@@ -555,7 +555,6 @@ fn emit_node_rejects_reuse_when_parent_did_not_own_child() {
             composer.with_group(location_key(file!(), line!(), column!()), |composer| {
                 let child_id = composer.emit_node(|| TestDummyNode);
 
-                composer.core.last_node_reused.set(Some(false));
                 composer.push_parent(parent_b);
 
                 {
@@ -589,7 +588,6 @@ fn push_parent_uses_empty_previous_when_not_reused() {
     let (composer, slots_host, applier_host) =
         setup_composer(&mut slots, &mut applier, handle, Some(parent_id));
 
-    composer.core.last_node_reused.set(Some(false));
     composer.push_parent(parent_id);
 
     {
@@ -622,7 +620,6 @@ fn new_parent_attaches_children_immediately_without_sync_children() {
         crate::slot::SlotPassMode::Compose,
         |composer| {
             composer.with_group(location_key(file!(), line!(), column!()), |composer| {
-                composer.core.last_node_reused.set(Some(false));
                 composer.push_parent(parent_id);
                 let child_id = composer.emit_node(RecordingNode::default);
                 composer.pop_parent();
@@ -698,7 +695,6 @@ fn reused_parent_with_existing_children_still_defers_to_sync_children() {
     let (composer, slots_host, applier_host) =
         setup_composer(&mut slots, &mut applier, handle, None);
 
-    composer.core.last_node_reused.set(Some(true));
     composer.push_parent(parent_id);
     {
         let mut stack = composer.parent_stack();
@@ -740,7 +736,6 @@ fn non_reused_parent_with_existing_children_still_defers_to_sync_children() {
     let (composer, slots_host, applier_host) =
         setup_composer(&mut slots, &mut applier, handle, None);
 
-    composer.core.last_node_reused.set(Some(false));
     composer.push_parent(parent_id);
     {
         let stack = composer.parent_stack();
@@ -794,7 +789,6 @@ fn record_subcompose_child_deduplicates_large_deferred_sync_frames() {
     let (composer, slots_host, applier_host) =
         setup_composer(&mut slots, &mut applier, handle, None);
 
-    composer.core.last_node_reused.set(Some(true));
     composer.push_parent(parent_id);
     for &child_id in &child_ids {
         composer.record_subcompose_child(child_id);
@@ -1750,7 +1744,6 @@ fn push_parent_inherits_previous_when_reused() {
         let (composer, slots_host, applier_host) =
             setup_composer(&mut slots, &mut applier, handle.clone(), Some(parent_id));
 
-        composer.core.last_node_reused.set(Some(true));
         composer.push_parent(parent_id);
 
         {
@@ -1776,7 +1769,6 @@ fn push_parent_inherits_previous_when_reused() {
         let (composer, slots_host, applier_host) =
             setup_composer(&mut slots, &mut applier, handle, Some(parent_id));
 
-        composer.core.last_node_reused.set(Some(true));
         composer.push_parent(parent_id);
 
         {
@@ -1813,7 +1805,6 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
                 if toggle.value() {
                     with_current_composer(|composer| {
                         let _parent = composer.emit_node(|| TestDummyNode);
-                        composer.core.last_node_reused.set(Some(true));
                         composer.push_parent(_parent);
 
                         let child = composer.emit_node(|| TestTextNode {
@@ -1849,8 +1840,6 @@ fn emit_node_creates_nodes_when_parent_restored_after_conditional_removal() {
                 if toggle.value() {
                     with_current_composer(|composer| {
                         let _parent = composer.emit_node(|| TestDummyNode);
-                        let reused = composer.core.last_node_reused.get();
-                        println!("Parent reused: {reused:?}");
                         composer.push_parent(_parent);
 
                         let child = composer.emit_node(|| TestTextNode {
@@ -1897,7 +1886,6 @@ fn emit_node_works_with_new_parent_having_empty_previous() {
         crate::slot::SlotPassMode::Compose,
         |composer| {
             composer.with_group(location_key(file!(), line!(), column!()), |composer| {
-                composer.core.last_node_reused.set(Some(false));
                 composer.push_parent(parent_id);
 
                 {
@@ -1911,11 +1899,6 @@ fn emit_node_works_with_new_parent_having_empty_previous() {
 
                 let child_id = composer.emit_node(|| TestDummyNode);
                 assert!(child_id > 0, "Child should be emitted successfully");
-                let was_reused = composer.core.last_node_reused.get();
-                assert!(
-                    was_reused.is_some(),
-                    "emit_node should set last_node_reused"
-                );
 
                 composer.pop_parent();
                 child_id

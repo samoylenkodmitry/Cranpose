@@ -13,6 +13,7 @@ impl SlotWriteSession<'_> {
             .debug_assert_no_pending_payload_location_refreshes("payload location flush");
     }
 
+    #[cfg(test)]
     pub(crate) fn value_slot_with_kind<T: 'static>(
         &mut self,
         kind: PayloadKind,
@@ -22,18 +23,25 @@ impl SlotWriteSession<'_> {
         self.located_value_slot(kind, source, init).0
     }
 
-    /// The value slot at the cursor and its value, found by one lookup.
+    /// The value slot at the cursor, its payload record's index and its
+    /// value, found by one lookup.
     pub(crate) fn value_slot_and_value<T: 'static>(
         &mut self,
         kind: PayloadKind,
         source: crate::Key,
         init: impl FnOnce() -> T,
-    ) -> (ValueSlotId, &mut T) {
+    ) -> (ValueSlotId, Option<usize>, &mut T) {
         let (slot, record_index) = self.located_value_slot(kind, source, init);
-        (slot, self.table.value_at_mut(slot, record_index))
+        (
+            slot,
+            record_index,
+            self.table.value_at_mut(slot, record_index),
+        )
     }
 
-    fn located_value_slot<T: 'static>(
+    /// The value slot at the cursor and the index of its payload record when
+    /// it has one.
+    pub(crate) fn located_value_slot<T: 'static>(
         &mut self,
         kind: PayloadKind,
         source: crate::Key,

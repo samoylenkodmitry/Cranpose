@@ -75,6 +75,10 @@ harness = false
 name = "layout_keep"
 harness = false
 
+[[bench]]
+name = "scope_cost"
+harness = false
+
 [[test]]
 name = "integration"
 path = "tests/integration.rs"

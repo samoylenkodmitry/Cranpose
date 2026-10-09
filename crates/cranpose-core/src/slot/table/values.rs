@@ -150,67 +150,93 @@ impl SlotTable {
         ))
     }
 
-    pub(crate) fn try_read_value<T: 'static>(
+    /// The index of the slot's payload record: `record` when the slot's
+    /// record sits there, else found through the slot's anchor.
+    #[inline]
+    fn value_record_index(
         &self,
         slot: ValueSlotId,
+        record: Option<usize>,
+    ) -> Result<usize, ValueSlotError> {
+        if let Some(index) = record
+            && slot.storage_id() == self.storage_id()
+            && self
+                .payloads
+                .get(index)
+                .is_some_and(|payload| payload.anchor == slot.anchor())
+        {
+            return Ok(index);
+        }
+        self.anchored_value_record_index(slot)
+    }
+
+    #[inline(never)]
+    fn anchored_value_record_index(&self, slot: ValueSlotId) -> Result<usize, ValueSlotError> {
+        Ok(self.checked_value_slot(slot)?.0.absolute_payload_index)
+    }
+
+    pub(crate) fn try_value_at<T: 'static>(
+        &self,
+        slot: ValueSlotId,
+        record: Option<usize>,
     ) -> Result<&T, ValueSlotError> {
-        let (_, record) = self.checked_value_slot(slot)?;
-        record
+        let index = self.value_record_index(slot, record)?;
+        let payload = self
+            .payloads
+            .get(index)
+            .ok_or_else(|| ValueSlotError::InactiveAnchor {
+                anchor: slot.anchor(),
+            })?;
+        payload
             .value
             .downcast_ref::<T>()
             .ok_or_else(|| ValueSlotError::TypeMismatch {
                 anchor: slot.anchor(),
                 expected: std::any::type_name::<T>(),
-                actual: (record.payload_type.type_name)(),
+                actual: (payload.payload_type.type_name)(),
             })
     }
 
-    pub(crate) fn read_value<T: 'static>(&self, slot: ValueSlotId) -> &T {
-        self.try_read_value(slot)
-            .unwrap_or_else(|error| panic!("{error}"))
-    }
-
-    /// The slot's value, read from `record_index` when the slot's payload
-    /// record sits there, else found through the slot's anchor.
     fn try_value_at_mut<T: 'static>(
         &mut self,
         slot: ValueSlotId,
-        record_index: Option<usize>,
+        record: Option<usize>,
     ) -> Result<&mut T, ValueSlotError> {
-        let record_index = match record_index.filter(|&index| {
+        let index = self.value_record_index(slot, record)?;
+        let payload =
             self.payloads
-                .get(index)
-                .is_some_and(|record| record.anchor == slot.anchor())
-        }) {
-            Some(index) => index,
-            None => self.checked_value_slot(slot)?.0.absolute_payload_index,
-        };
-        let record =
-            self.payloads
-                .get_mut(record_index)
+                .get_mut(index)
                 .ok_or_else(|| ValueSlotError::InactiveAnchor {
                     anchor: slot.anchor(),
                 })?;
-        record
+        payload
             .value
             .downcast_mut::<T>()
             .ok_or_else(|| ValueSlotError::TypeMismatch {
                 anchor: slot.anchor(),
                 expected: std::any::type_name::<T>(),
-                actual: (record.payload_type.type_name)(),
+                actual: (payload.payload_type.type_name)(),
             })
     }
 
-    pub(crate) fn read_value_mut<T: 'static>(&mut self, slot: ValueSlotId) -> &mut T {
-        self.value_at_mut(slot, None)
+    #[cfg(test)]
+    pub(crate) fn read_value<T: 'static>(&self, slot: ValueSlotId) -> &T {
+        self.value_at(slot, None)
+    }
+
+    /// The slot's value, read from `record` when the slot's payload record
+    /// sits there.
+    pub(crate) fn value_at<T: 'static>(&self, slot: ValueSlotId, record: Option<usize>) -> &T {
+        self.try_value_at(slot, record)
+            .unwrap_or_else(|error| panic!("{error}"))
     }
 
     pub(crate) fn value_at_mut<T: 'static>(
         &mut self,
         slot: ValueSlotId,
-        record_index: Option<usize>,
+        record: Option<usize>,
     ) -> &mut T {
-        self.try_value_at_mut(slot, record_index)
+        self.try_value_at_mut(slot, record)
             .unwrap_or_else(|error| panic!("{error}"))
     }
 

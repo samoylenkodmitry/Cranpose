@@ -24,6 +24,7 @@ use crate::{
 
 pub struct ValueSlotHandle<'pass, T: 'static> {
     slot: ValueSlotId,
+    record: Option<usize>,
     _pass: PhantomData<&'pass Composer>,
     _value: PhantomData<fn() -> T>,
 }
@@ -37,16 +38,13 @@ impl<T: 'static> Clone for ValueSlotHandle<'_, T> {
 }
 
 impl<T: 'static> ValueSlotHandle<'_, T> {
-    pub(crate) fn new(slot: ValueSlotId) -> Self {
+    pub(crate) fn new(slot: ValueSlotId, record: Option<usize>) -> Self {
         Self {
             slot,
+            record,
             _pass: PhantomData,
             _value: PhantomData,
         }
-    }
-
-    pub(crate) fn slot(self) -> ValueSlotId {
-        self.slot
     }
 }
 
@@ -91,6 +89,7 @@ struct GroupScopeEntry<'a> {
     start_kind: GroupStartKind,
     host: &'a SlotsHost,
     group: crate::slot::ActiveGroupId,
+    parent_hint: Option<NodeId>,
 }
 
 struct SlotHostPassGuard {
@@ -246,6 +245,10 @@ impl ComposerRuntimeState {
         self.live_hosts
             .borrow_mut()
             .insert(host.storage_key(), Rc::downgrade(host));
+    }
+
+    pub(crate) fn retains_any(&self) -> bool {
+        !self.retention_by_host.borrow().is_empty()
     }
 
     pub(crate) fn set_retention_policy(&self, policy: RetentionPolicy) {
@@ -642,9 +645,8 @@ pub(crate) struct ComposerCore {
     pub(crate) side_effects: RefCell<Vec<Box<dyn FnOnce()>>>,
     pub(crate) pending_scope_options: RefCell<Option<RecomposeOptions>>,
     pub(crate) phase: Cell<crate::Phase>,
-    pub(crate) last_node_reused: Cell<Option<bool>>,
     pub(crate) recompose_parent_hint: Cell<Option<NodeId>>,
-    pub(crate) recompose_child_cursor: Cell<Option<usize>>,
+    pub(crate) recompose_child_cursor: Cell<crate::recompose::RecomposeChildCursor>,
     pub(crate) root_render_requested: Cell<bool>,
     pub(crate) _not_send: PhantomData<*const ()>,
 }
@@ -755,9 +757,8 @@ impl ComposerCore {
             side_effects: RefCell::new(Vec::new()),
             pending_scope_options: RefCell::new(None),
             phase: Cell::new(crate::Phase::Compose),
-            last_node_reused: Cell::new(None),
             recompose_parent_hint: Cell::new(None),
-            recompose_child_cursor: Cell::new(None),
+            recompose_child_cursor: Cell::new(crate::recompose::RecomposeChildCursor::Unknown),
             root_render_requested: Cell::new(false),
             _not_send: PhantomData,
         }
@@ -780,6 +781,48 @@ impl Drop for BranchGroupGuard {
         };
         if !host.try_close_branch_fold(*token) {
             log::error!("a branch fold guard closed while its slot host was busy");
+        }
+    }
+}
+
+/// A group a composable call opened; [`ComposableGroup::close`] ends it
+/// after the call's body.
+#[doc(hidden)]
+pub struct ComposableGroup<'a> {
+    composer: &'a Composer,
+    host: Rc<SlotsHost>,
+    scope: RecomposeScope,
+    pass: Option<SlotHostPassGuard>,
+    runs_body: bool,
+    completed: bool,
+}
+
+impl ComposableGroup<'_> {
+    /// The recompose scope of the group.
+    pub fn scope(&self) -> &RecomposeScope {
+        &self.scope
+    }
+
+    /// Ends the group after its body composed.
+    pub fn close(mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for ComposableGroup<'_> {
+    fn drop(&mut self) {
+        if self.completed {
+            self.scope.mark_composed_once();
+        }
+        self.composer
+            .close_group_in_active_pass(&self.host, &self.scope);
+        if let Some(mut pass) = self.pass.take() {
+            if self.completed
+                && let Err(err) = self.composer.finish_slot_host_pass(&pass.host)
+            {
+                log::error!("slot host pass finalization failed: {err}");
+            }
+            pass.close();
         }
     }
 }
@@ -1346,6 +1389,7 @@ impl Composer {
             start_kind,
             host,
             group,
+            parent_hint,
         } = entry;
         // A group entered while its scope is inactive is reused content, as
         // when a lazy list gives a recycled row to another item: like Compose,
@@ -1390,43 +1434,30 @@ impl Composer {
         }
 
         scope_ref.snapshot_locals(&self.core.local_stack.borrow());
-        let parent_hint = self.current_parent_hint();
         if restored {
             reparent_restored_scopes(host, group, scope_ref.parent_hint(), parent_hint);
         }
         scope_ref.set_parent_hint(parent_hint);
     }
 
-    #[inline(never)]
-    fn with_group_in_active_pass_dyn(
+    fn start_group(
         &self,
         host: &Rc<SlotsHost>,
-        key: crate::slot::GroupKeySeed,
-        f: &mut dyn FnMut(&Composer),
+        seed: crate::slot::GroupKeySeed,
+        parent_node: Option<NodeId>,
+    ) -> (
+        GroupStart<crate::slot::ActiveGroupId>,
+        Option<crate::slot::GroupKey>,
     ) {
-        struct GroupGuard<'a> {
-            composer: &'a Composer,
-            host: &'a Rc<SlotsHost>,
-            scope: RecomposeScope,
-        }
-
-        impl Drop for GroupGuard<'_> {
-            fn drop(&mut self) {
-                let result = self.host.with_write_session(|slots| {
-                    let result = slots.finish_group_body();
-                    slots.end_group();
-                    result
-                });
-                self.composer
-                    .close_finished_group(self.host, &self.scope, result);
-                self.scope.mark_recomposed();
-                if let Err(err) = self.composer.flush_pending_commands_if_large() {
-                    log::error!("mid-composition command flush failed: {err}");
-                }
+        if !self.core.shared_state.retains_any() {
+            let started = host.with_write_session(|slots| {
+                let key = slots.reserve_group_key(seed);
+                (!key.is_movable()).then(|| slots.begin_group(key, None, parent_node))
+            });
+            if let Some(started) = started {
+                return (started, None);
             }
         }
-
-        let options = self.pending_scope_options().take().unwrap_or_default();
         let parent_scope_id = self
             .core
             .scope_stack
@@ -1434,17 +1465,32 @@ impl Composer {
             .last()
             .map(RecomposeScope::id);
         let GroupEntry {
-            key: reserved_key,
+            key,
             restored,
             placeholder_for,
-        } = self.resolve_group_entry(host, key, parent_scope_id);
+        } = self.resolve_group_entry(host, seed, parent_scope_id);
+        let started =
+            host.with_write_session(|slots| slots.begin_group(key, restored, parent_node));
+        (started, placeholder_for)
+    }
+
+    #[inline(never)]
+    fn open_group_in_active_pass(
+        &self,
+        host: &Rc<SlotsHost>,
+        key: crate::slot::GroupKeySeed,
+    ) -> (RecomposeScope, bool) {
+        let options = self.pending_scope_options().take().unwrap_or_default();
         let parent_node = self.current_parent_hint();
-        let GroupStart {
-            group,
-            anchor,
-            scope,
-            kind,
-        } = host.with_write_session(|slots| slots.begin_group(reserved_key, restored, parent_node));
+        let (
+            GroupStart {
+                group,
+                anchor,
+                scope,
+                kind,
+            },
+            placeholder_for,
+        ) = self.start_group(host, key, parent_node);
         let scope_ref = self.scope_for_started_group(host, group, scope);
         if let Some(movable_key) = placeholder_for {
             self.core.shared_state.record_pending_movable(
@@ -1468,30 +1514,49 @@ impl Composer {
                 start_kind: kind,
                 host,
                 group,
+                parent_hint: parent_node,
             },
         );
-
-        let guard = GroupGuard {
-            composer: self,
-            host,
-            scope: scope_ref,
-        };
-        if placeholder_for.is_none() {
-            f(self);
-        }
-        guard.scope.mark_composed_once();
-        drop(guard);
+        (scope_ref, placeholder_for.is_none())
     }
 
-    fn with_group_seed_dyn(&self, key: crate::slot::GroupKeySeed, f: &mut dyn FnMut(&Composer)) {
-        let host = self.active_slots_host();
-        if host.has_active_pass() {
-            self.with_group_in_active_pass_dyn(&host, key, f);
-            return;
-        }
-        self.with_slot_host_pass(host, crate::slot::SlotPassMode::Compose, |composer| {
-            composer.with_group_in_active_pass_dyn(&composer.active_slots_host(), key, f);
+    #[inline(never)]
+    fn close_group_in_active_pass(&self, host: &Rc<SlotsHost>, scope: &RecomposeScope) {
+        let result = host.with_write_session(|slots| {
+            let result = slots.finish_group_body();
+            slots.end_group();
+            result
         });
+        self.close_finished_group(host, scope, result);
+        scope.mark_recomposed();
+        if let Err(err) = self.flush_pending_commands_if_large() {
+            log::error!("mid-composition command flush failed: {err}");
+        }
+    }
+
+    #[inline(never)]
+    fn open_group(&self, key: crate::slot::GroupKeySeed) -> ComposableGroup<'_> {
+        let host = self.active_slots_host();
+        let (host, pass) = if host.has_active_pass() {
+            (host, None)
+        } else {
+            let pass = self.begin_slot_host_pass(&host, crate::slot::SlotPassMode::Compose);
+            (self.active_slots_host(), Some(pass))
+        };
+        let (scope, runs_body) = self.open_group_in_active_pass(&host, key);
+        ComposableGroup {
+            composer: self,
+            host,
+            scope,
+            pass,
+            runs_body,
+            completed: false,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn __open_composable_group(&self, key: Key) -> ComposableGroup<'_> {
+        self.open_group(crate::slot::GroupKeySeed::unkeyed(key))
     }
 
     pub(crate) fn with_group_seed<R>(
@@ -1499,22 +1564,19 @@ impl Composer {
         key: crate::slot::GroupKeySeed,
         f: impl FnOnce(&Composer) -> R,
     ) -> R {
-        let mut f = Some(f);
-        let mut result = None;
-        self.with_group_seed_dyn(key, &mut |composer| {
-            let f = f.take().expect("group body must run at most once");
-            result = Some(f(composer));
-        });
-        result.expect("group body must run exactly once")
+        let group = self.open_group(key);
+        debug_assert!(group.runs_body, "only movable content waits for a body");
+        let result = f(self);
+        group.close();
+        result
     }
 
     pub(crate) fn with_movable_group(&self, id: Key, f: impl FnOnce(&Composer)) {
-        let mut f = Some(f);
-        self.with_group_seed_dyn(crate::slot::GroupKeySeed::movable(id), &mut |composer| {
-            if let Some(f) = f.take() {
-                f(composer);
-            }
-        });
+        let group = self.open_group(crate::slot::GroupKeySeed::movable(id));
+        if group.runs_body {
+            f(self);
+        }
+        group.close();
     }
 
     pub fn with_group<R>(&self, key: Key, f: impl FnOnce(&Composer) -> R) -> R {
@@ -1758,10 +1820,10 @@ impl Composer {
     #[track_caller]
     pub fn use_value_slot<T: 'static>(&self, init: impl FnOnce() -> T) -> ValueSlotHandle<'_, T> {
         let source = crate::caller_location_key();
-        let slot = self.with_slot_session_mut(|slots| {
-            slots.value_slot_with_kind(PayloadKind::Internal, source, init)
+        let (slot, record) = self.with_slot_session_mut(|slots| {
+            slots.located_value_slot(PayloadKind::Internal, source, init)
         });
-        ValueSlotHandle::new(slot)
+        ValueSlotHandle::new(slot, record)
     }
 
     #[doc(hidden)]
@@ -1770,10 +1832,10 @@ impl Composer {
         source: Key,
         init: impl FnOnce() -> T,
     ) -> ValueSlotHandle<'_, T> {
-        let slot = self.with_slot_session_mut(|slots| {
-            slots.value_slot_with_kind(PayloadKind::Param, source, init)
+        let (slot, record) = self.with_slot_session_mut(|slots| {
+            slots.located_value_slot(PayloadKind::Param, source, init)
         });
-        ValueSlotHandle::new(slot)
+        ValueSlotHandle::new(slot, record)
     }
 
     /// Finds the call's next parameter slot and runs `update` on its value,
@@ -1808,8 +1870,8 @@ impl Composer {
         update: impl FnOnce(&mut T) -> R,
     ) -> (ValueSlotHandle<'_, T>, R) {
         self.with_slot_session_mut(|slots| {
-            let (slot, value) = slots.value_slot_and_value(kind, source, init);
-            (ValueSlotHandle::new(slot), update(value))
+            let (slot, record, value) = slots.value_slot_and_value(kind, source, init);
+            (ValueSlotHandle::new(slot, record), update(value))
         })
     }
 
@@ -1820,10 +1882,10 @@ impl Composer {
         init: impl FnOnce() -> T,
     ) -> ValueSlotHandle<'_, T> {
         let source = crate::caller_location_key();
-        let slot = self.with_slot_session_mut(|slots| {
-            slots.value_slot_with_kind(PayloadKind::Return, source, init)
+        let (slot, record) = self.with_slot_session_mut(|slots| {
+            slots.located_value_slot(PayloadKind::Return, source, init)
         });
-        ValueSlotHandle::new(slot)
+        ValueSlotHandle::new(slot, record)
     }
 
     #[doc(hidden)]
@@ -1845,7 +1907,7 @@ impl Composer {
         handle: ValueSlotHandle<'pass, T>,
         f: impl FnOnce(&T) -> R,
     ) -> R {
-        self.with_slots(|slots| f(slots.read_value(handle.slot())))
+        self.with_slots(|slots| f(slots.value_at(handle.slot, handle.record)))
     }
 
     pub fn with_slot_value_mut<'pass, T: 'static, R>(
@@ -1853,7 +1915,7 @@ impl Composer {
         handle: ValueSlotHandle<'pass, T>,
         f: impl FnOnce(&mut T) -> R,
     ) -> R {
-        self.with_slots_mut(|slots| f(slots.read_value_mut(handle.slot())))
+        self.with_slots_mut(|slots| f(slots.value_at_mut(handle.slot, handle.record)))
     }
 
     pub fn mutable_state_of<T: Clone + 'static>(&self, initial: T) -> MutableState<T> {

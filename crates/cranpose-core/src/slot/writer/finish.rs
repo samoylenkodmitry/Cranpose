@@ -7,6 +7,12 @@ use super::{
 };
 use crate::AnchorId;
 
+struct GroupLeftovers {
+    payloads: bool,
+    nodes: bool,
+    children: bool,
+}
+
 impl SlotTable {
     fn detach_unvisited_children_internal(
         &mut self,
@@ -27,12 +33,39 @@ impl SlotTable {
         detached_children
     }
 
+    fn open_group_leftovers(
+        &self,
+        group_anchor: AnchorId,
+        group_index: usize,
+        payload_cursor: usize,
+        node_cursor: usize,
+        next_child_index: usize,
+    ) -> GroupLeftovers {
+        let Some(group) = self
+            .open_group_index(group_anchor, group_index)
+            .and_then(|index| self.groups.get(index).map(|group| (index, group)))
+        else {
+            return GroupLeftovers {
+                payloads: true,
+                nodes: true,
+                children: true,
+            };
+        };
+        let (index, group) = group;
+        let children_end = index.saturating_add(group.subtree_len as usize);
+        GroupLeftovers {
+            payloads: payload_cursor < group.payload_len as usize,
+            nodes: node_cursor < group.node_len as usize,
+            children: index < next_child_index && next_child_index < children_end,
+        }
+    }
+
     fn finish_group_body_internal(
         &mut self,
         lifecycle: &mut SlotLifecycleCoordinator,
         state: &mut SlotWriteSessionState,
     ) -> FinishGroupResult {
-        let (group_anchor, group_index, payload_cursor, node_cursor, was_skipped) = {
+        let (group_anchor, group_index, payload_cursor, node_cursor, next_child_index, was_skipped) = {
             let Some(frame) = state.group_stack.last_mut() else {
                 log::error!("slot writer finish_group_body called with an empty group stack");
                 return FinishGroupResult::empty();
@@ -54,11 +87,19 @@ impl SlotTable {
                 frame.group_index,
                 frame.payload_cursor,
                 frame.node_cursor,
+                frame.next_child_index,
                 frame.was_skipped(),
             )
         };
+        let leftovers = self.open_group_leftovers(
+            group_anchor,
+            group_index,
+            payload_cursor,
+            node_cursor,
+            next_child_index,
+        );
 
-        {
+        if leftovers.payloads {
             let removed = self.remove_payload_tail_at_cursor(group_anchor, payload_cursor);
             if !removed.is_empty() {
                 let removed_payload_count = removed.len();
@@ -73,12 +114,16 @@ impl SlotTable {
         state.debug_assert_no_pending_payload_location_refreshes("finish_group_body");
 
         let mut direct_nodes = Vec::new();
-        let removed = self.remove_group_node_tail_at_cursor(group_anchor, node_cursor);
-        if !removed.is_empty() {
+        if leftovers.nodes {
+            let removed = self.remove_group_node_tail_at_cursor(group_anchor, node_cursor);
             direct_nodes.extend(removed.into_iter().map(|node| node.id));
         }
 
-        let detached_children = self.detach_unvisited_children_internal(state);
+        let detached_children = if leftovers.children {
+            self.detach_unvisited_children_internal(state)
+        } else {
+            Vec::new()
+        };
         let root_nodes = if was_skipped {
             self.open_frame_root_node_ids(group_anchor, group_index)
         } else {

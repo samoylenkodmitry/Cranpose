@@ -155,7 +155,7 @@ fn slot_write_session_exposes_semantic_operations() {
     });
     harness.finish_pass();
     assert_eq!(*harness.table.read_value::<i32>(slot), 7);
-    *harness.table.read_value_mut::<i32>(slot) = 8;
+    *harness.table.value_at_mut::<i32>(slot, None) = 8;
     harness.table.write_value(slot, 9_i32);
     assert_eq!(*harness.table.read_value::<i32>(slot), 9);
     assert_eq!(harness.table.validate(), Ok(()));
