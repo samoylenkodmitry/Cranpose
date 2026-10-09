@@ -187,8 +187,11 @@ just robot-accessibility-web /tmp/a11y-web-build/site /tmp/a11y-web
 
 The build runs the shipped wasm feature lint, release build, and packaging.
 The robot serves only the packaged site on a private localhost port and runs
-headless Chrome. Set `CHROME` to select an executable. Its checks cover
-native names and roles, overlapping controls, disabled activation, adjustable values, retained DOM
+headless Chrome. Set `CHROME` to select an executable. It first checks that a
+fresh page builds no mirror, offers the "Enable accessibility" button, takes
+typing and IME composition through the hidden editor, and hands a focused
+field to the mirror when the button is pressed; every later check presses the
+button after it loads a page. Its checks cover native names and roles, overlapping controls, disabled activation, adjustable values, retained DOM
 identity and focus, forward/backward Tab, single keyboard activation, list
 ownership, dictated Unicode input, selection, keyboard editing, radio-group
 navigation, modal focus containment, and nested dialog dismissal. Artifacts

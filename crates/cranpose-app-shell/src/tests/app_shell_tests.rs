@@ -2762,6 +2762,50 @@ fn a_dialog_takes_focus_when_it_opens() {
 }
 
 #[test]
+fn the_focused_field_says_whether_it_holds_a_secret_with_semantics_off() {
+    let _guard = test_guard();
+    let name = cranpose_ui::FocusRequester::new();
+    let passphrase = cranpose_ui::FocusRequester::new();
+    let fields = [(name.clone(), false), (passphrase.clone(), true)];
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, move || {
+        let fields = fields.clone();
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            for (requester, secret) in &fields {
+                let state = cranpose_core::remember(|| cranpose_ui::TextFieldState::new(""))
+                    .with(|state| *state);
+                let modifier = Modifier::empty()
+                    .size(Size::new(200.0, 40.0))
+                    .focus_requester(requester);
+                cranpose_ui::BasicTextField(
+                    state,
+                    if *secret {
+                        modifier.password()
+                    } else {
+                        modifier
+                    },
+                    TextStyle::default(),
+                );
+            }
+        });
+    });
+    shell.update();
+    assert!(!shell.semantics_active());
+    assert!(!shell.ime_field_is_password(), "no field is focused yet");
+
+    for (requester, secret) in [(&name, false), (&passphrase, true), (&name, false)] {
+        assert!(
+            shell
+                .debug_enter_app_context(|| requester.request_focus())
+                .is_ok()
+        );
+        shell.update();
+        assert!(shell.ime_editor_state().is_some(), "the field takes text");
+        assert_eq!(shell.ime_field_is_password(), secret);
+    }
+}
+
+#[test]
 fn a_text_field_named_by_the_app_keeps_that_name() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());

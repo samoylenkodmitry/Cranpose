@@ -9,10 +9,7 @@ use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::LiveRegionMode;
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
-use web_sys::{
-    Document, Element, HtmlCanvasElement, HtmlElement, HtmlInputElement, HtmlTextAreaElement,
-    MouseEvent,
-};
+use web_sys::{Document, Element, HtmlCanvasElement, HtmlElement, MouseEvent};
 use web_time::Instant;
 
 use crate::{
@@ -22,6 +19,10 @@ use crate::{
         MirrorAttributes, PageTarget, mirror_tag, mirror_text, page_targets,
     },
     web_accessibility_order::ChildMoves,
+    web_text_input::{
+        WebTextInput, apply_editor_text, attach_field_key_listener, attach_field_listeners,
+        attach_selection_listener, focus_field,
+    },
 };
 
 /// The class every mirror node and action button carries. One rule in the
@@ -34,14 +35,14 @@ const MIRROR_CLASS: &str = "cranpose-mirror";
 /// each virtual id, and what a person did through the mirror since the
 /// bridge last looked at the app.
 #[derive(Default)]
-struct MirrorLinks {
+pub(crate) struct MirrorLinks {
     node_ids: RefCell<HashMap<i32, cranpose_core::NodeId>>,
     /// A reader acted through the mirror, so changes show at the interactive
     /// interval for a while.
     read: Cell<bool>,
     /// A person typed in a mirrored field or moved its caret, so the mirror
     /// shows the field as the app holds it at once.
-    edited: Cell<bool>,
+    pub(crate) edited: Cell<bool>,
 }
 
 /// Pages the scroll container around the focused mirror node on Page Down and
@@ -128,7 +129,7 @@ fn number_attribute(target: &Element, name: &str) -> Option<f32> {
 }
 
 /// The live node behind the virtual id an attribute on the mirror carries.
-fn node_id_attribute(
+pub(crate) fn node_id_attribute(
     target: &Element,
     name: &str,
     links: &MirrorLinks,
@@ -141,7 +142,7 @@ fn node_id_attribute(
 
 /// Runs one reader action against the live semantics tree, unless the app is
 /// busy with its own frame.
-fn on_live_tree(
+pub(crate) fn on_live_tree(
     app: &Rc<RefCell<AppShell<WgpuRenderer>>>,
     links: &MirrorLinks,
     act: impl FnOnce(&cranpose_ui::SemanticsNode) -> bool,
@@ -162,146 +163,6 @@ fn apply_field_text(node: &HtmlElement, element: &AccessibilityElement) -> Resul
         return Ok(());
     };
     apply_editor_text(node, value, anchor, focus)
-}
-
-fn apply_editor_text(
-    node: &HtmlElement,
-    value: &str,
-    anchor: usize,
-    focus: usize,
-) -> Result<(), JsValue> {
-    if node.has_attribute("data-cranpose-composition") {
-        return Ok(());
-    }
-    let anchor = accessibility::utf16_offset(value, anchor) as u32;
-    let focus = accessibility::utf16_offset(value, focus) as u32;
-    let ends = format!("{anchor}:{focus}");
-    let previous = node.get_attribute("data-cranpose-selection");
-    let selection_changed = previous.as_deref() != Some(ends.as_str());
-    let native_selection = field_selection(node).map(|(anchor, focus)| format!("{anchor}:{focus}"));
-    let pending_selection = previous.is_some()
-        && node.matches(":focus")?
-        && native_selection.as_ref() != previous.as_ref();
-    let value_changed = field_value(node).as_deref() != Some(value);
-    if value_changed {
-        if let Some(input) = node.dyn_ref::<HtmlInputElement>() {
-            input.set_value(value);
-        } else if let Some(area) = node.dyn_ref::<HtmlTextAreaElement>() {
-            area.set_value(value);
-        }
-    }
-    node.set_attribute("data-cranpose-selection", &ends)?;
-    if value_changed || (selection_changed && !pending_selection) {
-        restore_field_caret(node)?;
-    }
-    Ok(())
-}
-
-/// Puts the caret of a mirrored field back where the app last published it,
-/// after the browser's focus moved onto the field.
-fn restore_field_caret(node: &HtmlElement) -> Result<(), JsValue> {
-    let Some(ends) = node.get_attribute("data-cranpose-selection") else {
-        return Ok(());
-    };
-    let Some((anchor, focus)) = ends.split_once(':').and_then(|(anchor, focus)| {
-        Some((anchor.parse::<u32>().ok()?, focus.parse::<u32>().ok()?))
-    }) else {
-        return Ok(());
-    };
-    let (start, end) = (anchor.min(focus), anchor.max(focus));
-    let direction = if focus < anchor {
-        "backward"
-    } else {
-        "forward"
-    };
-    if let Some(input) = node.dyn_ref::<HtmlInputElement>() {
-        input.set_selection_range_with_direction(start, end, direction)?;
-    } else if let Some(area) = node.dyn_ref::<HtmlTextAreaElement>() {
-        area.set_selection_range_with_direction(start, end, direction)?;
-    }
-    Ok(())
-}
-
-/// Moves the browser's focus onto a mirror node, and for a field puts the
-/// caret back where it was, because a fresh input starts with its caret at
-/// the start.
-fn focus_mirror_node(node: &HtmlElement) -> Result<(), JsValue> {
-    if node.matches(":focus")? {
-        return Ok(());
-    }
-    node.focus()?;
-    restore_field_caret(node)
-}
-
-/// The two ends of the selection in a mirrored field, the anchor first, in
-/// UTF-16 units, or nothing for a node that is not a field.
-fn field_selection(element: &Element) -> Option<(usize, usize)> {
-    let (start, end, direction) = if let Some(input) = element.dyn_ref::<HtmlInputElement>() {
-        (
-            input.selection_start().ok()??,
-            input.selection_end().ok()??,
-            input.selection_direction().ok()??,
-        )
-    } else {
-        let area = element.dyn_ref::<HtmlTextAreaElement>()?;
-        (
-            area.selection_start().ok()??,
-            area.selection_end().ok()??,
-            area.selection_direction().ok()??,
-        )
-    };
-    let (start, end) = (start as usize, end as usize);
-    Some(if direction == "backward" {
-        (end, start)
-    } else {
-        (start, end)
-    })
-}
-
-/// Hands the app the caret a reader or a keyboard moved inside a mirrored
-/// field, through the browser's own selection change. A change that only
-/// echoes the ends the app published is not sent back.
-fn attach_selection_listener(
-    document: &Document,
-    app: Rc<RefCell<AppShell<WgpuRenderer>>>,
-    links: Rc<MirrorLinks>,
-) -> Result<(), JsValue> {
-    let owner = document.clone();
-    let on_change = Closure::wrap(Box::new(move |_event: web_sys::Event| {
-        let Some(active) = owner.active_element() else {
-            return;
-        };
-        if active.has_attribute("data-cranpose-composition") {
-            return;
-        }
-        let Some((anchor, focus)) = field_selection(&active) else {
-            return;
-        };
-        let ends = format!("{anchor}:{focus}");
-        if active.get_attribute("data-cranpose-selection").as_deref() == Some(ends.as_str()) {
-            return;
-        }
-        let Some(node_id) = node_id_attribute(&active, "data-cranpose-node", &links) else {
-            return;
-        };
-        let Some(value) = field_value(&active) else {
-            return;
-        };
-        let _ = active.set_attribute("data-cranpose-selection", &ends);
-        links.edited.set(true);
-        on_live_tree(&app, &links, |root| {
-            accessibility::set_text_selection(
-                root,
-                node_id,
-                accessibility::byte_offset_for_utf16(&value, anchor),
-                accessibility::byte_offset_for_utf16(&value, focus),
-            )
-        });
-    }) as Box<dyn FnMut(_)>);
-    document
-        .add_event_listener_with_callback("selectionchange", on_change.as_ref().unchecked_ref())?;
-    on_change.forget();
-    Ok(())
 }
 
 fn mirror_element(document: &Document, tag: &str) -> Result<HtmlElement, JsValue> {
@@ -346,14 +207,14 @@ fn write_text(node: &HtmlElement, text: Option<&str>) {
 fn mirror_style(document: &Document) -> Result<Element, JsValue> {
     let style = document.create_element("style")?;
     style.set_text_content(Some(&format!(
-        ".{MIRROR_CLASS}{{position:fixed!important;opacity:0.001!important;\
+        ".{MIRROR_CLASS}{{position:fixed!important;opacity:0!important;\
          pointer-events:none!important;overflow:hidden!important}}"
     )));
     Ok(style)
 }
 
 /// Where the canvas sits on the page and how its logical pixels map onto it.
-struct Placement {
+pub(crate) struct Placement {
     left: f64,
     top: f64,
     scale_x: f64,
@@ -361,9 +222,21 @@ struct Placement {
 }
 
 impl Placement {
-    /// Where the mirror node for a control with these bounds goes: its left,
+    /// Where `canvas` sits now, for an app whose viewport is `viewport`
+    /// logical pixels.
+    pub(crate) fn of(canvas: &HtmlCanvasElement, viewport: (f32, f32)) -> Self {
+        let rect = canvas.get_bounding_client_rect();
+        Self {
+            left: rect.left(),
+            top: rect.top(),
+            scale_x: rect.width() / viewport.0.max(1.0) as f64,
+            scale_y: rect.height() / viewport.1.max(1.0) as f64,
+        }
+    }
+
+    /// Where the element for a control with these bounds goes: its left,
     /// top, width and height in CSS pixels.
-    fn rect(&self, bounds: AccessibilityRect) -> [f64; 4] {
+    pub(crate) fn rect(&self, bounds: AccessibilityRect) -> [f64; 4] {
         [
             self.left + f64::from(bounds.x) * self.scale_x,
             self.top + f64::from(bounds.y) * self.scale_y,
@@ -379,23 +252,6 @@ fn attach_focus_listener(
     app: Rc<RefCell<AppShell<WgpuRenderer>>>,
     links: Rc<MirrorLinks>,
 ) -> Result<(), JsValue> {
-    let blur_app = Rc::clone(&app);
-    let focus_out = Closure::wrap(Box::new(move |event: web_sys::Event| {
-        let Some(target) = event
-            .target()
-            .and_then(|target| target.dyn_into::<Element>().ok())
-            .filter(|target| field_value(target).is_some())
-        else {
-            return;
-        };
-        let _ = target.remove_attribute("data-cranpose-composition");
-        if let Ok(mut shell) = blur_app.try_borrow_mut() {
-            shell.on_ime_finish_composing();
-            shell.clear_text_field_focus();
-        }
-    }) as Box<dyn FnMut(_)>);
-    root.add_event_listener_with_callback("focusout", focus_out.as_ref().unchecked_ref())?;
-    focus_out.forget();
     let focus_in = Closure::wrap(Box::new(move |event: web_sys::Event| {
         let Some(target) = event.target().and_then(|t| t.dyn_into::<Element>().ok()) else {
             return;
@@ -512,10 +368,6 @@ fn attach_key_listener(
         let Some(target) = key_target(&event) else {
             return;
         };
-        if browser_handles_key(&event, &target) {
-            event.stop_propagation();
-            return;
-        }
         let read = |name: &str| number_attribute(&target, name);
         let (Some(current), Some(min), Some(max), Some(step)) = (
             read("data-cranpose-value"),
@@ -543,35 +395,7 @@ fn attach_key_listener(
     }) as Box<dyn FnMut(_)>);
     root.add_event_listener_with_callback("keydown", key_down.as_ref().unchecked_ref())?;
     key_down.forget();
-    let key_up = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
-        if key_target(&event).is_some_and(|target| browser_handles_key(&event, &target)) {
-            event.stop_propagation();
-        }
-    }) as Box<dyn FnMut(_)>);
-    root.add_event_listener_with_callback("keyup", key_up.as_ref().unchecked_ref())?;
-    key_up.forget();
     Ok(())
-}
-
-fn browser_handles_key(event: &web_sys::KeyboardEvent, target: &Element) -> bool {
-    if event.is_composing()
-        || event.key_code() == 229
-        || target.has_attribute("data-cranpose-composition")
-    {
-        return true;
-    }
-    let key = event.key();
-    if key == "Tab" {
-        return target
-            .closest("[aria-modal=\"true\"]")
-            .ok()
-            .flatten()
-            .is_none();
-    }
-    (key != "Escape"
-        && (target.is_instance_of::<HtmlInputElement>()
-            || target.is_instance_of::<HtmlTextAreaElement>()))
-        || (target.tag_name() == "BUTTON" && matches!(key.as_str(), "Enter" | " "))
 }
 
 fn live_region(document: &Document, politeness: &str) -> Result<HtmlElement, JsValue> {
@@ -588,163 +412,6 @@ fn live_region(document: &Document, politeness: &str) -> Result<HtmlElement, JsV
     style.set_property("white-space", "nowrap")?;
     style.set_property("pointer-events", "none")?;
     Ok(region)
-}
-
-fn attach_input_listener(
-    root: &HtmlElement,
-    app: Rc<RefCell<AppShell<WgpuRenderer>>>,
-    links: Rc<MirrorLinks>,
-) -> Result<(), JsValue> {
-    let input = Closure::wrap(Box::new(move |event: web_sys::Event| {
-        let Some(target) = event
-            .target()
-            .and_then(|target| target.dyn_into::<Element>().ok())
-        else {
-            return;
-        };
-        sync_field_input(&target, &app, &links);
-    }) as Box<dyn FnMut(_)>);
-    root.add_event_listener_with_callback("input", input.as_ref().unchecked_ref())?;
-    input.forget();
-    Ok(())
-}
-
-fn field_value(target: &Element) -> Option<String> {
-    if let Some(input) = target.dyn_ref::<HtmlInputElement>() {
-        Some(input.value())
-    } else {
-        target
-            .dyn_ref::<HtmlTextAreaElement>()
-            .map(HtmlTextAreaElement::value)
-    }
-}
-
-fn composition_range(target: &Element) -> Option<(usize, usize)> {
-    let range = target.get_attribute("data-cranpose-composition")?;
-    let (start, end) = range.split_once(':')?;
-    Some((start.parse().ok()?, end.parse().ok()?))
-}
-
-fn sync_field_input(
-    target: &Element,
-    app: &Rc<RefCell<AppShell<WgpuRenderer>>>,
-    links: &MirrorLinks,
-) {
-    let Some(node_id) = node_id_attribute(target, "data-cranpose-node", links) else {
-        return;
-    };
-    let Some(value) = field_value(target) else {
-        return;
-    };
-    let selection = field_selection(target);
-    if let Some((anchor, focus)) = selection {
-        let _ = target.set_attribute("data-cranpose-selection", &format!("{anchor}:{focus}"));
-    }
-    links.edited.set(true);
-    on_live_tree(app, links, |root| {
-        let changed = accessibility::set_text(root, node_id, &value);
-        if let Some((anchor, focus)) = selection {
-            let anchor = accessibility::byte_offset_for_utf16(&value, anchor);
-            let focus = accessibility::byte_offset_for_utf16(&value, focus);
-            return accessibility::set_text_selection(root, node_id, anchor, focus) || changed;
-        }
-        changed
-    });
-    if let Some((start, end)) = composition_range(target)
-        && let Ok(mut shell) = app.try_borrow_mut()
-    {
-        shell.on_ime_set_composing_region(
-            accessibility::byte_offset_for_utf16(&value, start),
-            accessibility::byte_offset_for_utf16(&value, end),
-        );
-    }
-}
-
-fn attach_composition_listener(
-    root: &HtmlElement,
-    app: Rc<RefCell<AppShell<WgpuRenderer>>>,
-    links: Rc<MirrorLinks>,
-) -> Result<(), JsValue> {
-    for name in ["compositionstart", "compositionupdate", "compositionend"] {
-        let app = Rc::clone(&app);
-        let links = Rc::clone(&links);
-        let listener = Closure::wrap(Box::new(move |event: web_sys::CompositionEvent| {
-            let Some(target) = event
-                .target()
-                .and_then(|target| target.dyn_into::<Element>().ok())
-            else {
-                return;
-            };
-            let Some((anchor, focus)) = field_selection(&target) else {
-                return;
-            };
-            if name == "compositionend" {
-                let _ = target.remove_attribute("data-cranpose-composition");
-                sync_field_input(&target, &app, &links);
-                if let Ok(mut shell) = app.try_borrow_mut() {
-                    shell.on_ime_finish_composing();
-                }
-            } else {
-                let start =
-                    composition_range(&target).map_or_else(|| anchor.min(focus), |range| range.0);
-                let end = start + event.data().unwrap_or_default().encode_utf16().count();
-                let _ =
-                    target.set_attribute("data-cranpose-composition", &format!("{start}:{end}"));
-            }
-        }) as Box<dyn FnMut(_)>);
-        root.add_event_listener_with_callback(name, listener.as_ref().unchecked_ref())?;
-        listener.forget();
-    }
-    for name in ["copy", "cut", "paste"] {
-        let listener = Closure::wrap(Box::new(move |event: web_sys::Event| {
-            if event
-                .target()
-                .and_then(|target| target.dyn_into::<Element>().ok())
-                .is_some_and(|target| field_value(&target).is_some())
-            {
-                event.stop_propagation();
-            }
-        }) as Box<dyn FnMut(_)>);
-        root.add_event_listener_with_callback(name, listener.as_ref().unchecked_ref())?;
-        listener.forget();
-    }
-    Ok(())
-}
-
-#[derive(Default)]
-struct WebTextInput {
-    fields: RefCell<HashMap<cranpose_core::NodeId, HtmlElement>>,
-    active: RefCell<Option<HtmlElement>>,
-}
-
-impl cranpose_app_shell::PlatformTextInputHandler for WebTextInput {
-    fn show_keyboard(&self) {
-        let Some(node_id) = cranpose_ui::text_field_focus::focused_field_target() else {
-            return;
-        };
-        let Some(node) = self.fields.borrow().get(&node_id).cloned() else {
-            return;
-        };
-        if let Some(editor) = cranpose_ui::text_field_focus::focused_editor_state()
-            && field_value(&node).as_deref() != Some(&editor.text)
-        {
-            let _ = apply_editor_text(
-                &node,
-                &editor.text,
-                editor.selection_start,
-                editor.selection_end,
-            );
-        }
-        *self.active.borrow_mut() = Some(node.clone());
-        let _ = focus_mirror_node(&node);
-    }
-
-    fn hide_keyboard(&self) {
-        let active = self.active.borrow_mut().take();
-        if let Some(node) = active {
-            let _ = node.blur();
-        }
-    }
 }
 
 /// Room for the attributes of a mirror node as the mirror showed it and as
@@ -1051,7 +718,148 @@ impl MirrorOrders {
     }
 }
 
+/// The button a screen reader turns the mirror on with. It sits just
+/// outside the page's corner, where no pointer reaches it, first in the
+/// page, so a reader finds it first. A reader presses a button with a click,
+/// and a keyboard with Enter or Space, which a button turns into a click;
+/// both keys stay away from the app's key listener.
+fn enable_button(
+    document: &Document,
+    app: Rc<RefCell<AppShell<WgpuRenderer>>>,
+    request_frame: Rc<dyn Fn()>,
+) -> Result<HtmlElement, JsValue> {
+    let button = document
+        .create_element("button")?
+        .dyn_into::<HtmlElement>()?;
+    button.set_attribute("aria-label", "Enable accessibility")?;
+    button.set_attribute("data-cranpose-enable-accessibility", "")?;
+    button.set_attribute("tabindex", "0")?;
+    button.style().set_css_text(
+        "position:fixed;left:-1px;top:-1px;width:1px;height:1px;opacity:0;\
+         border:0;padding:0;margin:0;overflow:hidden",
+    );
+    let click = Closure::wrap(Box::new(move |_event: MouseEvent| {
+        if let Ok(mut shell) = app.try_borrow_mut() {
+            shell.set_semantics_enabled(true);
+            request_frame();
+        }
+    }) as Box<dyn FnMut(_)>);
+    button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+    click.forget();
+    attach_field_key_listener(&button)?;
+    document
+        .body()
+        .ok_or("document has no body")?
+        .prepend_with_node_1(&button)?;
+    Ok(button)
+}
+
+/// What the page holds for a screen reader. Until a reader asks for more,
+/// that is one button that turns the mirror on, as Flutter's web engine
+/// offers its semantics: no semantics tree is built and no mirror node is
+/// made while no one reads them.
 pub(crate) struct WebAccessibilityBridge {
+    app: Rc<RefCell<AppShell<WgpuRenderer>>>,
+    canvas: HtmlCanvasElement,
+    links: Rc<MirrorLinks>,
+    text_input: Rc<WebTextInput>,
+    /// The button that turns the mirror on, until it is on.
+    enable: Option<HtmlElement>,
+    mirror: Option<Mirror>,
+}
+
+impl WebAccessibilityBridge {
+    /// Puts the button that turns the mirror on into `document`, unless the
+    /// app's semantics are on already because the app asked for the mirror
+    /// from the start. The mirror is built on the first frame then.
+    pub(crate) fn install(
+        document: &Document,
+        canvas: HtmlCanvasElement,
+        app: Rc<RefCell<AppShell<WgpuRenderer>>>,
+        request_frame: Rc<dyn Fn()>,
+    ) -> Result<Self, JsValue> {
+        let links = Rc::new(MirrorLinks::default());
+        attach_selection_listener(document, Rc::clone(&app), Rc::clone(&links))?;
+        let text_input = WebTextInput::new(
+            document.clone(),
+            canvas.clone(),
+            Rc::downgrade(&app),
+            Rc::clone(&links),
+        );
+        let enable = if app.borrow().semantics_active() {
+            None
+        } else {
+            Some(enable_button(document, Rc::clone(&app), request_frame)?)
+        };
+        Ok(Self {
+            app,
+            canvas,
+            links,
+            text_input,
+            enable,
+            mirror: None,
+        })
+    }
+
+    pub(crate) fn text_input_handler(
+        &self,
+    ) -> Rc<dyn cranpose_app_shell::PlatformTextInputHandler> {
+        self.text_input.clone()
+    }
+
+    /// When a frame must come for the mirror to look at a change the publish
+    /// interval holds back, if one waits.
+    pub(crate) fn sync_wake(&self) -> Option<Instant> {
+        self.mirror
+            .as_ref()
+            .and_then(|mirror| mirror.policy.wake_deadline())
+    }
+
+    /// Runs once a frame. While the app's semantics are off, no reader asked
+    /// for the mirror: text the app asks to read out has no one to hear it,
+    /// and the hidden editor follows the focused field. Once they are on, the
+    /// mirror is built and brought to the app's controls.
+    pub(crate) fn sync(
+        &mut self,
+        document: &Document,
+        shell: &mut AppShell<WgpuRenderer>,
+    ) -> Result<(), JsValue> {
+        if !shell.semantics_active() {
+            accessibility::drain_app_announcements();
+            return self.text_input.follow(shell);
+        }
+        let mirror = match self.mirror.take() {
+            Some(mirror) => mirror,
+            None => self.open(document)?,
+        };
+        let mirror = self.mirror.insert(mirror);
+        mirror.sync(document, shell)?;
+        mirror.take_reader_in(document)
+    }
+
+    /// Builds the mirror a reader turned on. The button leaves, a reader who
+    /// pressed it is taken into the mirror, and text entry moves to the
+    /// mirror's field nodes.
+    fn open(&mut self, document: &Document) -> Result<Mirror, JsValue> {
+        let mirror = Mirror::open(
+            document,
+            self.canvas.clone(),
+            Rc::clone(&self.app),
+            Rc::clone(&self.links),
+            Rc::clone(&self.text_input),
+            self.enable.is_some(),
+        )?;
+        if let Some(button) = self.enable.take() {
+            button.remove();
+        }
+        self.text_input.hand_to_mirror();
+        Ok(mirror)
+    }
+}
+
+/// The mirror: one element in the page per control a reader reaches, kept
+/// over the control it stands for.
+struct Mirror {
     root: HtmlElement,
     canvas: HtmlCanvasElement,
     /// The elements the mirror shows.
@@ -1077,13 +885,19 @@ pub(crate) struct WebAccessibilityBridge {
     polite: HtmlElement,
     assertive: HtmlElement,
     announcement_turn: bool,
+    /// Whether a reader who turned the mirror on still waits to be taken
+    /// into it.
+    reader_waits: bool,
 }
 
-impl WebAccessibilityBridge {
-    pub(crate) fn install(
+impl Mirror {
+    fn open(
         document: &Document,
         canvas: HtmlCanvasElement,
         app: Rc<RefCell<AppShell<WgpuRenderer>>>,
+        links: Rc<MirrorLinks>,
+        text_input: Rc<WebTextInput>,
+        reader_waits: bool,
     ) -> Result<Self, JsValue> {
         let root = mirror_root(document)?;
 
@@ -1095,14 +909,11 @@ impl WebAccessibilityBridge {
         let assertive = live_region(document, "assertive")?;
         body.append_child(&polite)?;
         body.append_child(&assertive)?;
-        let links = Rc::new(MirrorLinks::default());
         attach_click_listener(&root, Rc::clone(&app), Rc::clone(&links))?;
         attach_focus_listener(&root, Rc::clone(&app), Rc::clone(&links))?;
         attach_key_listener(&root, Rc::clone(&app), Rc::clone(&links))?;
         attach_action_listener(&root, Rc::clone(&app), Rc::clone(&links))?;
-        attach_selection_listener(document, Rc::clone(&app), Rc::clone(&links))?;
-        attach_input_listener(&root, Rc::clone(&app), Rc::clone(&links))?;
-        attach_composition_listener(&root, Rc::clone(&app), Rc::clone(&links))?;
+        attach_field_listeners(&root, Rc::clone(&app), Rc::clone(&links))?;
         attach_page_listener(&root, app, Rc::clone(&links))?;
 
         Ok(Self {
@@ -1118,24 +929,35 @@ impl WebAccessibilityBridge {
             dirty: false,
             entries: HashMap::new(),
             links,
-            text_input: Rc::default(),
+            text_input,
             focused_element: None,
             polite,
             assertive,
             announcement_turn: false,
+            reader_waits,
         })
     }
 
-    pub(crate) fn text_input_handler(
-        &self,
-    ) -> Rc<dyn cranpose_app_shell::PlatformTextInputHandler> {
-        self.text_input.clone()
-    }
-
-    /// When a frame must come for the mirror to look at a change the publish
-    /// interval holds back, if one waits.
-    pub(crate) fn sync_wake(&self) -> Option<Instant> {
-        self.policy.wake_deadline()
+    /// Takes a reader who turned the mirror on into it, once it shows the
+    /// app's controls: to the control that holds the app's focus, which the
+    /// sync focused, or else to the first control a reader can focus.
+    fn take_reader_in(&mut self, document: &Document) -> Result<(), JsValue> {
+        if !self.reader_waits || self.dirty || self.previous.elements.is_empty() {
+            return Ok(());
+        }
+        self.reader_waits = false;
+        let inside = document
+            .active_element()
+            .is_some_and(|active| self.root.contains(Some(&active)));
+        if self.focused_element.is_some() || inside {
+            return Ok(());
+        }
+        if let Some(node) = self.root.query_selector("[tabindex=\"0\"]")?
+            && let Ok(node) = node.dyn_into::<HtmlElement>()
+        {
+            focus_field(&node)?;
+        }
+        Ok(())
     }
 
     /// Puts text a screen reader reads out into the live region that matches
@@ -1171,9 +993,9 @@ impl WebAccessibilityBridge {
         }
         self.focused_element = Some(id);
         if edits_text(element) {
-            *self.text_input.active.borrow_mut() = Some(node.clone());
+            self.text_input.set_active(node);
         }
-        focus_mirror_node(node)
+        focus_field(node)
     }
 
     /// Looks at the app's controls and brings the mirror to them. The mirror
@@ -1184,7 +1006,7 @@ impl WebAccessibilityBridge {
     /// controls are as the mirror last saw them. Text the app asks to read
     /// out is spoken every frame, and a live region or a pane title that
     /// changed is spoken when the mirror looks.
-    pub(crate) fn sync(
+    fn sync(
         &mut self,
         document: &Document,
         shell: &mut AppShell<WgpuRenderer>,
@@ -1252,14 +1074,7 @@ impl WebAccessibilityBridge {
         let opened_dialog = accessibility::opened_dialog(&self.previous.elements, &elements);
         let held = reader_focus(document).filter(|_| opened_dialog.is_none());
         let app_focus_before = self.focused_element;
-        let canvas_rect = self.canvas.get_bounding_client_rect();
-        let viewport = shell.viewport_size();
-        let placement = Placement {
-            left: canvas_rect.left(),
-            top: canvas_rect.top(),
-            scale_x: canvas_rect.width() / viewport.0.max(1.0) as f64,
-            scale_y: canvas_rect.height() / viewport.1.max(1.0) as f64,
-        };
+        let placement = Placement::of(&self.canvas, shell.viewport_size());
         let mut next_snapshot = std::mem::take(&mut self.previous);
         let replaced = match next_snapshot.update(elements) {
             Ok(replaced) => replaced,
@@ -1411,7 +1226,7 @@ impl WebAccessibilityBridge {
             && let Ok(node) = node.dyn_into::<HtmlElement>()
             && !node.matches(":focus")?
         {
-            focus_mirror_node(&node)?;
+            focus_field(&node)?;
         }
         Ok(())
     }

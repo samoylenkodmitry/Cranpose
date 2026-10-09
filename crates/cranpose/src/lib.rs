@@ -688,6 +688,13 @@ mod web_accessibility_options;
 mod web_accessibility_order;
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 mod web_lifecycle;
+#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
+mod web_text_input;
+#[cfg(any(
+    test,
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+mod web_text_span;
 
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 mod web_clipboard;

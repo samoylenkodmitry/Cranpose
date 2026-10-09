@@ -9,6 +9,19 @@ Four platforms carry it: iOS through VoiceOver, Android through TalkBack, the
 web through a DOM mirror that a browser screen reader reads, and Linux, macOS
 and Windows through accesskit (Orca, VoiceOver, NVDA, Narrator).
 
+On the web the mirror costs memory and frame time in proportion to the
+controls on screen, so a page builds it only for a reader, as Flutter's web
+engine builds its semantics. Until then the page holds one button, "Enable
+accessibility", first in the page and just outside its corner, where only a
+reader finds it; the app keeps its semantics off and makes no mirror node and
+no live region. A reader presses it with a click, a keyboard with Enter or
+Space. The press turns semantics on, the mirror is built on the next frame,
+and the reader lands on the control that holds the app's focus, or else on the
+first control. An app whose readers should not have to press it builds the
+mirror from the first frame with `with_web_accessibility_on_start(true)`.
+Text entry works with the mirror off: a hidden editor holds the browser's
+focus for the focused field, as section 4j describes.
+
 For web apps, validate the browser and screen reader together. The
 [web support targets and acceptance checks](accessibility_validation.md#browser-and-screen-reader-targets)
 cover JAWS and NVDA on Windows, VoiceOver with Safari, and TalkBack with Chrome.
@@ -148,7 +161,7 @@ Both reach the same four platforms:
 | accesskit (Linux, macOS, Windows) | `Live::Polite` / `Live::Assertive` on the node | a live node under the window, whose value carries the text |
 | iOS | no such notion: Cranpose reads the changed text out | `UIAccessibilityAnnouncementNotification` |
 | Android | TalkBack reads a virtual view's live region only through its host view, so Cranpose reads the changed text out | `announceForAccessibility` on the host view |
-| Web | retained DOM nodes preserve the reader's cursor; changed live text is sent through a persistent announcement region | a hidden `aria-live` region that outlives screen changes |
+| Web | retained DOM nodes preserve the reader's cursor; changed live text is sent through a persistent announcement region | a hidden `aria-live` region that outlives screen changes; before a reader turns the mirror on there is none, and the text is dropped |
 
 Where Cranpose reads the text out itself, it compares the new semantics
 snapshot against the one before it. A live region that just appeared is read;
@@ -264,7 +277,9 @@ for the text, so without a mark it reads the password out loud in a room
 full of people. `Modifier::password()` on the field, Compose's `password`,
 keeps the text out of the shared accessibility projection. A web editor still
 needs its actual value to support native editing, so it uses a password input
-whose browser and operating system apply their native protection policy. Every
+whose browser and operating system apply their native protection policy. The
+hidden editor a web page types through before a reader turns the mirror on is
+a password input too, so a software keyboard does not learn the secret. Every
 exposed password editor has its current value before it receives focus. The
 field keeps the name the app gave it; with no name a reader hears
 "password".
@@ -416,10 +431,25 @@ On the web a keystroke or a caret move patches the focused input in place. A
 rebuild of the mirror would drop the browser's focus and make a reader hear
 the whole field again instead of one character.
 
-The accessible native editor also owns keyboard and IME focus. It is never
-hidden from accessibility while focused. Multiline capability chooses the
-control type independently of its current value, and rendering preserves a
-new browser selection while its selection notification is pending.
+While the mirror is on, the accessible native editor also owns keyboard and
+IME focus. It is never hidden from accessibility while focused. Multiline
+capability chooses the control type independently of its current value, and
+rendering preserves a new browser selection while its selection notification
+is pending.
+
+Before a reader turns the mirror on, a hidden editor takes its place: one
+`<input>` for fields of one line, one `<textarea>` for fields of many, and
+one `<input type="password" autocomplete="current-password">` for fields that
+hold a secret, each made the first time a field needs it, placed over the
+focused field and kept out of the tab order. A software keyboard neither
+learns from nor suggests for the password input. Whether a field holds a
+secret is read once as focus reaches it, from the semantics of the field's
+own node (`SurfaceMut::ime_field_is_password`), with no semantics tree built.
+The editors take typing, IME composition, the clipboard and caret moves
+through the same listeners as the mirror's fields, and hand the focused field
+only the stretch of text that changed. Tab goes to the app, which moves its
+own focus. When a reader turns the mirror on while a field is focused, the
+editors leave the page and the field's mirror node takes the focus.
 
 **The target of a decorated field.** As in Compose, the decoration box of a
 `BasicTextFieldDecorated` is the field: the field's modifier applies to it,

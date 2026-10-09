@@ -1,3 +1,10 @@
+// Presses the page's "Enable accessibility" button until the mirror is built.
+// A Cranpose web app builds no mirror until a screen reader presses it.
+export const ENABLE_MIRROR = `(() => {
+    document.querySelector('[data-cranpose-enable-accessibility]')?.click();
+    return !!document.querySelector('[data-cranpose-accessibility]');
+})()`;
+
 export class Cdp {
     constructor() {
         this.pending = new Map();

@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkMarkdownImages } from "./tests/markdown-images.mjs";
 import { checkImeFocus } from "./tests/ime-focus.mjs";
-import { Cdp } from "./cdp.mjs";
+import { checkEditorWithoutMirror } from "./tests/editor-without-mirror.mjs";
+import { Cdp, ENABLE_MIRROR } from "./cdp.mjs";
 
 const url = process.argv[2];
 assert.ok(url, "pass the URL of a running web demo");
@@ -76,9 +77,13 @@ try {
   await send("Page.enable");
   await send("Runtime.enable");
   await send("Log.enable");
+  await checkEditorWithoutMirror({ send, until, evaluate, report, url });
   await checkImeFocus({ send, until, evaluate, report, url });
   await checkMarkdownImages({ send, until, evaluate, report, url, output });
-  await send("Page.navigate", { url });
+  const counterUrl = new URL(url);
+  counterUrl.searchParams.set("tab", "counter");
+  await send("Page.navigate", { url: counterUrl.href });
+  await until(ENABLE_MIRROR);
   await until(`!!document.querySelector('[data-cranpose-node][aria-label="Increment"]')`);
   await pause(500);
   await evaluate(`(() => {
@@ -104,6 +109,7 @@ try {
   const fixtureUrl = new URL(url);
   fixtureUrl.searchParams.set('tab', 'accessibility_robot');
   await send('Page.navigate', { url: fixtureUrl.href });
+  await until(ENABLE_MIRROR);
   await until(`!!document.querySelector('[data-cranpose-node][aria-label="Remove"]')`);
   const nativeTree = await send('Accessibility.getFullAXTree');
   const accessible = nativeTree.nodes.filter(node => !node.ignored);
@@ -158,11 +164,13 @@ try {
   const listUrl = new URL(url);
   listUrl.searchParams.set("tab", "lazylist");
   await send("Page.navigate", { url: listUrl.href });
+  await until(ENABLE_MIRROR);
   await until(`!!document.querySelector('[data-cranpose-node][role="list"]')`);
   await check("list children belong to their container", `!!document.querySelector('[data-cranpose-node][role="list"] [data-cranpose-node]')`);
   const inputUrl = new URL(url);
   inputUrl.searchParams.set("tab", "textinput");
   await send("Page.navigate", { url: inputUrl.href });
+  await until(ENABLE_MIRROR);
   await until(`!!document.querySelector('[data-cranpose-node] input, input[data-cranpose-node], textarea[data-cranpose-node]')`);
   await evaluate(`(() => {
     window.a11yField = document.querySelector('input[data-cranpose-node], textarea[data-cranpose-node]');

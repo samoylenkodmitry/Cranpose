@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { ENABLE_MIRROR } from "../cdp.mjs";
 
 export async function checkImeFocus({send, until, evaluate, report, url}) {
     const inputUrl = new URL(url);
     inputUrl.searchParams.set("tab", "textinput");
     await send("Page.navigate", {url: inputUrl.href});
+    await until(ENABLE_MIRROR);
     await until(`!!document.querySelector('input[data-cranpose-node], textarea[data-cranpose-node]')`);
     const point = await evaluate(`(() => {
         window.imeField = document.querySelector('input[data-cranpose-node], textarea[data-cranpose-node]');
@@ -94,6 +96,7 @@ export async function checkImeFocus({send, until, evaluate, report, url}) {
 
     inputUrl.searchParams.set("tab", "accessibility_robot");
     await send("Page.navigate", {url: inputUrl.href});
+    await until(ENABLE_MIRROR);
     await until(`!!document.querySelector('[aria-label="Passphrase"]')`);
     assert.equal(await evaluate(`document.querySelector('[aria-label="Passphrase"]').value`),
         "robot-secret-value", "an unfocused native password editor must reflect its application value");

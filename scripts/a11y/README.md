@@ -5,6 +5,8 @@ define the reader interaction checks required in addition to these browser robot
 
 Build and package the release demo with `just web` and `apps/desktop-demo/package-web.sh <site>`.
 
+A page builds no accessibility mirror until a screen reader presses its "Enable accessibility" button, so every runner presses it after it loads a page (`ENABLE_MIRROR` in `cdp.mjs` and `web_ime_robot.py`). `tests/editor-without-mirror.mjs` checks the page before the press: typing and IME composition through the hidden editor, then the hand-over to the mirror with a field focused.
+
 - `just robot-accessibility-web <site> <output>` runs Chromium focus, accessibility and native composition checks. The selection regression defers the selection notification across rendering to verify that an unchanged application caret does not overwrite a newer browser selection.
 - `just test-web-ime-firefox <site> <output> <driver-port> <http-port>` starts geckodriver and a local server, then runs the shared keyboard checks. On a Linux host without a display, run the recipe under `xvfb-run -a`.
 - `just test-web-ime-webdriver <endpoint> safari <url> <output>` connects to a running `safaridriver --port <port>`. Enable Safari's **Allow remote automation**.

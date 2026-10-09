@@ -6,6 +6,13 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+# Presses the page's "Enable accessibility" button until the mirror is built.
+# A Cranpose web app builds no mirror until a screen reader presses it.
+ENABLE_MIRROR = """(() => {
+    document.querySelector('[data-cranpose-enable-accessibility]')?.click();
+    return !!document.querySelector('[data-cranpose-accessibility]');
+})()"""
+
 
 class WebDriver:
     def __init__(self, endpoint, capabilities):
@@ -104,6 +111,7 @@ def state_contains(driver, text):
 
 def run(driver, url, report):
     driver.navigate(url + '?tab=textinput')
+    driver.wait(ENABLE_MIRROR)
     driver.wait("!!document.querySelector('input[data-cranpose-node], textarea[data-cranpose-node]')")
     driver.click(record(driver))
     driver.wait('document.activeElement === window.imeField')
@@ -149,6 +157,7 @@ def run(driver, url, report):
     report['text_events'] = driver.evaluate('window.imeEvents')
 
     driver.navigate(url + '?tab=accessibility_robot')
+    driver.wait(ENABLE_MIRROR)
     driver.wait("!!document.querySelector('[aria-label=\"Passphrase\"]')")
     check(driver, report, 'unfocused password reflects its application value',
           "document.querySelector('[aria-label=\"Passphrase\"]').value === 'robot-secret-value'")
