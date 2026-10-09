@@ -795,12 +795,19 @@ pub struct ComposableGroup<'a> {
     pass: Option<SlotHostPassGuard>,
     runs_body: bool,
     completed: bool,
+    skipped: Cell<bool>,
 }
 
 impl ComposableGroup<'_> {
     /// The recompose scope of the group.
     pub fn scope(&self) -> &RecomposeScope {
         &self.scope
+    }
+
+    /// Skips the group's body: what it composed last stays. The call
+    /// composes nothing more in the group before closing it.
+    pub fn skip(&self) {
+        self.skipped.set(true);
     }
 
     /// Ends the group after its body composed.
@@ -814,8 +821,13 @@ impl Drop for ComposableGroup<'_> {
         if self.completed {
             self.scope.mark_composed_once();
         }
-        self.composer
-            .close_group_in_active_pass(&self.host, &self.scope);
+        if self.skipped.get() {
+            self.composer
+                .close_skipped_group_in_active_pass(&self.host, &self.scope);
+        } else {
+            self.composer
+                .close_group_in_active_pass(&self.host, &self.scope);
+        }
         if let Some(mut pass) = self.pass.take() {
             if self.completed
                 && let Err(err) = self.composer.finish_slot_host_pass(&pass.host)
@@ -1528,6 +1540,24 @@ impl Composer {
             result
         });
         self.close_finished_group(host, scope, result);
+        self.settle_closed_group(scope);
+    }
+
+    /// Closes a group whose body was skipped, in one slot session: its root
+    /// nodes stay attached where they were.
+    #[inline(never)]
+    fn close_skipped_group_in_active_pass(&self, host: &Rc<SlotsHost>, scope: &RecomposeScope) {
+        #[expect(
+            clippy::redundant_closure_for_method_calls,
+            reason = "the method path is not general over the session lifetime"
+        )]
+        let root_nodes = host.with_write_session(|slots| slots.skip_and_end_group());
+        self.attach_root_nodes(root_nodes);
+        self.pop_closed_scope(scope);
+        self.settle_closed_group(scope);
+    }
+
+    fn settle_closed_group(&self, scope: &RecomposeScope) {
         scope.mark_recomposed();
         if let Err(err) = self.flush_pending_commands_if_large() {
             log::error!("mid-composition command flush failed: {err}");
@@ -1551,6 +1581,7 @@ impl Composer {
             pass,
             runs_body,
             completed: false,
+            skipped: Cell::new(false),
         }
     }
 
@@ -1772,6 +1803,10 @@ impl Composer {
         result: FinishGroupResult,
     ) {
         self.handle_finished_group_result(host, Some(scope.id()), result);
+        self.pop_closed_scope(scope);
+    }
+
+    fn pop_closed_scope(&self, scope: &RecomposeScope) {
         if let Some(popped) = self.scope_stack().pop() {
             debug_assert_eq!(
                 popped.id(),

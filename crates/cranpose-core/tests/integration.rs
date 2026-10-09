@@ -8,6 +8,7 @@ mod ordered_parent;
 mod recompose_child_order;
 #[cfg(feature = "inspection")]
 mod recomposition_inspection;
+mod returned_values;
 mod scene_attachment_scratch;
 mod snapshot_observation;
 mod snapshot_runtime_thread_isolation;

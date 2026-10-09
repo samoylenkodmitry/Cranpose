@@ -49,8 +49,8 @@ pub use blocking::{
     withBlocking,
 };
 pub use callbacks::{
-    CallbackHolder, CallbackHolder1, ParamSlot, ParamState, ReturnSlot, SharedParam, refresh_param,
-    refresh_shared_param,
+    CallbackHolder, CallbackHolder1, ParamReturnState, ParamSlot, ParamState, ReturnSlot,
+    SharedParam, refresh_param, refresh_shared_param,
 };
 pub use composer::{
     BranchGroupGuard, CapturedCompositionContext, ComposableGroup, Composer, ValueSlotHandle,
