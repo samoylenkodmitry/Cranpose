@@ -100,14 +100,17 @@ impl TextPreparedLayoutOwner {
         options: TextLayoutOptions,
     ) {
         let mut source = self.source.borrow_mut();
-        let same_style = Arc::ptr_eq(&source.style, style) || *source.style == **style;
+        let shared_style = Arc::ptr_eq(&source.style, style);
+        let same_style = shared_style || *source.style == **style;
         if source.text == *text && same_style && source.options == options {
             return;
         }
         if !same_style {
             source.style_hash = style.render_hash();
         }
-        source.style = Arc::clone(style);
+        if !shared_style {
+            source.style = Arc::clone(style);
+        }
         source.text = Rc::clone(text);
         source.options = options;
         source.shares_layouts = false;
@@ -507,27 +510,32 @@ impl PartialEq for TextModifierElement {
 const SHARED_TEXT_STYLES: usize = 16;
 
 thread_local! {
-    /// The styles texts were last composed with, most recent first.
+    /// Styles texts were composed with, those in use toward the front.
     static RECENT_TEXT_STYLES: RefCell<Vec<Arc<TextStyle>>> = const { RefCell::new(Vec::new()) };
 }
 
 /// `style` shared with the texts recently composed with an equal one, so a
 /// screen of texts in a few styles keeps a few copies, not one a text, and
 /// a node updated to an element of the same style compares pointers. A
-/// style none of the last [`SHARED_TEXT_STYLES`] equals gets a copy of its
-/// own and becomes the most recent.
+/// style none of the kept [`SHARED_TEXT_STYLES`] equals gets a copy of its
+/// own, kept first; the last kept one goes.
 fn shared_text_style(style: TextStyle) -> Arc<TextStyle> {
     RECENT_TEXT_STYLES.with_borrow_mut(|recent| {
-        let shared = match recent.iter().position(|kept| **kept == style) {
-            Some(0) => return Arc::clone(&recent[0]),
-            Some(index) => recent.remove(index),
-            None => {
-                recent.truncate(SHARED_TEXT_STYLES - 1);
-                Arc::new(style)
+        match recent.iter().position(|kept| **kept == style) {
+            Some(0) => Arc::clone(&recent[0]),
+            // One step toward the front: styles in use stay among the first
+            // compared, without moving the whole list on every hit.
+            Some(index) => {
+                recent.swap(index, index - 1);
+                Arc::clone(&recent[index - 1])
             }
-        };
-        recent.insert(0, Arc::clone(&shared));
-        shared
+            None => {
+                let shared = Arc::new(style);
+                recent.truncate(SHARED_TEXT_STYLES - 1);
+                recent.insert(0, Arc::clone(&shared));
+                shared
+            }
+        }
     })
 }
 
