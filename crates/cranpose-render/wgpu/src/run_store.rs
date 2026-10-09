@@ -1452,15 +1452,16 @@ impl RunStore {
         }
     }
 
-    /// The draws one stored run takes: its segments in record order, one
-    /// draw for each run of them a single pipeline draws.
+    /// Appends the draws one stored run takes to `out`: its segments in
+    /// record order, one draw for each run of them a single pipeline draws.
     pub(crate) fn stored_run_draws(
         &mut self,
         device: &wgpu::Device,
         run: &RunDraw,
         key_for: &mut dyn FnMut(&RecordSegment) -> crate::render::ShapePipelineKey,
-        out: &mut SmallVec<[RunDrawCall; 8]>,
+        out: &mut Vec<RunDrawCall>,
     ) {
+        let start = out.len();
         for segment in run.segment_records() {
             let key = key_for(segment);
             let band_class = if self.mode.storage {
@@ -1470,14 +1471,14 @@ impl RunStore {
             };
             let records = segment.start..segment.start + segment.count;
             let occluders = segment.occluders;
-            if !out
+            if !out[start..]
                 .last_mut()
                 .is_some_and(|last| last.absorb(key, band_class, records.clone(), occluders))
             {
                 out.push(RunDrawCall::new(key, band_class, records, occluders));
             }
         }
-        self.ensure_strip_indices(device, out);
+        self.ensure_strip_indices(device, &out[start..]);
     }
 
     pub(crate) fn mode(&self) -> RunBufferMode {
