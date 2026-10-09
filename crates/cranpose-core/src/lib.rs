@@ -52,7 +52,9 @@ pub use callbacks::{
     CallbackHolder, CallbackHolder1, ParamSlot, ParamState, ReturnSlot, SharedParam, refresh_param,
     refresh_shared_param,
 };
-pub use composer::{BranchGroupGuard, CapturedCompositionContext, Composer, ValueSlotHandle};
+pub use composer::{
+    BranchGroupGuard, CapturedCompositionContext, ComposableGroup, Composer, ValueSlotHandle,
+};
 pub(crate) use composer::{ComposerCore, EmittedNode, ParentAttachMode, ParentFrame};
 pub use composition::{Composition, ROOT_RENDER_REPLAY_LIMIT};
 pub use composition_locals::{
@@ -854,7 +856,7 @@ impl Drop for RecomposeScopeInner {
             });
         }
         if self.enqueued.replace(false) {
-            self.runtime.mark_scope_recomposed(id);
+            self.runtime.mark_scope_recomposed();
         }
     }
 }
@@ -918,6 +920,10 @@ impl RecomposeScope {
         self.inner.invalid.get()
     }
 
+    pub(crate) fn is_enqueued(&self) -> bool {
+        self.inner.enqueued.get()
+    }
+
     pub fn is_active(&self) -> bool {
         self.inner.active.get()
     }
@@ -963,9 +969,7 @@ impl RecomposeScope {
             return;
         }
         if !self.inner.enqueued.replace(true) {
-            self.inner
-                .runtime
-                .register_invalid_scope(self.id(), self.downgrade());
+            self.inner.runtime.register_invalid_scope(self.downgrade());
         }
     }
 
@@ -986,7 +990,7 @@ impl RecomposeScope {
         self.inner.unknown_invalidation_source.set(false);
         self.inner.invalidation_sources.borrow_mut().clear();
         if self.inner.enqueued.replace(false) {
-            self.inner.runtime.mark_scope_recomposed(self.id());
+            self.inner.runtime.mark_scope_recomposed();
         }
         let pending = self.inner.pending_recompose.replace(false);
         if pending {
@@ -1150,6 +1154,20 @@ impl RecomposeScope {
         (key != 0).then_some(key)
     }
 
+    /// What decides the slot host a recomposition of this scope runs in: its
+    /// table's storage key and the runtime state that table belongs to.
+    pub(crate) fn slots_host_identity(
+        &self,
+    ) -> (usize, *const crate::composer::ComposerRuntimeState) {
+        let state = self
+            .inner
+            .slots_runtime_state
+            .borrow()
+            .as_ref()
+            .map_or(std::ptr::null(), std::rc::Weak::as_ptr);
+        (self.inner.slots_storage_key.get(), state)
+    }
+
     pub(crate) fn slots_runtime_state(&self) -> Option<Rc<crate::composer::ComposerRuntimeState>> {
         self.inner
             .slots_runtime_state
@@ -1167,13 +1185,13 @@ impl RecomposeScope {
             .deactivations
             .set(self.inner.deactivations.get() + 1);
         if self.inner.enqueued.replace(false) {
-            self.inner.runtime.mark_scope_recomposed(self.id());
+            self.inner.runtime.mark_scope_recomposed();
         }
     }
 
     pub(crate) fn defer_until_reactivated(&self) {
         if self.inner.enqueued.replace(false) {
-            self.inner.runtime.mark_scope_recomposed(self.id());
+            self.inner.runtime.mark_scope_recomposed();
         }
     }
 
@@ -1183,9 +1201,7 @@ impl RecomposeScope {
             && self.is_effectively_active()
             && !self.inner.enqueued.replace(true)
         {
-            self.inner
-                .runtime
-                .register_invalid_scope(self.id(), self.downgrade());
+            self.inner.runtime.register_invalid_scope(self.downgrade());
         }
     }
 
@@ -1337,7 +1353,9 @@ pub enum Phase {
     Layout,
 }
 
-pub use composer_context::{note_nested_slots_host, with_composer as with_current_composer};
+pub use composer_context::{
+    __current_composer, note_nested_slots_host, with_composer as with_current_composer,
+};
 
 #[expect(non_snake_case)]
 pub fn withCurrentComposer<R>(f: impl FnOnce(&Composer) -> R) -> R {

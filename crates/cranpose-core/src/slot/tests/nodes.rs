@@ -117,28 +117,6 @@ fn node_range_outside_current_group_segment_is_ignored() {
 }
 
 #[test]
-fn collecting_root_nodes_with_stale_group_anchor_returns_empty() {
-    const GROUP_KEY: Key = 364_001;
-
-    let mut harness = SlotHarness::new();
-
-    harness.begin_pass(SlotPassMode::Compose);
-    let group_anchor = harness.session(|session| {
-        let started = begin_unkeyed(session, GROUP_KEY, None);
-        session.record_node_with_parent(42, 1, None, crate::slot::BRANCH_PATH_ROOT);
-        let result = session.finish_group_body();
-        assert!(result.detached_children.is_empty());
-        session.end_group();
-        started.anchor
-    });
-    harness.finish_pass();
-
-    harness.table.anchors.mark_detached(group_anchor);
-
-    assert_eq!(harness.table.first_subtree_root_node_id(group_anchor), None);
-}
-
-#[test]
 fn record_node_reports_explicit_insert_and_reuse() {
     const GROUP_KEY: Key = 365;
 

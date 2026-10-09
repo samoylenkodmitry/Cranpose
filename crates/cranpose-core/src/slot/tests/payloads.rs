@@ -611,7 +611,7 @@ fn read_value_mut_updates_existing_slot_in_place() {
     });
     harness.finish_pass();
 
-    *harness.table.read_value_mut::<i32>(slot) = 77;
+    *harness.table.value_at_mut::<i32>(slot, None) = 77;
 
     assert_eq!(*harness.table.read_value::<i32>(slot), 77);
 }
@@ -639,7 +639,7 @@ fn cross_table_value_slot_read_reports_foreign_table_before_anchor_resolution() 
     assert_eq!(first_slot.anchor(), second_slot.anchor());
     assert_ne!(first_slot.storage_id(), second_slot.storage_id());
     assert_eq!(
-        second.table.try_read_value::<i32>(first_slot),
+        second.table.try_value_at::<i32>(first_slot, None),
         Err(ValueSlotError::ForeignTable {
             table_storage_id: second.table.storage_id(),
             slot_storage_id: first_slot.storage_id(),

@@ -189,6 +189,7 @@ impl SlotTable {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn record_node_at_cursor(
         &mut self,
         owner: AnchorId,
@@ -204,6 +205,33 @@ impl SlotTable {
             );
             return NodeSlotUpdate::Inserted { id, generation };
         };
+        self.record_node_at(
+            owner,
+            group_index,
+            node_index,
+            id,
+            parent_id,
+            generation,
+            source,
+        )
+    }
+
+    /// Records node `id` at `node_index` of `owner`'s group, which sits at
+    /// `group_index`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a node record's fields and where it goes"
+    )]
+    pub(super) fn record_node_at(
+        &mut self,
+        owner: AnchorId,
+        group_index: usize,
+        node_index: usize,
+        id: NodeId,
+        parent_id: Option<NodeId>,
+        generation: u32,
+        source: crate::Key,
+    ) -> NodeSlotUpdate {
         let update = self.record_group_node(
             group_index,
             node_index,
@@ -223,13 +251,12 @@ impl SlotTable {
         update
     }
 
-    pub(super) fn find_node_record_by_source(
+    pub(super) fn find_node_record_by_source_at(
         &self,
-        owner: AnchorId,
+        group_index: usize,
         from_index: usize,
         source: crate::Key,
     ) -> Option<(usize, NodeId, u32)> {
-        let group_index = self.active_group_index(owner)?;
         let records = self.group_node_records_at(group_index);
         (from_index..records.len()).find_map(|index| {
             let record = &records[index];
@@ -237,15 +264,12 @@ impl SlotTable {
         })
     }
 
-    pub(super) fn rotate_node_record_to_cursor(
+    pub(super) fn rotate_node_record_to_cursor_at(
         &mut self,
-        owner: AnchorId,
+        group_index: usize,
         found_index: usize,
         cursor_index: usize,
     ) {
-        let Some(group_index) = self.active_group_index(owner) else {
-            return;
-        };
         let start = self.group_node_start_at(group_index);
         self.nodes[start + cursor_index..=start + found_index].rotate_right(1);
     }

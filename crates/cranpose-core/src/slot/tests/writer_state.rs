@@ -208,39 +208,6 @@ fn skip_and_end_group_with_stale_frame_anchor_do_not_panic() {
 }
 
 #[test]
-fn begin_group_repairs_corrupt_active_anchor_index_from_group_record() {
-    const GROUP_KEY: Key = 604;
-
-    let mut harness = SlotHarness::new();
-
-    harness.begin_pass(SlotPassMode::Compose);
-    let group_anchor = harness.session(|session| {
-        let started = begin_unkeyed(session, GROUP_KEY, None);
-        let result = session.finish_group_body();
-        assert!(result.detached_children.is_empty());
-        session.end_group();
-        started.anchor
-    });
-    harness.finish_pass();
-
-    harness.table.anchors.set_active(group_anchor, 99);
-
-    harness.begin_pass(SlotPassMode::Compose);
-    let reused = harness.session(|session| {
-        let started = begin_unkeyed(session, GROUP_KEY, None);
-        assert_eq!(started.kind, GroupStartKind::Reused);
-        let result = session.finish_group_body();
-        assert!(result.detached_children.is_empty());
-        session.end_group();
-        started.anchor
-    });
-    harness.finish_pass();
-
-    assert_eq!(reused, group_anchor);
-    assert_eq!(harness.table.active_group_index(group_anchor), Some(0));
-}
-
-#[test]
 fn node_count_adjustment_stops_at_corrupt_parent_anchor() {
     const PARENT_KEY: Key = 606;
     const CHILD_KEY: Key = 607;

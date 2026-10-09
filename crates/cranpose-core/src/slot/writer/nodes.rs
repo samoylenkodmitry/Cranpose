@@ -1,17 +1,7 @@
 use super::super::{NodeRecord, NodeSlotUpdate, RootNodeIds, SlotTable, SlotWriteSession};
-use crate::{AnchorId, NodeId};
+use crate::NodeId;
 
 impl SlotTable {
-    fn subtree_node_records(&self, group_anchor: AnchorId) -> &[NodeRecord] {
-        let Some(group_index) = self.active_group_index(group_anchor) else {
-            log::error!(
-                "slot table ignored root-node collection for stale group anchor {group_anchor:?}"
-            );
-            return &[];
-        };
-        self.subtree_node_records_at(group_index)
-    }
-
     fn subtree_node_records_at(&self, group_index: usize) -> &[NodeRecord] {
         let group = &self.groups[group_index];
         let start = group.node_start as usize;
@@ -48,11 +38,11 @@ impl SlotTable {
         roots
     }
 
-    pub(in crate::slot) fn first_subtree_root_node_id(
+    pub(in crate::slot) fn first_subtree_root_node_id_at(
         &self,
-        group_anchor: AnchorId,
+        group_index: usize,
     ) -> Option<NodeId> {
-        let records = self.subtree_node_records(group_anchor);
+        let records = self.subtree_node_records_at(group_index);
         let first = records.first().map(|record| record.id);
         #[cfg(any(test, debug_assertions))]
         if crate::slot_validation_diagnostics_enabled() {
@@ -66,7 +56,23 @@ impl SlotTable {
     }
 }
 
+/// A node record of the open group that a node emitted again may adopt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FoundNodeRecord {
+    index: usize,
+    pub(crate) id: NodeId,
+    pub(crate) generation: u32,
+}
+
 impl SlotWriteSession<'_> {
+    fn open_node_group(&self) -> Option<(usize, usize)> {
+        let frame = self.state.group_stack.last()?;
+        let group_index = self
+            .table
+            .open_group_index(frame.group_anchor, frame.group_index)?;
+        Some((group_index, frame.node_cursor))
+    }
+
     pub(crate) fn record_node_with_parent(
         &mut self,
         id: NodeId,
@@ -75,70 +81,77 @@ impl SlotWriteSession<'_> {
         source: crate::Key,
     ) -> NodeSlotUpdate {
         let source = self.state.mix_branch_fold(source);
-        let Some(frame) = self.state.group_stack.last_mut() else {
+        let Some(frame) = self.state.group_stack.last() else {
             log::error!(
                 "slot writer record_node_with_parent called with an empty group stack; id={id}"
             );
             return NodeSlotUpdate::Inserted { id, generation };
         };
-        let group_anchor = frame.group_anchor;
-        let result = self.table.record_node_at_cursor(
-            group_anchor,
-            frame.node_cursor,
-            id,
-            parent_id,
-            generation,
-            source,
-        );
-
-        frame.advance_node_cursor();
+        let (group_anchor, node_cursor) = (frame.group_anchor, frame.node_cursor);
+        let result = match self.table.open_group_index(group_anchor, frame.group_index) {
+            Some(group_index) => self.table.record_node_at(
+                group_anchor,
+                group_index,
+                node_cursor,
+                id,
+                parent_id,
+                generation,
+                source,
+            ),
+            None => {
+                log::error!(
+                    "slot table ignored node record for stale owner anchor {group_anchor:?}; node id={id}"
+                );
+                NodeSlotUpdate::Inserted { id, generation }
+            }
+        };
+        if let Some(frame) = self.state.group_stack.last_mut() {
+            frame.advance_node_cursor();
+        }
         result
     }
 
-    fn locate_node_record_by_source(
-        &mut self,
-        source: crate::Key,
-        skip_matches: usize,
-    ) -> Option<(usize, usize, NodeId, u32)> {
-        let mixed = self.state.mix_branch_fold(source);
-        let frame = self.state.group_stack.last()?;
-        let (group_anchor, cursor) = (frame.group_anchor, frame.node_cursor);
-        let mut from = cursor;
-        let mut remaining = skip_matches;
-        loop {
-            let (found, id, generation) =
-                self.table
-                    .find_node_record_by_source(group_anchor, from, mixed)?;
-            if remaining == 0 {
-                return Some((found, cursor, id, generation));
-            }
-            remaining -= 1;
-            from = found + 1;
-        }
-    }
-
+    /// The `skip_matches`th node record at or after the node cursor that a
+    /// node emitted from `source` left.
     pub(crate) fn peek_node_record_by_source(
         &mut self,
         source: crate::Key,
         skip_matches: usize,
-    ) -> Option<(NodeId, u32)> {
-        self.locate_node_record_by_source(source, skip_matches)
-            .map(|(_, _, id, generation)| (id, generation))
+    ) -> Option<FoundNodeRecord> {
+        let mixed = self.state.mix_branch_fold(source);
+        let (group_index, cursor) = self.open_node_group()?;
+        let mut from = cursor;
+        let mut remaining = skip_matches;
+        loop {
+            let (index, id, generation) =
+                self.table
+                    .find_node_record_by_source_at(group_index, from, mixed)?;
+            if remaining == 0 {
+                return Some(FoundNodeRecord {
+                    index,
+                    id,
+                    generation,
+                });
+            }
+            remaining -= 1;
+            from = index + 1;
+        }
     }
 
-    pub(crate) fn adopt_node_record_by_source(
+    /// Moves `found` to the node cursor and records its node there.
+    pub(crate) fn adopt_node_record(
         &mut self,
+        found: FoundNodeRecord,
+        parent_id: Option<NodeId>,
         source: crate::Key,
-        skip_matches: usize,
-    ) -> Option<(NodeId, u32)> {
-        let (found, cursor, id, generation) =
-            self.locate_node_record_by_source(source, skip_matches)?;
-        if found > cursor {
-            let group_anchor = self.state.group_stack.last()?.group_anchor;
+    ) -> NodeSlotUpdate {
+        if let Some((group_index, cursor)) = self.open_node_group()
+            && found.index > cursor
+        {
             self.table
-                .rotate_node_record_to_cursor(group_anchor, found, cursor);
+                .rotate_node_record_to_cursor_at(group_index, found.index, cursor);
         }
-        Some((id, generation))
+        self.record_node_with_parent(found.id, found.generation, parent_id, source)
     }
 
     #[cfg(test)]

@@ -3,7 +3,7 @@ use std::any::TypeId;
 use crate::{
     Applier, ChildList, Command, CommandQueue, Composer, DirtyBubble, EmittedNode, MutableState,
     Node, NodeError, NodeId, OwnedMutableState, ParentAttachMode, ParentFrame, debug_scope_label,
-    slot::NodeSlotUpdate,
+    recompose::RecomposeChildCursor, slot::NodeSlotUpdate,
 };
 
 impl Composer {
@@ -52,32 +52,29 @@ impl Composer {
         let adopted = {
             let mut skip = 0;
             loop {
-                let Some((id, slot_gen)) = self
+                let Some(found) = self
                     .with_slot_session_mut(|slots| slots.peek_node_record_by_source(source, skip))
                 else {
                     break None;
                 };
                 let (type_ok, gen_ok) = {
                     let mut applier = self.borrow_applier();
-                    let gen_ok = applier.node_generation(id) == slot_gen;
-                    let type_ok = match applier.get_mut(id) {
+                    let gen_ok = applier.node_generation(found.id) == found.generation;
+                    let type_ok = match applier.get_mut(found.id) {
                         Ok(node) => node.as_any_mut().downcast_ref::<N>().is_some(),
                         Err(_) => false,
                     };
                     (type_ok, gen_ok)
                 };
                 if type_ok && gen_ok {
-                    let committed = self.with_slot_session_mut(|slots| {
-                        slots.adopt_node_record_by_source(source, skip)
-                    });
-                    debug_assert_eq!(committed, Some((id, slot_gen)));
-                    break Some((id, slot_gen));
+                    break Some(found);
                 }
                 skip += 1;
             }
         };
 
-        if let Some((id, slot_gen)) = adopted {
+        if let Some(found) = adopted {
+            let id = found.id;
             let scope_debug = self.current_recompose_scope().map_or((0, None), |scope| {
                 (scope.id(), debug_scope_label(scope.id()))
             });
@@ -91,16 +88,15 @@ impl Composer {
             self.commands_mut().push(Command::update_node::<N>(id));
             self.attach_to_parent(id);
             let parent_id = self.planned_node_parent(id);
-            let recorded = self.with_slot_session_mut(|slots| {
-                slots.record_node_with_parent(id, slot_gen, parent_id, source)
-            });
+            let recorded = self
+                .with_slot_session_mut(|slots| slots.adopt_node_record(found, parent_id, source));
             match recorded {
                 NodeSlotUpdate::Reused {
                     id: recorded_id,
                     generation,
                 } => {
                     debug_assert_eq!(recorded_id, id);
-                    debug_assert_eq!(generation, slot_gen);
+                    debug_assert_eq!(generation, found.generation);
                 }
                 NodeSlotUpdate::Inserted { .. } => {
                     log::warn!(
@@ -120,7 +116,6 @@ impl Composer {
                     self.queue_replaced_slot_node_removal(old_id, old_generation);
                 }
             }
-            self.core.last_node_reused.set(Some(true));
             return id;
         }
 
@@ -188,7 +183,6 @@ impl Composer {
                 );
             }
         }
-        self.core.last_node_reused.set(Some(false));
         id
     }
 
@@ -228,10 +222,26 @@ impl Composer {
         })
     }
 
-    fn advance_recompose_child_cursor(&self) -> Option<usize> {
-        let cursor = self.core.recompose_child_cursor.get()?;
-        self.core.recompose_child_cursor.set(Some(cursor + 1));
-        Some(cursor)
+    fn skip_recompose_child(&self) {
+        let cursor = match self.core.recompose_child_cursor.get() {
+            RecomposeChildCursor::After { first, placed } => RecomposeChildCursor::After {
+                first,
+                placed: placed + 1,
+            },
+            RecomposeChildCursor::At(index) => RecomposeChildCursor::At(index + 1),
+            RecomposeChildCursor::Unknown => return,
+        };
+        self.core.recompose_child_cursor.set(cursor);
+    }
+
+    fn next_recompose_insert_index(&self) -> Option<usize> {
+        let RecomposeChildCursor::At(index) = self.resolve_recompose_child_cursor() else {
+            return None;
+        };
+        self.core
+            .recompose_child_cursor
+            .set(RecomposeChildCursor::At(index + 1));
+        Some(index)
     }
 
     pub(crate) fn attach_to_parent(&self, id: NodeId) {
@@ -327,10 +337,10 @@ impl Composer {
             };
             match parent_status {
                 Some(existing) if existing == parent_hint => {
-                    self.advance_recompose_child_cursor();
+                    self.skip_recompose_child();
                 }
                 None => {
-                    let insert_index = self.advance_recompose_child_cursor();
+                    let insert_index = self.next_recompose_insert_index();
                     self.commands_mut().push(Command::AttachChild {
                         parent_id: parent_hint,
                         child_id: id,
@@ -374,18 +384,14 @@ impl Composer {
     }
 
     pub fn push_parent(&self, id: NodeId) {
-        let reused = self.core.last_node_reused.take().unwrap_or(true);
         let in_subcompose = !self.core.subcompose_stack.borrow().is_empty();
 
-        let mut previous = ChildList::new();
-        if reused || in_subcompose {
-            previous.extend(self.get_node_children(id));
+        let children = self.get_node_children(id);
+        let previous = if children.is_empty() {
+            ChildList::new()
         } else {
-            let existing_children = self.get_node_children(id);
-            if !existing_children.is_empty() {
-                previous.extend(existing_children);
-            }
-        }
+            ChildList::from_slice(&children)
+        };
         let attach_mode = if in_subcompose || !previous.is_empty() {
             ParentAttachMode::DeferredSync
         } else {
@@ -445,6 +451,7 @@ impl Composer {
     /// This is useful during measure-time subcomposition to ensure newly created
     /// nodes are available for measurement before the full composition is committed.
     pub fn apply_pending_commands(&self) -> Result<(), NodeError> {
+        self.resolve_recompose_child_cursor();
         let mut commands = self.take_commands();
         let runtime_handle = self.runtime_handle();
         let result = {

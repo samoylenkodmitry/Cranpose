@@ -18,9 +18,9 @@ use std::{
 #[cfg(any(feature = "internal", test))]
 use crate::frame_clock::FrameClock;
 use crate::{
-    Applier, Command, FrameCallbackId, Key, MutableStateInner, NodeError, RecomposeScopeInner,
-    ScopeId,
-    collections::map::{HashMap, HashSet},
+    Applier, Command, FrameCallbackId, Key, MutableStateInner, NodeError, RecomposeScope,
+    RecomposeScopeInner, ScopeId,
+    collections::map::HashMap,
     platform::{RuntimeScheduler, SchedulerRef},
     state::{MutationPolicy, NeverEqual},
 };
@@ -79,7 +79,6 @@ pub struct RuntimeDebugStats {
     pub node_updates_len: usize,
     pub node_updates_cap: usize,
     pub invalid_scopes_len: usize,
-    pub invalid_scopes_cap: usize,
     pub scope_queue_len: usize,
     pub scope_queue_cap: usize,
     pub frame_callbacks_len: usize,
@@ -414,8 +413,8 @@ struct RuntimeInner {
     scheduler: SchedulerRef,
     needs_frame: RefCell<bool>,
     node_updates: RefCell<Vec<Command>>,
-    invalid_scopes: RefCell<HashSet<ScopeId>>,
-    scope_queue: RefCell<Vec<(ScopeId, Weak<RecomposeScopeInner>)>>,
+    invalid_scope_count: Cell<usize>,
+    scope_queue: RefCell<Vec<Weak<RecomposeScopeInner>>>,
     frame_callbacks: RefCell<VecDeque<FrameCallbackEntry>>,
     next_frame_callback_id: Cell<u64>,
     last_frame_time_nanos: Cell<Option<u64>>,
@@ -459,7 +458,7 @@ impl RuntimeInner {
             scheduler,
             needs_frame: RefCell::new(false),
             node_updates: RefCell::new(Vec::new()),
-            invalid_scopes: RefCell::new(HashSet::default()),
+            invalid_scope_count: Cell::new(0),
             scope_queue: RefCell::new(Vec::new()),
             frame_callbacks: RefCell::new(VecDeque::new()),
             next_frame_callback_id: Cell::new(1),
@@ -500,41 +499,60 @@ impl RuntimeInner {
         !self.node_updates.borrow().is_empty() || self.has_invalid_scopes()
     }
 
-    fn register_invalid_scope(&self, id: ScopeId, scope: Weak<RecomposeScopeInner>) {
-        let mut invalid = self.invalid_scopes.borrow_mut();
-        if invalid.insert(id) {
-            self.scope_queue.borrow_mut().push((id, scope));
+    fn register_invalid_scope(&self, scope: Weak<RecomposeScopeInner>) {
+        self.invalid_scope_count
+            .set(self.invalid_scope_count.get() + 1);
+        self.scope_queue.borrow_mut().push(scope);
+        self.schedule();
+    }
+
+    fn requeue_invalid_scope(&self, scope: &RecomposeScope) {
+        if scope.is_enqueued() {
+            self.scope_queue.borrow_mut().push(scope.downgrade());
             self.schedule();
         }
     }
 
-    fn requeue_invalid_scope(&self, id: ScopeId, scope: Weak<RecomposeScopeInner>) {
-        if self.invalid_scopes.borrow().contains(&id) {
-            self.scope_queue.borrow_mut().push((id, scope));
-            self.schedule();
+    fn mark_scope_recomposed(&self) {
+        self.invalid_scope_count
+            .set(self.invalid_scope_count.get().saturating_sub(1));
+    }
+
+    fn take_invalidated_scopes(&self) -> Option<Vec<RecomposeScope>> {
+        let mut pending = std::mem::take(&mut *self.scope_queue.borrow_mut());
+        if pending.is_empty() {
+            return None;
         }
-    }
-
-    fn mark_scope_recomposed(&self, id: ScopeId) {
-        self.invalid_scopes.borrow_mut().remove(&id);
-    }
-
-    fn take_invalidated_scopes(&self) -> Vec<(ScopeId, Weak<RecomposeScopeInner>)> {
+        let scopes: Vec<RecomposeScope> = pending
+            .iter()
+            .filter_map(RecomposeScope::upgrade)
+            .filter(RecomposeScope::is_enqueued)
+            .collect();
+        pending.clear();
         let mut queue = self.scope_queue.borrow_mut();
         if queue.is_empty() {
-            return Vec::new();
+            std::mem::swap(&mut *queue, &mut pending);
         }
-        let pending: Vec<_> = queue.drain(..).collect();
         drop(queue);
-        let invalid = self.invalid_scopes.borrow();
-        pending
-            .into_iter()
-            .filter(|(id, _)| invalid.contains(id))
-            .collect()
+        (!scopes.is_empty()).then_some(scopes)
     }
 
     fn has_invalid_scopes(&self) -> bool {
-        !self.invalid_scopes.borrow().is_empty()
+        self.invalid_scope_count.get() != 0
+    }
+
+    fn queued_invalid_scope_ids(&self) -> Vec<ScopeId> {
+        let mut ids: Vec<ScopeId> = self
+            .scope_queue
+            .borrow()
+            .iter()
+            .filter_map(RecomposeScope::upgrade)
+            .filter(RecomposeScope::is_enqueued)
+            .map(|scope| scope.id())
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids
     }
 
     fn increment_live_recompose_scope_count(&self) {
@@ -845,7 +863,6 @@ impl RuntimeInner {
 
     fn debug_stats(&self) -> RuntimeDebugStats {
         let node_updates = self.node_updates.borrow();
-        let invalid_scopes = self.invalid_scopes.borrow();
         let scope_queue = self.scope_queue.borrow();
         let frame_callbacks = self.frame_callbacks.borrow();
         let local_tasks = self.local_tasks.borrow();
@@ -856,8 +873,7 @@ impl RuntimeInner {
         RuntimeDebugStats {
             node_updates_len: node_updates.len(),
             node_updates_cap: node_updates.capacity(),
-            invalid_scopes_len: invalid_scopes.len(),
-            invalid_scopes_cap: invalid_scopes.capacity(),
+            invalid_scopes_len: self.invalid_scope_count.get(),
             scope_queue_len: scope_queue.len(),
             scope_queue_cap: scope_queue.capacity(),
             frame_callbacks_len: frame_callbacks.len(),
@@ -1337,29 +1353,28 @@ impl RuntimeHandle {
             .is_some_and(|inner| inner.has_updates())
     }
 
-    pub(crate) fn mark_scope_recomposed(&self, id: ScopeId) {
+    pub(crate) fn mark_scope_recomposed(&self) {
         if let Some(inner) = self.inner.upgrade() {
-            inner.mark_scope_recomposed(id);
+            inner.mark_scope_recomposed();
         }
     }
 
-    pub(crate) fn register_invalid_scope(&self, id: ScopeId, scope: Weak<RecomposeScopeInner>) {
+    pub(crate) fn register_invalid_scope(&self, scope: Weak<RecomposeScopeInner>) {
         if let Some(inner) = self.inner.upgrade() {
-            inner.register_invalid_scope(id, scope);
+            inner.register_invalid_scope(scope);
         }
     }
 
-    pub(crate) fn requeue_invalid_scope(&self, id: ScopeId, scope: Weak<RecomposeScopeInner>) {
+    pub(crate) fn requeue_invalid_scope(&self, scope: &RecomposeScope) {
         if let Some(inner) = self.inner.upgrade() {
-            inner.requeue_invalid_scope(id, scope);
+            inner.requeue_invalid_scope(scope);
         }
     }
 
-    pub(crate) fn take_invalidated_scopes(&self) -> Vec<(ScopeId, Weak<RecomposeScopeInner>)> {
+    pub(crate) fn take_invalidated_scopes(&self) -> Option<Vec<RecomposeScope>> {
         self.inner
             .upgrade()
-            .map(|inner| inner.take_invalidated_scopes())
-            .unwrap_or_default()
+            .and_then(|inner| inner.take_invalidated_scopes())
     }
 
     /// Releases the retained state of the movable content with identity
@@ -1422,7 +1437,7 @@ impl RuntimeHandle {
     pub fn debug_invalid_scope_ids(&self) -> Vec<usize> {
         self.inner
             .upgrade()
-            .map(|inner| inner.invalid_scopes.borrow().iter().copied().collect())
+            .map(|inner| inner.queued_invalid_scope_ids())
             .unwrap_or_default()
     }
 

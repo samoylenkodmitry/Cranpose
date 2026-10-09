@@ -23,9 +23,10 @@ impl SlotTable {
         &mut self,
         state: &mut SlotWriteSessionState,
         anchor: AnchorId,
+        index_hint: usize,
     ) -> Option<usize> {
         let Some(group_index) = self
-            .active_group_index(anchor)
+            .open_group_index(anchor, index_hint)
             .or_else(|| self.recover_group_index_from_recorded_anchor(anchor))
         else {
             log::error!("slot writer could not open group frame for inactive anchor {anchor:?}");
@@ -50,9 +51,12 @@ impl SlotWriteSession<'_> {
     fn open_started_group(
         &mut self,
         anchor: AnchorId,
+        index_hint: usize,
         kind: GroupStartKind,
     ) -> Option<GroupStart<ActiveGroupId>> {
-        let group_index = self.table.open_group_frame(self.state, anchor)?;
+        let group_index = self
+            .table
+            .open_group_frame(self.state, anchor, index_hint)?;
         let scope = self.table.group_scope_at_index(group_index);
         let Some(group) = self.table.active_group_id_at_index(group_index) else {
             log::error!(
@@ -66,6 +70,12 @@ impl SlotWriteSession<'_> {
             scope,
             kind,
         })
+    }
+
+    fn open_parent_index(&self) -> Option<usize> {
+        let frame = self.state.group_stack.last()?;
+        self.table
+            .open_group_index(frame.group_anchor, frame.group_index)
     }
 
     fn discard_stale_group_frames(&mut self) {
@@ -115,7 +125,7 @@ impl SlotWriteSession<'_> {
             .table
             .restore_subtree(cursor, key, detached, parent_node)
         {
-            Ok(anchor) => self.open_started_group(anchor, kind),
+            Ok(anchor) => self.open_started_group(anchor, insert_index, kind),
             Err(detached) => {
                 log::error!(
                     "slot writer rejected detached subtree restore at parent={parent_anchor:?} child_index={insert_index}"
@@ -145,7 +155,9 @@ impl SlotWriteSession<'_> {
         self.state.advance_parent_after_child(insert_index);
         let fallback_cursor = ChildCursor::new(parent_anchor, insert_index);
         let anchor = self.table.insert_new_group(fallback_cursor, key);
-        if let Some(started) = self.open_started_group(anchor, GroupStartKind::Inserted) {
+        if let Some(started) =
+            self.open_started_group(anchor, insert_index, GroupStartKind::Inserted)
+        {
             return started;
         }
 
@@ -155,7 +167,9 @@ impl SlotWriteSession<'_> {
         let root_anchor = self
             .table
             .insert_new_group(ChildCursor::new(AnchorId::INVALID, root_insert_index), key);
-        if let Some(started) = self.open_started_group(root_anchor, GroupStartKind::Inserted) {
+        if let Some(started) =
+            self.open_started_group(root_anchor, root_insert_index, GroupStartKind::Inserted)
+        {
             return started;
         }
 
@@ -193,7 +207,14 @@ impl SlotWriteSession<'_> {
         cursor: ChildCursor,
         key: GroupKey,
     ) -> ActiveChildResolution {
-        let Some(expected_group) = self.table.direct_child_sibling_record_at_cursor(cursor) else {
+        let siblings = match self.open_parent_index() {
+            Some(parent_index) => self
+                .table
+                .direct_child_range_at(cursor.parent(), parent_index),
+            None => self.table.direct_child_range(cursor.parent()),
+        };
+        let Some(expected_group) = self.table.direct_child_sibling_record_in(siblings, cursor)
+        else {
             return ActiveChildResolution::InsertNew;
         };
 
@@ -238,15 +259,6 @@ impl SlotWriteSession<'_> {
         }
     }
 
-    pub(crate) fn active_scope_first_root_node_id(
-        &mut self,
-        scope: &RecomposeScope,
-    ) -> Option<NodeId> {
-        let group = self.table.active_group_for_scope(scope)?;
-        let anchor = self.table.try_active_group_anchor(group)?;
-        self.table.first_subtree_root_node_id(anchor)
-    }
-
     pub(crate) fn begin_recompose_at_scope(
         &mut self,
         scope: &RecomposeScope,
@@ -257,8 +269,15 @@ impl SlotWriteSession<'_> {
             .debug_assert_no_pending_payload_location_refreshes("begin_recompose_at_scope");
         let group = self.table.active_group_for_scope(scope)?;
         let anchor = self.table.try_active_group_anchor(group)?;
-        self.table.open_group_frame(self.state, anchor)?;
+        self.table
+            .open_group_frame(self.state, anchor, group.index())?;
         Some(group)
+    }
+
+    /// The first root node of the open group's subtree.
+    pub(crate) fn open_group_first_root_node(&self) -> Option<NodeId> {
+        let group_index = self.open_parent_index()?;
+        self.table.first_subtree_root_node_id_at(group_index)
     }
 
     pub(crate) fn begin_group(
@@ -290,7 +309,7 @@ impl SlotWriteSession<'_> {
 
         let resolution = resolution.unwrap_or_else(|| self.resolve_active_child(cursor, key));
         let started = self.materialize_group_at_cursor(cursor, key, resolution);
-        self.open_started_group(started.anchor, started.kind)
+        self.open_started_group(started.anchor, cursor.index(), started.kind)
             .unwrap_or_else(|| self.recover_malformed_group_start(key, started.anchor))
     }
 
