@@ -95,6 +95,8 @@ mod android_launch_args;
 #[cfg(all(feature = "android", feature = "media", target_os = "android"))]
 mod android_media;
 #[cfg(all(feature = "android", target_os = "android"))]
+mod android_microphone;
+#[cfg(all(feature = "android", target_os = "android"))]
 mod android_microphone_standby;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_overlay_window;
@@ -102,6 +104,8 @@ mod android_overlay_window;
 mod android_panic_hook;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_perf_hint;
+#[cfg(all(feature = "android", target_os = "android"))]
+mod android_permissions;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_pipeline_update;
 #[cfg(any(

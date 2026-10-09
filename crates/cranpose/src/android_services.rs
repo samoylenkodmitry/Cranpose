@@ -92,6 +92,11 @@ pub(crate) fn register(
     // Present only when the application declares the `wearable` service in
     // its Gradle build; without it the link reports itself unavailable.
     crate::android_wearable::register(app.clone());
+    // Present only when the application declares the microphone; anywhere
+    // else recording needs no permission from the framework.
+    if capabilities.has(cranpose_capabilities::Service::Microphone) {
+        crate::android_microphone::register(app.clone());
+    }
     // Present only when the application declares `microphone-standby`.
     crate::android_microphone_standby::register(app.clone());
     #[cfg(feature = "media")]

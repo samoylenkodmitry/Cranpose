@@ -33,6 +33,7 @@ pub mod launch_args;
 pub mod launcher;
 pub mod media;
 pub mod memory_pressure;
+pub mod microphone_permission;
 pub mod microphone_standby;
 pub mod navigation;
 pub mod network_status;
@@ -200,6 +201,11 @@ pub use media::{
 pub use memory_pressure::{
     MemoryPressure, MemoryPressureObserver, observe_memory_pressure, publish_memory_pressure,
     rememberMemoryPressure,
+};
+pub use microphone_permission::{
+    MicrophoneAccess, MicrophonePermission, MicrophonePermissionObserver, microphone_permission,
+    observe_microphone_permission, open_microphone_settings, publish_microphone_permission,
+    rememberMicrophonePermission, request_microphone_permission, set_platform_microphone_access,
 };
 pub use microphone_standby::{
     MicrophoneStandby, MicrophoneStandbyLease, hold_microphone_standby,

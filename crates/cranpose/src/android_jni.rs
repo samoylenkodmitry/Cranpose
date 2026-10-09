@@ -35,6 +35,44 @@ where
     .map_err(|error| format!("failed to access Android JNI environment: {error}"))?
 }
 
+/// Runs `run` with the activity and the Cranpose Java class `class_name`,
+/// clearing any Java exception it leaves.
+pub(crate) fn call_cranpose_class<T>(
+    app: &android_activity::AndroidApp,
+    class_name: &str,
+    run: impl for<'local> FnOnce(
+        &mut Env<'local>,
+        &JObject<'local>,
+        JClass<'local>,
+    ) -> jni::errors::Result<T>,
+) -> Result<T, String> {
+    with_android_activity_env(app, |env, activity| {
+        let class = load_cranpose_java_class(env, &activity, class_name)?;
+        run(env, &activity, class).map_err(|error| {
+            clear_pending_android_jni_exception(env);
+            error.to_string()
+        })
+    })
+}
+
+/// Calls the static method `name(Activity)` of the Cranpose Java class
+/// `class_name`.
+pub(crate) fn call_cranpose_activity_method(
+    app: &android_activity::AndroidApp,
+    class_name: &str,
+    name: &'static jni::strings::JNIStr,
+) -> Result<(), String> {
+    call_cranpose_class(app, class_name, |env, activity, class| {
+        env.call_static_method(
+            class,
+            name,
+            jni::jni_sig!("(Landroid/app/Activity;)V"),
+            &[jni::objects::JValue::Object(activity)],
+        )
+        .map(|_| ())
+    })
+}
+
 pub(crate) fn decode_jni_string(env: &mut EnvUnowned<'_>, value: JString<'_>) -> Option<String> {
     match env
         .with_env(|env| -> jni::errors::Result<String> { value.try_to_string(env) })

@@ -3,29 +3,26 @@
 //! The heart-rate sensor on Android, through `CranposeHeartRate`, which an
 //! application carries only when its build script declares
 //! `Use::heart_rate`. The permission answer comes back through
-//! `CranposeActivity#onRequestPermissionsResult`, which hands Rust every
-//! answer to a request the activity did not make itself.
+//! `android_permissions`.
 
 use std::sync::Arc;
 
 use cranpose_services::{
     HeartRate, HeartRateError, HeartRateMonitor, HeartRatePermission, HeartRateStatus,
-    publish_heart_rate, publish_heart_rate_permission, set_platform_heart_rate,
+    publish_heart_rate, set_platform_heart_rate,
 };
 use jni::{
-    Env, EnvUnowned, Outcome, jni_sig, jni_str,
-    objects::{JClass, JObject, JString, JValue},
+    EnvUnowned, jni_sig, jni_str,
+    objects::{JClass, JValue},
     sys::{jfloat, jint},
 };
 
-use crate::android_jni::{
-    clear_pending_android_jni_exception, load_cranpose_java_class, with_android_activity_env,
-};
+use crate::android_jni::{call_cranpose_activity_method, call_cranpose_class};
 
 const HEART_RATE_CLASS: &str = "dev/cranpose/android/CranposeHeartRate";
 
 /// The permissions the sensor is read under, the newer one first.
-const HEART_RATE_PERMISSIONS: [&str; 2] = [
+pub(crate) const HEART_RATE_PERMISSIONS: [&str; 2] = [
     "android.permission.health.READ_HEART_RATE",
     "android.permission.BODY_SENSORS",
 ];
@@ -39,39 +36,14 @@ struct AndroidHeartRate {
 }
 
 impl AndroidHeartRate {
-    fn call<T>(
-        &self,
-        run: impl for<'local> FnOnce(
-            &mut Env<'local>,
-            &JObject<'local>,
-            JClass<'local>,
-        ) -> jni::errors::Result<T>,
-    ) -> Result<T, String> {
-        with_android_activity_env(&self.app, |env, activity| {
-            let class = load_cranpose_java_class(env, &activity, HEART_RATE_CLASS)?;
-            run(env, &activity, class).map_err(|error| {
-                clear_pending_android_jni_exception(env);
-                error.to_string()
-            })
-        })
-    }
-
     fn call_void(&self, name: &'static jni::strings::JNIStr) -> Result<(), String> {
-        self.call(|env, activity, class| {
-            env.call_static_method(
-                class,
-                name,
-                jni_sig!("(Landroid/app/Activity;)V"),
-                &[JValue::Object(activity)],
-            )
-            .map(|_| ())
-        })
+        call_cranpose_activity_method(&self.app, HEART_RATE_CLASS, name)
     }
 }
 
 impl HeartRateMonitor for AndroidHeartRate {
     fn available(&self) -> bool {
-        self.call(|env, activity, class| {
+        call_cranpose_class(&self.app, HEART_RATE_CLASS, |env, activity, class| {
             env.call_static_method(
                 class,
                 jni_str!("cranposeHeartRateAvailable"),
@@ -84,7 +56,7 @@ impl HeartRateMonitor for AndroidHeartRate {
     }
 
     fn permission(&self) -> HeartRatePermission {
-        let answer = self.call(|env, activity, class| {
+        let answer = call_cranpose_class(&self.app, HEART_RATE_CLASS, |env, activity, class| {
             env.call_static_method(
                 class,
                 jni_str!("cranposeHeartRatePermission"),
@@ -143,36 +115,6 @@ fn reading(bpm: f32, status: i32) -> HeartRate {
             bpm: None,
         },
     }
-}
-
-/// Every answer to a permission request the activity did not make itself,
-/// one `permission<TAB>granted` line each, routed to the service that asked.
-#[doc(hidden)]
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnPermissionsResult<
-    'local,
->(
-    mut env: EnvUnowned<'local>,
-    _class: JClass<'local>,
-    results: JString<'local>,
-) {
-    let decoded = env.with_env(|env| results.try_to_string(env));
-    let Outcome::Ok(results) = decoded.into_outcome() else {
-        return;
-    };
-    if let Some(granted) = heart_rate_answer(&results) {
-        publish_heart_rate_permission(granted);
-    }
-}
-
-/// The heart-rate permission's answer among `results`, if it is there.
-fn heart_rate_answer(results: &str) -> Option<bool> {
-    results.lines().find_map(|line| {
-        let (name, granted) = line.split_once('\t')?;
-        HEART_RATE_PERMISSIONS
-            .contains(&name)
-            .then_some(granted == "1")
-    })
 }
 
 #[cfg(test)]
