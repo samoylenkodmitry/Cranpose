@@ -12,19 +12,31 @@ pub(crate) enum RecomposeChildCursor {
     At(usize),
 }
 
-impl Composer {
-    fn scope_child_cursor(
-        &self,
-        scope: &RecomposeScope,
-        parent_hint: Option<NodeId>,
-    ) -> RecomposeChildCursor {
-        if parent_hint.is_none() {
-            return RecomposeChildCursor::Unknown;
+impl RecomposeChildCursor {
+    fn at_first_root(parent_hint: Option<NodeId>, first_root: Option<NodeId>) -> Self {
+        match (parent_hint, first_root) {
+            (Some(_), Some(first)) => Self::After { first, placed: 0 },
+            _ => Self::Unknown,
         }
-        self.with_slot_session_mut(|slots| slots.active_scope_first_root_node_id(scope))
-            .map_or(RecomposeChildCursor::Unknown, |first| {
-                RecomposeChildCursor::After { first, placed: 0 }
-            })
+    }
+}
+
+impl Composer {
+    fn begin_scope_group(&self, scope: &RecomposeScope) -> Option<Option<NodeId>> {
+        let started = self.with_slot_session_mut(|slots| {
+            slots
+                .begin_recompose_at_scope(scope)
+                .map(|group| (group, slots.open_group_first_root_node()))
+        });
+        log::trace!(
+            target: "cranpose::compose::recompose",
+            "scope_id={} label={:?} started_at={:?} sources={:?}",
+            scope.id(),
+            debug_scope_label(scope.id()),
+            started.map(|(group, _)| group),
+            debug_scope_invalidation_sources(scope.id()),
+        );
+        started.map(|(_, first_root)| first_root)
     }
 
     pub(crate) fn resolve_recompose_child_cursor(&self) -> RecomposeChildCursor {
@@ -81,18 +93,10 @@ impl Composer {
             scope.mark_recomposed();
             return;
         }
-        let started = self.with_slot_session_mut(|slots| slots.begin_recompose_at_scope(scope));
-        log::trace!(
-            target: "cranpose::compose::recompose",
-            "scope_id={} label={:?} started_at={started:?} sources={:?}",
-            scope.id(),
-            debug_scope_label(scope.id()),
-            debug_scope_invalidation_sources(scope.id()),
-        );
-        if started.is_some() {
+        if let Some(first_root) = self.begin_scope_group(scope) {
             let parent_hint = scope.parent_hint();
             let previous_cursor = self.resolve_recompose_child_cursor();
-            let cursor = self.scope_child_cursor(scope, parent_hint);
+            let cursor = RecomposeChildCursor::at_first_root(parent_hint, first_root);
             let previous_hint = self.core.recompose_parent_hint.replace(parent_hint);
             self.core.recompose_child_cursor.set(cursor);
             struct HintGuard {

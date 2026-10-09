@@ -250,21 +250,34 @@ impl SlotTable {
                 let end = self.group_count();
                 return DirectChildRange::new(end, end);
             };
-            let start = parent_index + 1;
-            let declared_end =
-                parent_index.checked_add(self.group_subtree_len_at_index(parent_index));
-            let end = match declared_end {
-                Some(end) if start <= end && end <= self.group_count() => end,
-                _ => {
-                    log::error!(
-                        "slot table clamped the child range of parent {parent_anchor:?}: declared end {declared_end:?} lies outside {} active groups",
-                        self.group_count()
-                    );
-                    self.group_count()
-                }
-            };
-            DirectChildRange::new(start, end)
+            self.direct_child_range_at(parent_anchor, parent_index)
         }
+    }
+
+    /// The child range of `parent_anchor`'s group, which sits at
+    /// `parent_index`.
+    #[inline(always)]
+    pub(in crate::slot) fn direct_child_range_at(
+        &self,
+        parent_anchor: AnchorId,
+        parent_index: usize,
+    ) -> DirectChildRange {
+        if !parent_anchor.is_valid() {
+            return DirectChildRange::new(0, self.group_count());
+        }
+        let start = parent_index + 1;
+        let declared_end = parent_index.checked_add(self.group_subtree_len_at_index(parent_index));
+        let end = match declared_end {
+            Some(end) if start <= end && end <= self.group_count() => end,
+            _ => {
+                log::error!(
+                    "slot table clamped the child range of parent {parent_anchor:?}: declared end {declared_end:?} lies outside {} active groups",
+                    self.group_count()
+                );
+                self.group_count()
+            }
+        };
+        DirectChildRange::new(start, end)
     }
 
     pub(in crate::slot) fn direct_child_anchor_at_cursor(
@@ -287,14 +300,24 @@ impl SlotTable {
         parent_anchor: AnchorId,
         child_index: usize,
     ) -> Option<GroupSiblingRecord> {
-        if !self
-            .direct_child_range(parent_anchor)
-            .contains_index(child_index)
-        {
+        self.direct_child_sibling_record_in(
+            self.direct_child_range(parent_anchor),
+            ChildCursor::new(parent_anchor, child_index),
+        )
+    }
+
+    /// The direct child at `cursor` among `siblings`, the cursor parent's
+    /// child range.
+    pub(in crate::slot) fn direct_child_sibling_record_in(
+        &self,
+        siblings: DirectChildRange,
+        cursor: ChildCursor,
+    ) -> Option<GroupSiblingRecord> {
+        if !siblings.contains_index(cursor.index()) {
             return None;
         }
-        let group = self.group_sibling_record_at_index_checked(child_index)?;
-        (group.parent_anchor == parent_anchor).then_some(group)
+        let group = self.group_sibling_record_at_index_checked(cursor.index())?;
+        (group.parent_anchor == cursor.parent()).then_some(group)
     }
 
     pub(in crate::slot) fn child_cursor_boundary_is_valid(&self, cursor: ChildCursor) -> bool {

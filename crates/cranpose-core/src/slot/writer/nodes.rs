@@ -1,17 +1,7 @@
 use super::super::{NodeRecord, NodeSlotUpdate, RootNodeIds, SlotTable, SlotWriteSession};
-use crate::{AnchorId, NodeId};
+use crate::NodeId;
 
 impl SlotTable {
-    fn subtree_node_records(&self, group_anchor: AnchorId) -> &[NodeRecord] {
-        let Some(group_index) = self.active_group_index(group_anchor) else {
-            log::error!(
-                "slot table ignored root-node collection for stale group anchor {group_anchor:?}"
-            );
-            return &[];
-        };
-        self.subtree_node_records_at(group_index)
-    }
-
     fn subtree_node_records_at(&self, group_index: usize) -> &[NodeRecord] {
         let group = &self.groups[group_index];
         let start = group.node_start as usize;
@@ -48,11 +38,11 @@ impl SlotTable {
         roots
     }
 
-    pub(in crate::slot) fn first_subtree_root_node_id(
+    pub(in crate::slot) fn first_subtree_root_node_id_at(
         &self,
-        group_anchor: AnchorId,
+        group_index: usize,
     ) -> Option<NodeId> {
-        let records = self.subtree_node_records(group_anchor);
+        let records = self.subtree_node_records_at(group_index);
         let first = records.first().map(|record| record.id);
         #[cfg(any(test, debug_assertions))]
         if crate::slot_validation_diagnostics_enabled() {
