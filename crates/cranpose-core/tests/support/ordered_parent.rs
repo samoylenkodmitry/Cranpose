@@ -1,11 +1,9 @@
 use cranpose_core::{Node, NodeId};
 
-pub trait FixtureLeaf: std::any::Any {
-    fn update(&mut self) {}
-}
+pub trait FixtureLeaf: std::any::Any {}
 
 pub struct ParentTracked<T> {
-    pub node: T,
+    node: T,
     parent: Option<NodeId>,
 }
 
@@ -15,11 +13,15 @@ impl<T> ParentTracked<T> {
     }
 }
 
-impl<T: FixtureLeaf> Node for ParentTracked<T> {
-    fn update(&mut self) {
-        FixtureLeaf::update(&mut self.node);
-    }
+impl<T> std::ops::Deref for ParentTracked<T> {
+    type Target = T;
 
+    fn deref(&self) -> &T {
+        &self.node
+    }
+}
+
+impl<T: FixtureLeaf> Node for ParentTracked<T> {
     fn on_attached_to_parent(&mut self, parent: NodeId) {
         if let Some(previous) = self.parent.replace(parent) {
             debug_assert_eq!(

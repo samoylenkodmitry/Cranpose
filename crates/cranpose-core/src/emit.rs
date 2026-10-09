@@ -85,7 +85,6 @@ impl Composer {
                 scope_debug.0,
                 scope_debug.1,
             );
-            self.commands_mut().push(Command::update_node::<N>(id));
             self.attach_to_parent(id);
             let parent_id = self.planned_node_parent(id);
             let recorded = self
