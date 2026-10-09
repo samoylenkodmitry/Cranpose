@@ -11,7 +11,7 @@ tauri-build = "2"
 
 [dependencies]
 # Tauri on the system's WKWebView, showing the web app's page.
-tauri = { version = "2.12.1" }
+tauri = { version = "2.12.2" }
 perf-data = { path = "../perf-data" }
 serde = { version = "1", features = ["derive"] }
 
