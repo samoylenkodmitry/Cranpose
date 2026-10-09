@@ -557,14 +557,14 @@ impl CompositePassOptions {
 struct ShaderPassOptions {
     load_op: wgpu::LoadOp<wgpu::Color>,
     scissor: Option<(u32, u32, u32, u32)>,
-    dest_viewport: Option<(f32, f32, f32, f32)>,
     pipeline_mode: RuntimeShaderPipelineMode,
     source_logical_size: Option<(f32, f32)>,
     source_region: Option<(f32, f32, f32, f32)>,
     substrate_regions: SubstrateRegions,
 }
 
-/// A runtime shader drawn into a pass over `dest_viewport`, reading
+/// A runtime shader drawn into a pass over `dest_viewport`, placed in the
+/// pass's target by `placement`, reading
 /// `source_region` of `source` (the whole texture when `None`), which
 /// stands for `source_logical_size` pixels when it is a downscaled result,
 /// with `layer_pixel_rect` relative to that region, masked by
@@ -583,15 +583,61 @@ pub(crate) struct ShaderCompositeBatchItem<'a> {
     pub(crate) alpha: f32,
     pub(crate) scissor: Option<(u32, u32, u32, u32)>,
     pub(crate) dest_viewport: (f32, f32, f32, f32),
+    pub(crate) placement: QuadPlacement,
 }
 
-/// Fills the renderer-reserved uniform slots of a runtime shader; see
-/// `RuntimeShader`'s slot table.
+/// Where a runtime shader's effect rect lands in a pass: the viewport, the
+/// rect held to the pass's target, and the placement the prelude's vertex
+/// stage reads to span the whole rect from that viewport. Safari's WebGPU
+/// rejects a viewport that reaches past its attachment and drops the frame's
+/// command buffer with it, so a rect at the target's edge cannot be the
+/// viewport itself.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct QuadPlacement {
+    viewport: (f32, f32, f32, f32),
+    uniform: [f32; 4],
+}
+
+impl QuadPlacement {
+    /// The placement of `rect` in a target of `target` pixels; `None` when
+    /// no part of it lies on the target.
+    pub(crate) fn in_target(rect: (f32, f32, f32, f32), target: (u32, u32)) -> Option<Self> {
+        let (x, y, width, height) = rect;
+        let left = x.max(0.0);
+        let top = y.max(0.0);
+        let right = (x + width).min(target.0 as f32);
+        let bottom = (y + height).min(target.1 as f32);
+        if right <= left || bottom <= top {
+            return None;
+        }
+        let viewport = (left, top, right - left, bottom - top);
+        if viewport == rect {
+            return Some(Self {
+                viewport,
+                uniform: [0.0; 4],
+            });
+        }
+        let (view_width, view_height) = (viewport.2, viewport.3);
+        Some(Self {
+            viewport,
+            uniform: [
+                width / view_width - 1.0,
+                height / view_height - 1.0,
+                (2.0 * (x - left) + width) / view_width - 1.0,
+                1.0 - (2.0 * (y - top) + height) / view_height,
+            ],
+        })
+    }
+}
+
 /// The regions of a shader's substrates in its input texture, in slot
 /// order; none where the shader declared fewer or the stage packed none.
 pub(crate) type SubstrateRegions = [Option<(f32, f32, f32, f32)>; MAX_SUBSTRATES];
 
+/// Fills the renderer-reserved uniform slots of a runtime shader; see
+/// `RuntimeShader`'s slot table.
 struct ReservedShaderUniforms {
+    placement: [f32; 4],
     layer_pixel_rect: [f32; 4],
     source_region: Option<(f32, f32, f32, f32)>,
     substrate_regions: SubstrateRegions,
@@ -618,6 +664,7 @@ impl ReservedShaderUniforms {
             padded[*slot..*slot + 4].copy_from_slice(&region_slot(region));
         }
         let slots = [
+            (RuntimeShader::QUAD_PLACEMENT_UNIFORM, self.placement),
             (
                 RuntimeShader::SOURCE_REGION_UNIFORM,
                 region_slot(self.source_region),
@@ -904,6 +951,7 @@ pub(crate) struct PreparedShaderDraw<'a> {
     uniform: UniformUpload,
     scissor: Option<(u32, u32, u32, u32)>,
     dest_viewport: (f32, f32, f32, f32),
+    viewport: (f32, f32, f32, f32),
     layer_pixel_rect: [f32; 4],
     pipelines: SmallVec<[(ShaderDrawVariant, wgpu::RenderPipeline); 2]>,
 }
@@ -2543,7 +2591,6 @@ impl EffectRenderer {
             ShaderPassOptions {
                 load_op: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                 scissor,
-                dest_viewport: None,
                 pipeline_mode: RuntimeShaderPipelineMode::Replace,
                 source_logical_size: None,
                 source_region: None,
@@ -2598,6 +2645,7 @@ impl EffectRenderer {
             radii: mask.radii,
         });
         ReservedShaderUniforms {
+            placement: item.placement.uniform,
             layer_pixel_rect: item.layer_pixel_rect,
             source_region: item.source_region,
             substrate_regions: item.substrate_regions,
@@ -2626,6 +2674,7 @@ impl EffectRenderer {
             uniform,
             scissor: item.scissor,
             dest_viewport: item.dest_viewport,
+            viewport: item.placement.viewport,
             layer_pixel_rect: item.layer_pixel_rect,
             pipelines,
         })
@@ -2640,7 +2689,15 @@ impl EffectRenderer {
         pass.set_bind_group(0, draw.texture_bind_group, &[]);
         pass.set_bind_group(1, &draw.uniform.bind_group, &[draw.uniform.offset]);
         let (x, y, width, height) = draw.dest_viewport;
-        pass.set_viewport(x, y, width, height, 0.0, 1.0);
+        let (left, top, view_width, view_height) = draw.viewport;
+        debug_assert!(
+            left >= 0.0
+                && top >= 0.0
+                && left + view_width <= viewport.0 as f32
+                && top + view_height <= viewport.1 as f32,
+            "a viewport must lie inside its target: Safari's WebGPU drops the frame otherwise"
+        );
+        pass.set_viewport(left, top, view_width, view_height, 0.0, 1.0);
         let scissor = draw.scissor.unwrap_or((0, 0, viewport.0, viewport.1));
         self.debug_shader_pixels
             .set(self.debug_shader_pixels.get() + shaded_pixels((x, y, width, height), scissor));
@@ -2703,6 +2760,7 @@ impl EffectRenderer {
     ) -> bool {
         let mut padded = shader.uniforms_padded();
         ReservedShaderUniforms {
+            placement: [0.0; 4],
             layer_pixel_rect,
             substrate_regions: options.substrate_regions,
             source_region: options.source_region,
@@ -2742,9 +2800,6 @@ impl EffectRenderer {
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, texture_bind_group, &[]);
         pass.set_bind_group(1, &uniform.bind_group, &[uniform.offset]);
-        if let Some((x, y, width, height)) = options.dest_viewport {
-            pass.set_viewport(x, y, width, height, 0.0, 1.0);
-        }
         if let Some((x, y, width, height)) = options.scissor {
             pass.set_scissor_rect(x, y, width, height);
         }
@@ -2817,7 +2872,6 @@ impl EffectRenderer {
             ShaderPassOptions {
                 load_op: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                 scissor: reads.output,
-                dest_viewport: None,
                 pipeline_mode: RuntimeShaderPipelineMode::Replace,
                 source_logical_size: Some((source.width as f32, source.height as f32)),
                 source_region: Some((0.0, 0.0, source.width as f32, source.height as f32)),

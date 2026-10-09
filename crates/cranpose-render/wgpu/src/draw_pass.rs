@@ -5,7 +5,7 @@ use cranpose_ui_graphics::{BlendMode, Rect, RuntimeShader};
 use crate::{
     effect_renderer::{
         CompositeBatchItem, CompositeSampleMode, PreparedCompositeDraw,
-        PreparedProjectiveComposite, PreparedShaderDraw, ProjectiveCompositeItem,
+        PreparedProjectiveComposite, PreparedShaderDraw, ProjectiveCompositeItem, QuadPlacement,
         RoundedCompositeMask, ShaderCompositeBatchItem, SubstrateRegions,
     },
     frame_graph::FrameCommandRecorder,
@@ -1713,6 +1713,9 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                 rounded_mask,
                 alpha,
             } => {
+                let Some(placement) = QuadPlacement::in_target(dest, self.target_size()) else {
+                    return Ok(());
+                };
                 let item = ShaderCompositeBatchItem {
                     source: composite.source.as_ref(),
                     shader: shader.as_ref(),
@@ -1724,6 +1727,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     alpha: *alpha,
                     scissor,
                     dest_viewport: dest,
+                    placement,
                 };
                 let prepared = renderer
                     .effect_renderer

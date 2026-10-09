@@ -29,7 +29,7 @@ impl GradientBlurDirection {
 }
 
 /// WGSL implementation of a per-fragment Gaussian-style blur kernel.
-pub const GRADIENT_BLUR_WGSL: &str = framework_wgsl!("gradient_blur.wgsl");
+pub const GRADIENT_BLUR_WGSL: &str = runtime_shader_wgsl!("gradient_blur.wgsl");
 
 /// The blur levels' shares of the wide radius: the renderer blurs the
 /// capture by each, and the shader blends the sharp source and the levels

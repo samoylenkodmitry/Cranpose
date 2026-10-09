@@ -782,10 +782,8 @@ pub const GLASS_RESTING_TINT_UNIFORM: usize = 113;
 ///          unset -> light overhead, return glow at the bottom rim)
 /// 124..126: ink recolor RGB — the lens recolors dark transmitted ink
 /// 127: ink recolor strength (0 = off)
-pub const LIQUID_GLASS_WGSL: &str = concat!(
-    framework_wgsl!("glass_geometry.wgsl"),
-    framework_wgsl!("liquid_glass.wgsl"),
-);
+pub const LIQUID_GLASS_WGSL: &str =
+    runtime_shader_wgsl!("glass_geometry.wgsl", "liquid_glass.wgsl");
 
 /// WGSL distance and circular displacement functions shared by glass and its content.
 /// Concatenate this source once with the runtime shader prelude and a fragment stage.

@@ -1,7 +1,7 @@
 use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
 use cranpose_ui_graphics::{
-    GradientBlurDirection, GraphicsLayer, LayerShape, Rect, RenderEffect, RoundedCornerShape,
-    RuntimeShader, gradient_blur_effect,
+    GradientBlurDirection, GraphicsLayer, LayerShape, RUNTIME_SHADER_PRELUDE_WGSL, Rect,
+    RenderEffect, RoundedCornerShape, RuntimeShader, gradient_blur_effect,
 };
 
 use crate::{shared_test_support, support};
@@ -48,7 +48,8 @@ fn compare_ladder(substrates: bool) {
             if !substrates {
                 std::sync::Arc::make_mut(&mut shader).set_substrates(&[]);
             }
-            let mut reference = RuntimeShader::new(REFERENCE);
+            let mut reference =
+                RuntimeShader::new(&format!("{RUNTIME_SHADER_PRELUDE_WGSL}{REFERENCE}"));
             for (index, value) in shader.uniforms().iter().enumerate() {
                 reference.set_float(index, *value);
             }

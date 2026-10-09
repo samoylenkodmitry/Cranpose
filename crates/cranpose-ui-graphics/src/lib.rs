@@ -23,6 +23,17 @@ macro_rules! framework_wgsl {
     };
 }
 
+/// A runtime shader's source: the prelude every runtime shader starts from,
+/// followed by the named framework WGSL files.
+macro_rules! runtime_shader_wgsl {
+    ($($name:literal),+ $(,)?) => {
+        concat!(
+            framework_wgsl!("runtime_shader_prelude.wgsl"),
+            $(framework_wgsl!($name)),+
+        )
+    };
+}
+
 pub mod alpha_mask;
 mod brush;
 mod color;

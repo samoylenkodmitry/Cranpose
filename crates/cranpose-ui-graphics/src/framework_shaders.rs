@@ -30,7 +30,7 @@ pub const PROJECTIVE_BLIT_FS_WGSL: &str = framework_wgsl!("projective_blit_fs.wg
 pub const PROJECTIVE_BLIT_MAIN_WGSL: &str = framework_wgsl!("projective_blit_main.wgsl");
 
 /// RuntimeShader source for GPU text brush effects (gradient/stroked text).
-pub const GPU_TEXT_BRUSH_EFFECT_WGSL: &str = framework_wgsl!("gpu_text_brush_effect.wgsl");
+pub const GPU_TEXT_BRUSH_EFFECT_WGSL: &str = runtime_shader_wgsl!("gpu_text_brush_effect.wgsl");
 
 /// Changes whenever any framework WGSL file does, and with nothing else, so a
 /// cache of what a driver compiled from these shaders can tell its blob was

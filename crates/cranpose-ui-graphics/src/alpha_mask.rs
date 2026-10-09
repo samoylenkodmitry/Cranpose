@@ -85,7 +85,7 @@ impl Default for GradientFadeMaskSpec {
 /// - 3: feather in dp
 /// - 4: corner radius in dp
 /// - 5: direction code (0=L->R, 1=R->L, 2=T->B, 3=B->T)
-pub const GRADIENT_CUT_MASK_WGSL: &str = framework_wgsl!("gradient_cut_mask.wgsl");
+pub const GRADIENT_CUT_MASK_WGSL: &str = runtime_shader_wgsl!("gradient_cut_mask.wgsl");
 
 /// WGSL shader for rounded-rectangle alpha masking with feathered edges.
 ///
@@ -93,7 +93,7 @@ pub const GRADIENT_CUT_MASK_WGSL: &str = framework_wgsl!("gradient_cut_mask.wgsl
 /// - 0,1: container size in dp
 /// - 2: edge feather in dp
 /// - 3,4,5,6: corner radii in dp (top-left, top-right, bottom-right, bottom-left)
-pub const ROUNDED_ALPHA_MASK_WGSL: &str = framework_wgsl!("rounded_alpha_mask.wgsl");
+pub const ROUNDED_ALPHA_MASK_WGSL: &str = runtime_shader_wgsl!("rounded_alpha_mask.wgsl");
 
 /// WGSL shader for directional fade-out alpha masking (DstOut-style).
 ///
@@ -102,7 +102,7 @@ pub const ROUNDED_ALPHA_MASK_WGSL: &str = framework_wgsl!("rounded_alpha_mask.wg
 /// - 2: fade start in dp
 /// - 3: fade end in dp
 /// - 4: direction code (0=L->R, 1=R->L, 2=T->B, 3=B->T)
-pub const GRADIENT_FADE_DST_OUT_WGSL: &str = framework_wgsl!("gradient_fade_dst_out.wgsl");
+pub const GRADIENT_FADE_DST_OUT_WGSL: &str = runtime_shader_wgsl!("gradient_fade_dst_out.wgsl");
 
 /// Builds a directional cut mask effect.
 ///

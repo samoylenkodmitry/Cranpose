@@ -3,14 +3,24 @@ use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
     Brush, Color, GLASS_ACTIVITY_UNIFORM, GLASS_ADAPTIVE_FROST_UNIFORM,
-    GLASS_LIGHT_DIRECTION_UNIFORM, GraphicsLayer, LIQUID_GLASS_WGSL, Point, Rect, RenderEffect,
-    RuntimeShader, SubstrateSpec, TileMode, specialize_liquid_glass,
+    GLASS_LIGHT_DIRECTION_UNIFORM, GraphicsLayer, LIQUID_GLASS_WGSL, Point,
+    RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect, RuntimeShader, SubstrateSpec, TileMode,
+    specialize_liquid_glass,
 };
 use support::{brush_rect, solid_rect};
 
 use crate::{shared_test_support, support};
 
-const REFERENCE_WGSL: &str = include_str!("fixtures/liquid_glass_reference.wgsl");
+/// The frozen glass fragment stage after the runtime shader prelude.
+fn reference_wgsl() -> &'static str {
+    static SOURCE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        format!(
+            "{RUNTIME_SHADER_PRELUDE_WGSL}{}",
+            include_str!("fixtures/liquid_glass_reference.wgsl")
+        )
+    });
+    &SOURCE
+}
 const FRAME_WIDTH: u32 = 360;
 const FRAME_HEIGHT: u32 = 240;
 
@@ -39,7 +49,7 @@ fn resourced_shader(shader: &RuntimeShader, source: &str) -> RuntimeShader {
     copy.set_sample_domain(shader.sample_domain());
     copy.set_substrates(shader.substrates());
     copy.set_draw_split(
-        (source != REFERENCE_WGSL)
+        (source != reference_wgsl())
             .then(|| shader.draw_split())
             .flatten(),
     );
@@ -352,7 +362,7 @@ fn assert_matches_reference(
     graph: impl Fn(&str) -> RenderGraph,
     root_scale: f32,
 ) {
-    let frozen = capture(renderer, graph(REFERENCE_WGSL), root_scale);
+    let frozen = capture(renderer, graph(reference_wgsl()), root_scale);
     let current = capture(renderer, graph(LIQUID_GLASS_WGSL), root_scale);
     // A step of rounding is not a picture change: drivers compile the two
     // shaders' equal arithmetic in different orders, and one channel of one
