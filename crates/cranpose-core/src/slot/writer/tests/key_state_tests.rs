@@ -56,7 +56,7 @@ fn seen_keys_promote_after_inline_capacity() {
 }
 
 #[test]
-fn clear_keeps_promoted_storage_reusable() {
+fn a_cleared_frame_forgets_spilled_keys() {
     let mut state = FrameKeyState::default();
     for key in 0..=INLINE_KEY_STATE_CAPACITY as Key {
         let _ = state.next_ordinal(key);
@@ -67,9 +67,16 @@ fn clear_keeps_promoted_storage_reusable() {
 
     state.clear();
 
-    assert!(state.ordinals_are_promoted());
-    assert!(state.seen_is_promoted());
     assert_eq!(state.expected_ordinal(1), 0);
     assert_eq!(state.next_ordinal(1), 0);
     assert!(state.insert_seen(group_key(1)));
+    assert!(!state.insert_seen(group_key(1)));
+    for key in 0..=INLINE_KEY_STATE_CAPACITY as Key {
+        let _ = state.next_ordinal(key + 100);
+    }
+    assert_eq!(state.expected_ordinal(1), 1);
+    assert_eq!(
+        state.expected_ordinal(INLINE_KEY_STATE_CAPACITY as Key + 100),
+        1
+    );
 }
