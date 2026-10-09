@@ -27,31 +27,57 @@ use crate::{
 };
 
 /// Snapshot of modifier node slices that impact draw and pointer subsystems.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ModifierNodeSlices {
     draw_commands: Vec<DrawCommand>,
     layer_draw_boundary: Option<usize>,
-    pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
-    pointer_input_sizes: Vec<Rc<std::cell::Cell<cranpose_ui_graphics::Size>>>,
-    pointer_icon: Option<PointerIcon>,
     clip_to_bounds: bool,
     /// Where the outermost clip or graphics layer of the chain sits: its
     /// coordinator, which a later offset moves the content inside of.
     layer_coordinator: Option<CoordinatorRect>,
+    text: Option<SliceText>,
+    text_coordinator: Option<CoordinatorRect>,
+    /// Boxed: few nodes carry a layer, and inline it took 240 bytes of
+    /// every node's slices.
+    graphics_layer: Option<Box<GraphicsLayer>>,
+    corner_shape: Option<RoundedCornerShape>,
+    /// Boxed for the same reason: inline they took 150 bytes of every
+    /// node's slices, and on the gauntlet's 5,600 nodes none sets them but the
+    /// 44 animated layers' resolvers.
+    rare: Option<Box<RareSlices>>,
+}
+
+/// What few nodes' chains contribute: pointer input, window geometry sinks,
+/// translated content and live layer resolvers.
+#[derive(Clone, Default)]
+struct RareSlices {
+    pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
+    pointer_input_sizes: Vec<Rc<std::cell::Cell<cranpose_ui_graphics::Size>>>,
+    pointer_icon: Option<PointerIcon>,
     motion_context_animated: bool,
     translated_content_context: bool,
     translated_content_context_identity: Option<usize>,
     translated_content_offset_reader: Option<Rc<dyn Fn() -> Point>>,
-    text: Option<SliceText>,
-    text_coordinator: Option<CoordinatorRect>,
     text_window_transform: Option<Rc<std::cell::Cell<cranpose_ui_graphics::ProjectiveTransform>>>,
     viewport_window_rect: Option<Rc<dyn crate::modifier_nodes::WindowRectSink>>,
-    /// Boxed: few nodes carry a layer, and inline it took 240 bytes of
-    /// every node's slices.
-    graphics_layer: Option<Box<GraphicsLayer>>,
     graphics_layer_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
-    corner_shape: Option<RoundedCornerShape>,
     chain_guard: Option<Rc<ChainGuard>>,
+}
+
+impl RareSlices {
+    fn clear(&mut self) {
+        self.pointer_inputs.clear();
+        self.pointer_input_sizes.clear();
+        self.pointer_icon = None;
+        self.motion_context_animated = false;
+        self.translated_content_context = false;
+        self.translated_content_context_identity = None;
+        self.translated_content_offset_reader = None;
+        self.text_window_transform = None;
+        self.viewport_window_rect = None;
+        self.graphics_layer_resolver = None;
+        self.chain_guard = None;
+    }
 }
 
 struct ChainGuard {
@@ -141,32 +167,6 @@ pub struct ModifierNodeSlicesDebugStats {
     pub has_graphics_layer: bool,
     pub has_graphics_layer_resolver: bool,
     pub heap_bytes: usize,
-}
-
-impl Clone for ModifierNodeSlices {
-    fn clone(&self) -> Self {
-        Self {
-            draw_commands: self.draw_commands.clone(),
-            layer_draw_boundary: self.layer_draw_boundary,
-            pointer_inputs: self.pointer_inputs.clone(),
-            pointer_input_sizes: self.pointer_input_sizes.clone(),
-            pointer_icon: self.pointer_icon.clone(),
-            clip_to_bounds: self.clip_to_bounds,
-            layer_coordinator: self.layer_coordinator.clone(),
-            motion_context_animated: self.motion_context_animated,
-            translated_content_context: self.translated_content_context,
-            translated_content_context_identity: self.translated_content_context_identity,
-            translated_content_offset_reader: self.translated_content_offset_reader.clone(),
-            text: self.text.clone(),
-            text_coordinator: self.text_coordinator.clone(),
-            text_window_transform: self.text_window_transform.clone(),
-            viewport_window_rect: self.viewport_window_rect.clone(),
-            graphics_layer: self.graphics_layer.clone(),
-            graphics_layer_resolver: self.graphics_layer_resolver.clone(),
-            corner_shape: self.corner_shape,
-            chain_guard: self.chain_guard.clone(),
-        }
-    }
 }
 
 fn merge_graphics_layers(base: GraphicsLayer, overlay: GraphicsLayer) -> GraphicsLayer {
@@ -286,8 +286,17 @@ impl ModifierNodeSlices {
         }
     }
 
+    /// The boxed fields when the chain set any; see [`RareSlices`].
+    fn rare(&self) -> Option<&RareSlices> {
+        self.rare.as_deref()
+    }
+
+    fn rare_mut(&mut self) -> &mut RareSlices {
+        self.rare.get_or_insert_with(Box::default)
+    }
+
     pub fn pointer_inputs(&self) -> &[Rc<dyn Fn(PointerEvent)>] {
-        &self.pointer_inputs
+        self.rare().map_or(&[], |rare| &rare.pointer_inputs)
     }
 
     /// Dispatches an event whose position is already local to this layout node.
@@ -295,7 +304,7 @@ impl ModifierNodeSlices {
     /// which reach every handler so each can finish its active interaction.
     pub fn dispatch_pointer_event(&self, event: PointerEvent) {
         let terminal = matches!(event.kind, PointerEventKind::Up | PointerEventKind::Cancel);
-        for handler in &self.pointer_inputs {
+        for handler in self.pointer_inputs() {
             if event.is_consumed() && !terminal {
                 break;
             }
@@ -307,7 +316,7 @@ impl ModifierNodeSlices {
     /// node that exposes a size to its handler. See
     /// [`ModifierNodeSlices::publish_pointer_input_size`].
     pub fn pointer_input_size_sinks(&self) -> &[Rc<std::cell::Cell<cranpose_ui_graphics::Size>>] {
-        &self.pointer_input_sizes
+        self.rare().map_or(&[], |rare| &rare.pointer_input_sizes)
     }
 
     /// Publishes this layout node's resolved size to every pointer-input
@@ -322,7 +331,7 @@ impl ModifierNodeSlices {
     /// [`PointerEvent`] positions are made local to — so handlers can compare
     /// event coordinates against it directly.
     pub fn publish_pointer_input_size(&self, size: cranpose_ui_graphics::Size) {
-        for sink in &self.pointer_input_sizes {
+        for sink in self.pointer_input_size_sinks() {
             sink.set(size);
         }
     }
@@ -330,7 +339,7 @@ impl ModifierNodeSlices {
     /// The pointer's appearance over this node, when a `pointer_icon`
     /// modifier names one. The innermost declaration in the chain wins.
     pub fn pointer_icon(&self) -> Option<&PointerIcon> {
-        self.pointer_icon.as_ref()
+        self.rare()?.pointer_icon.as_ref()
     }
 
     pub fn clip_to_bounds(&self) -> bool {
@@ -357,7 +366,7 @@ impl ModifierNodeSlices {
         transform: cranpose_ui_graphics::ProjectiveTransform,
         size: Size,
     ) {
-        if self.text_window_transform.is_some() || self.viewport_window_rect.is_some() {
+        if self.text_window_transform().is_some() || self.viewport_window_rect().is_some() {
             let local_to_window =
                 cranpose_ui_graphics::ProjectiveTransform::translation(origin.x, origin.y)
                     .then(transform);
@@ -375,19 +384,21 @@ impl ModifierNodeSlices {
     }
 
     pub fn motion_context_animated(&self) -> bool {
-        self.motion_context_animated
+        self.rare().is_some_and(|rare| rare.motion_context_animated)
     }
 
     pub fn translated_content_context(&self) -> bool {
-        self.translated_content_context
+        self.rare()
+            .is_some_and(|rare| rare.translated_content_context)
     }
 
     pub fn translated_content_context_identity(&self) -> Option<usize> {
-        self.translated_content_context_identity
+        self.rare()?.translated_content_context_identity
     }
 
     pub fn translated_content_offset(&self) -> Option<Point> {
-        self.translated_content_offset_reader
+        self.rare()?
+            .translated_content_offset_reader
             .as_ref()
             .map(|reader| reader())
     }
@@ -455,7 +466,7 @@ impl ModifierNodeSlices {
     pub fn text_window_transform(
         &self,
     ) -> Option<&Rc<std::cell::Cell<cranpose_ui_graphics::ProjectiveTransform>>> {
-        self.text_window_transform.as_ref()
+        self.rare()?.text_window_transform.as_ref()
     }
 
     /// The write target for a scroll container's composited window rect, if this
@@ -463,7 +474,7 @@ impl ModifierNodeSlices {
     /// node's true on-screen viewport rect here so a `BringIntoViewResponder`
     /// can scroll a focused field's caret above the soft keyboard.
     pub fn viewport_window_rect(&self) -> Option<&Rc<dyn crate::modifier_nodes::WindowRectSink>> {
-        self.viewport_window_rect.as_ref()
+        self.rare()?.viewport_window_rect.as_ref()
     }
 
     /// Returns the text layout this node's `Text` or text field produced when
@@ -480,7 +491,10 @@ impl ModifierNodeSlices {
     }
 
     pub fn graphics_layer(&self) -> Option<GraphicsLayer> {
-        if let Some(resolve) = &self.graphics_layer_resolver {
+        if let Some(resolve) = self
+            .rare()
+            .and_then(|rare| rare.graphics_layer_resolver.as_ref())
+        {
             Some(resolve())
         } else {
             self.graphics_layer.as_deref().cloned()
@@ -509,49 +523,57 @@ impl ModifierNodeSlices {
             || layer.clone(),
             |current| merge_graphics_layers(current.clone(), layer.clone()),
         );
-        let existing_resolver = self.graphics_layer_resolver.clone();
+        let existing_resolver = self
+            .rare()
+            .and_then(|rare| rare.graphics_layer_resolver.clone());
 
         match &mut self.graphics_layer {
             Some(held) => **held = next_snapshot,
             None => self.graphics_layer = Some(Box::new(next_snapshot)),
         }
-        self.graphics_layer_resolver = match (existing_resolver, resolver) {
-            (None, None) => None,
-            (Some(current_resolver), None) => Some(Rc::new(move || {
-                merge_graphics_layers(current_resolver(), layer.clone())
-            })),
-            (None, Some(next_resolver)) => {
-                let base = existing_snapshot.unwrap_or_default();
-                Some(Rc::new(move || {
-                    merge_graphics_layers(base.clone(), next_resolver())
-                }))
-            }
-            (Some(current_resolver), Some(next_resolver)) => Some(Rc::new(move || {
-                merge_graphics_layers(current_resolver(), next_resolver())
-            })),
-        };
+        let merged_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>> =
+            match (existing_resolver, resolver) {
+                (None, None) => None,
+                (Some(current_resolver), None) => Some(Rc::new(move || {
+                    merge_graphics_layers(current_resolver(), layer.clone())
+                })),
+                (None, Some(next_resolver)) => {
+                    let base = existing_snapshot.unwrap_or_default();
+                    Some(Rc::new(move || {
+                        merge_graphics_layers(base.clone(), next_resolver())
+                    }))
+                }
+                (Some(current_resolver), Some(next_resolver)) => Some(Rc::new(move || {
+                    merge_graphics_layers(current_resolver(), next_resolver())
+                })),
+            };
+        if merged_resolver.is_some() {
+            self.rare_mut().graphics_layer_resolver = merged_resolver;
+        }
     }
 
     pub fn with_chain_guard(mut self, handle: ModifierChainHandle) -> Self {
-        self.chain_guard = Some(Rc::new(ChainGuard { _handle: handle }));
+        self.rare_mut().chain_guard = Some(Rc::new(ChainGuard { _handle: handle }));
         self
     }
 
     pub fn debug_stats(&self) -> ModifierNodeSlicesDebugStats {
         let draw_command_bytes = self.draw_commands.capacity() * size_of::<DrawCommand>();
-        let pointer_input_bytes =
-            self.pointer_inputs.capacity() * size_of::<Rc<dyn Fn(PointerEvent)>>();
+        let pointer_input_capacity = self.rare().map_or(0, |rare| rare.pointer_inputs.capacity());
+        let pointer_input_bytes = pointer_input_capacity * size_of::<Rc<dyn Fn(PointerEvent)>>();
         ModifierNodeSlicesDebugStats {
             draw_command_count: self.draw_commands.len(),
             draw_command_capacity: self.draw_commands.capacity(),
-            pointer_input_count: self.pointer_inputs.len(),
-            pointer_input_capacity: self.pointer_inputs.capacity(),
+            pointer_input_count: self.pointer_inputs().len(),
+            pointer_input_capacity,
             has_text_content: self.text.is_some(),
             has_text_style: self.text.is_some(),
             has_text_layout_options: self.text.is_some(),
             has_prepared_text_layout: self.text.is_some(),
             has_graphics_layer: self.graphics_layer.is_some(),
-            has_graphics_layer_resolver: self.graphics_layer_resolver.is_some(),
+            has_graphics_layer_resolver: self
+                .rare()
+                .is_some_and(|rare| rare.graphics_layer_resolver.is_some()),
             heap_bytes: draw_command_bytes + pointer_input_bytes,
         }
     }
@@ -560,23 +582,15 @@ impl ModifierNodeSlices {
     pub fn clear(&mut self) {
         self.draw_commands.clear();
         self.layer_draw_boundary = None;
-        self.pointer_inputs.clear();
-        self.pointer_input_sizes.clear();
-        self.pointer_icon = None;
         self.clip_to_bounds = false;
         self.layer_coordinator = None;
-        self.motion_context_animated = false;
-        self.translated_content_context = false;
-        self.translated_content_context_identity = None;
-        self.translated_content_offset_reader = None;
         self.text = None;
         self.text_coordinator = None;
-        self.text_window_transform = None;
-        self.viewport_window_rect = None;
         self.graphics_layer = None;
-        self.graphics_layer_resolver = None;
         self.corner_shape = None;
-        self.chain_guard = None;
+        if let Some(rare) = self.rare.as_deref_mut() {
+            rare.clear();
+        }
     }
 }
 
@@ -584,17 +598,17 @@ impl fmt::Debug for ModifierNodeSlices {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ModifierNodeSlices")
             .field("draw_commands", &self.draw_commands.len())
-            .field("pointer_inputs", &self.pointer_inputs.len())
-            .field("pointer_icon", &self.pointer_icon)
+            .field("pointer_inputs", &self.pointer_inputs().len())
+            .field("pointer_icon", &self.pointer_icon())
             .field("clip_to_bounds", &self.clip_to_bounds)
-            .field("motion_context_animated", &self.motion_context_animated)
+            .field("motion_context_animated", &self.motion_context_animated())
             .field(
                 "translated_content_context",
-                &self.translated_content_context,
+                &self.translated_content_context(),
             )
             .field(
                 "translated_content_context_identity",
-                &self.translated_content_context_identity,
+                &self.translated_content_context_identity(),
             )
             .field(
                 "translated_content_offset",
@@ -606,7 +620,9 @@ impl fmt::Debug for ModifierNodeSlices {
             .field("graphics_layer", &self.graphics_layer)
             .field(
                 "graphics_layer_resolver",
-                &self.graphics_layer_resolver.is_some(),
+                &self
+                    .rare()
+                    .is_some_and(|rare| rare.graphics_layer_resolver.is_some()),
             )
             .field("corner_shape", &self.corner_shape)
             .finish()
@@ -620,7 +636,7 @@ impl fmt::Debug for ModifierNodeSlices {
 /// one written and the one that survives.
 fn collect_pointer_icon(node: &dyn std::any::Any, slices: &mut ModifierNodeSlices) {
     if let Some(icon_node) = node.downcast_ref::<PointerIconNode>() {
-        slices.pointer_icon = Some(icon_node.icon().clone());
+        slices.rare_mut().pointer_icon = Some(icon_node.icon().clone());
     }
 }
 
@@ -691,10 +707,10 @@ fn collect_modifier_slices_into(
                 && let Some(pointer_node) = node.as_pointer_input_node()
             {
                 if let Some(handler) = pointer_node.pointer_input_handler() {
-                    slices.pointer_inputs.push(handler);
+                    slices.rare_mut().pointer_inputs.push(handler);
                 }
                 if let Some(sink) = pointer_node.layout_size_sink() {
-                    slices.pointer_input_sizes.push(sink);
+                    slices.rare_mut().pointer_input_sizes.push(sink);
                 }
                 collect_pointer_icon(any, slices);
             }
@@ -715,7 +731,7 @@ fn collect_modifier_slices_into(
                 }
 
                 if let Some(motion_context_node) = any.downcast_ref::<MotionContextAnimatedNode>() {
-                    slices.motion_context_animated = motion_context_node.is_active();
+                    slices.rare_mut().motion_context_animated = motion_context_node.is_active();
                 }
 
                 collect_window_geometry_sink(
@@ -728,10 +744,11 @@ fn collect_modifier_slices_into(
                 if let Some(translated_content_node) =
                     any.downcast_ref::<TranslatedContentContextNode>()
                 {
-                    slices.translated_content_context = translated_content_node.is_active();
-                    slices.translated_content_context_identity =
+                    let rare = slices.rare_mut();
+                    rare.translated_content_context = translated_content_node.is_active();
+                    rare.translated_content_context_identity =
                         Some(translated_content_node.identity());
-                    slices.translated_content_offset_reader =
+                    rare.translated_content_offset_reader =
                         translated_content_node.content_offset_reader();
                 }
 
@@ -750,7 +767,8 @@ fn collect_modifier_slices_into(
                         layout: text_field_node.layout_handle(),
                         pan: text_field_node.text_pan_resolver(),
                     })));
-                    slices.text_window_transform = Some(text_field_node.window_transform_sink());
+                    slices.rare_mut().text_window_transform =
+                        Some(text_field_node.window_transform_sink());
 
                     let coordinator = CoordinatorRect::new(geometry, layout_ordinal, padding);
                     text_field_node.set_content_origin(coordinator.clone());
@@ -863,10 +881,11 @@ fn collect_window_geometry_sink(
     slices: &mut ModifierNodeSlices,
 ) {
     if let Some(reporter) = any.downcast_ref::<WindowRectReporterNode>() {
-        slices.viewport_window_rect = Some(reporter.window_rect_sink());
+        slices.rare_mut().viewport_window_rect = Some(reporter.window_rect_sink());
     }
     if let Some(selectable) = any.downcast_ref::<SelectableTextNode>() {
-        slices.text_window_transform = Some(selectable.geometry().window_transform_sink());
+        slices.rare_mut().text_window_transform =
+            Some(selectable.geometry().window_transform_sink());
         selectable.geometry().set_content_origin(text);
     }
 }
