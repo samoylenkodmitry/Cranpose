@@ -408,6 +408,18 @@ impl Composer {
         });
     }
 
+    /// Composes nothing under node `id`, which holds children when
+    /// `holds_children`: the parent frame [`Composer::push_parent`] and
+    /// [`Composer::pop_parent`] would open and close around nothing is left
+    /// out where closing it would sync nothing, which is outside a
+    /// subcomposition for a node that holds no children.
+    pub fn compose_no_children(&self, id: NodeId, holds_children: bool) {
+        if holds_children || !self.core.subcompose_stack.borrow().is_empty() {
+            self.push_parent(id);
+            self.pop_parent();
+        }
+    }
+
     pub fn pop_parent(&self) {
         let frame_opt = {
             let mut stack = self.parent_stack();
