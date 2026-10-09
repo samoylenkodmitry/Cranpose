@@ -32,9 +32,11 @@ fn url_encode(input: &str) -> String {
 }
 
 pub(crate) fn decode_bitmap(bytes: &[u8]) -> anyhow::Result<ImageBitmap> {
-    let image = image::load_from_memory(bytes).context("failed to decode image bytes")?;
-    let rgba = image.to_rgba8();
-    ImageBitmap::from_rgba8(image.width(), image.height(), rgba.into_raw())
+    let rgba = image::load_from_memory(bytes)
+        .context("failed to decode image bytes")?
+        .into_rgba8();
+    let (width, height) = rgba.dimensions();
+    ImageBitmap::from_rgba8(width, height, rgba.into_raw())
         .map_err(|err| anyhow!("invalid RGBA bitmap: {err}"))
 }
 

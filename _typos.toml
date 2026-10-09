@@ -33,6 +33,8 @@ trak = "trak"
 wdth = "wdth"
 # Mipmap level of detail, as in "explicit-LOD sampling".
 LOD = "LOD"
+# The Paeth predictor, one of the PNG row filters the icon renderer chooses.
+paeth = "paeth"
 # Windows structured exception handling, not a transposition of "SHE".
 SEH = "SEH"
 # The Hang Seng Index, on the workspace bench's index bar.

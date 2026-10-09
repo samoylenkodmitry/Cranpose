@@ -45,7 +45,7 @@ mod lazy_scrollbar;
 mod liquid_ui;
 mod markdown;
 mod mineswapper2;
-mod net_image;
+pub(crate) mod net_image;
 pub mod performance_dashboard;
 pub mod pet;
 mod recomposition_lab;

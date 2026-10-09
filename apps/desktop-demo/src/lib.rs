@@ -33,12 +33,41 @@ use crate::fonts::DEMO_FONTS;
 ))]
 fn create_app() -> AppLauncher<AppFonts> {
     let dev_controls = cranpose::launch_args().string("test_screen").is_none();
-    AppLauncher::new()
-        .with_title("Cranpose Demo")
-        .with_size(800, 600)
-        .with_fonts(DEMO_FONTS)
-        .with_fps_counter(dev_controls)
-        .with_frame_pacing_controls(dev_controls)
+    with_window_icon(
+        AppLauncher::new()
+            .with_title("Cranpose Demo")
+            .with_size(800, 600)
+            .with_fonts(DEMO_FONTS)
+            .with_fps_counter(dev_controls)
+            .with_frame_pacing_controls(dev_controls),
+    )
+}
+
+/// Windows and Linux show this picture on the demo's windows and taskbar
+/// entries. It is drawn from `assets/icon/icon.svg` like every other platform's
+/// icon.
+#[cfg(all(
+    feature = "desktop",
+    feature = "renderer-wgpu",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_os = "macos"),
+    not(target_arch = "wasm32")
+))]
+fn with_window_icon(launcher: AppLauncher<AppFonts>) -> AppLauncher<AppFonts> {
+    match app::net_image::decode_bitmap(include_bytes!("../assets/icon/window-icon.png")) {
+        Ok(icon) => launcher.with_window_icon(icon),
+        Err(error) => {
+            log::warn!("the demo's window icon is unusable: {error:#}");
+            launcher
+        }
+    }
+}
+
+/// macOS shows the icon of the application bundle and ignores a window icon.
+#[cfg(all(feature = "desktop", feature = "renderer-wgpu", target_os = "macos"))]
+fn with_window_icon(launcher: AppLauncher<AppFonts>) -> AppLauncher<AppFonts> {
+    launcher
 }
 
 #[cfg(all(

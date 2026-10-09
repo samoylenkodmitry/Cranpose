@@ -116,6 +116,42 @@ fn release_assets_are_content_addressed_as_one_consistent_bundle() {
 }
 
 #[test]
+fn the_packaged_site_serves_every_icon_its_page_links() {
+    let workspace_root = workspace_root();
+    let test_root = unique_test_root(&workspace_root);
+    let package_dir = test_root.join("pkg");
+    write_fixture(&package_dir, b"wasm");
+    let output = test_root.join("site");
+    package_site(
+        &workspace_root.join("apps/desktop-demo/package-web.sh"),
+        &output,
+        &package_dir,
+        &workspace_root.join("apps/desktop-demo/index.html"),
+    );
+
+    let page = fs::read_to_string(output.join("index.html")).expect("packaged page should exist");
+    let icons: Vec<&str> = page
+        .split("<link ")
+        .skip(1)
+        .filter(|tag| {
+            tag.starts_with("rel=\"icon\"") || tag.starts_with("rel=\"apple-touch-icon\"")
+        })
+        .filter_map(|tag| tag.split("href=\"").nth(1)?.split('"').next())
+        .collect();
+    assert_eq!(
+        icons,
+        ["favicon.svg", "apple-touch-icon.png"],
+        "the page links the favicon and the home screen icon"
+    );
+    for icon in icons {
+        assert!(
+            output.join(icon).is_file(),
+            "the site must serve the icon `{icon}` its page links"
+        );
+    }
+}
+
+#[test]
 fn browser_boot_surface_uses_the_content_addressed_manifest() {
     let workspace_root = workspace_root();
     let index = fs::read_to_string(workspace_root.join("apps/desktop-demo/index.html"))

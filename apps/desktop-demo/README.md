@@ -35,6 +35,9 @@ Build a signed bundle with xtask:
 cargo xtask bundle-macos --target aarch64-apple-darwin
 ```
 
+The bundle shows `assets/icon/CranposeDemo.icns` as its icon; `--icon` names
+another `.icns` file.
+
 The bundle is sealed with an ad-hoc signature by default (`_CodeSignature/CodeResources`
 binding `Info.plist`). This is required: an unsealed bundle is reported as
 "is damaged and should be moved to the Trash" by Gatekeeper once it has been
@@ -80,6 +83,15 @@ The demo uses WebGPU where the browser offers it and WebGL2 otherwise. Add
    ```
 
 4. **Open** http://localhost:8080 in a browser with WebGL2 support
+
+### App icon
+
+[`assets/icon/icon.svg`](assets/icon/icon.svg) is the demo's icon on every
+platform, and the web page serves it as its favicon. The other platforms package
+pictures of it, which `node scripts/dev/render_app_icons.mjs` draws through
+headless Chrome: the Windows and Linux window icon, the macOS `.icns`, the iOS
+icon files and the Android launcher icons. Run it after a change to the SVG and
+commit the files it writes.
 
 ## Architecture
 

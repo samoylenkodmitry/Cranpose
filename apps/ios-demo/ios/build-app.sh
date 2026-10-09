@@ -47,6 +47,8 @@ fi
 mkdir -p "$APP"
 cp "$BINARY" "$APP/$APP_NAME"
 cp "$INFO_PLIST" "$APP/Info.plist"
+# The icon pictures sit beside the property list whose CFBundleIcons names them.
+find "$(dirname "$INFO_PLIST")" -maxdepth 1 -name 'AppIcon*.png' -exec cp {} "$APP/" \;
 
 # Ad-hoc sign so the bundle runs on device/simulator without a developer team.
 # Pass CODESIGN_IDENTITY for a real Developer ID / distribution identity.
