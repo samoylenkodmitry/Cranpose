@@ -1512,9 +1512,10 @@ fn write_node_content(
 ) {
     let outer_count = slices.outer_draw_command_count();
     let commands = &slices.draw_commands()[outer_count..];
-    // Exactly: most layers are leaves holding one draw run or text, where
-    // growth would make room for four nodes.
-    list.reserve_exact(layer_node_capacity(commands, written, slices.has_text()));
+    crate::layer_recycling::reserve_nodes(
+        list,
+        layer_node_capacity(commands, written, slices.has_text()),
+    );
     let first_kept = list.len() - kept;
     let first_draw = list.len();
     append_draw_nodes(
@@ -2162,7 +2163,7 @@ fn write_wrapper(
         mut overlay,
     } = outer;
     let children = &mut wrapper.children;
-    children.reserve_exact(behind.len() + 1 + overlay.len());
+    crate::layer_recycling::reserve_nodes(children, behind.len() + 1 + overlay.len());
     children.append(&mut behind);
     children.push(RenderNode::Layer(layer));
     children.append(&mut overlay);

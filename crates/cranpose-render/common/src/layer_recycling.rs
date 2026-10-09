@@ -97,13 +97,25 @@ pub(crate) fn recycle_list(list: Vec<RenderNode>) {
 }
 
 /// A child list with room for `capacity` children, recycled when the pool
-/// has one. A new list holds exactly that many.
+/// has one; see [`reserve_nodes`].
 pub(crate) fn child_list(capacity: usize) -> Vec<RenderNode> {
     let mut list = POOL
         .with(|pool| pool.borrow_mut().lists.pop())
         .unwrap_or_default();
-    list.reserve_exact(capacity);
+    reserve_nodes(&mut list, capacity);
     list
+}
+
+/// Makes room in `list` for `additional` more nodes: exactly that many in
+/// a list that has none yet, as most layers are leaves of one draw run or
+/// text where growth would make room for four; a list that has room grows
+/// as usual.
+pub(crate) fn reserve_nodes(list: &mut Vec<RenderNode>, additional: usize) {
+    if list.capacity() == 0 {
+        list.reserve_exact(additional);
+    } else {
+        list.reserve(additional);
+    }
 }
 
 pub(crate) fn layer_box() -> Box<LayerNode> {
