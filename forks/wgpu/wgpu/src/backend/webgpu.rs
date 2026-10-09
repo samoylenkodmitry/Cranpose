@@ -4174,8 +4174,12 @@ impl dispatch::SurfaceInterface for WebSurface {
             // Doesn't really have meaning on the web.
             present_modes: vec![wgt::PresentMode::Fifo],
             alpha_modes: vec![wgt::CompositeAlphaMode::Opaque],
-            // Statically set to RENDER_ATTACHMENT for now. See https://gpuweb.github.io/gpuweb/#dom-gpucanvasconfiguration-usage
-            usages: wgt::TextureUsages::RENDER_ATTACHMENT,
+            // A canvas texture takes any of these usages:
+            // https://gpuweb.github.io/gpuweb/#dom-gpucanvasconfiguration-usage
+            usages: wgt::TextureUsages::RENDER_ATTACHMENT
+                | wgt::TextureUsages::COPY_SRC
+                | wgt::TextureUsages::COPY_DST
+                | wgt::TextureUsages::TEXTURE_BINDING,
         }
     }
 

@@ -1376,6 +1376,15 @@ impl crate::Adapter for super::Adapter {
                 composite_alpha_modes: vec![wgt::CompositeAlphaMode::Opaque], //TODO
                 maximum_frame_latency: 2..=2, //TODO, unused currently
                 current_extent: None,
+                // A WebGL surface's image is a texture of its own, which the
+                // queue blits to the canvas at present: it can be copied and
+                // sampled like any other.
+                #[cfg(webgl)]
+                usage: wgt::TextureUses::COLOR_TARGET
+                    | wgt::TextureUses::COPY_SRC
+                    | wgt::TextureUses::COPY_DST
+                    | wgt::TextureUses::RESOURCE,
+                #[cfg(not(webgl))]
                 usage: wgt::TextureUses::COLOR_TARGET,
             })
         } else {

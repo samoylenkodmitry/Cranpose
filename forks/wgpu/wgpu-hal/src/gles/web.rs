@@ -99,10 +99,14 @@ impl Instance {
         })
     }
 
+    /// The canvas's own buffers only receive the surface texture at
+    /// present, so they need no multisampling, depth or stencil.
     fn create_context_options() -> js_sys::Object {
         let context_options = js_sys::Object::new();
-        js_sys::Reflect::set(&context_options, &"antialias".into(), &JsValue::FALSE)
-            .expect("Cannot create context options");
+        for option in ["antialias", "depth", "stencil"] {
+            js_sys::Reflect::set(&context_options, &option.into(), &JsValue::FALSE)
+                .expect("Cannot create context options");
+        }
         context_options
     }
 }
