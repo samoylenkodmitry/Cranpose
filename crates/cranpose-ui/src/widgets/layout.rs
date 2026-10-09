@@ -80,7 +80,18 @@ pub(crate) fn compose_empty_layout(
     thread_local! {
         static EMPTY: Rc<dyn MeasurePolicy> = Rc::new(crate::layout::policies::EmptyMeasurePolicy);
     }
-    emit_layout(modifier, EMPTY.with(Rc::clone), composed_density, || {})
+    let (id, provided, holds_children) =
+        emit_layout_node(modifier, EMPTY.with(Rc::clone), composed_density);
+    if provided.is_empty() {
+        cranpose_core::with_current_composer(|composer| {
+            composer.compose_no_children(id, holds_children);
+        });
+    } else {
+        cranpose_core::push_parent(id);
+        compose_under_locals(provided, &mut || {});
+        cranpose_core::pop_parent();
+    }
+    id
 }
 
 fn emit_layout<F>(
@@ -92,6 +103,20 @@ fn emit_layout<F>(
 where
     F: FnMut() + 'static,
 {
+    let (id, provided, _) = emit_layout_node(modifier, policy, composed_density);
+    cranpose_core::push_parent(id);
+    compose_under_locals(provided, &mut content);
+    cranpose_core::pop_parent();
+    id
+}
+
+/// Emits and updates a layout node; returns it, the composition locals its
+/// modifier provides and whether it holds children.
+fn emit_layout_node(
+    modifier: Modifier,
+    policy: Rc<dyn MeasurePolicy>,
+    composed_density: crate::density::Density,
+) -> (NodeId, Vec<cranpose_core::ProvidedValue>, bool) {
     let id = cranpose_core::with_current_composer(|composer| {
         composer.emit_recyclable_node(
             || LayoutNode::new(modifier.clone(), Rc::clone(&policy)),
@@ -100,18 +125,18 @@ where
     });
     let provided = modifier.provided_composition_locals();
     let direction = crate::layout_direction();
-    if let Err(err) = cranpose_core::with_node_mut(id, |node: &mut LayoutNode| {
+    let holds_children = cranpose_core::with_node_mut(id, |node: &mut LayoutNode| {
         node.set_modifier(modifier);
         node.set_measure_policy(policy);
         node.set_density(composed_density);
         node.set_layout_direction(direction);
-    }) {
+        !node.children.is_empty()
+    })
+    .unwrap_or_else(|err| {
         debug_assert!(false, "failed to update Layout node: {err}");
-    }
-    cranpose_core::push_parent(id);
-    compose_under_locals(provided, &mut content);
-    cranpose_core::pop_parent();
-    id
+        true
+    });
+    (id, provided, holds_children)
 }
 
 fn compose_under_locals(provided: Vec<cranpose_core::ProvidedValue>, content: &mut dyn FnMut()) {

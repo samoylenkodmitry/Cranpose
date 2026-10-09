@@ -82,7 +82,7 @@ fn child_labels(composition: &mut Composition<MemoryApplier>, parent: NodeId) ->
         .into_iter()
         .map(|child| {
             applier
-                .with_node::<ParentTracked<LabelNode>, _>(child, |node| node.node.label)
+                .with_node::<ParentTracked<LabelNode>, _>(child, |node| node.label)
                 .expect("ordered child exists")
         })
         .collect()

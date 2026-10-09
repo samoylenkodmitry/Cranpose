@@ -13,15 +13,9 @@ use ordered_parent::{OrderedParent, ParentTracked};
 const FRAMES: usize = 512;
 const INVALIDATED_ROWS: usize = 4;
 
-struct Leaf {
-    updates: Rc<Cell<usize>>,
-}
+struct Leaf;
 
-impl ordered_parent::FixtureLeaf for Leaf {
-    fn update(&mut self) {
-        self.updates.set(self.updates.get() + 1);
-    }
-}
+impl ordered_parent::FixtureLeaf for Leaf {}
 
 #[composable]
 fn Scene(
@@ -53,16 +47,19 @@ fn Row(
     if insert.is_some_and(|insert| insert.get()) {
         Extra(index, Rc::clone(&updates));
     }
-    with_current_composer(|composer| {
-        let updates = Rc::clone(&updates);
-        composer.emit_node(|| ParentTracked::new(Leaf { updates }));
-    });
+    emit_leaf(&updates);
 }
 
 #[composable]
 fn Extra(_index: usize, updates: Rc<Cell<usize>>) {
+    emit_leaf(&updates);
+}
+
+/// Emits a leaf and counts the emit.
+fn emit_leaf(emits: &Cell<usize>) {
+    emits.set(emits.get() + 1);
     with_current_composer(|composer| {
-        composer.emit_node(|| ParentTracked::new(Leaf { updates }));
+        composer.emit_node(|| ParentTracked::new(Leaf));
     });
 }
 
@@ -135,7 +132,7 @@ fn run_case(sibling_count: usize) {
     }
     let elapsed = start.elapsed().as_nanos();
     println!(
-        "{{\"benchmark\":\"recompose_sibling_cursor\",\"siblings\":{sibling_count},\"invalidated_rows_per_frame\":{},\"insert_control\":true,\"warmup_frames\":32,\"frames\":{FRAMES},\"node_updates\":{},\"elapsed_ns\":{elapsed},\"ns_per_frame\":{}}}",
+        "{{\"benchmark\":\"recompose_sibling_cursor\",\"siblings\":{sibling_count},\"invalidated_rows_per_frame\":{},\"insert_control\":true,\"warmup_frames\":32,\"frames\":{FRAMES},\"node_emits\":{},\"elapsed_ns\":{elapsed},\"ns_per_frame\":{}}}",
         INVALIDATED_ROWS + 1,
         fixture.updates.get() - updates_before,
         elapsed / FRAMES as u128,

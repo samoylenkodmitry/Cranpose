@@ -1,7 +1,8 @@
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Cell, Ref, RefCell},
     hash::{Hash, Hasher},
     rc::Rc,
+    sync::Arc,
 };
 
 use cranpose_foundation::{
@@ -42,15 +43,26 @@ struct TextPreparedLayoutCacheEntry {
     layout: Rc<crate::text::PreparedTextLayout>,
 }
 
+/// A text node's text and its prepared layouts. The node and the slices
+/// built from it share one owner for the node's life: an update changes its
+/// source in place, so the slices read the new text without being rebuilt.
 #[derive(Debug)]
 struct TextPreparedLayoutOwner {
-    text: Rc<AnnotatedString>,
-    style: std::sync::Arc<TextStyle>,
-    style_hash: u64,
-    options: TextLayoutOptions,
+    source: RefCell<TextLayoutSource>,
     node_id: Cell<Option<cranpose_core::NodeId>>,
     measured_max_width: Cell<Option<Option<f32>>>,
     cache: RefCell<SmallVec<[TextPreparedLayoutCacheEntry; 1]>>,
+}
+
+/// What a text is laid out from.
+#[derive(Debug)]
+struct TextLayoutSource {
+    text: Rc<AnnotatedString>,
+    style: Arc<TextStyle>,
+    style_hash: u64,
+    options: TextLayoutOptions,
+    /// Whether layouts come from the text service's shared cache. A text
+    /// changed in place, as a ticker's is every frame, lays out unshared.
     shares_layouts: bool,
 }
 
@@ -60,44 +72,52 @@ pub(crate) struct TextPreparedLayoutHandle {
 }
 
 impl TextPreparedLayoutOwner {
-    fn new(
-        text: Rc<AnnotatedString>,
-        (style, style_hash): (std::sync::Arc<TextStyle>, u64),
-        options: TextLayoutOptions,
-        node_id: Option<cranpose_core::NodeId>,
-        measured_max_width: Option<Option<f32>>,
-        shares_layouts: bool,
-    ) -> Self {
+    fn new(text: Rc<AnnotatedString>, style: TextStyle, options: TextLayoutOptions) -> Self {
+        let style_hash = style.render_hash();
         Self {
-            text,
-            style,
-            style_hash,
-            options: options.normalized(),
-            node_id: Cell::new(node_id),
-            measured_max_width: Cell::new(measured_max_width),
+            source: RefCell::new(TextLayoutSource {
+                text,
+                style: Arc::new(style),
+                style_hash,
+                options: options.normalized(),
+                shares_layouts: true,
+            }),
+            node_id: Cell::new(None),
+            measured_max_width: Cell::new(None),
             cache: RefCell::new(SmallVec::new()),
-            shares_layouts,
         }
     }
 
-    fn text(&self) -> &str {
-        self.text.text.as_str()
+    /// Lays the text out from `text`, `style` and normalized `options` from
+    /// now on, dropping the layouts prepared from the old ones. A style equal
+    /// to the current one keeps being shared.
+    fn update(&self, text: &Rc<AnnotatedString>, style: &TextStyle, options: TextLayoutOptions) {
+        let mut source = self.source.borrow_mut();
+        let same_style = *source.style == *style;
+        if source.text == *text && same_style && source.options == options {
+            return;
+        }
+        if !same_style {
+            source.style = Arc::new(style.clone());
+            source.style_hash = style.render_hash();
+        }
+        source.text = Rc::clone(text);
+        source.options = options;
+        source.shares_layouts = false;
+        drop(source);
+        self.cache.borrow_mut().clear();
     }
 
-    fn annotated_text(&self) -> Rc<AnnotatedString> {
-        self.text.clone()
+    fn annotated_text(&self) -> Ref<'_, Rc<AnnotatedString>> {
+        Ref::map(self.source.borrow(), |source| &source.text)
     }
 
-    fn annotated_string(&self) -> AnnotatedString {
-        (*self.text).clone()
-    }
-
-    fn style(&self) -> &TextStyle {
-        &self.style
+    fn style(&self) -> Ref<'_, TextStyle> {
+        Ref::map(self.source.borrow(), |source| &*source.style)
     }
 
     fn options(&self) -> TextLayoutOptions {
-        self.options
+        self.source.borrow().options
     }
 
     fn node_id(&self) -> Option<cranpose_core::NodeId> {
@@ -130,27 +150,29 @@ impl TextPreparedLayoutOwner {
             }
         }
 
-        let prepare = if self.shares_layouts {
+        let source = self.source.borrow();
+        let prepare = if source.shares_layouts {
             crate::text::prepare_text_layout_for_node
         } else {
             crate::text::measure::prepare_unshared_text_layout_for_node
         };
         let prepared = prepare(
             self.node_id(),
-            &self.text,
-            &self.style,
-            self.options,
+            &source.text,
+            &source.style,
+            source.options,
             normalized_max_width,
         );
-        if std::sync::Arc::ptr_eq(&prepared.visual_style, &self.style) {
-            let _ = prepared.visual_style_hash.set(self.style_hash);
+        if Arc::ptr_eq(&prepared.visual_style, &source.style) {
+            let _ = prepared.visual_style_hash.set(source.style_hash);
         }
         let widths = crate::text::measure::PreparedWidths::of(
-            self.text.as_ref(),
-            self.options,
+            source.text.as_ref(),
+            source.options,
             normalized_max_width,
             &prepared,
         );
+        drop(source);
 
         let mut cache = self.cache.borrow_mut();
         cache.insert(
@@ -219,11 +241,11 @@ impl TextPreparedLayoutHandle {
         Self { owner }
     }
 
-    pub(crate) fn annotated_text(&self) -> &Rc<AnnotatedString> {
-        &self.owner.text
+    pub(crate) fn annotated_text(&self) -> Ref<'_, Rc<AnnotatedString>> {
+        self.owner.annotated_text()
     }
 
-    pub(crate) fn style(&self) -> &TextStyle {
+    pub(crate) fn style(&self) -> Ref<'_, TextStyle> {
         self.owner.style()
     }
 
@@ -244,16 +266,8 @@ impl TextModifierNode {
         options: TextLayoutOptions,
         density: Density,
     ) -> Self {
-        let style_hash = style.render_hash();
         Self {
-            layout: Rc::new(TextPreparedLayoutOwner::new(
-                text,
-                (std::sync::Arc::new(style), style_hash),
-                options,
-                None,
-                None,
-                true,
-            )),
+            layout: Rc::new(TextPreparedLayoutOwner::new(text, style, options)),
             density,
             state: NodeState::new(),
         }
@@ -269,19 +283,15 @@ impl TextModifierNode {
         }
     }
 
-    pub fn text(&self) -> &str {
-        self.layout.text()
+    pub fn text(&self) -> Ref<'_, str> {
+        Ref::map(self.layout.annotated_text(), |text| text.text.as_str())
     }
 
     pub fn annotated_text(&self) -> Rc<AnnotatedString> {
-        self.layout.annotated_text()
+        Rc::clone(&self.layout.annotated_text())
     }
 
-    pub fn annotated_string(&self) -> AnnotatedString {
-        self.layout.annotated_string()
-    }
-
-    pub fn style(&self) -> &TextStyle {
+    pub fn style(&self) -> Ref<'_, TextStyle> {
         self.layout.style()
     }
 
@@ -497,33 +507,7 @@ impl ModifierNodeElement for TextModifierElement {
 
     fn update(&self, node: &mut Self::Node) {
         node.density = self.density;
-        let current = node.layout.as_ref();
-        let same_style = *current.style == self.style;
-        if current.text != self.text || !same_style || current.options != self.options {
-            // A text that changed in the same style, as a ticker's does,
-            // keeps sharing the style it had.
-            let style = if same_style {
-                (std::sync::Arc::clone(&current.style), current.style_hash)
-            } else {
-                (
-                    std::sync::Arc::new(self.style.clone()),
-                    self.style.render_hash(),
-                )
-            };
-            let owner = TextPreparedLayoutOwner::new(
-                self.text.clone(),
-                style,
-                self.options,
-                current.node_id(),
-                current.measured_max_width.get(),
-                false,
-            );
-            // A layout no handle still reads keeps its allocation.
-            match Rc::get_mut(&mut node.layout) {
-                Some(layout) => *layout = owner,
-                None => node.layout = Rc::new(owner),
-            }
-        }
+        node.layout.update(&self.text, &self.style, self.options);
     }
 
     fn capabilities(&self) -> NodeCapabilities {

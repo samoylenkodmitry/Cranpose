@@ -1,7 +1,7 @@
 use super::{
     super::{
         ActiveGroupId, ActiveSubtreeRoot, ChildCursor, DetachedSubtree, GroupKey, GroupKeySeed,
-        GroupStart, GroupStartKind, SlotTable, SlotWriteSession,
+        GroupStart, GroupStartKind, RootNodeIds, SlotTable, SlotWriteSession,
     },
     SlotWriteSessionState,
 };
@@ -346,6 +346,26 @@ impl SlotWriteSession<'_> {
             return;
         };
         frame.skip_to_existing_group_end(subtree_end);
+    }
+
+    /// Skips the open group's body and ends the group, as `skip_group`,
+    /// `finish_group_body` and `end_group` would one after another, and
+    /// returns the group's root nodes.
+    pub(crate) fn skip_and_end_group(&mut self) -> RootNodeIds {
+        let Some((group_anchor, opened_index)) = self.state.pop_group_frame() else {
+            log::error!("slot writer skip_and_end_group called with an empty group stack");
+            return RootNodeIds::new();
+        };
+        let Some(group_index) = self.table.open_group_index(group_anchor, opened_index) else {
+            log::error!(
+                "slot writer skip_and_end_group ignored stale group frame anchor {group_anchor:?}"
+            );
+            return RootNodeIds::new();
+        };
+        let root_nodes = self.table.subtree_root_node_ids_at(group_index);
+        let subtree_end = self.group_subtree_end(group_index, "group skip cursor advance");
+        self.state.advance_parent_after_child(subtree_end);
+        root_nodes
     }
 
     pub(crate) fn set_group_scope(&mut self, group: ActiveGroupId, scope: RecomposeScope) -> bool {

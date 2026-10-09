@@ -607,7 +607,8 @@ impl LayoutNode {
             return;
         }
         // A text that changed and nothing else, as a ticker's does, keeps
-        // the slices the chain gave: only their text moves to the new layout.
+        // the slices the chain gave: their text reads the layout the update
+        // changes in place.
         let text_only = self
             .modifier
             .differs_only_in::<crate::text_modifier_node::TextModifierElement>(&modifier);
@@ -621,8 +622,8 @@ impl LayoutNode {
     }
 
     /// Reconciles the chain with the node's modifier. `text_only` says the
-    /// modifier changed only in its text elements: current slices are then
-    /// kept, with their text pointed at the new layout.
+    /// modifier changed only in its text elements: when the chain updates
+    /// them in place, the current slices are kept.
     fn sync_modifier_chain(&mut self, text_only: bool) {
         let prev_caps = self.modifier_capabilities();
         let start_parent = self.parent();
@@ -659,8 +660,7 @@ impl LayoutNode {
         if !in_place {
             self.forget_semantics_reach();
         }
-        let keep_slices =
-            text_only && !self.modifier_slices_dirty.get() && self.point_slices_at_text();
+        let keep_slices = in_place && !self.modifier_slices_dirty.get();
         if !keep_slices {
             self.modifier_slices_dirty.set(true);
         }
@@ -673,31 +673,6 @@ impl LayoutNode {
         if !in_place {
             self.refresh_registry_state();
         }
-    }
-
-    /// Points the current slices' text at the chain's text node, and
-    /// returns whether the chain has one.
-    fn point_slices_at_text(&self) -> bool {
-        let mut layout = None;
-        self.modifier_chain.chain().for_each_forward_matching(
-            NodeCapabilities::LAYOUT,
-            |node_ref| {
-                node_ref.with_node(|node| {
-                    if layout.is_none()
-                        && let Some(text) = node
-                            .as_any()
-                            .downcast_ref::<crate::text_modifier_node::TextModifierNode>()
-                    {
-                        layout = Some(text.prepared_layout_handle());
-                    }
-                });
-            },
-        );
-        let Some(layout) = layout else {
-            return false;
-        };
-        Rc::make_mut(&mut *self.modifier_slices_snapshot.borrow_mut()).replace_text_layout(layout);
-        true
     }
 
     fn update_modifier_slices_cache(&self) {

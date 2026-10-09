@@ -49,8 +49,8 @@ pub use blocking::{
     withBlocking,
 };
 pub use callbacks::{
-    CallbackHolder, CallbackHolder1, ParamSlot, ParamState, ReturnSlot, SharedParam, refresh_param,
-    refresh_shared_param,
+    CallbackHolder, CallbackHolder1, ParamReturnState, ParamSlot, ParamState, ReturnSlot,
+    SharedParam, refresh_param, refresh_shared_param,
 };
 pub use composer::{
     BranchGroupGuard, CapturedCompositionContext, ComposableGroup, Composer, ValueSlotHandle,
@@ -60,6 +60,7 @@ pub use composition::{Composition, ROOT_RENDER_REPLAY_LIMIT};
 pub use composition_locals::{
     CompositionLocal, CompositionLocalProvider, ProvidedValue, StaticCompositionLocal,
     compositionLocalOf, compositionLocalOfWithPolicy, staticCompositionLocalOf,
+    staticCompositionLocalOfWithPolicy,
 };
 pub(crate) use composition_locals::{LocalStateEntry, StaticLocalEntry};
 pub use concurrency::{
@@ -1699,7 +1700,6 @@ pub fn pop_parent() {
 
 pub trait Node: Any {
     fn mount(&mut self) {}
-    fn update(&mut self) {}
     fn unmount(&mut self) {}
     /// Adds `child` to this node's child list, returning whether the list
     /// actually changed. A node that already holds the child returns `false`:
@@ -2174,7 +2174,6 @@ pub trait Applier: Any {
     fn clear_recycled_nodes(&mut self) {}
 }
 
-type TypedNodeUpdate = fn(&mut dyn Node, NodeId) -> Result<(), NodeError>;
 type CommandCallback = Box<dyn FnOnce(&mut dyn Applier) -> Result<(), NodeError> + 'static>;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -2271,10 +2270,6 @@ pub(crate) enum Command {
     BubbleDirty {
         node_id: NodeId,
         bubble: DirtyBubble,
-    },
-    UpdateTypedNode {
-        id: NodeId,
-        updater: TypedNodeUpdate,
     },
     RemoveNode {
         id: NodeId,
@@ -2375,13 +2370,6 @@ impl DeferredChildCleanupQueue {
 }
 
 impl Command {
-    pub(crate) fn update_node<N: Node + 'static>(id: NodeId) -> Self {
-        Self::UpdateTypedNode {
-            id,
-            updater: update_typed_node::<N>,
-        }
-    }
-
     pub(crate) fn callback(
         callback: impl FnOnce(&mut dyn Applier) -> Result<(), NodeError> + 'static,
     ) -> Self {
@@ -2403,14 +2391,6 @@ impl Command {
             Self::BubbleDirty { node_id, bubble } => {
                 bubble.apply(applier, node_id);
                 Ok(())
-            }
-            Self::UpdateTypedNode { id, updater } => {
-                let node = match applier.get_mut(id) {
-                    Ok(node) => node,
-                    Err(NodeError::Missing { .. }) => return Ok(()),
-                    Err(err) => return Err(err),
-                };
-                updater(node, id)
             }
             Self::RemoveNode { id } => {
                 if let Ok(node) = applier.get_mut(id) {
@@ -2499,7 +2479,6 @@ const SMALL_CHILD_SYNC_LINEAR_THRESHOLD: usize = 8;
 #[derive(Copy, Clone)]
 enum CommandTag {
     BubbleDirty,
-    UpdateTypedNode,
     RemoveNode,
     MountNode,
     AttachChild,
@@ -2515,7 +2494,6 @@ impl CommandTag {
     fn label(self) -> &'static str {
         match self {
             Self::BubbleDirty => "BubbleDirty",
-            Self::UpdateTypedNode => "UpdateTypedNode",
             Self::RemoveNode => "RemoveNode",
             Self::MountNode => "MountNode",
             Self::AttachChild => "AttachChild",
@@ -2533,12 +2511,6 @@ impl CommandTag {
 struct BubbleDirtyCommand {
     node_id: NodeId,
     bubble: DirtyBubble,
-}
-
-#[derive(Copy, Clone)]
-struct UpdateTypedNodeCommand {
-    id: NodeId,
-    updater: TypedNodeUpdate,
 }
 
 #[derive(Copy, Clone)]
@@ -2591,7 +2563,6 @@ struct SyncChildrenCommand {
 pub(crate) struct CommandQueue {
     tags: Vec<CommandTag>,
     bubble_dirty: Vec<BubbleDirtyCommand>,
-    update_typed_nodes: Vec<UpdateTypedNodeCommand>,
     remove_nodes: Vec<NodeId>,
     mount_nodes: Vec<NodeId>,
     attach_children: Vec<AttachChildCommand>,
@@ -2616,11 +2587,6 @@ impl CommandQueue {
                 self.bubble_dirty
                     .push(BubbleDirtyCommand { node_id, bubble });
                 self.push_tag(CommandTag::BubbleDirty);
-            }
-            Command::UpdateTypedNode { id, updater } => {
-                self.update_typed_nodes
-                    .push(UpdateTypedNodeCommand { id, updater });
-                self.push_tag(CommandTag::UpdateTypedNode);
             }
             Command::RemoveNode { id } => {
                 self.remove_nodes.push(id);
@@ -2728,11 +2694,6 @@ impl CommandQueue {
             .len()
             .saturating_mul(std::mem::size_of::<BubbleDirtyCommand>())
             .saturating_add(
-                self.update_typed_nodes
-                    .len()
-                    .saturating_mul(std::mem::size_of::<UpdateTypedNodeCommand>()),
-            )
-            .saturating_add(
                 self.remove_nodes
                     .len()
                     .saturating_mul(std::mem::size_of::<NodeId>()),
@@ -2788,11 +2749,6 @@ impl CommandQueue {
         self.bubble_dirty
             .capacity()
             .saturating_mul(std::mem::size_of::<BubbleDirtyCommand>())
-            .saturating_add(
-                self.update_typed_nodes
-                    .capacity()
-                    .saturating_mul(std::mem::size_of::<UpdateTypedNodeCommand>()),
-            )
             .saturating_add(
                 self.remove_nodes
                     .capacity()
@@ -2857,7 +2813,6 @@ impl CommandQueue {
         let Self {
             tags,
             bubble_dirty,
-            update_typed_nodes,
             remove_nodes,
             mount_nodes,
             attach_children,
@@ -2872,7 +2827,6 @@ impl CommandQueue {
         } = self;
         tags.clear();
         bubble_dirty.clear();
-        update_typed_nodes.clear();
         remove_nodes.clear();
         mount_nodes.clear();
         attach_children.clear();
@@ -2889,7 +2843,6 @@ impl CommandQueue {
     fn apply_in_order(&mut self, applier: &mut dyn Applier) -> Result<(), NodeError> {
         let mut payloads = CommandPayloads {
             bubble_dirty: self.bubble_dirty.drain(..),
-            update_typed_nodes: self.update_typed_nodes.drain(..),
             remove_nodes: self.remove_nodes.drain(..),
             mount_nodes: self.mount_nodes.drain(..),
             attach_children: self.attach_children.drain(..),
@@ -2913,7 +2866,6 @@ impl CommandQueue {
 /// them.
 struct CommandPayloads<'a> {
     bubble_dirty: std::vec::Drain<'a, BubbleDirtyCommand>,
-    update_typed_nodes: std::vec::Drain<'a, UpdateTypedNodeCommand>,
     remove_nodes: std::vec::Drain<'a, NodeId>,
     mount_nodes: std::vec::Drain<'a, NodeId>,
     attach_children: std::vec::Drain<'a, AttachChildCommand>,
@@ -2935,7 +2887,6 @@ impl CommandPayloads<'_> {
     ) -> Result<(), NodeError> {
         match tag {
             CommandTag::BubbleDirty
-            | CommandTag::UpdateTypedNode
             | CommandTag::RemoveNode
             | CommandTag::MountNode
             | CommandTag::Callback => self.apply_node_command(tag, applier, cleanup),
@@ -2959,11 +2910,6 @@ impl CommandPayloads<'_> {
                 let BubbleDirtyCommand { node_id, bubble } =
                     next_command_payload(&mut self.bubble_dirty, tag)?;
                 Command::BubbleDirty { node_id, bubble }.apply_with_cleanup(applier, cleanup)?;
-            }
-            CommandTag::UpdateTypedNode => {
-                let UpdateTypedNodeCommand { id, updater } =
-                    next_command_payload(&mut self.update_typed_nodes, tag)?;
-                Command::UpdateTypedNode { id, updater }.apply_with_cleanup(applier, cleanup)?;
             }
             CommandTag::RemoveNode => {
                 let id = next_command_payload(&mut self.remove_nodes, tag)?;
@@ -3065,7 +3011,6 @@ impl CommandPayloads<'_> {
             }
             CommandTag::SyncChildren => self.sync_children(applier, cleanup)?,
             CommandTag::BubbleDirty
-            | CommandTag::UpdateTypedNode
             | CommandTag::RemoveNode
             | CommandTag::MountNode
             | CommandTag::Callback => return Err(command_payload_error(tag)),
@@ -3093,7 +3038,6 @@ impl CommandPayloads<'_> {
 
     fn assert_all_taken(&mut self) {
         debug_assert!(self.bubble_dirty.next().is_none());
-        debug_assert!(self.update_typed_nodes.next().is_none());
         debug_assert!(self.remove_nodes.next().is_none());
         debug_assert!(self.mount_nodes.next().is_none());
         debug_assert!(self.attach_children.next().is_none());
@@ -3115,18 +3059,6 @@ fn next_command_payload<T>(
     tag: CommandTag,
 ) -> Result<T, NodeError> {
     payloads.next().ok_or_else(|| command_payload_error(tag))
-}
-
-fn update_typed_node<N: Node + 'static>(node: &mut dyn Node, id: NodeId) -> Result<(), NodeError> {
-    let typed = node
-        .as_any_mut()
-        .downcast_mut::<N>()
-        .ok_or_else(|| NodeError::TypeMismatch {
-            id,
-            expected: std::any::type_name::<N>(),
-        })?;
-    typed.update();
-    Ok(())
 }
 
 fn attach_child_at(

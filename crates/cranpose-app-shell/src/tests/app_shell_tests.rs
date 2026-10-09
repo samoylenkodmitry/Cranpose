@@ -107,7 +107,7 @@ fn find_layout_box_with_text<'a>(
     node: &'a cranpose_ui::LayoutBox,
     text: &str,
 ) -> Option<&'a cranpose_ui::LayoutBox> {
-    if node.node_data.modifier_slices().text_content() == Some(text) {
+    if node.node_data.modifier_slices().text_content().as_deref() == Some(text) {
         return Some(node);
     }
 

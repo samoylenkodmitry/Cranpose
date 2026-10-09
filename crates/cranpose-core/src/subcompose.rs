@@ -333,6 +333,9 @@ pub struct SubcomposeState {
     retained_capture_keys: HashMap<SlotId, RetainedCaptureKey>,
     content_generation: std::cell::Cell<u64>,
     slot_composed_generation: HashMap<SlotId, (u64, u64)>,
+    /// The content generation from which slots compose under changed
+    /// static composition locals; zero while none changed.
+    locals_generation: std::cell::Cell<u64>,
 }
 
 struct RetainedCaptureKey {
@@ -399,6 +402,7 @@ impl SubcomposeState {
             retained_capture_keys: HashMap::default(),
             content_generation: std::cell::Cell::new(0),
             slot_composed_generation: HashMap::default(),
+            locals_generation: std::cell::Cell::new(0),
         }
     }
 
@@ -1052,6 +1056,25 @@ impl SubcomposeState {
         self.mapping.invalidate_scopes();
         self.content_generation
             .set(self.content_generation.get() + 1);
+    }
+
+    /// Records that a static composition local the slots compose under
+    /// changed: every slot composed before must compose again, and run
+    /// every body it holds, before it may be reused.
+    pub fn invalidate_locals(&self) {
+        self.bump_content_generation();
+        self.locals_generation.set(self.content_generation.get());
+    }
+
+    /// Whether the slot composed before a static composition local it reads
+    /// from changed; see [`Self::invalidate_locals`]. A composition another
+    /// slot left counts as fresh: its scopes come back inactive, and a group
+    /// entered with an inactive scope composes again anyway.
+    pub fn slot_locals_stale(&self, slot_id: SlotId) -> bool {
+        let changed_at = self.locals_generation.get();
+        self.slot_composed_generation
+            .get(&slot_id)
+            .is_some_and(|(generation, _)| *generation < changed_at)
     }
 
     /// Advances the content generation without invalidating scopes: every

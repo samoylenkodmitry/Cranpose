@@ -3,7 +3,7 @@ use std::cell::OnceCell;
 use cranpose_core::{CompositionLocal, OwnedMutableState, StaticCompositionLocal};
 
 pub(crate) struct EnvironmentLocals {
-    pub(crate) density: OnceCell<CompositionLocal<crate::Density>>,
+    pub(crate) density: OnceCell<StaticCompositionLocal<crate::Density>>,
     pub(crate) direction: OnceCell<CompositionLocal<crate::LayoutDirection>>,
     pub(crate) safe_area: OnceCell<CompositionLocal<crate::EdgeInsets>>,
     pub(crate) ime: OnceCell<CompositionLocal<crate::EdgeInsets>>,

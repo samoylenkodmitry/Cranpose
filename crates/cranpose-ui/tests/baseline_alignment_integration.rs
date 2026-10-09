@@ -171,7 +171,7 @@ fn style(size: f32) -> TextStyle {
 }
 
 fn find_text<'a>(node: &'a LayoutBox, text: &str) -> Option<&'a LayoutBox> {
-    if node.node_data.modifier_slices().text_content() == Some(text) {
+    if node.node_data.modifier_slices().text_content().as_deref() == Some(text) {
         return Some(node);
     }
     node.children

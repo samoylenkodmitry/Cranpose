@@ -648,6 +648,9 @@ pub(crate) struct ComposerCore {
     pub(crate) recompose_parent_hint: Cell<Option<NodeId>>,
     pub(crate) recompose_child_cursor: Cell<crate::recompose::RecomposeChildCursor>,
     pub(crate) root_render_requested: Cell<bool>,
+    /// Whether a static composition local provided around what composes
+    /// now changed: every group opened meanwhile runs its body.
+    locals_changed: Cell<bool>,
     pub(crate) _not_send: PhantomData<*const ()>,
 }
 
@@ -658,9 +661,18 @@ pub(crate) struct ComposerCore {
 pub struct CapturedCompositionContext {
     locals: LocalStackSnapshot,
     owner_scope: Option<Weak<RecomposeScopeInner>>,
+    locals_changed: bool,
 }
 
 impl CapturedCompositionContext {
+    /// Whether a static composition local provided around the capture site
+    /// changed in the composition that captured this context: what composes
+    /// under it, subcompositions included, must compose again without
+    /// skipping.
+    pub fn locals_changed(&self) -> bool {
+        self.locals_changed
+    }
+
     /// Total deactivations along the capturing scope's owner chain right now;
     /// see [`crate::RecomposeScope::owner_chain_deactivation_epoch`]. Zero
     /// when the context has no owner scope or it is gone.
@@ -760,6 +772,7 @@ impl ComposerCore {
             recompose_parent_hint: Cell::new(None),
             recompose_child_cursor: Cell::new(crate::recompose::RecomposeChildCursor::Unknown),
             root_render_requested: Cell::new(false),
+            locals_changed: Cell::new(false),
             _not_send: PhantomData,
         }
     }
@@ -795,12 +808,19 @@ pub struct ComposableGroup<'a> {
     pass: Option<SlotHostPassGuard>,
     runs_body: bool,
     completed: bool,
+    skipped: Cell<bool>,
 }
 
 impl ComposableGroup<'_> {
     /// The recompose scope of the group.
     pub fn scope(&self) -> &RecomposeScope {
         &self.scope
+    }
+
+    /// Skips the group's body: what it composed last stays. The call
+    /// composes nothing more in the group before closing it.
+    pub fn skip(&self) {
+        self.skipped.set(true);
     }
 
     /// Ends the group after its body composed.
@@ -814,8 +834,13 @@ impl Drop for ComposableGroup<'_> {
         if self.completed {
             self.scope.mark_composed_once();
         }
-        self.composer
-            .close_group_in_active_pass(&self.host, &self.scope);
+        if self.skipped.get() {
+            self.composer
+                .close_skipped_group_in_active_pass(&self.host, &self.scope);
+        } else {
+            self.composer
+                .close_group_in_active_pass(&self.host, &self.scope);
+        }
         if let Some(mut pass) = self.pass.take() {
             if self.completed
                 && let Err(err) = self.composer.finish_slot_host_pass(&pass.host)
@@ -1412,16 +1437,14 @@ impl Composer {
         }
         scope_ref.set_retention_mode(options.retention);
 
-        if options.force_recompose {
+        // Content under a changed static composition local runs every body,
+        // as restored content does.
+        let restored = matches!(start_kind, GroupStartKind::Restored);
+        let recompose = options.force_recompose | self.core.locals_changed.get() | restored;
+        if recompose | (reused & !options.force_reuse) {
             scope_ref.force_recompose();
         } else if options.force_reuse {
             scope_ref.force_reuse();
-        } else if reused {
-            scope_ref.force_recompose();
-        }
-        let restored = matches!(start_kind, GroupStartKind::Restored);
-        if restored {
-            scope_ref.force_recompose();
         }
 
         scope_ref.set_slots_host(host);
@@ -1528,6 +1551,24 @@ impl Composer {
             result
         });
         self.close_finished_group(host, scope, result);
+        self.settle_closed_group(scope);
+    }
+
+    /// Closes a group whose body was skipped, in one slot session: its root
+    /// nodes stay attached where they were.
+    #[inline(never)]
+    fn close_skipped_group_in_active_pass(&self, host: &Rc<SlotsHost>, scope: &RecomposeScope) {
+        #[expect(
+            clippy::redundant_closure_for_method_calls,
+            reason = "the method path is not general over the session lifetime"
+        )]
+        let root_nodes = host.with_write_session(|slots| slots.skip_and_end_group());
+        self.attach_root_nodes(root_nodes);
+        self.pop_closed_scope(scope);
+        self.settle_closed_group(scope);
+    }
+
+    fn settle_closed_group(&self, scope: &RecomposeScope) {
         scope.mark_recomposed();
         if let Err(err) = self.flush_pending_commands_if_large() {
             log::error!("mid-composition command flush failed: {err}");
@@ -1551,6 +1592,7 @@ impl Composer {
             pass,
             runs_body,
             completed: false,
+            skipped: Cell::new(false),
         }
     }
 
@@ -1772,6 +1814,10 @@ impl Composer {
         result: FinishGroupResult,
     ) {
         self.handle_finished_group_result(host, Some(scope.id()), result);
+        self.pop_closed_scope(scope);
+    }
+
+    fn pop_closed_scope(&self, scope: &RecomposeScope) {
         if let Some(popped) = self.scope_stack().pop() {
             debug_assert_eq!(
                 popped.id(),
@@ -2057,6 +2103,7 @@ impl Composer {
             InitialParentFrame::RealParent,
         ));
         core.phase.set(phase);
+        core.locals_changed.set(self.core.locals_changed.get());
         *core.local_stack.borrow_mut() = locals;
         core
     }
@@ -2128,7 +2175,19 @@ impl Composer {
             owner_scope: self
                 .current_recompose_scope()
                 .map(|scope| scope.downgrade()),
+            locals_changed: self.core.locals_changed.get(),
         }
+    }
+
+    /// Runs `f` as content under a static composition local that changed
+    /// when `changed`: every group it opens runs its body, as under the
+    /// provider of a changed static local.
+    pub fn with_locals_changed<R>(&self, changed: bool, f: impl FnOnce(&Composer) -> R) -> R {
+        let outer = self.core.locals_changed.get();
+        self.core.locals_changed.set(outer || changed);
+        let result = f(self);
+        self.core.locals_changed.set(outer);
+        result
     }
 
     /// Subcomposes content using an isolated SlotsHost without resetting it.
@@ -2264,18 +2323,21 @@ impl Composer {
             return f(self);
         }
         let mut values = SmallVec::<[(LocalKey, Rc<dyn Any>); 2]>::new();
+        let mut static_changed = false;
         for value in provided.into_iter().rev() {
             if values.iter().any(|(key, _)| key == value.key()) {
                 continue;
             }
-            values.push(value.into_entry(self, site));
+            let (key, entry, changed) = value.into_entry(self, site);
+            static_changed |= changed;
+            values.push((key, entry));
         }
         let parent = self.current_local_stack();
         *self.local_stack() = Some(Rc::new(LocalFrame {
             values,
             parent: parent.clone(),
         }));
-        let result = f(self);
+        let result = self.with_locals_changed(static_changed, f);
         *self.local_stack() = parent;
         result
     }

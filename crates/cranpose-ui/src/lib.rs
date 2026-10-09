@@ -185,7 +185,7 @@ pub use modifier::{
     ModifierLocalKey, ModifierLocalReadScope, ModifierNodeSlices, ModifierNodeSlicesDebugStats,
     Point, PointerEvent, PointerEventKind, PointerInputScope, PointerSource, Rect, RenderEffect,
     ResolvedBackground, ResolvedModifiers, RotaryInputModifierNode, RotaryScrollEvent,
-    RoundedCornerShape, RuntimeShader, SemanticsRequester, Shadow, ShadowScope, Size,
+    RoundedCornerShape, RuntimeShader, SemanticsRequester, Shadow, ShadowScope, Size, SliceTextRef,
     TransformOrigin, WindowRootDescriptor, WindowRootElement, WindowRootEntry, WindowRootNode,
     WindowRootRegistry, WindowRootRoutingScratch, collect_modifier_slices,
     collect_semantics_from_modifier, collect_slices_from_modifier, is_window_root,

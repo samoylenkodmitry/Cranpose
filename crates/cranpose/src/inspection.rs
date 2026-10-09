@@ -171,8 +171,8 @@ fn capture(layout: &LayoutBox, parent: Option<String>) -> Node {
         .node_data
         .modifier_slices
         .text_content()
-        .unwrap_or_default()
-        .to_owned();
+        .map(|text| text.to_string())
+        .unwrap_or_default();
     let kind = if text.is_empty() {
         format!("{:?}", layout.node_data.kind)
     } else {

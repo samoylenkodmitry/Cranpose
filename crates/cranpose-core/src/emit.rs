@@ -85,7 +85,6 @@ impl Composer {
                 scope_debug.0,
                 scope_debug.1,
             );
-            self.commands_mut().push(Command::update_node::<N>(id));
             self.attach_to_parent(id);
             let parent_id = self.planned_node_parent(id);
             let recorded = self
@@ -406,6 +405,18 @@ impl Composer {
             attach_mode,
             synthetic_root: false,
         });
+    }
+
+    /// Composes nothing under node `id`, which holds children when
+    /// `holds_children`: the parent frame [`Composer::push_parent`] and
+    /// [`Composer::pop_parent`] would open and close around nothing is left
+    /// out where closing it would sync nothing, which is outside a
+    /// subcomposition for a node that holds no children.
+    pub fn compose_no_children(&self, id: NodeId, holds_children: bool) {
+        if holds_children || !self.core.subcompose_stack.borrow().is_empty() {
+            self.push_parent(id);
+            self.pop_parent();
+        }
     }
 
     pub fn pop_parent(&self) {

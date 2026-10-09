@@ -15,7 +15,7 @@ fn find_box<'a>(node: &'a LayoutBox, needle: &str) -> Option<&'a LayoutBox> {
         .node_data
         .modifier_slices()
         .text_content()
-        .is_some_and(|text| squashed(text).starts_with(&squashed(needle)))
+        .is_some_and(|text| squashed(&text).starts_with(&squashed(needle)))
     {
         return Some(node);
     }

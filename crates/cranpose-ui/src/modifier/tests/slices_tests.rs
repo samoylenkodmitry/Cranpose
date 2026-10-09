@@ -288,14 +288,14 @@ fn a_texts_slices_read_its_string_style_and_options_from_its_layout() {
         crate::density::Density::new(2.0, 1.0),
     ));
     let slices = collect_slices_from_modifier(&modifier);
-    assert_eq!(slices.text_content(), Some("Shared"));
+    assert_eq!(slices.text_content().as_deref(), Some("Shared"));
     assert!(Rc::ptr_eq(
-        slices
+        &slices
             .annotated_text()
             .expect("a text node's slices hold its text"),
         &text
     ));
-    assert_eq!(slices.text_style(), Some(&style));
+    assert_eq!(slices.text_style().as_deref(), Some(&style));
     assert_eq!(slices.text_layout_options(), Some(options.normalized()));
     assert!(slices.text_pan_resolver().is_none());
     assert!(slices.debug_stats().has_prepared_text_layout);

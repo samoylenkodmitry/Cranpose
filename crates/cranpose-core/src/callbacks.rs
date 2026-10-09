@@ -52,6 +52,52 @@ impl<T> ParamState<T> {
     }
 }
 
+/// A call's stored parameters and the value its body last returned, held in
+/// one slot: a call that skips its body finds both with one lookup.
+pub struct ParamReturnState<T, R> {
+    params: ParamState<T>,
+    returned: Option<R>,
+}
+
+impl<T, R> ParamReturnState<T, R> {
+    /// [`ParamState::update_fields`] for the stored parameters.
+    pub fn update_fields(
+        &mut self,
+        fresh: impl FnOnce() -> T,
+        refresh: impl FnOnce(&mut T) -> bool,
+    ) -> bool {
+        self.params.update_fields(fresh, refresh)
+    }
+
+    pub fn value(&self) -> Option<T>
+    where
+        T: Clone,
+    {
+        self.params.value()
+    }
+
+    /// The value the call's body returned last.
+    pub fn returned(&self) -> Option<R>
+    where
+        R: Clone,
+    {
+        self.returned.clone()
+    }
+
+    pub fn store_return(&mut self, value: R) {
+        self.returned = Some(value);
+    }
+}
+
+impl<T, R> Default for ParamReturnState<T, R> {
+    fn default() -> Self {
+        Self {
+            params: ParamState::default(),
+            returned: None,
+        }
+    }
+}
+
 /// Updates one stored parameter to `new` and says whether it differed,
 /// reusing the stored value's allocations where `Clone::clone_from` can.
 pub fn refresh_param<T: PartialEq + Clone>(stored: &mut T, new: &T) -> bool {

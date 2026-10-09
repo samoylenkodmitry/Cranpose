@@ -206,7 +206,7 @@ fn find_nearest_draw_ancestor_for_text<'a>(
             draw_ancestors.push(node);
         }
 
-        let result = if node.node_data.modifier_slices().text_content() == Some(text) {
+        let result = if node.node_data.modifier_slices().text_content().as_deref() == Some(text) {
             draw_ancestors.last().copied()
         } else {
             node.children

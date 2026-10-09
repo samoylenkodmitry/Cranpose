@@ -89,7 +89,7 @@ pub use semantics::{
 };
 pub(crate) use slices::collect_modifier_slices_into_shared;
 pub use slices::{
-    ModifierNodeSlices, ModifierNodeSlicesDebugStats, collect_modifier_slices,
+    ModifierNodeSlices, ModifierNodeSlicesDebugStats, SliceTextRef, collect_modifier_slices,
     collect_slices_from_modifier,
 };
 pub use window_root::{

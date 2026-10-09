@@ -1,4 +1,4 @@
-use std::{fmt, mem::size_of, rc::Rc};
+use std::{cell::Ref, fmt, mem::size_of, ops::Deref, rc::Rc};
 
 use cranpose_foundation::{ModifierNodeChain, NodeCapabilities, PointerEvent, PointerEventKind};
 use cranpose_ui_graphics::{
@@ -65,6 +65,60 @@ struct ChainGuard {
 enum SliceText {
     Text(TextPreparedLayoutHandle),
     Field(Rc<FieldText>),
+}
+
+/// The text, or a part of it, that a node's slices lend: a `Text`'s is
+/// borrowed from its layout, which an update changes in place; a text
+/// field's is held by the slices.
+pub struct SliceTextRef<'a, T: ?Sized>(TextBorrow<'a, T>);
+
+enum TextBorrow<'a, T: ?Sized> {
+    Layout(Ref<'a, T>),
+    Field(&'a T),
+}
+
+impl<'a, T: ?Sized> SliceTextRef<'a, T> {
+    fn map<U: ?Sized>(self, part: impl FnOnce(&T) -> &U) -> SliceTextRef<'a, U> {
+        SliceTextRef(match self.0 {
+            TextBorrow::Layout(text) => TextBorrow::Layout(Ref::map(text, part)),
+            TextBorrow::Field(text) => TextBorrow::Field(part(text)),
+        })
+    }
+}
+
+impl<T: ?Sized> Deref for SliceTextRef<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        match &self.0 {
+            TextBorrow::Layout(text) => text,
+            TextBorrow::Field(text) => text,
+        }
+    }
+}
+
+impl<T: ?Sized + fmt::Debug> fmt::Debug for SliceTextRef<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        (**self).fmt(f)
+    }
+}
+
+impl<T: ?Sized + fmt::Display> fmt::Display for SliceTextRef<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        (**self).fmt(f)
+    }
+}
+
+impl PartialEq<str> for SliceTextRef<'_, str> {
+    fn eq(&self, other: &str) -> bool {
+        **self == *other
+    }
+}
+
+impl PartialEq<&str> for SliceTextRef<'_, str> {
+    fn eq(&self, other: &&str) -> bool {
+        **self == **other
+    }
 }
 
 struct FieldText {
@@ -338,21 +392,21 @@ impl ModifierNodeSlices {
             .map(|reader| reader())
     }
 
-    /// Points the text slice at a text node's new layout, after an update
-    /// that changed only the text node's element.
-    pub(crate) fn replace_text_layout(&mut self, layout: TextPreparedLayoutHandle) {
-        self.text = Some(SliceText::Text(layout));
+    /// Whether the node shows a `Text`'s or a text field's text.
+    pub fn has_text(&self) -> bool {
+        self.text.is_some()
     }
 
-    pub fn text_content(&self) -> Option<&str> {
-        self.annotated_text().map(|text| text.text.as_str())
+    pub fn text_content(&self) -> Option<SliceTextRef<'_, str>> {
+        self.annotated_text()
+            .map(|text| text.map(|text| text.text.as_str()))
     }
 
-    pub fn annotated_text(&self) -> Option<&Rc<crate::text::AnnotatedString>> {
-        match self.text.as_ref()? {
-            SliceText::Text(layout) => Some(layout.annotated_text()),
-            SliceText::Field(field) => Some(&field.content),
-        }
+    pub fn annotated_text(&self) -> Option<SliceTextRef<'_, Rc<crate::text::AnnotatedString>>> {
+        Some(SliceTextRef(match self.text.as_ref()? {
+            SliceText::Text(layout) => TextBorrow::Layout(layout.annotated_text()),
+            SliceText::Field(field) => TextBorrow::Field(&field.content),
+        }))
     }
 
     /// Where the text draws in a node of `node_size`: the rect its layout put
@@ -369,11 +423,11 @@ impl ModifierNodeSlices {
         )
     }
 
-    pub fn text_style(&self) -> Option<&TextStyle> {
-        match self.text.as_ref()? {
-            SliceText::Text(layout) => Some(layout.style()),
-            SliceText::Field(field) => Some(&field.style),
-        }
+    pub fn text_style(&self) -> Option<SliceTextRef<'_, TextStyle>> {
+        Some(SliceTextRef(match self.text.as_ref()? {
+            SliceText::Text(layout) => TextBorrow::Layout(layout.style()),
+            SliceText::Field(field) => TextBorrow::Field(&field.style),
+        }))
     }
 
     pub fn text_layout_options(&self) -> Option<TextLayoutOptions> {
