@@ -263,7 +263,7 @@ thread_local! {
 
 #[cfg(any(test, debug_assertions))]
 fn register_location_key_debug_info(key: Key, file: &str, line: u32, column: u32) {
-    let info = LocationKeyDebugInfo {
+    let info = || LocationKeyDebugInfo {
         file: file.to_owned(),
         line,
         column,
@@ -272,12 +272,13 @@ fn register_location_key_debug_info(key: Key, file: &str, line: u32, column: u32
         let mut registry = registry.borrow_mut();
         match registry.entry(key) {
             std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(info);
+                entry.insert(info());
                 None
             }
             std::collections::hash_map::Entry::Occupied(entry) => {
                 let existing = entry.get();
-                (existing != &info).then(|| (existing.clone(), info))
+                (existing.file != file || existing.line != line || existing.column != column)
+                    .then(|| (existing.clone(), info()))
             }
         }
     });
@@ -324,11 +325,11 @@ pub(crate) fn slot_validation_diagnostics_enabled() -> bool {
     crate::env_flag!("CRANPOSE_VALIDATE_SLOTS")
 }
 
-fn source_location_hash(file: &str, line: u32, column: u32) -> u64 {
+const fn source_location_hash(file: &str, line: u32, column: u32) -> u64 {
     position_location_hash(file_location_hash(file), line, column)
 }
 
-fn file_location_hash(file: &str) -> u64 {
+const fn file_location_hash(file: &str) -> u64 {
     fnv1a_location_key_bytes(0xcbf2_9ce4_8422_2325u64, file.as_bytes())
 }
 
@@ -355,7 +356,7 @@ fn static_file_location_hash(file: &'static str) -> u64 {
     })
 }
 
-fn position_location_hash(mut hash: u64, line: u32, column: u32) -> u64 {
+const fn position_location_hash(mut hash: u64, line: u32, column: u32) -> u64 {
     hash = fnv1a_location_key_bytes(hash, &[0xff]);
     hash = fnv1a_location_key_bytes(hash, &line.to_le_bytes());
     hash = fnv1a_location_key_bytes(hash, &[0xfe]);
@@ -363,15 +364,16 @@ fn position_location_hash(mut hash: u64, line: u32, column: u32) -> u64 {
     hash
 }
 
-fn fnv1a_location_key_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+const fn fnv1a_location_key_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
+    let mut index = 0;
+    while index < bytes.len() {
+        hash = (hash ^ bytes[index] as u64).wrapping_mul(0x0000_0100_0000_01b3);
+        index += 1;
     }
     hash
 }
 
-fn avalanche_location_key(mut value: u64) -> u64 {
+const fn avalanche_location_key(mut value: u64) -> u64 {
     value ^= value >> 33;
     value = value.wrapping_mul(0xff51_afd7_ed55_8ccd);
     value ^= value >> 33;
@@ -475,45 +477,31 @@ fn hot_call_site_key(file: &str, line: u32, column: u32) -> Option<Key> {
         return None;
     }
     let relative = line.wrapping_sub(origin.line);
-    let hash = hot_key_hash(origin.identity, &relative.to_le_bytes());
-    Some(hot_avalanche(hot_key_hash(
+    let hash = fnv1a_location_key_bytes(origin.identity, &relative.to_le_bytes());
+    Some(avalanche_location_key(fnv1a_location_key_bytes(
         hash ^ 0xfc,
         &column.to_le_bytes(),
     )))
-}
-
-const fn hot_key_hash(mut hash: u64, bytes: &[u8]) -> u64 {
-    let mut index = 0;
-    while index < bytes.len() {
-        hash = (hash ^ bytes[index] as u64).wrapping_mul(0x0000_0100_0000_01b3);
-        index += 1;
-    }
-    hash
-}
-
-const fn hot_avalanche(mut value: u64) -> u64 {
-    value ^= value >> 33;
-    value = value.wrapping_mul(0xff51_afd7_ed55_8ccd);
-    value ^= value >> 33;
-    value = value.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
-    value ^ (value >> 33)
 }
 
 /// Branch group key for the development-only `hot-reload` expansion: the
 /// file and a hash of the guard's structural path, independent of lines.
 #[doc(hidden)]
 pub const fn hot_branch_key(file: &str, path_hash: u64) -> Key {
-    let hash = hot_key_hash(0xcbf2_9ce4_8422_2325, file.as_bytes());
-    hot_avalanche(hot_key_hash(hash ^ 0xfd, &path_hash.to_le_bytes()))
+    let hash = file_location_hash(file);
+    avalanche_location_key(fnv1a_location_key_bytes(
+        hash ^ 0xfd,
+        &path_hash.to_le_bytes(),
+    ))
 }
 
 /// Composable definition key for the development-only `hot-reload`
 /// expansion: the file, module and function name, independent of lines.
 #[doc(hidden)]
 pub const fn hot_definition_key(file: &str, module: &str, name: &str) -> Key {
-    let mut hash = hot_key_hash(0xcbf2_9ce4_8422_2325, file.as_bytes());
-    hash = hot_key_hash(hash ^ 0xfe, module.as_bytes());
-    hot_avalanche(hot_key_hash(hash ^ 0xff, name.as_bytes()))
+    let mut hash = file_location_hash(file);
+    hash = fnv1a_location_key_bytes(hash ^ 0xfe, module.as_bytes());
+    avalanche_location_key(fnv1a_location_key_bytes(hash ^ 0xff, name.as_bytes()))
 }
 
 #[doc(hidden)]
@@ -535,12 +523,20 @@ pub fn composable_definition_key(
     location_key(file, line, column) ^ avalanche_location_key(std::hash::Hasher::finish(&hasher))
 }
 
-/// The key [`caller_location_key`] gives a call site, remembered in a static
-/// of the call site that the `#[composable]` macro writes, so the call takes
-/// no thread-local lookup.
+/// The key [`caller_location_key`] gives a call site, as a constant the
+/// `#[composable]` macro writes, so the call takes no thread-local lookup.
 #[doc(hidden)]
-pub fn cached_location_key(cell: &OnceLock<Key>, file: &str, line: u32, column: u32) -> Key {
-    *cell.get_or_init(|| registered_location_key(file_location_hash(file), file, line, column))
+pub const fn const_location_key(file: &str, line: u32, column: u32) -> Key {
+    avalanche_location_key(source_location_hash(file, line, column))
+}
+
+/// Returns a constant key the `#[composable]` macro wrote, after recording
+/// where it came from for collision diagnostics in debug builds.
+#[doc(hidden)]
+#[inline(always)]
+pub fn noted_location_key(key: Key, file: &str, line: u32, column: u32) -> Key {
+    note_location_key(key, file, line, column);
+    key
 }
 
 #[doc(hidden)]
@@ -586,26 +582,14 @@ pub fn __branch_group_scope_deferred(key: Key) -> Option<ScopedBranchGroupGuard>
     })
 }
 
+/// The key of the `branch`th branch guard the `#[composable]` macro wrote at
+/// a source position, as a constant.
 #[doc(hidden)]
-pub fn branch_location_key(file: &str, line: u32, column: u32, branch: u32) -> Key {
+pub const fn branch_location_key(file: &str, line: u32, column: u32, branch: u32) -> Key {
     let mut hash = source_location_hash(file, line, column);
     hash = fnv1a_location_key_bytes(hash, &[0xfd]);
     hash = fnv1a_location_key_bytes(hash, &branch.to_le_bytes());
-    let key = avalanche_location_key(hash);
-    note_location_key(key, file, line, column);
-    key
-}
-
-#[doc(hidden)]
-#[inline]
-pub fn cached_branch_location_key(
-    cell: &OnceLock<Key>,
-    file: &str,
-    line: u32,
-    column: u32,
-    branch: u32,
-) -> Key {
-    *cell.get_or_init(|| branch_location_key(file, line, column, branch))
+    avalanche_location_key(hash)
 }
 
 /// Stable identifier for a slot in the slot table.

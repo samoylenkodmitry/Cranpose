@@ -409,8 +409,9 @@ impl BranchGroupInjector<'_> {
             return self.hot_guard_stmt(span, &path);
         }
         let cached_key = quote::quote! {{
-            static #key: ::std::sync::OnceLock<#core_path::Key> = ::std::sync::OnceLock::new();
-            #core_path::cached_branch_location_key(&#key, file!(), line!(), column!(), #branch)
+            const #key: #core_path::Key =
+                #core_path::branch_location_key(file!(), line!(), column!(), #branch);
+            #core_path::noted_location_key(#key, file!(), line!(), column!())
         }};
         if self.in_content_closure {
             syn::parse_quote_spanned! {span=>

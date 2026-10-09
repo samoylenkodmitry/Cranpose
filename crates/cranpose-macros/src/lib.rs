@@ -596,17 +596,17 @@ fn core_crate_path() -> TokenStream2 {
     }
 }
 
-/// The key of a slot the expansion takes: cached in a static of the call
-/// site, or under hot reload, where a patch may reuse a static for a
-/// different site, the caller's location as a call computes it.
+/// The key of a slot the expansion takes: a constant of the call site, or
+/// under hot reload, where a patch moves call sites, the caller's location
+/// as a call computes it.
 fn slot_key(core_path: &TokenStream2) -> TokenStream2 {
     if cfg!(feature = "hot-reload") {
         return quote! { #core_path::caller_location_key() };
     }
     quote! {{
-        static __CRANPOSE_SLOT_KEY: ::std::sync::OnceLock<#core_path::Key> =
-            ::std::sync::OnceLock::new();
-        #core_path::cached_location_key(&__CRANPOSE_SLOT_KEY, file!(), line!(), column!())
+        const __CRANPOSE_SLOT_KEY: #core_path::Key =
+            #core_path::const_location_key(file!(), line!(), column!());
+        #core_path::noted_location_key(__CRANPOSE_SLOT_KEY, file!(), line!(), column!())
     }}
 }
 
