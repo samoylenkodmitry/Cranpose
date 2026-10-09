@@ -16,9 +16,9 @@ formatting, spelling and diff gates skip the forks.
 
 Upstream: <https://github.com/gfx-rs/wgpu>, commit
 `40f4a34ebaf56f9a046231f54125ad046239d3f3` (`wgpu-hal` 30.0.1).
-`cranpose-wgpu-hal` is at 30.0.3 for the catch-up barrier and the Metal
-pipeline switch below, and `cranpose-wgpu-core` and `cranpose-wgpu` are at
-30.0.3 to require it.
+`cranpose-wgpu-hal` is at 30.0.4 for the catch-up barrier, the Metal
+pipeline switch and the dedicated Vulkan allocations below, and
+`cranpose-wgpu-core` and `cranpose-wgpu` are at 30.0.4 to require it.
 
 | fork | upstream |
 | --- | --- |
@@ -83,6 +83,28 @@ shader location, to put that buffer's size in the sizes buffer. The fork
 keeps those locations (`vertex_buffer_ids`), which a switch copies into the
 capacity it already holds. Shader compilation still receives the full
 mappings.
+
+### Large Vulkan resources take dedicated allocations
+
+`gpu-allocator` gives a resource memory of its own only when the resource
+is larger than a memory block; a smaller one takes a range of a shared
+block. With Cranpose's mobile memory hints a block of host-visible memory
+is 4 MiB, and every memory type of a Mali GPU is host-visible. Small
+textures and tables of other lifetimes stay scattered through every
+shared block, so its free space splits into small ranges. On a Huawei
+Mate 20 X (Mali-G76) at gauntlet tier 12, a block with 2.9 MiB free held no
+free 512 KiB range, and each frame ring buffer of 0.8 to 1.4 MiB and each
+512 KiB glyph chunk the renderer opened after the first frames took a new
+4 MiB block. The GL memory Android reports for the process stays at the
+allocator's peak.
+
+The fork's Vulkan device gives a buffer or texture whose memory takes at
+least an eighth of the smallest configured block a dedicated allocation
+(`VkMemoryDedicatedAllocateInfo`, core since Vulkan 1.1; a Vulkan 1.0
+device keeps upstream's behaviour). With the mobile hints that is 512 KiB
+and up; with wgpu's default `Performance` hints it is 8 MiB and up. On the
+Mate the allocator's peak over three launches was 40.3 to 41.6 MiB, against
+42.4 to 46.4 MiB before.
 
 ### Update the fork
 

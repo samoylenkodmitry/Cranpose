@@ -988,6 +988,23 @@ impl super::Device {
     }
 }
 
+impl super::Device {
+    /// `dedicated` for a resource whose memory takes `size` bytes or more of
+    /// [`super::Device::dedicated_allocation_bytes`], a range of a shared
+    /// block otherwise.
+    fn allocation_scheme(
+        &self,
+        size: u64,
+        dedicated: gpu_allocator::vulkan::AllocationScheme,
+    ) -> gpu_allocator::vulkan::AllocationScheme {
+        if size >= self.dedicated_allocation_bytes {
+            dedicated
+        } else {
+            gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged
+        }
+    }
+}
+
 impl crate::Device for super::Device {
     type A = super::Api;
 
@@ -1047,7 +1064,10 @@ impl crate::Device for super::Device {
                 },
                 location,
                 linear: true, // Buffers are always linear
-                allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
+                allocation_scheme: self.allocation_scheme(
+                    requirements.size,
+                    gpu_allocator::vulkan::AllocationScheme::DedicatedBuffer(raw),
+                ),
             })
             .inspect_err(|_| {
                 unsafe { self.shared.raw.destroy_buffer(raw, None) };
@@ -1208,7 +1228,10 @@ impl crate::Device for super::Device {
                 },
                 location: gpu_allocator::MemoryLocation::GpuOnly,
                 linear: false,
-                allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
+                allocation_scheme: self.allocation_scheme(
+                    image.requirements.size,
+                    gpu_allocator::vulkan::AllocationScheme::DedicatedImage(image.raw),
+                ),
             })
             .inspect_err(|_| {
                 unsafe { self.shared.raw.destroy_image(image.raw, None) };

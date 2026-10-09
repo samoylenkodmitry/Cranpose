@@ -2950,7 +2950,19 @@ impl super::Adapter {
             catch_up_barrier: Mutex::new(None),
         };
 
-        let allocation_sizes = AllocationSizes::from_memory_hints(memory_hints).into();
+        let allocation_sizes = AllocationSizes::from_memory_hints(memory_hints);
+        // A dedicated allocation names its resource, which Vulkan 1.1 made
+        // core; without it every resource shares the allocator's blocks.
+        let dedicated_allocation_bytes =
+            if self.phd_capabilities.device_api_version >= vk::API_VERSION_1_1 {
+                allocation_sizes
+                    .min_host_memblock_size
+                    .min(allocation_sizes.min_device_memblock_size)
+                    / super::DEDICATED_ALLOCATION_BLOCK_SHARE
+            } else {
+                u64::MAX
+            };
+        let allocation_sizes = allocation_sizes.into();
 
         let buffer_device_address = enabled_extensions.contains(&khr::buffer_device_address::NAME);
 
@@ -2977,6 +2989,7 @@ impl super::Adapter {
             mem_allocator: Mutex::new(mem_allocator),
             desc_allocator: Mutex::new(desc_allocator),
             valid_ash_memory_types,
+            dedicated_allocation_bytes,
             naga_options,
             #[cfg(feature = "renderdoc")]
             render_doc: Default::default(),
