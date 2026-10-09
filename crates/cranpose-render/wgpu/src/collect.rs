@@ -20,8 +20,8 @@ use cranpose_ui_graphics::{
 use crate::{
     pipeline::{TextLayoutResolver, push_draw_primitive, push_layer_shadow, push_text_style_draws},
     scene::{
-        BackdropLayer, CompositorScene, LayerRoundedClip, Placement as RunPlacement, RunDraw,
-        SceneCapacityHint, ShadowDraw, SnapAnchor,
+        BackdropLayer, CompositorScene, LayerPaint, LayerRoundedClip, Placement as RunPlacement,
+        RunDraw, SceneCapacityHint, ShadowDraw, SnapAnchor,
     },
 };
 
@@ -1177,6 +1177,7 @@ fn collect_into(
             .then(|| rigid_snap_anchor(layer_bounds, &local_layer))
             .flatten()
     });
+    let paint = LayerPaint::of(&local_layer);
     let content = ContentContext {
         // The node's own draws and text sit in its local space, whose origin
         // is the node's, even where its layer is bounded at a coordinator
@@ -1185,6 +1186,7 @@ fn collect_into(
             .node_rect()
             .translate(context.offset.x, context.offset.y),
         local_layer: &local_layer,
+        paint: &paint,
         visual_clip,
         clip_radius,
         anchor: layer_anchor,
@@ -1242,6 +1244,8 @@ fn collect_into(
 struct ContentContext<'a> {
     layer_bounds: Rect,
     local_layer: &'a GraphicsLayer,
+    /// The local layer's alpha and filter, which every run it draws takes.
+    paint: &'a LayerPaint,
     visual_clip: Option<Rect>,
     clip_radius: f32,
     anchor: Option<SnapAnchor>,
@@ -1485,6 +1489,7 @@ fn push_primitive(
         clip_radius,
         anchor: snap_anchor,
         motion_context_animated,
+        ..
     } = *content;
     let counts = scene_counts(&out.scene);
     match &entry.node {
@@ -1554,6 +1559,7 @@ fn push_draw_run(out: &mut LayerScene, run: &DrawRunNode, content: &ContentConte
     let ContentContext {
         layer_bounds,
         local_layer,
+        paint,
         visual_clip,
         clip_radius,
         anchor: snap_anchor,
@@ -1564,7 +1570,7 @@ fn push_draw_run(out: &mut LayerScene, run: &DrawRunNode, content: &ContentConte
         Point::new(layer_bounds.x, layer_bounds.y),
         snap_anchor,
         visual_clip,
-        local_layer,
+        paint,
     )
     .with_clip_radius(clip_radius);
     let recording = &*run.recording;
@@ -1582,8 +1588,12 @@ fn push_draw_run(out: &mut LayerScene, run: &DrawRunNode, content: &ContentConte
     let mut shapes_from: Option<u32> = None;
     let flush_shapes = |out: &mut LayerScene, end: u32, from: &mut Option<u32>| {
         if let Some(start) = from.take() {
-            out.scene
-                .push_run(RunDraw::of(recording, run.command, start..end, placement));
+            out.scene.push_run(RunDraw::of(
+                recording,
+                run.command,
+                start..end,
+                placement.clone(),
+            ));
         }
     };
     for (index, segment) in recording.segments_in(&run.segments).enumerate() {

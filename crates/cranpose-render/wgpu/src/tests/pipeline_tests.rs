@@ -147,7 +147,7 @@ fn shape_records(
             run.tables()
                 .shapes
                 .iter()
-                .map(move |record| (record, run.placement))
+                .map(move |record| (record, run.placement.clone()))
         })
         .collect()
 }

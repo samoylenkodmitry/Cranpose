@@ -247,7 +247,7 @@ fn a_placement_folds_its_snap_delta_clip_and_filter_into_the_uniform() {
         }),
         clip_radius: 0.0,
         alpha: 0.5,
-        color_filter: Some(ColorFilter::modulate(Color(0.5, 0.25, 1.0, 1.0))),
+        color_filter: Some(Arc::new(ColorFilter::modulate(Color(0.5, 0.25, 1.0, 1.0)))),
     };
     let data = PlacementData::of(&placement, 2.0, crate::geometry::SegmentTransform::IDENTITY);
     assert_eq!(
@@ -562,7 +562,7 @@ fn a_stored_run_rewritten_within_a_frame_leaves_each_read_its_own_tables() {
         let faded = RunDraw {
             placement: crate::scene::Placement {
                 alpha: 0.25,
-                ..opaque.placement
+                ..opaque.placement.clone()
             },
             ..opaque.clone()
         };

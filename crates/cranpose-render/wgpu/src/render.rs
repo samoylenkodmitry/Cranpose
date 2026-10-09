@@ -928,8 +928,10 @@ pub(crate) fn hash_run_item_with_clip<H: Hasher>(
             }
         }
     }
-    let mut clipped = *placement;
-    clipped.clip = clip;
+    let clipped = crate::scene::Placement {
+        clip,
+        ..placement.clone()
+    };
     match crate::run_store::device_clip(&clipped, root_scale) {
         Some([x, y, width, height]) => {
             1u8.hash(state);
@@ -957,7 +959,7 @@ pub(crate) fn hash_run_item_with_clip<H: Hasher>(
         hash_f32_for_cache(dither.y - origin_y, state);
     }
     hash_f32_for_cache(placement.alpha, state);
-    match placement.color_filter {
+    match &placement.color_filter {
         Some(filter) => {
             1u8.hash(state);
             filter.render_hash().hash(state);

@@ -1880,7 +1880,7 @@ fn push_shadow_primitive(
                 if !record_shadow_caster(&mut recorder, cutout, layer, BlendMode::DstOut) {
                     return;
                 }
-                RunDraw::whole(recorder, placement)
+                RunDraw::whole(recorder, placement.clone())
             } else {
                 None
             };
