@@ -38,6 +38,7 @@ use std::{
 
 use cranpose_app_shell::{AppShell, FrameSchedule, RootId, default_root_key};
 use cranpose_core::NodeId;
+use cranpose_render_common::Renderer;
 use cranpose_render_wgpu::{WgpuRenderer, WgpuTextSystem};
 use cranpose_services::{
     HostMessage, LifecycleState, SystemTheme, advance_lifecycle, clear_host_outbox,
@@ -415,7 +416,6 @@ impl EmbeddedHost {
         slot.kind.set_content_size(Size::new(width, height));
         if slot.root == RootId::Primary {
             self.primary_size = size;
-            self.shell.renderer().set_root_scale(size.scale);
             self.shell.renderer().note_surface_reconfigured();
             self.shell.set_density(size.scale);
             self.shell.set_buffer_size(size.width, size.height);

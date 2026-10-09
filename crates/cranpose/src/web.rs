@@ -427,7 +427,6 @@ pub async fn run(
         adapter_info.backend,
         adapter.get_downlevel_capabilities().flags,
     );
-    renderer.set_root_scale(effective_scale as f32);
 
     let app = Rc::new(RefCell::new(AppShell::new_with_size_and_density(
         renderer,
@@ -787,7 +786,6 @@ pub async fn run(
                 if let Some(device) = app_mut.renderer().try_device() {
                     surface.configure(device, &config);
                 }
-                app_mut.renderer().set_root_scale(render_scale as f32);
                 app_mut.set_buffer_size(buffer_width, buffer_height);
                 app_mut.set_viewport(width as f32, height as f32);
                 app_mut.set_density(render_scale as f32);

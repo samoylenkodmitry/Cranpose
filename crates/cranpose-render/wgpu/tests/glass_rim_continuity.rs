@@ -144,7 +144,6 @@ fn capture_tab_bar() -> Result<CapturedFrame, String> {
         location_key(file!(), line!(), column!()),
         TabBarScene,
     );
-    shell.renderer().set_root_scale(TAB_SCALE);
     shell.set_density(TAB_SCALE);
     shell.set_buffer_size(TAB_FRAME_WIDTH, TAB_FRAME_HEIGHT);
     shell.set_viewport(TAB_VIEW_WIDTH, TAB_VIEW_HEIGHT);

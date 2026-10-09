@@ -93,7 +93,6 @@ impl EmbeddedView {
         let mut renderer = WgpuRenderer::with_text_system(WgpuTextSystem::from_font_set(
             settings.resolve_font_set(),
         ));
-        renderer.set_root_scale(density);
         renderer.init_gpu(
             Arc::clone(&device),
             Arc::clone(&queue),
@@ -154,7 +153,6 @@ impl EmbeddedView {
         if size_changed {
             self.target = FrameTarget::new(&self.device, width, height, FRAME_FORMAT);
         }
-        self.shell.renderer().set_root_scale(density);
         self.shell
             .primary()
             .set_viewport(width as f32 / density, height as f32 / density);

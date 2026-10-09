@@ -191,6 +191,14 @@ pub trait Renderer {
     /// them here rather than as constructor side effects.
     fn attach_app_context_services(&mut self, _app_context: &cranpose_ui::AppContext) {}
 
+    /// Sets how many device pixels the renderer draws for one logical unit.
+    ///
+    /// AppShell sets its primary renderer's scale to the density it lays
+    /// out with, at construction and on every density change, so a host
+    /// sets it only for the renderers of other surfaces. Renderers that take
+    /// the scale with each draw ignore it.
+    fn set_root_scale(&mut self, _scale: f32) {}
+
     fn scene(&self) -> &Self::Scene;
     fn scene_mut(&mut self) -> &mut Self::Scene;
 

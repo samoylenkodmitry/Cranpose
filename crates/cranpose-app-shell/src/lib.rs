@@ -595,6 +595,8 @@ where
         Self::new_with_size_and_density(renderer, root_key, content, buffer_size, viewport, 1.0)
     }
 
+    /// A shell that lays out `viewport` at `density` and gives its primary
+    /// renderer the same density as its root scale, for `buffer_size` pixels.
     pub fn new_with_size_and_density(
         mut renderer: R,
         root_key: Key,
@@ -603,6 +605,7 @@ where
         viewport: (f32, f32),
         density: f32,
     ) -> Self {
+        renderer.set_root_scale(density);
         let app_context = cranpose_ui::AppContext::new_with_density(density);
         let runtime = StdRuntime::new();
         let mut composition = Composition::with_runtime(MemoryApplier::new(), runtime.runtime());
@@ -1131,7 +1134,10 @@ where
         self.mark_all_dirty();
     }
 
+    /// Lays the composition out at `density` from now on, and has the primary
+    /// renderer draw at that root scale.
     pub fn set_density(&mut self, density: f32) {
+        self.surfaces[0].renderer.set_root_scale(density);
         let app_context = Rc::clone(&self.app.app_context);
         let changed = app_context.enter(|| {
             let previous = cranpose_ui::current_density().to_bits();

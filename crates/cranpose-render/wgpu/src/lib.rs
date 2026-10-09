@@ -510,11 +510,6 @@ impl WgpuRenderer {
         self.surface_epoch = self.surface_epoch.wrapping_add(1);
     }
 
-    /// Set root scale factor for text rendering (e.g., density scaling on Android)
-    pub fn set_root_scale(&mut self, scale: f32) {
-        self.frontend.root_scale = scale;
-    }
-
     /// Clears each frame to nothing instead of the framework's background,
     /// for a window whose surface composites with the desktop behind it. A
     /// renderer starts opaque; `false` puts the background back. Takes
@@ -1144,6 +1139,10 @@ impl Renderer for WgpuRenderer {
             8192,
         ));
         self.frontend.app_context = Some(app_context.downgrade());
+    }
+
+    fn set_root_scale(&mut self, scale: f32) {
+        self.frontend.root_scale = scale;
     }
 
     fn scene(&self) -> &Self::Scene {

@@ -176,7 +176,6 @@ impl<F: FnMut() + 'static> IosApp<F> {
 
             let density = (scale_factor as f32).max(f32::EPSILON);
             self.platform.set_scale_factor(scale_factor);
-            shell.renderer().set_root_scale(density);
             shell.set_density(density);
             shell.set_buffer_size(width, height);
             shell.set_viewport(width as f32 / density, height as f32 / density);
@@ -413,7 +412,6 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
             backend,
             adapter.get_downlevel_capabilities().flags,
         );
-        renderer.set_root_scale(density);
 
         let Some(content) = self.content.take() else {
             self.abort(event_loop, LaunchError::ContentUnavailable);
