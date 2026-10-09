@@ -230,6 +230,7 @@ pub fn PerfCompareApp() {
     );
 }
 
+#[cfg(feature = "entry")]
 cranpose::android_main! {
     launcher: create_app(),
     content: PerfCompareApp,

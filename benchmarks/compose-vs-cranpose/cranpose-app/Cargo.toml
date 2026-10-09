@@ -21,7 +21,9 @@ path = "src/main.rs"
 required-features = ["desktop"]
 
 [features]
-default = ["renderer-wgpu", "desktop"]
+default = ["renderer-wgpu", "desktop", "entry"]
+# Exports the Android entry symbol. An app that links this crate as a library turns it off and exports its own.
+entry = []
 renderer-wgpu = ["cranpose/renderer-wgpu"]
 # The embedded face is what the desktop app draws in when `PERF_FONTS` names
 # no Roboto files.
