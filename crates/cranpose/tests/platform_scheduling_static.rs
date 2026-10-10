@@ -804,8 +804,32 @@ fn web_frame_waker_is_shell_owned_without_thread_local_router() {
     );
     assert!(
         web_source.contains("app.borrow_mut().set_frame_waker({")
-            && web_source.contains("request_frame();\n            run_tasks();"),
+            && web_source.contains(
+                "if !frame_running.get() {\n                request_frame();\n            }\n            run_tasks();"
+            ),
         "web runtime should install the per-shell frame requester directly on AppShell"
+    );
+}
+
+#[test]
+fn web_frame_waker_leaves_a_running_frame_to_schedule_the_next() {
+    let source = crate_source("src/web.rs");
+    let start = source
+        .find("*render_loop.borrow_mut() = Some(Closure::wrap(Box::new(move || {")
+        .expect("web render loop should exist");
+    let render_loop = &source[start..];
+    let running = render_loop
+        .find("frame_running.set(true);")
+        .expect("the render loop should mark its frame running");
+    let done = render_loop
+        .find("frame_running.set(false);")
+        .expect("the render loop should mark its frame done");
+    let schedule = render_loop
+        .find("app.borrow().schedule_platform_frame(&frame_driver)")
+        .expect("the render loop should schedule the next frame");
+    assert!(
+        running < done && done < schedule,
+        "an app wake inside a frame asks for nothing: the frame clears its running mark only right before it schedules the next frame from what the app still needs"
     );
 }
 

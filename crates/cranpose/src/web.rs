@@ -463,11 +463,15 @@ pub async fn run(
             request_frame.clone(),
         )?,
     ));
+    let frame_running = Rc::new(Cell::new(false));
     app.borrow_mut().set_frame_waker({
         let request_frame = request_frame.clone();
+        let frame_running = frame_running.clone();
         let run_tasks = woken_task_pump(Rc::downgrade(&app));
         move || {
-            request_frame();
+            if !frame_running.get() {
+                request_frame();
+            }
             run_tasks();
         }
     });
@@ -828,6 +832,7 @@ pub async fn run(
 
     *render_loop.borrow_mut() = Some(Closure::wrap(Box::new(move || {
         frame_pending.set(false);
+        frame_running.set(true);
         canvas_watch.follow();
         #[cfg(feature = "webview")]
         webviews.dispatch(&platform_env.native_views);
@@ -910,6 +915,7 @@ pub async fn run(
             }
         }
 
+        frame_running.set(false);
         let frame_driver = WebPlatformFrameDriver {
             frame_timer: &frame_timer,
             frame_pending: &frame_pending,
