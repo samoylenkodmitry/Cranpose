@@ -3062,7 +3062,8 @@ pub struct GpuRenderer {
     /// interiors down first, dropped once no frame has used them for
     /// [`crate::idle_pool::IDLE_FRAMES`].
     depth_targets: crate::idle_pool::IdlePool<((u32, u32), wgpu::TextureView)>,
-    /// The layer surface atlas sizes recent frames drew into.
+    pub(crate) interiors_first: bool,
+    /// The size of the atlas the layer surfaces drawn again go into.
     pub(crate) surface_atlas_sizes: crate::frame::SurfaceAtlasSizes,
     uniform_bind_group_layout: wgpu::BindGroupLayout,
     image_bind_group_layout: wgpu::BindGroupLayout,
@@ -3425,6 +3426,7 @@ impl GpuRenderer {
             glyph_atlas_shader,
             rrect_shadow_shader,
             depth_targets: crate::idle_pool::IdlePool::default(),
+            interiors_first: crate::draw_pass::lays_interiors_first(adapter_backend),
             surface_atlas_sizes: crate::frame::SurfaceAtlasSizes::for_backend(adapter_backend),
             uniform_bind_group_layout,
             image_bind_group_layout,
@@ -3766,13 +3768,8 @@ impl GpuRenderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: DEPTH_FORMAT,
-            // A browser's WebGPU may not know the transient usage; every
-            // other backend takes it and ignores it where it saves nothing.
-            usage: if self.adapter_backend == wgpu::Backend::BrowserWebGpu {
-                wgpu::TextureUsages::RENDER_ATTACHMENT
-            } else {
-                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TRANSIENT_ATTACHMENT
-            },
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TRANSIENT_ATTACHMENT,
             view_formats: &[],
         });
         texture.create_view(&wgpu::TextureViewDescriptor::default())

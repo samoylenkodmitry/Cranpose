@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use alloc::string::String;
 use core::{mem, ops::Range};
 
@@ -331,11 +332,13 @@ impl crate::CommandEncoder for super::CommandEncoder {
     }
 
     unsafe fn clear_buffer(&mut self, buffer: &super::Buffer, range: crate::MemoryRange) {
-        self.cmd_buffer.commands.push(C::ClearBuffer {
-            dst: buffer.clone(),
-            dst_target: buffer.target,
-            range,
-        });
+        self.cmd_buffer
+            .commands
+            .push(C::ClearBuffer(Box::new(super::ClearBufferOp {
+                dst: buffer.clone(),
+                dst_target: buffer.target,
+                range,
+            })));
     }
 
     unsafe fn copy_buffer_to_buffer<T>(
@@ -352,13 +355,15 @@ impl crate::CommandEncoder for super::CommandEncoder {
             (src.target, dst.target)
         };
         for copy in regions {
-            self.cmd_buffer.commands.push(C::CopyBufferToBuffer {
-                src: src.clone(),
-                src_target,
-                dst: dst.clone(),
-                dst_target,
-                copy,
-            })
+            self.cmd_buffer
+                .commands
+                .push(C::CopyBufferToBuffer(Box::new(super::BufferToBufferCopy {
+                    src: src.clone(),
+                    src_target,
+                    dst: dst.clone(),
+                    dst_target,
+                    copy,
+                })))
         }
     }
 
@@ -376,14 +381,16 @@ impl crate::CommandEncoder for super::CommandEncoder {
         for copy in regions {
             self.cmd_buffer
                 .commands
-                .push(C::CopyExternalImageToTexture {
-                    src: src.clone(),
-                    dst: dst_raw,
-                    dst_target,
-                    dst_format: dst.format,
-                    dst_premultiplication,
-                    copy,
-                })
+                .push(C::CopyExternalImageToTexture(Box::new(
+                    super::ExternalImageToTextureCopy {
+                        src: src.clone(),
+                        dst: dst_raw,
+                        dst_target,
+                        dst_format: dst.format,
+                        dst_premultiplication,
+                        copy,
+                    },
+                )))
         }
     }
 
@@ -400,13 +407,17 @@ impl crate::CommandEncoder for super::CommandEncoder {
         let (dst_raw, dst_target) = dst.inner.as_native();
         for mut copy in regions {
             copy.clamp_size_to_virtual(&src.copy_size, &dst.copy_size);
-            self.cmd_buffer.commands.push(C::CopyTextureToTexture {
-                src: src_raw,
-                src_target,
-                dst: dst_raw,
-                dst_target,
-                copy,
-            })
+            self.cmd_buffer
+                .commands
+                .push(C::CopyTextureToTexture(Box::new(
+                    super::TextureToTextureCopy {
+                        src: src_raw,
+                        src_target,
+                        dst: dst_raw,
+                        dst_target,
+                        copy,
+                    },
+                )))
         }
     }
 
@@ -422,14 +433,18 @@ impl crate::CommandEncoder for super::CommandEncoder {
 
         for mut copy in regions {
             copy.clamp_size_to_virtual(&dst.copy_size);
-            self.cmd_buffer.commands.push(C::CopyBufferToTexture {
-                src: src.clone(),
-                src_target: src.target,
-                dst: dst_raw,
-                dst_target,
-                dst_format: dst.format,
-                copy,
-            })
+            self.cmd_buffer
+                .commands
+                .push(C::CopyBufferToTexture(Box::new(
+                    super::BufferToTextureCopy {
+                        src: src.clone(),
+                        src_target: src.target,
+                        dst: dst_raw,
+                        dst_target,
+                        dst_format: dst.format,
+                        copy,
+                    },
+                )))
         }
     }
 
@@ -445,14 +460,18 @@ impl crate::CommandEncoder for super::CommandEncoder {
         let (src_raw, src_target) = src.inner.as_native();
         for mut copy in regions {
             copy.clamp_size_to_virtual(&src.copy_size);
-            self.cmd_buffer.commands.push(C::CopyTextureToBuffer {
-                src: src_raw,
-                src_target,
-                src_format: src.format,
-                dst: dst.clone(),
-                dst_target: dst.target,
-                copy,
-            })
+            self.cmd_buffer
+                .commands
+                .push(C::CopyTextureToBuffer(Box::new(
+                    super::TextureToBufferCopy {
+                        src: src_raw,
+                        src_target,
+                        src_format: src.format,
+                        dst: dst.clone(),
+                        dst_target: dst.target,
+                        copy,
+                    },
+                )))
         }
     }
 
@@ -485,12 +504,14 @@ impl crate::CommandEncoder for super::CommandEncoder {
             .queries
             .extend_from_slice(&set.queries[range.start as usize..range.end as usize]);
         let query_range = start as u32..self.cmd_buffer.queries.len() as u32;
-        self.cmd_buffer.commands.push(C::CopyQueryResults {
-            query_range,
-            dst: buffer.clone(),
-            dst_target: buffer.target,
-            dst_offset: offset,
-        });
+        self.cmd_buffer
+            .commands
+            .push(C::CopyQueryResults(Box::new(super::QueryResultsCopy {
+                query_range,
+                dst: buffer.clone(),
+                dst_target: buffer.target,
+                dst_offset: offset,
+            })));
     }
 
     // render
@@ -568,21 +589,25 @@ impl crate::CommandEncoder for super::CommandEncoder {
                                 // Extension specifies that only COLOR_ATTACHMENT0 is valid
                                 && i == 0
                             {
-                                self.cmd_buffer.commands.push(C::BindAttachment {
-                                    attachment,
-                                    view: rat.view.clone(),
-                                    depth_slice: None,
-                                    sample_count: desc.sample_count,
-                                });
+                                self.cmd_buffer.commands.push(C::BindAttachment(Box::new(
+                                    super::AttachmentBinding {
+                                        attachment,
+                                        view: rat.view.clone(),
+                                        depth_slice: None,
+                                        sample_count: desc.sample_count,
+                                    },
+                                )));
                                 continue;
                             }
                         }
-                        self.cmd_buffer.commands.push(C::BindAttachment {
-                            attachment,
-                            view: cat.target.view.clone(),
-                            depth_slice: cat.depth_slice,
-                            sample_count: 1,
-                        });
+                        self.cmd_buffer.commands.push(C::BindAttachment(Box::new(
+                            super::AttachmentBinding {
+                                attachment,
+                                view: cat.target.view.clone(),
+                                depth_slice: cat.depth_slice,
+                                sample_count: 1,
+                            },
+                        )));
                         if let Some(ref rat) = cat.resolve_target {
                             self.state
                                 .resolve_attachments
@@ -600,12 +625,14 @@ impl crate::CommandEncoder for super::CommandEncoder {
                         crate::FormatAspects::STENCIL => glow::STENCIL_ATTACHMENT,
                         _ => glow::DEPTH_STENCIL_ATTACHMENT,
                     };
-                    self.cmd_buffer.commands.push(C::BindAttachment {
-                        attachment,
-                        view: dsat.target.view.clone(),
-                        depth_slice: None,
-                        sample_count: 1,
-                    });
+                    self.cmd_buffer.commands.push(C::BindAttachment(Box::new(
+                        super::AttachmentBinding {
+                            attachment,
+                            view: dsat.target.view.clone(),
+                            depth_slice: None,
+                            sample_count: 1,
+                        },
+                    )));
                     if aspects.contains(crate::FormatAspects::DEPTH)
                         && dsat.depth_ops.contains(crate::AttachmentOps::STORE_DISCARD)
                     {
@@ -698,11 +725,13 @@ impl crate::CommandEncoder for super::CommandEncoder {
     }
     unsafe fn end_render_pass(&mut self) {
         for (attachment, dst) in self.state.resolve_attachments.drain(..) {
-            self.cmd_buffer.commands.push(C::ResolveAttachment {
-                attachment,
-                dst,
-                size: self.state.render_size,
-            });
+            self.cmd_buffer.commands.push(C::ResolveAttachment(Box::new(
+                super::AttachmentResolve {
+                    attachment,
+                    dst,
+                    size: self.state.render_size,
+                },
+            )));
         }
         if !self.state.invalidate_attachments.is_empty() {
             self.cmd_buffer.commands.push(C::InvalidateAttachments(

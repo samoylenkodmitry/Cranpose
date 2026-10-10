@@ -333,65 +333,72 @@ impl super::Queue {
                 unsafe { gl.bind_buffer(glow::DISPATCH_INDIRECT_BUFFER, Some(indirect_buf)) };
                 unsafe { gl.dispatch_compute_indirect(indirect_offset as i32) };
             }
-            C::ClearBuffer {
-                ref dst,
-                dst_target,
-                ref range,
-            } => match dst.raw {
-                Some(buffer) => {
-                    // When `INDEX_BUFFER_ROLE_CHANGE` isn't available, we can't copy into the
-                    // index buffer from the zero buffer. This would fail in Chrome with the
-                    // following message:
-                    //
-                    // > Cannot copy into an element buffer destination from a non-element buffer
-                    // > source
-                    //
-                    // Instead, we'll upload zeroes into the buffer.
-                    let can_use_zero_buffer = self
-                        .shared
-                        .private_caps
-                        .contains(PrivateCapabilities::INDEX_BUFFER_ROLE_CHANGE)
-                        || dst_target != glow::ELEMENT_ARRAY_BUFFER;
+            C::ClearBuffer(ref op) => {
+                let super::ClearBufferOp {
+                    ref dst,
+                    dst_target,
+                    ref range,
+                } = **op;
+                match dst.raw {
+                    Some(buffer) => {
+                        // When `INDEX_BUFFER_ROLE_CHANGE` isn't available, we can't copy into the
+                        // index buffer from the zero buffer. This would fail in Chrome with the
+                        // following message:
+                        //
+                        // > Cannot copy into an element buffer destination from a non-element buffer
+                        // > source
+                        //
+                        // Instead, we'll upload zeroes into the buffer.
+                        let can_use_zero_buffer = self
+                            .shared
+                            .private_caps
+                            .contains(PrivateCapabilities::INDEX_BUFFER_ROLE_CHANGE)
+                            || dst_target != glow::ELEMENT_ARRAY_BUFFER;
 
-                    if can_use_zero_buffer {
-                        unsafe { gl.bind_buffer(glow::COPY_READ_BUFFER, Some(self.zero_buffer)) };
-                        unsafe { gl.bind_buffer(dst_target, Some(buffer)) };
-                        let mut dst_offset = range.start;
-                        while dst_offset < range.end {
-                            let size = (range.end - dst_offset).min(super::ZERO_BUFFER_SIZE as u64);
+                        if can_use_zero_buffer {
                             unsafe {
-                                gl.copy_buffer_sub_data(
-                                    glow::COPY_READ_BUFFER,
-                                    dst_target,
-                                    0,
-                                    dst_offset as i32,
-                                    size as i32,
-                                )
+                                gl.bind_buffer(glow::COPY_READ_BUFFER, Some(self.zero_buffer))
                             };
-                            dst_offset += size;
+                            unsafe { gl.bind_buffer(dst_target, Some(buffer)) };
+                            let mut dst_offset = range.start;
+                            while dst_offset < range.end {
+                                let size =
+                                    (range.end - dst_offset).min(super::ZERO_BUFFER_SIZE as u64);
+                                unsafe {
+                                    gl.copy_buffer_sub_data(
+                                        glow::COPY_READ_BUFFER,
+                                        dst_target,
+                                        0,
+                                        dst_offset as i32,
+                                        size as i32,
+                                    )
+                                };
+                                dst_offset += size;
+                            }
+                        } else {
+                            unsafe { gl.bind_buffer(dst_target, Some(buffer)) };
+                            let zeroes = vec![0u8; (range.end - range.start) as usize];
+                            unsafe {
+                                gl.buffer_sub_data_u8_slice(dst_target, range.start as i32, &zeroes)
+                            };
                         }
-                    } else {
-                        unsafe { gl.bind_buffer(dst_target, Some(buffer)) };
-                        let zeroes = vec![0u8; (range.end - range.start) as usize];
-                        unsafe {
-                            gl.buffer_sub_data_u8_slice(dst_target, range.start as i32, &zeroes)
-                        };
+                    }
+                    None => {
+                        let mut map_state = lock(&dst.map_state);
+                        map_state.data.as_mut().unwrap().as_mut_slice()
+                            [range.start as usize..range.end as usize]
+                            .fill(0);
                     }
                 }
-                None => {
-                    let mut map_state = lock(&dst.map_state);
-                    map_state.data.as_mut().unwrap().as_mut_slice()
-                        [range.start as usize..range.end as usize]
-                        .fill(0);
-                }
-            },
-            C::CopyBufferToBuffer {
-                ref src,
-                src_target,
-                ref dst,
-                dst_target,
-                copy,
-            } => {
+            }
+            C::CopyBufferToBuffer(ref op) => {
+                let super::BufferToBufferCopy {
+                    ref src,
+                    src_target,
+                    ref dst,
+                    dst_target,
+                    copy,
+                } = **op;
                 let copy_src_target = glow::COPY_READ_BUFFER;
                 let is_index_buffer_only_element_dst = !self
                     .shared
@@ -466,14 +473,15 @@ impl super::Queue {
                 }
             }
             #[cfg(webgl)]
-            C::CopyExternalImageToTexture {
-                ref src,
-                dst,
-                dst_target,
-                dst_format,
-                dst_premultiplication,
-                ref copy,
-            } => {
+            C::CopyExternalImageToTexture(ref op) => {
+                let super::ExternalImageToTextureCopy {
+                    ref src,
+                    dst,
+                    dst_target,
+                    dst_format,
+                    dst_premultiplication,
+                    ref copy,
+                } = **op;
                 const UNPACK_FLIP_Y_WEBGL: u32 =
                     web_sys::WebGl2RenderingContext::UNPACK_FLIP_Y_WEBGL;
                 const UNPACK_PREMULTIPLY_ALPHA_WEBGL: u32 =
@@ -691,13 +699,14 @@ impl super::Queue {
                     }
                 }
             }
-            C::CopyTextureToTexture {
-                src,
-                src_target,
-                dst,
-                dst_target,
-                ref copy,
-            } => {
+            C::CopyTextureToTexture(ref op) => {
+                let super::TextureToTextureCopy {
+                    src,
+                    src_target,
+                    dst,
+                    dst_target,
+                    ref copy,
+                } = **op;
                 //TODO: handle 3D copies
                 unsafe { gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(self.copy_fbo)) };
                 if is_layered_target(src_target) {
@@ -753,14 +762,15 @@ impl super::Queue {
                     };
                 }
             }
-            C::CopyBufferToTexture {
-                ref src,
-                src_target: _,
-                dst,
-                dst_target,
-                dst_format,
-                ref copy,
-            } => {
+            C::CopyBufferToTexture(ref op) => {
+                let super::BufferToTextureCopy {
+                    ref src,
+                    src_target: _,
+                    dst,
+                    dst_target,
+                    dst_format,
+                    ref copy,
+                } = **op;
                 let (block_width, block_height) = dst_format.block_dimensions();
                 let block_size = dst_format.block_copy_size(None).unwrap();
                 let format_desc = self.shared.describe_texture_format(dst_format);
@@ -891,14 +901,15 @@ impl super::Queue {
                     unsafe { gl.bind_buffer(glow::PIXEL_UNPACK_BUFFER, None) };
                 }
             }
-            C::CopyTextureToBuffer {
-                src,
-                src_target,
-                src_format,
-                ref dst,
-                dst_target: _,
-                ref copy,
-            } => {
+            C::CopyTextureToBuffer(ref op) => {
+                let super::TextureToBufferCopy {
+                    src,
+                    src_target,
+                    src_format,
+                    ref dst,
+                    dst_target: _,
+                    ref copy,
+                } = **op;
                 let block_size = src_format.block_copy_size(None).unwrap();
                 if src_format.is_compressed() {
                     log::error!("Not implemented yet: compressed texture copy to buffer");
@@ -1009,12 +1020,13 @@ impl super::Queue {
             C::TimestampQuery(query) => {
                 unsafe { gl.query_counter(query, glow::TIMESTAMP) };
             }
-            C::CopyQueryResults {
-                ref query_range,
-                ref dst,
-                dst_target,
-                dst_offset,
-            } => {
+            C::CopyQueryResults(ref op) => {
+                let super::QueryResultsCopy {
+                    ref query_range,
+                    ref dst,
+                    dst_target,
+                    dst_offset,
+                } = **op;
                 if self
                     .shared
                     .private_caps
@@ -1140,12 +1152,13 @@ impl super::Queue {
                 unsafe { gl.disable(glow::STENCIL_TEST) };
                 unsafe { gl.disable(glow::SCISSOR_TEST) };
             }
-            C::BindAttachment {
-                attachment,
-                ref view,
-                depth_slice,
-                sample_count,
-            } => {
+            C::BindAttachment(ref op) => {
+                let super::AttachmentBinding {
+                    attachment,
+                    ref view,
+                    depth_slice,
+                    sample_count,
+                } = **op;
                 unsafe {
                     self.set_attachment(
                         gl,
@@ -1157,11 +1170,12 @@ impl super::Queue {
                     )
                 };
             }
-            C::ResolveAttachment {
-                attachment,
-                ref dst,
-                ref size,
-            } => {
+            C::ResolveAttachment(ref op) => {
+                let super::AttachmentResolve {
+                    attachment,
+                    ref dst,
+                    ref size,
+                } = **op;
                 unsafe { gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(self.draw_fbo)) };
                 unsafe { gl.read_buffer(attachment) };
                 unsafe { gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(self.copy_fbo)) };

@@ -16,10 +16,11 @@ formatting, spelling and diff gates skip the forks.
 
 Upstream: <https://github.com/gfx-rs/wgpu>, commit
 `40f4a34ebaf56f9a046231f54125ad046239d3f3` (`wgpu-hal` 30.0.1).
-`cranpose-wgpu-hal` is at 30.0.6 for the catch-up barrier, the Metal
+`cranpose-wgpu-hal` is at 30.0.7 for the catch-up barrier, the Metal
 pipeline switch, the dedicated Vulkan allocations, the GL point size, the
-GL state tracker and the web surface usages below, and
-`cranpose-wgpu-core` and `cranpose-wgpu` are at 30.0.6 to require it.
+GL state tracker, the web surface usages and the boxed GL copy commands
+below, and `cranpose-wgpu-core` and `cranpose-wgpu` are at 30.0.7 to
+require it.
 
 | fork | upstream |
 | --- | --- |
@@ -162,6 +163,22 @@ A WebGL canvas also took the default depth buffer (8.1 MiB at
 1080 x 1975), which no draw uses: the GL backend renders into its surface
 texture and blits that to the canvas. The fork asks for a canvas without
 depth or stencil.
+
+### GL copy and attachment commands are boxed
+
+The GL encoder records each command into a vector that the queue plays
+back at submission, and every command took the size of the largest: 128
+bytes on wasm32, set by the buffer and texture copies. The commands of a
+frame stay alive until the GPU finishes it, several frames at once. The
+fork boxes the payloads of the rare large commands (buffer clears, copies,
+query result copies, attachment binds and resolves), so a command takes 48
+bytes, the size of a vertex attribute.
+
+Cranpose's gauntlet at tier 8 records about 6,100 commands for its main
+pass, 59% of them vertex attribute commands: the pass's vector held 1 MiB
+and holds 384 KiB. In Chrome on an M5 at the Mate 20 X's viewport, on
+WebGL, the page's peak heap went from 22.2 to 20.7 MiB and its WebAssembly
+memory from 28.1 to 25.8 MiB.
 
 ### Update the fork
 

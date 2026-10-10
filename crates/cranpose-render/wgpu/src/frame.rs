@@ -1904,77 +1904,94 @@ impl Atlas {
     }
 }
 
-/// How many times a request's area a recent atlas size may hold and still
-/// serve it. Cards that a resize narrows ask for a third of the area they
-/// had: at twice the area each such step took a new texture and depth
-/// buffer, and the pools kept four sizes at once for their idle frames. The
-/// unused area costs no fragments, and its tiles store compressed.
+/// How many times the area the busiest recent frame packed into its atlas
+/// the atlas may hold before it shrinks to that need.
 const SURFACE_ATLAS_SLACK: u64 = 4;
-const KEPT_SURFACE_ATLAS_SIZES: usize = 4;
 
-/// The layer surface atlas sizes recent frames drew into. Sized to each
-/// frame's members, an atlas took a new size whenever a resize moved them
-/// by a step, and the transient pool, which reuses a texture only at its
-/// exact size, then kept a texture and a depth buffer for every size a
-/// frame had used. An atlas now takes the newest recent size that holds it,
-/// grown to fit where that stays within [`SURFACE_ATLAS_SLACK`] times its
-/// area, so frames keep drawing into one texture.
+/// The size of the one atlas the layer surfaces a frame draws again go
+/// into. Members pack into its width; it grows to fit a frame that needs
+/// more and shrinks once the busiest frame of the last
+/// [`crate::idle_pool::IDLE_FRAMES`] needs less than a
+/// [`SURFACE_ATLAS_SLACK`]th of it. Sized to each frame's members instead,
+/// the gauntlet's 5 and 10 cards a frame at tier 8 took four sizes in turn,
+/// and the WebGL page held a texture and a depth buffer for each: 20 MiB
+/// for 0.5 MP of surfaces.
 ///
 /// A new size takes one padding step more on each side where the GPU memory
-/// a process holds stays at its peak: the frames after a screen's first add
-/// members, and each step up meant a second atlas while the first stayed
-/// pooled. Without the step, a Mate 20 X held two atlases and two depth
-/// buffers at the gauntlet's third frame, and its GL memory stayed 3 to
-/// 10 MB higher at tier 12. Metal takes a dropped texture's memory back, so
-/// there a new size is the size asked for: with the step, the desktop
-/// gauntlet drew its 1536-pixel frames at tier 16 into a 1792-pixel atlas,
-/// 3.4 MB more for as long as it ran.
+/// a process holds stays at its peak, so the next busier frame fits. Metal
+/// takes a dropped texture's memory back, so there a new size is the size
+/// asked for.
 pub(crate) struct SurfaceAtlasSizes {
-    recent: crate::idle_pool::IdlePool<(u32, u32)>,
+    current: Option<(u32, u32)>,
+    need_width: crate::idle_pool::RecentPeak,
+    need_height: crate::idle_pool::RecentPeak,
     step_ahead: bool,
 }
 
 impl SurfaceAtlasSizes {
     pub(crate) fn for_backend(backend: wgpu::Backend) -> Self {
         Self {
-            recent: crate::idle_pool::IdlePool::default(),
+            current: None,
+            need_width: crate::idle_pool::RecentPeak::default(),
+            need_height: crate::idle_pool::RecentPeak::default(),
             step_ahead: backend != wgpu::Backend::Metal,
         }
     }
 
-    /// The size an atlas whose members pack into `size`, a padded size,
+    /// The width members pack into: the atlas's own once it holds the
+    /// widest of them, else about the square root of their `area`.
+    fn shelf_width(&self, area: u64, widest: u32, limit: u32) -> u32 {
+        match self.current {
+            Some((width, _)) if width >= widest => width,
+            _ => u32::try_from(area.isqrt()).unwrap_or(limit),
+        }
+    }
+
+    /// The size the atlas whose members pack into `size`, a padded size,
     /// takes this frame; no side passes `limit`.
     fn settle(&mut self, size: (u32, u32), limit: u32) -> (u32, u32) {
         let area = |(width, height): (u32, u32)| u64::from(width) * u64::from(height);
-        let served = area(size).saturating_mul(SURFACE_ATLAS_SLACK);
-        // The newest size first: requests that fit two sizes keep taking
-        // the one in use, so the other goes idle and is dropped.
-        let settled = self
-            .recent
-            .iter()
-            .rev()
-            .map(|recent| (recent.0.max(size.0), recent.1.max(size.1)))
-            .find(|grown| area(*grown) <= served)
-            .unwrap_or_else(|| {
-                if self.step_ahead {
-                    (
-                        padded_dimension(size.0.saturating_add(1), limit),
-                        padded_dimension(size.1.saturating_add(1), limit),
-                    )
+        self.need_width.reach(u64::from(size.0));
+        self.need_height.reach(u64::from(size.1));
+        let need = (
+            u32::try_from(self.need_width.value()).unwrap_or(limit),
+            u32::try_from(self.need_height.value()).unwrap_or(limit),
+        );
+        let settled = match self.current {
+            Some(current) if current.0 >= size.0 && current.1 >= size.1 => {
+                if area(current) > area(self.grown(need, limit)).saturating_mul(SURFACE_ATLAS_SLACK)
+                {
+                    self.grown(need, limit)
                 } else {
-                    size
+                    current
                 }
-            });
-        let _ = self.recent.take(|recent| *recent == settled);
-        self.recent
-            .put(settled, KEPT_SURFACE_ATLAS_SIZES, u64::MAX, |_| 0);
+            }
+            Some(current) => {
+                let grown = self.grown(size, limit);
+                (current.0.max(grown.0), current.1.max(grown.1))
+            }
+            None => self.grown(size, limit),
+        };
+        self.current = Some(settled);
         settled
     }
 
-    /// Ends a frame, forgetting the sizes no frame has drawn into for
-    /// [`crate::idle_pool::IDLE_FRAMES`].
+    fn grown(&self, size: (u32, u32), limit: u32) -> (u32, u32) {
+        if self.step_ahead {
+            (
+                padded_dimension(size.0.saturating_add(1), limit),
+                padded_dimension(size.1.saturating_add(1), limit),
+            )
+        } else {
+            size
+        }
+    }
+
+    /// Ends a frame, letting the recent need follow the frames since the
+    /// busiest one once that is [`crate::idle_pool::IDLE_FRAMES`] old.
     pub(crate) fn end_frame(&mut self) {
-        self.recent.end_frame();
+        self.need_width.end_frame();
+        self.need_height.end_frame();
     }
 }
 
@@ -4806,8 +4823,19 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .iter()
             .map(|member| u64::from(member.plan.width) * u64::from(member.plan.height))
             .sum();
-        let mut packer =
-            AtlasPacker::new(limit).with_shelf_width(u32::try_from(area.isqrt()).unwrap_or(limit));
+        let shelf_width = if keeps {
+            u32::try_from(area.isqrt()).unwrap_or(limit)
+        } else {
+            let widest = group
+                .iter()
+                .map(|member| member.plan.width)
+                .max()
+                .unwrap_or(0);
+            self.renderer
+                .surface_atlas_sizes
+                .shelf_width(area, widest, limit)
+        };
+        let mut packer = AtlasPacker::new(limit).with_shelf_width(shelf_width);
         // A kept surface is read in place or copied out, so where it lands
         // costs nothing later: the tallest go first, into an atlas near
         // square.
