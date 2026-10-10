@@ -31,6 +31,24 @@ def tree_with(gradlew, folder):
     return tree
 
 
+def judged(first, second):
+    """A run of one scenario whose starts judged their metrics as given."""
+    return {'scenarios': [{'scenario': 'gauntlet', 'starts': {'first': {'verdicts': first},
+                                                               'second': {'verdicts': second}}}]}
+
+
+class ConfirmedTest(unittest.TestCase):
+    def test_a_regression_is_confirmed_only_where_both_runs_judged_the_same_start_worse(self):
+        report = judged({'fps': 'worse', 'cpu_ms_per_frame': 'same'}, {'fps': 'same', 'cpu_ms_per_frame': 'worse'})
+        recheck = judged({'fps': 'worse', 'cpu_ms_per_frame': 'worse'}, {'fps': 'worse', 'cpu_ms_per_frame': 'same'})
+        self.assertEqual(nightly.confirmed(report, recheck), {'gauntlet': {'first': ['fps']}})
+
+    def test_no_start_judged_worse_twice_confirms_nothing(self):
+        report = judged({'fps': 'worse'}, {'fps': 'same'})
+        recheck = judged({'fps': 'same'}, {'fps': 'worse'})
+        self.assertEqual(nightly.confirmed(report, recheck), {})
+
+
 class BuildTest(unittest.TestCase):
     def test_a_build_that_fails_once_is_made_again(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(nightly, 'BUILD_RETRY_DELAY_S', 0):

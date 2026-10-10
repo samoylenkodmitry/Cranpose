@@ -45,8 +45,6 @@ pub struct PerfRun {
     pub subjects: Vec<PerfSubject>,
     pub scenarios: BTreeMap<String, PerfScenario>,
     #[serde(default)]
-    pub confirmed_regressions: BTreeMap<String, Vec<String>>,
-    #[serde(default)]
     pub protocol: PerfProtocol,
 }
 
@@ -56,10 +54,11 @@ pub struct PerfProtocol {
     /// Seconds each launch was measured for, from its start.
     #[serde(default)]
     pub run_s: Option<f64>,
-    /// Whether each launch was measured from its start, its first seconds
-    /// included; older runs measured a window after a warm-up.
+    /// The starts each round measured of every subject: its first after its
+    /// install and its second. An older run did not keep them apart, and the
+    /// dashboard leaves it out.
     #[serde(default)]
-    pub from_launch: bool,
+    pub starts: Vec<String>,
 }
 
 /// A run's own file: every leg, with the time of each frame it presented.
@@ -78,8 +77,11 @@ pub struct PerfFramesScenario {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct PerfFramesLeg {
     pub subject: String,
-    /// When each frame was presented, in milliseconds since the launch; empty
-    /// in a run measured after a warm-up.
+    /// Which start of its round the launch was: `first`, after the subject's
+    /// data was cleared as its install leaves it, or `second`.
+    #[serde(default)]
+    pub start: String,
+    /// When each frame was presented, in milliseconds since the launch.
     #[serde(default)]
     pub frame_ms: Vec<f64>,
     /// Another process spent more than the run allows in this leg: it is
@@ -174,22 +176,55 @@ pub struct PerfSubject {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct PerfScenario {
     pub legs: usize,
-    pub summary: BTreeMap<String, BTreeMap<String, f64>>,
-    pub verdicts: BTreeMap<String, String>,
-    /// Why a subject has no legs: its first failure.
+    /// The results of each start, by its name in [`STARTS`].
     #[serde(default)]
-    pub failures: BTreeMap<String, String>,
+    pub starts: BTreeMap<String, PerfStart>,
 }
 
+/// One start's results in a scenario.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct PerfStart {
+    /// Each subject's medians over its legs of the start.
+    pub summary: BTreeMap<String, BTreeMap<String, f64>>,
+    /// Between two builds, each deciding metric's verdict on the second.
+    #[serde(default)]
+    pub verdicts: BTreeMap<String, String>,
+    /// Why a subject has no legs of the start: its first failure there.
+    #[serde(default)]
+    pub failures: BTreeMap<String, String>,
+    /// The metrics a second run judged worse again.
+    #[serde(default)]
+    pub confirmed: Vec<String>,
+}
+
+/// The starts a run measures of every subject in each round, each with its
+/// title: its first start after its install, its data cleared as the install
+/// leaves it, and its second start.
+pub const STARTS: [(&str, &str); 2] = [
+    ("first", "First start after install"),
+    ("second", "Second start"),
+];
+
 impl PerfRun {
-    fn median(&self, scenario: &str, subject: usize, metric: &str) -> Option<f64> {
+    fn start(&self, scenario: &str, start: &str) -> Option<&PerfStart> {
+        self.scenarios.get(scenario)?.starts.get(start)
+    }
+
+    fn median(&self, scenario: &str, start: &str, subject: usize, metric: &str) -> Option<f64> {
         let name = &self.subjects.get(subject)?.name;
-        self.scenarios
-            .get(scenario)?
+        self.start(scenario, start)?
             .summary
             .get(name)?
             .get(metric)
             .copied()
+    }
+
+    /// Whether the run kept each subject's first and second starts apart, as
+    /// every chart shows them.
+    fn keeps_starts(&self) -> bool {
+        STARTS
+            .iter()
+            .all(|(start, _)| self.protocol.starts.iter().any(|kept| kept == start))
     }
 
     /// Whether the run compares frameworks: Compose is among its subjects,
@@ -212,7 +247,7 @@ impl PerfIndex {
     fn nightly(&self) -> Vec<&PerfRun> {
         self.runs
             .iter()
-            .filter(|run| run.kind == "nightly")
+            .filter(|run| run.kind == "nightly" && run.keeps_starts())
             .collect()
     }
 
@@ -223,7 +258,9 @@ impl PerfIndex {
             .iter()
             .rev()
             .filter(|run| {
-                let first = run.compares_frameworks() && !devices.contains(&run.device.as_str());
+                let first = run.compares_frameworks()
+                    && run.keeps_starts()
+                    && !devices.contains(&run.device.as_str());
                 if first {
                     devices.push(run.device.as_str());
                 }
@@ -474,7 +511,7 @@ pub fn PerformanceDashboard(
             let nightly: Vec<PerfRun> = index.nightly().into_iter().cloned().collect();
             match nightly.last() {
                 Some(latest) => {
-                    LatestNightly(palette, latest.clone(), source.clone());
+                    LatestNightly(palette, Rc::new(latest.clone()), source.clone());
                     Trend(palette, Rc::new(nightly.clone()), selected, metric);
                 }
                 None => {
@@ -486,7 +523,7 @@ pub fn PerformanceDashboard(
                 }
             }
             for run in index.latest_framework_runs() {
-                Frameworks(palette, run.clone(), source.clone());
+                Frameworks(palette, Rc::new(run.clone()), source.clone());
             }
         },
     );
@@ -561,7 +598,7 @@ fn Card(palette: Palette, title: String, content: impl Fn() + 'static) {
 }
 
 #[composable]
-fn LatestNightly(palette: Palette, run: PerfRun, source: FrameSource) {
+fn LatestNightly(palette: Palette, run: Rc<PerfRun>, source: FrameSource) {
     let release = run.release.clone().unwrap_or_default();
     let main = run.main.clone().unwrap_or_default();
     let title = format!(
@@ -571,64 +608,6 @@ fn LatestNightly(palette: Palette, run: PerfRun, source: FrameSource) {
         &run.started_at[..run.started_at.len().min(10)]
     );
     Card(palette, title, move || {
-        let headers = [
-            "scenario",
-            "release",
-            "main",
-            "change",
-            "CPU ms/frame",
-            "to screen ms",
-        ];
-        TableRow(
-            headers.map(str::to_string).to_vec(),
-            vec![palette.muted; 6],
-            true,
-        );
-        for (scenario, entry) in &run.scenarios {
-            let fps = (
-                run.median(scenario, 0, "fps"),
-                run.median(scenario, 1, "fps"),
-            );
-            let change = match fps {
-                (Some(before), Some(after)) if before > 0.0 => {
-                    format!("{:+.1}%", (after - before) / before * 100.0)
-                }
-                _ => "–".to_string(),
-            };
-            let pair = |metric: &str| match (
-                run.median(scenario, 0, metric),
-                run.median(scenario, 1, metric),
-            ) {
-                (Some(before), Some(after)) => format!("{before:.1} → {after:.1}"),
-                _ => "–".to_string(),
-            };
-            let regressed = run.confirmed_regressions.contains_key(scenario);
-            let cells = vec![
-                if regressed {
-                    format!("{scenario} ⚠")
-                } else {
-                    scenario.clone()
-                },
-                figure(fps.0),
-                figure(fps.1),
-                change,
-                pair("cpu_ms_per_frame"),
-                pair("desired_to_present_p50_ms"),
-            ];
-            let colors = vec![
-                if regressed {
-                    palette.worse
-                } else {
-                    palette.text
-                },
-                palette.muted,
-                palette.verdict(entry.verdicts.get("fps")),
-                palette.verdict(entry.verdicts.get("fps")),
-                palette.verdict(entry.verdicts.get("cpu_ms_per_frame")),
-                palette.verdict(entry.verdicts.get("desired_to_present_p50_ms")),
-            ];
-            TableRow(cells, colors, false);
-        }
         Text(
             "Green: main is better; red: worse; amber: not settled within four pairs of legs. \
              ⚠ marks a regression a second run confirmed.",
@@ -637,17 +616,91 @@ fn LatestNightly(palette: Palette, run: PerfRun, source: FrameSource) {
         );
         let subjects: Vec<(usize, PerfSubject)> =
             run.subjects.iter().cloned().enumerate().collect();
-        let loaded = run_frames(source.clone(), run.file.clone(), run.protocol.from_launch);
-        for scenario in run.scenarios.keys() {
-            ScenarioLaunch(
-                palette,
-                loaded.get(),
-                run_ms(&run),
-                scenario.clone(),
-                launch_lines(palette, &run, scenario, &subjects),
+        let loaded = run_frames(source.clone(), run.file.clone());
+        for (start, title) in STARTS {
+            Text(
+                title,
+                Modifier::empty(),
+                text_style(15.0, palette.text, true),
             );
+            NightlyTable(palette, run.clone(), start);
+            for scenario in run.scenarios.keys() {
+                ScenarioLaunch(
+                    palette,
+                    loaded.get(),
+                    run_ms(&run),
+                    scenario.clone(),
+                    start,
+                    launch_lines(palette, &run, scenario, start, &subjects),
+                );
+            }
         }
     });
+}
+
+/// Each scenario's medians on both builds for one `start`, coloured by its
+/// verdicts.
+#[composable]
+fn NightlyTable(palette: Palette, run: Rc<PerfRun>, start: &'static str) {
+    let headers = [
+        "scenario",
+        "release",
+        "main",
+        "change",
+        "CPU ms/frame",
+        "to screen ms",
+    ];
+    TableRow(
+        headers.map(str::to_string).to_vec(),
+        vec![palette.muted; 6],
+        true,
+    );
+    for scenario in run.scenarios.keys() {
+        let entry = run.start(scenario, start).cloned().unwrap_or_default();
+        let fps = (
+            run.median(scenario, start, 0, "fps"),
+            run.median(scenario, start, 1, "fps"),
+        );
+        let change = match fps {
+            (Some(before), Some(after)) if before > 0.0 => {
+                format!("{:+.1}%", (after - before) / before * 100.0)
+            }
+            _ => "–".to_string(),
+        };
+        let pair = |metric: &str| match (
+            run.median(scenario, start, 0, metric),
+            run.median(scenario, start, 1, metric),
+        ) {
+            (Some(before), Some(after)) => format!("{before:.1} → {after:.1}"),
+            _ => "–".to_string(),
+        };
+        let regressed = !entry.confirmed.is_empty();
+        let cells = vec![
+            if regressed {
+                format!("{scenario} ⚠")
+            } else {
+                scenario.clone()
+            },
+            figure(fps.0),
+            figure(fps.1),
+            change,
+            pair("cpu_ms_per_frame"),
+            pair("desired_to_present_p50_ms"),
+        ];
+        let colors = vec![
+            if regressed {
+                palette.worse
+            } else {
+                palette.text
+            },
+            palette.muted,
+            palette.verdict(entry.verdicts.get("fps")),
+            palette.verdict(entry.verdicts.get("fps")),
+            palette.verdict(entry.verdicts.get("cpu_ms_per_frame")),
+            palette.verdict(entry.verdicts.get("desired_to_present_p50_ms")),
+        ];
+        TableRow(cells, colors, false);
+    }
 }
 
 #[composable]
@@ -689,20 +742,30 @@ fn Trend(
         MetricChips(palette, metric);
         let scenario = selected.get();
         let shown = metric.get();
-        let series = |subject: usize| -> Vec<f32> {
-            nightly
+        for (start, title) in STARTS {
+            let series = |subject: usize| -> Vec<f32> {
+                nightly
+                    .iter()
+                    .map(|run| {
+                        run.median(&scenario, start, subject, shown.key())
+                            .unwrap_or(f64::NAN) as f32
+                    })
+                    .collect()
+            };
+            let regressed: Vec<bool> = nightly
                 .iter()
                 .map(|run| {
-                    run.median(&scenario, subject, shown.key())
-                        .unwrap_or(f64::NAN) as f32
+                    run.start(&scenario, start)
+                        .is_some_and(|entry| !entry.confirmed.is_empty())
                 })
-                .collect()
-        };
-        let regressed: Vec<bool> = nightly
-            .iter()
-            .map(|run| run.confirmed_regressions.contains_key(&scenario))
-            .collect();
-        LineChart(palette, series(0), series(1), regressed);
+                .collect();
+            Text(
+                title,
+                Modifier::empty(),
+                text_style(13.0, palette.text, true),
+            );
+            LineChart(palette, series(0), series(1), regressed);
+        }
         Text(
             format!(
                 "Grey: the release; blue: main; red dots: confirmed regressions. {}",
@@ -836,18 +899,17 @@ enum FramesState {
     Loading,
     Loaded(Rc<PerfRunFrames>),
     Failed(String),
-    NotKept,
 }
 
-/// Loads a run's own `file` from `source` once, for every chart of its card;
-/// a run not measured from each launch kept no frames.
+/// Loads a run's own `file` from `source` once, for every chart of its card.
 #[composable]
-fn run_frames(source: FrameSource, file: String, from_launch: bool) -> MutableState<FramesState> {
+fn run_frames(source: FrameSource, file: String) -> MutableState<FramesState> {
     let state = cranpose_core::rememberMutableStateOf(|| FramesState::Loading);
-    let kept = from_launch && !file.is_empty();
     cranpose_core::LaunchedEffect(file.clone(), move |scope| {
-        if !kept {
-            state.set(FramesState::NotKept);
+        if file.is_empty() {
+            state.set(FramesState::Failed(
+                "The run names no file of its frames.".to_string(),
+            ));
             return;
         }
         match source.clone() {
@@ -913,6 +975,7 @@ fn launch_lines(
     palette: Palette,
     run: &PerfRun,
     scenario: &str,
+    start: &str,
     subjects: &[(usize, PerfSubject)],
 ) -> Vec<LaunchLine> {
     let mut others = 0;
@@ -932,11 +995,10 @@ fn launch_lines(
                 name: subject.name.clone(),
                 label: subject.label.clone(),
                 color,
-                fps: run.median(scenario, *index, "fps"),
+                fps: run.median(scenario, start, *index, "fps"),
                 emphasized: subject.name == "cranpose",
                 failure: run
-                    .scenarios
-                    .get(scenario)
+                    .start(scenario, start)
                     .and_then(|entry| entry.failures.get(&subject.name).cloned()),
             }
         })
@@ -954,10 +1016,11 @@ struct LaunchCurve {
 }
 
 /// Each line's frame rate from the launch, every [`CHART_STEP_MS`] up to
-/// `run_ms`, over its legs no other process disturbed.
+/// `run_ms`, over its legs of `start` no other process disturbed.
 fn launch_curves(
     frames: &PerfRunFrames,
     scenario: &str,
+    start: &str,
     run_ms: f64,
     lines: &[LaunchLine],
 ) -> Vec<LaunchCurve> {
@@ -975,7 +1038,10 @@ fn launch_curves(
                 .legs
                 .iter()
                 .filter(|leg| {
-                    leg.subject == line.name && !leg.disturbed && !leg.frame_ms.is_empty()
+                    leg.subject == line.name
+                        && leg.start == start
+                        && !leg.disturbed
+                        && !leg.frame_ms.is_empty()
                 })
                 .collect();
             if legs.is_empty() {
@@ -1022,11 +1088,6 @@ fn frames_note(frames: &FramesState) -> Option<(String, bool)> {
         FramesState::Loaded(_) => None,
         FramesState::Loading => Some(("Loading the run's frames…".to_string(), false)),
         FramesState::Failed(error) => Some((error.clone(), true)),
-        FramesState::NotKept => Some((
-            "This run measured a window after a warm-up and kept no frame times from the launch."
-                .to_string(),
-            false,
-        )),
     }
 }
 
@@ -1150,6 +1211,7 @@ fn LaunchChart(
     frames: FramesState,
     run_ms: f64,
     scenario: String,
+    start: &'static str,
     lines: Vec<LaunchLine>,
 ) {
     if let Some((note, failed)) = frames_note(&frames) {
@@ -1158,7 +1220,7 @@ fn LaunchChart(
         return;
     }
     let curves = match &frames {
-        FramesState::Loaded(frames) => launch_curves(frames, &scenario, run_ms, &lines),
+        FramesState::Loaded(frames) => launch_curves(frames, &scenario, start, run_ms, &lines),
         _ => Vec::new(),
     };
     let curves = Rc::new(curves);
@@ -1207,14 +1269,19 @@ fn ScenarioLaunch(
     frames: FramesState,
     run_ms: f64,
     scenario: String,
+    start: &'static str,
     lines: Vec<LaunchLine>,
 ) {
+    let title = STARTS
+        .iter()
+        .find(|(name, _)| *name == start)
+        .map_or(start, |(_, title)| *title);
     Text(
-        scenario.clone(),
+        format!("{scenario}: {title}"),
         Modifier::empty(),
         text_style(13.0, palette.text, true),
     );
-    LaunchChart(palette, frames, run_ms, scenario, lines);
+    LaunchChart(palette, frames, run_ms, scenario, start, lines);
 }
 
 /// The run's length in milliseconds from its launch.
@@ -1223,14 +1290,13 @@ fn run_ms(run: &PerfRun) -> f64 {
 }
 
 #[composable]
-fn Frameworks(palette: Palette, run: PerfRun, source: FrameSource) {
-    // Best first for the metric shown, alphabetical among equals, each with
-    // the version measured and a link to its source at the commit the run
-    // measured. Cranpose's bars carry the accent.
+fn Frameworks(palette: Palette, run: Rc<PerfRun>, source: FrameSource) {
+    // Alphabetical, each with the version measured; the bars of each start
+    // put the best first for the metric shown.
     let mut subjects: Vec<(usize, PerfSubject)> =
         run.subjects.iter().cloned().enumerate().collect();
     subjects.sort_by(|(_, a), (_, b)| a.name.cmp(&b.name));
-    let commit = run.main.clone().unwrap_or_else(|| "main".to_string());
+    let subjects = Rc::new(subjects);
     let metric = cranpose_core::rememberMutableStateOf(|| Metric::Fps);
     let place = if run.kind == "browser" {
         "Frameworks in the browser,"
@@ -1243,42 +1309,27 @@ fn Frameworks(palette: Palette, run: PerfRun, source: FrameSource) {
         &run.started_at[..run.started_at.len().min(10)]
     );
     Card(palette, title, move || {
-        let loaded = run_frames(source.clone(), run.file.clone(), run.protocol.from_launch);
+        let loaded = run_frames(source.clone(), run.file.clone());
         MetricChips(palette, metric);
         let shown = metric.get();
         for scenario in run.scenarios.keys() {
-            ScenarioLaunch(
-                palette,
-                loaded.get(),
-                run_ms(&run),
-                scenario.clone(),
-                launch_lines(palette, &run, scenario, &subjects),
-            );
-            let values: Vec<Option<f64>> = subjects
-                .iter()
-                .map(|(index, _)| run.median(scenario, *index, shown.key()))
-                .collect();
-            let full = shown.full_scale(&values);
-            let mut order: Vec<usize> = (0..subjects.len()).collect();
-            order.sort_by(|&a, &b| shown.best_first(values[a], values[b]));
-            for position in order {
-                let (_, subject) = &subjects[position];
-                let value = &values[position];
-                let color = if subject.name.starts_with("cranpose") {
-                    palette.accent
-                } else {
-                    palette.baseline
-                };
-                let url = subject
-                    .source
-                    .as_ref()
-                    .map(|source| format!("{SOURCE_URL}/{commit}/{source}"));
-                let share = match value {
-                    Some(value) if full > 0.0 => (value / full) as f32,
-                    _ => 0.0,
-                };
-                let text = value.map_or_else(|| "–".to_string(), |value| shown.format(value));
-                MetricBar(palette, subject.label.clone(), url, share, text, color);
+            for (start, _) in STARTS {
+                ScenarioLaunch(
+                    palette,
+                    loaded.get(),
+                    run_ms(&run),
+                    scenario.clone(),
+                    start,
+                    launch_lines(palette, &run, scenario, start, &subjects),
+                );
+                MetricBars(
+                    palette,
+                    run.clone(),
+                    subjects.clone(),
+                    scenario.clone(),
+                    start,
+                    shown,
+                );
             }
         }
         Text(
@@ -1287,6 +1338,47 @@ fn Frameworks(palette: Palette, run: PerfRun, source: FrameSource) {
             text_style(12.0, palette.muted, false),
         );
     });
+}
+
+/// One start's bar of the metric `shown` for every subject, best first,
+/// alphabetical among equals, each with a link to its source at the commit
+/// the run measured. Cranpose's bars carry the accent.
+#[composable]
+fn MetricBars(
+    palette: Palette,
+    run: Rc<PerfRun>,
+    subjects: Rc<Vec<(usize, PerfSubject)>>,
+    scenario: String,
+    start: &'static str,
+    shown: Metric,
+) {
+    let commit = run.main.clone().unwrap_or_else(|| "main".to_string());
+    let values: Vec<Option<f64>> = subjects
+        .iter()
+        .map(|(index, _)| run.median(&scenario, start, *index, shown.key()))
+        .collect();
+    let full = shown.full_scale(&values);
+    let mut order: Vec<usize> = (0..subjects.len()).collect();
+    order.sort_by(|&a, &b| shown.best_first(values[a], values[b]));
+    for position in order {
+        let (_, subject) = &subjects[position];
+        let value = &values[position];
+        let color = if subject.name.starts_with("cranpose") {
+            palette.accent
+        } else {
+            palette.baseline
+        };
+        let url = subject
+            .source
+            .as_ref()
+            .map(|source| format!("{SOURCE_URL}/{commit}/{source}"));
+        let share = match value {
+            Some(value) if full > 0.0 => (value / full) as f32,
+            _ => 0.0,
+        };
+        let text = value.map_or_else(|| "–".to_string(), |value| shown.format(value));
+        MetricBar(palette, subject.label.clone(), url, share, text, color);
+    }
 }
 
 /// A framework, which opens its source when it has one, and its value as a

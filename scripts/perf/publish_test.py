@@ -23,39 +23,61 @@ def run():
         'subjects': [{'name': 'cranpose-release', 'label': 'v0.9.7', 'package': 'x'},
                      {'name': 'cranpose', 'label': 'abc123def', 'package': 'y'}],
         'duration_s': 420,
-        'protocol': {'run_s': 3.0, 'from_launch': True, 'max_pairs': 4},
+        'protocol': {'run_s': 3.0, 'starts': ['first', 'second'], 'max_pairs': 4},
         'scenarios': [{
             'scenario': 'gauntlet',
             'legs': [{}, {}, {}, {}],
-            'failures': [{'subject': 'cranpose', 'error': 'first'}, {'subject': 'cranpose', 'error': 'second'}],
-            'summary': {'cranpose-release': {'fps': 50.0, 'cpu_ms_per_frame': 33.0, 'gpu_mhz': 139,
-                                             'interval_p99_ms': 41.0},
-                        'cranpose': {'fps': 52.8, 'cpu_ms_per_frame': 32.0, 'gpu_mhz': 139,
-                                     'interval_p99_ms': 38.0}},
-            'verdicts': {'fps': 'better', 'cpu_ms_per_frame': 'same', 'desired_to_present_p50_ms': 'same'},
+            'failures': [{'subject': 'cranpose', 'start': 'first', 'error': 'first'},
+                         {'subject': 'cranpose', 'start': 'first', 'error': 'second'},
+                         {'subject': 'cranpose-release', 'start': 'second', 'error': 'later'}],
+            'starts': {
+                'first': {
+                    'summary': {'cranpose-release': {'fps': 31.0, 'cpu_ms_per_frame': 61.0},
+                                'cranpose': {'fps': 33.5, 'cpu_ms_per_frame': 58.0}},
+                    'verdicts': {'fps': 'same', 'cpu_ms_per_frame': 'same', 'desired_to_present_p50_ms': 'same'},
+                },
+                'second': {
+                    'summary': {'cranpose-release': {'fps': 50.0, 'cpu_ms_per_frame': 33.0, 'gpu_mhz': 139,
+                                                     'interval_p99_ms': 41.0},
+                                'cranpose': {'fps': 52.8, 'cpu_ms_per_frame': 32.0, 'gpu_mhz': 139,
+                                             'interval_p99_ms': 38.0}},
+                    'verdicts': {'fps': 'better', 'cpu_ms_per_frame': 'same',
+                                 'desired_to_present_p50_ms': 'same'},
+                },
+            },
         }],
         'confirmed_regressions': {},
     }
 
 
 class IndexEntryTest(unittest.TestCase):
-    def test_an_entry_carries_each_scenarios_medians_and_verdicts_without_its_legs(self):
+    def test_an_entry_carries_each_starts_medians_and_verdicts_without_its_legs(self):
         entry = publish.index_entry(run(), 'runs/x.json')
         gauntlet = entry['scenarios']['gauntlet']
         self.assertEqual(gauntlet['legs'], 4)
-        self.assertEqual(gauntlet['summary']['cranpose']['fps'], 52.8)
-        self.assertEqual(gauntlet['summary']['cranpose']['gpu_mhz'], 139)
-        self.assertNotIn('interval_p99_ms', gauntlet['summary']['cranpose'], 'only the charted metrics')
-        self.assertEqual(gauntlet['verdicts']['fps'], 'better')
+        first, second = gauntlet['starts']['first'], gauntlet['starts']['second']
+        self.assertEqual(first['summary']['cranpose']['fps'], 33.5)
+        self.assertEqual(second['summary']['cranpose']['fps'], 52.8)
+        self.assertEqual(second['summary']['cranpose']['gpu_mhz'], 139)
+        self.assertNotIn('interval_p99_ms', second['summary']['cranpose'], 'only the charted metrics')
+        self.assertEqual(first['verdicts']['fps'], 'same')
+        self.assertEqual(second['verdicts']['fps'], 'better')
         self.assertEqual(entry['device'], 'EVR-AL00')
         self.assertEqual([subject['label'] for subject in entry['subjects']], ['v0.9.7', 'abc123def'])
 
     def test_an_entry_says_how_the_run_measured_and_where_its_frames_are(self):
         entry = publish.index_entry(run(), 'runs/x.json')
-        self.assertTrue(entry['protocol']['from_launch'])
+        self.assertEqual(entry['protocol']['starts'], ['first', 'second'])
         self.assertEqual(entry['file'], 'runs/x.json', 'the dashboard reads the frame times there')
-        self.assertEqual(entry['scenarios']['gauntlet']['failures'], {'cranpose': 'first'},
-                         "a subject's first failure says why it has no frames")
+        starts = entry['scenarios']['gauntlet']['starts']
+        self.assertEqual((starts['first']['failures'], starts['second']['failures']),
+                         ({'cranpose': 'first'}, {'cranpose-release': 'later'}),
+                         "a subject's first failure of a start says why it has no frames there")
+
+    def test_an_entry_keeps_each_starts_confirmed_regressions_with_its_medians(self):
+        nightly = {**run(), 'confirmed_regressions': {'gauntlet': {'second': ['fps']}}}
+        starts = publish.index_entry(nightly, 'runs/x.json')['scenarios']['gauntlet']['starts']
+        self.assertEqual((starts['first']['confirmed'], starts['second']['confirmed']), ([], ['fps']))
 
 
 # The scratch repositories take nothing from the machine's git: not a hook's

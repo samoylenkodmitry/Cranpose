@@ -1,4 +1,9 @@
-"""Frames in each second from an app's launch."""
+"""The starts a round measures, and the frames in each second from a launch."""
+
+# The two starts every round measures of each app: its first start after its
+# install, with what it keeps between launches cleared as an install leaves
+# it (its compiled shaders among them), and its second start after that.
+STARTS = ('first', 'second')
 
 
 def per_second(times, launched, run_s):

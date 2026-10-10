@@ -380,6 +380,7 @@ test-shell-helpers: _benchmark-python ci-contract-gates
     python3 benchmarks/compose-vs-cranpose/tests/test_desktop_accounting.py
     python3 benchmarks/compose-vs-cranpose/tests/test_adb_recovery.py
     python3 benchmarks/compose-vs-cranpose/tests/test_browser_server.py
+    python3 benchmarks/compose-vs-cranpose/tests/test_starts.py
     {{benchmark_python}} benchmarks/compose-vs-cranpose/tests/test_parity_compare.py
     python3 scripts/perf/publish_test.py
     python3 scripts/perf/nightly_test.py

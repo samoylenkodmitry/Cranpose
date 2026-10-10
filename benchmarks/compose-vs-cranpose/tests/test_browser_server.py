@@ -42,7 +42,8 @@ class BrowserServerTest(unittest.TestCase):
         self.assertIn('<head><script src="/__perf.js"></script><meta charset', body)
         self.assertTrue(body.startswith('<!doctype html>'))
         self.assertEqual(headers['Cross-Origin-Opener-Policy'], 'same-origin')
-        self.assertEqual(headers['Cache-Control'], 'no-store')
+        self.assertEqual(headers['Cache-Control'], 'max-age=3600',
+                         "a page's second start takes its files from the browser's cache")
         script, _ = fetch(self.server, '/__perf.js')
         self.assertIn('sendBeacon', script)
 

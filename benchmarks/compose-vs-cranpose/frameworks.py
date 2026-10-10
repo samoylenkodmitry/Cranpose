@@ -3,12 +3,14 @@
 framework comparison.
 
 Every app is measured in rounds, every app once a round, the order reversed
-each round so heat and time fall on all alike. Legs are `ab.py`'s: one launch
-measured from its start command for `--run` seconds, the same span for every
-app, with nothing left out. The first round is each app's first launch after
-its install. Writes `frameworks.json` in the dashboard's run format, kind
-`frameworks`: device, subjects, every leg with the time of each of its frames
-since the launch, and per-app medians.
+each round so heat and time fall on all alike. In a round an app starts
+twice: first with its data cleared, as its install leaves it (in the browser,
+Chrome's data, its compiled GPU programs among them), then a second time. Legs
+are `ab.py`'s: one launch measured from its start command for `--run`
+seconds, the same span for every app, with nothing left out. Writes
+`frameworks.json` in the dashboard's run format, kind `frameworks`: device,
+subjects, every leg with the time of each of its frames since the launch, and
+per start the per-app medians.
 `--install DIR` first installs each app's `APP.apk` from DIR, as the
 nightly hands over the builds macm3 made. `--browser DIR` measures the pages
 `build_apps.sh browser DIR` built instead, each open in Chrome on the phone at
@@ -26,8 +28,8 @@ from pathlib import Path
 
 from ab import DECIDING, REPORTED, leg_record, summarize
 from browser import BrowserServer
-from measure import (APPS, CHROME, HEAVY, HERE, REMOTE_WINDOW, AppTarget, Device, PageTarget, device_lock,
-                     measure_run)
+from measure import (APPS, CHROME, HEAVY, HERE, REMOTE_WINDOW, STARTS, AppTarget, Device, PageTarget,
+                     device_lock, measure_run)
 import versions
 
 DEFAULT_APPS = 'compose,cranpose,views,flutter,rn,nativescript,lynx,maui,avalonia,egui,slint,web'
@@ -67,20 +69,24 @@ def measure_frameworks(args):
     legs, failures, running = [], [], list(apps)
     for round_index in range(args.rounds):
         for app in list(running if round_index % 2 == 0 else running[::-1]):
-            try:
-                run = measure_run(device, targets[app], args.scenario, args, args.output)
-            except (RuntimeError, ValueError) as failure:
-                print(f'{app:10} failed: {failure}', flush=True)
-                # Kept, so the dashboard shows why the app has no frames.
-                failures.append({'subject': app, 'round': round_index, 'error': str(failure)[:300]})
-                if round_index == 0:
-                    running.remove(app)
-                continue
-            legs.append(leg_record(run, app, len(legs)))
-            print(f'{app:10} fps {run["fps"]:5.1f} cpu/f {run["cpu_ms_per_frame"]:6.1f} '
-                  f'frames {run["frames"]:4d} first frame {run["first_frame_s"]:4.1f} s '
-                  f'run {run["run_s"]:4.1f} s', flush=True)
-    summary = summarize(legs, apps, [*DECIDING, *REPORTED])
+            target = targets[app]
+            for start in STARTS:
+                try:
+                    if start == STARTS[0]:
+                        target.reset(device)
+                    run = measure_run(device, target, args.scenario, args, args.output)
+                except (RuntimeError, ValueError) as failure:
+                    print(f'{app:10} {start:6} failed: {failure}', flush=True)
+                    # Kept, so the dashboard shows why the app has no frames.
+                    failures.append({'subject': app, 'round': round_index, 'start': start,
+                                     'error': str(failure)[:300]})
+                    if round_index == 0:
+                        running.remove(app)
+                    break
+                legs.append(leg_record(run, app, len(legs), start))
+                print(f'{app:10} {start:6} fps {run["fps"]:5.1f} cpu/f {run["cpu_ms_per_frame"]:6.1f} '
+                      f'frames {run["frames"]:4d} first frame {run["first_frame_s"]:4.1f} s '
+                      f'run {run["run_s"]:4.1f} s', flush=True)
     identity = {key: device.shell('getprop', key).strip() for key in
                 ['ro.product.model', 'ro.build.version.release', 'ro.hardware']}
     if args.browser:
@@ -98,15 +104,15 @@ def measure_frameworks(args):
         'release': args.release,
         'device': identity,
         'subjects': subjects,
-        'protocol': {'run_s': args.run, 'from_launch': True, 'rounds': args.rounds},
+        'protocol': {'run_s': args.run, 'starts': list(STARTS), 'rounds': args.rounds},
         'scenarios': [{
             'scenario': args.scenario,
             'extras': f'tier {args.tier}, in Chrome' if args.browser else (
                 HEAVY.get(args.scenario, '') + ' ' + args.extra).strip(),
             'legs': legs,
             'failures': failures,
-            'summary': summary,
-            'verdicts': {},
+            'starts': {start: {'summary': summarize(legs, apps, [*DECIDING, *REPORTED], start), 'verdicts': {}}
+                       for start in STARTS},
         }],
         'duration_s': round(time.monotonic() - args.started),
     }
@@ -120,7 +126,7 @@ def main():
     parser.add_argument('--apps', help='by default every app built, or every page in `--browser`')
     parser.add_argument('--scenario', default='gauntlet')
     parser.add_argument('--rounds', type=int, default=3,
-                        help='launches of every app; the first is its first launch after its install')
+                        help="rounds, in each of which every app starts with its data cleared, then once more")
     parser.add_argument('--run', type=float, default=10.0,
                         help='seconds each launch is measured for, from its start command')
     parser.add_argument('--interval', type=float, default=0.5)
@@ -141,9 +147,10 @@ def main():
     with device_lock(args.serial):
         run = measure_frameworks(args)
     (args.output / 'frameworks.json').write_text(json.dumps(run, indent=1))
-    for app, values in run['scenarios'][0]['summary'].items():
-        print(f'{app:10} ' + (f'fps {values["fps"]:5.1f} cpu/f {values["cpu_ms_per_frame"]:6.1f}' if values
-                              else 'no legs'))
+    for start, judged in run['scenarios'][0]['starts'].items():
+        for app, values in judged['summary'].items():
+            print(f'{app:10} {start:6} ' + (f'fps {values["fps"]:5.1f} cpu/f {values["cpu_ms_per_frame"]:6.1f}'
+                                            if values else 'no legs'))
     print('DURATION', run['duration_s'], 's')
 
 

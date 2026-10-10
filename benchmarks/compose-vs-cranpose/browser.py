@@ -77,11 +77,14 @@ class BrowserServer:
 
             def end_headers(self):
                 # Cross-origin isolation, which Flutter's and Kotlin's
-                # multi-threaded WebAssembly builds ask for, and no caching:
-                # a build is not the one the last run served.
+                # multi-threaded WebAssembly builds ask for. A page's second
+                # start takes its files, and the browser the code it compiled
+                # from them, from the browser's cache, as a site's second
+                # visit does: each first start begins in a browser whose data
+                # was cleared, so no earlier run's build is in that cache.
                 self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
                 self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
-                self.send_header('Cache-Control', 'no-store')
+                self.send_header('Cache-Control', 'max-age=3600')
                 super().end_headers()
 
             def do_GET(self):

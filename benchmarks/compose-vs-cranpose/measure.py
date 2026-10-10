@@ -26,8 +26,11 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent.parent / 'scripts'))
+# Its sibling modules and the shared scripts, also for a test that loads this
+# file by its path.
+sys.path[:0] = [str(HERE), str(HERE.parent.parent / 'scripts')]
 from android_robot_device import device_lock  # noqa: E402  (the shared per-device lock)
+from timelines import STARTS  # noqa: E402,F401  (the starts each round measures)
 APPS = {
     'cranpose': {
         'package': 'dev.perfcompare.cranpose',
@@ -214,6 +217,17 @@ class Device:
         """The device's /proc/uptime in seconds: the clock the window script
         stamps its samples with."""
         return float(self.shell('cat', '/proc/uptime').split()[0])
+
+    def screen(self):
+        """The views on the screen, as `uiautomator dump` writes them."""
+        self.shell('uiautomator', 'dump', '/sdcard/window.xml', timeout=30, check=False)
+        return self.shell('cat', '/sdcard/window.xml', check=False)
+
+    def clear(self, package):
+        """Clears `package`'s data and caches, as a fresh install leaves them."""
+        result = self.shell('pm', 'clear', package, check=False)
+        if 'Success' not in result:
+            raise RuntimeError(f'pm clear {package} failed: {result.strip()}')
 
 
 # Hardware clock ceilings of the Kirin 980 domains the window samples, in the
@@ -552,6 +566,10 @@ class AppTarget:
     def log(self, device):
         return app_log(device, self.name)
 
+    def reset(self, device):
+        """Leaves the app as its install did, for its first start."""
+        device.clear(self.package)
+
     def stop(self, device):
         device.shell('am', 'force-stop', self.package)
 
@@ -562,6 +580,48 @@ CHROME = 'com.android.chrome'
 CHROME_LAYER = 'com.android.chrome/ChromeChildSurface#0'
 # How long a page gets to download, compile and draw its first frame.
 PAGE_TIMEOUT_S = 120
+# The buttons Chrome's first run shows after its data is cleared, each tapped
+# when it is on the screen: the sign-in screen's "Stay signed out", which
+# accepts the terms. A tab's address bar shows that the run has ended.
+CHROME_WELCOME = ('com.android.chrome:id/signin_fre_dismiss_button',)
+CHROME_READY = 'com.android.chrome:id/url_bar'
+WELCOME_TIMEOUT_S = 40
+
+
+def view_center(screen, resource_id):
+    """The middle of the view with `resource_id` in a `Device.screen` dump."""
+    found = re.search(rf'resource-id="{re.escape(resource_id)}"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+                      screen)
+    if not found:
+        return None
+    left, top, right, bottom = map(int, found.groups())
+    return (left + right) // 2, (top + bottom) // 2
+
+
+def reset_chrome(device):
+    """Clears Chrome's data, its compiled GPU programs and its HTTP and code
+    caches among them, and passes the screens of its first run, so a page's
+    next launch is its first visit in Chrome as installed. Only clearing its
+    data empties the GPU program cache: DevTools' cache clearing and
+    `pm trim-caches` leave it."""
+    device.shell('am', 'force-stop', CHROME)
+    device.clear(CHROME)
+    device.shell('input', 'keyevent', 'KEYCODE_WAKEUP')
+    device.shell('am', 'start', '-a', 'android.intent.action.VIEW', '-d', 'about:blank',
+                 '-n', f'{CHROME}/com.google.android.apps.chrome.Main')
+    deadline = time.monotonic() + WELCOME_TIMEOUT_S
+    while time.monotonic() < deadline:
+        screen = device.screen()
+        if f'resource-id="{CHROME_READY}"' in screen:
+            device.shell('am', 'force-stop', CHROME)
+            return
+        for button in CHROME_WELCOME:
+            if center := view_center(screen, button):
+                device.shell('input', 'tap', *map(str, center))
+                break
+        time.sleep(1.0)
+    shown = sorted(set(re.findall(r'resource-id="(com\.android\.chrome:id/[\w.]+)"', device.screen())))
+    raise RuntimeError(f"Chrome's first run did not reach a tab; on the screen: {', '.join(shown)[:300]}")
 
 
 class PageTarget:
@@ -622,6 +682,10 @@ class PageTarget:
 
     def log(self, device):
         return '\n'.join(self.server.heard)
+
+    def reset(self, device):
+        """Leaves Chrome as its install did, for the page's first visit."""
+        reset_chrome(device)
 
     def stop(self, device):
         device.shell('am', 'force-stop', CHROME)

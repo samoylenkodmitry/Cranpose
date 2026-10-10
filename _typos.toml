@@ -29,6 +29,8 @@ extend-exclude = [
 ]
 
 [default.extend-words]
+# Chrome's first-run experience, in the ids of its views the benches tap.
+fre = "fre"
 trak = "trak"
 wdth = "wdth"
 # Mipmap level of detail, as in "explicit-LOD sampling".
