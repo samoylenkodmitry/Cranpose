@@ -26,7 +26,9 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent.parent / 'scripts'))
+# Its sibling modules and the shared scripts, also for a test that loads this
+# file by its path.
+sys.path[:0] = [str(HERE), str(HERE.parent.parent / 'scripts')]
 from android_robot_device import device_lock  # noqa: E402  (the shared per-device lock)
 from timelines import STARTS  # noqa: E402,F401  (the starts each round measures)
 APPS = {
