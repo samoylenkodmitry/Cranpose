@@ -246,14 +246,25 @@ pub fn renders_copy_free() -> bool {
 /// A renderer whose device does not map its vertex and table buffers, so
 /// its uploads take copies even on an integrated GPU.
 pub fn headless_renderer_copying_uploads() -> Result<LockedRenderer, String> {
-    headless_renderer_on(|| {
-        device::HeadlessDevice::request_without_features(
-            wgpu::Backends::all(),
-            wgpu::Limits::default(),
-            "Copied Upload Test Device",
-            wgpu::Features::MAPPABLE_PRIMARY_BUFFERS,
-        )
-    })
+    headless_renderer_on(copying_upload_device)
+}
+
+/// [`headless_renderer_copying_uploads`] without an app context, for a
+/// shell: its kept layer surfaces are copied out of their atlas, as off
+/// Metal.
+pub fn headless_renderer_parts_copying_uploads()
+-> Result<(MutexGuard<'static, ()>, WgpuRenderer), String> {
+    let lock = lock_gpu_test();
+    Ok((lock, inline_renderer(copying_upload_device()?)))
+}
+
+fn copying_upload_device() -> Result<device::HeadlessDevice, String> {
+    device::HeadlessDevice::request_without_features(
+        wgpu::Backends::all(),
+        wgpu::Limits::default(),
+        "Copied Upload Test Device",
+        wgpu::Features::MAPPABLE_PRIMARY_BUFFERS,
+    )
 }
 
 pub fn headless_renderer_without(flags: wgpu::DownlevelFlags) -> Result<LockedRenderer, String> {
@@ -273,14 +284,19 @@ fn headless_renderer_on(
     request: impl FnOnce() -> Result<device::HeadlessDevice, String>,
 ) -> Result<LockedRenderer, String> {
     let lock = lock_gpu_test();
-    let device = request()?;
+    let renderer = inline_renderer(request()?);
+    Ok(with_app_context(renderer, Some(lock)))
+}
+
+/// A renderer on `device` compiling every pipeline where first needed.
+fn inline_renderer(device: device::HeadlessDevice) -> WgpuRenderer {
     let mut renderer = WgpuRenderer::new(&[TEST_FONT]);
     device.attach(
         &mut renderer,
         wgpu::TextureFormat::Bgra8UnormSrgb,
         device::Pipelines::Inline,
     );
-    Ok(with_app_context(renderer, Some(lock)))
+    renderer
 }
 
 pub fn headless_renderer_unencoded() -> Result<LockedRenderer, String> {

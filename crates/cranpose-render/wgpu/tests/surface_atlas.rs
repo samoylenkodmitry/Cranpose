@@ -175,8 +175,9 @@ fn surfaces_at_different_scales_share_one_atlas_pass_and_draw_as_they_do_alone()
 }
 
 /// Tiles each composited through a surface of its own, `side` points square.
+/// The odd tiles take a shade of blue from `phase`.
 #[composable]
-fn Tiles(side: MutableState<f32>) {
+fn Tiles(side: MutableState<f32>, phase: MutableState<u32>) {
     Box(
         Modifier::empty()
             .size_points(WIDTH as f32, HEIGHT as f32)
@@ -185,6 +186,7 @@ fn Tiles(side: MutableState<f32>) {
         move || {
             for index in 0..6u8 {
                 let side = side.get();
+                let shade = if index % 2 == 1 { phase.get() % 8 } else { 0 };
                 Box(
                     Modifier::empty()
                         .offset(8.0 + f32::from(index) * 38.0, 20.0)
@@ -193,7 +195,12 @@ fn Tiles(side: MutableState<f32>) {
                             compositing_strategy: CompositingStrategy::Offscreen,
                             ..Default::default()
                         })
-                        .background(Color(0.15 * f32::from(index), 0.4, 0.8, 1.0))
+                        .background(Color(
+                            0.15 * f32::from(index),
+                            0.4,
+                            0.8 - 0.05 * shade as f32,
+                            1.0,
+                        ))
                         .rounded_corners(6.0),
                     BoxSpec::default(),
                     || {},
@@ -203,28 +210,36 @@ fn Tiles(side: MutableState<f32>) {
     );
 }
 
+/// The tiles' side and the odd tiles' phase.
+type TileStates = (MutableState<f32>, MutableState<u32>);
+
 fn tiles_shell(
     renderer: WgpuRenderer,
     side: f32,
     density: u32,
-) -> (AppShell<WgpuRenderer>, MutableState<f32>) {
-    let state: Rc<RefCell<Option<MutableState<f32>>>> = Rc::new(RefCell::new(None));
+) -> (AppShell<WgpuRenderer>, TileStates) {
+    let state: Rc<RefCell<Option<TileStates>>> = Rc::new(RefCell::new(None));
     let state_for_app = Rc::clone(&state);
     let mut shell = AppShell::new_with_size_and_density(
         renderer,
         location_key(file!(), line!(), column!()),
         move || {
             let side = cranpose_core::rememberMutableStateOf(|| side);
-            *state_for_app.borrow_mut() = Some(side);
-            Tiles(side);
+            let phase = cranpose_core::rememberMutableStateOf(|| 0u32);
+            *state_for_app.borrow_mut() = Some((side, phase));
+            Tiles(side, phase);
         },
         (WIDTH * density, HEIGHT * density),
         (WIDTH as f32, HEIGHT as f32),
         density as f32,
     );
     shell.update();
-    let side = state.borrow().as_ref().copied().expect("side captured");
-    (shell, side)
+    let states = state
+        .borrow()
+        .as_ref()
+        .copied()
+        .expect("tile states captured");
+    (shell, states)
 }
 
 /// Resizes the still tiles twice, checks the second resize draws what a
@@ -237,7 +252,7 @@ fn resize_tiles_twice(first: f32, second: f32) -> Option<(u32, u32)> {
         eprintln!("skipping (headless WGPU init failed)");
         return None;
     };
-    let (mut shell, side) = tiles_shell(renderer, 36.0, 1);
+    let (mut shell, (side, _)) = tiles_shell(renderer, 36.0, 1);
     support::settle(|| support::update_and_capture(&mut shell, WIDTH, HEIGHT));
     support::wait_for_background_compiler_idle();
     shell.debug_enter_app_context(|| side.set(first));
@@ -333,6 +348,46 @@ fn kept_atlas_surfaces_are_read_in_place_without_copies() {
     support::assert_same_bytes("kept tiles", WIDTH, &reference.pixels, &kept.pixels);
 }
 
+/// The odd tiles change every frame from the third on, as a starting
+/// screen's animations do: a renderer that copies kept surfaces out of the
+/// shared atlas copies none of them out, since the second frame repeated
+/// the first, and keeps the still tiles once they held still for two frames
+/// after their first.
+#[test]
+fn a_starting_screens_animated_atlas_members_take_no_copies() {
+    const FRAMES: u32 = 8;
+    let Ok((_lock, renderer)) = support::headless_renderer_parts_copying_uploads() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    let (mut shell, (_, phase)) = tiles_shell(renderer, 30.0, 1);
+    let mut copies = Vec::new();
+    let mut last = None;
+    for frame in 0..FRAMES {
+        if frame >= 2 {
+            shell.debug_enter_app_context(|| phase.set(frame));
+        }
+        let (stats, _) = support::update_and_capture(&mut shell, WIDTH, HEIGHT);
+        assert!(
+            support::pipelines_settled(&stats),
+            "frame {frame} drew with stand-in pipelines: {stats:?}"
+        );
+        copies.push(stats.copy_count);
+        last = Some(stats);
+    }
+    assert_eq!(
+        copies,
+        [0, 0, 3, 0, 0, 0, 0, 0],
+        "the three still tiles are copied out once, on their third frame"
+    );
+    let last = last.expect("frames rendered");
+    assert_eq!(
+        last.layer_cache_hits, 3,
+        "the still tiles draw from the cache"
+    );
+    assert_eq!(last.isolated_layer_renders, 3, "the changing tiles render");
+}
+
 /// A host that builds its shell at a density and sets nothing more, as a
 /// headless bench or an embedder does, gets surfaces rasterized at that
 /// density, as on a device: the first tile, 30 points wide from x = 8, ends
@@ -346,7 +401,7 @@ fn a_shell_built_at_a_density_rasterizes_its_surfaces_at_that_density() {
         return;
     };
     let (width, height) = (WIDTH * DENSITY, HEIGHT * DENSITY);
-    let (mut shell, side) = tiles_shell(renderer, 36.0, DENSITY);
+    let (mut shell, (side, _)) = tiles_shell(renderer, 36.0, DENSITY);
     support::settle(|| support::update_and_capture(&mut shell, width, height));
     support::wait_for_background_compiler_idle();
     shell.debug_enter_app_context(|| side.set(30.0));

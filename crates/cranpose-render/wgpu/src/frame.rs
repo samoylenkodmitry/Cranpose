@@ -1917,10 +1917,13 @@ const SURFACE_ATLAS_SLACK: u64 = 4;
 /// and the WebGL page held a texture and a depth buffer for each: 20 MiB
 /// for 0.5 MP of surfaces.
 ///
-/// A new size takes one padding step more on each side where the GPU memory
-/// a process holds stays at its peak, so the next busier frame fits. Metal
-/// takes a dropped texture's memory back, so there a new size is the size
-/// asked for.
+/// A new size takes one padding step more in height where the GPU memory a
+/// process holds stays at its peak, so the next busier frame fits: its
+/// members pack into the atlas's width and add shelves below. A step on
+/// each side drew the Mate 20 X gauntlet's tier 12 frames, which need at
+/// most 1280 by 1352 pixels, into a 1536-pixel square. Metal takes a
+/// dropped texture's memory back, so there a new size is the size asked
+/// for.
 pub(crate) struct SurfaceAtlasSizes {
     current: Option<(u32, u32)>,
     need_width: crate::idle_pool::RecentPeak,
@@ -1978,10 +1981,7 @@ impl SurfaceAtlasSizes {
 
     fn grown(&self, size: (u32, u32), limit: u32) -> (u32, u32) {
         if self.step_ahead {
-            (
-                padded_dimension(size.0.saturating_add(1), limit),
-                padded_dimension(size.1.saturating_add(1), limit),
-            )
+            (size.0, padded_dimension(size.1.saturating_add(1), limit))
         } else {
             size
         }
@@ -2151,6 +2151,27 @@ impl AdmissionGate {
             AdmissionCost::Copy {
                 patience: 0,
                 floor: 0,
+                ceiling: MAX_ADMISSION_PATIENCE,
+            },
+        )
+    }
+
+    /// A gate for a member of a shared atlas, whose kept surface is copied
+    /// out of it: kept once its content has held still for two frames after
+    /// its first. A screen's second frame repeats its first, since a
+    /// frame-clock animation takes its start time there, so content seen
+    /// alike on both has not yet shown whether it moves. Kept on its first
+    /// or second sight, every member of a starting screen took a copy and a
+    /// texture of its own that the next frame left unread wherever the
+    /// member animated: the Mate 20 X gauntlet copied 96 cards at tier 12
+    /// for the 14 that held still, and its GPU allocator held 3 to 8 MB
+    /// more for as long as it ran.
+    fn copied_out_of_atlas(key: LayerRasterCacheKey) -> Self {
+        Self::with_cost(
+            key,
+            AdmissionCost::Copy {
+                patience: 2,
+                floor: 1,
                 ceiling: MAX_ADMISSION_PATIENCE,
             },
         )
@@ -4741,11 +4762,13 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 continue;
             };
             // A member rendered with the others lands in an atlas: a kept
-            // one is read there in place or copied out of it.
+            // one is read there in place copy-free, else copied out of it.
             let gate = if in_place {
                 AdmissionGate::drawn_in_place
-            } else {
+            } else if self.renderer.copy_free == UploadMode::Mapped {
                 AdmissionGate::rendered
+            } else {
+                AdmissionGate::copied_out_of_atlas
             };
             resolved[index] = match self.source_decision(child, &plan, gate) {
                 SourceDecision::Cached(surface) => Some(Resolved::Surface(Some(surface))),
