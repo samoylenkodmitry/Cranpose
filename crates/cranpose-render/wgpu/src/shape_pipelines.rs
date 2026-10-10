@@ -130,6 +130,28 @@ impl ShapePipelines {
     }
 }
 
+/// The shape pipelines a stretch of draws needs, each with the vertices
+/// its draws run through: a pass gathers them as it batches its runs and
+/// prepares each once before it records its draws, instead of looking every
+/// run's keys up as it goes.
+#[derive(Default)]
+pub(crate) struct PipelineDemand(SmallVec<[(ShapePipelineKey, u64); 8]>);
+
+impl PipelineDemand {
+    /// Adds `vertices` drawn with `key`.
+    pub(crate) fn add(&mut self, key: ShapePipelineKey, vertices: u64) {
+        match self.0.iter_mut().find(|(wanted, _)| *wanted == key) {
+            Some((_, total)) => *total += vertices,
+            None => self.0.push((key, vertices)),
+        }
+    }
+
+    /// Each key with its vertices, leaving the demand empty.
+    pub(crate) fn drain(&mut self) -> impl Iterator<Item = (ShapePipelineKey, u64)> + '_ {
+        self.0.drain(..)
+    }
+}
+
 /// What a draw's first look at a key found.
 pub(crate) struct Need {
     /// Its value is built.
@@ -154,7 +176,7 @@ pub(crate) struct Slots<B: KeyedBuild> {
     entries: HashMap<ShapePipelineKey, Entry<B::Output>>,
     builder: Arc<B>,
     compiler: PipelineCompiler,
-    wanted: SmallVec<[(ShapePipelineKey, u64); 4]>,
+    wanted: PipelineDemand,
     demand: Arc<Demand<B::Output>>,
     published: bool,
     stopped: Arc<AtomicBool>,
@@ -201,7 +223,7 @@ impl<B: KeyedBuild> Slots<B> {
             entries: HashMap::default(),
             builder: Arc::new(builder),
             compiler: compiler.clone(),
-            wanted: SmallVec::new(),
+            wanted: PipelineDemand::default(),
             demand: Arc::new(Demand {
                 wanted: Mutex::new(SmallVec::new()),
                 jobs: AtomicUsize::new(0),
@@ -268,19 +290,16 @@ impl<B: KeyedBuild> Slots<B> {
     }
 
     pub(crate) fn want(&mut self, key: ShapePipelineKey, vertices: u64) {
-        match self.wanted.iter_mut().find(|(wanted, _)| *wanted == key) {
-            Some((_, total)) => *total += vertices,
-            None => self.wanted.push((key, vertices)),
-        }
+        self.wanted.add(key, vertices);
     }
 
     /// Forgets the wants of a frame that ended before queuing them.
     pub(crate) fn begin_frame(&mut self) {
-        self.wanted.clear();
+        self.wanted.0.clear();
     }
 
     pub(crate) fn request_wanted(&mut self) {
-        if self.wanted.is_empty() && !self.published {
+        if self.wanted.0.is_empty() && !self.published {
             return;
         }
         let entries = &mut self.entries;
@@ -290,7 +309,7 @@ impl<B: KeyedBuild> Slots<B> {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         published.clear();
-        for (key, vertices) in self.wanted.drain(..) {
+        for (key, vertices) in self.wanted.drain() {
             let value = &Self::entry(entries, key).value;
             if value.get().is_none() {
                 published.push(Wanted {

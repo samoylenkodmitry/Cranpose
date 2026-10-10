@@ -119,6 +119,40 @@ fn device_coordinate_canonicalization_absorbs_half_pixel_float_noise() {
 }
 
 #[test]
+fn device_coordinate_canonicalization_matches_the_f64_snap_everywhere() {
+    let snapped_in_f64 = |value: f32| ((f64::from(value) * 16.0).round() / 16.0) as f32;
+    let mut values = vec![
+        0.0,
+        -0.0,
+        0.031_25,
+        -0.031_25,
+        0.093_75,
+        f32::MIN_POSITIVE,
+        f32::MAX,
+        f32::MAX / 16.0,
+        -f32::MAX / 15.0,
+        (1u32 << 19) as f32 + 0.031_25,
+        (1u32 << 20) as f32 + 0.5,
+        (1u32 << 24) as f32 + 2.0,
+    ];
+    let mut bits = 0x3f80_0000_u32;
+    for _ in 0..200_000 {
+        bits = bits.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let value = f32::from_bits(bits);
+        if value.is_finite() {
+            values.push(value);
+        }
+    }
+    for value in values {
+        assert_eq!(
+            canonicalize_device_coordinate(value).to_bits(),
+            snapped_in_f64(value).to_bits(),
+            "{value:e}"
+        );
+    }
+}
+
+#[test]
 fn scaled_geometry_canonicalization_preserves_edges_and_quad_topology() {
     let rect = Rect {
         x: 10.000_02,

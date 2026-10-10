@@ -78,7 +78,7 @@ fn run_quads<'a>(
     GlyphRunQuads {
         glyphs,
         entries: &run.1,
-        atlas_size: renderer.text_glyph_atlas.size(),
+        texel: renderer.text_glyph_atlas.texel(),
         bounds: GlyphRunBounds::of(run.0),
     }
 }
@@ -129,7 +129,7 @@ fn draw_queued(renderer: &mut GpuRenderer, commands: &[GlyphDrawCmd]) -> wgpu::T
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
         );
         renderer.draw_glyph_cmds(
-            &mut pass,
+            &mut crate::draw_pass::TrackedPass::new(&mut pass),
             (None, None),
             0,
             commands,
@@ -581,7 +581,7 @@ fn push_label(scene: &mut CompositorScene, x: f32, color: Color) {
             width: 30.0,
             height: 24.0,
         },
-        cranpose_ui::text::shared_plain_render_string("MM"),
+        DrawnText::of(cranpose_ui::text::shared_plain_render_string("MM"), &style),
         color,
         {
             let hash = style.render_hash();
@@ -780,7 +780,7 @@ fn a_runs_quads_are_derived_from_its_glyphs_and_atlas_entries() {
     let run = (glyphs, entries);
     let glyphs = run_glyphs(&run);
     let quads = run_quads(&renderer, &glyphs, &run);
-    let atlas_size = renderer.text_glyph_atlas.size();
+    let texel = renderer.text_glyph_atlas.texel();
 
     let derived: Vec<_> = quads.iter().collect();
 
@@ -788,7 +788,7 @@ fn a_runs_quads_are_derived_from_its_glyphs_and_atlas_entries() {
     let [quad] = derived.as_slice() else {
         panic!("one glyph derives one quad");
     };
-    let expected = cached_text_glyph_quad(&run.0[0], run.1[0], atlas_size);
+    let expected = cached_text_glyph_quad(&run.0[0], run.1[0], texel);
     assert_eq!((quad.x, quad.y, quad.width, quad.height), (3, 0, 2, 2));
     assert_eq!(quad.color, (1.0, 0.5, 0.0, 1.0), "colour is clamped");
     assert_eq!(quad.uv.min, expected.uv.min);

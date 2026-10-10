@@ -76,11 +76,16 @@ pub(crate) fn scaled_quad(quad: [[f32; 2]; 4], scale: f32) -> [[f32; 2]; 4] {
 }
 
 pub(crate) fn canonicalize_device_coordinate(value: f32) -> f32 {
-    if !value.is_finite() {
+    // The step is a power of two: scaling by it and back is exact in `f32`,
+    // and the scaled value rounds exactly through `f64`, so this is the
+    // `f64` snap's value, without its multiply and divide, for every value
+    // whose scaled form is finite.
+    let steps = DEVICE_SNAP_SUBPIXEL_STEPS as f32;
+    let scaled = value * steps;
+    if !scaled.is_finite() {
         return value;
     }
-    (round_half_away(f64::from(value) * DEVICE_SNAP_SUBPIXEL_STEPS) / DEVICE_SNAP_SUBPIXEL_STEPS)
-        as f32
+    round_half_away(f64::from(scaled)) as f32 / steps
 }
 
 #[cfg(target_arch = "wasm32")]

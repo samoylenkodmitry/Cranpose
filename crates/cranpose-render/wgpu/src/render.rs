@@ -37,7 +37,10 @@ use crate::{
     arc_trig_fill::ArcTrigFill,
     collect::LayerScene,
     debug_toggles::DebugToggle,
-    draw_pass::{PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SourceContent},
+    draw_pass::{
+        PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SourceContent,
+        TrackedPass,
+    },
     effect_renderer::{CompositeSampleMode, EffectRenderer, RoundedCompositeMask},
     fixed_pipeline::FixedPipeline,
     frame::{AdmissionGate, FrameExecutor, StageSideScratch},
@@ -66,10 +69,11 @@ use crate::{
     rrect_shadow::{SHADOW_QUAD_CORNERS, ShadowInstance, create_rrect_shadow_pipeline},
     run_store::{ArenaBinding, PlacementData, RunBufferMode, RunDrawCall, RunStore, StoredTables},
     scene::{
-        CompositorScene, DrawOp, DrawOpKind, ImageDraw, RunDraw, ShadowDraw, SnapAnchor, TextDraw,
+        CompositorScene, DrawOp, DrawOpKind, DrawnText, ImageDraw, RunDraw, ShadowDraw, SnapAnchor,
+        TextDraw,
     },
     shaders,
-    shape_pipelines::{ShapePipelineFactory, ShapePipelines},
+    shape_pipelines::{PipelineDemand, ShapePipelineFactory, ShapePipelines},
     shared_shader::SharedShader,
 };
 const MAX_SHADOW_SURFACE_CACHE_ITEMS: usize = 512;
@@ -354,7 +358,9 @@ struct CachedTextGlyphRun {
 struct GlyphRunQuads<'a> {
     glyphs: &'a RunGlyphs,
     entries: &'a [GlyphAtlasEntry],
-    atlas_size: u32,
+    /// One atlas texel's share of the atlas side: see
+    /// [`TextGlyphAtlas::texel`].
+    texel: f32,
     bounds: GlyphRunBounds,
 }
 
@@ -434,13 +440,13 @@ fn log_text_atlas_fallback(text_draw: &TextDraw) {
     if !text_atlas_fallback_diag_enabled() {
         return;
     }
-    let preview: String = text_draw.text.text().chars().take(96).collect();
+    let preview: String = text_draw.text.string().text().chars().take(96).collect();
     log::warn!(
         "[text-atlas-fallback] node={:?} spans={} links={} text_len={} preview={:?} span_style={:?} paragraph_style={:?}",
         text_draw.node_id,
-        text_draw.text.span_styles().len(),
-        text_draw.text.links().len(),
-        text_draw.text.text().len(),
+        text_draw.text.string().span_styles().len(),
+        text_draw.text.string().links().len(),
+        text_draw.text.string().text().len(),
         preview,
         text_draw.text_style.span_style,
         text_draw.text_style.paragraph_style,
@@ -456,7 +462,7 @@ impl GlyphRunQuads<'_> {
         self.glyphs
             .iter()
             .zip(self.entries)
-            .map(|(glyph, entry)| cached_text_glyph_quad(&glyph, *entry, self.atlas_size))
+            .map(|(glyph, entry)| cached_text_glyph_quad(&glyph, *entry, self.texel))
     }
 }
 
@@ -612,14 +618,7 @@ pub(crate) fn hash_text_gradient_phase_for_cache<H: Hasher>(
     raster_rect: Rect,
     state: &mut H,
 ) {
-    if std::iter::once(&text_draw.text_style.span_style)
-        .chain(text_draw.text.span_styles().iter().map(|span| &span.item))
-        .any(|span| {
-            span.brush
-                .as_ref()
-                .is_some_and(|brush| !matches!(brush, cranpose_ui_graphics::Brush::Solid(_)))
-        })
-    {
+    if text_draw.text.gradient() {
         for coordinate in [raster_rect.x, raster_rect.y] {
             let phase = if coordinate >= 0.0 {
                 coordinate.rem_euclid(4.0)
@@ -631,7 +630,12 @@ pub(crate) fn hash_text_gradient_phase_for_cache<H: Hasher>(
     }
 }
 
-fn text_logical_geometry_for_draw(text_draw: &TextDraw, root_scale: f32) -> Option<(Rect, f32)> {
+/// Where a text draws in the scene, snapped, and the scale its glyphs
+/// raster at; `None` for a text that draws nothing.
+pub(crate) fn text_logical_geometry_for_draw(
+    text_draw: &TextDraw,
+    root_scale: f32,
+) -> Option<(Rect, f32)> {
     if text_draw.text.is_empty()
         || text_draw.rect.width <= 0.0
         || text_draw.rect.height <= 0.0
@@ -658,13 +662,18 @@ pub(crate) fn text_raster_geometry_for_draw(
     text_draw: &TextDraw,
     root_scale: f32,
 ) -> Option<(Rect, Rect, Option<Rect>, f32, bool)> {
-    let (logical_rect, text_scale) = text_logical_geometry_for_draw(text_draw, root_scale)?;
-    let static_text_motion = text_draw
-        .text_style
-        .paragraph_style
-        .text_motion
-        .unwrap_or(cranpose_ui::text::TextMotion::Static)
-        == cranpose_ui::text::TextMotion::Static;
+    text_logical_geometry_for_draw(text_draw, root_scale)
+        .map(|logical| text_raster_geometry_at(text_draw, logical, root_scale))
+}
+
+/// The raster geometry of a text whose logical geometry is
+/// `(logical_rect, text_scale)`: see [`text_raster_geometry_for_draw`].
+fn text_raster_geometry_at(
+    text_draw: &TextDraw,
+    (logical_rect, text_scale): (Rect, f32),
+    root_scale: f32,
+) -> (Rect, Rect, Option<Rect>, f32, bool) {
+    let static_text_motion = text_draw.text.static_motion();
     let clip = text_draw.clip;
     let mut raster_rect = Rect {
         x: logical_rect.x * root_scale,
@@ -682,13 +691,13 @@ pub(crate) fn text_raster_geometry_for_draw(
     }
     raster_rect.width = raster_rect.width.ceil().max(1.0);
     raster_rect.height = raster_rect.height.ceil().max(1.0);
-    Some((
+    (
         logical_rect,
         raster_rect,
         clip,
         text_scale,
         static_text_motion,
-    ))
+    )
 }
 
 fn text_draw_is_visible_in_viewport(
@@ -769,27 +778,23 @@ pub(crate) fn run_draw_bounds(run: &RunDraw, root_scale: f32) -> Option<Rect> {
     )
 }
 
-pub(crate) fn text_draw_is_visible_in_rect(
+/// The logical geometry of `text` (see [`text_logical_geometry_for_draw`])
+/// when it draws any pixel inside `viewport_rect`.
+pub(crate) fn text_draw_geometry_in_rect(
     text: &TextDraw,
     viewport_rect: Rect,
     root_scale: f32,
-) -> bool {
-    text_draw_bounds(text, root_scale)
-        .is_some_and(|bounds| bounds.intersect(viewport_rect).is_some())
-}
-
-pub(crate) fn run_draw_is_visible_in_rect(
-    run: &RunDraw,
-    viewport_rect: Rect,
-    root_scale: f32,
-) -> bool {
-    run_draw_bounds(run, root_scale).is_some_and(|bounds| bounds.intersect(viewport_rect).is_some())
+) -> Option<(Rect, f32)> {
+    text_logical_geometry_for_draw(text, root_scale).filter(|(logical_rect, _)| {
+        clipped_bounds(*logical_rect, text.clip)
+            .is_some_and(|bounds| bounds.intersect(viewport_rect).is_some())
+    })
 }
 
 fn cached_text_glyph_quad(
     glyph: &SoftwareGlyphAtlasPlacement,
     entry: GlyphAtlasEntry,
-    atlas_size: u32,
+    texel: f32,
 ) -> CachedTextGlyphQuad {
     CachedTextGlyphQuad {
         x: glyph.x,
@@ -802,7 +807,7 @@ fn cached_text_glyph_quad(
             glyph.color.2.clamp(0.0, 1.0),
             glyph.color.3.clamp(0.0, 1.0),
         ),
-        uv: glyph_atlas_uv_rect(entry, atlas_size),
+        uv: glyph_atlas_uv_rect(entry, texel),
     }
 }
 
@@ -2327,8 +2332,13 @@ impl TextGlyphAtlas {
         samplers: GlyphSamplers<'_>,
         size: u32,
     ) -> Self {
-        let max_size = TEXT_GLYPH_ATLAS_MAX_SIZE.min(device.limits().max_texture_dimension_2d);
-        let size = size.clamp(TEXT_GLYPH_ATLAS_MIN_SIZE.min(max_size), max_size);
+        // The side stays a power of two, whose texel is exact: see
+        // [`TextGlyphAtlas::texel`].
+        let device_max = device.limits().max_texture_dimension_2d.max(1);
+        let max_size = TEXT_GLYPH_ATLAS_MAX_SIZE.min(1 << device_max.ilog2());
+        let size = size
+            .next_power_of_two()
+            .clamp(TEXT_GLYPH_ATLAS_MIN_SIZE.min(max_size), max_size);
         let texture = Self::create_texture(device, size);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind = |label: &'static str, sampler: &wgpu::Sampler| {
@@ -2412,6 +2422,13 @@ impl TextGlyphAtlas {
 
     fn size(&self) -> u32 {
         self.size
+    }
+
+    /// One texel's share of the atlas side. The side is a power of two, so
+    /// this reciprocal is exact and a coordinate times it is the coordinate
+    /// divided by the side: a glyph's quad takes eight of them.
+    fn texel(&self) -> f32 {
+        (self.size() as f32).recip()
     }
 
     fn entry(&mut self, key: &GlyphAtlasSlotKey) -> Option<GlyphAtlasEntry> {
@@ -2756,6 +2773,48 @@ pub(crate) fn movable_glyph_kind<T>(
     })
 }
 
+/// Moves a glyph batch's retained runs after its shared quads, each in its
+/// order, when no run shares a pixel with a shared draw after it: the
+/// shared quads around a run, which follow each other in the frame's
+/// buffer, then draw at once. A card's body text, a retained run between
+/// its title and its labels, split them into two draws. Returns how many
+/// shared draws lead the batch, none when its runs keep their places;
+/// `moved` is scratch.
+pub(crate) fn defer_retained_glyph_runs(
+    cmds: &mut [GlyphDrawCmd],
+    moved: &mut Vec<GlyphDrawCmd>,
+) -> usize {
+    let retained = |cmd: &GlyphDrawCmd| cmd.turned().is_none();
+    let shared = cmds.iter().filter(|cmd| !retained(cmd)).count();
+    if cmds[..shared].iter().all(|cmd| !retained(cmd)) {
+        return shared;
+    }
+    let deferrable = cmds.iter().enumerate().all(|(index, cmd)| {
+        !retained(cmd)
+            || cmds[index + 1..].iter().all(|later| {
+                retained(later)
+                    || !crate::draw_pass::target_rects_overlap(cmd.bounds(), later.bounds())
+            })
+    });
+    if !deferrable {
+        return 0;
+    }
+    moved.clear();
+    let mut kept = 0;
+    for read in 0..cmds.len() {
+        if retained(&cmds[read]) {
+            moved.push(cmds[read].clone());
+        } else {
+            cmds.swap(kept, read);
+            kept += 1;
+        }
+    }
+    for (slot, cmd) in cmds[kept..].iter_mut().zip(moved.drain(..)) {
+        *slot = cmd;
+    }
+    shared
+}
+
 /// Moves a glyph batch's draws of the kind [`movable_glyph_kind`] picks
 /// after those of the other kind, each kind in its order, so each draws
 /// once instead of once per change between them. `moved` is scratch.
@@ -2850,7 +2909,7 @@ impl ViewportUniforms {
         slot
     }
 
-    fn bind(&self, pass: &mut wgpu::RenderPass<'_>, slot: usize) -> Result<(), String> {
+    fn bind(&self, pass: &mut TrackedPass<'_, '_>, slot: usize) -> Result<(), String> {
         let uniform = self
             .slots
             .get(slot)
@@ -3096,6 +3155,8 @@ pub struct GpuRenderer {
     pub(crate) scratch_glyph_moved: Vec<GlyphDrawCmd>,
     pub(crate) scratch_shadow_instances: Vec<ShadowInstance>,
     pub(crate) scratch_arena_draws: Vec<RunDrawCall>,
+    pub(crate) scratch_pipelines: PipelineDemand,
+    pub(crate) scratch_held: crate::draw_pass::HeldDraws,
     scratch_text_glyph_run: Vec<SoftwareGlyphAtlasRunGlyph>,
     scratch_text_glyph_entries: Vec<GlyphAtlasEntry>,
     run_glyph_scratch: RunGlyphScratch,
@@ -3468,6 +3529,8 @@ impl GpuRenderer {
             scratch_glyph_moved: Vec::new(),
             scratch_shadow_instances: Vec::new(),
             scratch_arena_draws: Vec::new(),
+            scratch_pipelines: PipelineDemand::default(),
+            scratch_held: crate::draw_pass::HeldDraws::default(),
             scratch_text_glyph_run: Vec::new(),
             scratch_text_glyph_entries: Vec::new(),
             run_glyph_scratch: RunGlyphScratch::default(),
@@ -3698,7 +3761,7 @@ impl GpuRenderer {
     /// `uniform_slot` under `scissor`.
     pub(crate) fn draw_shadow_instances(
         &self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut TrackedPass<'_, '_>,
         buffer: &BufferUpload,
         uniform_slot: usize,
         instances: std::ops::Range<u32>,
@@ -5092,17 +5155,20 @@ impl GpuRenderer {
         }
     }
 
-    /// Prepares `key`'s pipeline and, in a pass with a depth buffer, the
-    /// one laying down its opaque interiors.
-    fn ensure_run_pipelines(&mut self, key: ShapePipelineKey, vertices: u64) {
-        self.ensure_shape_pipeline(key, vertices);
-        if let Some(interior) = key.interior() {
-            self.ensure_shape_pipeline(interior, vertices);
+    /// Prepares the pipeline of each key `pipelines` holds and, in a pass
+    /// with a depth buffer, the one laying down its opaque interiors.
+    pub(crate) fn ensure_run_pipelines(&mut self, pipelines: &mut PipelineDemand) {
+        for (key, vertices) in pipelines.drain() {
+            self.ensure_shape_pipeline(key, vertices);
+            if let Some(interior) = key.interior() {
+                self.ensure_shape_pipeline(interior, vertices);
+            }
         }
     }
 
     /// Brings a stored run's tables up to date and appends its draws, under
-    /// a placement uniform of its own, to the pass's run draws `draws`.
+    /// a placement uniform of its own, to the pass's run draws `draws`, and
+    /// the pipelines they draw with to `pipelines`.
     #[expect(clippy::too_many_arguments)]
     pub(crate) fn prepare_store_run<C: FrameCommandRecorder>(
         &mut self,
@@ -5112,7 +5178,7 @@ impl GpuRenderer {
         root_scale: f32,
         window: &std::ops::Range<u32>,
         depth: bool,
-        draws: &mut Vec<RunDrawCall>,
+        (draws, pipelines): (&mut Vec<RunDrawCall>, &mut PipelineDemand),
     ) -> StoreRunBatch {
         let placement = &run.placement;
         let ablation = self.ablation.shape;
@@ -5167,7 +5233,7 @@ impl GpuRenderer {
             self.viewport_uniforms
                 .claim(&self.device, &self.uniform_bind_group_layout, &uniforms);
         for draw in run_draws {
-            self.ensure_run_pipelines(
+            pipelines.add(
                 draw.key,
                 crate::run_store::draw_vertices(
                     draw.records.end - draw.records.start,
@@ -5198,11 +5264,11 @@ impl GpuRenderer {
 
     /// Appends `window` of `run`'s records to the open arena chunk, their
     /// placement under `turn`, keyed for a pass whose flat and turned
-    /// records alternate often when `mixed_turns`.
+    /// records alternate often when `mixed_turns`, and the pipelines they
+    /// draw with to `pipelines`. `clip` says how its variant tests its clip:
+    /// an unturned run leaves a rect clip to its paint's scissor, never a
+    /// rounded one.
     #[expect(clippy::too_many_arguments)]
-    /// Appends `run`'s records at `window` to the open arena chunk. `clip`
-    /// says how its variant tests its clip: an unturned run leaves a rect
-    /// clip to its paint's scissor, never a rounded one.
     pub(crate) fn append_arena_run(
         &mut self,
         chunk: usize,
@@ -5212,13 +5278,13 @@ impl GpuRenderer {
         viewport: ViewportUniformParams,
         mixed_turns: bool,
         (depth, clip): (bool, SegmentClip),
+        pipelines: &mut PipelineDemand,
     ) -> u32 {
         let placement = &run.placement;
         let ablation = self.ablation.shape;
         let turn = viewport.transform;
         let turns = ShapeTurns::of(turn, mixed_turns);
-        let mut keys: SmallVec<[(ShapePipelineKey, u64); 4]> = SmallVec::new();
-        let taken = self.run_store.append_arena(
+        self.run_store.append_arena(
             chunk,
             run,
             window,
@@ -5234,12 +5300,8 @@ impl GpuRenderer {
                     viewport,
                 )
             },
-            &mut keys,
-        );
-        for (key, vertices) in keys {
-            self.ensure_run_pipelines(key, vertices);
-        }
-        taken
+            pipelines,
+        )
     }
 
     /// Moves the open chunk's draws since its last cut onto `out`, keeping
@@ -5258,7 +5320,7 @@ impl GpuRenderer {
 
     pub(crate) fn draw_run_calls(
         &self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut TrackedPass<'_, '_>,
         tables: ArenaBinding<'_>,
         uniform_slot: usize,
         draws: &[RunDrawCall],
@@ -5295,7 +5357,7 @@ impl GpuRenderer {
     /// Records `planned` against one batch's tables, uniform and scissor.
     fn record_run_draws(
         &self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut TrackedPass<'_, '_>,
         tables: ArenaBinding<'_>,
         uniform_slot: usize,
         scissor: (u32, u32, u32, u32),
@@ -5326,10 +5388,7 @@ impl GpuRenderer {
                     .set(self.frame_stats.shape_specialized_draws.get() + 1);
             }
             if bound_class != Some(draw.band_class) {
-                pass.set_index_buffer(
-                    self.run_store.strip_index_buffer(draw.band_class).slice(..),
-                    wgpu::IndexFormat::Uint32,
-                );
+                pass.set_index_buffer(self.run_store.strip_index_buffer(draw.band_class).slice(..));
                 bound_class = Some(draw.band_class);
             }
             pass.set_pipeline(pipeline);
@@ -5341,7 +5400,7 @@ impl GpuRenderer {
     /// Draws a stored-run batch, whose draws are its range of `draws`.
     pub(crate) fn draw_store_run(
         &self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut TrackedPass<'_, '_>,
         batch: &StoreRunBatch,
         draws: &[RunDrawCall],
         scissor: (u32, u32, u32, u32),
@@ -5359,7 +5418,7 @@ impl GpuRenderer {
 
     pub(crate) fn draw_arena(
         &self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut TrackedPass<'_, '_>,
         chunk: usize,
         uniform_slot: usize,
         draws: &[RunDrawCall],
@@ -5408,7 +5467,7 @@ impl GpuRenderer {
     }
     pub(crate) fn draw_image_cmds(
         &self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut TrackedPass<'_, '_>,
         image_slot: &ImageSlot,
         uniform_slot: usize,
         cmds: &[ImageDrawCmd],
@@ -5422,7 +5481,7 @@ impl GpuRenderer {
         self.frame_stats.add_draw_calls(cmds.len() as u32);
         let mut bound_pipeline = None;
         self.viewport_uniforms.bind(pass, uniform_slot)?;
-        pass.set_index_buffer(image_slot.indices.slice(), wgpu::IndexFormat::Uint32);
+        pass.set_index_buffer(image_slot.indices.slice());
         pass.set_vertex_buffer(0, image_slot.vertices.slice());
         let mut clips_bound = false;
         for cmd in cmds {
@@ -5465,7 +5524,7 @@ impl GpuRenderer {
 
     pub(crate) fn draw_glyph_cmds(
         &self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut TrackedPass<'_, '_>,
         (glyph_slot, turned_slot): (Option<&BufferUpload>, Option<&BufferUpload>),
         uniform_slot: usize,
         cmds: &[GlyphDrawCmd],
@@ -5947,28 +6006,23 @@ impl GpuRenderer {
         );
         true
     }
-    /// Appends the glyph atlas draws of `text_draw` if `viewport` shows it.
+    /// Appends the glyph atlas draws of `text_draw`, whose logical geometry
+    /// `logical` the caller found drawing into a rect `viewport` shows.
     /// `false` when the text cannot draw from the atlas (animated motion, or
     /// a run the atlas cannot hold): nothing was appended, and the caller
     /// draws the text as a rasterized image instead.
     pub(crate) fn append_text_glyph_draws(
         &mut self,
-        text_draw: &TextDraw,
+        (text_draw, logical): (&TextDraw, (Rect, f32)),
         viewport: ViewportUniformParams,
         root_scale: f32,
         glyph_instances: &mut GlyphInstances,
         glyph_cmds: &mut Vec<GlyphDrawCmd>,
     ) -> bool {
-        let Some((logical_rect, raster_rect, clip, text_scale, static_text_motion)) =
-            self.text_raster_geometry(text_draw, root_scale)
-        else {
-            return true;
-        };
+        let (_, raster_rect, _, text_scale, static_text_motion) =
+            text_raster_geometry_at(text_draw, logical, root_scale);
         if !static_text_motion {
             return false;
-        }
-        if !text_draw_is_visible_in_viewport(logical_rect, clip, viewport, root_scale) {
-            return true;
         }
         let run_key = Self::text_glyph_run_cache_key(text_draw, raster_rect, text_scale);
         let mut collected_run = std::mem::take(&mut self.scratch_text_glyph_run);
@@ -6033,7 +6087,7 @@ impl GpuRenderer {
         }
         collected_run.clear();
         if collect_solid_text_atlas_run(
-            text_draw.text.as_ref(),
+            text_draw.text.string().as_ref(),
             raster_rect,
             &text_draw.text_style,
             text_draw.color,
@@ -6116,7 +6170,7 @@ impl GpuRenderer {
         else {
             return true;
         };
-        let atlas_size = self.text_glyph_atlas.size();
+        let texel = self.text_glyph_atlas.texel();
 
         // A retained run's quads are uploaded whole: under a turn only the
         // shared path cuts them to a clip.
@@ -6129,7 +6183,7 @@ impl GpuRenderer {
                 GlyphRunQuads {
                     glyphs: &run.glyphs,
                     entries,
-                    atlas_size,
+                    texel,
                     bounds: run.bounds,
                 },
                 viewport,
@@ -6161,7 +6215,7 @@ impl GpuRenderer {
         let quads = GlyphRunQuads {
             glyphs: &run.glyphs,
             entries: &entries,
-            atlas_size: self.text_glyph_atlas.size(),
+            texel: self.text_glyph_atlas.texel(),
             bounds: run.bounds,
         };
         let cut = glyph_cut_edges(text_draw.clip, scissor, viewport, root_scale);
@@ -6289,7 +6343,7 @@ impl GpuRenderer {
         );
         let source_draw = raster_source.draw.as_ref();
         let source_raster_rect = raster_source.raster_rect;
-        let source_origin = if source_draw.text.span_styles().is_empty() {
+        let source_origin = if source_draw.text.string().span_styles().is_empty() {
             Point::new(source_raster_rect.x, source_raster_rect.y)
         } else {
             Point::new(raster_rect.x, raster_rect.y)
@@ -6301,7 +6355,7 @@ impl GpuRenderer {
             text_scale,
             static_text_motion,
         );
-        if !source_draw.text.span_styles().is_empty() {
+        if !source_draw.text.string().span_styles().is_empty() {
             let mut state = default_hash::new();
             cache_key.0.hash(&mut state);
             (source_origin.x - source_raster_rect.x)
@@ -6378,14 +6432,14 @@ impl GpuRenderer {
                 raster_rect,
             };
         };
-        if !static_text_motion || text_draw.text.text().find('\n').is_none() {
+        if !static_text_motion || text_draw.text.string().text().find('\n').is_none() {
             return TextRasterSource {
                 draw: Cow::Borrowed(text_draw),
                 raster_rect,
             };
         }
 
-        if !text_draw.text.span_styles().is_empty() {
+        if !text_draw.text.string().span_styles().is_empty() {
             let device_clip = Rect {
                 x: (clip.x * root_scale).floor(),
                 y: (clip.y * root_scale).floor(),
@@ -6399,7 +6453,9 @@ impl GpuRenderer {
             };
         }
 
-        let line_starts = self.text_line_index_cache.line_starts(&text_draw.text);
+        let line_starts = self
+            .text_line_index_cache
+            .line_starts(text_draw.text.string());
         clipped_text_raster_source_with_line_starts(
             text_draw,
             logical_rect,
@@ -6453,9 +6509,9 @@ impl GpuRenderer {
         text_scale: f32,
     ) -> Option<ImageBitmap> {
         rasterize_annotated_text_region(
-            text_draw.text.as_ref(),
+            text_draw.text.string().as_ref(),
             raster_rect,
-            if text_draw.text.span_styles().is_empty() {
+            if text_draw.text.string().span_styles().is_empty() {
                 Point::new(raster_rect.x, raster_rect.y)
             } else {
                 source_origin
@@ -6520,7 +6576,7 @@ fn clipped_text_raster_source_with_line_starts<'a>(
     }
 
     let byte_start = line_starts[start_line];
-    let byte_end = line_end_offset(text_draw.text.text(), line_starts, end_line - 1);
+    let byte_end = line_end_offset(text_draw.text.string().text(), line_starts, end_line - 1);
     if byte_start >= byte_end {
         return TextRasterSource {
             draw: Cow::Borrowed(text_draw),
@@ -6548,7 +6604,10 @@ fn clipped_text_raster_source_with_line_starts<'a>(
         width: logical_rect.width,
         height: slice_height,
     };
-    sliced_draw.text = Arc::new(text_draw.text.subsequence(byte_start..byte_end));
+    sliced_draw.text = DrawnText::of(
+        Arc::new(text_draw.text.string().subsequence(byte_start..byte_end)),
+        &text_draw.text_style,
+    );
 
     TextRasterSource {
         draw: Cow::Owned(sliced_draw),
@@ -6764,21 +6823,21 @@ fn image_uv_rect(image: &ImageBitmap, src_rect: Option<Rect>) -> Option<ImageUvR
     })
 }
 
-fn glyph_atlas_uv_rect(entry: GlyphAtlasEntry, atlas_size: u32) -> ImageUvRect {
-    let atlas_width = atlas_size as f32;
-    let atlas_height = atlas_size as f32;
-    let min = [entry.x as f32 / atlas_width, entry.y as f32 / atlas_height];
+/// `entry`'s rect in an atlas whose texel is `texel` of its side, an
+/// exact power of two: the products are the quotients by the side.
+fn glyph_atlas_uv_rect(entry: GlyphAtlasEntry, texel: f32) -> ImageUvRect {
+    let min = [entry.x as f32 * texel, entry.y as f32 * texel];
     let max = [
-        (entry.x + entry.width) as f32 / atlas_width,
-        (entry.y + entry.height) as f32 / atlas_height,
+        (entry.x + entry.width) as f32 * texel,
+        (entry.y + entry.height) as f32 * texel,
     ];
     let center_min = [
-        (entry.x as f32 + 0.5) / atlas_width,
-        (entry.y as f32 + 0.5) / atlas_height,
+        (entry.x as f32 + 0.5) * texel,
+        (entry.y as f32 + 0.5) * texel,
     ];
     let center_max = [
-        (entry.x as f32 + entry.width as f32 - 0.5).max(entry.x as f32 + 0.5) / atlas_width,
-        (entry.y as f32 + entry.height as f32 - 0.5).max(entry.y as f32 + 0.5) / atlas_height,
+        (entry.x as f32 + entry.width as f32 - 0.5).max(entry.x as f32 + 0.5) * texel,
+        (entry.y as f32 + entry.height as f32 - 0.5).max(entry.y as f32 + 0.5) * texel,
     ];
     ImageUvRect {
         min,

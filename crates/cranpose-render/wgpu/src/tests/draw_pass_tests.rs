@@ -61,12 +61,12 @@ fn shadow_run_items_preserve_geometry_culling_and_first_run_window() {
     )
     .collect::<Vec<_>>();
     assert_eq!(items.len(), 2);
-    let Item::Run(ordinary, window) = &items[0] else {
+    let Item::Run(ordinary, window, _) = &items[0] else {
         panic!("expected the ordinary run")
     };
     assert!(std::ptr::eq(*ordinary, &scene.runs[0]));
     assert_eq!(*window, Some(1..2));
-    let Item::Run(shadow, window) = &items[1] else {
+    let Item::Run(shadow, window, _) = &items[1] else {
         panic!("expected the visible shadow run")
     };
     assert!(std::ptr::eq(
@@ -88,7 +88,7 @@ fn shadow_run_items_preserve_geometry_culling_and_first_run_window() {
             false,
         );
         match (visible.next(), expected) {
-            (Some(Item::Run(run, None)), Some(index)) => assert!(std::ptr::eq(
+            (Some(Item::Run(run, None, _)), Some(index)) => assert!(std::ptr::eq(
                 run,
                 scene.shadow_draws[index].shapes.as_ref().unwrap()
             )),

@@ -113,7 +113,7 @@ fn a_run_draws_the_same_glyphs_whether_or_not_its_bounds_answer_for_them() {
     let quads = |bounds| GlyphRunQuads {
         glyphs: &run,
         entries: &entries,
-        atlas_size: 64,
+        texel: 1.0 / 64.0,
         bounds,
     };
     let unknown = GlyphRunBounds::of(std::iter::empty());

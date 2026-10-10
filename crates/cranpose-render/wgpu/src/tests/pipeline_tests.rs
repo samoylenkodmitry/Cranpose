@@ -124,6 +124,7 @@ fn push_text_style_draws_for_test(
                     text_style.render_hash(),
                     &text.span_styles,
                     font_size,
+                    (render_text.render_hash(), render_text.is_empty()),
                 ),
             ),
             font_size,
@@ -1526,7 +1527,7 @@ fn push_text_style_draws_span_gradient_without_paint_override_uses_gpu_shader_ma
         1,
         "span gradient without paint overrides should use gpu effect path"
     );
-    let mask_text = &scene.texts[0].text;
+    let mask_text = scene.texts[0].text.string();
     assert!(
         mask_text
             .span_styles()
@@ -1629,6 +1630,7 @@ fn push_text_style_draws_span_gradient_with_paint_override_uses_gpu_shader_mask_
     assert!(
         scene.texts.iter().all(|draw| draw
             .text
+            .string()
             .span_styles()
             .iter()
             .any(|span| span.item.color == Some(Color::WHITE))),
@@ -1637,6 +1639,7 @@ fn push_text_style_draws_span_gradient_with_paint_override_uses_gpu_shader_mask_
     assert!(
         scene.texts.iter().all(|draw| draw
             .text
+            .string()
             .span_styles()
             .iter()
             .any(|span| span.item.font_weight == Some(cranpose_ui::text::FontWeight::BOLD))),
@@ -1645,6 +1648,7 @@ fn push_text_style_draws_span_gradient_with_paint_override_uses_gpu_shader_mask_
     assert!(
         scene.texts.iter().all(|draw| draw
             .text
+            .string()
             .span_styles()
             .iter()
             .all(|span| span.item.color != Some(Color::RED))),
@@ -1713,6 +1717,7 @@ fn push_text_style_draws_adjacent_span_color_overrides_use_direct_path() {
     assert!(
         scene.texts[0]
             .text
+            .string()
             .span_styles()
             .iter()
             .filter(|span| span.item.color == Some(Color::RED))
@@ -1764,6 +1769,7 @@ fn push_text_style_draws_span_color_override_uses_direct_per_glyph_color() {
     assert!(
         scene.texts[0]
             .text
+            .string()
             .span_styles()
             .iter()
             .any(|span| span.item.color == Some(Color::RED)),
@@ -1874,6 +1880,7 @@ fn push_text_style_draws_wrap_newline_gap_color_spans_use_direct_path() {
     );
     let red_ranges: Vec<_> = scene.texts[0]
         .text
+        .string()
         .span_styles()
         .iter()
         .filter(|span| span.item.color == Some(Color::RED))
@@ -1940,6 +1947,7 @@ fn push_text_style_draws_mixed_bidi_wrapped_color_spans_use_direct_path() {
     assert!(
         scene.texts[0]
             .text
+            .string()
             .span_styles()
             .iter()
             .any(|span| span.item.color == Some(Color::RED)),
@@ -2193,7 +2201,7 @@ fn a_text_draw_primitive_joins_the_scene_text_list_the_text_nodes_use() {
         "text must not be lowered into a shape or a rasterized image"
     );
     let text = &scene.texts[0];
-    assert_eq!(text.text.text(), "SCORE");
+    assert_eq!(text.text.string().text(), "SCORE");
     assert_eq!(text.rect.x, 14.0);
     assert_eq!(text.rect.y, 25.0);
     assert_eq!(text.color, cranpose_ui_graphics::Color::WHITE);

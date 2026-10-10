@@ -308,20 +308,17 @@ impl SoftwareTextFont {
         }
     }
 
-    /// Whether `text` is ASCII and this face supports each of its graphemes
-    /// as [`font_supports_grapheme`] decides: each character is a control
-    /// character or has a glyph. An ASCII grapheme is one character, or
-    /// `\r\n`, two control characters. The face's glyph table answers each
-    /// character with one load, so no grapheme split or cmap search runs.
-    fn takes_ascii(&self, text: &str) -> bool {
-        text.is_ascii()
-            && text.bytes().map(char::from).all(|ch| {
-                ch.is_ascii_control()
-                    || self
-                        .font
-                        .ascii_glyph(ch)
-                        .is_some_and(|(glyph, _)| glyph.0 != 0)
-            })
+    /// Whether this face supports every character of `text` as
+    /// [`font_supports_grapheme`] decides, so every grapheme of it too, with
+    /// no grapheme split: a text with an ellipsis or another character past
+    /// ASCII would otherwise be split into graphemes on every layout. The
+    /// face's glyph table answers each printable ASCII character with one
+    /// load; another character takes a cmap search.
+    fn takes_every_char(&self, text: &str) -> bool {
+        text.chars().all(|ch| match self.font.ascii_glyph(ch) {
+            Some((glyph, _)) => glyph.0 != 0,
+            None => font_supports_char(self, ch),
+        })
     }
 
     fn raster_ref(&self) -> RasterFontRef<'_, KernedFont> {
@@ -483,7 +480,7 @@ impl SoftwareTextFontSet {
     ) -> Option<()> {
         let request = FontSelectionRequest::resolve(style, &self.registered_families);
         let primary = self.resolve_for_request(request)?;
-        if self.fonts.len() == 1 || primary.takes_ascii(text) {
+        if self.fonts.len() == 1 || primary.takes_every_char(text) {
             if !text.is_empty() {
                 visit(0..text.len(), primary);
             }
@@ -525,7 +522,7 @@ impl SoftwareTextFontSet {
         let request = FontSelectionRequest::resolve(style, &self.registered_families);
         let primary = self.resolve_for_request(request)?;
         let covers = self.fonts.len() == 1
-            || primary.takes_ascii(text)
+            || primary.takes_every_char(text)
             || text.graphemes(true).all(|grapheme| {
                 std::ptr::eq(primary, self.resolve_grapheme(primary, grapheme, request))
             });
@@ -534,11 +531,15 @@ impl SoftwareTextFontSet {
 }
 
 fn font_supports_grapheme(font: &SoftwareTextFont, grapheme: &str) -> bool {
-    grapheme.chars().all(|ch| {
-        ch.is_control()
-            || matches!(ch, '\u{200c}' | '\u{200d}' | '\u{2066}'..='\u{2069}' | '\u{fe00}'..='\u{fe0f}')
-            || font.font.glyph_id(ch).0 != 0
-    })
+    grapheme.chars().all(|ch| font_supports_char(font, ch))
+}
+
+/// Whether `font` draws `ch`, or `ch` draws nothing of its own: a control
+/// character, a joiner or a variation selector.
+fn font_supports_char(font: &SoftwareTextFont, ch: char) -> bool {
+    ch.is_control()
+        || matches!(ch, '\u{200c}' | '\u{200d}' | '\u{2066}'..='\u{2069}' | '\u{fe00}'..='\u{fe0f}')
+        || font.font.glyph_id(ch).0 != 0
 }
 
 pub fn software_text_font_from_fonts_or_default(

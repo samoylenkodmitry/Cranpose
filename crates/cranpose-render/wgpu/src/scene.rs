@@ -4,8 +4,10 @@ use std::{ops::Range, sync::Arc};
 
 use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
-use cranpose_render_common::{graph::DrawCommandId, layer_shadow::ShadowRRect};
-use cranpose_ui::{TextLayoutOptions, TextStyle};
+use cranpose_render_common::{
+    graph::DrawCommandId, layer_shadow::ShadowRRect, text_paint::TextPaint,
+};
+use cranpose_ui::{TextLayoutOptions, TextStyle, text::RenderString};
 use cranpose_ui_graphics::{
     BlendMode, Color, ColorFilter, CommandRecording, DrawPrimitive, GraphicsLayer, ImageBitmap,
     ImageSampling, Point, Recorded, Rect, RenderEffect, ShapeRecorder,
@@ -181,12 +183,89 @@ struct LooseRun {
     placement: Placement,
 }
 
+/// A text's string as its draws carry it, with what drawing a cached glyph
+/// run reads of it and of its style on every frame: the present thread then
+/// loads neither for a text whose run it holds.
+#[derive(Clone)]
+pub(crate) struct DrawnText {
+    string: Arc<RenderString>,
+    hash: u64,
+    empty: bool,
+    gradient: bool,
+    static_motion: bool,
+}
+
+impl DrawnText {
+    /// `string` drawn in `style`, its facts read from both.
+    pub(crate) fn of(string: Arc<RenderString>, style: &TextStyle) -> Self {
+        let paints_gradient = |span: &cranpose_ui::text::SpanStyle| {
+            span.brush
+                .as_ref()
+                .is_some_and(|brush| !matches!(brush, cranpose_ui_graphics::Brush::Solid(_)))
+        };
+        let gradient = paints_gradient(&style.span_style)
+            || string
+                .span_styles()
+                .iter()
+                .any(|span| paints_gradient(&span.item));
+        Self {
+            hash: string.render_hash(),
+            empty: string.is_empty(),
+            gradient,
+            static_motion: style
+                .paragraph_style
+                .text_motion
+                .unwrap_or(cranpose_ui::text::TextMotion::Static)
+                == cranpose_ui::text::TextMotion::Static,
+            string,
+        }
+    }
+
+    /// The string of a plain text (see [`TextPaint::plain`]), its facts
+    /// taken from the paint its node worked out: a plain text paints no
+    /// gradient, in its style or in a span.
+    pub(crate) fn plain(string: Arc<RenderString>, paint: &TextPaint) -> Self {
+        Self {
+            string,
+            hash: paint.text_hash,
+            empty: paint.text_empty,
+            gradient: false,
+            static_motion: paint.static_motion,
+        }
+    }
+
+    pub(crate) fn string(&self) -> &Arc<RenderString> {
+        &self.string
+    }
+
+    /// [`RenderString::render_hash`] of the string.
+    pub(crate) fn render_hash(&self) -> u64 {
+        self.hash
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.empty
+    }
+
+    /// Whether the style or a span of the string paints with a gradient
+    /// brush.
+    pub(crate) fn gradient(&self) -> bool {
+        self.gradient
+    }
+
+    /// Whether the style's motion is static, so its glyphs stay on whole
+    /// pixels.
+    pub(crate) fn static_motion(&self) -> bool {
+        self.static_motion
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct TextDraw {
     pub node_id: NodeId,
     pub rect: Rect,
     pub snap_anchor: Option<SnapAnchor>,
-    pub text: std::sync::Arc<cranpose_ui::text::RenderString>,
+    pub text: DrawnText,
     pub color: Color,
     pub text_style: Arc<TextStyle>,
     /// `text_style`'s [`TextStyle::render_hash`], hashed once per text.
@@ -552,7 +631,7 @@ impl CompositorScene {
         &mut self,
         node_id: NodeId,
         rect: Rect,
-        text: Arc<cranpose_ui::text::RenderString>,
+        text: DrawnText,
         color: Color,
         (text_style, style_hash): (Arc<TextStyle>, u64),
         font_size: f32,
