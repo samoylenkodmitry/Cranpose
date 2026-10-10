@@ -1917,10 +1917,13 @@ const SURFACE_ATLAS_SLACK: u64 = 4;
 /// and the WebGL page held a texture and a depth buffer for each: 20 MiB
 /// for 0.5 MP of surfaces.
 ///
-/// A new size takes one padding step more on each side where the GPU memory
-/// a process holds stays at its peak, so the next busier frame fits. Metal
-/// takes a dropped texture's memory back, so there a new size is the size
-/// asked for.
+/// A new size takes one padding step more in height where the GPU memory a
+/// process holds stays at its peak, so the next busier frame fits: its
+/// members pack into the atlas's width and add shelves below. A step on
+/// each side drew the Mate 20 X gauntlet's tier 12 frames, which need at
+/// most 1280 by 1352 pixels, into a 1536-pixel square. Metal takes a
+/// dropped texture's memory back, so there a new size is the size asked
+/// for.
 pub(crate) struct SurfaceAtlasSizes {
     current: Option<(u32, u32)>,
     need_width: crate::idle_pool::RecentPeak,
@@ -1978,10 +1981,7 @@ impl SurfaceAtlasSizes {
 
     fn grown(&self, size: (u32, u32), limit: u32) -> (u32, u32) {
         if self.step_ahead {
-            (
-                padded_dimension(size.0.saturating_add(1), limit),
-                padded_dimension(size.1.saturating_add(1), limit),
-            )
+            (size.0, padded_dimension(size.1.saturating_add(1), limit))
         } else {
             size
         }
