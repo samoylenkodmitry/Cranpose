@@ -901,6 +901,87 @@ struct PrimitiveState {
 type InvalidatedAttachments = ArrayVec<u32, { crate::MAX_COLOR_ATTACHMENTS + 2 }>;
 
 #[derive(Debug)]
+struct ClearBufferOp {
+    dst: Buffer,
+    dst_target: BindTarget,
+    range: crate::MemoryRange,
+}
+
+#[derive(Debug)]
+struct BufferToBufferCopy {
+    src: Buffer,
+    src_target: BindTarget,
+    dst: Buffer,
+    dst_target: BindTarget,
+    copy: crate::BufferCopy,
+}
+
+#[cfg(webgl)]
+#[derive(Debug)]
+struct ExternalImageToTextureCopy {
+    src: wgt::CopyExternalImageSourceInfo,
+    dst: glow::Texture,
+    dst_target: BindTarget,
+    dst_format: wgt::TextureFormat,
+    dst_premultiplication: bool,
+    copy: crate::TextureCopy,
+}
+
+#[derive(Debug)]
+struct TextureToTextureCopy {
+    src: glow::Texture,
+    src_target: BindTarget,
+    dst: glow::Texture,
+    dst_target: BindTarget,
+    copy: crate::TextureCopy,
+}
+
+#[derive(Debug)]
+struct BufferToTextureCopy {
+    src: Buffer,
+    #[allow(unused)]
+    src_target: BindTarget,
+    dst: glow::Texture,
+    dst_target: BindTarget,
+    dst_format: wgt::TextureFormat,
+    copy: crate::BufferTextureCopy,
+}
+
+#[derive(Debug)]
+struct TextureToBufferCopy {
+    src: glow::Texture,
+    src_target: BindTarget,
+    src_format: wgt::TextureFormat,
+    dst: Buffer,
+    #[allow(unused)]
+    dst_target: BindTarget,
+    copy: crate::BufferTextureCopy,
+}
+
+#[derive(Debug)]
+struct QueryResultsCopy {
+    query_range: Range<u32>,
+    dst: Buffer,
+    dst_target: BindTarget,
+    dst_offset: wgt::BufferAddress,
+}
+
+#[derive(Debug)]
+struct AttachmentBinding {
+    attachment: u32,
+    view: TextureView,
+    depth_slice: Option<u32>,
+    sample_count: u32,
+}
+
+#[derive(Debug)]
+struct AttachmentResolve {
+    attachment: u32,
+    dst: TextureView,
+    size: wgt::Extent3d,
+}
+
+#[derive(Debug)]
 enum Command {
     Draw {
         topology: u32,
@@ -938,76 +1019,23 @@ enum Command {
         indirect_buf: glow::Buffer,
         indirect_offset: wgt::BufferAddress,
     },
-    ClearBuffer {
-        dst: Buffer,
-        dst_target: BindTarget,
-        range: crate::MemoryRange,
-    },
-    CopyBufferToBuffer {
-        src: Buffer,
-        src_target: BindTarget,
-        dst: Buffer,
-        dst_target: BindTarget,
-        copy: crate::BufferCopy,
-    },
+    ClearBuffer(Box<ClearBufferOp>),
+    CopyBufferToBuffer(Box<BufferToBufferCopy>),
     #[cfg(webgl)]
-    CopyExternalImageToTexture {
-        src: wgt::CopyExternalImageSourceInfo,
-        dst: glow::Texture,
-        dst_target: BindTarget,
-        dst_format: wgt::TextureFormat,
-        dst_premultiplication: bool,
-        copy: crate::TextureCopy,
-    },
-    CopyTextureToTexture {
-        src: glow::Texture,
-        src_target: BindTarget,
-        dst: glow::Texture,
-        dst_target: BindTarget,
-        copy: crate::TextureCopy,
-    },
-    CopyBufferToTexture {
-        src: Buffer,
-        #[allow(unused)]
-        src_target: BindTarget,
-        dst: glow::Texture,
-        dst_target: BindTarget,
-        dst_format: wgt::TextureFormat,
-        copy: crate::BufferTextureCopy,
-    },
-    CopyTextureToBuffer {
-        src: glow::Texture,
-        src_target: BindTarget,
-        src_format: wgt::TextureFormat,
-        dst: Buffer,
-        #[allow(unused)]
-        dst_target: BindTarget,
-        copy: crate::BufferTextureCopy,
-    },
+    CopyExternalImageToTexture(Box<ExternalImageToTextureCopy>),
+    CopyTextureToTexture(Box<TextureToTextureCopy>),
+    CopyBufferToTexture(Box<BufferToTextureCopy>),
+    CopyTextureToBuffer(Box<TextureToBufferCopy>),
     SetIndexBuffer(glow::Buffer),
     BeginQuery(glow::Query, BindTarget),
     EndQuery(BindTarget),
     TimestampQuery(glow::Query),
-    CopyQueryResults {
-        query_range: Range<u32>,
-        dst: Buffer,
-        dst_target: BindTarget,
-        dst_offset: wgt::BufferAddress,
-    },
+    CopyQueryResults(Box<QueryResultsCopy>),
     ResetFramebuffer {
         is_default: bool,
     },
-    BindAttachment {
-        attachment: u32,
-        view: TextureView,
-        depth_slice: Option<u32>,
-        sample_count: u32,
-    },
-    ResolveAttachment {
-        attachment: u32,
-        dst: TextureView,
-        size: wgt::Extent3d,
-    },
+    BindAttachment(Box<AttachmentBinding>),
+    ResolveAttachment(Box<AttachmentResolve>),
     InvalidateAttachments(InvalidatedAttachments),
     SetDrawColorBuffers(u8),
     ClearColorF {
