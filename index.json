@@ -13789,6 +13789,144 @@
     }
    },
    "confirmed_regressions": {}
+  },
+  {
+   "file": "runs/2026-10-10-browser-b8e7614e3-EVR-AL00-\u00b7-Chrome-154.json",
+   "kind": "browser",
+   "started_at": "2026-10-10T12:04:08+00:00",
+   "device": "EVR-AL00 \u00b7 Chrome 154",
+   "main": "b8e7614e3d14c51b810c79110c5e20c2ab5b7869",
+   "release": null,
+   "subjects": [
+    {
+     "name": "cranpose",
+     "label": "Cranpose 0.9.19 main b8e7614e3",
+     "source": "benchmarks/compose-vs-cranpose/cranpose-app/src/screens/gauntlet.rs"
+    },
+    {
+     "name": "compose",
+     "label": "Compose Multiplatform 1.12.1",
+     "source": "benchmarks/compose-vs-cranpose/shared-compose/dev/perfcompare/compose/Gauntlet.kt"
+    },
+    {
+     "name": "flutter",
+     "label": "Flutter 3.47.7",
+     "source": "benchmarks/compose-vs-cranpose/flutter-app/lib/main.dart"
+    },
+    {
+     "name": "egui",
+     "label": "egui 0.36.2",
+     "source": "benchmarks/compose-vs-cranpose/egui-app/src/lib.rs"
+    },
+    {
+     "name": "slint",
+     "label": "Slint 1.18.1",
+     "source": "benchmarks/compose-vs-cranpose/slint-app/ui/gauntlet.slint"
+    },
+    {
+     "name": "iced",
+     "label": "iced 0.14.0",
+     "source": "benchmarks/compose-vs-cranpose/iced-app/src/lib.rs"
+    },
+    {
+     "name": "dioxus",
+     "label": "Dioxus 0.7.10",
+     "source": "benchmarks/compose-vs-cranpose/dioxus-app/src/main.rs"
+    },
+    {
+     "name": "avalonia",
+     "label": "Avalonia 12.1.4",
+     "source": "benchmarks/compose-vs-cranpose/avalonia-app/Gauntlet.cs"
+    },
+    {
+     "name": "web",
+     "label": "Web Chrome 154.0.8037.92",
+     "source": "benchmarks/compose-vs-cranpose/web-app/src/gauntlet.ts"
+    }
+   ],
+   "duration_s": 283,
+   "scenarios": {
+    "gauntlet": {
+     "legs": 16,
+     "summary": {
+      "cranpose": {
+       "fps": 43.2438052330276,
+       "cpu_ms_per_frame": 64.63104686318971,
+       "janky_pct": 5.1797761727121205,
+       "ram_mb": 512.7509765625,
+       "gpu_ram_mb": 95.380859375,
+       "cpu_mhz": 2323.4375,
+       "gpu_mhz": 448.375
+      },
+      "compose": {
+       "fps": 6.0849654096647665,
+       "cpu_ms_per_frame": 266.3717105263158,
+       "janky_pct": 100.0,
+       "ram_mb": 700.0234375,
+       "gpu_ram_mb": 132.150390625,
+       "cpu_mhz": 2600.0,
+       "gpu_mhz": 156.52380952380952
+      },
+      "flutter": {
+       "fps": 27.852358437610675,
+       "cpu_ms_per_frame": 86.46710208030962,
+       "janky_pct": 94.89995916700694,
+       "ram_mb": 599.6455078125,
+       "gpu_ram_mb": 106.30078125,
+       "cpu_mhz": 2600.0,
+       "gpu_mhz": 199.375
+      },
+      "egui": {
+       "fps": 53.44724157546716,
+       "cpu_ms_per_frame": 34.573661618952876,
+       "janky_pct": 11.87978425666784,
+       "ram_mb": 455.67431640625,
+       "gpu_ram_mb": 87.75,
+       "cpu_mhz": 1852.25,
+       "gpu_mhz": 259.75
+      },
+      "slint": {
+       "fps": 9.067875472400281,
+       "cpu_ms_per_frame": 180.2607204116638,
+       "janky_pct": 99.03846153846155,
+       "ram_mb": 485.64306640625,
+       "gpu_ram_mb": 92.376953125,
+       "cpu_mhz": 1797.5,
+       "gpu_mhz": 182.125
+      },
+      "iced": {},
+      "dioxus": {
+       "fps": 33.982300885515905,
+       "cpu_ms_per_frame": 74.86979166666667,
+       "janky_pct": 69.10994764397907,
+       "ram_mb": 581.46337890625,
+       "gpu_ram_mb": 95.126953125,
+       "cpu_mhz": 2600.0,
+       "gpu_mhz": 242.5
+      },
+      "avalonia": {
+       "fps": 5.372239496122969,
+       "cpu_ms_per_frame": 295.83518312985575,
+       "janky_pct": 100.0,
+       "ram_mb": 675.4541015625,
+       "gpu_ram_mb": 125.359375,
+       "cpu_mhz": 2600.0,
+       "gpu_mhz": 265.5
+      },
+      "web": {
+       "fps": 42.27709536912467,
+       "cpu_ms_per_frame": 64.44656555090656,
+       "janky_pct": 40.67015927709996,
+       "ram_mb": 567.36083984375,
+       "gpu_ram_mb": 104.095703125,
+       "cpu_mhz": 2582.25,
+       "gpu_mhz": 242.5
+      }
+     },
+     "verdicts": {}
+    }
+   },
+   "confirmed_regressions": {}
   }
  ]
 }
