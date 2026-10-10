@@ -42,7 +42,9 @@ export async function launchChrome(flags, output) {
             await exited;
         }
         if (browserLog !== null) closeSync(browserLog);
-        rmSync(profile, { recursive: true, force: true });
+        // Chrome's helper processes can still write into the profile after
+        // the browser exits; rmSync retries the ENOTEMPTY that leaves.
+        rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
 
     try {
