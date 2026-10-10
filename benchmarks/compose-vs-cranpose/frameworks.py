@@ -2,12 +2,13 @@
 """Measures every framework's app on one scenario, for the dashboard's
 framework comparison.
 
-Each app is launched once unmeasured, then measured in rounds, every app once
-a round, the order reversed each round so heat and time fall on all alike.
-Legs are `ab.py`'s: a warm-up, then a window long enough for `--min-frames`
-frames, from 4 to 15 seconds, kept short so a night's run of every framework
-stays short. Writes `frameworks.json` in the dashboard's run
-format, kind `frameworks`: device, subjects, every leg and per-app medians.
+Every app is measured in rounds, every app once a round, the order reversed
+each round so heat and time fall on all alike. Legs are `ab.py`'s: one launch
+measured from its start command for `--run` seconds, the same span for every
+app, with nothing left out. The first round is each app's first launch after
+its install. Writes `frameworks.json` in the dashboard's run format, kind
+`frameworks`: device, subjects, every leg with the time of each of its frames
+since the launch, and per-app medians.
 `--install DIR` first installs each app's `APP.apk` from DIR, as the
 nightly hands over the builds macm3 made. `--browser DIR` measures the pages
 `build_apps.sh browser DIR` built instead, each open in Chrome on the phone at
@@ -19,12 +20,11 @@ Usage: frameworks.py --serial SERIAL --output DIR [--apps compose,cranpose,...]
 import argparse
 import json
 import re
-import statistics
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ab import DECIDING, REPORTED, leg_record, metric_values, prime, size_window
+from ab import DECIDING, REPORTED, leg_record, summarize
 from browser import BrowserServer
 from measure import (APPS, CHROME, HEAVY, HERE, REMOTE_WINDOW, AppTarget, Device, PageTarget, device_lock,
                      measure_run)
@@ -37,7 +37,6 @@ def measure_frameworks(args):
     """Runs the whole comparison: the caller holds the device lock."""
     args.load, args.screenshots = 'heavy', False
     args.started = time.monotonic()
-    args.windows = {}
     args.output.mkdir(parents=True, exist_ok=True)
     device = Device(args.serial)
     apps = args.apps.split(',')
@@ -51,16 +50,6 @@ def measure_frameworks(args):
             if args.install and (apk := args.install / f'{app}.apk').exists():
                 device.install(app, apk)
     device.adb('push', str(HERE / 'perf_window.sh'), REMOTE_WINDOW)
-    # An app that fails to start leaves its legs out and the run goes on: a
-    # page can fail where the browser lacks what its framework needs.
-    started = []
-    for app in apps:
-        try:
-            prime(device, targets[app], args.scenario, args)
-        except (RuntimeError, ValueError) as failure:
-            print(f'{app:10} failed to start: {failure}', flush=True)
-        else:
-            started.append(app)
     # The versions macm3 built with, and the browser or WebView the web page
     # runs in.
     folder = args.browser or args.install
@@ -73,25 +62,23 @@ def measure_frameworks(args):
         webview = device.shell('dumpsys', 'package', 'com.google.android.webview')
         if match := re.search(r'versionName=(\S+)', webview):
             built['web'] = f'WebView {match.group(1)}, {built.get("web") or versions.version("web", "android")}'
-    legs = []
+    # An app whose first launch fails leaves its legs out and the run goes
+    # on: a page can fail where the browser lacks what its framework needs.
+    legs, running = [], list(apps)
     for round_index in range(args.rounds):
-        for app in started if round_index % 2 == 0 else started[::-1]:
+        for app in list(running if round_index % 2 == 0 else running[::-1]):
             try:
-                run = measure_run(device, targets[app], args.scenario, args, args.output,
-                                  args.windows.get((app, args.scenario)))
+                run = measure_run(device, targets[app], args.scenario, args, args.output)
             except (RuntimeError, ValueError) as failure:
                 print(f'{app:10} failed: {failure}', flush=True)
+                if round_index == 0:
+                    running.remove(app)
                 continue
-            size_window(args, app, args.scenario, run['fps'])
             legs.append(leg_record(run, app, len(legs)))
             print(f'{app:10} fps {run["fps"]:5.1f} cpu/f {run["cpu_ms_per_frame"]:6.1f} '
-                  f'frames {run["frames"]:4d} window {run["window_s"]:4.1f} s', flush=True)
-    summary = {
-        app: {metric: statistics.median(values)
-              for metric in [*DECIDING, *REPORTED]
-              if (values := metric_values(legs, app, metric))}
-        for app in apps
-    }
+                  f'frames {run["frames"]:4d} first frame {run["first_frame_s"]:4.1f} s '
+                  f'run {run["run_s"]:4.1f} s', flush=True)
+    summary = summarize(legs, apps, [*DECIDING, *REPORTED])
     identity = {key: device.shell('getprop', key).strip() for key in
                 ['ro.product.model', 'ro.build.version.release', 'ro.hardware']}
     if args.browser:
@@ -109,8 +96,7 @@ def measure_frameworks(args):
         'release': args.release,
         'device': identity,
         'subjects': subjects,
-        'protocol': {'warmup_s': args.warmup, 'window_s': args.window, 'min_frames': args.min_frames,
-                     'max_window_s': args.max_window, 'rounds': args.rounds},
+        'protocol': {'run_s': args.run, 'from_launch': True, 'rounds': args.rounds},
         'scenarios': [{
             'scenario': args.scenario,
             'extras': f'tier {args.tier}, in Chrome' if args.browser else (
@@ -130,12 +116,10 @@ def main():
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--apps', help='by default every app built, or every page in `--browser`')
     parser.add_argument('--scenario', default='gauntlet')
-    parser.add_argument('--rounds', type=int, default=2)
-    parser.add_argument('--warmup', type=float, default=1.5)
-    parser.add_argument('--window', type=float, default=4.0)
-    parser.add_argument('--min-frames', type=int, default=30)
-    parser.add_argument('--max-window', type=float, default=15.0)
-    parser.add_argument('--prime', type=float, default=2.0)
+    parser.add_argument('--rounds', type=int, default=3,
+                        help='launches of every app; the first is its first launch after its install')
+    parser.add_argument('--run', type=float, default=20.0,
+                        help='seconds each launch is measured for, from its start command')
     parser.add_argument('--interval', type=float, default=0.5)
     parser.add_argument('--clock-ticks', type=int, default=100)
     parser.add_argument('--extra', default='', help='more `am start` extras')

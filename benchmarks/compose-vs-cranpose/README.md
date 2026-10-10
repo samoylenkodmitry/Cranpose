@@ -329,9 +329,11 @@ preserve the original reference checkout and benchmark executable.
 ### Short A/B comparisons
 
 `ab.py` compares two installed builds as briefly as the evidence allows. It
-holds the device lock throughout and launches each build once unmeasured.
-Then it measures legs of 2 s warm-up plus a 5 s window, in pairs, A B then
-B A. From the second pair on, it stops a scenario once fps, CPU per frame and
+holds the device lock throughout and measures legs in pairs, A B then B A.
+Every leg is one launch measured from its start command for 15 s (`--run`),
+nothing left out: a build's first launch after its install is a leg like the
+others, and the launch, the first frame and the first seconds count as the
+rest of the run does. From the second pair on, it stops a scenario once fps, CPU per frame and
 desired → present are each settled:
 - **Same:** medians within half the threshold, and each build's own range
   narrower than the threshold.
@@ -349,15 +351,15 @@ python3 benchmarks/compose-vs-cranpose/ab.py --serial SERIAL --a cranpose-releas
 ```
 
 `cranpose-release` is the Cranpose app built with `-PperfCompareSuffix=.release`,
-so a second build installs beside the first. A build too slow to draw 40 frames
-in 5 seconds gets a longer window, up to 30 seconds, sized from its previous
-launch.
+so a second build installs beside the first. Every leg runs the same span,
+whatever the build's frame rate.
 
 `frameworks.py` measures every framework's app on the gauntlet for the
-dashboard: each launched once unmeasured, then two rounds of one leg each,
-the order reversed in the second. A leg lasts as long as the app's frame rate
-needs for 30 frames, from 4 to 15 seconds, so a night with every framework
-stays short. Each leg records the app's frame rate and CPU per frame, its
+dashboard: three rounds of one leg each, the order reversed every round, the
+first round each app's first launch after its install. Every leg is one launch
+measured from its start command for 20 s (`--run`), the same span for every
+app, and keeps the frames of every second from the launch; the dashboard
+charts those seconds for every framework. Each leg records the app's frame rate and CPU per frame, its
 PSS and the part of it GPU buffers hold (GL and EGL mtrack), and the mean
 clocks of the big cores and the GPU. `--install DIR` first installs each app's
 `APP.apk` from DIR and compiles every app's Java with `speed`, as the Compose
@@ -425,7 +427,9 @@ sustain the display rate. A paused workspace only repaints its footer and does
 not need to present at the display rate. The same command supports `--app compose`.
 
 `benchmarks/compose-vs-cranpose/perf_window.sh` runs on the device for one
-window, so adb round trips stay outside the measured interval. The report reads:
+run, started right after the launch command, so adb round trips stay outside
+the measured interval. The run's zero is the device clock read just before
+the launch command. The report reads:
 
 - **Presented frames:** `dumpsys SurfaceFlinger --latency <app layer>`, polled
   every `--interval` by a loop of its own and merged. SurfaceFlinger keeps 128
@@ -439,8 +443,14 @@ window, so adb round trips stay outside the measured interval. The report reads:
   Per-layer timestats are not available on this Huawei build. Present times
   are in SurfaceFlinger's monotonic clock, which is calibrated against
   `/proc/uptime` from each poll's newest present, to within about one frame.
-  The report keeps frames per second of the window and counts seconds with no
-  present, so a ramp or a stall cannot hide in the mean.
+  The report keeps the frames of every second from the launch
+  (`fps_by_second`) and the time to the first frame, and counts seconds after
+  the first frame with no present, so a slow start, a ramp or a stall cannot
+  hide in the mean. When the first poll already holds a full history, frames
+  of the launch may be lost and the run says so (`first_poll_full`).
+- **CPU:** every process whose name starts with the app's package, with the
+  ticks it spent since it started; the launch stopped the earlier ones, so
+  these are the run's, its start included.
 - **Presentation timestamp deltas:** Android 10 reports desired present time,
   actual present time, and frame ready time in that order. The report names the
   first-to-second delta `desired_to_present_p50_ms` and the first-to-third delta
@@ -486,8 +496,9 @@ window, so adb round trips stay outside the measured interval. The report reads:
   (HWUI does not see Cranpose's Vulkan surface).
 
 Each scenario runs A B A B, then B A B A. With no cooling pauses, heat and any
-throttling fall on both apps alike. Each run is a cold launch, a 5 s warm-up
-and a 15 s window. Failed runs are kept in the report.
+throttling fall on both apps alike. Each run is a cold launch measured from
+its start command for 20 s (`--run`), its first seconds included. Failed runs
+are kept in the report.
 
 ```bash
 (cd benchmarks/compose-vs-cranpose/cranpose-app/android && ./gradlew :app:assembleRelease)
@@ -531,10 +542,13 @@ of the app and every process it started, `footprint` the memory they hold at
 the window's end and the part of it that is the GPU's (Metal's buffers and
 textures, and the surfaces the window server composites), and `macmon` the
 mean clocks of the performance cores and the GPU over the window, from the
-chip's own counters and without root. Two rounds measure each app once each;
-a window lasts as long as the app's frame rate needs for 40 frames, from 3 to
-8 seconds. Desktop numbers feed the dashboard only; merges are judged on the
-slowest phone.
+chip's own counters and without root. Three rounds measure each app once
+each. Every leg is one launch measured from its start for 20 s (`--run`), the
+same span for every app: FrameCount waits for the app's window, records the
+time of every frame and says where its capture began, so the frames of every
+second from the launch are kept. A leg disturbed by other processes stays in
+the run, marked, and out of the medians. Desktop numbers feed the dashboard
+only; merges are judged on the slowest phone.
 
 At tier 5 against Compose Multiplatform, SwiftUI and AppKit change 0.0% of
 tiles, Flutter 0.1%, the web page and Tauri 0.2%, Dioxus and egui 0.3%,

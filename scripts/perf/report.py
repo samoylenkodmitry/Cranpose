@@ -53,7 +53,8 @@ def body(run):
                          f'{(after - before) / before:+.1%} |')
     lines += [
         '',
-        'Each value is the median of the first run\'s legs (2 s warm-up, 5 s window, A B then B A); '
+        'Each value is the median of the first run\'s legs (each one launch measured from its start '
+        'for 15 s, its first seconds included, A B then B A); '
         'a second run judged the same metrics worse. Reproduce on the device with:',
         '',
         '```bash',

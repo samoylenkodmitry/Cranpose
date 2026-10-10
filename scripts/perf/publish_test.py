@@ -23,6 +23,7 @@ def run():
         'subjects': [{'name': 'cranpose-release', 'label': 'v0.9.7', 'package': 'x'},
                      {'name': 'cranpose', 'label': 'abc123def', 'package': 'y'}],
         'duration_s': 420,
+        'protocol': {'run_s': 3.0, 'from_launch': True, 'max_pairs': 4},
         'scenarios': [{
             'scenario': 'gauntlet',
             'legs': [{}, {}, {}, {}],
@@ -47,6 +48,11 @@ class IndexEntryTest(unittest.TestCase):
         self.assertEqual(gauntlet['verdicts']['fps'], 'better')
         self.assertEqual(entry['device'], 'EVR-AL00')
         self.assertEqual([subject['label'] for subject in entry['subjects']], ['v0.9.7', 'abc123def'])
+
+    def test_an_entry_says_how_the_run_measured_and_where_its_frames_are(self):
+        entry = publish.index_entry(run(), 'runs/x.json')
+        self.assertTrue(entry['protocol']['from_launch'])
+        self.assertEqual(entry['file'], 'runs/x.json', 'the dashboard reads the frame times there')
 
 
 # The scratch repositories take nothing from the machine's git: not a hook's

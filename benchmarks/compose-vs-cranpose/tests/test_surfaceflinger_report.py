@@ -35,6 +35,25 @@ LAT_END
         self.assertEqual(report['desired_to_present_p50_ms'], 20)
         self.assertEqual(report['desired_to_ready_p50_ms'], 10)
 
+    def test_a_run_counts_from_its_launch_with_the_seconds_before_the_first_frame(self):
+        # Launched at 10 s; the first frame comes at 12.5 s, then one a
+        # second until 13.5 s and none for the last second.
+        presents = [12_500_000_000, 12_900_000_000, 13_100_000_000, 13_500_000_000]
+        frames = {time: (0, 0) for time in presents}
+        report = measure.frame_stats(frames, 10.0, 15.0, 1000.0 / 60.0)
+        self.assertEqual(report['fps_by_second'], [0, 0, 2, 2, 0])
+        self.assertEqual(report['frame_ms'], [2500.0, 2900.0, 3100.0, 3500.0], 'every frame, from the launch')
+        self.assertAlmostEqual(report['first_frame_s'], 2.5)
+        self.assertEqual(report['fps'], 4 / 5.0, 'frames over the whole run, its start included')
+        self.assertEqual(report['stalled_seconds'], 1, 'only seconds after the first frame are stalls')
+
+    def test_a_first_poll_with_a_full_history_is_flagged(self):
+        full = 'LAT_BEGIN 1.0\n16666667\n' + ''.join(
+            f'{i} {1_000_000_000 + i * 16_000_000} {i}\n' for i in range(1, 128)) + 'LAT_END\n'
+        short = 'LAT_BEGIN 1.0\n16666667\n1 1000000000 1\n0 0 0\nLAT_END\n'
+        self.assertTrue(measure.first_poll_full(full))
+        self.assertFalse(measure.first_poll_full(short))
+
     def test_missing_delay_samples_are_reported_as_unavailable(self):
         raw = '''LAT_BEGIN 1.2
 16666667
