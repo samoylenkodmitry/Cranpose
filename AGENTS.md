@@ -19,6 +19,7 @@
 Performance rules:
 
 - Benchmark on the slowest shipped device against the last release before merging. Desktop numbers do not count.
+- Keep every test, benchmark and device run as short as physically possible. Alternate A and B, read the result after each pair, and stop as soon as it clearly shows the answer: a difference well past the noise, or clearly no difference. Never run long fixed batches.
 - When moving work between CPU, GPU or threads, measure the unit that bounds that device.
 - Gate every new shader or per-frame feature so code that does not use it compiles or skips it out. Compare malioc registers and cycles per variant.
 - In shaders, test pipeline constants with `&`, `|` or `if (CONST)`, never `&&` or `||`. Call large functions from one site.
