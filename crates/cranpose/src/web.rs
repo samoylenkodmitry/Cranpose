@@ -464,17 +464,11 @@ pub async fn run(
         )?,
     ));
     let frame_running = Rc::new(Cell::new(false));
-    app.borrow_mut().set_frame_waker({
-        let request_frame = request_frame.clone();
-        let frame_running = frame_running.clone();
-        let run_tasks = woken_task_pump(Rc::downgrade(&app));
-        move || {
-            if !frame_running.get() {
-                request_frame();
-            }
-            run_tasks();
-        }
-    });
+    app.borrow_mut().set_frame_waker(frame_waker(
+        request_frame.clone(),
+        frame_running.clone(),
+        woken_task_pump(Rc::downgrade(&app)),
+    ));
 
     crate::web_clipboard::install(&app, request_frame.clone());
 
@@ -937,6 +931,22 @@ fn request_animation_frame(window: &web_sys::Window, f: &Closure<dyn FnMut()>) -
             log::error!("requestAnimationFrame registration failed: {error:?}");
             false
         }
+    }
+}
+
+/// The app's frame waker: a wake outside a frame asks the window for one; a
+/// wake inside a running frame only runs the woken tasks, since the frame asks
+/// for the next one at its end from what the app still needs.
+fn frame_waker(
+    request_frame: Rc<dyn Fn()>,
+    frame_running: Rc<Cell<bool>>,
+    run_tasks: impl Fn() + 'static,
+) -> impl Fn() + 'static {
+    move || {
+        if !frame_running.get() {
+            request_frame();
+        }
+        run_tasks();
     }
 }
 

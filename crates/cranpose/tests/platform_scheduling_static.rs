@@ -803,9 +803,9 @@ fn web_frame_waker_is_shell_owned_without_thread_local_router() {
         "wasm AppShell frame wakers should be single-threaded instead of requiring Send"
     );
     assert!(
-        web_source.contains("app.borrow_mut().set_frame_waker({")
+        web_source.contains("app.borrow_mut().set_frame_waker(frame_waker(")
             && web_source.contains(
-                "if !frame_running.get() {\n                request_frame();\n            }\n            run_tasks();"
+                "if !frame_running.get() {\n            request_frame();\n        }\n        run_tasks();"
             ),
         "web runtime should install the per-shell frame requester directly on AppShell"
     );
