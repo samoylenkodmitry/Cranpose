@@ -2306,13 +2306,12 @@ impl Composer {
     where
         F: FnMut(&Composer) + 'static,
     {
-        let stateless = (std::mem::size_of::<F>() == 0).then(std::any::TypeId::of::<F>);
-        if let Some(body) = stateless
-            && self.current_scope_reruns(body)
-        {
+        let stateless = std::mem::size_of::<F>() == 0;
+        if stateless && self.current_scope_reruns(std::any::TypeId::of::<F>()) {
             return;
         }
-        self.set_recompose_callback_boxed(Box::new(callback), stateless);
+        let stateless_body = stateless.then_some(std::any::TypeId::of::<F> as fn() -> _);
+        self.set_recompose_callback_boxed(Box::new(callback), stateless_body);
     }
 
     fn current_scope_reruns(&self, body: std::any::TypeId) -> bool {
@@ -2327,7 +2326,7 @@ impl Composer {
     fn set_recompose_callback_boxed(
         &self,
         callback: Box<dyn FnMut(&Composer)>,
-        stateless: Option<std::any::TypeId>,
+        stateless: Option<fn() -> std::any::TypeId>,
     ) {
         if let Some(scope) = self.current_recompose_scope() {
             scope.set_boxed_recompose(callback, stateless);
@@ -2335,9 +2334,7 @@ impl Composer {
     }
 
     pub fn set_recompose_fn(&self, callback: fn(&Composer)) {
-        if let Some(scope) = self.current_recompose_scope() {
-            scope.set_recompose_fn(callback);
-        }
+        self.set_recompose_callback_boxed(Box::new(callback), None);
     }
 
     /// Runs `f` with `provided` in scope over the locals around it; of values
