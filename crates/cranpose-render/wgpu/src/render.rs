@@ -256,25 +256,47 @@ pub(crate) fn bounded_scissor(
     (right > left && bottom > top).then(|| (left, top, right - left, bottom - top))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct GlyphExtent {
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+}
+
+impl GlyphExtent {
+    pub(crate) const EMPTY: Self = Self {
+        left: f32::INFINITY,
+        top: f32::INFINITY,
+        right: f32::NEG_INFINITY,
+        bottom: f32::NEG_INFINITY,
+    };
+
+    pub(crate) fn add(&mut self, rect: [f32; 4]) {
+        self.left = self.left.min(rect[0]);
+        self.top = self.top.min(rect[1]);
+        self.right = self.right.max(rect[2]);
+        self.bottom = self.bottom.max(rect[3]);
+    }
+}
+
 /// The scissor an unturned shared glyph run needs and the target pixels it
 /// touches. A run whose quads all lie inside `scissor` needs none of its own,
 /// which lets it share a draw with its neighbours. A turned run never needs
 /// one: its quads were cut to its clip before the turn.
 fn shared_glyph_clip(
-    glyphs: &[GlyphInstance],
+    extent: GlyphExtent,
     scissor: TargetRect,
     viewport: ViewportUniformParams,
 ) -> (Option<TargetRect>, TargetRect) {
-    if glyphs.is_empty() {
+    let GlyphExtent {
+        left,
+        top,
+        right,
+        bottom,
+    } = extent;
+    if left > right {
         return (Some(scissor), scissor);
-    }
-    let (mut left, mut top) = (f32::INFINITY, f32::INFINITY);
-    let (mut right, mut bottom) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
-    for glyph in glyphs {
-        left = left.min(glyph.rect[0]);
-        top = top.min(glyph.rect[1]);
-        right = right.max(glyph.rect[2]);
-        bottom = bottom.max(glyph.rect[3]);
     }
     let left = (left - viewport.offset[0]).floor().max(0.0);
     let top = (top - viewport.offset[1]).floor().max(0.0);
@@ -2105,21 +2127,6 @@ impl GlyphInstances {
             self.turned.len()
         } else {
             self.plain.len()
-        }
-    }
-
-    /// The scissor the glyphs at `range` need and the target pixels they
-    /// touch: see [`shared_glyph_clip`]; turned glyphs need none.
-    fn draw_clip(
-        &self,
-        (range, turned): (std::ops::Range<usize>, bool),
-        scissor: TargetRect,
-        viewport: ViewportUniformParams,
-    ) -> (Option<TargetRect>, TargetRect) {
-        if turned {
-            (None, scissor)
-        } else {
-            shared_glyph_clip(&self.plain[range], scissor, viewport)
         }
     }
 
@@ -5818,8 +5825,9 @@ impl GpuRenderer {
         root_scale: f32,
         glyph_instances: &mut GlyphInstances,
         record_cached_hits: bool,
-    ) -> GlyphQuads {
+    ) -> (GlyphQuads, GlyphExtent) {
         let start = glyph_instances.lens();
+        let mut extent = GlyphExtent::EMPTY;
         let kind = if viewport.transform.is_identity() {
             let plain = &mut glyph_instances.plain;
             let mut aligned = true;
@@ -5831,6 +5839,7 @@ impl GpuRenderer {
                 root_scale,
                 |glyph| {
                     aligned &= glyph_rect_aligned(glyph.rect, viewport.offset);
+                    extent.add(glyph.rect);
                     plain.push(glyph);
                 },
             );
@@ -5854,7 +5863,7 @@ impl GpuRenderer {
             self.frame_stats
                 .record_text_glyph_atlas_hits(u32::try_from(appended).unwrap_or(u32::MAX));
         }
-        kind
+        (kind, extent)
     }
 
     /// The viewport a retained glyph run draws under: its vertices sit at
@@ -6219,7 +6228,7 @@ impl GpuRenderer {
             bounds: run.bounds,
         };
         let cut = glyph_cut_edges(text_draw.clip, scissor, viewport, root_scale);
-        let kind = self.append_text_glyph_quad_run(
+        let (kind, extent) = self.append_text_glyph_quad_run(
             raster_rect,
             quads,
             (text_draw.clip, cut),
@@ -6230,11 +6239,11 @@ impl GpuRenderer {
         );
         let instance_end = glyph_instances.len_of(turned);
         if instance_end > instance_start {
-            let (clip, bounds) = glyph_instances.draw_clip(
-                (instance_start..instance_end, turned),
-                scissor,
-                viewport,
-            );
+            let (clip, bounds) = if turned {
+                (None, scissor)
+            } else {
+                shared_glyph_clip(extent, scissor, viewport)
+            };
             glyph_cmds.push(GlyphDrawCmd::shared(
                 (instance_start..instance_end, kind),
                 clip,

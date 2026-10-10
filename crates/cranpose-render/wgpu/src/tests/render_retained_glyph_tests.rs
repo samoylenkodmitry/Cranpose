@@ -750,17 +750,21 @@ fn shared_glyphs_inside_their_scissor_draw_unclipped_within_their_bounds() {
         },
     ]
     .map(|origin| cached_text_glyph_instance(origin, &quad).expect("a drawn quad"));
+    let extent = glyphs.iter().fold(GlyphExtent::EMPTY, |mut extent, glyph| {
+        extent.add(glyph.rect);
+        extent
+    });
     let identity = ViewportUniformParams {
         offset: [0.0, 0.0],
         ..viewport(SegmentTransform::IDENTITY)
     };
     assert_eq!(
-        shared_glyph_clip(&glyphs, (0, 0, 8, 8), identity),
+        shared_glyph_clip(extent, (0, 0, 8, 8), identity),
         (None, (1, 1, 6, 3)),
         "glyphs inside the scissor need none, and draw within their own bounds"
     );
     assert_eq!(
-        shared_glyph_clip(&glyphs, (2, 0, 6, 8), identity),
+        shared_glyph_clip(extent, (2, 0, 6, 8), identity),
         (Some((2, 0, 6, 8)), (2, 0, 6, 8)),
         "a glyph past the scissor keeps it"
     );
