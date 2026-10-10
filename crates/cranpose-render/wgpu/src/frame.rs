@@ -2156,6 +2156,27 @@ impl AdmissionGate {
         )
     }
 
+    /// A gate for a member of a shared atlas, whose kept surface is copied
+    /// out of it: kept once its content has held still for two frames after
+    /// its first. A screen's second frame repeats its first, since a
+    /// frame-clock animation takes its start time there, so content seen
+    /// alike on both has not yet shown whether it moves. Kept on its first
+    /// or second sight, every member of a starting screen took a copy and a
+    /// texture of its own that the next frame left unread wherever the
+    /// member animated: the Mate 20 X gauntlet copied 96 cards at tier 12
+    /// for the 14 that held still, and its GPU allocator held 3 to 8 MB
+    /// more for as long as it ran.
+    fn copied_out_of_atlas(key: LayerRasterCacheKey) -> Self {
+        Self::with_cost(
+            key,
+            AdmissionCost::Copy {
+                patience: 2,
+                floor: 1,
+                ceiling: MAX_ADMISSION_PATIENCE,
+            },
+        )
+    }
+
     /// A gate for a surface its layer can do without by drawing in place:
     /// the surface is kept only once its content has held still for
     /// `IN_PLACE_PATIENCE` frames. Drawing in place meanwhile costs nothing
@@ -4741,11 +4762,13 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 continue;
             };
             // A member rendered with the others lands in an atlas: a kept
-            // one is read there in place or copied out of it.
+            // one is read there in place copy-free, else copied out of it.
             let gate = if in_place {
                 AdmissionGate::drawn_in_place
-            } else {
+            } else if self.renderer.copy_free == UploadMode::Mapped {
                 AdmissionGate::rendered
+            } else {
+                AdmissionGate::copied_out_of_atlas
             };
             resolved[index] = match self.source_decision(child, &plan, gate) {
                 SourceDecision::Cached(surface) => Some(Resolved::Surface(Some(surface))),
