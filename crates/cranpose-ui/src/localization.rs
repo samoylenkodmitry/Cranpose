@@ -138,6 +138,19 @@ pub(crate) fn apply_text_locale(mut style: crate::text::TextStyle) -> crate::tex
     style
 }
 
+/// [`apply_text_locale`] for a shared style: the same one when it names its
+/// locales, else the shared style with the composition's locales.
+pub(crate) fn apply_shared_text_locale(
+    style: std::sync::Arc<crate::text::TextStyle>,
+) -> std::sync::Arc<crate::text::TextStyle> {
+    if style.span_style.locale_list.is_some() {
+        return style;
+    }
+    crate::text_modifier_node::shared_text_style(apply_text_locale(crate::text::TextStyle::clone(
+        &style,
+    )))
+}
+
 struct CachedTranslation {
     translator: Option<Translator>,
     message: &'static Message,

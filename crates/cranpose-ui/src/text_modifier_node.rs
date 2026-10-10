@@ -488,9 +488,19 @@ impl TextModifierElement {
         options: TextLayoutOptions,
         density: Density,
     ) -> Self {
+        Self::with_shared_style(text, shared_text_style(style), options, density)
+    }
+
+    /// [`Self::new`] for a style [`shared_text_style`] already shared.
+    pub(crate) fn with_shared_style(
+        text: Rc<AnnotatedString>,
+        style: Arc<TextStyle>,
+        options: TextLayoutOptions,
+        density: Density,
+    ) -> Self {
         Self {
             text,
-            style: shared_text_style(style),
+            style,
             options: options.normalized(),
             density,
         }
@@ -519,7 +529,7 @@ thread_local! {
 /// a node updated to an element of the same style compares pointers. A
 /// style none of the kept [`SHARED_TEXT_STYLES`] equals gets a copy of its
 /// own, kept first; the last kept one goes.
-fn shared_text_style(style: TextStyle) -> Arc<TextStyle> {
+pub(crate) fn shared_text_style(style: TextStyle) -> Arc<TextStyle> {
     RECENT_TEXT_STYLES.with_borrow_mut(|recent| {
         match recent.iter().position(|kept| **kept == style) {
             Some(0) => Arc::clone(&recent[0]),

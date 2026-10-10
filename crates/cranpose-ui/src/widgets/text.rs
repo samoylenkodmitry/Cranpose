@@ -5,16 +5,15 @@
 //! concerns: MeasurePolicy handles child layout, while TextModifierNode handles text content
 //! measurement, drawing, and semantics.
 
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 use cranpose_core::{MutableState, NodeId, State};
 use cranpose_foundation::modifier_element;
 
 use crate::{
-    composable,
     modifier::Modifier,
     text::{TextLayoutOptions, TextOptions, TextOverflow, TextStyle},
-    text_modifier_node::TextModifierElement,
+    text_modifier_node::{TextModifierElement, shared_text_style},
     widgets::layout::compose_empty_layout,
 };
 
@@ -132,11 +131,11 @@ impl IntoTextSource for DynamicTextSource {
 fn compose_basic_text_group(
     text: TextSource,
     modifier: Modifier,
-    style: TextStyle,
+    style: Arc<TextStyle>,
     options: TextLayoutOptions,
 ) -> NodeId {
     #[cfg(feature = "localization")]
-    let style = crate::localization::apply_text_locale(style);
+    let style = crate::localization::apply_shared_text_locale(style);
     let current = text.resolve();
 
     let options = options.normalized();
@@ -145,20 +144,54 @@ fn compose_basic_text_group(
         Some(registrar) => modifier.then(crate::widgets::selection_container::selectable_text(
             registrar,
             Rc::clone(&current),
-            style.clone(),
+            TextStyle::clone(&style),
             options,
         )),
         None => modifier,
     };
     let density = crate::density::density();
-    let text_element = modifier_element(TextModifierElement::new(current, style, options, density));
+    let text_element = modifier_element(TextModifierElement::with_shared_style(
+        current, style, options, density,
+    ));
     let final_modifier = Modifier::from_parts(&[text_element]);
     let combined_modifier = modifier.then(final_modifier);
 
     compose_empty_layout(combined_modifier, density)
 }
 
-#[composable]
+/// The composable every text widget calls, named `Text` for the source
+/// traces inspection shows.
+mod shared_style {
+    use std::sync::Arc;
+
+    use cranpose_core::NodeId;
+
+    use super::{IntoTextSource, compose_basic_text_group};
+    use crate::{
+        composable,
+        modifier::Modifier,
+        text::{TextLayoutOptions, TextStyle},
+    };
+
+    /// Its stored parameters hold the style
+    /// [`crate::text_modifier_node::shared_text_style`] shares with equal
+    /// ones, eight bytes where a style takes 320, and compare it by pointer.
+    #[composable]
+    pub(super) fn Text<S>(
+        text: S,
+        modifier: Modifier,
+        style: Arc<TextStyle>,
+        options: TextLayoutOptions,
+    ) -> NodeId
+    where
+        S: IntoTextSource + Clone + PartialEq + 'static,
+    {
+        compose_basic_text_group(text.into_text_source(), modifier, style, options)
+    }
+}
+
+#[track_caller]
+#[expect(non_snake_case)]
 pub fn BasicTextWithOptions<S>(
     text: S,
     modifier: Modifier,
@@ -168,10 +201,11 @@ pub fn BasicTextWithOptions<S>(
 where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
-    compose_basic_text_group(text.into_text_source(), modifier, style, options)
+    shared_style::Text(text, modifier, shared_text_style(style), options)
 }
 
-#[composable]
+#[track_caller]
+#[expect(non_snake_case)]
 pub fn BasicText<S>(
     text: S,
     modifier: Modifier,
@@ -184,10 +218,10 @@ pub fn BasicText<S>(
 where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
-    compose_basic_text_group(
-        text.into_text_source(),
+    shared_style::Text(
+        text,
         modifier,
-        style,
+        shared_text_style(style),
         TextLayoutOptions {
             overflow,
             soft_wrap,
@@ -197,7 +231,8 @@ where
     )
 }
 
-#[composable]
+#[track_caller]
+#[expect(non_snake_case)]
 pub fn TextWithOptions<S>(
     value: S,
     modifier: Modifier,
@@ -207,10 +242,10 @@ pub fn TextWithOptions<S>(
 where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
-    compose_basic_text_group(
-        value.into_text_source(),
+    shared_style::Text(
+        value,
         modifier,
-        style,
+        shared_text_style(style),
         TextLayoutOptions::from(options),
     )
 }
@@ -232,15 +267,16 @@ where
 ///     );
 /// }
 /// ```
-#[composable]
+#[track_caller]
+#[expect(non_snake_case)]
 pub fn Text<S>(value: S, modifier: Modifier, style: TextStyle) -> NodeId
 where
     S: IntoTextSource + Clone + PartialEq + 'static,
 {
-    compose_basic_text_group(
-        value.into_text_source(),
+    shared_style::Text(
+        value,
         modifier,
-        style,
+        shared_text_style(style),
         TextLayoutOptions::from(TextOptions::default()),
     )
 }
