@@ -114,6 +114,7 @@ impl Application {
             }
         };
         let insets = EdgeInsets::from_components(edge(left), edge(top), edge(right), edge(bottom));
+        self.shell.set_safe_area(insets);
         if self.environment.set_safe_area(insets) {
             self.shell.request_root_render();
         }

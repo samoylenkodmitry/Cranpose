@@ -153,7 +153,11 @@ impl<F: FnMut() + 'static> IosApp<F> {
     }
 
     fn refresh_environment(&mut self, window: &Arc<dyn Window>) {
-        let mut changed = self.platform_env.set_safe_area(safe_area_insets(window));
+        let insets = safe_area_insets(window);
+        let mut changed = self.platform_env.set_safe_area(insets);
+        if let Some(shell) = self.shell.as_mut() {
+            shell.set_safe_area(insets);
+        }
         if let Some(theme) = window.theme() {
             changed |= self.platform_env.set_system_theme(match theme {
                 winit::window::Theme::Dark => cranpose_services::SystemTheme::Dark,
@@ -435,6 +439,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         shell.app_context().enter(crate::ios_back_gesture::register);
         shell.set_semantics_enabled(true);
         crate::accessibility::install_inspector(&mut shell, self.settings.developer_inspector);
+        shell.set_safe_area(self.platform_env.safe_area());
 
         let mut accessibility =
             crate::ios_accessibility::IosAccessibilityBridge::new(self.event_proxy.clone());
