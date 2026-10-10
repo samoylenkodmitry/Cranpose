@@ -292,17 +292,7 @@ public class CranposeActivity extends NativeActivity {
             // with nothing to protect.
             return;
         }
-        Intent service = new Intent(this, CranposeBackgroundService.class);
-        CranposeBackgroundService.noteStartRequested();
-        try {
-            if (Build.VERSION.SDK_INT >= 26) {
-                startForegroundService(service);
-            } else {
-                startService(service);
-            }
-        } catch (RuntimeException error) {
-            android.util.Log.w("cranpose", "background work service could not start", error);
-        }
+        CranposeBackgroundService.start(this);
     }
 
     private CranposeCamera cranposeCamera() {
