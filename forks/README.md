@@ -16,12 +16,13 @@ formatting, spelling and diff gates skip the forks.
 
 Upstream: <https://github.com/gfx-rs/wgpu>, commit
 `40f4a34ebaf56f9a046231f54125ad046239d3f3` (`wgpu-hal` 30.0.1).
-`cranpose-wgpu-hal` is at 30.0.9 for the catch-up barrier, the Metal
+`cranpose-wgpu-hal` is at 30.0.10 for the catch-up barrier, the Metal
 pipeline switch, the dedicated Vulkan allocations, the GL point size, the
 GL state tracker, the web surface usages, the boxed GL copy commands, the
-Vulkan command pools that give a burst's memory back and the GL shaders
-without the branches their constants decide below, and
-`cranpose-wgpu-core` and `cranpose-wgpu` are at 30.0.9 to require it.
+Vulkan command pools that give a burst's memory back, the GL shaders
+without the branches their constants decide and the GL program status read
+only on failure below, and `cranpose-wgpu-core` and `cranpose-wgpu` are at
+30.0.10 to require it.
 
 | fork | upstream |
 | --- | --- |
@@ -145,6 +146,17 @@ functions only the dropped sides called and validates the module again
 (`wgpu_hal::auxil::prune`). A solid fill program went from 31 KB of vertex
 and 25 KB of fragment GLSL to 13 and 12 KB, and its link from 510 to 30
 ms. The frozen gauntlet frame on WebGL is the same to the pixel.
+
+### GL programs read their shader status only when they fail to link
+
+Upstream's GL device reads each shader's compile status and info log, then
+the program's link status and info log, for every pipeline. In WebGL each
+of these reads waits for a round trip to the GPU process, and the first
+one also waits for the compile. The fork reads only the link status; a
+failed link then reads the shaders' status and logs to report which stage
+failed, and the program's log is read only for debug logging. In Chrome on
+a Huawei Mate 20 X the gauntlet's pipeline creation at start went from
+about 396 to 302 ms (two profiles each).
 
 ### The GL queue skips calls that set what the context holds
 
