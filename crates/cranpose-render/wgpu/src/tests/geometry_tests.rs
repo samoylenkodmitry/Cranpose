@@ -3,7 +3,7 @@ use cranpose_ui_graphics::Rect;
 use super::{
     SegmentTransform, axis_aligned_quad_rect, canonicalize_device_coordinate,
     canonicalized_scaled_quad, canonicalized_scaled_rect,
-    translation_stable_anchored_device_pixel_bounds,
+    translation_stable_anchored_device_pixel_bounds, truncated_round,
 };
 use crate::rect_to_quad;
 
@@ -222,4 +222,55 @@ fn composed_segment_transforms_apply_the_inner_one_first() {
     let unit = rect(0.0, 0.0, 1.0, 1.0);
     assert_eq!(composed.target_bounds(unit), rect(9.0, 25.0, 1.0, 1.0));
     assert_eq!(composed.segment_bounds(rect(9.0, 25.0, 1.0, 1.0)), unit);
+}
+
+#[test]
+fn truncated_round_matches_round_on_ties_signs_and_extremes() {
+    let values = [
+        0.0,
+        -0.0,
+        0.5,
+        -0.5,
+        1.5,
+        -1.5,
+        2.5,
+        -2.5,
+        0.49999999999999994,
+        -0.49999999999999994,
+        0.5000000000000001,
+        0.3,
+        -0.3,
+        0.7,
+        -0.7,
+        4503599627370495.5,
+        -4503599627370495.5,
+        4503599627370497.0,
+        9007199254740993.0,
+        f64::MAX,
+        f64::MIN,
+        f64::MIN_POSITIVE,
+        -f64::MIN_POSITIVE,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        12345.0625 * 16.0,
+        -98765.4375 * 16.0,
+    ];
+    for value in values {
+        let expected = value.round();
+        let actual = truncated_round(value);
+        assert_eq!(
+            actual.to_bits(),
+            expected.to_bits(),
+            "{value:e}: {actual:e} against {expected:e}"
+        );
+    }
+    assert!(truncated_round(f64::NAN).is_nan());
+    for step in -4000..4000 {
+        let value = f64::from(step) / 16.0 + f64::from(step) * 1e-9;
+        assert_eq!(
+            truncated_round(value).to_bits(),
+            value.round().to_bits(),
+            "{value:e}"
+        );
+    }
 }

@@ -85,3 +85,52 @@ fn a_write_longer_than_a_staging_chunk_lands_whole_at_its_offset() {
         "every piece of the write lands at its place"
     );
 }
+
+#[test]
+fn queued_writes_land_in_order_across_frames_and_buffers() {
+    let (_lock, device, queue) = super::super::upload_test_device();
+    let buffer = |size: u64, usage: wgpu::BufferUsages| {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size,
+            usage,
+            mapped_at_creation: false,
+        })
+    };
+    let copy = wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
+    let read = wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST;
+    let first = buffer(32, copy);
+    let second = buffer(16, copy);
+    let readback = [buffer(32, read), buffer(16, read)];
+    let mut uploads = BufferUploads::default();
+    let mut expected = ([0u8; 32], [0u8; 16]);
+    for frame in 1..=6u8 {
+        let large = vec![frame; 4 * (1 + usize::from(frame) * 3000)];
+        let scratch = buffer(large.len() as u64, copy);
+        uploads.queued.stage(&first, 0, &[frame; 8]);
+        uploads.queued.stage(&first, 8, &[frame + 100; 4]);
+        uploads.queued.stage(&second, 4, &[frame; 8]);
+        uploads.queued.stage(&scratch, 0, &large);
+        uploads.queued.stage(&first, 4, &[frame + 50; 8]);
+        uploads.queued.stage(&second, 0, &[]);
+        expected.0[..4].fill(frame);
+        expected.0[4..12].fill(frame + 50);
+        expected.1[4..12].fill(frame);
+        uploads.flush_queued(&device, &queue);
+        let mut encoder = uploads
+            .take_before_passes()
+            .expect("queued writes copy ahead of the passes");
+        encoder.copy_buffer_to_buffer(&first, 0, &readback[0], 0, 32);
+        encoder.copy_buffer_to_buffer(&second, 0, &readback[1], 0, 16);
+        let submission = queue.submit([encoder.finish()]);
+        assert_eq!(
+            super::super::read_uploaded_bytes(&device, &readback[0], submission.clone()),
+            expected.0
+        );
+        assert_eq!(
+            super::super::read_uploaded_bytes(&device, &readback[1], submission),
+            expected.1
+        );
+        uploads.reset();
+    }
+}

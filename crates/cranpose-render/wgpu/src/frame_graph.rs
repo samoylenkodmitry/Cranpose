@@ -544,6 +544,11 @@ impl WgpuFrameGraphExecutor {
         Self::default()
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn batch_queue_writes(&mut self, batched: bool) {
+        self.upload_allocators.buffers.batch_queued(batched);
+    }
+
     pub(crate) fn init_pass_timing(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         if crate::pass_timing::pass_timing_requested() {
             self.pass_timer = PassTimer::for_device(device, queue);
@@ -627,6 +632,7 @@ impl WgpuFrameGraphExecutor {
         label: Option<&'static str>,
     ) -> WgpuFrameEncoder<'a> {
         WgpuFrameEncoder {
+            device,
             queue,
             encoder: Self::create_command_encoder(device, label),
             uploads: &mut self.upload_allocators,
@@ -1185,6 +1191,7 @@ impl FrameCommandRecorder for PassContext<'_> {
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) struct WgpuFrameEncoder<'a> {
+    device: &'a wgpu::Device,
     queue: &'a wgpu::Queue,
     encoder: wgpu::CommandEncoder,
     uploads: &'a mut FrameUploadAllocators,
@@ -1211,6 +1218,7 @@ impl WgpuFrameEncoder<'_> {
         let copies = self.copies;
         let mut transient_releases = self.transient_releases;
         let uploads = self.uploads.encode_pending(self.queue);
+        self.uploads.buffers.flush_queued(self.device, self.queue);
         self.uploads.buffers.finish();
         self.uploads.finish_frame();
         let before_passes = self.uploads.buffers.take_before_passes();

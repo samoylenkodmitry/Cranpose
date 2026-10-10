@@ -3304,6 +3304,8 @@ impl GpuRenderer {
         let effects_ms = instant_ms(effects_started, Instant::now());
         let mut frame_graph_executor = WgpuFrameGraphExecutor::new();
         frame_graph_executor.init_pass_timing(&device, &queue);
+        #[cfg(target_arch = "wasm32")]
+        frame_graph_executor.batch_queue_writes(adapter_backend == wgpu::Backend::BrowserWebGpu);
         let shape_shader = SharedShader::new(
             &device,
             adapter_backend,

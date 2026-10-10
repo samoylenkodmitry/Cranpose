@@ -214,6 +214,7 @@ fn read_sources(
     for (index, (source, offset)) in sources.iter().enumerate() {
         encoder.copy_buffer_to_buffer(source, *offset, &readback, index as u64 * 16, 16);
     }
+    belt.flush_queued(device, queue);
     belt.finish();
     let copies = belt.take_before_passes().map(wgpu::CommandEncoder::finish);
     let submission = queue.submit(copies.into_iter().chain([encoder.finish()]));
@@ -306,10 +307,13 @@ fn check_staged_uploads(
 fn vertex_uploads_written_as_they_come_land_whole_across_growth() {
     let (_lock, device, queue) = super::upload_test_device();
     for mode in upload_modes(&device) {
-        check_written_uploads(&device, &queue, mode, &device);
+        check_written_uploads(&device, &queue, mode, &device, false);
     }
-    // The web's frame encoder writes through the queue.
-    check_written_uploads(&device, &queue, super::UploadMode::Copied, &queue);
+    // The web's frame encoder writes through the queue, alone on WebGL and
+    // gathered into one write in a browser's WebGPU.
+    for batched in [false, true] {
+        check_written_uploads(&device, &queue, super::UploadMode::Copied, &queue, batched);
+    }
 }
 
 fn check_written_uploads(
@@ -317,6 +321,7 @@ fn check_written_uploads(
     queue: &wgpu::Queue,
     mode: super::UploadMode,
     writer: &impl super::BeforePassWriter,
+    batched: bool,
 ) {
     // The frame's rings, readable back for the test.
     let readable = wgpu::BufferUsages::COPY_SRC;
@@ -340,6 +345,7 @@ fn check_written_uploads(
         ]),
         ..super::FrameUploadAllocators::default()
     };
+    allocators.buffers.batch_queued(batched);
     let odd: Vec<u8> = (1..=13).collect();
     let large = vec![2; MIN_UPLOAD_BUFFER_BYTES as usize * 2];
     let last = [3; 16];
