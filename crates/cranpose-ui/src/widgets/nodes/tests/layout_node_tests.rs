@@ -65,6 +65,7 @@ fn bubbling_preserves_the_layout_nodes_existing_owner() {
 fn modifier_slices_cache_reuses_unique_snapshot_allocation() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut node = fresh_node();
+    node.set_modifier(Modifier::empty().padding(2.0));
     let snapshot = node.modifier_slices_snapshot();
     let snapshot_ptr = Rc::as_ptr(&snapshot);
     drop(snapshot);

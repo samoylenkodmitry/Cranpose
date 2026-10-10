@@ -658,27 +658,53 @@ pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices 
     slices
 }
 
-/// Collects modifier node slices into an existing buffer to reuse allocations.
-///
-/// Single-pass: iterates the chain once instead of 4 separate capability-filtered
-/// traversals, reducing per-node `RefCell::borrow()` overhead.
-/// Collects `chain`'s slices into the node's shared snapshot. The snapshot's
-/// storage is reused when nothing else holds it; one the render graph still
-/// shares is left to the graph and replaced, not cloned only to be cleared.
-/// Its draws and text read their place from `geometry`, which the node's
-/// layout writes, and until then sit inside the padding before them on the
-/// device pixel grid of `density`.
-pub(crate) fn collect_modifier_slices_into_shared(
-    chain: &ModifierNodeChain,
-    slices: &mut Rc<ModifierNodeSlices>,
-    geometry: &Rc<CoordinatorGeometry>,
-    density: f32,
-) {
-    if Rc::get_mut(slices).is_none() {
-        *slices = Rc::default();
+/// A node's modifier slices, shared with the render graph. A node whose
+/// chain draws, lays out and handles pointers in none of its modifiers holds
+/// none: it reads the one empty snapshot such nodes share.
+#[derive(Default)]
+pub(crate) struct SlicesSnapshot(std::cell::Cell<Option<Rc<ModifierNodeSlices>>>);
+
+thread_local! {
+    static EMPTY_SLICES: Rc<ModifierNodeSlices> = Rc::default();
+}
+
+impl SlicesSnapshot {
+    pub(crate) fn get(&self) -> Rc<ModifierNodeSlices> {
+        let snapshot = self.0.take();
+        let shared = snapshot.clone();
+        self.0.set(snapshot);
+        shared.unwrap_or_else(|| EMPTY_SLICES.with(Rc::clone))
     }
-    if let Some(slices) = Rc::get_mut(slices) {
-        collect_modifier_slices_into(chain, slices, geometry, density);
+
+    /// Collects `chain`'s slices into the snapshot. Its storage is reused
+    /// when nothing else holds it; one the render graph still shares is left
+    /// to the graph and replaced, not cloned only to be cleared. The draws
+    /// and text read their place from `geometry`, which the node's layout
+    /// writes, and until then sit inside the padding before them on the
+    /// device pixel grid of `density`.
+    pub(crate) fn collect(
+        &self,
+        chain: &ModifierNodeChain,
+        geometry: &Rc<CoordinatorGeometry>,
+        density: f32,
+    ) {
+        if !chain.capabilities().intersects(
+            NodeCapabilities::POINTER_INPUT | NodeCapabilities::DRAW | NodeCapabilities::LAYOUT,
+        ) {
+            self.0.set(None);
+            return;
+        }
+        let mut snapshot = self.0.take();
+        if !snapshot
+            .as_mut()
+            .is_some_and(|slices| Rc::get_mut(slices).is_some())
+        {
+            snapshot = Some(Rc::default());
+        }
+        if let Some(slices) = snapshot.as_mut().and_then(Rc::get_mut) {
+            collect_modifier_slices_into(chain, slices, geometry, density);
+        }
+        self.0.set(snapshot);
     }
 }
 

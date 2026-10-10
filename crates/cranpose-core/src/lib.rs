@@ -675,15 +675,12 @@ thread_local! {
     static DEBUG_SCOPE_TRACKING_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
 }
 
-enum RecomposeCallback {
-    Static(fn(&Composer)),
-    /// A composable's body. The scope passes itself when it runs, so the
-    /// callback needs neither a second box nor a reference back to its
-    /// scope; a capture-free body records its type to be kept as is.
-    Boxed {
-        body: Box<dyn FnMut(&Composer) + 'static>,
-        stateless_body: Option<TypeId>,
-    },
+/// A composable's body. The scope passes itself when it runs, so the
+/// callback needs neither a second box nor a reference back to its scope; a
+/// capture-free body records how to name its type, to be kept as is.
+struct RecomposeCallback {
+    body: Box<dyn FnMut(&Composer) + 'static>,
+    stateless_body: Option<fn() -> TypeId>,
 }
 
 thread_local! {
@@ -698,16 +695,42 @@ fn note_scope_activity_change() {
     let _ = SCOPE_ACTIVITY_EPOCH.try_with(|epoch| epoch.set(epoch.get() + 1));
 }
 
-fn link_scope(link: &RefCell<Option<Weak<RecomposeScopeInner>>>, target: Option<&RecomposeScope>) {
-    let mut link = link.borrow_mut();
-    if link.as_ref().map(Weak::as_ptr) != target.map(|scope| Rc::as_ptr(&scope.inner)) {
-        *link = target.map(RecomposeScope::downgrade);
-        note_scope_activity_change();
-    }
+/// Runs `read` on what `cell` holds and puts it back: a scope's links are
+/// read this way rather than through a `RefCell`, whose borrow flag would
+/// take a word in every scope of a composition. `read` must not reach the
+/// same cell again.
+fn read_cell<T: Default, R>(cell: &Cell<T>, read: impl FnOnce(&T) -> R) -> R {
+    let value = cell.take();
+    let result = read(&value);
+    cell.set(value);
+    result
 }
 
+/// Like [`read_cell`], for a change to what `cell` holds.
+fn update_cell<T: Default, R>(cell: &Cell<T>, update: impl FnOnce(&mut T) -> R) -> R {
+    let mut value = cell.take();
+    let result = update(&mut value);
+    cell.set(value);
+    result
+}
+
+type ScopeLink = Cell<Option<Weak<RecomposeScopeInner>>>;
+
+fn link_scope(link: &ScopeLink, target: Option<&RecomposeScope>) {
+    update_cell(link, |link| {
+        if link.as_ref().map(Weak::as_ptr) != target.map(|scope| Rc::as_ptr(&scope.inner)) {
+            *link = target.map(RecomposeScope::downgrade);
+            note_scope_activity_change();
+        }
+    });
+}
+
+/// The node id a scope's `parent_hint` holds for none: ids index the
+/// applier's nodes, which never reach it.
+const NO_PARENT_HINT: NodeId = NodeId::MAX;
+
 pub(crate) struct RecomposeScopeInner {
-    runtime: RuntimeHandle,
+    runtime: runtime::ScopeRuntime,
     invalid: Cell<bool>,
     enqueued: Cell<bool>,
     active: Cell<bool>,
@@ -719,20 +742,21 @@ pub(crate) struct RecomposeScopeInner {
     force_recompose: Cell<bool>,
     derivation: Cell<bool>,
     retention_mode: Cell<RetentionMode>,
-    parent_hint: Cell<Option<NodeId>>,
+    /// [`NO_PARENT_HINT`] for none.
+    parent_hint: Cell<NodeId>,
     group_anchor: Cell<AnchorId>,
-    recompose: RefCell<Option<RecomposeCallback>>,
-    parent_scope: RefCell<Option<Weak<RecomposeScopeInner>>>,
-    lifetime_owner_scope: RefCell<Option<Weak<RecomposeScopeInner>>>,
-    local_stack: RefCell<LocalStackSnapshot>,
+    recompose: Cell<Option<RecomposeCallback>>,
+    parent_scope: ScopeLink,
+    lifetime_owner_scope: ScopeLink,
+    local_stack: Cell<LocalStackSnapshot>,
     #[cfg(feature = "inspection")]
     source_trace: RefCell<Rc<[source_trace::SourceLocation]>>,
     #[cfg(all(feature = "inspection", debug_assertions))]
     recompositions: std::cell::OnceCell<source_trace::RecompositionCounter>,
     slots_storage_key: Cell<usize>,
-    slots_runtime_state: RefCell<Option<std::rc::Weak<crate::composer::ComposerRuntimeState>>>,
-    state_subscriptions: RefCell<StateIds>,
-    invalidation_sources: RefCell<StateIds>,
+    slots_runtime_state: Cell<Option<std::rc::Weak<crate::composer::ComposerRuntimeState>>>,
+    state_subscriptions: Cell<StateIds>,
+    invalidation_sources: Cell<StateIds>,
     unknown_invalidation_source: Cell<bool>,
 }
 
@@ -746,21 +770,16 @@ enum ScopeOwner {
 
 impl RecomposeScopeInner {
     fn owner(&self) -> ScopeOwner {
-        let parent = self.parent_scope.borrow();
-        let lifetime_owner;
-        let owner = match parent.as_ref() {
-            Some(parent) => parent,
-            None => {
-                lifetime_owner = self.lifetime_owner_scope.borrow();
-                match lifetime_owner.as_ref() {
-                    Some(owner) => owner,
-                    None => return ScopeOwner::Root,
-                }
-            }
+        let upgrade = |owner: &Option<Weak<RecomposeScopeInner>>| {
+            owner.as_ref().map(|owner| {
+                owner
+                    .upgrade()
+                    .map_or(ScopeOwner::Dropped, ScopeOwner::Live)
+            })
         };
-        owner
-            .upgrade()
-            .map_or(ScopeOwner::Dropped, ScopeOwner::Live)
+        read_cell(&self.parent_scope, upgrade)
+            .or_else(|| read_cell(&self.lifetime_owner_scope, upgrade))
+            .unwrap_or(ScopeOwner::Root)
     }
 
     fn is_effectively_active(&self, epoch: u64) -> bool {
@@ -781,7 +800,7 @@ impl RecomposeScopeInner {
         active
     }
 
-    fn new(runtime: RuntimeHandle) -> Self {
+    fn new(runtime: runtime::ScopeRuntime) -> Self {
         runtime.increment_live_recompose_scope_count();
         Self {
             runtime,
@@ -796,20 +815,20 @@ impl RecomposeScopeInner {
             force_recompose: Cell::new(false),
             derivation: Cell::new(false),
             retention_mode: Cell::new(RetentionMode::DisposeWhenInactive),
-            parent_hint: Cell::new(None),
+            parent_hint: Cell::new(NO_PARENT_HINT),
             group_anchor: Cell::new(AnchorId::INVALID),
-            recompose: RefCell::new(None),
-            parent_scope: RefCell::new(None),
-            lifetime_owner_scope: RefCell::new(None),
-            local_stack: RefCell::new(None),
+            recompose: Cell::new(None),
+            parent_scope: Cell::new(None),
+            lifetime_owner_scope: Cell::new(None),
+            local_stack: Cell::new(None),
             #[cfg(feature = "inspection")]
             source_trace: RefCell::new(Rc::from([])),
             #[cfg(all(feature = "inspection", debug_assertions))]
             recompositions: std::cell::OnceCell::new(),
             slots_storage_key: Cell::new(0),
-            slots_runtime_state: RefCell::new(None),
-            state_subscriptions: RefCell::new(StateIds::new()),
-            invalidation_sources: RefCell::new(StateIds::new()),
+            slots_runtime_state: Cell::new(None),
+            state_subscriptions: Cell::new(StateIds::new()),
+            invalidation_sources: Cell::new(StateIds::new()),
             unknown_invalidation_source: Cell::new(false),
         }
     }
@@ -888,7 +907,7 @@ impl RecomposeScope {
 
     fn new(runtime: RuntimeHandle) -> Self {
         Self {
-            inner: Rc::new(RecomposeScopeInner::new(runtime)),
+            inner: Rc::new(RecomposeScopeInner::new(runtime.scope_runtime())),
         }
     }
 
@@ -937,17 +956,21 @@ impl RecomposeScope {
     }
 
     fn record_state_subscription(&self, state_id: StateId) {
-        push_unique_state_id(&mut self.inner.state_subscriptions.borrow_mut(), state_id);
+        update_cell(&self.inner.state_subscriptions, |ids| {
+            push_unique_state_id(ids, state_id);
+        });
     }
 
     fn record_unknown_invalidation_source(&self) {
         self.inner.unknown_invalidation_source.set(true);
-        self.inner.invalidation_sources.borrow_mut().clear();
+        update_cell(&self.inner.invalidation_sources, StateIds::clear);
     }
 
     fn record_state_invalidation_source(&self, state_id: StateId) {
         if !self.inner.unknown_invalidation_source.get() {
-            push_unique_state_id(&mut self.inner.invalidation_sources.borrow_mut(), state_id);
+            update_cell(&self.inner.invalidation_sources, |ids| {
+                push_unique_state_id(ids, state_id);
+            });
         }
     }
 
@@ -976,7 +999,7 @@ impl RecomposeScope {
         self.inner.force_reuse.set(false);
         self.inner.force_recompose.set(false);
         self.inner.unknown_invalidation_source.set(false);
-        self.inner.invalidation_sources.borrow_mut().clear();
+        update_cell(&self.inner.invalidation_sources, StateIds::clear);
         if self.inner.enqueued.replace(false) {
             self.inner.runtime.mark_scope_recomposed();
         }
@@ -990,91 +1013,68 @@ impl RecomposeScope {
         }
     }
 
-    fn set_recompose_fn(&self, callback: fn(&Composer)) {
-        #[cfg(feature = "inspection")]
-        self.inner
-            .source_trace
-            .replace(source_trace::current_source_trace());
-        *self.inner.recompose.borrow_mut() = Some(RecomposeCallback::Static(callback));
-    }
-
     fn set_boxed_recompose(
         &self,
         body: Box<dyn FnMut(&Composer) + 'static>,
-        stateless_body: Option<TypeId>,
+        stateless_body: Option<fn() -> TypeId>,
     ) {
         #[cfg(feature = "inspection")]
         self.inner
             .source_trace
             .replace(source_trace::current_source_trace());
-        *self.inner.recompose.borrow_mut() = Some(RecomposeCallback::Boxed {
+        self.inner.recompose.set(Some(RecomposeCallback {
             body,
             stateless_body,
-        });
+        }));
     }
 
     fn reruns_stateless(&self, body: TypeId) -> bool {
-        matches!(
-            &*self.inner.recompose.borrow(),
-            Some(RecomposeCallback::Boxed {
-                stateless_body: Some(current_body),
-                ..
-            }) if *current_body == body
-        )
+        read_cell(&self.inner.recompose, |callback| {
+            callback
+                .as_ref()
+                .and_then(|callback| callback.stateless_body)
+                .is_some_and(|current_body| current_body() == body)
+        })
     }
 
     fn run_recompose(&self, composer: &Composer) -> bool {
         #[cfg(feature = "inspection")]
         let _source_context = source_trace::restore_source_trace(&self.inner.source_trace.borrow());
-        let callback = self.inner.recompose.borrow_mut().take();
-        if let Some(callback) = callback {
-            let callback = match callback {
-                RecomposeCallback::Static(callback) => {
-                    callback(composer);
-                    RecomposeCallback::Static(callback)
-                }
-                RecomposeCallback::Boxed {
-                    mut body,
-                    stateless_body,
-                } => {
-                    body(composer);
-                    RecomposeCallback::Boxed {
-                        body,
-                        stateless_body,
-                    }
-                }
-            };
-            let mut slot = self.inner.recompose.borrow_mut();
+        let Some(mut callback) = self.inner.recompose.take() else {
+            return false;
+        };
+        (callback.body)(composer);
+        // The body may have stored a new callback for the scope while it ran.
+        update_cell(&self.inner.recompose, |slot| {
             if slot.is_none() {
                 *slot = Some(callback);
             }
-            true
-        } else {
-            false
-        }
+        });
+        true
     }
 
     fn has_recompose_callback(&self) -> bool {
-        self.inner.recompose.borrow().is_some()
+        read_cell(&self.inner.recompose, Option::is_some)
     }
 
     fn snapshot_locals(&self, stack: &LocalStackSnapshot) {
-        let mut locals = self.inner.local_stack.borrow_mut();
-        let unchanged = match (&*locals, stack) {
-            (Some(current), Some(stack)) => Rc::ptr_eq(current, stack),
-            (current, stack) => current.is_none() && stack.is_none(),
-        };
-        if !unchanged {
-            locals.clone_from(stack);
-        }
+        update_cell(&self.inner.local_stack, |locals| {
+            let unchanged = match (&*locals, stack) {
+                (Some(current), Some(stack)) => Rc::ptr_eq(current, stack),
+                (current, stack) => current.is_none() && stack.is_none(),
+            };
+            if !unchanged {
+                locals.clone_from(stack);
+            }
+        });
     }
 
     fn local_stack(&self) -> LocalStackSnapshot {
-        self.inner.local_stack.borrow().clone()
+        read_cell(&self.inner.local_stack, Clone::clone)
     }
 
     fn set_parent_hint(&self, parent: Option<NodeId>) {
-        self.inner.parent_hint.set(parent);
+        self.inner.parent_hint.set(parent.unwrap_or(NO_PARENT_HINT));
     }
 
     fn set_parent_scope(&self, parent: Option<&RecomposeScope>) {
@@ -1082,11 +1082,9 @@ impl RecomposeScope {
     }
 
     fn parent_scope(&self) -> Option<RecomposeScope> {
-        self.inner
-            .parent_scope
-            .borrow()
-            .as_ref()
-            .and_then(RecomposeScope::upgrade)
+        read_cell(&self.inner.parent_scope, |parent| {
+            parent.as_ref().and_then(RecomposeScope::upgrade)
+        })
     }
 
     fn set_lifetime_owner_scope(&self, owner: Option<&RecomposeScope>) {
@@ -1095,11 +1093,9 @@ impl RecomposeScope {
 
     #[cfg(test)]
     fn lifetime_owner_scope(&self) -> Option<RecomposeScope> {
-        self.inner
-            .lifetime_owner_scope
-            .borrow()
-            .as_ref()
-            .and_then(RecomposeScope::upgrade)
+        read_cell(&self.inner.lifetime_owner_scope, |owner| {
+            owner.as_ref().and_then(RecomposeScope::upgrade)
+        })
     }
 
     fn callback_promotion_target(&self) -> Option<RecomposeScope> {
@@ -1114,7 +1110,7 @@ impl RecomposeScope {
     }
 
     fn parent_hint(&self) -> Option<NodeId> {
-        self.inner.parent_hint.get()
+        Some(self.inner.parent_hint.get()).filter(|&hint| hint != NO_PARENT_HINT)
     }
 
     pub(crate) fn group_anchor(&self) -> AnchorId {
@@ -1127,14 +1123,15 @@ impl RecomposeScope {
 
     fn set_slots_host(&self, host: &SlotsHost) {
         let storage_key = host.storage_key();
-        let mut runtime_state = self.inner.slots_runtime_state.borrow_mut();
-        if self.inner.slots_storage_key.get() == storage_key
-            && runtime_state.as_ref().map(std::rc::Weak::as_ptr) == host.runtime_state_ptr()
-        {
-            return;
-        }
-        self.inner.slots_storage_key.set(storage_key);
-        *runtime_state = host.runtime_state().map(|state| Rc::downgrade(&state));
+        update_cell(&self.inner.slots_runtime_state, |runtime_state| {
+            if self.inner.slots_storage_key.get() == storage_key
+                && runtime_state.as_ref().map(std::rc::Weak::as_ptr) == host.runtime_state_ptr()
+            {
+                return;
+            }
+            self.inner.slots_storage_key.set(storage_key);
+            *runtime_state = host.runtime_state().map(|state| Rc::downgrade(&state));
+        });
     }
 
     pub(crate) fn slots_storage_key(&self) -> Option<usize> {
@@ -1147,21 +1144,18 @@ impl RecomposeScope {
     pub(crate) fn slots_host_identity(
         &self,
     ) -> (usize, *const crate::composer::ComposerRuntimeState) {
-        let state = self
-            .inner
-            .slots_runtime_state
-            .borrow()
-            .as_ref()
-            .map_or(std::ptr::null(), std::rc::Weak::as_ptr);
+        let state = read_cell(&self.inner.slots_runtime_state, |state| {
+            state
+                .as_ref()
+                .map_or(std::ptr::null(), std::rc::Weak::as_ptr)
+        });
         (self.inner.slots_storage_key.get(), state)
     }
 
     pub(crate) fn slots_runtime_state(&self) -> Option<Rc<crate::composer::ComposerRuntimeState>> {
-        self.inner
-            .slots_runtime_state
-            .borrow()
-            .as_ref()
-            .and_then(std::rc::Weak::upgrade)
+        read_cell(&self.inner.slots_runtime_state, |state| {
+            state.as_ref().and_then(std::rc::Weak::upgrade)
+        })
     }
 
     pub fn deactivate(&self) {
@@ -1240,15 +1234,13 @@ impl RecomposeScope {
         if self.inner.unknown_invalidation_source.get() {
             return None;
         }
-        let sources = self.inner.invalidation_sources.borrow();
-        if sources.is_empty() {
-            return None;
-        }
-        Some(
-            sources
-                .iter()
-                .all(|source| allowed_sources.contains(source)),
-        )
+        read_cell(&self.inner.invalidation_sources, |sources| {
+            (!sources.is_empty()).then(|| {
+                sources
+                    .iter()
+                    .all(|source| allowed_sources.contains(source))
+            })
+        })
     }
 
     fn has_unknown_invalidation_source(&self) -> bool {

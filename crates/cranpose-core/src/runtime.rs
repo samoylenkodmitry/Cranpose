@@ -1008,6 +1008,43 @@ pub struct RuntimeHandle {
     id: RuntimeId,
 }
 
+/// What a recompose scope keeps of its runtime: one word, where a
+/// [`RuntimeHandle`] takes four, on every scope of a composition. Each call
+/// does nothing once the runtime is gone, as the handle's would.
+pub(crate) struct ScopeRuntime(Weak<RuntimeInner>);
+
+impl ScopeRuntime {
+    pub(crate) fn mark_scope_recomposed(&self) {
+        if let Some(inner) = self.0.upgrade() {
+            inner.mark_scope_recomposed();
+        }
+    }
+
+    pub(crate) fn register_invalid_scope(&self, scope: Weak<RecomposeScopeInner>) {
+        if let Some(inner) = self.0.upgrade() {
+            inner.register_invalid_scope(scope);
+        }
+    }
+
+    pub(crate) fn unregister_state_scope(&self, id: StateId, scope_id: ScopeId) {
+        if let Some(inner) = self.0.upgrade() {
+            inner.state_arena.unregister_scope(id, scope_id);
+        }
+    }
+
+    pub(crate) fn increment_live_recompose_scope_count(&self) {
+        if let Some(inner) = self.0.upgrade() {
+            inner.increment_live_recompose_scope_count();
+        }
+    }
+
+    pub(crate) fn decrement_live_recompose_scope_count(&self) {
+        if let Some(inner) = self.0.upgrade() {
+            inner.decrement_live_recompose_scope_count();
+        }
+    }
+}
+
 pub struct TaskHandle {
     id: u64,
     runtime: RuntimeHandle,
@@ -1201,12 +1238,6 @@ impl RuntimeHandle {
             .unwrap_or_default()
     }
 
-    pub(crate) fn unregister_state_scope(&self, id: StateId, scope_id: ScopeId) {
-        if let Some(inner) = self.inner.upgrade() {
-            inner.state_arena.unregister_scope(id, scope_id);
-        }
-    }
-
     pub fn schedule(&self) {
         if let Some(inner) = self.inner.upgrade() {
             inner.schedule();
@@ -1353,16 +1384,9 @@ impl RuntimeHandle {
             .is_some_and(|inner| inner.has_updates())
     }
 
-    pub(crate) fn mark_scope_recomposed(&self) {
-        if let Some(inner) = self.inner.upgrade() {
-            inner.mark_scope_recomposed();
-        }
-    }
-
-    pub(crate) fn register_invalid_scope(&self, scope: Weak<RecomposeScopeInner>) {
-        if let Some(inner) = self.inner.upgrade() {
-            inner.register_invalid_scope(scope);
-        }
+    /// The link a recompose scope keeps to this runtime.
+    pub(crate) fn scope_runtime(&self) -> ScopeRuntime {
+        ScopeRuntime(Weak::clone(&self.inner))
     }
 
     pub(crate) fn requeue_invalid_scope(&self, scope: &RecomposeScope) {
@@ -1412,18 +1436,6 @@ impl RuntimeHandle {
         self.inner
             .upgrade()
             .is_some_and(|inner| inner.has_invalid_scopes())
-    }
-
-    pub(crate) fn increment_live_recompose_scope_count(&self) {
-        if let Some(inner) = self.inner.upgrade() {
-            inner.increment_live_recompose_scope_count();
-        }
-    }
-
-    pub(crate) fn decrement_live_recompose_scope_count(&self) {
-        if let Some(inner) = self.inner.upgrade() {
-            inner.decrement_live_recompose_scope_count();
-        }
     }
 
     fn live_recompose_scope_count(&self) -> usize {

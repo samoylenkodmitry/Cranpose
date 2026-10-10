@@ -7,11 +7,10 @@ use crate::{modifier::Color, modifier_nodes::PaddingNode};
 fn attaches_padding_node_and_invalidates_layout() {
     let mut handle = ModifierChainHandle::new();
 
-    let _ = handle.update(&Modifier::empty().padding(8.0));
+    let invalidations = handle.update(&Modifier::empty().padding(8.0));
 
     assert_eq!(handle.chain().len(), 1);
 
-    let invalidations = handle.take_invalidations();
     assert_eq!(
         invalidations.as_slice(),
         [ModifierInvalidation::new(
@@ -27,14 +26,13 @@ fn reuses_nodes_between_updates() {
 
     let _ = handle.update(&Modifier::empty().padding(12.0));
     let first_ptr = node_ptr::<PaddingNode>(&handle);
-    handle.take_invalidations();
 
-    let _ = handle.update(&Modifier::empty().padding(12.0));
+    let invalidations = handle.update(&Modifier::empty().padding(12.0));
     let second_ptr = node_ptr::<PaddingNode>(&handle);
 
     assert_eq!(first_ptr, second_ptr, "expected the node to be reused");
     assert!(
-        handle.take_invalidations().is_empty(),
+        invalidations.is_empty(),
         "no additional invalidations should be issued for a pure update"
     );
 }
@@ -82,7 +80,6 @@ fn capability_mask_updates_with_chain() {
     assert_eq!(handle.capabilities(), NodeCapabilities::LAYOUT);
     assert!(handle.has_layout_nodes());
     assert!(!handle.has_draw_nodes());
-    handle.take_invalidations();
 
     let color = Color(0.5, 0.6, 0.7, 1.0);
     let _ = handle.update(&Modifier::empty().background(color));
@@ -95,10 +92,8 @@ fn capability_mask_updates_with_chain() {
 fn offset_update_invalidates_layout_for_retained_placement() {
     let mut handle = ModifierChainHandle::new();
     let _ = handle.update(&Modifier::empty().offset(0.0, 0.0));
-    handle.take_invalidations();
 
-    let _ = handle.update(&Modifier::empty().offset(12.0, 0.0));
-    let invalidations = handle.take_invalidations();
+    let invalidations = handle.update(&Modifier::empty().offset(12.0, 0.0));
 
     assert!(
         invalidations

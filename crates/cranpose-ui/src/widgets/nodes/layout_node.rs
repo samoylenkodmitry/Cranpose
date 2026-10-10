@@ -518,7 +518,7 @@ pub struct LayoutNode {
     id: NodeIdCell,
     parent: NodeIdCell,
     folded_parent: NodeIdCell,
-    modifier_slices_snapshot: RefCell<Rc<ModifierNodeSlices>>,
+    modifier_slices_snapshot: crate::modifier::SlicesSnapshot,
 
     /// The chain's modal and hidden flags, read by the modal count and the
     /// modal walk: dropped whenever the chain syncs or semantics are
@@ -606,7 +606,7 @@ impl LayoutNode {
             owner_context_id: Cell::new(None),
             debug_modifiers: Cell::new(false),
             is_virtual,
-            modifier_slices_snapshot: RefCell::new(Rc::default()),
+            modifier_slices_snapshot: crate::modifier::SlicesSnapshot::default(),
             modifier_slices_dirty: Cell::new(true),
             layout_state: Rc::new(RefCell::new(LayoutState::default())),
             layout_runtime_state,
@@ -660,19 +660,22 @@ impl LayoutNode {
         };
         self.modifier_chain
             .set_debug_logging(self.debug_modifiers.get());
-        self.modifier_chain.set_node_id(self.id.get());
+        let mut context = self.modifier_chain.context(self.id.get());
         let in_place = text_only
             && self
                 .modifier_chain
                 .update_elements_in_place::<crate::text_modifier_node::TextModifierElement>(
                     &self.modifier,
+                    &mut context,
                 );
         let modifier_local_invalidations = if in_place {
             ModifierInvalidations::new()
         } else {
-            let invalidations = self
-                .modifier_chain
-                .update_with_resolver(&self.modifier, &mut resolver);
+            let invalidations = self.modifier_chain.update_with_resolver(
+                &self.modifier,
+                &mut resolver,
+                &mut context,
+            );
             self.refresh_parent_data();
             invalidations
         };
@@ -693,7 +696,7 @@ impl LayoutNode {
             self.modifier_slices_dirty.set(true);
         }
 
-        let mut invalidations = self.modifier_chain.take_invalidations();
+        let mut invalidations = context.take_invalidations();
         invalidations.extend(modifier_local_invalidations);
         self.dispatch_modifier_invalidations_with_prev(&invalidations, prev_caps, keep_slices);
         // An update in place leaves the node's parent, capabilities and
@@ -704,10 +707,8 @@ impl LayoutNode {
     }
 
     fn update_modifier_slices_cache(&self) {
-        let mut snapshot = self.modifier_slices_snapshot.borrow_mut();
-        crate::modifier::collect_modifier_slices_into_shared(
+        self.modifier_slices_snapshot.collect(
             self.modifier_chain.chain(),
-            &mut snapshot,
             &self.coordinator_geometry,
             self.density.density(),
         );
@@ -955,7 +956,8 @@ impl LayoutNode {
 
     /// Set this node's ID (called by applier after creation).
     pub fn set_node_id(&mut self, id: NodeId) {
-        if let Some(existing) = self.id.replace(Some(id))
+        let previous = self.id.replace(Some(id));
+        if let Some(existing) = previous
             && let Some(owner_context_id) = self.owner_context_id.take()
         {
             unregister_layout_node(owner_context_id, existing);
@@ -965,8 +967,9 @@ impl LayoutNode {
         self.owner_context_id.set(Some(owner_context_id));
         self.refresh_registry_state();
 
-        self.modifier_chain.set_node_id(Some(id));
-        let invalidations = self.modifier_chain.take_invalidations();
+        let mut context = self.modifier_chain.context(Some(id));
+        self.modifier_chain.move_to_node(previous, &mut context);
+        let invalidations = context.take_invalidations();
         self.dispatch_modifier_invalidations_with_prev(
             &invalidations,
             NodeCapabilities::empty(),
@@ -1101,7 +1104,7 @@ impl LayoutNode {
         if self.modifier_slices_dirty.get() {
             self.update_modifier_slices_cache();
         }
-        self.modifier_slices_snapshot.borrow().clone()
+        self.modifier_slices_snapshot.get()
     }
 
     /// Returns a clone of the current layout state.
@@ -1243,7 +1246,7 @@ impl Clone for LayoutNode {
             owner_context_id: Cell::new(None),
             debug_modifiers: Cell::new(self.debug_modifiers.get()),
             is_virtual: self.is_virtual,
-            modifier_slices_snapshot: RefCell::new(Rc::default()),
+            modifier_slices_snapshot: crate::modifier::SlicesSnapshot::default(),
             modifier_slices_dirty: Cell::new(true),
             layout_state: self.layout_state.clone(),
             layout_runtime_state: self.layout_runtime_state.clone(),
@@ -1256,9 +1259,7 @@ impl Clone for LayoutNode {
 
 impl Node for LayoutNode {
     fn mount(&mut self) {
-        let (chain, mut context) = self.modifier_chain.chain_and_context_mut();
-        chain.repair_chain();
-        chain.attach_nodes(&mut *context);
+        self.modifier_chain.remount(self.id.get());
         crate::modal_nodes::reach_changed(self.id.get());
     }
 

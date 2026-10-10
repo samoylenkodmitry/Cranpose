@@ -713,6 +713,7 @@ fn subcompose_modifier_slices_cache_reuses_unique_snapshot_allocation() {
         Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
     let mut node =
         SubcomposeLayoutNode::new(crate::modifier::Modifier::empty(), Rc::clone(&policy));
+    node.set_modifier(crate::modifier::Modifier::empty().padding(2.0));
     let snapshot = node.modifier_slices_snapshot();
     let snapshot_ptr = Rc::as_ptr(&snapshot);
     drop(snapshot);

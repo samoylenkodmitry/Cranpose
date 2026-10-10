@@ -49,13 +49,17 @@ const COLLINEAR_EPSILON_DP: f32 = 1.0e-3;
 ///
 /// A curve is `Copy` and rides in every [`crate::Density`], which each layout
 /// node keeps and the measurement path passes by value, so its knots live in
-/// a table shared by every curve with the same knots: a curve is 24 bytes.
+/// a table shared by every curve with the same knots, which it reaches by a
+/// thin pointer: a curve is 16 bytes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FontScaleCurve {
     scale: f32,
     fingerprint: u32,
-    knots: &'static [(f32, f32)],
+    knots: &'static Vec<(f32, f32)>,
 }
+
+/// The knots of every linear curve.
+static NO_KNOTS: Vec<(f32, f32)> = Vec::new();
 
 impl Default for FontScaleCurve {
     fn default() -> Self {
@@ -70,7 +74,7 @@ impl FontScaleCurve {
         Self {
             scale,
             fingerprint: 0,
-            knots: &[],
+            knots: &NO_KNOTS,
         }
     }
 
@@ -131,7 +135,7 @@ impl FontScaleCurve {
 
     /// The knots, ascending by sp. Empty for a linear curve.
     pub fn knots(self) -> &'static [(f32, f32)] {
-        self.knots
+        self.knots.as_slice()
     }
 
     /// How many [`FontScaleCurve::knots`] there are.
@@ -214,15 +218,17 @@ fn compress(samples: &[(f32, f32)]) -> Option<Vec<(f32, f32)>> {
 /// The table holding `knots`, shared with every curve that has the same
 /// knots. A process meets one table per font scale setting the user picks, so
 /// the tables are kept for its life.
-fn shared_knots(knots: Vec<(f32, f32)>) -> &'static [(f32, f32)] {
-    static TABLES: std::sync::Mutex<Vec<&'static [(f32, f32)]>> = std::sync::Mutex::new(Vec::new());
+fn shared_knots(mut knots: Vec<(f32, f32)>) -> &'static Vec<(f32, f32)> {
+    static TABLES: std::sync::Mutex<Vec<&'static Vec<(f32, f32)>>> =
+        std::sync::Mutex::new(Vec::new());
     let mut tables = TABLES
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(table) = tables.iter().find(|table| ***table == knots[..]) {
+    if let Some(table) = tables.iter().find(|table| ***table == knots) {
         return table;
     }
-    let table: &'static [(f32, f32)] = Box::leak(knots.into_boxed_slice());
+    knots.shrink_to_fit();
+    let table: &'static Vec<(f32, f32)> = Box::leak(Box::new(knots));
     tables.push(table);
     table
 }

@@ -1473,7 +1473,7 @@ struct LayoutRuntimeFrameBindingCleanup<'a> {
 
 impl Drop for LayoutRuntimeFrameBindingCleanup<'_> {
     fn drop(&mut self) {
-        self.state.borrow().frame.unbind();
+        self.state.borrow().unbind_children();
     }
 }
 
@@ -2065,9 +2065,9 @@ impl LayoutBuilderState {
             &mut pools.child_ids,
         );
 
-        if let Some(err) = runtime_state.frame.error.borrow_mut().take() {
-            for child_state in &runtime_state.child_states {
-                child_state.measured.borrow_mut().take();
+        if let Some(err) = runtime_state.take_child_error() {
+            for child_state in runtime_state.child_states() {
+                child_state.measured.take();
             }
             self.with_applier_result(|applier| {
                 applier.with_node::<LayoutNode, _>(node_id, |node| {
@@ -2155,8 +2155,8 @@ impl LayoutBuilderState {
             let frame = CoordinatorFrame::new(
                 &runtime_state.measure_policy,
                 &scope,
-                runtime_state.child_measurables.as_slice(),
-                &runtime_state.child_states,
+                runtime_state.child_measurables(),
+                runtime_state.child_states(),
                 &mut pools.placements,
                 &mut pools.child_ids,
             );
@@ -2166,11 +2166,11 @@ impl LayoutBuilderState {
         } else {
             policy_intrinsic(
                 runtime_state.measure_policy.as_ref(),
-                runtime_state.child_measurables.as_slice(),
+                runtime_state.child_measurables(),
                 kind,
             )
         };
-        match runtime_state.frame.error.borrow_mut().take() {
+        match runtime_state.take_child_error() {
             Some(err) => Err(err),
             None => Ok(Some(value)),
         }
@@ -2278,7 +2278,7 @@ impl LayoutBuilderState {
     ) -> Result<ChildChange, NodeError> {
         let runtime_state = runtime_state.borrow();
         let Some((offset, state)) = runtime_state
-            .child_states
+            .child_states()
             .get(*next_state..)
             .unwrap_or_default()
             .iter()
@@ -2376,8 +2376,7 @@ impl LayoutBuilderState {
         pass: ChildPass,
     ) -> Result<(), NodeError> {
         let mut runtime_state = runtime_state.borrow_mut();
-        runtime_state.frame.bind(self, pass);
-        runtime_state.reserve_children(child_ids.len());
+        runtime_state.bind_children(self, pass, child_ids.len());
         let mut bound = 0;
         for &child_id in child_ids {
             if self.bind_layout_child(applier, &mut runtime_state, bound, child_id)? {
@@ -2448,14 +2447,14 @@ impl LayoutBuilderState {
         if !chain.uses_chain {
             let measurement = runtime_state.measure_policy.measure_into(
                 &scope,
-                runtime_state.child_measurables.as_slice(),
+                runtime_state.child_measurables(),
                 constraints,
                 placements,
             );
             return ModifierChainMeasurement {
                 size: measurement.size,
                 alignment_lines: inherited_alignment_lines(
-                    &runtime_state.child_states,
+                    runtime_state.child_states(),
                     placements,
                     placement_indices,
                 )
@@ -2468,7 +2467,7 @@ impl LayoutBuilderState {
                     None
                 } else {
                     runtime_state.measure_policy.measure_hold(
-                        runtime_state.child_measurables.as_slice(),
+                        runtime_state.child_measurables(),
                         constraints,
                         measurement.size,
                     )
@@ -2479,8 +2478,8 @@ impl LayoutBuilderState {
         let frame = CoordinatorFrame::new(
             &runtime_state.measure_policy,
             &scope,
-            runtime_state.child_measurables.as_slice(),
-            &runtime_state.child_states,
+            runtime_state.child_measurables(),
+            runtime_state.child_states(),
             placements,
             placement_indices,
         );
@@ -2526,7 +2525,7 @@ impl LayoutBuilderState {
                 runtime_state.coordinator_chain.measured_hold(
                     cranpose_ui_layout::MeasureScope::density(&scope),
                     runtime_state.measure_policy.as_ref(),
-                    runtime_state.child_measurables.as_slice(),
+                    runtime_state.child_measurables(),
                 )
             },
         }
@@ -3136,13 +3135,15 @@ fn inherited_alignment_lines(
     let mut lines = AlignmentLines::default();
     for (index, child) in child_states.iter().enumerate() {
         let placement = placement_for_child(placements, placement_indices, index, child.node_id);
-        if let Some(measured) = child.measured.borrow().as_ref() {
-            lines.merge(
-                measured
-                    .alignment_lines_for_parent()
-                    .translated(child.placement_position(placement).y),
-            );
-        }
+        read_cell(&child.measured, |measured| {
+            if let Some(measured) = measured {
+                lines.merge(
+                    measured
+                        .alignment_lines_for_parent()
+                        .translated(child.placement_position(placement).y),
+                );
+            }
+        });
     }
     lines
 }
@@ -3165,23 +3166,40 @@ fn placement_for_child<'a>(
 }
 
 pub(crate) struct LayoutRuntimeState {
-    child_ids: Vec<NodeId>,
-    child_states: Vec<Rc<LayoutChildMeasureState>>,
-    child_measurables: Vec<Box<dyn Measurable>>,
+    /// `None` until the node first binds a child: most nodes are leaves.
+    children: Option<Box<LayoutChildren>>,
     coordinator_chain: CoordinatorChain,
     measure_policy: Rc<dyn MeasurePolicy>,
+}
+
+/// What a node keeps for measuring its children, in their order.
+struct LayoutChildren {
+    ids: Vec<NodeId>,
+    states: Vec<Rc<LayoutChildMeasureState>>,
+    measurables: Vec<Box<dyn Measurable>>,
     frame: Rc<LayoutChildFrame>,
+}
+
+impl LayoutChildren {
+    /// Room for exactly `count` children, where growth would make room for
+    /// four in each of the three lists. Children added later grow the lists
+    /// as usual.
+    fn with_capacity(count: usize) -> Self {
+        Self {
+            ids: Vec::with_capacity(count),
+            states: Vec::with_capacity(count),
+            measurables: Vec::with_capacity(count),
+            frame: Rc::default(),
+        }
+    }
 }
 
 impl LayoutRuntimeState {
     pub(crate) fn new(measure_policy: Rc<dyn MeasurePolicy>) -> Self {
         Self {
-            child_ids: Vec::new(),
-            child_states: Vec::new(),
-            child_measurables: Vec::new(),
+            children: None,
             coordinator_chain: CoordinatorChain::default(),
             measure_policy,
-            frame: Rc::default(),
         }
     }
 
@@ -3192,44 +3210,78 @@ impl LayoutRuntimeState {
         self.coordinator_chain.sync(node)
     }
 
+    fn child_states(&self) -> &[Rc<LayoutChildMeasureState>] {
+        self.children
+            .as_deref()
+            .map_or(&[], |children| children.states.as_slice())
+    }
+
+    fn child_measurables(&self) -> &[Box<dyn Measurable>] {
+        self.children
+            .as_deref()
+            .map_or(&[], |children| children.measurables.as_slice())
+    }
+
+    /// Binds the children's frame to `builder` for a pass over `count`
+    /// children. A node that never had one binds nothing.
+    fn bind_children(&mut self, builder: &Rc<LayoutBuilderState>, pass: ChildPass, count: usize) {
+        if count == 0 && self.children.is_none() {
+            return;
+        }
+        self.children
+            .get_or_insert_with(|| Box::new(LayoutChildren::with_capacity(count)))
+            .frame
+            .bind(builder, pass);
+    }
+
+    fn unbind_children(&self) {
+        if let Some(children) = &self.children {
+            children.frame.unbind();
+        }
+    }
+
+    /// The first error a child recorded in the pass, taken.
+    fn take_child_error(&self) -> Option<NodeError> {
+        self.children
+            .as_ref()
+            .and_then(|children| children.frame.error.borrow_mut().take())
+    }
+
+    /// The state of the child at `position`, for a pass `bind_children`
+    /// bound.
     fn child_state_at(&mut self, position: usize, child_id: NodeId) -> &LayoutChildMeasureState {
-        if self.child_ids.get(position) != Some(&child_id) {
-            let from = match self.child_ids[position..]
+        let children = self
+            .children
+            .get_or_insert_with(|| Box::new(LayoutChildren::with_capacity(position + 1)));
+        if children.ids.get(position) != Some(&child_id) {
+            let from = match children.ids[position..]
                 .iter()
                 .position(|&id| id == child_id)
             {
                 Some(offset) => position + offset,
                 None => {
-                    let state = LayoutChildMeasureState::new(child_id, Rc::clone(&self.frame));
-                    self.child_ids.push(child_id);
-                    self.child_states.push(Rc::clone(&state));
-                    self.child_measurables
+                    let state = LayoutChildMeasureState::new(child_id, Rc::clone(&children.frame));
+                    children.ids.push(child_id);
+                    children.states.push(Rc::clone(&state));
+                    children
+                        .measurables
                         .push(Box::new(LayoutChildMeasurable::new(state)));
-                    self.child_ids.len() - 1
+                    children.ids.len() - 1
                 }
             };
-            self.child_ids.swap(position, from);
-            self.child_states.swap(position, from);
-            self.child_measurables.swap(position, from);
+            children.ids.swap(position, from);
+            children.states.swap(position, from);
+            children.measurables.swap(position, from);
         }
-        &self.child_states[position]
-    }
-
-    /// Makes room for `count` children on the node's first bind: exactly
-    /// that many, where growth would make room for four in each of the
-    /// three lists. Children added later grow the lists as usual.
-    fn reserve_children(&mut self, count: usize) {
-        if self.child_ids.capacity() == 0 {
-            self.child_ids.reserve_exact(count);
-            self.child_states.reserve_exact(count);
-            self.child_measurables.reserve_exact(count);
-        }
+        &children.states[position]
     }
 
     fn truncate_children(&mut self, len: usize) {
-        self.child_ids.truncate(len);
-        self.child_states.truncate(len);
-        self.child_measurables.truncate(len);
+        if let Some(children) = &mut self.children {
+            children.ids.truncate(len);
+            children.states.truncate(len);
+            children.measurables.truncate(len);
+        }
     }
 
     fn measured_children(
@@ -3238,9 +3290,10 @@ impl LayoutRuntimeState {
         placement_indices: &[usize],
         content_offset: Point,
     ) -> Vec<MeasuredChild> {
-        let mut measured_children = Vec::with_capacity(self.child_states.len());
-        for (index, child_state) in self.child_states.iter().enumerate() {
-            let Some(measured) = child_state.measured.borrow_mut().take() else {
+        let child_states = self.child_states();
+        let mut measured_children = Vec::with_capacity(child_states.len());
+        for (index, child_state) in child_states.iter().enumerate() {
+            let Some(measured) = child_state.measured.take() else {
                 continue;
             };
             let placement =
@@ -3289,20 +3342,24 @@ impl LayoutRuntimeState {
     #[cfg(test)]
     pub(crate) fn debug_stats(&self) -> LayoutRuntimeDebugStats {
         LayoutRuntimeDebugStats {
-            child_ids: self.child_ids.clone(),
+            child_ids: self
+                .children
+                .as_ref()
+                .map(|children| children.ids.clone())
+                .unwrap_or_default(),
             child_state_ptrs: self
-                .child_states
+                .child_states()
                 .iter()
                 .map(|state| Rc::as_ptr(state) as *const () as usize)
                 .collect(),
             child_measurable_ptrs: self
-                .child_measurables
+                .child_measurables()
                 .iter()
                 .map(|measurable| {
                     measurable.as_ref() as *const dyn Measurable as *const () as usize
                 })
                 .collect(),
-            child_measurable_count: self.child_measurables.len(),
+            child_measurable_count: self.child_measurables().len(),
             coordinator_node_ptrs: self.coordinator_chain.debug_ptrs(),
             coordinator_node_count: self.coordinator_chain.nodes.len(),
         }
@@ -3443,10 +3500,14 @@ pub(crate) fn parent_data_of(
     }
 }
 
+/// A parent's record of one child, for each child of every parent: its
+/// shared parts sit in `Cell`s, read by take and put back, where a
+/// `RefCell`'s borrow flag would take a word of every record.
 struct LayoutChildMeasureState {
     node_id: NodeId,
     frame: Rc<LayoutChildFrame>,
-    cache: RefCell<LayoutNodeCacheHandles>,
+    /// The child's cache, `None` until the record is first bound.
+    cache: Cell<Option<LayoutNodeCacheHandles>>,
     cache_epoch: Cell<u64>,
     force_remeasure: Cell<bool>,
     parent_data: Cell<Option<cranpose_ui_layout::ParentData>>,
@@ -3454,9 +3515,18 @@ struct LayoutChildMeasureState {
     measured_constraints: Cell<Option<Constraints>>,
     /// Whether the parent's last measure read the child's intrinsic sizes.
     read_intrinsics: Cell<bool>,
-    measured: RefCell<Option<Rc<MeasuredNode>>>,
+    measured: Cell<Option<Rc<MeasuredNode>>>,
     last_position: Cell<Option<Point>>,
-    layout_state: RefCell<Option<Rc<RefCell<LayoutState>>>>,
+    layout_state: Cell<Option<Rc<RefCell<LayoutState>>>>,
+}
+
+/// Runs `read` on what `cell` holds and puts it back. `read` must not reach
+/// the same cell again.
+fn read_cell<T: Default, R>(cell: &Cell<T>, read: impl FnOnce(&T) -> R) -> R {
+    let value = cell.take();
+    let result = read(&value);
+    cell.set(value);
+    result
 }
 
 impl LayoutChildMeasureState {
@@ -3474,15 +3544,15 @@ impl LayoutChildMeasureState {
         Rc::new(Self {
             node_id,
             frame,
-            cache: RefCell::new(LayoutNodeCacheHandles::default()),
+            cache: Cell::new(None),
             cache_epoch: Cell::new(0),
             force_remeasure: Cell::new(true),
             parent_data: Cell::new(None),
             measured_constraints: Cell::new(None),
             read_intrinsics: Cell::new(false),
-            measured: RefCell::new(None),
+            measured: Cell::new(None),
             last_position: Cell::new(None),
-            layout_state: RefCell::new(None),
+            layout_state: Cell::new(None),
         })
     }
 
@@ -3494,24 +3564,31 @@ impl LayoutChildMeasureState {
         let stale = binding.dirty || child_epoch < pass.cache_floor;
         let cache_epoch = if stale { pass.cache_epoch } else { child_epoch };
         binding.cache.activate(cache_epoch);
-        self.cache.borrow_mut().clone_from(binding.cache);
+        let mut cache = self.cache.take();
+        match &mut cache {
+            Some(cache) => cache.clone_from(binding.cache),
+            None => cache = Some(binding.cache.clone()),
+        }
+        self.cache.set(cache);
         self.cache_epoch.set(cache_epoch);
         self.force_remeasure.set(stale || binding.descendant_dirty);
         self.parent_data.set(binding.parent_data);
         if self.frame.measures() {
-            self.measured.borrow_mut().take();
+            self.measured.take();
             self.last_position.set(None);
             self.measured_constraints.set(None);
             self.read_intrinsics.set(false);
         }
-        let mut layout_state = self.layout_state.borrow_mut();
+        let layout_state = self.layout_state.take();
         let shared = layout_state
             .as_ref()
             .zip(binding.layout_state)
             .is_some_and(|(current, bound)| Rc::ptr_eq(current, bound));
-        if !shared {
-            *layout_state = binding.layout_state.cloned();
-        }
+        self.layout_state.set(if shared {
+            layout_state
+        } else {
+            binding.layout_state.cloned()
+        });
     }
 
     fn place_retained(&self, position: Point) {
@@ -3520,8 +3597,13 @@ impl LayoutChildMeasureState {
         let Some(builder) = builder.as_ref() else {
             return;
         };
-        if let Some(layout_state) = self.layout_state.borrow().as_ref() {
-            layout_state.borrow_mut().place(position);
+        let placed = read_cell(&self.layout_state, |layout_state| {
+            layout_state
+                .as_ref()
+                .map(|layout_state| layout_state.borrow_mut().place(position))
+                .is_some()
+        });
+        if placed {
             return;
         }
         let Ok(mut applier) = builder.applier.try_borrow_typed() else {
@@ -3560,17 +3642,23 @@ impl LayoutChildMeasureState {
         if self.frame.measures() {
             self.measured_constraints.set(Some(constraints));
         }
-        let cache = self.cache.borrow();
-        cache.activate(self.cache_epoch.get());
+        let cache = read_cell(&self.cache, Clone::clone);
+        if let Some(cache) = &cache {
+            cache.activate(self.cache_epoch.get());
+        }
         if !self.force_remeasure.get()
-            && let Some(cached) = cache.get_measurement(constraints)
+            && let Some(cached) = cache
+                .as_ref()
+                .and_then(|cache| cache.get_measurement(constraints))
         {
             // A measure clears the placed flag the parent's placement sets
             // again; a child it no longer places then leaves the scene.
-            if self.frame.measures()
-                && let Some(state) = self.layout_state.borrow().as_ref()
-            {
-                state.borrow_mut().clear_placed();
+            if self.frame.measures() {
+                read_cell(&self.layout_state, |state| {
+                    if let Some(state) = state {
+                        state.borrow_mut().clear_placed();
+                    }
+                });
             }
             return Some(cached);
         }
@@ -3578,7 +3666,9 @@ impl LayoutChildMeasureState {
         match self.perform_measure(constraints) {
             Ok(measured) => {
                 self.force_remeasure.set(false);
-                cache.store_measurement(constraints, Rc::clone(&measured));
+                if let Some(cache) = &cache {
+                    cache.store_measurement(constraints, Rc::clone(&measured));
+                }
                 Some(measured)
             }
             Err(err) => {
@@ -3615,10 +3705,12 @@ impl LayoutChildMeasurable {
         if state.frame.measures() {
             state.read_intrinsics.set(true);
         }
-        let cache = state.cache.borrow();
-        cache.activate(state.cache_epoch.get());
+        let cache = read_cell(&state.cache, Clone::clone);
+        if let Some(cache) = &cache {
+            cache.activate(state.cache_epoch.get());
+        }
         if !state.force_remeasure.get()
-            && let Some(value) = cache.get_intrinsic(&kind)
+            && let Some(value) = cache.as_ref().and_then(|cache| cache.get_intrinsic(&kind))
         {
             return value;
         }
@@ -3628,19 +3720,21 @@ impl LayoutChildMeasurable {
                 .measure_cached(constraints)
                 .map_or(0.0, |node| extent(node.size_for_parent())),
         };
-        cache.store_intrinsic(kind, value);
+        if let Some(cache) = &cache {
+            cache.store_intrinsic(kind, value);
+        }
         value
     }
 }
 
 impl PlaceTarget for LayoutChildMeasureState {
     fn place(&self, x: f32, y: f32) {
-        let internal_offset = self
-            .measured
-            .borrow()
-            .as_ref()
-            .map(|measured| measured.offset)
-            .unwrap_or_default();
+        let internal_offset = read_cell(&self.measured, |measured| {
+            measured
+                .as_ref()
+                .map(|measured| measured.offset)
+                .unwrap_or_default()
+        });
         self.place_retained(Point {
             x: x + internal_offset.x,
             y: y + internal_offset.y,
@@ -3650,10 +3744,11 @@ impl PlaceTarget for LayoutChildMeasureState {
 
 impl Measurable for LayoutChildMeasurable {
     fn measured_hold(&self) -> Option<(Size, cranpose_ui_layout::ConstraintsHold)> {
-        let measured = self.state.measured.borrow();
-        let measured = measured.as_ref()?;
-        let hold = self.state.cache.borrow().hold_of(measured)?;
-        Some((measured.size_for_parent(), hold))
+        read_cell(&self.state.measured, |measured| {
+            let measured = measured.as_ref()?;
+            let hold = read_cell(&self.state.cache, |cache| cache.as_ref()?.hold_of(measured))?;
+            Some((measured.size_for_parent(), hold))
+        })
     }
 
     fn measure(&self, constraints: Constraints) -> Placeable {
@@ -3672,15 +3767,17 @@ impl Measurable for LayoutChildMeasurable {
             ),
             |measured| (measured.size, measured.size_for_parent()),
         );
-        if let Some(layout_state) = state.layout_state.borrow().as_ref() {
-            layout_state.borrow_mut().set_size(measured_size);
-        }
+        read_cell(&state.layout_state, |layout_state| {
+            if let Some(layout_state) = layout_state {
+                layout_state.borrow_mut().set_size(measured_size);
+            }
+        });
         let alignment_lines = measured
             .as_ref()
             .map_or_else(AlignmentLines::default, |node| {
                 node.alignment_lines_for_parent()
             });
-        *state.measured.borrow_mut() = measured;
+        state.measured.set(measured);
 
         Placeable::with_place_target(
             size_for_parent.width,

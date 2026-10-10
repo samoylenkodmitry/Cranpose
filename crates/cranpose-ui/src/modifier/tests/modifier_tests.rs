@@ -523,16 +523,14 @@ fn lazy_graphics_layer_resolver_update_self_invalidates_without_auto_draw_invali
     });
 
     let mut handle = ModifierChainHandle::new();
-    handle.set_node_id(Some(42));
-    let _ = handle.update(&first);
-    let _ = handle.take_invalidations();
+    let _ = handle.update_on_node(Some(42), &first);
     let _ = crate::take_render_invalidation();
     let _ = crate::take_draw_repass_nodes();
 
-    let _ = handle.update(&second);
+    let invalidations = handle.update_on_node(Some(42), &second);
 
     assert!(
-        handle.take_invalidations().is_empty(),
+        invalidations.is_empty(),
         "lazy graphics layer resolver replacement schedules an exact draw repass itself"
     );
     assert!(crate::take_render_invalidation());
