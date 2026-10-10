@@ -62,7 +62,7 @@ Read only the sections required by the current operation. These are project requ
 - For nontrivial bugs: explore, record evidence, rank causes, compare architecture options, implement, verify and iterate.
 - Start bugs with a failing integration regression that exercises observable behavior; for a device UI bug, write the robot e2e test first.
 - Verify optimizations with integration tests of observable behavior and measured performance. When using a deliberate correctness mutation, it must change an observable result rather than an internal representation.
-- Hold the shared per-device lock for the entire FPS sequence; run ABAB then BABA without cooling waits and log temperatures before and after every run.
+- Hold the shared per-device lock for the entire FPS sequence; run ABAB without cooling waits, add BABA only while the result is still unclear, and log temperatures and the battery level before and after every run.
 - Measure production FPS on a physical display; Xvfb presentation measures software presentation.
 
 ## UI and platform references
