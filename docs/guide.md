@@ -3255,6 +3255,32 @@ LiquidSegmentedControl(
 );
 ```
 
+Give the segmented controls of a subtree another look with `ProvideLiquidSegmentedStyle`. `LiquidSegmentedStyle` sets the track, the indicator, both label colors, the label text and the height. While a person holds the lens, the indicator clears to glass and the chosen label takes the color of the others.
+
+```rust preview=segments_styled
+use cranpose::liquid::prelude::*;
+
+let colors = liquid_colors();
+let style = LiquidSegmentedStyle {
+    indicator: colors.accent,
+    selected_label: colors.on_accent,
+    height: 40.0,
+    ..LiquidSegmentedStyle::system(&colors, &liquid_typography())
+};
+let selected = rememberMutableStateOf(|| 0_usize);
+ProvideLiquidSegmentedStyle(style, move || {
+    LiquidSegmentedControl(
+        Modifier::empty().fill_max_width(),
+        selected.get(),
+        move |index| selected.set(index),
+        |segments| {
+            segments.segment("Day");
+            segments.segment("Night");
+        },
+    );
+});
+```
+
 #### SearchField
 
 Edit a query in a themed search field.

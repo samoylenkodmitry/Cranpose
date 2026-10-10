@@ -18,8 +18,9 @@ pub use material::{
 };
 pub use motion::{LiquidMotion, liquid_press_scale};
 pub use theme::{
-    LiquidColors, LiquidTheme, LiquidThemeSpec, LiquidTypography, SchemeMode, liquid_colors,
-    liquid_glass_tint_amount, liquid_typography,
+    LiquidColors, LiquidSegmentedStyle, LiquidTheme, LiquidThemeSpec, LiquidTypography,
+    ProvideLiquidSegmentedStyle, SchemeMode, liquid_colors, liquid_glass_tint_amount,
+    liquid_segmented_style, liquid_typography,
 };
 pub use widgets::*;
 
@@ -36,8 +37,9 @@ pub mod prelude {
         },
         motion::{LiquidMotion, liquid_press_scale},
         theme::{
-            LiquidColors, LiquidTheme, LiquidThemeSpec, LiquidTypography, SchemeMode,
-            liquid_colors, liquid_glass_tint_amount, liquid_typography,
+            LiquidColors, LiquidSegmentedStyle, LiquidTheme, LiquidThemeSpec, LiquidTypography,
+            ProvideLiquidSegmentedStyle, SchemeMode, liquid_colors, liquid_glass_tint_amount,
+            liquid_segmented_style, liquid_typography,
         },
         widgets::*,
     };

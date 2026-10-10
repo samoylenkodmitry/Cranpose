@@ -13,7 +13,7 @@ fn pointer_position_is_the_clamped_lens_center() {
 #[test]
 fn segmented_contact_matches_native_presentation_bounds() {
     for (progress, width, height) in [(0.0, 96.0, 28.0), (0.5, 108.0, 36.0), (1.0, 120.0, 44.0)] {
-        let size = segmented_lens_base_size(100.0, progress);
+        let size = segmented_lens_base_size(100.0, 32.0, progress);
         assert_eq!(size.width, width);
         assert_eq!(size.height, height);
     }
@@ -31,10 +31,13 @@ fn a_scope_records_what_each_segment_announces() {
     });
 
     assert_eq!(segments.len(), 2);
-    assert_eq!(segments[0].description, "Sending");
-    assert_eq!(segments[1].description, "Received");
+    assert_eq!(segments[0].description(), "Sending");
+    assert_eq!(segments[1].description(), "Received");
     assert_eq!(drawn.get(), 0);
-    (segments[1].content)(true);
+    let LiquidSegment::Content { content, .. } = &segments[1] else {
+        panic!("segment_content declares caller content");
+    };
+    content(true);
     assert_eq!(drawn.get(), 1);
 }
 
