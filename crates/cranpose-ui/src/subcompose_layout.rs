@@ -754,7 +754,7 @@ pub struct SubcomposeLayoutNode {
     needs_focus_sync: Cell<bool>,
     layout_state: RefCell<LayoutState>,
     cache_handles: LayoutNodeCacheHandles,
-    modifier_slices_snapshot: RefCell<Rc<ModifierNodeSlices>>,
+    modifier_slices_snapshot: crate::modifier::SlicesSnapshot,
     /// Never written: this node lays its chain out from padding, size and
     /// offset without coordinators, so its draws sit inside the padding
     /// before them.
@@ -778,7 +778,7 @@ impl SubcomposeLayoutNode {
             needs_focus_sync: Cell::new(false),
             layout_state: RefCell::new(LayoutState::default()),
             cache_handles: LayoutNodeCacheHandles::default(),
-            modifier_slices_snapshot: RefCell::new(Rc::default()),
+            modifier_slices_snapshot: crate::modifier::SlicesSnapshot::default(),
             coordinator_geometry: Rc::default(),
             modifier_slices_dirty: Cell::new(true),
         };
@@ -817,7 +817,7 @@ impl SubcomposeLayoutNode {
             needs_focus_sync: Cell::new(false),
             layout_state: RefCell::new(LayoutState::default()),
             cache_handles: LayoutNodeCacheHandles::default(),
-            modifier_slices_snapshot: RefCell::new(Rc::default()),
+            modifier_slices_snapshot: crate::modifier::SlicesSnapshot::default(),
             coordinator_geometry: Rc::default(),
             modifier_slices_dirty: Cell::new(true),
         };
@@ -927,10 +927,8 @@ impl SubcomposeLayoutNode {
 
     fn update_modifier_slices_cache(&self) {
         let inner = self.inner.borrow();
-        let mut snapshot = self.modifier_slices_snapshot.borrow_mut();
-        crate::modifier::collect_modifier_slices_into_shared(
+        self.modifier_slices_snapshot.collect(
             inner.modifier_chain.chain(),
-            &mut snapshot,
             &self.coordinator_geometry,
             inner.density.density(),
         );
@@ -995,7 +993,7 @@ impl SubcomposeLayoutNode {
         if self.modifier_slices_dirty.get() {
             self.update_modifier_slices_cache();
         }
-        self.modifier_slices_snapshot.borrow().clone()
+        self.modifier_slices_snapshot.get()
     }
 
     pub fn state(&self) -> Ref<'_, SubcomposeState> {
@@ -1220,9 +1218,8 @@ impl SubcomposeLayoutNode {
 impl cranpose_core::Node for SubcomposeLayoutNode {
     fn mount(&mut self) {
         let mut inner = self.inner.borrow_mut();
-        let (chain, mut context) = inner.modifier_chain.chain_and_context_mut();
-        chain.repair_chain();
-        chain.attach_nodes(&mut *context);
+        let node_id = inner.node_id;
+        inner.modifier_chain.remount(node_id);
         crate::modal_nodes::reach_changed(self.id.get());
     }
 
@@ -1289,8 +1286,8 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
         self.layout_state.borrow_mut().set_node_id(id);
         {
             let mut inner = self.inner.borrow_mut();
-            inner.node_id = Some(id);
-            inner.modifier_chain.set_node_id(Some(id));
+            let previous = inner.node_id.replace(id);
+            inner.modifier_chain.move_to_node_later(previous, Some(id));
         }
         // The slices carry the node's id; they are collected again when next read.
         self.modifier_slices_dirty.set(true);
@@ -1669,12 +1666,11 @@ impl SubcomposeLayoutNodeInner {
         let modifier_changed = !self.modifier.structural_eq(&modifier);
         self.modifier = modifier;
         self.modifier_chain.set_debug_logging(self.debug_modifiers);
-        let modifier_local_invalidations = self.modifier_chain.update(&self.modifier);
+        let invalidations = self
+            .modifier_chain
+            .update_on_node(self.node_id, &self.modifier);
         self.resolved_modifiers = self.modifier_chain.resolved_modifiers();
         self.modifier_capabilities = self.modifier_chain.capabilities();
-
-        let mut invalidations = self.modifier_chain.take_invalidations();
-        invalidations.extend(modifier_local_invalidations);
 
         (invalidations, modifier_changed)
     }

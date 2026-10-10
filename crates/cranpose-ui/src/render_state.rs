@@ -68,8 +68,10 @@ pub struct AppContext {
     drag_and_drop: crate::modifier::DragAndDropState,
 }
 
+/// Nonzero, so that an absent one takes no more room than one: every
+/// layout node keeps the id of the context it registered with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct AppContextId(u64);
+pub(crate) struct AppContextId(std::num::NonZeroU64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct DrawObservationScope {
@@ -210,7 +212,7 @@ impl RenderState {
 }
 
 std::thread_local! {
-    static NEXT_APP_CONTEXT_ID: Cell<u64> = const { Cell::new(1) };
+    static NEXT_APP_CONTEXT_ID: Cell<std::num::NonZeroU64> = const { Cell::new(std::num::NonZeroU64::MIN) };
     static CURRENT_APP_CONTEXT: RefCell<Vec<Weak<AppContext>>> = const { RefCell::new(Vec::new()) };
     static APP_CONTEXTS: RefCell<HashMap<AppContextId, Weak<AppContext>>> = RefCell::new(HashMap::new());
 }
@@ -218,7 +220,7 @@ std::thread_local! {
 fn next_app_context_id() -> AppContextId {
     NEXT_APP_CONTEXT_ID.with(|next| {
         let id = next.get();
-        next.set(id.wrapping_add(1));
+        next.set(id.checked_add(1).unwrap_or(std::num::NonZeroU64::MIN));
         AppContextId(id)
     })
 }

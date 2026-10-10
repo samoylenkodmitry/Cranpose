@@ -83,6 +83,19 @@ impl BasicModifierNodeContext {
         Self::default()
     }
 
+    /// A context for the modifier nodes of node `node_id`, holding
+    /// `invalidations` an earlier operation left for this one to report.
+    pub fn for_node(
+        node_id: Option<cranpose_core::NodeId>,
+        invalidations: ModifierInvalidations,
+    ) -> Self {
+        Self {
+            invalidations,
+            node_id,
+            ..Self::default()
+        }
+    }
+
     /// Returns the ordered list of invalidation kinds that were requested
     /// since the last call to `clear_invalidations`. Duplicate requests for
     /// the same kind are coalesced.

@@ -87,7 +87,7 @@ pub use semantics::{
     SemanticsRequester, SemanticsRequesterElement, collect_semantics_from_chain,
     collect_semantics_from_modifier, semantics_reach_of_chain,
 };
-pub(crate) use slices::collect_modifier_slices_into_shared;
+pub(crate) use slices::SlicesSnapshot;
 pub use slices::{
     ModifierNodeSlices, ModifierNodeSlicesDebugStats, SliceTextRef, collect_modifier_slices,
     collect_slices_from_modifier,

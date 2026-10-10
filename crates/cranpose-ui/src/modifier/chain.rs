@@ -1,5 +1,3 @@
-#![expect(private_interfaces)]
-
 use std::{
     any::type_name_of_val,
     cell::{Cell, RefCell},
@@ -44,7 +42,11 @@ pub type ModifierLocalsHandle = Rc<RefCell<ModifierLocalManager>>;
 pub struct ModifierChainHandle {
     chain: ModifierNodeChain,
     layout_direction: crate::LayoutDirection,
-    context: RefCell<BasicModifierNodeContext>,
+    /// What the chain's nodes asked for while they attached on a remount, or
+    /// on a new id whose caller reports it later: the node's next chain
+    /// operation reports it. A context lives for one operation only; a kept
+    /// one took a hundred bytes of every node.
+    pending_invalidations: Option<Box<ModifierInvalidations>>,
     resolved: ResolvedModifiers,
     capabilities: NodeCapabilities,
     aggregate_child_capabilities: NodeCapabilities,
@@ -64,7 +66,7 @@ impl Default for ModifierChainHandle {
         Self {
             chain: ModifierNodeChain::new(),
             layout_direction: crate::LayoutDirection::Ltr,
-            context: RefCell::new(BasicModifierNodeContext::new()),
+            pending_invalidations: None,
             resolved: ResolvedModifiers::default(),
             capabilities: NodeCapabilities::default(),
             aggregate_child_capabilities: NodeCapabilities::default(),
@@ -129,10 +131,43 @@ impl ModifierChainHandle {
         });
     }
 
-    /// Reconciles the underlying [`ModifierNodeChain`] with the elements stored in `modifier`.
+    /// Reconciles the underlying [`ModifierNodeChain`] with the elements
+    /// stored in `modifier`, for no node. Returns the invalidations its nodes
+    /// requested, then those of its modifier locals.
     pub fn update(&mut self, modifier: &Modifier) -> ModifierInvalidations {
+        self.update_on_node(None, modifier)
+    }
+
+    /// [`Self::update`] for the chain of node `node_id`.
+    pub(crate) fn update_on_node(
+        &mut self,
+        node_id: Option<NodeId>,
+        modifier: &Modifier,
+    ) -> ModifierInvalidations {
         let mut resolver = |_: &ModifierLocalToken| None;
-        self.update_with_resolver(modifier, &mut resolver)
+        let mut context = self.context(node_id);
+        let locals = self.update_with_resolver(modifier, &mut resolver, &mut context);
+        let mut invalidations = context.take_invalidations();
+        invalidations.extend(locals);
+        invalidations
+    }
+
+    /// A context for an operation on the chain of node `node_id`, holding
+    /// what the chain's nodes asked for since the last one.
+    pub(crate) fn context(&mut self, node_id: Option<NodeId>) -> BasicModifierNodeContext {
+        let pending = self
+            .pending_invalidations
+            .take()
+            .map_or_else(ModifierInvalidations::new, |pending| *pending);
+        BasicModifierNodeContext::for_node(node_id, pending)
+    }
+
+    /// Keeps what `context` holds for the chain's next operation.
+    fn keep_for_next(&mut self, mut context: BasicModifierNodeContext) {
+        let invalidations = context.take_invalidations();
+        if !invalidations.is_empty() {
+            self.pending_invalidations = Some(Box::new(invalidations));
+        }
     }
 
     /// Updates in place the chain's elements of type `E`, for a modifier
@@ -140,7 +175,11 @@ impl ModifierChainHandle {
     /// does: the elements must not change the chain's capabilities, links,
     /// offsets or resolved layout properties. `false` when the chain cannot
     /// take it so; the caller then updates the whole chain.
-    pub(crate) fn update_elements_in_place<E: 'static>(&mut self, modifier: &Modifier) -> bool {
+    pub(crate) fn update_elements_in_place<E: 'static>(
+        &mut self,
+        modifier: &Modifier,
+        context: &mut BasicModifierNodeContext,
+    ) -> bool {
         // A chain that reads modifier locals syncs them on every update.
         if self
             .capabilities
@@ -152,18 +191,21 @@ impl ModifierChainHandle {
             modifier.iter_elements(),
             modifier.element_count(),
             std::any::TypeId::of::<E>(),
-            &mut *self.context.borrow_mut(),
+            context,
         )
     }
 
-    pub fn update_with_resolver(
+    /// Reconciles the chain with `modifier`, its nodes asking `context` for
+    /// what they invalidate. Returns the invalidations of its modifier locals.
+    pub(crate) fn update_with_resolver(
         &mut self,
         modifier: &Modifier,
         resolver: &mut ModifierLocalAncestorResolver<'_>,
+        context: &mut BasicModifierNodeContext,
     ) -> ModifierInvalidations {
         self.revision = next_revision();
         self.chain
-            .update_from_ref_iter(modifier.iter_elements(), &mut *self.context.borrow_mut());
+            .update_from_ref_iter(modifier.iter_elements(), context);
         if self.layout_direction.is_rtl() {
             self.update_offset_direction();
         }
@@ -171,11 +213,7 @@ impl ModifierChainHandle {
         self.aggregate_child_capabilities = self.chain.head().aggregate_child_capabilities();
         let modifier_local_invalidations = self.sync_modifier_locals(resolver);
 
-        let needs_resolved_update = {
-            let ctx = self.context.borrow();
-            !ctx.invalidations().is_empty()
-        };
-        if needs_resolved_update {
+        if !context.invalidations().is_empty() {
             self.resolved = self.compute_resolved();
         }
 
@@ -193,20 +231,41 @@ impl ModifierChainHandle {
         self.debug_logging = enabled;
     }
 
-    pub fn set_node_id(&mut self, id: Option<NodeId>) {
-        let old_id = self.context.borrow().node_id();
-        if old_id == id {
+    /// Moves the chain from node `previous` to the node `context` is for,
+    /// attaching its nodes again for the new id.
+    pub(crate) fn move_to_node(
+        &mut self,
+        previous: Option<NodeId>,
+        context: &mut BasicModifierNodeContext,
+    ) {
+        let id = context.node_id();
+        if previous == id {
             return;
         }
-
-        self.context.borrow_mut().set_node_id(id);
         self.revision = next_revision();
-
         if id.is_some() {
             self.chain.detach_nodes();
             self.chain.repair_chain();
-            self.chain.attach_nodes(&mut *self.context.borrow_mut());
+            self.chain.attach_nodes(context);
         }
+    }
+
+    /// [`Self::move_to_node`] for a caller that reports what the nodes ask
+    /// for at its next operation.
+    pub(crate) fn move_to_node_later(&mut self, previous: Option<NodeId>, id: Option<NodeId>) {
+        let mut context = self.context(id);
+        self.move_to_node(previous, &mut context);
+        self.keep_for_next(context);
+    }
+
+    /// Attaches the chain's nodes again on a remount of node `node_id`; what
+    /// they ask for, its next chain operation reports.
+    pub(crate) fn remount(&mut self, node_id: Option<NodeId>) {
+        self.revision = next_revision();
+        let mut context = self.context(node_id);
+        self.chain.repair_chain();
+        self.chain.attach_nodes(&mut context);
+        self.keep_for_next(context);
     }
 
     /// Returns the modifier node chain for read-only traversal.
@@ -218,18 +277,6 @@ impl ModifierChainHandle {
     pub fn chain_mut(&mut self) -> &mut ModifierNodeChain {
         self.revision = next_revision();
         &mut self.chain
-    }
-
-    /// Returns mutable references to both the chain and context.
-    /// This is a convenience method for measurement that avoids borrow conflicts.
-    pub fn chain_and_context_mut(
-        &mut self,
-    ) -> (
-        &mut ModifierNodeChain,
-        std::cell::RefMut<'_, BasicModifierNodeContext>,
-    ) {
-        self.revision = next_revision();
-        (&mut self.chain, self.context.borrow_mut())
     }
 
     /// Returns the aggregated capability mask for the reconciled chain.
@@ -248,11 +295,6 @@ impl ModifierChainHandle {
 
     pub fn has_draw_nodes(&self) -> bool {
         self.capabilities.contains(NodeCapabilities::DRAW)
-    }
-
-    /// Drains invalidations requested during the last update cycle.
-    pub fn take_invalidations(&self) -> ModifierInvalidations {
-        self.context.borrow_mut().take_invalidations()
     }
 
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {
