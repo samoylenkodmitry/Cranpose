@@ -110,6 +110,12 @@ log = "0.4"
         self.invoke()
         self.assertTrue((self.destination / 'runner/src/lib.rs').is_file())
 
+    def test_info_plist_entries_must_be_a_table(self):
+        self.manifest.write_text(self.original + '\n[package.metadata.cranpose.watchos]\ninfo-plist = "audio"\n')
+        with self.assertRaises(SystemExit):
+            self.invoke()
+        self.assertFalse(self.destination.exists())
+
     def test_missing_icon_is_rejected_before_writing(self):
         self.args.extend(['--icon', 'icon.png'])
         with self.assertRaises(SystemExit):

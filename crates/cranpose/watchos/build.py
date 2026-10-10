@@ -144,6 +144,10 @@ def main():
             parser.error(f'no icon at {args.icon}')
     args.features = args.features or ''
     args.deployment_target = args.deployment_target or ('26.0' if args.target == 'device' else '10.0')
+    # Info.plist entries of the application's own, which go in last.
+    extra_info = metadata.get('info-plist', {})
+    if not isinstance(extra_info, dict):
+        parser.error('package.metadata.cranpose.watchos.info-plist must be a table')
     if not args.entry or not args.bundle_id:
         parser.error('entry and bundle-id are required as flags or package.metadata.cranpose.watchos fields')
     if not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*(::[A-Za-z_][A-Za-z_0-9]*)*', args.entry):
@@ -271,6 +275,7 @@ panic = "abort"
     usage = capabilities / f"{app['name']}-usage.plist"
     if usage.is_file():
         info.update(plistlib.loads(usage.read_bytes()))
+    info.update(extra_info)
     (bundle / 'Info.plist').write_bytes(plistlib.dumps(info))
     if simulator or args.sign:
         run(['codesign', '--force', '--sign', args.sign or '-', bundle])
