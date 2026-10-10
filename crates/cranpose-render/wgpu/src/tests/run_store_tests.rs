@@ -379,7 +379,7 @@ fn arena_wants(
     window: std::ops::Range<u32>,
 ) -> (u32, Vec<(crate::render::ShapePipelineKey, u64)>) {
     let chunk = store.open_arena();
-    let mut wanted = SmallVec::new();
+    let mut wanted = crate::shape_pipelines::PipelineDemand::default();
     let taken = store.append_arena(
         chunk,
         run,
@@ -388,7 +388,7 @@ fn arena_wants(
         &mut |segment| arena_key(segment),
         &mut wanted,
     );
-    (taken, wanted.into_vec())
+    (taken, wanted.drain().collect())
 }
 
 #[test]

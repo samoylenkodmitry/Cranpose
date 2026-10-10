@@ -1,11 +1,12 @@
-//! What a renderer reads of a text's style to draw its glyphs, worked out
-//! once per text node so that drawing a plain text never loads its style.
+//! What a renderer reads of a text's style and string to draw its glyphs,
+//! worked out once per text node so that drawing a plain text never loads
+//! its style, and drawing a cached run never loads its string.
 
 use std::cell::Cell;
 
 use cranpose_ui::{
     Brush, Color, TextStyle,
-    text::{RangeStyle, SpanStyle, TextDecoration, TextDrawStyle},
+    text::{RangeStyle, SpanStyle, TextDecoration, TextDrawStyle, TextMotion},
 };
 
 /// The paint of a text node's glyphs.
@@ -23,16 +24,27 @@ pub struct TextPaint {
     /// The style's [`TextStyle::render_hash`], which keys the glyph caches
     /// a renderer draws the text from, so no frame hashes the style again.
     pub style_hash: u64,
+    /// The string's `RenderString::render_hash`, which keys those caches
+    /// beside the style's, so that drawing a cached run never loads the
+    /// string.
+    pub text_hash: u64,
+    /// Whether the string has no characters.
+    pub text_empty: bool,
+    /// Whether the style's motion is static, so its glyphs stay on whole
+    /// pixels.
+    pub static_motion: bool,
 }
 
 impl TextPaint {
     /// The paint of a text in `style`, whose [`TextStyle::render_hash`] is
-    /// `style_hash`, with `spans`, at `font_size`.
+    /// `style_hash`, with `spans`, at `font_size`, whose string's
+    /// `RenderString::render_hash` and emptiness are `text`.
     pub fn of(
         style: &TextStyle,
         style_hash: u64,
         spans: &[RangeStyle<SpanStyle>],
         font_size: f32,
+        (text_hash, text_empty): (u64, bool),
     ) -> Self {
         let span_style = &style.span_style;
         let plain = span_style.background.is_none()
@@ -52,6 +64,13 @@ impl TextPaint {
                 .filter(|shift| shift.is_specified())
                 .map_or(0.0, |shift| -(shift.0 * font_size)),
             style_hash,
+            text_hash,
+            text_empty,
+            static_motion: style
+                .paragraph_style
+                .text_motion
+                .unwrap_or(TextMotion::Static)
+                == TextMotion::Static,
         }
     }
 }

@@ -13,12 +13,13 @@ use crate::{
     offscreen::OffscreenTarget,
     render::{
         GpuRenderer, PassFrame, RunStage, StoreRunBatch, TargetRect, ViewportUniformParams,
-        image_draw_bounds, run_draw_bounds, run_draw_is_visible_in_rect, scissor_rect_for_rect,
-        segment_scene_rect, supported_blend_mode, text_draw_bounds, text_draw_is_visible_in_rect,
+        image_draw_bounds, run_draw_bounds, scissor_rect_for_rect, segment_scene_rect,
+        supported_blend_mode, text_draw_bounds, text_draw_geometry_in_rect,
     },
     rrect_shadow::{ShadowInstance, append_shadow_instances, rrect_shadow_bounds},
     run_store::{RunDrawCall, run_has_shapes},
     scene::{CompositorScene, DrawOp, DrawOpKind, RRectShadowDraw, RunDraw, TextDraw},
+    shape_pipelines::PipelineDemand,
 };
 
 /// A render target and its size in pixels.
@@ -123,9 +124,13 @@ pub(crate) struct PassSegment<'a> {
 }
 
 enum Item<'a> {
-    Run(&'a RunDraw, Option<std::ops::Range<u32>>),
+    /// A run, the window of its records the segment draws, and its draw
+    /// bounds: see [`run_draw_bounds`].
+    Run(&'a RunDraw, Option<std::ops::Range<u32>>, Rect),
     Image(usize),
-    Text(&'a TextDraw),
+    /// A text with its logical geometry: see
+    /// [`crate::render::text_logical_geometry_for_draw`].
+    Text(&'a TextDraw, (Rect, f32)),
     RRectShadow(&'a RRectShadowDraw),
     Composite(&'a ResolvedComposite),
 }
@@ -166,6 +171,85 @@ enum Batch<'a> {
     Composite(PreparedCompositeDraw<'a>),
     Shader(PreparedShaderDraw<'a>),
     Projective(PreparedProjectiveComposite<'a>),
+}
+
+/// A render pass that leaves out the scissor and index buffer sets that
+/// change nothing: wgpu records and validates every set call again, and
+/// consecutive batches often bind the same strip indices under the same
+/// scissor.
+pub(crate) struct TrackedPass<'a, 'p> {
+    pass: &'a mut wgpu::RenderPass<'p>,
+    scissor: Option<TargetRect>,
+    /// The bound index buffer's address, offset and size.
+    index: Option<(usize, wgpu::BufferAddress, wgpu::BufferAddress)>,
+}
+
+impl<'a, 'p> TrackedPass<'a, 'p> {
+    pub(crate) fn new(pass: &'a mut wgpu::RenderPass<'p>) -> Self {
+        Self {
+            pass,
+            scissor: None,
+            index: None,
+        }
+    }
+
+    pub(crate) fn set_scissor_rect(&mut self, x: u32, y: u32, width: u32, height: u32) {
+        if self.scissor != Some((x, y, width, height)) {
+            self.pass.set_scissor_rect(x, y, width, height);
+            self.scissor = Some((x, y, width, height));
+        }
+    }
+
+    /// Binds `slice` as `u32` indices.
+    pub(crate) fn set_index_buffer(&mut self, slice: wgpu::BufferSlice<'_>) {
+        let bound = (
+            std::ptr::from_ref(slice.buffer()).addr(),
+            slice.offset(),
+            slice.size(),
+        );
+        if self.index != Some(bound) {
+            self.pass.set_index_buffer(slice, wgpu::IndexFormat::Uint32);
+            self.index = Some(bound);
+        }
+    }
+
+    pub(crate) fn set_pipeline(&mut self, pipeline: &wgpu::RenderPipeline) {
+        self.pass.set_pipeline(pipeline);
+    }
+
+    pub(crate) fn set_bind_group(
+        &mut self,
+        index: u32,
+        bind_group: &wgpu::BindGroup,
+        offsets: &[wgpu::DynamicOffset],
+    ) {
+        self.pass.set_bind_group(index, bind_group, offsets);
+    }
+
+    pub(crate) fn set_vertex_buffer(&mut self, slot: u32, slice: wgpu::BufferSlice<'_>) {
+        self.pass.set_vertex_buffer(slot, slice);
+    }
+
+    pub(crate) fn draw(&mut self, vertices: std::ops::Range<u32>, instances: std::ops::Range<u32>) {
+        self.pass.draw(vertices, instances);
+    }
+
+    pub(crate) fn draw_indexed(
+        &mut self,
+        indices: std::ops::Range<u32>,
+        base_vertex: i32,
+        instances: std::ops::Range<u32>,
+    ) {
+        self.pass.draw_indexed(indices, base_vertex, instances);
+    }
+
+    /// The pass, for a draw that sets what it needs itself: what it binds
+    /// is then no longer known.
+    pub(crate) fn untracked(&mut self) -> &mut wgpu::RenderPass<'p> {
+        self.scissor = None;
+        self.index = None;
+        self.pass
+    }
 }
 
 pub(crate) fn scissor_in_target(
@@ -316,7 +400,7 @@ impl GpuRenderer {
             load_op,
             batches: Vec::new(),
             chunk: None,
-            held: HeldDraws::default(),
+            held: std::mem::take(&mut scratch.held),
             depth,
             mixed_turns: turns_mixed(segments),
             overlay_segment: None,
@@ -324,6 +408,7 @@ impl GpuRenderer {
             depth_seq: 0,
             open: None,
             arena_draws: std::mem::take(&mut scratch.arena_draws),
+            pipelines: std::mem::take(&mut scratch.pipelines),
             chunk_start: 0,
             chunk_base: 0,
             chunk_slot: None,
@@ -333,8 +418,11 @@ impl GpuRenderer {
             .iter()
             .try_for_each(|segment| prep.segment(self, segment, &mut scratch));
         prep.finish(self);
+        self.ensure_run_pipelines(&mut prep.pipelines);
         let batches = prep.batches;
         scratch.arena_draws = prep.arena_draws;
+        scratch.pipelines = prep.pipelines;
+        scratch.held = prep.held;
         let buffers = if prepared.is_ok() {
             self.upload_pass_buffers(recorder, &scratch)
         } else {
@@ -365,7 +453,7 @@ impl GpuRenderer {
                     };
                     let mut pass = self.begin_scene_pass(recorder, label, target, load_op, depth);
                     self.draw_batches(
-                        &mut pass,
+                        &mut TrackedPass::new(&mut pass),
                         frame,
                         &batches,
                         PassCmds {
@@ -396,6 +484,8 @@ impl GpuRenderer {
             glyph_moved: std::mem::take(&mut self.scratch_glyph_moved),
             shadow_instances: std::mem::take(&mut self.scratch_shadow_instances),
             arena_draws: std::mem::take(&mut self.scratch_arena_draws),
+            pipelines: std::mem::take(&mut self.scratch_pipelines),
+            held: std::mem::take(&mut self.scratch_held),
         };
         scratch.arena_draws.clear();
         scratch.image_vertices.clear();
@@ -418,11 +508,13 @@ impl GpuRenderer {
         self.scratch_glyph_moved = scratch.glyph_moved;
         self.scratch_shadow_instances = scratch.shadow_instances;
         self.scratch_arena_draws = scratch.arena_draws;
+        self.scratch_pipelines = scratch.pipelines;
+        self.scratch_held = scratch.held;
     }
 
     fn draw_batches(
         &mut self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut TrackedPass<'_, '_>,
         frame: PassFrame,
         batches: &[Batch<'_>],
         cmds: PassCmds<'_>,
@@ -491,16 +583,22 @@ impl GpuRenderer {
                     )?;
                 }
                 Batch::Composite(prepared) => {
-                    self.effect_renderer
-                        .draw_prepared_composite(pass, target_size, prepared);
+                    self.effect_renderer.draw_prepared_composite(
+                        pass.untracked(),
+                        target_size,
+                        prepared,
+                    );
                 }
                 Batch::Shader(prepared) => {
-                    self.effect_renderer
-                        .draw_prepared_shader_src_over(pass, target_size, prepared);
+                    self.effect_renderer.draw_prepared_shader_src_over(
+                        pass.untracked(),
+                        target_size,
+                        prepared,
+                    );
                 }
                 Batch::Projective(prepared) => {
                     self.effect_renderer.draw_prepared_projective_composite(
-                        pass,
+                        pass.untracked(),
                         target_size,
                         prepared,
                     );
@@ -516,7 +614,7 @@ impl GpuRenderer {
     /// An arena batch's draws are ranges of `arena`.
     fn draw_shape_batch(
         &self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut TrackedPass<'_, '_>,
         batch: &Batch<'_>,
         arena: &[RunDrawCall],
         frame: PassFrame,
@@ -741,29 +839,6 @@ fn translate_inverse(inverse: [[f32; 3]; 3], offset: [f32; 2]) -> [[f32; 3]; 3] 
     shifted
 }
 
-fn unshadowed_item<'a>(
-    scene: &'a CompositorScene,
-    kind: DrawOpKind,
-    op_index: usize,
-    first_run_window: &Option<std::ops::Range<u32>>,
-    skip_text: bool,
-) -> Option<Item<'a>> {
-    match kind {
-        DrawOpKind::Run(index) => {
-            let run = &scene.runs[index];
-            run_has_shapes(run).then(|| {
-                let window = (op_index == 0).then(|| first_run_window.clone()).flatten();
-                Item::Run(run, window)
-            })
-        }
-        DrawOpKind::Image(index) => Some(Item::Image(index)),
-        DrawOpKind::Text(_) if skip_text => None,
-        DrawOpKind::Text(index) => Some(Item::Text(&scene.texts[index])),
-        DrawOpKind::RRectShadow(index) => Some(Item::RRectShadow(&scene.rrect_shadows[index])),
-        DrawOpKind::Shadow(_) => None,
-    }
-}
-
 fn merge_items<'a>(
     segment: &PassSegment<'a>,
     viewport_rect: Rect,
@@ -780,10 +855,11 @@ fn merge_items<'a>(
     let first_run_window = segment.first_run_window.clone();
     std::iter::from_fn(move || {
         loop {
-            if let Some(text) = shadow_texts
-                .find(|text| text_draw_is_visible_in_rect(text, viewport_rect, root_scale))
-            {
-                return Some(Item::Text(text));
+            if let Some(item) = shadow_texts.find_map(|text| {
+                text_draw_geometry_in_rect(text, viewport_rect, root_scale)
+                    .map(|geometry| Item::Text(text, geometry))
+            }) {
+                return Some(item);
             }
             let next_z = ops.peek().map(|(_, op)| op.z_index);
             if composites
@@ -797,35 +873,71 @@ fn merge_items<'a>(
                 continue;
             }
             let (op_index, op) = ops.next()?;
-            if !op_is_visible_in_rect(scene, op, viewport_rect, root_scale) {
-                continue;
-            }
-            if let DrawOpKind::Shadow(index) = op.kind {
-                let shadow = &scene.shadow_draws[index];
-                shadow_texts = shadow.texts.iter();
-                if let Some(run) = unblurred_shadow_run(shadow, viewport_rect, root_scale) {
-                    return Some(Item::Run(run, None));
+            let window = (op_index == 0).then(|| first_run_window.clone()).flatten();
+            match op_item(scene, op, window, (viewport_rect, root_scale, skip_text)) {
+                OpItem::Draw(item) => return Some(item),
+                OpItem::Shadow(texts, casters) => {
+                    shadow_texts = texts;
+                    if let Some(item) = casters {
+                        return Some(item);
+                    }
                 }
-                continue;
-            }
-            if let Some(item) =
-                unshadowed_item(scene, op.kind, op_index, &first_run_window, skip_text)
-            {
-                return Some(item);
+                OpItem::Nothing => {}
             }
         }
     })
 }
 
-/// An unblurred shadow's casters as a run, when any of them reaches the
-/// viewport.
-fn unblurred_shadow_run(
-    shadow: &crate::scene::ShadowDraw,
-    viewport_rect: Rect,
-    root_scale: f32,
-) -> Option<&RunDraw> {
-    let run = shadow.shapes.as_ref()?;
-    run_draw_is_visible_in_rect(run, viewport_rect, root_scale).then_some(run)
+/// What one op draws into a segment's viewport.
+enum OpItem<'a> {
+    Draw(Item<'a>),
+    /// A shadow's texts, drawn next, and its casters when unblurred.
+    Shadow(std::slice::Iter<'a, TextDraw>, Option<Item<'a>>),
+    Nothing,
+}
+
+/// The item `op` draws into `viewport_rect`, its records windowed by
+/// `window`; texts are left out when `skip_text`. A text's and a run's
+/// visibility tests work out their geometry and bounds, which their draws
+/// take on.
+fn op_item<'a>(
+    scene: &'a CompositorScene,
+    op: &DrawOp,
+    window: Option<std::ops::Range<u32>>,
+    (viewport_rect, root_scale, skip_text): (Rect, f32, bool),
+) -> OpItem<'a> {
+    let item = match op.kind {
+        DrawOpKind::Text(index) => {
+            let text = &scene.texts[index];
+            text_draw_geometry_in_rect(text, viewport_rect, root_scale)
+                .filter(|_| !skip_text)
+                .map(|geometry| Item::Text(text, geometry))
+        }
+        DrawOpKind::Run(index) => {
+            let run = &scene.runs[index];
+            visible_run_bounds(run, viewport_rect, root_scale)
+                .filter(|_| run_has_shapes(run))
+                .map(|bounds| Item::Run(run, window, bounds))
+        }
+        _ if !op_is_visible_in_rect(scene, op, viewport_rect, root_scale) => None,
+        DrawOpKind::Shadow(index) => {
+            let shadow = &scene.shadow_draws[index];
+            let casters = shadow.shapes.as_ref().and_then(|run| {
+                visible_run_bounds(run, viewport_rect, root_scale)
+                    .map(|bounds| Item::Run(run, None, bounds))
+            });
+            return OpItem::Shadow(shadow.texts.iter(), casters);
+        }
+        DrawOpKind::Image(index) => Some(Item::Image(index)),
+        DrawOpKind::RRectShadow(index) => Some(Item::RRectShadow(&scene.rrect_shadows[index])),
+    };
+    item.map_or(OpItem::Nothing, OpItem::Draw)
+}
+
+/// The draw bounds of `run` (see [`run_draw_bounds`]) when it draws into
+/// `viewport_rect`.
+fn visible_run_bounds(run: &RunDraw, viewport_rect: Rect, root_scale: f32) -> Option<Rect> {
+    run_draw_bounds(run, root_scale).filter(|bounds| bounds.intersect(viewport_rect).is_some())
 }
 
 /// The per-frame vectors a pass fills: image and glyph geometry and draw
@@ -851,6 +963,8 @@ struct PassScratch {
     glyph_moved: Vec<crate::render::GlyphDrawCmd>,
     shadow_instances: Vec<ShadowInstance>,
     arena_draws: Vec<RunDrawCall>,
+    pipelines: PipelineDemand,
+    held: HeldDraws,
 }
 
 /// The commands a pass's batches draw ranges of.
@@ -861,15 +975,16 @@ struct PassCmds<'a> {
     arena: &'a [RunDrawCall],
 }
 
-/// Draws each glyph batch's labels one kind, turned or upright, at a time
-/// where their order allows: see [`crate::render::group_glyph_kinds`].
+/// Draws each glyph batch's retained runs after its shared quads, and its
+/// labels one kind, turned or upright, at a time, where their order allows:
+/// see [`crate::render::defer_retained_glyph_runs`] and
+/// [`crate::render::group_glyph_kinds`].
 fn group_glyph_batches(batches: &[Batch<'_>], scratch: &mut PassScratch) {
     for batch in batches {
         if let Batch::Glyphs { cmds, .. } = batch {
-            crate::render::group_glyph_kinds(
-                &mut scratch.glyph_cmds[cmds.clone()],
-                &mut scratch.glyph_moved,
-            );
+            let cmds = &mut scratch.glyph_cmds[cmds.clone()];
+            let shared = crate::render::defer_retained_glyph_runs(cmds, &mut scratch.glyph_moved);
+            crate::render::group_glyph_kinds(&mut cmds[..shared], &mut scratch.glyph_moved);
         }
     }
 }
@@ -920,19 +1035,23 @@ fn held_cells(rect: TargetRect) -> (std::ops::Range<usize>, u64) {
 /// the held images, so an image may lie over held glyphs and a text that
 /// lies over a held image draws what is held first.
 #[derive(Default)]
-struct HeldDraws {
+pub(crate) struct HeldDraws {
     cmds: Option<std::ops::Range<usize>>,
     /// The held image commands and the viewport they draw under.
     images: Option<(std::ops::Range<usize>, ViewportUniformParams)>,
-    bounds: Vec<TargetRect>,
+    /// How many draws are held.
+    held: usize,
     /// The target pixels the held images touch.
     image_bounds: Vec<TargetRect>,
     union: Option<TargetRect>,
     /// Per band of cell rows, the cell columns a held draw touches. A shape
-    /// touching none of them overlaps no held draw, so only one that does is
-    /// checked against each: a list's cards held a few hundred glyph draws
-    /// that every background after them was checked against.
+    /// touching none of them overlaps no held draw.
     cells: Vec<u64>,
+    /// Per band of cell rows, the target pixels of each held draw touching
+    /// it: a shape that touches a held cell is checked only against the
+    /// draws of its own bands. A list's tickers held a few hundred glyph
+    /// draws, which every background after them was checked against.
+    rows: Vec<Vec<TargetRect>>,
 }
 
 impl HeldDraws {
@@ -969,33 +1088,46 @@ impl HeldDraws {
             self.union
                 .map_or(rect, |union| target_rect_union(union, rect)),
         );
-        self.bounds.push(rect);
+        self.held += 1;
         let (rows, mask) = held_cells(rect);
         if self.cells.len() < rows.end {
             self.cells.resize(rows.end, 0);
         }
-        for row in &mut self.cells[rows] {
-            *row |= mask;
+        if self.rows.len() < rows.end {
+            self.rows.resize_with(rows.end, Vec::new);
+        }
+        for (cells, held) in self.cells[rows.clone()]
+            .iter_mut()
+            .zip(&mut self.rows[rows])
+        {
+            *cells |= mask;
+            held.push(rect);
         }
     }
 
-    /// Whether a draw touching `rect` would cover a held draw.
-    fn overlaps(&self, rect: TargetRect) -> bool {
-        self.union
-            .is_some_and(|union| target_rects_overlap(union, rect))
-            && self.cells_touched(rect)
-            && self
-                .bounds
-                .iter()
-                .any(|held| target_rects_overlap(*held, rect))
+    /// Whether nothing is held.
+    fn is_empty(&self) -> bool {
+        self.union.is_none()
     }
 
-    /// Whether `rect` touches a cell a held draw touches.
-    fn cells_touched(&self, rect: TargetRect) -> bool {
+    /// Whether a draw touching `rect` would cover a held draw: one that
+    /// overlaps it shares a band of cell rows with it.
+    fn overlaps(&self, rect: TargetRect) -> bool {
+        if !self
+            .union
+            .is_some_and(|union| target_rects_overlap(union, rect))
+        {
+            return false;
+        }
         let (rows, mask) = held_cells(rect);
         let end = rows.end.min(self.cells.len());
         let start = rows.start.min(end);
-        self.cells[start..end].iter().any(|row| row & mask != 0)
+        self.cells[start..end]
+            .iter()
+            .zip(&self.rows[start..end])
+            .any(|(cells, held)| {
+                cells & mask != 0 && held.iter().any(|held| target_rects_overlap(*held, rect))
+            })
     }
 
     /// Whether glyphs touching `rect` would cover a held image.
@@ -1011,12 +1143,15 @@ impl HeldDraws {
     }
 
     fn full(&self) -> bool {
-        self.bounds.len() >= MAX_HELD_DRAWS
+        self.held >= MAX_HELD_DRAWS
     }
 
     fn take(&mut self) -> HeldCmds {
-        self.bounds.clear();
+        self.held = 0;
         self.image_bounds.clear();
+        for held in &mut self.rows[..self.cells.len()] {
+            held.clear();
+        }
         self.cells.clear();
         self.union = None;
         HeldCmds {
@@ -1063,6 +1198,9 @@ struct PassPrep<'a, 's, C> {
     /// Every run draw of the pass, arena chunks' and stored runs', which
     /// their batches draw ranges of.
     arena_draws: Vec<RunDrawCall>,
+    /// The shape pipelines the pass's run draws take, prepared once its
+    /// batches are made.
+    pipelines: PipelineDemand,
     /// Where the open chunk's draws start in `arena_draws`.
     chunk_start: usize,
     /// The pass-order index of the open chunk's first record.
@@ -1141,7 +1279,9 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     self.image_items(renderer, &mut items, &run, scratch)?;
                     continue;
                 }
-                Item::Text(text) => self.text_item(renderer, text, &run, scratch)?,
+                Item::Text(text, geometry) => {
+                    self.text_item(renderer, (text, *geometry), &run, scratch)?;
+                }
                 Item::RRectShadow(_) => {
                     self.flush(renderer, run.binding);
                     self.shadow_run(renderer, &mut items, &run, scratch);
@@ -1417,8 +1557,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
 
     /// The target pixels a shape run can touch, a pixel wider on each side
     /// for its antialiased edge.
-    fn run_target_bounds(&self, draw: &RunDraw, run: &SegmentRun<'s, '_>) -> Option<TargetRect> {
-        let bounds = run_draw_bounds(draw, run.segment.scale)?;
+    fn run_target_bounds(&self, bounds: Rect, run: &SegmentRun<'s, '_>) -> Option<TargetRect> {
         let pixel = 1.0 / run.segment.scale;
         scissor_rect_for_rect(
             Rect {
@@ -1438,12 +1577,13 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         items: &mut Peekable<impl Iterator<Item = Item<'s>>>,
         run: &SegmentRun<'s, '_>,
     ) {
-        while let Some(Item::Run(draw, window)) =
+        while let Some(Item::Run(draw, window, bounds)) =
             items.next_if(|item| matches!(item, Item::Run(..)))
         {
-            if self
-                .run_target_bounds(draw, run)
-                .is_some_and(|bounds| self.held.overlaps(bounds))
+            if !self.held.is_empty()
+                && self
+                    .run_target_bounds(bounds, run)
+                    .is_some_and(|bounds| self.held.overlaps(bounds))
             {
                 self.draw_held(renderer, run.binding);
             }
@@ -1461,7 +1601,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     run.segment.scale,
                     &window,
                     self.depth,
-                    &mut self.arena_draws,
+                    (&mut self.arena_draws, &mut self.pipelines),
                 );
                 if self.depth {
                     self.take_depth_range(batch.draws.clone());
@@ -1501,6 +1641,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                         run.viewport,
                         self.mixed_turns,
                         (self.depth, segment_clip),
+                        &mut self.pipelines,
                     );
                     if taken == 0 {
                         self.close_chunk(renderer, run.binding);
@@ -1627,13 +1768,13 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
     fn text_item(
         &mut self,
         renderer: &mut GpuRenderer,
-        text: &'s TextDraw,
+        (text, geometry): (&'s TextDraw, (Rect, f32)),
         run: &SegmentRun<'s, '_>,
         scratch: &mut PassScratch,
     ) -> Result<(), String> {
         let glyph_start = scratch.glyph_cmds.len();
         let drew_glyphs = renderer.append_text_glyph_draws(
-            text,
+            (text, geometry),
             self.text_viewport(renderer, run),
             run.segment.scale,
             &mut scratch.glyph_instances,

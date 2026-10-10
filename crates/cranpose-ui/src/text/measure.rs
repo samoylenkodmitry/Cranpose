@@ -57,9 +57,10 @@ pub struct PreparedTextLayout {
     /// The first and last drawn baselines, excluding blank height added by `min_lines`.
     pub alignment_lines: cranpose_ui_layout::AlignmentLines,
     pub did_overflow: bool,
-    /// `text` as a renderer draws it, converted on first use: see
-    /// [`PreparedTextLayout::render_text`].
-    pub render_text: std::cell::OnceCell<std::sync::Arc<crate::text::RenderString>>,
+    /// `text` as a renderer draws it, and its
+    /// [`RenderString::render_hash`](crate::text::RenderString::render_hash),
+    /// converted on first use: see [`PreparedTextLayout::render_text`].
+    pub render_text: std::cell::OnceCell<(std::sync::Arc<crate::text::RenderString>, u64)>,
     pub(crate) visual_style_hash: std::cell::OnceCell<u64>,
     /// The max widths the layout's greedy wrap breaks the same lines at and
     /// cuts its ellipsis at the same character, when it wrapped: `None` when
@@ -114,12 +115,29 @@ impl PreparedTextLayout {
     /// and shared after, so every frame and scene rebuild drawing this layout
     /// hands over the same allocation.
     pub fn render_text(&self) -> std::sync::Arc<crate::text::RenderString> {
-        if let Some(converted) = self.render_text.get() {
+        if let Some((converted, _)) = self.render_text.get() {
             return std::sync::Arc::clone(converted);
         }
+        self.convert_render_text().0
+    }
+
+    /// [`RenderString::render_hash`](crate::text::RenderString::render_hash)
+    /// of [`PreparedTextLayout::render_text`], kept beside it so that reading
+    /// it never loads the string.
+    pub fn render_text_hash(&self) -> u64 {
+        if let Some((_, hash)) = self.render_text.get() {
+            return *hash;
+        }
+        self.convert_render_text().1
+    }
+
+    fn convert_render_text(&self) -> (std::sync::Arc<crate::text::RenderString>, u64) {
         let converted = std::sync::Arc::new(self.text.render_string());
-        let _ = self.render_text.set(std::sync::Arc::clone(&converted));
-        converted
+        let hash = converted.render_hash();
+        let _ = self
+            .render_text
+            .set((std::sync::Arc::clone(&converted), hash));
+        (converted, hash)
     }
 
     /// [`TextStyle::render_hash`] of `visual_style`, hashed once for the

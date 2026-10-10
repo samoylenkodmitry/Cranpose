@@ -2274,6 +2274,7 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
             prepared.visual_style_hash(),
             &prepared.text.span_styles,
             font_size,
+            (prepared.render_text_hash(), prepared.text.text.is_empty()),
         )),
     })
 }

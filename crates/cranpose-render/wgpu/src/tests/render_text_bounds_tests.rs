@@ -14,7 +14,10 @@ fn text_bounds_preserve_logical_snapping_clipping_and_invalid_scale_rejection() 
             height: 18.875,
         },
         snap_anchor: Some(SnapAnchor::rigid(Point::new(10.25, 20.75))),
-        text: cranpose_ui::text::shared_plain_render_string("bounds"),
+        text: DrawnText::of(
+            cranpose_ui::text::shared_plain_render_string("bounds"),
+            &cranpose_ui::TextStyle::default(),
+        ),
         color: Color::WHITE,
         text_style: Default::default(),
         style_hash: 0,
@@ -57,7 +60,10 @@ fn text_bounds_preserve_logical_snapping_clipping_and_invalid_scale_rejection() 
         assert_eq!(text_draw_bounds(&draw, 2.0), None);
         draw.scale = 1.0;
     }
-    draw.text = cranpose_ui::text::shared_plain_render_string("");
+    draw.text = DrawnText::of(
+        cranpose_ui::text::shared_plain_render_string(""),
+        &draw.text_style,
+    );
     assert_eq!(text_draw_bounds(&draw, 2.0), None);
 }
 

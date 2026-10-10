@@ -8,7 +8,6 @@ use cranpose_ui_graphics::{
     RecordLane, RecordSegment, RecordTables, ShapeRecordBody, ShapeRecordCurve,
     band_class_segments, strip_index_pattern, strip_indices, strip_vertices,
 };
-use smallvec::SmallVec;
 
 use crate::{
     arc_trig_fill::{ArcTrigFill, TrigBindings},
@@ -1758,7 +1757,7 @@ impl RunStore {
         window: std::ops::Range<u32>,
         (root_scale, turn): (f32, SegmentTransform),
         key_for: &mut dyn FnMut(&RecordSegment) -> crate::render::ShapePipelineKey,
-        wanted: &mut SmallVec<[(crate::render::ShapePipelineKey, u64); 4]>,
+        pipelines: &mut crate::shape_pipelines::PipelineDemand,
     ) -> u32 {
         let from = window.start;
         let mode = self.mode;
@@ -1839,11 +1838,7 @@ impl RunStore {
                 taken += 1;
             }
             if taken > segment_start {
-                let vertices = draw_vertices(taken - segment_start, band_class);
-                match wanted.iter_mut().find(|(wanted, _)| *wanted == key) {
-                    Some((_, total)) => *total += vertices,
-                    None => wanted.push((key, vertices)),
-                }
+                pipelines.add(key, draw_vertices(taken - segment_start, band_class));
             }
             if stopped {
                 break;
