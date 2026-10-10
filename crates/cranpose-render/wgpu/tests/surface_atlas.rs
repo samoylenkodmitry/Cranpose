@@ -374,3 +374,138 @@ fn a_shell_built_at_a_density_rasterizes_its_surfaces_at_that_density() {
         "the gap after the first tile starts at device pixel 114"
     );
 }
+
+/// How many cards draw on each frame of [`changing_cards_shell`]'s cycle:
+/// rows of five scrolling through a list change one row or two a frame.
+const CHANGING_COUNTS: [u32; 7] = [5, 10, 10, 10, 5, 5, 10];
+/// Every this many frames, four small avatars draw instead of the cards:
+/// further apart than a texture stays pooled unused.
+const AVATAR_FRAMES: u32 = 150;
+/// The frames a card's width holds before it steps, as a list whose width
+/// follows the frame measures its cards a point wider or narrower.
+const WIDTH_STEP_FRAMES: u32 = 20;
+const WIDTH_STEPS: u32 = 6;
+const CARDS_WIDTH: u32 = 330;
+const CARDS_HEIGHT: u32 = 176;
+const CARDS_DENSITY: u32 = 3;
+
+/// `count` cards composited through surfaces of their own, each a colour
+/// that follows `frame`, so every card draws again on every frame, and a
+/// point wider each [`WIDTH_STEP_FRAMES`] frames up to [`WIDTH_STEPS`]
+/// points, then narrow again; four avatars of their own instead every
+/// [`AVATAR_FRAMES`] frames.
+#[composable]
+fn ChangingCards(count: MutableState<u32>, frame: MutableState<u32>) {
+    Box(
+        Modifier::empty()
+            .size_points(CARDS_WIDTH as f32, CARDS_HEIGHT as f32)
+            .background(PAGE),
+        BoxSpec::default(),
+        move || {
+            let frame = frame.get();
+            let width = 58.0 + ((frame / WIDTH_STEP_FRAMES) % WIDTH_STEPS) as f32;
+            let count = count.get();
+            let (count, width, height) = if frame.is_multiple_of(AVATAR_FRAMES) {
+                (4, 16.0, 16.0)
+            } else {
+                (count, width, 83.0)
+            };
+            for index in 0..count {
+                let shade = ((frame + index) % 8) as f32 / 8.0;
+                Box(
+                    Modifier::empty()
+                        .offset(
+                            2.0 + (index % 5) as f32 * 65.0,
+                            4.0 + (index / 5) as f32 * 86.0,
+                        )
+                        .size_points(width, height)
+                        .graphics_layer_value(GraphicsLayer {
+                            compositing_strategy: CompositingStrategy::Offscreen,
+                            ..Default::default()
+                        })
+                        .background(Color(shade, 0.4, 0.8, 1.0))
+                        .rounded_corners(6.0),
+                    BoxSpec::default(),
+                    || {},
+                );
+            }
+        },
+    );
+}
+
+fn changing_cards_shell(
+    renderer: WgpuRenderer,
+) -> (AppShell<WgpuRenderer>, MutableState<u32>, MutableState<u32>) {
+    let states: Rc<RefCell<Option<(MutableState<u32>, MutableState<u32>)>>> =
+        Rc::new(RefCell::new(None));
+    let states_for_app = Rc::clone(&states);
+    let mut shell = AppShell::new_with_size_and_density(
+        renderer,
+        location_key(file!(), line!(), column!()),
+        move || {
+            let count = cranpose_core::rememberMutableStateOf(|| CHANGING_COUNTS[0]);
+            let frame = cranpose_core::rememberMutableStateOf(|| 0u32);
+            *states_for_app.borrow_mut() = Some((count, frame));
+            ChangingCards(count, frame);
+        },
+        (CARDS_WIDTH * CARDS_DENSITY, CARDS_HEIGHT * CARDS_DENSITY),
+        (CARDS_WIDTH as f32, CARDS_HEIGHT as f32),
+        CARDS_DENSITY as f32,
+    );
+    shell.update();
+    let (count, frame) = states.borrow().as_ref().copied().expect("states captured");
+    (shell, count, frame)
+}
+
+/// Frames that draw a varying number of surfaces again keep drawing them into
+/// the atlas texture the busiest of them needed, the avatars' frames too:
+/// none takes a texture of its own once those numbers have been seen,
+/// however long the cycle runs, and the last frame draws what a fresh
+/// renderer draws. The frame after the avatars' is left out: its cards are
+/// new layers again, and the layer cache may keep one of them at once.
+#[test]
+fn surfaces_drawn_again_in_varying_numbers_keep_one_atlas_texture() {
+    let Ok((_lock, renderer)) = support::headless_renderer_parts() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    let (width, height) = (CARDS_WIDTH * CARDS_DENSITY, CARDS_HEIGHT * CARDS_DENSITY);
+    let (mut shell, count, frame) = changing_cards_shell(renderer);
+    let step = |shell: &mut AppShell<WgpuRenderer>, index: u32| {
+        shell.debug_enter_app_context(|| {
+            count.set(CHANGING_COUNTS[index as usize % CHANGING_COUNTS.len()]);
+            frame.set(index);
+        });
+        support::update_and_capture(shell, width, height)
+    };
+    let mut index = 0;
+    support::settle(|| {
+        index += 1;
+        step(&mut shell, index)
+    });
+    support::wait_for_background_compiler_idle();
+    for _ in 0..AVATAR_FRAMES {
+        index += 1;
+        step(&mut shell, index);
+    }
+    let mut news = Vec::new();
+    for _ in 0..3 * AVATAR_FRAMES {
+        index += 1;
+        let (stats, _) = step(&mut shell, index);
+        if stats.offscreen_news > 0 && index % AVATAR_FRAMES != 1 {
+            news.push((index, stats.offscreen_news));
+        }
+    }
+    assert!(news.is_empty(), "frames that took new textures: {news:?}");
+
+    let (_, drawn) = support::update_and_capture(&mut shell, width, height);
+    let (mut fresh, fresh_count, fresh_frame) = changing_cards_shell(
+        support::headless_renderer_beside_locked().expect("reference renderer"),
+    );
+    fresh.debug_enter_app_context(|| {
+        fresh_count.set(CHANGING_COUNTS[index as usize % CHANGING_COUNTS.len()]);
+        fresh_frame.set(index);
+    });
+    let reference = support::settle(|| support::update_and_capture(&mut fresh, width, height));
+    support::assert_same_bytes("changing cards", width, &reference.pixels, &drawn.pixels);
+}

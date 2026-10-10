@@ -308,7 +308,7 @@ impl GpuRenderer {
     ) -> Result<bool, String> {
         let mut scratch = self.take_pass_scratch();
         let device = self.device.clone();
-        let depth = takes_depth(segments);
+        let depth = self.interiors_first && takes_depth(segments);
         let mut prep = PassPrep {
             recorder,
             device: &device,
@@ -591,6 +591,15 @@ fn turns_mixed(segments: &[PassSegment<'_>]) -> bool {
         .filter(|pair| pair[0].transform.is_identity() != pair[1].transform.is_identity())
         .count()
         >= MIXED_TURN_CHANGES
+}
+
+/// Whether passes on `backend` may lay opaque interiors down first. On GL
+/// and in a browser's WebGPU the depth buffer is memory of its own and the
+/// pre-pass's draws each cross into JavaScript: in Chrome on a Mate 20 X the
+/// gauntlet at tier 8 held 11 MB more and spent 1-2% more CPU a frame with
+/// it, for 0.6% fewer GPU cycles.
+pub(crate) fn lays_interiors_first(backend: wgpu::Backend) -> bool {
+    !matches!(backend, wgpu::Backend::Gl | wgpu::Backend::BrowserWebGpu)
 }
 
 static NO_INTERIORS_FIRST: crate::debug_toggles::DebugToggle =
