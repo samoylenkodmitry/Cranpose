@@ -19,6 +19,7 @@ pub mod env_flags;
 mod frame_clock;
 mod hooks;
 mod launched_effect;
+mod node_marks;
 pub mod owned;
 pub mod platform;
 mod recompose;
@@ -87,6 +88,7 @@ pub use launched_effect::{
     __launched_effect_async_impl, __launched_effect_impl, CancelToken, LaunchedEffect,
     LaunchedEffectAsync, LaunchedEffectScope, TaskSite,
 };
+pub use node_marks::NodeMarks;
 pub use owned::Owned;
 pub use platform::{Clock, RuntimeScheduler, SchedulerRef, scheduler_ref};
 pub use retention::{RetentionBudget, RetentionEvictionPolicy, RetentionMode, RetentionPolicy};
@@ -3423,9 +3425,12 @@ pub struct MemoryApplier {
 /// value without keeping stale attachment results after graph mutations.
 #[derive(Default)]
 pub struct SceneNodeAttachmentScratch {
-    attached: HashMap<NodeId, bool>,
+    attached: NodeMarks,
     path: Vec<NodeId>,
 }
+
+const ATTACHED: u8 = 1;
+const DETACHED: u8 = 2;
 
 struct RemovalFrame {
     node_id: NodeId,
@@ -3604,14 +3609,14 @@ impl MemoryApplier {
         scratch: &mut SceneNodeAttachmentScratch,
     ) {
         let nodes = nodes.into_iter();
-        scratch.attached.clear();
         output.clear();
         let (lower_bound, upper_bound) = nodes.size_hint();
         if lower_bound == 0 && upper_bound == Some(0) {
             scratch.path.clear();
             return;
         }
-        scratch.attached.insert(root, true);
+        scratch.attached.reset(self);
+        scratch.attached.set(self, root, ATTACHED);
         output.reserve(lower_bound);
         scratch.path.clear();
         for node_id in nodes {
@@ -3622,8 +3627,10 @@ impl MemoryApplier {
             let mut current = resolved;
             scratch.path.clear();
             let answer = loop {
-                if let Some(known) = scratch.attached.get(&current) {
-                    break *known;
+                match scratch.attached.get(self, current) {
+                    ATTACHED => break true,
+                    DETACHED => break false,
+                    _ => {}
                 }
                 scratch.path.push(current);
                 match self.get_mut(current).ok().and_then(|node| node.parent()) {
@@ -3631,8 +3638,9 @@ impl MemoryApplier {
                     _ => break false,
                 }
             };
+            let mark = if answer { ATTACHED } else { DETACHED };
             for visited in scratch.path.drain(..) {
-                scratch.attached.insert(visited, answer);
+                scratch.attached.set(self, visited, mark);
             }
             output.push(answer.then_some(resolved));
         }
@@ -3670,6 +3678,9 @@ impl MemoryApplier {
     }
 
     fn first_non_virtual_ancestor(&mut self, node_id: NodeId) -> Option<NodeId> {
+        if self.virtual_node_ids.is_empty() {
+            return Some(node_id);
+        }
         let mut current = node_id;
         for _ in 0..100_000 {
             if !self.virtual_node_ids.contains(&current) {

@@ -78,6 +78,10 @@ impl TextLayoutResolver for UiTextLayoutResolver {
 /// `layer`'s elevation shadow over `transformed_bounds`, cut to `clip`: its
 /// ambient and spot passes as Skia draws them, each a round rect shadow the
 /// pass draws straight into its target.
+pub(crate) fn layer_casts_shadow(layer: &GraphicsLayer) -> bool {
+    layer.shadow_elevation > 0.0
+}
+
 pub(crate) fn push_layer_shadow(
     scene: &mut CompositorScene,
     layer: &GraphicsLayer,
@@ -86,7 +90,7 @@ pub(crate) fn push_layer_shadow(
     clip: Option<Rect>,
     light: ShadowLight,
 ) {
-    if layer.shadow_elevation <= 0.0 {
+    if !layer_casts_shadow(layer) {
         return;
     }
     let caster = match layer.shape {
