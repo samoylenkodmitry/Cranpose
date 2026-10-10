@@ -18,7 +18,10 @@ use cranpose_ui_graphics::{
 };
 
 use crate::{
-    pipeline::{TextLayoutResolver, push_draw_primitive, push_layer_shadow, push_text_style_draws},
+    pipeline::{
+        TextLayoutResolver, layer_casts_shadow, push_draw_primitive, push_layer_shadow,
+        push_text_style_draws,
+    },
     scene::{
         BackdropLayer, CompositorScene, LayerRoundedClip, Placement as RunPlacement, RunDraw,
         SceneCapacityHint, ShadowDraw, SnapAnchor,
@@ -901,6 +904,7 @@ pub(crate) fn collect_overlay(
     )
 }
 
+#[inline(never)]
 fn push_backdrop_layer(
     layer: &LayerNode,
     offset: Point,
@@ -1281,106 +1285,137 @@ fn collect_child(
     if composite.is_some_and(|(alpha, blend)| alpha == 0.0 && blend == BlendMode::SrcOver) {
         return context.wants_pixel_sensitive && layer_has_pixel_sensitive_subtree(child);
     }
-    match placement_in(child, &context) {
-        placement @ (Placement::Direct(translation) | Placement::DirectRounded(translation, _)) => {
-            let child_offset = Point::new(
-                context.offset.x + translation.x,
-                context.offset.y + translation.y,
-            );
-            let child_bounds = child.local_bounds.translate(child_offset.x, child_offset.y);
-            if clipped_away(child, child_bounds, context.visual_clip) {
-                return context.wants_pixel_sensitive && layer_has_pixel_sensitive_subtree(child);
-            }
-            let child_local_layer = local_content_layer_for(&child.graphics_layer);
-            let child_anchor = context.snap_anchor.or_else(|| {
-                context
-                    .translated
-                    .then(|| rigid_snap_anchor(child_bounds, &child_local_layer))
-                    .flatten()
-            });
-            let shadow_clip = resolve_clip(
-                context.visual_clip,
-                child
-                    .shadow_clip()
-                    .map(|clip| clip.translate(child_offset.x, child_offset.y)),
-            );
-            let shadows_before = out.scene.rrect_shadows.len();
-            push_layer_shadow(
-                &mut out.scene,
-                &child.graphics_layer,
-                child_bounds,
-                child_bounds,
-                shadow_clip,
-                context.light,
-            );
-            assign_shadow_anchor(&mut out.scene, shadows_before, child_anchor);
-            let (visual_clip, clip_radius) = match placement {
-                Placement::DirectRounded(_, radius) => (
-                    resolve_clip(
-                        context.visual_clip,
-                        child
-                            .visual_clip_rect()
-                            .map(|clip| clip.translate(child_offset.x, child_offset.y)),
-                    ),
-                    radius,
-                ),
-                _ => (context.visual_clip, context.clip_radius),
-            };
-            let child_context = WalkContext {
-                offset: child_offset,
-                visual_clip,
-                clip_radius,
-                snap_anchor: child_anchor,
-                translated: context.translated,
-                raster_scale: context.raster_scale,
-                light: context.light,
-                wants_pixel_sensitive: context.wants_pixel_sensitive,
-                update: context.update,
-            };
-            if child.backdrop().is_some() {
-                push_backdrop_layer(child, child_offset, child_context, &mut out.scene);
-            }
-            collect_into(child, text_layout, motion, child_context, out, recycler)
-        }
+    let (translation, radius) = match placement_in(child, &context) {
+        Placement::Direct(translation) => (translation, None),
+        Placement::DirectRounded(translation, radius) => (translation, Some(radius)),
         Placement::Isolated => {
-            let transform = child
-                .transform_to_parent
-                .then(ProjectiveTransform::translation(
-                    context.offset.x,
-                    context.offset.y,
-                ));
-            let child_bounds = quad_bounds(transform.map_rect(child.local_bounds));
-            let shadow_clip = resolve_clip(
+            return collect_isolated_child(child, text_layout, motion, context, out, recycler);
+        }
+    };
+    let child_offset = Point::new(
+        context.offset.x + translation.x,
+        context.offset.y + translation.y,
+    );
+    let child_bounds = child.local_bounds.translate(child_offset.x, child_offset.y);
+    if clipped_away(child, child_bounds, context.visual_clip) {
+        return context.wants_pixel_sensitive && layer_has_pixel_sensitive_subtree(child);
+    }
+    let child_anchor = context.snap_anchor.or_else(|| {
+        context
+            .translated
+            .then(|| {
+                rigid_snap_anchor(
+                    child_bounds,
+                    &local_content_layer_for(&child.graphics_layer),
+                )
+            })
+            .flatten()
+    });
+    if layer_casts_shadow(&child.graphics_layer) {
+        push_direct_layer_shadow(
+            child,
+            (child_offset, child_bounds),
+            child_anchor,
+            &context,
+            &mut out.scene,
+        );
+    }
+    let (visual_clip, clip_radius) = match radius {
+        Some(radius) => (
+            resolve_clip(
                 context.visual_clip,
                 child
-                    .shadow_clip()
-                    .map(|clip| quad_bounds(transform.map_rect(clip))),
-            );
-            let shadows_before = out.scene.rrect_shadows.len();
-            push_layer_shadow(
-                &mut out.scene,
-                &child.graphics_layer,
-                child.local_bounds,
-                child_bounds,
-                shadow_clip,
-                context.light,
-            );
-            let (isolated, has_pixel_sensitive_subtree) = isolated_child(
-                child,
-                text_layout,
-                motion,
-                context,
-                &mut out.scene,
-                recycler,
-            );
-            let mut isolated = with_backdrop_in_own_space(isolated, recycler);
-            assign_shadow_anchor(&mut out.scene, shadows_before, isolated.snap_anchor);
-            detach_flat_backdrop(&mut isolated, &mut out.scene);
-            out.children.push(isolated);
-            out.scene.next_z += 1;
-            direct_translation(child.transform_to_parent).is_some() && has_pixel_sensitive_subtree
-        }
+                    .visual_clip_rect()
+                    .map(|clip| clip.translate(child_offset.x, child_offset.y)),
+            ),
+            radius,
+        ),
+        None => (context.visual_clip, context.clip_radius),
+    };
+    let child_context = WalkContext {
+        offset: child_offset,
+        visual_clip,
+        clip_radius,
+        snap_anchor: child_anchor,
+        ..context
+    };
+    if child.backdrop().is_some() {
+        push_backdrop_layer(child, child_offset, child_context, &mut out.scene);
     }
+    collect_into(child, text_layout, motion, child_context, out, recycler)
+}
+
+#[inline(never)]
+fn push_direct_layer_shadow(
+    child: &LayerNode,
+    (child_offset, child_bounds): (Point, Rect),
+    child_anchor: Option<SnapAnchor>,
+    context: &WalkContext,
+    scene: &mut CompositorScene,
+) {
+    let shadow_clip = resolve_clip(
+        context.visual_clip,
+        child
+            .shadow_clip()
+            .map(|clip| clip.translate(child_offset.x, child_offset.y)),
+    );
+    let shadows_before = scene.rrect_shadows.len();
+    push_layer_shadow(
+        scene,
+        &child.graphics_layer,
+        child_bounds,
+        child_bounds,
+        shadow_clip,
+        context.light,
+    );
+    assign_shadow_anchor(scene, shadows_before, child_anchor);
+}
+
+#[inline(never)]
+fn collect_isolated_child(
+    child: &LayerNode,
+    text_layout: &mut impl TextLayoutResolver,
+    motion: &mut LayerMotion,
+    context: WalkContext,
+    out: &mut LayerScene,
+    recycler: &mut LayerSceneRecycler,
+) -> bool {
+    let transform = child
+        .transform_to_parent
+        .then(ProjectiveTransform::translation(
+            context.offset.x,
+            context.offset.y,
+        ));
+    let child_bounds = quad_bounds(transform.map_rect(child.local_bounds));
+    let shadow_clip = resolve_clip(
+        context.visual_clip,
+        child
+            .shadow_clip()
+            .map(|clip| quad_bounds(transform.map_rect(clip))),
+    );
+    let shadows_before = out.scene.rrect_shadows.len();
+    push_layer_shadow(
+        &mut out.scene,
+        &child.graphics_layer,
+        child.local_bounds,
+        child_bounds,
+        shadow_clip,
+        context.light,
+    );
+    let (isolated, has_pixel_sensitive_subtree) = isolated_child(
+        child,
+        text_layout,
+        motion,
+        context,
+        &mut out.scene,
+        recycler,
+    );
+    let mut isolated = with_backdrop_in_own_space(isolated, recycler);
+    assign_shadow_anchor(&mut out.scene, shadows_before, isolated.snap_anchor);
+    detach_flat_backdrop(&mut isolated, &mut out.scene);
+    out.children.push(isolated);
+    out.scene.next_z += 1;
+    direct_translation(child.transform_to_parent).is_some() && has_pixel_sensitive_subtree
 }
 
 /// Whether nothing `child`, placed at `bounds`, draws can show inside
