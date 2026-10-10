@@ -31,6 +31,7 @@ mod descriptor;
 mod device;
 mod drm;
 mod instance;
+mod pool_trim;
 mod sampler;
 mod semaphore_list;
 mod swapchain;
@@ -1238,6 +1239,9 @@ pub struct CommandEncoder {
     counters: Arc<wgt::HalCounters>,
 
     current_pipeline_is_multiview: bool,
+
+    /// When a reset of `raw` gives its memory back.
+    pool_trim: pool_trim::PoolTrim,
 }
 
 impl Drop for CommandEncoder {

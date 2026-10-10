@@ -16,11 +16,11 @@ formatting, spelling and diff gates skip the forks.
 
 Upstream: <https://github.com/gfx-rs/wgpu>, commit
 `40f4a34ebaf56f9a046231f54125ad046239d3f3` (`wgpu-hal` 30.0.1).
-`cranpose-wgpu-hal` is at 30.0.7 for the catch-up barrier, the Metal
+`cranpose-wgpu-hal` is at 30.0.8 for the catch-up barrier, the Metal
 pipeline switch, the dedicated Vulkan allocations, the GL point size, the
-GL state tracker, the web surface usages and the boxed GL copy commands
-below, and `cranpose-wgpu-core` and `cranpose-wgpu` are at 30.0.7 to
-require it.
+GL state tracker, the web surface usages, the boxed GL copy commands and
+the Vulkan command pools that give a burst's memory back below, and
+`cranpose-wgpu-core` and `cranpose-wgpu` are at 30.0.8 to require it.
 
 | fork | upstream |
 | --- | --- |
@@ -179,6 +179,33 @@ pass, 59% of them vertex attribute commands: the pass's vector held 1 MiB
 and holds 384 KiB. In Chrome on an M5 at the Mate 20 X's viewport, on
 WebGL, the page's peak heap went from 22.2 to 20.7 MiB and its WebAssembly
 memory from 28.1 to 25.8 MiB.
+
+### Vulkan command pools give a burst's memory back
+
+`wgpu-core` keeps every command encoder it made and reuses it once its
+submission is done; `wgpu-hal` resets the encoder's Vulkan command pool
+without `RELEASE_RESOURCES`, so the pool keeps the memory its command
+buffers took. A tile-based driver takes command memory for each render
+pass. On a Pixel 9 Pro (Mali-G715) the first frames of Cranslate's main
+screen record 17 to 48 passes each while its glass panels capture and blur
+what lies behind them, about 1,000 passes in 350 ms, and the driver took
+that memory in chunks of 128 KiB and 576 KiB. The pools kept it: the GL
+memory Android reported was 255 to 265 MiB with the screen idle after
+launch, and 314 to 321 MiB after scrolling its lines, against 37 MiB for
+a bench app without glass.
+
+The fork's Vulkan encoder counts the render passes begun since its pool's
+last reset (`vulkan/pool_trim.rs`). A pool that held at least 8 passes
+gives its memory back, with `RELEASE_RESOURCES`, at the fourth reset in a
+row that used less than half of that, and counts from that reset again.
+A steady workload, light or heavy, keeps its memory, so its frames record
+as fast as before; heavy frames between light ones keep it too.
+
+On the Pixel, the idle main screen after launch held 161 to 177 MiB, and
+after scrolling 161 to 181 MiB. Over the same scroll the present thread's
+median render took 2.88 and 2.98 ms a frame against 3.13 and 3.28 ms
+before (two legs each). Giving the memory back at every reset reached
+142 MiB but cost the present thread 0.2 to 0.3 ms a frame.
 
 ### Update the fork
 

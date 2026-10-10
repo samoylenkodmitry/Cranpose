@@ -1431,6 +1431,7 @@ impl crate::Device for super::Device {
             counters: Arc::clone(&self.counters),
             current_pipeline_is_multiview: false,
             texture_stages_widened: false,
+            pool_trim: Default::default(),
         })
     }
 

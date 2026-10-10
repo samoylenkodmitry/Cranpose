@@ -189,11 +189,14 @@ impl crate::CommandEncoder for super::CommandEncoder {
         for (_, framebuffer) in self.framebuffers.drain() {
             unsafe { self.device.raw.destroy_framebuffer(framebuffer, None) };
         }
-        let _ = unsafe {
-            self.device
-                .raw
-                .reset_command_pool(self.raw, vk::CommandPoolResetFlags::default())
+        // After a burst of heavy frames the pool gives the driver back the
+        // command memory they took; see `pool_trim`.
+        let flags = if self.pool_trim.reset() {
+            vk::CommandPoolResetFlags::RELEASE_RESOURCES
+        } else {
+            vk::CommandPoolResetFlags::empty()
         };
+        let _ = unsafe { self.device.raw.reset_command_pool(self.raw, flags) };
     }
 
     unsafe fn transition_buffers<'a, T>(&mut self, barriers: T)
@@ -788,6 +791,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         &mut self,
         desc: &crate::RenderPassDescriptor<super::QuerySet, super::TextureView>,
     ) -> Result<(), crate::DeviceError> {
+        self.pool_trim.begin_render_pass();
         let mut vk_clear_values =
             ArrayVec::<vk::ClearValue, { super::MAX_TOTAL_ATTACHMENTS }>::new();
         let mut rp_key = super::RenderPassKey {
