@@ -479,17 +479,17 @@ fn Sparkline(card: usize, color: usize, frame: MutableState<u32>, s: f32) {
             let size = scope.size();
             let step = size.width / (GAUNTLET_SPARK_POINTS - 1) as f32;
             let k = frame.get();
-            let point = |index: usize| Point {
+            let points: [Point; GAUNTLET_SPARK_POINTS] = std::array::from_fn(|index| Point {
                 x: index as f32 * step,
                 y: size.height * (1.0 - data::spark_value(card, index, k)),
-            };
+            });
             let mut area = Path::new();
             area.move_to(Point {
                 x: 0.0,
                 y: size.height,
             });
-            for index in 0..GAUNTLET_SPARK_POINTS {
-                area.line_to(point(index));
+            for point in points {
+                area.line_to(point);
             }
             area.line_to(Point {
                 x: size.width,
@@ -498,9 +498,9 @@ fn Sparkline(card: usize, color: usize, frame: MutableState<u32>, s: f32) {
             area.close();
             scope.draw_path(&area, fill.clone(), DrawStyle::Fill);
             let mut stroke = Path::new();
-            stroke.move_to(point(0));
-            for index in 1..GAUNTLET_SPARK_POINTS {
-                stroke.line_to(point(index));
+            stroke.move_to(points[0]);
+            for point in &points[1..] {
+                stroke.line_to(*point);
             }
             scope.draw_path(
                 &stroke,
