@@ -2067,7 +2067,7 @@ impl LayoutBuilderState {
 
         if let Some(err) = runtime_state.take_child_error() {
             for child_state in runtime_state.child_states() {
-                child_state.measured.borrow_mut().take();
+                child_state.measured.take();
             }
             self.with_applier_result(|applier| {
                 applier.with_node::<LayoutNode, _>(node_id, |node| {
@@ -3135,13 +3135,15 @@ fn inherited_alignment_lines(
     let mut lines = AlignmentLines::default();
     for (index, child) in child_states.iter().enumerate() {
         let placement = placement_for_child(placements, placement_indices, index, child.node_id);
-        if let Some(measured) = child.measured.borrow().as_ref() {
-            lines.merge(
-                measured
-                    .alignment_lines_for_parent()
-                    .translated(child.placement_position(placement).y),
-            );
-        }
+        read_cell(&child.measured, |measured| {
+            if let Some(measured) = measured {
+                lines.merge(
+                    measured
+                        .alignment_lines_for_parent()
+                        .translated(child.placement_position(placement).y),
+                );
+            }
+        });
     }
     lines
 }
@@ -3291,7 +3293,7 @@ impl LayoutRuntimeState {
         let child_states = self.child_states();
         let mut measured_children = Vec::with_capacity(child_states.len());
         for (index, child_state) in child_states.iter().enumerate() {
-            let Some(measured) = child_state.measured.borrow_mut().take() else {
+            let Some(measured) = child_state.measured.take() else {
                 continue;
             };
             let placement =
@@ -3498,10 +3500,14 @@ pub(crate) fn parent_data_of(
     }
 }
 
+/// A parent's record of one child, for each child of every parent: its
+/// shared parts sit in `Cell`s, read by take and put back, where a
+/// `RefCell`'s borrow flag would take a word of every record.
 struct LayoutChildMeasureState {
     node_id: NodeId,
     frame: Rc<LayoutChildFrame>,
-    cache: RefCell<LayoutNodeCacheHandles>,
+    /// The child's cache, `None` until the record is first bound.
+    cache: Cell<Option<LayoutNodeCacheHandles>>,
     cache_epoch: Cell<u64>,
     force_remeasure: Cell<bool>,
     parent_data: Cell<Option<cranpose_ui_layout::ParentData>>,
@@ -3509,9 +3515,18 @@ struct LayoutChildMeasureState {
     measured_constraints: Cell<Option<Constraints>>,
     /// Whether the parent's last measure read the child's intrinsic sizes.
     read_intrinsics: Cell<bool>,
-    measured: RefCell<Option<Rc<MeasuredNode>>>,
+    measured: Cell<Option<Rc<MeasuredNode>>>,
     last_position: Cell<Option<Point>>,
-    layout_state: RefCell<Option<Rc<RefCell<LayoutState>>>>,
+    layout_state: Cell<Option<Rc<RefCell<LayoutState>>>>,
+}
+
+/// Runs `read` on what `cell` holds and puts it back. `read` must not reach
+/// the same cell again.
+fn read_cell<T: Default, R>(cell: &Cell<T>, read: impl FnOnce(&T) -> R) -> R {
+    let value = cell.take();
+    let result = read(&value);
+    cell.set(value);
+    result
 }
 
 impl LayoutChildMeasureState {
@@ -3529,15 +3544,15 @@ impl LayoutChildMeasureState {
         Rc::new(Self {
             node_id,
             frame,
-            cache: RefCell::new(LayoutNodeCacheHandles::default()),
+            cache: Cell::new(None),
             cache_epoch: Cell::new(0),
             force_remeasure: Cell::new(true),
             parent_data: Cell::new(None),
             measured_constraints: Cell::new(None),
             read_intrinsics: Cell::new(false),
-            measured: RefCell::new(None),
+            measured: Cell::new(None),
             last_position: Cell::new(None),
-            layout_state: RefCell::new(None),
+            layout_state: Cell::new(None),
         })
     }
 
@@ -3549,24 +3564,31 @@ impl LayoutChildMeasureState {
         let stale = binding.dirty || child_epoch < pass.cache_floor;
         let cache_epoch = if stale { pass.cache_epoch } else { child_epoch };
         binding.cache.activate(cache_epoch);
-        self.cache.borrow_mut().clone_from(binding.cache);
+        let mut cache = self.cache.take();
+        match &mut cache {
+            Some(cache) => cache.clone_from(binding.cache),
+            None => cache = Some(binding.cache.clone()),
+        }
+        self.cache.set(cache);
         self.cache_epoch.set(cache_epoch);
         self.force_remeasure.set(stale || binding.descendant_dirty);
         self.parent_data.set(binding.parent_data);
         if self.frame.measures() {
-            self.measured.borrow_mut().take();
+            self.measured.take();
             self.last_position.set(None);
             self.measured_constraints.set(None);
             self.read_intrinsics.set(false);
         }
-        let mut layout_state = self.layout_state.borrow_mut();
+        let layout_state = self.layout_state.take();
         let shared = layout_state
             .as_ref()
             .zip(binding.layout_state)
             .is_some_and(|(current, bound)| Rc::ptr_eq(current, bound));
-        if !shared {
-            *layout_state = binding.layout_state.cloned();
-        }
+        self.layout_state.set(if shared {
+            layout_state
+        } else {
+            binding.layout_state.cloned()
+        });
     }
 
     fn place_retained(&self, position: Point) {
@@ -3575,8 +3597,13 @@ impl LayoutChildMeasureState {
         let Some(builder) = builder.as_ref() else {
             return;
         };
-        if let Some(layout_state) = self.layout_state.borrow().as_ref() {
-            layout_state.borrow_mut().place(position);
+        let placed = read_cell(&self.layout_state, |layout_state| {
+            layout_state
+                .as_ref()
+                .map(|layout_state| layout_state.borrow_mut().place(position))
+                .is_some()
+        });
+        if placed {
             return;
         }
         let Ok(mut applier) = builder.applier.try_borrow_typed() else {
@@ -3615,17 +3642,23 @@ impl LayoutChildMeasureState {
         if self.frame.measures() {
             self.measured_constraints.set(Some(constraints));
         }
-        let cache = self.cache.borrow();
-        cache.activate(self.cache_epoch.get());
+        let cache = read_cell(&self.cache, Clone::clone);
+        if let Some(cache) = &cache {
+            cache.activate(self.cache_epoch.get());
+        }
         if !self.force_remeasure.get()
-            && let Some(cached) = cache.get_measurement(constraints)
+            && let Some(cached) = cache
+                .as_ref()
+                .and_then(|cache| cache.get_measurement(constraints))
         {
             // A measure clears the placed flag the parent's placement sets
             // again; a child it no longer places then leaves the scene.
-            if self.frame.measures()
-                && let Some(state) = self.layout_state.borrow().as_ref()
-            {
-                state.borrow_mut().clear_placed();
+            if self.frame.measures() {
+                read_cell(&self.layout_state, |state| {
+                    if let Some(state) = state {
+                        state.borrow_mut().clear_placed();
+                    }
+                });
             }
             return Some(cached);
         }
@@ -3633,7 +3666,9 @@ impl LayoutChildMeasureState {
         match self.perform_measure(constraints) {
             Ok(measured) => {
                 self.force_remeasure.set(false);
-                cache.store_measurement(constraints, Rc::clone(&measured));
+                if let Some(cache) = &cache {
+                    cache.store_measurement(constraints, Rc::clone(&measured));
+                }
                 Some(measured)
             }
             Err(err) => {
@@ -3670,10 +3705,12 @@ impl LayoutChildMeasurable {
         if state.frame.measures() {
             state.read_intrinsics.set(true);
         }
-        let cache = state.cache.borrow();
-        cache.activate(state.cache_epoch.get());
+        let cache = read_cell(&state.cache, Clone::clone);
+        if let Some(cache) = &cache {
+            cache.activate(state.cache_epoch.get());
+        }
         if !state.force_remeasure.get()
-            && let Some(value) = cache.get_intrinsic(&kind)
+            && let Some(value) = cache.as_ref().and_then(|cache| cache.get_intrinsic(&kind))
         {
             return value;
         }
@@ -3683,19 +3720,21 @@ impl LayoutChildMeasurable {
                 .measure_cached(constraints)
                 .map_or(0.0, |node| extent(node.size_for_parent())),
         };
-        cache.store_intrinsic(kind, value);
+        if let Some(cache) = &cache {
+            cache.store_intrinsic(kind, value);
+        }
         value
     }
 }
 
 impl PlaceTarget for LayoutChildMeasureState {
     fn place(&self, x: f32, y: f32) {
-        let internal_offset = self
-            .measured
-            .borrow()
-            .as_ref()
-            .map(|measured| measured.offset)
-            .unwrap_or_default();
+        let internal_offset = read_cell(&self.measured, |measured| {
+            measured
+                .as_ref()
+                .map(|measured| measured.offset)
+                .unwrap_or_default()
+        });
         self.place_retained(Point {
             x: x + internal_offset.x,
             y: y + internal_offset.y,
@@ -3705,10 +3744,11 @@ impl PlaceTarget for LayoutChildMeasureState {
 
 impl Measurable for LayoutChildMeasurable {
     fn measured_hold(&self) -> Option<(Size, cranpose_ui_layout::ConstraintsHold)> {
-        let measured = self.state.measured.borrow();
-        let measured = measured.as_ref()?;
-        let hold = self.state.cache.borrow().hold_of(measured)?;
-        Some((measured.size_for_parent(), hold))
+        read_cell(&self.state.measured, |measured| {
+            let measured = measured.as_ref()?;
+            let hold = read_cell(&self.state.cache, |cache| cache.as_ref()?.hold_of(measured))?;
+            Some((measured.size_for_parent(), hold))
+        })
     }
 
     fn measure(&self, constraints: Constraints) -> Placeable {
@@ -3727,15 +3767,17 @@ impl Measurable for LayoutChildMeasurable {
             ),
             |measured| (measured.size, measured.size_for_parent()),
         );
-        if let Some(layout_state) = state.layout_state.borrow().as_ref() {
-            layout_state.borrow_mut().set_size(measured_size);
-        }
+        read_cell(&state.layout_state, |layout_state| {
+            if let Some(layout_state) = layout_state {
+                layout_state.borrow_mut().set_size(measured_size);
+            }
+        });
         let alignment_lines = measured
             .as_ref()
             .map_or_else(AlignmentLines::default, |node| {
                 node.alignment_lines_for_parent()
             });
-        *state.measured.borrow_mut() = measured;
+        state.measured.set(measured);
 
         Placeable::with_place_target(
             size_for_parent.width,
