@@ -45,4 +45,7 @@ CGImageRef CPFrame(uint64_t elapsed) {
 void CPTouch(uint8_t phase, float x, float y) { if (app) (*app)->touch(phase, x, y); }
 void CPCrown(float delta, uint64_t elapsed) { if (app) (*app)->crown(delta, elapsed); }
 void CPActive(bool value) { active = value; if (app) (*app)->set_active(value); }
+void CPSafeArea(float left, float top, float right, float bottom) {
+    if (app) (*app)->set_safe_area(left, top, right, bottom);
+}
 const char *CPError(void) { return error.c_str(); }

@@ -45,6 +45,9 @@ impl Application {
     pub fn touch(&mut self, phase: u8, x: f32, y: f32) { self.0.touch(phase, x, y); }
     pub fn crown(&mut self, delta: f32, elapsed: u64) -> bool { self.0.crown(delta, elapsed) }
     pub fn set_active(&mut self, active: bool) { self.0.set_active(active); }
+    pub fn set_safe_area(&mut self, left: f32, top: f32, right: f32, bottom: f32) {
+        self.0.set_safe_area(left, top, right, bottom);
+    }
 }
 
 #[cxx::bridge(namespace = "cranpose_watchos")]
@@ -60,6 +63,7 @@ mod ffi {
         fn touch(self: &mut Application, phase: u8, x: f32, y: f32);
         fn crown(self: &mut Application, delta: f32, elapsed_millis: u64) -> bool;
         fn set_active(self: &mut Application, active: bool);
+        fn set_safe_area(self: &mut Application, left: f32, top: f32, right: f32, bottom: f32);
     }
 }
 

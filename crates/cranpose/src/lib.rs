@@ -443,7 +443,8 @@ pub mod prelude {
     all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"),
-    feature = "embed"
+    feature = "embed",
+    feature = "watchos"
 ))]
 pub(crate) mod platform_env;
 

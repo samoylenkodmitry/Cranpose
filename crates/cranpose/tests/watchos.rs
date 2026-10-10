@@ -106,3 +106,20 @@ fn invalid_surface_and_input_are_rejected() {
     assert!(!app.crown(f32::NAN, 0));
     app.touch(99, 0.0, 0.0);
 }
+
+#[test]
+fn the_safe_area_reaches_content() {
+    let seen = Rc::new(Cell::new(EdgeInsets::default()));
+    let sink = Rc::clone(&seen);
+    let mut app = Application::new(100, 100, 2.0, move || {
+        sink.set(local_safe_area_insets().current());
+    })
+    .expect("valid surface");
+    app.set_active(true);
+    app.tick(1);
+    assert_eq!(seen.get(), EdgeInsets::default());
+    // The clock's edge; a broken edge counts as none.
+    app.set_safe_area(0.0, 32.0, -4.0, f32::NAN);
+    app.tick(16_000_001);
+    assert_eq!(seen.get(), EdgeInsets::from_components(0.0, 32.0, 0.0, 0.0));
+}
