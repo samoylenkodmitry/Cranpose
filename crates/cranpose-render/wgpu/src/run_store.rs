@@ -36,6 +36,7 @@ pub(crate) const PLACEMENT_CHUNK: usize = 4;
 /// consecutive runs share a draw.
 pub(crate) const STORE_RUN_MIN_RECORDS: u32 = 64;
 const STORE_IDLE_FRAMES: u64 = 120;
+const STORES_RUNS: bool = cfg!(not(target_arch = "wasm32"));
 const INITIAL_ARENA_RECORDS: usize = 1024;
 const INITIAL_BRUSHES: usize = 64;
 const INITIAL_STOPS: usize = 128;
@@ -64,21 +65,12 @@ impl RunBufferMode {
         Self::select(&device.limits(), downlevel)
     }
 
-    pub(crate) fn select(limits: &wgpu::Limits, _downlevel: wgpu::DownlevelFlags) -> Self {
-        #[cfg(not(target_arch = "wasm32"))]
-        if limits.max_storage_buffers_per_shader_stage >= TABLE_COUNT as u32
-            && _downlevel.contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
-        {
-            return Self {
-                storage: true,
-                trig_fill: _downlevel.contains(wgpu::DownlevelFlags::COMPUTE_SHADERS)
-                    && crate::arc_trig_fill::fits(limits),
-            };
-        }
-        let _ = limits;
+    pub(crate) fn select(limits: &wgpu::Limits, downlevel: wgpu::DownlevelFlags) -> Self {
+        let storage = limits.max_storage_buffers_per_shader_stage >= TABLE_COUNT as u32
+            && downlevel.contains(wgpu::DownlevelFlags::VERTEX_STORAGE);
         Self {
-            storage: false,
-            trig_fill: false,
+            storage,
+            trig_fill: storage && trig_fill_fits(limits, downlevel),
         }
     }
 
@@ -109,6 +101,15 @@ impl RunBufferMode {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn trig_fill_fits(limits: &wgpu::Limits, downlevel: wgpu::DownlevelFlags) -> bool {
+    downlevel.contains(wgpu::DownlevelFlags::COMPUTE_SHADERS) && crate::arc_trig_fill::fits(limits)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn trig_fill_fits(_limits: &wgpu::Limits, _downlevel: wgpu::DownlevelFlags) -> bool {
+    false
+}
+
 const TABLE_COUNT: usize = 3;
 const BUFFER_COUNT: usize = 5;
 const BODY_BUFFER: usize = 0;
@@ -1571,7 +1572,10 @@ impl RunStore {
 
     /// Whether `run` keeps retained buffers rather than joining the arena.
     pub(crate) fn is_stored(&self, run: &RunDraw) -> bool {
-        self.mode.storage && run.command.is_some() && run.record_count() >= STORE_RUN_MIN_RECORDS
+        STORES_RUNS
+            && self.mode.storage
+            && run.command.is_some()
+            && run.record_count() >= STORE_RUN_MIN_RECORDS
     }
 
     /// Brings a stored run's tables up to date: nothing is written when the
