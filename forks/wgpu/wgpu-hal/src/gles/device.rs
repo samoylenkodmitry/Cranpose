@@ -326,6 +326,10 @@ impl super::Device {
                 let msg = format!("{e}");
                 crate::PipelineError::PipelineConstants(map_naga_stage(naga_stage), msg)
             })?;
+            let (module, info) = crate::auxil::prune::prune_decided_branches(module, info)
+                .map_err(|msg| {
+                    crate::PipelineError::PipelineConstants(map_naga_stage(naga_stage), msg)
+                })?;
 
             let entry_point_index = module
                 .entry_points

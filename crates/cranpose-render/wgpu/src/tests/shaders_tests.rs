@@ -19,19 +19,12 @@ fn the_blit_shaders_are_complete_wgsl_with_a_fragment_entry_point() {
     assert_ne!(blit_shader(), projective_blit_shader());
 }
 
-use naga::{ShaderStage, back::glsl};
+use naga::ShaderStage;
+
+use crate::gles_lowering::ParsedShader;
 
 fn validate_wgsl_module(source: &str) -> Result<(), String> {
-    let module =
-        naga::front::wgsl::parse_str(source).map_err(|err| format!("WGSL parse error: {err}"))?;
-    let mut validator = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::all(),
-    );
-    validator
-        .validate(&module)
-        .map_err(|err| format!("WGSL validation error: {err}"))?;
-    Ok(())
+    ParsedShader::new(source).map(|_| ())
 }
 
 fn validate_glsl_portability(
@@ -53,46 +46,9 @@ fn validate_glsl_portability_with_constants(
     shader_stage: ShaderStage,
     constants: &naga::back::PipelineConstants,
 ) -> Result<(), String> {
-    let module =
-        naga::front::wgsl::parse_str(source).map_err(|err| format!("WGSL parse error: {err}"))?;
-    let mut validator = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::all(),
-    );
-    let module_info = validator
-        .validate(&module)
-        .map_err(|err| format!("WGSL validation error: {err}"))?;
-    let mut glsl_source = String::new();
-    let options = glsl::Options {
-        version: glsl::Version::new_gles(300),
-        writer_flags: glsl::WriterFlags::ADJUST_COORDINATE_SPACE,
-        ..Default::default()
-    };
-    let pipeline_options = glsl::PipelineOptions {
-        shader_stage,
-        entry_point: entry_point.to_string(),
-        multiview: None,
-    };
-    let (module, module_info) = naga::back::pipeline_constants::process_overrides(
-        &module,
-        &module_info,
-        Some((shader_stage, entry_point)),
-        constants,
-    )
-    .map_err(|err| format!("override resolution failed: {err}"))?;
-    let mut writer = glsl::Writer::new(
-        &mut glsl_source,
-        &module,
-        &module_info,
-        &options,
-        &pipeline_options,
-        naga::proc::BoundsCheckPolicies::default(),
-    )
-    .map_err(|err| format!("GL/WebGL portability validation failed: {err}"))?;
-    writer
-        .write()
+    ParsedShader::new(source)?
+        .lower_to_gles(entry_point, shader_stage, constants)
         .map(|_| ())
-        .map_err(|err| format!("GL/WebGL portability emission failed: {err}"))
 }
 
 #[test]

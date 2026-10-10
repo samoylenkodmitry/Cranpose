@@ -23,6 +23,9 @@ mod frame_graph;
 mod frame_packet;
 mod frontend;
 mod glass_split;
+#[cfg(test)]
+#[path = "tests/gles_lowering.rs"]
+mod gles_lowering;
 mod glyph_run;
 mod glyph_run_arena;
 pub(crate) mod gpu_stats;

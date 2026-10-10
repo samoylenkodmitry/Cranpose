@@ -143,3 +143,89 @@ fn vertex_shading_requires_an_aligned_placement_and_viewport_without_turns() {
         }
     }
 }
+
+/// The GL backend lowers each program with its constants applied and the
+/// branches they decide removed. Every program a segment can select must
+/// still lower to WebGL's GLSL ES 300 that way.
+#[test]
+fn every_shape_program_lowers_to_webgl_with_its_decided_branches_removed() {
+    use cranpose_ui_graphics::{
+        FRAGMENT_KIND_ARC, FRAGMENT_KIND_LINE, FRAGMENT_KIND_STROKE, FRAGMENT_KIND_TRAPEZOID,
+    };
+
+    let shader = crate::gles_lowering::ParsedShader::new(crate::shaders::SHADER)
+        .unwrap_or_else(|error| panic!("shape.wgsl: {error}"));
+    let webgl = crate::run_store::RunBufferMode {
+        storage: false,
+        trig_fill: false,
+    };
+    let fill = 1 << FRAGMENT_KIND_FILL;
+    let kind_sets = [
+        fill,
+        1 << FRAGMENT_KIND_STROKE,
+        1 << FRAGMENT_KIND_ARC,
+        1 << FRAGMENT_KIND_LINE,
+        1 << FRAGMENT_KIND_TRAPEZOID,
+        fill | (1 << FRAGMENT_KIND_STROKE) | (1 << FRAGMENT_KIND_ARC),
+        fill | (1 << FRAGMENT_KIND_LINE) | (1 << FRAGMENT_KIND_TRAPEZOID),
+    ];
+    let mut keys = Vec::new();
+    for kinds in kind_sets {
+        for (gradient, vertex_gradient) in [(false, false), (false, true), (true, false)] {
+            for clip in [
+                SegmentClip::Untested,
+                SegmentClip::Tested,
+                SegmentClip::Rounded,
+            ] {
+                for turns in [ShapeTurns::None, ShapeTurns::All, ShapeTurns::Mixed] {
+                    let segment = RecordSegment {
+                        kinds,
+                        ..fill_segment(gradient, vertex_gradient, true)
+                    };
+                    let variant = ShapeVariant::of_segment(
+                        &segment,
+                        clip,
+                        ShapeAblation::default(),
+                        false,
+                        (turns == ShapeTurns::None, true),
+                    );
+                    keys.push(ShapePipelineKey {
+                        variant,
+                        turns,
+                        ..key(segment)
+                    });
+                }
+            }
+        }
+    }
+    for tier in [RunTier::Store, RunTier::Arena, RunTier::Either] {
+        for depth in [ShapeDepth::Off, ShapeDepth::Tested, ShapeDepth::Interior] {
+            keys.push(ShapePipelineKey {
+                tier,
+                depth,
+                ..key(fill_segment(false, false, true))
+            });
+        }
+    }
+    let mut lowered = std::collections::HashSet::new();
+    for key in keys {
+        let program = key.program(webgl);
+        let constants = naga::back::PipelineConstants::from_iter(
+            program
+                .constants
+                .iter()
+                .map(|&(name, value)| (name.to_string(), value)),
+        );
+        for (entry, stage) in [
+            (program.vertex_entry, naga::ShaderStage::Vertex),
+            (program.fragment_entry, naga::ShaderStage::Fragment),
+        ] {
+            let bits = program.constants.map(|(_, value)| value.to_bits());
+            if lowered.insert((entry, bits)) {
+                shader
+                    .lower_to_gles(entry, stage, &constants)
+                    .unwrap_or_else(|error| panic!("{entry} for {key:?}: {error}"));
+            }
+        }
+    }
+}
