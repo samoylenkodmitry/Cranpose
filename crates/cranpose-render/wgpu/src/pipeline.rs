@@ -85,6 +85,9 @@ pub(crate) fn push_layer_shadow(
     clip: Option<Rect>,
     light: ShadowLight,
 ) {
+    if layer.shadow_elevation <= 0.0 {
+        return;
+    }
     let caster = match layer.shape {
         LayerShape::Rectangle => None,
         LayerShape::Rounded(shape) => {
