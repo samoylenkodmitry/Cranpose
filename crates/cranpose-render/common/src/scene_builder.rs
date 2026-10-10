@@ -1,9 +1,6 @@
 use std::{any::Any, cell::Cell, rc::Rc};
 
-use cranpose_core::{
-    MemoryApplier, NodeId,
-    collections::map::{HashMap, HashSet},
-};
+use cranpose_core::{MemoryApplier, NodeId, NodeMarks, collections::map::HashMap};
 use cranpose_ui::{
     DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, PreparedTextLayout, Rect, Size,
     SubcomposeLayoutNode, TextLayoutOptions, TextOverflow, TextPanResolver, text::TextStyle,
@@ -258,20 +255,8 @@ fn update_graph_from_applier_report_inner(
                     hit_graph_dirty,
                 };
             }
-            let inherited = graph.root.translated_content_context;
-            let root_children = AbsOrigin::ROOT.children_of(&graph.root);
-            let ancestry = dirty_ancestry(applier, &remaining_dirty_nodes);
-            let walked = replace_dirty_layers_from_applier(
-                applier,
-                &mut graph.root,
-                root_children,
-                DirtyWalk {
-                    nodes: &mut remaining_dirty_nodes,
-                    ancestry: &ancestry,
-                },
-                inherited,
-                update,
-            );
+            let walked =
+                walk_dirty_layers(applier, &mut graph.root, &mut remaining_dirty_nodes, update);
             return GraphUpdateReport {
                 update: classify_walk(applier, walked.is_some(), &mut remaining_dirty_nodes),
                 hit_graph_dirty: hit_graph_dirty || walked.is_none_or(|r| r.hit_graph_dirty),
@@ -295,20 +280,9 @@ fn update_graph_from_applier_report_inner(
         };
     }
 
-    let inherited_translated_content_context = graph.root.translated_content_context;
-    let root_children = AbsOrigin::ROOT.children_of(&graph.root);
-    let ancestry = dirty_ancestry(applier, &remaining_dirty_nodes);
-    let Some(report) = replace_dirty_layers_from_applier(
-        applier,
-        &mut graph.root,
-        root_children,
-        DirtyWalk {
-            nodes: &mut remaining_dirty_nodes,
-            ancestry: &ancestry,
-        },
-        inherited_translated_content_context,
-        update,
-    ) else {
+    let Some(report) =
+        walk_dirty_layers(applier, &mut graph.root, &mut remaining_dirty_nodes, update)
+    else {
         return GraphUpdateReport {
             update: GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable),
             hit_graph_dirty: true,
@@ -388,7 +362,8 @@ struct ReplaceDirtyLayersReport {
 /// layer whose node is in neither holds no dirty layer.
 struct DirtyWalk<'a> {
     nodes: &'a mut HashMap<NodeId, NodeUpdate>,
-    ancestry: &'a HashSet<NodeId>,
+    ancestry: &'a NodeMarks,
+    applier: &'a MemoryApplier,
 }
 
 impl DirtyWalk<'_> {
@@ -396,19 +371,55 @@ impl DirtyWalk<'_> {
         DirtyWalk {
             nodes: self.nodes,
             ancestry: self.ancestry,
+            applier: self.applier,
         }
     }
 
     /// Whether the subtree of a layer with `identity` may hold a dirty
     /// layer: always for a layer without a node.
     fn may_hold(&self, identity: Option<NodeId>) -> bool {
-        identity.is_none_or(|id| self.ancestry.contains(&id))
+        identity.is_none_or(|id| self.ancestry.get(self.applier, id) == DIRTY_ANCESTOR)
     }
 }
 
-/// The applier ancestors of every node in `dirty`.
-fn dirty_ancestry(applier: &MemoryApplier, dirty: &HashMap<NodeId, NodeUpdate>) -> HashSet<NodeId> {
-    let mut ancestry = HashSet::default();
+const DIRTY_ANCESTOR: u8 = 1;
+
+thread_local! {
+    static DIRTY_ANCESTRY: Cell<NodeMarks> = Cell::new(NodeMarks::default());
+}
+
+fn walk_dirty_layers(
+    applier: &MemoryApplier,
+    root: &mut LayerNode,
+    dirty: &mut HashMap<NodeId, NodeUpdate>,
+    update: u64,
+) -> Option<ReplaceDirtyLayersReport> {
+    let inherited = root.translated_content_context;
+    let root_children = AbsOrigin::ROOT.children_of(root);
+    let mut ancestry = DIRTY_ANCESTRY.take();
+    mark_dirty_ancestry(applier, dirty, &mut ancestry);
+    let walked = replace_dirty_layers_from_applier(
+        applier,
+        root,
+        root_children,
+        DirtyWalk {
+            nodes: dirty,
+            ancestry: &ancestry,
+            applier,
+        },
+        inherited,
+        update,
+    );
+    DIRTY_ANCESTRY.set(ancestry);
+    walked
+}
+
+fn mark_dirty_ancestry(
+    applier: &MemoryApplier,
+    dirty: &HashMap<NodeId, NodeUpdate>,
+    ancestry: &mut NodeMarks,
+) {
+    ancestry.reset(applier);
     for &node in dirty.keys() {
         let mut current = node;
         while let Some(parent) = applier
@@ -416,13 +427,13 @@ fn dirty_ancestry(applier: &MemoryApplier, dirty: &HashMap<NodeId, NodeUpdate>) 
             .ok()
             .and_then(cranpose_core::Node::parent)
         {
-            if !ancestry.insert(parent) {
+            if ancestry.get(applier, parent) == DIRTY_ANCESTOR {
                 break;
             }
+            ancestry.set(applier, parent, DIRTY_ANCESTOR);
             current = parent;
         }
     }
-    ancestry
 }
 
 fn replace_dirty_layers_from_applier(
