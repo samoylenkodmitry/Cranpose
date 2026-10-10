@@ -116,6 +116,7 @@ ios = [
     "dep:objc2-core-foundation",
     "dep:objc2-avf-audio",
     "dep:objc2-media-player",
+    "dep:oslog",
 ]
 android = [
     "cranpose-platform-android",
@@ -164,7 +165,16 @@ camera-desktop = [
 # use their platform stack, and there the backend compiles away.
 media = ["dep:cranpose-media"]
 renderer-pixels = ["cranpose-render-pixels"]
-watchos = ["renderer-pixels"]
+watchos = [
+    "renderer-pixels",
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "dep:block2",
+    "dep:dispatch2",
+    "dep:objc2-avf-audio",
+    "dep:objc2-watch-kit",
+    "dep:oslog",
+]
 renderer-wgpu = ["cranpose-render-wgpu", "dep:wgpu", "dep:pollster", "dep:ash"]
 # App-defined WGSL RuntimeShaders on the slim renderer (naga at runtime,
 # ~0.7 MiB). On by default; drop via `default-features = false` if the app
@@ -175,6 +185,16 @@ robot = ["cranpose-app-shell/test-support"] # Enable robot testing support (cran
 # framework and compiles a Swift shim, which an app that sells nothing should
 # not pay for. Harmless to enable on non-Apple targets — it compiles away.
 storekit = ["dep:cranpose-storekit"]
+# Messages and streams between an iPhone app and the same app on its Apple
+# Watch through WatchConnectivity, behind `cranpose_services::wearable`. On
+# Android the Gradle service "wearable" brings the Wear OS link instead.
+wearable = [
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "dep:block2",
+    "dep:dispatch2",
+    "dep:objc2-watch-connectivity",
+]
 # In-app purchases through Google Play Billing on Android and Wear OS,
 # registered into `cranpose_services::purchases`. Off by default: the bridge
 # expects the app's Gradle build to add the Play Billing dependency and the
@@ -571,9 +591,18 @@ objc2-user-notifications = { version = "0.3", default-features = false, optional
 # interruptions, and MediaPlayer for the lock screen and the remote commands.
 objc2-avf-audio = { version = "0.3.2", default-features = false, optional = true, features = [
     "std",
+    "block2",
     "AVAudioSession",
     "AVAudioSessionRoute",
     "AVAudioSessionTypes",
+] }
+# The unified system log, which `log` records go to (`apple_mobile`).
+oslog = { version = "0.2", default-features = false, optional = true }
+# The link between an iPhone app and its watch app (`wearable`).
+objc2-watch-connectivity = { version = "0.3.2", default-features = false, optional = true, features = [
+    "std",
+    "block2",
+    "WCSession",
 ] }
 objc2-media-player = { version = "0.3.2", default-features = false, optional = true, features = [
     "std",
@@ -583,6 +612,39 @@ objc2-media-player = { version = "0.3.2", default-features = false, optional = t
     "MPRemoteCommand",
     "MPRemoteCommandCenter",
     "MPRemoteCommandEvent",
+] }
+
+[target.'cfg(target_os = "watchos")'.dependencies]
+# The watchOS host's services (`watchos_services`), with the iOS host's
+# microphone session and, under `wearable`, its link to the phone.
+objc2 = { version = "0.6", optional = true }
+objc2-foundation = { version = "0.3", default-features = false, optional = true, features = [
+    "std",
+    "block2",
+    "NSBundle",
+    "NSData",
+    "NSError",
+    "NSObject",
+    "NSPathUtilities",
+    "NSString",
+] }
+block2 = { version = "0.6", optional = true }
+dispatch2 = { version = "0.3", optional = true }
+objc2-avf-audio = { version = "0.3.2", default-features = false, optional = true, features = [
+    "std",
+    "block2",
+    "AVAudioSession",
+    "AVAudioSessionTypes",
+] }
+objc2-watch-connectivity = { version = "0.3.2", default-features = false, optional = true, features = [
+    "std",
+    "block2",
+    "WCSession",
+] }
+oslog = { version = "0.2", default-features = false, optional = true }
+objc2-watch-kit = { version = "0.3.2", default-features = false, optional = true, features = [
+    "std",
+    "WKInterfaceDevice",
 ] }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "linux"), not(target_os = "windows"), not(target_os = "macos"), not(target_os = "ios")))'.dependencies]

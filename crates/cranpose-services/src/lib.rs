@@ -48,6 +48,7 @@ pub mod share_sheet;
 pub mod theme;
 pub mod uri_handler;
 pub mod wearable;
+pub mod wearable_framed;
 pub mod writable_folder;
 
 pub use accessibility_options::{
@@ -204,8 +205,9 @@ pub use memory_pressure::{
 };
 pub use microphone_permission::{
     MicrophoneAccess, MicrophonePermission, MicrophonePermissionObserver, microphone_permission,
-    observe_microphone_permission, open_microphone_settings, publish_microphone_permission,
-    rememberMicrophonePermission, request_microphone_permission, set_platform_microphone_access,
+    observe_microphone_permission, open_microphone_settings, prepare_microphone,
+    publish_microphone_permission, rememberMicrophonePermission, request_microphone_permission,
+    set_platform_microphone_access,
 };
 pub use microphone_standby::{
     MicrophoneStandby, MicrophoneStandbyLease, hold_microphone_standby,
@@ -267,6 +269,7 @@ pub use wearable::{
     open_on_wearable_peer, open_wearable_stream, publish_wearable_event, send_wearable_message,
     set_platform_wearable_link, set_wearable_receiver, wearable_peers,
 };
+pub use wearable_framed::{FramedWearableLink, WearableTransport};
 pub use writable_folder::{
     FolderEntry, FolderError, FolderReader, FolderWriter, WritableFolderStore,
     WritableFolderStoreRef, open_writable_folder, set_writable_folder_store_factory,

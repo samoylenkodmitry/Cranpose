@@ -47,6 +47,12 @@ pub trait MicrophoneAccess: Send + Sync {
     fn request(&self);
     /// Opens the system settings page of this application.
     fn open_settings(&self);
+    /// Readies the platform's audio for recording, where opening an input
+    /// stream is not enough: iOS and watchOS record only in a session whose
+    /// category takes input.
+    fn prepare_recording(&self) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 static PLATFORM: ServiceRegistry<dyn MicrophoneAccess> = ServiceRegistry::new();
@@ -87,6 +93,15 @@ pub fn open_microphone_settings() {
     if let Some(access) = PLATFORM.get() {
         access.open_settings();
     }
+}
+
+/// Readies the platform's audio for recording; call it before opening a
+/// microphone stream. On iOS and watchOS it sets the audio session to record
+/// and play and activates it; elsewhere it does nothing.
+pub fn prepare_microphone() -> Result<(), String> {
+    PLATFORM
+        .get()
+        .map_or(Ok(()), |access| access.prepare_recording())
 }
 
 type Observer = Arc<dyn Fn(MicrophonePermission) + Send + Sync>;

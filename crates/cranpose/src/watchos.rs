@@ -3,13 +3,23 @@
 //! The native host owns presentation and feeds physical surface sizes, touch
 //! positions in points, crown deltas, and lifecycle changes into this runtime.
 //! Application content remains an ordinary Rust composable. No wgpu or winit
-//! dependency is required. Audio, purchases, and accessibility are not yet
+//! dependency is required. The host installs the application's folders, taps,
+//! the microphone permission and, with the `wearable` feature, the link to the
+//! iPhone app. Audio playback, purchases, and accessibility are not yet
 //! implemented by this experimental host.
+
+use std::rc::Rc;
 
 use cranpose_app_shell::{AppShell, default_root_key};
 use cranpose_foundation::PointerSource;
 use cranpose_render_pixels::PixelsRenderer;
-use cranpose_services::host::{LifecycleState, dispatch_lifecycle_state};
+use cranpose_services::{
+    SystemTheme,
+    host::{LifecycleState, dispatch_lifecycle_state},
+};
+use cranpose_ui::EdgeInsets;
+
+use crate::platform_env::PlatformEnvironment;
 
 /// An invalid watch display configuration.
 #[derive(Debug, thiserror::Error)]
@@ -31,6 +41,7 @@ pub struct Application {
     density: f32,
     active: bool,
     needs_present: bool,
+    environment: Rc<PlatformEnvironment>,
 }
 
 fn buffer_length(width: u32, height: u32, density: f32) -> Result<usize, SurfaceError> {
@@ -57,16 +68,22 @@ impl Application {
         width: u32,
         height: u32,
         density: f32,
-        content: impl FnMut() + 'static,
+        mut content: impl FnMut() + 'static,
     ) -> Result<Self, SurfaceError> {
         let len = buffer_length(width, height, density)?;
+        #[cfg(target_os = "watchos")]
+        crate::watchos_services::register();
         let mut pixels = Vec::new();
         pixels.try_reserve_exact(len).map_err(|_| SurfaceError)?;
         pixels.resize(len, 0);
+        let environment = PlatformEnvironment::new();
+        // A watch shows its apps on black.
+        environment.set_system_theme(SystemTheme::Dark);
+        let root_environment = Rc::clone(&environment);
         let mut shell = AppShell::new_with_size_and_density(
             PixelsRenderer::new(),
             default_root_key(),
-            content,
+            move || root_environment.compose_root(&mut content),
             (width, height),
             (width as f32 / density, height as f32 / density),
             density,
@@ -81,7 +98,25 @@ impl Application {
             density,
             active: false,
             needs_present: true,
+            environment,
         })
+    }
+
+    /// Applies the screen's safe area in points: the edges the system draws
+    /// on, such as the clock. Content reads it from `local_safe_area_insets`.
+    /// Negative and non-finite edges count as none.
+    pub fn set_safe_area(&mut self, left: f32, top: f32, right: f32, bottom: f32) {
+        let edge = |value: f32| {
+            if value.is_finite() {
+                value.max(0.0)
+            } else {
+                0.0
+            }
+        };
+        let insets = EdgeInsets::from_components(edge(left), edge(top), edge(right), edge(bottom));
+        if self.environment.set_safe_area(insets) {
+            self.shell.request_root_render();
+        }
     }
 
     /// Applies a new physical surface size without replacing the composition.

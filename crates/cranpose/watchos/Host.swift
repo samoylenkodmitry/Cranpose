@@ -13,7 +13,7 @@ final class CranposeModel: ObservableObject {
         UInt64(max(0, ProcessInfo.processInfo.systemUptime - epoch) * 1_000_000_000)
     }
 
-    func resize(_ size: CGSize) {
+    func resize(_ size: CGSize, safeArea: EdgeInsets) {
         let scale = WKInterfaceDevice.current().screenScale
         let width = UInt32(max(1, (size.width * scale).rounded()))
         let height = UInt32(max(1, (size.height * scale).rounded()))
@@ -21,6 +21,7 @@ final class CranposeModel: ObservableObject {
             error = String(cString: CPError())
             return
         }
+        CPSafeArea(Float(safeArea.leading), Float(safeArea.top), Float(safeArea.trailing), Float(safeArea.bottom))
         ready = true
         tick()
     }
@@ -50,7 +51,9 @@ struct CranposeView: View {
     @State private var touching = false
 
     var body: some View {
-        GeometryReader { geometry in
+        // The outer reader keeps to the safe area and reports its edges, such
+        // as the clock's; the inner one draws on the whole screen.
+        GeometryReader { safe in GeometryReader { geometry in
             ZStack {
                 Color.black
                 if let image = model.image {
@@ -76,12 +79,13 @@ struct CranposeView: View {
                     CPTouch(2, Float(event.location.x), Float(event.location.y))
                     touching = false
                 })
-            .onAppear { model.resize(geometry.size); model.activate(phase == .active) }
-            .onChange(of: geometry.size) { _, size in model.resize(size) }
+            .onAppear { model.resize(geometry.size, safeArea: safe.safeAreaInsets); model.activate(phase == .active) }
+            .onChange(of: geometry.size) { _, size in model.resize(size, safeArea: safe.safeAreaInsets) }
+            .onChange(of: safe.safeAreaInsets) { _, insets in model.resize(geometry.size, safeArea: insets) }
             .onChange(of: phase) { _, phase in touching = false; model.activate(phase == .active) }
             .onDisappear { touching = false; model.activate(false) }
         }
-        .ignoresSafeArea()
+        .ignoresSafeArea() }
     }
 }
 
