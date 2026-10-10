@@ -343,8 +343,12 @@ fn the_uniform_chunk_sizes_in_the_shader_match_the_run_store() {
     for (uniform, _) in RUN_TABLE_DECLARATIONS {
         assert!(super::SHADER.contains(uniform), "missing `{uniform}`");
     }
-    assert!(super::SHADER.contains(&format!("array<BrushRecord, {BRUSH_CHUNK}>")));
-    assert!(super::SHADER.contains(&format!("array<GradientStop, {STOP_CHUNK}>")));
+    let words = |record: usize| record / std::mem::size_of::<[f32; 4]>();
+    let brush_words = BRUSH_CHUNK * words(std::mem::size_of::<cranpose_ui_graphics::BrushRecord>());
+    let stop_words =
+        STOP_CHUNK * words(std::mem::size_of::<cranpose_ui_graphics::GradientStopRecord>());
+    assert!(super::SHADER.contains(&format!("array<vec4<u32>, {brush_words}>")));
+    assert!(super::SHADER.contains(&format!("array<vec4<f32>, {stop_words}>")));
     assert!(super::SHADER.contains(&format!("array<Placement, {PLACEMENT_CHUNK}>")));
 }
 

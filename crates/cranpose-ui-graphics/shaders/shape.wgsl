@@ -323,11 +323,36 @@ struct GradientStop {
     position: vec4<f32>,
 }
 
+// The brush and stop tables are arrays of plain vectors, read back into
+// records by `brush_at` and `gradient_stop_at`: GL lists every member of
+// every element of a uniform array of structs, and Chrome on a Mali phone
+// spent about 350 ms more linking each shape program that declared these
+// 256 records as structs. The bytes are the same in either form.
 @group(1) @binding(1)
-var<uniform> brushes: array<BrushRecord, 256>;
+var<uniform> brush_words: array<vec4<u32>, 768>;
 
 @group(1) @binding(2)
-var<uniform> gradient_stops: array<GradientStop, 256>;
+var<uniform> gradient_stop_words: array<vec4<f32>, 512>;
+
+fn brush_at(index: u32) -> BrushRecord {
+    let first = index * 3u;
+    let head = brush_words[first];
+    let tail = brush_words[first + 2u];
+    return BrushRecord(
+        head.x,
+        head.y,
+        head.z,
+        head.w,
+        bitcast<vec4<f32>>(brush_words[first + 1u]),
+        tail.x,
+        tail.y,
+        tail.zw,
+    );
+}
+
+fn gradient_stop_at(index: u32) -> GradientStop {
+    return GradientStop(gradient_stop_words[index * 2u], gradient_stop_words[index * 2u + 1u]);
+}
 
 @group(1) @binding(3)
 var<uniform> placements: array<Placement, 4>;
@@ -564,12 +589,12 @@ fn vertex_gradient_ramp(
     scale: f32,
     position: vec2<f32>,
 ) -> GradientRamp {
-    let brush = brushes[record.brush - 1u];
+    let brush = brush_at(record.brush - 1u);
     let line = linear_gradient_line(brush.params * scale, rect, canonicalize);
     let dir = line.zw - line.xy;
     let t = dot(position - line.xy, dir) / max(dot(dir, dir), 0.00001);
-    let first = gradient_stops[brush.stop_start];
-    let last = gradient_stops[brush.stop_start + 1u];
+    let first = gradient_stop_at(brush.stop_start);
+    let last = gradient_stop_at(brush.stop_start + 1u);
     let span = max(last.position.x - first.position.x, 0.00001);
     return GradientRamp(first.color, last.color, (t - first.position.x) / span);
 }
@@ -632,7 +657,7 @@ fn shape_output(
             max(frame.bottom.x, frame.bottom.y) + reach.y,
         );
         output.rect = vec4<f32>(low, high - low);
-    } else if (DRAWS_LINES & (kind == RECORD_KIND_LINE)) {
+    } else if (DRAWS_SEGMENTS & (kind == RECORD_KIND_LINE)) {
         let line = line_frame(record, placement);
         let cap = line_cap;
         output.radii = vec4<f32>(0.0);
@@ -711,7 +736,7 @@ fn shape_output(
     output.brush = vec4<u32>(0u);
     let brush_rect = select(geometry.rect, slice_brush_rect(record, placement), trapezoid);
     if (!SHAPE_SOLID & (record.brush != 0u)) {
-        let brush = brushes[record.brush - 1u];
+        let brush = brush_at(record.brush - 1u);
         let rect = brush_rect;
         let canonicalize = geometry.canonicalize;
         let params = brush.params * scale;
@@ -784,7 +809,7 @@ fn record_vertex(record: ShapeRecord, local: u32) -> VertexOutput {
         if (local >= 4u) {
             return pinned(position, placement);
         }
-    } else if (DRAWS_LINES & ((record.flags & 3u) == RECORD_KIND_LINE)) {
+    } else if (DRAWS_SEGMENTS & ((record.flags & 3u) == RECORD_KIND_LINE)) {
         let line = line_frame(record, placement);
         if (local >= 4u) {
             return pinned(line_corner(line, line_cap, 3u), placement);
@@ -1494,21 +1519,21 @@ fn load_inline_gradient_stops(gradient_start: u32, count: u32) -> InlineGradient
     if (count == 0u || count > INLINE_GRADIENT_STOPS) {
         return stops;
     }
-    let first = gradient_stops[gradient_start];
+    let first = gradient_stop_at(gradient_start);
     stops.offsets.x = first.position.x;
     stops.color0 = first.color;
     if (count > 1u) {
-        let second = gradient_stops[gradient_start + 1u];
+        let second = gradient_stop_at(gradient_start + 1u);
         stops.offsets.y = second.position.x;
         stops.color1 = second.color;
     }
     if (count > 2u) {
-        let third = gradient_stops[gradient_start + 2u];
+        let third = gradient_stop_at(gradient_start + 2u);
         stops.offsets.z = third.position.x;
         stops.color2 = third.color;
     }
     if (count > 3u) {
-        let fourth = gradient_stops[gradient_start + 3u];
+        let fourth = gradient_stop_at(gradient_start + 3u);
         stops.offsets.w = fourth.position.x;
         stops.color3 = fourth.color;
     }
@@ -1567,11 +1592,11 @@ fn sample_gradient(gradient_start: u32, count: u32, t: f32) -> vec4<f32> {
         return vec4<f32>(0.0);
     }
     if (count == 1u) {
-        return gradient_stops[gradient_start].color;
+        return gradient_stop_at(gradient_start).color;
     }
 
     let clamped = clamp(t, 0.0, 1.0);
-    let first = gradient_stops[gradient_start];
+    let first = gradient_stop_at(gradient_start);
     if (clamped <= first.position.x) {
         return first.color;
     }
@@ -1581,8 +1606,8 @@ fn sample_gradient(gradient_start: u32, count: u32, t: f32) -> vec4<f32> {
         if (i + 1u >= count) {
             break;
         }
-        let current = gradient_stops[gradient_start + i];
-        let next = gradient_stops[gradient_start + i + 1u];
+        let current = gradient_stop_at(gradient_start + i);
+        let next = gradient_stop_at(gradient_start + i + 1u);
         if (clamped <= next.position.x) {
             return gradient_segment(
                 current.position.x, current.color, next.position.x, next.color, clamped,
@@ -1591,7 +1616,7 @@ fn sample_gradient(gradient_start: u32, count: u32, t: f32) -> vec4<f32> {
         i = i + 1u;
     }
 
-    return gradient_stops[gradient_start + count - 1u].color;
+    return gradient_stop_at(gradient_start + count - 1u).color;
 }
 
 /// The coverage half of a shape fragment: the clip test, the shape-kind
@@ -1692,7 +1717,7 @@ fn shape_record_coverage(input: VertexOutput) -> f32 {
             stroke_join,
             fragment_turned(input),
         );
-    } else if (DRAWS_LINES & (shape_kind == SHAPE_KIND_LINE)) {
+    } else if (DRAWS_SEGMENTS & (shape_kind == SHAPE_KIND_LINE)) {
         alpha = line_coverage(rect_pos, input.arc_params, input.stroke_params, stroke_cap);
     } else if (DRAWS_ARCS & (shape_kind == SHAPE_KIND_ARC)) {
         // Arcs have no corner radii, so `radii` carries the precomputed
