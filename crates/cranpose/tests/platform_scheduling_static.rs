@@ -3536,9 +3536,9 @@ fn the_android_background_service_ask_survives_launch_shaped_pauses() {
          that resumed while the ask waited must not leave an orphan foreground service"
     );
     assert!(
-        fire.contains("catch (RuntimeException"),
-        "a start the platform refuses outright (background-start restrictions past the \
-         grace window) is the platform's answer, to be logged rather than to crash"
+        fire.contains("CranposeBackgroundService.start(this)"),
+        "the deferred ask must start through the service's own handshake, which records \
+         what the platform accepted"
     );
 
     let set_active = method_body(
@@ -3577,13 +3577,30 @@ fn the_android_background_service_never_stops_before_start_foreground() {
     );
 
     assert!(
-        activity.contains("CranposeBackgroundService.noteStartRequested()"),
-        "every start must arm the obligation record first, so a stale stop from the \
-         previous cycle cannot end the service the moment it comes up"
+        !activity.contains("startForegroundService(") && !activity.contains("startService("),
+        "the activity must route every start through CranposeBackgroundService.start, \
+         which arms the obligation record a stop has to respect"
     );
 
     let service = workspace_source(
         "crates/cranpose/android/java/dev/cranpose/android/CranposeBackgroundService.java",
+    );
+    let start = method_body(&service, "static void start(Context context)");
+    assert!(
+        start.contains("catch (RuntimeException"),
+        "a start the platform refuses outright (background-start restrictions past the \
+         grace window) is the platform's answer, to be logged rather than to crash"
+    );
+    let accepted = start.find("if (started == null)");
+    let armed = start.find("obligationArmed = true");
+    let fresh = start.find("stopRequested = false");
+    assert!(
+        accepted
+            .zip(armed.zip(fresh))
+            .is_some_and(|(accepted, (armed, fresh))| accepted < armed && accepted < fresh),
+        "every accepted start must arm the obligation record, so a stale stop from the \
+         previous cycle cannot end the service the moment it comes up; a refused start \
+         must leave the record of the previous cycle as it was"
     );
     let stop = method_body(&service, "static void stop(Context context)");
     assert!(
@@ -3600,6 +3617,35 @@ fn the_android_background_service_never_stops_before_start_foreground() {
             && enter.contains("startForeground("),
         "the service itself honours a deferred stop, and only after its startForeground \
          has run — the order is the whole point"
+    );
+}
+
+#[test]
+fn the_android_background_service_stops_only_an_accepted_start() {
+    let service = workspace_source(
+        "crates/cranpose/android/java/dev/cranpose/android/CranposeBackgroundService.java",
+    );
+    let start = method_body(&service, "static void start(Context context)");
+    let accepted = start.find("if (started == null)");
+    let recorded = start.find("startOutstanding = true");
+    assert!(
+        accepted
+            .zip(recorded)
+            .is_some_and(|(accepted, recorded)| accepted < recorded),
+        "only a start the platform accepted may be recorded: startForegroundService \
+         returns null when the application's manifest does not declare the service"
+    );
+    let stop = method_body(&service, "static void stop(Context context)");
+    let guard = stop.find("if (!startOutstanding)");
+    let cleared = stop.find("startOutstanding = false");
+    let call = stop.find("context.stopService(");
+    assert!(
+        guard
+            .zip(cleared.zip(call))
+            .is_some_and(|(guard, (cleared, call))| guard < cleared && cleared < call),
+        "a stop without an outstanding start must make no call: every resume stops the \
+         service, and in an application without the background service each such call \
+         reaches ActivityManager, which logs \"Unable to start service ... not found\""
     );
 }
 
