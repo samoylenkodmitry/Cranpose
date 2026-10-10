@@ -94,15 +94,22 @@ def compare(args, scenarios, output, labels):
     return json.loads((output / 'ab.json').read_text())
 
 
+def worse(scenario):
+    """Per start, the metrics a scenario judged worse."""
+    return {start: sorted(metric for metric, verdict in judged['verdicts'].items() if verdict == 'worse')
+            for start, judged in scenario['starts'].items()}
+
+
 def confirmed(first, second):
-    """Per scenario, the metrics both runs judged worse."""
-    earlier = {scenario['scenario']: scenario['verdicts'] for scenario in first['scenarios']}
+    """Per scenario and start, the metrics both runs judged worse."""
+    earlier = {scenario['scenario']: worse(scenario) for scenario in first['scenarios']}
     found = {}
     for scenario in second['scenarios']:
-        metrics = sorted(metric for metric, verdict in scenario['verdicts'].items()
-                         if verdict == 'worse' and earlier[scenario['scenario']][metric] == 'worse')
-        if metrics:
-            found[scenario['scenario']] = metrics
+        again = {start: metrics for start, found_worse in worse(scenario).items()
+                 if (metrics := [metric for metric in found_worse
+                                 if metric in earlier[scenario['scenario']].get(start, [])])}
+        if again:
+            found[scenario['scenario']] = again
     return found
 
 
@@ -125,9 +132,9 @@ def nightly(args):
         device.install('cranpose', main_apk)
     labels = (release, main[:9])
     report = compare(args, scenarios, args.output / 'ab', labels)
-    worse = [scenario['scenario'] for scenario in report['scenarios']
-             if 'worse' in scenario['verdicts'].values()]
-    regressions = confirmed(report, compare(args, worse, args.output / 'recheck', labels)) if worse else {}
+    rechecked = [scenario['scenario'] for scenario in report['scenarios'] if any(worse(scenario).values())]
+    regressions = (confirmed(report, compare(args, rechecked, args.output / 'recheck', labels))
+                   if rechecked else {})
     return {**report, 'kind': 'nightly', 'main': main, 'release': release,
             'release_commit': git('rev-list', '-n', '1', release), 'confirmed_regressions': regressions}
 

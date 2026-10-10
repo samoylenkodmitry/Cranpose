@@ -17,6 +17,7 @@ REPO = Path(__file__).resolve().parents[2]
 DATA_BRANCH = 'perf-data'
 LABEL = 'perf-regression'
 UNITS = {'fps': 'fps', 'cpu_ms_per_frame': 'ms CPU/frame', 'desired_to_present_p50_ms': 'ms to screen'}
+STARTS = {'first': 'first start after install', 'second': 'second start'}
 
 
 def previous_main(run):
@@ -42,19 +43,21 @@ def body(run):
         f'The nightly comparison on the {run["device"]["ro.product.model"]} found main ({main[:9]}) '
         f'slower than {release}, twice in a row, in the scenarios below. {commits}',
         '',
-        '| scenario | metric | ' + f'{release} | main ({main[:9]}) | change |',
-        '|---|---|---|---|---|',
+        '| scenario | start | metric | ' + f'{release} | main ({main[:9]}) | change |',
+        '|---|---|---|---|---|---|',
     ]
     for scenario in run['scenarios']:
-        for metric in run['confirmed_regressions'].get(scenario['scenario'], []):
-            before = scenario['summary'][names[0]][metric]
-            after = scenario['summary'][names[1]][metric]
-            lines.append(f'| {scenario["scenario"]} | {UNITS[metric]} | {before:.2f} | {after:.2f} | '
-                         f'{(after - before) / before:+.1%} |')
+        for start, metrics in run['confirmed_regressions'].get(scenario['scenario'], {}).items():
+            summary = scenario['starts'][start]['summary']
+            for metric in metrics:
+                before, after = summary[names[0]][metric], summary[names[1]][metric]
+                lines.append(f'| {scenario["scenario"]} | {STARTS[start]} | {UNITS[metric]} | {before:.2f} | '
+                             f'{after:.2f} | {(after - before) / before:+.1%} |')
     lines += [
         '',
-        'Each value is the median of the first run\'s legs (each one launch measured from its start '
-        'for 10 s, its first seconds included, A B then B A); '
+        'Each value is the median of the first run\'s legs of that start (each one launch measured from '
+        'its start for 10 s, its first seconds included; in each pair, A then B, or B then A, each starts '
+        'first with its data cleared, as its install leaves it, then a second time); '
         'a second run judged the same metrics worse. Reproduce on the device with:',
         '',
         '```bash',

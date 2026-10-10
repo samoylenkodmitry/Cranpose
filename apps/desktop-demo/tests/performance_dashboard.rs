@@ -13,63 +13,81 @@ use desktop_app::app::performance_dashboard::{
 };
 
 /// Two nights and framework comparisons on two devices, the phone's twice, in
-/// `publish.py`'s index format: oldest first.
+/// `publish.py`'s index format, each start apart: oldest first. The Pixel's
+/// run predates keeping the starts apart.
 const INDEX: &str = r#"{"runs": [
- {"file": "runs/d.json", "kind": "frameworks", "started_at": "2026-10-04T12:00:00+00:00",
-  "device": "EVR-AL00",
+ {"file": "runs/g.json", "kind": "frameworks", "started_at": "2026-10-03T12:00:00+00:00",
+  "device": "Pixel 8", "protocol": {"run_s": 10, "from_launch": true},
   "subjects": [{"name": "compose", "label": "compose"}, {"name": "cranpose", "label": "cranpose"}],
-  "scenarios": {"gauntlet": {"legs": 4,
-    "summary": {"compose": {"fps": 4.7}, "cranpose": {"fps": 8.6}}, "verdicts": {}}}},
+  "scenarios": {"gauntlet": {"legs": 4, "failures": {"compose": "an older run's failure"},
+    "summary": {"compose": {"fps": 3.3}, "cranpose": {"fps": 7.7}}, "verdicts": {}}},
+  "confirmed_regressions": {"gauntlet": ["fps"]}},
+ {"file": "runs/d.json", "kind": "frameworks", "started_at": "2026-10-04T12:00:00+00:00",
+  "device": "EVR-AL00", "protocol": {"run_s": 10, "starts": ["first", "second"]},
+  "subjects": [{"name": "compose", "label": "compose"}, {"name": "cranpose", "label": "cranpose"}],
+  "scenarios": {"gauntlet": {"legs": 4, "starts": {
+    "first": {"summary": {"compose": {"fps": 4.1}, "cranpose": {"fps": 8.2}}},
+    "second": {"summary": {"compose": {"fps": 4.7}, "cranpose": {"fps": 8.6}}}}}}},
  {"file": "runs/a.json", "kind": "nightly", "started_at": "2026-10-05T01:30:00+00:00",
-  "device": "EVR-AL00", "main": "aaaaaaaaa111", "release": "v0.9.7",
+  "device": "EVR-AL00", "main": "aaaaaaaaa111", "release": "v0.9.7", "protocol": {"run_s": 10, "starts": ["first", "second"]},
   "subjects": [{"name": "cranpose-release", "label": "v0.9.7"}, {"name": "cranpose", "label": "aaaaaaaaa"}],
-  "scenarios": {"gauntlet": {"legs": 4,
-    "summary": {"cranpose-release": {"fps": 50.0, "cpu_ms_per_frame": 33.0, "desired_to_present_p50_ms": 26.0},
-                "cranpose": {"fps": 52.0, "cpu_ms_per_frame": 32.0, "desired_to_present_p50_ms": 26.0}},
-    "verdicts": {"fps": "same", "cpu_ms_per_frame": "same", "desired_to_present_p50_ms": "same"}}},
-  "confirmed_regressions": {}},
+  "scenarios": {"gauntlet": {"legs": 8, "starts": {
+    "first": {"summary": {"cranpose-release": {"fps": 30.0, "cpu_ms_per_frame": 60.0}, "cranpose": {"fps": 31.0, "cpu_ms_per_frame": 59.0}},
+              "verdicts": {"fps": "same", "cpu_ms_per_frame": "same", "desired_to_present_p50_ms": "same"}},
+    "second": {"summary": {"cranpose-release": {"fps": 50.0, "cpu_ms_per_frame": 33.0, "desired_to_present_p50_ms": 26.0},
+                           "cranpose": {"fps": 52.0, "cpu_ms_per_frame": 32.0, "desired_to_present_p50_ms": 26.0}},
+               "verdicts": {"fps": "same", "cpu_ms_per_frame": "same", "desired_to_present_p50_ms": "same"}}}}}},
  {"file": "runs/b.json", "kind": "nightly", "started_at": "2026-10-06T01:30:00+00:00",
-  "device": "EVR-AL00", "main": "bbbbbbbbb222", "release": "v0.9.8",
+  "device": "EVR-AL00", "main": "bbbbbbbbb222", "release": "v0.9.8", "protocol": {"run_s": 10, "starts": ["first", "second"]},
   "subjects": [{"name": "cranpose-release", "label": "v0.9.8"}, {"name": "cranpose", "label": "bbbbbbbbb"}],
-  "scenarios": {"gauntlet": {"legs": 8,
-    "summary": {"cranpose-release": {"fps": 52.0, "cpu_ms_per_frame": 32.0, "desired_to_present_p50_ms": 26.0},
-                "cranpose": {"fps": 49.4, "cpu_ms_per_frame": 34.0, "desired_to_present_p50_ms": 26.1}},
-    "verdicts": {"fps": "worse", "cpu_ms_per_frame": "worse", "desired_to_present_p50_ms": "same"}},
-   "feed": {"legs": 4,
-    "summary": {"cranpose-release": {"fps": 60.0, "cpu_ms_per_frame": 14.8}, "cranpose": {"fps": 60.0, "cpu_ms_per_frame": 14.6}},
-    "verdicts": {"fps": "same", "cpu_ms_per_frame": "same", "desired_to_present_p50_ms": "same"}}},
-  "confirmed_regressions": {"gauntlet": ["cpu_ms_per_frame", "fps"]}},
+  "scenarios": {"gauntlet": {"legs": 16, "starts": {
+    "first": {"summary": {"cranpose-release": {"fps": 31.0, "cpu_ms_per_frame": 61.0, "desired_to_present_p50_ms": 30.0},
+                          "cranpose": {"fps": 33.5, "cpu_ms_per_frame": 58.0, "desired_to_present_p50_ms": 29.0}},
+              "verdicts": {"fps": "better", "cpu_ms_per_frame": "same", "desired_to_present_p50_ms": "same"}},
+    "second": {"summary": {"cranpose-release": {"fps": 52.0, "cpu_ms_per_frame": 32.0, "desired_to_present_p50_ms": 26.0},
+                           "cranpose": {"fps": 49.4, "cpu_ms_per_frame": 34.0, "desired_to_present_p50_ms": 26.1}},
+               "verdicts": {"fps": "worse", "cpu_ms_per_frame": "worse", "desired_to_present_p50_ms": "same"},
+               "confirmed": ["cpu_ms_per_frame", "fps"]}}},
+   "feed": {"legs": 8, "starts": {
+    "first": {"summary": {"cranpose-release": {"fps": 58.0, "cpu_ms_per_frame": 16.1}, "cranpose": {"fps": 58.5, "cpu_ms_per_frame": 16.0}},
+              "verdicts": {"fps": "same", "cpu_ms_per_frame": "same", "desired_to_present_p50_ms": "same"}},
+    "second": {"summary": {"cranpose-release": {"fps": 60.0, "cpu_ms_per_frame": 14.8}, "cranpose": {"fps": 60.0, "cpu_ms_per_frame": 14.6}},
+               "verdicts": {"fps": "same", "cpu_ms_per_frame": "same", "desired_to_present_p50_ms": "same"}}}}}},
  {"file": "runs/c.json", "kind": "ab", "started_at": "2026-10-05T12:00:00+00:00",
-  "device": "EVR-AL00",
+  "device": "EVR-AL00", "protocol": {"run_s": 10, "starts": ["first", "second"]},
   "subjects": [{"name": "compose", "label": "BOM 2026.09.00"}, {"name": "cranpose", "label": "main"}],
-  "scenarios": {"gauntlet": {"legs": 8,
-    "summary": {"compose": {"fps": 26.5}, "cranpose": {"fps": 52.8}},
-    "verdicts": {"fps": "better", "cpu_ms_per_frame": "better", "desired_to_present_p50_ms": "worse"}}}},
+  "scenarios": {"gauntlet": {"legs": 16, "starts": {
+    "first": {"summary": {"compose": {"fps": 12.0}, "cranpose": {"fps": 40.1}}},
+    "second": {"summary": {"compose": {"fps": 26.5}, "cranpose": {"fps": 52.8}}}}}}},
  {"file": "runs/f.json", "kind": "browser", "started_at": "2026-10-06T06:10:00+00:00",
-  "device": "Apple M3 Pro · Chrome 154", "main": "ccccccccc333",
+  "device": "Apple M3 Pro · Chrome 154", "main": "ccccccccc333", "protocol": {"run_s": 10, "starts": ["first", "second"]},
   "subjects": [
    {"name": "egui", "label": "egui 0.36.2", "source": "benchmarks/compose-vs-cranpose/egui-app/src/lib.rs"},
    {"name": "web", "label": "Web Chrome 154.0.8037.98",
     "source": "benchmarks/compose-vs-cranpose/web-app/src/gauntlet.ts"}],
-  "scenarios": {"gauntlet": {"legs": 4,
-    "summary": {"egui": {"fps": 49.8, "ram_mb": 935.3}, "web": {"fps": 37.8, "ram_mb": 1002.7}},
-    "verdicts": {}}}},
+  "scenarios": {"gauntlet": {"legs": 4, "starts": {
+    "first": {"summary": {"egui": {"fps": 45.0, "ram_mb": 940.1}, "web": {"fps": 30.2, "ram_mb": 1010.5}}},
+    "second": {"summary": {"egui": {"fps": 49.8, "ram_mb": 935.3}, "web": {"fps": 37.8, "ram_mb": 1002.7}}}}}}},
  {"file": "runs/e.json", "kind": "frameworks", "started_at": "2026-10-06T06:40:00+00:00",
-  "device": "Apple M3 Pro", "main": "ccccccccc333", "protocol": {"run_s": 20, "from_launch": true, "rounds": 3},
+  "device": "Apple M3 Pro", "main": "ccccccccc333", "protocol": {"run_s": 20, "starts": ["first", "second"], "rounds": 3},
   "subjects": [
    {"name": "egui", "label": "egui 0.36.2", "source": "benchmarks/compose-vs-cranpose/egui-app/src/lib.rs"},
    {"name": "compose", "label": "Compose Multiplatform 1.12.1",
     "source": "benchmarks/compose-vs-cranpose/shared-compose/dev/perfcompare/compose/Gauntlet.kt"},
    {"name": "avalonia", "label": "Avalonia 12.1.3", "source": "benchmarks/compose-vs-cranpose/avalonia-app/Gauntlet.cs"}],
-  "scenarios": {"gauntlet": {"legs": 6,
-    "summary": {"compose": {"fps": 17.1, "ram_mb": 412.0, "gpu_ram_mb": 96.4},
-                "egui": {"fps": 55.7, "ram_mb": 120.4, "gpu_ram_mb": 33.0},
-                "avalonia": {"fps": 17.3, "ram_mb": 180.2}}, "verdicts": {},
-    "failures": {"avalonia": "process 4242 shows no window"}}}}
+  "scenarios": {"gauntlet": {"legs": 12, "starts": {
+    "first": {"summary": {"compose": {"fps": 17.1, "ram_mb": 412.0, "gpu_ram_mb": 96.4},
+                          "egui": {"fps": 55.7, "ram_mb": 120.4, "gpu_ram_mb": 33.0},
+                          "avalonia": {"fps": 17.3, "ram_mb": 180.2}},
+              "failures": {"avalonia": "process 4242 shows no window"}},
+    "second": {"summary": {"compose": {"fps": 19.0, "ram_mb": 400.0, "gpu_ram_mb": 95.0},
+                           "egui": {"fps": 58.1, "ram_mb": 118.0, "gpu_ram_mb": 32.0},
+                           "avalonia": {"fps": 18.0, "ram_mb": 175.0}}}}}}}
 ]}"#;
 
-/// The desktop run's own file: egui draws from 600 ms at 60 fps, Compose from
-/// 2000 ms at 20 fps.
+/// The desktop run's own file: egui's first starts draw from 900 ms at 60
+/// fps, its second from 600 ms; Compose's first from 2500 ms at 20 fps, its
+/// second from 2000 ms.
 fn frames() -> FrameSource {
     let steady = |first: f64, interval: f64| -> Vec<f64> {
         (0..)
@@ -78,9 +96,11 @@ fn frames() -> FrameSource {
             .collect()
     };
     let run = serde_json::json!({"scenarios": [{"scenario": "gauntlet", "legs": [
-        {"subject": "egui", "frame_ms": steady(600.0, 1000.0 / 60.0)},
-        {"subject": "compose", "frame_ms": steady(2000.0, 50.0)},
-        {"subject": "compose", "frame_ms": steady(2000.0, 50.0), "disturbed": true}
+        {"subject": "egui", "start": "first", "frame_ms": steady(900.0, 1000.0 / 60.0)},
+        {"subject": "egui", "start": "second", "frame_ms": steady(600.0, 1000.0 / 60.0)},
+        {"subject": "compose", "start": "first", "frame_ms": steady(2500.0, 50.0)},
+        {"subject": "compose", "start": "second", "frame_ms": steady(2000.0, 50.0)},
+        {"subject": "compose", "start": "second", "frame_ms": steady(2000.0, 50.0), "disturbed": true}
     ]}]});
     FrameSource::Files(Rc::new(BTreeMap::from([(
         "runs/e.json".to_string(),
@@ -131,6 +151,40 @@ fn the_latest_night_lists_each_scenario_with_both_builds_and_the_change() {
         "CPU per frame, release then main: {labels:?}"
     );
     assert!(shows(&labels, "feed"), "{labels:?}");
+    assert!(
+        shows(&labels, "+8.1%"),
+        "the first start's change, with a table of its own: {labels:?}"
+    );
+    let regressed = labels.iter().filter(|label| *label == "gauntlet ⚠").count();
+    assert_eq!(
+        regressed, 1,
+        "only the start a second run confirmed is marked: {labels:?}"
+    );
+}
+
+#[test]
+fn every_card_shows_the_first_start_after_install_and_the_second_start_apart() {
+    let labels = labels();
+    for title in ["First start after install", "Second start"] {
+        assert!(shows(&labels, title), "{title}: {labels:?}");
+        assert!(
+            shows(&labels, &format!("gauntlet: {title}")),
+            "a launch chart of each start: {labels:?}"
+        );
+    }
+    assert!(
+        shows(&labels, "55.7") && shows(&labels, "58.1"),
+        "egui's frame rate on each start's bars: {labels:?}"
+    );
+}
+
+#[test]
+fn a_run_that_did_not_keep_the_starts_apart_is_left_out() {
+    let labels = labels();
+    assert!(
+        !labels.iter().any(|label| label.contains("Pixel 8")),
+        "{labels:?}"
+    );
 }
 
 /// Where the first chart's caption ends: the framework bars follow it, after
@@ -219,31 +273,18 @@ fn a_run_measured_from_each_launch_charts_every_framework_from_its_launch() {
         .iter()
         .filter(|label| *label == "Compose Multiplatform 1.12.1")
         .count();
-    assert_eq!(legend, 2, "the chart's legend and the bars: {labels:?}");
-    assert!(
-        shows(&labels, "first frame 600 ms"),
-        "egui's first frame: {labels:?}"
-    );
-    assert!(
-        shows(&labels, "first frame 2000 ms"),
-        "Compose's first frame: {labels:?}"
-    );
+    assert_eq!(legend, 4, "each start's chart legend and bars: {labels:?}");
+    for (first, second) in [("900", "600"), ("2500", "2000")] {
+        assert!(
+            shows(&labels, &format!("first frame {first} ms"))
+                && shows(&labels, &format!("first frame {second} ms")),
+            "each start's own first frame, egui's then Compose's: {labels:?}"
+        );
+    }
     assert!(shows(&labels, "20000 ms"), "the chart's end: {labels:?}");
     assert!(
         shows(&labels, "no frames: process 4242 shows no window"),
         "a framework whose launches failed is shown with why: {labels:?}"
-    );
-}
-
-#[test]
-fn a_run_measured_after_a_warm_up_says_it_kept_no_frame_times() {
-    let labels = labels();
-    assert!(
-        shows(
-            &labels,
-            "This run measured a window after a warm-up and kept no frame times from the launch."
-        ),
-        "the older browser run: {labels:?}"
     );
 }
 
@@ -318,7 +359,7 @@ fn a_framework_card_shows_the_metric_chosen_and_leaves_a_dash_where_a_run_has_no
     // desktop's.
     choose(&mut robot, "RAM MB", 1);
     let texts = robot.get_all_text();
-    for value in ["412", "120", "180"] {
+    for value in ["412", "120", "180", "400", "118", "175"] {
         assert!(texts.iter().any(|text| text == value), "{value}: {texts:?}");
     }
     assert!(

@@ -2,7 +2,8 @@
 """Adds a comparison run to the perf-data branch the dashboard reads.
 
 The run goes under `runs/`. `index.json` gains one entry per run, holding
-each scenario's medians and verdicts, so the dashboard draws its trends from
+each scenario's medians and verdicts for each start (an app's first start
+after its install, and its second), so the dashboard draws its trends from
 the index and opens a run's file only for its legs. A run that was skipped
 publishes nothing.
 Usage: publish.py --run RUN_JSON [--tree DIR] [--no-push]
@@ -69,23 +70,30 @@ def index_entry(run, file):
         'subjects': [{key: subject[key] for key in ('name', 'label', 'source') if key in subject}
                      for subject in run['subjects']],
         'duration_s': run.get('duration_s'),
-        # A run measured from each launch says so; an older one measured a
-        # window after a warm-up.
-        'protocol': run.get('protocol', {}),
+        # How long each launch was measured, and the starts each round took.
+        'protocol': run['protocol'],
         'scenarios': {
             scenario['scenario']: {
                 'legs': len(scenario['legs']),
-                # Why a subject has no legs: its first failure.
-                'failures': {failure['subject']: failure['error']
-                             for failure in reversed(scenario.get('failures', []))},
-                'summary': {name: {metric: scenario['summary'][name][metric]
-                                   for metric in SUMMARY_METRICS if metric in scenario['summary'][name]}
-                            for name in names},
-                'verdicts': scenario['verdicts'],
+                'starts': {
+                    start: {
+                        'summary': {name: {metric: judged['summary'][name][metric]
+                                           for metric in SUMMARY_METRICS if metric in judged['summary'][name]}
+                                    for name in names},
+                        'verdicts': judged['verdicts'],
+                        # Why a subject has no legs of the start: its first
+                        # failure there.
+                        'failures': {failure['subject']: failure['error']
+                                     for failure in reversed(scenario.get('failures', []))
+                                     if failure['start'] == start},
+                        # The metrics a second run judged worse again.
+                        'confirmed': run.get('confirmed_regressions', {}).get(scenario['scenario'], {}).get(start, []),
+                    }
+                    for start, judged in scenario['starts'].items()
+                },
             }
             for scenario in run['scenarios']
         },
-        'confirmed_regressions': run.get('confirmed_regressions', {}),
     }
 
 

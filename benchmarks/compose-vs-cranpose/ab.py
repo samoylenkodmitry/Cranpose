@@ -20,12 +20,13 @@ The scenario stops once every deciding metric is settled. After
 threshold is the same whatever its spread; anything else still open is
 inconclusive.
 Every leg is one launch measured from its start command for `--run` seconds,
-the same span for both builds. Nothing is left unmeasured: a build's first
-launch after its install is a leg like the others, and each leg keeps the
-frames of every second from its launch.
+the same span for both builds. In each pair every build starts twice: first
+with its data cleared, as its install leaves it, then a second time. The two
+starts are judged apart, and the scenario stops once both are settled. Each
+leg keeps the frames of every second from its launch.
 
 Writes `ab.json` in the dashboard's run format: device, subjects, every leg,
-per-subject medians and per-metric verdicts.
+and per start the per-subject medians and per-metric verdicts.
 """
 
 import argparse
@@ -36,7 +37,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from measure import APPS, HEAVY, REMOTE_WINDOW, HERE, Device, device_lock, measure_run, memory_mb
+from measure import (APPS, HEAVY, REMOTE_WINDOW, HERE, STARTS, AppTarget, Device, device_lock, measure_run,
+                     memory_mb)
 
 # Metric: (threshold, whether the threshold is relative, whether more is better).
 DECIDING = {
@@ -47,9 +49,9 @@ DECIDING = {
 REPORTED = ['first_frame_s', 'janky_pct', 'interval_p99_ms', 'cpu_mhz', 'gpu_mhz', 'ram_mb', 'gpu_ram_mb']
 
 
-def metric_values(legs, subject, metric):
-    values = [leg[metric] for leg in legs if leg['subject'] == subject and leg.get(metric) is not None]
-    return values
+def metric_values(legs, subject, metric, start):
+    return [leg[metric] for leg in legs
+            if leg['subject'] == subject and leg['start'] == start and leg.get(metric) is not None]
 
 
 def verdict(a_values, b_values, threshold, relative, higher_is_better, last):
@@ -71,10 +73,12 @@ def verdict(a_values, b_values, threshold, relative, higher_is_better, last):
     return None
 
 
-def leg_record(run, subject, order):
+def leg_record(run, subject, order, start):
     return {
         'subject': subject,
         'order': order,
+        # The app's first start after its data was cleared, or its second.
+        'start': start,
         'fps': run['fps'],
         'frames': run['frames'],
         'run_s': run['run_s'],
@@ -97,38 +101,50 @@ def leg_record(run, subject, order):
     }
 
 
-def summarize(legs, subjects, metrics):
-    """Per subject: the median of every metric over its legs."""
+def summarize(legs, subjects, metrics, start):
+    """Per subject: the median of every metric over its legs of `start`."""
     return {
         subject: {metric: statistics.median(values) for metric in metrics
-                  if (values := metric_values(legs, subject, metric))}
+                  if (values := metric_values(legs, subject, metric, start))}
         for subject in subjects
     }
 
 
+def verdicts(legs, subjects, start, last):
+    """Per deciding metric, B's verdict against A over the legs of `start`."""
+    return {
+        metric: verdict(metric_values(legs, subjects[0], metric, start),
+                        metric_values(legs, subjects[1], metric, start), *rule, last)
+        for metric, rule in DECIDING.items()
+    }
+
+
 def compare_scenario(device, scenario, subjects, args):
-    legs, verdicts = [], {}
+    legs, judged = [], {}
     for pair in range(args.max_pairs):
         order = subjects if pair % 2 == 0 else subjects[::-1]
         for subject in order:
-            run = measure_run(device, subject, scenario, args, args.output)
-            legs.append(leg_record(run, subject, len(legs)))
-            print(f'{scenario:10} {subject:16} fps {run["fps"]:5.1f} cpu/f {run["cpu_ms_per_frame"]:5.2f} '
-                  f'present {run.get("desired_to_present_p50_ms") or 0:5.1f}', flush=True)
-        verdicts = {
-            metric: verdict(metric_values(legs, subjects[0], metric),
-                            metric_values(legs, subjects[1], metric), *rule,
-                            pair == args.max_pairs - 1)
-            for metric, rule in DECIDING.items()
-        }
-        if all(value is not None for value in verdicts.values()):
+            AppTarget(subject).reset(device)
+            for start in STARTS:
+                run = measure_run(device, subject, scenario, args, args.output)
+                legs.append(leg_record(run, subject, len(legs), start))
+                print(f'{scenario:10} {subject:16} {start:6} fps {run["fps"]:5.1f} '
+                      f'cpu/f {run["cpu_ms_per_frame"]:5.2f} '
+                      f'present {run.get("desired_to_present_p50_ms") or 0:5.1f}', flush=True)
+        judged = {start: verdicts(legs, subjects, start, pair == args.max_pairs - 1) for start in STARTS}
+        if all(value is not None for start in STARTS for value in judged[start].values()):
             break
     return {
         'scenario': scenario,
         'extras': (HEAVY.get(scenario, '') + ' ' + args.extra).strip(),
         'legs': legs,
-        'summary': summarize(legs, subjects, [*DECIDING, *REPORTED]),
-        'verdicts': {metric: value or 'inconclusive' for metric, value in verdicts.items()},
+        'starts': {
+            start: {
+                'summary': summarize(legs, subjects, [*DECIDING, *REPORTED], start),
+                'verdicts': {metric: value or 'inconclusive' for metric, value in judged[start].items()},
+            }
+            for start in STARTS
+        },
     }
 
 
@@ -169,7 +185,7 @@ def compare_builds(args):
                    ['ro.product.model', 'ro.build.version.release', 'ro.hardware']},
         'subjects': [{'name': name, 'package': APPS[name]['package'], 'label': label}
                      for name, label in ((args.a, args.label_a), (args.b, args.label_b))],
-        'protocol': {'run_s': args.run, 'from_launch': True, 'max_pairs': args.max_pairs,
+        'protocol': {'run_s': args.run, 'starts': list(STARTS), 'max_pairs': args.max_pairs,
                      'deciding': {metric: rule[0] for metric, rule in DECIDING.items()}},
         'scenarios': [],
     }
@@ -179,7 +195,9 @@ def compare_builds(args):
     run['duration_s'] = round(time.monotonic() - args.started)
     (args.output / 'ab.json').write_text(json.dumps(run, indent=1))
     for scenario in run['scenarios']:
-        print('VERDICT', scenario['scenario'], len(scenario['legs']), 'legs', json.dumps(scenario['verdicts']))
+        for start, judged in scenario['starts'].items():
+            print('VERDICT', scenario['scenario'], start, len(scenario['legs']), 'legs',
+                  json.dumps(judged['verdicts']))
     print('DURATION', run['duration_s'], 's')
     subprocess.run(['adb', '-s', args.serial, 'shell', 'rm', '-f', REMOTE_WINDOW], check=False)
 

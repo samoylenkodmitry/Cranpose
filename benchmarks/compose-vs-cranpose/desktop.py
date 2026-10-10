@@ -9,7 +9,10 @@ window presents, the way SurfaceFlinger counts a phone app's, `ps` counts
 the CPU time of the app and every process it started, `footprint` the memory
 they hold and `macmon` the clocks the chip ran at. The apps are measured in
 turn, round after round, as `frameworks.py` measures phones, and the run is a
-`frameworks` run `scripts/perf/publish.py` publishes. A leg that fails, or in
+`frameworks` run `scripts/perf/publish.py` publishes. In a round each app
+starts twice: first after what the apps keep between launches is removed, as
+an install leaves them (`APP_STATE`; in the browser, a new Chrome profile),
+then a second time. A leg that fails, or in
 which other processes spent more than `--max-others` cores, is measured again,
 up to three times; an app no attempt measured leaves its leg out. A leg
 whose frame rate is more than 1.5 times off the app's earlier legs is measured
@@ -24,7 +27,8 @@ are kept. A disturbed leg stays in the run, marked, out of the medians.
   python3 desktop.py --output results/browser --browser DIST --tier 6
 
 `--browser DIST` runs the apps `build_apps.sh browser DIST` built for the
-browser, each in a Chrome window of its own profile, at the browser's own tier.
+browser, each in a Chrome window of a profile of its own for the round, at the
+browser's own tier.
 
 `--parity` freezes every app on frame 120, takes a picture of each window
 with `FrameCount.app` and compares each with Compose's picture, as
@@ -52,7 +56,7 @@ from pathlib import Path
 
 import versions
 from browser import BrowserServer
-from timelines import per_second
+from timelines import STARTS, per_second
 
 
 HERE = Path(__file__).resolve().parent
@@ -65,6 +69,38 @@ CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 DESKTOP_WINDOW = (1280, 820)
 # The window's title bar at the display's 2x scale, which pictures leave out.
 TITLE_BAR_PIXELS = 64
+
+# What the apps keep between launches, found by listing the files each wrote
+# in a launch on macm3: compiled Metal shaders, in the cache unbundled apps
+# share and in each bundle's own; the WebKit caches of the web view apps;
+# Chrome's compiled Metal shaders (its profile, with its GPU and HTTP caches,
+# is the round's own); and the Cranpose app's pipeline cache. Removed before
+# every first start.
+USER_CACHE = Path(subprocess.run(['getconf', 'DARWIN_USER_CACHE_DIR'], capture_output=True,
+                                 text=True).stdout.strip() or tempfile.gettempdir())
+LIBRARY = Path.home() / 'Library'
+APP_STATE = [
+    (USER_CACHE, 'com.apple.metal'),
+    (USER_CACHE, 'dev.perfcompare.*'),
+    (USER_CACHE, 'com.apple.WebKit.*+perf_compare_*'),
+    (USER_CACHE, 'com.google.Chrome*'),
+    (LIBRARY / 'Caches', 'perf-compare*'),
+    (LIBRARY / 'Application Support', 'perf-compare*'),
+    (LIBRARY / 'WebKit', 'perf-compare*'),
+]
+
+
+def clear_app_state(profile):
+    """Removes what the apps keep between launches, and Chrome's `profile`,
+    so the next launch is an app's first after its install."""
+    for root, pattern in APP_STATE:
+        for path in root.glob(pattern):
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
+    shutil.rmtree(profile, ignore_errors=True)
+
 
 # A leg whose frame rate is this many times off the median of the app's
 # earlier legs was disturbed or drew something else: the app is measured once
@@ -244,14 +280,12 @@ class App:
     no window from outside the login session, and an app it starts comes to
     the front."""
 
-    def __init__(self, name, args, freeze, work, page, stage, label=None):
+    def __init__(self, name, args, freeze, work, page, stage, label=None, profile=None):
         tier = args.tier
         self.name = name
         self.work = work
         self.log = stage / f'{label or name}.log'
-        # A profile for each launch: helpers of an earlier launch's Chrome may
-        # outlive it, and must not pass for this one's.
-        profile = stage / f'chrome-profile-{label or name}'
+        profile = profile or stage / f'chrome-profile-{label or name}'
         # In the browser every app is the same Chrome, opened on its own page.
         template, page = (CHROME_APP, f'{page}/{name}/index.html') if args.browser else (APPS[name], page)
         values = {'tier': tier, 'freeze': freeze, 'page': page, 'profile': profile}
@@ -273,6 +307,8 @@ class App:
                                          '--stderr', str(self.log), bundle, '--args', *arguments])
         # Chrome's helpers share its path's start, and the user's own Chrome
         # its path: this launch's Chrome is the oldest process of its profile.
+        # Every process of an earlier launch on the profile has ended: `end`
+        # waits for them.
         chrome = executable == CHROME
         self.profile = f'--user-data-dir={profile}' if chrome else None
         pattern = self.profile or executable
@@ -293,7 +329,8 @@ class App:
 
     def end(self):
         """Ends the app: its process group, or the app `open` started and,
-        for Chrome, every process of its profile."""
+        for Chrome, every process of its profile, which the round's next
+        launch must not find."""
         group = '-W' not in self.process.args
         for sent in (signal.SIGTERM, signal.SIGKILL):
             try:
@@ -308,12 +345,17 @@ class App:
                                capture_output=True)
             try:
                 self.process.wait(timeout=5)
-                return
+                break
             except subprocess.TimeoutExpired:
                 continue
-        # `open -W` still waits on an app that did not end: stop waiting.
-        self.process.kill()
-        self.process.wait(timeout=5)
+        else:
+            # `open -W` still waits on an app that did not end: stop waiting.
+            self.process.kill()
+            self.process.wait(timeout=5)
+        deadline = time.monotonic() + 10
+        while self.profile and time.monotonic() < deadline and subprocess.run(
+                ['pgrep', '-f', '--', self.profile], capture_output=True).returncode == 0:
+            time.sleep(0.1)
 
 
 def disagrees(fps, earlier):
@@ -325,19 +367,19 @@ def disagrees(fps, earlier):
     return max(fps, reference) > DISAGREEMENT * min(fps, reference)
 
 
-def measure(name, args, work, page, stage, label, earlier):
+def measure(name, args, work, page, stage, label, earlier, profile):
     """One launch, measured from its start for `--run` seconds: every frame
     its window presented in each second, the CPU the app and every process it
     started spent, the clocks the chip ran at and the memory the app held at
     the end. Nothing is left out: the launch, the first frame and the first
     seconds count as the rest of the run does. The frames, the app's output
     and, for a rate that disagrees with the app's `earlier` legs, the window's
-    picture are kept under `label`."""
+    picture are kept under `label`. Chrome runs on `profile`."""
     # Every process's CPU before the launch: the app's processes start at
     # zero, so what they hold at the end is the run's.
     before = processes()
     launched = time.monotonic()
-    app = App(name, args, 0, work, page, stage, label)
+    app = App(name, args, 0, work, page, stage, label, profile)
     try:
         clocks = Clocks()
         out = stage / f'{label}-frames.json'
@@ -415,7 +457,8 @@ def main():
     parser.add_argument('--release', help='the release tag `cranpose-release` was built at')
     parser.add_argument('--tier', type=int, default=12)
     parser.add_argument('--rounds', type=int, default=3,
-                        help='launches of every app; the first is its first launch after its build')
+                        help="rounds, in each of which every app starts after the apps' state is removed, "
+                             'then once more')
     parser.add_argument('--run', type=float, default=10.0,
                         help='seconds each launch is measured for, from its start')
     parser.add_argument('--timeout', type=float, default=60.0)
@@ -448,22 +491,27 @@ def main():
         report = run(args, apps, page, stage)
     report['duration_s'] = round(time.monotonic() - started)
     (args.output / 'report.json').write_text(json.dumps(report, indent=1))
-    print(json.dumps(report['scenarios'][0]['summary'] if 'scenarios' in report else report['changed_pct']))
+    print(json.dumps(report['scenarios'][0]['starts'] if 'scenarios' in report else report['changed_pct']))
 
 
-def undisturbed_leg(name, args, page, stage, label, earlier, failures):
-    """A leg, measured again, up to three times, while other processes spend
-    more than `--max-others` cores in it or it fails. Every leg measured is
-    kept, a disturbed one marked `disturbed`, and every failed attempt is
-    added to `failures`; none when every attempt failed, so one app cannot
-    end the run."""
+def undisturbed_leg(name, args, page, stage, label, earlier, failures, profile, start):
+    """A leg of `start`, measured again, up to three times, while other
+    processes spend more than `--max-others` cores in it or it fails. Every
+    attempt at a first start begins after the apps' state and Chrome's
+    `profile` are removed; a second start measured again follows the earlier
+    ones, its caches as full. Every leg measured is kept, a disturbed one
+    marked `disturbed`, and every failed attempt is added to `failures`; none
+    when every attempt failed, so one app cannot end the run."""
     legs = []
     for attempt in range(3):
+        if start == STARTS[0]:
+            clear_app_state(profile)
         try:
-            leg = measure(name, args, args.output, page, stage, f'{label}-{attempt + 1}', earlier)
+            leg = measure(name, args, args.output, page, stage, f'{label}-{attempt + 1}', earlier, profile)
         except (RuntimeError, subprocess.SubprocessError) as failure:
             print(f'{label:16} failed: {failure}', flush=True)
-            failures.append({'subject': name, 'label': f'{label}-{attempt + 1}', 'error': str(failure)[:300]})
+            failures.append({'subject': name, 'start': start, 'label': f'{label}-{attempt + 1}',
+                             'error': str(failure)[:300]})
             continue
         leg['disturbed'] = leg['other_cores'] > args.max_others
         legs.append(leg)
@@ -472,6 +520,17 @@ def undisturbed_leg(name, args, page, stage, label, earlier, failures):
         if not leg['disturbed']:
             break
     return legs
+
+
+def summarize(legs, apps, start):
+    """Per app, the medians over its legs of `start` no other process
+    disturbed; the disturbed ones stay in the run, marked."""
+    return {name: {key: round(statistics.median(values), 2)
+                   for key in SUMMARY
+                   if (values := [leg[key] for leg in legs
+                                  if leg['subject'] == name and leg['start'] == start and not leg['disturbed']
+                                  and leg.get(key) is not None])}
+            for name in apps}
 
 
 def run(args, apps, page, stage):
@@ -504,23 +563,25 @@ def run(args, apps, page, stage):
     legs, failures = [], []
     for round_index in range(args.rounds):
         for name in apps:
-            earlier = [leg['fps'] for leg in legs if leg['subject'] == name and not leg['disturbed']]
-            label = f'{name}-{round_index + 1}'
-            measured = undisturbed_leg(name, args, page, stage, label, earlier, failures)
-            legs += [{'subject': name, 'round': round_index, **leg} for leg in measured]
-            kept = [leg for leg in measured if not leg['disturbed']]
-            if kept and disagrees(kept[-1]['fps'], earlier):
-                print(f'{name}: {kept[-1]["fps"]} fps disagrees with its earlier legs; measuring once more',
-                      flush=True)
-                again = undisturbed_leg(name, args, page, stage, f'{label}-again', earlier, failures)
-                legs += [{'subject': name, 'round': round_index, **leg} for leg in again]
-    # Medians over the legs no other process disturbed; the disturbed ones
-    # stay in the run, marked.
-    summary = {name: {key: round(statistics.median(values), 2)
-                      for key in SUMMARY
-                      if (values := [leg[key] for leg in legs if leg['subject'] == name and not leg['disturbed']
-                                     and leg.get(key) is not None])}
-               for name in apps}
+            # Chrome's profile of the round: made by the first start, kept
+            # for the second.
+            profile = stage / f'chrome-profile-{name}-{round_index + 1}'
+            for start in STARTS:
+                earlier = [leg['fps'] for leg in legs
+                           if leg['subject'] == name and leg['start'] == start and not leg['disturbed']]
+                label = f'{name}-{round_index + 1}-{start}'
+                measured = undisturbed_leg(name, args, page, stage, label, earlier, failures, profile, start)
+                if not measured:
+                    # No second start without a first one.
+                    break
+                legs += [{'subject': name, 'round': round_index, 'start': start, **leg} for leg in measured]
+                kept = [leg for leg in measured if not leg['disturbed']]
+                if kept and disagrees(kept[-1]['fps'], earlier):
+                    print(f'{name}: {kept[-1]["fps"]} fps disagrees with its earlier legs; measuring once more',
+                          flush=True)
+                    again = undisturbed_leg(name, args, page, stage, f'{label}-again', earlier, failures,
+                                            profile, start)
+                    legs += [{'subject': name, 'round': round_index, 'start': start, **leg} for leg in again]
     chip = subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'], capture_output=True, text=True,
                           check=True).stdout.strip()
     width, height = DESKTOP_WINDOW
@@ -533,11 +594,13 @@ def run(args, apps, page, stage):
         'main': args.main,
         'device': {'ro.product.model': chip},
         'subjects': [versions.subject(name, platform, built, args.release) for name in apps],
-        'protocol': {'run_s': args.run, 'from_launch': True, 'rounds': args.rounds,
+        'protocol': {'run_s': args.run, 'starts': list(STARTS), 'rounds': args.rounds,
                      'max_other_cores': args.max_others},
         'scenarios': [{'scenario': 'gauntlet',
                        'extras': f'tier {args.tier}, {width} x {height} {"browser " if args.browser else ""}window',
-                       'legs': legs, 'failures': failures, 'summary': summary, 'verdicts': {}}],
+                       'legs': legs, 'failures': failures,
+                       'starts': {start: {'summary': summarize(legs, apps, start), 'verdicts': {}}
+                                  for start in STARTS}}],
     }
 
 
