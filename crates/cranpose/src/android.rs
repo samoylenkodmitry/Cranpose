@@ -1456,6 +1456,7 @@ where
         );
         shell.set_semantics_enabled(true);
         crate::accessibility::install_inspector(&mut shell, settings.developer_inspector);
+        shell.set_safe_area(android_platform_env().safe_area());
 
         *app_shell = Some(shell);
 

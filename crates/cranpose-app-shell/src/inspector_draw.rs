@@ -15,42 +15,45 @@ const ACCENT: Color = Color(0.2, 0.75, 1.0, 1.0);
 const WARNING: Color = Color(1.0, 0.65, 0.24, 1.0);
 const ROW: f32 = 30.0;
 
-pub(super) fn panel_bounds(state: &InspectorState, viewport: Size) -> Rect {
-    let width = (viewport.width - 16.0).clamp(0.0, 390.0);
-    let height = (viewport.height - 16.0).clamp(0.0, 620.0);
+/// The panel in `area`, the part of the window outside the system's edges.
+pub(super) fn panel_bounds(state: &InspectorState, area: Rect) -> Rect {
+    let width = (area.width - 16.0).clamp(0.0, 390.0);
+    let height = (area.height - 16.0).clamp(0.0, 620.0);
     floating_bounds(
         Rect {
-            x: (viewport.width - width - 8.0).max(0.0),
-            y: 8.0,
+            x: area.x + (area.width - width - 8.0).max(0.0),
+            y: area.y + 8.0_f32.min(area.height),
             width,
             height,
         },
         state.panel_position,
-        viewport,
+        area,
     )
 }
 
-pub(super) fn launcher_bounds(state: &InspectorState, viewport: Size) -> Rect {
+/// The launcher in `area`, the part of the window outside the system's edges.
+pub(super) fn launcher_bounds(state: &InspectorState, area: Rect) -> Rect {
     floating_bounds(
         Rect {
-            x: (viewport.width - 158.0).max(0.0),
-            y: (viewport.height - 56.0).max(0.0),
-            width: 146.0_f32.min(viewport.width),
-            height: 44.0_f32.min(viewport.height),
+            x: area.x + (area.width - 158.0).max(0.0),
+            y: area.y + (area.height - 56.0).max(0.0),
+            width: 146.0_f32.min(area.width),
+            height: 44.0_f32.min(area.height),
         },
         state.launcher_position,
-        viewport,
+        area,
     )
 }
 
-fn floating_bounds(mut bounds: Rect, position: Option<Point>, viewport: Size) -> Rect {
+/// `bounds` at the position the person dragged it to, kept inside `area`.
+fn floating_bounds(mut bounds: Rect, position: Option<Point>, area: Rect) -> Rect {
     if let Some(position) = position {
         bounds.x = position
             .x
-            .clamp(0.0, (viewport.width - bounds.width).max(0.0));
+            .clamp(area.x, area.x + (area.width - bounds.width).max(0.0));
         bounds.y = position
             .y
-            .clamp(0.0, (viewport.height - bounds.height).max(0.0));
+            .clamp(area.y, area.y + (area.height - bounds.height).max(0.0));
     }
     bounds
 }
@@ -136,7 +139,8 @@ impl Canvas {
     }
 }
 
-pub(super) fn build(state: &mut InspectorState, viewport: Size) -> RenderGraph {
+/// The inspector over a window of `viewport`, its controls inside `area`.
+pub(super) fn build(state: &mut InspectorState, viewport: Size, area: Rect) -> RenderGraph {
     state.controls.clear();
     let mut canvas = Canvas {
         children: Vec::new(),
@@ -146,7 +150,7 @@ pub(super) fn build(state: &mut InspectorState, viewport: Size) -> RenderGraph {
         draw_nodes(&mut canvas, state);
     }
     if !state.open || state.picking {
-        let bounds = launcher_bounds(state, viewport);
+        let bounds = launcher_bounds(state, area);
         if state.launcher_position.is_some() {
             state.launcher_position = Some(Point {
                 x: bounds.x,
@@ -165,7 +169,7 @@ pub(super) fn build(state: &mut InspectorState, viewport: Size) -> RenderGraph {
         };
         canvas.button(state, action, label, bounds, state.picking);
     } else {
-        let panel = panel_bounds(state, viewport);
+        let panel = panel_bounds(state, area);
         if state.panel_position.is_some() {
             state.panel_position = Some(Point {
                 x: panel.x,
@@ -342,12 +346,8 @@ fn detail_text(state: &InspectorState) -> &str {
         .map_or("Select from the list or use Pick element.\n\nBlue: accessible bounds\nGreen: app focus\nPurple: selected\nAmber: missing accessible name", |node| node.details.as_str())
 }
 
-pub(super) fn detail_line_count(state: &InspectorState, viewport: Size) -> usize {
-    wrapped_lines(
-        detail_text(state),
-        panel_bounds(state, viewport).width - 24.0,
-    )
-    .len()
+pub(super) fn detail_line_count(state: &InspectorState, area: Rect) -> usize {
+    wrapped_lines(detail_text(state), panel_bounds(state, area).width - 24.0).len()
 }
 
 fn draw_details(canvas: &mut Canvas, state: &mut InspectorState, panel: Rect, y: f32) {

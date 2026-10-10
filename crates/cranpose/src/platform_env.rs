@@ -31,6 +31,12 @@ impl PlatformEnvironment {
         not(any(target_os = "android", target_os = "ios", feature = "watchos")),
         expect(dead_code)
     )]
+    /// The window's edges the system draws on.
+    #[cfg_attr(not(any(target_os = "android", target_os = "ios")), expect(dead_code))]
+    pub(crate) fn safe_area(&self) -> EdgeInsets {
+        self.safe_area.get()
+    }
+
     pub(crate) fn set_safe_area(&self, insets: EdgeInsets) -> bool {
         let changed = self.safe_area.get() != insets;
         self.safe_area.set(insets);

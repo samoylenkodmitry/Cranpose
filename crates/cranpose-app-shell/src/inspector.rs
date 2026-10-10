@@ -5,7 +5,7 @@ use std::fmt::Debug;
 use cranpose_core::NodeId;
 use cranpose_render_common::Renderer;
 use cranpose_ui::{KeyCode, KeyEvent, KeyEventType, SemanticsTree};
-use cranpose_ui_graphics::{Point, Rect, Size};
+use cranpose_ui_graphics::{EdgeInsets, Point, Rect, Size};
 
 use crate::{AppShell, RootSurface, ShellApp, SurfaceMut};
 
@@ -110,6 +110,8 @@ pub(crate) struct DeveloperInspector {
     pub(crate) state: InspectorState,
     revision: Option<u64>,
     viewport: Option<Size>,
+    /// The window's edges the system draws on; the controls stay inside.
+    insets: EdgeInsets,
     dirty: bool,
     pub(crate) pointer_captured: bool,
     keyboard: bool,
@@ -125,6 +127,19 @@ struct InspectorDrag {
 }
 
 impl DeveloperInspector {
+    /// The part of the window outside the system's edges, where the
+    /// controls go.
+    fn area(&self) -> Rect {
+        let viewport = self.viewport.unwrap_or_default();
+        let insets = self.insets;
+        Rect {
+            x: insets.left.min(viewport.width),
+            y: insets.top.min(viewport.height),
+            width: (viewport.width - insets.left - insets.right).max(0.0),
+            height: (viewport.height - insets.top - insets.bottom).max(0.0),
+        }
+    }
+
     fn apply(&mut self, action: InspectorAction) {
         match action {
             InspectorAction::Move => return,
@@ -149,7 +164,7 @@ impl DeveloperInspector {
                 self.state.detail_offset = self.state.detail_offset.saturating_sub(3);
             }
             InspectorAction::DetailsDown => {
-                let count = draw::detail_line_count(&self.state, self.viewport.unwrap_or_default());
+                let count = draw::detail_line_count(&self.state, self.area());
                 self.state.detail_offset =
                     (self.state.detail_offset + 3).min(count.saturating_sub(1));
             }
@@ -213,11 +228,11 @@ impl DeveloperInspector {
     }
 
     fn start_drag(&mut self, action: InspectorAction, x: f32, y: f32) {
-        let viewport = self.viewport.unwrap_or_default();
+        let area = self.area();
         let bounds = if action == InspectorAction::Move {
-            draw::panel_bounds(&self.state, viewport)
+            draw::panel_bounds(&self.state, area)
         } else {
-            draw::launcher_bounds(&self.state, viewport)
+            draw::launcher_bounds(&self.state, area)
         };
         self.drag = Some(InspectorDrag {
             action,
@@ -284,12 +299,26 @@ where
         self.app.inspector_projector = projector;
         for surface in &mut self.surfaces {
             surface.inspector = DeveloperInspector {
+                insets: surface.inspector.insets,
                 dirty: true,
                 ..Default::default()
             };
             if projector.is_none() {
                 surface.renderer.set_inspector_overlay(None);
             }
+            surface.is_dirty = true;
+        }
+    }
+
+    /// The edges of the primary window the system draws on, such as a
+    /// phone's status bar, its rounded corners and its home indicator. The
+    /// developer inspector keeps its controls inside them, where they can be
+    /// reached.
+    pub fn set_safe_area(&mut self, insets: EdgeInsets) {
+        let surface = &mut self.surfaces[0];
+        if surface.inspector.insets != insets {
+            surface.inspector.insets = insets;
+            surface.inspector.dirty = true;
             surface.is_dirty = true;
         }
     }
@@ -325,11 +354,7 @@ where
                     .iter()
                     .any(|control| control.bounds.contains(x, y))
                 || (inspector.state.open
-                    && draw::panel_bounds(
-                        &inspector.state,
-                        inspector.viewport.unwrap_or_default(),
-                    )
-                    .contains(x, y)))
+                    && draw::panel_bounds(&inspector.state, inspector.area()).contains(x, y)))
     }
 
     pub(crate) fn inspector_move(&mut self, x: f32, y: f32) -> bool {
@@ -378,8 +403,7 @@ where
         } else {
             inspector.keyboard = false;
             inspector.state.open
-                && draw::panel_bounds(&inspector.state, inspector.viewport.unwrap_or_default())
-                    .contains(x, y)
+                && draw::panel_bounds(&inspector.state, inspector.area()).contains(x, y)
         };
         if consumed {
             inspector.keyboard = inspector.state.open;
@@ -446,7 +470,8 @@ pub(crate) fn refresh<R: Renderer>(
     if !surface.inspector.dirty && surface.inspector.installed {
         return false;
     }
-    let graph = draw::build(&mut surface.inspector.state, viewport);
+    let area = surface.inspector.area();
+    let graph = draw::build(&mut surface.inspector.state, viewport, area);
     surface.renderer.set_inspector_overlay(Some(graph));
     surface.inspector.installed = true;
     surface.inspector.dirty = false;
