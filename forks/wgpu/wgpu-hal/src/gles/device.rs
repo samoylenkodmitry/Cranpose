@@ -250,7 +250,7 @@ impl super::Device {
         shader: &str,
         naga_stage: naga::ShaderStage,
         #[cfg_attr(target_arch = "wasm32", allow(unused))] label: Option<&str>,
-    ) -> Result<glow::Shader, crate::PipelineError> {
+    ) -> Result<(glow::Shader, naga::ShaderStage), crate::PipelineError> {
         let target = match naga_stage {
             naga::ShaderStage::Vertex => glow::VERTEX_SHADER,
             naga::ShaderStage::Fragment => glow::FRAGMENT_SHADER,
@@ -275,21 +275,28 @@ impl super::Device {
 
         log::debug!("\tCompiled shader {raw:?}");
 
-        let compiled_ok = unsafe { gl.get_shader_compile_status(raw) };
-        let msg = unsafe { gl.get_shader_info_log(raw) };
-        if compiled_ok {
-            if !msg.is_empty() {
-                log::debug!("\tCompile message: {msg}");
+        // The status is read only when the program fails to link (see
+        // `link_failure`): on the web each read waits for a round trip to
+        // the GPU process.
+        Ok((raw, naga_stage))
+    }
+
+    /// Why `program`, built from `shaders`, failed to link: the first shader
+    /// that failed to compile, or the program's own log.
+    unsafe fn link_failure(
+        gl: &glow::Context,
+        program: glow::Program,
+        shaders: &[(glow::Shader, naga::ShaderStage)],
+        has_stages: wgt::ShaderStages,
+    ) -> crate::PipelineError {
+        for &(shader, naga_stage) in shaders {
+            if !unsafe { gl.get_shader_compile_status(shader) } {
+                let msg = unsafe { gl.get_shader_info_log(shader) };
+                log::error!("\tShader compilation failed: {msg}");
+                return crate::PipelineError::Linkage(map_naga_stage(naga_stage), msg);
             }
-            Ok(raw)
-        } else {
-            log::error!("\tShader compilation failed: {msg}");
-            unsafe { gl.delete_shader(raw) };
-            Err(crate::PipelineError::Linkage(
-                map_naga_stage(naga_stage),
-                msg,
-            ))
         }
+        crate::PipelineError::Linkage(has_stages, unsafe { gl.get_program_info_log(program) })
     }
 
     fn create_shader(
@@ -298,7 +305,7 @@ impl super::Device {
         stage: &crate::ProgrammableStage<super::ShaderModule>,
         context: CompilationContext,
         program: glow::Program,
-    ) -> Result<glow::Shader, crate::PipelineError> {
+    ) -> Result<(glow::Shader, naga::ShaderStage), crate::PipelineError> {
         let source = 'outer: {
             use naga::back::glsl;
             let pipeline_options = glsl::PipelineOptions {
@@ -539,24 +546,28 @@ impl super::Device {
             shaders_to_delete.push(shader);
         }
 
-        for &shader in shaders_to_delete.iter() {
+        for &(shader, _) in shaders_to_delete.iter() {
             unsafe { gl.attach_shader(program, shader) };
         }
         unsafe { gl.link_program(program) };
 
-        for shader in shaders_to_delete {
-            unsafe { gl.delete_shader(shader) };
-        }
-
         log::debug!("\tLinked program {program:?}");
 
         let linked_ok = unsafe { gl.get_program_link_status(program) };
-        let msg = unsafe { gl.get_program_info_log(program) };
-        if !linked_ok {
-            return Err(crate::PipelineError::Linkage(has_stages, msg));
+        let failure = (!linked_ok)
+            .then(|| unsafe { Self::link_failure(gl, program, &shaders_to_delete, has_stages) });
+        for &(shader, _) in shaders_to_delete.iter() {
+            unsafe { gl.delete_shader(shader) };
         }
-        if !msg.is_empty() {
-            log::debug!("\tLink message: {msg}");
+        if let Some(error) = failure {
+            unsafe { gl.delete_program(program) };
+            return Err(error);
+        }
+        if log::log_enabled!(log::Level::Debug) {
+            let msg = unsafe { gl.get_program_info_log(program) };
+            if !msg.is_empty() {
+                log::debug!("\tLink message: {msg}");
+            }
         }
 
         if !private_caps.contains(PrivateCapabilities::SHADER_BINDING_LAYOUT) {
