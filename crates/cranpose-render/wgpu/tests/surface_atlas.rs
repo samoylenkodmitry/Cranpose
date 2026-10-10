@@ -433,11 +433,13 @@ fn ChangingCards(count: MutableState<u32>, frame: MutableState<u32>) {
     );
 }
 
+/// The number of cards drawn and the frame they follow.
+type CardStates = (MutableState<u32>, MutableState<u32>);
+
 fn changing_cards_shell(
     renderer: WgpuRenderer,
 ) -> (AppShell<WgpuRenderer>, MutableState<u32>, MutableState<u32>) {
-    let states: Rc<RefCell<Option<(MutableState<u32>, MutableState<u32>)>>> =
-        Rc::new(RefCell::new(None));
+    let states: Rc<RefCell<Option<CardStates>>> = Rc::new(RefCell::new(None));
     let states_for_app = Rc::clone(&states);
     let mut shell = AppShell::new_with_size_and_density(
         renderer,
