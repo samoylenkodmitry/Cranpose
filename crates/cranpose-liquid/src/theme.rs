@@ -213,6 +213,63 @@ impl Default for LiquidTypography {
     }
 }
 
+/// How a [`crate::LiquidSegmentedControl`] looks. [`Self::system`] is the
+/// system control; an app gives its controls another look with
+/// [`ProvideLiquidSegmentedStyle`].
+///
+/// ```rust,ignore
+/// let colors = liquid_colors();
+/// let style = LiquidSegmentedStyle {
+///     indicator: colors.accent,
+///     selected_label: colors.on_accent,
+///     ..LiquidSegmentedStyle::system(&colors, &liquid_typography())
+/// };
+/// ProvideLiquidSegmentedStyle(style, || settings());
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiquidSegmentedStyle {
+    /// The track under the segments.
+    pub track: Color,
+    /// The lens over the chosen segment at rest. A held lens clears to glass.
+    pub indicator: Color,
+    /// The labels of the segments.
+    pub label: Color,
+    /// The label of the chosen segment while the lens rests over it. While
+    /// the lens is held, the label moves to [`Self::label`] as the indicator
+    /// clears.
+    pub selected_label: Color,
+    /// The labels' text. The chosen segment's label is one weight heavier.
+    pub text: TextStyle,
+    /// The height of the control.
+    pub height: f32,
+}
+
+impl LiquidSegmentedStyle {
+    /// The system control: a white lens on a light track, or a gray lens on a
+    /// dark one, with every label in the label color.
+    pub fn system(colors: &LiquidColors, typography: &LiquidTypography) -> Self {
+        let mut text = typography.subheadline.clone();
+        text.span_style.font_size = TextUnit::Sp(13.0);
+        text.span_style.font_weight = Some(FontWeight::NORMAL);
+        let (track, indicator) = if colors.is_dark {
+            (
+                Color::from_rgb_u8(28, 28, 31),
+                Color::from_rgb_u8(90, 90, 95),
+            )
+        } else {
+            (Color::from_rgb_u8(238, 238, 239), Color::WHITE)
+        };
+        Self {
+            track,
+            indicator,
+            label: colors.label,
+            selected_label: colors.label,
+            text,
+            height: 32.0,
+        }
+    }
+}
+
 /// Theme configuration passed to [`LiquidTheme`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiquidThemeSpec {
@@ -239,6 +296,7 @@ struct ThemeLocals {
     colors: OnceCell<CompositionLocal<LiquidColors>>,
     typography: OnceCell<CompositionLocal<LiquidTypography>>,
     glass_tint: OnceCell<CompositionLocal<GlassTintAmount>>,
+    segmented: OnceCell<CompositionLocal<Option<LiquidSegmentedStyle>>>,
 }
 
 thread_local! {
@@ -246,6 +304,7 @@ thread_local! {
         colors: OnceCell::new(),
         typography: OnceCell::new(),
         glass_tint: OnceCell::new(),
+        segmented: OnceCell::new(),
     } };
 }
 
@@ -273,6 +332,30 @@ fn local_liquid_typography() -> CompositionLocal<LiquidTypography> {
 
 fn local_liquid_glass_tint_amount() -> CompositionLocal<GlassTintAmount> {
     theme_local(|locals| &locals.glass_tint, GlassTintAmount::default)
+}
+
+fn local_liquid_segmented_style() -> CompositionLocal<Option<LiquidSegmentedStyle>> {
+    theme_local(|locals| &locals.segmented, || None)
+}
+
+/// The look of segmented controls here: the one provided by
+/// [`ProvideLiquidSegmentedStyle`], or the system one.
+#[composable]
+pub fn liquid_segmented_style() -> LiquidSegmentedStyle {
+    local_liquid_segmented_style()
+        .current()
+        .unwrap_or_else(|| LiquidSegmentedStyle::system(&liquid_colors(), &liquid_typography()))
+}
+
+/// Gives the segmented controls in `content` the look of `style`.
+#[composable]
+pub fn ProvideLiquidSegmentedStyle(style: LiquidSegmentedStyle, content: impl FnOnce()) {
+    CompositionLocalProvider(
+        [local_liquid_segmented_style().provides(Some(style))],
+        move || {
+            content();
+        },
+    );
 }
 
 /// The active navigation surface tint amount, defaulting to 25 percent.

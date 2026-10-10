@@ -1,24 +1,23 @@
 use std::rc::Rc;
 
-use cranpose_animation::spring;
-use cranpose_core::{mutableStateOf, remember};
+use cranpose_animation::{Lerp, spring};
+use cranpose_core::{State, mutableStateOf, remember};
 use cranpose_macros::composable;
 use cranpose_ui::{
-    Modifier, PointerInputScope, SemanticsWidgetRole, Size,
-    text::{FontWeight, SpanStyle, TextStyle},
+    Modifier, PointerInputScope, SemanticsWidgetRole, SharedText, Size,
+    text::{FontWeight, TextStyle},
     widgets::{Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Row, RowSpec, Text},
 };
-use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer};
+use cranpose_ui_graphics::{Brush, Color, ColorFilter, CornerRadii, GraphicsLayer};
 use cranpose_ui_layout::Alignment;
 
 use crate::{
     material::{GlassDynamics, GlassMorph, LiquidModifierExt},
     motion::LiquidMotion,
-    theme::{liquid_colors, liquid_typography},
+    theme::{LiquidSegmentedStyle, liquid_segmented_style},
     widgets::content_scope::ScopeContent,
 };
 
-const SEGMENT_HEIGHT: f32 = 32.0;
 const TRACK_PADDING: f32 = 2.0;
 const LENS_PAD: f32 = 10.0;
 const TAP_SLOP: f32 = 4.0;
@@ -50,18 +49,32 @@ fn segmented_lens_reading(
     )
 }
 
-fn segmented_lens_base_size(segment_width: f32, progress: f32) -> Size {
+fn segmented_lens_base_size(segment_width: f32, height: f32, progress: f32) -> Size {
     let progress = progress.clamp(-0.1, 1.2);
-    let rest_h = SEGMENT_HEIGHT - TRACK_PADDING * 2.0;
+    let rest_h = height - TRACK_PADDING * 2.0;
     Size::new(
         segment_width - TRACK_PADDING * 2.0 + 24.0 * progress,
         rest_h + 16.0 * progress,
     )
 }
 
-struct LiquidSegment {
-    description: String,
-    content: Rc<dyn Fn(bool)>,
+enum LiquidSegment {
+    /// A label the control draws in its style.
+    Label(SharedText),
+    /// Content the caller draws, and what accessibility announces for it.
+    Content {
+        description: String,
+        content: Rc<dyn Fn(bool)>,
+    },
+}
+
+impl LiquidSegment {
+    fn description(&self) -> String {
+        match self {
+            Self::Label(label) => label.to_string(),
+            Self::Content { description, .. } => description.clone(),
+        }
+    }
 }
 
 /// The scope a segmented control's content is declared in.
@@ -73,14 +86,12 @@ pub struct LiquidSegmentedControlScope {
 }
 
 impl LiquidSegmentedControlScope {
-    /// A segment showing `label`, styled by the control: the selected one is
-    /// told apart by weight, never by dimming the rest.
+    /// A segment showing `label` in the control's
+    /// [`LiquidSegmentedStyle`]: the selected one is told apart by weight
+    /// and by the selected label color, never by dimming the rest.
     pub fn segment(&self, label: impl Into<String>) {
-        let label = label.into();
-        let text = label.clone();
-        self.segment_content(label, move |selected| {
-            SegmentLabel(text.clone(), selected);
-        });
+        self.segments
+            .push(LiquidSegment::Label(SharedText::from(label.into())));
     }
 
     /// A segment the caller draws.
@@ -93,7 +104,7 @@ impl LiquidSegmentedControlScope {
         description: impl Into<String>,
         content: impl Fn(bool) + 'static,
     ) {
-        self.segments.push(LiquidSegment {
+        self.segments.push(LiquidSegment::Content {
             description: description.into(),
             content: Rc::new(content),
         });
@@ -104,29 +115,61 @@ fn collect_segments(content: impl FnOnce(&LiquidSegmentedControlScope)) -> Vec<L
     ScopeContent::collect(|segments| LiquidSegmentedControlScope { segments }, content)
 }
 
-#[composable]
-fn SegmentLabel(label: String, selected: bool) {
-    let colors = liquid_colors();
-    let typography = liquid_typography();
-    let style = TextStyle {
-        span_style: SpanStyle {
-            color: Some(colors.label),
-            font_size: cranpose_ui::text::TextUnit::Sp(13.0),
-            font_weight: Some(if selected {
-                FontWeight::MEDIUM
-            } else {
-                FontWeight::NORMAL
+/// The labels' text, worked out once for every segment of a control.
+struct SegmentLabels {
+    text: TextStyle,
+    selected_text: TextStyle,
+    /// The chosen label's color at rest and while the lens is held, when
+    /// they differ.
+    held: Option<(Color, Color)>,
+}
+
+impl SegmentLabels {
+    fn new(style: &LiquidSegmentedStyle) -> Self {
+        let mut text = style.text.clone();
+        text.span_style.color = Some(style.label);
+        let mut selected_text = style.text.clone();
+        let weight = selected_text
+            .span_style
+            .font_weight
+            .unwrap_or(FontWeight::NORMAL);
+        selected_text.span_style.font_weight = Some(FontWeight((weight.0 + 100).min(900)));
+        selected_text.span_style.color = Some(style.selected_label);
+        Self {
+            text,
+            selected_text,
+            held: (style.selected_label != style.label)
+                .then_some((style.selected_label, style.label)),
+        }
+    }
+
+    /// Draws `label`. The chosen label follows the indicator: as a held lens
+    /// clears to glass, the label moves to the color of the others, which
+    /// reads on the track.
+    fn show(&self, label: &SharedText, selected: bool, lift: State<f32>) {
+        let modifier = match self.held.filter(|_| selected) {
+            Some((rest, held)) => Modifier::empty().graphics_layer(move || {
+                let lift = lift.get().clamp(0.0, 1.0);
+                GraphicsLayer {
+                    color_filter: (lift > 0.0).then(|| ColorFilter::tint(rest.lerp(&held, lift))),
+                    ..Default::default()
+                }
             }),
-            ..typography.subheadline.span_style.clone()
-        },
-        ..typography.subheadline
-    };
-    Text(label, Modifier::empty(), style);
+            None => Modifier::empty(),
+        };
+        let text = if selected {
+            &self.selected_text
+        } else {
+            &self.text
+        };
+        Text(label.clone(), modifier, text.clone());
+    }
 }
 
 /// A segmented control. `content` declares equal-width segments; `selected` is
 /// the active index; `on_select` receives the committed index. Segments tap AND
-/// swipe: dragging slides the indicator with the finger as a glass lens.
+/// swipe: dragging slides the indicator with the finger as a glass lens. The
+/// look comes from [`liquid_segmented_style`].
 ///
 /// ```rust,ignore
 /// LiquidSegmentedControl(Modifier::empty().width(310.0), selected.get(), move |index| {
@@ -144,7 +187,7 @@ pub fn LiquidSegmentedControl(
     on_select: impl Fn(usize) + 'static,
     content: impl FnOnce(&LiquidSegmentedControlScope),
 ) {
-    let colors = liquid_colors();
+    let style = liquid_segmented_style();
     let segments = collect_segments(content);
     let count = segments.len().max(1);
     let selected = selected.min(count - 1);
@@ -157,32 +200,22 @@ pub fn LiquidSegmentedControl(
     );
     let (lens_progress, material_progress) = contact.states();
 
-    let track_height = SEGMENT_HEIGHT;
-    let track_fill = if colors.is_dark {
-        Color::from_rgb_u8(28, 28, 31)
-    } else {
-        Color::from_rgb_u8(238, 238, 239)
-    };
-    let marker_fill = if colors.is_dark {
-        Color::from_rgb_u8(90, 90, 95)
-    } else {
-        Color::WHITE
-    };
-    let track = Modifier::empty()
-        .height(track_height)
-        .draw_behind(move |scope| {
-            scope.draw_round_rect(
-                Brush::solid(track_fill),
-                CornerRadii::uniform(track_height * 0.5),
-            );
-        });
+    let height = style.height;
+    let track_fill = style.track;
+    let marker_fill = style.indicator;
+    let labels = Rc::new(SegmentLabels::new(&style));
+    let track = Modifier::empty().height(height).draw_behind(move |scope| {
+        scope.draw_round_rect(Brush::solid(track_fill), CornerRadii::uniform(height * 0.5));
+    });
 
     Box(modifier.then(track), BoxSpec::default(), move || {
         let segments = Rc::clone(&segments);
+        let labels = Rc::clone(&labels);
         let on_select = Rc::clone(&on_select);
         let contact = Rc::clone(&contact);
         BoxWithConstraints(Modifier::empty(), move |scope| {
             let segments = Rc::clone(&segments);
+            let labels = Rc::clone(&labels);
             let on_select = Rc::clone(&on_select);
             let total_width = scope.constraints().max_width.max(1.0);
             let segment_width = total_width / count as f32;
@@ -209,7 +242,7 @@ pub fn LiquidSegmentedControl(
             };
 
             let gesture = Modifier::empty()
-                .size(Size::new(total_width, SEGMENT_HEIGHT))
+                .size(Size::new(total_width, height))
                 .pointer_input(selected, {
                     let on_select = Rc::clone(&on_select);
                     let lens_axis = Rc::clone(&lens_axis);
@@ -246,8 +279,8 @@ pub fn LiquidSegmentedControl(
                 width: node_w,
                 height: node_h,
             } = super::control_lens::node_size(
-                segmented_lens_base_size(segment_width, 0.0),
-                segmented_lens_base_size(segment_width, 1.0),
+                segmented_lens_base_size(segment_width, height, 0.0),
+                segmented_lens_base_size(segment_width, height, 1.0),
                 LENS_PAD,
             );
             let lens_for_layer = lens_progress;
@@ -259,10 +292,7 @@ pub fn LiquidSegmentedControl(
             let foreground_axis = Rc::clone(&lens_axis);
             let lens = Modifier::empty()
                 .required_size(Size::new(node_w, node_h))
-                .offset(
-                    (segment_width - node_w) * 0.5,
-                    (SEGMENT_HEIGHT - node_h) * 0.5,
-                )
+                .offset((segment_width - node_w) * 0.5, (height - node_h) * 0.5)
                 .graphics_layer(move || GraphicsLayer {
                     translation_x: layer_axis.value(),
                     alpha: 1.0,
@@ -274,7 +304,7 @@ pub fn LiquidSegmentedControl(
                     ),
                     move || {
                         let grow = lens_for_layer.get().clamp(-0.1, 1.2);
-                        let base_size = segmented_lens_base_size(segment_width, grow);
+                        let base_size = segmented_lens_base_size(segment_width, height, grow);
                         let projection = shape.projection(physics_axis.value());
                         let material = material_progress.get().max(0.0);
                         GlassDynamics {
@@ -317,9 +347,13 @@ pub fn LiquidSegmentedControl(
                         let position = content_axis.value();
                         GraphicsLayer {
                             render_effect: super::control_material::content_effect(
-                                Size::new(total_width, SEGMENT_HEIGHT),
-                                (position + segment_width * 0.5, SEGMENT_HEIGHT * 0.5),
-                                segmented_lens_base_size(segment_width, lens_progress.get()),
+                                Size::new(total_width, height),
+                                (position + segment_width * 0.5, height * 0.5),
+                                segmented_lens_base_size(
+                                    segment_width,
+                                    height,
+                                    lens_progress.get(),
+                                ),
                                 content_shape.projection(position),
                                 material_progress.get().max(0.0),
                             ),
@@ -330,10 +364,10 @@ pub fn LiquidSegmentedControl(
                 move || {
                     for (index, segment) in segments.iter().enumerate() {
                         let is_selected = index == visual_index;
-                        let description = segment.description.clone();
+                        let description = segment.description();
                         let on_select = Rc::clone(&semantic_selection);
                         let cell = Modifier::empty()
-                            .size(Size::new(segment_width, SEGMENT_HEIGHT))
+                            .size(Size::new(segment_width, height))
                             .stable_semantics(super::selection::selection_semantics(
                                 description,
                                 SemanticsWidgetRole::RadioButton,
@@ -342,11 +376,16 @@ pub fn LiquidSegmentedControl(
                                 on_select,
                             ))
                             .focusable();
-                        let content = Rc::clone(&segment.content);
+                        let (drawn, labels) = (Rc::clone(&segments), Rc::clone(&labels));
                         Box(
                             cell,
                             BoxSpec::default().content_alignment(Alignment::CENTER),
-                            move || content(is_selected),
+                            move || match &drawn[index] {
+                                LiquidSegment::Label(label) => {
+                                    labels.show(label, is_selected, material_progress);
+                                }
+                                LiquidSegment::Content { content, .. } => content(is_selected),
+                            },
                         );
                     }
                 },
@@ -354,17 +393,18 @@ pub fn LiquidSegmentedControl(
             Box(
                 Modifier::empty()
                     .required_size(Size::new(node_w, node_h))
-                    .offset(
-                        (segment_width - node_w) * 0.5,
-                        (SEGMENT_HEIGHT - node_h) * 0.5,
-                    )
+                    .offset((segment_width - node_w) * 0.5, (height - node_h) * 0.5)
                     .graphics_layer(move || {
                         let position = foreground_axis.value();
                         GraphicsLayer {
                             translation_x: position,
                             backdrop_effect: super::control_material::foreground_effect(
                                 Size::new(node_w, node_h),
-                                segmented_lens_base_size(segment_width, lens_progress.get()),
+                                segmented_lens_base_size(
+                                    segment_width,
+                                    height,
+                                    lens_progress.get(),
+                                ),
                                 foreground_shape.projection(position),
                                 material_progress.get().max(0.0),
                             ),
