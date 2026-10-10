@@ -54,7 +54,7 @@ def body(run):
     lines += [
         '',
         'Each value is the median of the first run\'s legs (each one launch measured from its start '
-        'for 15 s, its first seconds included, A B then B A); '
+        'for 10 s, its first seconds included, A B then B A); '
         'a second run judged the same metrics worse. Reproduce on the device with:',
         '',
         '```bash',

@@ -142,7 +142,7 @@ def main():
     parser.add_argument('--label-a', default='', help='version or commit of A, recorded with the run')
     parser.add_argument('--label-b', default='', help='version or commit of B, recorded with the run')
     parser.add_argument('--scenarios', default='gauntlet')
-    parser.add_argument('--run', type=float, default=15.0,
+    parser.add_argument('--run', type=float, default=10.0,
                         help='seconds each leg is measured for, from its start command')
     parser.add_argument('--max-pairs', type=int, default=4)
     parser.add_argument('--interval', type=float, default=0.5)

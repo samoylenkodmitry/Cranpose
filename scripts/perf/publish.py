@@ -75,6 +75,9 @@ def index_entry(run, file):
         'scenarios': {
             scenario['scenario']: {
                 'legs': len(scenario['legs']),
+                # Why a subject has no legs: its first failure.
+                'failures': {failure['subject']: failure['error']
+                             for failure in reversed(scenario.get('failures', []))},
                 'summary': {name: {metric: scenario['summary'][name][metric]
                                    for metric in SUMMARY_METRICS if metric in scenario['summary'][name]}
                             for name in names},

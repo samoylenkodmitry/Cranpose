@@ -64,13 +64,15 @@ def measure_frameworks(args):
             built['web'] = f'WebView {match.group(1)}, {built.get("web") or versions.version("web", "android")}'
     # An app whose first launch fails leaves its legs out and the run goes
     # on: a page can fail where the browser lacks what its framework needs.
-    legs, running = [], list(apps)
+    legs, failures, running = [], [], list(apps)
     for round_index in range(args.rounds):
         for app in list(running if round_index % 2 == 0 else running[::-1]):
             try:
                 run = measure_run(device, targets[app], args.scenario, args, args.output)
             except (RuntimeError, ValueError) as failure:
                 print(f'{app:10} failed: {failure}', flush=True)
+                # Kept, so the dashboard shows why the app has no frames.
+                failures.append({'subject': app, 'round': round_index, 'error': str(failure)[:300]})
                 if round_index == 0:
                     running.remove(app)
                 continue
@@ -102,6 +104,7 @@ def measure_frameworks(args):
             'extras': f'tier {args.tier}, in Chrome' if args.browser else (
                 HEAVY.get(args.scenario, '') + ' ' + args.extra).strip(),
             'legs': legs,
+            'failures': failures,
             'summary': summary,
             'verdicts': {},
         }],
@@ -118,7 +121,7 @@ def main():
     parser.add_argument('--scenario', default='gauntlet')
     parser.add_argument('--rounds', type=int, default=3,
                         help='launches of every app; the first is its first launch after its install')
-    parser.add_argument('--run', type=float, default=20.0,
+    parser.add_argument('--run', type=float, default=10.0,
                         help='seconds each launch is measured for, from its start command')
     parser.add_argument('--interval', type=float, default=0.5)
     parser.add_argument('--clock-ticks', type=int, default=100)

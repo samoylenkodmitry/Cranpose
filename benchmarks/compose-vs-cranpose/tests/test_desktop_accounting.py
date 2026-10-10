@@ -89,6 +89,8 @@ class DesktopRoundsTest(unittest.TestCase):
         self.assertEqual(measured, ['fyne-1-1', 'fyne-1-2', 'fyne-1-3'])
         self.assertEqual(scenario['legs'], [])
         self.assertEqual(scenario['summary']['fyne'], {}, 'no values: the dashboard shows a dash')
+        self.assertEqual([failure['subject'] for failure in scenario['failures']], ['fyne'] * 3,
+                         'each failed attempt is kept, so the dashboard can say why fyne has no frames')
 
     def test_a_browser_run_is_a_run_of_its_own_kind_on_a_device_named_for_the_browser(self):
         with patch.object(desktop.versions, 'chrome_version', return_value='154.0.8037.98'):

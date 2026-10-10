@@ -64,7 +64,8 @@ const INDEX: &str = r#"{"runs": [
   "scenarios": {"gauntlet": {"legs": 6,
     "summary": {"compose": {"fps": 17.1, "ram_mb": 412.0, "gpu_ram_mb": 96.4},
                 "egui": {"fps": 55.7, "ram_mb": 120.4, "gpu_ram_mb": 33.0},
-                "avalonia": {"fps": 17.3, "ram_mb": 180.2}}, "verdicts": {}}}}
+                "avalonia": {"fps": 17.3, "ram_mb": 180.2}}, "verdicts": {},
+    "failures": {"avalonia": "process 4242 shows no window"}}}}
 ]}"#;
 
 /// The desktop run's own file: egui draws from 600 ms at 60 fps, Compose from
@@ -139,8 +140,9 @@ fn bars_start(labels: &[String]) -> usize {
         .iter()
         .position(|label| label.starts_with("Frame rate against milliseconds since the launch"))
         .unwrap_or_else(|| panic!("no chart: {labels:?}"));
-    // The legend: a label, its frame rate and its first frame for each line.
-    caption + 1 + 2 * 3
+    // The legend: a label, its frame rate and its first frame, or why it has
+    // none, for each of the run's three frameworks.
+    caption + 1 + 3 * 3
 }
 
 /// Where `text` first appears among the bars.
@@ -227,6 +229,10 @@ fn a_run_measured_from_each_launch_charts_every_framework_from_its_launch() {
         "Compose's first frame: {labels:?}"
     );
     assert!(shows(&labels, "20000 ms"), "the chart's end: {labels:?}");
+    assert!(
+        shows(&labels, "no frames: process 4242 shows no window"),
+        "a framework whose launches failed is shown with why: {labels:?}"
+    );
 }
 
 #[test]

@@ -732,7 +732,7 @@ def main():
                         help='blocks per scenario, alternating ABAB and BABA')
     parser.add_argument('--apps', default='cranpose,compose', help='A,B order of the first block')
     parser.add_argument('--scenarios', default=','.join(SCENARIOS))
-    parser.add_argument('--run', type=float, default=20.0,
+    parser.add_argument('--run', type=float, default=10.0,
                         help='seconds each launch is measured for, from its start command')
     parser.add_argument('--interval', type=float, default=0.5)
     parser.add_argument('--startup-runs', type=int, default=5)

@@ -27,6 +27,7 @@ def run():
         'scenarios': [{
             'scenario': 'gauntlet',
             'legs': [{}, {}, {}, {}],
+            'failures': [{'subject': 'cranpose', 'error': 'first'}, {'subject': 'cranpose', 'error': 'second'}],
             'summary': {'cranpose-release': {'fps': 50.0, 'cpu_ms_per_frame': 33.0, 'gpu_mhz': 139,
                                              'interval_p99_ms': 41.0},
                         'cranpose': {'fps': 52.8, 'cpu_ms_per_frame': 32.0, 'gpu_mhz': 139,
@@ -53,6 +54,8 @@ class IndexEntryTest(unittest.TestCase):
         entry = publish.index_entry(run(), 'runs/x.json')
         self.assertTrue(entry['protocol']['from_launch'])
         self.assertEqual(entry['file'], 'runs/x.json', 'the dashboard reads the frame times there')
+        self.assertEqual(entry['scenarios']['gauntlet']['failures'], {'cranpose': 'first'},
+                         "a subject's first failure says why it has no frames")
 
 
 # The scratch repositories take nothing from the machine's git: not a hook's

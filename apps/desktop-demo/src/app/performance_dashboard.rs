@@ -176,6 +176,9 @@ pub struct PerfScenario {
     pub legs: usize,
     pub summary: BTreeMap<String, BTreeMap<String, f64>>,
     pub verdicts: BTreeMap<String, String>,
+    /// Why a subject has no legs: its first failure.
+    #[serde(default)]
+    pub failures: BTreeMap<String, String>,
 }
 
 impl PerfRun {
@@ -886,6 +889,8 @@ struct LaunchLine {
     /// The frame rate over the whole run, the median of the subject's legs.
     fps: Option<f64>,
     emphasized: bool,
+    /// Why the subject has no legs, when a launch failed.
+    failure: Option<String>,
 }
 
 /// Colours for the subjects' lines, in turn; Cranpose's take the accent.
@@ -929,6 +934,10 @@ fn launch_lines(
                 color,
                 fps: run.median(scenario, *index, "fps"),
                 emphasized: subject.name == "cranpose",
+                failure: run
+                    .scenarios
+                    .get(scenario)
+                    .and_then(|entry| entry.failures.get(&subject.name).cloned()),
             }
         })
         .collect()
@@ -1083,12 +1092,20 @@ fn draw_launch_curves(
     }
 }
 
-/// Each curve's colour, label, frame rate over the whole run and first frame.
+/// Every subject: its colour, label, frame rate over the whole run and first
+/// frame, or why it has no frames.
 #[composable]
-fn LaunchLegend(palette: Palette, curves: Rc<Vec<LaunchCurve>>) {
-    for curve in curves.iter() {
-        let line = curve.line.clone();
-        let first = curve.first_frame_ms;
+fn LaunchLegend(palette: Palette, lines: Vec<LaunchLine>, curves: Rc<Vec<LaunchCurve>>) {
+    for line in lines {
+        let curve = curves.iter().find(|curve| curve.line.name == line.name);
+        let detail = match (curve, &line.failure) {
+            (Some(curve), _) => curve.first_frame_ms.map_or_else(
+                || "–".to_string(),
+                |first| format!("first frame {first:.0} ms"),
+            ),
+            (None, Some(failure)) => format!("no frames: {failure}"),
+            (None, None) => "no frames kept".to_string(),
+        };
         Row(
             Modifier::empty(),
             RowSpec::new()
@@ -1114,10 +1131,7 @@ fn LaunchLegend(palette: Palette, curves: Rc<Vec<LaunchCurve>>) {
                     text_style(12.0, palette.text, line.emphasized),
                 );
                 Text(
-                    first.map_or_else(
-                        || "–".to_string(),
-                        |first| format!("first frame {first:.0} ms"),
-                    ),
+                    detail.clone(),
                     Modifier::empty(),
                     text_style(12.0, palette.muted, false),
                 );
@@ -1147,15 +1161,11 @@ fn LaunchChart(
         FramesState::Loaded(frames) => launch_curves(frames, &scenario, run_ms, &lines),
         _ => Vec::new(),
     };
+    let curves = Rc::new(curves);
     if curves.is_empty() {
-        Text(
-            "No frames were kept for this scenario.",
-            Modifier::empty(),
-            text_style(12.0, palette.muted, false),
-        );
+        LaunchLegend(palette, lines, curves);
         return;
     }
-    let curves = Rc::new(curves);
     let drawn = curves.clone();
     Canvas(
         Modifier::empty().fill_max_width().height(200.0),
@@ -1187,7 +1197,7 @@ fn LaunchChart(
         Modifier::empty(),
         text_style(12.0, palette.muted, false),
     );
-    LaunchLegend(palette, curves);
+    LaunchLegend(palette, lines, curves);
 }
 
 /// A scenario's name over its launch chart.
@@ -1209,7 +1219,7 @@ fn ScenarioLaunch(
 
 /// The run's length in milliseconds from its launch.
 fn run_ms(run: &PerfRun) -> f64 {
-    run.protocol.run_s.unwrap_or(20.0) * 1000.0
+    run.protocol.run_s.unwrap_or(10.0) * 1000.0
 }
 
 #[composable]

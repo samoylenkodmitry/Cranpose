@@ -330,7 +330,7 @@ preserve the original reference checkout and benchmark executable.
 
 `ab.py` compares two installed builds as briefly as the evidence allows. It
 holds the device lock throughout and measures legs in pairs, A B then B A.
-Every leg is one launch measured from its start command for 15 s (`--run`),
+Every leg is one launch measured from its start command for 10 s (`--run`),
 nothing left out: a build's first launch after its install is a leg like the
 others, and the launch, the first frame and the first seconds count as the
 rest of the run does. From the second pair on, it stops a scenario once fps, CPU per frame and
@@ -357,7 +357,7 @@ whatever the build's frame rate.
 `frameworks.py` measures every framework's app on the gauntlet for the
 dashboard: three rounds of one leg each, the order reversed every round, the
 first round each app's first launch after its install. Every leg is one launch
-measured from its start command for 20 s (`--run`), the same span for every
+measured from its start command for 10 s (`--run`), the same span for every
 app, and keeps the frames of every second from the launch; the dashboard
 charts those seconds for every framework. Each leg records the app's frame rate and CPU per frame, its
 PSS and the part of it GPU buffers hold (GL and EGL mtrack), and the mean
@@ -497,7 +497,7 @@ the launch command. The report reads:
 
 Each scenario runs A B A B, then B A B A. With no cooling pauses, heat and any
 throttling fall on both apps alike. Each run is a cold launch measured from
-its start command for 20 s (`--run`), its first seconds included. Failed runs
+its start command for 10 s (`--run`), its first seconds included. Failed runs
 are kept in the report.
 
 ```bash
@@ -543,7 +543,7 @@ the window's end and the part of it that is the GPU's (Metal's buffers and
 textures, and the surfaces the window server composites), and `macmon` the
 mean clocks of the performance cores and the GPU over the window, from the
 chip's own counters and without root. Three rounds measure each app once
-each. Every leg is one launch measured from its start for 20 s (`--run`), the
+each. Every leg is one launch measured from its start for 10 s (`--run`), the
 same span for every app: FrameCount waits for the app's window, records the
 time of every frame and says where its capture began, so the frames of every
 second from the launch are kept. A leg disturbed by other processes stays in

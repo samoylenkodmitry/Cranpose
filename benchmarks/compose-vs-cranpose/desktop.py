@@ -416,7 +416,7 @@ def main():
     parser.add_argument('--tier', type=int, default=12)
     parser.add_argument('--rounds', type=int, default=3,
                         help='launches of every app; the first is its first launch after its build')
-    parser.add_argument('--run', type=float, default=20.0,
+    parser.add_argument('--run', type=float, default=10.0,
                         help='seconds each launch is measured for, from its start')
     parser.add_argument('--timeout', type=float, default=60.0)
     parser.add_argument('--main', help='the commit the Cranpose app was built at, recorded with the run')
@@ -451,17 +451,19 @@ def main():
     print(json.dumps(report['scenarios'][0]['summary'] if 'scenarios' in report else report['changed_pct']))
 
 
-def undisturbed_leg(name, args, page, stage, label, earlier):
+def undisturbed_leg(name, args, page, stage, label, earlier, failures):
     """A leg, measured again, up to three times, while other processes spend
     more than `--max-others` cores in it or it fails. Every leg measured is
-    kept, a disturbed one marked `disturbed`; none when every attempt failed,
-    so one app cannot end the run."""
+    kept, a disturbed one marked `disturbed`, and every failed attempt is
+    added to `failures`; none when every attempt failed, so one app cannot
+    end the run."""
     legs = []
     for attempt in range(3):
         try:
             leg = measure(name, args, args.output, page, stage, f'{label}-{attempt + 1}', earlier)
         except (RuntimeError, subprocess.SubprocessError) as failure:
             print(f'{label:16} failed: {failure}', flush=True)
+            failures.append({'subject': name, 'label': f'{label}-{attempt + 1}', 'error': str(failure)[:300]})
             continue
         leg['disturbed'] = leg['other_cores'] > args.max_others
         legs.append(leg)
@@ -499,18 +501,18 @@ def run(args, apps, page, stage):
     # among them.
     built_file = HERE / 'desktop-versions.json'
     built = json.loads(built_file.read_text()) if built_file.exists() else {}
-    legs = []
+    legs, failures = [], []
     for round_index in range(args.rounds):
         for name in apps:
             earlier = [leg['fps'] for leg in legs if leg['subject'] == name and not leg['disturbed']]
             label = f'{name}-{round_index + 1}'
-            measured = undisturbed_leg(name, args, page, stage, label, earlier)
+            measured = undisturbed_leg(name, args, page, stage, label, earlier, failures)
             legs += [{'subject': name, 'round': round_index, **leg} for leg in measured]
             kept = [leg for leg in measured if not leg['disturbed']]
             if kept and disagrees(kept[-1]['fps'], earlier):
                 print(f'{name}: {kept[-1]["fps"]} fps disagrees with its earlier legs; measuring once more',
                       flush=True)
-                again = undisturbed_leg(name, args, page, stage, f'{label}-again', earlier)
+                again = undisturbed_leg(name, args, page, stage, f'{label}-again', earlier, failures)
                 legs += [{'subject': name, 'round': round_index, **leg} for leg in again]
     # Medians over the legs no other process disturbed; the disturbed ones
     # stay in the run, marked.
@@ -535,7 +537,7 @@ def run(args, apps, page, stage):
                      'max_other_cores': args.max_others},
         'scenarios': [{'scenario': 'gauntlet',
                        'extras': f'tier {args.tier}, {width} x {height} {"browser " if args.browser else ""}window',
-                       'legs': legs, 'summary': summary, 'verdicts': {}}],
+                       'legs': legs, 'failures': failures, 'summary': summary, 'verdicts': {}}],
     }
 
 
