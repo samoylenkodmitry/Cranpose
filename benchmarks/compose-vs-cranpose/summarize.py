@@ -84,7 +84,7 @@ def main():
             threads = defaultdict(list)
             for run in runs:
                 for thread in run['top_threads']:
-                    threads[thread['name']].append(100 * thread['cpu_s'] / run['window_s'])
+                    threads[thread['name']].append(100 * thread['cpu_s'] / run['run_s'])
             busiest = sorted(threads.items(), key=lambda item: -median(item[1]))[:4]
             lines.append(f'| {app} busiest threads (% core) | ' + ', '.join(
                 f'{name} {median(values):.0f}' for name, values in busiest) + ' | |')

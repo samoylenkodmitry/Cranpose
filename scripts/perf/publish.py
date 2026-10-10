@@ -20,8 +20,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 DATA_BRANCH = 'perf-data'
-SUMMARY_METRICS = ['fps', 'cpu_ms_per_frame', 'desired_to_present_p50_ms', 'janky_pct', 'ram_mb',
-                   'gpu_ram_mb', 'cpu_mhz', 'gpu_mhz']
+SUMMARY_METRICS = ['fps', 'first_frame_s', 'cpu_ms_per_frame', 'desired_to_present_p50_ms', 'janky_pct',
+                   'ram_mb', 'gpu_ram_mb', 'cpu_mhz', 'gpu_mhz']
 
 
 # Attempts at a push GitHub refuses, and the seconds between them, times the
@@ -69,9 +69,15 @@ def index_entry(run, file):
         'subjects': [{key: subject[key] for key in ('name', 'label', 'source') if key in subject}
                      for subject in run['subjects']],
         'duration_s': run.get('duration_s'),
+        # A run measured from each launch says so; an older one measured a
+        # window after a warm-up.
+        'protocol': run.get('protocol', {}),
         'scenarios': {
             scenario['scenario']: {
                 'legs': len(scenario['legs']),
+                # Why a subject has no legs: its first failure.
+                'failures': {failure['subject']: failure['error']
+                             for failure in reversed(scenario.get('failures', []))},
                 'summary': {name: {metric: scenario['summary'][name][metric]
                                    for metric in SUMMARY_METRICS if metric in scenario['summary'][name]}
                             for name in names},
@@ -175,7 +181,8 @@ def main():
 def commit_run(tree, run, file, stamp, device):
     """Adds `run` as `file` and to the index, and commits both."""
     (tree / file).parent.mkdir(parents=True, exist_ok=True)
-    (tree / file).write_text(json.dumps(run, indent=1) + '\n')
+    # Compact: every leg keeps the time of each of its frames since the launch.
+    (tree / file).write_text(json.dumps(run, separators=(',', ':')) + '\n')
     index = json.loads((tree / 'index.json').read_text())
     index['runs'] = [entry for entry in index['runs'] if entry['file'] != file]
     index['runs'].append(index_entry(run, file))

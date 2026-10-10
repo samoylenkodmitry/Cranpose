@@ -9,6 +9,10 @@ thermal service for temperatures, dumpsys meminfo for memory.
 
 Runs alternate A B A B, then B A B A, with no cooling pauses: heat builds on
 both apps, and temperature is recorded as a result in its own right.
+
+Each launch is measured from its start command for `--run` seconds, with
+nothing left out: the launch, the first frame and the first seconds count as
+the rest of the run does, and the frames of every second are kept.
 """
 
 import argparse
@@ -206,6 +210,11 @@ class Device:
     def temperatures(self):
         return thermal_reading(self.shell('dumpsys', 'thermalservice'))
 
+    def uptime(self):
+        """The device's /proc/uptime in seconds: the clock the window script
+        stamps its samples with."""
+        return float(self.shell('cat', '/proc/uptime').split()[0])
+
 
 # Hardware clock ceilings of the Kirin 980 domains the window samples, in the
 # units sysfs reports: GPU in Hz, CPU clusters in kHz.
@@ -339,10 +348,26 @@ def percentile(values, fraction):
     return ordered[min(len(ordered) - 1, int(fraction * len(ordered)))] if ordered else None
 
 
+# The presents SurfaceFlinger keeps for a layer on Android 10.
+LATENCY_HISTORY = 128
+
+
+def first_poll_full(output):
+    """Whether the window's first latency poll already held a full history:
+    presents older than it, from the run's first seconds, may be lost."""
+    block = output.split('LAT_BEGIN ', 1)[1] if 'LAT_BEGIN ' in output else ''
+    lines = block.split('LAT_END', 1)[0].splitlines()[2:]
+    presented = sum(1 for fields in (line.split() for line in lines)
+                    if len(fields) == 3 and fields[1].isdigit() and 0 < int(fields[1]) < PENDING)
+    return presented >= LATENCY_HISTORY - 1
+
+
 def frame_stats(frames, t0, t1, vsync_ms):
+    """The frames presented from `t0`, the launch, to `t1`, the run's end, in
+    seconds on SurfaceFlinger's clock."""
     times = sorted(time for time in frames if t0 * 1e9 <= time <= t1 * 1e9)
     if len(times) < 2:
-        raise ValueError('the layer presented no frames in the window')
+        raise ValueError('the layer presented fewer than two frames in the run')
     intervals = [(later - earlier) / 1e6 for earlier, later in zip(times, times[1:])]
     desired_to_present = []
     desired_to_ready = []
@@ -352,19 +377,27 @@ def frame_stats(frames, t0, t1, vsync_ms):
             desired_to_present.append((actual - desired) / 1e6)
             if 0 < ready < PENDING:
                 desired_to_ready.append((ready - desired) / 1e6)
+    # Whole seconds only: the run ends a little past its length, and a part
+    # of a second would read as a drop.
     per_second = [0] * int(t1 - t0)
     for time in times:
         second = int(time / 1e9 - t0)
         if second < len(per_second):
             per_second[second] += 1
+    first_second = int(times[0] / 1e9 - t0)
     return {
-        # Frames presented in each whole second of the window: a ramp or a
-        # stall that the window mean hides shows up here.
+        # When each frame was presented, in milliseconds since the launch:
+        # every frame of the run, its start included.
+        'frame_ms': [round(time / 1e6 - t0 * 1e3, 1) for time in times],
+        # Frames presented in each whole second from the launch.
         'fps_by_second': per_second,
-        # Whole seconds without a single present: a stall, or content that
-        # stopped changing, which would make the window mean meaningless.
-        'stalled_seconds': sum(count == 0 for count in per_second),
+        'first_frame_s': times[0] / 1e9 - t0,
+        # Whole seconds after the first frame without a single present: a
+        # stall, or content that stopped changing.
+        'stalled_seconds': sum(count == 0 for count in per_second[first_second:]),
         'frames': len(times),
+        # Frames over the whole run, from the start command: the launch and
+        # the first seconds count.
         'fps': len(times) / (t1 - t0),
         'interval_p50_ms': percentile(intervals, 0.50),
         'interval_p90_ms': percentile(intervals, 0.90),
@@ -416,11 +449,14 @@ def launch(device, app, scenario, extra=()):
     time.sleep(1.0)
     device.shell('input', 'keyevent', 'KEYCODE_WAKEUP')
     device.adb('logcat', '-c')
+    started = device.uptime()
     out = device.shell('am', 'start', '-W', '-n', APPS[app]['activity'], '--es', 'scenario', scenario,
                        *extra)
     if 'Status: ok' not in out:
         raise RuntimeError('launch failed: ' + out)
     times = {key: int(value) for key, value in re.findall(r'(TotalTime|WaitTime): (\d+)', out)}
+    # The device clock read just before the start command: the run's zero.
+    times['uptime_s'] = started
     return times, device.pid(APPS[app]['package'])
 
 
@@ -544,15 +580,22 @@ class PageTarget:
         device.shell('am', 'force-stop', CHROME)
         time.sleep(1.0)
         device.shell('input', 'keyevent', 'KEYCODE_WAKEUP')
-        mark = self.server.mark()
+        self.mark = self.server.mark()
         url = f'http://localhost:{self.server.port}/{self.name}/index.html?tier={self.tier}&freeze=0'
+        started = device.uptime()
         out = device.shell('am', 'start', '-W', '-a', 'android.intent.action.VIEW', '-d', url,
                            '-n', f'{CHROME}/com.google.android.apps.chrome.Main')
         if 'Status: ok' not in out:
             raise RuntimeError('launch failed: ' + out)
         times = {key: int(value) for key, value in re.findall(r'(TotalTime|WaitTime): (\d+)', out)}
-        self.server.wait_for('PERF first_frame', PAGE_TIMEOUT_S, mark)
+        # The device clock read just before the start command: the run's zero.
+        # The page downloads, compiles and draws inside the run.
+        times['uptime_s'] = started
         return times, self.pids(device)
+
+    def drew(self):
+        """Whether the page logged its first frame since its launch."""
+        return self.server.wait_for('PERF first_frame', 0, self.mark)
 
     def pids(self, device):
         """Chrome's processes, the browser's own first; the zygote that
@@ -584,58 +627,63 @@ class PageTarget:
         device.shell('am', 'force-stop', CHROME)
 
 
-def measure_run(device, app, scenario, args, destination, window=None):
-    """One cold launch measured over `window` seconds after the warm-up
-    (`args.window` unless given). `app` is an installed app's name, or the
-    target of a page in the browser."""
+def measure_run(device, app, scenario, args, destination, run_s=None):
+    """One cold launch, measured from the start command for `run_s` seconds
+    (`args.run` unless given): every frame the layer presented, the CPU every
+    process of the app spent since it started, the clocks and the memory held
+    at the end. Nothing of the run is left out: its first seconds, the launch
+    and the first frames included, count as the rest do. `app` is an
+    installed app's name, or the target of a page in the browser."""
     target = AppTarget(app) if isinstance(app, str) else app
-    window = window or args.window
+    run_s = run_s or args.run
     run = {'app': target.name, 'scenario': scenario, 'temperature_before': device.temperatures()}
-    extras = (HEAVY.get(scenario, '') if args.load == 'heavy' else '') + ' ' + args.extra
-    run['extras'] = extras.strip()
+    extras = (HEAVY.get(scenario, '') + ' ' + args.extra).strip() if args.load == 'heavy' else args.extra.strip()
+    run['extras'] = extras
+    launched_host = time.monotonic()
     run['launch'], pids = target.launch(device, scenario, extras.split())
-    run['started_s'] = round(time.monotonic() - args.started, 1)
-    time.sleep(args.warmup)
+    launched = run['launch']['uptime_s']
+    run['started_s'] = round(launched_host - args.started, 1)
     layer = target.layer(device)
-    samples = int(window / args.interval)
-    output = device.shell('sh', REMOTE_WINDOW, ','.join(map(str, pids)), target.package, layer, str(samples),
-                          str(args.interval), '1' if target.gfx else '0', timeout=window + 60)
+    output = device.shell('sh', REMOTE_WINDOW, ','.join(map(str, pids)), target.package, layer,
+                          f'{launched + run_s:.2f}', str(args.interval), '1' if target.gfx else '0',
+                          timeout=run_s + 60)
     (destination / f'{target.name}-{scenario}-{int(time.time())}.txt').write_text(output)
     lines = output.splitlines()
     if any(line.strip() == 'STAT' for line in lines):
-        raise RuntimeError(f'{target.package} exited during the window')
-    t0 = float(next(line for line in lines if line.startswith('T0 ')).split()[1])
+        raise RuntimeError(f'{target.package} exited during the run')
     t1 = float(next(line for line in lines if line.startswith('T1 ')).split()[1])
-    t0_index = next(i for i, line in enumerate(lines) if line.startswith('T0 '))
-    t1_index = next(i for i, line in enumerate(lines) if line.startswith('T1 '))
-    first_proc, first_threads = parse_snap(lines[t0_index + 1:])
-    last_proc, last_threads = parse_snap(lines[t1_index + 1:])
+    whole_index = next(i for i, line in enumerate(lines) if line == 'WHOLE')
+    whole_cpu, whole_threads = parse_snap(lines[whole_index + 1:])
     if str(pids[0]) not in device.shell('pidof', target.package, check=False).split():
-        raise RuntimeError(f'{target.package} restarted or died during the window')
-    elapsed = t1 - t0
+        raise RuntimeError(f'{target.package} restarted or died during the run')
+    if isinstance(target, PageTarget):
+        target.drew()
+    elapsed = t1 - launched
     frames, calibration, vsync_ms, poll_gaps = presents(output)
     # /proc/uptime counts suspended time and SurfaceFlinger's monotonic clock
     # does not. A poll's newest present can only precede the poll, so the
     # smallest gap is the clock offset to within about one frame.
     offset = min(calibration)
-    stats = frame_stats(frames, t0 - offset, t1 - offset, vsync_ms)
+    stats = frame_stats(frames, launched - offset, t1 - offset, vsync_ms)
     freqs = clock_samples(lines)
     mali_khz = [int(fields[1]) for fields in (line.split() for line in lines if line.startswith('G '))
                 if len(fields) == 2 and fields[1].isdigit()]
     ticks_per_s = args.clock_ticks
-    cpu_s = (last_proc - first_proc) / ticks_per_s
-    threads = []
-    for tid, (name, ticks) in last_threads.items():
-        before = first_threads.get(tid, (name, 0))[1]
-        threads.append({'name': name, 'cpu_s': (ticks - before) / ticks_per_s})
+    # Every process of the app started after the launch force-stopped the
+    # last one, so the ticks each has spent since it started are the run's.
+    cpu_s = whole_cpu / ticks_per_s
+    threads = [{'name': name, 'cpu_s': ticks / ticks_per_s} for name, ticks in whole_threads.values()]
     threads.sort(key=lambda thread: -thread['cpu_s'])
     run.update(
         pid=pids[0],
-        window_s=elapsed,
+        run_s=elapsed,
         layer=layer,
         clock_offset_s=offset,
         clock_offset_spread_s=max(calibration) - offset,
         latency_poll_gaps=poll_gaps,
+        # SurfaceFlinger keeps a layer's last 128 presents: when the first poll
+        # already held that many, frames of the launch may be missing.
+        first_poll_full=first_poll_full(output),
         **stats,
         cpu_pct=100.0 * cpu_s / elapsed,
         cpu_ms_per_frame=1000.0 * cpu_s / stats['frames'],
@@ -684,8 +732,8 @@ def main():
                         help='blocks per scenario, alternating ABAB and BABA')
     parser.add_argument('--apps', default='cranpose,compose', help='A,B order of the first block')
     parser.add_argument('--scenarios', default=','.join(SCENARIOS))
-    parser.add_argument('--warmup', type=float, default=5.0)
-    parser.add_argument('--window', type=float, default=15.0)
+    parser.add_argument('--run', type=float, default=10.0,
+                        help='seconds each launch is measured for, from its start command')
     parser.add_argument('--interval', type=float, default=0.5)
     parser.add_argument('--startup-runs', type=int, default=5)
     parser.add_argument('--clock-ticks', type=int, default=100)

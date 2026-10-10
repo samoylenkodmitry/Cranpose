@@ -13,9 +13,11 @@ turn, round after round, as `frameworks.py` measures phones, and the run is a
 which other processes spent more than `--max-others` cores, is measured again,
 up to three times; an app no attempt measured leaves its leg out. A leg
 whose frame rate is more than 1.5 times off the app's earlier legs is measured
-once more, with a picture of its window kept beside the results. Each window
-is as short as the app's frame rate allows: `--min-frames` frames, within
-`--window` and `--max-window` seconds.
+once more, with a picture of its window kept beside the results. Every leg
+is one launch measured from its start for `--run` seconds, the same span for
+every app, with nothing left out: the launch, the first frame and the first
+seconds count as the rest of the run does, and the frames of every second
+are kept. A disturbed leg stays in the run, marked, out of the medians.
 
   python3 desktop.py --output results/desktop --tier 12
   python3 desktop.py --output results/desktop-parity --parity --tier 5
@@ -50,6 +52,7 @@ from pathlib import Path
 
 import versions
 from browser import BrowserServer
+from timelines import per_second
 
 
 HERE = Path(__file__).resolve().parent
@@ -69,7 +72,7 @@ TITLE_BAR_PIXELS = 64
 DISAGREEMENT = 1.5
 
 # What each app's legs are summarized by.
-SUMMARY = ('fps', 'cpu_ms_per_frame', 'cpu_cores', 'server_cores', 'other_cores', 'ram_mb', 'gpu_ram_mb', 'cpu_mhz',
+SUMMARY = ('fps', 'first_frame_s', 'cpu_ms_per_frame', 'cpu_cores', 'server_cores', 'other_cores', 'ram_mb', 'gpu_ram_mb', 'cpu_mhz',
            'gpu_mhz')
 
 # Chrome, the engine Electron apps ship, in an app window of its own profile.
@@ -323,38 +326,43 @@ def disagrees(fps, earlier):
 
 
 def measure(name, args, work, page, stage, label, earlier):
-    """One window: frames presented, CPU spent, the clocks the chip ran at and
-    the memory the app held at the window's end. The window is long enough for
-    `--min-frames` frames at the app's last rate, within `--window` and
-    `--max-window` seconds. Its frames, the app's output and, for a rate that
-    disagrees with the app's `earlier` legs, the window's picture are kept
-    under `label`."""
-    window = args.windows.get(name, args.window)
+    """One launch, measured from its start for `--run` seconds: every frame
+    its window presented in each second, the CPU the app and every process it
+    started spent, the clocks the chip ran at and the memory the app held at
+    the end. Nothing is left out: the launch, the first frame and the first
+    seconds count as the rest of the run does. The frames, the app's output
+    and, for a rate that disagrees with the app's `earlier` legs, the window's
+    picture are kept under `label`."""
+    # Every process's CPU before the launch: the app's processes start at
+    # zero, so what they hold at the end is the run's.
+    before = processes()
+    launched = time.monotonic()
     app = App(name, args, 0, work, page, stage, label)
     try:
-        wait_for(app.log, 'PERF first_frame', args.timeout)
-        time.sleep(args.warmup)
         clocks = Clocks()
-        before, wall_before = processes(), time.monotonic()
         out = stage / f'{label}-frames.json'
-        frames = framecount(app.pid, out, '--seconds', f'{window:.1f}', '--out', str(out))
-        after, wall_after = processes(), time.monotonic()
+        frames = framecount(app.pid, out, '--until', f'{launched + args.run:.3f}', '--out', str(out))
+        after, ended = processes(), time.monotonic()
         clocked = clocks.stop()
-        mine = tree(app.pid, after, wall_after - app.started + 1)
+        if 'PERF first_frame' not in app.log.read_text(errors='replace'):
+            raise RuntimeError(f'{name} logged no first frame within its {args.run:.0f} s run')
+        mine = tree(app.pid, after, ended - app.started + 1)
         held = memory(mine, stage)
         shutil.copy(out, work / out.name)
-        if disagrees(frames['fps'], earlier):
+        times = [time for time in frames['times'] if launched <= time < launched + args.run]
+        if len(times) < 2:
+            raise RuntimeError(f'{name} presented fewer than two frames in its run')
+        fps = len(times) / args.run
+        if disagrees(fps, earlier):
             shown = stage / f'{label}.png'
             framecount(app.pid, shown, '--screenshot', str(shown))
             shutil.copy(shown, work / shown.name)
     finally:
         app.stop()
-    # FrameCount starts and stops around its window, so CPU counts as a rate
-    # over the whole span and divides by the frame rate. What every other
-    # process spent in the span, FrameCount's capture included, tells a run
-    # that something else disturbed; a process that ended within the span
-    # counts for neither.
-    wall = wall_after - wall_before
+    # What every other process spent in the run, FrameCount's capture
+    # included, tells a run that something else disturbed; a process that
+    # ended within the run counts for neither.
+    wall = ended - launched
     spent = {pid: cpu - before.get(pid, (0, 0.0))[1] for pid, (_, cpu, _, _) in after.items()}
     server = {pid for pid, (_, _, _, command) in after.items() if command.endswith(WINDOW_SERVER)}
     server_cores = sum(spent[pid] for pid in server) / wall
@@ -362,15 +370,24 @@ def measure(name, args, work, page, stage, label, earlier):
     # are what the window server renders.
     cores = sum(value for pid, value in spent.items() if pid in mine) / wall + server_cores
     others = sum(value for pid, value in spent.items() if pid not in mine and pid not in server) / wall
-    fps = frames['fps']
-    wanted = args.min_frames / fps if fps > 0 else args.max_window
-    args.windows[name] = min(args.max_window, max(args.window, wanted))
-    return {'fps': round(fps, 1), 'frames': frames['frames'], 'window_s': round(window, 1),
-            'interval_p50_ms': round(frames['interval_p50_ms'], 2),
-            'interval_p99_ms': round(frames['interval_p99_ms'], 2),
+    intervals = sorted((later - earlier) * 1000 for earlier, later in zip(times, times[1:]))
+    return {'fps': round(fps, 1), 'frames': len(times), 'run_s': args.run,
+            'first_frame_s': round(times[0] - launched, 3),
+            # Where FrameCount's capture began: it waits for the window, so a
+            # second before this one saw no window to count.
+            'capture_start_s': round(frames['capture_start'] - launched, 3),
+            # When each frame was presented, in milliseconds since the launch.
+            'frame_ms': [round((time - launched) * 1000, 1) for time in times],
+            'fps_by_second': per_second(times, launched, args.run),
+            'interval_p50_ms': round(percentile(intervals, 0.50), 2),
+            'interval_p99_ms': round(percentile(intervals, 0.99), 2),
             'cpu_cores': round(cores, 2), 'server_cores': round(server_cores, 2), 'other_cores': round(others, 2),
-            'cpu_ms_per_frame': round(cores * 1000 / fps, 2) if fps else None,
+            'cpu_ms_per_frame': round(cores * 1000 / fps, 2),
             **held, **clocked}
+
+
+def percentile(ordered, share):
+    return ordered[min(len(ordered) - 1, int(share * len(ordered)))] if ordered else 0.0
 
 
 def picture(name, args, work, page, stage):
@@ -397,12 +414,10 @@ def main():
                         help='run the apps `build_apps.sh browser DIST` built, in Chrome')
     parser.add_argument('--release', help='the release tag `cranpose-release` was built at')
     parser.add_argument('--tier', type=int, default=12)
-    parser.add_argument('--rounds', type=int, default=2)
-    parser.add_argument('--warmup', type=float, default=1.0)
-    parser.add_argument('--window', type=float, default=3.0, help='the shortest window, in seconds')
-    parser.add_argument('--max-window', type=float, default=8.0, help='the longest window, in seconds')
-    parser.add_argument('--min-frames', type=int, default=40,
-                        help='frames a window should hold at the app\'s last rate')
+    parser.add_argument('--rounds', type=int, default=3,
+                        help='launches of every app; the first is its first launch after its build')
+    parser.add_argument('--run', type=float, default=10.0,
+                        help='seconds each launch is measured for, from its start')
     parser.add_argument('--timeout', type=float, default=60.0)
     parser.add_argument('--main', help='the commit the Cranpose app was built at, recorded with the run')
     parser.add_argument('--max-others', type=float, default=1.5,
@@ -436,22 +451,27 @@ def main():
     print(json.dumps(report['scenarios'][0]['summary'] if 'scenarios' in report else report['changed_pct']))
 
 
-def undisturbed_leg(name, args, page, stage, label, earlier):
+def undisturbed_leg(name, args, page, stage, label, earlier, failures):
     """A leg, measured again, up to three times, while other processes spend
-    more than `--max-others` cores in it or it fails; none when every attempt
-    failed, so one app cannot end the run."""
-    leg = None
+    more than `--max-others` cores in it or it fails. Every leg measured is
+    kept, a disturbed one marked `disturbed`, and every failed attempt is
+    added to `failures`; none when every attempt failed, so one app cannot
+    end the run."""
+    legs = []
     for attempt in range(3):
         try:
             leg = measure(name, args, args.output, page, stage, f'{label}-{attempt + 1}', earlier)
         except (RuntimeError, subprocess.SubprocessError) as failure:
             print(f'{label:16} failed: {failure}', flush=True)
+            failures.append({'subject': name, 'label': f'{label}-{attempt + 1}', 'error': str(failure)[:300]})
             continue
-        print(f'{label:16} fps {leg["fps"]:6.1f} cpu/f {leg["cpu_ms_per_frame"]} '
-              f'p99 {leg["interval_p99_ms"]} others {leg["other_cores"]}', flush=True)
-        if leg['other_cores'] <= args.max_others:
+        leg['disturbed'] = leg['other_cores'] > args.max_others
+        legs.append(leg)
+        print(f'{label:16} fps {leg["fps"]:6.1f} cpu/f {leg["cpu_ms_per_frame"]} first frame '
+              f'{leg["first_frame_s"]} s p99 {leg["interval_p99_ms"]} others {leg["other_cores"]}', flush=True)
+        if not leg['disturbed']:
             break
-    return leg
+    return legs
 
 
 def run(args, apps, page, stage):
@@ -481,24 +501,25 @@ def run(args, apps, page, stage):
     # among them.
     built_file = HERE / 'desktop-versions.json'
     built = json.loads(built_file.read_text()) if built_file.exists() else {}
-    legs = []
-    args.windows = {}
+    legs, failures = [], []
     for round_index in range(args.rounds):
         for name in apps:
-            earlier = [leg['fps'] for leg in legs if leg['subject'] == name]
+            earlier = [leg['fps'] for leg in legs if leg['subject'] == name and not leg['disturbed']]
             label = f'{name}-{round_index + 1}'
-            leg = undisturbed_leg(name, args, page, stage, label, earlier)
-            if leg is None:
-                continue
-            legs.append({'subject': name, 'round': round_index, **leg})
-            if disagrees(leg['fps'], earlier):
-                print(f'{name}: {leg["fps"]} fps disagrees with its earlier legs; measuring once more', flush=True)
-                again = undisturbed_leg(name, args, page, stage, f'{label}-again', earlier)
-                if again is not None:
-                    legs.append({'subject': name, 'round': round_index, **again})
+            measured = undisturbed_leg(name, args, page, stage, label, earlier, failures)
+            legs += [{'subject': name, 'round': round_index, **leg} for leg in measured]
+            kept = [leg for leg in measured if not leg['disturbed']]
+            if kept and disagrees(kept[-1]['fps'], earlier):
+                print(f'{name}: {kept[-1]["fps"]} fps disagrees with its earlier legs; measuring once more',
+                      flush=True)
+                again = undisturbed_leg(name, args, page, stage, f'{label}-again', earlier, failures)
+                legs += [{'subject': name, 'round': round_index, **leg} for leg in again]
+    # Medians over the legs no other process disturbed; the disturbed ones
+    # stay in the run, marked.
     summary = {name: {key: round(statistics.median(values), 2)
                       for key in SUMMARY
-                      if (values := [leg[key] for leg in legs if leg['subject'] == name and leg.get(key) is not None])}
+                      if (values := [leg[key] for leg in legs if leg['subject'] == name and not leg['disturbed']
+                                     and leg.get(key) is not None])}
                for name in apps}
     chip = subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'], capture_output=True, text=True,
                           check=True).stdout.strip()
@@ -512,11 +533,11 @@ def run(args, apps, page, stage):
         'main': args.main,
         'device': {'ro.product.model': chip},
         'subjects': [versions.subject(name, platform, built, args.release) for name in apps],
-        'protocol': {'warmup_s': args.warmup, 'window_s': args.window, 'max_window_s': args.max_window,
-                     'min_frames': args.min_frames, 'rounds': args.rounds, 'max_other_cores': args.max_others},
+        'protocol': {'run_s': args.run, 'from_launch': True, 'rounds': args.rounds,
+                     'max_other_cores': args.max_others},
         'scenarios': [{'scenario': 'gauntlet',
                        'extras': f'tier {args.tier}, {width} x {height} {"browser " if args.browser else ""}window',
-                       'legs': legs, 'summary': summary, 'verdicts': {}}],
+                       'legs': legs, 'failures': failures, 'summary': summary, 'verdicts': {}}],
     }
 
 

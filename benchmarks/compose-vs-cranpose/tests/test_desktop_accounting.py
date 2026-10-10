@@ -49,7 +49,8 @@ class DesktopRoundsTest(unittest.TestCase):
     `FrameCount`'s rates."""
 
     def rounds(self, rates, rounds=2, browser=None, app='fyne'):
-        """A rate is a leg; a `RuntimeError` is an attempt that failed."""
+        """A rate is a leg, or a (rate, cores other processes spent) pair; a
+        `RuntimeError` is an attempt that failed."""
         measured = []
 
         def measure(name, args, work, page, stage, label, earlier):
@@ -57,13 +58,15 @@ class DesktopRoundsTest(unittest.TestCase):
             rate = rates[len(measured) - 1]
             if isinstance(rate, Exception):
                 raise rate
-            return {'fps': rate, 'frames': 90, 'window_s': 3.0, 'interval_p50_ms': 16.7,
-                    'interval_p99_ms': 20.0, 'cpu_cores': 1.0, 'server_cores': 0.2, 'other_cores': 0.5,
+            rate, others = rate if isinstance(rate, tuple) else (rate, 0.5)
+            return {'fps': rate, 'frames': 90, 'run_s': 3.0, 'first_frame_s': 0.4,
+                    'frame_ms': [400.0, 416.7, 433.3], 'fps_by_second': [rate / 2, rate, rate],
+                    'interval_p50_ms': 16.7,
+                    'interval_p99_ms': 20.0, 'cpu_cores': 1.0, 'server_cores': 0.2, 'other_cores': others,
                     'cpu_ms_per_frame': 40.0}
 
         args = SimpleNamespace(parity=False, output=Path('results'), rounds=rounds, max_others=1.5, main=None,
-                               release=None, tier=16, warmup=1.0, window=3.0, max_window=8.0, min_frames=40,
-                               browser=browser)
+                               release=None, tier=16, run=3.0, browser=browser)
         with patch.object(desktop, 'measure', measure), \
                 patch.object(desktop.subprocess, 'run', return_value=SimpleNamespace(stdout='Apple M3 Pro')):
             report = desktop.run(args, [app], 'page', Path('stage'))
@@ -86,6 +89,8 @@ class DesktopRoundsTest(unittest.TestCase):
         self.assertEqual(measured, ['fyne-1-1', 'fyne-1-2', 'fyne-1-3'])
         self.assertEqual(scenario['legs'], [])
         self.assertEqual(scenario['summary']['fyne'], {}, 'no values: the dashboard shows a dash')
+        self.assertEqual([failure['subject'] for failure in scenario['failures']], ['fyne'] * 3,
+                         'each failed attempt is kept, so the dashboard can say why fyne has no frames')
 
     def test_a_browser_run_is_a_run_of_its_own_kind_on_a_device_named_for_the_browser(self):
         with patch.object(desktop.versions, 'chrome_version', return_value='154.0.8037.98'):
@@ -94,6 +99,17 @@ class DesktopRoundsTest(unittest.TestCase):
         self.assertEqual(report['device']['ro.product.model'], 'Apple M3 Pro · Chrome 154')
         self.assertEqual(report['scenarios'][0]['extras'], 'tier 16, 1280 x 820 browser window')
         self.assertEqual(report['subjects'][0]['label'], 'Web Chrome 154.0.8037.98')
+
+    def test_a_disturbed_leg_stays_in_the_run_marked_and_out_of_the_medians(self):
+        measured, scenario = self.rounds([(10.0, 3.0), 24.3, 24.6], rounds=2)
+        self.assertEqual(measured, ['fyne-1-1', 'fyne-1-2', 'fyne-2-1'])
+        self.assertEqual([(leg['fps'], leg['disturbed']) for leg in scenario['legs']],
+                         [(10.0, True), (24.3, False), (24.6, False)])
+        self.assertEqual(scenario['summary']['fyne']['fps'], 24.45)
+
+    def test_every_frame_time_from_the_launch_is_kept_in_the_run(self):
+        _, scenario = self.rounds([24.0, 26.0])
+        self.assertEqual([leg['frame_ms'] for leg in scenario['legs']], [[400.0, 416.7, 433.3]] * 2)
 
     def test_legs_that_agree_are_measured_once_each(self):
         measured, scenario = self.rounds([24.3, 25.9])

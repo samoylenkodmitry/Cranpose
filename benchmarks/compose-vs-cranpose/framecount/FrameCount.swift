@@ -7,6 +7,10 @@
 // down to keep the capture's own cost small and alike for every app.
 //
 // Usage: open -W -n FrameCount.app --args --pid PID --seconds S --out FILE.json
+// or, from an app's launch to a deadline on the host clock
+// (`CACurrentMediaTime`, the clock the frames are stamped with), waiting for
+// its window to appear:
+//        open -W -n FrameCount.app --args --pid PID --until T --out FILE.json
 // or, for a picture of the window at its full resolution:
 //        open -W -n FrameCount.app --args --pid PID --screenshot FILE.png
 // Launched through `open`, macOS attributes the capture to FrameCount.app
@@ -17,12 +21,14 @@ import CoreGraphics
 import CoreMedia
 import Foundation
 import ImageIO
+import QuartzCore
 import ScreenCaptureKit
 import UniformTypeIdentifiers
 
 struct Options {
     var pid: pid_t = 0
     var seconds = 5.0
+    var until = 0.0
     var out = ""
     var screenshot = ""
 
@@ -33,12 +39,13 @@ struct Options {
             switch flag {
             case "--pid": pid = pid_t(value) ?? 0
             case "--seconds": seconds = Double(value) ?? 0
+            case "--until": until = Double(value) ?? 0
             case "--out": out = value
             case "--screenshot": screenshot = value
             default: throw Failure.usage
             }
         }
-        if pid <= 0 || seconds <= 0 || (out.isEmpty && screenshot.isEmpty) { throw Failure.usage }
+        if pid <= 0 || (seconds <= 0 && until <= 0) || (out.isEmpty && screenshot.isEmpty) { throw Failure.usage }
     }
 }
 
@@ -50,7 +57,9 @@ enum Failure: Error, CustomStringConvertible {
 
     var description: String {
         switch self {
-        case .usage: return "usage: FrameCount --pid PID (--seconds S --out FILE.json | --screenshot FILE.png)"
+        case .usage:
+            return "usage: FrameCount --pid PID (--seconds S --out FILE.json | --until T --out FILE.json"
+                + " | --screenshot FILE.png)"
         case .noPermission: return "FrameCount has no Screen Recording permission"
         case .noWindow(let pid): return "process \(pid) shows no window"
         case .unwritable(let path): return "cannot write \(path)"
@@ -118,8 +127,23 @@ func screenshot(_ options: Options) async throws {
     guard CGImageDestinationFinalize(destination) else { throw Failure.unwritable(options.screenshot) }
 }
 
+/// The process's window once it shows one, looked for every 20 ms until the
+/// host clock reaches `until`.
+func awaitedWindow(of pid: pid_t, until: Double) async throws -> SCWindow {
+    while true {
+        do {
+            return try await window(of: pid)
+        } catch Failure.noWindow(let pid) {
+            if CACurrentMediaTime() >= until { throw Failure.noWindow(pid) }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+}
+
 func measure(_ options: Options) async throws -> [String: Any] {
-    let window = try await window(of: options.pid)
+    let window = options.until > 0
+        ? try await awaitedWindow(of: options.pid, until: options.until)
+        : try await window(of: options.pid)
     let configuration = SCStreamConfiguration()
     configuration.width = max(1, Int(window.frame.width / 8))
     configuration.height = max(1, Int(window.frame.height / 8))
@@ -131,7 +155,11 @@ func measure(_ options: Options) async throws -> [String: Any] {
                           delegate: nil)
     try stream.addStreamOutput(frames, type: .screen, sampleHandlerQueue: DispatchQueue(label: "frames"))
     try await stream.startCapture()
-    try await Task.sleep(nanoseconds: UInt64(options.seconds * 1_000_000_000))
+    // Frames are stamped on the host clock: where the capture began on it
+    // tells a caller which of its seconds the capture saw.
+    let captureStart = CACurrentMediaTime()
+    let seconds = options.until > 0 ? max(0, options.until - captureStart) : options.seconds
+    try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
     try await stream.stopCapture()
 
     let times = frames.taken()
@@ -140,7 +168,8 @@ func measure(_ options: Options) async throws -> [String: Any] {
     return [
         "pid": Int(options.pid),
         "window": ["width": window.frame.width, "height": window.frame.height],
-        "seconds": options.seconds,
+        "seconds": seconds,
+        "capture_start": captureStart,
         "frames": times.count,
         "fps": span > 0 ? Double(times.count - 1) / span : 0,
         "interval_p50_ms": percentile(intervals, 0.5),

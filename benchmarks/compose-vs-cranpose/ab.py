@@ -19,10 +19,10 @@ The scenario stops once every deciding metric is settled. After
 `--max-pairs` pairs, a metric whose medians differ by under half the
 threshold is the same whatever its spread; anything else still open is
 inconclusive.
-Before measuring, each build is launched once unmeasured so both start from a
-written pipeline cache. A leg's window is 5 seconds, or longer for a build too
-slow to draw `--min-frames` frames in that, up to `--max-window`: sized from
-the unmeasured launch, then from the build's previous leg in the scenario.
+Every leg is one launch measured from its start command for `--run` seconds,
+the same span for both builds. Nothing is left unmeasured: a build's first
+launch after its install is a leg like the others, and each leg keeps the
+frames of every second from its launch.
 
 Writes `ab.json` in the dashboard's run format: device, subjects, every leg,
 per-subject medians and per-metric verdicts.
@@ -36,8 +36,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from measure import (APPS, HEAVY, REMOTE_WINDOW, HERE, AppTarget, Device, device_lock, frame_rate,
-                     measure_run, memory_mb)
+from measure import APPS, HEAVY, REMOTE_WINDOW, HERE, Device, device_lock, measure_run, memory_mb
 
 # Metric: (threshold, whether the threshold is relative, whether more is better).
 DECIDING = {
@@ -45,7 +44,7 @@ DECIDING = {
     'cpu_ms_per_frame': (0.03, True, False),
     'desired_to_present_p50_ms': (2.0, False, False),
 }
-REPORTED = ['janky_pct', 'interval_p99_ms', 'cpu_mhz', 'gpu_mhz', 'ram_mb', 'gpu_ram_mb']
+REPORTED = ['first_frame_s', 'janky_pct', 'interval_p99_ms', 'cpu_mhz', 'gpu_mhz', 'ram_mb', 'gpu_ram_mb']
 
 
 def metric_values(legs, subject, metric):
@@ -78,7 +77,12 @@ def leg_record(run, subject, order):
         'order': order,
         'fps': run['fps'],
         'frames': run['frames'],
-        'window_s': run['window_s'],
+        'run_s': run['run_s'],
+        'first_frame_s': run['first_frame_s'],
+        # When each frame was presented, in milliseconds since the launch.
+        'frame_ms': run['frame_ms'],
+        'fps_by_second': run['fps_by_second'],
+        'first_poll_full': run['first_poll_full'],
         'janky_pct': run['janky_pct'],
         'interval_p99_ms': run['interval_p99_ms'],
         'cpu_ms_per_frame': run['cpu_ms_per_frame'],
@@ -93,13 +97,21 @@ def leg_record(run, subject, order):
     }
 
 
+def summarize(legs, subjects, metrics):
+    """Per subject: the median of every metric over its legs."""
+    return {
+        subject: {metric: statistics.median(values) for metric in metrics
+                  if (values := metric_values(legs, subject, metric))}
+        for subject in subjects
+    }
+
+
 def compare_scenario(device, scenario, subjects, args):
     legs, verdicts = [], {}
     for pair in range(args.max_pairs):
         order = subjects if pair % 2 == 0 else subjects[::-1]
         for subject in order:
-            run = measure_run(device, subject, scenario, args, args.output, args.windows.get((subject, scenario)))
-            size_window(args, subject, scenario, run['fps'])
+            run = measure_run(device, subject, scenario, args, args.output)
             legs.append(leg_record(run, subject, len(legs)))
             print(f'{scenario:10} {subject:16} fps {run["fps"]:5.1f} cpu/f {run["cpu_ms_per_frame"]:5.2f} '
                   f'present {run.get("desired_to_present_p50_ms") or 0:5.1f}', flush=True)
@@ -111,38 +123,13 @@ def compare_scenario(device, scenario, subjects, args):
         }
         if all(value is not None for value in verdicts.values()):
             break
-    summary = {
-        subject: {metric: statistics.median(values)
-                  for metric in [*DECIDING, *REPORTED]
-                  if (values := metric_values(legs, subject, metric))}
-        for subject in subjects
-    }
     return {
         'scenario': scenario,
         'extras': (HEAVY.get(scenario, '') + ' ' + args.extra).strip(),
         'legs': legs,
-        'summary': summary,
+        'summary': summarize(legs, subjects, [*DECIDING, *REPORTED]),
         'verdicts': {metric: value or 'inconclusive' for metric, value in verdicts.items()},
     }
-
-
-def size_window(args, subject, scenario, rate):
-    """The window for the build's next leg in the scenario: long enough for
-    `--min-frames` frames at `rate`, within `--window` and `--max-window`
-    seconds."""
-    wanted = args.min_frames / rate if rate > 0 else args.max_window
-    args.windows[(subject, scenario)] = min(args.max_window, max(args.window, wanted))
-
-
-def prime(device, subject, scenario, args):
-    """Launches the build once unmeasured, and sizes its first window from the
-    frame rate it reached. `subject` is an installed app's name, or the target
-    of a page in the browser."""
-    target = AppTarget(subject) if isinstance(subject, str) else subject
-    target.launch(device, scenario, (HEAVY.get(scenario, '') + ' ' + args.extra).split())
-    time.sleep(args.prime)
-    size_window(args, target.name, scenario, frame_rate(device, target.layer(device)))
-    target.stop(device)
 
 
 def main():
@@ -155,13 +142,8 @@ def main():
     parser.add_argument('--label-a', default='', help='version or commit of A, recorded with the run')
     parser.add_argument('--label-b', default='', help='version or commit of B, recorded with the run')
     parser.add_argument('--scenarios', default='gauntlet')
-    parser.add_argument('--warmup', type=float, default=2.0)
-    parser.add_argument('--window', type=float, default=5.0)
-    parser.add_argument('--min-frames', type=int, default=40,
-                        help='frames a window holds at least, when the build is slow enough to need longer')
-    parser.add_argument('--max-window', type=float, default=30.0)
-    parser.add_argument('--prime', type=float, default=3.0,
-                        help='seconds of the unmeasured launch each build gets first')
+    parser.add_argument('--run', type=float, default=10.0,
+                        help='seconds each leg is measured for, from its start command')
     parser.add_argument('--max-pairs', type=int, default=4)
     parser.add_argument('--interval', type=float, default=0.5)
     parser.add_argument('--clock-ticks', type=int, default=100)
@@ -174,15 +156,12 @@ def main():
 def compare_builds(args):
     """Runs the whole comparison: the caller holds the device lock."""
     args.load, args.screenshots = 'heavy', False
-    args.windows = {}
     args.started = time.monotonic()
     args.output.mkdir(parents=True, exist_ok=True)
     device = Device(args.serial)
     subjects = [args.a, args.b]
     device.adb('push', str(HERE / 'perf_window.sh'), REMOTE_WINDOW)
     scenarios = args.scenarios.split(',')
-    for subject in subjects:
-        prime(device, subject, scenarios[0], args)
     run = {
         'kind': 'ab',
         'started_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
@@ -190,8 +169,7 @@ def compare_builds(args):
                    ['ro.product.model', 'ro.build.version.release', 'ro.hardware']},
         'subjects': [{'name': name, 'package': APPS[name]['package'], 'label': label}
                      for name, label in ((args.a, args.label_a), (args.b, args.label_b))],
-        'protocol': {'warmup_s': args.warmup, 'window_s': args.window, 'min_frames': args.min_frames,
-                     'max_window_s': args.max_window, 'max_pairs': args.max_pairs,
+        'protocol': {'run_s': args.run, 'from_launch': True, 'max_pairs': args.max_pairs,
                      'deciding': {metric: rule[0] for metric, rule in DECIDING.items()}},
         'scenarios': [],
     }
