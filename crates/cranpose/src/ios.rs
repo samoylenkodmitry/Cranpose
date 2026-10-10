@@ -641,12 +641,16 @@ fn ios_surface_config(
 ///
 /// Called by [`crate::AppLauncher::try_run`] on iOS.
 pub fn try_run(settings: AppSettings, content: impl FnMut() + 'static) -> Result<(), LaunchError> {
+    crate::apple_mobile::init_logging();
     crate::ios_file_picker::register();
     crate::ios_uri_handler::register();
     crate::ios_share_sheet::register();
     crate::ios_image_picker::register();
     crate::ios_notifier::register();
     crate::ios_haptics::register();
+    crate::apple_microphone::register();
+    #[cfg(feature = "wearable")]
+    crate::apple_wearable::register();
     crate::ios_app_info::register();
     crate::ios_device_info::register();
     crate::process_info::install();

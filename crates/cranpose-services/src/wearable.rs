@@ -4,7 +4,10 @@
 //!
 //! On Android the link is the Wear OS Data Layer. An application turns it on
 //! with `cranpose { services.add("wearable") }`, which brings the framework's
-//! Java and Google Play services' wearable library into its build. On other
+//! Java and Google Play services' wearable library into its build. Between
+//! an iPhone app and its Apple Watch app the link is WatchConnectivity, which
+//! the `wearable` feature of the `cranpose` crate turns on; the session has one
+//! peer, the paired device, and a peer cannot open links on the other. On other
 //! platforms, and in a build without the service, every call returns
 //! [`WearableError::Unavailable`].
 //!
@@ -17,7 +20,8 @@
 //! until the platform answers, so call them off the UI thread.
 //!
 //! **The companion.** On Android the phone and watch applications must share
-//! one application id. The build advertises the application on the device it
+//! one application id. On Apple devices the iPhone app carries the watch app,
+//! whose bundle id starts with the iPhone app's. The build advertises the application on the device it
 //! is installed on, so the other device sees it as soon as it is installed,
 //! also before it first runs.
 //!

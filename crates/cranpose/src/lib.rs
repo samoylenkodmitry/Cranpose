@@ -602,6 +602,30 @@ mod ios_notifier;
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod ios_haptics;
 
+#[cfg(any(
+    all(feature = "ios", target_os = "ios"),
+    all(feature = "watchos", target_os = "watchos")
+))]
+mod apple_mobile;
+
+#[cfg(any(
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "watchos", target_os = "watchos")
+))]
+mod apple_microphone;
+
+#[cfg(all(
+    feature = "wearable",
+    any(
+        all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+        all(feature = "watchos", target_os = "watchos")
+    )
+))]
+mod apple_wearable;
+
+#[cfg(all(feature = "watchos", target_os = "watchos"))]
+mod watchos_services;
+
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod ios_media;
 

@@ -13,6 +13,15 @@ bundle-id = "com.example.cranorbit.watch"
 name = "Cranorbit"
 ```
 
+A watch app that an iPhone app carries names that app's bundle id as
+`companion` (or `--companion`); the watch bundle id must start with it and a
+dot. Without it the watch app stands alone. Put the built `CranposeWatch.app`
+in the iPhone app's `Watch` folder. With the `cranpose/wearable` feature on
+both apps, `cranpose_services::wearable` links them through WatchConnectivity.
+The reasons the app gives in its build script with
+`cranpose_capabilities::declare`, such as the microphone's, go into the watch
+app's `Info.plist`.
+
 Run `build.py` from the resolved `cranpose` crate directory. Cargo metadata identifies this directory for a published dependency. Metadata supplies `--entry`, `--bundle-id` and `--name`, so a simulator build can use:
 
 ```sh

@@ -3,7 +3,9 @@
 //! The native host owns presentation and feeds physical surface sizes, touch
 //! positions in points, crown deltas, and lifecycle changes into this runtime.
 //! Application content remains an ordinary Rust composable. No wgpu or winit
-//! dependency is required. Audio, purchases, and accessibility are not yet
+//! dependency is required. The host installs the application's folders, taps,
+//! the microphone permission and, with the `wearable` feature, the link to the
+//! iPhone app. Audio playback, purchases, and accessibility are not yet
 //! implemented by this experimental host.
 
 use cranpose_app_shell::{AppShell, default_root_key};
@@ -60,6 +62,8 @@ impl Application {
         content: impl FnMut() + 'static,
     ) -> Result<Self, SurfaceError> {
         let len = buffer_length(width, height, density)?;
+        #[cfg(target_os = "watchos")]
+        crate::watchos_services::register();
         let mut pixels = Vec::new();
         pixels.try_reserve_exact(len).map_err(|_| SurfaceError)?;
         pixels.resize(len, 0);

@@ -4,7 +4,7 @@ use cranpose_services::{
     HostController, PlatformDirectories, set_application_id, set_host_controller,
 };
 use objc2::MainThreadMarker;
-use objc2_foundation::{NSBundle, NSHomeDirectory};
+use objc2_foundation::NSBundle;
 use objc2_ui_kit::UIApplication;
 
 struct IosHost;
@@ -18,15 +18,7 @@ impl HostController for IosHost {
     }
 
     fn platform_directories(&self) -> Option<PlatformDirectories> {
-        let home = std::path::PathBuf::from(format!("{}", NSHomeDirectory()));
-        Some(PlatformDirectories {
-            data: home.join("Library").join("Application Support"),
-            config: home.join("Library").join("Preferences"),
-            cache: home.join("Library").join("Caches"),
-            documents: Some(home.join("Documents")),
-            temporary: std::env::temp_dir(),
-            shared: None,
-        })
+        Some(crate::apple_mobile::sandbox_directories())
     }
 
     fn exit(&self) {}

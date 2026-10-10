@@ -101,6 +101,15 @@ log = "0.4"
             self.invoke()
         self.assertFalse(self.destination.exists())
 
+    def test_companion_must_prefix_the_watch_bundle_id(self):
+        self.args.extend(['--companion', 'org.cranpose.other'])
+        with self.assertRaises(SystemExit):
+            self.invoke()
+        self.assertFalse(self.destination.exists())
+        self.args[-1] = 'org.cranpose'
+        self.invoke()
+        self.assertTrue((self.destination / 'runner/src/lib.rs').is_file())
+
     def test_runner_inherits_application_lock_without_modifying_it(self):
         lock = self.manifest.parent / 'Cargo.lock'
         lock.write_text('# the application dependency resolution\nversion = 4\n')

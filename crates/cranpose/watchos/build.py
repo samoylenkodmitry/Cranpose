@@ -99,6 +99,8 @@ def main():
     parser.add_argument('--entry', help='Public composable path relative to the app crate, e.g. ui::OrbitApp')
     parser.add_argument('--bundle-id')
     parser.add_argument('--name')
+    parser.add_argument('--companion', help='Bundle id of the iPhone app that carries this watch app; '
+                        'without it the watch app stands alone')
     parser.add_argument('--output', type=Path, required=True)
     framework = parser.add_mutually_exclusive_group()
     framework.add_argument('--framework-source', type=Path, help='Development-only Cranpose workspace override')
@@ -112,7 +114,7 @@ def main():
     app_manifest = args.manifest.resolve()
     app = tomllib.loads(app_manifest.read_text())['package']
     metadata = app.get('metadata', {}).get('cranpose', {}).get('watchos', {})
-    for field in ('entry', 'bundle_id', 'name', 'features'):
+    for field in ('entry', 'bundle_id', 'name', 'companion', 'features'):
         if getattr(args, field) is None:
             setattr(args, field, metadata.get(field.replace('_', '-')))
     args.name = args.name or app['name']
@@ -124,6 +126,8 @@ def main():
         parser.error('--entry must be a Rust function path')
     if not re.fullmatch(r'[A-Za-z0-9]+([.-][A-Za-z0-9]+)+', args.bundle_id):
         parser.error('invalid bundle identifier')
+    if args.companion and not args.bundle_id.startswith(args.companion + '.'):
+        parser.error('the watch bundle id must start with the companion bundle id and a dot')
     if not re.fullmatch(r'\d+(\.\d+){1,2}', args.deployment_target):
         parser.error('invalid deployment target')
     if args.target == 'device' and int(args.deployment_target.split('.')[0]) < 26:
@@ -193,15 +197,24 @@ panic = "abort"
     sdk = output(['xcrun', '--sdk', sdk_name, '--show-sdk-path'])
     target = 'aarch64-apple-watchos-sim' if simulator else 'aarch64-apple-watchos'
     apple_target = f'arm64-apple-watchos{args.deployment_target}' + ('-simulator' if simulator else '')
+    capabilities = root / 'capabilities'
     env = dict(os.environ, SDKROOT=sdk, WATCHOS_DEPLOYMENT_TARGET=args.deployment_target,
-               CARGO_TARGET_DIR=str(root / 'target'))
+               CARGO_TARGET_DIR=str(root / 'target'), CRANPOSE_CAPABILITIES_DIR=str(capabilities))
     import fcntl
     rustup_home = Path(env.get('RUSTUP_HOME', Path.home() / '.rustup'))
     rustup_home.mkdir(parents=True, exist_ok=True)
     with (rustup_home / 'cranpose-install.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         run(['rustup', 'target', 'add', target], cwd=runner, env=env)
-    run(['cargo', 'build', '--lib', '--release', '--locked', '--target', target], cwd=runner, env=env)
+    # The frameworks and system libraries the Rust code links, which the
+    # static library cannot carry. Rustc writes them when it builds the
+    # library, and the file stays for a build with nothing to compile.
+    native_libs = root / 'native-static-libs.txt'
+    # A published framework builds from the application's lock; a checkout's
+    # dependencies move with it, so its build may add to the lock.
+    locked = [] if source else ['--locked']
+    run(['cargo', 'rustc', '--lib', '--release', *locked, '--target', target, '--',
+         f'--print=native-static-libs={native_libs}'], cwd=runner, env=env)
     native_object = root / 'Host.o'
     run(['xcrun', '--sdk', sdk_name, 'clang++', '-target', apple_target,
          '-isysroot', sdk, '-std=c++17', '-fobjc-arc', '-O2', '-c', root / 'Host.mm',
@@ -211,15 +224,27 @@ panic = "abort"
     run(['xcrun', '--sdk', sdk_name, 'swiftc', '-target', apple_target,
          '-sdk', sdk, '-O', '-parse-as-library', '-import-objc-header', root / 'Host.h',
          root / 'Host.swift', native_object, root / f'target/{target}/release/libcranpose_watchos_runner.a',
-         '-lc++', '-framework', 'Security',
-         '-framework', 'CoreFoundation', '-framework', 'Foundation',
+         '-lc++', *native_libs.read_text().split(),
          '-o', bundle / 'CranposeWatch'], env=env)
+    # A companion's version must match the iPhone app's, which an app keeps
+    # equal to its package version.
+    version = app.get('version')
     info = dict(CFBundleIdentifier=args.bundle_id, CFBundleName=args.name,
                 CFBundleDisplayName=args.name, CFBundleExecutable='CranposeWatch',
                 CFBundlePackageType='APPL', CFBundleVersion='1',
-                CFBundleShortVersionString='0.1', WKApplication=True, WKWatchOnly=True,
+                CFBundleShortVersionString=version if isinstance(version, str) else '0.1',
+                WKApplication=True,
                 MinimumOSVersion=args.deployment_target, UIDeviceFamily=[4],
                 CFBundleSupportedPlatforms=['WatchSimulator' if simulator else 'WatchOS'])
+    if args.companion:
+        info['WKCompanionAppBundleIdentifier'] = args.companion
+    else:
+        info['WKWatchOnly'] = True
+    # The reasons the application gave for its permissions, written by
+    # `cranpose_capabilities::declare` in its build script.
+    usage = capabilities / f"{app['name']}-usage.plist"
+    if usage.is_file():
+        info.update(plistlib.loads(usage.read_bytes()))
     (bundle / 'Info.plist').write_bytes(plistlib.dumps(info))
     if simulator or args.sign:
         run(['codesign', '--force', '--sign', args.sign or '-', bundle])

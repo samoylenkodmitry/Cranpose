@@ -47,6 +47,29 @@ fn without_a_backend_the_microphone_is_allowed_and_nothing_is_asked() {
     assert_eq!(microphone_permission(), MicrophonePermission::Granted);
     request_microphone_permission();
     open_microphone_settings();
+    assert_eq!(prepare_microphone(), Ok(()));
+}
+
+#[test]
+fn preparing_reports_why_the_platform_cannot_record() {
+    struct Busy;
+    impl MicrophoneAccess for Busy {
+        fn permission(&self) -> MicrophonePermission {
+            MicrophonePermission::Granted
+        }
+        fn request(&self) {}
+        fn open_settings(&self) {}
+        fn prepare_recording(&self) -> Result<(), String> {
+            Err("a call holds the audio session".into())
+        }
+    }
+    let _guard = crate::registry::test_service_guard();
+    set_platform_microphone_access(Some(Arc::new(Busy)));
+    assert_eq!(
+        prepare_microphone(),
+        Err("a call holds the audio session".into())
+    );
+    set_platform_microphone_access(None);
 }
 
 #[test]
