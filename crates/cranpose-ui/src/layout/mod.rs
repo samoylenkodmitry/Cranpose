@@ -1473,7 +1473,7 @@ struct LayoutRuntimeFrameBindingCleanup<'a> {
 
 impl Drop for LayoutRuntimeFrameBindingCleanup<'_> {
     fn drop(&mut self) {
-        self.state.borrow().frame.unbind();
+        self.state.borrow().unbind_children();
     }
 }
 
@@ -2065,8 +2065,8 @@ impl LayoutBuilderState {
             &mut pools.child_ids,
         );
 
-        if let Some(err) = runtime_state.frame.error.borrow_mut().take() {
-            for child_state in &runtime_state.child_states {
+        if let Some(err) = runtime_state.take_child_error() {
+            for child_state in runtime_state.child_states() {
                 child_state.measured.borrow_mut().take();
             }
             self.with_applier_result(|applier| {
@@ -2155,8 +2155,8 @@ impl LayoutBuilderState {
             let frame = CoordinatorFrame::new(
                 &runtime_state.measure_policy,
                 &scope,
-                runtime_state.child_measurables.as_slice(),
-                &runtime_state.child_states,
+                runtime_state.child_measurables(),
+                runtime_state.child_states(),
                 &mut pools.placements,
                 &mut pools.child_ids,
             );
@@ -2166,11 +2166,11 @@ impl LayoutBuilderState {
         } else {
             policy_intrinsic(
                 runtime_state.measure_policy.as_ref(),
-                runtime_state.child_measurables.as_slice(),
+                runtime_state.child_measurables(),
                 kind,
             )
         };
-        match runtime_state.frame.error.borrow_mut().take() {
+        match runtime_state.take_child_error() {
             Some(err) => Err(err),
             None => Ok(Some(value)),
         }
@@ -2278,7 +2278,7 @@ impl LayoutBuilderState {
     ) -> Result<ChildChange, NodeError> {
         let runtime_state = runtime_state.borrow();
         let Some((offset, state)) = runtime_state
-            .child_states
+            .child_states()
             .get(*next_state..)
             .unwrap_or_default()
             .iter()
@@ -2376,8 +2376,7 @@ impl LayoutBuilderState {
         pass: ChildPass,
     ) -> Result<(), NodeError> {
         let mut runtime_state = runtime_state.borrow_mut();
-        runtime_state.frame.bind(self, pass);
-        runtime_state.reserve_children(child_ids.len());
+        runtime_state.bind_children(self, pass, child_ids.len());
         let mut bound = 0;
         for &child_id in child_ids {
             if self.bind_layout_child(applier, &mut runtime_state, bound, child_id)? {
@@ -2448,14 +2447,14 @@ impl LayoutBuilderState {
         if !chain.uses_chain {
             let measurement = runtime_state.measure_policy.measure_into(
                 &scope,
-                runtime_state.child_measurables.as_slice(),
+                runtime_state.child_measurables(),
                 constraints,
                 placements,
             );
             return ModifierChainMeasurement {
                 size: measurement.size,
                 alignment_lines: inherited_alignment_lines(
-                    &runtime_state.child_states,
+                    runtime_state.child_states(),
                     placements,
                     placement_indices,
                 )
@@ -2468,7 +2467,7 @@ impl LayoutBuilderState {
                     None
                 } else {
                     runtime_state.measure_policy.measure_hold(
-                        runtime_state.child_measurables.as_slice(),
+                        runtime_state.child_measurables(),
                         constraints,
                         measurement.size,
                     )
@@ -2479,8 +2478,8 @@ impl LayoutBuilderState {
         let frame = CoordinatorFrame::new(
             &runtime_state.measure_policy,
             &scope,
-            runtime_state.child_measurables.as_slice(),
-            &runtime_state.child_states,
+            runtime_state.child_measurables(),
+            runtime_state.child_states(),
             placements,
             placement_indices,
         );
@@ -2526,7 +2525,7 @@ impl LayoutBuilderState {
                 runtime_state.coordinator_chain.measured_hold(
                     cranpose_ui_layout::MeasureScope::density(&scope),
                     runtime_state.measure_policy.as_ref(),
-                    runtime_state.child_measurables.as_slice(),
+                    runtime_state.child_measurables(),
                 )
             },
         }
@@ -3165,23 +3164,40 @@ fn placement_for_child<'a>(
 }
 
 pub(crate) struct LayoutRuntimeState {
-    child_ids: Vec<NodeId>,
-    child_states: Vec<Rc<LayoutChildMeasureState>>,
-    child_measurables: Vec<Box<dyn Measurable>>,
+    /// `None` until the node first binds a child: most nodes are leaves.
+    children: Option<Box<LayoutChildren>>,
     coordinator_chain: CoordinatorChain,
     measure_policy: Rc<dyn MeasurePolicy>,
+}
+
+/// What a node keeps for measuring its children, in their order.
+struct LayoutChildren {
+    ids: Vec<NodeId>,
+    states: Vec<Rc<LayoutChildMeasureState>>,
+    measurables: Vec<Box<dyn Measurable>>,
     frame: Rc<LayoutChildFrame>,
+}
+
+impl LayoutChildren {
+    /// Room for exactly `count` children, where growth would make room for
+    /// four in each of the three lists. Children added later grow the lists
+    /// as usual.
+    fn with_capacity(count: usize) -> Self {
+        Self {
+            ids: Vec::with_capacity(count),
+            states: Vec::with_capacity(count),
+            measurables: Vec::with_capacity(count),
+            frame: Rc::default(),
+        }
+    }
 }
 
 impl LayoutRuntimeState {
     pub(crate) fn new(measure_policy: Rc<dyn MeasurePolicy>) -> Self {
         Self {
-            child_ids: Vec::new(),
-            child_states: Vec::new(),
-            child_measurables: Vec::new(),
+            children: None,
             coordinator_chain: CoordinatorChain::default(),
             measure_policy,
-            frame: Rc::default(),
         }
     }
 
@@ -3192,44 +3208,78 @@ impl LayoutRuntimeState {
         self.coordinator_chain.sync(node)
     }
 
+    fn child_states(&self) -> &[Rc<LayoutChildMeasureState>] {
+        self.children
+            .as_deref()
+            .map_or(&[], |children| children.states.as_slice())
+    }
+
+    fn child_measurables(&self) -> &[Box<dyn Measurable>] {
+        self.children
+            .as_deref()
+            .map_or(&[], |children| children.measurables.as_slice())
+    }
+
+    /// Binds the children's frame to `builder` for a pass over `count`
+    /// children. A node that never had one binds nothing.
+    fn bind_children(&mut self, builder: &Rc<LayoutBuilderState>, pass: ChildPass, count: usize) {
+        if count == 0 && self.children.is_none() {
+            return;
+        }
+        self.children
+            .get_or_insert_with(|| Box::new(LayoutChildren::with_capacity(count)))
+            .frame
+            .bind(builder, pass);
+    }
+
+    fn unbind_children(&self) {
+        if let Some(children) = &self.children {
+            children.frame.unbind();
+        }
+    }
+
+    /// The first error a child recorded in the pass, taken.
+    fn take_child_error(&self) -> Option<NodeError> {
+        self.children
+            .as_ref()
+            .and_then(|children| children.frame.error.borrow_mut().take())
+    }
+
+    /// The state of the child at `position`, for a pass `bind_children`
+    /// bound.
     fn child_state_at(&mut self, position: usize, child_id: NodeId) -> &LayoutChildMeasureState {
-        if self.child_ids.get(position) != Some(&child_id) {
-            let from = match self.child_ids[position..]
+        let children = self
+            .children
+            .get_or_insert_with(|| Box::new(LayoutChildren::with_capacity(position + 1)));
+        if children.ids.get(position) != Some(&child_id) {
+            let from = match children.ids[position..]
                 .iter()
                 .position(|&id| id == child_id)
             {
                 Some(offset) => position + offset,
                 None => {
-                    let state = LayoutChildMeasureState::new(child_id, Rc::clone(&self.frame));
-                    self.child_ids.push(child_id);
-                    self.child_states.push(Rc::clone(&state));
-                    self.child_measurables
+                    let state = LayoutChildMeasureState::new(child_id, Rc::clone(&children.frame));
+                    children.ids.push(child_id);
+                    children.states.push(Rc::clone(&state));
+                    children
+                        .measurables
                         .push(Box::new(LayoutChildMeasurable::new(state)));
-                    self.child_ids.len() - 1
+                    children.ids.len() - 1
                 }
             };
-            self.child_ids.swap(position, from);
-            self.child_states.swap(position, from);
-            self.child_measurables.swap(position, from);
+            children.ids.swap(position, from);
+            children.states.swap(position, from);
+            children.measurables.swap(position, from);
         }
-        &self.child_states[position]
-    }
-
-    /// Makes room for `count` children on the node's first bind: exactly
-    /// that many, where growth would make room for four in each of the
-    /// three lists. Children added later grow the lists as usual.
-    fn reserve_children(&mut self, count: usize) {
-        if self.child_ids.capacity() == 0 {
-            self.child_ids.reserve_exact(count);
-            self.child_states.reserve_exact(count);
-            self.child_measurables.reserve_exact(count);
-        }
+        &children.states[position]
     }
 
     fn truncate_children(&mut self, len: usize) {
-        self.child_ids.truncate(len);
-        self.child_states.truncate(len);
-        self.child_measurables.truncate(len);
+        if let Some(children) = &mut self.children {
+            children.ids.truncate(len);
+            children.states.truncate(len);
+            children.measurables.truncate(len);
+        }
     }
 
     fn measured_children(
@@ -3238,8 +3288,9 @@ impl LayoutRuntimeState {
         placement_indices: &[usize],
         content_offset: Point,
     ) -> Vec<MeasuredChild> {
-        let mut measured_children = Vec::with_capacity(self.child_states.len());
-        for (index, child_state) in self.child_states.iter().enumerate() {
+        let child_states = self.child_states();
+        let mut measured_children = Vec::with_capacity(child_states.len());
+        for (index, child_state) in child_states.iter().enumerate() {
             let Some(measured) = child_state.measured.borrow_mut().take() else {
                 continue;
             };
@@ -3289,20 +3340,24 @@ impl LayoutRuntimeState {
     #[cfg(test)]
     pub(crate) fn debug_stats(&self) -> LayoutRuntimeDebugStats {
         LayoutRuntimeDebugStats {
-            child_ids: self.child_ids.clone(),
+            child_ids: self
+                .children
+                .as_ref()
+                .map(|children| children.ids.clone())
+                .unwrap_or_default(),
             child_state_ptrs: self
-                .child_states
+                .child_states()
                 .iter()
                 .map(|state| Rc::as_ptr(state) as *const () as usize)
                 .collect(),
             child_measurable_ptrs: self
-                .child_measurables
+                .child_measurables()
                 .iter()
                 .map(|measurable| {
                     measurable.as_ref() as *const dyn Measurable as *const () as usize
                 })
                 .collect(),
-            child_measurable_count: self.child_measurables.len(),
+            child_measurable_count: self.child_measurables().len(),
             coordinator_node_ptrs: self.coordinator_chain.debug_ptrs(),
             coordinator_node_count: self.coordinator_chain.nodes.len(),
         }
