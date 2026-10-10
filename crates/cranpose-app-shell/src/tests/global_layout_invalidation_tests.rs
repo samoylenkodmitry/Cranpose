@@ -208,3 +208,140 @@ fn a_global_layout_invalidation_survives_a_scoped_repass_in_the_same_frame() {
         "the scoped repass downgraded the global invalidation to a subtree pass"
     );
 }
+
+thread_local! {
+    /// The safe area's top edge, which the root provides as a platform's
+    /// environment does: only a root render reads a new one.
+    static PADDING_TOP: Cell<f32> = const { Cell::new(5.0) };
+    static TICKER: Cell<Option<MutableState<u32>>> = const { Cell::new(None) };
+}
+
+const PADDED_ROW: Color = Color(0.9, 0.1, 0.2, 1.0);
+
+fn safe_area_root() {
+    let insets =
+        cranpose_ui::EdgeInsets::from_components(0.0, PADDING_TOP.with(Cell::get), 0.0, 0.0);
+    CompositionLocalProvider(
+        [cranpose_ui::local_safe_area_insets().provides(insets)],
+        PaddedColumnBesideATicker,
+    );
+}
+
+#[composable]
+fn PaddedColumnBesideATicker() {
+    let top = cranpose_ui::local_safe_area_insets().current().top;
+    Column(
+        Modifier::empty()
+            .fill_max_size()
+            .padding_each(0.0, top, 0.0, 0.0),
+        ColumnSpec::default(),
+        || {
+            Box(
+                Modifier::empty()
+                    .size_points(60.0, 10.0)
+                    .background(PADDED_ROW),
+                BoxSpec::default(),
+                || {},
+            );
+            Ticker();
+        },
+    );
+}
+
+/// Text that changes in its own scope, as an animation's does.
+#[composable]
+fn Ticker() {
+    let ticks = rememberMutableStateOf(|| 0_u32);
+    TICKER.with(|slot| slot.set(Some(ticks)));
+    Text(
+        format!("tick {}", ticks.get()),
+        Modifier::empty(),
+        TextStyle::default(),
+    );
+}
+
+/// The window rect of every solid rectangle `layer` paints.
+fn painted_rects(
+    layer: &cranpose_render_common::graph::LayerNode,
+    parent: cranpose_render_common::graph::ProjectiveTransform,
+    out: &mut Vec<Rect>,
+) {
+    let transform = layer.transform_to_parent.then(parent);
+    for child in &layer.children {
+        match child {
+            cranpose_render_common::graph::RenderNode::Layer(child) => {
+                painted_rects(child, transform, out);
+            }
+            cranpose_render_common::graph::RenderNode::DrawRun(run) => {
+                out.extend(run.primitives().filter_map(|primitive| match primitive {
+                    DrawPrimitive::Rect { rect, .. } => Some(transform.bounds_for_rect(rect)),
+                    _ => None,
+                }));
+            }
+            cranpose_render_common::graph::RenderNode::Primitive(_) => {}
+        }
+    }
+}
+
+#[test]
+fn a_root_render_that_moves_content_reaches_the_scene_while_a_scope_redraws() {
+    let _guard = test_guard();
+    PADDING_TOP.with(|top| top.set(5.0));
+    let mut shell = AppShell::new_with_size(
+        ScopedUpdateCountingRenderer::new(
+            Rc::new(Cell::new(0)),
+            Rc::new(Cell::new(0)),
+            Rc::new(RefCell::new(Vec::new())),
+        ),
+        location_key(file!(), line!(), column!()),
+        safe_area_root,
+        (100, 100),
+        (100.0, 100.0),
+    );
+    shell.update();
+    shell.update();
+
+    // The safe area grows through a root render, and the ticker changes in
+    // the same frame.
+    PADDING_TOP.with(|top| top.set(40.0));
+    shell.request_root_render();
+    let ticks = TICKER.with(Cell::get).expect("the ticker composed");
+    ticks.set_value(1);
+    shell.update();
+
+    let mut retained = Vec::new();
+    let graph = shell.surfaces[0]
+        .renderer
+        .scene()
+        .graph
+        .as_ref()
+        .expect("the frame keeps a graph");
+    painted_rects(
+        &graph.root,
+        cranpose_render_common::graph::ProjectiveTransform::identity(),
+        &mut retained,
+    );
+    let root = shell.surfaces[0]
+        .root_node(&shell.app)
+        .expect("the surface has a root");
+    let fresh = Rc::clone(shell.app_context())
+        .enter(|| {
+            cranpose_render_common::scene_builder::build_graph_from_applier(
+                &shell.app.composition.applier_mut(),
+                root,
+                1.0,
+            )
+        })
+        .expect("a fresh graph");
+    let mut expected = Vec::new();
+    painted_rects(
+        &fresh.root,
+        cranpose_render_common::graph::ProjectiveTransform::identity(),
+        &mut expected,
+    );
+    assert_eq!(expected.first().map(|rect| rect.y), Some(40.0));
+    assert_eq!(
+        retained, expected,
+        "the scene drew the column's children where the old padding put them"
+    );
+}

@@ -512,9 +512,12 @@ where
             for surface in &mut self.surfaces {
                 surface.invalidate_scene_root(surface.root_node(&self.app));
             }
-            return;
         }
-        let scoped = has_scoped_repasses
+        // The scene updates the root of a global pass in place and keeps the
+        // layers below it, so the nodes the pass reshaped or moved go to the
+        // scene too: a padding that grew moves its node's children although
+        // no child moved in its parent.
+        let scoped = (has_scoped_repasses && !global)
             .then_some(scoped_layout_nodes)
             .into_iter()
             .flatten();
