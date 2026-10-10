@@ -7,6 +7,8 @@ pub(super) mod dxgi;
 #[cfg(all(native, feature = "renderdoc"))]
 pub(super) mod renderdoc;
 
+pub mod prune;
+
 pub mod db {
     pub mod amd {
         /// cbindgen:ignore

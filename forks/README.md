@@ -16,11 +16,12 @@ formatting, spelling and diff gates skip the forks.
 
 Upstream: <https://github.com/gfx-rs/wgpu>, commit
 `40f4a34ebaf56f9a046231f54125ad046239d3f3` (`wgpu-hal` 30.0.1).
-`cranpose-wgpu-hal` is at 30.0.8 for the catch-up barrier, the Metal
+`cranpose-wgpu-hal` is at 30.0.9 for the catch-up barrier, the Metal
 pipeline switch, the dedicated Vulkan allocations, the GL point size, the
-GL state tracker, the web surface usages, the boxed GL copy commands and
-the Vulkan command pools that give a burst's memory back below, and
-`cranpose-wgpu-core` and `cranpose-wgpu` are at 30.0.8 to require it.
+GL state tracker, the web surface usages, the boxed GL copy commands, the
+Vulkan command pools that give a burst's memory back and the GL shaders
+without the branches their constants decide below, and
+`cranpose-wgpu-core` and `cranpose-wgpu` are at 30.0.9 to require it.
 
 | fork | upstream |
 | --- | --- |
@@ -124,6 +125,26 @@ frame that drew with it failed validation and drew nothing.
 
 The fork's GL device writes `gl_PointSize` only in the vertex stage of a
 pipeline whose topology is a point list; the program cache keys on it.
+
+### GL shaders drop the branches their constants decide
+
+Upstream's GL backend applies a pipeline's override constants and writes
+GLSL for the whole entry point. A condition such as
+`DRAWS_ARCS & (kind == ARC)` keeps its runtime side after the constant
+becomes `false`, so both sides of every such branch reach the driver,
+which compiles and links all of it. In Chrome on a Huawei Mate 20 X
+(Mali-G76, ANGLE on OpenGL ES) each of Cranpose's seven shape programs
+at start took 400 to 600 ms to link, on the page's only thread, and the
+page drew nothing for 5.9 s after its first frame.
+
+Before it writes GLSL, the fork's GL device folds each condition as far as
+its decided operands allow (`false & x`, `true | x`, comparisons and bit
+operations of constants, a call to a function that only returns a decided
+value), puts the side of each decided `if` in its place, compacts away the
+functions only the dropped sides called and validates the module again
+(`wgpu_hal::auxil::prune`). A solid fill program went from 31 KB of vertex
+and 25 KB of fragment GLSL to 13 and 12 KB, and its link from 510 to 30
+ms. The frozen gauntlet frame on WebGL is the same to the pixel.
 
 ### The GL queue skips calls that set what the context holds
 

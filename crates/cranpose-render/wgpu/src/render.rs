@@ -1707,6 +1707,58 @@ impl ShapePipelineKey {
     }
 }
 
+/// The entry points and pipeline constants of the shape program a key names.
+pub(crate) struct ShapeProgram {
+    pub(crate) vertex_entry: &'static str,
+    pub(crate) fragment_entry: &'static str,
+    pub(crate) constants: [(&'static str, f64); 15],
+}
+
+impl ShapePipelineKey {
+    pub(crate) fn program(self, mode: RunBufferMode) -> ShapeProgram {
+        let Self {
+            tier,
+            variant,
+            turns,
+            depth,
+            ..
+        } = self;
+        let constants = [
+            ("SHAPE_KIND_FIXED", variant.kind().map_or(-1.0, f64::from)),
+            ("SHAPE_KINDS", f64::from(variant.kinds)),
+            ("BRUSH_KIND_FIXED", variant.brush.map_or(-1.0, f64::from)),
+            ("SHAPE_SOLID", f64::from(u8::from(variant.solid))),
+            (
+                "SHAPE_CLIPPED",
+                f64::from(u8::from(variant.clip != SegmentClip::Untested)),
+            ),
+            ("SHAPE_ROUNDED_CLIP", f64::from(u8::from(variant.rounded()))),
+            (
+                "SHAPE_INTERIOR",
+                f64::from(u8::from(variant.interior && !variant.rounded())),
+            ),
+            ("SHAPE_DITHER", f64::from(u8::from(variant.dither))),
+            ("SHAPE_TURNS", turns.constant()),
+            ("SHAPE_TIER", f64::from(tier as u8)),
+            ("SHAPE_DEPTH", f64::from(u8::from(depth != ShapeDepth::Off))),
+            ("SHAPE_BANDS", f64::from(u8::from(mode.storage))),
+            ("SHAPE_TRIG_FILLED", f64::from(u8::from(mode.trig_fill))),
+            ("SHAPE_FLAT", f64::from(u8::from(variant.ablation.material))),
+            ("SHAPE_DISCARD", f64::from(u8::from(variant.ablation.fill))),
+        ];
+        let (vertex_entry, fragment_entry) = if depth == ShapeDepth::Interior {
+            ("vs_record_interior", "fs_interior")
+        } else {
+            variant.entries(turns == ShapeTurns::None)
+        };
+        ShapeProgram {
+            vertex_entry,
+            fragment_entry,
+            constants,
+        }
+    }
+}
+
 pub(crate) fn create_shape_pipeline(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
@@ -1722,34 +1774,11 @@ pub(crate) fn create_shape_pipeline(
         turns,
         depth,
     } = key;
-    let constants = [
-        ("SHAPE_KIND_FIXED", variant.kind().map_or(-1.0, f64::from)),
-        ("SHAPE_KINDS", f64::from(variant.kinds)),
-        ("BRUSH_KIND_FIXED", variant.brush.map_or(-1.0, f64::from)),
-        ("SHAPE_SOLID", f64::from(u8::from(variant.solid))),
-        (
-            "SHAPE_CLIPPED",
-            f64::from(u8::from(variant.clip != SegmentClip::Untested)),
-        ),
-        ("SHAPE_ROUNDED_CLIP", f64::from(u8::from(variant.rounded()))),
-        (
-            "SHAPE_INTERIOR",
-            f64::from(u8::from(variant.interior && !variant.rounded())),
-        ),
-        ("SHAPE_DITHER", f64::from(u8::from(variant.dither))),
-        ("SHAPE_TURNS", turns.constant()),
-        ("SHAPE_TIER", f64::from(tier as u8)),
-        ("SHAPE_DEPTH", f64::from(u8::from(depth != ShapeDepth::Off))),
-        ("SHAPE_BANDS", f64::from(u8::from(mode.storage))),
-        ("SHAPE_TRIG_FILLED", f64::from(u8::from(mode.trig_fill))),
-        ("SHAPE_FLAT", f64::from(u8::from(variant.ablation.material))),
-        ("SHAPE_DISCARD", f64::from(u8::from(variant.ablation.fill))),
-    ];
-    let (vertex_entry, fragment_entry) = if depth == ShapeDepth::Interior {
-        ("vs_record_interior", "fs_interior")
-    } else {
-        variant.entries(turns == ShapeTurns::None)
-    };
+    let ShapeProgram {
+        vertex_entry,
+        fragment_entry,
+        constants,
+    } = key.program(mode);
     let blend = (depth != ShapeDepth::Interior).then(|| blend_state_for_mode(blend_mode));
     let instance_layout = record_vertex_layouts().map(Some);
     let module = shader.module();
