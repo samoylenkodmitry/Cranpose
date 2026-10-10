@@ -110,6 +110,12 @@ log = "0.4"
         self.invoke()
         self.assertTrue((self.destination / 'runner/src/lib.rs').is_file())
 
+    def test_missing_icon_is_rejected_before_writing(self):
+        self.args.extend(['--icon', 'icon.png'])
+        with self.assertRaises(SystemExit):
+            self.invoke()
+        self.assertFalse(self.destination.exists())
+
     def test_runner_inherits_application_lock_without_modifying_it(self):
         lock = self.manifest.parent / 'Cargo.lock'
         lock.write_text('# the application dependency resolution\nversion = 4\n')

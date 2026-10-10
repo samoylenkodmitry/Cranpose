@@ -18,7 +18,9 @@ A watch app that an iPhone app carries names that app's bundle id as
 dot. Without it the watch app stands alone. Put the built `CranposeWatch.app`
 in the iPhone app's `Watch` folder. With the `cranpose/wearable` feature on
 both apps, `cranpose_services::wearable` links them through WatchConnectivity.
-The reasons the app gives in its build script with
+`icon` (or `--icon`) names a square PNG of 1024 pixels, relative to the
+manifest, which the watch shows in a circle. The reasons the app gives in its
+build script with
 `cranpose_capabilities::declare`, such as the microphone's, go into the watch
 app's `Info.plist`.
 

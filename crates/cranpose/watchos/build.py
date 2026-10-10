@@ -70,6 +70,24 @@ pub fn create_application(width: u32, height: u32, density: f32) -> Result<Box<A
 '''
 
 
+def compile_icon(icon, root, bundle, sdk_name, deployment_target):
+    """Compiles `icon` into the bundle's asset catalog and returns the
+    Info.plist entries that name it."""
+    catalog = root / 'Assets.xcassets'
+    iconset = catalog / 'AppIcon.appiconset'
+    iconset.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(icon, iconset / 'icon.png')
+    info = {'info': {'author': 'xcode', 'version': 1}}
+    write(catalog / 'Contents.json', json.dumps(info))
+    write(iconset / 'Contents.json', json.dumps({'images': [{
+        'filename': 'icon.png', 'idiom': 'universal', 'platform': 'watchos', 'size': '1024x1024'}], **info}))
+    partial = root / 'icon-info.plist'
+    run(['xcrun', 'actool', catalog, '--compile', bundle, '--platform', sdk_name,
+         '--minimum-deployment-target', deployment_target, '--target-device', 'watch',
+         '--app-icon', 'AppIcon', '--output-partial-info-plist', partial])
+    return plistlib.loads(partial.read_bytes())
+
+
 def prepare_manifest(parser, runner, manifest, app_lock=None):
     path = runner / 'Cargo.toml'
     previous = tomllib.loads(path.read_text()) if path.exists() else {}
@@ -101,6 +119,8 @@ def main():
     parser.add_argument('--name')
     parser.add_argument('--companion', help='Bundle id of the iPhone app that carries this watch app; '
                         'without it the watch app stands alone')
+    parser.add_argument('--icon', type=Path, help='Square PNG of at least 1024 pixels, relative to the '
+                        'manifest; the watch shows it in a circle')
     parser.add_argument('--output', type=Path, required=True)
     framework = parser.add_mutually_exclusive_group()
     framework.add_argument('--framework-source', type=Path, help='Development-only Cranpose workspace override')
@@ -114,10 +134,14 @@ def main():
     app_manifest = args.manifest.resolve()
     app = tomllib.loads(app_manifest.read_text())['package']
     metadata = app.get('metadata', {}).get('cranpose', {}).get('watchos', {})
-    for field in ('entry', 'bundle_id', 'name', 'companion', 'features'):
+    for field in ('entry', 'bundle_id', 'name', 'companion', 'icon', 'features'):
         if getattr(args, field) is None:
             setattr(args, field, metadata.get(field.replace('_', '-')))
     args.name = args.name or app['name']
+    if args.icon:
+        args.icon = app_manifest.parent / args.icon
+        if not args.icon.is_file():
+            parser.error(f'no icon at {args.icon}')
     args.features = args.features or ''
     args.deployment_target = args.deployment_target or ('26.0' if args.target == 'device' else '10.0')
     if not args.entry or not args.bundle_id:
@@ -240,6 +264,8 @@ panic = "abort"
         info['WKCompanionAppBundleIdentifier'] = args.companion
     else:
         info['WKWatchOnly'] = True
+    if args.icon:
+        info.update(compile_icon(args.icon, root, bundle, sdk_name, args.deployment_target))
     # The reasons the application gave for its permissions, written by
     # `cranpose_capabilities::declare` in its build script.
     usage = capabilities / f"{app['name']}-usage.plist"
