@@ -8,8 +8,8 @@ use cranpose_core::{self, MutableState};
 use cranpose_services::{isSystemInDarkTheme, local_http_client, local_uri_handler, HttpClientRef};
 use cranpose_ui::{
     composable, Alignment, Box, BoxSpec, Brush, Button, ButtonSpec, Canvas, Color, Column,
-    ColumnSpec, DrawStyle, LinearArrangement, Modifier, Path, Point, Row, RowSpec, ScrollState,
-    Stroke, Text, VerticalAlignment,
+    ColumnSpec, DrawScope, DrawStyle, LinearArrangement, Modifier, Path, Point, Row, RowSpec,
+    ScrollState, Stroke, Text, VerticalAlignment,
 };
 use serde::Deserialize;
 
@@ -18,6 +18,8 @@ use super::demo_text::text_style;
 /// The run index the nightly publishes, served as raw JSON from the branch.
 const INDEX_URL: &str =
     "https://raw.githubusercontent.com/samoylenkodmitry/Cranpose/perf-data/index.json";
+/// The data branch's files, a run's own among them.
+const DATA_URL: &str = "https://raw.githubusercontent.com/samoylenkodmitry/Cranpose/perf-data";
 /// Where a framework's gauntlet source opens.
 const SOURCE_URL: &str = "https://github.com/samoylenkodmitry/Cranpose/blob";
 
@@ -30,6 +32,9 @@ pub struct PerfIndex {
 /// One comparison: two builds on one device, scenario by scenario.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct PerfRun {
+    /// The run's own file on the branch, which holds every leg's frames.
+    #[serde(default)]
+    pub file: String,
     pub kind: String,
     pub started_at: String,
     pub device: String,
@@ -41,6 +46,119 @@ pub struct PerfRun {
     pub scenarios: BTreeMap<String, PerfScenario>,
     #[serde(default)]
     pub confirmed_regressions: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    pub protocol: PerfProtocol,
+}
+
+/// How a run measured each launch.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct PerfProtocol {
+    /// Seconds each launch was measured for, from its start.
+    #[serde(default)]
+    pub run_s: Option<f64>,
+    /// Whether each launch was measured from its start, its first seconds
+    /// included; older runs measured a window after a warm-up.
+    #[serde(default)]
+    pub from_launch: bool,
+}
+
+/// A run's own file: every leg, with the time of each frame it presented.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct PerfRunFrames {
+    pub scenarios: Vec<PerfFramesScenario>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct PerfFramesScenario {
+    pub scenario: String,
+    pub legs: Vec<PerfFramesLeg>,
+}
+
+/// One launch of one subject.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct PerfFramesLeg {
+    pub subject: String,
+    /// When each frame was presented, in milliseconds since the launch; empty
+    /// in a run measured after a warm-up.
+    #[serde(default)]
+    pub frame_ms: Vec<f64>,
+    /// Another process spent more than the run allows in this leg: it is
+    /// shown, and left out of the medians.
+    #[serde(default)]
+    pub disturbed: bool,
+}
+
+impl PerfRunFrames {
+    pub fn parse(json: &str) -> Result<Self, String> {
+        serde_json::from_str(json)
+            .map_err(|error| format!("The run's frames did not parse: {error}"))
+    }
+}
+
+/// Where the charts read a run's frames: the data branch, or run files at
+/// hand, by their path on the branch.
+#[derive(Clone)]
+pub enum FrameSource {
+    Http(HttpClientRef),
+    Files(Rc<BTreeMap<String, String>>),
+}
+
+impl PartialEq for FrameSource {
+    /// The same client, or the same files.
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Http(a), Self::Http(b)) => std::sync::Arc::ptr_eq(a, b),
+            (Self::Files(a), Self::Files(b)) => Rc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+/// How often the launch chart reads the frame rate, in milliseconds.
+const CHART_STEP_MS: f64 = 50.0;
+/// The span the frame rate at a moment is taken over, in milliseconds.
+const RATE_WINDOW_MS: f64 = 500.0;
+
+/// The frame rate at every `step_ms` from the launch to `run_ms`, from the
+/// times frames were presented, in milliseconds since the launch: the
+/// frames presented in the last 500 ms over the time between the first and
+/// the last of them, or, with fewer than two there, 1000 over the last
+/// interval between frames. The wait since the last frame stands in for the
+/// interval when it is longer, so a stall shows as the drop it is. Zero
+/// before the first frame.
+pub fn launch_fps(frame_ms: &[f64], run_ms: f64, step_ms: f64) -> Vec<f64> {
+    let steps = (run_ms / step_ms).floor() as usize + 1;
+    let mut rates = Vec::with_capacity(steps);
+    let (mut shown, mut oldest) = (0, 0);
+    for step in 0..steps {
+        let now = step as f64 * step_ms;
+        while shown < frame_ms.len() && frame_ms[shown] <= now {
+            shown += 1;
+        }
+        while oldest < shown && frame_ms[oldest] <= now - RATE_WINDOW_MS {
+            oldest += 1;
+        }
+        if shown == 0 {
+            rates.push(0.0);
+            continue;
+        }
+        let last = frame_ms[shown - 1];
+        let wait = now - last;
+        let interval = if shown - oldest >= 2 {
+            (last - frame_ms[oldest]) / (shown - oldest - 1) as f64
+        } else if shown >= 2 {
+            last - frame_ms[shown - 2]
+        } else {
+            wait
+        };
+        let interval = interval.max(wait);
+        rates.push(if interval > 0.0 {
+            1000.0 / interval
+        } else {
+            0.0
+        });
+    }
+    rates
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -224,13 +342,14 @@ impl Metric {
     fn about(self) -> &'static str {
         match self {
             Self::Fps => {
-                "Frames the display showed each second, counted outside the app; 60 at most."
+                "Frames the display showed per second over the whole run from the launch, counted \
+                 outside the app; 60 at most."
             }
             Self::CpuPerFrame => {
                 "CPU time of the app and every process it started, per frame shown."
             }
             Self::Ram => {
-                "Memory the app holds at the window's end: PSS on Android, the footprint of the \
+                "Memory the app holds at the run's end: PSS on Android, the footprint of the \
                  app and every process it started on macOS."
             }
             Self::GpuRam => {
@@ -238,10 +357,10 @@ impl Metric {
                  textures and window surfaces on macOS."
             }
             Self::CpuClock => {
-                "Mean clock over the window of the big cores on Android, the performance cores \
-                 on macOS."
+                "Mean clock over the run of the big cores on Android, the performance cores on \
+                 macOS."
             }
-            Self::GpuClock => "Mean GPU clock over the window.",
+            Self::GpuClock => "Mean GPU clock over the run.",
         }
     }
 
@@ -302,8 +421,9 @@ pub fn PerformanceTab() {
         );
     });
     let palette = Palette::new(isSystemInDarkTheme());
+    let frames = FrameSource::Http(local_http_client().current());
     match state.get() {
-        LoadState::Loaded(index) => PerformanceDashboard(index, Some(refresh)),
+        LoadState::Loaded(index) => PerformanceDashboard(index, Some(refresh), frames),
         LoadState::Loading => Message(palette, "Loading the nightly runs…".to_string()),
         LoadState::Failed(error) => Message(palette, error),
     }
@@ -327,10 +447,14 @@ fn Message(palette: Palette, text: String) {
     );
 }
 
-/// Everything the tab shows for one run index. `refresh` adds a Refresh
-/// button that bumps it.
+/// Everything the tab shows for one run index, with each run's frames from
+/// `source`. `refresh` adds a Refresh button that bumps it.
 #[composable]
-pub fn PerformanceDashboard(index: Rc<PerfIndex>, refresh: Option<MutableState<u64>>) {
+pub fn PerformanceDashboard(
+    index: Rc<PerfIndex>,
+    refresh: Option<MutableState<u64>>,
+    source: FrameSource,
+) {
     let palette = Palette::new(isSystemInDarkTheme());
     let scroll = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
     let selected = cranpose_core::rememberMutableStateOf(|| "gauntlet".to_string());
@@ -347,7 +471,7 @@ pub fn PerformanceDashboard(index: Rc<PerfIndex>, refresh: Option<MutableState<u
             let nightly: Vec<PerfRun> = index.nightly().into_iter().cloned().collect();
             match nightly.last() {
                 Some(latest) => {
-                    LatestNightly(palette, latest.clone());
+                    LatestNightly(palette, latest.clone(), source.clone());
                     Trend(palette, Rc::new(nightly.clone()), selected, metric);
                 }
                 None => {
@@ -359,7 +483,7 @@ pub fn PerformanceDashboard(index: Rc<PerfIndex>, refresh: Option<MutableState<u
                 }
             }
             for run in index.latest_framework_runs() {
-                Frameworks(palette, run.clone());
+                Frameworks(palette, run.clone(), source.clone());
             }
         },
     );
@@ -384,7 +508,9 @@ fn Header(palette: Palette, refresh: Option<MutableState<u64>>) {
                     );
                     Text(
                     "Each night the latest release and main draw the same scenarios on the same \
-                     phone, measured from outside the app.",
+                     phone, measured from outside the app. Every launch is measured from its start, \
+                     the same span for every framework: the charts show the frame rate against the \
+                     milliseconds since the launch, the start included.",
                     Modifier::empty(),
                     text_style(13.0, palette.muted, false),
                 );
@@ -432,7 +558,7 @@ fn Card(palette: Palette, title: String, content: impl Fn() + 'static) {
 }
 
 #[composable]
-fn LatestNightly(palette: Palette, run: PerfRun) {
+fn LatestNightly(palette: Palette, run: PerfRun, source: FrameSource) {
     let release = run.release.clone().unwrap_or_default();
     let main = run.main.clone().unwrap_or_default();
     let title = format!(
@@ -506,6 +632,18 @@ fn LatestNightly(palette: Palette, run: PerfRun) {
             Modifier::empty(),
             text_style(12.0, palette.muted, false),
         );
+        let subjects: Vec<(usize, PerfSubject)> =
+            run.subjects.iter().cloned().enumerate().collect();
+        let loaded = run_frames(source.clone(), run.file.clone(), run.protocol.from_launch);
+        for scenario in run.scenarios.keys() {
+            ScenarioLaunch(
+                palette,
+                loaded.get(),
+                run_ms(&run),
+                scenario.clone(),
+                launch_lines(palette, &run, scenario, &subjects),
+            );
+        }
     });
 }
 
@@ -688,8 +826,394 @@ fn LineChart(palette: Palette, release: Vec<f32>, main: Vec<f32>, regressed: Vec
     );
 }
 
+/// A run's frames as a card has them: loading, loaded, failed, or never
+/// kept, by a run measured after a warm-up.
+#[derive(Clone, Debug, PartialEq)]
+enum FramesState {
+    Loading,
+    Loaded(Rc<PerfRunFrames>),
+    Failed(String),
+    NotKept,
+}
+
+/// Loads a run's own `file` from `source` once, for every chart of its card;
+/// a run not measured from each launch kept no frames.
 #[composable]
-fn Frameworks(palette: Palette, run: PerfRun) {
+fn run_frames(source: FrameSource, file: String, from_launch: bool) -> MutableState<FramesState> {
+    let state = cranpose_core::rememberMutableStateOf(|| FramesState::Loading);
+    let kept = from_launch && !file.is_empty();
+    cranpose_core::LaunchedEffect(file.clone(), move |scope| {
+        if !kept {
+            state.set(FramesState::NotKept);
+            return;
+        }
+        match source.clone() {
+            FrameSource::Files(files) => state.set(match files.get(&file) {
+                Some(json) => loaded(PerfRunFrames::parse(json)),
+                None => FramesState::Failed(format!("No frames for {file}.")),
+            }),
+            FrameSource::Http(client) => {
+                let url = format!("{DATA_URL}/{file}");
+                scope.launch_background(
+                    move |_token| async move {
+                        let json = client
+                            .get_text(&url)
+                            .await
+                            .map_err(|error| format!("The run's frames did not load: {error}"))?;
+                        PerfRunFrames::parse(&json)
+                    },
+                    move |result| state.set(loaded(result)),
+                );
+            }
+        }
+    });
+    state
+}
+
+fn loaded(result: Result<PerfRunFrames, String>) -> FramesState {
+    match result {
+        Ok(frames) => FramesState::Loaded(Rc::new(frames)),
+        Err(error) => FramesState::Failed(error),
+    }
+}
+
+/// One subject's line on a [`LaunchChart`].
+#[derive(Clone, Debug, PartialEq)]
+struct LaunchLine {
+    name: String,
+    label: String,
+    color: Color,
+    /// The frame rate over the whole run, the median of the subject's legs.
+    fps: Option<f64>,
+    emphasized: bool,
+}
+
+/// Colours for the subjects' lines, in turn; Cranpose's take the accent.
+const LINE_COLORS: [(u8, u8, u8); 10] = [
+    (0xE6, 0x9F, 0x00),
+    (0x00, 0x9E, 0x73),
+    (0xCC, 0x79, 0xA7),
+    (0xD5, 0x5E, 0x00),
+    (0x56, 0xB4, 0xE9),
+    (0x8B, 0x5C, 0xF6),
+    (0x7C, 0x8A, 0x3C),
+    (0xEF, 0x44, 0x44),
+    (0x0E, 0x74, 0x90),
+    (0xA1, 0x62, 0x07),
+];
+
+/// Every subject's line for `run`'s `scenario`, in the order of `subjects`:
+/// main's Cranpose in the accent, the release in grey, the others in turn.
+fn launch_lines(
+    palette: Palette,
+    run: &PerfRun,
+    scenario: &str,
+    subjects: &[(usize, PerfSubject)],
+) -> Vec<LaunchLine> {
+    let mut others = 0;
+    subjects
+        .iter()
+        .map(|(index, subject)| {
+            let color = match subject.name.as_str() {
+                "cranpose" => palette.accent,
+                "cranpose-release" => palette.baseline,
+                _ => {
+                    let (red, green, blue) = LINE_COLORS[others % LINE_COLORS.len()];
+                    others += 1;
+                    Color::from_rgb_u8(red, green, blue)
+                }
+            };
+            LaunchLine {
+                name: subject.name.clone(),
+                label: subject.label.clone(),
+                color,
+                fps: run.median(scenario, *index, "fps"),
+                emphasized: subject.name == "cranpose",
+            }
+        })
+        .collect()
+}
+
+/// One subject's frame rate through the run, across its launches.
+#[derive(Clone, Debug, PartialEq)]
+struct LaunchCurve {
+    line: LaunchLine,
+    median: Vec<f64>,
+    lowest: Vec<f64>,
+    highest: Vec<f64>,
+    first_frame_ms: Option<f64>,
+}
+
+/// Each line's frame rate from the launch, every [`CHART_STEP_MS`] up to
+/// `run_ms`, over its legs no other process disturbed.
+fn launch_curves(
+    frames: &PerfRunFrames,
+    scenario: &str,
+    run_ms: f64,
+    lines: &[LaunchLine],
+) -> Vec<LaunchCurve> {
+    let Some(entry) = frames
+        .scenarios
+        .iter()
+        .find(|entry| entry.scenario == scenario)
+    else {
+        return Vec::new();
+    };
+    lines
+        .iter()
+        .filter_map(|line| {
+            let legs: Vec<&PerfFramesLeg> = entry
+                .legs
+                .iter()
+                .filter(|leg| {
+                    leg.subject == line.name && !leg.disturbed && !leg.frame_ms.is_empty()
+                })
+                .collect();
+            if legs.is_empty() {
+                return None;
+            }
+            let rates: Vec<Vec<f64>> = legs
+                .iter()
+                .map(|leg| launch_fps(&leg.frame_ms, run_ms, CHART_STEP_MS))
+                .collect();
+            let steps = rates.iter().map(Vec::len).min().unwrap_or(0);
+            let at = |step: usize| -> Vec<f64> {
+                let mut values: Vec<f64> = rates.iter().map(|rate| rate[step]).collect();
+                values.sort_by(f64::total_cmp);
+                values
+            };
+            let mut firsts: Vec<f64> = legs.iter().map(|leg| leg.frame_ms[0]).collect();
+            firsts.sort_by(f64::total_cmp);
+            Some(LaunchCurve {
+                line: line.clone(),
+                median: (0..steps).map(|step| middle(&at(step))).collect(),
+                lowest: (0..steps).map(|step| at(step)[0]).collect(),
+                highest: (0..steps)
+                    .map(|step| *at(step).last().unwrap_or(&0.0))
+                    .collect(),
+                first_frame_ms: Some(middle(&firsts)),
+            })
+        })
+        .collect()
+}
+
+/// The median of sorted `values`.
+fn middle(values: &[f64]) -> f64 {
+    match values.len() {
+        0 => 0.0,
+        length if length % 2 == 1 => values[length / 2],
+        length => (values[length / 2 - 1] + values[length / 2]) / 2.0,
+    }
+}
+
+/// What a chart says in place of its curves while its run's frames are not
+/// at hand, and whether that reports a failure.
+fn frames_note(frames: &FramesState) -> Option<(String, bool)> {
+    match frames {
+        FramesState::Loaded(_) => None,
+        FramesState::Loading => Some(("Loading the run's frames…".to_string(), false)),
+        FramesState::Failed(error) => Some((error.clone(), true)),
+        FramesState::NotKept => Some((
+            "This run measured a window after a warm-up and kept no frame times from the launch."
+                .to_string(),
+            false,
+        )),
+    }
+}
+
+/// A path through `values`, one every chart step from the launch.
+fn polyline(
+    path: &mut Path,
+    values: impl Iterator<Item = (usize, f64)>,
+    at: impl Fn(usize, f64) -> Point,
+) {
+    for (index, (step, value)) in values.enumerate() {
+        if index == 0 {
+            path.move_to(at(step, value));
+        } else {
+            path.line_to(at(step, value));
+        }
+    }
+}
+
+/// The grid at 0, 30 and 60, and each curve: its band from the lowest to the
+/// highest launch, then its median line.
+fn draw_launch_curves(
+    scope: &mut dyn DrawScope,
+    curves: &[LaunchCurve],
+    run_ms: f64,
+    palette: Palette,
+) {
+    let size = scope.size();
+    let peak = curves
+        .iter()
+        .flat_map(|curve| curve.highest.iter().copied())
+        .fold(60.0f64, f64::max);
+    let top = (peak * 1.05) as f32;
+    let at = |step: usize, value: f64| Point {
+        x: size.width * (step as f64 * CHART_STEP_MS / run_ms) as f32,
+        y: size.height * (1.0 - value as f32 / top),
+    };
+    for fps in [0.0, 30.0, 60.0] {
+        let y = at(0, fps).y;
+        scope.draw_line(
+            Brush::solid(palette.baseline.with_alpha(0.4)),
+            Point { x: 0.0, y },
+            Point { x: size.width, y },
+            Stroke::new(1.0),
+        );
+    }
+    for curve in curves {
+        let color = curve.line.color;
+        let mut band = Path::new();
+        polyline(&mut band, curve.highest.iter().copied().enumerate(), at);
+        for (step, value) in curve.lowest.iter().enumerate().rev() {
+            band.line_to(at(step, *value));
+        }
+        band.close();
+        scope.draw_path(&band, Brush::solid(color.with_alpha(0.12)), DrawStyle::Fill);
+        let mut line = Path::new();
+        polyline(&mut line, curve.median.iter().copied().enumerate(), at);
+        let width = if curve.line.emphasized { 2.5 } else { 1.5 };
+        scope.draw_path(
+            &line,
+            Brush::solid(color),
+            DrawStyle::Stroke(Stroke::new(width)),
+        );
+    }
+}
+
+/// Each curve's colour, label, frame rate over the whole run and first frame.
+#[composable]
+fn LaunchLegend(palette: Palette, curves: Rc<Vec<LaunchCurve>>) {
+    for curve in curves.iter() {
+        let line = curve.line.clone();
+        let first = curve.first_frame_ms;
+        Row(
+            Modifier::empty(),
+            RowSpec::new()
+                .horizontal_arrangement(LinearArrangement::SpacedBy(8.0))
+                .vertical_alignment(VerticalAlignment::CenterVertically),
+            move || {
+                Box(
+                    Modifier::empty()
+                        .width(16.0)
+                        .height(4.0)
+                        .background(line.color),
+                    BoxSpec::default(),
+                    || {},
+                );
+                Text(
+                    line.label.clone(),
+                    Modifier::empty().width(220.0),
+                    text_style(12.0, palette.text, line.emphasized),
+                );
+                Text(
+                    format!("{} fps", figure(line.fps)),
+                    Modifier::empty().width(80.0),
+                    text_style(12.0, palette.text, line.emphasized),
+                );
+                Text(
+                    first.map_or_else(
+                        || "–".to_string(),
+                        |first| format!("first frame {first:.0} ms"),
+                    ),
+                    Modifier::empty(),
+                    text_style(12.0, palette.muted, false),
+                );
+            },
+        );
+    }
+}
+
+/// The frame rate against the milliseconds since the launch, for every
+/// subject: each line is the median of its launches, over a band from the
+/// lowest to the highest, and the legend gives each its frame rate over the
+/// whole run and its first frame.
+#[composable]
+fn LaunchChart(
+    palette: Palette,
+    frames: FramesState,
+    run_ms: f64,
+    scenario: String,
+    lines: Vec<LaunchLine>,
+) {
+    if let Some((note, failed)) = frames_note(&frames) {
+        let color = if failed { palette.worse } else { palette.muted };
+        Text(note, Modifier::empty(), text_style(12.0, color, false));
+        return;
+    }
+    let curves = match &frames {
+        FramesState::Loaded(frames) => launch_curves(frames, &scenario, run_ms, &lines),
+        _ => Vec::new(),
+    };
+    if curves.is_empty() {
+        Text(
+            "No frames were kept for this scenario.",
+            Modifier::empty(),
+            text_style(12.0, palette.muted, false),
+        );
+        return;
+    }
+    let curves = Rc::new(curves);
+    let drawn = curves.clone();
+    Canvas(
+        Modifier::empty().fill_max_width().height(200.0),
+        move |scope| {
+            draw_launch_curves(scope, &drawn, run_ms, palette);
+        },
+    );
+    Row(
+        Modifier::empty().fill_max_width(),
+        RowSpec::new().horizontal_arrangement(LinearArrangement::SpaceBetween),
+        move || {
+            for quarter in 0..=4 {
+                Text(
+                    format!("{:.0} ms", run_ms * f64::from(quarter) / 4.0),
+                    Modifier::empty(),
+                    text_style(11.0, palette.muted, false),
+                );
+            }
+        },
+    );
+    Text(
+        format!(
+            "Frame rate against milliseconds since the launch, every {CHART_STEP_MS:.0} ms: the \
+             frames of the last {RATE_WINDOW_MS:.0} ms, falling as the wait since the last frame \
+             grows; 0 before the first frame. Grid at 0, 30 and 60. Lines: the median of each \
+             one's launches; bands: its lowest to its highest. Each one's frame rate is over the \
+             whole {run_ms:.0} ms from the launch, its start included."
+        ),
+        Modifier::empty(),
+        text_style(12.0, palette.muted, false),
+    );
+    LaunchLegend(palette, curves);
+}
+
+/// A scenario's name over its launch chart.
+#[composable]
+fn ScenarioLaunch(
+    palette: Palette,
+    frames: FramesState,
+    run_ms: f64,
+    scenario: String,
+    lines: Vec<LaunchLine>,
+) {
+    Text(
+        scenario.clone(),
+        Modifier::empty(),
+        text_style(13.0, palette.text, true),
+    );
+    LaunchChart(palette, frames, run_ms, scenario, lines);
+}
+
+/// The run's length in milliseconds from its launch.
+fn run_ms(run: &PerfRun) -> f64 {
+    run.protocol.run_s.unwrap_or(20.0) * 1000.0
+}
+
+#[composable]
+fn Frameworks(palette: Palette, run: PerfRun, source: FrameSource) {
     // Best first for the metric shown, alphabetical among equals, each with
     // the version measured and a link to its source at the commit the run
     // measured. Cranpose's bars carry the accent.
@@ -709,13 +1233,16 @@ fn Frameworks(palette: Palette, run: PerfRun) {
         &run.started_at[..run.started_at.len().min(10)]
     );
     Card(palette, title, move || {
+        let loaded = run_frames(source.clone(), run.file.clone(), run.protocol.from_launch);
         MetricChips(palette, metric);
         let shown = metric.get();
         for scenario in run.scenarios.keys() {
-            Text(
+            ScenarioLaunch(
+                palette,
+                loaded.get(),
+                run_ms(&run),
                 scenario.clone(),
-                Modifier::empty(),
-                text_style(13.0, palette.text, true),
+                launch_lines(palette, &run, scenario, &subjects),
             );
             let values: Vec<Option<f64>> = subjects
                 .iter()
