@@ -1268,7 +1268,12 @@ impl ShapeVariant {
 
     /// The variant `segment` draws with. `vertex_gradients` says a rect
     /// fill may take its gradient from its vertices here; a segment of
-    /// slices of path fills may wherever it is drawn `flat`.
+    /// slices of path fills may wherever it is drawn `flat`. Under a rounded
+    /// clip the variant keeps the general entry points, which carry the
+    /// clip's radius to the fragment, but compiles in only the segment's
+    /// kinds and brush: the general program with every kind and brush is
+    /// twice the code (Mali-G76: 108-115 ms to compile or link, the
+    /// specialized ones 22-62).
     pub(crate) fn of_segment(
         segment: &RecordSegment,
         clip: SegmentClip,
@@ -1276,7 +1281,7 @@ impl ShapeVariant {
         laid: bool,
         (flat, vertex_gradients): (bool, bool),
     ) -> Self {
-        if !shape_variants_enabled() || clip == SegmentClip::Rounded {
+        if !shape_variants_enabled() {
             return Self {
                 kinds: Self::GENERAL.kinds | (segment.kinds & TRAPEZOID_KIND),
                 ablation,
@@ -1298,7 +1303,9 @@ impl ShapeVariant {
                 .map(|brush| brush as u8),
             solid: !gradient,
             clip,
-            interior: gradient
+            // A rounded clip's corners are not opaque: no interior path.
+            interior: clip != SegmentClip::Rounded
+                && gradient
                 && segment.interiors
                 && !(laid && segment.occluders && !segment.bare_interiors),
             dither: segment.vertex_gradient && vertex_gradients,
