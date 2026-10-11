@@ -37,7 +37,13 @@ pub enum HttpError {
     #[error("Download was cancelled")]
     Cancelled,
     #[error("Failed to write downloaded file {path}: {message}")]
-    FileWrite { path: String, message: String },
+    FileWrite {
+        path: String,
+        /// What the system reported, such as
+        /// [`std::io::ErrorKind::StorageFull`] for a full disk.
+        kind: std::io::ErrorKind,
+        message: String,
+    },
 }
 
 /// How much of a transfer has arrived.
@@ -537,10 +543,7 @@ async fn download_through<C: HttpClient + ?Sized>(
     } else {
         std::fs::File::create(target)
     }
-    .map_err(|error| HttpError::FileWrite {
-        path: target.display().to_string(),
-        message: error.to_string(),
-    })?;
+    .map_err(|error| file_write_error(target, &error))?;
 
     let mut transferred = base;
     control.report(HttpProgress { transferred, total });
@@ -550,18 +553,23 @@ async fn download_through<C: HttpClient + ?Sized>(
         }
         output
             .write_all(&chunk)
-            .map_err(|error| HttpError::FileWrite {
-                path: target.display().to_string(),
-                message: error.to_string(),
-            })?;
+            .map_err(|error| file_write_error(target, &error))?;
         transferred += chunk.len() as u64;
         control.report(HttpProgress { transferred, total });
     }
-    output.flush().map_err(|error| HttpError::FileWrite {
-        path: target.display().to_string(),
-        message: error.to_string(),
-    })?;
+    output
+        .flush()
+        .map_err(|error| file_write_error(target, &error))?;
     Ok(transferred)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn file_write_error(target: &Path, error: &std::io::Error) -> HttpError {
+    HttpError::FileWrite {
+        path: target.display().to_string(),
+        kind: error.kind(),
+        message: error.to_string(),
+    }
 }
 
 pub type HttpClientRef = Arc<dyn HttpClient>;

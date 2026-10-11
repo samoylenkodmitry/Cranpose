@@ -703,6 +703,33 @@ fn a_download_resumes_from_what_is_already_on_disk() {
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
 #[test]
+fn a_download_that_cannot_write_says_why() {
+    let target = crate::test_scratch_dir("http-unwritable")
+        .join("no such folder")
+        .join("payload.bin");
+    let Some((url, server)) =
+        local_server(vec![b'w'; 1024], 1024, std::time::Duration::ZERO, false)
+    else {
+        return;
+    };
+    let outcome =
+        pollster::block_on(default_http_client().download_to(&url, &target, HttpControl::new()));
+    server.join().expect("the local server finishes");
+
+    assert!(
+        matches!(
+            outcome,
+            Err(HttpError::FileWrite {
+                kind: std::io::ErrorKind::NotFound,
+                ..
+            })
+        ),
+        "a file that cannot be created must say why, got {outcome:?}"
+    );
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
+#[test]
 fn a_server_that_ignores_a_range_restarts_the_file_rather_than_appending() {
     let body: Vec<u8> = (0..4096u32).map(|value| value as u8).collect();
     let directory = crate::test_scratch_dir("http-restart");
