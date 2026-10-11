@@ -544,6 +544,23 @@ pub trait PlatformDownloader: Send + Sync {
         target: &'a Path,
         control: HttpControl,
     ) -> HttpFuture<'a, u64>;
+
+    /// The bytes of `target` this downloader keeps apart from the file, as
+    /// a paused transfer's, added to the file's own; `None` when it keeps
+    /// none.
+    fn downloaded_length(&self, target: &Path) -> Option<u64>;
+}
+
+/// How much of a download into `target` is on the device: the file's
+/// length, or more where the platform keeps a paused transfer's bytes apart
+/// from the file, as iOS does. An application shows a paused download's
+/// progress with it.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn downloaded_length(target: &Path) -> u64 {
+    PLATFORM_DOWNLOADER
+        .get()
+        .and_then(|downloader| downloader.downloaded_length(target))
+        .unwrap_or_else(|| std::fs::metadata(target).map_or(0, |metadata| metadata.len()))
 }
 
 #[cfg(not(target_arch = "wasm32"))]

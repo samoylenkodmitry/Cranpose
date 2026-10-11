@@ -740,6 +740,10 @@ fn a_platform_downloader_runs_every_download_to() {
                 .push((url.to_owned(), target.to_owned()));
             Box::pin(async { Ok(7) })
         }
+
+        fn downloaded_length(&self, _target: &Path) -> Option<u64> {
+            Some(42)
+        }
     }
     let _services = crate::registry::test_service_guard();
     let recorded = Arc::new(Recorded(std::sync::Mutex::default()));
@@ -750,12 +754,21 @@ fn a_platform_downloader_runs_every_download_to() {
         &target,
         HttpControl::new(),
     ));
+    let kept = downloaded_length(&target);
     PLATFORM_DOWNLOADER.clear();
+    std::fs::write(&target, [0u8; 5]).expect("a partial file");
+    let on_disk = downloaded_length(&target);
+    let _ = std::fs::remove_file(&target);
 
     assert_eq!(written.expect("the platform's result"), 7);
     assert_eq!(
         *recorded.0.lock().unwrap_or_else(PoisonError::into_inner),
         [("https://example.test/model.bin".to_owned(), target)]
+    );
+    assert_eq!(kept, 42, "the platform's own count of what it keeps");
+    assert_eq!(
+        on_disk, 5,
+        "without a platform downloader, the file is the count"
     );
 }
 
