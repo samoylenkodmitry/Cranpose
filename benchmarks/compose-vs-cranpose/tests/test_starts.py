@@ -59,7 +59,8 @@ def leg(fps):
     """What `measure_run` reports of a leg, at `fps`."""
     return {'fps': fps, 'frames': int(fps * 10), 'run_s': 10.0, 'first_frame_s': 0.4, 'frame_ms': [400.0],
             'fps_by_second': [fps] * 10, 'first_poll_full': False, 'janky_pct': 0.0, 'interval_p99_ms': 20.0,
-            'cpu_ms_per_frame': 30.0, 'desired_to_present_p50_ms': 26.0, 'memory': {'total_pss_kb': 102400},
+            'cpu_ms_per_frame': 30.0, 'cpu_cores': 1.5, 'samples': {'t_ms': [500]},
+            'desired_to_present_p50_ms': 26.0, 'memory': {'total_pss_kb': 102400},
             'throttled': False, 'temperature_before': {}, 'temperature_after': {}}
 
 

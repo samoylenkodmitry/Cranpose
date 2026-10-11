@@ -9,6 +9,10 @@
 # PACKAGE:name for its other processes), with the CPU it spent since it
 # started: the app's whole run from its launch.
 #
+# Each interval also reads every process's CPU ticks and resident pages (PU,
+# PS and PM lines) with the shell's own `read`, which starts no process, so
+# the samples cost the device next to nothing.
+#
 # SurfaceFlinger keeps only the last frames of a layer: 128 on Android 10, 64
 # on Android 17, which is half a second at 120 Hz. A poller of its own reads
 # the layer every INTERVAL_S, so pick it below that span; the slower clock and
@@ -68,6 +72,16 @@ read_node() { cat "$1" 2>/dev/null || echo -; }
 before_end() { awk -v now="$(cut -d' ' -f1 /proc/uptime)" -v end="$END" 'BEGIN { exit !(now < end) }'; }
 while before_end; do
   sleep $INTERVAL
+  read -r up idle < /proc/uptime
+  echo "PU $up"
+  for pid in $PIDS; do
+    if [ -r /proc/$pid/stat ]; then
+      read -r stat < /proc/$pid/stat
+      read -r pages < /proc/$pid/statm
+      echo "PS $stat"
+      echo "PM $pid $pages"
+    fi
+  done
   # Current clocks, then the caps thermal management applies to them; a
   # node the shell cannot read (the CPU caps, after some reboots) is "-".
   echo "F $(read_node /sys/class/devfreq/gpufreq/cur_freq) $(read_node /sys/class/devfreq/ddrfreq/cur_freq) $(read_node /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq) $(read_node /sys/devices/system/cpu/cpu4/cpufreq/scaling_cur_freq) $(read_node /sys/devices/system/cpu/cpu6/cpufreq/scaling_cur_freq) $(read_node /sys/class/devfreq/gpufreq/max_freq) $(read_node /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq) $(read_node /sys/devices/system/cpu/cpu4/cpufreq/scaling_max_freq) $(read_node /sys/devices/system/cpu/cpu6/cpufreq/scaling_max_freq)"

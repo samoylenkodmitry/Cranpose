@@ -532,6 +532,56 @@ def clock_summary(freqs):
     return summary
 
 
+# The size of a page /proc/PID/statm counts in.
+PAGE_BYTES = 4096
+MB = 1024 * 1024
+
+
+def run_samples(lines, launched, ticks_per_s, frame_times):
+    """The run at each of the sampler's intervals, from the launch: the cores
+    the app's processes kept busy, the CPU they spent per frame presented in
+    the interval, the memory they kept resident (RSS: the PSS that `meminfo`
+    reads at the end costs the app a garbage collection), and the big cores'
+    and the GPU's clocks. Each interval runs from the previous sample; the
+    first from the launch, when every process of the app started anew.
+    `frame_times` are the frames' presentation times on the uptime clock."""
+    taken = [{'t': launched, 'ticks': 0, 'pages': None, 'clocks': None, 'mali': None}]
+    for line in lines:
+        if line.startswith('PU '):
+            taken.append({'t': float(line.split()[1]), 'ticks': 0, 'pages': 0, 'clocks': None, 'mali': None})
+        elif len(taken) == 1:
+            continue
+        elif line.startswith('PS ') and len(line) > 3:
+            taken[-1]['ticks'] += parse_stat(line[3:])[1]
+        elif line.startswith('PM '):
+            fields = line.split()
+            if len(fields) > 3 and fields[3].isdigit():
+                taken[-1]['pages'] += int(fields[3])
+        elif line.startswith('F '):
+            taken[-1]['clocks'] = next(iter(clock_samples([line])), None)
+        elif line.startswith('G ') and line.split()[-1].isdigit():
+            taken[-1]['mali'] = int(line.split()[-1])
+    samples = {'t_ms': [], 'cores': [], 'cpu_ms_per_frame': [], 'ram_mb': [], 'cpu_mhz': [], 'gpu_mhz': []}
+    for earlier, later in zip(taken, taken[1:]):
+        span = later['t'] - earlier['t']
+        if span <= 0:
+            continue
+        # A helper process that ended takes its ticks with it.
+        cpu_s = max(0, later['ticks'] - earlier['ticks']) / ticks_per_s
+        shown = sum(1 for time in frame_times if earlier['t'] < time <= later['t'])
+        clocks = later['clocks'] or [None] * len(CLOCKS)
+        big = clocks[CLOCKS.index(('cpu_big_mhz', 1e3))]
+        gpu = clocks[CLOCKS.index(('gpu_mhz', 1e6))]
+        samples['t_ms'].append(round((later['t'] - launched) * 1000))
+        samples['cores'].append(round(cpu_s / span, 3))
+        samples['cpu_ms_per_frame'].append(round(cpu_s * 1000 / shown, 2) if shown else None)
+        samples['ram_mb'].append(round(later['pages'] * PAGE_BYTES / MB, 1))
+        samples['cpu_mhz'].append(round(big / 1e3) if big is not None else None)
+        samples['gpu_mhz'].append(round(gpu / 1e6) if gpu is not None
+                                  else round(later['mali'] / 1e3) if later['mali'] is not None else None)
+    return samples
+
+
 def frame_rate(device, layer):
     """A layer's recent frame rate, from the presents SurfaceFlinger keeps for
     it; 0 when it has presented fewer than two frames."""
@@ -729,6 +779,7 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
     # smallest gap is the clock offset to within about one frame.
     offset = min(calibration)
     stats = frame_stats(frames, launched - offset, t1 - offset, vsync_ms)
+    frame_times = [actual / 1e9 + offset for actual in frames]
     freqs = clock_samples(lines)
     mali_khz = [int(fields[1]) for fields in (line.split() for line in lines if line.startswith('G '))
                 if len(fields) == 2 and fields[1].isdigit()]
@@ -750,7 +801,9 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
         first_poll_full=first_poll_full(output),
         **stats,
         cpu_pct=100.0 * cpu_s / elapsed,
+        cpu_cores=cpu_s / elapsed,
         cpu_ms_per_frame=1000.0 * cpu_s / stats['frames'],
+        samples=run_samples(lines, launched, ticks_per_s, frame_times),
         top_threads=threads[:6],
         **clock_summary(freqs),
         **mali_clock_summary(freqs, mali_khz),
