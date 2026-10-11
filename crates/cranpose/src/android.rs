@@ -2031,7 +2031,7 @@ pub fn run(
 ) {
     use android_activity::{MainEvent, PollEvent};
 
-    init_logging(settings.log_tag.as_deref().unwrap_or(DEFAULT_LOG_TAG));
+    crate::android_process::start_for_activity(&app, &settings);
     crate::android_pipeline_update::note_app_launched();
 
     crate::android_frame_telemetry::seed_env_from_system_properties();
@@ -2054,7 +2054,7 @@ pub fn run(
     crate::android_file_picker::register(app.clone());
     crate::android_writable_folder::register(app.clone());
     crate::android_services::register(app.clone(), &settings.capabilities);
-    crate::android_host::install(app.clone());
+    crate::android_host::install_activity(app.clone());
     crate::process_info::install();
 
     android_platform_env()
@@ -2063,30 +2063,6 @@ pub fn run(
     crate::android_font_scale::refresh_font_scale(&app);
 
     crate::android_app_info::install_app_info(&app);
-
-    let previous_hook = std::panic::take_hook();
-    std::panic::set_hook(crate::android_panic_hook::chained_panic_hook(
-        |panic_info| {
-            let location = panic_info.location().map_or_else(
-                || "unknown location".to_string(),
-                |l| format!("{}:{}:{}", l.file(), l.line(), l.column()),
-            );
-            let message = panic_info
-                .payload()
-                .downcast_ref::<&str>()
-                .copied()
-                .or_else(|| {
-                    panic_info
-                        .payload()
-                        .downcast_ref::<String>()
-                        .map(String::as_str)
-                })
-                .unwrap_or("Box<dyn Any>");
-            let backtrace = std::backtrace::Backtrace::force_capture();
-            log::error!("PANIC at {location}: {message}\n{backtrace}");
-        },
-        previous_hook,
-    ));
 
     let content = std::rc::Rc::new(std::cell::RefCell::new(content));
 

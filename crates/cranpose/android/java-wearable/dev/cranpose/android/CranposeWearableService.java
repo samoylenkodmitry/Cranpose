@@ -1,8 +1,5 @@
 package dev.cranpose.android;
 
-import android.content.ComponentName;
-import android.content.pm.ActivityInfo;
-import android.content.pm.PackageManager;
 import android.util.Log;
 
 import com.google.android.gms.tasks.Tasks;
@@ -19,15 +16,14 @@ import java.util.concurrent.TimeUnit;
  * application's {@code cranpose_services::WearableReceiver}.
  *
  * <p>Google Play services starts this service, and the application's process
- * with it, when a message or a stream arrives; the service loads the
- * application's native library if the activity has not. A process the
- * service started has no activity, and Rust drops what arrives until the
- * application installs its receiver.
+ * with it, when a message or a stream arrives. A process the service started
+ * has no activity: {@link CranposeProcess} starts the native side, where the
+ * application installs its receiver in {@code AppLauncher::with_process_start}.
  */
 public final class CranposeWearableService extends WearableListenerService {
     private static final String TAG = "CranposeWearable";
     private static final long TIMEOUT_SECONDS = 10;
-    private static boolean loaded;
+    private boolean loaded;
 
     private static native void nativeOnMessage(String peer, String path, byte[] data);
 
@@ -36,7 +32,7 @@ public final class CranposeWearableService extends WearableListenerService {
     @Override
     public void onCreate() {
         super.onCreate();
-        loaded = loaded || loadApplicationLibrary();
+        loaded = CranposeProcess.start(this);
     }
 
     @Override
@@ -57,22 +53,6 @@ public final class CranposeWearableService extends WearableListenerService {
             nativeOnStream(channel.getNodeId(), channel.getPath(), input);
         } catch (Exception error) {
             Log.w(TAG, "a stream from the paired device did not open", error);
-        }
-    }
-
-    private boolean loadApplicationLibrary() {
-        try {
-            ActivityInfo activity = getPackageManager().getActivityInfo(
-                    new ComponentName(this, CranposeActivity.class), PackageManager.GET_META_DATA);
-            String library = activity.metaData == null ? null : activity.metaData.getString("android.app.lib_name");
-            if (library == null) {
-                return false;
-            }
-            System.loadLibrary(library);
-            return true;
-        } catch (PackageManager.NameNotFoundException | UnsatisfiedLinkError error) {
-            Log.w(TAG, "the application's native library did not load", error);
-            return false;
         }
     }
 }

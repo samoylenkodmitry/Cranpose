@@ -170,6 +170,9 @@ pub struct AppSettings {
     /// did, and hope the ordering held. Naming it here removes both the
     /// platform call and the race. Unset, lines carry `Cranpose`.
     pub log_tag: Option<String>,
+    /// Runs once per process, before the first composition and whether or
+    /// not a window ever opens. See [`AppLauncher::with_process_start`].
+    pub process_start: Option<fn()>,
     /// Optional Android overlay surface configuration.
     pub android_overlay_window: Option<AndroidOverlayWindowOptions>,
     /// Run in headless mode (window hidden, for robot testing)
@@ -230,6 +233,7 @@ impl Default for AppSettings {
             default_face: || None,
             android_gpu_backend: AndroidGpuBackend::default(),
             log_tag: None,
+            process_start: None,
             android_overlay_window: None,
             headless: false,
             developer_inspector: None,
@@ -258,6 +262,17 @@ impl Default for AppSettings {
 }
 
 impl AppSettings {
+    /// Runs [`process_start`](Self::process_start), at most once per process.
+    ///
+    /// Every platform entry point calls it once its services are in place; a
+    /// host that drives Cranpose itself calls it at the same point.
+    pub fn start_process(&self) {
+        static STARTED: std::sync::Once = std::sync::Once::new();
+        if let Some(start) = self.process_start {
+            STARTED.call_once(start);
+        }
+    }
+
     /// The font set every platform entry point hands its renderer.
     ///
     /// One definition so the platforms cannot drift, and so the measurer and
@@ -489,13 +504,13 @@ impl LauncherFonts for AppFonts {
 ///         });
 /// }
 ///
-/// // Android
-/// #[cfg(all(feature = "android", target_os = "android"))]
-/// #[unsafe(no_mangle)]
-/// fn android_main(app: android_activity::AndroidApp) {
-///     AppLauncher::new().with_title("My App").run(app, || {
+/// // Android: the macro exports what the platform looks up, the activity's
+/// // entry and the start of a process a service started.
+/// cranpose::android_main! {
+///     launcher: AppLauncher::new().with_title("My App"),
+///     content: || {
 ///         // Your composable UI here
-///     });
+///     },
 /// }
 ///
 /// #[cfg(not(any(
@@ -975,6 +990,21 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
         self
     }
 
+    /// Runs `start` once per process, after the platform services are in
+    /// place and before the first composition.
+    ///
+    /// The system can start an application's process without a window: Android
+    /// starts it when a paired watch sends a message, and iOS launches an app in
+    /// the background when its watch app asks for it. Composable content does
+    /// not run then, so what must answer without a screen, such as a
+    /// [`cranpose_services::set_wearable_receiver`], is installed here. Work
+    /// that costs memory or battery belongs where the first event arrives, not
+    /// in `start`, since the process may have started for something else.
+    pub fn with_process_start(mut self, start: fn()) -> Self {
+        self.settings.process_start = Some(start);
+        self
+    }
+
     /// Desktop only: the picture every window the application opens carries,
     /// in the title bar, taskbar and task switcher of Windows and Linux.
     ///
@@ -1378,6 +1408,27 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
     #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
     pub fn run(self, app: android_activity::AndroidApp, content: impl FnMut() + 'static) {
         crate::android::run(app, self.into_settings(), content);
+    }
+
+    /// Starts the process for a service the system started it for, with no
+    /// activity. The export [`android_main!`](crate::android_main) writes
+    /// calls it.
+    #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+    #[doc(hidden)]
+    pub fn start_service_process(
+        self,
+        env: jni::EnvUnowned<'_>,
+        class: jni::objects::JClass<'_>,
+        context: jni::objects::JObject<'_>,
+        share: jni::sys::jboolean,
+    ) {
+        crate::android_process::start_for_service(
+            env,
+            class,
+            context,
+            share,
+            &self.into_settings(),
+        );
     }
 
     /// Run the application (Web platform).

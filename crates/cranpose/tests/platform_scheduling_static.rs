@@ -2113,6 +2113,7 @@ fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
         "android_accessibility.rs",
         "android_camera.rs",
         "android_host.rs",
+        "android_process.rs",
         "android_media.rs",
         "android_services.rs",
         "android_surface.rs",
@@ -2330,6 +2331,7 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose/src/android_wearable.rs",
         "crates/cranpose/src/android_app_update.rs",
         "crates/cranpose/src/android_pipeline_update.rs",
+        "crates/cranpose/src/android_process.rs",
         "crates/cranpose/src/android_text_input.rs",
         "crates/cranpose-macros/src/branch_groups.rs",
         "crates/cranpose-macros/src/tests/branch_groups_tests.rs",
@@ -3154,11 +3156,12 @@ fn the_launcher_resolves_the_platform_font_directory_itself() {
 
 #[test]
 fn the_android_host_takes_its_log_tag_from_the_launcher() {
-    let android = crate_source("src/android.rs");
+    let process = crate_source("src/android_process.rs");
     assert!(
-        android.contains("settings.log_tag.as_deref().unwrap_or(DEFAULT_LOG_TAG)"),
+        process.contains(".log_tag") && process.contains("DEFAULT_LOG_TAG"),
         "the Android host must log under the tag the application named"
     );
+    let android = crate_source("src/android.rs");
     assert!(
         !android.contains("\"ComposeRS\""),
         "the framework is Cranpose; a stale name in logcat sends anyone reading \

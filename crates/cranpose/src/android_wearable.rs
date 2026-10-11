@@ -19,24 +19,19 @@ use jni::{
     sys::jbyte,
 };
 
-use crate::android_jni::{
-    clear_pending_android_jni_exception, load_cranpose_java_class, with_android_activity_env,
-};
+use crate::android_jni::{AndroidContext, clear_pending_android_jni_exception};
 
 const WEARABLE_CLASS: &str = "dev/cranpose/android/CranposeWearable";
 const CHUNK: usize = 8192;
 
-pub(crate) fn register(app: android_activity::AndroidApp) {
-    let declared = with_android_activity_env(&app, |env, activity| {
-        load_cranpose_java_class(env, &activity, WEARABLE_CLASS).map(|_| ())
-    });
-    if declared.is_ok() {
-        set_platform_wearable_link(Some(Arc::new(AndroidWearableLink { app })));
+pub(crate) fn register(context: &'static AndroidContext) {
+    if context.call_class(WEARABLE_CLASS, |_, _, _| Ok(())).is_ok() {
+        set_platform_wearable_link(Some(Arc::new(AndroidWearableLink { context })));
     }
 }
 
 struct AndroidWearableLink {
-    app: android_activity::AndroidApp,
+    context: &'static AndroidContext,
 }
 
 impl AndroidWearableLink {
@@ -48,26 +43,21 @@ impl AndroidWearableLink {
             JClass<'local>,
         ) -> jni::errors::Result<T>,
     ) -> Result<T, WearableError> {
-        with_android_activity_env(&self.app, |env, activity| {
-            let class = load_cranpose_java_class(env, &activity, WEARABLE_CLASS)?;
-            run(env, &activity, class).map_err(|error| {
-                clear_pending_android_jni_exception(env);
-                error.to_string()
-            })
-        })
-        .map_err(WearableError::Failed)
+        self.context
+            .call_class(WEARABLE_CLASS, run)
+            .map_err(WearableError::Failed)
     }
 }
 
 impl WearableLink for AndroidWearableLink {
     fn peers(&self) -> Result<Vec<WearablePeer>, WearableError> {
-        let listing = self.call(|env, activity, class| {
+        let listing = self.call(|env, context, class| {
             let listing = env
                 .call_static_method(
                     class,
                     jni_str!("peers"),
                     jni_sig!("(Landroid/content/Context;)Ljava/lang/String;"),
-                    &[JValue::Object(activity)],
+                    &[JValue::Object(context)],
                 )
                 .and_then(jni::JValueOwned::l)?;
             env.cast_local::<JString>(listing)?.try_to_string(env)
@@ -86,7 +76,7 @@ impl WearableLink for AndroidWearableLink {
     }
 
     fn send_message(&self, peer: &str, path: &str, data: &[u8]) -> Result<(), WearableError> {
-        self.call(|env, activity, class| {
+        self.call(|env, context, class| {
             let peer = JObject::from(env.new_string(peer)?);
             let path = JObject::from(env.new_string(path)?);
             let data = JObject::from(env.byte_array_from_slice(data)?);
@@ -95,7 +85,7 @@ impl WearableLink for AndroidWearableLink {
                 jni_str!("sendMessage"),
                 jni_sig!("(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;[B)V"),
                 &[
-                    JValue::Object(activity),
+                    JValue::Object(context),
                     JValue::Object(&peer),
                     JValue::Object(&path),
                     JValue::Object(&data),
@@ -106,7 +96,7 @@ impl WearableLink for AndroidWearableLink {
     }
 
     fn open_url(&self, peer: &str, url: &str) -> Result<(), WearableError> {
-        self.call(|env, activity, class| {
+        self.call(|env, context, class| {
             let peer = JObject::from(env.new_string(peer)?);
             let url = JObject::from(env.new_string(url)?);
             env.call_static_method(
@@ -114,7 +104,7 @@ impl WearableLink for AndroidWearableLink {
                 jni_str!("openUrl"),
                 jni_sig!("(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)V"),
                 &[
-                    JValue::Object(activity),
+                    JValue::Object(context),
                     JValue::Object(&peer),
                     JValue::Object(&url),
                 ],
@@ -124,7 +114,7 @@ impl WearableLink for AndroidWearableLink {
     }
 
     fn open_stream(&self, peer: &str, path: &str) -> Result<Box<dyn Write + Send>, WearableError> {
-        let (stream, buffer) = self.call(|env, activity, class| {
+        let (stream, buffer) = self.call(|env, context, class| {
             let peer = JObject::from(env.new_string(peer)?);
             let path = JObject::from(env.new_string(path)?);
             let stream = env
@@ -134,7 +124,7 @@ impl WearableLink for AndroidWearableLink {
                     jni_sig!(
                         "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)Ljava/io/OutputStream;"
                     ),
-                    &[JValue::Object(activity), JValue::Object(&peer), JValue::Object(&path)],
+                    &[JValue::Object(context), JValue::Object(&peer), JValue::Object(&path)],
                 )
                 .and_then(jni::JValueOwned::l)?;
             let buffer = env.new_byte_array(CHUNK)?;

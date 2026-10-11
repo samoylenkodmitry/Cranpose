@@ -29,7 +29,10 @@
 //! [`set_wearable_receiver`]. Events arrive on a platform thread. A
 //! [`WearableStream`] is read until it ends, on whatever thread the receiver
 //! hands it to. An event that arrives while no receiver is installed is
-//! dropped.
+//! dropped. The system starts the application without a window for what the
+//! paired device sends, so the receiver is installed in the application's
+//! process start (`AppLauncher::with_process_start` in `cranpose`), not in
+//! composable content.
 
 use std::{
     io::{Read, Write},

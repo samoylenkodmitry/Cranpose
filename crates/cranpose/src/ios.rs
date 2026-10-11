@@ -672,6 +672,7 @@ pub fn try_run(settings: AppSettings, content: impl FnMut() + 'static) -> Result
     ));
     #[cfg(feature = "storekit")]
     cranpose_storekit::register();
+    settings.start_process();
 
     crate::ios_scene::register_class();
 

@@ -171,6 +171,7 @@ runners! {
     robot_presented_window_hidpi_geometry,
     robot_presented_window_redraw,
     robot_pressed_state,
+    robot_process_start,
     robot_progress_bar,
     robot_reactive_handle_copy,
     robot_reactive_state,

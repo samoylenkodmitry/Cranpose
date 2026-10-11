@@ -264,6 +264,7 @@ pub async fn run(
 
     crate::web_services::register();
     crate::web_host_surface::install();
+    settings.start_process();
 
     let window = web_sys::window().ok_or("no global window exists")?;
     let document = window

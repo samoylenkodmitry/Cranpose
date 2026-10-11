@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use jni::{
-    Env, EnvUnowned, JavaVM, Outcome,
-    objects::{JClass, JObject, JString},
+    Env, EnvUnowned, JavaVM, Outcome, jni_sig, jni_str,
+    objects::{Global, JClass, JObject, JString},
     sys::{jfloat, jint, jlong},
 };
 use ndk::native_window::NativeWindow;
@@ -47,12 +47,81 @@ pub(crate) fn call_cranpose_class<T>(
     ) -> jni::errors::Result<T>,
 ) -> Result<T, String> {
     with_android_activity_env(app, |env, activity| {
-        let class = load_cranpose_java_class(env, &activity, class_name)?;
-        run(env, &activity, class).map_err(|error| {
-            clear_pending_android_jni_exception(env);
-            error.to_string()
-        })
+        run_cranpose_class(env, &activity, class_name, run)
     })
+}
+
+fn run_cranpose_class<'local, T>(
+    env: &mut Env<'local>,
+    owner: &JObject<'local>,
+    class_name: &str,
+    run: impl FnOnce(&mut Env<'local>, &JObject<'local>, JClass<'local>) -> jni::errors::Result<T>,
+) -> Result<T, String> {
+    let class = load_cranpose_java_class(env, owner, class_name)?;
+    run(env, owner, class).map_err(|error| {
+        clear_pending_android_jni_exception(env);
+        error.to_string()
+    })
+}
+
+/// The application's `Context`, which outlives every activity and exists
+/// also in a process the system started for a service, with no activity.
+pub(crate) struct AndroidContext(Global<JObject<'static>>);
+
+impl AndroidContext {
+    /// Holds the application context that `context` belongs to.
+    pub(crate) fn new(env: &mut Env<'_>, context: &JObject<'_>) -> Result<Self, String> {
+        env.call_method(
+            context,
+            jni_str!("getApplicationContext"),
+            jni_sig!("()Landroid/content/Context;"),
+            &[],
+        )
+        .and_then(jni::JValueOwned::l)
+        .and_then(|application| env.new_global_ref(application))
+        .map(Self)
+        .map_err(|error| {
+            clear_pending_android_jni_exception(env);
+            format!("the application context is not available: {error}")
+        })
+    }
+
+    /// The JNI reference to the context, valid while `self` lives.
+    pub(crate) fn raw(&self) -> jni::sys::jobject {
+        self.0.as_raw()
+    }
+
+    /// Holds the application context of the activity `app` runs.
+    pub(crate) fn of_activity(app: &android_activity::AndroidApp) -> Result<Self, String> {
+        with_android_activity_env(app, |env, activity| Self::new(env, &activity))
+    }
+
+    /// Runs `run` with the context on this thread's JNI environment.
+    pub(crate) fn with_env<T>(
+        &self,
+        run: impl for<'local> FnOnce(&mut Env<'local>, &JObject<'local>) -> Result<T, String>,
+    ) -> Result<T, String> {
+        JavaVM::singleton()
+            .map_err(|error| format!("the Android JavaVM is not available: {error}"))?
+            .attach_current_thread(|env| -> jni::errors::Result<Result<T, String>> {
+                Ok(run(env, self.0.as_obj()))
+            })
+            .map_err(|error| format!("failed to access Android JNI environment: {error}"))?
+    }
+
+    /// Runs `run` with the context and the Cranpose Java class `class_name`,
+    /// clearing any Java exception it leaves.
+    pub(crate) fn call_class<T>(
+        &self,
+        class_name: &str,
+        run: impl for<'local> FnOnce(
+            &mut Env<'local>,
+            &JObject<'local>,
+            JClass<'local>,
+        ) -> jni::errors::Result<T>,
+    ) -> Result<T, String> {
+        self.with_env(|env, context| run_cranpose_class(env, context, class_name, run))
+    }
 }
 
 /// Calls the static method `name(Activity)` of the Cranpose Java class
@@ -95,7 +164,7 @@ pub(crate) fn load_cranpose_java_class<'local>(
     activity: &jni::objects::JObject<'local>,
     class_name: &str,
 ) -> Result<JClass<'local>, String> {
-    use jni::{jni_sig, jni_str, objects::JValue};
+    use jni::objects::JValue;
 
     let class_name_string = env
         .new_string(class_name.replace('/', "."))
