@@ -25,6 +25,10 @@ default = []
 # GLSL writer for runtime-shader portability validation. Web always compiles
 # the WebGL fallback and does not need this feature.
 backend-gles = ["wgpu/gles", "naga/glsl-out"]
+# On the web, GLSL templates of the built-in shaders, written at build time:
+# a WebGL device builds their pipelines without naga on the page. The `web`
+# feature of `cranpose` turns it on.
+gl-templates = ["dep:cranpose-gl-templates", "dep:cranpose-ui-graphics"]
 # Embed the framework fallback font (~1.3 MiB) used when the app provides no fonts.
 embedded-default-font = ["cranpose-render-common/embedded-default-font"]
 
@@ -103,6 +107,10 @@ wgpu = { workspace = true, features = [
 # The WebGL fallback is always compiled on web, so runtime-shader GL
 # portability validation needs naga's GLSL writer there unconditionally.
 naga = { version = "30.0.1", features = ["wgsl-in", "glsl-out"] }
+
+[build-dependencies]
+cranpose-gl-templates = { workspace = true, optional = true }
+cranpose-ui-graphics = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Path-only dev-deps: stripped from the published manifest (publish order ignores dev edges).

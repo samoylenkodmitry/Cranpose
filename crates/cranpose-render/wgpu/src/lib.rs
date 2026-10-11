@@ -23,6 +23,11 @@ mod frame_graph;
 mod frame_packet;
 mod frontend;
 mod glass_split;
+/// The GLSL templates of the built-in shader modules, which `build.rs` wrote.
+#[cfg(all(target_arch = "wasm32", feature = "gl-templates"))]
+mod gl_templates {
+    include!(concat!(env!("OUT_DIR"), "/gl_templates.rs"));
+}
 #[cfg(test)]
 #[path = "tests/gles_lowering.rs"]
 mod gles_lowering;

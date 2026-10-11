@@ -125,6 +125,7 @@ android = [
 ]
 web = [
     "cranpose-platform-web",
+    "cranpose-render-wgpu?/gl-templates",
     "dep:wasm-bindgen",
     "dep:web-sys",
     "dep:js-sys",

@@ -264,6 +264,8 @@ pub mod noop;
 pub mod vulkan;
 
 pub mod auxil;
+mod glsl_template;
+pub use glsl_template::{GlslBlock, GlslMacro, GlslMacroKind, GlslTemplate, GlslTexture};
 pub mod api {
     #[cfg(dx12)]
     pub use super::dx12::Api as Dx12;
@@ -2543,6 +2545,8 @@ pub enum ShaderInput<'a> {
     Glsl {
         shader: &'a str,
     },
+    /// One template per entry point, for the GL backend.
+    GlslTemplates(&'static [GlslTemplate]),
 }
 
 impl fmt::Debug for ShaderInput<'_> {
@@ -2557,6 +2561,7 @@ impl fmt::Debug for ShaderInput<'_> {
             Self::Dxil { .. } => f.debug_tuple("Dxil").finish_non_exhaustive(),
             Self::Hlsl { .. } => f.debug_tuple("Hlsl").finish_non_exhaustive(),
             Self::Glsl { .. } => f.debug_tuple("Glsl").finish_non_exhaustive(),
+            Self::GlslTemplates(_) => f.debug_tuple("GlslTemplates").finish_non_exhaustive(),
         }
     }
 }

@@ -1370,6 +1370,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cranpose-gl-templates"
+version = "0.9.24"
+dependencies = [
+ "cranpose-ui-graphics",
+ "cranpose-wgpu-hal",
+ "naga",
+]
+
+[[package]]
 name = "cranpose-liquid"
 version = "0.9.24"
 dependencies = [
@@ -1539,6 +1548,7 @@ dependencies = [
  "cranpose-app-shell",
  "cranpose-core",
  "cranpose-foundation",
+ "cranpose-gl-templates",
  "cranpose-liquid",
  "cranpose-macros",
  "cranpose-render-common",
@@ -1658,7 +1668,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu"
-version = "30.0.10"
+version = "30.0.11"
 dependencies = [
  "arrayvec",
  "bitflags 2.13.2",
@@ -1686,7 +1696,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu-core"
-version = "30.0.10"
+version = "30.0.11"
 dependencies = [
  "arrayvec",
  "bit-set 0.10.0",
@@ -1747,7 +1757,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu-hal"
-version = "30.0.10"
+version = "30.0.11"
 dependencies = [
  "android_system_properties",
  "arrayvec",

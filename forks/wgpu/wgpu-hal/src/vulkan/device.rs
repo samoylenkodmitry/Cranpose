@@ -1947,7 +1947,8 @@ impl crate::Device for super::Device {
             | crate::ShaderInput::Msl { .. }
             | crate::ShaderInput::Dxil { .. }
             | crate::ShaderInput::Hlsl { .. }
-            | crate::ShaderInput::Glsl { .. } => unreachable!(),
+            | crate::ShaderInput::Glsl { .. }
+            | crate::ShaderInput::GlslTemplates(_) => unreachable!(),
         };
 
         self.counters.shader_modules.add(1);

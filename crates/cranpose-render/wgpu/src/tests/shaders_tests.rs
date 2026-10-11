@@ -1,22 +1,10 @@
 use super::*;
 
 #[test]
-fn the_blit_shaders_are_complete_wgsl_with_a_fragment_entry_point() {
-    for (name, source) in [
-        ("blit", blit_shader()),
-        ("projective blit", projective_blit_shader()),
-    ] {
-        assert!(
-            source.contains("@fragment"),
-            "the {name} shader has no fragment entry point"
-        );
-        assert!(
-            source.contains("fn "),
-            "the {name} shader declares no functions at all"
-        );
+fn every_built_in_module_validates_for_webgpu() {
+    for (name, source) in wgsl::MODULES {
+        validate_wgsl_module(source).unwrap_or_else(|error| panic!("{name}: {error}"));
     }
-
-    assert_ne!(blit_shader(), projective_blit_shader());
 }
 
 use naga::ShaderStage;
@@ -52,17 +40,12 @@ fn validate_glsl_portability_with_constants(
 }
 
 #[test]
-fn blur_shader_validates_for_webgpu() {
-    assert!(validate_wgsl_module(&super::blur_shader()).is_ok());
-}
-
-#[test]
-fn blur_shader_writes_one_guarded_call_per_kernel_pair() {
-    let shader = super::blur_shader();
-    assert!(
-        !shader.contains(super::BLUR_KERNEL_PAIRS_MARKER),
-        "the marker must be replaced"
-    );
+fn blur_shader_takes_one_guarded_call_per_kernel_pair() {
+    let shader = wgsl::BLUR_WGSL;
+    assert!(shader.contains(&format!(
+        "pairs: array<vec4<f32>, {}>,",
+        cranpose_render_common::geometry::BLUR_TAP_PAIRS
+    )));
     for pair in 0..cranpose_render_common::geometry::BLUR_TAP_PAIRS {
         let call = format!(
             "if (pair_count > {pair}) {{ color = color + kernel_pair(frame, axis, blur.pairs[{pair}], {}.0); }}",
@@ -80,8 +63,8 @@ fn blur_shader_writes_one_guarded_call_per_kernel_pair() {
 
 #[test]
 fn blur_shader_validates_for_webgl() {
-    let shader = super::blur_shader();
-    assert!(validate_glsl_portability(&shader, "fullscreen_vs", ShaderStage::Vertex).is_ok());
+    let shader = wgsl::BLUR_WGSL;
+    assert!(validate_glsl_portability(shader, "fullscreen_vs", ShaderStage::Vertex).is_ok());
     for tile_mode in 0..4 {
         for block in [2, 4] {
             let constants = naga::back::PipelineConstants::from_iter([
@@ -90,7 +73,7 @@ fn blur_shader_validates_for_webgl() {
             ]);
             for entry in ["blur_fs", "blur_downsample_fs", "blur_mean_fs"] {
                 validate_glsl_portability_with_constants(
-                    &shader,
+                    shader,
                     entry,
                     ShaderStage::Fragment,
                     &constants,
@@ -101,11 +84,6 @@ fn blur_shader_validates_for_webgl() {
             }
         }
     }
-}
-
-#[test]
-fn offset_shader_validates_for_webgpu() {
-    assert!(validate_wgsl_module(&super::offset_shader()).is_ok());
 }
 
 #[test]
@@ -357,8 +335,8 @@ fn shapes_glyphs_and_images_share_one_depth_step() {
     let step = "const DEPTH_STEP: f32 = 1.0 / 1048576.0;";
     for (name, source) in [
         ("shape", SHADER),
-        ("glyph", GLYPH_ATLAS_SHADER),
-        ("image", IMAGE_SHADER),
+        ("glyph", wgsl::GLYPH_ATLAS_WGSL),
+        ("image", wgsl::IMAGE_WGSL),
     ] {
         assert!(
             source.contains(step),
