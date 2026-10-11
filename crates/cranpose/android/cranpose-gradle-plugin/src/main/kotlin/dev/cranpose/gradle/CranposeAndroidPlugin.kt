@@ -223,12 +223,11 @@ class CranposeAndroidPlugin : Plugin<Project> {
             declaration.from(native.flatMap(CranposeNativeBuild::declarationDir).map { directory ->
                 directory.asFileTree
             })
-            serviceSources.set(
-                DECLARED_SERVICES.mapValues { (_, service) ->
-                    File(root, service.javaSource).absolutePath
-                }
-            )
-            sources.from(DECLARED_SERVICES.values.map { service -> File(root, service.javaSource) })
+            val javaSources = DECLARED_SERVICES.mapNotNull { (name, service) ->
+                service.javaSource?.let { directory -> name to File(root, directory) }
+            }.toMap()
+            serviceSources.set(javaSources.mapValues { (_, directory) -> directory.absolutePath })
+            sources.from(javaSources.values)
         }
         variant.sources.java?.addGeneratedSourceDirectory(
             declared,
@@ -270,10 +269,16 @@ class CranposeAndroidPlugin : Plugin<Project> {
         val needed = requireKnownServices(cranpose).flatMap { service ->
             SERVICE_PERMISSIONS[service].orEmpty().map { permission -> permission to service }
         }.toMap()
+        val root = androidRoot()
+        val manifests = DECLARED_SERVICES.mapNotNull { (name, service) ->
+            service.manifest?.let { path -> name to File(root, path) }
+        }.toMap()
         task.configure {
             description = "Checks ${variant.name}'s permissions and the features they carry"
             requiredFeatures.set(cranpose.requiredFeatures)
             servicePermissions.set(needed)
+            serviceManifests.set(manifests.mapValues { (_, file) -> file.absolutePath })
+            serviceManifestFiles.from(manifests.values)
             declaration.from(native.flatMap(CranposeNativeBuild::declarationDir).map { directory ->
                 directory.asFileTree
             })
@@ -559,12 +564,16 @@ class CranposeAndroidPlugin : Plugin<Project> {
         /** Names the directory a build script writes the declaration into. */
         const val CAPABILITIES_DIR_VARIABLE = "CRANPOSE_CAPABILITIES_DIR"
 
+        /**
+         * The services `cranpose { services }` offers. `background` and
+         * `media`, like `update`, come only from the build script's
+         * `Use::background()` and `Use::media()`: one declaration, which also
+         * writes their permissions.
+         */
         val KNOWN_SERVICES = setOf(
-            "background",
             "billing",
             "camera",
             "haptics",
-            "media",
             "microphone-standby",
             "network",
             "notifications",
@@ -607,17 +616,9 @@ class CranposeAndroidPlugin : Plugin<Project> {
          * there, so the code path does not fail silently on a device.
          */
         val SERVICE_PERMISSIONS = mapOf(
-            "background" to listOf(
-                "android.permission.FOREGROUND_SERVICE",
-                "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
-            ),
             "billing" to listOf("com.android.vending.BILLING"),
             "camera" to listOf("android.permission.CAMERA"),
             "haptics" to listOf("android.permission.VIBRATE"),
-            "media" to listOf(
-                "android.permission.FOREGROUND_SERVICE",
-                "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
-            ),
             "microphone-standby" to listOf(
                 "android.permission.FOREGROUND_SERVICE",
                 "android.permission.FOREGROUND_SERVICE_MICROPHONE",

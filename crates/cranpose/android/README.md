@@ -83,11 +83,9 @@ The Gradle `services` set also supports manually maintained app manifests:
 
 | Service | Platform component | Permission |
 | --- | --- | --- |
-| `background` | Foreground task service | `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC` |
 | `billing` | Play Billing client | `com.android.vending.BILLING` |
 | `camera` | Camera backend | `CAMERA` |
 | `haptics` | Vibrator backend | `VIBRATE` |
-| `media` | Media-session service | `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PLAYBACK` |
 | `microphone-standby` | Foreground service of type microphone that keeps recording possible from the background (`cranpose_services::hold_microphone_standby`) | `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MICROPHONE`, `RECORD_AUDIO` |
 | `network` | HTTP and connectivity state | `INTERNET`, `ACCESS_NETWORK_STATE` |
 | `notifications` | Notification backend | `POST_NOTIFICATIONS` |
@@ -97,6 +95,11 @@ The Gradle `services` set also supports manually maintained app manifests:
 `Use::update()` also selects the package installer, its receiver and
 `REQUEST_INSTALL_PACKAGES`. The launcher registers the updater when the declared
 capabilities include updates.
+
+`Use::background()` and `Use::media()` come only from `build.rs`: the build adds
+their foreground services (`dataSync` for background work, `mediaPlayback` for
+playback) and writes `FOREGROUND_SERVICE` with the matching
+`FOREGROUND_SERVICE_*` permission.
 
 Hardware features implied by permissions remain optional in the manifest.
 Declare mandatory hardware through `Demand`, or add an Android feature name to

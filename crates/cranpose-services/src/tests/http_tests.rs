@@ -729,7 +729,7 @@ fn a_platform_downloader_runs_every_download_to() {
         &target,
         HttpControl::new(),
     ));
-    clear_platform_downloader();
+    PLATFORM_DOWNLOADER.clear();
 
     assert_eq!(written.expect("the platform's result"), 7);
     assert_eq!(

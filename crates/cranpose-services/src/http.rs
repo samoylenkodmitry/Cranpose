@@ -543,15 +543,11 @@ static PLATFORM_DOWNLOADER: crate::registry::ServiceRegistry<dyn PlatformDownloa
 
 /// Installs the platform's downloader; [`default_http_client`] then runs
 /// `download_to` through it. iOS installs one on a background `URLSession`.
+// forwards on purpose: the registry is private to this crate, and this is the
+// one way a platform backend installs into it.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn set_platform_downloader(downloader: Arc<dyn PlatformDownloader>) {
     PLATFORM_DOWNLOADER.set(downloader);
-}
-
-/// Removes the platform's downloader (tests/teardown).
-#[cfg(not(target_arch = "wasm32"))]
-pub fn clear_platform_downloader() {
-    PLATFORM_DOWNLOADER.clear();
 }
 
 #[cfg(not(target_arch = "wasm32"))]

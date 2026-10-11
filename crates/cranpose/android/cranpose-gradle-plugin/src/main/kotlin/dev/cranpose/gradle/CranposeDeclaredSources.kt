@@ -12,21 +12,26 @@ import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import java.io.File
 
-internal data class DeclaredService(val javaSource: String, val receivers: List<String>)
+/**
+ * What a service declared in Rust brings: its Java source directory, the
+ * receivers it declares, and the manifest whose components it adds, each
+ * relative to `androidRoot()` where it has one.
+ */
+internal data class DeclaredService(
+    val javaSource: String? = null,
+    val receivers: List<String> = emptyList(),
+    val manifest: String? = null,
+)
 
 internal val DECLARED_SERVICES: Map<String, DeclaredService> = mapOf(
     "update" to DeclaredService(
         javaSource = "java-update",
         receivers = listOf("dev.cranpose.android.CranposeAppUpdate"),
     ),
-    "heart-rate" to DeclaredService(
-        javaSource = "java-heart-rate",
-        receivers = emptyList(),
-    ),
-    "microphone" to DeclaredService(
-        javaSource = "java-microphone",
-        receivers = emptyList(),
-    ),
+    "heart-rate" to DeclaredService(javaSource = "java-heart-rate"),
+    "microphone" to DeclaredService(javaSource = "java-microphone"),
+    "background" to DeclaredService(manifest = "manifests/background.xml"),
+    "media" to DeclaredService(manifest = "manifests/media.xml"),
 )
 
 /**

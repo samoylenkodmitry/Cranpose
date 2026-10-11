@@ -163,7 +163,7 @@ pub use http::{
     map_ordered_concurrent,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use http::{PlatformDownloader, clear_platform_downloader, set_platform_downloader};
+pub use http::{PlatformDownloader, set_platform_downloader};
 pub use image_picker::{
     IMAGE_EXTENSIONS, ImagePicker, ImagePickerError, ImagePickerRef, ImageSource,
     ProvideImagePicker, clear_platform_image_picker, default_image_picker, local_image_picker,
@@ -260,10 +260,7 @@ pub use share_sheet::{
     ProvideShareSheet, ShareContent, ShareError, ShareSheet, ShareSheetRef,
     clear_platform_share_sheet, default_share_sheet, local_share_sheet, set_platform_share_sheet,
 };
-pub use storage::{
-    StorageSpace, StorageSpaceRef, available_storage, clear_platform_storage_space,
-    set_platform_storage_space,
-};
+pub use storage::{StorageSpace, StorageSpaceRef, available_storage, set_platform_storage_space};
 pub use theme::{
     ProvideSystemTheme, SystemTheme, clear_platform_system_theme, default_system_theme,
     isSystemInDarkTheme, local_system_theme, set_platform_system_theme,

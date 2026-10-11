@@ -4,7 +4,7 @@ use super::*;
 #[test]
 fn a_folder_that_does_not_exist_yet_is_measured_by_the_one_above_it() {
     let _services = crate::registry::test_service_guard();
-    clear_platform_storage_space();
+    PLATFORM_STORAGE_SPACE.clear();
     let scratch = crate::test_scratch_dir("storage");
     let here = available_storage(&scratch).expect("the scratch folder's volume");
     let later = available_storage(&scratch.join("models").join("speech.gguf"))
@@ -28,5 +28,5 @@ fn a_platform_measure_replaces_the_file_system_one() {
     let scratch = crate::test_scratch_dir("storage-platform");
 
     assert_eq!(available_storage(&scratch), Some(42));
-    clear_platform_storage_space();
+    PLATFORM_STORAGE_SPACE.clear();
 }

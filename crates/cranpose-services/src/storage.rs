@@ -18,13 +18,10 @@ static PLATFORM_STORAGE_SPACE: ServiceRegistry<dyn StorageSpace> = ServiceRegist
 
 /// Installs the platform's measure of free space. iOS installs one that counts
 /// the space the system frees on demand for important data.
+// forwards on purpose: the registry is private to this crate, and this is the
+// one way a platform backend installs into it.
 pub fn set_platform_storage_space(space: StorageSpaceRef) {
     PLATFORM_STORAGE_SPACE.set(space);
-}
-
-/// Removes the platform's measure (tests/teardown).
-pub fn clear_platform_storage_space() {
-    PLATFORM_STORAGE_SPACE.clear();
 }
 
 /// The bytes the application can still write on the volume that holds `path`,

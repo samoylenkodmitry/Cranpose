@@ -2133,6 +2133,8 @@ fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
         "ios_back_gesture.rs",
         "ios_scene.rs",
         "ios_background.rs",
+        "ios_downloads.rs",
+        "ios_storage.rs",
         "ios_host.rs",
         "ios_accessibility.rs",
         "apple_microphone.rs",
@@ -2340,6 +2342,8 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose/src/ios_back_gesture.rs",
         "crates/cranpose/src/ios_scene.rs",
         "crates/cranpose/src/ios_background.rs",
+        "crates/cranpose/src/ios_downloads.rs",
+        "crates/cranpose/src/ios_storage.rs",
         "crates/cranpose/src/ios_host.rs",
         "crates/cranpose/src/ios_accessibility.rs",
         "crates/cranpose/src/apple_microphone.rs",
@@ -3500,15 +3504,6 @@ fn android_media_declares_the_foreground_service_it_needs() {
         !manifest.contains("uses-permission"),
         "the framework declares no permission; the application states what it asks for"
     );
-    let plugin = workspace_source(CRANPOSE_GRADLE_PLUGIN);
-    assert!(
-        plugin.contains("\"media\","),
-        "an application asks for the media service by name, so the plugin must know it"
-    );
-    assert!(
-        plugin.contains("android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"),
-        "the plugin must know the permission the mediaPlayback service needs"
-    );
     let capabilities = workspace_source(CRANPOSE_CAPABILITIES);
     assert!(
         capabilities.contains("android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"),
@@ -3818,6 +3813,37 @@ fn installing_an_update_comes_only_from_the_rust_declaration() {
             "{relative} declares REQUEST_INSTALL_PACKAGES; declare `Use::update()` instead"
         );
     }
+}
+
+#[test]
+fn foreground_services_come_only_from_the_rust_declaration() {
+    let plugin = workspace_source(CRANPOSE_GRADLE_PLUGIN);
+    let known = plugin
+        .split("val KNOWN_SERVICES = setOf(")
+        .nth(1)
+        .and_then(|rest| rest.split(')').next())
+        .expect("the plugin's KNOWN_SERVICES");
+    for service in ["\"background\"", "\"media\""] {
+        assert!(
+            !known.contains(service),
+            "the Gradle `services` block must not offer {service}: an application that lists it \
+             there and not in its build script gets a manifest with no permission, and one that \
+             declares it only in Rust got no service at all"
+        );
+    }
+    let declared = workspace_source(CRANPOSE_DECLARED_SOURCES);
+    assert!(
+        declared
+            .contains("\"background\" to DeclaredService(manifest = \"manifests/background.xml\")")
+            && declared
+                .contains("\"media\" to DeclaredService(manifest = \"manifests/media.xml\")"),
+        "`Use::background()` and `Use::media()` must add their foreground services"
+    );
+    let check = workspace_source(CRANPOSE_MANIFEST_CHECK);
+    assert!(
+        check.contains("declareServices(document, rust.services)"),
+        "the manifest check must add the declared services' components"
+    );
 }
 
 #[test]
