@@ -45,6 +45,7 @@ pub mod preferences;
 pub mod purchases;
 mod registry;
 pub mod share_sheet;
+pub mod storage;
 pub mod theme;
 pub mod uri_handler;
 pub mod wearable;
@@ -78,9 +79,9 @@ pub use audio::{
     clear_platform_audio, default_audio, local_audio, rememberSoundBank, set_platform_audio,
 };
 pub use background::{
-    BackgroundActivity, BackgroundActivityRef, BackgroundWorkLease, acquire_background_work,
-    background_active, background_activity, clear_platform_background_activity,
-    set_platform_background_activity,
+    BackgroundActivity, BackgroundActivityRef, BackgroundWork, BackgroundWorkLease,
+    acquire_background_work, background_active, background_activity,
+    clear_platform_background_activity, set_platform_background_activity,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use bundled_assets::{
@@ -156,10 +157,13 @@ pub use host_surface::{
     set_platform_host_surface,
 };
 pub use http::{
-    BytesBody, HttpBody, HttpBodyRef, HttpClient, HttpClientRef, HttpControl, HttpError,
-    HttpFuture, HttpMethod, HttpProgress, HttpRequest, HttpResponse, ProgressHandler, StubAnswer,
-    StubHttpClient, default_http_client, http_body_ref, local_http_client, map_ordered_concurrent,
+    BytesBody, CancelTransfer, HttpBody, HttpBodyRef, HttpClient, HttpClientRef, HttpControl,
+    HttpError, HttpFuture, HttpMethod, HttpProgress, HttpRequest, HttpResponse, ProgressHandler,
+    StubAnswer, StubHttpClient, default_http_client, http_body_ref, local_http_client,
+    map_ordered_concurrent,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use http::{PlatformDownloader, set_platform_downloader};
 pub use image_picker::{
     IMAGE_EXTENSIONS, ImagePicker, ImagePickerError, ImagePickerRef, ImageSource,
     ProvideImagePicker, clear_platform_image_picker, default_image_picker, local_image_picker,
@@ -256,6 +260,7 @@ pub use share_sheet::{
     ProvideShareSheet, ShareContent, ShareError, ShareSheet, ShareSheetRef,
     clear_platform_share_sheet, default_share_sheet, local_share_sheet, set_platform_share_sheet,
 };
+pub use storage::{StorageSpace, StorageSpaceRef, available_storage, set_platform_storage_space};
 pub use theme::{
     ProvideSystemTheme, SystemTheme, clear_platform_system_theme, default_system_theme,
     isSystemInDarkTheme, local_system_theme, set_platform_system_theme,

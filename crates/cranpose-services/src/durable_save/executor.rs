@@ -48,7 +48,7 @@ pub(super) fn run(deadline: Duration) -> DurableSaveOutcome {
     if batch.is_empty() {
         return DurableSaveOutcome::Nothing;
     }
-    let lease = crate::background::acquire_background_work();
+    let lease = crate::background::acquire_background_work("Saving changes");
     let (send, receive) = mpsc::sync_channel(1);
     let spawned = std::thread::Builder::new()
         .name("cranpose-durable-save".into())

@@ -63,6 +63,10 @@ file-picker-web = [
 # Android (SAF) and iOS (UIDocumentPicker) pickers are provided by the cranpose
 # crate's platform backends, which register into `set_platform_file_picker`.
 
+# Free space on the volume (`available_storage`).
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.5", features = ["fs"] }
+
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 open = { version = "5.4.4", optional = true }
 

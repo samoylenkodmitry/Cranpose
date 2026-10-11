@@ -681,6 +681,7 @@ fn a_cancel_ends_a_native_request_still_waiting_for_its_response() {
 #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
 #[test]
 fn a_download_resumes_from_what_is_already_on_disk() {
+    let _services = crate::registry::test_service_guard();
     let body: Vec<u8> = (0..4096u32).map(|value| value as u8).collect();
     let directory = crate::test_scratch_dir("http-resume");
     let target = directory.join("payload.bin");
@@ -691,19 +692,77 @@ fn a_download_resumes_from_what_is_already_on_disk() {
     else {
         return;
     };
+    let reports = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&reports);
+    let control = HttpControl::new().with_progress(move |progress| {
+        recorder
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(progress);
+    });
     let client = default_http_client();
-    let written = pollster::block_on(client.download_to(&url, &target, HttpControl::new()))
+    let written = pollster::block_on(client.download_to(&url, &target, control))
         .expect("the download finishes");
     server.join().expect("the local server finishes");
 
     assert_eq!(written, body.len() as u64);
     assert_eq!(std::fs::read(&target).expect("the file"), body);
+    // Progress counts the whole file: never less than the part already here,
+    // and never the response's own count, which starts again from zero.
+    let reports = reports
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert!(
+        reports
+            .iter()
+            .all(|progress| progress.transferred >= 1024
+                && progress.total == Some(body.len() as u64)),
+        "a resumed download reported progress of the response alone: {reports:?}"
+    );
     let _ = std::fs::remove_file(&target);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_platform_downloader_runs_every_download_to() {
+    struct Recorded(std::sync::Mutex<Vec<(String, std::path::PathBuf)>>);
+    impl PlatformDownloader for Recorded {
+        fn download<'a>(
+            &'a self,
+            url: &'a str,
+            target: &'a Path,
+            _control: HttpControl,
+        ) -> HttpFuture<'a, u64> {
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push((url.to_owned(), target.to_owned()));
+            Box::pin(async { Ok(7) })
+        }
+    }
+    let _services = crate::registry::test_service_guard();
+    let recorded = Arc::new(Recorded(std::sync::Mutex::default()));
+    set_platform_downloader(recorded.clone());
+    let target = crate::test_scratch_dir("http-platform").join("model.bin");
+    let written = pollster::block_on(default_http_client().download_to(
+        "https://example.test/model.bin",
+        &target,
+        HttpControl::new(),
+    ));
+    PLATFORM_DOWNLOADER.clear();
+
+    assert_eq!(written.expect("the platform's result"), 7);
+    assert_eq!(
+        *recorded.0.lock().unwrap_or_else(PoisonError::into_inner),
+        [("https://example.test/model.bin".to_owned(), target)]
+    );
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
 #[test]
 fn a_download_that_cannot_write_says_why() {
+    let _services = crate::registry::test_service_guard();
     let target = crate::test_scratch_dir("http-unwritable")
         .join("no such folder")
         .join("payload.bin");
@@ -731,6 +790,7 @@ fn a_download_that_cannot_write_says_why() {
 #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
 #[test]
 fn a_server_that_ignores_a_range_restarts_the_file_rather_than_appending() {
+    let _services = crate::registry::test_service_guard();
     let body: Vec<u8> = (0..4096u32).map(|value| value as u8).collect();
     let directory = crate::test_scratch_dir("http-restart");
     let target = directory.join("payload.bin");

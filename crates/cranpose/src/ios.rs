@@ -660,6 +660,8 @@ pub fn try_run(settings: AppSettings, content: impl FnMut() + 'static) -> Result
     crate::ios_device_info::register();
     crate::process_info::install();
     crate::ios_background::register();
+    crate::ios_downloads::register();
+    crate::ios_storage::register();
     crate::ios_writable_folder::register();
     crate::apple_camera::register();
     crate::ios_media::register();

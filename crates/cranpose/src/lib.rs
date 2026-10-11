@@ -673,6 +673,12 @@ mod ios_scene;
 mod ios_background;
 
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+mod ios_downloads;
+
+#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+mod ios_storage;
+
+#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod ios_bundled_assets;
 
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]

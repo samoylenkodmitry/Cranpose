@@ -13,6 +13,7 @@ import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.TaskAction
 import org.w3c.dom.Element
+import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 import javax.xml.transform.OutputKeys
 import javax.xml.transform.TransformerFactory
@@ -252,6 +253,14 @@ abstract class CranposeManifestCheck : DefaultTask() {
     @get:InputFiles
     abstract val declaration: ConfigurableFileCollection
 
+    /** The manifest each declared service's components come from, by service name. */
+    @get:Input
+    abstract val serviceManifests: MapProperty<String, String>
+
+    /** The contents of those manifests. */
+    @get:InputFiles
+    abstract val serviceManifestFiles: ConfigurableFileCollection
+
     private fun namedPermissions(document: org.w3c.dom.Document): List<String> =
         document.getElementsByTagName("uses-permission")
             .let { nodes -> (0 until nodes.length).mapNotNull { at -> nodes.item(at) as? Element } }
@@ -324,6 +333,46 @@ abstract class CranposeManifestCheck : DefaultTask() {
             "cranpose: ${receivers.joinToString(", ")} declared, not exported, from this " +
                 "application's own declaration"
         )
+    }
+
+    /**
+     * Adds the components of each declared service's manifest, such as the
+     * foreground service `Use::background()` needs, unless the merged manifest
+     * has them already.
+     */
+    private fun declareServices(document: org.w3c.dom.Document, services: List<String>) {
+        val manifests = serviceManifests.get()
+        val fragments = services.mapNotNull { service -> manifests[service]?.let(::File) }
+        if (fragments.isEmpty()) {
+            return
+        }
+        val application = document.getElementsByTagName("application").item(0) as? Element
+            ?: throw GradleException("the merged manifest has no application to declare services in")
+        val present = (0 until application.childNodes.length)
+            .mapNotNull { at -> application.childNodes.item(at) as? Element }
+            .map { element -> element.tagName to element.getAttributeNS(ANDROID_NAMESPACE, "name") }
+            .toSet()
+        val builder = DocumentBuilderFactory.newInstance()
+            .apply { isNamespaceAware = true }
+            .newDocumentBuilder()
+        val added = mutableListOf<String>()
+        for (fragment in fragments) {
+            val source = builder.parse(fragment).getElementsByTagName("application").item(0) as? Element
+                ?: continue
+            for (at in 0 until source.childNodes.length) {
+                val component = source.childNodes.item(at) as? Element ?: continue
+                val name = component.getAttributeNS(ANDROID_NAMESPACE, "name")
+                if ((component.tagName to name) !in present) {
+                    application.appendChild(document.importNode(component, true))
+                    added += name
+                }
+            }
+        }
+        if (added.isNotEmpty()) {
+            logger.lifecycle(
+                "cranpose: ${added.joinToString(", ")} declared from this application's own declaration"
+            )
+        }
     }
 
     @TaskAction
@@ -404,6 +453,7 @@ abstract class CranposeManifestCheck : DefaultTask() {
 
         offerOpening(document, rust.opens)
         declareReceivers(document, rust.services)
+        declareServices(document, rust.services)
 
         val writer = TransformerFactory.newInstance().newTransformer()
         writer.setOutputProperty(OutputKeys.INDENT, "yes")

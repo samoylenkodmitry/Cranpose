@@ -1235,7 +1235,7 @@ static BACKGROUND_LEASE: Mutex<Option<BackgroundWorkLease>> = Mutex::new(None);
 fn acquire_background_lease() {
     let mut lease = BACKGROUND_LEASE.lock();
     if lease.is_none() {
-        *lease = Some(acquire_background_work());
+        *lease = Some(acquire_background_work("Playing"));
     }
 }
 
