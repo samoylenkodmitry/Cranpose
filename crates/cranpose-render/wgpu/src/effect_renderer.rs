@@ -547,10 +547,16 @@ struct CompositePassOptions {
 
 impl CompositePassOptions {
     fn unmasked_nearest(self) -> bool {
-        matches!(self.sample_mode, CompositeSampleMode::Nearest)
-            && self.rounded_mask.is_none()
-            && shader_specialization_enabled()
+        unmasked_nearest(self.sample_mode, self.rounded_mask.is_some())
     }
+}
+
+/// Whether a blit samples nearest texels through no mask, which its own
+/// specialized pipeline draws.
+fn unmasked_nearest(sample_mode: CompositeSampleMode, masked: bool) -> bool {
+    matches!(sample_mode, CompositeSampleMode::Nearest)
+        && !masked
+        && shader_specialization_enabled()
 }
 
 #[derive(Clone, Copy)]
@@ -3124,10 +3130,7 @@ impl EffectRenderer {
             sample_mode: item.sample_mode,
         };
         let unmasked_nearest = options.unmasked_nearest();
-        let (blit, _, _) = self.blit_pipeline_target(item.blend_mode, unmasked_nearest);
-        blit.prefetch(&self.compiler, self.adapter_backend, || {
-            self.blit_pipeline_job(device, item.blend_mode, unmasked_nearest)
-        });
+        self.prefetch_blit(device, item.blend_mode, unmasked_nearest);
         let uniforms = Self::composite_pass_uniforms(options);
         let sampler = &self.effect_linear_sampler;
         let texture_bind_group = item.source.get_or_create_bind_group(
@@ -3149,6 +3152,26 @@ impl EffectRenderer {
             blend_mode: item.blend_mode,
             unmasked_nearest,
         }
+    }
+
+    /// Builds the blit a composite of `blend_mode`, sampled as
+    /// `sample_mode` through a mask or not, draws with, ahead of its first
+    /// draw.
+    pub(crate) fn prefetch_composite(
+        &self,
+        device: &wgpu::Device,
+        blend_mode: BlendMode,
+        sample_mode: CompositeSampleMode,
+        masked: bool,
+    ) {
+        self.prefetch_blit(device, blend_mode, unmasked_nearest(sample_mode, masked));
+    }
+
+    fn prefetch_blit(&self, device: &wgpu::Device, blend_mode: BlendMode, unmasked_nearest: bool) {
+        let (blit, _, _) = self.blit_pipeline_target(blend_mode, unmasked_nearest);
+        blit.prefetch(&self.compiler, self.adapter_backend, || {
+            self.blit_pipeline_job(device, blend_mode, unmasked_nearest)
+        });
     }
 
     pub(crate) fn draw_prepared_composite(

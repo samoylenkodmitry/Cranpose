@@ -995,6 +995,28 @@ impl WgpuRenderer {
         stats
     }
 
+    /// Starts a frame that takes its pipelines from a pipeline discovery:
+    /// the frame that discovers them, or the one that creates them again
+    /// while the browser holds them compiled. Such a frame also builds the
+    /// pipelines it expects a later frame to need, at its end, so the browser
+    /// compiles them behind the frame's own or holds them with those.
+    #[cfg(target_arch = "wasm32")]
+    pub fn begin_discovery_frame(&self) {
+        if let Some(gpu_renderer) = self.sync_gpu_renderer() {
+            gpu_renderer.pipeline_compiler().begin_discovery_frame();
+        }
+    }
+
+    /// Ends the frame begun with
+    /// [`begin_discovery_frame`](Self::begin_discovery_frame), building the
+    /// pipelines it expects a later frame to need.
+    #[cfg(target_arch = "wasm32")]
+    pub fn end_discovery_frame(&self) {
+        if let Some(gpu_renderer) = self.sync_gpu_renderer() {
+            gpu_renderer.pipeline_compiler().end_discovery_frame();
+        }
+    }
+
     /// Return the WGPU device when GPU resources are initialized.
     /// Sync backend only (desktop/web reconfigure paths); the threaded
     /// runtime owns its device on the present thread.

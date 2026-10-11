@@ -141,6 +141,17 @@ pub(crate) enum CompileLane {
 pub(crate) struct PipelineCompiler {
     #[cfg(not(target_arch = "wasm32"))]
     workers: Option<Arc<Workers>>,
+    #[cfg(target_arch = "wasm32")]
+    discovery: std::rc::Rc<DiscoveryFrame>,
+}
+
+/// On the web, the frame drawn while it takes its pipelines from a pipeline
+/// discovery, and the builds it holds back for later frames.
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+struct DiscoveryFrame {
+    drawing: std::cell::Cell<bool>,
+    ahead: std::cell::RefCell<Vec<Box<dyn FnOnce()>>>,
 }
 
 /// The jobs waiting for a compiler thread, per lane.
@@ -359,6 +370,39 @@ impl PipelineCompiler {
         }
     }
 
+    /// Whether a pipeline a later frame needs is built ahead of it: on the
+    /// warm-up lane where compiler threads run, and on the web at the end of
+    /// a frame that takes its pipelines from a pipeline discovery.
+    pub(crate) fn builds_ahead(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.is_active()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.discovery.drawing.get()
+        }
+    }
+
+    /// Starts a frame that takes its pipelines from a pipeline discovery:
+    /// the jobs queued until [`Self::end_discovery_frame`] are held back.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn begin_discovery_frame(&self) {
+        self.discovery.drawing.set(true);
+    }
+
+    /// Ends the frame begun with [`Self::begin_discovery_frame`] and runs the
+    /// jobs it held back, after the frame's own builds: the browser compiles
+    /// those first, on as many threads as it has.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn end_discovery_frame(&self) {
+        self.discovery.drawing.set(false);
+        let ahead = std::mem::take(&mut *self.discovery.ahead.borrow_mut());
+        for job in ahead {
+            job();
+        }
+    }
+
     /// Whether the warm-up threads take demanded jobs before their own. A
     /// frame that built a pipeline itself turns it off: on a driver that
     /// serializes much of each compile, compiles beside the frame's own slow
@@ -378,8 +422,9 @@ impl PipelineCompiler {
     }
 
     /// Queues `job` on `lane`'s thread, behind the jobs already waiting
-    /// there; an inactive compiler drops it, and the caller compiles at
-    /// first use as before.
+    /// there; on the web it waits for the end of a frame that takes its
+    /// pipelines from a pipeline discovery. An inactive compiler drops it,
+    /// and the caller compiles at first use as before.
     pub(crate) fn enqueue(&self, lane: CompileLane, job: impl FnOnce() + CompilerSend + 'static) {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(workers) = self.workers.as_ref() {
@@ -395,7 +440,11 @@ impl PipelineCompiler {
             workers.pool.queued.notify_all();
         }
         #[cfg(target_arch = "wasm32")]
-        drop((lane, job));
+        if self.discovery.drawing.get() {
+            self.discovery.ahead.borrow_mut().push(Box::new(job));
+        } else {
+            drop((lane, job));
+        }
     }
 }
 
