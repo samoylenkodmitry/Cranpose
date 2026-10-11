@@ -177,7 +177,7 @@ impl<E> ChunkChannel<E> {
         let waker = {
             let mut state = lock(&self.shared.state);
             #[cfg(not(target_arch = "wasm32"))]
-            while state.ready.len() >= MAX_PENDING_CHUNKS && !state.abandoned {
+            while state.ready.len() >= MAX_PENDING_CHUNKS && !state.abandoned && !state.finished {
                 state = self
                     .shared
                     .room
@@ -198,33 +198,12 @@ impl<E> ChunkChannel<E> {
 
     /// Ends the stream with an error.
     pub fn fail(&self, error: E) {
-        let waker = {
-            let mut state = lock(&self.shared.state);
-            if state.finished {
-                return;
-            }
-            state.error = Some(error);
-            state.finished = true;
-            state.waker.take()
-        };
-        if let Some(waker) = waker {
-            waker.wake();
-        }
+        self.shared.end(Some(error));
     }
 
     /// Ends the stream normally.
     pub fn finish(&self) {
-        let waker = {
-            let mut state = lock(&self.shared.state);
-            if state.finished {
-                return;
-            }
-            state.finished = true;
-            state.waker.take()
-        };
-        if let Some(waker) = waker {
-            waker.wake();
-        }
+        self.shared.end(None);
     }
 
     /// Whether the consumer has gone.
@@ -239,6 +218,24 @@ impl<E> Drop for ChunkChannel<E> {
     }
 }
 
+impl<E> ChunkShared<E> {
+    fn end(&self, error: Option<E>) {
+        let waker = {
+            let mut state = lock(&self.state);
+            if state.finished {
+                return;
+            }
+            state.error = error;
+            state.finished = true;
+            state.waker.take()
+        };
+        self.room.notify_all();
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+}
+
 /// The consuming half of a chunked byte stream.
 pub struct ChunkStream<E> {
     shared: Arc<ChunkShared<E>>,
@@ -249,6 +246,13 @@ impl<E> ChunkStream<E> {
     /// the error the producer ended with.
     pub fn next(&self) -> ChunkNext<'_, E> {
         ChunkNext { stream: self }
+    }
+
+    /// Ends the stream from the reading side: the next read resolves with
+    /// `error` once the chunks already here are taken, and the producer's
+    /// next push returns `false`. Ignored when the stream has already ended.
+    pub fn fail(&self, error: E) {
+        self.shared.end(Some(error));
     }
 }
 
@@ -270,7 +274,7 @@ impl<E> Future for ChunkNext<'_, E> {
     type Output = Result<Option<Vec<u8>>, E>;
 
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-        let shared = Arc::clone(&self.stream.shared);
+        let shared = &self.stream.shared;
         let mut state = lock(&shared.state);
         if let Some(chunk) = state.ready.pop_front() {
             drop(state);
