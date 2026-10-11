@@ -81,8 +81,11 @@ pub(crate) fn main() {
                 let mut line = format!("step={step}");
                 for label in texts {
                     if let Some((x, y, w, h)) = find_text_in_semantics(&robot, label) {
+                        // Only a label wholly below the chrome: one the chrome
+                        // half covers shows a strip beside the animated
+                        // flame, whose ink varies from frame to frame.
                         let visible =
-                            y + h > chrome_bottom && y < WINDOW_HEIGHT as f32 - 10.0;
+                            y > chrome_bottom && y + h < WINDOW_HEIGHT as f32 - 10.0;
                         if visible {
                             let ink = count_ink(&shot, x, y, w, h);
                             line.push_str(&format!(" | {label}: y={y:.0} ink={ink}"));
