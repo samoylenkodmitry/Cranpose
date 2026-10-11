@@ -1192,7 +1192,7 @@ impl EffectRenderer {
             device,
             adapter_backend,
             "Blur Shader",
-            || shaders::blur_shader().into(),
+            shaders::BLUR,
             &[
                 Some(&effect_texture_bind_group_layout),
                 Some(&blur_uniform_bind_group_layout),
@@ -1207,7 +1207,7 @@ impl EffectRenderer {
             device,
             adapter_backend,
             "Offset Shader",
-            || shaders::offset_shader().into(),
+            shaders::OFFSET,
             &[
                 Some(&effect_texture_bind_group_layout),
                 Some(&offset_uniform_bind_group_layout),
@@ -1224,7 +1224,7 @@ impl EffectRenderer {
             device,
             adapter_backend,
             "Blit Shader",
-            || shaders::blit_shader().into(),
+            shaders::BLIT,
             &blit_layouts,
         );
 
@@ -1245,7 +1245,7 @@ impl EffectRenderer {
             device,
             adapter_backend,
             "Projective Blit Shader",
-            || shaders::projective_blit_shader().into(),
+            shaders::PROJECTIVE_BLIT,
             &blit_layouts,
         );
         let projective_blit_pipeline = [

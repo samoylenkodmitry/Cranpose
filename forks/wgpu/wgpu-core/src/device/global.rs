@@ -1085,6 +1085,33 @@ impl Global {
         (id, Some(error))
     }
 
+    /// A module of GLSL templates for the GL backend.
+    ///
+    /// # Safety
+    ///
+    /// See [`crate::device::resource::Device::create_shader_module_glsl_templates`].
+    pub unsafe fn device_create_shader_module_glsl_templates(
+        &self,
+        device_id: DeviceId,
+        label: &Label<'_>,
+        templates: &'static [hal::GlslTemplate],
+        id_in: Option<id::ShaderModuleId>,
+    ) -> (
+        id::ShaderModuleId,
+        Option<pipeline::CreateShaderModuleError>,
+    ) {
+        profiling::scope!("Device::create_shader_module_glsl_templates");
+        let fid = self.hub.shader_modules.prepare(id_in);
+        let device = self.hub.devices.get(device_id);
+        match unsafe { device.create_shader_module_glsl_templates(label, templates) } {
+            Ok(shader) => (fid.assign(Fallible::Valid(shader)), None),
+            Err(error) => (
+                fid.assign(Fallible::Invalid(Arc::new(label.to_string()))),
+                Some(error),
+            ),
+        }
+    }
+
     pub fn shader_module_drop(&self, shader_module_id: id::ShaderModuleId) {
         profiling::scope!("ShaderModule::drop");
         api_log!("ShaderModule::drop {shader_module_id:?}");

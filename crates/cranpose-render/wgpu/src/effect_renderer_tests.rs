@@ -123,7 +123,7 @@ fn patterned_source(device: &wgpu::Device, queue: &wgpu::Queue) -> OffscreenTarg
 fn dynamic_blur_source() -> Cow<'static, str> {
     Cow::Owned(format!(
         "{}{}",
-        shaders::FULLSCREEN_QUAD_VS,
+        cranpose_ui_graphics::framework_shaders::FULLSCREEN_QUAD_VS_WGSL,
         include_str!("../tests/fixtures/blur_tile_reference.wgsl"),
     ))
 }
@@ -150,7 +150,7 @@ fn mixed_blur_tile_modes_preserve_dynamic_shader_pixels() {
                     &device,
                     device.adapter_info().backend,
                     "Dynamic Blur Tile Reference",
-                    dynamic_blur_source,
+                    crate::shared_shader::ShaderCode::wgsl(dynamic_blur_source),
                     &[
                         Some(&renderer.effect_texture_bind_group_layout),
                         Some(&renderer.blur_uniform_bind_group_layout),

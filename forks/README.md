@@ -16,13 +16,13 @@ formatting, spelling and diff gates skip the forks.
 
 Upstream: <https://github.com/gfx-rs/wgpu>, commit
 `40f4a34ebaf56f9a046231f54125ad046239d3f3` (`wgpu-hal` 30.0.1).
-`cranpose-wgpu-hal` is at 30.0.10 for the catch-up barrier, the Metal
+`cranpose-wgpu-hal` is at 30.0.11 for the catch-up barrier, the Metal
 pipeline switch, the dedicated Vulkan allocations, the GL point size, the
 GL state tracker, the web surface usages, the boxed GL copy commands, the
 Vulkan command pools that give a burst's memory back, the GL shaders
-without the branches their constants decide and the GL program status read
-only on failure below, and `cranpose-wgpu-core` and `cranpose-wgpu` are at
-30.0.10 to require it.
+without the branches their constants decide, the GL program status read
+only on failure and the GLSL templates below, and `cranpose-wgpu-core` and
+`cranpose-wgpu` are at 30.0.11 to require it and to make template modules.
 
 | fork | upstream |
 | --- | --- |
@@ -146,6 +146,30 @@ functions only the dropped sides called and validates the module again
 (`wgpu_hal::auxil::prune`). A solid fill program went from 31 KB of vertex
 and 25 KB of fragment GLSL to 13 and 12 KB, and its link from 510 to 30
 ms. The frozen gauntlet frame on WebGL is the same to the pixel.
+
+### WebGL pipelines build from GLSL templates
+
+Upstream's GL backend gets a pipeline's shaders as a naga module, which on
+the web means parsing the WGSL, validating it and writing GLSL on the
+page's only thread. On a first visit to the gauntlet in Chrome on a Huawei
+Mate 20 X that was about 0.3 s before anything showed, besides compiling
+naga's own WebAssembly.
+
+`wgpu_hal::GlslTemplate` is GLSL ES written at build time for one entry
+point, whose pipeline constants are preprocessor macros, with the names the
+backend binds its blocks, textures and varyings by. `ShaderInput::GlslTemplates`
+gives the GL device a module of them. For a pipeline, the device works out
+the template's `#if`s from the pipeline's constants and hands the browser
+only the code they keep, with the constants the code reads defined after
+the `#version` line: no naga runs, and the browser's compiler reads no more
+than it would of naga's pruned GLSL. `wgpu-core` makes such a module with
+`Device::create_shader_module_glsl_templates`, and `wgpu` with the safe
+`Device::create_shader_module_glsl_templates` on a WebGL device, where the
+browser checks the GLSL. Cranpose's build writes the templates
+(`cranpose-gl-templates`). On that first visit, wiped Chrome on the Mate,
+the gauntlet's content came 1.95 and 2.09 s after navigation with naga,
+1.74 and 1.73 s with the templates, and its frames are the same to the
+pixel.
 
 ### GL programs read their shader status only when they fail to link
 

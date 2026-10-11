@@ -74,7 +74,7 @@ use crate::{
     },
     shaders,
     shape_pipelines::{PipelineDemand, ShapePipelineFactory, ShapePipelines},
-    shared_shader::SharedShader,
+    shared_shader::{ShaderCode, SharedShader},
 };
 const MAX_SHADOW_SURFACE_CACHE_ITEMS: usize = 512;
 const MAX_TRANSPARENT_SOURCES: usize = 16;
@@ -1061,13 +1061,13 @@ pub(crate) fn shadow_draw_bounds(shadow: &ShadowDraw) -> Option<Rect> {
 }
 
 /// The shape shader's source for `mode`, built when its module is parsed.
-fn shape_shader_source(mode: RunBufferMode) -> fn() -> Cow<'static, str> {
+fn shape_shader_code(mode: RunBufferMode) -> ShaderCode {
     if mode.trig_fill {
-        || Cow::Owned(shaders::filling_shape_shader())
+        ShaderCode::wgsl(|| Cow::Owned(shaders::filling_shape_shader()))
     } else if mode.storage {
-        || Cow::Owned(shaders::storage_shape_shader())
+        ShaderCode::wgsl(|| Cow::Owned(shaders::storage_shape_shader()))
     } else {
-        || Cow::Borrowed(shaders::SHADER)
+        shaders::SHAPE
     }
 }
 
@@ -3414,7 +3414,7 @@ impl GpuRenderer {
             &device,
             adapter_backend,
             "Shape Shader",
-            shape_shader_source(run_store.mode()),
+            shape_shader_code(run_store.mode()),
             &[Some(&uniform_bind_group_layout), Some(run_store.layout())],
         );
         if run_store.mode().trig_fill {
@@ -3454,21 +3454,21 @@ impl GpuRenderer {
             &device,
             adapter_backend,
             "Image Shader",
-            || shaders::image_shader().into(),
+            shaders::IMAGE,
             &image_layouts,
         );
         let glyph_atlas_shader = SharedShader::new(
             &device,
             adapter_backend,
             "Glyph Atlas Shader",
-            || shaders::GLYPH_ATLAS_SHADER.into(),
+            shaders::GLYPH_ATLAS,
             &image_layouts,
         );
         let rrect_shadow_shader = SharedShader::new(
             &device,
             adapter_backend,
             "Round Rect Shadow Shader",
-            || shaders::RRECT_SHADOW_SHADER.into(),
+            shaders::RRECT_SHADOW,
             &[Some(&uniform_bind_group_layout)],
         );
 

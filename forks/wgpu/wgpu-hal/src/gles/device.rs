@@ -99,23 +99,8 @@ impl CompilationContext<'_> {
         }
 
         for (name, location) in reflection_info.varying {
-            match naga_stage {
-                naga::ShaderStage::Vertex => {
-                    assert_eq!(location.index, 0);
-                    unsafe { gl.bind_attrib_location(program, location.location, &name) }
-                }
-                naga::ShaderStage::Fragment => {
-                    assert_eq!(location.index, 0);
-                    unsafe { gl.bind_frag_data_location(program, location.location, &name) }
-                }
-                naga::ShaderStage::Compute => {}
-                naga::ShaderStage::Task
-                | naga::ShaderStage::Mesh
-                | naga::ShaderStage::RayGeneration
-                | naga::ShaderStage::AnyHit
-                | naga::ShaderStage::ClosestHit
-                | naga::ShaderStage::Miss => unreachable!(),
-            }
+            assert_eq!(location.index, 0);
+            bind_varying(gl, program, naga_stage, &name, location.location);
         }
 
         *self.immediates_items = reflection_info.immediates_items;
@@ -123,6 +108,69 @@ impl CompilationContext<'_> {
         if naga_stage == naga::ShaderStage::Vertex {
             *self.clip_distance_count = reflection_info.clip_distance_count;
         }
+    }
+
+    /// Binds the names a template's GLSL gives its resources, as
+    /// `consume_reflection` binds those of GLSL naga writes.
+    fn consume_template(
+        self,
+        gl: &glow::Context,
+        template: &crate::GlslTemplate,
+        program: glow::Program,
+    ) {
+        for block in template.blocks {
+            let register = if block.storage {
+                super::BindingRegister::StorageBuffers
+            } else {
+                super::BindingRegister::UniformBuffers
+            };
+            let slot = self.layout.get_slot(&block.binding);
+            self.name_binding_map
+                .insert(block.name.to_owned(), (register, slot));
+        }
+        for texture in template.textures {
+            let register = if texture.storage {
+                super::BindingRegister::Images
+            } else {
+                super::BindingRegister::Textures
+            };
+            let texture_linear_index = self.layout.get_slot(&texture.binding);
+            self.name_binding_map
+                .insert(texture.name.to_owned(), (register, texture_linear_index));
+            if let Some(sampler) = texture.sampler {
+                self.sampler_map[texture_linear_index as usize] =
+                    Some(self.layout.get_slot(&sampler));
+            }
+        }
+        for &(name, location) in template.varyings {
+            bind_varying(gl, program, template.stage, name, location);
+        }
+        if template.stage == naga::ShaderStage::Vertex {
+            *self.clip_distance_count = template.clip_distance_count;
+        }
+    }
+}
+
+/// Binds a vertex input or fragment output `name` to its `location`.
+fn bind_varying(
+    gl: &glow::Context,
+    program: glow::Program,
+    naga_stage: naga::ShaderStage,
+    name: &str,
+    location: u32,
+) {
+    match naga_stage {
+        naga::ShaderStage::Vertex => unsafe { gl.bind_attrib_location(program, location, name) },
+        naga::ShaderStage::Fragment => unsafe {
+            gl.bind_frag_data_location(program, location, name)
+        },
+        naga::ShaderStage::Compute => {}
+        naga::ShaderStage::Task
+        | naga::ShaderStage::Mesh
+        | naga::ShaderStage::RayGeneration
+        | naga::ShaderStage::AnyHit
+        | naga::ShaderStage::ClosestHit
+        | naga::ShaderStage::Miss => unreachable!(),
     }
 }
 
@@ -321,6 +369,30 @@ impl super::Device {
                 super::ShaderModuleSource::Naga(ref naga) => naga,
                 super::ShaderModuleSource::Passthrough { ref source } => {
                     break 'outer Cow::Borrowed(source);
+                }
+                super::ShaderModuleSource::Templates(templates) => {
+                    let template = templates
+                        .iter()
+                        .find(|template| {
+                            template.stage == naga_stage
+                                && template.entry_point == stage.entry_point
+                        })
+                        .ok_or(crate::PipelineError::EntryPoint(naga_stage))?;
+                    let stages = map_naga_stage(naga_stage);
+                    if context.multiview_mask.is_some()
+                        || (context.force_point_size && naga_stage == naga::ShaderStage::Vertex)
+                    {
+                        return Err(crate::PipelineError::Linkage(
+                            stages,
+                            "a GLSL template neither draws multiview nor writes the point size"
+                                .to_owned(),
+                        ));
+                    }
+                    let glsl = template
+                        .expand(stage.constants)
+                        .map_err(|msg| crate::PipelineError::PipelineConstants(stages, msg))?;
+                    context.consume_template(gl, template, program);
+                    break 'outer Cow::Owned(glsl);
                 }
             };
 
@@ -1583,6 +1655,9 @@ impl crate::Device for super::Device {
                 crate::ShaderInput::Glsl { shader, .. } => super::ShaderModuleSource::Passthrough {
                     source: shader.to_owned(),
                 },
+                crate::ShaderInput::GlslTemplates(templates) => {
+                    super::ShaderModuleSource::Templates(templates)
+                }
                 crate::ShaderInput::SpirV(_)
                 | crate::ShaderInput::MetalLib { .. }
                 | crate::ShaderInput::Msl { .. }

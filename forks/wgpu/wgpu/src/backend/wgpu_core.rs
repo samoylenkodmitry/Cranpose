@@ -470,6 +470,44 @@ pub struct CoreDevice {
     features: Features,
 }
 
+impl CoreDevice {
+    /// A module of GLSL templates on a WebGL device, which the browser checks.
+    #[cfg(webgl)]
+    pub fn create_shader_module_glsl_templates(
+        &self,
+        label: crate::Label<'_>,
+        templates: &'static [hal::GlslTemplate],
+    ) -> dispatch::DispatchShaderModule {
+        // SAFETY: on WebGL the browser checks the GLSL before it compiles.
+        let (id, error) = unsafe {
+            self.context.0.device_create_shader_module_glsl_templates(
+                self.id,
+                &label.map(Cow::Borrowed),
+                templates,
+                None,
+            )
+        };
+        let compilation_info = match error {
+            Some(cause) => {
+                self.context.handle_error(
+                    &self.error_sink,
+                    cause.clone(),
+                    label,
+                    "Device::create_shader_module_glsl_templates",
+                );
+                CompilationInfo::from(cause)
+            }
+            None => CompilationInfo { messages: vec![] },
+        };
+        CoreShaderModule {
+            context: self.context.clone(),
+            id,
+            compilation_info,
+        }
+        .into()
+    }
+}
+
 #[derive(Debug)]
 pub struct CoreBuffer {
     pub(crate) context: ContextWgpuCore,

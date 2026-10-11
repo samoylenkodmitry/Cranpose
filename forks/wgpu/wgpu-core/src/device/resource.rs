@@ -2597,6 +2597,51 @@ impl Device {
         Ok(Arc::new(module))
     }
 
+    /// A module of GLSL templates, one per entry point, for the GL backend.
+    ///
+    /// # Safety
+    ///
+    /// No naga checks the templates: a driver gets their GLSL as written.
+    /// On WebGL the browser checks it.
+    pub unsafe fn create_shader_module_glsl_templates(
+        self: &Arc<Self>,
+        label: &crate::Label<'_>,
+        templates: &'static [hal::GlslTemplate],
+    ) -> Result<Arc<pipeline::ShaderModule>, pipeline::CreateShaderModuleError> {
+        self.check_is_valid()?;
+        if self.backend() != wgt::Backend::Gl {
+            return Err(pipeline::CreateShaderModuleError::NotCompiledForBackend);
+        }
+        let hal_desc = hal::ShaderModuleDescriptor {
+            label: label.to_hal(self.instance_flags),
+            runtime_checks: wgt::ShaderRuntimeChecks::unchecked(),
+        };
+        let raw = unsafe {
+            self.raw()
+                .create_shader_module(&hal_desc, hal::ShaderInput::GlslTemplates(templates))
+        }
+        .map_err(|error| match error {
+            hal::ShaderError::Device(error) => {
+                pipeline::CreateShaderModuleError::Device(self.handle_hal_error(error))
+            }
+            hal::ShaderError::Compilation(ref msg) => {
+                log::error!("Shader error: {msg}");
+                pipeline::CreateShaderModuleError::Generation
+            }
+        })?;
+        Ok(Arc::new(pipeline::ShaderModule {
+            raw: ManuallyDrop::new(raw),
+            device: self.clone(),
+            interface: ShaderMetaData::Passthrough(PassthroughInterface {
+                entry_point_names: templates
+                    .iter()
+                    .map(|template| template.entry_point.to_string())
+                    .collect(),
+            }),
+            label: label.to_string(),
+        }))
+    }
+
     pub(crate) fn create_command_encoder(
         self: &Arc<Self>,
         label: &crate::Label,

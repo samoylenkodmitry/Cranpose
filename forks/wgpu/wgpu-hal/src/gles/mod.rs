@@ -674,6 +674,7 @@ type ShaderId = u32;
 pub enum ShaderModuleSource {
     Naga(crate::NagaShader),
     Passthrough { source: String },
+    Templates(&'static [crate::GlslTemplate]),
 }
 
 #[derive(Debug)]

@@ -1,0 +1,22 @@
+[package]
+name = "cranpose-gl-templates"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Writes GLSL templates of WGSL shaders for WebGL2 in a build script"
+
+[lints]
+workspace = true
+
+[dependencies]
+naga = { version = "30.0.1", features = ["wgsl-in", "glsl-out"] }
+
+[dev-dependencies]
+cranpose-ui-graphics = { workspace = true }
+# The GL backend's template expansion, which the tests run the templates through.
+wgpu-hal = { package = "cranpose-wgpu-hal", path = "../../../forks/wgpu/wgpu-hal" }

@@ -202,6 +202,25 @@ impl Device {
         ShaderModule { inner: module }
     }
 
+    /// Creates a shader module from GLSL ES templates, one per entry point,
+    /// on a WebGL device; `None` on a device of another backend.
+    ///
+    /// A pipeline's constants are defined as the templates' macros, and the
+    /// browser compiles the GLSL: no naga runs. The browser checks the GLSL,
+    /// so unlike [`Device::create_shader_module_passthrough`] this is safe.
+    #[cfg(webgl)]
+    #[must_use]
+    pub fn create_shader_module_glsl_templates(
+        &self,
+        label: Label<'_>,
+        templates: &'static [hal::GlslTemplate],
+    ) -> Option<ShaderModule> {
+        let device = self.inner.as_core_opt()?;
+        Some(ShaderModule {
+            inner: device.create_shader_module_glsl_templates(label, templates),
+        })
+    }
+
     /// Creates an empty [`CommandEncoder`].
     #[must_use]
     pub fn create_command_encoder(&self, desc: &CommandEncoderDescriptor<'_>) -> CommandEncoder {

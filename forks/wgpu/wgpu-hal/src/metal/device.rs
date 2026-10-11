@@ -1318,7 +1318,8 @@ impl crate::Device for super::Device {
             crate::ShaderInput::SpirV(_)
             | crate::ShaderInput::Dxil { .. }
             | crate::ShaderInput::Hlsl { .. }
-            | crate::ShaderInput::Glsl { .. } => unreachable!(),
+            | crate::ShaderInput::Glsl { .. }
+            | crate::ShaderInput::GlslTemplates(_) => unreachable!(),
         }
     }
 

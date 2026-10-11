@@ -3,7 +3,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use super::SharedShader;
+use super::{ShaderCode, SharedShader};
 
 static SOURCE_BUILDS: AtomicUsize = AtomicUsize::new(0);
 
@@ -62,7 +62,7 @@ fn every_variant_and_clone_builds_from_one_parse() {
         &device,
         device.adapter_info().backend,
         "shared shader test",
-        counted_source,
+        ShaderCode::wgsl(counted_source),
         &[],
     );
     assert_eq!(

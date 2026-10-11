@@ -10,10 +10,6 @@ use std::{env, ffi::OsStr, fs, io, path::Path};
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
-/// A comment opening with this is a directive the renderer looks for in the
-/// shader text, and stays.
-const DIRECTIVE: &str = "//@";
-
 /// Folds `bytes` and their length, so adjacent fields cannot trade bytes.
 fn fold(hash: u64, bytes: &[u8]) -> u64 {
     bytes
@@ -35,10 +31,7 @@ fn strip(name: &OsStr, text: &str) -> io::Result<String> {
     }
     let mut stripped = String::with_capacity(text.len());
     for line in text.lines() {
-        let code = match line.find("//") {
-            Some(at) if !line[at..].starts_with(DIRECTIVE) => &line[..at],
-            _ => line,
-        };
+        let code = line.find("//").map_or(line, |at| &line[..at]);
         stripped.push_str(code.trim());
         stripped.push('\n');
     }

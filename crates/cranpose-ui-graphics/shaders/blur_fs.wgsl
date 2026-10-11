@@ -191,8 +191,8 @@ fn kernel_pair(frame: KernelFrame, axis: vec2<f32>, pair: vec4<f32>, inner: f32)
 // texel, and the radius counts those texels. The taps at i and i + 1 on one
 // side become one bilinear fetch between them, placed where the filter
 // hands each its Gaussian weight, so the kernel keeps every weight and
-// costs half the fetches. The renderer writes one guarded call per pair of
-// the uniform table in place of the marker below: indexed by a constant,
+// costs half the fetches. One guarded call per pair of the uniform table,
+// whose length is `BLUR_TAP_PAIRS` on the CPU side: indexed by a constant,
 // the table stays in uniform registers, where a loop over it would load
 // each pair from memory, and the guards shrink the work with the radius.
 @fragment
@@ -201,6 +201,21 @@ fn blur_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let axis = blur.direction_and_radius.xy;
     let pair_count = i32(blur.kernel.x);
     var color = kernel_tap(frame, vec2<f32>(0.0, 0.0)) * tap_weight(frame.local, 1.0);
-    //@BLUR_KERNEL_PAIRS
+    if (pair_count > 0) { color = color + kernel_pair(frame, axis, blur.pairs[0], 1.0); }
+    if (pair_count > 1) { color = color + kernel_pair(frame, axis, blur.pairs[1], 3.0); }
+    if (pair_count > 2) { color = color + kernel_pair(frame, axis, blur.pairs[2], 5.0); }
+    if (pair_count > 3) { color = color + kernel_pair(frame, axis, blur.pairs[3], 7.0); }
+    if (pair_count > 4) { color = color + kernel_pair(frame, axis, blur.pairs[4], 9.0); }
+    if (pair_count > 5) { color = color + kernel_pair(frame, axis, blur.pairs[5], 11.0); }
+    if (pair_count > 6) { color = color + kernel_pair(frame, axis, blur.pairs[6], 13.0); }
+    if (pair_count > 7) { color = color + kernel_pair(frame, axis, blur.pairs[7], 15.0); }
+    if (pair_count > 8) { color = color + kernel_pair(frame, axis, blur.pairs[8], 17.0); }
+    if (pair_count > 9) { color = color + kernel_pair(frame, axis, blur.pairs[9], 19.0); }
+    if (pair_count > 10) { color = color + kernel_pair(frame, axis, blur.pairs[10], 21.0); }
+    if (pair_count > 11) { color = color + kernel_pair(frame, axis, blur.pairs[11], 23.0); }
+    if (pair_count > 12) { color = color + kernel_pair(frame, axis, blur.pairs[12], 25.0); }
+    if (pair_count > 13) { color = color + kernel_pair(frame, axis, blur.pairs[13], 27.0); }
+    if (pair_count > 14) { color = color + kernel_pair(frame, axis, blur.pairs[14], 29.0); }
+    if (pair_count > 15) { color = color + kernel_pair(frame, axis, blur.pairs[15], 31.0); }
     return color / max(blur.kernel.y, 0.00001);
 }
