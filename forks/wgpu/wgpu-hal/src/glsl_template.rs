@@ -133,7 +133,7 @@ fn macro_value(item: &GlslMacro, value: f64) -> Result<String, String> {
     Ok(match item.kind {
         GlslMacroKind::Bool => format!("{}", u8::from(value != 0.0)),
         GlslMacroKind::Sint => {
-            if value.fract() != 0.0
+            if value % 1.0 != 0.0
                 || !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&value)
             {
                 return Err(unfit());
@@ -143,7 +143,7 @@ fn macro_value(item: &GlslMacro, value: f64) -> Result<String, String> {
         // An integer literal is signed: a value past `i32::MAX` is written
         // as its bit pattern.
         GlslMacroKind::Uint => {
-            if value.fract() != 0.0 || !(0.0..=f64::from(u32::MAX)).contains(&value) {
+            if value % 1.0 != 0.0 || !(0.0..=f64::from(u32::MAX)).contains(&value) {
                 return Err(unfit());
             }
             let value = value as u32;
