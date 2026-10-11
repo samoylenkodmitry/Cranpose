@@ -9,14 +9,14 @@ use std::{
 };
 
 use cranpose_services::{
-    BackgroundActivity, BatteryStatus, BundledAssetError, BundledAssetReader, BundledAssets,
-    HapticEffect, HapticFeedback, HapticPattern, Haptics, IncomingContent, LaunchArgs,
-    MemoryPressure, NetworkMonitor, NetworkStatus, Notifier, NotifyRequest, PowerCapabilities,
-    PowerMonitor, PowerReading, ShareContent, ShareError, ShareSheet, StreamingAssetReader,
-    ThermalState, publish_incoming_content, publish_memory_pressure, push_notification_deeplink,
-    set_platform_background_activity, set_platform_bundled_assets, set_platform_haptics,
-    set_platform_launch_args, set_platform_network_monitor, set_platform_notifier,
-    set_platform_power_monitor, set_platform_share_sheet,
+    BackgroundActivity, BackgroundWork, BatteryStatus, BundledAssetError, BundledAssetReader,
+    BundledAssets, HapticEffect, HapticFeedback, HapticPattern, Haptics, IncomingContent,
+    LaunchArgs, MemoryPressure, NetworkMonitor, NetworkStatus, Notifier, NotifyRequest,
+    PowerCapabilities, PowerMonitor, PowerReading, ShareContent, ShareError, ShareSheet,
+    StreamingAssetReader, ThermalState, publish_incoming_content, publish_memory_pressure,
+    push_notification_deeplink, set_platform_background_activity, set_platform_bundled_assets,
+    set_platform_haptics, set_platform_launch_args, set_platform_network_monitor,
+    set_platform_notifier, set_platform_power_monitor, set_platform_share_sheet,
 };
 use jni::{
     EnvUnowned, Outcome, jni_sig, jni_str,
@@ -190,13 +190,23 @@ struct AndroidBackgroundActivity {
 }
 
 impl BackgroundActivity for AndroidBackgroundActivity {
-    fn set_active(&self, active: bool) {
+    fn show(&self, work: Option<&BackgroundWork>) {
         let result = with_android_activity_env(&self.app, |env, activity| {
+            let title = work
+                .map(|work| env.new_string(&work.title))
+                .transpose()
+                .map_err(|error| error.to_string())?;
+            let null = JObject::null();
+            let title_obj: &JObject = title.as_ref().map_or(&null, AsRef::as_ref);
+            // Thousandths, or -1 for work that does not know how far it is.
+            let permille = work
+                .and_then(|work| work.progress)
+                .map_or(-1, |fraction| (fraction.clamp(0.0, 1.0) * 1000.0) as i32);
             env.call_method(
                 &activity,
-                jni_str!("cranposeSetBackgroundActive"),
-                jni_sig!("(Z)V"),
-                &[JValue::Bool(active)],
+                jni_str!("cranposeShowBackgroundWork"),
+                jni_sig!("(Ljava/lang/String;I)V"),
+                &[JValue::Object(title_obj), JValue::Int(permille)],
             )
             .map(|_| ())
             .map_err(|error| {
@@ -205,7 +215,7 @@ impl BackgroundActivity for AndroidBackgroundActivity {
             })
         });
         if let Err(error) = result {
-            log::warn!("Android background activity set_active({active}) failed: {error}");
+            log::warn!("Android background work could not be shown: {error}");
         }
     }
 }

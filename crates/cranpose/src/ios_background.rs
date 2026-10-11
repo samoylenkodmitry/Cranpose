@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use block2::RcBlock;
-use cranpose_services::{BackgroundActivity, set_platform_background_activity};
+use cranpose_services::{BackgroundActivity, BackgroundWork, set_platform_background_activity};
 use dispatch2::DispatchQueue;
 use objc2::MainThreadMarker;
 use objc2_foundation::NSString;
@@ -19,7 +19,8 @@ pub(crate) fn register() {
 struct IosBackgroundActivity;
 
 impl BackgroundActivity for IosBackgroundActivity {
-    fn set_active(&self, active: bool) {
+    fn show(&self, work: Option<&BackgroundWork>) {
+        let active = work.is_some();
         DispatchQueue::main().exec_async(move || {
             let Some(mtm) = MainThreadMarker::new() else {
                 return;

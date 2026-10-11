@@ -3,6 +3,7 @@ package dev.cranpose.android;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
 import android.content.ComponentName;
 import android.content.Context;
@@ -33,6 +34,26 @@ public final class CranposeBackgroundService extends Service {
      * not declare this component, so a stop without this record makes no
      * binder call. */
     private static boolean startOutstanding;
+    /** What the notification shows, written on the main thread by {@link #show}. */
+    private static String workTitle = "";
+    private static int workPermille = -1;
+    /** Whether the service is in the foreground, so {@link #show} redraws its
+     * notification rather than leaving it for the next start. */
+    private static boolean inForeground;
+
+    /** The work to show, on the main thread: {@code permille} is how far it is,
+     * or -1 when the work does not know. */
+    static void show(Context context, String title, int permille) {
+        workTitle = title;
+        workPermille = permille;
+        if (!inForeground) {
+            return;
+        }
+        NotificationManager manager = context.getSystemService(NotificationManager.class);
+        if (manager != null) {
+            manager.notify(NOTIFICATION_ID, notification(context.getApplicationContext()));
+        }
+    }
 
     /** The one way the activity starts this service, on the main thread. The
      * record changes only for a start the platform accepted, and the
@@ -95,13 +116,7 @@ public final class CranposeBackgroundService extends Service {
             channel.setDescription("Shows when the app is finishing work in the background.");
             manager.createNotificationChannel(channel);
         }
-        Notification notification = new Notification.Builder(this, CHANNEL)
-                .setSmallIcon(android.R.drawable.stat_sys_download)
-                .setContentTitle(applicationLabel())
-                .setContentText("Finishing work…")
-                .setOngoing(true)
-                .setProgress(0, 0, true)
-                .build();
+        Notification notification = notification(this);
         try {
             if (Build.VERSION.SDK_INT >= 29) {
                 startForeground(
@@ -116,6 +131,7 @@ public final class CranposeBackgroundService extends Service {
             stopSelf();
             return;
         }
+        inForeground = true;
         obligationArmed = false;
         if (stopRequested) {
             stopRequested = false;
@@ -123,14 +139,43 @@ public final class CranposeBackgroundService extends Service {
         }
     }
 
-    private CharSequence applicationLabel() {
-        ApplicationInfo info = getApplicationInfo();
-        return getPackageManager().getApplicationLabel(info);
+    /** The app's name over what the work does, with its progress, opening
+     * the app when tapped. */
+    private static Notification notification(Context context) {
+        Notification.Builder builder = new Notification.Builder(context, CHANNEL)
+                .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setContentTitle(applicationLabel(context))
+                .setContentText(workTitle)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setContentIntent(openApp(context));
+        if (workPermille >= 0) {
+            builder.setProgress(1000, workPermille, false).setSubText(workPermille / 10 + "%");
+        } else {
+            builder.setProgress(0, 0, true);
+        }
+        return builder.build();
+    }
+
+    private static PendingIntent openApp(Context context) {
+        Intent launch = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
+        if (launch == null) {
+            return null;
+        }
+        launch.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+        return PendingIntent.getActivity(
+                context, 0, launch, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+    }
+
+    private static CharSequence applicationLabel(Context context) {
+        ApplicationInfo info = context.getApplicationInfo();
+        return context.getPackageManager().getApplicationLabel(info);
     }
 
     @Override
     @SuppressWarnings("deprecation")
     public void onDestroy() {
+        inForeground = false;
         if (Build.VERSION.SDK_INT >= 24) {
             stopForeground(STOP_FOREGROUND_REMOVE);
         } else {

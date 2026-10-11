@@ -3573,7 +3573,12 @@ fn the_android_background_service_ask_survives_launch_shaped_pauses() {
 
     let set_active = method_body(
         &java,
-        "public void cranposeSetBackgroundActive(boolean active)",
+        "public void cranposeShowBackgroundWork(String title, int permille)",
+    );
+    assert!(
+        set_active.contains("if (started && cranposePaused)"),
+        "only the start of work may ask for the service: a progress update re-asking would \
+         push the delayed ask back on every percent and the service would never start"
     );
     let confined = set_active
         .find("runOnUiThread(")

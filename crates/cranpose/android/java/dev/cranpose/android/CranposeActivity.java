@@ -251,7 +251,7 @@ public class CranposeActivity extends NativeActivity {
     private static final long BACKGROUND_SERVICE_ASK_DELAY_MS = 700;
 
     /** Background-service state, all of it confined to the UI thread: JNI
-     * callers cross over in {@link #cranposeSetBackgroundActive}, and
+     * callers cross over in {@link #cranposeShowBackgroundWork}, and
      * {@link #onPause} reads on the UI thread, so an off-thread write would be
      * a data race. */
     private boolean cranposeBackgroundActive;
@@ -260,12 +260,22 @@ public class CranposeActivity extends NativeActivity {
     private final Handler cranposeBackgroundServiceHandler = new Handler(Looper.getMainLooper());
     private final Runnable cranposeBackgroundServiceAsk = this::startCranposeBackgroundService;
 
-    public void cranposeSetBackgroundActive(boolean active) {
+    /** The work Cranpose keeps running off screen: {@code title} is what the
+     * notification says, or null once every lease has ended; {@code permille}
+     * is how far it is, or -1 when the work does not know. Called again for
+     * each change of title or percent, so only the start of work asks for the
+     * service. */
+    public void cranposeShowBackgroundWork(String title, int permille) {
         runOnUiThread(() -> {
+            boolean active = title != null;
+            boolean started = active && !cranposeBackgroundActive;
             cranposeBackgroundActive = active;
-            if (active && cranposePaused) {
-                askForCranposeBackgroundService();
-            } else if (!active) {
+            if (active) {
+                CranposeBackgroundService.show(this, title, permille);
+                if (started && cranposePaused) {
+                    askForCranposeBackgroundService();
+                }
+            } else {
                 cranposeBackgroundServiceHandler.removeCallbacks(cranposeBackgroundServiceAsk);
                 CranposeBackgroundService.stop(this);
             }

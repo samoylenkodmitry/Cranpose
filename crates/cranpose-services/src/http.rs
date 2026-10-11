@@ -93,7 +93,10 @@ struct CancelState {
     waiting: Mutex<Vec<Weak<dyn CancelTransfer>>>,
 }
 
-trait CancelTransfer: Send + Sync {
+/// A transfer that stops at once when its [`HttpControl`] is cancelled,
+/// registered with [`HttpControl::on_cancel`] by the backend running it.
+pub trait CancelTransfer: Send + Sync {
+    /// Stops the transfer; the caller sees [`HttpError::Cancelled`].
     fn cancel(&self);
 }
 
@@ -142,8 +145,10 @@ impl HttpControl {
         self.cancel.cancelled.load(Ordering::Acquire)
     }
 
-    #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
-    fn on_cancel(&self, transfer: Weak<dyn CancelTransfer>) {
+    /// Cancels `transfer` when this control is cancelled, or now if it already
+    /// is. The control holds it weakly, so a transfer that ended is dropped
+    /// at the next registration; a backend keeps it alive while it runs.
+    pub fn on_cancel(&self, transfer: Weak<dyn CancelTransfer>) {
         let mut waiting = self
             .cancel
             .waiting
@@ -512,6 +517,41 @@ pub trait HttpClient: Send + Sync {
     ) -> HttpFuture<'a, u64> {
         Box::pin(async move { download_through(self, url, target, control).await })
     }
+}
+
+/// A platform's own transfer for [`HttpClient::download_to`], one that goes
+/// on while the application is suspended or closed.
+///
+/// It keeps the contract of `download_to`: the file at `target` grows from its
+/// current length, a cancelled transfer keeps what arrived for the next call,
+/// and the result is the file's whole length. A transfer that finished while
+/// the application was closed is in `target` when the application starts
+/// again, so a call that finds the whole file returns at once.
+#[cfg(not(target_arch = "wasm32"))]
+pub trait PlatformDownloader: Send + Sync {
+    fn download<'a>(
+        &'a self,
+        url: &'a str,
+        target: &'a Path,
+        control: HttpControl,
+    ) -> HttpFuture<'a, u64>;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+static PLATFORM_DOWNLOADER: crate::registry::ServiceRegistry<dyn PlatformDownloader> =
+    crate::registry::ServiceRegistry::new();
+
+/// Installs the platform's downloader; [`default_http_client`] then runs
+/// `download_to` through it. iOS installs one on a background `URLSession`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn set_platform_downloader(downloader: Arc<dyn PlatformDownloader>) {
+    PLATFORM_DOWNLOADER.set(downloader);
+}
+
+/// Removes the platform's downloader (tests/teardown).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn clear_platform_downloader() {
+    PLATFORM_DOWNLOADER.clear();
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -958,6 +998,21 @@ impl HttpClient for DefaultHttpClient {
             #[cfg(target_arch = "wasm32")]
             {
                 send_web(request, control).await
+            }
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn download_to<'a>(
+        &'a self,
+        url: &'a str,
+        target: &'a Path,
+        control: HttpControl,
+    ) -> HttpFuture<'a, u64> {
+        Box::pin(async move {
+            match PLATFORM_DOWNLOADER.get() {
+                Some(downloader) => downloader.download(url, target, control).await,
+                None => download_through(self, url, target, control).await,
             }
         })
     }
