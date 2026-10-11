@@ -21,8 +21,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 DATA_BRANCH = 'perf-data'
-SUMMARY_METRICS = ['fps', 'first_frame_s', 'cpu_ms_per_frame', 'desired_to_present_p50_ms', 'janky_pct',
-                   'ram_mb', 'gpu_ram_mb', 'cpu_mhz', 'gpu_mhz']
+SUMMARY_METRICS = ['fps', 'first_frame_s', 'cpu_ms_per_frame', 'cpu_cores', 'desired_to_present_p50_ms',
+                   'janky_pct', 'ram_mb', 'gpu_ram_mb', 'cpu_mhz', 'gpu_mhz']
 
 
 # Attempts at a push GitHub refuses, and the seconds between them, times the
@@ -31,6 +31,8 @@ PUSH_ATTEMPTS = 3
 PUSH_DELAY_S = 2
 
 
+# The server the data branch lives on.
+GITHUB = 'https://github.com'
 # Answers git's request for credentials with the job's token.
 TOKEN_HELPER = '!f() { test "$1" = get && echo username=x-access-token && echo "password=$GH_TOKEN"; }; f'
 
@@ -42,12 +44,17 @@ def credentials():
     is at the machine, and the helper then fails the push with "failed to get:
     -25308" (the nightly of 2026-10-08). A header would reach the server even
     when `actions/checkout`'s own reaches it, which GitHub refuses as a
-    duplicate."""
+    duplicate. The headers the tree inherits are emptied first: a job that
+    `actions/checkout` could not clean up leaves its expired token as one in
+    the checkout the data tree belongs to, and GitHub refuses it before
+    asking for credentials (macm3, 2026-10-10 and 11)."""
     if not os.environ.get('GH_TOKEN'):
         return None
-    return {**os.environ, 'GIT_CONFIG_COUNT': '2',
-            'GIT_CONFIG_KEY_0': 'credential.helper', 'GIT_CONFIG_VALUE_0': '',
-            'GIT_CONFIG_KEY_1': 'credential.helper', 'GIT_CONFIG_VALUE_1': TOKEN_HELPER}
+    settings = [('http.extraheader', ''), (f'http.{GITHUB}/.extraheader', ''),
+                ('credential.helper', ''), ('credential.helper', TOKEN_HELPER)]
+    return {**os.environ, 'GIT_CONFIG_COUNT': str(len(settings)),
+            **{f'GIT_CONFIG_KEY_{index}': key for index, (key, _) in enumerate(settings)},
+            **{f'GIT_CONFIG_VALUE_{index}': value for index, (_, value) in enumerate(settings)}}
 
 
 def git(*args, cwd):
