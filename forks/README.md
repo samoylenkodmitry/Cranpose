@@ -23,6 +23,7 @@ Vulkan command pools that give a burst's memory back, the GL shaders
 without the branches their constants decide, the GL program status read
 only on failure and the GLSL templates below, and `cranpose-wgpu-core` and
 `cranpose-wgpu` are at 30.0.11 to require it and to make template modules.
+`cranpose-wgpu` is at 30.0.12 for the WebGPU pipeline discovery below.
 
 | fork | upstream |
 | --- | --- |
@@ -263,6 +264,27 @@ after scrolling 161 to 181 MiB. Over the same scroll the present thread's
 median render took 2.88 and 2.98 ms a frame against 3.13 and 3.28 ms
 before (two legs each). Giving the memory back at every reset reached
 142 MiB but cost the present thread 0.2 to 0.3 ms a frame.
+
+### A WebGPU frame can learn its pipelines while they compile together
+
+On the WebGPU backend `createRenderPipeline` hands the browser each
+pipeline as it is created, and Chrome's GPU process compiles them one after
+another on its main thread, presenting nothing meanwhile. On a first visit
+to the gauntlet on an Apple M5, with no Metal shader cached, the twelve
+pipelines of the first frame held it for 0.85 to 0.96 s; created through
+`createRenderPipelineAsync` the same twelve compiled side by side in 0.21
+to 0.25 s, and creating them again with `createRenderPipeline` afterwards
+took 3 ms in all, since the browser hands back the one it compiled.
+
+`Device::begin_pipeline_discovery` starts that on a WebGPU device: every
+render pipeline created until `Device::end_pipeline_discovery` goes to
+`createRenderPipelineAsync` and never draws, and every pass or bundle begun
+meanwhile records no draw. The future `end_pipeline_discovery` returns
+resolves, with the compiled pipelines to keep, once all of them compiled or
+failed. Cranpose's web shell draws its first frame this way, then installs
+a new renderer and draws the frame again once they compiled. On the M5
+the gauntlet's first frame showed after 0.5 to 0.75 s instead of 1.0 to
+1.25 s, the same to the pixel.
 
 ### Update the fork
 

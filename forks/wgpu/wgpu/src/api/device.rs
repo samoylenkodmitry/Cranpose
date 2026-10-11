@@ -439,6 +439,45 @@ impl Device {
         }
     }
 
+    /// Starts pipeline discovery when this `Device` is on the WebGPU backend,
+    /// and returns whether it did. Until [`Self::end_pipeline_discovery`],
+    /// every render pipeline it creates compiles through the browser's
+    /// `createRenderPipelineAsync`, in the background and beside the others
+    /// instead of one after another, and every encoder begun meanwhile
+    /// records no draw. A pipeline created during discovery never draws.
+    ///
+    /// A renderer draws a frame this way to learn the pipelines the frame
+    /// needs, drops what it drew, and draws the frame again once the future
+    /// [`Self::end_pipeline_discovery`] returns has resolved: creating the
+    /// same pipelines again then takes the ones the browser compiled.
+    #[cfg(webgpu)]
+    pub fn begin_pipeline_discovery(&self) -> bool {
+        self.inner
+            .as_webgpu_opt()
+            .map(crate::backend::webgpu::WebDevice::begin_pipeline_discovery)
+            .is_some()
+    }
+
+    /// Ends pipeline discovery. The future resolves once every pipeline
+    /// created during it compiled or failed, to those pipelines: keep them
+    /// until the same pipelines are created again, so the browser still has
+    /// them cached.
+    #[cfg(webgpu)]
+    pub fn end_pipeline_discovery(
+        &self,
+    ) -> impl core::future::Future<Output = Option<webgpu::DiscoveredPipelines>> + 'static {
+        let settled = self
+            .inner
+            .as_webgpu_opt()
+            .map(crate::backend::webgpu::WebDevice::end_pipeline_discovery);
+        async move {
+            match settled {
+                Some(settled) => Some(settled.await),
+                None => None,
+            }
+        }
+    }
+
     /// Returns the underlying [`webgpu::GpuDevice`] handle if this `Device`
     /// is on the WebGPU backend, otherwise `None`.
     #[cfg(webgpu)]

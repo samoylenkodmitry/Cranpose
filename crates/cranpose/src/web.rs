@@ -18,6 +18,7 @@ use web_sys::{HtmlCanvasElement, PointerEvent, WheelEvent};
 
 use crate::{
     app_launcher::AppSettings,
+    web_pipeline_discovery::{GpuTarget, PipelineDiscovery},
     wgpu_surface::{
         SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
         surface_present_required,
@@ -420,13 +421,14 @@ pub async fn run(
     fold_glass_on_mobile_devices(&window);
     let mut renderer = WgpuRenderer::with_font_set(fonts);
     #[expect(clippy::arc_with_non_send_sync)]
-    renderer.init_gpu(
-        Arc::new(device),
-        Arc::new(queue),
-        crate::surface_format::display_surface_view_format(surface_format),
-        adapter_info.backend,
-        adapter.get_downlevel_capabilities().flags,
-    );
+    let discovery = PipelineDiscovery::new(GpuTarget {
+        device: Arc::new(device),
+        queue: Arc::new(queue),
+        surface_format: crate::surface_format::display_surface_view_format(surface_format),
+        backend: adapter_info.backend,
+        downlevel: adapter.get_downlevel_capabilities().flags,
+    });
+    discovery.install(&mut renderer);
 
     let app = Rc::new(RefCell::new(AppShell::new_with_size_and_density(
         renderer,
@@ -811,6 +813,13 @@ pub async fn run(
 
     let render_loop_for_deadline = render_loop.clone();
     let request_frame_for_loop = request_frame.clone();
+    let presenter = CanvasPresenter::new(
+        surface.clone(),
+        surface_config,
+        surface_dirty.clone(),
+        request_frame.clone(),
+        discovery,
+    );
     let document_for_loop = document.clone();
     let cursors_for_loop = RefCell::new(crate::web_cursor::WebCursors::new(
         &canvas,
@@ -864,49 +873,7 @@ pub async fn run(
             app.borrow().needs_redraw(),
         );
         if present_required {
-            let config = surface_config.borrow();
-            match current_surface_texture(&surface, "web") {
-                SurfaceFrame::Ready(output) => {
-                    let view = output.texture.create_view(&wgpu::TextureViewDescriptor {
-                        format: Some(crate::surface_format::display_surface_view_format(
-                            config.format,
-                        )),
-                        ..Default::default()
-                    });
-                    let render_width = output.texture.width();
-                    let render_height = output.texture.height();
-
-                    {
-                        let mut app_mut = app.borrow_mut();
-                        if let Err(err) = app_mut.renderer().render_surface_texture(
-                            &output.texture,
-                            &view,
-                            render_width,
-                            render_height,
-                        ) {
-                            log::error!("render failed: {err:?}");
-                        }
-                        app_mut.renderer().present(output);
-                    }
-
-                    surface_dirty.set(false);
-                }
-                SurfaceFrame::Reconfigure => {
-                    {
-                        let mut app_mut = app.borrow_mut();
-                        if let Some(device) = app_mut.renderer().try_device() {
-                            surface.configure(device, &config);
-                        } else {
-                            log::error!(
-                                "web surface reconfigure skipped: GPU renderer is not initialized"
-                            );
-                        }
-                    }
-                    surface_dirty.set(true);
-                    request_frame_for_loop();
-                }
-                SurfaceFrame::Skip => surface_dirty.set(true),
-            }
+            presenter.present(&app);
         }
 
         frame_running.set(false);
@@ -922,6 +889,97 @@ pub async fn run(
     request_frame();
 
     Ok(())
+}
+
+/// Draws frames into the canvas.
+struct CanvasPresenter {
+    surface: Rc<wgpu::Surface<'static>>,
+    config: Rc<RefCell<wgpu::SurfaceConfiguration>>,
+    /// Whether the canvas shows less than the app holds.
+    dirty: Rc<Cell<bool>>,
+    request_frame: Rc<dyn Fn()>,
+    discovery: PipelineDiscovery,
+    /// Draws again once the first frame's pipelines compiled.
+    redraw: Rc<dyn Fn()>,
+}
+
+impl CanvasPresenter {
+    fn new(
+        surface: Rc<wgpu::Surface<'static>>,
+        config: Rc<RefCell<wgpu::SurfaceConfiguration>>,
+        dirty: Rc<Cell<bool>>,
+        request_frame: Rc<dyn Fn()>,
+        discovery: PipelineDiscovery,
+    ) -> Self {
+        let redraw: Rc<dyn Fn()> = {
+            let dirty = dirty.clone();
+            let request_frame = request_frame.clone();
+            Rc::new(move || {
+                dirty.set(true);
+                request_frame();
+            })
+        };
+        Self {
+            surface,
+            config,
+            dirty,
+            request_frame,
+            discovery,
+            redraw,
+        }
+    }
+
+    /// Draws `app` into the canvas's next image and presents it, or
+    /// reconfigures a surface the browser reports lost. While the first
+    /// frame's pipelines compile, the canvas keeps what it shows.
+    fn present(&self, app: &RefCell<AppShell<WgpuRenderer>>) {
+        if !self.discovery.may_draw() {
+            return;
+        }
+        let config = self.config.borrow();
+        match current_surface_texture(&self.surface, "web") {
+            SurfaceFrame::Ready(output) => {
+                let view = output.texture.create_view(&wgpu::TextureViewDescriptor {
+                    format: Some(crate::surface_format::display_surface_view_format(
+                        config.format,
+                    )),
+                    ..Default::default()
+                });
+                let render_width = output.texture.width();
+                let render_height = output.texture.height();
+                {
+                    let mut app_mut = app.borrow_mut();
+                    self.discovery.begin_frame(app_mut.renderer());
+                    if let Err(err) = app_mut.renderer().render_surface_texture(
+                        &output.texture,
+                        &view,
+                        render_width,
+                        render_height,
+                    ) {
+                        log::error!("render failed: {err:?}");
+                    }
+                    app_mut.renderer().present(output);
+                }
+                self.discovery.end_frame(&self.redraw);
+                self.dirty.set(false);
+            }
+            SurfaceFrame::Reconfigure => {
+                {
+                    let mut app_mut = app.borrow_mut();
+                    if let Some(device) = app_mut.renderer().try_device() {
+                        self.surface.configure(device, &config);
+                    } else {
+                        log::error!(
+                            "web surface reconfigure skipped: GPU renderer is not initialized"
+                        );
+                    }
+                }
+                self.dirty.set(true);
+                (self.request_frame)();
+            }
+            SurfaceFrame::Skip => self.dirty.set(true),
+        }
+    }
 }
 
 fn request_animation_frame(window: &web_sys::Window, f: &Closure<dyn FnMut()>) -> bool {
