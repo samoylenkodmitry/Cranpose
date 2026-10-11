@@ -49,6 +49,7 @@ import signal
 import socketserver
 import statistics
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -255,7 +256,8 @@ class Clocks:
                 'gpu_mhz': round(statistics.mean(sample['gpu_freq_mhz'] for sample in samples))}, timed
 
 
-LIBPROC = ctypes.CDLL('/usr/lib/libproc.dylib')
+# macOS only: the harness measures there, and its tests also run on Linux.
+LIBPROC = ctypes.CDLL('/usr/lib/libproc.dylib') if sys.platform == 'darwin' else None
 # `proc_pid_rusage`'s first flavour: CPU times in Mach ticks and the footprint.
 RUSAGE_INFO_V0 = 0
 
@@ -273,9 +275,10 @@ class MachTimebase(ctypes.Structure):
 
 
 TIMEBASE = MachTimebase()
-ctypes.CDLL(None).mach_timebase_info(ctypes.byref(TIMEBASE))
-# Seconds a Mach tick lasts.
-TICK_S = TIMEBASE.numerator / TIMEBASE.denominator / 1e9
+if sys.platform == 'darwin':
+    ctypes.CDLL(None).mach_timebase_info(ctypes.byref(TIMEBASE))
+# Seconds a Mach tick lasts; nothing reads it off macOS.
+TICK_S = TIMEBASE.numerator / max(TIMEBASE.denominator, 1) / 1e9
 # How often `Usage` reads the app's processes.
 USAGE_INTERVAL_S = 0.5
 
