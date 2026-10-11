@@ -491,6 +491,7 @@ impl GpuRenderer {
             .iter()
             .try_for_each(|segment| prep.segment(self, segment, &mut scratch));
         prep.finish(self);
+        self.prefetch_pass_pipelines(&prep.batches, &scratch, depth);
         self.ensure_run_pipelines(&mut prep.pipelines);
         let batches = prep.batches;
         scratch.arena_draws = prep.arena_draws;
@@ -585,6 +586,37 @@ impl GpuRenderer {
         self.scratch_held = scratch.held;
     }
 
+    /// Starts on the compiler's warm-up threads the builds of the image,
+    /// glyph and shadow pipelines a prepared pass draws with that are
+    /// missing; [`GpuRenderer::ensure_run_pipelines`] starts its shapes'
+    /// and the pass's composites start theirs as it prepares them. A launch's first frame
+    /// needs about fifteen; built one after another where the pass reached
+    /// each, they held the gauntlet's first frame 1.1 s on an Apple M5 with
+    /// no Metal shader cached. The pass still builds, or waits for, each
+    /// where it draws with it.
+    fn prefetch_pass_pipelines(&self, batches: &[Batch<'_>], scratch: &PassScratch, depth: bool) {
+        for batch in batches {
+            match batch {
+                Batch::Images {
+                    cmds, blend_mode, ..
+                } => self.prefetch_image_pipelines(
+                    &scratch.image_cmds[cmds.clone()],
+                    *blend_mode,
+                    depth,
+                ),
+                Batch::Glyphs { cmds, .. } => {
+                    self.prefetch_glyph_pipelines(&scratch.glyph_cmds[cmds.clone()], depth);
+                }
+                Batch::Shadows { .. } => self.prefetch_shadow_pipeline(depth),
+                Batch::StoreRun { .. }
+                | Batch::Arena { .. }
+                | Batch::Composite(_)
+                | Batch::Shader(_)
+                | Batch::Projective(_) => {}
+            }
+        }
+    }
+
     fn draw_batches(
         &mut self,
         pass: &mut TrackedPass<'_, '_>,
@@ -658,7 +690,7 @@ impl GpuRenderer {
                 Batch::Composite(prepared) => {
                     self.effect_renderer.draw_prepared_composite(
                         pass.untracked(),
-                        target_size,
+                        (&self.device, target_size),
                         prepared,
                     );
                 }
@@ -672,7 +704,7 @@ impl GpuRenderer {
                 Batch::Projective(prepared) => {
                     self.effect_renderer.draw_prepared_projective_composite(
                         pass.untracked(),
-                        target_size,
+                        (&self.device, target_size),
                         prepared,
                     );
                 }

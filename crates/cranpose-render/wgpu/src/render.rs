@@ -2585,6 +2585,17 @@ pub(crate) struct ImageDrawCmd {
     clip: Option<u32>,
 }
 
+impl ImageVariant {
+    /// The variant `cmd` draws with in a pass with a depth buffer or not.
+    fn of(cmd: &ImageDrawCmd, depth: bool) -> Self {
+        Self {
+            depth,
+            alpha_mask: cmd.image.alpha_mask,
+            rounded: cmd.clip.is_some(),
+        }
+    }
+}
+
 impl ImageDrawCmd {
     /// Target pixels the draw can touch: its scissor.
     pub(crate) fn bounds(&self) -> TargetRect {
@@ -2730,6 +2741,14 @@ impl<'a> Iterator for GlyphDraws<'a> {
 }
 
 impl GlyphDrawCmd {
+    /// The quads the command draws, which pick its pipeline.
+    fn quads(&self) -> GlyphQuads {
+        match &self.source {
+            GlyphDrawSource::Shared { quads, .. } => *quads,
+            GlyphDrawSource::Retained { aligned, .. } => GlyphQuads::plain(*aligned),
+        }
+    }
+
     fn shared(
         (instances, quads): (std::ops::Range<usize>, GlyphQuads),
         scissor: Option<(u32, u32, u32, u32)>,
@@ -3138,6 +3157,9 @@ pub struct GpuRenderer {
     recent_after_update: Option<Arc<crate::pipeline_records::PipelineRecords>>,
     /// What this renderer draws with, for the next launches.
     recorder: crate::pipeline_recorder::PipelineRecorder,
+    /// The background compiler, which builds a pass's missing pipelines side
+    /// by side.
+    pipeline_compiler: PipelineCompiler,
     /// Where the background compiler says a pipeline a placeholder waited
     /// for landed.
     #[cfg(not(target_arch = "wasm32"))]
@@ -3492,6 +3514,7 @@ impl GpuRenderer {
             recorder,
             #[cfg(not(target_arch = "wasm32"))]
             landing: pipeline_compiler.landing(),
+            pipeline_compiler,
             #[cfg(not(target_arch = "wasm32"))]
             built_at_frame_start: 0,
             drew_placeholder: false,
@@ -3751,6 +3774,55 @@ impl GpuRenderer {
                 variant,
             )
         }
+    }
+
+    /// Queues the builds of the image pipelines `cmds` draw with that are
+    /// missing (see [`FixedPipeline::prefetch`]).
+    pub(crate) fn prefetch_image_pipelines(
+        &self,
+        cmds: &[ImageDrawCmd],
+        blend_mode: BlendMode,
+        depth: bool,
+    ) {
+        let mut last = None;
+        for cmd in cmds {
+            let variant = ImageVariant::of(cmd, depth);
+            if last.replace(variant) == Some(variant) {
+                continue;
+            }
+            self.image_pipeline_resource(blend_mode, variant).prefetch(
+                &self.pipeline_compiler,
+                self.adapter_backend,
+                || self.image_pipeline_job(blend_mode, variant),
+            );
+        }
+    }
+
+    /// Queues the builds of the glyph pipelines `cmds` draw with that are
+    /// missing (see [`FixedPipeline::prefetch`]).
+    pub(crate) fn prefetch_glyph_pipelines(&self, cmds: &[GlyphDrawCmd], depth: bool) {
+        let mut last = None;
+        for cmd in cmds {
+            let quads = cmd.quads();
+            if last.replace(quads) == Some(quads) {
+                continue;
+            }
+            self.glyph_atlas_pipeline_resource(depth, quads).prefetch(
+                &self.pipeline_compiler,
+                self.adapter_backend,
+                || self.glyph_atlas_pipeline_job(depth, quads),
+            );
+        }
+    }
+
+    /// Queues the build of the shadow pipeline when it is missing (see
+    /// [`FixedPipeline::prefetch`]).
+    pub(crate) fn prefetch_shadow_pipeline(&self, depth: bool) {
+        self.rrect_shadow_pipeline[usize::from(depth)].prefetch(
+            &self.pipeline_compiler,
+            self.adapter_backend,
+            || self.rrect_shadow_pipeline_job(depth),
+        );
     }
 
     pub(crate) fn image_pipeline(
@@ -5199,8 +5271,11 @@ impl GpuRenderer {
     }
 
     /// Prepares the pipeline of each key `pipelines` holds and, in a pass
-    /// with a depth buffer, the one laying down its opaque interiors.
+    /// with a depth buffer, the one laying down its opaque interiors: the
+    /// compiler's threads build the missing ones after the first while this
+    /// thread builds that one.
     pub(crate) fn ensure_run_pipelines(&mut self, pipelines: &mut PipelineDemand) {
+        self.shape_pipelines.prefetch(pipelines);
         for (key, vertices) in pipelines.drain() {
             self.ensure_shape_pipeline(key, vertices);
             if let Some(interior) = key.interior() {
@@ -5532,11 +5607,7 @@ impl GpuRenderer {
                 continue;
             };
             pass.set_scissor_rect(x, y, width, height);
-            let variant = ImageVariant {
-                depth,
-                alpha_mask: cmd.image.alpha_mask,
-                rounded: cmd.clip.is_some(),
-            };
+            let variant = ImageVariant::of(cmd, depth);
             if bound_pipeline != Some(variant) {
                 pass.set_pipeline(self.image_pipeline(blend_mode, variant));
                 bound_pipeline = Some(variant);
