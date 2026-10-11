@@ -163,7 +163,7 @@ pub use http::{
     map_ordered_concurrent,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use http::{PlatformDownloader, set_platform_downloader};
+pub use http::{PlatformDownloader, downloaded_length, set_platform_downloader};
 pub use image_picker::{
     IMAGE_EXTENSIONS, ImagePicker, ImagePickerError, ImagePickerRef, ImageSource,
     ProvideImagePicker, clear_platform_image_picker, default_image_picker, local_image_picker,

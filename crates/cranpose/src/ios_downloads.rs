@@ -25,7 +25,7 @@ use objc2::{
 };
 use objc2_foundation::{
     NSArray, NSBundle, NSData, NSDictionary, NSError, NSHTTPURLResponse, NSKeyedArchiver,
-    NSKeyedUnarchiver, NSMutableCopying, NSMutableURLRequest, NSObject, NSObjectProtocol,
+    NSKeyedUnarchiver, NSMutableCopying, NSMutableURLRequest, NSNumber, NSObject, NSObjectProtocol,
     NSOperationQueue, NSString, NSURL, NSURLSession, NSURLSessionConfiguration,
     NSURLSessionDelegate, NSURLSessionDownloadDelegate, NSURLSessionDownloadTask,
     NSURLSessionDownloadTaskResumeData, NSURLSessionTask, NSURLSessionTaskDelegate,
@@ -308,6 +308,25 @@ impl Downloads {
 }
 
 impl PlatformDownloader for Downloads {
+    fn downloaded_length(&self, target: &Path) -> Option<u64> {
+        let file = fs::metadata(target).map_or(0, |metadata| metadata.len());
+        let running = self.state().transfers.values().find_map(|transfer| {
+            (transfer.target == target && !transfer.cancelling).then(|| {
+                transfer.offset + u64::try_from(transfer.task.countOfBytesReceived()).unwrap_or(0)
+            })
+        });
+        if running.is_some() {
+            return running;
+        }
+        let bytes = fs::read(resume_path(target)).ok()?;
+        let (saved, data) = bytes.split_first_chunk::<8>()?;
+        let offset = u64::from_le_bytes(*saved);
+        (offset == file)
+            .then(|| resume_bytes_received(&NSData::with_bytes(data)))
+            .flatten()
+            .map(|received| offset + received)
+    }
+
     fn download<'a>(
         &'a self,
         url: &'a str,
@@ -493,18 +512,32 @@ fn from_own_address(data: &[u8], url: &str) -> Retained<NSData> {
     }
 }
 
-fn with_own_address(data: &NSData, url: &str) -> Option<Retained<NSData>> {
-    // The key CFNetwork archives resume data under, not `NSKeyedArchiveRootObjectKey`'s value.
-    let root = NSString::from_str("NSKeyedArchiveRootObjectKey");
+/// The key CFNetwork archives resume data under, not
+/// `NSKeyedArchiveRootObjectKey`'s value.
+const RESUME_ROOT: &str = "NSKeyedArchiveRootObjectKey";
+
+fn resume_dictionary(data: &NSData) -> Option<Retained<NSDictionary>> {
     let unarchiver = unsafe {
         NSKeyedUnarchiver::initForReadingFromData_error(NSKeyedUnarchiver::alloc(), data)
     }
     .ok()?;
     unsafe { unarchiver.setRequiresSecureCoding(false) };
-    let resume = unsafe { unarchiver.decodeObjectForKey(&root) }?
+    unsafe { unarchiver.decodeObjectForKey(&NSString::from_str(RESUME_ROOT)) }?
         .downcast::<NSDictionary>()
-        .ok()?
-        .mutableCopy();
+        .ok()
+}
+
+/// The bytes a paused task had, as its resume data records them.
+fn resume_bytes_received(data: &NSData) -> Option<u64> {
+    let received = resume_dictionary(data)?
+        .objectForKey(&NSString::from_str("NSURLSessionResumeBytesReceived"))?
+        .downcast::<NSNumber>()
+        .ok()?;
+    u64::try_from(received.longLongValue()).ok()
+}
+
+fn with_own_address(data: &NSData, url: &str) -> Option<Retained<NSData>> {
+    let resume = resume_dictionary(data)?.mutableCopy();
     let original = resume.objectForKey(&NSString::from_str("NSURLSessionResumeOriginalRequest"))?;
     let current = NSString::from_str("NSURLSessionResumeCurrentRequest");
     let address = NSString::from_str("NSURLSessionDownloadURL");
@@ -516,7 +549,7 @@ fn with_own_address(data: &NSData, url: &str) -> Option<Retained<NSData>> {
         );
     }
     let archiver = NSKeyedArchiver::initRequiringSecureCoding(NSKeyedArchiver::alloc(), false);
-    unsafe { archiver.encodeObject_forKey(Some(&resume), &root) };
+    unsafe { archiver.encodeObject_forKey(Some(&resume), &NSString::from_str(RESUME_ROOT)) };
     archiver.finishEncoding();
     Some(archiver.encodedData())
 }
