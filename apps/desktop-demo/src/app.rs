@@ -946,12 +946,9 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
                 }));
                 return;
             }
-            let content_modifier = Modifier::empty().fill_max_width().weight(1.0).padding_each(
-                DEMO_PAGE_PADDING,
-                0.0,
-                DEMO_PAGE_PADDING,
-                DEMO_PAGE_PADDING,
-            );
+            // Each tab spans the window's width and height under the header:
+            // a tab pads its own content where it needs to.
+            let content_modifier = Modifier::empty().fill_max_width().weight(1.0);
             Column(
                 Modifier::empty().fill_max_size(),
                 ColumnSpec::default(),

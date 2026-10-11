@@ -74,14 +74,15 @@ const INDEX: &str = r#"{"runs": [
    {"name": "egui", "label": "egui 0.36.2", "source": "benchmarks/compose-vs-cranpose/egui-app/src/lib.rs"},
    {"name": "compose", "label": "Compose Multiplatform 1.12.1",
     "source": "benchmarks/compose-vs-cranpose/shared-compose/dev/perfcompare/compose/Gauntlet.kt"},
-   {"name": "avalonia", "label": "Avalonia 12.1.3", "source": "benchmarks/compose-vs-cranpose/avalonia-app/Gauntlet.cs"}],
+   {"name": "avalonia", "label": "Avalonia 12.1.3", "source": "benchmarks/compose-vs-cranpose/avalonia-app/Gauntlet.cs"},
+   {"name": "iced", "label": "iced 0.14.0"}],
   "scenarios": {"gauntlet": {"legs": 12, "starts": {
-    "first": {"summary": {"compose": {"fps": 17.1, "ram_mb": 412.0, "gpu_ram_mb": 96.4},
-                          "egui": {"fps": 55.7, "ram_mb": 120.4, "gpu_ram_mb": 33.0},
+    "first": {"summary": {"compose": {"fps": 17.1, "first_frame_s": 2.5, "ram_mb": 412.0, "gpu_ram_mb": 96.4},
+                          "egui": {"fps": 55.7, "first_frame_s": 0.9, "ram_mb": 120.4, "gpu_ram_mb": 33.0},
                           "avalonia": {"fps": 17.3, "ram_mb": 180.2}},
-              "failures": {"avalonia": "process 4242 shows no window"}},
-    "second": {"summary": {"compose": {"fps": 19.0, "ram_mb": 400.0, "gpu_ram_mb": 95.0},
-                           "egui": {"fps": 58.1, "ram_mb": 118.0, "gpu_ram_mb": 32.0},
+              "failures": {"iced": "process 4242 shows no window"}},
+    "second": {"summary": {"compose": {"fps": 19.0, "first_frame_s": 2.0, "ram_mb": 400.0, "gpu_ram_mb": 95.0},
+                           "egui": {"fps": 58.1, "first_frame_s": 0.6, "ram_mb": 118.0, "gpu_ram_mb": 32.0},
                            "avalonia": {"fps": 18.0, "ram_mb": 175.0}}}}}}}
 ]}"#;
 
@@ -128,53 +129,66 @@ fn shows(labels: &[String], text: &str) -> bool {
     labels.iter().any(|label| label == text)
 }
 
+const DESKTOP_CARD: &str = "Frameworks · Apple M3 Pro · 2026-10-06";
+
+/// Where `text` first appears after `marker`.
+fn after(labels: &[String], marker: &str, text: &str) -> usize {
+    let start = labels
+        .iter()
+        .position(|label| label == marker)
+        .unwrap_or_else(|| panic!("no {marker}: {labels:?}"));
+    start
+        + labels[start..]
+            .iter()
+            .position(|label| label == text)
+            .unwrap_or_else(|| panic!("no {text} after {marker}: {labels:?}"))
+}
+
 #[test]
-fn the_latest_night_lists_each_scenario_with_both_builds_and_the_change() {
+fn the_latest_night_lists_each_scenario_of_the_start_chosen_with_both_builds() {
     let labels = labels();
     assert!(
         shows(
             &labels,
-            "v0.9.8 against main bbbbbbbbb on EVR-AL00, 2026-10-06"
+            "Nightly · v0.9.8 against main bbbbbbbbb · EVR-AL00 · 2026-10-06"
         ),
         "{labels:?}"
     );
     assert!(
-        shows(&labels, "gauntlet ⚠"),
-        "the confirmed regression is marked: {labels:?}"
-    );
-    assert!(
-        shows(&labels, "-5.0%"),
-        "main's fps change against the release: {labels:?}"
-    );
-    assert!(
-        shows(&labels, "32.0 → 34.0"),
-        "CPU per frame, release then main: {labels:?}"
+        shows(&labels, "+8.1%"),
+        "the first start's change, shown first: {labels:?}"
     );
     assert!(shows(&labels, "feed"), "{labels:?}");
     assert!(
-        shows(&labels, "+8.1%"),
-        "the first start's change, with a table of its own: {labels:?}"
+        !shows(&labels, "gauntlet ⚠"),
+        "the first start had no confirmed regression: {labels:?}"
     );
-    let regressed = labels.iter().filter(|label| *label == "gauntlet ⚠").count();
+    let mut robot = dashboard();
+    choose(&mut robot, "Second start", 0);
+    let texts = robot.get_all_text();
+    // The row: its name, main's fps over the release's, the change, then
+    // main's CPU ms over the release's.
+    let row = after(&texts, "Second start", "gauntlet ⚠");
     assert_eq!(
-        regressed, 1,
-        "only the start a second run confirmed is marked: {labels:?}"
+        texts[row + 3..row + 6],
+        ["-5.0%", "34.0", "32.0"],
+        "the second start's table: {texts:?}"
     );
 }
 
 #[test]
-fn every_card_shows_the_first_start_after_install_and_the_second_start_apart() {
-    let labels = labels();
-    for title in ["First start after install", "Second start"] {
-        assert!(shows(&labels, title), "{title}: {labels:?}");
-        assert!(
-            shows(&labels, &format!("gauntlet: {title}")),
-            "a launch chart of each start: {labels:?}"
-        );
-    }
+fn a_card_shows_one_start_at_a_time_as_its_chips_choose() {
+    let mut robot = dashboard();
+    let texts = robot.get_all_text();
     assert!(
-        shows(&labels, "55.7") && shows(&labels, "58.1"),
-        "egui's frame rate on each start's bars: {labels:?}"
+        texts.iter().any(|text| text == "55.7") && !texts.iter().any(|text| text == "58.1"),
+        "the first start, shown first: {texts:?}"
+    );
+    choose(&mut robot, "Second start", 2);
+    let texts = robot.get_all_text();
+    assert!(
+        texts.iter().any(|text| text == "58.1") && !texts.iter().any(|text| text == "55.7"),
+        "the desktop card's second start: {texts:?}"
     );
 }
 
@@ -187,33 +201,11 @@ fn a_run_that_did_not_keep_the_starts_apart_is_left_out() {
     );
 }
 
-/// Where the first chart's caption ends: the framework bars follow it, after
-/// the chart's legend.
-fn bars_start(labels: &[String]) -> usize {
-    let caption = labels
-        .iter()
-        .position(|label| label.starts_with("Frame rate against milliseconds since the launch"))
-        .unwrap_or_else(|| panic!("no chart: {labels:?}"));
-    // The legend: a label, its frame rate and its first frame, or why it has
-    // none, for each of the run's three frameworks.
-    caption + 1 + 3 * 3
-}
-
-/// Where `text` first appears among the bars.
-fn bar_position(labels: &[String], text: &str) -> usize {
-    let start = bars_start(labels);
-    start
-        + labels[start..]
-            .iter()
-            .position(|label| label == text)
-            .unwrap_or_else(|| panic!("no {text} among the bars: {labels:?}"))
-}
-
 #[test]
 fn the_frameworks_card_shows_each_frameworks_frame_rate() {
     let labels = labels();
-    assert!(shows(&labels, "26.5"), "{labels:?}");
-    assert!(shows(&labels, "52.8"), "{labels:?}");
+    assert!(shows(&labels, "12.0"), "{labels:?}");
+    assert!(shows(&labels, "40.1"), "{labels:?}");
 }
 
 #[test]
@@ -221,7 +213,7 @@ fn each_device_shows_its_latest_framework_comparison() {
     let labels = labels();
     assert!(shows(&labels, "55.7"), "the desktop run: {labels:?}");
     assert!(
-        !shows(&labels, "4.7"),
+        !shows(&labels, "4.1"),
         "the phone's older comparison gives way to its latest: {labels:?}"
     );
 }
@@ -230,7 +222,7 @@ fn each_device_shows_its_latest_framework_comparison() {
 fn the_browser_runs_have_a_card_of_their_own_beside_the_native_ones() {
     let labels = labels();
     assert!(
-        shows(&labels, "49.8") && shows(&labels, "37.8"),
+        shows(&labels, "45.0") && shows(&labels, "30.2"),
         "the browser run, which has no Compose to give it a card: {labels:?}"
     );
     assert!(
@@ -240,56 +232,61 @@ fn the_browser_runs_have_a_card_of_their_own_beside_the_native_ones() {
     assert!(
         shows(
             &labels,
-            "Frameworks in the browser, Apple M3 Pro · Chrome 154, 2026-10-06"
+            "Frameworks in the browser · Apple M3 Pro · Chrome 154 · 2026-10-06"
         ),
         "the card says it is the browser's: {labels:?}"
     );
 }
 
 #[test]
-fn frameworks_show_the_highest_frame_rate_first() {
+fn frameworks_show_the_highest_frame_rate_first_and_the_reason_a_framework_has_none() {
     let labels = labels();
-    let egui = bar_position(&labels, "egui 0.36.2");
-    let avalonia = bar_position(&labels, "Avalonia 12.1.3");
-    let compose = bar_position(&labels, "Compose Multiplatform 1.12.1");
-    assert!(egui < avalonia && avalonia < compose, "{labels:?}");
+    let egui = after(&labels, DESKTOP_CARD, "egui 0.36.2");
+    let avalonia = after(&labels, DESKTOP_CARD, "Avalonia 12.1.3");
+    let compose = after(&labels, DESKTOP_CARD, "Compose Multiplatform 1.12.1");
+    let iced = after(&labels, DESKTOP_CARD, "iced 0.14.0");
+    assert!(
+        egui < avalonia && avalonia < compose && compose < iced,
+        "{labels:?}"
+    );
     assert_eq!(
         labels[egui + 1],
         "55.7",
         "the frame rate sits on the framework's bar: {labels:?}"
     );
-}
-
-#[test]
-fn a_run_measured_from_each_launch_charts_every_framework_from_its_launch() {
-    let labels = labels();
-    assert!(
-        labels
-            .iter()
-            .any(|label| label.contains("over the whole 20000 ms from the launch")),
-        "the chart says what its numbers are: {labels:?}"
+    assert_eq!(
+        labels[iced + 1],
+        "process 4242 shows no window",
+        "a framework whose launches failed shows why in place of its bar: {labels:?}"
     );
     let legend = labels
         .iter()
         .filter(|label| *label == "Compose Multiplatform 1.12.1")
         .count();
-    assert_eq!(legend, 4, "each start's chart legend and bars: {labels:?}");
-    for (first, second) in [("900", "600"), ("2500", "2000")] {
-        assert!(
-            shows(&labels, &format!("first frame {first} ms"))
-                && shows(&labels, &format!("first frame {second} ms")),
-            "each start's own first frame, egui's then Compose's: {labels:?}"
-        );
-    }
-    assert!(shows(&labels, "20000 ms"), "the chart's end: {labels:?}");
-    assert!(
-        shows(&labels, "no frames: process 4242 shows no window"),
-        "a framework whose launches failed is shown with why: {labels:?}"
+    assert_eq!(
+        legend, 1,
+        "its bar carries its line's colour: no legend beside it: {labels:?}"
     );
+    assert!(shows(&labels, "20000 ms"), "the chart's end: {labels:?}");
 }
 
 #[test]
-fn the_frame_rate_since_the_launch_is_zero_before_the_first_frame_and_falls_in_a_stall() {
+fn the_first_frame_is_a_metric_of_each_start() {
+    let mut robot = dashboard();
+    choose(&mut robot, "first frame ms", 1);
+    let texts = robot.get_all_text();
+    for value in ["900", "2500"] {
+        assert!(texts.iter().any(|text| text == value), "{value}: {texts:?}");
+    }
+    choose(&mut robot, "Second start", 2);
+    let texts = robot.get_all_text();
+    for value in ["600", "2000"] {
+        assert!(texts.iter().any(|text| text == value), "{value}: {texts:?}");
+    }
+}
+
+#[test]
+fn the_frame_rate_since_the_launch_is_zero_before_the_first_frame_and_after_a_stall() {
     // 60 fps from 1000 ms to 2000 ms, then nothing.
     let frames: Vec<f64> = (0..=60)
         .map(|frame| 1000.0 + f64::from(frame) * 1000.0 / 60.0)
@@ -297,14 +294,25 @@ fn the_frame_rate_since_the_launch_is_zero_before_the_first_frame_and_falls_in_a
     let rates = launch_fps(&frames, 4000.0, 500.0);
     assert_eq!(rates.len(), 9, "0, 500, ... 4000 ms");
     assert_eq!(&rates[..2], &[0.0, 0.0], "nothing before the first frame");
-    assert!((rates[3] - 60.0).abs() < 0.5, "a steady 60 fps: {rates:?}");
-    assert!(
-        (rates[6] - 1.0).abs() < 0.01,
-        "a second without a frame reads 1 fps: {rates:?}"
+    assert!((rates[3] - 60.0).abs() < 2.5, "a steady 60 fps: {rates:?}");
+    assert_eq!(
+        &rates[6..],
+        &[0.0, 0.0, 0.0],
+        "a window without a frame reads 0: {rates:?}"
     );
+}
+
+#[test]
+fn frames_shown_together_at_the_start_never_read_more_than_they_are() {
+    // Two frames 0.05 ms apart, then 60 fps.
+    let mut frames = vec![100.0, 100.05];
+    frames.extend((1..120).map(|frame| 100.05 + f64::from(frame) * 1000.0 / 60.0));
+    let rates = launch_fps(&frames, 2000.0, 50.0);
+    let highest = rates.iter().copied().fold(0.0, f64::max);
+    assert!(highest <= 62.0, "no spike: {rates:?}");
     assert!(
-        (rates[8] - 0.5).abs() < 0.01,
-        "two seconds without one, 0.5: {rates:?}"
+        (rates[2] - 2.0).abs() < 0.01 && (rates[3] - 8.0).abs() < 0.01,
+        "one frame in the last 500 ms reads 2 fps, four read 8: {rates:?}"
     );
 }
 
@@ -353,13 +361,13 @@ fn choose(robot: &mut RobotTestRule<TestRenderer>, name: &str, nth: usize) {
 }
 
 #[test]
-fn a_framework_card_shows_the_metric_chosen_and_leaves_a_dash_where_a_run_has_none() {
+fn a_framework_card_shows_the_metric_chosen_and_a_dash_where_a_run_has_none() {
     let mut robot = dashboard();
     // The trend's chips come first, then the newest framework card's: the
     // desktop's.
     choose(&mut robot, "RAM MB", 1);
     let texts = robot.get_all_text();
-    for value in ["412", "120", "180", "400", "118", "175"] {
+    for value in ["412", "120", "180"] {
         assert!(texts.iter().any(|text| text == value), "{value}: {texts:?}");
     }
     assert!(
@@ -373,15 +381,6 @@ fn a_framework_card_shows_the_metric_chosen_and_leaves_a_dash_where_a_run_has_no
     }
 }
 
-/// Where each of `texts` first appears among the bars.
-fn order(robot: &mut RobotTestRule<TestRenderer>, texts: &[&str]) -> Vec<usize> {
-    let shown = robot.get_all_text();
-    texts
-        .iter()
-        .map(|text| bar_position(&shown, text))
-        .collect()
-}
-
 #[test]
 fn memory_puts_the_least_first_and_a_framework_without_a_value_last() {
     let mut robot = dashboard();
@@ -391,13 +390,21 @@ fn memory_puts_the_least_first_and_a_framework_without_a_value_last() {
         "Compose Multiplatform 1.12.1",
     ];
     choose(&mut robot, "RAM MB", 1);
-    let at = order(&mut robot, &frameworks);
+    let shown = robot.get_all_text();
+    let at: Vec<usize> = frameworks
+        .iter()
+        .map(|name| after(&shown, DESKTOP_CARD, name))
+        .collect();
     assert!(
         at[0] < at[1] && at[1] < at[2],
         "egui 120, Avalonia 180, Compose 412: {at:?}"
     );
     choose(&mut robot, "GPU RAM MB", 1);
-    let at = order(&mut robot, &frameworks);
+    let shown = robot.get_all_text();
+    let at: Vec<usize> = frameworks
+        .iter()
+        .map(|name| after(&shown, DESKTOP_CARD, name))
+        .collect();
     assert!(
         at[0] < at[2] && at[2] < at[1],
         "egui 33, Compose 96, Avalonia none: {at:?}"

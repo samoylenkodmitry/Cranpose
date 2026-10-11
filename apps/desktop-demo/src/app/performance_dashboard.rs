@@ -7,9 +7,11 @@ use std::{cmp::Ordering, collections::BTreeMap, rc::Rc};
 use cranpose_core::{self, MutableState};
 use cranpose_services::{isSystemInDarkTheme, local_http_client, local_uri_handler, HttpClientRef};
 use cranpose_ui::{
-    composable, Alignment, Box, BoxSpec, Brush, Button, ButtonSpec, Canvas, Color, Column,
-    ColumnSpec, DrawScope, DrawStyle, LinearArrangement, Modifier, Path, Point, Row, RowSpec,
-    ScrollState, Stroke, Text, VerticalAlignment,
+    composable,
+    widgets::{FlowRow, FlowRowSpec},
+    Alignment, Box, BoxSpec, Brush, Button, ButtonSpec, Canvas, Color, Column, ColumnSpec,
+    DrawScope, DrawStyle, LinearArrangement, Modifier, Path, Point, Row, RowSpec, ScrollState,
+    Stroke, Text, TextOptions, TextOverflow, TextWithOptions, VerticalAlignment,
 };
 use serde::Deserialize;
 
@@ -122,12 +124,10 @@ const CHART_STEP_MS: f64 = 50.0;
 const RATE_WINDOW_MS: f64 = 500.0;
 
 /// The frame rate at every `step_ms` from the launch to `run_ms`, from the
-/// times frames were presented, in milliseconds since the launch: the
-/// frames presented in the last 500 ms over the time between the first and
-/// the last of them, or, with fewer than two there, 1000 over the last
-/// interval between frames. The wait since the last frame stands in for the
-/// interval when it is longer, so a stall shows as the drop it is. Zero
-/// before the first frame.
+/// times frames were presented, in milliseconds since the launch: the frames
+/// presented in the last 500 ms, per second. It is zero before the first
+/// frame and after a stall as long as the window, and never reads more than
+/// the frames shown.
 pub fn launch_fps(frame_ms: &[f64], run_ms: f64, step_ms: f64) -> Vec<f64> {
     let steps = (run_ms / step_ms).floor() as usize + 1;
     let mut rates = Vec::with_capacity(steps);
@@ -140,25 +140,7 @@ pub fn launch_fps(frame_ms: &[f64], run_ms: f64, step_ms: f64) -> Vec<f64> {
         while oldest < shown && frame_ms[oldest] <= now - RATE_WINDOW_MS {
             oldest += 1;
         }
-        if shown == 0 {
-            rates.push(0.0);
-            continue;
-        }
-        let last = frame_ms[shown - 1];
-        let wait = now - last;
-        let interval = if shown - oldest >= 2 {
-            (last - frame_ms[oldest]) / (shown - oldest - 1) as f64
-        } else if shown >= 2 {
-            last - frame_ms[shown - 2]
-        } else {
-            wait
-        };
-        let interval = interval.max(wait);
-        rates.push(if interval > 0.0 {
-            1000.0 / interval
-        } else {
-            0.0
-        });
+        rates.push((shown - oldest) as f64 * 1000.0 / RATE_WINDOW_MS);
     }
     rates
 }
@@ -200,12 +182,14 @@ pub struct PerfStart {
 /// The starts a run measures of every subject in each round, each with its
 /// title: its first start after its install, its data cleared as the install
 /// leaves it, and its second start.
-pub const STARTS: [(&str, &str); 2] = [
-    ("first", "First start after install"),
-    ("second", "Second start"),
-];
+pub const STARTS: [(&str, &str); 2] = [("first", "First start"), ("second", "Second start")];
 
 impl PerfRun {
+    /// The day the run started, as its start time writes it.
+    fn date(&self) -> &str {
+        self.started_at.get(..10).unwrap_or(&self.started_at)
+    }
+
     fn start(&self, scenario: &str, start: &str) -> Option<&PerfStart> {
         self.scenarios.get(scenario)?.starts.get(start)
     }
@@ -338,6 +322,7 @@ fn figure(value: Option<f64>) -> String {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Metric {
     Fps,
+    FirstFrame,
     CpuPerFrame,
     Ram,
     GpuRam,
@@ -346,8 +331,9 @@ enum Metric {
 }
 
 impl Metric {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::Fps,
+        Self::FirstFrame,
         Self::CpuPerFrame,
         Self::Ram,
         Self::GpuRam,
@@ -359,6 +345,7 @@ impl Metric {
     fn key(self) -> &'static str {
         match self {
             Self::Fps => "fps",
+            Self::FirstFrame => "first_frame_s",
             Self::CpuPerFrame => "cpu_ms_per_frame",
             Self::Ram => "ram_mb",
             Self::GpuRam => "gpu_ram_mb",
@@ -370,6 +357,7 @@ impl Metric {
     fn name(self) -> &'static str {
         match self {
             Self::Fps => "fps",
+            Self::FirstFrame => "first frame ms",
             Self::CpuPerFrame => "CPU ms per frame",
             Self::Ram => "RAM MB",
             Self::GpuRam => "GPU RAM MB",
@@ -384,6 +372,9 @@ impl Metric {
             Self::Fps => {
                 "Frames the display showed per second over the whole run from the launch, counted \
                  outside the app; 60 at most."
+            }
+            Self::FirstFrame => {
+                "Milliseconds from the launch command to the first frame the display showed."
             }
             Self::CpuPerFrame => {
                 "CPU time of the app and every process it started, per frame shown."
@@ -407,6 +398,8 @@ impl Metric {
     fn format(self, value: f64) -> String {
         match self {
             Self::Fps | Self::CpuPerFrame => format!("{value:.1}"),
+            // Medians in seconds, shown in milliseconds.
+            Self::FirstFrame => format!("{:.0}", value * 1000.0),
             Self::Ram | Self::GpuRam | Self::CpuClock | Self::GpuClock => format!("{value:.0}"),
         }
     }
@@ -497,22 +490,22 @@ pub fn PerformanceDashboard(
 ) {
     let palette = Palette::new(isSystemInDarkTheme());
     let scroll = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
-    let selected = cranpose_core::rememberMutableStateOf(|| "gauntlet".to_string());
-    let metric = cranpose_core::rememberMutableStateOf(|| Metric::Fps);
+    // The nightly's scenario, which its chart and its trend share.
+    let scenario = cranpose_core::rememberMutableStateOf(|| "gauntlet".to_string());
     Column(
         Modifier::empty()
             .fill_max_size()
             .background(palette.background)
             .vertical_scroll(scroll, false)
-            .padding(20.0),
-        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(16.0)),
+            .padding(12.0),
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
         move || {
             Header(palette, refresh);
             let nightly: Vec<PerfRun> = index.nightly().into_iter().cloned().collect();
             match nightly.last() {
                 Some(latest) => {
-                    LatestNightly(palette, Rc::new(latest.clone()), source.clone());
-                    Trend(palette, Rc::new(nightly.clone()), selected, metric);
+                    LatestNightly(palette, Rc::new(latest.clone()), source.clone(), scenario);
+                    Trend(palette, Rc::new(nightly.clone()), scenario);
                 }
                 None => {
                     Text(
@@ -529,31 +522,42 @@ pub fn PerformanceDashboard(
     );
 }
 
+/// The tab's title, how every chart and bar reads, and Refresh.
 #[composable]
 fn Header(palette: Palette, refresh: Option<MutableState<u64>>) {
     Row(
-        Modifier::empty().fill_max_width(),
+        Modifier::empty()
+            .fill_max_width()
+            .padding_symmetric(4.0, 4.0),
         RowSpec::new()
             .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
-            .vertical_alignment(VerticalAlignment::CenterVertically),
+            .vertical_alignment(VerticalAlignment::Top),
         move || {
             Column(
                 Modifier::empty().weight(1.0),
-                ColumnSpec::default(),
+                ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(6.0)),
                 move || {
                     Text(
                         "Performance",
                         Modifier::empty(),
-                        text_style(24.0, palette.text, true),
+                        text_style(22.0, palette.text, true),
                     );
                     Text(
-                    "Each night the latest release and main draw the same scenarios on the same \
-                     phone, measured from outside the app. Every launch is measured from its start, \
-                     the same span for every framework: the charts show the frame rate against the \
-                     milliseconds since the launch, the start included.",
-                    Modifier::empty(),
-                    text_style(13.0, palette.muted, false),
-                );
+                        "Measured from outside each app, from its launch, over the same span \
+                         for every framework. First start: the first launch after install. \
+                         Second start: the launch after it.",
+                        Modifier::empty(),
+                        text_style(13.0, palette.muted, false),
+                    );
+                    Text(
+                        format!(
+                            "Charts: frames per second over the last {RATE_WINDOW_MS:.0} ms; a \
+                             line is the median launch, its band the lowest to the highest. \
+                             Bars: medians over the run, best first."
+                        ),
+                        Modifier::empty(),
+                        text_style(12.0, palette.muted, false),
+                    );
                 },
             );
             if let Some(refresh) = refresh {
@@ -583,9 +587,9 @@ fn Card(palette: Palette, title: String, content: impl Fn() + 'static) {
         Modifier::empty()
             .fill_max_width()
             .background(palette.surface)
-            .rounded_corners(12.0)
-            .padding(16.0),
-        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
+            .rounded_corners(14.0)
+            .padding(14.0),
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(10.0)),
         move || {
             Text(
                 title.clone(),
@@ -597,183 +601,169 @@ fn Card(palette: Palette, title: String, content: impl Fn() + 'static) {
     );
 }
 
-#[composable]
-fn LatestNightly(palette: Palette, run: Rc<PerfRun>, source: FrameSource) {
-    let release = run.release.clone().unwrap_or_default();
-    let main = run.main.clone().unwrap_or_default();
-    let title = format!(
-        "{release} against main {} on {}, {}",
-        &main[..main.len().min(9)],
-        run.device,
-        &run.started_at[..run.started_at.len().min(10)]
-    );
-    Card(palette, title, move || {
-        Text(
-            "Green: main is better; red: worse; amber: not settled within four pairs of legs. \
-             ⚠ marks a regression a second run confirmed.",
-            Modifier::empty(),
-            text_style(12.0, palette.muted, false),
-        );
-        let subjects: Vec<(usize, PerfSubject)> =
-            run.subjects.iter().cloned().enumerate().collect();
-        let loaded = run_frames(source.clone(), run.file.clone());
-        for (start, title) in STARTS {
-            Text(
-                title,
-                Modifier::empty(),
-                text_style(15.0, palette.text, true),
-            );
-            NightlyTable(palette, run.clone(), start);
-            for scenario in run.scenarios.keys() {
-                ScenarioLaunch(
-                    palette,
-                    loaded.get(),
-                    run_ms(&run),
-                    scenario.clone(),
-                    start,
-                    launch_lines(palette, &run, scenario, start, &subjects),
-                );
-            }
-        }
-    });
-}
-
-/// Each scenario's medians on both builds for one `start`, coloured by its
-/// verdicts.
-#[composable]
-fn NightlyTable(palette: Palette, run: Rc<PerfRun>, start: &'static str) {
-    let headers = [
-        "scenario",
-        "release",
-        "main",
-        "change",
-        "CPU ms/frame",
-        "to screen ms",
-    ];
-    TableRow(
-        headers.map(str::to_string).to_vec(),
-        vec![palette.muted; 6],
-        true,
-    );
-    for scenario in run.scenarios.keys() {
-        let entry = run.start(scenario, start).cloned().unwrap_or_default();
-        let fps = (
-            run.median(scenario, start, 0, "fps"),
-            run.median(scenario, start, 1, "fps"),
-        );
-        let change = match fps {
-            (Some(before), Some(after)) if before > 0.0 => {
-                format!("{:+.1}%", (after - before) / before * 100.0)
-            }
-            _ => "–".to_string(),
-        };
-        let pair = |metric: &str| match (
-            run.median(scenario, start, 0, metric),
-            run.median(scenario, start, 1, metric),
-        ) {
-            (Some(before), Some(after)) => format!("{before:.1} → {after:.1}"),
-            _ => "–".to_string(),
-        };
-        let regressed = !entry.confirmed.is_empty();
-        let cells = vec![
-            if regressed {
-                format!("{scenario} ⚠")
-            } else {
-                scenario.clone()
-            },
-            figure(fps.0),
-            figure(fps.1),
-            change,
-            pair("cpu_ms_per_frame"),
-            pair("desired_to_present_p50_ms"),
-        ];
-        let colors = vec![
-            if regressed {
-                palette.worse
-            } else {
-                palette.text
-            },
-            palette.muted,
-            palette.verdict(entry.verdicts.get("fps")),
-            palette.verdict(entry.verdicts.get("fps")),
-            palette.verdict(entry.verdicts.get("cpu_ms_per_frame")),
-            palette.verdict(entry.verdicts.get("desired_to_present_p50_ms")),
-        ];
-        TableRow(cells, colors, false);
+/// `chosen` when the run has it, else its first scenario.
+fn shown_scenario(run: &PerfRun, chosen: &str) -> String {
+    if run.scenarios.contains_key(chosen) {
+        chosen.to_string()
+    } else {
+        run.scenarios.keys().next().cloned().unwrap_or_default()
     }
 }
 
+/// The latest night: each scenario's medians on both builds for the start
+/// chosen, and the chosen scenario's launches.
 #[composable]
-fn TableRow(cells: Vec<String>, colors: Vec<Color>, header: bool) {
-    Row(
-        Modifier::empty().fill_max_width(),
-        RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
-        move || {
-            for (index, (cell, color)) in cells.iter().zip(&colors).enumerate() {
-                Text(
-                    cell.clone(),
-                    Modifier::empty().weight(if index == 0 { 1.6 } else { 1.0 }),
-                    text_style(13.0, *color, header || index == 0),
-                );
-            }
-        },
+fn LatestNightly(
+    palette: Palette,
+    run: Rc<PerfRun>,
+    source: FrameSource,
+    scenario: MutableState<String>,
+) {
+    let start = cranpose_core::rememberMutableStateOf(|| STARTS[0].0);
+    let release = run.release.clone().unwrap_or_default();
+    let main = run.main.clone().unwrap_or_default();
+    let title = format!(
+        "Nightly · {release} against main {} · {} · {}",
+        &main[..main.len().min(9)],
+        run.device,
+        run.date()
     );
+    let subjects: Rc<Vec<(usize, PerfSubject)>> =
+        Rc::new(run.subjects.iter().cloned().enumerate().collect());
+    Card(palette, title, move || {
+        StartChips(palette, start);
+        NightlyTable(palette, run.clone(), start.get());
+        Text(
+            "Main's median over the release's. Green: main is better; red: worse; amber: not \
+             settled within four pairs of legs; ⚠: a second run confirmed it.",
+            Modifier::empty(),
+            text_style(12.0, palette.muted, false),
+        );
+        RunView(
+            palette,
+            run.clone(),
+            subjects.clone(),
+            source.clone(),
+            scenario,
+            start.get(),
+            Metric::Fps,
+        );
+    });
 }
 
+/// Every night's medians of the chosen scenario, start and metric, the
+/// release's and main's.
 #[composable]
-fn Trend(
-    palette: Palette,
-    nightly: Rc<Vec<PerfRun>>,
-    selected: MutableState<String>,
-    metric: MutableState<Metric>,
-) {
-    let scenario = selected.get();
-    let title = format!("{scenario}: {}, night by night", metric.get().name());
+fn Trend(palette: Palette, nightly: Rc<Vec<PerfRun>>, scenario: MutableState<String>) {
+    let metric = cranpose_core::rememberMutableStateOf(|| Metric::Fps);
+    let start = cranpose_core::rememberMutableStateOf(|| STARTS[0].0);
+    let title = format!(
+        "{}: {}, night by night",
+        scenario.get(),
+        metric.get().name()
+    );
     Card(palette, title, move || {
         let names: Vec<String> = nightly
             .last()
             .map(|run| run.scenarios.keys().cloned().collect())
             .unwrap_or_default();
-        let chosen = names.iter().position(|name| *name == selected.get());
-        let choices = names.clone();
-        Chips(palette, names, chosen, move |index| {
-            selected.set(choices[index].clone());
-        });
+        ScenarioChips(palette, names, scenario);
+        StartChips(palette, start);
         MetricChips(palette, metric);
-        let scenario = selected.get();
-        let shown = metric.get();
-        for (start, title) in STARTS {
-            let series = |subject: usize| -> Vec<f32> {
-                nightly
-                    .iter()
-                    .map(|run| {
-                        run.median(&scenario, start, subject, shown.key())
-                            .unwrap_or(f64::NAN) as f32
-                    })
-                    .collect()
-            };
-            let regressed: Vec<bool> = nightly
+        let (shown, measured, start) = (scenario.get(), metric.get(), start.get());
+        let series = |subject: usize| -> Vec<f32> {
+            nightly
                 .iter()
                 .map(|run| {
-                    run.start(&scenario, start)
-                        .is_some_and(|entry| !entry.confirmed.is_empty())
+                    run.median(&shown, start, subject, measured.key())
+                        .unwrap_or(f64::NAN) as f32
                 })
-                .collect();
-            Text(
-                title,
-                Modifier::empty(),
-                text_style(13.0, palette.text, true),
-            );
-            LineChart(palette, series(0), series(1), regressed);
-        }
+                .collect()
+        };
+        let regressed: Vec<bool> = nightly
+            .iter()
+            .map(|run| {
+                run.start(&shown, start)
+                    .is_some_and(|entry| !entry.confirmed.is_empty())
+            })
+            .collect();
+        let dates = nightly.iter().map(|run| run.date().to_string()).collect();
+        LineChart(palette, dates, series(0), series(1), regressed);
+        Row(
+            Modifier::empty().fill_max_width(),
+            RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(14.0)),
+            move || {
+                for (label, color) in [
+                    ("release", palette.baseline),
+                    ("main", palette.accent),
+                    ("confirmed regression", palette.worse),
+                ] {
+                    Swatch(palette, label, color);
+                }
+            },
+        );
         Text(
-            format!(
-                "Grey: the release; blue: main; red dots: confirmed regressions. {}",
-                shown.about()
-            ),
+            measured.about(),
             Modifier::empty(),
             text_style(12.0, palette.muted, false),
         );
+    });
+}
+
+/// A coloured dot and its name.
+#[composable]
+fn Swatch(palette: Palette, label: &'static str, color: Color) {
+    Row(
+        Modifier::empty(),
+        RowSpec::new()
+            .horizontal_arrangement(LinearArrangement::SpacedBy(6.0))
+            .vertical_alignment(VerticalAlignment::CenterVertically),
+        move || {
+            Dot(color);
+            Text(
+                label,
+                Modifier::empty(),
+                text_style(12.0, palette.muted, false),
+            );
+        },
+    );
+}
+
+/// The colour a subject's line has on the charts.
+#[composable]
+fn Dot(color: Color) {
+    Box(
+        Modifier::empty()
+            .size_points(10.0, 10.0)
+            .rounded_corners(5.0)
+            .background(color),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+/// The starts, the one shown highlighted.
+#[composable]
+fn StartChips(palette: Palette, start: MutableState<&'static str>) {
+    let shown = start.get();
+    Chips(
+        palette,
+        STARTS.map(|(_, title)| title.to_string()).to_vec(),
+        STARTS.iter().position(|(name, _)| *name == shown),
+        move |index| start.set(STARTS[index].0),
+    );
+}
+
+/// A run's scenarios, the one shown highlighted; none for a run of one.
+#[composable]
+fn ScenarioChips(palette: Palette, names: Vec<String>, scenario: MutableState<String>) {
+    if names.len() < 2 {
+        return;
+    }
+    let chosen = names.iter().position(|name| *name == scenario.get());
+    let choices = names.clone();
+    Chips(palette, names, chosen, move |index| {
+        scenario.set(choices[index].clone());
     });
 }
 
@@ -789,7 +779,8 @@ fn MetricChips(palette: Palette, metric: MutableState<Metric>) {
     );
 }
 
-/// A row of choices, the `chosen` one highlighted.
+/// A row of choices that wraps where the card is narrow, the `chosen` one
+/// highlighted.
 #[composable]
 fn Chips(
     palette: Palette,
@@ -798,9 +789,11 @@ fn Chips(
     choose: impl Fn(usize) + 'static,
 ) {
     let choose: Rc<dyn Fn(usize)> = Rc::new(choose);
-    Row(
+    FlowRow(
         Modifier::empty().fill_max_width(),
-        RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(6.0)),
+        FlowRowSpec::default()
+            .main_axis_spacing(6.0)
+            .cross_axis_spacing(6.0),
         move || {
             for (index, name) in names.iter().enumerate() {
                 let highlighted = chosen == Some(index);
@@ -812,8 +805,8 @@ fn Chips(
                         } else {
                             palette.background
                         })
-                        .rounded_corners(12.0)
-                        .padding_symmetric(10.0, 4.0),
+                        .rounded_corners(14.0)
+                        .padding_symmetric(12.0, 5.0),
                     ButtonSpec::default(),
                     move || choose(index),
                     {
@@ -829,7 +822,7 @@ fn Chips(
                                     } else {
                                         palette.text
                                     },
-                                    false,
+                                    highlighted,
                                 ),
                             );
                         }
@@ -840,57 +833,176 @@ fn Chips(
     );
 }
 
+/// Each scenario's medians for one `start`: main's value over the
+/// release's, coloured by its verdicts.
 #[composable]
-fn LineChart(palette: Palette, release: Vec<f32>, main: Vec<f32>, regressed: Vec<bool>) {
-    Canvas(
-        Modifier::empty().fill_max_width().height(160.0),
-        move |scope| {
-            let size = scope.size();
-            let finite = release
-                .iter()
-                .chain(&main)
-                .copied()
-                .filter(|value| value.is_finite());
-            let top = finite.fold(0.0f32, f32::max).max(1.0) * 1.1;
-            let step = if main.len() > 1 {
-                size.width / (main.len() - 1) as f32
-            } else {
-                0.0
-            };
-            let at = |index: usize, value: f32| Point {
-                x: index as f32 * step,
-                y: size.height * (1.0 - value / top),
-            };
-            for series in [(&release, palette.baseline), (&main, palette.accent)] {
-                let mut line = Path::new();
-                let mut started = false;
-                for (index, value) in series.0.iter().enumerate() {
-                    if !value.is_finite() {
-                        started = false;
-                        continue;
-                    }
-                    if started {
-                        line.line_to(at(index, *value));
-                    } else {
-                        line.move_to(at(index, *value));
-                        started = true;
-                    }
-                    scope.draw_circle(Brush::solid(series.1), at(index, *value), 3.0);
-                }
-                scope.draw_path(
-                    &line,
-                    Brush::solid(series.1),
-                    DrawStyle::Stroke(Stroke::new(2.0)),
-                );
+fn NightlyTable(palette: Palette, run: Rc<PerfRun>, start: &'static str) {
+    let headers = ["scenario", "fps", "change", "CPU ms", "latency ms"]
+        .map(|header| TableCell::new(header.to_string(), palette.muted));
+    TableRow(palette, headers.to_vec(), true);
+    for scenario in run.scenarios.keys() {
+        let entry = run.start(scenario, start).cloned().unwrap_or_default();
+        let verdict = |metric: &str| palette.verdict(entry.verdicts.get(metric));
+        let pair = |metric: &str| TableCell {
+            text: figure(run.median(scenario, start, 1, metric)),
+            under: Some(figure(run.median(scenario, start, 0, metric))),
+            color: verdict(metric),
+        };
+        let change = match (
+            run.median(scenario, start, 0, "fps"),
+            run.median(scenario, start, 1, "fps"),
+        ) {
+            (Some(before), Some(after)) if before > 0.0 => {
+                format!("{:+.1}%", (after - before) / before * 100.0)
             }
-            for (index, value) in main.iter().enumerate() {
-                if regressed.get(index) == Some(&true) && value.is_finite() {
-                    scope.draw_circle(Brush::solid(palette.worse), at(index, *value), 5.0);
-                }
+            _ => "–".to_string(),
+        };
+        let name = if entry.confirmed.is_empty() {
+            TableCell::new(scenario.clone(), palette.text)
+        } else {
+            TableCell::new(format!("{scenario} ⚠"), palette.worse)
+        };
+        let cells = vec![
+            name,
+            pair("fps"),
+            TableCell::new(change, verdict("fps")),
+            pair("cpu_ms_per_frame"),
+            pair("desired_to_present_p50_ms"),
+        ];
+        TableRow(palette, cells, false);
+    }
+}
+
+/// A table cell: its text, and the release's value under main's.
+#[derive(Clone, Debug, PartialEq)]
+struct TableCell {
+    text: String,
+    under: Option<String>,
+    color: Color,
+}
+
+impl TableCell {
+    fn new(text: String, color: Color) -> Self {
+        Self {
+            text,
+            under: None,
+            color,
+        }
+    }
+}
+
+#[composable]
+fn TableRow(palette: Palette, cells: Vec<TableCell>, header: bool) {
+    Row(
+        Modifier::empty().fill_max_width(),
+        RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
+        move || {
+            for (index, cell) in cells.iter().enumerate() {
+                let cell = cell.clone();
+                Column(
+                    Modifier::empty().weight(if index == 0 { 1.4 } else { 1.0 }),
+                    ColumnSpec::default(),
+                    move || {
+                        Text(
+                            cell.text.clone(),
+                            Modifier::empty(),
+                            text_style(13.0, cell.color, header || index == 0),
+                        );
+                        if let Some(under) = cell.under.clone() {
+                            Text(
+                                under,
+                                Modifier::empty(),
+                                text_style(11.0, palette.muted, false),
+                            );
+                        }
+                    },
+                );
             }
         },
     );
 }
+
+/// The release's and main's value night by night, `dates` under the first
+/// and the last, a confirmed regression marked on main's.
+#[composable]
+fn LineChart(
+    palette: Palette,
+    dates: Vec<String>,
+    release: Vec<f32>,
+    main: Vec<f32>,
+    regressed: Vec<bool>,
+) {
+    let peak = release
+        .iter()
+        .chain(&main)
+        .copied()
+        .filter(|value| value.is_finite())
+        .fold(0.0f32, f32::max);
+    let (top, step) = scale(f64::from(peak));
+    Plot(palette, top, step, move |scope| {
+        let size = scope.size();
+        let count = main.len();
+        let at = |index: usize, value: f32| Point {
+            x: if count > 1 {
+                TREND_INSET + index as f32 * (size.width - 2.0 * TREND_INSET) / (count - 1) as f32
+            } else {
+                size.width / 2.0
+            },
+            y: chart_y(size.height, f64::from(value), top),
+        };
+        for series in [(&release, palette.baseline), (&main, palette.accent)] {
+            let mut line = Path::new();
+            let mut started = false;
+            for (index, value) in series.0.iter().enumerate() {
+                if !value.is_finite() {
+                    started = false;
+                    continue;
+                }
+                if started {
+                    line.line_to(at(index, *value));
+                } else {
+                    line.move_to(at(index, *value));
+                    started = true;
+                }
+                scope.draw_circle(Brush::solid(series.1), at(index, *value), 3.5);
+            }
+            scope.draw_path(
+                &line,
+                Brush::solid(series.1),
+                DrawStyle::Stroke(Stroke::new(2.0)),
+            );
+        }
+        for (index, value) in main.iter().enumerate() {
+            if regressed.get(index) == Some(&true) && value.is_finite() {
+                scope.draw_circle(Brush::solid(palette.worse), at(index, *value), 5.0);
+            }
+        }
+    });
+    Row(
+        Modifier::empty().fill_max_width(),
+        RowSpec::new().horizontal_arrangement(if dates.len() > 1 {
+            LinearArrangement::SpaceBetween
+        } else {
+            LinearArrangement::Center
+        }),
+        move || {
+            let ends = dates
+                .first()
+                .into_iter()
+                .chain(dates.last().filter(|_| dates.len() > 1));
+            for date in ends {
+                Text(
+                    date.clone(),
+                    Modifier::empty(),
+                    text_style(11.0, palette.muted, false),
+                );
+            }
+        },
+    );
+}
+
+/// How far the first and the last night sit from a trend chart's sides.
+const TREND_INSET: f32 = 6.0;
 
 /// A run's frames as a card has them: loading, loaded, failed, or never
 /// kept, by a run measured after a warm-up.
@@ -1106,33 +1218,14 @@ fn polyline(
     }
 }
 
-/// The grid at 0, 30 and 60, and each curve: its band from the lowest to the
-/// highest launch, then its median line.
-fn draw_launch_curves(
-    scope: &mut dyn DrawScope,
-    curves: &[LaunchCurve],
-    run_ms: f64,
-    palette: Palette,
-) {
+/// Each curve: its band from the lowest to the highest launch, then its
+/// median line, each value capped at the top.
+fn draw_launch_curves(scope: &mut dyn DrawScope, curves: &[LaunchCurve], run_ms: f64, top: f64) {
     let size = scope.size();
-    let peak = curves
-        .iter()
-        .flat_map(|curve| curve.highest.iter().copied())
-        .fold(60.0f64, f64::max);
-    let top = (peak * 1.05) as f32;
     let at = |step: usize, value: f64| Point {
         x: size.width * (step as f64 * CHART_STEP_MS / run_ms) as f32,
-        y: size.height * (1.0 - value as f32 / top),
+        y: chart_y(size.height, value, top),
     };
-    for fps in [0.0, 30.0, 60.0] {
-        let y = at(0, fps).y;
-        scope.draw_line(
-            Brush::solid(palette.baseline.with_alpha(0.4)),
-            Point { x: 0.0, y },
-            Point { x: size.width, y },
-            Stroke::new(1.0),
-        );
-    }
     for curve in curves {
         let color = curve.line.color;
         let mut band = Path::new();
@@ -1141,70 +1234,62 @@ fn draw_launch_curves(
             band.line_to(at(step, *value));
         }
         band.close();
-        scope.draw_path(&band, Brush::solid(color.with_alpha(0.12)), DrawStyle::Fill);
+        scope.draw_path(&band, Brush::solid(color.with_alpha(0.10)), DrawStyle::Fill);
+    }
+    // Cranpose's line last, over the others.
+    for curve in curves
+        .iter()
+        .filter(|curve| !curve.line.emphasized)
+        .chain(curves.iter().filter(|curve| curve.line.emphasized))
+    {
         let mut line = Path::new();
         polyline(&mut line, curve.median.iter().copied().enumerate(), at);
         let width = if curve.line.emphasized { 2.5 } else { 1.5 };
         scope.draw_path(
             &line,
-            Brush::solid(color),
+            Brush::solid(curve.line.color),
             DrawStyle::Stroke(Stroke::new(width)),
         );
     }
 }
 
-/// Every subject: its colour, label, frame rate over the whole run and first
-/// frame, or why it has no frames.
+/// A run's scenarios to choose from, then the chosen one's `start`: every
+/// subject's frame rate since the launch, from the run's frames at `source`,
+/// then its `metric` as a bar in its line's colour.
 #[composable]
-fn LaunchLegend(palette: Palette, lines: Vec<LaunchLine>, curves: Rc<Vec<LaunchCurve>>) {
-    for line in lines {
-        let curve = curves.iter().find(|curve| curve.line.name == line.name);
-        let detail = match (curve, &line.failure) {
-            (Some(curve), _) => curve.first_frame_ms.map_or_else(
-                || "–".to_string(),
-                |first| format!("first frame {first:.0} ms"),
-            ),
-            (None, Some(failure)) => format!("no frames: {failure}"),
-            (None, None) => "no frames kept".to_string(),
-        };
-        Row(
-            Modifier::empty(),
-            RowSpec::new()
-                .horizontal_arrangement(LinearArrangement::SpacedBy(8.0))
-                .vertical_alignment(VerticalAlignment::CenterVertically),
-            move || {
-                Box(
-                    Modifier::empty()
-                        .width(16.0)
-                        .height(4.0)
-                        .background(line.color),
-                    BoxSpec::default(),
-                    || {},
-                );
-                Text(
-                    line.label.clone(),
-                    Modifier::empty().width(220.0),
-                    text_style(12.0, palette.text, line.emphasized),
-                );
-                Text(
-                    format!("{} fps", figure(line.fps)),
-                    Modifier::empty().width(80.0),
-                    text_style(12.0, palette.text, line.emphasized),
-                );
-                Text(
-                    detail.clone(),
-                    Modifier::empty(),
-                    text_style(12.0, palette.muted, false),
-                );
-            },
-        );
-    }
+fn RunView(
+    palette: Palette,
+    run: Rc<PerfRun>,
+    subjects: Rc<Vec<(usize, PerfSubject)>>,
+    source: FrameSource,
+    scenario: MutableState<String>,
+    start: &'static str,
+    metric: Metric,
+) {
+    ScenarioChips(palette, run.scenarios.keys().cloned().collect(), scenario);
+    let frames = run_frames(source, run.file.clone()).get();
+    let scenario = shown_scenario(&run, &scenario.get());
+    let lines = launch_lines(palette, &run, &scenario, start, &subjects);
+    LaunchChart(
+        palette,
+        frames,
+        run_ms(&run),
+        scenario.clone(),
+        start,
+        lines.clone(),
+    );
+    SubjectBars(palette, run, subjects, scenario, start, metric, lines);
 }
+
+/// How tall a launch chart is, in points.
+const CHART_HEIGHT: f32 = 190.0;
+/// The room over the top grid line, as a share of its value: a line at the
+/// top stays off the chart's edge.
+const CHART_HEADROOM: f64 = 1.08;
 
 /// The frame rate against the milliseconds since the launch, for every
 /// subject: each line is the median of its launches, over a band from the
-/// lowest to the highest, and the legend gives each its frame rate over the
-/// whole run and its first frame.
+/// lowest to the highest, on a grid every 30 fps.
 #[composable]
 fn LaunchChart(
     palette: Palette,
@@ -1223,174 +1308,193 @@ fn LaunchChart(
         FramesState::Loaded(frames) => launch_curves(frames, &scenario, start, run_ms, &lines),
         _ => Vec::new(),
     };
-    let curves = Rc::new(curves);
     if curves.is_empty() {
-        LaunchLegend(palette, lines, curves);
+        Text(
+            "No launch of this start kept its frames.",
+            Modifier::empty(),
+            text_style(12.0, palette.muted, false),
+        );
         return;
     }
-    let drawn = curves.clone();
-    Canvas(
-        Modifier::empty().fill_max_width().height(200.0),
-        move |scope| {
-            draw_launch_curves(scope, &drawn, run_ms, palette);
-        },
-    );
+    let top = chart_top(&curves);
+    Plot(palette, top, FPS_STEP, move |scope| {
+        draw_launch_curves(scope, &curves, run_ms, top);
+    });
     Row(
         Modifier::empty().fill_max_width(),
         RowSpec::new().horizontal_arrangement(LinearArrangement::SpaceBetween),
         move || {
             for quarter in 0..=4 {
+                let ms = run_ms * f64::from(quarter) / 4.0;
                 Text(
-                    format!("{:.0} ms", run_ms * f64::from(quarter) / 4.0),
+                    if quarter == 4 {
+                        format!("{ms:.0} ms")
+                    } else {
+                        format!("{ms:.0}")
+                    },
                     Modifier::empty(),
                     text_style(11.0, palette.muted, false),
                 );
             }
         },
     );
-    Text(
-        format!(
-            "Frame rate against milliseconds since the launch, every {CHART_STEP_MS:.0} ms: the \
-             frames of the last {RATE_WINDOW_MS:.0} ms, falling as the wait since the last frame \
-             grows; 0 before the first frame. Grid at 0, 30 and 60. Lines: the median of each \
-             one's launches; bands: its lowest to its highest. Each one's frame rate is over the \
-             whole {run_ms:.0} ms from the launch, its start included."
-        ),
-        Modifier::empty(),
-        text_style(12.0, palette.muted, false),
-    );
-    LaunchLegend(palette, lines, curves);
 }
 
-/// A scenario's name over its launch chart.
-#[composable]
-fn ScenarioLaunch(
-    palette: Palette,
-    frames: FramesState,
-    run_ms: f64,
-    scenario: String,
-    start: &'static str,
-    lines: Vec<LaunchLine>,
-) {
-    let title = STARTS
+/// The frame rate a launch chart's top stands for: the next `FPS_STEP` above
+/// its highest median, two steps at least. A median a frame or two over a
+/// grid line, as a window can count at 60 Hz, stays under it.
+fn chart_top(curves: &[LaunchCurve]) -> f64 {
+    let peak = curves
         .iter()
-        .find(|(name, _)| *name == start)
-        .map_or(start, |(_, title)| *title);
-    Text(
-        format!("{scenario}: {title}"),
-        Modifier::empty(),
-        text_style(13.0, palette.text, true),
-    );
-    LaunchChart(palette, frames, run_ms, scenario, start, lines);
+        .flat_map(|curve| curve.median.iter().copied())
+        .fold(0.0f64, f64::max);
+    (FPS_STEP * (peak / FPS_STEP - 0.1).ceil()).max(2.0 * FPS_STEP)
 }
 
-/// The run's length in milliseconds from its launch.
-fn run_ms(run: &PerfRun) -> f64 {
-    run.protocol.run_s.unwrap_or(10.0) * 1000.0
+/// The frame rates between a launch chart's grid lines.
+const FPS_STEP: f64 = 30.0;
+
+/// A chart's top and the step between its grid lines for values up to
+/// `peak`: the step 1, 2 or 5 times a power of ten that splits the top in
+/// three at most.
+fn scale(peak: f64) -> (f64, f64) {
+    let peak = if peak.is_finite() { peak.max(1.0) } else { 1.0 };
+    let rough = peak / 3.0;
+    let power = 10f64.powf(rough.log10().floor());
+    let step = [1.0, 2.0, 5.0, 10.0]
+        .into_iter()
+        .map(|multiple| multiple * power)
+        .find(|step| *step >= rough)
+        .unwrap_or(10.0 * power);
+    (step * (peak / step).ceil(), step)
 }
 
+/// The grid lines from 0 to `top`, every `step`.
+fn grid(top: f64, step: f64) -> impl Iterator<Item = f64> {
+    (0..)
+        .map(move |line| f64::from(line) * step)
+        .take_while(move |value| *value <= top)
+}
+
+/// Where `value` sits on a chart `height` tall whose top grid line stands
+/// for `top`; a value over the top sits on it.
+fn chart_y(height: f32, value: f64, top: f64) -> f32 {
+    height * (1.0 - (value.min(top) / (top * CHART_HEADROOM)) as f32)
+}
+
+/// What a chart paints over its grid.
+type ChartDraw = Rc<dyn Fn(&mut dyn DrawScope)>;
+
+/// A chart's area: a labelled grid line every `step` from 0 to `top`, under
+/// what `draw` paints.
 #[composable]
-fn Frameworks(palette: Palette, run: Rc<PerfRun>, source: FrameSource) {
-    // Alphabetical, each with the version measured; the bars of each start
-    // put the best first for the metric shown.
-    let mut subjects: Vec<(usize, PerfSubject)> =
-        run.subjects.iter().cloned().enumerate().collect();
-    subjects.sort_by(|(_, a), (_, b)| a.name.cmp(&b.name));
-    let subjects = Rc::new(subjects);
-    let metric = cranpose_core::rememberMutableStateOf(|| Metric::Fps);
-    let place = if run.kind == "browser" {
-        "Frameworks in the browser,"
-    } else {
-        "Frameworks on the"
-    };
-    let title = format!(
-        "{place} {}, {}",
-        run.device,
-        &run.started_at[..run.started_at.len().min(10)]
-    );
-    Card(palette, title, move || {
-        let loaded = run_frames(source.clone(), run.file.clone());
-        MetricChips(palette, metric);
-        let shown = metric.get();
-        for scenario in run.scenarios.keys() {
-            for (start, _) in STARTS {
-                ScenarioLaunch(
-                    palette,
-                    loaded.get(),
-                    run_ms(&run),
-                    scenario.clone(),
-                    start,
-                    launch_lines(palette, &run, scenario, start, &subjects),
-                );
-                MetricBars(
-                    palette,
-                    run.clone(),
-                    subjects.clone(),
-                    scenario.clone(),
-                    start,
-                    shown,
+fn Plot(palette: Palette, top: f64, step: f64, draw: impl Fn(&mut dyn DrawScope) + 'static) {
+    let draw: ChartDraw = Rc::new(draw);
+    Box(
+        Modifier::empty().fill_max_width().height(CHART_HEIGHT),
+        BoxSpec::default(),
+        move || {
+            let draw = Rc::clone(&draw);
+            Canvas(Modifier::empty().fill_max_size(), move |scope| {
+                let size = scope.size();
+                for value in grid(top, step) {
+                    let y = chart_y(size.height, value, top).min(size.height - 0.5);
+                    scope.draw_line(
+                        Brush::solid(palette.baseline.with_alpha(0.3)),
+                        Point { x: 0.0, y },
+                        Point { x: size.width, y },
+                        Stroke::new(1.0),
+                    );
+                }
+                draw(scope);
+            });
+            for value in grid(top, step) {
+                let y = chart_y(CHART_HEIGHT, value, top) - 14.0;
+                Text(
+                    if step < 1.0 {
+                        format!("{value:.1}")
+                    } else {
+                        format!("{value:.0}")
+                    },
+                    Modifier::empty().offset(2.0, y.max(0.0)),
+                    text_style(10.0, palette.muted, false),
                 );
             }
-        }
-        Text(
-            shown.about(),
-            Modifier::empty(),
-            text_style(12.0, palette.muted, false),
-        );
-    });
+        },
+    );
 }
 
-/// One start's bar of the metric `shown` for every subject, best first,
-/// alphabetical among equals, each with a link to its source at the commit
-/// the run measured. Cranpose's bars carry the accent.
+/// Every subject's `metric` for `scenario` and `start` as a bar in its line's
+/// colour, best first, alphabetical among equals: its dot, its name, which
+/// opens its source at the commit the run measured, and the bar with its
+/// value, or why it has none.
 #[composable]
-fn MetricBars(
+fn SubjectBars(
     palette: Palette,
     run: Rc<PerfRun>,
     subjects: Rc<Vec<(usize, PerfSubject)>>,
     scenario: String,
     start: &'static str,
-    shown: Metric,
+    metric: Metric,
+    lines: Vec<LaunchLine>,
 ) {
     let commit = run.main.clone().unwrap_or_else(|| "main".to_string());
     let values: Vec<Option<f64>> = subjects
         .iter()
-        .map(|(index, _)| run.median(&scenario, start, *index, shown.key()))
+        .map(|(index, _)| run.median(&scenario, start, *index, metric.key()))
         .collect();
-    let full = shown.full_scale(&values);
+    let full = metric.full_scale(&values);
     let mut order: Vec<usize> = (0..subjects.len()).collect();
-    order.sort_by(|&a, &b| shown.best_first(values[a], values[b]));
+    order.sort_by(|&a, &b| metric.best_first(values[a], values[b]));
     for position in order {
-        let (_, subject) = &subjects[position];
-        let value = &values[position];
-        let color = if subject.name.starts_with("cranpose") {
-            palette.accent
-        } else {
-            palette.baseline
+        let (index, subject) = &subjects[position];
+        let line = lines.iter().find(|line| line.name == subject.name);
+        // A subject with legs but without this metric gets a dash; one with
+        // no legs says why.
+        let measured = run.median(&scenario, start, *index, "fps").is_some();
+        let (share, value) = match values[position] {
+            Some(value) => (
+                Some(if full > 0.0 {
+                    (value / full) as f32
+                } else {
+                    0.0
+                }),
+                metric.format(value),
+            ),
+            None if measured => (None, "–".to_string()),
+            None => (
+                None,
+                line.and_then(|line| line.failure.clone())
+                    .unwrap_or_else(|| "no frames".to_string()),
+            ),
         };
-        let url = subject
-            .source
-            .as_ref()
-            .map(|source| format!("{SOURCE_URL}/{commit}/{source}"));
-        let share = match value {
-            Some(value) if full > 0.0 => (value / full) as f32,
-            _ => 0.0,
-        };
-        let text = value.map_or_else(|| "–".to_string(), |value| shown.format(value));
-        MetricBar(palette, subject.label.clone(), url, share, text, color);
+        SubjectBar(
+            palette,
+            subject.label.clone(),
+            subject
+                .source
+                .as_ref()
+                .map(|source| format!("{SOURCE_URL}/{commit}/{source}")),
+            line.map_or(palette.baseline, |line| line.color),
+            line.is_some_and(|line| line.emphasized),
+            share,
+            value,
+        );
     }
 }
 
-/// A framework, which opens its source when it has one, and its value as a
-/// bar `share` of the full length with the number on it.
+/// One subject's row: the dot of its line's colour, its name, and its value
+/// on a bar `share` of the full length that fades into its colour, or, with
+/// no share, why it has no value.
 #[composable]
-fn MetricBar(
+fn SubjectBar(
     palette: Palette,
     label: String,
     url: Option<String>,
-    share: f32,
-    value: String,
     color: Color,
+    emphasized: bool,
+    share: Option<f32>,
+    value: String,
 ) {
     let uri_handler = local_uri_handler().current();
     Row(
@@ -1399,7 +1503,9 @@ fn MetricBar(
             .horizontal_arrangement(LinearArrangement::SpacedBy(8.0))
             .vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
-            let name = Modifier::empty().width(220.0);
+            Dot(color);
+            let name = Modifier::empty().weight(0.44);
+            let style = text_style(12.0, palette.text, emphasized);
             match url.clone() {
                 Some(url) => {
                     let uri_handler = uri_handler.clone();
@@ -1410,20 +1516,34 @@ fn MetricBar(
                                 log::error!("Could not open {url}: {error:#}");
                             }
                         }),
-                        text_style(12.0, palette.accent, false),
+                        style,
                     );
                 }
                 None => {
-                    Text(label.clone(), name, text_style(12.0, palette.muted, false));
+                    Text(label.clone(), name, style);
                 }
             }
             let value = value.clone();
             Box(
-                Modifier::empty().weight(1.0).height(18.0),
+                Modifier::empty().weight(0.56).height(22.0),
                 BoxSpec::new().content_alignment(Alignment::CENTER_START),
                 move || {
+                    let Some(share) = share else {
+                        TextWithOptions(
+                            value.clone(),
+                            Modifier::empty().fill_max_width().padding_horizontal(4.0),
+                            text_style(11.0, palette.muted, false),
+                            TextOptions {
+                                overflow: TextOverflow::Ellipsis,
+                                max_lines: Some(1),
+                                ..TextOptions::default()
+                            },
+                        );
+                        return;
+                    };
                     Canvas(Modifier::empty().fill_max_size(), move |scope| {
                         let size = scope.size();
+                        let radius = cranpose_ui::CornerRadii::uniform(size.height / 2.0);
                         scope.draw_round_rect_at(
                             cranpose_ui::Rect {
                                 x: 0.0,
@@ -1432,26 +1552,74 @@ fn MetricBar(
                                 height: size.height,
                             },
                             Brush::solid(palette.background),
-                            cranpose_ui::CornerRadii::uniform(9.0),
+                            radius,
                         );
+                        let width = (size.width * share.clamp(0.0, 1.0)).max(size.height);
                         scope.draw_round_rect_at(
                             cranpose_ui::Rect {
                                 x: 0.0,
                                 y: 0.0,
-                                width: size.width * share.clamp(0.0, 1.0),
+                                width,
                                 height: size.height,
                             },
-                            Brush::solid(color),
-                            cranpose_ui::CornerRadii::uniform(9.0),
+                            Brush::horizontal_gradient(
+                                vec![color.with_alpha(0.35), color],
+                                0.0,
+                                width,
+                            ),
+                            radius,
                         );
                     });
                     Text(
                         value.clone(),
-                        Modifier::empty().padding_horizontal(8.0),
-                        text_style(11.0, palette.text, true),
+                        Modifier::empty().padding_horizontal(9.0),
+                        text_style(11.5, palette.text, true),
                     );
                 },
             );
         },
     );
+}
+
+/// The run's length in milliseconds from its launch.
+fn run_ms(run: &PerfRun) -> f64 {
+    run.protocol.run_s.unwrap_or(10.0) * 1000.0
+}
+
+/// A device's latest framework comparison: the chosen start and metric of
+/// the chosen scenario, one chart and every framework's bar.
+#[composable]
+fn Frameworks(palette: Palette, run: Rc<PerfRun>, source: FrameSource) {
+    // Alphabetical: each keeps its line's colour whatever the bars' order.
+    let mut subjects: Vec<(usize, PerfSubject)> =
+        run.subjects.iter().cloned().enumerate().collect();
+    subjects.sort_by(|(_, a), (_, b)| a.name.cmp(&b.name));
+    let subjects = Rc::new(subjects);
+    let metric = cranpose_core::rememberMutableStateOf(|| Metric::Fps);
+    let start = cranpose_core::rememberMutableStateOf(|| STARTS[0].0);
+    let scenario = cranpose_core::rememberMutableStateOf(String::new);
+    let place = if run.kind == "browser" {
+        "Frameworks in the browser"
+    } else {
+        "Frameworks"
+    };
+    let title = format!("{place} · {} · {}", run.device, run.date());
+    Card(palette, title, move || {
+        StartChips(palette, start);
+        MetricChips(palette, metric);
+        RunView(
+            palette,
+            run.clone(),
+            subjects.clone(),
+            source.clone(),
+            scenario,
+            start.get(),
+            metric.get(),
+        );
+        Text(
+            metric.get().about(),
+            Modifier::empty(),
+            text_style(12.0, palette.muted, false),
+        );
+    });
 }
