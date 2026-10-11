@@ -53,6 +53,11 @@ fn assert_long_comment_bottom_gap(robot: &Robot, comments_list_bounds: Bounds) {
     }
     let author = format!("commenter-{LONG_COMMENT_SUFFIX}");
     let next_author = format!("commenter-{}", LONG_COMMENT_SUFFIX + 1);
+    // Where a drag stops varies with timing: the next comment can still sit
+    // below the viewport, where the list composes nothing.
+    if !scroll_until_text_visible_in_bounds(robot, comments_list_bounds, &next_author, 2) {
+        fail(robot, format!("{next_author} did not become visible below the long comment"));
+    }
     let author_bounds = required_bounds(robot, &author);
     let body_bounds = required_bounds(robot, &body);
     let next_author_bounds = required_bounds(robot, &next_author);
