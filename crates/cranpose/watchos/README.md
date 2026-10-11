@@ -36,8 +36,11 @@ python3 watchos/build.py \
 ```
 
 The default target is the watchOS simulator, with a watchOS 10 deployment
-target. Use `--target device` for arm64 watches; the device target uses
-watchOS 26 or later. Supply `--sign IDENTITY` to sign the bundle. Give each target
+target. Use `--target device` for arm64 watches; the device target defaults
+to watchOS 27, the first version for which the App Store takes a watch app
+built for arm64 alone (earlier versions also need arm64_32). A watchOS 26
+target still installs on a watch and warns. Supply `--sign IDENTITY` to sign
+the bundle. Give each target
 its own output directory. `--prepare-only` creates the generated runner
 before Apple compilation.
 

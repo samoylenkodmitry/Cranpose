@@ -131,7 +131,7 @@ def main():
     framework.add_argument('--cranpose-version', help='Published Cranpose version with watchOS support')
     parser.add_argument('--features', help='Comma-separated application features; defaults stay disabled')
     parser.add_argument('--target', choices=['simulator', 'device'], default='simulator')
-    parser.add_argument('--deployment-target', help='Defaults to 10.0 for simulator, 26.0 for arm64 devices')
+    parser.add_argument('--deployment-target', help='Defaults to 10.0 for simulator, 27.0 for arm64 devices')
     parser.add_argument('--sign', help='Device signing identity; provisioning is managed by the caller')
     parser.add_argument('--prepare-only', action='store_true')
     args = parser.parse_args()
@@ -147,7 +147,10 @@ def main():
         if not args.icon.is_file():
             parser.error(f'no icon at {args.icon}')
     args.features = args.features or ''
-    args.deployment_target = args.deployment_target or ('26.0' if args.target == 'device' else '10.0')
+    # The App Store takes a watch app built for arm64 alone only from watchOS 27
+    # on; for earlier versions it also asks for arm64_32, which Rust builds only
+    # as a tier-3 target.
+    args.deployment_target = args.deployment_target or ('27.0' if args.target == 'device' else '10.0')
     # Info.plist entries of the application's own, which go in last.
     extra_info = metadata.get('info-plist', {})
     if not isinstance(extra_info, dict):
@@ -164,6 +167,9 @@ def main():
         parser.error('invalid deployment target')
     if args.target == 'device' and int(args.deployment_target.split('.')[0]) < 26:
         parser.error('arm64 watch devices require watchOS 26 or later')
+    if args.target == 'device' and int(args.deployment_target.split('.')[0]) < 27:
+        print(f'warning: the App Store refuses an arm64-only watch app for watchOS {args.deployment_target}; '
+              'it needs watchOS 27 or an arm64_32 slice', file=sys.stderr)
     root = args.output.resolve()
     marker = root / '.cranpose-watchos-output'
     if root.exists() and any(root.iterdir()) and not marker.exists():
