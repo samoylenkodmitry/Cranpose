@@ -1668,7 +1668,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu"
-version = "30.0.11"
+version = "30.0.12"
 dependencies = [
  "arrayvec",
  "bitflags 2.13.2",
