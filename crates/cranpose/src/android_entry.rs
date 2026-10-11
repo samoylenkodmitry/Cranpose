@@ -50,8 +50,9 @@ macro_rules! android_main {
             env: $crate::__android_jni::EnvUnowned<'local>,
             class: $crate::__android_jni::objects::JClass<'local>,
             context: $crate::__android_jni::objects::JObject<'local>,
+            share: $crate::__android_jni::sys::jboolean,
         ) {
-            ($launcher).start_service_process(env, class, context);
+            ($launcher).start_service_process(env, class, context, share);
         }
     };
 }

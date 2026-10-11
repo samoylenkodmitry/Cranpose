@@ -2478,9 +2478,10 @@ public class CranposeActivity extends NativeActivity {
     /**
      * Loads the native library {@code activity} names in its manifest
      * meta-data, the one {@link NativeActivity} reads: for this activity, and
-     * for a receiver that runs native code without it.
+     * for a receiver or service that runs native code without it. Returns
+     * whether the library is loaded.
      */
-    static void loadNativeLibrary(
+    static boolean loadNativeLibrary(
             android.content.Context context, android.content.ComponentName activity) {
         String libraryName = DEFAULT_NATIVE_LIB_NAME;
         try {
@@ -2500,8 +2501,10 @@ public class CranposeActivity extends NativeActivity {
         }
         try {
             System.loadLibrary(libraryName);
+            return true;
         } catch (UnsatisfiedLinkError error) {
             android.util.Log.w("cranpose", "could not load native library " + libraryName, error);
+            return false;
         }
     }
 
@@ -2535,6 +2538,7 @@ public class CranposeActivity extends NativeActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        CranposeProcess.beforeActivity();
         loadCranposeNativeLibrary();
         super.onCreate(savedInstanceState);
         installTrimMemoryHook();

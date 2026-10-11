@@ -1420,8 +1420,15 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
         env: jni::EnvUnowned<'_>,
         class: jni::objects::JClass<'_>,
         context: jni::objects::JObject<'_>,
+        share: jni::sys::jboolean,
     ) {
-        crate::android_process::start_for_service(env, class, context, &self.into_settings());
+        crate::android_process::start_for_service(
+            env,
+            class,
+            context,
+            share,
+            &self.into_settings(),
+        );
     }
 
     /// Run the application (Web platform).

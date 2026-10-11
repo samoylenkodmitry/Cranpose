@@ -86,6 +86,11 @@ impl AndroidContext {
         })
     }
 
+    /// The JNI reference to the context, valid while `self` lives.
+    pub(crate) fn raw(&self) -> jni::sys::jobject {
+        self.0.as_raw()
+    }
+
     /// Holds the application context of the activity `app` runs.
     pub(crate) fn of_activity(app: &android_activity::AndroidApp) -> Result<Self, String> {
         with_android_activity_env(app, |env, activity| Self::new(env, &activity))

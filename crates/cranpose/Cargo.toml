@@ -340,6 +340,9 @@ ash = { version = "0.38", optional = true }
 android_logger = "0.15"
 jni = "0.22.4"
 ndk = "0.9.0"
+# The context crates such as cpal read; android-activity sets it for an
+# activity, `android_process` for a process a service started.
+ndk-context = "0.1.1"
 # Raw AChoreographer bindings for the vsync-phase probe in
 # `android_frame_telemetry`; the safe `ndk` crate does not wrap it.
 ndk-sys = "0.6.0"

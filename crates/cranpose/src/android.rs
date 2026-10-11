@@ -2064,30 +2064,6 @@ pub fn run(
 
     crate::android_app_info::install_app_info(&app);
 
-    let previous_hook = std::panic::take_hook();
-    std::panic::set_hook(crate::android_panic_hook::chained_panic_hook(
-        |panic_info| {
-            let location = panic_info.location().map_or_else(
-                || "unknown location".to_string(),
-                |l| format!("{}:{}:{}", l.file(), l.line(), l.column()),
-            );
-            let message = panic_info
-                .payload()
-                .downcast_ref::<&str>()
-                .copied()
-                .or_else(|| {
-                    panic_info
-                        .payload()
-                        .downcast_ref::<String>()
-                        .map(String::as_str)
-                })
-                .unwrap_or("Box<dyn Any>");
-            let backtrace = std::backtrace::Backtrace::force_capture();
-            log::error!("PANIC at {location}: {message}\n{backtrace}");
-        },
-        previous_hook,
-    ));
-
     let content = std::rc::Rc::new(std::cell::RefCell::new(content));
 
     let mut app_shell: Option<AppShell<WgpuRenderer>> = None;
