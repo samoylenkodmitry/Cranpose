@@ -132,25 +132,26 @@ fn macro_value(item: &GlslMacro, value: f64) -> Result<String, String> {
     let unfit = || format!("{}: {value} is no {:?}", item.constant, item.kind);
     Ok(match item.kind {
         GlslMacroKind::Bool => format!("{}", u8::from(value != 0.0)),
+        // A value with a fraction, past the type's range or not a number
+        // comes back from the cast changed.
         GlslMacroKind::Sint => {
-            if value.fract() != 0.0
-                || !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&value)
-            {
+            let integer = value as i32;
+            if f64::from(integer) != value {
                 return Err(unfit());
             }
-            format!("{}", value as i32)
+            format!("{integer}")
         }
         // An integer literal is signed: a value past `i32::MAX` is written
         // as its bit pattern.
         GlslMacroKind::Uint => {
-            if value.fract() != 0.0 || !(0.0..=f64::from(u32::MAX)).contains(&value) {
+            let integer = value as u32;
+            if f64::from(integer) != value {
                 return Err(unfit());
             }
-            let value = value as u32;
-            if value > i32::MAX as u32 {
-                format!("{value:#X}")
+            if integer > i32::MAX as u32 {
+                format!("{integer:#X}")
             } else {
-                format!("{value}")
+                format!("{integer}")
             }
         }
         GlslMacroKind::Float => {
