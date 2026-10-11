@@ -253,14 +253,13 @@ fn union_rect(a: Rect, b: Rect, padding: f32) -> Rect {
     (min_x.max(0.0), min_y.max(0.0), max_x - min_x, max_y - min_y)
 }
 
+/// The box's orange, faded to between 0.4 and 1 over its track: the track
+/// and the text beside it are greys of the light or the dark theme, and the
+/// faded orange stays well redder than either (over the dark track at 0.4
+/// it is about (112, 65, 59)).
 fn is_orange_box_pixel(pixel: [u8; 4]) -> bool {
     let [red, green, blue, alpha] = pixel;
-    alpha > 170
-        && red > 205
-        && (145..=225).contains(&green)
-        && (120..=210).contains(&blue)
-        && red > green.saturating_add(8)
-        && red > blue.saturating_add(24)
+    alpha > 170 && red > green.saturating_add(30) && red > blue.saturating_add(40)
 }
 
 fn row_top_edge_y(image: &image::RgbaImage, region: (u32, u32, u32, u32)) -> Option<f64> {
