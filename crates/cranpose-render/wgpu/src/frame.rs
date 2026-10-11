@@ -252,8 +252,7 @@ impl PageBase {
     }
 }
 
-/// The pixels of `source`, whose origin sits at `origin` in device space,
-/// within `parent`, drawn at `dest`.
+/// A kept prefix drawn back where the page drew it.
 fn prefix_blit(prefix: &OpaquePrefix, texture: Rc<OffscreenTarget>) -> ResolvedComposite {
     ResolvedComposite {
         z_index: prefix.z_index,
@@ -271,6 +270,8 @@ fn prefix_blit(prefix: &OpaquePrefix, texture: Rc<OffscreenTarget>) -> ResolvedC
     }
 }
 
+/// The pixels of `source`, whose origin sits at `origin` in device space,
+/// within `parent`, drawn at `dest`.
 fn page_blit(
     source: &Rc<OffscreenTarget>,
     origin: [f32; 2],
@@ -4327,6 +4328,15 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 composite
             }
             None => {
+                // A transform that moves, such as a rotation passing through
+                // zero, lands the surface on the pixel grid in a later
+                // frame, where it is blitted one to one.
+                self.renderer.effect_renderer.prefetch_composite(
+                    &self.renderer.device,
+                    child.blend_mode,
+                    CompositeSampleMode::Nearest,
+                    child.rounded_clip.is_some(),
+                );
                 let Some(composite) =
                     projected_child_composite(child, z, source, &surface, snap, scale, shown)
                 else {

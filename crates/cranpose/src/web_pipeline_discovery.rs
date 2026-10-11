@@ -72,7 +72,7 @@ impl PipelineDiscovery {
 
     /// Prepares the frame about to draw with `renderer`: the first frame on
     /// WebGPU discovers its pipelines, and the frame after they compiled
-    /// draws with a new renderer.
+    /// draws with a new renderer. Both also build what a later frame needs.
     pub(crate) fn begin_frame(&self, renderer: &mut WgpuRenderer) {
         let mut stage = self.stage.borrow_mut();
         *stage = match std::mem::replace(&mut *stage, Stage::Done) {
@@ -86,14 +86,18 @@ impl PipelineDiscovery {
             Stage::Cold | Stage::Redrawing { .. } | Stage::Done => Stage::Done,
             current @ (Stage::Discovering | Stage::Compiling) => current,
         };
+        if matches!(*stage, Stage::Discovering | Stage::Redrawing { .. }) {
+            renderer.begin_discovery_frame();
+        }
     }
 
-    /// Ends the frame that drew: after discovery, waits for the browser to
-    /// compile what it learned and calls `redraw` once it has.
-    pub(crate) fn end_frame(&self, redraw: &Rc<dyn Fn()>) {
+    /// Ends the frame `renderer` drew: after discovery, waits for the browser
+    /// to compile what it learned and calls `redraw` once it has.
+    pub(crate) fn end_frame(&self, renderer: &WgpuRenderer, redraw: &Rc<dyn Fn()>) {
         let mut stage = self.stage.borrow_mut();
         match &*stage {
             Stage::Discovering => {
+                renderer.end_discovery_frame();
                 *stage = Stage::Compiling;
                 let compiling = self.target.device.end_pipeline_discovery();
                 let landed = Rc::clone(&self.stage);
@@ -104,7 +108,10 @@ impl PipelineDiscovery {
                     redraw();
                 });
             }
-            Stage::Redrawing { .. } => *stage = Stage::Done,
+            Stage::Redrawing { .. } => {
+                renderer.end_discovery_frame();
+                *stage = Stage::Done;
+            }
             Stage::Cold | Stage::Compiling | Stage::Landed(_) | Stage::Done => {}
         }
     }

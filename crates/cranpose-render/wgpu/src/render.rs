@@ -4427,6 +4427,11 @@ impl GpuRenderer {
         self.pending_frame_warmup_frames > 0 || self.placeholder_awaits_frame()
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn pipeline_compiler(&self) -> &PipelineCompiler {
+        &self.pipeline_compiler
+    }
+
     /// Whether a frame must follow to replace a placeholder: a pipeline it
     /// waited for landed, or, with nothing to wake the app when one does,
     /// this frame drew one.

@@ -63,10 +63,12 @@ impl FixedPipeline {
         }
     }
 
-    /// Queues the build, which `job` makes, on the warm-up lane unless the
-    /// pipeline is built, queued or in the loaded driver cache, or no
-    /// compiler runs: a pass asks for every pipeline it is about to draw
-    /// with, so the missing ones compile side by side.
+    /// Builds the pipeline, which `job` makes, ahead of its first draw
+    /// unless it is built, queued or in the loaded driver cache, or the
+    /// compiler builds nothing ahead: queued on the warm-up lane, or on the
+    /// web built at the end of a frame of a pipeline discovery. A pass asks
+    /// for every pipeline it is about to draw with, so the missing ones
+    /// compile side by side.
     pub(crate) fn prefetch<J>(
         &self,
         compiler: &PipelineCompiler,
@@ -75,7 +77,7 @@ impl FixedPipeline {
     ) where
         J: FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static,
     {
-        if compiler.is_active()
+        if compiler.builds_ahead()
             && self.resource.get().is_none()
             && !self.cached.get()
             && !self.queued.get()
