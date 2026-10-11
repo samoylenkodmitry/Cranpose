@@ -9,10 +9,12 @@ import subprocess
 import sys
 from threading import Thread
 
-# Each browser check: the script that drives the page and its time limit in seconds.
+# Each browser check: the script that drives the page, its arguments after the
+# site's URL and the output directory, and its time limit in seconds.
 CHECKS = {
-    'accessibility': ('scripts/a11y/web-page-check.mjs', 180),
-    'webgpu': ('scripts/a11y/tests/webgpu-smoke.mjs', 300),
+    'accessibility': ('scripts/a11y/web-page-check.mjs', [], 180),
+    'webgpu': ('scripts/a11y/tests/gpu-smoke.mjs', ['webgpu'], 300),
+    'webgl': ('scripts/a11y/tests/gpu-smoke.mjs', ['gl'], 300),
 }
 
 
@@ -36,7 +38,7 @@ def main():
         chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
     if not chrome:
         raise RuntimeError('Set CHROME to a Chrome or Chromium executable')
-    script, timeout = CHECKS[args.check]
+    script, extra, timeout = CHECKS[args.check]
     handler = partial(QuietHandler, directory=str(args.site.resolve()))
     with ThreadingHTTPServer(('127.0.0.1', 0), handler) as server:
         serving = Thread(target=server.serve_forever)
@@ -47,7 +49,7 @@ def main():
             environment = dict(os.environ, CHROME=chrome, A11Y_DEBUG_PORT='0')
             with (args.output / 'browser.log').open('w') as log:
                 process = subprocess.Popen(
-                    ['node', script, url, str(args.output.resolve())],
+                    ['node', script, url, str(args.output.resolve()), *extra],
                     env=environment, stdout=log, stderr=subprocess.STDOUT,
                     start_new_session=os.name == 'posix')
                 status = process.wait(timeout=timeout)

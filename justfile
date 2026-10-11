@@ -548,13 +548,18 @@ robot-accessibility-web site output:
 web-webgpu-smoke site output:
     python3 scripts/a11y/web_robot.py --check webgpu --site {{quote(site)}} --output {{quote(output)}}
 
-# Build and package the web demo, then open every page on WebGPU.
-web-webgpu: web
+# The same pages on WebGL2, which phones without WebGPU use.
+web-webgl-smoke site output:
+    python3 scripts/a11y/web_robot.py --check webgl --site {{quote(site)}} --output {{quote(output)}}
+
+# Build and package the web demo, then open every page on WebGPU and on WebGL2.
+web-backends: web
     #!/usr/bin/env bash
     set -euo pipefail
-    run="$(mktemp -d "${TMPDIR:-/tmp}/web-webgpu.XXXXXX")"
+    run="$(mktemp -d "${TMPDIR:-/tmp}/web-backends.XXXXXX")"
     apps/desktop-demo/package-web.sh "$run/site"
-    just web-webgpu-smoke "$run/site" "$run/smoke"
+    just web-webgpu-smoke "$run/site" "$run/webgpu"
+    just web-webgl-smoke "$run/site" "$run/webgl"
 
 test-web-ime-webdriver endpoint browser url output *args:
     python3 scripts/a11y/web_ime_robot.py --endpoint {{quote(endpoint)}} --browser {{quote(browser)}} --url {{quote(url)}} --output {{quote(output)}} {{args}}
@@ -951,7 +956,7 @@ ci: fmt-check typos versions twin-matrix-check test clippy clippy-release clippy
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
 # Every gate, including the platform builds and the robot suite.
-ci-full: ci clippy-ios clippy-android web-webgpu android watchos robot vulkan-sync
+ci-full: ci clippy-ios clippy-android web-backends android watchos robot vulkan-sync
 
 liquid-reference-traces output bundle="io.cranpose.liquid-reference" device="booted":
     python3 apps/liquid-reference/collect-traces.py '{{output}}' --bundle '{{bundle}}' --device '{{device}}'

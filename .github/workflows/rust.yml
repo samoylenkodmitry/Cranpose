@@ -309,6 +309,20 @@ jobs:
           name: webgpu-smoke
           path: ${{ runner.temp }}/webgpu-smoke
           retention-days: 3
+      - name: Open every page of the web demo on WebGL2
+        id: webgl
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
+        # Phones without WebGPU draw on WebGL2. Its backend reads a program's
+        # link at the program's first draw, so a program that does not link
+        # shows only when a page draws with it.
+        run: just web-webgl-smoke "$RUNNER_TEMP/web-demo" "$RUNNER_TEMP/webgl-smoke"
+      - name: Keep the WebGL2 check's screenshots and console
+        if: ${{ failure() && steps.webgl.conclusion == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: webgl-smoke
+          path: ${{ runner.temp }}/webgl-smoke
+          retention-days: 3
 
       - name: Remember that this tree passed
         if: ${{ success() && steps.memo.outputs.passed != 'true' }}
