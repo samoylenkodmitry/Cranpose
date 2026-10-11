@@ -24,8 +24,9 @@ use objc2::{
     AllocAnyThread, Message, define_class, msg_send, rc::Retained, runtime::ProtocolObject,
 };
 use objc2_foundation::{
-    NSArray, NSBundle, NSData, NSError, NSHTTPURLResponse, NSMutableURLRequest, NSObject,
-    NSObjectProtocol, NSOperationQueue, NSString, NSURL, NSURLSession, NSURLSessionConfiguration,
+    NSArray, NSBundle, NSData, NSDictionary, NSError, NSHTTPURLResponse, NSKeyedArchiver,
+    NSKeyedUnarchiver, NSMutableCopying, NSMutableURLRequest, NSObject, NSObjectProtocol,
+    NSOperationQueue, NSString, NSURL, NSURLSession, NSURLSessionConfiguration,
     NSURLSessionDelegate, NSURLSessionDownloadDelegate, NSURLSessionDownloadTask,
     NSURLSessionDownloadTaskResumeData, NSURLSessionTask, NSURLSessionTaskDelegate,
 };
@@ -179,7 +180,7 @@ impl Downloads {
             None => {
                 let offset = fs::metadata(target).map_or(0, |metadata| metadata.len());
                 let task = match take_resume_data(target, offset) {
-                    Some(data) => session.downloadTaskWithResumeData(&NSData::with_bytes(&data)),
+                    Some(data) => session.downloadTaskWithResumeData(&from_own_address(&data, url)),
                     None => {
                         let request = request(url, offset)?;
                         session.downloadTaskWithRequest(&request)
@@ -473,6 +474,51 @@ fn file_write(transfer: &Transfer, error: &io::Error) -> HttpError {
         kind: error.kind(),
         message: error.to_string(),
     }
+}
+
+/// Resume data that continues from the download's own address. iOS resumes
+/// from the address the transfer ended at: for a release asset that is a
+/// signed address which expires within the hour, and a pause longer than
+/// that would lose what the task had. The own address redirects to a fresh
+/// one, where the range continues. The data stays as it was when it cannot
+/// be read.
+fn from_own_address(data: &[u8], url: &str) -> Retained<NSData> {
+    let data = NSData::with_bytes(data);
+    match with_own_address(&data, url) {
+        Some(rewritten) => rewritten,
+        None => {
+            log::warn!("the resume data of {url} could not be read; it resumes where it ended");
+            data
+        }
+    }
+}
+
+fn with_own_address(data: &NSData, url: &str) -> Option<Retained<NSData>> {
+    // The key CFNetwork archives resume data under, not `NSKeyedArchiveRootObjectKey`'s value.
+    let root = NSString::from_str("NSKeyedArchiveRootObjectKey");
+    let unarchiver = unsafe {
+        NSKeyedUnarchiver::initForReadingFromData_error(NSKeyedUnarchiver::alloc(), data)
+    }
+    .ok()?;
+    unsafe { unarchiver.setRequiresSecureCoding(false) };
+    let resume = unsafe { unarchiver.decodeObjectForKey(&root) }?
+        .downcast::<NSDictionary>()
+        .ok()?
+        .mutableCopy();
+    let original = resume.objectForKey(&NSString::from_str("NSURLSessionResumeOriginalRequest"))?;
+    let current = NSString::from_str("NSURLSessionResumeCurrentRequest");
+    let address = NSString::from_str("NSURLSessionDownloadURL");
+    unsafe {
+        resume.setObject_forKey(&original, ProtocolObject::from_ref(&*current));
+        resume.setObject_forKey(
+            &NSString::from_str(url),
+            ProtocolObject::from_ref(&*address),
+        );
+    }
+    let archiver = NSKeyedArchiver::initRequiringSecureCoding(NSKeyedArchiver::alloc(), false);
+    unsafe { archiver.encodeObject_forKey(Some(&resume), &root) };
+    archiver.finishEncoding();
+    Some(archiver.encodedData())
 }
 
 fn resume_data(error: &NSError) -> Option<Vec<u8>> {
