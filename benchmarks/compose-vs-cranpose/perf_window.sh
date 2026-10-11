@@ -1,8 +1,11 @@
 #!/system/bin/sh
 # One measurement window, run on the device so no adb round trip lands inside it.
-# Usage: perf_window.sh PIDS PACKAGE LAYER END INTERVAL_S GFXINFO(0|1)
+# Usage: perf_window.sh PIDS PACKAGE LAYER END INTERVAL_S GFXINFO(0|1) START SLOW_FPS SLOW_WINDOW_S
 # END is the run's end on /proc/uptime's clock: the launch plus the run's
-# length, so every run lasts the same from its launch.
+# length, so every run lasts the same from its launch. START is the launch on
+# that clock. A run whose layer presented fewer than SLOW_FPS frames a second
+# over the last SLOW_WINDOW_S seconds ends there, with a SLOW line: the rest
+# of it would only repeat that the app is slow.
 # PIDS is one process id, or a comma-separated list for an app that runs in
 # several (a browser): the first is the one that must stay alive.
 # At the end, WHOLE lists every process of PACKAGE (named PACKAGE, or
@@ -24,11 +27,17 @@ LAYER=$3
 END=$4
 INTERVAL=$5
 GFX=$6
+START=$7
+SLOW_FPS=$8
+SLOW_WINDOW=$9
 # The Mali GPU clock where the kernel exposes it (kHz on the Pixel 9 Pro);
 # the Kirin 980 reports its clocks on the F line instead.
 MALI_CLOCK=/sys/class/misc/mali0/device/cur_freq
 LATENCY_LOG=/data/local/tmp/perf_window_latency.$$
 STOP=/data/local/tmp/perf_window_stop.$$
+POLL=/data/local/tmp/perf_window_poll.$$
+# One "UPTIME TOTAL" line per poll: the frames the layer presented so far.
+COUNTS=/data/local/tmp/perf_window_counts.$$
 
 snap() {
   first=1
@@ -61,8 +70,19 @@ thermal
 echo "T0 $(cat /proc/uptime)"
 snap
 (
+  # The newest present counted, and the presents counted so far. A frame
+  # whose present is still pending reads INT64_MAX and is counted later.
+  newest=0
+  total=0
   while [ ! -e "$STOP" ]; do
-    latency
+    latency > "$POLL"
+    cat "$POLL"
+    counted=$(awk -v newest="$newest" -v total="$total" '
+      NF == 3 && $1 ~ /^[0-9]+$/ && $2 > newest && $2 < 9e18 { total++; if ($2 > last) last = $2 }
+      END { printf "%.0f %d", (last > newest ? last : newest), total }' "$POLL")
+    newest=${counted% *}
+    total=${counted#* }
+    echo "$(cut -d' ' -f1 /proc/uptime) $total" >> "$COUNTS"
     sleep "$INTERVAL"
   done
 ) > "$LATENCY_LOG" &
@@ -70,10 +90,27 @@ POLLER=$!
 i=0
 read_node() { cat "$1" 2>/dev/null || echo -; }
 before_end() { awk -v now="$(cut -d' ' -f1 /proc/uptime)" -v end="$END" 'BEGIN { exit !(now < end) }'; }
+# Whether, at the newest poll, the run was SLOW_WINDOW_S old and its last
+# SLOW_WINDOW_S seconds held fewer presents than SLOW_FPS a second. The
+# launch counts as a poll that found none.
+slow() {
+  awk -v start="$START" -v fps="$SLOW_FPS" -v window="$SLOW_WINDOW" '
+    { at[NR] = $1; total[NR] = $2 }
+    END {
+      if (NR == 0 || at[NR] - start < window) exit 1
+      before = 0
+      for (i = NR; i > 0; i--) if (at[i] <= at[NR] - window) { before = total[i]; break }
+      exit !(total[NR] - before < fps * window)
+    }' "$COUNTS" 2>/dev/null
+}
 while before_end; do
   sleep $INTERVAL
   read -r up idle < /proc/uptime
   echo "PU $up"
+  if slow; then
+    echo "SLOW $up"
+    break
+  fi
   for pid in $PIDS; do
     if [ -r /proc/$pid/stat ]; then
       read -r stat < /proc/$pid/stat
@@ -103,7 +140,7 @@ touch "$STOP"
 wait "$POLLER"
 latency >> "$LATENCY_LOG"
 cat "$LATENCY_LOG"
-rm -f "$LATENCY_LOG" "$STOP"
+rm -f "$LATENCY_LOG" "$STOP" "$POLL" "$COUNTS"
 thermal
 if [ "$GFX" = 1 ]; then
   echo GFX_BEGIN

@@ -47,6 +47,14 @@ LAT_END
         self.assertEqual(report['fps'], 4 / 5.0, 'frames over the whole run, its start included')
         self.assertEqual(report['stalled_seconds'], 1, 'only seconds after the first frame are stalls')
 
+    def test_an_app_that_drew_nothing_in_its_run_reads_no_frames(self):
+        # MAUI's gauntlet on the Huawei Mate 20 X: its first frame came after
+        # the run's 10 s.
+        report = measure.frame_stats({}, 10.0, 20.0, 1000.0 / 60.0)
+        self.assertEqual((report['frames'], report['fps'], report['fps_by_second']), (0, 0, [0] * 10))
+        self.assertEqual((report['first_frame_s'], report['interval_p99_ms'], report['janky_pct']),
+                         (None, None, None))
+
     def test_a_first_poll_with_a_full_history_is_flagged(self):
         full = 'LAT_BEGIN 1.0\n16666667\n' + ''.join(
             f'{i} {1_000_000_000 + i * 16_000_000} {i}\n' for i in range(1, 128)) + 'LAT_END\n'

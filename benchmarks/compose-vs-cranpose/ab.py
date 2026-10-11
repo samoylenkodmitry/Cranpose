@@ -37,8 +37,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from measure import (APPS, HEAVY, REMOTE_WINDOW, HERE, STARTS, AppTarget, Device, device_lock, measure_run,
-                     memory_mb)
+from measure import (APPS, HEAVY, REMOTE_WINDOW, HERE, STARTS, AppTarget, Device, device_lock, figure,
+                     measure_run, memory_mb)
+from timelines import slow_rule
 
 # Metric: (threshold, whether the threshold is relative, whether more is better).
 DECIDING = {
@@ -82,6 +83,7 @@ def leg_record(run, subject, order, start):
         'fps': run['fps'],
         'frames': run['frames'],
         'run_s': run['run_s'],
+        'stopped': run['stopped'],
         'first_frame_s': run['first_frame_s'],
         # When each frame was presented, in milliseconds since the launch.
         'frame_ms': run['frame_ms'],
@@ -132,7 +134,7 @@ def compare_scenario(device, scenario, subjects, args):
                 run = measure_run(device, subject, scenario, args, args.output)
                 legs.append(leg_record(run, subject, len(legs), start))
                 print(f'{scenario:10} {subject:16} {start:6} fps {run["fps"]:5.1f} '
-                      f'cpu/f {run["cpu_ms_per_frame"]:5.2f} '
+                      f'cpu/f {figure(run["cpu_ms_per_frame"], "5.2f")} '
                       f'present {run.get("desired_to_present_p50_ms") or 0:5.1f}', flush=True)
         judged = {start: verdicts(legs, subjects, start, pair == args.max_pairs - 1) for start in STARTS}
         if all(value is not None for start in STARTS for value in judged[start].values()):
@@ -188,7 +190,7 @@ def compare_builds(args):
                    ['ro.product.model', 'ro.build.version.release', 'ro.hardware']},
         'subjects': [{'name': name, 'package': APPS[name]['package'], 'label': label}
                      for name, label in ((args.a, args.label_a), (args.b, args.label_b))],
-        'protocol': {'run_s': args.run, 'starts': list(STARTS), 'max_pairs': args.max_pairs,
+        'protocol': {'run_s': args.run, 'starts': list(STARTS), 'max_pairs': args.max_pairs, **slow_rule(),
                      'deciding': {metric: rule[0] for metric, rule in DECIDING.items()}},
         'scenarios': [],
     }

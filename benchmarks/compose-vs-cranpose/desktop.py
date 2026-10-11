@@ -20,7 +20,9 @@ once more, with a picture of its window kept beside the results. Every leg
 is one launch measured from its start for `--run` seconds, the same span for
 every app, with nothing left out: the launch, the first frame and the first
 seconds count as the rest of the run does, and the frames of every second
-are kept. A disturbed leg stays in the run, marked, out of the medians.
+are kept. A leg whose app presented fewer than `SLOW_FPS` frames a second
+over the last `SLOW_WINDOW_S` seconds ends there, marked `stopped`. A
+disturbed leg stays in the run, marked, out of the medians.
 
   python3 desktop.py --output results/desktop --tier 12
   python3 desktop.py --output results/desktop-parity --parity --tier 5
@@ -41,6 +43,7 @@ a removable volume, and the checkout may be on one.
 
 import argparse
 import ctypes
+import hashlib
 import http.server
 import json
 import os
@@ -58,12 +61,13 @@ from pathlib import Path
 
 import versions
 from browser import BrowserServer
-from timelines import STARTS, per_second
+from timelines import SLOW_FPS, SLOW_WINDOW_S, STARTS, per_second, slow_rule
 
 
 HERE = Path(__file__).resolve().parent
 FONTS = HERE / 'fonts'
 FRAMECOUNT = Path.home() / 'Applications/FrameCount.app'
+FRAMECOUNT_SOURCE = HERE / 'framecount/FrameCount.swift'
 MACMON = shutil.which('macmon')
 CLOCK_INTERVAL_MS = 250
 CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
@@ -391,6 +395,15 @@ def wait_for(log, text, timeout):
     raise RuntimeError(f'{log.name}: no "{text}" within {timeout} s')
 
 
+def current_framecount():
+    """Builds `FrameCount.app` again when its source changed since the
+    installed build: its signature keeps the Screen Recording grant."""
+    built = FRAMECOUNT / 'Contents/Resources/source-sha256'
+    source = hashlib.sha256(FRAMECOUNT_SOURCE.read_bytes()).hexdigest()
+    if not built.exists() or built.read_text().strip() != source:
+        subprocess.run(['sh', str(HERE / 'framecount/build.sh'), str(FRAMECOUNT.parent)], check=True)
+
+
 def framecount(pid, out, *arguments):
     """Runs `FrameCount.app` on the process's window, through `open` so its
     Screen Recording permission applies."""
@@ -518,19 +531,22 @@ def measure(name, args, work, page, stage, label, earlier, profile):
                           None)
         usage = Usage(app.pid, server_pid, launched)
         out = stage / f'{label}-frames.json'
-        frames = framecount(app.pid, out, '--until', f'{launched + args.run:.3f}', '--out', str(out))
+        frames = framecount(app.pid, out, '--until', f'{launched + args.run:.3f}', '--launched', f'{launched:.3f}',
+                            '--slow-fps', str(SLOW_FPS), '--slow-window', str(SLOW_WINDOW_S), '--out', str(out))
         after, ended = processes(), time.monotonic()
         taken = usage.stop()
         clocked, clock_samples = clocks.stop()
+        # A slow run ends where FrameCount stopped it.
+        run_s = frames['stopped'] - launched if 'stopped' in frames else args.run
         if 'PERF first_frame' not in app.log.read_text(errors='replace'):
-            raise RuntimeError(f'{name} logged no first frame within its {args.run:.0f} s run')
+            raise RuntimeError(f'{name} logged no first frame within its {run_s:.0f} s run')
         mine = tree(app.pid, after, ended - app.started + 1)
         held = memory(mine, stage)
         shutil.copy(out, work / out.name)
-        times = [time for time in frames['times'] if launched <= time < launched + args.run]
+        times = [time for time in frames['times'] if launched <= time < launched + run_s]
         if len(times) < 2:
             raise RuntimeError(f'{name} presented fewer than two frames in its run')
-        fps = len(times) / args.run
+        fps = len(times) / run_s
         if disagrees(fps, earlier):
             shown = stage / f'{label}.png'
             framecount(app.pid, shown, '--screenshot', str(shown))
@@ -549,14 +565,14 @@ def measure(name, args, work, page, stage, label, earlier, profile):
     cores = sum(value for pid, value in spent.items() if pid in mine) / wall + server_cores
     others = sum(value for pid, value in spent.items() if pid not in mine and pid not in server) / wall
     intervals = sorted((later - earlier) * 1000 for earlier, later in zip(times, times[1:]))
-    return {'fps': round(fps, 1), 'frames': len(times), 'run_s': args.run,
+    return {'fps': round(fps, 1), 'frames': len(times), 'run_s': round(run_s, 3), 'stopped': 'stopped' in frames,
             'first_frame_s': round(times[0] - launched, 3),
             # Where FrameCount's capture began: it waits for the window, so a
             # second before this one saw no window to count.
             'capture_start_s': round(frames['capture_start'] - launched, 3),
             # When each frame was presented, in milliseconds since the launch.
             'frame_ms': [round((time - launched) * 1000, 1) for time in times],
-            'fps_by_second': per_second(times, launched, args.run),
+            'fps_by_second': per_second(times, launched, run_s),
             'interval_p50_ms': round(percentile(intervals, 0.50), 2),
             'interval_p99_ms': round(percentile(intervals, 0.99), 2),
             'cpu_cores': round(cores, 2), 'server_cores': round(server_cores, 2), 'other_cores': round(others, 2),
@@ -594,7 +610,7 @@ def main():
                         help='run the apps `build_apps.sh browser DIST` built, in Chrome')
     parser.add_argument('--release', help='the release tag `cranpose-release` was built at')
     parser.add_argument('--tier', type=int, default=12)
-    parser.add_argument('--rounds', type=int, default=3,
+    parser.add_argument('--rounds', type=int, default=1,
                         help="rounds, in each of which every app starts after the apps' state is removed, "
                              'then once more')
     parser.add_argument('--run', type=float, default=10.0,
@@ -622,6 +638,7 @@ def main():
         apps = [name for name in APPS if name == 'web' or Path(APPS[name][0]).exists()]
         print('not built:', ', '.join(name for name in APPS if name not in apps) or 'none', flush=True)
     args.output.mkdir(parents=True, exist_ok=True)
+    current_framecount()
     started = time.monotonic()
     page = BrowserServer(args.browser).base if args.browser else serve_page()
     with tempfile.TemporaryDirectory(prefix='gauntlet-') as folder:
@@ -753,7 +770,7 @@ def run(args, apps, page, stage):
         'device': {'ro.product.model': chip},
         'subjects': [versions.subject(name, platform, built, args.release) for name in apps],
         'protocol': {'run_s': args.run, 'starts': list(STARTS), 'rounds': args.rounds,
-                     'max_other_cores': args.max_others},
+                     'max_other_cores': args.max_others, **slow_rule()},
         'scenarios': [{'scenario': 'gauntlet',
                        'extras': f'tier {args.tier}, {width} x {height} {"browser " if args.browser else ""}window',
                        'legs': legs, 'failures': failures,

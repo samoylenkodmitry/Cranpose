@@ -7,10 +7,9 @@ Android device.
 3. Builds the Cranpose benchmark app at the tag, installed as
    `dev.perfcompare.cranpose.release`, and at main. The tag builds in a
    worktree kept across nights, so its build caches stay warm.
-4. Installs both under the device lock and runs `ab.py` over every scenario
-   the release can draw.
-5. Runs each scenario judged worse once more. A metric judged worse both
-   times is a confirmed regression.
+4. Installs both under the device lock and runs `ab.py` over the gauntlet.
+5. Runs the gauntlet once more when it was judged worse. A metric judged
+   worse both times is a confirmed regression.
 
 Writes `run.json`: ab.py's report with both commits and the confirmed
 regressions, or the reason the night was skipped.
@@ -28,8 +27,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 BENCH = Path('benchmarks/compose-vs-cranpose')
 ANDROID = BENCH / 'cranpose-app/android'
-SCENARIOS = ['gauntlet', 'feed', 'ticker', 'particles', 'layers', 'grid', 'grid_layer', 'deep',
-             'deep_layer', 'workspace']
+# The gauntlet alone, which runs at once every stage the other scenarios
+# test: the ten scenarios held the device for 33 minutes on 2026-10-11.
+SCENARIO = 'gauntlet'
 
 sys.path.insert(0, str(REPO / 'scripts'))
 sys.path.insert(0, str(REPO / BENCH))
@@ -120,10 +120,9 @@ def nightly(args):
         return {'skipped': f'main {main[:9]} was already measured against {release}'}
     if not release_has(release, ANDROID / 'app/build.gradle.kts', 'perfCompareSuffix'):
         return {'skipped': f'{release} predates installing a second benchmark build'}
-    # A scenario the release's app does not know falls back to the feed, so
-    # only the ones its measure table lists are compared.
-    scenarios = [scenario for scenario in SCENARIOS
-                 if release_has(release, BENCH / 'measure.py', f"'{scenario}': '")]
+    # A scenario the release's app does not know falls back to the feed.
+    if not release_has(release, BENCH / 'measure.py', f"'{SCENARIO}': '"):
+        return {'skipped': f'{release} draws no {SCENARIO}'}
     release_apk = build(release_tree_at(args.release_tree, release), '.release')
     main_apk = build(REPO)
     with device_lock(args.serial):
@@ -131,7 +130,7 @@ def nightly(args):
         device.install('cranpose-release', release_apk)
         device.install('cranpose', main_apk)
     labels = (release, main[:9])
-    report = compare(args, scenarios, args.output / 'ab', labels)
+    report = compare(args, [SCENARIO], args.output / 'ab', labels)
     rechecked = [scenario['scenario'] for scenario in report['scenarios'] if any(worse(scenario).values())]
     regressions = (confirmed(report, compare(args, rechecked, args.output / 'recheck', labels))
                    if rechecked else {})
