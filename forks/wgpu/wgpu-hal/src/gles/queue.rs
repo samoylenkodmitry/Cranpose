@@ -189,13 +189,17 @@ impl super::Queue {
         }
     }
 
+    /// Runs `command`; `program` is what the program in use tells.
     unsafe fn process(
         &self,
         gl: &glow::Context,
         command: &C,
         #[cfg_attr(target_arch = "wasm32", allow(unused))] data_bytes: &[u8],
         queries: &[glow::Query],
+        program: Option<&super::LinkedProgram>,
     ) {
+        let first_instance_location =
+            program.and_then(|program| program.first_instance_location.as_ref());
         match *command {
             C::Draw {
                 topology,
@@ -203,7 +207,6 @@ impl super::Queue {
                 vertex_count,
                 instance_count,
                 first_instance,
-                ref first_instance_location,
             } => {
                 let supports_full_instancing = self
                     .shared
@@ -221,7 +224,7 @@ impl super::Queue {
                         )
                     }
                 } else {
-                    if let Some(location) = first_instance_location.as_ref() {
+                    if let Some(location) = first_instance_location {
                         unsafe { gl.uniform_1_u32(Some(location), first_instance) };
                     }
 
@@ -246,7 +249,6 @@ impl super::Queue {
                 base_vertex,
                 first_instance,
                 instance_count,
-                ref first_instance_location,
             } => {
                 let supports_full_instancing = self
                     .shared
@@ -266,7 +268,7 @@ impl super::Queue {
                         )
                     }
                 } else {
-                    if let Some(location) = first_instance_location.as_ref() {
+                    if let Some(location) = first_instance_location {
                         unsafe { gl.uniform_1_u32(Some(location), first_instance) };
                     }
 
@@ -302,9 +304,8 @@ impl super::Queue {
                 topology,
                 indirect_buf,
                 indirect_offset,
-                ref first_instance_location,
             } => {
-                unsafe { gl.uniform_1_u32(first_instance_location.as_ref(), 0) };
+                unsafe { gl.uniform_1_u32(first_instance_location, 0) };
 
                 unsafe { gl.bind_buffer(glow::DRAW_INDIRECT_BUFFER, Some(indirect_buf)) };
                 unsafe { gl.draw_arrays_indirect_offset(topology, indirect_offset as i32) };
@@ -314,9 +315,8 @@ impl super::Queue {
                 index_type,
                 indirect_buf,
                 indirect_offset,
-                ref first_instance_location,
             } => {
-                unsafe { gl.uniform_1_u32(first_instance_location.as_ref(), 0) };
+                unsafe { gl.uniform_1_u32(first_instance_location, 0) };
 
                 unsafe { gl.bind_buffer(glow::DRAW_INDIRECT_BUFFER, Some(indirect_buf)) };
                 unsafe {
@@ -1587,214 +1587,12 @@ impl super::Queue {
                     }
                 };
             }
-            C::SetImmediates {
-                ref uniform,
-                offset,
-            } => {
-                fn get_data<T, const COUNT: usize>(data: &[u8], offset: u32) -> [T; COUNT]
-                where
-                    [T; COUNT]: bytemuck::AnyBitPattern,
-                {
-                    let data_required = size_of::<T>() * COUNT;
-                    let raw = &data[(offset as usize)..][..data_required];
-                    bytemuck::pod_read_unaligned(raw)
-                }
-
-                let location = Some(&uniform.location);
-                use nt::glsl::{GlslScalar, GlslUniformType, GlslVectorSize};
-                match uniform.ty {
-                    //
-                    // --- Float 1-4 Component ---
-                    //
-                    GlslUniformType::Scalar(GlslScalar::F32) => {
-                        let data = get_data::<f32, 1>(data_bytes, offset)[0];
-                        unsafe { gl.uniform_1_f32(location, data) };
-                    }
-                    GlslUniformType::Vector {
-                        size: GlslVectorSize::Bi,
-                        scalar: GlslScalar::F32,
-                    } => {
-                        let data = &get_data::<f32, 2>(data_bytes, offset);
-                        unsafe { gl.uniform_2_f32_slice(location, data) };
-                    }
-                    GlslUniformType::Vector {
-                        size: GlslVectorSize::Tri,
-                        scalar: GlslScalar::F32,
-                    } => {
-                        let data = &get_data::<f32, 3>(data_bytes, offset);
-                        unsafe { gl.uniform_3_f32_slice(location, data) };
-                    }
-                    GlslUniformType::Vector {
-                        size: GlslVectorSize::Quad,
-                        scalar: GlslScalar::F32,
-                    } => {
-                        let data = &get_data::<f32, 4>(data_bytes, offset);
-                        unsafe { gl.uniform_4_f32_slice(location, data) };
-                    }
-
-                    //
-                    // --- Int 1-4 Component ---
-                    //
-                    GlslUniformType::Scalar(GlslScalar::I32) => {
-                        let data = get_data::<i32, 1>(data_bytes, offset)[0];
-                        unsafe { gl.uniform_1_i32(location, data) };
-                    }
-                    GlslUniformType::Vector {
-                        size: GlslVectorSize::Bi,
-                        scalar: GlslScalar::I32,
-                    } => {
-                        let data = &get_data::<i32, 2>(data_bytes, offset);
-                        unsafe { gl.uniform_2_i32_slice(location, data) };
-                    }
-                    GlslUniformType::Vector {
-                        size: GlslVectorSize::Tri,
-                        scalar: GlslScalar::I32,
-                    } => {
-                        let data = &get_data::<i32, 3>(data_bytes, offset);
-                        unsafe { gl.uniform_3_i32_slice(location, data) };
-                    }
-                    GlslUniformType::Vector {
-                        size: GlslVectorSize::Quad,
-                        scalar: GlslScalar::I32,
-                    } => {
-                        let data = &get_data::<i32, 4>(data_bytes, offset);
-                        unsafe { gl.uniform_4_i32_slice(location, data) };
-                    }
-
-                    //
-                    // --- Uint 1-4 Component ---
-                    //
-                    GlslUniformType::Scalar(GlslScalar::U32) => {
-                        let data = get_data::<u32, 1>(data_bytes, offset)[0];
-                        unsafe { gl.uniform_1_u32(location, data) };
-                    }
-                    GlslUniformType::Vector {
-                        size: GlslVectorSize::Bi,
-                        scalar: GlslScalar::U32,
-                    } => {
-                        let data = &get_data::<u32, 2>(data_bytes, offset);
-                        unsafe { gl.uniform_2_u32_slice(location, data) };
-                    }
-                    GlslUniformType::Vector {
-                        size: GlslVectorSize::Tri,
-                        scalar: GlslScalar::U32,
-                    } => {
-                        let data = &get_data::<u32, 3>(data_bytes, offset);
-                        unsafe { gl.uniform_3_u32_slice(location, data) };
-                    }
-                    GlslUniformType::Vector {
-                        size: GlslVectorSize::Quad,
-                        scalar: GlslScalar::U32,
-                    } => {
-                        let data = &get_data::<u32, 4>(data_bytes, offset);
-                        unsafe { gl.uniform_4_u32_slice(location, data) };
-                    }
-
-                    //
-                    // --- Matrix 2xR ---
-                    //
-                    GlslUniformType::Matrix {
-                        columns: GlslVectorSize::Bi,
-                        rows: GlslVectorSize::Bi,
-                        scalar: GlslScalar::F32,
-                    } => {
-                        let data = &get_data::<f32, 4>(data_bytes, offset);
-                        unsafe { gl.uniform_matrix_2_f32_slice(location, false, data) };
-                    }
-                    GlslUniformType::Matrix {
-                        columns: GlslVectorSize::Bi,
-                        rows: GlslVectorSize::Tri,
-                        scalar: GlslScalar::F32,
-                    } => {
-                        // repack 2 vec3s into 6 values.
-                        let unpacked_data = &get_data::<f32, 8>(data_bytes, offset);
-                        #[rustfmt::skip]
-                        let packed_data = [
-                            unpacked_data[0], unpacked_data[1], unpacked_data[2],
-                            unpacked_data[4], unpacked_data[5], unpacked_data[6],
-                        ];
-                        unsafe { gl.uniform_matrix_2x3_f32_slice(location, false, &packed_data) };
-                    }
-                    GlslUniformType::Matrix {
-                        columns: GlslVectorSize::Bi,
-                        rows: GlslVectorSize::Quad,
-                        scalar: GlslScalar::F32,
-                    } => {
-                        let data = &get_data::<f32, 8>(data_bytes, offset);
-                        unsafe { gl.uniform_matrix_2x4_f32_slice(location, false, data) };
-                    }
-
-                    //
-                    // --- Matrix 3xR ---
-                    //
-                    GlslUniformType::Matrix {
-                        columns: GlslVectorSize::Tri,
-                        rows: GlslVectorSize::Bi,
-                        scalar: GlslScalar::F32,
-                    } => {
-                        let data = &get_data::<f32, 6>(data_bytes, offset);
-                        unsafe { gl.uniform_matrix_3x2_f32_slice(location, false, data) };
-                    }
-                    GlslUniformType::Matrix {
-                        columns: GlslVectorSize::Tri,
-                        rows: GlslVectorSize::Tri,
-                        scalar: GlslScalar::F32,
-                    } => {
-                        // repack 3 vec3s into 9 values.
-                        let unpacked_data = &get_data::<f32, 12>(data_bytes, offset);
-                        #[rustfmt::skip]
-                        let packed_data = [
-                            unpacked_data[0], unpacked_data[1], unpacked_data[2],
-                            unpacked_data[4], unpacked_data[5], unpacked_data[6],
-                            unpacked_data[8], unpacked_data[9], unpacked_data[10],
-                        ];
-                        unsafe { gl.uniform_matrix_3_f32_slice(location, false, &packed_data) };
-                    }
-                    GlslUniformType::Matrix {
-                        columns: GlslVectorSize::Tri,
-                        rows: GlslVectorSize::Quad,
-                        scalar: GlslScalar::F32,
-                    } => {
-                        let data = &get_data::<f32, 12>(data_bytes, offset);
-                        unsafe { gl.uniform_matrix_3x4_f32_slice(location, false, data) };
-                    }
-
-                    //
-                    // --- Matrix 4xR ---
-                    //
-                    GlslUniformType::Matrix {
-                        columns: GlslVectorSize::Quad,
-                        rows: GlslVectorSize::Bi,
-                        scalar: GlslScalar::F32,
-                    } => {
-                        let data = &get_data::<f32, 8>(data_bytes, offset);
-                        unsafe { gl.uniform_matrix_4x2_f32_slice(location, false, data) };
-                    }
-                    GlslUniformType::Matrix {
-                        columns: GlslVectorSize::Quad,
-                        rows: GlslVectorSize::Tri,
-                        scalar: GlslScalar::F32,
-                    } => {
-                        // repack 4 vec3s into 12 values.
-                        let unpacked_data = &get_data::<f32, 16>(data_bytes, offset);
-                        #[rustfmt::skip]
-                        let packed_data = [
-                            unpacked_data[0], unpacked_data[1], unpacked_data[2],
-                            unpacked_data[4], unpacked_data[5], unpacked_data[6],
-                            unpacked_data[8], unpacked_data[9], unpacked_data[10],
-                            unpacked_data[12], unpacked_data[13], unpacked_data[14],
-                        ];
-                        unsafe { gl.uniform_matrix_4x3_f32_slice(location, false, &packed_data) };
-                    }
-                    GlslUniformType::Matrix {
-                        columns: GlslVectorSize::Quad,
-                        rows: GlslVectorSize::Quad,
-                        scalar: GlslScalar::F32,
-                    } => {
-                        let data = &get_data::<f32, 16>(data_bytes, offset);
-                        unsafe { gl.uniform_matrix_4_f32_slice(location, false, data) };
-                    }
-                    _ => panic!("Unsupported uniform datatype: {:?}!", uniform.ty),
+            C::SetImmediates { ref data } => {
+                // Each uniform of the program from the block: one per stage
+                // may read the same words, and those the program does not
+                // use have no location.
+                for uniform in program.into_iter().flat_map(|program| &program.immediates_descs) {
+                    unsafe { set_immediate(gl, uniform, data_bytes, data.start + uniform.offset) };
                 }
             }
             C::SetClipDistances {
@@ -1849,9 +1647,23 @@ impl crate::Queue for super::Queue {
             }
 
             let mut state = super::gl_state::GlState::default();
+            // The program in use: its link is read at its first use, so
+            // the GPU process links while the encoders record.
+            let mut program = None;
             for command in cmd_buf.commands.iter() {
+                if let C::SetProgram(ref inner) = *command {
+                    program = Some(unsafe { inner.linked(gl) });
+                }
                 if !unsafe { state.apply(gl, command) } {
-                    unsafe { self.process(gl, command, &cmd_buf.data_bytes, &cmd_buf.queries) };
+                    unsafe {
+                        self.process(
+                            gl,
+                            command,
+                            &cmd_buf.data_bytes,
+                            &cmd_buf.queries,
+                            program.as_deref(),
+                        )
+                    };
                 }
             }
             unsafe { state.finish(gl) };
@@ -1900,3 +1712,217 @@ impl crate::Queue for super::Queue {
 unsafe impl Sync for super::Queue {}
 #[cfg(send_sync)]
 unsafe impl Send for super::Queue {}
+
+/// Sets `uniform` from its words at `offset` in `data`.
+unsafe fn set_immediate(
+    gl: &glow::Context,
+    uniform: &super::ImmediateDesc,
+    data_bytes: &[u8],
+    offset: u32,
+) {
+    fn get_data<T, const COUNT: usize>(data: &[u8], offset: u32) -> [T; COUNT]
+    where
+        [T; COUNT]: bytemuck::AnyBitPattern,
+    {
+        let data_required = size_of::<T>() * COUNT;
+        let raw = &data[(offset as usize)..][..data_required];
+        bytemuck::pod_read_unaligned(raw)
+    }
+
+    let location = Some(&uniform.location);
+    use nt::glsl::{GlslScalar, GlslUniformType, GlslVectorSize};
+    match uniform.ty {
+        //
+        // --- Float 1-4 Component ---
+        //
+        GlslUniformType::Scalar(GlslScalar::F32) => {
+            let data = get_data::<f32, 1>(data_bytes, offset)[0];
+            unsafe { gl.uniform_1_f32(location, data) };
+        }
+        GlslUniformType::Vector {
+            size: GlslVectorSize::Bi,
+            scalar: GlslScalar::F32,
+        } => {
+            let data = &get_data::<f32, 2>(data_bytes, offset);
+            unsafe { gl.uniform_2_f32_slice(location, data) };
+        }
+        GlslUniformType::Vector {
+            size: GlslVectorSize::Tri,
+            scalar: GlslScalar::F32,
+        } => {
+            let data = &get_data::<f32, 3>(data_bytes, offset);
+            unsafe { gl.uniform_3_f32_slice(location, data) };
+        }
+        GlslUniformType::Vector {
+            size: GlslVectorSize::Quad,
+            scalar: GlslScalar::F32,
+        } => {
+            let data = &get_data::<f32, 4>(data_bytes, offset);
+            unsafe { gl.uniform_4_f32_slice(location, data) };
+        }
+
+        //
+        // --- Int 1-4 Component ---
+        //
+        GlslUniformType::Scalar(GlslScalar::I32) => {
+            let data = get_data::<i32, 1>(data_bytes, offset)[0];
+            unsafe { gl.uniform_1_i32(location, data) };
+        }
+        GlslUniformType::Vector {
+            size: GlslVectorSize::Bi,
+            scalar: GlslScalar::I32,
+        } => {
+            let data = &get_data::<i32, 2>(data_bytes, offset);
+            unsafe { gl.uniform_2_i32_slice(location, data) };
+        }
+        GlslUniformType::Vector {
+            size: GlslVectorSize::Tri,
+            scalar: GlslScalar::I32,
+        } => {
+            let data = &get_data::<i32, 3>(data_bytes, offset);
+            unsafe { gl.uniform_3_i32_slice(location, data) };
+        }
+        GlslUniformType::Vector {
+            size: GlslVectorSize::Quad,
+            scalar: GlslScalar::I32,
+        } => {
+            let data = &get_data::<i32, 4>(data_bytes, offset);
+            unsafe { gl.uniform_4_i32_slice(location, data) };
+        }
+
+        //
+        // --- Uint 1-4 Component ---
+        //
+        GlslUniformType::Scalar(GlslScalar::U32) => {
+            let data = get_data::<u32, 1>(data_bytes, offset)[0];
+            unsafe { gl.uniform_1_u32(location, data) };
+        }
+        GlslUniformType::Vector {
+            size: GlslVectorSize::Bi,
+            scalar: GlslScalar::U32,
+        } => {
+            let data = &get_data::<u32, 2>(data_bytes, offset);
+            unsafe { gl.uniform_2_u32_slice(location, data) };
+        }
+        GlslUniformType::Vector {
+            size: GlslVectorSize::Tri,
+            scalar: GlslScalar::U32,
+        } => {
+            let data = &get_data::<u32, 3>(data_bytes, offset);
+            unsafe { gl.uniform_3_u32_slice(location, data) };
+        }
+        GlslUniformType::Vector {
+            size: GlslVectorSize::Quad,
+            scalar: GlslScalar::U32,
+        } => {
+            let data = &get_data::<u32, 4>(data_bytes, offset);
+            unsafe { gl.uniform_4_u32_slice(location, data) };
+        }
+
+        //
+        // --- Matrix 2xR ---
+        //
+        GlslUniformType::Matrix {
+            columns: GlslVectorSize::Bi,
+            rows: GlslVectorSize::Bi,
+            scalar: GlslScalar::F32,
+        } => {
+            let data = &get_data::<f32, 4>(data_bytes, offset);
+            unsafe { gl.uniform_matrix_2_f32_slice(location, false, data) };
+        }
+        GlslUniformType::Matrix {
+            columns: GlslVectorSize::Bi,
+            rows: GlslVectorSize::Tri,
+            scalar: GlslScalar::F32,
+        } => {
+            // repack 2 vec3s into 6 values.
+            let unpacked_data = &get_data::<f32, 8>(data_bytes, offset);
+            #[rustfmt::skip]
+            let packed_data = [
+                unpacked_data[0], unpacked_data[1], unpacked_data[2],
+                unpacked_data[4], unpacked_data[5], unpacked_data[6],
+            ];
+            unsafe { gl.uniform_matrix_2x3_f32_slice(location, false, &packed_data) };
+        }
+        GlslUniformType::Matrix {
+            columns: GlslVectorSize::Bi,
+            rows: GlslVectorSize::Quad,
+            scalar: GlslScalar::F32,
+        } => {
+            let data = &get_data::<f32, 8>(data_bytes, offset);
+            unsafe { gl.uniform_matrix_2x4_f32_slice(location, false, data) };
+        }
+
+        //
+        // --- Matrix 3xR ---
+        //
+        GlslUniformType::Matrix {
+            columns: GlslVectorSize::Tri,
+            rows: GlslVectorSize::Bi,
+            scalar: GlslScalar::F32,
+        } => {
+            let data = &get_data::<f32, 6>(data_bytes, offset);
+            unsafe { gl.uniform_matrix_3x2_f32_slice(location, false, data) };
+        }
+        GlslUniformType::Matrix {
+            columns: GlslVectorSize::Tri,
+            rows: GlslVectorSize::Tri,
+            scalar: GlslScalar::F32,
+        } => {
+            // repack 3 vec3s into 9 values.
+            let unpacked_data = &get_data::<f32, 12>(data_bytes, offset);
+            #[rustfmt::skip]
+            let packed_data = [
+                unpacked_data[0], unpacked_data[1], unpacked_data[2],
+                unpacked_data[4], unpacked_data[5], unpacked_data[6],
+                unpacked_data[8], unpacked_data[9], unpacked_data[10],
+            ];
+            unsafe { gl.uniform_matrix_3_f32_slice(location, false, &packed_data) };
+        }
+        GlslUniformType::Matrix {
+            columns: GlslVectorSize::Tri,
+            rows: GlslVectorSize::Quad,
+            scalar: GlslScalar::F32,
+        } => {
+            let data = &get_data::<f32, 12>(data_bytes, offset);
+            unsafe { gl.uniform_matrix_3x4_f32_slice(location, false, data) };
+        }
+
+        //
+        // --- Matrix 4xR ---
+        //
+        GlslUniformType::Matrix {
+            columns: GlslVectorSize::Quad,
+            rows: GlslVectorSize::Bi,
+            scalar: GlslScalar::F32,
+        } => {
+            let data = &get_data::<f32, 8>(data_bytes, offset);
+            unsafe { gl.uniform_matrix_4x2_f32_slice(location, false, data) };
+        }
+        GlslUniformType::Matrix {
+            columns: GlslVectorSize::Quad,
+            rows: GlslVectorSize::Tri,
+            scalar: GlslScalar::F32,
+        } => {
+            // repack 4 vec3s into 12 values.
+            let unpacked_data = &get_data::<f32, 16>(data_bytes, offset);
+            #[rustfmt::skip]
+            let packed_data = [
+                unpacked_data[0], unpacked_data[1], unpacked_data[2],
+                unpacked_data[4], unpacked_data[5], unpacked_data[6],
+                unpacked_data[8], unpacked_data[9], unpacked_data[10],
+                unpacked_data[12], unpacked_data[13], unpacked_data[14],
+            ];
+            unsafe { gl.uniform_matrix_4x3_f32_slice(location, false, &packed_data) };
+        }
+        GlslUniformType::Matrix {
+            columns: GlslVectorSize::Quad,
+            rows: GlslVectorSize::Quad,
+            scalar: GlslScalar::F32,
+        } => {
+            let data = &get_data::<f32, 16>(data_bytes, offset);
+            unsafe { gl.uniform_matrix_4_f32_slice(location, false, data) };
+        }
+        _ => panic!("Unsupported uniform datatype: {:?}!", uniform.ty),
+    }
+}

@@ -1,5 +1,6 @@
 use alloc::boxed::Box;
 use alloc::string::String;
+use alloc::sync::Arc;
 use core::{mem, ops::Range};
 
 use arrayvec::ArrayVec;
@@ -35,8 +36,6 @@ pub(super) struct State {
     instance_vbuf_mask: usize,
     dirty_vbuf_mask: usize,
     active_first_instance: u32,
-    first_instance_location: Option<glow::UniformLocation>,
-    immediates_descs: ArrayVec<super::ImmediateDesc, { super::MAX_IMMEDIATES_COMMANDS }>,
     // The current state of the immediate data block.
     current_immediates_data: [u32; super::MAX_IMMEDIATES],
     end_of_pass_timestamp: Option<glow::Query>,
@@ -65,8 +64,6 @@ impl Default for State {
             instance_vbuf_mask: Default::default(),
             dirty_vbuf_mask: Default::default(),
             active_first_instance: Default::default(),
-            first_instance_location: Default::default(),
-            immediates_descs: Default::default(),
             current_immediates_data: [0; super::MAX_IMMEDIATES],
             end_of_pass_timestamp: Default::default(),
             clip_distance_count: Default::default(),
@@ -230,15 +227,8 @@ impl super::CommandEncoder {
         }
     }
 
-    fn set_pipeline_inner(&mut self, inner: &super::PipelineInner) {
-        self.cmd_buffer.commands.push(C::SetProgram(inner.program));
-
-        self.state
-            .first_instance_location
-            .clone_from(&inner.first_instance_location);
-        self.state
-            .immediates_descs
-            .clone_from(&inner.immediates_descs);
+    fn set_pipeline_inner(&mut self, inner: &Arc<super::PipelineInner>) {
+        self.cmd_buffer.commands.push(C::SetProgram(Arc::clone(inner)));
 
         // rebind textures, if needed
         let mut dirty_textures = 0u32;
@@ -858,32 +848,12 @@ impl crate::CommandEncoder for super::CommandEncoder {
         self.state.current_immediates_data[start_words as usize..end_words as usize]
             .copy_from_slice(data);
 
-        // We iterate over the uniform list as there may be multiple uniforms that need
-        // updating from the same immediate data memory (one for each shader stage).
-        //
-        // Additionally, any statically unused uniform descs will have been removed from this list
-        // by OpenGL, so the uniform list is not contiguous.
-        for uniform in self.state.immediates_descs.iter().cloned() {
-            let uniform_size_words = uniform.size_bytes / 4;
-            let uniform_start_words = uniform.offset / 4;
-            let uniform_end_words = uniform_start_words + uniform_size_words;
-
-            // Is true if any word within the uniform binding was updated
-            let needs_updating =
-                start_words < uniform_end_words || uniform_start_words <= end_words;
-
-            if needs_updating {
-                let uniform_data = &self.state.current_immediates_data
-                    [uniform_start_words as usize..uniform_end_words as usize];
-
-                let range = self.cmd_buffer.add_immediates_data(uniform_data);
-
-                self.cmd_buffer.commands.push(C::SetImmediates {
-                    uniform,
-                    offset: range.start,
-                });
-            }
-        }
+        // The program's uniforms are known once it links, when the queue
+        // runs this: it sets each of them from the whole block.
+        let data = self
+            .cmd_buffer
+            .add_immediates_data(&self.state.current_immediates_data);
+        self.cmd_buffer.commands.push(C::SetImmediates { data });
     }
 
     unsafe fn insert_debug_marker(&mut self, label: &str) {
@@ -1109,17 +1079,12 @@ impl crate::CommandEncoder for super::CommandEncoder {
         instance_count: u32,
     ) {
         self.prepare_draw(first_instance);
-        #[allow(
-            clippy::clone_on_copy,
-            reason = "False positive when cloning glow::UniformLocation"
-        )]
         self.cmd_buffer.commands.push(C::Draw {
             topology: self.state.topology,
             first_vertex,
             vertex_count,
             first_instance,
             instance_count,
-            first_instance_location: self.state.first_instance_location.clone(),
         });
     }
     unsafe fn draw_indexed(
@@ -1136,10 +1101,6 @@ impl crate::CommandEncoder for super::CommandEncoder {
             wgt::IndexFormat::Uint32 => (4, glow::UNSIGNED_INT),
         };
         let index_offset = self.state.index_offset + index_size * first_index as wgt::BufferAddress;
-        #[allow(
-            clippy::clone_on_copy,
-            reason = "False positive when cloning glow::UniformLocation"
-        )]
         self.cmd_buffer.commands.push(C::DrawIndexed {
             topology: self.state.topology,
             index_type,
@@ -1148,7 +1109,6 @@ impl crate::CommandEncoder for super::CommandEncoder {
             base_vertex,
             first_instance,
             instance_count,
-            first_instance_location: self.state.first_instance_location.clone(),
         });
     }
     unsafe fn draw_mesh_tasks(
@@ -1169,15 +1129,10 @@ impl crate::CommandEncoder for super::CommandEncoder {
         for draw in 0..draw_count as wgt::BufferAddress {
             let indirect_offset =
                 offset + draw * size_of::<wgt::DrawIndirectArgs>() as wgt::BufferAddress;
-            #[allow(
-                clippy::clone_on_copy,
-                reason = "False positive when cloning glow::UniformLocation"
-            )]
             self.cmd_buffer.commands.push(C::DrawIndirect {
                 topology: self.state.topology,
                 indirect_buf: buffer.raw.unwrap(),
                 indirect_offset,
-                first_instance_location: self.state.first_instance_location.clone(),
             });
         }
     }
@@ -1195,16 +1150,11 @@ impl crate::CommandEncoder for super::CommandEncoder {
         for draw in 0..draw_count as wgt::BufferAddress {
             let indirect_offset =
                 offset + draw * size_of::<wgt::DrawIndexedIndirectArgs>() as wgt::BufferAddress;
-            #[allow(
-                clippy::clone_on_copy,
-                reason = "False positive when cloning glow::UniformLocation"
-            )]
             self.cmd_buffer.commands.push(C::DrawIndexedIndirect {
                 topology: self.state.topology,
                 index_type,
                 indirect_buf: buffer.raw.unwrap(),
                 indirect_offset,
-                first_instance_location: self.state.first_instance_location.clone(),
             });
         }
     }

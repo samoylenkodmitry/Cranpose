@@ -1,5 +1,6 @@
 use alloc::{
     borrow::{Cow, ToOwned},
+    boxed::Box,
     format,
     string::String,
     string::ToString as _,
@@ -550,18 +551,66 @@ impl super::Device {
             unsafe { gl.attach_shader(program, shader) };
         }
         unsafe { gl.link_program(program) };
+        // WebGL keeps commands in the page's buffer until a flush or a read
+        // sends them: without one the GPU process starts this link only when
+        // the queue reads it.
+        #[cfg(webgl)]
+        unsafe {
+            gl.flush()
+        };
 
         log::debug!("\tLinked program {program:?}");
 
+        // Nothing is read back here: on the web each read waits for the GPU
+        // process to compile and link the program, which it does one
+        // program at a time. The queue reads the link at the program's
+        // first use, so the caller records and submits work meanwhile.
+        Ok(Arc::new(super::PipelineInner {
+            program,
+            sampler_map,
+            clip_distance_count,
+            link: parking_lot::Mutex::new(super::ProgramLink {
+                pending: Some(Box::new(PendingLink {
+                    shaders: shaders_to_delete,
+                    has_stages,
+                    name_binding_map,
+                    immediates_items,
+                    remap_bindings: !private_caps
+                        .contains(PrivateCapabilities::SHADER_BINDING_LAYOUT),
+                })),
+                linked: None,
+            }),
+        }))
+    }
+}
+
+/// What reading a program's link needs: its shaders, kept until then for
+/// the log of one that failed, and the names its uniforms are found by.
+#[derive(Debug)]
+pub(super) struct PendingLink {
+    shaders: ArrayVec<(glow::Shader, naga::ShaderStage), { crate::MAX_CONCURRENT_SHADER_STAGES }>,
+    has_stages: wgt::ShaderStages,
+    name_binding_map: NameBindingMap,
+    immediates_items:
+        ArrayVec<Vec<naga::back::glsl::ImmediateItem>, { crate::MAX_CONCURRENT_SHADER_STAGES }>,
+    /// Whether the program's bindings are set here: GLSL ES 3.00 cannot
+    /// name them in the shader.
+    remap_bindings: bool,
+}
+
+impl PendingLink {
+    /// Reads `program`'s link and sets the bindings the shader could not
+    /// name. A program that failed to link logs why and sets nothing; its
+    /// draws then fail as GL fails them.
+    unsafe fn finish(self, gl: &glow::Context, program: glow::Program) -> super::LinkedProgram {
         let linked_ok = unsafe { gl.get_program_link_status(program) };
-        let failure = (!linked_ok)
-            .then(|| unsafe { Self::link_failure(gl, program, &shaders_to_delete, has_stages) });
-        for &(shader, _) in shaders_to_delete.iter() {
-            unsafe { gl.delete_shader(shader) };
-        }
+        let failure = (!linked_ok).then(|| unsafe {
+            super::Device::link_failure(gl, program, &self.shaders, self.has_stages)
+        });
+        unsafe { self.delete_shaders(gl) };
         if let Some(error) = failure {
-            unsafe { gl.delete_program(program) };
-            return Err(error);
+            log::error!("A render pipeline's program did not link: {error}");
+            return super::LinkedProgram::default();
         }
         if log::log_enabled!(log::Level::Debug) {
             let msg = unsafe { gl.get_program_info_log(program) };
@@ -570,23 +619,23 @@ impl super::Device {
             }
         }
 
-        if !private_caps.contains(PrivateCapabilities::SHADER_BINDING_LAYOUT) {
-            // This remapping is only needed if we aren't able to put the binding layout
-            // in the shader. We can't remap storage buffers this way.
+        if self.remap_bindings {
+            // We can't remap storage buffers this way.
             unsafe { gl.use_program(Some(program)) };
-            for (ref name, (register, slot)) in name_binding_map {
+            for (ref name, (register, slot)) in self.name_binding_map {
                 log::trace!("Get binding {name:?} from program {program:?}");
                 match register {
                     super::BindingRegister::UniformBuffers => {
-                        let index = unsafe { gl.get_uniform_block_index(program, name) }.unwrap();
-                        log::trace!("\tBinding slot {slot} to block index {index}");
-                        unsafe { gl.uniform_block_binding(program, index, slot as _) };
+                        match unsafe { gl.get_uniform_block_index(program, name) } {
+                            Some(index) => {
+                                log::trace!("\tBinding slot {slot} to block index {index}");
+                                unsafe { gl.uniform_block_binding(program, index, slot as _) };
+                            }
+                            None => log::error!("No uniform block {name} in program {program:?}"),
+                        }
                     }
                     super::BindingRegister::StorageBuffers => {
-                        let index =
-                            unsafe { gl.get_shader_storage_block_index(program, name) }.unwrap();
-                        log::error!("Unable to re-map shader storage block {name} to {index}");
-                        return Err(crate::DeviceError::Lost.into());
+                        log::error!("Unable to re-map shader storage block {name}");
                     }
                     super::BindingRegister::Textures | super::BindingRegister::Images => {
                         let location = unsafe { gl.get_uniform_location(program, name) };
@@ -596,45 +645,63 @@ impl super::Device {
             }
         }
 
-        let mut uniforms = ArrayVec::new();
+        let mut immediates_descs = ArrayVec::new();
+        for item in self.immediates_items.iter().flatten() {
+            let location = unsafe { gl.get_uniform_location(program, &item.access_path) };
 
-        for stage_items in immediates_items {
-            for item in stage_items {
-                let location = unsafe { gl.get_uniform_location(program, &item.access_path) };
+            log::trace!(
+                "immediate data item: name={}, ty={:?}, offset={}, location={:?}",
+                item.access_path,
+                item.ty,
+                item.offset,
+                location,
+            );
 
-                log::trace!(
-                    "immediate data item: name={}, ty={:?}, offset={}, location={:?}",
-                    item.access_path,
-                    item.ty,
-                    item.offset,
+            if let Some(location) = location {
+                immediates_descs.push(super::ImmediateDesc {
                     location,
-                );
-
-                if let Some(location) = location {
-                    uniforms.push(super::ImmediateDesc {
-                        location,
-                        offset: item.offset,
-                        size_bytes: item.size_bytes,
-                        ty: item.ty,
-                    });
-                }
+                    offset: item.offset,
+                    ty: item.ty,
+                });
             }
         }
 
-        let first_instance_location = if has_stages.contains(wgt::ShaderStages::VERTEX) {
+        let first_instance_location = if self.has_stages.contains(wgt::ShaderStages::VERTEX) {
             // If this returns none (the uniform isn't active), that's fine, we just won't set it.
             unsafe { gl.get_uniform_location(program, naga::back::glsl::FIRST_INSTANCE_BINDING) }
         } else {
             None
         };
 
-        Ok(Arc::new(super::PipelineInner {
-            program,
-            sampler_map,
+        super::LinkedProgram {
             first_instance_location,
-            immediates_descs: uniforms,
-            clip_distance_count,
-        }))
+            immediates_descs,
+        }
+    }
+
+    unsafe fn delete_shaders(&self, gl: &glow::Context) {
+        for &(shader, _) in self.shaders.iter() {
+            unsafe { gl.delete_shader(shader) };
+        }
+    }
+}
+
+impl super::PipelineInner {
+    /// What the linked program tells, read once, at its first use.
+    pub(super) unsafe fn linked(&self, gl: &glow::Context) -> Arc<super::LinkedProgram> {
+        let mut link = self.link.lock();
+        if let Some(pending) = link.pending.take() {
+            link.linked = Some(Arc::new(unsafe { pending.finish(gl, self.program) }));
+        }
+        link.linked.clone().unwrap_or_default()
+    }
+
+    /// Deletes the program, with its shaders when no command used it.
+    unsafe fn delete(&self, gl: &glow::Context) {
+        if let Some(pending) = self.link.lock().pending.take() {
+            unsafe { pending.delete_shaders(gl) };
+        }
+        unsafe { gl.delete_program(self.program) };
     }
 }
 
@@ -1642,7 +1709,7 @@ impl crate::Device for super::Device {
                 Ok(ref p) => p.program != pipeline.inner.program,
                 Err(_) => false,
             });
-            unsafe { gl.delete_program(pipeline.inner.program) };
+            unsafe { pipeline.inner.delete(gl) };
         }
 
         self.counters.render_pipelines.sub(1);
@@ -1679,7 +1746,7 @@ impl crate::Device for super::Device {
                 Ok(ref p) => p.program != pipeline.inner.program,
                 Err(_) => false,
             });
-            unsafe { gl.delete_program(pipeline.inner.program) };
+            unsafe { pipeline.inner.delete(gl) };
         }
 
         self.counters.compute_pipelines.sub(1);

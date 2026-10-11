@@ -104,7 +104,8 @@ impl GlState {
             C::UnsetVertexAttribute(location) => {
                 self.pending_disables |= 1 << location;
             }
-            C::SetProgram(program) => {
+            C::SetProgram(ref inner) => {
+                let program = inner.program;
                 if self.program != Some(program) {
                     unsafe { gl.use_program(Some(program)) };
                     self.program = Some(program);

@@ -548,6 +548,10 @@ robot-accessibility-web site output:
 web-webgpu-smoke site output:
     python3 scripts/a11y/web_robot.py --check webgpu --site {{quote(site)}} --output {{quote(output)}}
 
+# The same pages on WebGL2, which phones without WebGPU use.
+web-webgl-smoke site output:
+    python3 scripts/a11y/web_robot.py --check webgl --site {{quote(site)}} --output {{quote(output)}}
+
 # Build and package the web demo, then open every page on WebGPU.
 web-webgpu: web
     #!/usr/bin/env bash

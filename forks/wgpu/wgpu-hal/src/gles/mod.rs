@@ -726,7 +726,6 @@ struct ImmediateDesc {
     location: glow::UniformLocation,
     ty: nt::glsl::GlslUniformType,
     offset: u32,
-    size_bytes: u32,
 }
 
 #[cfg(send_sync)]
@@ -742,9 +741,24 @@ type SamplerBindMap = [Option<u8>; MAX_TEXTURE_SLOTS];
 struct PipelineInner {
     program: glow::Program,
     sampler_map: SamplerBindMap,
+    clip_distance_count: u32,
+    /// The program's link, whose state the queue reads when a command
+    /// buffer first uses it (see [`PipelineInner::linked`]).
+    link: Mutex<ProgramLink>,
+}
+
+/// A program's link: pending until its first use, then what it tells.
+#[derive(Debug)]
+struct ProgramLink {
+    pending: Option<Box<device::PendingLink>>,
+    linked: Option<Arc<LinkedProgram>>,
+}
+
+/// What only the linked program tells: the uniforms its draws set.
+#[derive(Debug, Default)]
+struct LinkedProgram {
     first_instance_location: Option<glow::UniformLocation>,
     immediates_descs: ArrayVec<ImmediateDesc, MAX_IMMEDIATES_COMMANDS>,
-    clip_distance_count: u32,
 }
 
 #[cfg(send_sync)]
@@ -989,7 +1003,6 @@ enum Command {
         vertex_count: u32,
         first_instance: u32,
         instance_count: u32,
-        first_instance_location: Option<glow::UniformLocation>,
     },
     DrawIndexed {
         topology: u32,
@@ -999,20 +1012,17 @@ enum Command {
         base_vertex: i32,
         first_instance: u32,
         instance_count: u32,
-        first_instance_location: Option<glow::UniformLocation>,
     },
     DrawIndirect {
         topology: u32,
         indirect_buf: glow::Buffer,
         indirect_offset: wgt::BufferAddress,
-        first_instance_location: Option<glow::UniformLocation>,
     },
     DrawIndexedIndirect {
         topology: u32,
         index_type: u32,
         indirect_buf: glow::Buffer,
         indirect_offset: wgt::BufferAddress,
-        first_instance_location: Option<glow::UniformLocation>,
     },
     Dispatch([u32; 3]),
     DispatchIndirect {
@@ -1085,7 +1095,7 @@ enum Command {
         buffer: BufferBinding,
         buffer_desc: VertexBufferDesc,
     },
-    SetProgram(glow::Program),
+    SetProgram(Arc<PipelineInner>),
     SetPrimitive(PrimitiveState),
     SetBlendConstant([f32; 4]),
     SetColorTarget {
@@ -1115,9 +1125,9 @@ enum Command {
     PushDebugGroup(Range<u32>),
     PopDebugGroup,
     SetImmediates {
-        uniform: ImmediateDesc,
-        /// Offset from the start of the `data_bytes`
-        offset: u32,
+        /// The whole immediate data block in `data_bytes`, as the encoder
+        /// last set it.
+        data: Range<u32>,
     },
     SetClipDistances {
         old_count: u32,
