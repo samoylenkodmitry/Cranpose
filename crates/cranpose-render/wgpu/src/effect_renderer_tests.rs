@@ -277,7 +277,7 @@ fn blit_specialization_preserves_sampling_masks_and_blending() {
                                                 );
                                                 renderer.draw_prepared_composite(
                                                     &mut pass,
-                                                    (64, 32),
+                                                    (&device, (64, 32)),
                                                     &draw,
                                                 );
                                             } else {

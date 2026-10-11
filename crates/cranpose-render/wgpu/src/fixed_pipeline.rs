@@ -50,10 +50,6 @@ impl FixedPipeline {
         self.resource.for_draw(recorder, backend, create)
     }
 
-    pub(crate) fn get(&self) -> Option<&wgpu::RenderPipeline> {
-        self.resource.get()
-    }
-
     /// Queues the build on `lane` unless it is already built or queued.
     pub(crate) fn queue(
         &self,
@@ -64,6 +60,27 @@ impl FixedPipeline {
     ) {
         if self.resource.get().is_none() && !self.queued.replace(true) {
             self.resource.queue(compiler, lane, backend, create);
+        }
+    }
+
+    /// Queues the build, which `job` makes, on the warm-up lane unless the
+    /// pipeline is built, queued or in the loaded driver cache, or no
+    /// compiler runs: a pass asks for every pipeline it is about to draw
+    /// with, so the missing ones compile side by side.
+    pub(crate) fn prefetch<J>(
+        &self,
+        compiler: &PipelineCompiler,
+        backend: wgpu::Backend,
+        job: impl FnOnce() -> J,
+    ) where
+        J: FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static,
+    {
+        if compiler.is_active()
+            && self.resource.get().is_none()
+            && !self.cached.get()
+            && !self.queued.get()
+        {
+            self.queue(compiler, CompileLane::WarmUp, backend, job());
         }
     }
 
