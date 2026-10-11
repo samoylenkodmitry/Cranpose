@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -102,6 +103,35 @@ LAT_END
         self.assertIn('| Desired timestamp → ready p50 (ms) | n/a | n/a |', result.stdout)
         self.assertIn('producer-selected', result.stdout)
         self.assertNotIn('GPU done', result.stdout)
+
+
+class DevicePresentCountTest(unittest.TestCase):
+    """The poller of `perf_window.sh` counts a layer's new presents at each
+    poll, which ends a run that stays slow."""
+
+    def count(self, poll, newest='0', total='0'):
+        source = (BENCHMARK / 'perf_window.sh').read_text()
+        program = re.search(r"""counted=\$\(awk -v newest="\$newest" -v total="\$total" '(.*?)' "\$POLL"\)""",
+                            source, re.S).group(1)
+        with tempfile.NamedTemporaryFile('w', suffix='.txt', delete=False) as handle:
+            handle.write(poll)
+        result = subprocess.run(['awk', '-v', f'newest={newest}', '-v', f'total={total}', program, handle.name],
+                                capture_output=True, text=True, check=True)
+        Path(handle.name).unlink()
+        newest, total = result.stdout.split()
+        return newest, int(total)
+
+    def test_a_layer_whose_desired_times_read_minus_one_counts_every_present(self):
+        # Chrome's layer on the Huawei Mate 20 X: no desired time, and the
+        # newest frame's present still pending.
+        poll = ('LAT_BEGIN 732746.26 5383872.46\n16666666\n0\t0\t0\n'
+                '-1\t732744180206419\t732744158416836\n-1\t732744196857461\t732744173556419\n'
+                '-1\t9223372036854775807\t732744185897565\nLAT_END\n')
+        self.assertEqual(self.count(poll), ('732744196857461', 2))
+
+    def test_a_present_an_earlier_poll_counted_counts_once(self):
+        poll = 'LAT_BEGIN 1.0 2.0\n16666666\n1\t1000\t900\n1\t2000\t1900\n1\t3000\t2900\nLAT_END\n'
+        self.assertEqual(self.count(poll, newest='2000', total='5'), ('3000', 6))
 
 
 if __name__ == '__main__':
