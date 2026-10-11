@@ -25,6 +25,7 @@ mod animations;
 pub mod chrome_tabs;
 mod controls_ui;
 mod demo_text;
+mod demo_theme;
 mod demo_trace;
 mod documentation;
 pub mod flame_window;
@@ -1059,6 +1060,8 @@ fn tab_requires_scroll(tab: DemoTab) -> bool {
         DemoTab::HackerNews
             | DemoTab::Performance
             | DemoTab::Gauntlet
+            | DemoTab::Animations
+            | DemoTab::RecompositionLab
             | DemoTab::WebView
             | DemoTab::Guide
             | DemoTab::LazyList

@@ -2,11 +2,14 @@ use std::cell::Cell;
 
 use cranpose_core::{self, MutableState};
 use cranpose_ui::{
-    composable, BoxWithConstraints, BoxWithConstraintsScope, Button, ButtonSpec, Color, Column,
+    composable, BoxWithConstraints, BoxWithConstraintsScope, Button, ButtonSpec, Column,
     ColumnSpec, LinearArrangement, Modifier, Row, RowSpec, Text, TextStyle,
 };
 
-use super::demo_text::text_style;
+use super::{
+    demo_text::text_style,
+    demo_theme::{DemoPalette, ThemedPage},
+};
 
 thread_local! {
     static INSTANCE_SEQ: Cell<u32> = const { Cell::new(0) };
@@ -20,15 +23,15 @@ fn next_instance() -> u32 {
 }
 
 fn title_style() -> TextStyle {
-    text_style(22.0, Color(0.10, 0.12, 0.18, 1.0), true)
+    text_style(22.0, DemoPalette::current().text, true)
 }
 
 fn label_style() -> TextStyle {
-    text_style(14.0, Color(0.16, 0.19, 0.25, 1.0), false)
+    text_style(14.0, DemoPalette::current().text, false)
 }
 
 fn counter_style() -> TextStyle {
-    text_style(12.0, Color(0.12, 0.45, 0.25, 1.0), false)
+    text_style(12.0, DemoPalette::current().positive, false)
 }
 
 #[composable]
@@ -222,11 +225,10 @@ pub fn RecompositionLabTab() {
     let hide_keyed_first = cranpose_core::rememberMutableStateOf(|| false);
     let hide_bracketed_first = cranpose_core::rememberMutableStateOf(|| false);
     let show_gauge = cranpose_core::rememberMutableStateOf(|| true);
-    Column(
-        Modifier::empty()
-            .fill_max_width()
-            .padding(super::DEMO_PAGE_PADDING),
-        ColumnSpec::new().vertical_arrangement(LinearArrangement::spaced_by(10.0)),
+    ThemedPage(
+        DemoPalette::current(),
+        super::DEMO_PAGE_PADDING,
+        10.0,
         move || {
             Text("Recomposition Lab", Modifier::empty(), title_style());
             PhaseSection(phase);
