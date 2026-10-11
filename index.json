@@ -16666,6 +16666,274 @@
      }
     }
    }
+  },
+  {
+   "file": "runs/2026-10-11-browser-7ca08ec0e-Apple-M3-Pro-\u00b7-Chrome-154.json",
+   "kind": "browser",
+   "started_at": "2026-10-11T08:03:45+00:00",
+   "device": "Apple M3 Pro \u00b7 Chrome 154",
+   "main": "7ca08ec0e6346cd6f5e497dadb0bb3e0afd0e2d4",
+   "release": null,
+   "subjects": [
+    {
+     "name": "cranpose",
+     "label": "Cranpose 0.9.23 main 7ca08ec0e",
+     "source": "benchmarks/compose-vs-cranpose/cranpose-app/src/screens/gauntlet.rs"
+    },
+    {
+     "name": "compose",
+     "label": "Compose Multiplatform 1.12.1",
+     "source": "benchmarks/compose-vs-cranpose/shared-compose/dev/perfcompare/compose/Gauntlet.kt"
+    },
+    {
+     "name": "flutter",
+     "label": "Flutter 3.47.7",
+     "source": "benchmarks/compose-vs-cranpose/flutter-app/lib/main.dart"
+    },
+    {
+     "name": "egui",
+     "label": "egui 0.36.2",
+     "source": "benchmarks/compose-vs-cranpose/egui-app/src/lib.rs"
+    },
+    {
+     "name": "slint",
+     "label": "Slint 1.18.1",
+     "source": "benchmarks/compose-vs-cranpose/slint-app/ui/gauntlet.slint"
+    },
+    {
+     "name": "iced",
+     "label": "iced 0.14.0",
+     "source": "benchmarks/compose-vs-cranpose/iced-app/src/lib.rs"
+    },
+    {
+     "name": "dioxus",
+     "label": "Dioxus 0.7.10, WKWebView 27.0",
+     "source": "benchmarks/compose-vs-cranpose/dioxus-app/src/main.rs"
+    },
+    {
+     "name": "avalonia",
+     "label": "Avalonia 12.1.4",
+     "source": "benchmarks/compose-vs-cranpose/avalonia-app/Gauntlet.cs"
+    },
+    {
+     "name": "web",
+     "label": "Web Chrome 154.0.8037.98",
+     "source": "benchmarks/compose-vs-cranpose/web-app/src/gauntlet.ts"
+    }
+   ],
+   "duration_s": 733,
+   "protocol": {
+    "run_s": 10.0,
+    "starts": [
+     "first",
+     "second"
+    ],
+    "rounds": 3,
+    "max_other_cores": 1.5
+   },
+   "scenarios": {
+    "gauntlet": {
+     "legs": 54,
+     "starts": {
+      "first": {
+       "summary": {
+        "cranpose": {
+         "fps": 38.6,
+         "first_frame_s": 0.8,
+         "cpu_ms_per_frame": 36.33,
+         "cpu_cores": 1.4,
+         "ram_mb": 977.5,
+         "gpu_ram_mb": 352.5,
+         "cpu_mhz": 4056,
+         "gpu_mhz": 483
+        },
+        "compose": {
+         "fps": 10.2,
+         "first_frame_s": 0.85,
+         "cpu_ms_per_frame": 134.24,
+         "cpu_cores": 1.38,
+         "ram_mb": 1775.4,
+         "gpu_ram_mb": 350.0,
+         "cpu_mhz": 4056,
+         "gpu_mhz": 390
+        },
+        "flutter": {
+         "fps": 19.4,
+         "first_frame_s": 0.81,
+         "cpu_ms_per_frame": 108.91,
+         "cpu_cores": 2.11,
+         "ram_mb": 2077.3,
+         "gpu_ram_mb": 363.8,
+         "cpu_mhz": 4056,
+         "gpu_mhz": 462
+        },
+        "egui": {
+         "fps": 43.0,
+         "first_frame_s": 0.83,
+         "cpu_ms_per_frame": 35.6,
+         "cpu_cores": 1.53,
+         "ram_mb": 1130.2,
+         "gpu_ram_mb": 485.9,
+         "cpu_mhz": 4056,
+         "gpu_mhz": 568
+        },
+        "slint": {
+         "fps": 13.5,
+         "first_frame_s": 0.86,
+         "cpu_ms_per_frame": 90.93,
+         "cpu_cores": 1.22,
+         "ram_mb": 937.5,
+         "gpu_ram_mb": 361.6,
+         "cpu_mhz": 4039,
+         "gpu_mhz": 418
+        },
+        "iced": {
+         "fps": 15.7,
+         "first_frame_s": 0.82,
+         "cpu_ms_per_frame": 83.3,
+         "cpu_cores": 1.32,
+         "ram_mb": 1284.7,
+         "gpu_ram_mb": 570.6,
+         "cpu_mhz": 4055,
+         "gpu_mhz": 1000
+        },
+        "dioxus": {
+         "fps": 24.8,
+         "first_frame_s": 0.82,
+         "cpu_ms_per_frame": 73.84,
+         "cpu_cores": 1.86,
+         "ram_mb": 1137.0,
+         "gpu_ram_mb": 232.4,
+         "cpu_mhz": 4056,
+         "gpu_mhz": 550
+        },
+        "avalonia": {
+         "fps": 9.9,
+         "first_frame_s": 0.86,
+         "cpu_ms_per_frame": 136.93,
+         "cpu_cores": 1.36,
+         "ram_mb": 1553.7,
+         "gpu_ram_mb": 589.8,
+         "cpu_mhz": 4056,
+         "gpu_mhz": 661
+        },
+        "web": {
+         "fps": 29.9,
+         "first_frame_s": 0.82,
+         "cpu_ms_per_frame": 66.39,
+         "cpu_cores": 1.98,
+         "ram_mb": 1001.5,
+         "gpu_ram_mb": 257.9,
+         "cpu_mhz": 4056,
+         "gpu_mhz": 526
+        }
+       },
+       "verdicts": {},
+       "failures": {
+        "iced": "Command '['open', '-W', '-n', '/Users/dmitriisamoilenko/Applications/FrameCount.app', '--args', '--pid', '9106', '--until', '1531008.511', '--out', '/var/folders/4k/0rv5yyyd10l32qg85fg99sgm0000gn/T/gauntlet-t7z9_m58/iced-2-first-1-frames.json']' timed out after 120 seconds"
+       },
+       "confirmed": []
+      },
+      "second": {
+       "summary": {
+        "cranpose": {
+         "fps": 44.7,
+         "first_frame_s": 0.85,
+         "cpu_ms_per_frame": 37.14,
+         "cpu_cores": 1.65,
+         "ram_mb": 966.4,
+         "gpu_ram_mb": 409.5,
+         "cpu_mhz": 4056,
+         "gpu_mhz": 537
+        },
+        "compose": {
+         "fps": 10.8,
+         "first_frame_s": 0.83,
+         "cpu_ms_per_frame": 150.05,
+         "cpu_cores": 1.62,
+         "ram_mb": 2083.7,
+         "gpu_ram_mb": 354.8,
+         "cpu_mhz": 4056,
+         "gpu_mhz": 396
+        },
+        "flutter": {
+         "fps": 21.0,
+         "first_frame_s": 0.72,
+         "cpu_ms_per_frame": 102.75,
+         "cpu_cores": 2.17,
+         "ram_mb": 2128.0,
+         "gpu_ram_mb": 363.1,
+         "cpu_mhz": 4056,
+         "gpu_mhz": 499
+        },
+        "egui": {
+         "fps": 44.5,
+         "first_frame_s": 0.71,
+         "cpu_ms_per_frame": 35.73,
+         "cpu_cores": 1.59,
+         "ram_mb": 1001.6,
+         "gpu_ram_mb": 407.1,
+         "cpu_mhz": 4056,
+         "gpu_mhz": 578
+        },
+        "slint": {
+         "fps": 14.4,
+         "first_frame_s": 0.81,
+         "cpu_ms_per_frame": 96.94,
+         "cpu_cores": 1.4,
+         "ram_mb": 904.3,
+         "gpu_ram_mb": 364.9,
+         "cpu_mhz": 4032,
+         "gpu_mhz": 473
+        },
+        "iced": {
+         "fps": 16.9,
+         "first_frame_s": 0.79,
+         "cpu_ms_per_frame": 85.51,
+         "cpu_cores": 1.45,
+         "ram_mb": 1250.5,
+         "gpu_ram_mb": 571.6,
+         "cpu_mhz": 4056,
+         "gpu_mhz": 1291
+        },
+        "dioxus": {
+         "fps": 26.0,
+         "first_frame_s": 0.73,
+         "cpu_ms_per_frame": 74.77,
+         "cpu_cores": 1.94,
+         "ram_mb": 1172.6,
+         "gpu_ram_mb": 304.7,
+         "cpu_mhz": 4056,
+         "gpu_mhz": 561
+        },
+        "avalonia": {
+         "fps": 10.8,
+         "first_frame_s": 0.78,
+         "cpu_ms_per_frame": 137.58,
+         "cpu_cores": 1.49,
+         "ram_mb": 1543.2,
+         "gpu_ram_mb": 582.3,
+         "cpu_mhz": 4056,
+         "gpu_mhz": 820
+        },
+        "web": {
+         "fps": 31.6,
+         "first_frame_s": 0.7,
+         "cpu_ms_per_frame": 65.35,
+         "cpu_cores": 2.07,
+         "ram_mb": 1012.1,
+         "gpu_ram_mb": 246.6,
+         "cpu_mhz": 4056,
+         "gpu_mhz": 526
+        }
+       },
+       "verdicts": {},
+       "failures": {},
+       "confirmed": []
+      }
+     }
+    }
+   }
   }
  ]
 }
