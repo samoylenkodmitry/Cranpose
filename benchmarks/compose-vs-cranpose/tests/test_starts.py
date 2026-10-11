@@ -1,5 +1,6 @@
 """Each round measures an app's first start after its data is cleared and its
-second start, and keeps the two apart."""
+second start, and keeps the two apart; a start slower than `am start -W`
+waits for is measured as any other."""
 import importlib.util
 import sys
 from pathlib import Path
@@ -39,6 +40,43 @@ class Phone(measure.Device):
         return ''
 
 
+# What `am start -W` prints when the app's first frame takes over its 10 s
+# wait (MAUI's gauntlet on the Huawei Mate 20 X).
+TIMED_OUT = ('Starting: Intent { cmp=dev.perfcompare.maui/.MainActivity (has extras) }\nStatus: timeout\n'
+             'LaunchState: UNKNOWN (-1)\nActivity: dev.perfcompare.maui/.MainActivity\nWaitTime: 10061\nComplete\n')
+
+
+class Launcher(measure.Device):
+    """A device whose start command prints `answer`."""
+
+    def __init__(self, answer):
+        super().__init__('serial')
+        self.answer = answer
+
+    def shell(self, *args, timeout=120, check=True):
+        if args[:2] == ('am', 'start'):
+            return self.answer
+        return '4321' if args[:1] == ('pidof',) else ''
+
+    def adb(self, *args, **kwargs):
+        return ''
+
+    def uptime(self):
+        return 1000.0
+
+
+class LaunchTest(unittest.TestCase):
+    def test_an_app_slower_than_the_start_commands_wait_is_measured(self):
+        with patch.object(measure.time, 'sleep'):
+            launched = measure.launch(Launcher(TIMED_OUT), 'maui', 'gauntlet')
+        self.assertEqual(launched, ({'WaitTime': 10061, 'uptime_s': 1000.0}, 4321))
+
+    def test_a_start_the_system_refused_fails(self):
+        with patch.object(measure.time, 'sleep'), self.assertRaisesRegex(RuntimeError, 'launch failed'):
+            measure.launch(Launcher('Error: Activity class {dev.perfcompare.maui/.MainActivity} does not exist.'),
+                           'maui', 'gauntlet')
+
+
 class ChromeResetTest(unittest.TestCase):
     def test_chrome_is_cleared_its_first_run_passed_and_stopped_before_a_first_visit(self):
         phone = Phone([WELCOME, TAB])
@@ -57,7 +95,8 @@ class ChromeResetTest(unittest.TestCase):
 
 def leg(fps):
     """What `measure_run` reports of a leg, at `fps`."""
-    return {'fps': fps, 'frames': int(fps * 10), 'run_s': 10.0, 'first_frame_s': 0.4, 'frame_ms': [400.0],
+    return {'fps': fps, 'frames': int(fps * 10), 'run_s': 10.0, 'stopped': False, 'first_frame_s': 0.4,
+            'frame_ms': [400.0],
             'fps_by_second': [fps] * 10, 'first_poll_full': False, 'janky_pct': 0.0, 'interval_p99_ms': 20.0,
             'cpu_ms_per_frame': 30.0, 'cpu_cores': 1.5, 'samples': {'t_ms': [500]},
             'desired_to_present_p50_ms': 26.0, 'memory': {'total_pss_kb': 102400},

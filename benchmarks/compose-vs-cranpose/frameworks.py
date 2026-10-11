@@ -2,12 +2,13 @@
 """Measures every framework's app on one scenario, for the dashboard's
 framework comparison.
 
-Every app is measured in rounds, every app once a round, the order reversed
-each round so heat and time fall on all alike. In a round an app starts
-twice: first with its data cleared, as its install leaves it (in the browser,
-Chrome's data, its compiled GPU programs among them), then a second time. Legs
-are `ab.py`'s: one launch measured from its start command for `--run`
-seconds, the same span for every app, with nothing left out. Writes
+Every app is measured in rounds, one by default, every app once a round, the
+order reversed each round so heat and time fall on all alike. In a round an
+app starts twice: first with its data cleared, as its install leaves it (in
+the browser, Chrome's data, its compiled GPU programs among them), then a
+second time. Legs are `ab.py`'s: one launch measured from its start command
+for `--run` seconds, the same span for every app, with nothing left out, or
+until it ran too slow (`timelines.SLOW_FPS`). Writes
 `frameworks.json` in the dashboard's run format, kind `frameworks`: device,
 subjects, every leg with the time of each of its frames since the launch, and
 per start the per-app medians.
@@ -29,7 +30,8 @@ from pathlib import Path
 from ab import DECIDING, REPORTED, leg_record, summarize
 from browser import BrowserServer
 from measure import (APPS, CHROME, HEAVY, HERE, REMOTE_WINDOW, STARTS, AppTarget, Device, PageTarget,
-                     device_lock, measure_run)
+                     device_lock, figure, measure_run)
+from timelines import slow_rule
 import versions
 
 DEFAULT_APPS = 'compose,cranpose,views,flutter,rn,nativescript,lynx,maui,avalonia,egui,slint,web'
@@ -84,9 +86,9 @@ def measure_frameworks(args):
                         running.remove(app)
                     break
                 legs.append(leg_record(run, app, len(legs), start))
-                print(f'{app:10} {start:6} fps {run["fps"]:5.1f} cpu/f {run["cpu_ms_per_frame"]:6.1f} '
-                      f'frames {run["frames"]:4d} first frame {run["first_frame_s"]:4.1f} s '
-                      f'run {run["run_s"]:4.1f} s', flush=True)
+                print(f'{app:10} {start:6} fps {run["fps"]:5.1f} cpu/f {figure(run["cpu_ms_per_frame"], "6.1f")} '
+                      f'frames {run["frames"]:4d} first frame {figure(run["first_frame_s"], "4.1f")} s '
+                      f'run {run["run_s"]:4.1f} s{" stopped, slow" if run["stopped"] else ""}', flush=True)
     identity = {key: device.shell('getprop', key).strip() for key in
                 ['ro.product.model', 'ro.build.version.release', 'ro.hardware']}
     if args.browser:
@@ -104,7 +106,7 @@ def measure_frameworks(args):
         'release': args.release,
         'device': identity,
         'subjects': subjects,
-        'protocol': {'run_s': args.run, 'starts': list(STARTS), 'rounds': args.rounds},
+        'protocol': {'run_s': args.run, 'starts': list(STARTS), 'rounds': args.rounds, **slow_rule()},
         'scenarios': [{
             'scenario': args.scenario,
             'extras': f'tier {args.tier}, in Chrome' if args.browser else (
@@ -125,7 +127,7 @@ def main():
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--apps', help='by default every app built, or every page in `--browser`')
     parser.add_argument('--scenario', default='gauntlet')
-    parser.add_argument('--rounds', type=int, default=3,
+    parser.add_argument('--rounds', type=int, default=1,
                         help="rounds, in each of which every app starts with its data cleared, then once more")
     parser.add_argument('--run', type=float, default=10.0,
                         help='seconds each launch is measured for, from its start command')
@@ -149,7 +151,8 @@ def main():
     (args.output / 'frameworks.json').write_text(json.dumps(run, indent=1))
     for start, judged in run['scenarios'][0]['starts'].items():
         for app, values in judged['summary'].items():
-            print(f'{app:10} {start:6} ' + (f'fps {values["fps"]:5.1f} cpu/f {values["cpu_ms_per_frame"]:6.1f}'
+            print(f'{app:10} {start:6} ' + (f'fps {values["fps"]:5.1f} '
+                                            f'cpu/f {figure(values.get("cpu_ms_per_frame"), "6.1f")}'
                                             if values else 'no legs'))
     print('DURATION', run['duration_s'], 's')
 

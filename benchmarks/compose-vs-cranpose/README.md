@@ -358,12 +358,15 @@ so a second build installs beside the first. Every leg runs the same span,
 whatever the build's frame rate.
 
 `frameworks.py` measures every framework's app on the gauntlet for the
-dashboard: three rounds, the order reversed every round. In a round each app
-starts twice: first with its data cleared, as its install leaves it, then a
-second time. Every leg is one launch measured from its start command for 10 s
-(`--run`), the same span for every app, and keeps the frames of every second
-from the launch; the dashboard charts those seconds for every framework, the
-first starts and the second starts apart. In Chrome a first start begins with
+dashboard: one round by default (`--rounds`), the order reversed every round.
+In a round each app starts twice: first with its data cleared, as its install
+leaves it, then a second time. Every leg is one launch measured from its start
+command for 10 s (`--run`), the same span for every app, and keeps the frames
+of every second from the launch; the dashboard charts those seconds for every
+framework, the first starts and the second starts apart. A leg whose app
+presented fewer than 10 frames a second over the last 5 s ends there, marked
+`stopped`: on every harness, `ab.py` and `desktop.py` too, the rest of it would
+only repeat that the app is slow. In Chrome a first start begins with
 Chrome's data cleared (`pm clear com.android.chrome`, then its first-run
 screen passed with "Stay signed out"): only that empties its compiled GPU
 programs, which DevTools' cache clearing and `pm trim-caches` leave. The
@@ -397,7 +400,8 @@ release (`cranpose-release`, once a release draws the gauntlet) and main.
    `build_apps.sh browser` also builds the apps that target the browser, and
    `desktop.py --browser` measures them in Chrome at tier 16 (below).
 2. On the Mac the Mate 20 X is attached to, `scripts/perf/nightly.py`
-   compares the latest release with main, and `just perf-frameworks` installs
+   compares the latest release with main on the gauntlet, and
+   `just perf-frameworks` installs
    macm3's Android builds beside Cranpose's release and main and runs
    `frameworks.py`. `just perf-browser` then opens macm3's browser builds in
    Chrome on the phone at tier 8.
@@ -552,7 +556,8 @@ of the app and every process it started, `footprint` the memory they hold at
 the window's end and the part of it that is the GPU's (Metal's buffers and
 textures, and the surfaces the window server composites), and `macmon` the
 mean clocks of the performance cores and the GPU over the window, from the
-chip's own counters and without root. Three rounds measure each app twice:
+chip's own counters and without root. Each round, one by default, measures
+each app twice:
 its first start after what the apps keep between launches is removed
 (`APP_STATE`: compiled Metal shaders, in the cache unbundled apps share and
 in each bundle's own, the web views' WebKit caches, Chrome's Metal shaders and

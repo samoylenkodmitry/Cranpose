@@ -30,7 +30,7 @@ HERE = Path(__file__).resolve().parent
 # file by its path.
 sys.path[:0] = [str(HERE), str(HERE.parent.parent / 'scripts')]
 from android_robot_device import device_lock  # noqa: E402  (the shared per-device lock)
-from timelines import STARTS  # noqa: E402,F401  (the starts each round measures)
+from timelines import SLOW_FPS, SLOW_WINDOW_S, STARTS  # noqa: E402,F401  (STARTS: the harnesses' starts)
 APPS = {
     'cranpose': {
         'package': 'dev.perfcompare.cranpose',
@@ -378,10 +378,9 @@ def first_poll_full(output):
 
 def frame_stats(frames, t0, t1, vsync_ms):
     """The frames presented from `t0`, the launch, to `t1`, the run's end, in
-    seconds on SurfaceFlinger's clock."""
+    seconds on SurfaceFlinger's clock. A run of fewer than two frames, an app
+    that took most of it to start, has no intervals to report."""
     times = sorted(time for time in frames if t0 * 1e9 <= time <= t1 * 1e9)
-    if len(times) < 2:
-        raise ValueError('the layer presented fewer than two frames in the run')
     intervals = [(later - earlier) / 1e6 for earlier, later in zip(times, times[1:])]
     desired_to_present = []
     desired_to_ready = []
@@ -398,17 +397,17 @@ def frame_stats(frames, t0, t1, vsync_ms):
         second = int(time / 1e9 - t0)
         if second < len(per_second):
             per_second[second] += 1
-    first_second = int(times[0] / 1e9 - t0)
+    first_second = int(times[0] / 1e9 - t0) if times else None
     return {
         # When each frame was presented, in milliseconds since the launch:
         # every frame of the run, its start included.
         'frame_ms': [round(time / 1e6 - t0 * 1e3, 1) for time in times],
         # Frames presented in each whole second from the launch.
         'fps_by_second': per_second,
-        'first_frame_s': times[0] / 1e9 - t0,
+        'first_frame_s': times[0] / 1e9 - t0 if times else None,
         # Whole seconds after the first frame without a single present: a
         # stall, or content that stopped changing.
-        'stalled_seconds': sum(count == 0 for count in per_second[first_second:]),
+        'stalled_seconds': sum(count == 0 for count in per_second[first_second:]) if times else None,
         'frames': len(times),
         # Frames over the whole run, from the start command: the launch and
         # the first seconds count.
@@ -416,11 +415,12 @@ def frame_stats(frames, t0, t1, vsync_ms):
         'interval_p50_ms': percentile(intervals, 0.50),
         'interval_p90_ms': percentile(intervals, 0.90),
         'interval_p99_ms': percentile(intervals, 0.99),
-        'interval_max_ms': max(intervals),
+        'interval_max_ms': max(intervals, default=None),
         # A present more than 1.5 vsyncs after the previous one repeated a frame.
         'vsync_ms': vsync_ms,
-        'janky_pct': 100.0 * sum(interval > 1.5 * vsync_ms for interval in intervals) / len(intervals),
-        'missed_vsyncs': sum(max(0, round(interval / vsync_ms) - 1) for interval in intervals),
+        'janky_pct': 100.0 * sum(interval > 1.5 * vsync_ms for interval in intervals) / len(intervals)
+        if intervals else None,
+        'missed_vsyncs': sum(max(0, round(interval / vsync_ms) - 1) for interval in intervals) if intervals else None,
         'desired_to_present_p50_ms': percentile(desired_to_present, 0.50),
         'desired_to_ready_p50_ms': percentile(desired_to_ready, 0.50),
     }
@@ -466,12 +466,26 @@ def launch(device, app, scenario, extra=()):
     started = device.uptime()
     out = device.shell('am', 'start', '-W', '-n', APPS[app]['activity'], '--es', 'scenario', scenario,
                        *extra)
-    if 'Status: ok' not in out:
+    return start_times(out, started), device.pid(APPS[app]['package'])
+
+
+def start_times(out, started):
+    """The times `am start -W` reported in `out`, and the run's zero: the
+    device clock read just before the start command. The command waits 10 s
+    at most for the first frame; an app slower than that reports a timeout
+    and runs on, its run measured as any other (MAUI's gauntlet on the Huawei
+    Mate 20 X, 2026-10-11)."""
+    if 'Status: ok' not in out and 'Status: timeout' not in out:
         raise RuntimeError('launch failed: ' + out)
     times = {key: int(value) for key, value in re.findall(r'(TotalTime|WaitTime): (\d+)', out)}
-    # The device clock read just before the start command: the run's zero.
     times['uptime_s'] = started
-    return times, device.pid(APPS[app]['package'])
+    return times
+
+
+def figure(value, spec):
+    """`value` in `spec` for a progress line, or '-' where the run has none:
+    a run of fewer than two frames has no intervals."""
+    return '-' if value is None else format(value, spec)
 
 
 def heat_note(run):
@@ -695,13 +709,8 @@ class PageTarget:
         started = device.uptime()
         out = device.shell('am', 'start', '-W', '-a', 'android.intent.action.VIEW', '-d', url,
                            '-n', f'{CHROME}/com.google.android.apps.chrome.Main')
-        if 'Status: ok' not in out:
-            raise RuntimeError('launch failed: ' + out)
-        times = {key: int(value) for key, value in re.findall(r'(TotalTime|WaitTime): (\d+)', out)}
-        # The device clock read just before the start command: the run's zero.
         # The page downloads, compiles and draws inside the run.
-        times['uptime_s'] = started
-        return times, self.pids(device)
+        return start_times(out, started), self.pids(device)
 
     def drew(self):
         """Whether the page logged its first frame since its launch."""
@@ -743,11 +752,13 @@ class PageTarget:
 
 def measure_run(device, app, scenario, args, destination, run_s=None):
     """One cold launch, measured from the start command for `run_s` seconds
-    (`args.run` unless given): every frame the layer presented, the CPU every
-    process of the app spent since it started, the clocks and the memory held
-    at the end. Nothing of the run is left out: its first seconds, the launch
-    and the first frames included, count as the rest do. `app` is an
-    installed app's name, or the target of a page in the browser."""
+    (`args.run` unless given), or until it presented fewer than `SLOW_FPS`
+    frames a second over `SLOW_WINDOW_S`: every frame the layer presented,
+    the CPU every process of the app spent since it started, the clocks and
+    the memory held at the end. Nothing of the run is left out: its first
+    seconds, the launch and the first frames included, count as the rest do.
+    `app` is an installed app's name, or the target of a page in the
+    browser."""
     target = AppTarget(app) if isinstance(app, str) else app
     run_s = run_s or args.run
     run = {'app': target.name, 'scenario': scenario, 'temperature_before': device.temperatures()}
@@ -760,7 +771,7 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
     layer = target.layer(device)
     output = device.shell('sh', REMOTE_WINDOW, ','.join(map(str, pids)), target.package, layer,
                           f'{launched + run_s:.2f}', str(args.interval), '1' if target.gfx else '0',
-                          timeout=run_s + 60)
+                          f'{launched:.2f}', str(SLOW_FPS), str(SLOW_WINDOW_S), timeout=run_s + 60)
     (destination / f'{target.name}-{scenario}-{int(time.time())}.txt').write_text(output)
     lines = output.splitlines()
     if any(line.strip() == 'STAT' for line in lines):
@@ -792,6 +803,8 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
     run.update(
         pid=pids[0],
         run_s=elapsed,
+        # Whether the run ended early, too slow to go on.
+        stopped=any(line.startswith('SLOW ') for line in lines),
         layer=layer,
         clock_offset_s=offset,
         clock_offset_spread_s=max(calibration) - offset,
@@ -802,7 +815,7 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
         **stats,
         cpu_pct=100.0 * cpu_s / elapsed,
         cpu_cores=cpu_s / elapsed,
-        cpu_ms_per_frame=1000.0 * cpu_s / stats['frames'],
+        cpu_ms_per_frame=1000.0 * cpu_s / stats['frames'] if stats['frames'] else None,
         samples=run_samples(lines, launched, ticks_per_s, frame_times),
         top_threads=threads[:6],
         **clock_summary(freqs),
@@ -894,9 +907,9 @@ def compare(args):
                     run = measure_run(device, app, scenario, args, args.output)
                     run['block'] = block
                     report['runs'].append(run)
-                    print(f'{scenario:10} {app:8} fps={run["fps"]:5.1f} jank={run["janky_pct"]:4.1f}% '
+                    print(f'{scenario:10} {app:8} fps={run["fps"]:5.1f} jank={figure(run["janky_pct"], "4.1f")}% '
                           f'stalled={run["stalled_seconds"]}s '
-                          f'p99={run["interval_p99_ms"]:.1f}ms '
+                          f'p99={figure(run["interval_p99_ms"], ".1f")}ms '
                           f'cpu={run["cpu_pct"]:5.1f}% {heat_note(run)}'
                           f'throttled={run["throttled"]}', flush=True)
                 except Exception as error:  # retain the failure, keep measuring
