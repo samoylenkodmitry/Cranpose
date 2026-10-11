@@ -71,14 +71,16 @@ echo "T0 $(cat /proc/uptime)"
 snap
 (
   # The newest present counted, and the presents counted so far. A frame
-  # whose present is still pending reads INT64_MAX and is counted later.
+  # whose present is still pending reads INT64_MAX and is counted later; a
+  # frame's desired time may read -1 (Chrome's layer), so only the present
+  # column decides.
   newest=0
   total=0
   while [ ! -e "$STOP" ]; do
     latency > "$POLL"
     cat "$POLL"
     counted=$(awk -v newest="$newest" -v total="$total" '
-      NF == 3 && $1 ~ /^[0-9]+$/ && $2 > newest && $2 < 9e18 { total++; if ($2 > last) last = $2 }
+      NF == 3 && $2 ~ /^[0-9]+$/ && $2 > newest && $2 < 9e18 { total++; if ($2 > last) last = $2 }
       END { printf "%.0f %d", (last > newest ? last : newest), total }' "$POLL")
     newest=${counted% *}
     total=${counted#* }
