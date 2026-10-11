@@ -197,12 +197,11 @@ fn bounds_center(bounds: Bounds) -> (f32, f32) {
 
 fn drag_between(
     robot: &cranpose::Robot,
-    start_x: f32,
-    start_y: f32,
-    end_x: f32,
-    end_y: f32,
+    (start_x, start_y): (f32, f32),
+    (end_x, end_y): (f32, f32),
     steps: usize,
     step_delay: Duration,
+    hold: Duration,
 ) {
     let _ = robot.mouse_move(start_x, start_y);
     std::thread::sleep(Duration::from_millis(50));
@@ -216,7 +215,7 @@ fn drag_between(
         let _ = robot.mouse_move(x, y);
         std::thread::sleep(step_delay);
     }
-
+    std::thread::sleep(hold);
     let _ = robot.mouse_up();
 }
 
@@ -234,12 +233,11 @@ pub fn click_button(robot: &cranpose::Robot, name: &str) -> bool {
                 let drag_y = center_y.clamp(24.0, 64.0);
                 drag_between(
                     robot,
-                    start_x,
-                    drag_y,
-                    end_x,
-                    drag_y,
+                    (start_x, drag_y),
+                    (end_x, drag_y),
                     12,
                     Duration::from_millis(16),
+                    Duration::ZERO,
                 );
                 std::thread::sleep(Duration::from_millis(120));
                 continue;
@@ -503,7 +501,28 @@ pub fn raw_drag(
     steps: usize,
     step_delay: Duration,
 ) {
-    drag_between(robot, x, start_y, x, end_y, steps, step_delay);
+    drag_between(
+        robot,
+        (x, start_y),
+        (x, end_y),
+        steps,
+        step_delay,
+        Duration::ZERO,
+    );
+}
+
+/// Drags from `start_y` to `end_y` and holds still before letting go: the
+/// list moves by the drag alone, with no fling after it.
+pub fn nudge(robot: &cranpose::Robot, x: f32, start_y: f32, end_y: f32) {
+    drag_between(
+        robot,
+        (x, start_y),
+        (x, end_y),
+        10,
+        Duration::from_millis(16),
+        Duration::from_millis(250),
+    );
+    let _ = robot.wait_for_idle();
 }
 
 pub fn fail(robot: &cranpose::Robot, message: impl Into<String>) -> ! {

@@ -9,7 +9,7 @@ use cranpose_testing::{find_in_semantics, find_text_exact, root_bounds};
 use desktop_app::app::{self, DemoTab};
 use hacker_news_robot_support::{
     click_button, click_first_visible_comments_button, create_mock_client, fail,
-    long_comment_body_text, scroll_until_comment_visible, scroll_until_text_visible_in_bounds,
+    long_comment_body_text, nudge, scroll_until_comment_visible, scroll_until_text_visible_in_bounds,
     semantics_bounds, visible_comment_numbers, visible_mock_story_numbers, wait_for_comments_data,
     wait_for_no_text, wait_for_text, Bounds, LONG_COMMENT_SUFFIX,
 };
@@ -53,10 +53,15 @@ fn assert_long_comment_bottom_gap(robot: &Robot, comments_list_bounds: Bounds) {
     }
     let author = format!("commenter-{LONG_COMMENT_SUFFIX}");
     let next_author = format!("commenter-{}", LONG_COMMENT_SUFFIX + 1);
-    // Where a drag stops varies with timing: the next comment can still sit
-    // below the viewport, where the list composes nothing.
-    if !scroll_until_text_visible_in_bounds(robot, comments_list_bounds, &next_author, 2) {
-        fail(robot, format!("{next_author} did not become visible below the long comment"));
+    // A drag ends in a fling, which stops where timing puts it: the next
+    // comment can still lie below the viewport, where the list composes
+    // nothing. Short drags without a fling bring it in.
+    let (x, y, w, h) = comments_list_bounds;
+    for _ in 0..6 {
+        if semantics_bounds(robot, &next_author).is_some() {
+            break;
+        }
+        nudge(robot, x + w * 0.5, y + h * 0.6, y + h * 0.4);
     }
     let author_bounds = required_bounds(robot, &author);
     let body_bounds = required_bounds(robot, &body);
