@@ -83,6 +83,10 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just typos
 
+      - name: Check the wgpu forks build as publishing verifies them
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just check-forks
+
       - name: Check cyclomatic complexity of changed functions
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just complexity-gate

@@ -223,6 +223,21 @@ test-quality-gates:
 complexity-gate base="origin/main":
     cargo xtask complexity-gate --base {{base}}
 
+# The wgpu forks as publishing verifies them: each from its own manifest with
+# its default features, which the workspace never builds (it turns on `std`
+# and a backend). `f64::fract` without `std` failed v0.9.24's publish this way.
+# Runs when the diff against `base` touches `forks/`.
+check-forks base="origin/main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if git diff --quiet "$(git merge-base HEAD {{quote(base)}})" -- forks; then
+        echo "check-forks: forks/ unchanged against {{base}}"
+        exit 0
+    fi
+    for crate in wgpu-hal wgpu-core wgpu; do
+        cargo check --manifest-path "forks/wgpu/$crate/Cargo.toml" --target-dir target/forks
+    done
+
 # Copy-paste budget for a block the diff adds, at either end of the copy.
 # Same on-demand install as above, through the same pinned-path resolver.
 duplication-gate base="origin/main":
@@ -952,7 +967,7 @@ _disk-guard:
 # all seven on every pull request.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions twin-matrix-check test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-wasm doc budgets complexity-gate duplication-gate state-holder-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout test-robot-suite-partition test-android-accessibility-contract
+ci: fmt-check typos versions twin-matrix-check check-forks test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-wasm doc budgets complexity-gate duplication-gate state-holder-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout test-robot-suite-partition test-android-accessibility-contract
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
