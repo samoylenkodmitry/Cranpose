@@ -951,6 +951,7 @@ pub(crate) fn try_run(
     content: impl FnMut() + 'static,
 ) -> Result<(), EmbedError> {
     crate::application_id::register(settings.application_id.as_deref());
+    settings.start_process();
     let stream = TcpStream::connect(&endpoint.address).map_err(|source| EmbedError::Connect {
         address: endpoint.address.clone(),
         source,

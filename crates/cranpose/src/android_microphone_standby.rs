@@ -7,23 +7,18 @@ use std::sync::Arc;
 use cranpose_services::{MicrophoneStandby, set_platform_microphone_standby};
 use jni::{jni_sig, jni_str, objects::JValue};
 
-use crate::android_jni::{
-    clear_pending_android_jni_exception, load_cranpose_java_class, with_android_activity_env,
-};
+use crate::android_jni::AndroidContext;
 
 const STANDBY_CLASS: &str = "dev/cranpose/android/CranposeMicrophoneStandby";
 
-pub(crate) fn register(app: android_activity::AndroidApp) {
-    let declared = with_android_activity_env(&app, |env, activity| {
-        load_cranpose_java_class(env, &activity, STANDBY_CLASS).map(|_| ())
-    });
-    if declared.is_ok() {
-        set_platform_microphone_standby(Some(Arc::new(AndroidMicrophoneStandby { app })));
+pub(crate) fn register(context: &'static AndroidContext) {
+    if context.call_class(STANDBY_CLASS, |_, _, _| Ok(())).is_ok() {
+        set_platform_microphone_standby(Some(Arc::new(AndroidMicrophoneStandby { context })));
     }
 }
 
 struct AndroidMicrophoneStandby {
-    app: android_activity::AndroidApp,
+    context: &'static AndroidContext,
 }
 
 impl MicrophoneStandby for AndroidMicrophoneStandby {
@@ -33,20 +28,17 @@ impl MicrophoneStandby for AndroidMicrophoneStandby {
         } else {
             jni_str!("stop")
         };
-        let result = with_android_activity_env(&self.app, |env, activity| {
-            let class = load_cranpose_java_class(env, &activity, STANDBY_CLASS)?;
-            env.call_static_method(
-                class,
-                name,
-                jni_sig!("(Landroid/content/Context;)V"),
-                &[JValue::Object(&activity)],
-            )
-            .map(|_| ())
-            .map_err(|error| {
-                clear_pending_android_jni_exception(env);
-                error.to_string()
-            })
-        });
+        let result = self
+            .context
+            .call_class(STANDBY_CLASS, |env, context, class| {
+                env.call_static_method(
+                    class,
+                    name,
+                    jni_sig!("(Landroid/content/Context;)V"),
+                    &[JValue::Object(context)],
+                )
+                .map(|_| ())
+            });
         if let Err(error) = result {
             log::warn!("the microphone standby did not change: {error}");
         }

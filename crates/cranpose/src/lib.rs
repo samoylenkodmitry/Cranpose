@@ -118,6 +118,8 @@ mod android_poll;
     all(feature = "android", feature = "renderer-wgpu", target_os = "android")
 ))]
 mod android_present_thread;
+#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+mod android_process;
 #[cfg(any(
     test,
     all(feature = "android", feature = "playbilling", target_os = "android")
@@ -203,6 +205,10 @@ pub use cranpose_render_common::font_source::{
 /// Shared font data accepted by [`AppLauncher::with_font_face_bytes`].
 pub use cranpose_render_common::software_text_raster::FontBytes;
 pub use host_environment::{host_density, system_font_directory};
+/// The JNI types the [`android_main!`] exports name.
+#[cfg(all(feature = "android", target_os = "android"))]
+#[doc(hidden)]
+pub use jni as __android_jni;
 pub use native_window::{
     WindowConfig, WindowFocus, WindowModifierExt, WindowResizeDirection, WindowState,
     rememberWindowState, rememberWindowStateAt,

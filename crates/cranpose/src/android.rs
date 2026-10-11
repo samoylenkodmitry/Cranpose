@@ -2031,7 +2031,7 @@ pub fn run(
 ) {
     use android_activity::{MainEvent, PollEvent};
 
-    init_logging(settings.log_tag.as_deref().unwrap_or(DEFAULT_LOG_TAG));
+    crate::android_process::start_for_activity(&app, &settings);
     crate::android_pipeline_update::note_app_launched();
 
     crate::android_frame_telemetry::seed_env_from_system_properties();
@@ -2054,7 +2054,7 @@ pub fn run(
     crate::android_file_picker::register(app.clone());
     crate::android_writable_folder::register(app.clone());
     crate::android_services::register(app.clone(), &settings.capabilities);
-    crate::android_host::install(app.clone());
+    crate::android_host::install_activity(app.clone());
     crate::process_info::install();
 
     android_platform_env()

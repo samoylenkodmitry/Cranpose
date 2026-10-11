@@ -7061,6 +7061,7 @@ pub fn try_run(
     #[cfg(unix)]
     crate::process_info::install();
 
+    settings.start_process();
     let mut app = App::new(settings, content, Rc::clone(&launch_error), event_proxy);
 
     #[cfg(feature = "robot")]

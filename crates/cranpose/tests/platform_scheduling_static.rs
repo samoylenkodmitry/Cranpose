@@ -3146,11 +3146,12 @@ fn the_launcher_resolves_the_platform_font_directory_itself() {
 
 #[test]
 fn the_android_host_takes_its_log_tag_from_the_launcher() {
-    let android = crate_source("src/android.rs");
+    let process = crate_source("src/android_process.rs");
     assert!(
-        android.contains("settings.log_tag.as_deref().unwrap_or(DEFAULT_LOG_TAG)"),
+        process.contains(".log_tag") && process.contains("DEFAULT_LOG_TAG"),
         "the Android host must log under the tag the application named"
     );
+    let android = crate_source("src/android.rs");
     assert!(
         !android.contains("\"ComposeRS\""),
         "the framework is Cranpose; a stale name in logcat sends anyone reading \
