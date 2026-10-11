@@ -13929,6 +13929,161 @@
    "confirmed_regressions": {}
   },
   {
+   "file": "runs/2026-10-10-frameworks-7ea2dc586-Apple-M3-Pro.json",
+   "kind": "frameworks",
+   "started_at": "2026-10-10T18:07:30+00:00",
+   "device": "Apple M3 Pro",
+   "main": "7ea2dc586e1235f2b8e776aecd15e44dbbb1bf7e",
+   "release": null,
+   "subjects": [
+    {
+     "name": "cranpose",
+     "label": "Cranpose 0.9.20 main 7ea2dc586",
+     "source": "benchmarks/compose-vs-cranpose/cranpose-app/src/screens/gauntlet.rs"
+    },
+    {
+     "name": "cranpose-release",
+     "label": "Cranpose v0.9.20",
+     "source": "benchmarks/compose-vs-cranpose/cranpose-app/src/screens/gauntlet.rs"
+    },
+    {
+     "name": "egui",
+     "label": "egui 0.36.2",
+     "source": "benchmarks/compose-vs-cranpose/egui-app/src/lib.rs"
+    },
+    {
+     "name": "slint",
+     "label": "Slint 1.18.1",
+     "source": "benchmarks/compose-vs-cranpose/slint-app/ui/gauntlet.slint"
+    },
+    {
+     "name": "iced",
+     "label": "iced 0.14.0",
+     "source": "benchmarks/compose-vs-cranpose/iced-app/src/lib.rs"
+    },
+    {
+     "name": "gpui",
+     "label": "GPUI 0.3.8",
+     "source": "benchmarks/compose-vs-cranpose/gpui-app/src/main.rs"
+    },
+    {
+     "name": "avalonia",
+     "label": "Avalonia 12.1.4",
+     "source": "benchmarks/compose-vs-cranpose/avalonia-app/Gauntlet.cs"
+    },
+    {
+     "name": "swiftui",
+     "label": "SwiftUI macOS 27.0",
+     "source": "benchmarks/compose-vs-cranpose/swiftui-app/Gauntlet.swift"
+    },
+    {
+     "name": "appkit",
+     "label": "AppKit macOS 27.0",
+     "source": "benchmarks/compose-vs-cranpose/appkit-app/Gauntlet.swift"
+    },
+    {
+     "name": "flutter",
+     "label": "Flutter 3.47.7",
+     "source": "benchmarks/compose-vs-cranpose/flutter-app/lib/main.dart"
+    },
+    {
+     "name": "compose",
+     "label": "Compose Multiplatform 1.12.1",
+     "source": "benchmarks/compose-vs-cranpose/shared-compose/dev/perfcompare/compose/Gauntlet.kt"
+    },
+    {
+     "name": "web",
+     "label": "Web Chrome 154.0.8037.98",
+     "source": "benchmarks/compose-vs-cranpose/web-app/src/gauntlet.ts"
+    },
+    {
+     "name": "tauri",
+     "label": "Tauri 2.12.3, WKWebView 27.0",
+     "source": "benchmarks/compose-vs-cranpose/web-app/src/gauntlet.ts"
+    },
+    {
+     "name": "dioxus",
+     "label": "Dioxus 0.7.10, WKWebView 27.0",
+     "source": "benchmarks/compose-vs-cranpose/dioxus-app/src/main.rs"
+    },
+    {
+     "name": "xilem",
+     "label": "Xilem 0.4.0",
+     "source": "benchmarks/compose-vs-cranpose/xilem-app/src/main.rs"
+    },
+    {
+     "name": "fyne",
+     "label": "Fyne 2.8.1",
+     "source": "benchmarks/compose-vs-cranpose/fyne-app/main.go"
+    }
+   ],
+   "duration_s": 3046,
+   "protocol": {
+    "run_s": 10.0,
+    "starts": [
+     "first",
+     "second"
+    ],
+    "rounds": 3,
+    "max_other_cores": 1.5
+   },
+   "scenarios": {
+    "gauntlet": {
+     "legs": 270,
+     "starts": {
+      "first": {
+       "summary": {
+        "cranpose": {},
+        "cranpose-release": {},
+        "egui": {},
+        "slint": {},
+        "iced": {},
+        "gpui": {},
+        "avalonia": {},
+        "swiftui": {},
+        "appkit": {},
+        "flutter": {},
+        "compose": {},
+        "web": {},
+        "tauri": {},
+        "dioxus": {},
+        "xilem": {},
+        "fyne": {}
+       },
+       "verdicts": {},
+       "failures": {
+        "xilem": "FrameCount: process 84100 shows no window"
+       },
+       "confirmed": []
+      },
+      "second": {
+       "summary": {
+        "cranpose": {},
+        "cranpose-release": {},
+        "egui": {},
+        "slint": {},
+        "iced": {},
+        "gpui": {},
+        "avalonia": {},
+        "swiftui": {},
+        "appkit": {},
+        "flutter": {},
+        "compose": {},
+        "web": {},
+        "tauri": {},
+        "dioxus": {},
+        "xilem": {},
+        "fyne": {}
+       },
+       "verdicts": {},
+       "failures": {},
+       "confirmed": []
+      }
+     }
+    }
+   }
+  },
+  {
    "file": "runs/2026-10-10-nightly-aaa213c3e-EVR-AL00.json",
    "kind": "nightly",
    "started_at": "2026-10-10T19:00:50+00:00",
