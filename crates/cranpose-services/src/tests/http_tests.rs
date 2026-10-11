@@ -224,7 +224,7 @@ fn the_native_transfer_awaits_its_response_rather_than_blocking_on_it() {
         .expect("the native send");
     let body = send.split("\nasync fn ").next().unwrap_or(send);
     assert!(
-        body.contains("head_signal\n        .wait()\n        .await"),
+        body.contains(".head\n        .wait()\n        .await"),
         "the native send must await the response head"
     );
     let blocking = ["pollster", "::", "block_on"].concat();
@@ -361,7 +361,7 @@ fn default_http_client_reports_disabled_native_http_feature() {
 #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
 #[test]
 fn native_http_client_builds() {
-    build_native_client().expect("native HTTP client should initialize");
+    build_native_client(IDLE_TIMEOUT).expect("native HTTP client should initialize");
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
@@ -564,6 +564,118 @@ fn a_cancelled_native_transfer_stops() {
     drop(response);
     let _ = server.join();
     assert!(ended, "a cancelled transfer must end rather than run on");
+}
+
+/// A server that sends the first half of `body`, then goes silent for
+/// `silence`, the way a socket does after the phone slept or lost its network.
+#[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
+fn half_then_silent(silence: std::time::Duration) -> Option<String> {
+    let body = vec![b's'; 64 * 1024];
+    // The server thread stays asleep after the test ends; nothing waits on it.
+    local_server(body, 32 * 1024, silence, false).map(|(url, _server)| url)
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
+#[test]
+fn a_silent_native_transfer_fails_after_its_idle_timeout() {
+    let Some(url) = half_then_silent(std::time::Duration::from_secs(5)) else {
+        return;
+    };
+    let client = DefaultHttpClient::with_idle_timeout(std::time::Duration::from_millis(300));
+    let started = std::time::Instant::now();
+    let response = pollster::block_on(client.send(&HttpRequest::get(&url), HttpControl::new()))
+        .expect("a response");
+    let outcome = pollster::block_on(response.read_all());
+
+    assert!(
+        matches!(outcome, Err(HttpError::BodyReadFailed { .. })),
+        "a silent body must fail, got {outcome:?}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(3),
+        "the silent body was waited on for {:?}",
+        started.elapsed()
+    );
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
+#[test]
+fn an_idle_timeout_does_not_cut_a_transfer_that_keeps_arriving() {
+    let body = vec![b'k'; 160 * 1024];
+    let Some((url, server)) = local_server(
+        body.clone(),
+        16 * 1024,
+        std::time::Duration::from_millis(60),
+        false,
+    ) else {
+        return;
+    };
+    let client = DefaultHttpClient::with_idle_timeout(std::time::Duration::from_millis(300));
+    let response = pollster::block_on(client.send(&HttpRequest::get(&url), HttpControl::new()))
+        .expect("a response");
+    let received = pollster::block_on(response.read_all()).expect("the whole body");
+    server.join().expect("the local server finishes");
+
+    assert_eq!(received.len(), body.len());
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
+#[test]
+fn a_cancel_ends_a_silent_native_transfer_at_once() {
+    let Some(url) = half_then_silent(std::time::Duration::from_secs(5)) else {
+        return;
+    };
+    let control = HttpControl::new();
+    let response =
+        pollster::block_on(default_http_client().send(&HttpRequest::get(&url), control.clone()))
+            .expect("a response");
+    let started = std::time::Instant::now();
+    thread::spawn(move || {
+        thread::sleep(std::time::Duration::from_millis(200));
+        control.cancel();
+    });
+    let outcome = pollster::block_on(response.read_all());
+
+    assert!(
+        matches!(outcome, Err(HttpError::Cancelled)),
+        "a cancelled body must end with Cancelled, got {outcome:?}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "the cancel waited on the silent socket for {:?}",
+        started.elapsed()
+    );
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
+#[test]
+fn a_cancel_ends_a_native_request_still_waiting_for_its_response() {
+    let listener = match std::net::TcpListener::bind("127.0.0.1:0") {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+        Err(error) => panic!("bind local test server: {error}"),
+    };
+    let url = format!("http://{}", listener.local_addr().expect("an address"));
+    // Accepts and never answers; the thread stays asleep after the test ends.
+    thread::spawn(move || {
+        let _held = listener.accept();
+        thread::sleep(std::time::Duration::from_secs(5));
+    });
+    let control = HttpControl::new();
+    let canceller = control.clone();
+    let started = std::time::Instant::now();
+    thread::spawn(move || {
+        thread::sleep(std::time::Duration::from_millis(200));
+        canceller.cancel();
+    });
+    let outcome = pollster::block_on(default_http_client().send(&HttpRequest::get(&url), control));
+
+    assert!(
+        matches!(outcome, Err(HttpError::Cancelled)),
+        "a cancelled request must end with Cancelled, got {:?}",
+        outcome.map(|response| response.status)
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]

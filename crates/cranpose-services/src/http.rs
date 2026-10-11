@@ -4,7 +4,7 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{
-        Arc, PoisonError,
+        Arc, Mutex, PoisonError, Weak,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -77,8 +77,18 @@ pub type ProgressHandler = Arc<dyn Fn(HttpProgress) + Send + Sync>;
 /// memory, and a screen that leaves is a screen that leaves.
 #[derive(Clone, Default)]
 pub struct HttpControl {
-    cancelled: Arc<AtomicBool>,
+    cancel: Arc<CancelState>,
     progress: Option<ProgressHandler>,
+}
+
+#[derive(Default)]
+struct CancelState {
+    cancelled: AtomicBool,
+    waiting: Mutex<Vec<Weak<dyn CancelTransfer>>>,
+}
+
+trait CancelTransfer: Send + Sync {
+    fn cancel(&self);
 }
 
 impl HttpControl {
@@ -102,16 +112,46 @@ impl HttpControl {
 
     /// Requests cancellation.
     ///
-    /// The transfer stops at its next chunk boundary. A partial file left by a
-    /// cancelled download stays on disk, which is what makes the next attempt
-    /// able to resume rather than start again.
+    /// A native transfer that waits for the response or the next chunk ends
+    /// with [`HttpError::Cancelled`] at once; other backends stop at the next
+    /// chunk boundary. A partial file left by a cancelled download stays on
+    /// disk, which is what makes the next attempt able to resume rather than
+    /// start again.
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Release);
+        self.cancel.cancelled.store(true, Ordering::Release);
+        let waiting = std::mem::take(
+            &mut *self
+                .cancel
+                .waiting
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        for transfer in waiting.iter().filter_map(Weak::upgrade) {
+            transfer.cancel();
+        }
     }
 
     /// Whether cancellation was requested.
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
+        self.cancel.cancelled.load(Ordering::Acquire)
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
+    fn on_cancel(&self, transfer: Weak<dyn CancelTransfer>) {
+        let mut waiting = self
+            .cancel
+            .waiting
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if self.is_cancelled() {
+            drop(waiting);
+            if let Some(transfer) = transfer.upgrade() {
+                transfer.cancel();
+            }
+            return;
+        }
+        waiting.retain(|transfer| transfer.strong_count() > 0);
+        waiting.push(transfer);
     }
 
     /// Hands a progress reading to whatever [`with_progress`](Self::with_progress)
@@ -685,6 +725,9 @@ impl HttpClient for StubHttpClient {
 #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
 const CHUNK_LEN: usize = 64 * 1024;
 
+#[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
+const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 struct DefaultHttpClient {
     #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
     native_client: Result<reqwest::blocking::Client, HttpError>,
@@ -694,7 +737,14 @@ impl DefaultHttpClient {
     fn new() -> Self {
         Self {
             #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
-            native_client: build_native_client(),
+            native_client: build_native_client(IDLE_TIMEOUT),
+        }
+    }
+
+    #[cfg(all(test, not(target_arch = "wasm32"), feature = "http-native"))]
+    fn with_idle_timeout(idle: std::time::Duration) -> Self {
+        Self {
+            native_client: build_native_client(idle),
         }
     }
 }
@@ -708,14 +758,28 @@ struct ResponseHead {
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
-struct ChannelBody {
+struct NativeTransfer {
+    head: crate::async_io::Signal<Result<ResponseHead, HttpError>>,
     chunks: crate::async_io::ChunkStream<HttpError>,
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
+impl CancelTransfer for NativeTransfer {
+    fn cancel(&self) {
+        self.head.set(Err(HttpError::Cancelled));
+        self.chunks.fail(HttpError::Cancelled);
+    }
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
+struct ChannelBody {
+    transfer: Arc<NativeTransfer>,
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
 impl HttpBody for ChannelBody {
     fn read_chunk(&self) -> HttpFuture<'_, Option<Vec<u8>>> {
-        Box::pin(self.chunks.next())
+        Box::pin(self.transfer.chunks.next())
     }
 }
 
@@ -727,31 +791,30 @@ async fn send_native(
 ) -> Result<HttpResponse, HttpError> {
     use crate::async_io::{ChunkChannel, Signal};
 
-    let head_signal: Signal<Result<ResponseHead, HttpError>> = Signal::new();
+    let head = Signal::new();
     let (chunks, stream) = ChunkChannel::<HttpError>::new();
-    let worker_head = head_signal.clone();
+    let transfer = Arc::new(NativeTransfer {
+        head: head.clone(),
+        chunks: stream,
+    });
+    control.on_cancel(Arc::<NativeTransfer>::downgrade(&transfer));
     let url = request.url.clone();
-    let worker_url = url.clone();
 
     std::thread::Builder::new()
         .name("cranpose-http".to_string())
         .spawn(move || {
-            let outcome = read_native_response(&client, &request, &control, &chunks, &worker_head);
-            match outcome {
-                Ok(()) => chunks.finish(),
-                Err(error) => {
-                    worker_head.set(Err(error.clone()));
-                    chunks.fail(error);
-                }
+            if let Err(error) = read_native_response(&client, request, &control, &chunks, &head) {
+                head.set(Err(error.clone()));
+                chunks.fail(error);
             }
-            let _ = worker_url;
         })
         .map_err(|error| HttpError::RequestFailed {
             url: url.clone(),
             message: format!("could not start the transfer: {error}"),
         })?;
 
-    let head = head_signal
+    let head = transfer
+        .head
         .wait()
         .await
         .ok_or_else(|| HttpError::RequestFailed {
@@ -759,20 +822,18 @@ async fn send_native(
             message: "the transfer ended before a response arrived".to_string(),
         })??;
 
-    Ok(HttpResponse::new(
-        url,
-        head.status,
-        http_body_ref(ChannelBody { chunks: stream }),
+    Ok(
+        HttpResponse::new(url, head.status, http_body_ref(ChannelBody { transfer }))
+            .with_headers(head.headers)
+            .with_content_length(head.content_length)
+            .with_resumed(head.resumed),
     )
-    .with_headers(head.headers)
-    .with_content_length(head.content_length)
-    .with_resumed(head.resumed))
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
 fn read_native_response(
     client: &reqwest::blocking::Client,
-    request: &HttpRequest,
+    request: HttpRequest,
     control: &HttpControl,
     chunks: &crate::async_io::ChunkChannel<HttpError>,
     head_signal: &crate::async_io::Signal<Result<ResponseHead, HttpError>>,
@@ -782,31 +843,38 @@ fn read_native_response(
     if control.is_cancelled() {
         return Err(HttpError::Cancelled);
     }
-    let method = match request.method {
+    let HttpRequest {
+        url,
+        method,
+        headers,
+        body,
+        resume_from,
+    } = request;
+    let method = match method {
         HttpMethod::Get => reqwest::Method::GET,
         HttpMethod::Head => reqwest::Method::HEAD,
         HttpMethod::Post => reqwest::Method::POST,
         HttpMethod::Put => reqwest::Method::PUT,
         HttpMethod::Delete => reqwest::Method::DELETE,
     };
-    let mut builder = client.request(method, &request.url);
-    for (name, value) in &request.headers {
+    let mut builder = client.request(method, &url);
+    for (name, value) in headers {
         builder = builder.header(name, value);
     }
-    if let Some(offset) = request.resume_from {
+    if let Some(offset) = resume_from {
         builder = builder.header(reqwest::header::RANGE, format!("bytes={offset}-"));
     }
-    if let Some(body) = &request.body {
-        builder = builder.body(body.clone());
+    if let Some(body) = body {
+        builder = builder.body(body);
     }
 
     let mut response = builder.send().map_err(|error| HttpError::RequestFailed {
-        url: request.url.clone(),
+        url: url.clone(),
         message: error.to_string(),
     })?;
 
     let status = response.status();
-    let resumed = request.resume_from.is_some() && status == reqwest::StatusCode::PARTIAL_CONTENT;
+    let resumed = resume_from.is_some() && status == reqwest::StatusCode::PARTIAL_CONTENT;
     let content_length = response.content_length();
     let headers = response
         .headers()
@@ -834,7 +902,7 @@ fn read_native_response(
         let count = response
             .read(&mut buffer)
             .map_err(|error| HttpError::BodyReadFailed {
-                url: request.url.clone(),
+                url: url.clone(),
                 message: error.to_string(),
             })?;
         if count == 0 {
@@ -888,13 +956,11 @@ impl HttpClient for DefaultHttpClient {
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
-fn build_native_client() -> Result<reqwest::blocking::Client, HttpError> {
-    use std::time::Duration;
-
+fn build_native_client(idle: std::time::Duration) -> Result<reqwest::blocking::Client, HttpError> {
     configure_native_client_builder(
         reqwest::blocking::Client::builder()
-            .connect_timeout(Duration::from_secs(30))
-            .timeout(None)
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .timeout(idle)
             .user_agent(concat!("cranpose/", env!("CARGO_PKG_VERSION"))),
     )?
     .build()
@@ -1106,6 +1172,13 @@ async fn send_web(request: &HttpRequest, _control: HttpControl) -> Result<HttpRe
     })
 }
 
+/// The platform's HTTP client.
+///
+/// A native transfer fails when the response, or the next piece of its body,
+/// does not arrive within 60 seconds; a body that keeps arriving runs as long
+/// as it needs. A socket left open by a phone that slept or lost its network
+/// therefore ends in an error, and [`HttpClient::download_to`] resumes from the
+/// bytes already on disk at the next attempt.
 pub fn default_http_client() -> HttpClientRef {
     Arc::new(DefaultHttpClient::new())
 }
