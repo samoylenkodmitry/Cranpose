@@ -4,7 +4,8 @@
 //! transfer while the application is suspended, and finishes it when the
 //! system closed the application. The session is made again at every start,
 //! so a file that finished while the application was closed is put in place
-//! before anything asks for it.
+//! before anything asks for it. A finished file stays out of iCloud and device
+//! backups: it can be downloaded again from its address.
 
 use std::{
     collections::{HashMap, hash_map::Entry},
@@ -26,9 +27,10 @@ use objc2::{
 use objc2_foundation::{
     NSArray, NSBundle, NSData, NSDictionary, NSError, NSHTTPURLResponse, NSKeyedArchiver,
     NSKeyedUnarchiver, NSMutableCopying, NSMutableURLRequest, NSNumber, NSObject, NSObjectProtocol,
-    NSOperationQueue, NSString, NSURL, NSURLSession, NSURLSessionConfiguration,
-    NSURLSessionDelegate, NSURLSessionDownloadDelegate, NSURLSessionDownloadTask,
-    NSURLSessionDownloadTaskResumeData, NSURLSessionTask, NSURLSessionTaskDelegate,
+    NSOperationQueue, NSString, NSURL, NSURLIsExcludedFromBackupKey, NSURLSession,
+    NSURLSessionConfiguration, NSURLSessionDelegate, NSURLSessionDownloadDelegate,
+    NSURLSessionDownloadTask, NSURLSessionDownloadTaskResumeData, NSURLSessionTask,
+    NSURLSessionTaskDelegate,
 };
 
 /// `NSURLErrorCancelled`.
@@ -422,7 +424,8 @@ fn described(task: &Retained<NSURLSessionDownloadTask>) -> Option<Transfer> {
 }
 
 /// Puts the downloaded part after the bytes already in the target, or the
-/// whole file in its place, and returns the target's length.
+/// whole file in its place, and returns the target's length. The placed file
+/// is left out of backups.
 fn place(
     task: &NSURLSessionDownloadTask,
     location: &NSURL,
@@ -439,7 +442,7 @@ fn place(
     let part = location
         .to_file_path()
         .ok_or_else(|| invalid("the download has no file"))?;
-    match response.statusCode() {
+    let placed = match response.statusCode() {
         200 => replace(&part, transfer),
         206 => {
             // A resumed task answers for its last request, so the part is
@@ -464,6 +467,31 @@ fn place(
             url: transfer.url.clone(),
             status: u16::try_from(status).unwrap_or(0),
         }),
+    };
+    if placed.is_ok() {
+        keep_out_of_backups(&transfer.target);
+    }
+    placed
+}
+
+/// Marks `file` as one iOS leaves out of iCloud and device backups. Apple's
+/// storage guidelines ask that a file the app can download again is not
+/// backed up, and App Review rejects an app that backs up large ones.
+fn keep_out_of_backups(file: &Path) {
+    let Some(url) = NSURL::from_file_path(file) else {
+        return;
+    };
+    let excluded = NSNumber::new_bool(true);
+    // SAFETY: a file URL, the key Foundation documents for this resource
+    // value, and the boolean it takes.
+    let result =
+        unsafe { url.setResourceValue_forKey_error(Some(&excluded), NSURLIsExcludedFromBackupKey) };
+    if let Err(error) = result {
+        log::warn!(
+            "{} stays in backups: {}",
+            file.display(),
+            error.localizedDescription()
+        );
     }
 }
 
