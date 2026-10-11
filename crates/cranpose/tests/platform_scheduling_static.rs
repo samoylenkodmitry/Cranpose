@@ -701,8 +701,16 @@ fn web_first_frame_is_forced_through_surface_dirty() {
         ),
         "web render loop must gate the present through the shared surface_present_required helper"
     );
+    let ready = source
+        .find("SurfaceFrame::Ready(output) => {")
+        .map(|start| &source[start..])
+        .expect("the web presenter must handle a ready surface texture");
+    let ready_arm = ready
+        .find("SurfaceFrame::Reconfigure => {")
+        .map(|end| &ready[..end])
+        .expect("the web presenter must handle a surface that needs configuring");
     assert!(
-        source.contains("surface_dirty.set(false);"),
+        ready_arm.contains("self.dirty.set(false);"),
         "web surface_dirty must be cleared only after a successful present"
     );
 }
