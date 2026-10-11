@@ -46,7 +46,7 @@ DECIDING = {
     'cpu_ms_per_frame': (0.03, True, False),
     'desired_to_present_p50_ms': (2.0, False, False),
 }
-REPORTED = ['first_frame_s', 'janky_pct', 'interval_p99_ms', 'cpu_mhz', 'gpu_mhz', 'ram_mb', 'gpu_ram_mb']
+REPORTED = ['first_frame_s', 'janky_pct', 'interval_p99_ms', 'cpu_cores', 'cpu_mhz', 'gpu_mhz', 'ram_mb', 'gpu_ram_mb']
 
 
 def metric_values(legs, subject, metric, start):
@@ -90,7 +90,8 @@ def leg_record(run, subject, order, start):
         'janky_pct': run['janky_pct'],
         'interval_p99_ms': run['interval_p99_ms'],
         'cpu_ms_per_frame': run['cpu_ms_per_frame'],
-        # The big cores run the UI and render threads.
+        # The cores the app's processes kept busy, on average over the run.
+        'cpu_cores': run['cpu_cores'],
         'cpu_mhz': run.get('cpu_big_mhz'),
         'gpu_mhz': run.get('gpu_mhz'),
         'desired_to_present_p50_ms': run.get('desired_to_present_p50_ms'),
@@ -98,6 +99,8 @@ def leg_record(run, subject, order, start):
         'throttled': run['throttled'],
         'temperature_before': run['temperature_before'],
         'temperature_after': run['temperature_after'],
+        # The run at each of the sampler's intervals.
+        'samples': run['samples'],
     }
 
 

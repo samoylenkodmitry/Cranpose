@@ -40,6 +40,7 @@ a removable volume, and the checkout may be on one.
 """
 
 import argparse
+import ctypes
 import http.server
 import json
 import os
@@ -231,22 +232,150 @@ class Clocks:
     the run has no clocks."""
 
     def __init__(self):
+        self.started = time.monotonic()
         self.process = subprocess.Popen(
             [MACMON, 'pipe', '-i', str(CLOCK_INTERVAL_MS)], stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, text=True) if MACMON else None
 
     def stop(self):
+        """The mean clocks, and each sample's clocks by the monotonic time it
+        ended at: one every `CLOCK_INTERVAL_MS` from the start."""
         if not self.process:
-            return {}
+            return {}, []
         self.process.terminate()
         output, _ = self.process.communicate(timeout=10)
         # Stopped, `macmon` may leave its last line unfinished: only the lines
         # it ended are samples.
         samples = [json.loads(line) for line in output.split('\n')[:-1] if line.startswith('{')]
         if not samples:
-            return {}
+            return {}, []
+        timed = [(self.started + (index + 1) * CLOCK_INTERVAL_MS / 1000, sample['pcpu_freq_mhz'],
+                  sample['gpu_freq_mhz']) for index, sample in enumerate(samples)]
         return {'cpu_mhz': round(statistics.mean(sample['pcpu_freq_mhz'] for sample in samples)),
-                'gpu_mhz': round(statistics.mean(sample['gpu_freq_mhz'] for sample in samples))}
+                'gpu_mhz': round(statistics.mean(sample['gpu_freq_mhz'] for sample in samples))}, timed
+
+
+LIBPROC = ctypes.CDLL('/usr/lib/libproc.dylib')
+# `proc_pid_rusage`'s first flavour: CPU times in Mach ticks and the footprint.
+RUSAGE_INFO_V0 = 0
+
+
+class RusageInfoV0(ctypes.Structure):
+    _fields_ = [('uuid', ctypes.c_uint8 * 16), ('user_time', ctypes.c_uint64), ('system_time', ctypes.c_uint64),
+                ('pkg_idle_wkups', ctypes.c_uint64), ('interrupt_wkups', ctypes.c_uint64),
+                ('pageins', ctypes.c_uint64), ('wired_size', ctypes.c_uint64), ('resident_size', ctypes.c_uint64),
+                ('phys_footprint', ctypes.c_uint64), ('proc_start_abstime', ctypes.c_uint64),
+                ('proc_exit_abstime', ctypes.c_uint64)]
+
+
+class MachTimebase(ctypes.Structure):
+    _fields_ = [('numerator', ctypes.c_uint32), ('denominator', ctypes.c_uint32)]
+
+
+TIMEBASE = MachTimebase()
+ctypes.CDLL(None).mach_timebase_info(ctypes.byref(TIMEBASE))
+# Seconds a Mach tick lasts.
+TICK_S = TIMEBASE.numerator / TIMEBASE.denominator / 1e9
+# How often `Usage` reads the app's processes.
+USAGE_INTERVAL_S = 0.5
+
+
+def child_pids(pid):
+    """The processes `pid` started, through libproc: no process is started."""
+    buffer = (ctypes.c_int * 1024)()
+    count = LIBPROC.proc_listchildpids(pid, buffer, ctypes.sizeof(buffer))
+    return list(buffer[:max(count, 0)])
+
+
+def webkit_services():
+    """Every WebKit service process, by its name, through libproc."""
+    buffer = (ctypes.c_int * 8192)()
+    name = ctypes.create_string_buffer(256)
+    found = set()
+    for pid in buffer[:max(LIBPROC.proc_listallpids(buffer, ctypes.sizeof(buffer)), 0)]:
+        if LIBPROC.proc_name(pid, name, ctypes.sizeof(name)) > 0 and \
+                name.value.decode(errors='replace').startswith(WEBKIT_SERVICE):
+            found.add(pid)
+    return found
+
+
+def own_usage(pid):
+    """The CPU seconds a process of this user spent and the footprint it holds,
+    or None for one that ended."""
+    info = RusageInfoV0()
+    if LIBPROC.proc_pid_rusage(pid, RUSAGE_INFO_V0, ctypes.byref(info)) != 0:
+        return None
+    return (info.user_time + info.system_time) * TICK_S, info.phys_footprint
+
+
+class Usage:
+    """The app's processes every `USAGE_INTERVAL_S` of its run: the CPU they
+    and the window server spent, and the footprint they hold. The app's are
+    read through libproc; the window server's, which runs as another user,
+    through one `ps` of it. A sample costs about 5 ms of one core on a Mac
+    with 2,200 processes, which counts toward the other processes, never the
+    app's: `ps -A` there takes 110 ms."""
+
+    def __init__(self, root, server, launched):
+        self.root = root
+        self.server = server
+        # The WebKit services that ran before the launch are not the app's.
+        self.earlier_services = webkit_services()
+        # At the launch the app's processes had spent nothing.
+        self.taken = [(launched, self.server_cpu(), 0)]
+        self.stopped = threading.Event()
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+
+    def pids(self):
+        found, pending = set(), [self.root, *(webkit_services() - self.earlier_services)]
+        while pending:
+            pid = pending.pop()
+            if pid not in found:
+                found.add(pid)
+                pending.extend(child_pids(pid))
+        return found
+
+    def server_cpu(self):
+        if not self.server:
+            return 0.0
+        spent = subprocess.run(['ps', '-o', 'time=', '-p', str(self.server)], capture_output=True,
+                               text=True).stdout.strip()
+        return seconds(spent) if spent else 0.0
+
+    def run(self):
+        while not self.stopped.wait(USAGE_INTERVAL_S):
+            usage = [found for pid in self.pids() if (found := own_usage(pid))]
+            self.taken.append((time.monotonic(), sum(cpu for cpu, _ in usage) + self.server_cpu(),
+                               sum(footprint for _, footprint in usage)))
+
+    def stop(self):
+        self.stopped.set()
+        self.thread.join(timeout=5)
+        return self.taken
+
+
+def run_samples(taken, clocks, launched, times):
+    """The run at each of `Usage`'s samples since the launch: the cores the app
+    and the window server kept busy, their CPU per frame presented in the
+    interval, the app's footprint, and the clocks `macmon` read last. The
+    first interval starts at the launch, before the app spent anything."""
+    samples = {'t_ms': [], 'cores': [], 'cpu_ms_per_frame': [], 'ram_mb': [], 'cpu_mhz': [], 'gpu_mhz': []}
+    for (earlier, spent_before, _), (later, spent, footprint) in zip(taken, taken[1:]):
+        span = later - earlier
+        if span <= 0:
+            continue
+        # A process that ended takes its CPU with it.
+        cpu = max(0.0, spent - spent_before)
+        shown = sum(1 for time in times if earlier < time <= later)
+        clock = next((sample for sample in reversed(clocks) if sample[0] <= later), None)
+        samples['t_ms'].append(round((later - launched) * 1000))
+        samples['cores'].append(round(cpu / span, 3))
+        samples['cpu_ms_per_frame'].append(round(cpu * 1000 / shown, 2) if shown else None)
+        samples['ram_mb'].append(round(footprint / MB, 1))
+        samples['cpu_mhz'].append(round(clock[1]) if clock else None)
+        samples['gpu_mhz'].append(round(clock[2]) if clock else None)
+    return samples
 
 
 def wait_for(log, text, timeout):
@@ -382,10 +511,14 @@ def measure(name, args, work, page, stage, label, earlier, profile):
     app = App(name, args, 0, work, page, stage, label, profile)
     try:
         clocks = Clocks()
+        server_pid = next((pid for pid, (_, _, _, command) in before.items() if command.endswith(WINDOW_SERVER)),
+                          None)
+        usage = Usage(app.pid, server_pid, launched)
         out = stage / f'{label}-frames.json'
         frames = framecount(app.pid, out, '--until', f'{launched + args.run:.3f}', '--out', str(out))
         after, ended = processes(), time.monotonic()
-        clocked = clocks.stop()
+        taken = usage.stop()
+        clocked, clock_samples = clocks.stop()
         if 'PERF first_frame' not in app.log.read_text(errors='replace'):
             raise RuntimeError(f'{name} logged no first frame within its {args.run:.0f} s run')
         mine = tree(app.pid, after, ended - app.started + 1)
@@ -425,6 +558,8 @@ def measure(name, args, work, page, stage, label, earlier, profile):
             'interval_p99_ms': round(percentile(intervals, 0.99), 2),
             'cpu_cores': round(cores, 2), 'server_cores': round(server_cores, 2), 'other_cores': round(others, 2),
             'cpu_ms_per_frame': round(cores * 1000 / fps, 2),
+            # The run at each interval of `Usage`.
+            'samples': run_samples(taken, clock_samples, launched, times),
             **held, **clocked}
 
 
@@ -464,7 +599,8 @@ def main():
     parser.add_argument('--timeout', type=float, default=60.0)
     parser.add_argument('--main', help='the commit the Cranpose app was built at, recorded with the run')
     parser.add_argument('--max-others', type=float, default=1.5,
-                        help='cores other processes may spend in a leg before it is measured again')
+                        help='cores other processes may spend in a leg above what they spend while the machine '
+                             'idles, before it is measured again')
     parser.add_argument('--parity', action='store_true')
     parser.add_argument('--freeze', type=int, default=120)
     parser.add_argument('--shift', type=int, default=8)
@@ -494,9 +630,24 @@ def main():
     print(json.dumps(report['scenarios'][0]['starts'] if 'scenarios' in report else report['changed_pct']))
 
 
-def undisturbed_leg(name, args, page, stage, label, earlier, failures, profile, start):
+# How long the machine's own background load is read for, before each round.
+IDLE_SPAN_S = 5.0
+
+
+def idle_others(span_s=IDLE_SPAN_S):
+    """The cores the machine's processes spend while no app runs, over
+    `span_s`: its own background load, which a Mac up for weeks can hold
+    above a core (macm3, 2026-10-11: `dasd`, `launchd` and `notifyd`)."""
+    before, started = processes(), time.monotonic()
+    time.sleep(span_s)
+    after, wall = processes(), time.monotonic() - started
+    return sum(max(0.0, cpu - before[pid][1]) for pid, (_, cpu, _, _) in after.items() if pid in before) / wall
+
+
+def undisturbed_leg(name, args, page, stage, label, earlier, failures, profile, start, idle):
     """A leg of `start`, measured again, up to three times, while other
-    processes spend more than `--max-others` cores in it or it fails. Every
+    processes spend more than `--max-others` cores above the machine's `idle`
+    load in it or it fails. Every
     attempt at a first start begins after the apps' state and Chrome's
     `profile` are removed; a second start measured again follows the earlier
     ones, its caches as full. Every leg measured is kept, a disturbed one
@@ -513,7 +664,8 @@ def undisturbed_leg(name, args, page, stage, label, earlier, failures, profile, 
             failures.append({'subject': name, 'start': start, 'label': f'{label}-{attempt + 1}',
                              'error': str(failure)[:300]})
             continue
-        leg['disturbed'] = leg['other_cores'] > args.max_others
+        leg['idle_other_cores'] = round(idle, 2)
+        leg['disturbed'] = leg['other_cores'] > idle + args.max_others
         legs.append(leg)
         print(f'{label:16} fps {leg["fps"]:6.1f} cpu/f {leg["cpu_ms_per_frame"]} first frame '
               f'{leg["first_frame_s"]} s p99 {leg["interval_p99_ms"]} others {leg["other_cores"]}', flush=True)
@@ -562,6 +714,8 @@ def run(args, apps, page, stage):
     built = json.loads(built_file.read_text()) if built_file.exists() else {}
     legs, failures = [], []
     for round_index in range(args.rounds):
+        idle = idle_others()
+        print(f'round {round_index + 1}: the machine idles at {idle:.2f} cores', flush=True)
         for name in apps:
             # Chrome's profile of the round: made by the first start, kept
             # for the second.
@@ -570,7 +724,8 @@ def run(args, apps, page, stage):
                 earlier = [leg['fps'] for leg in legs
                            if leg['subject'] == name and leg['start'] == start and not leg['disturbed']]
                 label = f'{name}-{round_index + 1}-{start}'
-                measured = undisturbed_leg(name, args, page, stage, label, earlier, failures, profile, start)
+                measured = undisturbed_leg(name, args, page, stage, label, earlier, failures, profile, start,
+                                           idle)
                 if not measured:
                     # No second start without a first one.
                     break
@@ -580,7 +735,7 @@ def run(args, apps, page, stage):
                     print(f'{name}: {kept[-1]["fps"]} fps disagrees with its earlier legs; measuring once more',
                           flush=True)
                     again = undisturbed_leg(name, args, page, stage, f'{label}-again', earlier, failures,
-                                            profile, start)
+                                            profile, start, idle)
                     legs += [{'subject': name, 'round': round_index, 'start': start, **leg} for leg in again]
     chip = subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'], capture_output=True, text=True,
                           check=True).stdout.strip()

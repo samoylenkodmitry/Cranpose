@@ -159,32 +159,48 @@ class PublishPushTest(unittest.TestCase):
             self.assertEqual([entry['file'] for entry in index['runs']],
                              ['runs/earlier.json', 'runs/2026-10-05-nightly-abc123def-EVR-AL00.json'])
 
+    def push_with_token(self, root, machine_config):
+        """Publishes once without a token and once with the job's, on a
+        machine whose git configuration is `machine_config`, and returns the
+        environment git pushed with the token in."""
+        origin, repo = scratch_repo(root)
+        tools = root / 'tools'
+        tools.mkdir()
+        (tools / 'git').write_text(RECORD_PUSH)
+        (tools / 'git').chmod(0o755)
+        record = root / 'push-record'
+        machine = root / 'machine-gitconfig'
+        machine.write_text(SIGNING + machine_config)
+        environment = {**ENV, 'PATH': f'{tools}{os.pathsep}{ENV["PATH"]}', 'REAL_GIT': shutil.which('git'),
+                       'PUSH_RECORD': str(record), 'GIT_CONFIG_GLOBAL': str(machine)}
+        self.assertEqual(publish_run(root, repo, environment).returncode, 0)
+        self.assertFalse(record.exists() and record.read_text(), 'a job without a token pushes as the machine does')
+        (root / 'run.json').write_text(json.dumps({**run(), 'main': 'def456abc789'}))
+        published = publish_run(root, repo, {**environment, 'GH_TOKEN': 'job-token'})
+        self.assertEqual(published.returncode, 0, published.stderr)
+        pushed = dict(line.split('=', 1) for line in record.read_text().splitlines())
+        return {**environment, **pushed, 'GH_TOKEN': 'job-token'}
+
     def test_a_job_with_a_token_answers_git_with_it_in_place_of_the_machines_helper(self):
         with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            origin, repo = scratch_repo(root)
-            tools = root / 'tools'
-            tools.mkdir()
-            (tools / 'git').write_text(RECORD_PUSH)
-            (tools / 'git').chmod(0o755)
-            record = root / 'push-record'
-            machine = root / 'machine-gitconfig'
-            machine.write_text(SIGNING + '[credential]\n\thelper = !echo password=the-keychain\n')
-            environment = {**ENV, 'PATH': f'{tools}{os.pathsep}{ENV["PATH"]}', 'REAL_GIT': shutil.which('git'),
-                           'PUSH_RECORD': str(record), 'GIT_CONFIG_GLOBAL': str(machine)}
-            self.assertEqual(publish_run(root, repo, environment).returncode, 0)
-            self.assertFalse(record.exists() and record.read_text(), 'a job without a token pushes as the machine does')
-            (root / 'run.json').write_text(json.dumps({**run(), 'main': 'def456abc789'}))
-            published = publish_run(root, repo, {**environment, 'GH_TOKEN': 'job-token'})
-            self.assertEqual(published.returncode, 0, published.stderr)
+            pushed = self.push_with_token(Path(folder), '[credential]\n\thelper = !echo password=the-keychain\n')
             # What git is asked for with the push's environment: the job's token.
-            pushed = dict(line.split('=', 1) for line in record.read_text().splitlines())
             asked = subprocess.run(['git', 'credential', 'fill'], input='protocol=https\nhost=github.com\n\n',
-                                   capture_output=True, text=True, check=True,
-                                   env={**environment, **pushed, 'GH_TOKEN': 'job-token'}).stdout
+                                   capture_output=True, text=True, check=True, env=pushed).stdout
             self.assertIn('username=x-access-token', asked)
             self.assertIn('password=job-token', asked)
             self.assertNotIn('the-keychain', asked)
+
+    def test_a_header_an_earlier_job_left_in_the_checkout_does_not_reach_the_server(self):
+        with tempfile.TemporaryDirectory() as folder:
+            # A job actions/checkout could not clean up leaves its token as a
+            # header, which GitHub refuses once the job ended (macm3, 2026-10-11).
+            pushed = self.push_with_token(
+                Path(folder), '[http "https://github.com/"]\n\textraheader = AUTHORIZATION: basic expired\n')
+            sent = subprocess.run(['git', 'config', '--get-urlmatch', 'http.extraheader',
+                                   'https://github.com/samoylenkodmitry/Cranpose'],
+                                  capture_output=True, text=True, env=pushed).stdout
+            self.assertEqual(sent.strip(), '')
 
     def test_a_data_tree_the_checkout_lost_its_record_of_is_made_again(self):
         with tempfile.TemporaryDirectory() as folder:

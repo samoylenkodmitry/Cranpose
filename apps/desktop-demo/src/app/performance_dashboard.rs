@@ -90,6 +90,44 @@ pub struct PerfFramesLeg {
     /// shown, and left out of the medians.
     #[serde(default)]
     pub disturbed: bool,
+    /// The run at each of the sampler's intervals; none in a run before the
+    /// sampler.
+    #[serde(default)]
+    pub samples: LegSamples,
+}
+
+/// A launch sampled at each interval of its run, each sample standing for
+/// the interval since the one before; the first since the launch.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct LegSamples {
+    /// When each sample was taken, in milliseconds since the launch.
+    #[serde(default)]
+    pub t_ms: Vec<f64>,
+    /// Each metric's value at each sample, by its key; none where it was not
+    /// read.
+    #[serde(flatten)]
+    pub values: BTreeMap<String, Vec<Option<f64>>>,
+}
+
+impl LegSamples {
+    /// The metric under `key` every `step_ms` up to `run_ms`: at each moment
+    /// the sample whose interval holds it; not a number past the last
+    /// sample, or where the sample has no value.
+    pub fn every(&self, key: &str, run_ms: f64, step_ms: f64) -> Vec<f64> {
+        let Some(values) = self.values.get(key) else {
+            return Vec::new();
+        };
+        let mut sample = 0;
+        (0..=(run_ms / step_ms) as usize)
+            .map(|step| {
+                let now = step as f64 * step_ms;
+                while sample < self.t_ms.len() && self.t_ms[sample] < now {
+                    sample += 1;
+                }
+                values.get(sample).copied().flatten().unwrap_or(f64::NAN)
+            })
+            .collect()
+    }
 }
 
 impl PerfRunFrames {
@@ -318,12 +356,24 @@ fn figure(value: Option<f64>) -> String {
     value.map_or_else(|| "–".to_string(), |value| format!("{value:.1}"))
 }
 
+/// Where a metric's chart reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Curve {
+    /// The frame rate, from the times of the frames the display showed.
+    Frames,
+    /// The run's samples of the metric under this key.
+    Samples(&'static str),
+    /// No curve, and why.
+    None(&'static str),
+}
+
 /// What the trend and the framework bars show of each run's medians.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Metric {
     Fps,
     FirstFrame,
     CpuPerFrame,
+    CpuCores,
     Ram,
     GpuRam,
     CpuClock,
@@ -331,10 +381,11 @@ enum Metric {
 }
 
 impl Metric {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::Fps,
         Self::FirstFrame,
         Self::CpuPerFrame,
+        Self::CpuCores,
         Self::Ram,
         Self::GpuRam,
         Self::CpuClock,
@@ -347,6 +398,7 @@ impl Metric {
             Self::Fps => "fps",
             Self::FirstFrame => "first_frame_s",
             Self::CpuPerFrame => "cpu_ms_per_frame",
+            Self::CpuCores => "cpu_cores",
             Self::Ram => "ram_mb",
             Self::GpuRam => "gpu_ram_mb",
             Self::CpuClock => "cpu_mhz",
@@ -359,6 +411,7 @@ impl Metric {
             Self::Fps => "fps",
             Self::FirstFrame => "first frame ms",
             Self::CpuPerFrame => "CPU ms per frame",
+            Self::CpuCores => "CPU cores",
             Self::Ram => "RAM MB",
             Self::GpuRam => "GPU RAM MB",
             Self::CpuClock => "CPU MHz",
@@ -377,15 +430,22 @@ impl Metric {
                 "Milliseconds from the launch command to the first frame the display showed."
             }
             Self::CpuPerFrame => {
-                "CPU time of the app and every process it started, per frame shown."
+                "CPU time of the app and every process it started, per frame shown; on macOS \
+                 the window server's too."
+            }
+            Self::CpuCores => {
+                "Cores the app and every process it started kept busy: their CPU seconds per \
+                 second of the run."
             }
             Self::Ram => {
                 "Memory the app holds at the run's end: PSS on Android, the footprint of the \
-                 app and every process it started on macOS."
+                 app and every process it started on macOS. The chart's curve on Android is the \
+                 resident memory (RSS), which counts shared pages whole: PSS costs the app a \
+                 garbage collection to read."
             }
             Self::GpuRam => {
                 "The GPU's part of that memory: GL and EGL mtrack on Android; Metal buffers, \
-                 textures and window surfaces on macOS."
+                 textures and window surfaces on macOS. Read once, at the run's end."
             }
             Self::CpuClock => {
                 "Mean clock over the run of the big cores on Android, the performance cores on \
@@ -398,9 +458,27 @@ impl Metric {
     fn format(self, value: f64) -> String {
         match self {
             Self::Fps | Self::CpuPerFrame => format!("{value:.1}"),
+            Self::CpuCores => format!("{value:.2}"),
             // Medians in seconds, shown in milliseconds.
             Self::FirstFrame => format!("{:.0}", value * 1000.0),
             Self::Ram | Self::GpuRam | Self::CpuClock | Self::GpuClock => format!("{value:.0}"),
+        }
+    }
+
+    /// Where its chart reads it: the frames the display showed, the run's
+    /// samples by their key, or nowhere, with why.
+    fn curve(self) -> Curve {
+        match self {
+            Self::Fps | Self::FirstFrame => Curve::Frames,
+            Self::CpuPerFrame => Curve::Samples("cpu_ms_per_frame"),
+            Self::CpuCores => Curve::Samples("cores"),
+            Self::Ram => Curve::Samples("ram_mb"),
+            Self::CpuClock => Curve::Samples("cpu_mhz"),
+            Self::GpuClock => Curve::Samples("gpu_mhz"),
+            Self::GpuRam => Curve::None(
+                "No curve: the GPU's memory is read once, at the run's end. On Android, \
+                 reading it costs the app a garbage collection.",
+            ),
         }
     }
 
@@ -551,9 +629,10 @@ fn Header(palette: Palette, refresh: Option<MutableState<u64>>) {
                     );
                     Text(
                         format!(
-                            "Charts: frames per second over the last {RATE_WINDOW_MS:.0} ms; a \
-                             line is the median launch, its band the lowest to the highest. \
-                             Bars: medians over the run, best first."
+                            "Charts: the chosen metric from the launch, the frame rate over the \
+                             last {RATE_WINDOW_MS:.0} ms and the rest as sampled every half \
+                             second; a line is the median launch, its band the lowest to the \
+                             highest. Bars: medians over the run, best first."
                         ),
                         Modifier::empty(),
                         text_style(12.0, palette.muted, false),
@@ -1127,14 +1206,16 @@ struct LaunchCurve {
     first_frame_ms: Option<f64>,
 }
 
-/// Each line's frame rate from the launch, every [`CHART_STEP_MS`] up to
-/// `run_ms`, over its legs of `start` no other process disturbed.
+/// Each line's `curve` from the launch, every [`CHART_STEP_MS`] up to
+/// `run_ms`, over its legs of `start` no other process disturbed: the frame
+/// rate, or a metric the run sampled.
 fn launch_curves(
     frames: &PerfRunFrames,
     scenario: &str,
     start: &str,
     run_ms: f64,
     lines: &[LaunchLine],
+    curve: Curve,
 ) -> Vec<LaunchCurve> {
     let Some(entry) = frames
         .scenarios
@@ -1146,42 +1227,70 @@ fn launch_curves(
     lines
         .iter()
         .filter_map(|line| {
-            let legs: Vec<&PerfFramesLeg> = entry
+            let legs = entry
                 .legs
                 .iter()
-                .filter(|leg| {
-                    leg.subject == line.name
-                        && leg.start == start
-                        && !leg.disturbed
-                        && !leg.frame_ms.is_empty()
-                })
+                .filter(|leg| leg.subject == line.name && leg.start == start && !leg.disturbed);
+            let traces: Vec<Vec<f64>> = legs
+                .clone()
+                .filter_map(|leg| leg_trace(leg, curve, run_ms))
                 .collect();
-            if legs.is_empty() {
+            if traces.is_empty() {
                 return None;
             }
-            let rates: Vec<Vec<f64>> = legs
-                .iter()
-                .map(|leg| launch_fps(&leg.frame_ms, run_ms, CHART_STEP_MS))
+            let mut firsts: Vec<f64> = legs
+                .filter_map(|leg| leg.frame_ms.first().copied())
                 .collect();
-            let steps = rates.iter().map(Vec::len).min().unwrap_or(0);
-            let at = |step: usize| -> Vec<f64> {
-                let mut values: Vec<f64> = rates.iter().map(|rate| rate[step]).collect();
-                values.sort_by(f64::total_cmp);
-                values
-            };
-            let mut firsts: Vec<f64> = legs.iter().map(|leg| leg.frame_ms[0]).collect();
             firsts.sort_by(f64::total_cmp);
+            let [median, lowest, highest] = across(&traces);
             Some(LaunchCurve {
                 line: line.clone(),
-                median: (0..steps).map(|step| middle(&at(step))).collect(),
-                lowest: (0..steps).map(|step| at(step)[0]).collect(),
-                highest: (0..steps)
-                    .map(|step| *at(step).last().unwrap_or(&0.0))
-                    .collect(),
-                first_frame_ms: Some(middle(&firsts)),
+                median,
+                lowest,
+                highest,
+                first_frame_ms: (!firsts.is_empty()).then(|| middle(&firsts)),
             })
         })
         .collect()
+}
+
+/// A launch's `curve` every [`CHART_STEP_MS`] up to `run_ms`, when it read
+/// any.
+fn leg_trace(leg: &PerfFramesLeg, curve: Curve, run_ms: f64) -> Option<Vec<f64>> {
+    match curve {
+        Curve::Frames if !leg.frame_ms.is_empty() => {
+            Some(launch_fps(&leg.frame_ms, run_ms, CHART_STEP_MS))
+        }
+        Curve::Samples(key) => Some(leg.samples.every(key, run_ms, CHART_STEP_MS))
+            .filter(|trace| trace.iter().any(|value| value.is_finite())),
+        Curve::Frames | Curve::None(_) => None,
+    }
+}
+
+/// The median, the lowest and the highest of `traces` at each step, leaving
+/// out the launches that read nothing there; not a number where none did.
+fn across(traces: &[Vec<f64>]) -> [Vec<f64>; 3] {
+    let steps = traces.iter().map(Vec::len).min().unwrap_or(0);
+    let mut read: [Vec<f64>; 3] = std::array::from_fn(|_| Vec::with_capacity(steps));
+    let mut values = Vec::with_capacity(traces.len());
+    for step in 0..steps {
+        values.clear();
+        values.extend(
+            traces
+                .iter()
+                .map(|trace| trace[step])
+                .filter(|value| value.is_finite()),
+        );
+        values.sort_by(f64::total_cmp);
+        let picked = match (values.first(), values.last()) {
+            (Some(lowest), Some(highest)) => [middle(&values), *lowest, *highest],
+            _ => [f64::NAN; 3],
+        };
+        for (series, value) in read.iter_mut().zip(picked) {
+            series.push(value);
+        }
+    }
+    read
 }
 
 /// The median of sorted `values`.
@@ -1203,19 +1312,39 @@ fn frames_note(frames: &FramesState) -> Option<(String, bool)> {
     }
 }
 
-/// A path through `values`, one every chart step from the launch.
+/// A path through `values`, one every chart step from the launch, broken
+/// where no launch read a value.
 fn polyline(
     path: &mut Path,
     values: impl Iterator<Item = (usize, f64)>,
     at: impl Fn(usize, f64) -> Point,
 ) {
-    for (index, (step, value)) in values.enumerate() {
-        if index == 0 {
-            path.move_to(at(step, value));
-        } else {
+    let mut drawing = false;
+    for (step, value) in values {
+        if !value.is_finite() {
+            drawing = false;
+        } else if drawing {
             path.line_to(at(step, value));
+        } else {
+            path.move_to(at(step, value));
+            drawing = true;
         }
     }
+}
+
+/// The stretches of steps over which `values` reads a value.
+fn read_stretches(values: &[f64]) -> impl Iterator<Item = std::ops::Range<usize>> + '_ {
+    let mut step = 0;
+    std::iter::from_fn(move || {
+        while step < values.len() && !values[step].is_finite() {
+            step += 1;
+        }
+        let start = step;
+        while step < values.len() && values[step].is_finite() {
+            step += 1;
+        }
+        (start < step).then_some(start..step)
+    })
 }
 
 /// Each curve: its band from the lowest to the highest launch, then its
@@ -1229,11 +1358,17 @@ fn draw_launch_curves(scope: &mut dyn DrawScope, curves: &[LaunchCurve], run_ms:
     for curve in curves {
         let color = curve.line.color;
         let mut band = Path::new();
-        polyline(&mut band, curve.highest.iter().copied().enumerate(), at);
-        for (step, value) in curve.lowest.iter().enumerate().rev() {
-            band.line_to(at(step, *value));
+        for stretch in read_stretches(&curve.highest) {
+            polyline(
+                &mut band,
+                stretch.clone().map(|step| (step, curve.highest[step])),
+                at,
+            );
+            for step in stretch.rev() {
+                band.line_to(at(step, curve.lowest[step]));
+            }
+            band.close();
         }
-        band.close();
         scope.draw_path(&band, Brush::solid(color.with_alpha(0.10)), DrawStyle::Fill);
     }
     // Cranpose's line last, over the others.
@@ -1254,8 +1389,8 @@ fn draw_launch_curves(scope: &mut dyn DrawScope, curves: &[LaunchCurve], run_ms:
 }
 
 /// A run's scenarios to choose from, then the chosen one's `start`: every
-/// subject's frame rate since the launch, from the run's frames at `source`,
-/// then its `metric` as a bar in its line's colour.
+/// subject's `metric` since the launch, from the run's own file at `source`,
+/// then the metric's median as a bar in its line's colour.
 #[composable]
 fn RunView(
     palette: Palette,
@@ -1277,6 +1412,7 @@ fn RunView(
         scenario.clone(),
         start,
         lines.clone(),
+        metric,
     );
     SubjectBars(palette, run, subjects, scenario, start, metric, lines);
 }
@@ -1287,9 +1423,10 @@ const CHART_HEIGHT: f32 = 190.0;
 /// top stays off the chart's edge.
 const CHART_HEADROOM: f64 = 1.08;
 
-/// The frame rate against the milliseconds since the launch, for every
-/// subject: each line is the median of its launches, over a band from the
-/// lowest to the highest, on a grid every 30 fps.
+/// `metric` against the milliseconds since the launch, for every subject:
+/// each line is the median of its launches, over a band from the lowest to
+/// the highest. The frame rate's grid is every 30 fps; a sampled metric's
+/// fits its values.
 #[composable]
 fn LaunchChart(
     palette: Palette,
@@ -1298,26 +1435,52 @@ fn LaunchChart(
     scenario: String,
     start: &'static str,
     lines: Vec<LaunchLine>,
+    metric: Metric,
 ) {
+    let curve = metric.curve();
+    if let Curve::None(why) = curve {
+        Text(
+            why,
+            Modifier::empty(),
+            text_style(12.0, palette.muted, false),
+        );
+        return;
+    }
     if let Some((note, failed)) = frames_note(&frames) {
         let color = if failed { palette.worse } else { palette.muted };
         Text(note, Modifier::empty(), text_style(12.0, color, false));
         return;
     }
     let curves = match &frames {
-        FramesState::Loaded(frames) => launch_curves(frames, &scenario, start, run_ms, &lines),
+        FramesState::Loaded(frames) => {
+            launch_curves(frames, &scenario, start, run_ms, &lines, curve)
+        }
         _ => Vec::new(),
     };
     if curves.is_empty() {
         Text(
-            "No launch of this start kept its frames.",
+            if curve == Curve::Frames {
+                "No launch of this start kept its frames."
+            } else {
+                "No launch of this start kept samples of it: runs before the sampler have none."
+            },
             Modifier::empty(),
             text_style(12.0, palette.muted, false),
         );
         return;
     }
-    let top = chart_top(&curves);
-    Plot(palette, top, FPS_STEP, move |scope| {
+    let (top, step) = if curve == Curve::Frames {
+        (chart_top(&curves), FPS_STEP)
+    } else {
+        scale(
+            curves
+                .iter()
+                .flat_map(|curve| curve.highest.iter().copied())
+                .filter(|value| value.is_finite())
+                .fold(0.0f64, f64::max),
+        )
+    };
+    Plot(palette, top, step, move |scope| {
         draw_launch_curves(scope, &curves, run_ms, top);
     });
     Row(

@@ -9,7 +9,7 @@ use cranpose_testing::{
 };
 use cranpose_ui::Size;
 use desktop_app::app::performance_dashboard::{
-    launch_fps, FrameSource, PerfIndex, PerformanceDashboard,
+    launch_fps, FrameSource, LegSamples, PerfIndex, PerformanceDashboard,
 };
 
 /// Two nights and framework comparisons on two devices, the phone's twice, in
@@ -88,7 +88,8 @@ const INDEX: &str = r#"{"runs": [
 
 /// The desktop run's own file: egui's first starts draw from 900 ms at 60
 /// fps, its second from 600 ms; Compose's first from 2500 ms at 20 fps, its
-/// second from 2000 ms.
+/// second from 2000 ms. egui's first start sampled its memory, no leg its
+/// cores.
 fn frames() -> FrameSource {
     let steady = |first: f64, interval: f64| -> Vec<f64> {
         (0..)
@@ -97,7 +98,8 @@ fn frames() -> FrameSource {
             .collect()
     };
     let run = serde_json::json!({"scenarios": [{"scenario": "gauntlet", "legs": [
-        {"subject": "egui", "start": "first", "frame_ms": steady(900.0, 1000.0 / 60.0)},
+        {"subject": "egui", "start": "first", "frame_ms": steady(900.0, 1000.0 / 60.0),
+         "samples": {"t_ms": [500, 1000, 2000, 3000], "ram_mb": [110, 120, 130, 150]}},
         {"subject": "egui", "start": "second", "frame_ms": steady(600.0, 1000.0 / 60.0)},
         {"subject": "compose", "start": "first", "frame_ms": steady(2500.0, 50.0)},
         {"subject": "compose", "start": "second", "frame_ms": steady(2000.0, 50.0)},
@@ -379,6 +381,72 @@ fn a_framework_card_shows_the_metric_chosen_and_a_dash_where_a_run_has_none() {
     for value in ["96", "33", "–"] {
         assert!(texts.iter().any(|text| text == value), "{value}: {texts:?}");
     }
+}
+
+#[test]
+fn a_framework_card_charts_the_sampled_metric_chosen_on_a_scale_of_its_own() {
+    let mut robot = dashboard();
+    assert!(
+        !robot.get_all_text().iter().any(|text| text == "150"),
+        "the frame rate's grid stops at 60"
+    );
+    choose(&mut robot, "RAM MB", 1);
+    let texts = robot.get_all_text();
+    for grid in ["50", "100", "150"] {
+        assert!(
+            texts.iter().any(|text| text == grid),
+            "egui's memory, up to 150 MB, on a grid every 50: {grid}: {texts:?}"
+        );
+    }
+}
+
+#[test]
+fn a_metric_no_launch_sampled_or_no_one_can_sample_says_why_it_has_no_curve() {
+    let mut robot = dashboard();
+    choose(&mut robot, "CPU cores", 1);
+    assert!(
+        robot
+            .get_all_text()
+            .iter()
+            .any(|text| text.starts_with("No launch of this start kept samples of it")),
+        "a run from before the sampler"
+    );
+    choose(&mut robot, "GPU RAM MB", 1);
+    assert!(
+        robot
+            .get_all_text()
+            .iter()
+            .any(|text| text.starts_with("No curve: the GPU's memory is read once")),
+        "read once, at the run's end"
+    );
+}
+
+#[test]
+fn a_sample_stands_for_the_interval_since_the_one_before_and_nothing_past_the_last() {
+    let samples: LegSamples =
+        serde_json::from_str(r#"{"t_ms": [500, 1000, 1500], "cores": [1.0, null, 2.0]}"#)
+            .expect("the samples parse");
+    let cores = samples.every("cores", 2000.0, 250.0);
+    let read: Vec<Option<f64>> = cores
+        .iter()
+        .map(|value| value.is_finite().then_some(*value))
+        .collect();
+    assert_eq!(
+        read,
+        [
+            Some(1.0),
+            Some(1.0),
+            Some(1.0),
+            None,
+            None,
+            Some(2.0),
+            Some(2.0),
+            None,
+            None
+        ],
+        "from the launch to 500 ms the first sample; a sample without a value, and past the last, nothing"
+    );
+    assert!(samples.every("ram_mb", 2000.0, 250.0).is_empty());
 }
 
 #[test]

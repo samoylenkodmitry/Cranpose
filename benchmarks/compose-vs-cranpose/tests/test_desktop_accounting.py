@@ -38,11 +38,28 @@ class DesktopAccountingTest(unittest.TestCase):
 class DesktopClocksTest(unittest.TestCase):
     def test_a_line_macmon_left_unfinished_when_stopped_is_not_a_sample(self):
         clocks = desktop.Clocks.__new__(desktop.Clocks)
+        clocks.started = 10.0
         output = ('{"pcpu_freq_mhz": 4000, "gpu_freq_mhz": 500}\n'
                   '{"pcpu_freq_mhz": 4100, "gpu_freq_mhz": 700}\n'
                   '{"pcpu_freq_mhz": 41')
         clocks.process = SimpleNamespace(terminate=lambda: None, communicate=lambda timeout: (output, None))
-        self.assertEqual(clocks.stop(), {'cpu_mhz': 4050, 'gpu_mhz': 600})
+        summary, timed = clocks.stop()
+        self.assertEqual(summary, {'cpu_mhz': 4050, 'gpu_mhz': 600})
+        self.assertEqual(timed, [(10.25, 4000, 500), (10.5, 4100, 700)])
+
+    def test_each_interval_reads_the_cores_cpu_per_frame_footprint_and_last_clocks_since_the_one_before(self):
+        mb = desktop.MB
+        # (monotonic time, CPU seconds of the app and the window server, the app's footprint)
+        taken = [(10.0, 5.0, 0), (10.5, 5.4, 100 * mb), (11.0, 5.4, 120 * mb), (11.5, 5.2, 90 * mb)]
+        clocks = [(10.25, 3000, 400), (10.75, 3500, 600)]
+        frames = [10.1, 10.2, 10.3, 10.4, 10.6]
+        samples = desktop.run_samples(taken, clocks, 10.0, frames)
+        self.assertEqual(samples['t_ms'], [500, 1000, 1500])
+        self.assertEqual(samples['cores'], [0.8, 0.0, 0.0], 'a process that ended reads as no CPU, not less')
+        self.assertEqual(samples['cpu_ms_per_frame'], [100.0, 0.0, None])
+        self.assertEqual(samples['ram_mb'], [100.0, 120.0, 90.0])
+        self.assertEqual(samples['cpu_mhz'], [3000, 3500, 3500])
+        self.assertEqual(samples['gpu_mhz'], [400, 600, 600])
 
 
 class DesktopRoundsTest(unittest.TestCase):
@@ -50,7 +67,7 @@ class DesktopRoundsTest(unittest.TestCase):
     `FrameCount`'s rates, with the apps' state cleared by a stand-in that
     notes each clearing."""
 
-    def rounds(self, rates, rounds=1, browser=None, app='fyne'):
+    def rounds(self, rates, rounds=1, browser=None, app='fyne', idle=0.5):
         """A rate is a leg, or a (rate, cores other processes spent) pair; a
         `RuntimeError` is an attempt that failed. Each round measures the
         app's first start, then its second."""
@@ -75,6 +92,7 @@ class DesktopRoundsTest(unittest.TestCase):
         args = SimpleNamespace(parity=False, output=Path('results'), rounds=rounds, max_others=1.5, main=None,
                                release=None, tier=16, run=3.0, browser=browser)
         with patch.object(desktop, 'measure', measure), patch.object(desktop, 'clear_app_state', clear), \
+                patch.object(desktop, 'idle_others', return_value=idle), \
                 patch.object(desktop.subprocess, 'run', return_value=SimpleNamespace(stdout='Apple M3 Pro')):
             report = desktop.run(args, [app], 'page', Path('stage'))
         return measured, report['scenarios'][0] if browser is None else report
@@ -127,6 +145,14 @@ class DesktopRoundsTest(unittest.TestCase):
         self.assertEqual(measured, ['fyne-1-first-1', 'fyne-1-first-2', 'fyne-1-second-1'])
         self.assertEqual([(leg['fps'], leg['disturbed']) for leg in scenario['legs']],
                          [(10.0, True), (24.3, False), (30.0, False)])
+        self.assertEqual(scenario['starts']['first']['summary']['fyne']['fps'], 24.3)
+
+    def test_a_machine_busy_while_idle_disturbs_only_the_legs_that_add_more_than_the_limit_to_it(self):
+        # macm3 on 2026-10-11 idled at about a core: 2.2 cores of others then
+        # are 1.2 above it, within the 1.5 a leg may add.
+        measured, scenario = self.rounds([(24.3, 2.2), (10.0, 3.0), 30.0], idle=1.0)
+        self.assertEqual([(leg['fps'], leg['disturbed'], leg['idle_other_cores']) for leg in scenario['legs']],
+                         [(24.3, False, 1.0), (10.0, True, 1.0), (30.0, False, 1.0)])
         self.assertEqual(scenario['starts']['first']['summary']['fyne']['fps'], 24.3)
 
     def test_every_frame_time_from_the_launch_is_kept_in_the_run(self):
