@@ -44,20 +44,31 @@ impl KeyedBuild for ShapePipelineFactory {
     }
 }
 
-pub(crate) struct ShapePipelines {
-    slots: Slots<ShapePipelineFactory>,
+pub(crate) struct ShapePipelines<B: KeyedBuild = ShapePipelineFactory> {
+    slots: Slots<B>,
     /// Whether a draw takes the general pipeline while its specialized one
     /// builds on the background compiler.
     asynchronous: bool,
+    /// How many specialized pipelines draws built themselves, by the
+    /// general pipeline that would have stood in for them.
+    exact_builds: HashMap<ShapePipelineKey, u8>,
     recorder: crate::pipeline_recorder::PipelineRecorder,
 }
 
-impl ShapePipelines {
+/// How many specialized pipelines draws build themselves under one general
+/// pipeline before they build the general to stand in for the rest. A
+/// general compiles about as long as two specialized ones (Mali-G76: 110 to
+/// 131 ms against 32 to 72), so building it first only pays when a third
+/// draws; until then a draw that builds the general waits longer and its own
+/// pipeline still compiles afterwards.
+const EXACT_BUILDS_BEFORE_GENERAL: u8 = 2;
+
+impl<B: KeyedBuild> ShapePipelines<B> {
     /// Pipelines from `factory`. Those `first_screen` names, the ones the
     /// last launch drew its first screen with, start building on the
     /// compiler's warm-up lane at once, so the first frame finds them ready.
     pub(crate) fn new(
-        factory: ShapePipelineFactory,
+        factory: B,
         backend: wgpu::Backend,
         compiler: &PipelineCompiler,
         first_screen: impl IntoIterator<Item = ShapePipelineKey>,
@@ -75,6 +86,7 @@ impl ShapePipelines {
         Self {
             slots,
             asynchronous,
+            exact_builds: HashMap::default(),
             recorder,
         }
     }
@@ -106,19 +118,26 @@ impl ShapePipelines {
         }
         self.recorder.during_demand(|| {
             let general = key.general();
-            if self.asynchronous
-                && key != general
-                && (!need.queued || self.slots.get(general).is_some())
-            {
+            if !self.asynchronous || key == general {
+                self.slots.build(key);
+                return;
+            }
+            let exact_builds = self.exact_builds.entry(general).or_default();
+            // A queued key's own build is under way or next: waiting for it
+            // beats building a general beside it.
+            let stand_in = self.slots.get(general).is_some()
+                || (!need.queued && *exact_builds >= EXACT_BUILDS_BEFORE_GENERAL);
+            if stand_in {
                 self.slots.build(general);
                 self.slots.want(key, vertices);
             } else {
+                *exact_builds = exact_builds.saturating_add(1);
                 self.slots.build(key);
             }
         });
     }
 
-    pub(crate) fn get(&self, key: ShapePipelineKey) -> Option<(&wgpu::RenderPipeline, bool)> {
+    pub(crate) fn get(&self, key: ShapePipelineKey) -> Option<(&B::Output, bool)> {
         self.slots
             .get(key)
             .map(|pipeline| (pipeline, false))
@@ -357,3 +376,7 @@ mod slots_tests;
 #[cfg(test)]
 #[path = "tests/shape_pipelines_tests.rs"]
 mod tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "tests/shape_pipelines_stand_in_tests.rs"]
+mod stand_in_tests;
