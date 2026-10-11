@@ -140,6 +140,15 @@ impl HttpControl {
         }
     }
 
+    /// A control cancelled with this one that reports no progress.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn cancel_only(&self) -> Self {
+        Self {
+            cancel: Arc::clone(&self.cancel),
+            progress: None,
+        }
+    }
+
     /// Whether cancellation was requested.
     pub fn is_cancelled(&self) -> bool {
         self.cancel.cancelled.load(Ordering::Acquire)
@@ -567,8 +576,10 @@ async fn download_through<C: HttpClient + ?Sized>(
     if existing > 0 {
         request = request.resume_from(existing);
     }
+    // The request reports nothing itself: its count starts at zero, and this
+    // function reports the whole file's.
     let response = client
-        .send(&request, control.clone())
+        .send(&request, control.cancel_only())
         .await?
         .error_for_status()?;
 

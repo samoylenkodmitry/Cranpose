@@ -692,13 +692,34 @@ fn a_download_resumes_from_what_is_already_on_disk() {
     else {
         return;
     };
+    let reports = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&reports);
+    let control = HttpControl::new().with_progress(move |progress| {
+        recorder
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(progress);
+    });
     let client = default_http_client();
-    let written = pollster::block_on(client.download_to(&url, &target, HttpControl::new()))
+    let written = pollster::block_on(client.download_to(&url, &target, control))
         .expect("the download finishes");
     server.join().expect("the local server finishes");
 
     assert_eq!(written, body.len() as u64);
     assert_eq!(std::fs::read(&target).expect("the file"), body);
+    // Progress counts the whole file: never less than the part already here,
+    // and never the response's own count, which starts again from zero.
+    let reports = reports
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert!(
+        reports
+            .iter()
+            .all(|progress| progress.transferred >= 1024
+                && progress.total == Some(body.len() as u64)),
+        "a resumed download reported progress of the response alone: {reports:?}"
+    );
     let _ = std::fs::remove_file(&target);
 }
 
