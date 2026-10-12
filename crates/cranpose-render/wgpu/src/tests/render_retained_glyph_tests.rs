@@ -541,7 +541,7 @@ fn fonted_renderer() -> (std::sync::MutexGuard<'static, ()>, GpuRenderer) {
         adapter_downlevel: wgpu::DownlevelFlags::empty(),
         text_fonts: SoftwareTextFontSet::from_font(font),
         renderer_epoch: 0,
-        pipeline_compilation: PipelineCompilation::Background,
+        pipeline_compilation: PipelineCompilation::Inline,
     });
     (lock, renderer)
 }

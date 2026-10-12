@@ -3130,7 +3130,12 @@ impl EffectRenderer {
             sample_mode: item.sample_mode,
         };
         let unmasked_nearest = options.unmasked_nearest();
-        self.prefetch_blit(device, item.blend_mode, unmasked_nearest);
+        self.prefetch_blit(
+            CompileLane::WarmUp,
+            device,
+            item.blend_mode,
+            unmasked_nearest,
+        );
         let uniforms = Self::composite_pass_uniforms(options);
         let sampler = &self.effect_linear_sampler;
         let texture_bind_group = item.source.get_or_create_bind_group(
@@ -3154,22 +3159,33 @@ impl EffectRenderer {
         }
     }
 
-    /// Builds the blit a composite of `blend_mode`, sampled as
-    /// `sample_mode` through a mask or not, draws with, ahead of its first
-    /// draw.
-    pub(crate) fn prefetch_composite(
+    /// Builds, once the frame ends, the blit a later frame's composite of
+    /// `blend_mode`, sampled as `sample_mode` through a mask or not, draws
+    /// with.
+    pub(crate) fn prefetch_later_composite(
         &self,
         device: &wgpu::Device,
         blend_mode: BlendMode,
         sample_mode: CompositeSampleMode,
         masked: bool,
     ) {
-        self.prefetch_blit(device, blend_mode, unmasked_nearest(sample_mode, masked));
+        self.prefetch_blit(
+            CompileLane::Later,
+            device,
+            blend_mode,
+            unmasked_nearest(sample_mode, masked),
+        );
     }
 
-    fn prefetch_blit(&self, device: &wgpu::Device, blend_mode: BlendMode, unmasked_nearest: bool) {
+    fn prefetch_blit(
+        &self,
+        lane: CompileLane,
+        device: &wgpu::Device,
+        blend_mode: BlendMode,
+        unmasked_nearest: bool,
+    ) {
         let (blit, _, _) = self.blit_pipeline_target(blend_mode, unmasked_nearest);
-        blit.prefetch(&self.compiler, self.adapter_backend, || {
+        blit.prefetch(lane, &self.compiler, self.adapter_backend, || {
             self.blit_pipeline_job(device, blend_mode, unmasked_nearest)
         });
     }
@@ -3199,9 +3215,12 @@ impl EffectRenderer {
     ) -> PreparedProjectiveComposite<'a> {
         let texels = item.sample_mode == CompositeSampleMode::Texels;
         let (projective, _, _) = self.projective_pipeline_target(item.blend_mode, texels);
-        projective.prefetch(&self.compiler, self.adapter_backend, || {
-            self.projective_pipeline_job(device, item.blend_mode, texels)
-        });
+        projective.prefetch(
+            CompileLane::WarmUp,
+            &self.compiler,
+            self.adapter_backend,
+            || self.projective_pipeline_job(device, item.blend_mode, texels),
+        );
         let vertices = [
             ProjectiveBlitVertex {
                 position: item.dest_quad[0],

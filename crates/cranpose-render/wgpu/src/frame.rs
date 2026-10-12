@@ -4331,7 +4331,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 // A transform that moves, such as a rotation passing through
                 // zero, lands the surface on the pixel grid in a later
                 // frame, where it is blitted one to one.
-                self.renderer.effect_renderer.prefetch_composite(
+                self.renderer.effect_renderer.prefetch_later_composite(
                     &self.renderer.device,
                     child.blend_mode,
                     CompositeSampleMode::Nearest,

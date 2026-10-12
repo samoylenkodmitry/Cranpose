@@ -6,7 +6,7 @@
 use std::cell::Cell;
 
 use crate::{
-    lazy_resource::LazyGpuResource,
+    lazy_resource::{LazyGpuResource, Pending},
     pipeline_compiler::{CompileLane, CompilerSend, PipelineCompiler},
     pipeline_recorder::PipelineRecorder,
 };
@@ -63,27 +63,29 @@ impl FixedPipeline {
         }
     }
 
-    /// Builds the pipeline, which `job` makes, ahead of its first draw
-    /// unless it is built, queued or in the loaded driver cache, or the
-    /// compiler builds nothing ahead: queued on the warm-up lane, or on the
-    /// web built at the end of a frame of a pipeline discovery. A pass asks
-    /// for every pipeline it is about to draw with, so the missing ones
-    /// compile side by side.
+    /// Builds the pipeline, which `job` makes, on `lane` ahead of its first
+    /// draw unless it is built, queued or in the loaded driver cache, or the
+    /// compiler builds nothing ahead (see [`PipelineCompiler::builds_ahead`]).
+    /// A pass asks for every pipeline it is about to draw with, so the
+    /// missing ones compile side by side. The pipeline while it is still to
+    /// land, for a caller that waits for it.
     pub(crate) fn prefetch<J>(
         &self,
+        lane: CompileLane,
         compiler: &PipelineCompiler,
         backend: wgpu::Backend,
         job: impl FnOnce() -> J,
-    ) where
+    ) -> Option<Pending<wgpu::RenderPipeline>>
+    where
         J: FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static,
     {
-        if compiler.builds_ahead()
-            && self.resource.get().is_none()
-            && !self.cached.get()
-            && !self.queued.get()
-        {
-            self.queue(compiler, CompileLane::WarmUp, backend, job());
+        if !compiler.builds_ahead() || self.resource.get().is_some() || self.cached.get() {
+            return None;
         }
+        if !self.queued.get() {
+            self.queue(compiler, lane, backend, job());
+        }
+        Some(self.resource.pending())
     }
 
     /// Whether the pipeline is built; when it is not, its build, which

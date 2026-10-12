@@ -10,6 +10,7 @@ mod ablation;
 mod arc_trig_fill;
 mod capture_hash;
 mod collect;
+mod depth_gate;
 mod draw_pass;
 mod effect_renderer;
 mod fast_cores;
@@ -1004,16 +1005,6 @@ impl WgpuRenderer {
     pub fn begin_discovery_frame(&self) {
         if let Some(gpu_renderer) = self.sync_gpu_renderer() {
             gpu_renderer.pipeline_compiler().begin_discovery_frame();
-        }
-    }
-
-    /// Ends the frame begun with
-    /// [`begin_discovery_frame`](Self::begin_discovery_frame), building the
-    /// pipelines it expects a later frame to need.
-    #[cfg(target_arch = "wasm32")]
-    pub fn end_discovery_frame(&self) {
-        if let Some(gpu_renderer) = self.sync_gpu_renderer() {
-            gpu_renderer.pipeline_compiler().end_discovery_frame();
         }
     }
 

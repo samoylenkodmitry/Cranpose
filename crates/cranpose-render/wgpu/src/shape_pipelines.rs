@@ -7,6 +7,7 @@ use cranpose_core::collections::map::HashMap;
 use smallvec::SmallVec;
 
 use crate::{
+    lazy_resource::Pending,
     pipeline_compiler::{CompileLane, CompilerSend, CompilerSync, PipelineCompiler},
     render::{ShapePipelineKey, create_shape_pipeline},
     run_store::RunBufferMode,
@@ -100,6 +101,21 @@ impl<B: KeyedBuild> ShapePipelines<B> {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn warm(&mut self, key: ShapePipelineKey) {
         self.slots.warm(key);
+    }
+
+    /// Queues the build of `key` and of the interior it lays down for a
+    /// frame after this one (see [`CompileLane::Later`]), handing `awaited`
+    /// each still to land.
+    pub(crate) fn warm_later(
+        &mut self,
+        key: ShapePipelineKey,
+        awaited: &mut impl FnMut(Pending<B::Output>),
+    ) {
+        for key in std::iter::once(key).chain(key.interior()) {
+            if let Some(pending) = self.slots.warm_on(key, CompileLane::Later) {
+                awaited(pending);
+            }
+        }
     }
 
     pub(crate) fn request_wanted(&mut self) {
@@ -300,22 +316,35 @@ impl<B: KeyedBuild> Slots<B> {
     /// Queues `key`'s build on the warm-up lane, ahead of any draw, unless it
     /// is already queued or built.
     pub(crate) fn warm(&mut self, key: ShapePipelineKey) {
+        self.warm_on(key, CompileLane::WarmUp);
+    }
+
+    /// Queues `key`'s build on `lane` unless it is already queued or built,
+    /// or no compiler runs; the value while it is still to land.
+    pub(crate) fn warm_on(
+        &mut self,
+        key: ShapePipelineKey,
+        lane: CompileLane,
+    ) -> Option<Pending<B::Output>> {
         if !self.compiler.is_active() {
-            return;
+            return None;
         }
         let builder = Arc::clone(&self.builder);
         let stopped = Arc::clone(&self.stopped);
         let entry = Self::entry(&mut self.entries, key);
-        if entry.queued || entry.value.get().is_some() {
-            return;
+        if entry.value.get().is_some() {
+            return None;
         }
-        entry.queued = true;
         let value = Arc::clone(&entry.value);
-        self.compiler.enqueue(CompileLane::WarmUp, move || {
-            if !stopped.load(Ordering::Acquire) {
-                value.get_or_init(|| builder.build(key));
-            }
-        });
+        if !std::mem::replace(&mut entry.queued, true) {
+            let building = Arc::clone(&value);
+            self.compiler.enqueue(lane, move || {
+                if !stopped.load(Ordering::Acquire) {
+                    building.get_or_init(|| builder.build(key));
+                }
+            });
+        }
+        Some(Pending(value))
     }
 
     /// Builds `key`'s value here unless a job already built it, or waits

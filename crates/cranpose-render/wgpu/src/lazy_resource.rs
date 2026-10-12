@@ -51,6 +51,12 @@ impl<T> LazyGpuResource<T> {
         self.value.get()
     }
 
+    /// The resource while it is still being built, for whoever waits for it
+    /// to land.
+    pub(crate) fn pending(&self) -> Pending<T> {
+        Pending(Arc::clone(&self.value))
+    }
+
     pub(crate) fn for_draw(
         &self,
         recorder: &PipelineRecorder,
@@ -66,6 +72,17 @@ impl<T> LazyGpuResource<T> {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn label(&self) -> &'static str {
         self.label
+    }
+}
+
+/// A resource a compiler thread or a later frame builds, which a caller
+/// waits for without blocking on it.
+pub(crate) struct Pending<T>(pub(crate) Arc<OnceLock<T>>);
+
+impl<T> Pending<T> {
+    /// Whether the resource is built.
+    pub(crate) fn landed(&self) -> bool {
+        self.0.get().is_some()
     }
 }
 

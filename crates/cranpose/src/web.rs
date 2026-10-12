@@ -960,8 +960,8 @@ impl CanvasPresenter {
                         log::error!("render failed: {err:?}");
                     }
                     app_mut.renderer().present(output);
-                    self.discovery.end_frame(app_mut.renderer(), &self.redraw);
                 }
+                self.discovery.end_frame(&self.redraw);
                 self.dirty.set(false);
             }
             SurfaceFrame::Reconfigure => {

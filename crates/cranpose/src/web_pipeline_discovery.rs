@@ -91,13 +91,12 @@ impl PipelineDiscovery {
         }
     }
 
-    /// Ends the frame `renderer` drew: after discovery, waits for the browser
-    /// to compile what it learned and calls `redraw` once it has.
-    pub(crate) fn end_frame(&self, renderer: &WgpuRenderer, redraw: &Rc<dyn Fn()>) {
+    /// Ends the frame that drew: after discovery, waits for the browser to
+    /// compile what it learned and calls `redraw` once it has.
+    pub(crate) fn end_frame(&self, redraw: &Rc<dyn Fn()>) {
         let mut stage = self.stage.borrow_mut();
         match &*stage {
             Stage::Discovering => {
-                renderer.end_discovery_frame();
                 *stage = Stage::Compiling;
                 let compiling = self.target.device.end_pipeline_discovery();
                 let landed = Rc::clone(&self.stage);
@@ -108,10 +107,7 @@ impl PipelineDiscovery {
                     redraw();
                 });
             }
-            Stage::Redrawing { .. } => {
-                renderer.end_discovery_frame();
-                *stage = Stage::Done;
-            }
+            Stage::Redrawing { .. } => *stage = Stage::Done,
             Stage::Cold | Stage::Compiling | Stage::Landed(_) | Stage::Done => {}
         }
     }
