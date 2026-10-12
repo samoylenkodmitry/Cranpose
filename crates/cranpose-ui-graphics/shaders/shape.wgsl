@@ -214,7 +214,7 @@ fn gradient_fill_output(full: VertexOutput) -> GradientFillOutput {
     output.clip_rect = full.clip_rect;
     output.gradient_params = full.gradient_params;
     output.brush = full.brush;
-    if ((SHAPE_TURNS == TURNS_MIXED) & fragment_turned(full)) {
+    if ((SHAPE_TURNS == TURNS_MIXED) & turned_by(full.stroke_params.y)) {
         output.brush.w = output.brush.w | BRUSH_TURNED;
     }
     output.stop_offsets = full.stop_offsets;
@@ -850,12 +850,18 @@ fn segment_position(fragment_position: vec2<f32>, world_pos: vec2<f32>, turned: 
     return world_pos;
 }
 
-// Whether the record a fragment belongs to is turned.
-fn fragment_turned(input: VertexOutput) -> bool {
+// Whether the record whose packed stroke flags are `stroke_flags` is turned.
+fn turned_by(stroke_flags: f32) -> bool {
     return (SHAPE_TURNS == TURNS_ALL)
         | ((SHAPE_TURNS == TURNS_MIXED)
-            & ((u32(max(input.stroke_params.y, 0.0)) & SHAPE_FLAG_TURNED) != 0u));
+            & ((u32(max(stroke_flags, 0.0)) & SHAPE_FLAG_TURNED) != 0u));
 }
+
+// The vertex output a fragment shades, set once by its entry point. The
+// helpers read it here rather than take it by value: a Mali driver expands
+// every call and copies every struct passed by value, the full output being
+// fifteen vectors.
+var<private> frag: VertexOutput;
 
 // Depth steps one record apart: 2^-20, a whole number of ulps below 1, so
 // every record's depth is exact and interpolation cannot reorder two.
@@ -1529,39 +1535,44 @@ fn gradient_segment(
     return mix(from_color, to_color, local_t);
 }
 
-fn sample_inline_gradient(input: VertexOutput, count: u32, t: f32) -> vec4<f32> {
-    if (count == 1u) {
-        return input.stop_color0;
-    }
-    let offsets = input.stop_offsets;
+fn sample_inline_gradient(count: u32, t: f32) -> vec4<f32> {
+    let offsets = frag.stop_offsets;
     let clamped = clamp(t, 0.0, 1.0);
-    if (clamped <= offsets.x) {
-        return input.stop_color0;
+    if ((count == 1u) | (clamped <= offsets.x)) {
+        return frag.stop_color0;
     }
-    if (clamped <= offsets.y) {
-        return gradient_segment(offsets.x, input.stop_color0, offsets.y, input.stop_color1, clamped);
+    // The two stops `clamped` falls between, blended at one call site.
+    var from_offset = offsets.x;
+    var from_color = frag.stop_color0;
+    var to_offset = offsets.y;
+    var to_color = frag.stop_color1;
+    if (clamped > offsets.y) {
+        if (count == 2u) {
+            return frag.stop_color1;
+        }
+        from_offset = offsets.y;
+        from_color = frag.stop_color1;
+        to_offset = offsets.z;
+        to_color = frag.stop_color2;
+        if (clamped > offsets.z) {
+            if ((count == 3u) | (clamped > offsets.w)) {
+                return select(frag.stop_color3, frag.stop_color2, count == 3u);
+            }
+            from_offset = offsets.z;
+            from_color = frag.stop_color2;
+            to_offset = offsets.w;
+            to_color = frag.stop_color3;
+        }
     }
-    if (count == 2u) {
-        return input.stop_color1;
-    }
-    if (clamped <= offsets.z) {
-        return gradient_segment(offsets.y, input.stop_color1, offsets.z, input.stop_color2, clamped);
-    }
-    if (count == 3u) {
-        return input.stop_color2;
-    }
-    if (clamped <= offsets.w) {
-        return gradient_segment(offsets.z, input.stop_color2, offsets.w, input.stop_color3, clamped);
-    }
-    return input.stop_color3;
+    return gradient_segment(from_offset, from_color, to_offset, to_color, clamped);
 }
 
-fn gradient_color(input: VertexOutput, t: f32) -> vec4<f32> {
-    let count = input.brush.x >> BRUSH_COUNT_SHIFT;
+fn gradient_color(t: f32) -> vec4<f32> {
+    let count = frag.brush.x >> BRUSH_COUNT_SHIFT;
     if (count > 0u && count <= INLINE_GRADIENT_STOPS) {
-        return sample_inline_gradient(input, count, t);
+        return sample_inline_gradient(count, t);
     }
-    return sample_gradient(input.brush.y, count, t);
+    return sample_gradient(frag.brush.y, count, t);
 }
 
 fn sample_gradient(gradient_start: u32, count: u32, t: f32) -> vec4<f32> {
@@ -1606,20 +1617,15 @@ fn sample_gradient(gradient_start: u32, count: u32, t: f32) -> vec4<f32> {
 /// instructions; on Vulkan it did not, and the parity test measured three
 /// pixels apart by up to 2/255 (the macOS CI runner, on Metal, saw none of
 /// it). The pipeline constants fold branches; they never copy code.
-fn shape_coverage_alpha(input: VertexOutput) -> f32 {
-    let alpha = shape_record_coverage(input);
-    let clip_radius = bitcast<f32>(input.brush.z);
+fn shape_coverage_alpha(rect_pos: vec2<f32>, turned: bool) -> f32 {
+    let alpha = shape_record_coverage(rect_pos, turned);
+    let clip_radius = bitcast<f32>(frag.brush.z);
     if (!SHAPE_ROUNDED_CLIP | (clip_radius <= 0.0)) {
         return alpha;
     }
     // The same coverage the blit's mask takes of a rounded clip.
-    let rect_pos = segment_position(
-        input.clip_position.xy,
-        input.world_pos.xy,
-        fragment_turned(input),
-    );
-    let half_size = input.clip_rect.zw * 0.5;
-    let local_pos = rect_pos - (input.clip_rect.xy + half_size);
+    let half_size = frag.clip_rect.zw * 0.5;
+    let local_pos = rect_pos - (frag.clip_rect.xy + half_size);
     let dist = sdf_rounded_rect(local_pos, half_size, vec4<f32>(clip_radius));
     let coverage = alpha * (1.0 - smoothstep(-0.5, 0.5, dist));
     if (coverage < 0.001) {
@@ -1628,19 +1634,16 @@ fn shape_coverage_alpha(input: VertexOutput) -> f32 {
     return coverage;
 }
 
-fn shape_record_coverage(input: VertexOutput) -> f32 {
+fn shape_record_coverage(rect_pos: vec2<f32>, turned: bool) -> f32 {
     if (SHAPE_DISCARD) {
         discard;
     }
-    let world_pos = input.world_pos.xy;
-    let rect_pos = segment_position(input.clip_position.xy, world_pos, fragment_turned(input));
-
     // Apply clipping: if clip_rect has non-zero size, clip to it
-    let clip_w = input.clip_rect.z;
-    let clip_h = input.clip_rect.w;
+    let clip_w = frag.clip_rect.z;
+    let clip_h = frag.clip_rect.w;
     if (SHAPE_CLIPPED & (clip_w > 0.0 && clip_h > 0.0)) {
-        let clip_left = input.clip_rect.x;
-        let clip_top = input.clip_rect.y;
+        let clip_left = frag.clip_rect.x;
+        let clip_top = frag.clip_rect.y;
         let clip_right = clip_left + clip_w;
         let clip_bottom = clip_top + clip_h;
 
@@ -1660,52 +1663,52 @@ fn shape_record_coverage(input: VertexOutput) -> f32 {
     // byte — and, crucially, stroked and arc shapes stay on this same pipeline
     // and blend state, so they batch together with fills instead of splitting
     // the batch.
-    let flags = u32(max(input.stroke_params.y, 0.0));
+    let flags = u32(max(frag.stroke_params.y, 0.0));
     let shape_kind = select(flags & 3u, u32(max(SHAPE_KIND_FIXED, 0)), SHAPE_KIND_FIXED >= 0);
-    let interior = input.arc_params;
+    let interior = frag.arc_params;
     if (SHAPE_INTERIOR & (shape_kind == SHAPE_KIND_FILL &&
         rect_pos.x >= interior.x && rect_pos.x <= interior.z &&
         rect_pos.y >= interior.y && rect_pos.y <= interior.w)) {
         return 1.0;
     }
 
-    if (SHAPE_BANDS & !fragment_turned(input)) {
-        if (rect_pos.x < input.rect.x || rect_pos.x > input.rect.x + input.rect.z ||
-            rect_pos.y < input.rect.y || rect_pos.y > input.rect.y + input.rect.w) {
+    if (SHAPE_BANDS & !turned) {
+        if (rect_pos.x < frag.rect.x || rect_pos.x > frag.rect.x + frag.rect.z ||
+            rect_pos.y < frag.rect.y || rect_pos.y > frag.rect.y + frag.rect.w) {
             discard;
         }
     }
 
-    let rect_center = input.rect.xy + input.rect.zw * 0.5;
-    let half_size = input.rect.zw * 0.5;
+    let rect_center = frag.rect.xy + frag.rect.zw * 0.5;
+    let half_size = frag.rect.zw * 0.5;
     let local_pos = rect_pos - rect_center;
 
     let stroke_cap = (flags >> 2u) & 3u;
     let stroke_join = (flags >> 4u) & 3u;
 
-    let has_radii = (input.radii[0] > 0.0 || input.radii[1] > 0.0 ||
-                     input.radii[2] > 0.0 || input.radii[3] > 0.0);
+    let has_radii = (frag.radii[0] > 0.0 || frag.radii[1] > 0.0 ||
+                     frag.radii[2] > 0.0 || frag.radii[3] > 0.0);
     var alpha: f32;
     if ((DRAWS_LINES & (shape_kind == SHAPE_KIND_LINE)) & is_trapezoid(stroke_cap)) {
         alpha = trapezoid_coverage(
             rect_pos,
-            input.arc_params,
-            input.radii,
+            frag.arc_params,
+            frag.radii,
             stroke_join,
-            fragment_turned(input),
+            turned,
         );
     } else if (DRAWS_SEGMENTS & (shape_kind == SHAPE_KIND_LINE)) {
-        alpha = line_coverage(rect_pos, input.arc_params, input.stroke_params, stroke_cap);
+        alpha = line_coverage(rect_pos, frag.arc_params, frag.stroke_params, stroke_cap);
     } else if (DRAWS_ARCS & (shape_kind == SHAPE_KIND_ARC)) {
         // Arcs have no corner radii, so `radii` carries the precomputed
         // (sin, cos) of the mid angle (xy) and of the half sweep (zw).
         let dist = sdf_arc_band(
             rect_pos,
-            input.arc_params.xy,
-            input.stroke_params.w,
-            input.stroke_params.z,
-            input.radii.xy,
-            input.radii.zw,
+            frag.arc_params.xy,
+            frag.stroke_params.w,
+            frag.stroke_params.z,
+            frag.radii.xy,
+            frag.radii.zw,
             stroke_cap,
         );
         alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
@@ -1713,14 +1716,14 @@ fn shape_record_coverage(input: VertexOutput) -> f32 {
         let dist = sdf_stroked_rounded_rect(
             local_pos,
             half_size,
-            input.radii,
-            input.stroke_params.x * 0.5,
+            frag.radii,
+            frag.stroke_params.x * 0.5,
             stroke_join,
         );
         alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
     } else if (has_radii) {
         // Rounded rect: SDF + smoothstep for curved edges
-        let dist = sdf_rounded_rect(local_pos, half_size, input.radii);
+        let dist = sdf_rounded_rect(local_pos, half_size, frag.radii);
         alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
     } else {
         // Non-rounded rect: analytical box coverage.
@@ -1742,27 +1745,32 @@ fn shape_record_coverage(input: VertexOutput) -> f32 {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    return fragment(input);
+    frag = input;
+    return fragment();
 }
 
 @fragment
 fn fs_solid(input: SolidOutput) -> @location(0) vec4<f32> {
-    return fragment(full_output(input));
+    frag = full_output(input);
+    return fragment();
 }
 
 @fragment
 fn fs_clipped_fill(input: ClippedFillOutput) -> @location(0) vec4<f32> {
-    return fragment(full_from_clipped_fill(input));
+    frag = full_from_clipped_fill(input);
+    return fragment();
 }
 
 @fragment
 fn fs_plain_fill(input: PlainFillOutput) -> @location(0) vec4<f32> {
-    return fragment(full_from_plain_fill(input));
+    frag = full_from_plain_fill(input);
+    return fragment();
 }
 
 @fragment
 fn fs_dithered_fill(input: DitheredFillOutput) -> @location(0) vec4<f32> {
-    return fragment(full_from_dithered_fill(input));
+    frag = full_from_dithered_fill(input);
+    return fragment();
 }
 
 // The share of the pixel a flat slice covers after its clip, as
@@ -1807,68 +1815,46 @@ fn fs_gradient_slice(input: GradientSliceOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_gradient_fill(input: GradientFillOutput) -> @location(0) vec4<f32> {
-    return fragment(full_from_gradient_fill(input));
+    frag = full_from_gradient_fill(input);
+    return fragment();
 }
 
-fn fragment(input: VertexOutput) -> vec4<f32> {
-    let alpha = shape_coverage_alpha(input);
+fn fragment() -> vec4<f32> {
+    let turned = turned_by(frag.stroke_params.y);
+    let rect_pos = segment_position(frag.clip_position.xy, frag.world_pos.xy, turned);
+    let alpha = shape_coverage_alpha(rect_pos, turned);
     if (SHAPE_FLAT) {
-        return input.color;
+        return frag.color;
     }
 
-    // Re-derived rather than threaded out of the coverage pass: both are pure
-    // functions of `input`, so the compiler folds them back together.
-    let world_pos = input.world_pos.xy;
-    let rect_pos = segment_position(input.clip_position.xy, world_pos, fragment_turned(input));
-
-    var color = input.color;
+    var color = frag.color;
     var is_gradient = false;
 
     // Apply gradient if needed; a solid batch fixes the brush to solid and the
-    // whole ladder folds away.
-    let carried_brush = select(input.brush.x & BRUSH_KIND_MASK, 0u, SHAPE_SOLID);
+    // whole ladder folds away. Each kind finds the ramp position, and one
+    // site samples the ramp, which a driver expands once.
+    let carried_brush = select(frag.brush.x & BRUSH_KIND_MASK, 0u, SHAPE_SOLID);
     let brush_type = select(carried_brush, u32(max(BRUSH_KIND_FIXED, 0)), BRUSH_KIND_FIXED >= 0);
-    let gradient_tile_mode = input.brush.w;
+    var raw_t = 0.0;
     if (brush_type == 1u) {
         // Linear gradient projected from start.xy to end.xy
-        let start = input.gradient_params.xy;
-        let end = input.gradient_params.zw;
-        let dir = end - start;
-        let denom = max(dot(dir, dir), 0.00001);
-        let raw_t = dot(rect_pos - start, dir) / denom;
-        let sample = remap_gradient_t(raw_t, gradient_tile_mode);
-        if (!sample.valid) {
-            color = vec4<f32>(0.0);
-        } else {
-            color = gradient_color(input, sample.t);
-            is_gradient = true;
-        }
+        let start = frag.gradient_params.xy;
+        let dir = frag.gradient_params.zw - start;
+        raw_t = dot(rect_pos - start, dir) / max(dot(dir, dir), 0.00001);
     } else if (brush_type == 2u) {
-        // Radial gradient - use explicit center and radius from gradient_params
-        let center = input.gradient_params.xy;
-        let radius = max(input.gradient_params.z, 0.00001);
-        let dist_from_center = length(rect_pos - center);
-        let raw_t = dist_from_center / radius;
-        let sample = remap_gradient_t(raw_t, gradient_tile_mode);
-        if (!sample.valid) {
-            color = vec4<f32>(0.0);
-        } else {
-            color = gradient_color(input, sample.t);
-            is_gradient = true;
-        }
+        // Radial gradient: distance from the centre over the radius.
+        raw_t = length(rect_pos - frag.gradient_params.xy) / max(frag.gradient_params.z, 0.00001);
     } else if (brush_type == 3u) {
-        // Sweep gradient - angle-based interpolation around center
-        let center = input.gradient_params.xy;
-        let dx = rect_pos.x - center.x;
-        let dy = rect_pos.y - center.y;
-        let angle = atan2(dy, dx);
-        // Map [-PI, PI] to [0, 1]
-        let raw_t = angle / (2.0 * 3.14159265358979) + 0.5;
-        let sample = remap_gradient_t(raw_t, gradient_tile_mode);
+        // Sweep gradient: the angle around the centre.
+        let offset = rect_pos - frag.gradient_params.xy;
+        raw_t = atan2(offset.y, offset.x) / (2.0 * 3.14159265358979) + 0.5;
+    }
+    if ((brush_type >= 1u) & (brush_type <= 3u)) {
+        let sample = remap_gradient_t(raw_t, frag.brush.w);
         if (!sample.valid) {
             color = vec4<f32>(0.0);
         } else {
-            color = gradient_color(input, sample.t);
+            color = gradient_color(sample.t);
             is_gradient = true;
         }
     }
@@ -1876,9 +1862,9 @@ fn fragment(input: VertexOutput) -> vec4<f32> {
     // Dither the gradient, and only the gradient — a solid brush has no ramp
     // to band, and Skia leaves it alone too, which is why solid fills already
     // land byte-for-byte on the Compose build's.
-    let vertex_gradient = SHAPE_DITHER & (input.world_pos.z > UNDITHERED * 0.5);
+    let vertex_gradient = SHAPE_DITHER & (frag.world_pos.z > UNDITHERED * 0.5);
     if ((is_gradient || vertex_gradient) && color.a > 0.0) {
-        let offset = gradient_dither(input.world_pos.zw) * (1.0 / 255.0);
+        let offset = gradient_dither(frag.world_pos.zw) * (1.0 / 255.0);
         color = vec4<f32>(clamp(color.rgb + vec3<f32>(offset), vec3<f32>(0.0), vec3<f32>(1.0)),
                           color.a);
     }
