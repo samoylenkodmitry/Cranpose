@@ -1489,7 +1489,6 @@ impl ResolvedGlass {
             .and_then(GlassContourHighlight::uniforms)
             .filter(|values| values[2] > 0.0 && activity > 0.0)
             .map_or(0.0, |values| (-values[1]).max(0.0));
-        shader.set_output_padding(ring_reach.max(contour_reach));
         let visible_shadow = dynamic_shadow && shadow.color.a() > 0.0;
         let shadow_reach = if visible_shadow {
             shadow.radius + shadow.offset_y.abs() + shadow.spread.max(0.0)
@@ -1498,6 +1497,9 @@ impl ResolvedGlass {
         }
         .max(ring_reach)
         .max(contour_reach);
+        // The drop shadow falls outside the node: without this reach the
+        // compositor cuts it at the node's rectangle.
+        shader.set_output_padding(shadow_reach);
         let offset = if visible_shadow || ring_shadow.is_some() {
             shadow
                 .offset_y

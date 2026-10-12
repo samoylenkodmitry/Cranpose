@@ -1470,6 +1470,24 @@ fn full_optical_activity_preserves_the_resolved_material() {
 }
 
 #[test]
+fn a_shadow_without_a_morph_reaches_past_the_node() {
+    let shadow = GlassShadow::new(Color::BLACK.with_alpha(0.3), 12.0, 4.0, 2.0);
+    let shader = terminal_shader(
+        Glass::regular()
+            .no_clip()
+            .resolve(&light_colors())
+            .backdrop_effect(
+                1.0,
+                GlassDynamics {
+                    shadow: Some(shadow),
+                    ..Default::default()
+                },
+            ),
+    );
+    assert_eq!(shader.output_padding(), 12.0 + 4.0 + 2.0);
+}
+
+#[test]
 fn morph_geometry_and_incompressible_strain_are_packed() {
     let deformation = GlassDeformation::incompressible((0.0, 2.0), 1.25);
     let morph = GlassMorph {
