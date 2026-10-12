@@ -369,13 +369,13 @@ fn arc_row_runs(arc: &ArcGeometry, y: f32, min_x: i32, max_x: i32) -> RowRuns {
     let dy = y - arc.center.y;
     let outer = arc.outer_radius + INK_REACH;
     let reach = outer * outer - dy * dy;
-    if !(reach > 0.0) {
+    if reach.is_nan() || reach <= 0.0 {
         return [NO_RUN, NO_RUN];
     }
     let run = run_within(arc.center.x, reach.sqrt(), min_x, max_x);
     let inner = arc.inner_radius - INK_REACH;
     let hole = inner * inner - dy * dy;
-    if inner <= 0.0 || !(hole > 0.0) {
+    if inner <= 0.0 || hole.is_nan() || hole <= 0.0 {
         return [run, NO_RUN];
     }
     let hole = hole.sqrt();
@@ -428,7 +428,7 @@ fn stroke_row_runs(
         };
         let qy = local_y - outer.1 + radius;
         let grown = radius + INK_REACH;
-        if !(qy < grown) {
+        if qy.is_nan() || qy >= grown {
             return None;
         }
         Some(if qy <= 0.0 {
@@ -441,7 +441,7 @@ fn stroke_row_runs(
     let empty_reach = |radius: f32| {
         let radius = (radius - half_width).max(0.0);
         let qy = local_y - inner.1 + radius;
-        if !(qy <= radius - INK_REACH) {
+        if qy.is_nan() || qy > radius - INK_REACH {
             return None;
         }
         let reach = if qy <= 0.0 {
