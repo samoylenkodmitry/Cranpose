@@ -29,6 +29,7 @@ mod effect_rect_past_target;
 mod effect_sample_domain;
 mod effect_semantics;
 mod elevation_shadow;
+mod every_screen_pipelines;
 mod font_feature_settings_pixels;
 mod frame_driven_layer;
 mod glass_layer_cache;

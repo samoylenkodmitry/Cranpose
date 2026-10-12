@@ -1570,6 +1570,29 @@ impl ShapePipelineKey {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) const DISK_LAYOUT: [u8; 8] = *b"CPKEY003";
 
+    /// The flat solid rect fill of a pass without a depth buffer, which
+    /// every screen draws: on all 38 demo pages, and in a launch's first
+    /// frames, which draw without the depth pre-pass.
+    #[cfg(not(target_arch = "wasm32"))]
+    const SOLID_RECT: Self = Self {
+        blend_mode: BlendMode::SrcOver,
+        tier: RunTier::Arena,
+        variant: ShapeVariant {
+            kinds: 1 << FRAGMENT_KIND_FILL,
+            brush: None,
+            solid: true,
+            clip: SegmentClip::Untested,
+            interior: false,
+            dither: false,
+            ablation: ShapeAblation {
+                material: false,
+                fill: false,
+            },
+        },
+        turns: ShapeTurns::None,
+        depth: ShapeDepth::Off,
+    };
+
     /// The key as a number a later launch reads back with
     /// [`Self::from_bits`], to build the pipeline ahead of its first frame.
     #[cfg(not(target_arch = "wasm32"))]
@@ -3668,6 +3691,27 @@ impl GpuRenderer {
                 .filter(|shader| shader.first_screen)
                 .map(|shader| &shader.entry),
         );
+        if !records.shapes.iter().any(|shape| shape.first_screen) {
+            self.warm_every_screen();
+        }
+    }
+
+    /// Queues the pipelines every screen draws with, for a launch with no
+    /// record of its first screen: flat solid rects and text on whole
+    /// pixels. They build while the first screen composes, when the
+    /// compiler's threads have nothing else; on a Mate 20 X the gauntlet's
+    /// first content showed 333-366 ms after the first frame with them
+    /// against 383-399 ms without.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn warm_every_screen(&mut self) {
+        self.shape_pipelines.warm(ShapePipelineKey::SOLID_RECT);
+        self.glyph_atlas_pipeline_resource(false, GlyphQuads::Aligned)
+            .prefetch(
+                CompileLane::WarmUp,
+                &self.pipeline_compiler,
+                self.adapter_backend,
+                || self.glyph_atlas_pipeline_job(false, GlyphQuads::Aligned),
+            );
     }
 
     fn ensure_shape_pipeline(&mut self, key: ShapePipelineKey, vertices: u64) {

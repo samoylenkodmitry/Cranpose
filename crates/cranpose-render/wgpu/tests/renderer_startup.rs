@@ -3,9 +3,10 @@ use cranpose_ui_graphics::shader_warm_ups_after;
 
 use crate::support;
 
-/// A renderer compiles nothing on speculation: creating one builds no
-/// pipeline on the creating thread, and its compiler builds exactly the
-/// warm-ups requested so far, each once.
+/// A renderer builds no pipeline on the creating thread, and its compiler
+/// builds exactly the warm-ups requested so far, each once, and, with no
+/// record of a first screen, the two pipelines every screen draws with:
+/// flat solid rects and text on whole pixels.
 #[test]
 fn a_new_renderer_builds_only_the_requested_warm_ups() {
     let (_lock, (created, created_off_frame, requested), _renderer) =
@@ -26,7 +27,7 @@ fn a_new_renderer_builds_only_the_requested_warm_ups() {
     support::wait_for_background_compiler_idle();
     assert_eq!(
         pipelines_created_off_frame() - created_off_frame,
-        requested as u64,
-        "the compiler must build the requested warm-ups and nothing else"
+        requested as u64 + 2,
+        "the compiler must build the requested warm-ups and every screen's two pipelines"
     );
 }
