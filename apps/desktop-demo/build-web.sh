@@ -107,14 +107,18 @@ else
         echo "Using local cargo build jobs: $CARGO_BUILD_JOBS"
     fi
     echo "Building WASM module (optimized for size)..."
+    build_release() {
+        (
+            cd "$PLATFORM_DIR"
+            "$WASM_PACK" --log-level "$WASM_PACK_LOG_LEVEL" build --release --target web --out-dir "$SCRIPT_DIR/pkg" --features web,renderer-wgpu --no-default-features
+        )
+    }
 
     # Run wasm-pack build, don't exit on error so we can handle it
     set +e
-    (
-        cd "$PLATFORM_DIR"
-        "$WASM_PACK" --log-level "$WASM_PACK_LOG_LEVEL" build --release --target web --out-dir "$SCRIPT_DIR/pkg" --features web,renderer-wgpu --no-default-features
-    )
+    build_release
     BUILD_RESULT=$?
+    RELEASE_BUILT=$((BUILD_RESULT == 0))
     set -e
 
     if [ $BUILD_RESULT -ne 0 ]; then
@@ -138,6 +142,27 @@ else
         else
             exit 1
         fi
+    fi
+fi
+
+# A release records the pipelines its first screen draws with in headless
+# Chrome and builds again embedding them, so the page builds them as it
+# starts (scripts/web/record_first_screen.mjs). CRANPOSE_WEB_RECORD_FIRST_SCREEN=0
+# skips it; a recording that fails leaves the first build.
+if [ "${RELEASE_BUILT:-0}" = "1" ] && [ "${CRANPOSE_WEB_RECORD_FIRST_SCREEN:-1}" != "0" ]; then
+    RECORDS="$PLATFORM_DIR/target/first_screen_pipelines.bin"
+    mkdir -p "$(dirname "$RECORDS")"
+    # The page starts only from a packaged site, whose asset-manifest.json
+    # names the bundle.
+    RECORD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/first-screen.XXXXXX")"
+    trap 'rm -rf "$RECORD_DIR"' EXIT
+    echo "Recording the first screen's pipelines..."
+    if "$SCRIPT_DIR/package-web.sh" "$RECORD_DIR/site" >/dev/null \
+        && node "$SCRIPT_DIR/../../scripts/web/record_first_screen.mjs" "$RECORD_DIR/site" index.html "$RECORDS"; then
+        echo "Building WASM module with them..."
+        CRANPOSE_FIRST_SCREEN_PIPELINES="$RECORDS" build_release
+    else
+        echo "Warning: recording the first screen failed; the page builds its pipelines in its first frame"
     fi
 fi
 

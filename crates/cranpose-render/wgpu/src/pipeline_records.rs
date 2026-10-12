@@ -42,19 +42,84 @@ impl<T> Recorded<T> {
     }
 }
 
-/// The recorded pipelines besides the last first screen's shapes, which the
-/// file keeps ahead of this section.
+/// Recorded pipelines: shapes by their keys' bits, runtime shader
+/// pipelines, and fixed pipelines by their labels, as `F`.
 #[derive(Default)]
-pub(crate) struct PipelineRecords {
-    /// Shape pipelines, by their keys' bits.
+pub(crate) struct RecordedPipelines<F> {
     pub(crate) shapes: Vec<Recorded<u64>>,
     pub(crate) shaders: Vec<Recorded<ShaderPipelineRecord>>,
-    /// Fixed pipelines, by label.
-    pub(crate) fixed: Vec<Recorded<String>>,
+    pub(crate) fixed: Vec<Recorded<F>>,
 }
+
+/// The recorded pipelines besides the last first screen's shapes, which the
+/// file keeps ahead of this section.
+pub(crate) type PipelineRecords = RecordedPipelines<String>;
 
 /// Opens the records' section of the cache file.
 const SECTION: &[u8; 4] = b"RSP3";
+
+/// Opens a first screen's pipelines, written by one launch for another to
+/// build before its first frame: the layout of the shape keys they name,
+/// the backend that drew them, which picks the keys, then a records section
+/// of the first screen's entries.
+const FIRST_SCREEN: &[u8; 4] = b"CPFS";
+
+/// The first screen's entries of `drawn`, drawn on `backend`, as
+/// [`decode_first_screens`] reads them; `None` when one does not fit the
+/// layout.
+pub(crate) fn encode_first_screen(
+    drawn: &RecordedPipelines<&'static str>,
+    backend: wgpu::Backend,
+) -> Option<Vec<u8>> {
+    let mut bytes = FIRST_SCREEN.to_vec();
+    bytes.extend_from_slice(&crate::render::ShapePipelineKey::DISK_LAYOUT);
+    bytes.push(backend as u8);
+    encode(
+        drawn
+            .shapes
+            .iter()
+            .filter(|shape| shape.first_screen)
+            .copied(),
+        drawn
+            .shaders
+            .iter()
+            .filter(|shader| shader.first_screen)
+            .map(Recorded::as_ref),
+        drawn
+            .fixed
+            .iter()
+            .filter(|fixed| fixed.first_screen)
+            .map(|fixed| fixed.as_ref().map(|label| *label)),
+        &mut bytes,
+    )?;
+    Some(bytes)
+}
+
+/// Every pipeline the first screens drawn on `backend` in `bytes` name,
+/// sets [`encode_first_screen`] wrote one after another, in their order. A
+/// set another backend drew, or whose shape keys this build lays out
+/// otherwise, names none, and reading stops at bytes that open no set.
+pub(crate) fn decode_first_screens(mut bytes: &[u8], backend: wgpu::Backend) -> PipelineRecords {
+    let mut records = PipelineRecords::default();
+    while let Some((layout, section)) = bytes
+        .strip_prefix(FIRST_SCREEN.as_slice())
+        .and_then(<[u8]>::split_first_chunk::<8>)
+    {
+        let Some((&drawn_on, section)) = section.split_first() else {
+            break;
+        };
+        let Some((set, rest)) = decode(section) else {
+            break;
+        };
+        if *layout == crate::render::ShapePipelineKey::DISK_LAYOUT && drawn_on == backend as u8 {
+            records.shapes.extend(set.shapes);
+            records.shaders.extend(set.shaders);
+            records.fixed.extend(set.fixed);
+        }
+        bytes = rest;
+    }
+    records
+}
 
 /// Appends a section holding the records to `bytes`, or `None` when one of
 /// them does not fit the layout.

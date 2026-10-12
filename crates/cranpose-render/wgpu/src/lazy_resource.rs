@@ -69,7 +69,6 @@ impl<T> LazyGpuResource<T> {
         recorder.during_demand(|| self.get_or_init(backend, create))
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn label(&self) -> &'static str {
         self.label
     }

@@ -42,7 +42,7 @@ use crate::{
         TrackedPass,
     },
     effect_renderer::{CompositeSampleMode, EffectRenderer, RoundedCompositeMask},
-    fixed_pipeline::FixedPipeline,
+    fixed_pipeline::{FixedPipeline, FixedPipelineJob},
     frame::{AdmissionGate, FrameExecutor, StageSideScratch},
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
@@ -1535,14 +1535,12 @@ pub(crate) struct ShapePipelineKey {
 }
 
 /// Packs a key's fields into a number, low bit first.
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 struct KeyWriter {
     bits: u64,
     width: u32,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl KeyWriter {
     fn put(&mut self, value: u64, width: u32) {
         self.bits |= value << self.width;
@@ -1586,7 +1584,6 @@ impl KeyReader {
 }
 
 impl ShapePipelineKey {
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) const DISK_LAYOUT: [u8; 8] = *b"CPKEY003";
 
     /// The flat solid rect fill of a pass without a depth buffer, which
@@ -1614,7 +1611,6 @@ impl ShapePipelineKey {
 
     /// The key as a number a later launch reads back with
     /// [`Self::from_bits`], to build the pipeline ahead of its first frame.
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn to_bits(self) -> u64 {
         let mut bits = KeyWriter::default();
         bits.put(self.blend_mode as u64, 5);
@@ -3770,19 +3766,52 @@ impl GpuRenderer {
     /// Queues the fixed pipelines whose labels `wanted` accepts.
     #[cfg(not(target_arch = "wasm32"))]
     fn warm_fixed_pipelines(&self, wanted: &dyn Fn(&str) -> bool) {
-        self.effect_renderer.warm_fixed(&self.device, wanted);
-        let warm =
-            |pipeline: &FixedPipeline,
-             job: &dyn Fn() -> Box<dyn FnOnce() -> wgpu::RenderPipeline + Send>| {
-                if wanted(pipeline.label()) {
-                    pipeline.queue(
-                        self.effect_renderer.compiler(),
-                        crate::pipeline_compiler::CompileLane::WarmUp,
-                        self.adapter_backend,
-                        job(),
-                    );
-                }
-            };
+        let compiler = self.effect_renderer.compiler();
+        self.for_each_fixed_pipeline(&mut |pipeline, job| {
+            if wanted(pipeline.label()) {
+                pipeline.queue(
+                    compiler,
+                    crate::pipeline_compiler::CompileLane::WarmUp,
+                    self.adapter_backend,
+                    job(),
+                );
+            }
+        });
+    }
+
+    /// Builds here, ahead of the first frame, the pipelines named by the
+    /// first screens in `records` that this renderer's backend drew (see
+    /// [`crate::WgpuRenderer::build_first_screen_pipelines`]).
+    pub(crate) fn build_first_screen(&mut self, records: &[u8]) {
+        let records = crate::pipeline_records::decode_first_screens(records, self.adapter_backend);
+        for shape in &records.shapes {
+            if let Some(key) = ShapePipelineKey::from_bits(shape.entry) {
+                self.shape_pipelines.build_ahead(key);
+            }
+        }
+        self.for_each_fixed_pipeline(&mut |pipeline, job| {
+            if records
+                .fixed
+                .iter()
+                .any(|fixed| fixed.entry == pipeline.label())
+            {
+                pipeline.build_ahead(&self.recorder, self.adapter_backend, job());
+            }
+        });
+    }
+
+    /// See [`crate::WgpuRenderer::first_screen_pipelines`].
+    pub(crate) fn first_screen_pipelines(&self) -> Option<Vec<u8>> {
+        self.recorder.first_screen_records(self.adapter_backend)
+    }
+
+    /// Hands `visit` every fixed pipeline, the effect renderer's too, with
+    /// the job that builds it.
+    fn for_each_fixed_pipeline(
+        &self,
+        visit: &mut dyn FnMut(&FixedPipeline, &dyn Fn() -> FixedPipelineJob),
+    ) {
+        self.effect_renderer.for_each_fixed(&self.device, visit);
         for depth in [false, true] {
             for (alpha_mask, rounded) in
                 [(false, false), (true, false), (false, true), (true, true)]
@@ -3793,17 +3822,17 @@ impl GpuRenderer {
                     rounded,
                 };
                 for blend_mode in [BlendMode::SrcOver, BlendMode::DstOut] {
-                    warm(self.image_pipeline_resource(blend_mode, variant), &|| {
+                    visit(self.image_pipeline_resource(blend_mode, variant), &|| {
                         Box::new(self.image_pipeline_job(blend_mode, variant))
                     });
                 }
             }
             for quads in [GlyphQuads::Plain, GlyphQuads::Aligned, GlyphQuads::Turned] {
-                warm(self.glyph_atlas_pipeline_resource(depth, quads), &|| {
+                visit(self.glyph_atlas_pipeline_resource(depth, quads), &|| {
                     Box::new(self.glyph_atlas_pipeline_job(depth, quads))
                 });
             }
-            warm(&self.rrect_shadow_pipeline[usize::from(depth)], &|| {
+            visit(&self.rrect_shadow_pipeline[usize::from(depth)], &|| {
                 Box::new(self.rrect_shadow_pipeline_job(depth))
             });
         }

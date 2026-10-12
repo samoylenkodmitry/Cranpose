@@ -428,6 +428,25 @@ to force one.
 `wasm-pack` creates the WebAssembly module and JavaScript loader in `pkg`. The
 canvas ID matches the first argument to `run_web`.
 
+For a release, record the pipelines the first screen draws with and build
+again with them. On WebGL the page then builds them as it starts, and the
+browser compiles them while the page composes its first screen instead of
+during the first frame. On a Mate 20 X this showed the first screen of a
+heavy page about 0.3 s sooner. The recorder runs the built page in headless
+Chrome; it is `scripts/web/record_first_screen.mjs` in the Cranpose repository
+and needs Node.js. Outside macOS, set `CHROME` to the Chrome executable:
+
+```sh
+wasm-pack build --target web --out-dir pkg --no-default-features --features web,renderer-wgpu
+node path/to/cranpose/scripts/web/record_first_screen.mjs . index.html target/first_screen_pipelines.bin
+CRANPOSE_FIRST_SCREEN_PIPELINES=target/first_screen_pipelines.bin \
+    wasm-pack build --target web --out-dir pkg --no-default-features --features web,renderer-wgpu
+```
+
+Record again after the first screen or the Cranpose version changes. A
+recording written by a Cranpose release that lays out pipeline keys
+differently builds nothing.
+
 ## Ownership
 
 ### Capture state in callbacks

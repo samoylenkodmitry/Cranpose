@@ -9,7 +9,7 @@ use cranpose_ui_graphics::{
 use smallvec::SmallVec;
 
 use crate::{
-    fixed_pipeline::FixedPipeline,
+    fixed_pipeline::{FixedPipeline, FixedPipelineJob},
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
         TextureRegionCopy, UniformUpload, UploadAllocatorId, UploadAllocatorSpec, copy_compatible,
@@ -1045,11 +1045,6 @@ fn dst_out_blend_state() -> wgpu::BlendState {
     }
 }
 
-/// The creation of one fixed effect pipeline, owning clones of everything
-/// it reads so the background compiler can run it as well as the frame.
-#[cfg(not(target_arch = "wasm32"))]
-type FixedPipelineJob = Box<dyn FnOnce() -> wgpu::RenderPipeline + Send + 'static>;
-
 /// The framework's own runtime shader sources, which recorded pipelines are
 /// rebuilt from.
 #[cfg(not(target_arch = "wasm32"))]
@@ -1058,8 +1053,6 @@ fn framework_shader_sources() -> impl Iterator<Item = &'static str> {
         .into_iter()
         .chain([crate::pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER])
 }
-#[cfg(target_arch = "wasm32")]
-type FixedPipelineJob = Box<dyn FnOnce() -> wgpu::RenderPipeline + 'static>;
 
 #[expect(clippy::too_many_arguments)]
 fn fullscreen_pipeline_job(
@@ -1536,32 +1529,25 @@ impl EffectRenderer {
         }
     }
 
-    /// Queues the fixed pipelines whose labels `wanted` accepts.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn warm_fixed(&self, device: &wgpu::Device, wanted: &dyn Fn(&str) -> bool) {
-        let warm = |pipeline: &FixedPipeline, job: &dyn Fn() -> FixedPipelineJob| {
-            if wanted(pipeline.label()) {
-                pipeline.queue(
-                    &self.compiler,
-                    CompileLane::WarmUp,
-                    self.adapter_backend,
-                    job(),
-                );
-            }
-        };
+    /// Hands `visit` each fixed effect pipeline with the job that builds it.
+    pub(crate) fn for_each_fixed(
+        &self,
+        device: &wgpu::Device,
+        visit: &mut dyn FnMut(&FixedPipeline, &dyn Fn() -> FixedPipelineJob),
+    ) {
         let blurs = (0..BLUR_TILE_MODES.len())
             .flat_map(blur_family)
             .chain([BlurPipeline::Mean]);
         for blur in blurs {
-            warm(self.blur_resource(blur), &|| self.blur_job(device, blur));
+            visit(self.blur_resource(blur), &|| self.blur_job(device, blur));
         }
-        warm(&self.offset_pipeline, &|| self.offset_pipeline_job(device));
+        visit(&self.offset_pipeline, &|| self.offset_pipeline_job(device));
         for blend_mode in [BlendMode::SrcOver, BlendMode::Src, BlendMode::DstOut] {
             for variant in [false, true] {
-                warm(self.blit_pipeline_target(blend_mode, variant).0, &|| {
+                visit(self.blit_pipeline_target(blend_mode, variant).0, &|| {
                     self.blit_pipeline_job(device, blend_mode, variant)
                 });
-                warm(
+                visit(
                     self.projective_pipeline_target(blend_mode, variant).0,
                     &|| self.projective_pipeline_job(device, blend_mode, variant),
                 );
