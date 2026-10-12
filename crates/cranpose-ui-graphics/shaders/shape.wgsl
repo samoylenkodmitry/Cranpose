@@ -401,7 +401,6 @@ const TIER_STORE: u32 = 0u;
 const TIER_ARENA: u32 = 1u;
 const TIER_EITHER: u32 = 2u;
 override SHAPE_TIER: u32 = TIER_STORE;
-override SHAPE_DEPTH: bool = true;
 // Whether banded arcs draw as strips on this tier; false on the uniform
 // floor, which draws every record as its quad.
 override SHAPE_BANDS: bool = true;
@@ -876,11 +875,12 @@ fn record_depth(instance: u32) -> f32 {
     return max(1.0 - (uniforms.reserved.x + f32(instance) + 1.0) * DEPTH_STEP, 0.0);
 }
 
+// Every record writes its depth, in a pass with a depth buffer or without
+// one: a pipeline either way then runs one shader, which a driver compiles
+// once, and the position shader stays bound by its loads.
 fn placed_record_vertex(record: ShapeRecord, local: u32, instance: u32) -> VertexOutput {
     var output = record_vertex(record, local);
-    if (SHAPE_DEPTH) {
-        output.clip_position.z = record_depth(instance);
-    }
+    output.clip_position.z = record_depth(instance);
     return output;
 }
 
