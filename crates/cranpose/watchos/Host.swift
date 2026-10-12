@@ -145,33 +145,37 @@ vec4 paint(vec2 p, float brush, float tile_mode, vec4 color, vec4 color_end, vec
     return c;
 }
 
+// SpriteKit turns `main` into a function that returns the colour, so it
+// assigns `gl_FragColor` once at the end and never returns early.
 void main() {
     vec2 p = a_frame.xy + vec2(v_tex_coord.x, 1.0 - v_tex_coord.y) * a_frame.zw;
     float kind = a_kind.x;
+    vec4 color;
     if (kind == 0.0) {
         vec2 uv = (p - a_geometry.xy) / a_geometry.zw;
-        gl_FragColor = texture2D(u_texture, vec2(uv.x, 1.0 - uv.y));
-        return;
-    }
-    float coverage;
-    if (kind == 1.0) {
-        vec2 half_size = a_geometry.zw * 0.5;
-        coverage = a_stroke.x > 0.5
-            ? coverage_for_distance(sdf_rounded_rect(p - a_geometry.xy - half_size, half_size, a_detail))
-            : 1.0;
-    } else if (kind == 2.0) {
-        vec2 half_size = a_geometry.zw * 0.5;
-        coverage = coverage_for_distance(
-            sdf_stroked(p - a_geometry.xy - half_size, half_size, a_detail, a_stroke.x, a_stroke.y));
-    } else if (kind == 3.0) {
-        coverage = coverage_for_distance(
-            sdf_arc(p, a_geometry.xy, a_geometry.z, a_geometry.w, a_detail.x, a_detail.y, a_detail.z));
+        color = texture2D(u_texture, vec2(uv.x, 1.0 - uv.y));
     } else {
-        coverage = line_coverage(p, a_geometry.xy, a_geometry.zw, a_detail.x, a_detail.y);
+        float coverage;
+        if (kind == 1.0) {
+            vec2 half_size = a_geometry.zw * 0.5;
+            coverage = a_stroke.x > 0.5
+                ? coverage_for_distance(sdf_rounded_rect(p - a_geometry.xy - half_size, half_size, a_detail))
+                : 1.0;
+        } else if (kind == 2.0) {
+            vec2 half_size = a_geometry.zw * 0.5;
+            coverage = coverage_for_distance(
+                sdf_stroked(p - a_geometry.xy - half_size, half_size, a_detail, a_stroke.x, a_stroke.y));
+        } else if (kind == 3.0) {
+            coverage = coverage_for_distance(
+                sdf_arc(p, a_geometry.xy, a_geometry.z, a_geometry.w, a_detail.x, a_detail.y, a_detail.z));
+        } else {
+            coverage = line_coverage(p, a_geometry.xy, a_geometry.zw, a_detail.x, a_detail.y);
+        }
+        vec4 c = paint(p, a_kind.w, a_stroke.z, a_color, a_color_end, a_gradient, a_stops);
+        float alpha = c.a * coverage;
+        color = a_kind.z == 1.0 ? vec4(1.0 - alpha) : vec4(c.rgb * alpha, alpha);
     }
-    vec4 c = paint(p, a_kind.w, a_stroke.z, a_color, a_color_end, a_gradient, a_stops);
-    float alpha = c.a * coverage;
-    gl_FragColor = a_kind.z == 1.0 ? vec4(1.0 - alpha) : vec4(c.rgb * alpha, alpha);
+    gl_FragColor = color;
 }
 """
 
