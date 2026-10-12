@@ -4,12 +4,15 @@ use cranpose_render_common::text_measure::{
     fallback_text_metrics,
 };
 use cranpose_render_common::{
-    brush_sampling::sample_brush_rgba, graph_scene::RenderDiagnostics, shape_sdf,
-    software_text_raster::rasterize_annotated_text_region, text_measure::SoftwareTextResources,
+    brush_sampling::{color_to_rgba, sample_brush_rgba},
+    graph_scene::RenderDiagnostics,
+    shape_sdf,
+    software_text_raster::rasterize_annotated_text_region,
+    text_measure::SoftwareTextResources,
 };
 use cranpose_ui::text::TextMotion;
 use cranpose_ui_graphics::{
-    ArcGeometry, BlendMode, ColorFilter, CornerRadii, LineGeometry, Point, Rect, StrokeJoin,
+    ArcGeometry, BlendMode, Brush, ColorFilter, CornerRadii, LineGeometry, Point, Rect, StrokeJoin,
     Trapezoid, expand_rect,
 };
 
@@ -276,36 +279,198 @@ fn draw_shape(
         return;
     };
 
+    let opaque = opaque_solid_bytes(&draw.brush, draw.blend_mode);
     for py in clip_bounds.min_y..clip_bounds.max_y {
-        if py < 0 || py >= height as i32 {
-            continue;
-        }
-        for px in clip_bounds.min_x..clip_bounds.max_x {
-            if px < 0 || px >= width as i32 {
-                continue;
-            }
-            let center_x = px as f32 + 0.5;
-            let center_y = py as f32 + 0.5;
-            let coverage = coverage.at(Point::new(center_x, center_y));
-            if coverage <= 0.0 {
-                continue;
-            }
+        let center_y = py as f32 + 0.5;
+        for (start, end) in coverage.row_runs(center_y, clip_bounds.min_x, clip_bounds.max_x) {
+            for px in start..end {
+                let center_x = px as f32 + 0.5;
+                let coverage = coverage.at(Point::new(center_x, center_y));
+                if coverage <= 0.0 {
+                    continue;
+                }
+                if let Some(bytes) = opaque
+                    && coverage >= 1.0
+                {
+                    let idx = ((py as u32 * width + px as u32) * 4) as usize;
+                    frame[idx..idx + 4].copy_from_slice(&bytes);
+                    continue;
+                }
 
-            let mut sample =
-                sample_brush_rgba(&draw.brush, rect, center_x, center_y, dither_origin);
-            sample[3] *= coverage;
-            let alpha = sample[3];
-            if alpha <= 0.0 {
-                continue;
+                let mut sample =
+                    sample_brush_rgba(&draw.brush, rect, center_x, center_y, dither_origin);
+                sample[3] *= coverage;
+                let alpha = sample[3];
+                if alpha <= 0.0 {
+                    continue;
+                }
+                let idx = ((py as u32 * width + px as u32) * 4) as usize;
+                blend_pixel(
+                    &mut frame[idx..idx + 4],
+                    sample,
+                    draw.blend_mode,
+                    diagnostics,
+                );
             }
-            let idx = ((py as u32 * width + px as u32) * 4) as usize;
-            blend_pixel(
-                &mut frame[idx..idx + 4],
-                sample,
-                draw.blend_mode,
-                diagnostics,
-            );
         }
+    }
+}
+
+/// The bytes an opaque solid colour leaves on a pixel it covers fully,
+/// whatever was there: what `blend_pixel` works out for it.
+fn opaque_solid_bytes(brush: &Brush, blend_mode: BlendMode) -> Option<[u8; 4]> {
+    let Brush::Solid(color) = brush else {
+        return None;
+    };
+    let rgba = color_to_rgba(*color);
+    (blend_mode == BlendMode::SrcOver && rgba[3] >= 1.0).then(|| {
+        [
+            (rgba[0] * 255.0).round() as u8,
+            (rgba[1] * 255.0).round() as u8,
+            (rgba[2] * 255.0).round() as u8,
+            255,
+        ]
+    })
+}
+
+/// How far from a band's edge a pixel centre still takes ink: the
+/// antialiasing reaches half a pixel, and the rest is room for the rounding
+/// in the distance functions.
+const INK_REACH: f32 = 0.5 + 1.0 / 64.0;
+
+/// The pixels of one row worth testing, as two runs `start..end`: the band on
+/// either side of a hole. A run with `start >= end` is empty.
+type RowRuns = [(i32, i32); 2];
+
+const NO_RUN: (i32, i32) = (0, 0);
+
+/// The pixels whose centres lie within `half` of `centre`, cut to
+/// `min..max`.
+fn run_within(centre: f32, half: f32, min: i32, max: i32) -> (i32, i32) {
+    let start = ((centre - half - 0.5).ceil() as i32).max(min);
+    let end = ((centre + half - 0.5).floor() as i32 + 1).min(max);
+    (start, end)
+}
+
+/// `run` without the pixels whose centres lie in `from..=to`.
+fn runs_around(run: (i32, i32), from: f32, to: f32) -> RowRuns {
+    let first = (from - 0.5).ceil() as i32;
+    let last = (to - 0.5).floor() as i32;
+    if first > last {
+        return [run, NO_RUN];
+    }
+    [(run.0, run.1.min(first)), (run.0.max(last + 1), run.1)]
+}
+
+/// The row of an arc that can take ink. Every point of the band, caps
+/// included, lies between the inner and the outer radius, so the row stops at
+/// the outer circle and skips the inner one.
+fn arc_row_runs(arc: &ArcGeometry, y: f32, min_x: i32, max_x: i32) -> RowRuns {
+    let dy = y - arc.center.y;
+    let outer = arc.outer_radius + INK_REACH;
+    let reach = outer * outer - dy * dy;
+    if reach.is_nan() || reach <= 0.0 {
+        return [NO_RUN, NO_RUN];
+    }
+    let run = run_within(arc.center.x, reach.sqrt(), min_x, max_x);
+    let inner = arc.inner_radius - INK_REACH;
+    let hole = inner * inner - dy * dy;
+    if inner <= 0.0 || hole.is_nan() || hole <= 0.0 {
+        return [run, NO_RUN];
+    }
+    let hole = hole.sqrt();
+    runs_around(run, arc.center.x - hole, arc.center.x + hole)
+}
+
+/// The row of a stroked rounded rect that can take ink: inside the outer edge
+/// grown by `INK_REACH`, and outside the part of the hole that lies at least
+/// `INK_REACH` inside the inner edge. Both edges are the rounded boxes
+/// `shape_sdf::sdf_stroked_rounded_rect` measures, taken on each side of the
+/// centre with that side's corner radius.
+fn stroke_row_runs(
+    rect: Rect,
+    radii: Option<CornerRadii>,
+    half_width: f32,
+    join: StrokeJoin,
+    y: f32,
+    min_x: i32,
+    max_x: i32,
+) -> RowRuns {
+    let half_width = half_width.max(0.0);
+    let half_size = (rect.width * 0.5, rect.height * 0.5);
+    let geometry = (
+        (half_size.0 - half_width).max(0.0),
+        (half_size.1 - half_width).max(0.0),
+    );
+    let outer = (geometry.0 + half_width, geometry.1 + half_width);
+    let inner = (
+        (geometry.0 - half_width).max(0.0),
+        (geometry.1 - half_width).max(0.0),
+    );
+    let centre_x = rect.x + half_size.0;
+    let local_y = (y - (rect.y + half_size.1)).abs();
+    if !(local_y.is_finite() && centre_x.is_finite()) {
+        return [(min_x, max_x), NO_RUN];
+    }
+    let radii = radii.unwrap_or_default();
+    let (left, right) = if y - (rect.y + half_size.1) > 0.0 {
+        (radii.bottom_left, radii.bottom_right)
+    } else {
+        (radii.top_left, radii.top_right)
+    };
+    // How far from the centre the grown outer edge reaches on one side;
+    // `None` when the row passes outside it.
+    let ink_reach = |radius: f32| {
+        let radius = if join != StrokeJoin::Round && radius < 0.0001 {
+            0.0
+        } else {
+            radius + half_width
+        };
+        let qy = local_y - outer.1 + radius;
+        let grown = radius + INK_REACH;
+        if qy.is_nan() || qy >= grown {
+            return None;
+        }
+        Some(if qy <= 0.0 {
+            outer.0 + INK_REACH
+        } else {
+            outer.0 - radius + (grown * grown - qy * qy).max(0.0).sqrt()
+        })
+    };
+    // How far from the centre the hole is empty on one side, if it is.
+    let empty_reach = |radius: f32| {
+        let radius = (radius - half_width).max(0.0);
+        let qy = local_y - inner.1 + radius;
+        if qy.is_nan() || qy > radius - INK_REACH {
+            return None;
+        }
+        let reach = if qy <= 0.0 {
+            inner.0 - INK_REACH
+        } else {
+            let span = (radius - INK_REACH) * (radius - INK_REACH) - qy * qy;
+            inner.0 - radius + span.max(0.0).sqrt()
+        };
+        (reach >= 0.0).then_some(reach)
+    };
+    // A side the row misses still keeps the centre's own column, which
+    // belongs to the left side.
+    let run = match (ink_reach(left), ink_reach(right)) {
+        (None, None) => return [NO_RUN, NO_RUN],
+        (left, right) => {
+            let from = centre_x - left.unwrap_or(0.0);
+            let to = centre_x + right.unwrap_or(0.0);
+            let start = ((from - 0.5).ceil() as i32).max(min_x);
+            let end = ((to - 0.5).floor() as i32 + 1).min(max_x);
+            (start, end)
+        }
+    };
+    match (empty_reach(left), empty_reach(right)) {
+        (Some(left), Some(right)) => runs_around(run, centre_x - left, centre_x + right),
+        (Some(left), None) => runs_around(run, centre_x - left, centre_x),
+        // The right side starts past the centre: the centre's own column
+        // belongs to the left one.
+        (None, Some(right)) => runs_around(run, centre_x + 1.0 / 64.0, centre_x + right),
+        (None, None) => [run, NO_RUN],
     }
 }
 
@@ -369,11 +534,28 @@ impl ShapeCoverage {
     }
 
     /// The pixels it can cover: a slice's own box, which its edges reach
-    /// half a pixel past, otherwise the shape's `rect`.
+    /// half a pixel past, an arc's band, otherwise the shape's `rect`. An
+    /// arc's `rect` is the disc around its whole circle.
     fn reach(&self, rect: Rect) -> Rect {
         match self {
             Self::Trapezoid(trapezoid) => expand_rect(trapezoid.bounds(), 0.5),
+            Self::Arc(arc) => expand_rect(arc.bounds(), INK_REACH),
             _ => rect,
+        }
+    }
+
+    /// The pixels of the row centred at `y` that can take ink, within
+    /// `min_x..max_x`.
+    fn row_runs(&self, y: f32, min_x: i32, max_x: i32) -> RowRuns {
+        match self {
+            Self::Arc(arc) => arc_row_runs(arc, y, min_x, max_x),
+            Self::Stroke {
+                rect,
+                radii,
+                half_width,
+                join,
+            } => stroke_row_runs(*rect, *radii, *half_width, *join, y, min_x, max_x),
+            _ => [(min_x, max_x), NO_RUN],
         }
     }
 
@@ -655,6 +837,15 @@ fn blend_pixel(
 
     let src_alpha = src[3].clamp(0.0, 1.0);
     if src_alpha <= 0.0 {
+        return;
+    }
+    // An opaque source over anything is the source: the same bytes the
+    // blend below works out, without reading the destination.
+    if src_alpha >= 1.0 && resolved_blend_mode != BlendMode::DstOut {
+        dst[0] = (src[0].clamp(0.0, 1.0) * 255.0).round() as u8;
+        dst[1] = (src[1].clamp(0.0, 1.0) * 255.0).round() as u8;
+        dst[2] = (src[2].clamp(0.0, 1.0) * 255.0).round() as u8;
+        dst[3] = 255;
         return;
     }
     let dst_r = dst[0] as f32 / 255.0;
