@@ -7,10 +7,32 @@
 //! no Metal shader cached, and nothing showed meanwhile. Through
 //! `createRenderPipelineAsync` the same twelve compiled side by side in
 //! 0.21 to 0.25 s, and creating them again afterwards took 3 ms in all.
+//!
+//! On WebGL the first screen's pipelines an earlier run of the app recorded
+//! (see [`FIRST_SCREEN_PIPELINES`]) build as the renderer starts. Chrome's
+//! GPU process links each program one at a time, about 40 ms on a Mate 20
+//! X, and would otherwise sit idle while the page composes, then link all
+//! thirteen of the gauntlet's while its first frame waits: that frame ended
+//! at 1.11-1.21 s with them built at start, 1.45-1.57 s without. WebGPU
+//! builds none at start: Chrome compiles its discovery side by side on an
+//! M3 Pro, and a set recorded at another screen size than the first
+//! frame's added compiles there without moving the first content.
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use cranpose_render_wgpu::WgpuRenderer;
+
+/// The pipelines the app's first screen drew with in a recording run of an
+/// earlier build of the same app (`__cranposeRecordFirstScreen`), which the
+/// build embeds from the file `CRANPOSE_FIRST_SCREEN_PIPELINES` names;
+/// empty for a build that names none.
+const FIRST_SCREEN_PIPELINES: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/first_screen_pipelines.bin"));
+
+/// The global a recording run sets before the page loads, and the global
+/// the page then leaves its first screen's pipelines in.
+const RECORD_REQUEST: &str = "__cranposeRecordFirstScreen";
+const RECORDED: &str = "__cranposeFirstScreenPipelines";
 
 /// What the renderer draws with.
 pub(crate) struct GpuTarget {
@@ -42,13 +64,28 @@ enum Stage {
 pub(crate) struct PipelineDiscovery {
     target: GpuTarget,
     stage: Rc<RefCell<Stage>>,
+    /// Whether this is a recording run whose first screen is still to be
+    /// left in [`RECORDED`].
+    recording: std::cell::Cell<bool>,
 }
 
 impl PipelineDiscovery {
     pub(crate) fn new(target: GpuTarget) -> Self {
+        let recording = js_sys::Reflect::get(&js_sys::global(), &RECORD_REQUEST.into())
+            .is_ok_and(|requested| requested.is_truthy());
         Self {
             target,
             stage: Rc::new(RefCell::new(Stage::Cold)),
+            recording: std::cell::Cell::new(recording),
+        }
+    }
+
+    /// Installs the first renderer, and on WebGL builds the recorded first
+    /// screen's pipelines, which the browser links beside the page's start.
+    pub(crate) fn start(&self, renderer: &mut WgpuRenderer) {
+        self.install(renderer);
+        if self.target.backend == wgpu::Backend::Gl {
+            renderer.build_first_screen_pipelines(FIRST_SCREEN_PIPELINES);
         }
     }
 
@@ -74,6 +111,7 @@ impl PipelineDiscovery {
     /// WebGPU discovers its pipelines, and the frame after they compiled
     /// draws with a new renderer. Both also build what a later frame needs.
     pub(crate) fn begin_frame(&self, renderer: &mut WgpuRenderer) {
+        self.leave_recorded(renderer);
         let mut stage = self.stage.borrow_mut();
         *stage = match std::mem::replace(&mut *stage, Stage::Done) {
             Stage::Cold if self.target.device.begin_pipeline_discovery() => Stage::Discovering,
@@ -91,9 +129,34 @@ impl PipelineDiscovery {
         }
     }
 
+    /// In a recording run, leaves the first screen's pipelines in
+    /// [`RECORDED`] once the first screen ended.
+    fn leave_recorded(&self, renderer: &WgpuRenderer) {
+        if !self.recording.get() {
+            return;
+        }
+        let Some(records) = renderer.first_screen_pipelines() else {
+            return;
+        };
+        self.recording.set(false);
+        let records = js_sys::Uint8Array::from(records.as_slice());
+        if js_sys::Reflect::set(&js_sys::global(), &RECORDED.into(), &records).is_err() {
+            log::warn!(
+                "[pipeline-records] the first screen's pipelines could not be left in {RECORDED}"
+            );
+        }
+    }
+
     /// Ends the frame that drew: after discovery, waits for the browser to
-    /// compile what it learned and calls `redraw` once it has.
+    /// compile what it learned and calls `redraw` once it has. A recording
+    /// run draws on until its first screen is left: a screen that holds
+    /// still would draw no frame after the first screen ended.
     pub(crate) fn end_frame(&self, redraw: &Rc<dyn Fn()>) {
+        if self.recording.get() {
+            // Asked after this frame: a frame asked during one is dropped.
+            let redraw = Rc::clone(redraw);
+            wasm_bindgen_futures::spawn_local(async move { redraw() });
+        }
         let mut stage = self.stage.borrow_mut();
         match &*stage {
             Stage::Discovering => {

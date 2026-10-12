@@ -429,7 +429,7 @@ pub async fn run(
         backend: adapter_info.backend,
         downlevel: adapter.get_downlevel_capabilities().flags,
     });
-    discovery.install(&mut renderer);
+    discovery.start(&mut renderer);
 
     let app = Rc::new(RefCell::new(AppShell::new_with_size_and_density(
         renderer,

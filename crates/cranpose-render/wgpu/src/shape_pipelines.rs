@@ -139,9 +139,13 @@ impl<B: KeyedBuild> ShapePipelines<B> {
         }
     }
 
+    /// Builds `key`'s pipeline here unless it is built, ahead of any draw.
+    pub(crate) fn build_ahead(&mut self, key: ShapePipelineKey) {
+        self.slots.build(key);
+    }
+
     pub(crate) fn ensure(&mut self, key: ShapePipelineKey, vertices: u64) {
         let need = self.slots.need(key);
-        #[cfg(not(target_arch = "wasm32"))]
         if need.first {
             self.recorder
                 .note_shape(key.to_bits(), self.recorder.in_first_screen());
@@ -214,7 +218,6 @@ pub(crate) struct Need {
     /// Its value is built.
     pub(crate) ready: bool,
     /// No draw needed the key before.
-    #[cfg_attr(target_arch = "wasm32", expect(dead_code))]
     pub(crate) first: bool,
     pub(crate) queued: bool,
 }

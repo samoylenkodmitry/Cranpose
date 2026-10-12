@@ -107,6 +107,23 @@ wasm_page() {
     ditto "$here/$app/pkg" "$here/browser-dist/$name/pkg"
 }
 
+# Cranpose's page, built as every Cranpose web app's release is: built once,
+# opened in headless Chrome to record the pipelines its first screen draws
+# with, and built again embedding them, so the page builds them as it starts
+# (scripts/web/record_first_screen.mjs). A recording that fails leaves the
+# first build.
+cranpose_page() {
+    wasm_page cranpose cranpose-app "$@"
+    local records=$here/cranpose-app/target/first_screen_pipelines.bin
+    local node
+    node=$(command -v node || echo /opt/homebrew/bin/node)
+    if "$node" "$here/../../scripts/web/record_first_screen.mjs" "$here/browser-dist" cranpose/index.html "$records"; then
+        CRANPOSE_FIRST_SCREEN_PIPELINES=$records wasm_page cranpose cranpose-app "$@"
+    else
+        echo "cranpose-web: recording its first screen failed; the page builds its pipelines in its first frame" >&2
+    fi
+}
+
 # Dioxus's page draws with the web page's CSS, which names Roboto beside it.
 dioxus_page() {
     wasm_page dioxus dioxus-app
@@ -265,7 +282,7 @@ browser)
     # Cranpose's app reads the whole workspace, which moves every night.
     step cranpose-web
     rust_target cranpose-app
-    wasm_page cranpose cranpose-app --no-default-features --features web,renderer-wgpu
+    cranpose_page --no-default-features --features web,renderer-wgpu
     # egui's shell on WebGL2, as on the phone's OpenGL ES.
     rust_target egui-app
     build egui-browser browser-dist/egui egui-app perf-data fonts -- \

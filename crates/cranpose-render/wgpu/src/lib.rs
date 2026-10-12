@@ -46,7 +46,6 @@ mod pipeline_compiler;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pipeline_disk_cache;
 mod pipeline_recorder;
-#[cfg(not(target_arch = "wasm32"))]
 mod pipeline_records;
 #[cfg(not(target_arch = "wasm32"))]
 mod present_runtime;
@@ -963,6 +962,29 @@ impl WgpuRenderer {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
             PresentBackend::None => None,
+        }
+    }
+
+    /// The pipelines this renderer's first screen drew with, encoded for
+    /// [`Self::build_first_screen_pipelines`] in a later launch. `None`
+    /// until the first screen ends, two seconds after the first frame and
+    /// later by every wait for a pipeline, and for a renderer that does not
+    /// draw on the calling thread.
+    pub fn first_screen_pipelines(&self) -> Option<Vec<u8>> {
+        self.sync_gpu_renderer()
+            .and_then(GpuRenderer::first_screen_pipelines)
+    }
+
+    /// Builds now the pipelines `records` names: sets
+    /// [`Self::first_screen_pipelines`] wrote, one after another. A web page
+    /// calls this as its renderer starts, so the browser compiles them while
+    /// the page composes its first screen. Only sets drawn on this
+    /// renderer's backend by a build with the same layout of pipeline keys
+    /// build, and a renderer that does not draw on the calling thread builds
+    /// nothing.
+    pub fn build_first_screen_pipelines(&mut self, records: &[u8]) {
+        if let PresentBackend::Sync(gpu_renderer) = &mut self.backend {
+            gpu_renderer.build_first_screen(records);
         }
     }
 

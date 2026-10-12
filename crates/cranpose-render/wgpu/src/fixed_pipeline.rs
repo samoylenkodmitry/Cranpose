@@ -20,7 +20,6 @@ pub(crate) struct FixedPipeline {
     /// Whether the loaded driver cache holds it: a draw builds it in its
     /// frame as a cache hit.
     cached: Cell<bool>,
-    #[cfg(not(target_arch = "wasm32"))]
     drawn: Cell<bool>,
 }
 
@@ -30,7 +29,6 @@ impl FixedPipeline {
             resource: LazyGpuResource::new(label),
             queued: Cell::new(false),
             cached: Cell::new(false),
-            #[cfg(not(target_arch = "wasm32"))]
             drawn: Cell::new(false),
         }
     }
@@ -43,7 +41,6 @@ impl FixedPipeline {
         backend: wgpu::Backend,
         create: impl FnOnce() -> wgpu::RenderPipeline,
     ) -> &wgpu::RenderPipeline {
-        #[cfg(not(target_arch = "wasm32"))]
         if !self.drawn.replace(true) {
             recorder.note_fixed(self.resource.label(), recorder.in_first_screen());
         }
@@ -115,8 +112,25 @@ impl FixedPipeline {
         self.cached.set(true);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn label(&self) -> &'static str {
         self.resource.label()
     }
+
+    /// Builds the pipeline here unless it is built, ahead of its first draw,
+    /// which is still the one noted as drawn.
+    pub(crate) fn build_ahead(
+        &self,
+        recorder: &PipelineRecorder,
+        backend: wgpu::Backend,
+        create: FixedPipelineJob,
+    ) {
+        self.resource.for_draw(recorder, backend, create);
+    }
 }
+
+/// The creation of one fixed pipeline, owning clones of everything it reads
+/// so the background compiler can run it as well as the frame.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type FixedPipelineJob = Box<dyn FnOnce() -> wgpu::RenderPipeline + Send + 'static>;
+#[cfg(target_arch = "wasm32")]
+pub(crate) type FixedPipelineJob = Box<dyn FnOnce() -> wgpu::RenderPipeline + 'static>;
