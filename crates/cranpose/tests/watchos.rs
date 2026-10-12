@@ -123,3 +123,70 @@ fn the_safe_area_reaches_content() {
     app.tick(16_000_001);
     assert_eq!(seen.get(), EdgeInsets::from_components(0.0, 32.0, 0.0, 0.0));
 }
+
+/// The scroll indicator draws where its list stands: after the crown moves the
+/// list, the next frame carries the moved thumb, the same picture a frame
+/// drawn from scratch gives.
+#[test]
+fn the_scroll_indicator_follows_the_list_the_crown_moves() {
+    use cranpose::{
+        round_scaling_list::CentreAnchor,
+        widgets::wear::{
+            ScreenScaffold, ScreenScaffoldSpec, ScrollIndicatorSpec, WearScalingLazyColumn,
+            WearScalingLazyColumnSpec, rememberWearScalingListState,
+        },
+    };
+    let mut app = Application::new(200, 200, 1.0, || {
+        let list = rememberWearScalingListState(CentreAnchor::default());
+        ScreenScaffold(
+            Modifier::empty().fill_max_size(),
+            list,
+            ScreenScaffoldSpec::default().indicator(ScrollIndicatorSpec::default().alpha(1.0)),
+            move || {
+                WearScalingLazyColumn(
+                    Modifier::empty().fill_max_size(),
+                    list,
+                    WearScalingLazyColumnSpec::default(),
+                    |scope| {
+                        scope.items(30, |_| {
+                            Spacer(
+                                Modifier::empty()
+                                    .fill_max_width()
+                                    .height(40.0)
+                                    .background(Color(0.2, 0.4, 0.8, 1.0)),
+                            );
+                        });
+                    },
+                );
+            },
+        );
+    })
+    .expect("valid surface");
+    app.set_active(true);
+    let mut now = 0u64;
+    let mut frames = |app: &mut Application, count: u64| {
+        for _ in 0..count {
+            now += 16_666_667;
+            app.tick(now);
+        }
+        now
+    };
+    let start = frames(&mut app, 30);
+    let before = app.pixels().to_vec();
+    for step in 0..20u64 {
+        app.crown(-3.0, start / 1_000_000 + step * 16);
+        frames(&mut app, 1);
+    }
+    frames(&mut app, 60);
+    let scrolled = app.pixels().to_vec();
+    assert_ne!(before, scrolled, "the crown moves the list");
+    // A resize there and back lays out and draws every node again.
+    app.resize(202, 200, 1.0).expect("resize");
+    frames(&mut app, 2);
+    app.resize(200, 200, 1.0).expect("resize");
+    frames(&mut app, 2);
+    assert!(
+        scrolled == app.pixels(),
+        "after the scroll, the frame differs from the same screen drawn from scratch"
+    );
+}
