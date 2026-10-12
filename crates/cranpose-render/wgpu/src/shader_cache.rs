@@ -257,11 +257,14 @@ impl PipelineJob {
             (&module.module, &module.module),
             (crate::render::FULLSCREEN_VS, "effect_fs"),
             &constants,
-            wgpu::ColorTargetState {
-                format: factory.format,
-                blend: Some(mode.blend_state()),
-                write_mask: wgpu::ColorWrites::ALL,
-            },
+            (
+                wgpu::ColorTargetState {
+                    format: factory.format,
+                    blend: Some(mode.blend_state()),
+                    write_mask: wgpu::ColorWrites::ALL,
+                },
+                None,
+            ),
         ))
     }
 }

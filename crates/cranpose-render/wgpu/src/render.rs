@@ -1104,7 +1104,7 @@ pub(crate) fn create_fullscreen_strip_pipeline(
     (vertex_module, fragment_module): (&wgpu::ShaderModule, &wgpu::ShaderModule),
     (vertex_entry, fragment_entry): (&'static str, &'static str),
     constants: &[(&str, f64)],
-    target: wgpu::ColorTargetState,
+    (target, depth_stencil): (wgpu::ColorTargetState, Option<wgpu::DepthStencilState>),
 ) -> wgpu::RenderPipeline {
     create_render_pipeline_logged(
         device,
@@ -1138,7 +1138,7 @@ pub(crate) fn create_fullscreen_strip_pipeline(
                 cull_mode: None,
                 ..Default::default()
             },
-            depth_stencil: None,
+            depth_stencil,
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,
@@ -1482,6 +1482,16 @@ impl ShapeDepth {
             bias: wgpu::DepthBiasState::default(),
         })
     }
+}
+
+/// Depth steps one draw apart in a pass's order, as the shaders'
+/// `DEPTH_STEP`.
+const PASS_DEPTH_STEP: f32 = 1.0 / 1_048_576.0;
+
+/// The depth of the draw at `index` in its pass's order, as the shaders'
+/// `record_depth` and `batch_depth` place it: later draws nearer.
+pub(crate) fn pass_order_depth(index: u32) -> f32 {
+    (1.0 - (index as f32 + 1.0) * PASS_DEPTH_STEP).max(0.0)
 }
 
 /// The depth state of a glyph or image pipeline: in a pass with a depth

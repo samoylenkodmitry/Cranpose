@@ -16,6 +16,7 @@ use crate::{
     },
     glass_split::split_scissors,
     gpu_stats::FrameStats,
+    lazy_resource::Pending,
     offscreen::{OffscreenPool, OffscreenTarget},
     pipeline_compiler::{CompileLane, PipelineCompiler},
     pipeline_recorder::PipelineRecorder,
@@ -138,14 +139,14 @@ pub(crate) struct EffectRenderer {
     offset_uniform_bind_group_layout: wgpu::BindGroupLayout,
 
     blit_shader: SharedShader,
-    blit_pipeline: [FixedPipeline; 2],
-    blit_pipeline_src: [FixedPipeline; 2],
-    blit_pipeline_dst_out: [FixedPipeline; 2],
+    blit_pipeline: [FixedPipeline; CompositeVariant::COUNT],
+    blit_pipeline_src: [FixedPipeline; CompositeVariant::COUNT],
+    blit_pipeline_dst_out: [FixedPipeline; CompositeVariant::COUNT],
     blit_uniform_bind_group_layout: wgpu::BindGroupLayout,
     projective_blit_shader: SharedShader,
-    projective_blit_pipeline: [FixedPipeline; 2],
-    projective_blit_pipeline_src: [FixedPipeline; 2],
-    projective_blit_pipeline_dst_out: [FixedPipeline; 2],
+    projective_blit_pipeline: [FixedPipeline; CompositeVariant::COUNT],
+    projective_blit_pipeline_src: [FixedPipeline; CompositeVariant::COUNT],
+    projective_blit_pipeline_dst_out: [FixedPipeline; CompositeVariant::COUNT],
 
     pub effect_texture_bind_group_layout: wgpu::BindGroupLayout,
     pub effect_uniform_bind_group_layout: wgpu::BindGroupLayout,
@@ -326,6 +327,9 @@ struct BlitUniforms {
     sampling: [f32; 4],
     dest_clip: [f32; 4],
     source_viewport: [f32; 4],
+    /// `x`: the quad's depth, its place in a pass that lays opaque
+    /// interiors down first.
+    depth: [f32; 4],
 }
 
 /// Where a blit lands: `rect` (x, y, width, height) in the pixels of a
@@ -365,6 +369,9 @@ struct ProjectiveBlitUniforms {
     alpha: [f32; 4],
     sampling: [f32; 4],
     source_region: [f32; 4],
+    /// `x`: the quad's depth, its place in a pass that lays opaque
+    /// interiors down first.
+    depth: [f32; 4],
 }
 
 #[repr(C)]
@@ -583,6 +590,35 @@ fn unmasked_nearest(sample_mode: CompositeSampleMode, masked: bool) -> bool {
     matches!(sample_mode, CompositeSampleMode::Nearest)
         && !masked
         && shader_specialization_enabled()
+}
+
+/// What sets a composite pipeline apart beside its blend: its specialized
+/// sampling (a blit's nearest texels through no mask, a projective blit's
+/// bilinear over the surface's own texels), and whether the pass it draws
+/// into has a depth buffer its opaque interiors fill first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CompositeVariant {
+    sampling: bool,
+    depth: bool,
+}
+
+impl CompositeVariant {
+    const COUNT: usize = 4;
+
+    const ALL: [Self; Self::COUNT] = [
+        Self::new(false, false),
+        Self::new(true, false),
+        Self::new(false, true),
+        Self::new(true, true),
+    ];
+
+    const fn new(sampling: bool, depth: bool) -> Self {
+        Self { sampling, depth }
+    }
+
+    const fn index(self) -> usize {
+        self.sampling as usize | (self.depth as usize) << 1
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -966,6 +1002,9 @@ pub(crate) struct CompositeBatchItem<'a> {
     pub(crate) dest_viewport: Option<BlitDest>,
     pub(crate) source_viewport: Option<(f32, f32, f32, f32)>,
     pub(crate) sample_mode: CompositeSampleMode,
+    /// Its depth in a pass that lays opaque interiors down first, from its
+    /// place in the pass's order: later interiors hide it.
+    pub(crate) depth: Option<f32>,
 }
 
 pub(crate) struct PreparedCompositeDraw<'a> {
@@ -973,7 +1012,7 @@ pub(crate) struct PreparedCompositeDraw<'a> {
     uniform: UniformUpload,
     scissor: Option<(u32, u32, u32, u32)>,
     blend_mode: BlendMode,
-    unmasked_nearest: bool,
+    variant: CompositeVariant,
 }
 
 pub(crate) struct PreparedShaderDraw<'a> {
@@ -1015,6 +1054,9 @@ pub(crate) struct ProjectiveCompositeItem<'a> {
     /// child's quad reaches wherever its transform sends it; this is what
     /// keeps it inside the layer that clips it.
     pub scissor: Option<(u32, u32, u32, u32)>,
+    /// Its depth in a pass that lays opaque interiors down first, from its
+    /// place in the pass's order: later interiors hide it.
+    pub depth: Option<f32>,
 }
 
 pub(crate) struct PreparedProjectiveComposite<'a> {
@@ -1022,7 +1064,7 @@ pub(crate) struct PreparedProjectiveComposite<'a> {
     uniform: UniformUpload,
     vertices: BufferUpload,
     blend_mode: BlendMode,
-    texels: bool,
+    variant: CompositeVariant,
     scissor: Option<(u32, u32, u32, u32)>,
 }
 
@@ -1063,7 +1105,7 @@ fn fullscreen_pipeline_job(
     (vertex_entry, fragment_entry): (&'static str, &'static str),
     constants: &[(&'static str, f64)],
     surface_format: wgpu::TextureFormat,
-    blend: wgpu::BlendState,
+    (blend, depth_stencil): (wgpu::BlendState, Option<wgpu::DepthStencilState>),
 ) -> FixedPipelineJob {
     let device = device.clone();
     let cache = cache.cloned();
@@ -1080,11 +1122,14 @@ fn fullscreen_pipeline_job(
             (&stages.vertex, &stages.fragment),
             (vertex_entry, fragment_entry),
             stages.constants,
-            wgpu::ColorTargetState {
-                format: surface_format,
-                blend: Some(blend),
-                write_mask: wgpu::ColorWrites::ALL,
-            },
+            (
+                wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(blend),
+                    write_mask: wgpu::ColorWrites::ALL,
+                },
+                depth_stencil,
+            ),
         )
     })
 }
@@ -1096,12 +1141,15 @@ fn projective_pipeline_job(
     shader: &SharedShader,
     surface_format: wgpu::TextureFormat,
     blend: wgpu::BlendState,
-    texels: bool,
+    variant: CompositeVariant,
 ) -> FixedPipelineJob {
     let device = device.clone();
     let cache = cache.cloned();
     let shader = shader.clone();
-    let constants = [("PROJECTIVE_TEXELS", if texels { 1.0 } else { 0.0 })];
+    let constants = [(
+        "PROJECTIVE_TEXELS",
+        if variant.sampling { 1.0 } else { 0.0 },
+    )];
     Box::new(move || {
         let stages = shader.stages(("projective_blit_vs", "projective_blit_fs"), &constants);
         crate::render::create_render_pipeline_logged(
@@ -1148,7 +1196,7 @@ fn projective_pipeline_job(
                     cull_mode: None,
                     ..Default::default()
                 },
-                depth_stencil: None,
+                depth_stencil: crate::render::overlay_depth_state(variant.depth),
                 multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
                 cache: None,
@@ -1257,14 +1305,20 @@ impl EffectRenderer {
         let blit_pipeline = [
             FixedPipeline::new("effect/blit-src-over"),
             FixedPipeline::new("effect/blit-src-over-nearest-unmasked"),
+            FixedPipeline::new("effect/blit-src-over-depth"),
+            FixedPipeline::new("effect/blit-src-over-nearest-unmasked-depth"),
         ];
         let blit_pipeline_src = [
             FixedPipeline::new("effect/blit-src"),
             FixedPipeline::new("effect/blit-src-nearest-unmasked"),
+            FixedPipeline::new("effect/blit-src-depth"),
+            FixedPipeline::new("effect/blit-src-nearest-unmasked-depth"),
         ];
         let blit_pipeline_dst_out = [
             FixedPipeline::new("effect/blit-dst-out"),
             FixedPipeline::new("effect/blit-dst-out-nearest-unmasked"),
+            FixedPipeline::new("effect/blit-dst-out-depth"),
+            FixedPipeline::new("effect/blit-dst-out-nearest-unmasked-depth"),
         ];
 
         let projective_blit_shader = SharedShader::new(
@@ -1277,14 +1331,20 @@ impl EffectRenderer {
         let projective_blit_pipeline = [
             FixedPipeline::new("effect/projective-src-over"),
             FixedPipeline::new("effect/projective-src-over-texels"),
+            FixedPipeline::new("effect/projective-src-over-depth"),
+            FixedPipeline::new("effect/projective-src-over-texels-depth"),
         ];
         let projective_blit_pipeline_src = [
             FixedPipeline::new("effect/projective-src"),
             FixedPipeline::new("effect/projective-src-texels"),
+            FixedPipeline::new("effect/projective-src-depth"),
+            FixedPipeline::new("effect/projective-src-texels-depth"),
         ];
         let projective_blit_pipeline_dst_out = [
             FixedPipeline::new("effect/projective-dst-out"),
             FixedPipeline::new("effect/projective-dst-out-texels"),
+            FixedPipeline::new("effect/projective-dst-out-depth"),
+            FixedPipeline::new("effect/projective-dst-out-texels-depth"),
         ];
 
         let effect_linear_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -1543,7 +1603,7 @@ impl EffectRenderer {
         }
         visit(&self.offset_pipeline, &|| self.offset_pipeline_job(device));
         for blend_mode in [BlendMode::SrcOver, BlendMode::Src, BlendMode::DstOut] {
-            for variant in [false, true] {
+            for variant in CompositeVariant::ALL {
                 visit(self.blit_pipeline_target(blend_mode, variant).0, &|| {
                     self.blit_pipeline_job(device, blend_mode, variant)
                 });
@@ -1578,7 +1638,7 @@ impl EffectRenderer {
             (crate::render::FULLSCREEN_VS, "blur_fs"),
             &[("BLUR_TILE_MODE", tile_mode as f64)],
             self.surface_format,
-            wgpu::BlendState::REPLACE,
+            (wgpu::BlendState::REPLACE, None),
         )
     }
 
@@ -1648,7 +1708,7 @@ impl EffectRenderer {
             (crate::render::FULLSCREEN_VS, "blur_mean_fs"),
             &[],
             self.surface_format,
-            wgpu::BlendState::REPLACE,
+            (wgpu::BlendState::REPLACE, None),
         )
     }
 
@@ -1669,7 +1729,7 @@ impl EffectRenderer {
                 ("BLUR_TILE_MODE", tile_mode as f64),
             ],
             self.surface_format,
-            wgpu::BlendState::REPLACE,
+            (wgpu::BlendState::REPLACE, None),
         )
     }
 
@@ -1682,7 +1742,7 @@ impl EffectRenderer {
             (crate::render::FULLSCREEN_VS, "offset_fs"),
             &[],
             self.surface_format,
-            wgpu::BlendState::REPLACE,
+            (wgpu::BlendState::REPLACE, None),
         )
     }
 
@@ -1696,21 +1756,21 @@ impl EffectRenderer {
     fn blit_pipeline_target(
         &self,
         blend_mode: BlendMode,
-        unmasked_nearest: bool,
+        variant: CompositeVariant,
     ) -> (&FixedPipeline, &'static str, wgpu::BlendState) {
         match blend_mode {
             BlendMode::Src => (
-                &self.blit_pipeline_src[usize::from(unmasked_nearest)],
+                &self.blit_pipeline_src[variant.index()],
                 "Blit Pipeline Src",
                 wgpu::BlendState::REPLACE,
             ),
             BlendMode::DstOut => (
-                &self.blit_pipeline_dst_out[usize::from(unmasked_nearest)],
+                &self.blit_pipeline_dst_out[variant.index()],
                 "Blit Pipeline DstOut",
                 dst_out_blend_state(),
             ),
             _ => (
-                &self.blit_pipeline[usize::from(unmasked_nearest)],
+                &self.blit_pipeline[variant.index()],
                 "Blit Pipeline",
                 wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
             ),
@@ -1721,9 +1781,9 @@ impl EffectRenderer {
         &self,
         device: &wgpu::Device,
         blend_mode: BlendMode,
-        unmasked_nearest: bool,
+        variant: CompositeVariant,
     ) -> FixedPipelineJob {
-        let (_, label, blend) = self.blit_pipeline_target(blend_mode, unmasked_nearest);
+        let (_, label, blend) = self.blit_pipeline_target(blend_mode, variant);
         fullscreen_pipeline_job(
             device,
             self.pipeline_cache.as_ref(),
@@ -1732,10 +1792,10 @@ impl EffectRenderer {
             ("blit_vs", "blit_fs"),
             &[(
                 "BLIT_UNMASKED_NEAREST",
-                if unmasked_nearest { 1.0 } else { 0.0 },
+                if variant.sampling { 1.0 } else { 0.0 },
             )],
             self.surface_format,
-            blend,
+            (blend, crate::render::overlay_depth_state(variant.depth)),
         )
     }
 
@@ -1743,32 +1803,32 @@ impl EffectRenderer {
         &self,
         device: &wgpu::Device,
         blend_mode: BlendMode,
-        unmasked_nearest: bool,
+        variant: CompositeVariant,
     ) -> &wgpu::RenderPipeline {
-        let (resource, _, _) = self.blit_pipeline_target(blend_mode, unmasked_nearest);
+        let (resource, _, _) = self.blit_pipeline_target(blend_mode, variant);
         resource.for_draw(&self.recorder, self.adapter_backend, || {
-            self.blit_pipeline_job(device, blend_mode, unmasked_nearest)()
+            self.blit_pipeline_job(device, blend_mode, variant)()
         })
     }
 
     fn projective_pipeline_target(
         &self,
         blend_mode: BlendMode,
-        texels: bool,
+        variant: CompositeVariant,
     ) -> (&FixedPipeline, &'static str, wgpu::BlendState) {
         match blend_mode {
             BlendMode::Src => (
-                &self.projective_blit_pipeline_src[usize::from(texels)],
+                &self.projective_blit_pipeline_src[variant.index()],
                 "Projective Blit Pipeline Src",
                 wgpu::BlendState::REPLACE,
             ),
             BlendMode::DstOut => (
-                &self.projective_blit_pipeline_dst_out[usize::from(texels)],
+                &self.projective_blit_pipeline_dst_out[variant.index()],
                 "Projective Blit Pipeline DstOut",
                 dst_out_blend_state(),
             ),
             _ => (
-                &self.projective_blit_pipeline[usize::from(texels)],
+                &self.projective_blit_pipeline[variant.index()],
                 "Projective Blit Pipeline",
                 wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
             ),
@@ -1779,9 +1839,9 @@ impl EffectRenderer {
         &self,
         device: &wgpu::Device,
         blend_mode: BlendMode,
-        texels: bool,
+        variant: CompositeVariant,
     ) -> FixedPipelineJob {
-        let (_, label, blend) = self.projective_pipeline_target(blend_mode, texels);
+        let (_, label, blend) = self.projective_pipeline_target(blend_mode, variant);
         projective_pipeline_job(
             device,
             self.pipeline_cache.as_ref(),
@@ -1789,7 +1849,7 @@ impl EffectRenderer {
             &self.projective_blit_shader,
             self.surface_format,
             blend,
-            texels,
+            variant,
         )
     }
 
@@ -1797,11 +1857,11 @@ impl EffectRenderer {
         &self,
         device: &wgpu::Device,
         blend_mode: BlendMode,
-        texels: bool,
+        variant: CompositeVariant,
     ) -> &wgpu::RenderPipeline {
-        let (resource, _, _) = self.projective_pipeline_target(blend_mode, texels);
+        let (resource, _, _) = self.projective_pipeline_target(blend_mode, variant);
         resource.for_draw(&self.recorder, self.adapter_backend, || {
-            self.projective_pipeline_job(device, blend_mode, texels)()
+            self.projective_pipeline_job(device, blend_mode, variant)()
         })
     }
 
@@ -3054,6 +3114,7 @@ impl EffectRenderer {
                 source_viewport_uniform.2,
                 source_viewport_uniform.3,
             ],
+            depth: [0.0; 4],
         }
     }
 
@@ -3114,7 +3175,7 @@ impl EffectRenderer {
         pass.set_pipeline(self.blit_pipeline(
             device,
             options.blend_mode,
-            options.unmasked_nearest(),
+            CompositeVariant::new(options.unmasked_nearest(), false),
         ));
         pass.set_bind_group(0, texture_bind_group, &[]);
         pass.set_bind_group(1, &uniform.bind_group, &[uniform.offset]);
@@ -3141,14 +3202,10 @@ impl EffectRenderer {
             source_viewport: item.source_viewport,
             sample_mode: item.sample_mode,
         };
-        let unmasked_nearest = options.unmasked_nearest();
-        self.prefetch_blit(
-            CompileLane::WarmUp,
-            device,
-            item.blend_mode,
-            unmasked_nearest,
-        );
-        let uniforms = Self::composite_pass_uniforms(options);
+        let variant = CompositeVariant::new(options.unmasked_nearest(), item.depth.is_some());
+        self.prefetch_blit(CompileLane::WarmUp, device, item.blend_mode, variant);
+        let mut uniforms = Self::composite_pass_uniforms(options);
+        uniforms.depth[0] = item.depth.unwrap_or(0.0);
         let sampler = &self.effect_linear_sampler;
         let texture_bind_group = item.source.get_or_create_bind_group(
             device,
@@ -3167,7 +3224,7 @@ impl EffectRenderer {
             uniform,
             scissor: item.scissor,
             blend_mode: item.blend_mode,
-            unmasked_nearest,
+            variant,
         }
     }
 
@@ -3185,8 +3242,27 @@ impl EffectRenderer {
             CompileLane::Later,
             device,
             blend_mode,
-            unmasked_nearest(sample_mode, masked),
+            CompositeVariant::new(unmasked_nearest(sample_mode, masked), false),
         );
+    }
+
+    /// Queues the build of the blit `draw` would take in a pass with a depth
+    /// buffer or without one on `lane` when it is missing, handing `awaited`
+    /// the pipeline while it is still to land.
+    pub(crate) fn prefetch_composite_pipeline(
+        &self,
+        device: &wgpu::Device,
+        draw: &PreparedCompositeDraw<'_>,
+        (depth, lane): (bool, CompileLane),
+        awaited: &mut impl FnMut(Pending<wgpu::RenderPipeline>),
+    ) {
+        let variant = CompositeVariant {
+            depth,
+            ..draw.variant
+        };
+        if let Some(pending) = self.prefetch_blit(lane, device, draw.blend_mode, variant) {
+            awaited(pending);
+        }
     }
 
     fn prefetch_blit(
@@ -3194,12 +3270,12 @@ impl EffectRenderer {
         lane: CompileLane,
         device: &wgpu::Device,
         blend_mode: BlendMode,
-        unmasked_nearest: bool,
-    ) {
-        let (blit, _, _) = self.blit_pipeline_target(blend_mode, unmasked_nearest);
+        variant: CompositeVariant,
+    ) -> Option<Pending<wgpu::RenderPipeline>> {
+        let (blit, _, _) = self.blit_pipeline_target(blend_mode, variant);
         blit.prefetch(lane, &self.compiler, self.adapter_backend, || {
-            self.blit_pipeline_job(device, blend_mode, unmasked_nearest)
-        });
+            self.blit_pipeline_job(device, blend_mode, variant)
+        })
     }
 
     pub(crate) fn draw_prepared_composite(
@@ -3208,7 +3284,7 @@ impl EffectRenderer {
         (device, viewport): (&wgpu::Device, (u32, u32)),
         draw: &PreparedCompositeDraw<'_>,
     ) {
-        pass.set_pipeline(self.blit_pipeline(device, draw.blend_mode, draw.unmasked_nearest));
+        pass.set_pipeline(self.blit_pipeline(device, draw.blend_mode, draw.variant));
         pass.set_bind_group(0, draw.texture_bind_group, &[]);
         pass.set_bind_group(1, &draw.uniform.bind_group, &[draw.uniform.offset]);
         if let Some((x, y, w, h)) = draw.scissor {
@@ -3225,14 +3301,11 @@ impl EffectRenderer {
         device: &wgpu::Device,
         item: &ProjectiveCompositeItem<'a>,
     ) -> PreparedProjectiveComposite<'a> {
-        let texels = item.sample_mode == CompositeSampleMode::Texels;
-        let (projective, _, _) = self.projective_pipeline_target(item.blend_mode, texels);
-        projective.prefetch(
-            CompileLane::WarmUp,
-            &self.compiler,
-            self.adapter_backend,
-            || self.projective_pipeline_job(device, item.blend_mode, texels),
+        let variant = CompositeVariant::new(
+            item.sample_mode == CompositeSampleMode::Texels,
+            item.depth.is_some(),
         );
+        self.prefetch_projective(CompileLane::WarmUp, device, item.blend_mode, variant);
         let vertices = [
             ProjectiveBlitVertex {
                 position: item.dest_quad[0],
@@ -3278,6 +3351,7 @@ impl EffectRenderer {
             source_region: item
                 .source_region
                 .map_or([0.0; 4], |(x, y, width, height)| [x, y, width, height]),
+            depth: [item.depth.unwrap_or(0.0), 0.0, 0.0, 0.0],
         };
         let sampler = &self.effect_linear_sampler;
         let texture_bind_group = item.source.get_or_create_bind_group(
@@ -3302,9 +3376,41 @@ impl EffectRenderer {
             uniform,
             vertices,
             blend_mode: item.blend_mode,
-            texels,
+            variant,
             scissor: item.scissor,
         }
+    }
+
+    /// Queues the build of the projective blit `draw` would take in a pass
+    /// with a depth buffer or without one on `lane` when it is missing,
+    /// handing `awaited` the pipeline while it is still to land.
+    pub(crate) fn prefetch_projective_pipeline(
+        &self,
+        device: &wgpu::Device,
+        draw: &PreparedProjectiveComposite<'_>,
+        (depth, lane): (bool, CompileLane),
+        awaited: &mut impl FnMut(Pending<wgpu::RenderPipeline>),
+    ) {
+        let variant = CompositeVariant {
+            depth,
+            ..draw.variant
+        };
+        if let Some(pending) = self.prefetch_projective(lane, device, draw.blend_mode, variant) {
+            awaited(pending);
+        }
+    }
+
+    fn prefetch_projective(
+        &self,
+        lane: CompileLane,
+        device: &wgpu::Device,
+        blend_mode: BlendMode,
+        variant: CompositeVariant,
+    ) -> Option<Pending<wgpu::RenderPipeline>> {
+        let (projective, _, _) = self.projective_pipeline_target(blend_mode, variant);
+        projective.prefetch(lane, &self.compiler, self.adapter_backend, || {
+            self.projective_pipeline_job(device, blend_mode, variant)
+        })
     }
 
     pub(crate) fn draw_prepared_projective_composite(
@@ -3313,7 +3419,7 @@ impl EffectRenderer {
         (device, viewport): (&wgpu::Device, (u32, u32)),
         draw: &PreparedProjectiveComposite<'_>,
     ) {
-        pass.set_pipeline(self.projective_blit_pipeline(device, draw.blend_mode, draw.texels));
+        pass.set_pipeline(self.projective_blit_pipeline(device, draw.blend_mode, draw.variant));
         pass.set_bind_group(0, draw.texture_bind_group, &[]);
         pass.set_bind_group(1, &draw.uniform.bind_group, &[draw.uniform.offset]);
         pass.set_vertex_buffer(0, draw.vertices.slice());

@@ -630,19 +630,28 @@ impl GpuRenderer {
                     awaited,
                 ),
                 Batch::Shadows { .. } => self.prefetch_shadow_pipeline(depth_lane, awaited),
-                Batch::StoreRun { .. }
-                | Batch::Arena { .. }
-                | Batch::Composite(_)
-                | Batch::Shader(_)
-                | Batch::Projective(_) => {}
+                Batch::Composite(prepared) => self.effect_renderer.prefetch_composite_pipeline(
+                    &self.device,
+                    prepared,
+                    depth_lane,
+                    awaited,
+                ),
+                Batch::Projective(prepared) => self.effect_renderer.prefetch_projective_pipeline(
+                    &self.device,
+                    prepared,
+                    depth_lane,
+                    awaited,
+                ),
+                Batch::StoreRun { .. } | Batch::Arena { .. } | Batch::Shader(_) => {}
             }
         }
     }
 
     /// Queues for a later frame the pipelines a pass drawn without the
     /// depth pre-pass it takes would have drawn with: its shapes' with
-    /// `depth_keys` and the interiors they lay down, and its images', glyphs'
-    /// and shadows' with a depth buffer. The depth gate opens once they land.
+    /// `depth_keys` and the interiors they lay down, and its images', glyphs',
+    /// shadows' and blits' with a depth buffer. The depth gate opens once they
+    /// land.
     fn await_depth_pipelines(
         &mut self,
         batches: &[Batch<'_>],
@@ -852,12 +861,18 @@ static NO_INTERIORS_FIRST: crate::debug_toggles::DebugToggle =
     crate::debug_toggles::DebugToggle::new("CRANPOSE_NO_INTERIORS_FIRST");
 
 /// Whether a pass of `segments` lays its opaque interiors down in a depth
-/// pre-pass: one with an opaque fill worth laying down, unless it
-/// composites, whose composite pipelines also draw into passes without a
-/// depth buffer.
+/// pre-pass: one with an opaque fill worth laying down, unless it composites
+/// through a runtime shader, whose pipelines draw into passes without a
+/// depth buffer alone. A blit takes its place in the pass's order as glyphs
+/// and images do.
 fn takes_depth(segments: &[PassSegment<'_>]) -> bool {
     !NO_INTERIORS_FIRST.equals("1")
-        && segments.iter().all(|segment| segment.composites.is_empty())
+        && segments.iter().all(|segment| {
+            segment
+                .composites
+                .iter()
+                .all(|composite| !matches!(composite.kind, ResolvedCompositeKind::Shader { .. }))
+        })
         && segments.iter().any(segment_has_occluders)
 }
 
@@ -1567,11 +1582,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         base: Option<u32>,
     ) -> usize {
         if self.depth {
-            let base = base.unwrap_or_else(|| {
-                let next = self.depth_seq;
-                self.depth_seq = next.saturating_add(1);
-                next
-            });
+            let base = base.unwrap_or_else(|| self.next_place());
             renderer.claim_uniform_slot(ViewportUniformParams {
                 depth_base: base as f32,
                 ..viewport
@@ -1581,6 +1592,20 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         } else {
             renderer.claim_uniform_slot(viewport)
         }
+    }
+
+    /// Takes the next place in the pass's order.
+    fn next_place(&mut self) -> u32 {
+        let place = self.depth_seq;
+        self.depth_seq = place.saturating_add(1);
+        place
+    }
+
+    /// A composite's depth in a pass with a depth buffer: next in its order,
+    /// so later opaque interiors hide it and earlier ones do not.
+    fn composite_depth(&mut self) -> Option<f32> {
+        self.depth
+            .then(|| crate::render::pass_order_depth(self.next_place()))
     }
 
     /// The viewport a text draws its glyphs under: in a pass with a depth
@@ -2003,6 +2028,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     }),
                     source_viewport: *source_viewport,
                     sample_mode: *sample_mode,
+                    depth: self.composite_depth(),
                 };
                 let prepared = renderer.effect_renderer.prepare_composite_draw(
                     self.recorder,
@@ -2061,6 +2087,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     blend_mode: supported_blend_mode(*blend_mode),
                     sample_mode: *sample_mode,
                     scissor,
+                    depth: self.composite_depth(),
                 };
                 let prepared = renderer.effect_renderer.prepare_projective_composite_draw(
                     self.recorder,

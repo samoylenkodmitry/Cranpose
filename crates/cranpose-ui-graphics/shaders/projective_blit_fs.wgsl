@@ -17,6 +17,8 @@ struct ProjectiveBlitUniforms {
     alpha: vec4<f32>,
     sampling: vec4<f32>,
     source_region: vec4<f32>,
+    // x = the quad's depth: its place in a pass that lays opaque interiors down first
+    depth: vec4<f32>,
 }
 
 @group(0) @binding(0) var input_texture: texture_2d<f32>;

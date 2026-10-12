@@ -205,7 +205,9 @@ fn blit_specialization_preserves_sampling_masks_and_blending() {
             );
             if reference {
                 for mode in modes {
-                    let dynamic = renderer.blit_pipeline(&device, mode, false).clone();
+                    let dynamic = renderer
+                        .blit_pipeline(&device, mode, CompositeVariant::new(false, false))
+                        .clone();
                     let resources = match mode {
                         BlendMode::Src => &renderer.blit_pipeline_src,
                         BlendMode::DstOut => &renderer.blit_pipeline_dst_out,
@@ -271,6 +273,7 @@ fn blit_specialization_preserves_sampling_masks_and_blending() {
                                                         dest_viewport: options.dest_viewport,
                                                         source_viewport: options.source_viewport,
                                                         sample_mode,
+                                                        depth: None,
                                                     },
                                                 );
                                                 let mut pass = recorder.begin_color_pass(

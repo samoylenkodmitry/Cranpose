@@ -293,6 +293,81 @@ fn a_fill_under_layer_alpha_hides_nothing_beneath_it() {
     );
 }
 
+/// A half-transparent layer turned by `degrees` (a projective composite
+/// when turned, a blit when not) between two opaque fills, translucent
+/// within, so only the pass compositing it can take a depth buffer.
+fn layer_between_opaque_fills(degrees: f32) -> RenderGraph {
+    let frame = rect(0.0, 0.0, FRAME as f32, FRAME as f32);
+    frame_of(vec![
+        fill(
+            rect(10.0, 10.0, 120.0, 120.0),
+            Color::from_rgb_u8(220, 40, 40),
+            6.0,
+            None,
+        ),
+        RenderNode::Layer(Box::new(shared_test_support::layer_node(
+            frame,
+            turned_about_centre(frame, degrees),
+            GraphicsLayer {
+                alpha: 0.5,
+                ..GraphicsLayer::default()
+            },
+            vec![fill(
+                rect(40.0, 40.0, 120.0, 120.0),
+                Color(0.2, 0.8, 0.4, 0.8),
+                8.0,
+                None,
+            )],
+        ))),
+        fill(
+            rect(100.0, 100.0, 90.0, 90.0),
+            Color::from_rgb_u8(40, 80, 220),
+            6.0,
+            None,
+        ),
+    ])
+}
+
+#[test]
+fn a_layer_turned_between_opaque_fills_takes_its_place_in_the_pre_pass() {
+    let Some((with, without)) = capture_both_ways(|| layer_between_opaque_fills(7.0)) else {
+        return;
+    };
+    assert!(
+        with.depth_passes == 1 && with.interior_draws > 0,
+        "the pass that composites the turned layer lays its opaque interiors down first: {} depth passes",
+        with.depth_passes
+    );
+    assert_same_pixels(&with.pixels, &without.pixels);
+}
+
+#[test]
+fn a_layer_composited_between_opaque_fills_takes_its_place_in_the_pre_pass() {
+    let Some((with, without)) = capture_both_ways(|| layer_between_opaque_fills(0.0)) else {
+        return;
+    };
+    assert!(
+        with.depth_passes == 1 && with.interior_draws > 0,
+        "the pass that composites the layer lays its opaque interiors down first: {} depth passes",
+        with.depth_passes
+    );
+    assert_same_pixels(&with.pixels, &without.pixels);
+    let pixel = |x: usize, y: usize| {
+        let at = (y * FRAME as usize + x) * 4;
+        with.pixels[at..at + 3].to_vec()
+    };
+    assert_eq!(
+        pixel(150, 150),
+        vec![40, 80, 220],
+        "the later opaque fill hides the composite"
+    );
+    let over_red = pixel(60, 60);
+    assert!(
+        over_red[0] > 100 && over_red[1] > 100,
+        "the composite blends over the earlier fill: {over_red:?}"
+    );
+}
+
 #[test]
 fn a_pass_of_small_shapes_alone_lays_no_interiors_down() {
     let graph = || {
