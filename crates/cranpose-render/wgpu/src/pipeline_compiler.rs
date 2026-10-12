@@ -125,6 +125,10 @@ pub(crate) enum CompileLane {
     /// No frame has asked for this pipeline yet; it is built ahead of its
     /// first use.
     WarmUp,
+    /// Only a later frame may ask for this pipeline: held until the frame
+    /// queuing it ends, then queued behind the warm-ups, so it never takes a
+    /// thread from a pipeline the frame draws with.
+    Later,
 }
 
 /// Runs pipeline creation on background threads, so a draw finds its
@@ -146,12 +150,12 @@ pub(crate) struct PipelineCompiler {
 }
 
 /// On the web, the frame drawn while it takes its pipelines from a pipeline
-/// discovery, and the builds it holds back for later frames.
+/// discovery, and the builds it holds back to its end.
 #[cfg(target_arch = "wasm32")]
 #[derive(Default)]
 struct DiscoveryFrame {
     drawing: std::cell::Cell<bool>,
-    ahead: std::cell::RefCell<Vec<Box<dyn FnOnce()>>>,
+    held: std::cell::RefCell<Vec<Box<dyn FnOnce()>>>,
 }
 
 /// The jobs waiting for a compiler thread, per lane.
@@ -216,6 +220,9 @@ impl Pool {
 #[cfg(not(target_arch = "wasm32"))]
 struct Workers {
     pool: Arc<Pool>,
+    /// The jobs on [`CompileLane::Later`] the drawing frame holds. Behind a
+    /// mutex only so the handle is `Sync`; only the drawing thread takes it.
+    later: Mutex<Vec<Job>>,
     /// Each thread says here that it has ended. Behind a mutex only so the
     /// handle is `Sync`; the last handle reads it without locking.
     finished: Mutex<Receiver<()>>,
@@ -232,6 +239,7 @@ impl Drop for Workers {
             (
                 std::mem::take(&mut queues.demanded),
                 std::mem::take(&mut queues.warm_up),
+                std::mem::take(self.later.get_mut().unwrap_or_else(PoisonError::into_inner)),
             )
         };
         drop(skipped);
@@ -314,6 +322,7 @@ impl PipelineCompiler {
             let (finished_tx, finished) = mpsc::channel();
             let mut workers = Workers {
                 pool: Arc::default(),
+                later: Mutex::default(),
                 finished: Mutex::new(finished),
                 threads: 0,
                 landing: Arc::default(),
@@ -370,9 +379,9 @@ impl PipelineCompiler {
         }
     }
 
-    /// Whether a pipeline a later frame needs is built ahead of it: on the
-    /// warm-up lane where compiler threads run, and on the web at the end of
-    /// a frame that takes its pipelines from a pipeline discovery.
+    /// Whether a pipeline queued now is built ahead of the draw that needs
+    /// it: on the compiler's threads where they run, and on the web at the
+    /// end of a frame that takes its pipelines from a pipeline discovery.
     pub(crate) fn builds_ahead(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -385,21 +394,37 @@ impl PipelineCompiler {
     }
 
     /// Starts a frame that takes its pipelines from a pipeline discovery:
-    /// the jobs queued until [`Self::end_discovery_frame`] are held back.
+    /// the jobs queued until [`Self::end_frame`] run there, after the frame's
+    /// own builds, so the browser compiles those first.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn begin_discovery_frame(&self) {
         self.discovery.drawing.set(true);
     }
 
-    /// Ends the frame begun with [`Self::begin_discovery_frame`] and runs the
-    /// jobs it held back, after the frame's own builds: the browser compiles
-    /// those first, on as many threads as it has.
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn end_discovery_frame(&self) {
-        self.discovery.drawing.set(false);
-        let ahead = std::mem::take(&mut *self.discovery.ahead.borrow_mut());
-        for job in ahead {
-            job();
+    /// Ends the drawing frame: queues the jobs it held on
+    /// [`CompileLane::Later`] behind the warm-ups, or on the web runs the
+    /// jobs a discovery frame held.
+    pub(crate) fn end_frame(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(workers) = self.workers.as_ref() {
+            let mut later = workers.later.lock().unwrap_or_else(PoisonError::into_inner);
+            if later.is_empty() {
+                return;
+            }
+            workers
+                .landing
+                .queued
+                .fetch_add(later.len() as u64, Ordering::AcqRel);
+            workers.pool.queues().warm_up.extend(later.drain(..));
+            drop(later);
+            workers.pool.queued.notify_all();
+        }
+        #[cfg(target_arch = "wasm32")]
+        if self.discovery.drawing.replace(false) {
+            let held = std::mem::take(&mut *self.discovery.held.borrow_mut());
+            for job in held {
+                job();
+            }
         }
     }
 
@@ -422,17 +447,28 @@ impl PipelineCompiler {
     }
 
     /// Queues `job` on `lane`'s thread, behind the jobs already waiting
-    /// there; on the web it waits for the end of a frame that takes its
-    /// pipelines from a pipeline discovery. An inactive compiler drops it,
-    /// and the caller compiles at first use as before.
+    /// there, or holds it to the frame's end on [`CompileLane::Later`]; on
+    /// the web it waits for the end of a frame that takes its pipelines from
+    /// a pipeline discovery. An inactive compiler drops it, and the caller
+    /// compiles at first use as before.
     pub(crate) fn enqueue(&self, lane: CompileLane, job: impl FnOnce() + CompilerSend + 'static) {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(workers) = self.workers.as_ref() {
+            if lane == CompileLane::Later {
+                workers
+                    .later
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(Box::new(job));
+                return;
+            }
             workers.landing.queued.fetch_add(1, Ordering::AcqRel);
             let mut queues = workers.pool.queues();
             match lane {
                 CompileLane::Demanded => queues.demanded.push_back(Box::new(job)),
-                CompileLane::WarmUp => queues.warm_up.push_back(Box::new(job)),
+                CompileLane::WarmUp | CompileLane::Later => {
+                    queues.warm_up.push_back(Box::new(job));
+                }
             }
             drop(queues);
             // A warm-up wakes every thread: the one taking only demanded
@@ -441,7 +477,7 @@ impl PipelineCompiler {
         }
         #[cfg(target_arch = "wasm32")]
         if self.discovery.drawing.get() {
-            self.discovery.ahead.borrow_mut().push(Box::new(job));
+            self.discovery.held.borrow_mut().push(Box::new(job));
         } else {
             drop((lane, job));
         }

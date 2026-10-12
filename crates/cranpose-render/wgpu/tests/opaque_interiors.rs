@@ -174,6 +174,56 @@ fn nested_opaque_fills_draw_the_same_pixels_with_their_interiors_laid_down_first
     assert_same_pixels(&with.pixels, &without.pixels);
 }
 
+/// What `renderer` draws of the nested levels, and its statistics.
+fn capture_levels(renderer: &mut support::LockedRenderer) -> Capture {
+    renderer.scene_mut().graph = Some(frame_of(nested_levels()));
+    let frame = renderer
+        .capture_frame(FRAME, FRAME)
+        .expect("capture should succeed");
+    let stats = renderer.last_frame_stats().expect("stats");
+    Capture {
+        pixels: frame.pixels,
+        interior_draws: stats.shape_interior_draws,
+        depth_passes: stats.depth_passes,
+    }
+}
+
+#[test]
+fn a_renderer_compiling_in_the_background_lays_interiors_down_once_their_pipelines_land() {
+    let expected = {
+        let Ok(mut inline) = support::headless_renderer() else {
+            return;
+        };
+        capture_levels(&mut inline)
+    };
+    let Ok(mut renderer) = support::headless_renderer_compiling_in_background() else {
+        return;
+    };
+    let first = capture_levels(&mut renderer);
+    assert_eq!(
+        first.depth_passes, 0,
+        "the first frame draws without the pre-pass while its pipelines build"
+    );
+    assert_same_pixels(&expected.pixels, &first.pixels);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let landed = loop {
+        let frame = capture_levels(&mut renderer);
+        if frame.depth_passes > 0 {
+            break frame;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the pre-pass's pipelines never landed"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    assert!(
+        landed.interior_draws > 0,
+        "once they land, the nested fills lay interiors down first"
+    );
+    assert_same_pixels(&expected.pixels, &landed.pixels);
+}
+
 #[test]
 fn a_clipped_opaque_fill_hides_only_what_its_clip_shows() {
     let red = Color::from_rgb_u8(220, 40, 40);

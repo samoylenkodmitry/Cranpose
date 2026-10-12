@@ -10,7 +10,9 @@ use crate::{
     },
     frame_graph::FrameCommandRecorder,
     geometry::SegmentTransform,
+    lazy_resource::Pending,
     offscreen::OffscreenTarget,
+    pipeline_compiler::CompileLane,
     render::{
         GpuRenderer, PassFrame, RunStage, StoreRunBatch, TargetRect, ViewportUniformParams,
         image_draw_bounds, run_draw_bounds, scissor_rect_for_rect, segment_scene_rect,
@@ -465,7 +467,8 @@ impl GpuRenderer {
     ) -> Result<bool, String> {
         let mut scratch = self.take_pass_scratch();
         let device = self.device.clone();
-        let depth = self.interiors_first && takes_depth(segments);
+        let takes_depth = self.depth_gate.may() && takes_depth(segments);
+        let depth = takes_depth && self.depth_gate.is_open();
         let mut prep = PassPrep {
             recorder,
             device: &device,
@@ -482,6 +485,7 @@ impl GpuRenderer {
             open: None,
             arena_draws: std::mem::take(&mut scratch.arena_draws),
             pipelines: std::mem::take(&mut scratch.pipelines),
+            depth_keys: (takes_depth && !depth).then(PipelineDemand::default),
             chunk_start: 0,
             chunk_base: 0,
             chunk_slot: None,
@@ -491,7 +495,15 @@ impl GpuRenderer {
             .iter()
             .try_for_each(|segment| prep.segment(self, segment, &mut scratch));
         prep.finish(self);
-        self.prefetch_pass_pipelines(&prep.batches, &scratch, depth);
+        self.prefetch_overlay_pipelines(
+            &prep.batches,
+            &scratch,
+            (depth, CompileLane::WarmUp),
+            &mut |_| {},
+        );
+        if let Some(depth_keys) = prep.depth_keys.take() {
+            self.await_depth_pipelines(&prep.batches, &scratch, &depth_keys);
+        }
         self.ensure_run_pipelines(&mut prep.pipelines);
         let batches = prep.batches;
         scratch.arena_draws = prep.arena_draws;
@@ -586,15 +598,22 @@ impl GpuRenderer {
         self.scratch_held = scratch.held;
     }
 
-    /// Starts on the compiler's warm-up threads the builds of the image,
-    /// glyph and shadow pipelines a prepared pass draws with that are
-    /// missing; [`GpuRenderer::ensure_run_pipelines`] starts its shapes'
-    /// and the pass's composites start theirs as it prepares them. A launch's first frame
-    /// needs about fifteen; built one after another where the pass reached
-    /// each, they held the gauntlet's first frame 1.1 s on an Apple M5 with
-    /// no Metal shader cached. The pass still builds, or waits for, each
-    /// where it draws with it.
-    fn prefetch_pass_pipelines(&self, batches: &[Batch<'_>], scratch: &PassScratch, depth: bool) {
+    /// Starts on `lane` the builds of the image, glyph and shadow pipelines a
+    /// prepared pass draws with, with a depth buffer or not, that are
+    /// missing, handing `awaited` each still to land;
+    /// [`GpuRenderer::ensure_run_pipelines`] starts its shapes' and the
+    /// pass's composites start theirs as it prepares them. A launch's first
+    /// frame needs about fifteen; built one after another where the pass
+    /// reached each, they held the gauntlet's first frame 1.1 s on an Apple
+    /// M5 with no Metal shader cached. The pass still builds, or waits for,
+    /// each where it draws with it.
+    fn prefetch_overlay_pipelines(
+        &self,
+        batches: &[Batch<'_>],
+        scratch: &PassScratch,
+        depth_lane: (bool, CompileLane),
+        awaited: &mut impl FnMut(Pending<wgpu::RenderPipeline>),
+    ) {
         for batch in batches {
             match batch {
                 Batch::Images {
@@ -602,12 +621,15 @@ impl GpuRenderer {
                 } => self.prefetch_image_pipelines(
                     &scratch.image_cmds[cmds.clone()],
                     *blend_mode,
-                    depth,
+                    depth_lane,
+                    awaited,
                 ),
-                Batch::Glyphs { cmds, .. } => {
-                    self.prefetch_glyph_pipelines(&scratch.glyph_cmds[cmds.clone()], depth);
-                }
-                Batch::Shadows { .. } => self.prefetch_shadow_pipeline(depth),
+                Batch::Glyphs { cmds, .. } => self.prefetch_glyph_pipelines(
+                    &scratch.glyph_cmds[cmds.clone()],
+                    depth_lane,
+                    awaited,
+                ),
+                Batch::Shadows { .. } => self.prefetch_shadow_pipeline(depth_lane, awaited),
                 Batch::StoreRun { .. }
                 | Batch::Arena { .. }
                 | Batch::Composite(_)
@@ -615,6 +637,27 @@ impl GpuRenderer {
                 | Batch::Projective(_) => {}
             }
         }
+    }
+
+    /// Queues for a later frame the pipelines a pass drawn without the
+    /// depth pre-pass it takes would have drawn with: its shapes' with
+    /// `depth_keys` and the interiors they lay down, and its images', glyphs'
+    /// and shadows' with a depth buffer. The depth gate opens once they land.
+    fn await_depth_pipelines(
+        &mut self,
+        batches: &[Batch<'_>],
+        scratch: &PassScratch,
+        depth_keys: &PipelineDemand,
+    ) {
+        let mut awaited = self.depth_gate.take_awaited();
+        self.warm_shapes_later(depth_keys, &mut |pending| awaited.push(pending));
+        self.prefetch_overlay_pipelines(
+            batches,
+            scratch,
+            (true, CompileLane::Later),
+            &mut |pending| awaited.push(pending),
+        );
+        self.depth_gate.waited_for(awaited);
     }
 
     fn draw_batches(
@@ -1306,6 +1349,9 @@ struct PassPrep<'a, 's, C> {
     /// The shape pipelines the pass's run draws take, prepared once its
     /// batches are made.
     pipelines: PipelineDemand,
+    /// While the depth gate holds back a pre-pass the pass takes, the shape
+    /// pipelines its run draws would have taken with it.
+    depth_keys: Option<PipelineDemand>,
     /// Where the open chunk's draws start in `arena_draws`.
     chunk_start: usize,
     /// The pass-order index of the open chunk's first record.
@@ -1705,7 +1751,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     viewport,
                     run.segment.scale,
                     &window,
-                    self.depth,
+                    (self.depth, self.depth_keys.as_mut()),
                     (&mut self.arena_draws, &mut self.pipelines),
                 );
                 if self.depth {
@@ -1746,7 +1792,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                         run.viewport,
                         self.mixed_turns,
                         (self.depth, segment_clip),
-                        &mut self.pipelines,
+                        (&mut self.pipelines, self.depth_keys.as_mut()),
                     );
                     if taken == 0 {
                         self.close_chunk(renderer, run.binding);

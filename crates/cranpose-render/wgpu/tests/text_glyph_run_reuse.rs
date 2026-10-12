@@ -4,43 +4,17 @@
 
 use cranpose_render_common::{
     Renderer,
-    graph::{
-        PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph,
-        RenderNode, TextPrimitiveNode,
-    },
-};
-use cranpose_ui::{
-    TextLayoutOptions,
-    text::{SpanStyle, TextStyle, TextUnit},
+    graph::{ProjectiveTransform, RenderGraph, RenderNode},
 };
 use cranpose_ui_graphics::{Color, GraphicsLayer, Rect, Size};
 
-use crate::{shared_test_support, support};
+use crate::{
+    shared_test_support,
+    support::{self, text_node},
+};
 
 const WIDTH: u32 = 220;
 const HEIGHT: u32 = 40;
-
-fn text_node(node_id: usize, text: &str, rect: Rect, font_size: f32) -> RenderNode {
-    let style = TextStyle::from_span_style(SpanStyle {
-        color: Some(Color::WHITE),
-        font_size: TextUnit::Sp(font_size),
-        ..Default::default()
-    });
-    RenderNode::Primitive(PrimitiveEntry {
-        phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
-            node_id,
-            rect,
-            text: cranpose_ui::text::shared_plain_annotated_string(text),
-            render_text: cranpose_ui::text::shared_plain_render_string(text),
-            text_style: std::sync::Arc::new(style),
-            font_size,
-            layout_options: TextLayoutOptions::default(),
-            clip: None,
-            paint: Default::default(),
-        })),
-    })
-}
 
 fn page(texts: Vec<RenderNode>) -> RenderGraph {
     let frame = Rect::from_size(Size::new(WIDTH as f32, HEIGHT as f32));

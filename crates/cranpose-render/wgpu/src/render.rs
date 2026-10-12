@@ -61,9 +61,10 @@ use crate::{
     gpu_stats::{self, gpu_stats_enabled},
     idle_pool::FrameScratch,
     layer_cache::LayerCache,
+    lazy_resource::Pending,
     offscreen::{COMPOSITION_BYTES_PER_PIXEL, OffscreenTarget},
     output_conversion::OutputConverter,
-    pipeline_compiler::{CompilerSend, PipelineCompilation, PipelineCompiler},
+    pipeline_compiler::{CompileLane, CompilerSend, PipelineCompilation, PipelineCompiler},
     record_columns::record_vertex_layouts,
     rect_to_quad,
     rrect_shadow::{SHADOW_QUAD_CORNERS, ShadowInstance, create_rrect_shadow_pipeline},
@@ -1568,6 +1569,29 @@ impl KeyReader {
 impl ShapePipelineKey {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) const DISK_LAYOUT: [u8; 8] = *b"CPKEY003";
+
+    /// The flat solid rect fill of a pass without a depth buffer, which
+    /// every screen draws: on all 38 demo pages, and in a launch's first
+    /// frames, which draw without the depth pre-pass.
+    #[cfg(not(target_arch = "wasm32"))]
+    const SOLID_RECT: Self = Self {
+        blend_mode: BlendMode::SrcOver,
+        tier: RunTier::Arena,
+        variant: ShapeVariant {
+            kinds: 1 << FRAGMENT_KIND_FILL,
+            brush: None,
+            solid: true,
+            clip: SegmentClip::Untested,
+            interior: false,
+            dither: false,
+            ablation: ShapeAblation {
+                material: false,
+                fill: false,
+            },
+        },
+        turns: ShapeTurns::None,
+        depth: ShapeDepth::Off,
+    };
 
     /// The key as a number a later launch reads back with
     /// [`Self::from_bits`], to build the pipeline ahead of its first frame.
@@ -3186,7 +3210,7 @@ pub struct GpuRenderer {
     /// interiors down first, dropped once no frame has used them for
     /// [`crate::idle_pool::IDLE_FRAMES`].
     depth_targets: crate::idle_pool::IdlePool<((u32, u32), wgpu::TextureView)>,
-    pub(crate) interiors_first: bool,
+    pub(crate) depth_gate: crate::depth_gate::DepthGate,
     /// The size of the atlas the layer surfaces drawn again go into.
     pub(crate) surface_atlas_sizes: crate::frame::SurfaceAtlasSizes,
     uniform_bind_group_layout: wgpu::BindGroupLayout,
@@ -3416,6 +3440,10 @@ impl GpuRenderer {
 
         let effects_started = Instant::now();
         let pipeline_compiler = PipelineCompiler::for_compilation(pipeline_compilation);
+        let depth_gate = crate::depth_gate::DepthGate::new(
+            crate::draw_pass::lays_interiors_first(adapter_backend),
+            pipeline_compiler.is_active(),
+        );
         let effect_renderer = EffectRenderer::new(
             &device,
             pipeline_compiler.clone(),
@@ -3555,7 +3583,7 @@ impl GpuRenderer {
             glyph_atlas_shader,
             rrect_shadow_shader,
             depth_targets: crate::idle_pool::IdlePool::default(),
-            interiors_first: crate::draw_pass::lays_interiors_first(adapter_backend),
+            depth_gate,
             surface_atlas_sizes: crate::frame::SurfaceAtlasSizes::for_backend(adapter_backend),
             uniform_bind_group_layout,
             image_bind_group_layout,
@@ -3663,6 +3691,27 @@ impl GpuRenderer {
                 .filter(|shader| shader.first_screen)
                 .map(|shader| &shader.entry),
         );
+        if !records.shapes.iter().any(|shape| shape.first_screen) {
+            self.warm_every_screen();
+        }
+    }
+
+    /// Queues the pipelines every screen draws with, for a launch with no
+    /// record of its first screen: flat solid rects and text on whole
+    /// pixels. They build while the first screen composes, when the
+    /// compiler's threads have nothing else; on a Mate 20 X the gauntlet's
+    /// first content showed 333-366 ms after the first frame with them
+    /// against 383-399 ms without.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn warm_every_screen(&mut self) {
+        self.shape_pipelines.warm(ShapePipelineKey::SOLID_RECT);
+        self.glyph_atlas_pipeline_resource(false, GlyphQuads::Aligned)
+            .prefetch(
+                CompileLane::WarmUp,
+                &self.pipeline_compiler,
+                self.adapter_backend,
+                || self.glyph_atlas_pipeline_job(false, GlyphQuads::Aligned),
+            );
     }
 
     fn ensure_shape_pipeline(&mut self, key: ShapePipelineKey, vertices: u64) {
@@ -3777,12 +3826,14 @@ impl GpuRenderer {
     }
 
     /// Queues the builds of the image pipelines `cmds` draw with that are
-    /// missing (see [`FixedPipeline::prefetch`]).
+    /// missing on `lane` (see [`FixedPipeline::prefetch`]), handing
+    /// `awaited` each still to land.
     pub(crate) fn prefetch_image_pipelines(
         &self,
         cmds: &[ImageDrawCmd],
         blend_mode: BlendMode,
-        depth: bool,
+        (depth, lane): (bool, CompileLane),
+        awaited: &mut impl FnMut(Pending<wgpu::RenderPipeline>),
     ) {
         let mut last = None;
         for cmd in cmds {
@@ -3790,39 +3841,59 @@ impl GpuRenderer {
             if last.replace(variant) == Some(variant) {
                 continue;
             }
-            self.image_pipeline_resource(blend_mode, variant).prefetch(
+            if let Some(pending) = self.image_pipeline_resource(blend_mode, variant).prefetch(
+                lane,
                 &self.pipeline_compiler,
                 self.adapter_backend,
                 || self.image_pipeline_job(blend_mode, variant),
-            );
+            ) {
+                awaited(pending);
+            }
         }
     }
 
     /// Queues the builds of the glyph pipelines `cmds` draw with that are
-    /// missing (see [`FixedPipeline::prefetch`]).
-    pub(crate) fn prefetch_glyph_pipelines(&self, cmds: &[GlyphDrawCmd], depth: bool) {
+    /// missing on `lane` (see [`FixedPipeline::prefetch`]), handing
+    /// `awaited` each still to land.
+    pub(crate) fn prefetch_glyph_pipelines(
+        &self,
+        cmds: &[GlyphDrawCmd],
+        (depth, lane): (bool, CompileLane),
+        awaited: &mut impl FnMut(Pending<wgpu::RenderPipeline>),
+    ) {
         let mut last = None;
         for cmd in cmds {
             let quads = cmd.quads();
             if last.replace(quads) == Some(quads) {
                 continue;
             }
-            self.glyph_atlas_pipeline_resource(depth, quads).prefetch(
+            if let Some(pending) = self.glyph_atlas_pipeline_resource(depth, quads).prefetch(
+                lane,
                 &self.pipeline_compiler,
                 self.adapter_backend,
                 || self.glyph_atlas_pipeline_job(depth, quads),
-            );
+            ) {
+                awaited(pending);
+            }
         }
     }
 
-    /// Queues the build of the shadow pipeline when it is missing (see
-    /// [`FixedPipeline::prefetch`]).
-    pub(crate) fn prefetch_shadow_pipeline(&self, depth: bool) {
-        self.rrect_shadow_pipeline[usize::from(depth)].prefetch(
+    /// Queues the build of the shadow pipeline on `lane` when it is missing
+    /// (see [`FixedPipeline::prefetch`]), handing `awaited` the pipeline
+    /// while it is still to land.
+    pub(crate) fn prefetch_shadow_pipeline(
+        &self,
+        (depth, lane): (bool, CompileLane),
+        awaited: &mut impl FnMut(Pending<wgpu::RenderPipeline>),
+    ) {
+        if let Some(pending) = self.rrect_shadow_pipeline[usize::from(depth)].prefetch(
+            lane,
             &self.pipeline_compiler,
             self.adapter_backend,
             || self.rrect_shadow_pipeline_job(depth),
-        );
+        ) {
+            awaited(pending);
+        }
     }
 
     pub(crate) fn image_pipeline(
@@ -4847,6 +4918,8 @@ impl GpuRenderer {
         }
         self.stage_frame_uploads(recorder);
         self.shape_pipelines.request_wanted();
+        self.depth_gate.end_frame();
+        self.pipeline_compiler.end_frame();
         self.viewport_uniforms.uploads.finish_frame();
         self.run_store.finish_frame();
         Ok(())
@@ -5275,6 +5348,18 @@ impl GpuRenderer {
         }
     }
 
+    /// Queues for a later frame the shape pipelines `keys` name and the
+    /// interiors they lay down, handing `awaited` each still to land.
+    pub(crate) fn warm_shapes_later(
+        &mut self,
+        keys: &PipelineDemand,
+        awaited: &mut impl FnMut(Pending<wgpu::RenderPipeline>),
+    ) {
+        for key in keys.keys() {
+            self.shape_pipelines.warm_later(key, awaited);
+        }
+    }
+
     /// Prepares the pipeline of each key `pipelines` holds and, in a pass
     /// with a depth buffer, the one laying down its opaque interiors: the
     /// compiler's threads build the missing ones after the first while this
@@ -5300,7 +5385,7 @@ impl GpuRenderer {
         viewport: ViewportUniformParams,
         root_scale: f32,
         window: &std::ops::Range<u32>,
-        depth: bool,
+        (depth, mut depth_keys): (bool, Option<&mut PipelineDemand>),
         (draws, pipelines): (&mut Vec<RunDrawCall>, &mut PipelineDemand),
     ) -> StoreRunBatch {
         let placement = &run.placement;
@@ -5313,15 +5398,21 @@ impl GpuRenderer {
             &self.device,
             run,
             &mut |segment| {
-                Self::run_pipeline_key(
-                    segment,
-                    placement,
-                    RunTier::Store,
-                    ablation,
-                    turns,
-                    (depth, clip),
-                    viewport,
-                )
+                let key = |depth| {
+                    Self::run_pipeline_key(
+                        segment,
+                        placement,
+                        RunTier::Store,
+                        ablation,
+                        turns,
+                        (depth, clip),
+                        viewport,
+                    )
+                };
+                if let Some(keys) = depth_keys.as_deref_mut() {
+                    keys.add(key(true), 0);
+                }
+                key(depth)
             },
             draws,
         );
@@ -5401,7 +5492,7 @@ impl GpuRenderer {
         viewport: ViewportUniformParams,
         mixed_turns: bool,
         (depth, clip): (bool, SegmentClip),
-        pipelines: &mut PipelineDemand,
+        (pipelines, mut depth_keys): (&mut PipelineDemand, Option<&mut PipelineDemand>),
     ) -> u32 {
         let placement = &run.placement;
         let ablation = self.ablation.shape;
@@ -5413,15 +5504,21 @@ impl GpuRenderer {
             window,
             (root_scale, turn),
             &mut |segment| {
-                Self::run_pipeline_key(
-                    segment,
-                    placement,
-                    RunTier::Arena,
-                    ablation,
-                    turns,
-                    (depth, clip),
-                    viewport,
-                )
+                let key = |depth| {
+                    Self::run_pipeline_key(
+                        segment,
+                        placement,
+                        RunTier::Arena,
+                        ablation,
+                        turns,
+                        (depth, clip),
+                        viewport,
+                    )
+                };
+                if let Some(keys) = depth_keys.as_deref_mut() {
+                    keys.add(key(true), 0);
+                }
+                key(depth)
             },
             pipelines,
         )

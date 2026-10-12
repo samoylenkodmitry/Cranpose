@@ -17,7 +17,7 @@ use cranpose_render_wgpu::{
 };
 use cranpose_ui_graphics::{
     Brush, Color, CornerRadii, DrawPrimitive, LiquidGlassRect, LiquidGlassSpec, Rect, RenderEffect,
-    liquid_glass_effect,
+    Stroke, liquid_glass_effect,
 };
 
 use crate::support::{
@@ -203,8 +203,9 @@ fn dropping_a_renderer_stops_writing_its_previous_pipeline_cache() {
     );
 }
 
-/// A white square beside a rounded one, so a frame draws with more than one
-/// shape pipeline.
+/// A white square beside a stroked rounded one, so a frame draws with more
+/// than one shape pipeline, one of them not among those a launch with no
+/// record builds for every screen.
 fn squares() -> RenderGraph {
     let square = |x: f32| Rect {
         x,
@@ -230,7 +231,7 @@ fn squares() -> RenderGraph {
                     rect: square(8.0),
                     brush: Brush::solid(Color::WHITE),
                     radii: CornerRadii::uniform(3.0),
-                    stroke: None,
+                    stroke: Some(Stroke::new(2.0)),
                 },
                 None,
             ),

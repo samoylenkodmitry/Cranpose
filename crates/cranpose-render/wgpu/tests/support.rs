@@ -1170,6 +1170,31 @@ pub fn FramePage(width: u32, height: u32, background: Color, content: impl Fn() 
 }
 
 /// One solid-filled rectangle drawn before the children.
+/// A white plain text of `font_size` drawn in `rect`.
+pub fn text_node(node_id: usize, text: &str, rect: Rect, font_size: f32) -> RenderNode {
+    let style = cranpose_ui::text::TextStyle::from_span_style(cranpose_ui::text::SpanStyle {
+        color: Some(Color::WHITE),
+        font_size: cranpose_ui::text::TextUnit::Sp(font_size),
+        ..Default::default()
+    });
+    RenderNode::Primitive(PrimitiveEntry {
+        phase: PrimitivePhase::BeforeChildren,
+        node: PrimitiveNode::Text(std::boxed::Box::new(
+            cranpose_render_common::graph::TextPrimitiveNode {
+                node_id,
+                rect,
+                text: cranpose_ui::text::shared_plain_annotated_string(text),
+                render_text: cranpose_ui::text::shared_plain_render_string(text),
+                text_style: std::sync::Arc::new(style),
+                font_size,
+                layout_options: cranpose_ui::TextLayoutOptions::default(),
+                clip: None,
+                paint: Default::default(),
+            },
+        )),
+    })
+}
+
 pub fn solid_rect(rect: Rect, color: Color) -> RenderNode {
     brush_rect(rect, Brush::solid(color))
 }
