@@ -20,7 +20,8 @@
 //! runs unpaced, starting frames as soon as the renderer takes them. A loop that
 //! can keep up shows a full observation window without missing a refresh
 //! while keeping at least two frames behind the shown one. Then it is paced
-//! with two frames queued, and later one. One gets frames to the screen soonest, but leaves nothing to show
+//! with two frames queued, and with one once the display shows that frames
+//! at two keep more than a period to spare, or after a while. One gets frames to the screen soonest, but leaves nothing to show
 //! when a frame runs late, which the display reports as a vsync no new frame
 //! reached. Missed vsyncs move the loop up a level: a few of them from one
 //! frame queued, which Compose's own renderer holds through far more, and
@@ -93,6 +94,16 @@ const LONGEST_HOLD_NS: i64 = 64_000_000_000;
 /// A stretch this long at a level counts as that level working, so the next
 /// failure starts again from the first hold.
 const STABLE_LEVEL_NS: i64 = 5_000_000_000;
+
+/// Frames shown at two queued whose present margins say whether one frame
+/// queued would hold.
+const ROOM_WINDOW: usize = 30;
+
+/// The margin a frame at one queued keeps beyond what it kept at two less a
+/// period, for two to step down before its hold ends. On a Mate 20 X, grid
+/// kept 20.3-20.9 ms at two frames queued and 3.6-4.4 ms at one without a
+/// missed vsync; the gauntlet at tier 12 kept 4.5-9.2 ms at two.
+const SHALLOW_ROOM_NS: i64 = 3_000_000;
 
 /// Recent presents by id, to count how many followed a frame into the
 /// queue before the display showed it.
@@ -218,6 +229,8 @@ pub(crate) struct FramePacer {
     last_skip_ns: Option<i64>,
     last_extra_ns: Option<i64>,
     misses: Vec<bool>,
+    /// Present margins of frames shown at two queued, since the level began.
+    margins: Vec<i64>,
     stage: Option<Stage>,
     holds_ns: [i64; 2],
     failed: [bool; 2],
@@ -236,6 +249,7 @@ impl Default for FramePacer {
             last_skip_ns: None,
             last_extra_ns: None,
             misses: Vec::with_capacity(MISS_WINDOW),
+            margins: Vec::with_capacity(ROOM_WINDOW),
             stage: None,
             holds_ns: [FIRST_HOLD_NS; 2],
             failed: [false; 2],
@@ -280,6 +294,36 @@ impl FramePacer {
         }
     }
 
+    /// Records how early the display could have taken a frame shown with
+    /// `queued_behind` frames behind it, when it says. At two frames queued
+    /// that margin, less a period, is what one frame queued would leave.
+    pub(crate) fn record_present_margin(&mut self, queued_behind: u32, margin_ns: Option<i64>) {
+        let at_two = self
+            .stage
+            .is_some_and(|stage| stage.level == Level::Buffered)
+            && Level::Buffered.depth() == Some(queued_behind);
+        let Some(margin_ns) = margin_ns.filter(|_| at_two) else {
+            return;
+        };
+        if self.margins.len() == ROOM_WINDOW {
+            self.margins.remove(0);
+        }
+        self.margins.push(margin_ns);
+    }
+
+    /// Whether frames at two queued kept a period and [`SHALLOW_ROOM_NS`] to
+    /// spare in all but the tightest tenth of [`ROOM_WINDOW`], while one
+    /// frame queued has not missed vsyncs before.
+    fn room_for_shallow(&self, vsync_period_ns: i64) -> bool {
+        if self.failed[0] || self.margins.len() < ROOM_WINDOW {
+            return false;
+        }
+        let mut sorted = [0_i64; ROOM_WINDOW];
+        sorted.copy_from_slice(&self.margins);
+        sorted.sort_unstable();
+        sorted[ROOM_WINDOW / 10] >= vsync_period_ns + SHALLOW_ROOM_NS
+    }
+
     /// Whether `stage` is a try again at a level that missed vsyncs before,
     /// not yet long enough ago to count as working.
     fn retrying(&self, stage: Stage, now_ns: i64) -> bool {
@@ -321,6 +365,7 @@ impl FramePacer {
             until_ns,
         });
         self.misses.clear();
+        self.margins.clear();
         self.lead.reset();
         self.idle_until_ns = None;
     }
@@ -396,7 +441,9 @@ impl FramePacer {
                     && self.misses.len() == MISS_WINDOW
                     && !self.misses.iter().any(|missed| *missed)
             }
-            Level::Buffered => stage.until_ns.is_some() && hold_over,
+            Level::Buffered => {
+                (stage.until_ns.is_some() && hold_over) || self.room_for_shallow(vsync_period_ns)
+            }
             Level::Shallow => false,
         };
         if !step_down {

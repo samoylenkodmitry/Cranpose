@@ -286,9 +286,17 @@ final class CranposeScene: SKScene {
     }
 }
 
+/// The crown's running value. A plain object rather than view state: the
+/// crown moves on every event, and view state would rebuild the view (and
+/// the SpriteKit view in it) each time before the event reached the app.
+final class CrownReading {
+    var value = 0.0
+}
+
 @MainActor
 final class CranposeModel: ObservableObject {
     @Published var error: String?
+    let crown = CrownReading()
     private(set) var scene = CranposeScene(size: CGSize(width: 1, height: 1))
     private var ready = false
 
@@ -322,7 +330,6 @@ final class CranposeModel: ObservableObject {
 struct CranposeView: View {
     @StateObject private var model = CranposeModel()
     @Environment(\.scenePhase) private var phase
-    @State private var crown = 0.0
     @State private var touching = false
 
     var body: some View {
@@ -336,9 +343,16 @@ struct CranposeView: View {
             }
             .contentShape(Rectangle())
             .focusable()
-            .digitalCrownRotation($crown, from: -1_000_000, through: 1_000_000, by: 1,
-                                  sensitivity: .medium, isContinuous: true, isHapticFeedbackEnabled: false)
-            .onChange(of: crown) { old, value in CPCrown(Float(value - old), model.elapsed / 1_000_000) }
+            .digitalCrownRotation(
+                // Each new value goes to the app as it arrives, as the change
+                // from the one before.
+                Binding(get: { model.crown.value }, set: { value in
+                    let delta = value - model.crown.value
+                    model.crown.value = value
+                    CPCrown(Float(delta), model.elapsed / 1_000_000)
+                }),
+                from: -1_000_000, through: 1_000_000, by: 1, sensitivity: .medium,
+                isContinuous: true, isHapticFeedbackEnabled: false)
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { event in
                     if !touching {

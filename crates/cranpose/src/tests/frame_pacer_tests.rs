@@ -385,6 +385,79 @@ fn the_level_below_is_tried_after_the_hold() {
     );
 }
 
+/// Records `count` frames shown two queued behind from `start`, each with
+/// `margin` reported, and returns the vsync after the last.
+fn margin_run(pacer: &mut FramePacer, start: i64, count: i64, margin: Option<i64>) -> i64 {
+    for frame in 0..count {
+        pacer.record_shown(start + frame * VSYNC, 2, VSYNC);
+        pacer.record_present_margin(2, margin);
+    }
+    start + count * VSYNC
+}
+
+const ROOM_FRAMES: i64 = ROOM_WINDOW as i64;
+
+#[test]
+fn frames_at_two_queued_with_a_period_to_spare_go_to_one_before_the_hold_ends() {
+    let mut pacer = buffered();
+    let roomy = Some(VSYNC + SHALLOW_ROOM_NS);
+    let now = margin_run(&mut pacer, STUFFED, ROOM_FRAMES - 1, roomy);
+    assert_eq!(
+        level(&mut pacer, now),
+        Some(Level::Buffered),
+        "too few frames to tell"
+    );
+    let now = margin_run(&mut pacer, now, 1, roomy);
+    assert!(now < STUFFED + FIRST_HOLD_NS);
+    assert_eq!(level(&mut pacer, now), Some(Level::Shallow));
+}
+
+#[test]
+fn frames_at_two_queued_without_room_for_one_keep_the_hold() {
+    for margin in [Some(VSYNC + SHALLOW_ROOM_NS - 1), None] {
+        let mut pacer = buffered();
+        let now = margin_run(&mut pacer, STUFFED, 2 * ROOM_FRAMES, margin);
+        assert_eq!(
+            level(&mut pacer, now),
+            Some(Level::Buffered),
+            "{margin:?} leaves a frame at one queued too little room"
+        );
+        assert_eq!(
+            level(&mut pacer, STUFFED + FIRST_HOLD_NS),
+            Some(Level::Shallow)
+        );
+    }
+}
+
+#[test]
+fn a_tenth_of_tight_frames_does_not_hold_two_back() {
+    let mut pacer = buffered();
+    let tight = Some(VSYNC);
+    let roomy = Some(VSYNC + SHALLOW_ROOM_NS);
+    let now = margin_run(&mut pacer, STUFFED, ROOM_FRAMES / 10, tight);
+    let now = margin_run(&mut pacer, now, ROOM_FRAMES - ROOM_FRAMES / 10, roomy);
+    assert_eq!(level(&mut pacer, now), Some(Level::Shallow));
+
+    let mut pacer = buffered();
+    let now = margin_run(&mut pacer, STUFFED, ROOM_FRAMES / 10 + 1, tight);
+    let now = margin_run(&mut pacer, now, ROOM_FRAMES - ROOM_FRAMES / 10 - 1, roomy);
+    assert_eq!(level(&mut pacer, now), Some(Level::Buffered));
+}
+
+#[test]
+fn once_one_frame_queued_missed_vsyncs_room_at_two_waits_for_the_hold() {
+    let mut pacer = shallow();
+    let failed = missed_run(&mut pacer, SETTLED + VSYNC, SHALLOW_MISSES);
+    assert_eq!(level(&mut pacer, failed), Some(Level::Buffered));
+    let now = margin_run(
+        &mut pacer,
+        failed + VSYNC,
+        ROOM_FRAMES,
+        Some(VSYNC + 2 * SHALLOW_ROOM_NS),
+    );
+    assert_eq!(level(&mut pacer, now), Some(Level::Buffered));
+}
+
 #[test]
 fn a_retry_that_fails_soon_waits_four_times_as_long_for_the_next() {
     let mut pacer = buffered();
