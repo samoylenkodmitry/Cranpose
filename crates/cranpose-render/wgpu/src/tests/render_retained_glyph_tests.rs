@@ -792,7 +792,8 @@ fn a_runs_quads_are_derived_from_its_glyphs_and_atlas_entries() {
     let [quad] = derived.as_slice() else {
         panic!("one glyph derives one quad");
     };
-    let expected = cached_text_glyph_quad(&run.0[0], run.1[0], texel);
+    let first = glyphs.boxes().next().expect("one glyph");
+    let expected = cached_text_glyph_quad(&first, run.1[0], texel);
     assert_eq!((quad.x, quad.y, quad.width, quad.height), (3, 0, 2, 2));
     assert_eq!(quad.color, (1.0, 0.5, 0.0, 1.0), "colour is clamped");
     assert_eq!(quad.uv.min, expected.uv.min);

@@ -56,7 +56,7 @@ use crate::{
         scaled_quad, snap_delta_for_anchor, snapped_anchor_device_origin, translate_quad,
         translation_stable_anchored_device_pixel_bounds,
     },
-    glyph_run::{RunGlyphScratch, RunGlyphs},
+    glyph_run::{RunGlyphBox, RunGlyphScratch, RunGlyphs},
     glyph_run_arena::{GlyphRunArena, GlyphRunSpan},
     gpu_stats::{self, gpu_stats_enabled},
     idle_pool::FrameScratch,
@@ -412,6 +412,16 @@ impl GlyphRunBounds {
         bounds
     }
 
+    /// The box the glyphs cover from `origin`, as left, top, right, bottom.
+    fn at(self, origin: [f32; 2]) -> [f32; 4] {
+        [
+            origin[0] + self.min[0] as f32,
+            origin[1] + self.min[1] as f32,
+            origin[0] + self.max[0] as f32,
+            origin[1] + self.max[1] as f32,
+        ]
+    }
+
     /// Whether every glyph of the run at `source_raster_rect` lies inside
     /// what `viewport` shows of `clip`, so none needs its own test.
     fn within_viewport(
@@ -481,9 +491,39 @@ impl GlyphRunQuads<'_> {
         self.entries.len()
     }
 
+    /// Each glyph as an instance at `origin`. Every glyph of a run draws: its
+    /// collection leaves out the zero-sized and the transparent ones.
+    fn instances_at(&self, origin: [f32; 2]) -> impl Iterator<Item = GlyphInstance> + '_ {
+        let texel = self.texel;
+        self.glyphs
+            .boxes()
+            .zip(self.entries)
+            .map(move |(glyph, entry)| {
+                let x0 = origin[0] + glyph.x as f32;
+                let y0 = origin[1] + glyph.y as f32;
+                let uv = glyph_atlas_uv_rect(*entry, texel);
+                GlyphInstance {
+                    rect: [
+                        x0,
+                        y0,
+                        x0 + f32::from(glyph.width),
+                        y0 + f32::from(glyph.height),
+                    ],
+                    uv: [uv.min[0], uv.min[1], uv.max[0], uv.max[1]],
+                    uv_bounds: uv.sample_bounds,
+                    color: [
+                        glyph.color.0.clamp(0.0, 1.0),
+                        glyph.color.1.clamp(0.0, 1.0),
+                        glyph.color.2.clamp(0.0, 1.0),
+                        glyph.color.3.clamp(0.0, 1.0),
+                    ],
+                }
+            })
+    }
+
     fn iter(&self) -> impl Iterator<Item = CachedTextGlyphQuad> + '_ {
         self.glyphs
-            .iter()
+            .boxes()
             .zip(self.entries)
             .map(|(glyph, entry)| cached_text_glyph_quad(&glyph, *entry, self.texel))
     }
@@ -815,15 +855,15 @@ pub(crate) fn text_draw_geometry_in_rect(
 }
 
 fn cached_text_glyph_quad(
-    glyph: &SoftwareGlyphAtlasPlacement,
+    glyph: &RunGlyphBox,
     entry: GlyphAtlasEntry,
     texel: f32,
 ) -> CachedTextGlyphQuad {
     CachedTextGlyphQuad {
         x: glyph.x,
         y: glyph.y,
-        width: glyph.width,
-        height: glyph.height,
+        width: usize::from(glyph.width),
+        height: usize::from(glyph.height),
         color: (
             glyph.color.0.clamp(0.0, 1.0),
             glyph.color.1.clamp(0.0, 1.0),
@@ -6095,7 +6135,29 @@ impl GpuRenderer {
     ) -> (GlyphQuads, GlyphExtent) {
         let start = glyph_instances.lens();
         let mut extent = GlyphExtent::EMPTY;
-        let kind = if viewport.transform.is_identity() {
+        let origin = [source_raster_rect.x, source_raster_rect.y];
+        let bounds = quads.bounds.at(origin);
+        let kind = if viewport.transform.is_identity()
+            && cut.is_none_or(|edges| {
+                bounds[0] >= edges[0]
+                    && bounds[1] >= edges[1]
+                    && bounds[2] <= edges[2]
+                    && bounds[3] <= edges[3]
+            })
+            && quads
+                .bounds
+                .within_viewport(source_raster_rect, clip, viewport, root_scale)
+        {
+            // Every quad shows whole and uncut: they sit at whole pixels from
+            // the run's origin, which then decides their alignment, and
+            // their extent is the run's bounds.
+            glyph_instances.plain.extend(quads.instances_at(origin));
+            extent.add(bounds);
+            GlyphQuads::plain(glyph_rect_aligned(
+                [origin[0], origin[1], origin[0], origin[1]],
+                viewport.offset,
+            ))
+        } else if viewport.transform.is_identity() {
             let plain = &mut glyph_instances.plain;
             let mut aligned = true;
             for_each_visible_glyph(
@@ -6258,18 +6320,10 @@ impl GpuRenderer {
             return true;
         }
 
-        let origin = Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 0.0,
-            height: 0.0,
-        };
-        let Some(span) = self.text_glyph_run_arena.insert(
-            &self.device,
-            quads
-                .iter()
-                .filter_map(|quad| cached_text_glyph_instance(origin, &quad)),
-        ) else {
+        let Some(span) = self
+            .text_glyph_run_arena
+            .insert(&self.device, quads.instances_at([0.0, 0.0]))
+        else {
             return false;
         };
         self.text_glyph_gpu_run_cache.put(
