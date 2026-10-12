@@ -109,34 +109,35 @@ float tile(float t, float mode) {
     return wrapped <= 1.0 ? wrapped : 2.0 - wrapped;
 }
 
-vec4 paint(vec2 p) {
-    float brush = a_kind.w;
+// SpriteKit hands a sprite's attributes to `main` only, so the brush comes
+// in as arguments.
+vec4 paint(vec2 p, float brush, float tile_mode, vec4 color, vec4 color_end, vec4 gradient, vec4 stops) {
     if (brush == 0.0) {
-        return a_color;
+        return color;
     }
     float t;
     if (brush == 1.0) {
-        vec2 span = a_gradient.zw - a_gradient.xy;
-        t = tile(dot(p - a_gradient.xy, span) / max(dot(span, span), 0.00000012), a_stroke.z);
+        vec2 span = gradient.zw - gradient.xy;
+        t = tile(dot(p - gradient.xy, span) / max(dot(span, span), 0.00000012), tile_mode);
     } else if (brush == 2.0) {
-        t = tile(length(p - a_gradient.xy) / a_gradient.z, a_stroke.z);
+        t = tile(length(p - gradient.xy) / gradient.z, tile_mode);
     } else {
-        vec2 d = p - a_gradient.xy;
+        vec2 d = p - gradient.xy;
         t = clamp(atan(d.y, d.x) / 6.28318531 + 0.5, 0.0, 1.0);
     }
     if (t < 0.0) {
         return vec4(0.0);
     }
     vec4 c;
-    if (t <= a_stops.x) {
-        c = a_color;
-    } else if (t >= a_stops.y) {
-        c = a_color_end;
+    if (t <= stops.x) {
+        c = color;
+    } else if (t >= stops.y) {
+        c = color_end;
     } else {
-        c = mix(a_color, a_color_end, clamp((t - a_stops.x) / max(a_stops.y - a_stops.x, 0.00000012), 0.0, 1.0));
+        c = mix(color, color_end, clamp((t - stops.x) / max(stops.y - stops.x, 0.00000012), 0.0, 1.0));
     }
     if (c.a > 0.0) {
-        vec2 cell = max(floor(p - a_stops.zw), 0.0) + 1.0;
+        vec2 cell = max(floor(p - stops.zw), 0.0) + 1.0;
         float m = mod(cell.y, 2.0) * 8.0 + mod(cell.x, 2.0) * 4.0
             + mod(floor(cell.y * 0.5), 2.0) * 2.0 + mod(floor(cell.x * 0.5), 2.0);
         c.rgb = clamp(c.rgb + (m / 16.0 - 15.0 / 32.0) / 255.0, 0.0, 1.0);
@@ -168,7 +169,7 @@ void main() {
     } else {
         coverage = line_coverage(p, a_geometry.xy, a_geometry.zw, a_detail.x, a_detail.y);
     }
-    vec4 c = paint(p);
+    vec4 c = paint(p, a_kind.w, a_stroke.z, a_color, a_color_end, a_gradient, a_stops);
     float alpha = c.a * coverage;
     gl_FragColor = a_kind.z == 1.0 ? vec4(1.0 - alpha) : vec4(c.rgb * alpha, alpha);
 }
