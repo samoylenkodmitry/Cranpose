@@ -1,11 +1,11 @@
 #!/system/bin/sh
 # One measurement window, run on the device so no adb round trip lands inside it.
-# Usage: perf_window.sh PIDS PACKAGE LAYER END INTERVAL_S GFXINFO(0|1) START SLOW_FPS SLOW_WINDOW_S
+# Usage: perf_window.sh PIDS PACKAGE LAYER END INTERVAL_S GFXINFO(0|1) START SLOW_FPS SLOW_SECONDS
 # END is the run's end on /proc/uptime's clock: the launch plus the run's
 # length, so every run lasts the same from its launch. START is the launch on
-# that clock. A run whose layer presented fewer than SLOW_FPS frames a second
-# over the last SLOW_WINDOW_S seconds ends there, with a SLOW line: the rest
-# of it would only repeat that the app is slow.
+# that clock. A run whose layer presented fewer than SLOW_FPS frames in each
+# of SLOW_SECONDS seconds in a row ends there, with a SLOW line: the rest of
+# it would only repeat that the app is slow.
 # PIDS is one process id, or a comma-separated list for an app that runs in
 # several (a browser): the first is the one that must stay alive.
 # At the end, WHOLE lists every process of PACKAGE (named PACKAGE, or
@@ -29,7 +29,7 @@ INTERVAL=$5
 GFX=$6
 START=$7
 SLOW_FPS=$8
-SLOW_WINDOW=$9
+SLOW_SECONDS=$9
 # The Mali GPU clock where the kernel exposes it (kHz on the Pixel 9 Pro);
 # the Kirin 980 reports its clocks on the F line instead.
 MALI_CLOCK=/sys/class/misc/mali0/device/cur_freq
@@ -92,17 +92,21 @@ POLLER=$!
 i=0
 read_node() { cat "$1" 2>/dev/null || echo -; }
 before_end() { awk -v now="$(cut -d' ' -f1 /proc/uptime)" -v end="$END" 'BEGIN { exit !(now < end) }'; }
-# Whether, at the newest poll, the run was SLOW_WINDOW_S old and its last
-# SLOW_WINDOW_S seconds held fewer presents than SLOW_FPS a second. The
-# launch counts as a poll that found none.
+# Whether, at the newest poll, each of the last SLOW_SECONDS whole seconds
+# since the launch held fewer presents than SLOW_FPS. A second's presents are
+# the count of the newest poll at or before its end less that at or before
+# its start; the launch counts as a poll that found none.
 slow() {
-  awk -v start="$START" -v fps="$SLOW_FPS" -v window="$SLOW_WINDOW" '
+  awk -v start="$START" -v fps="$SLOW_FPS" -v seconds="$SLOW_SECONDS" '
+    function total_at(t,    i) { for (i = NR; i > 0; i--) if (at[i] <= t) return total[i]; return 0 }
     { at[NR] = $1; total[NR] = $2 }
     END {
-      if (NR == 0 || at[NR] - start < window) exit 1
-      before = 0
-      for (i = NR; i > 0; i--) if (at[i] <= at[NR] - window) { before = total[i]; break }
-      exit !(total[NR] - before < fps * window)
+      if (NR == 0) exit 1
+      done = int(at[NR] - start)
+      if (done < seconds) exit 1
+      for (s = done - seconds; s < done; s++)
+        if (total_at(start + s + 1) - total_at(start + s) >= fps) exit 1
+      exit 0
     }' "$COUNTS" 2>/dev/null
 }
 while before_end; do

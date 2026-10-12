@@ -6,15 +6,17 @@ in each second from a launch."""
 # it (its compiled shaders among them), and its second start after that.
 STARTS = ('first', 'second')
 
-# A run whose app presented fewer than SLOW_FPS frames a second over the last
-# SLOW_WINDOW_S seconds ends there: the rest would only repeat that it is slow.
-SLOW_FPS = 10
-SLOW_WINDOW_S = 5.0
+# A run whose app presented fewer than SLOW_FPS frames in each of the last
+# SLOW_SECONDS whole seconds since its launch ends there: the rest would only
+# repeat that it is slow. Seconds in a row, not an average, so a slow start
+# that the app then outruns does not end it.
+SLOW_FPS = 30
+SLOW_SECONDS = 5
 
 
 def slow_rule():
     """The rule for a slow run, as every run's protocol records it."""
-    return {'stop_below_fps': SLOW_FPS, 'stop_window_s': SLOW_WINDOW_S}
+    return {'stop_below_fps': SLOW_FPS, 'stop_seconds_in_a_row': SLOW_SECONDS}
 
 
 def per_second(times, launched, run_s):

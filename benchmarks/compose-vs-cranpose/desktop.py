@@ -20,8 +20,8 @@ once more, with a picture of its window kept beside the results. Every leg
 is one launch measured from its start for `--run` seconds, the same span for
 every app, with nothing left out: the launch, the first frame and the first
 seconds count as the rest of the run does, and the frames of every second
-are kept. A leg whose app presented fewer than `SLOW_FPS` frames a second
-over the last `SLOW_WINDOW_S` seconds ends there, marked `stopped`. A
+are kept. A leg whose app presented fewer than `SLOW_FPS` frames in each of
+`SLOW_SECONDS` seconds in a row ends there, marked `stopped`. A
 disturbed leg stays in the run, marked, out of the medians.
 
   python3 desktop.py --output results/desktop --tier 12
@@ -61,7 +61,7 @@ from pathlib import Path
 
 import versions
 from browser import BrowserServer
-from timelines import SLOW_FPS, SLOW_WINDOW_S, STARTS, per_second, slow_rule
+from timelines import SLOW_FPS, SLOW_SECONDS, STARTS, per_second, slow_rule
 
 
 HERE = Path(__file__).resolve().parent
@@ -532,7 +532,7 @@ def measure(name, args, work, page, stage, label, earlier, profile):
         usage = Usage(app.pid, server_pid, launched)
         out = stage / f'{label}-frames.json'
         frames = framecount(app.pid, out, '--until', f'{launched + args.run:.3f}', '--launched', f'{launched:.3f}',
-                            '--slow-fps', str(SLOW_FPS), '--slow-window', str(SLOW_WINDOW_S), '--out', str(out))
+                            '--slow-fps', str(SLOW_FPS), '--slow-seconds', str(SLOW_SECONDS), '--out', str(out))
         after, ended = processes(), time.monotonic()
         taken = usage.stop()
         clocked, clock_samples = clocks.stop()
