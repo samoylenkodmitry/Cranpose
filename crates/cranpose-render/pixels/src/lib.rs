@@ -3,6 +3,7 @@
 mod draw;
 mod pipeline;
 pub mod scene;
+pub mod sprites;
 pub mod style;
 
 use cranpose_render_common::{
@@ -63,6 +64,36 @@ impl PixelsRenderer {
             &self.scene,
             &self.text_resources,
             scale,
+        );
+    }
+}
+
+impl PixelsRenderer {
+    /// The scene at `scale` device pixels per point as sprites for a GPU
+    /// compositor, into `frame`, which keeps its textures from the frames
+    /// before. Invalid scales use 1.0.
+    pub fn compose_sprites(
+        &self,
+        frame: &mut sprites::SpriteFrame,
+        width: u32,
+        height: u32,
+        scale: f32,
+    ) {
+        let scale = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            1.0
+        };
+        let scene = match self.scene.graph.as_ref() {
+            Some(graph) => pipeline::build_raster_scene(graph, self.scene.diagnostics(), scale),
+            None => scene::RasterScene::new(),
+        };
+        frame.compose(
+            &scene,
+            width,
+            height,
+            self.scene.diagnostics(),
+            &self.text_resources,
         );
     }
 }

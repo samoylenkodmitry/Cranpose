@@ -53,7 +53,14 @@ fn alpha_masks_render_exactly_as_rgba_images() {
                         }),
                     };
                     let mut frame = [41, 71, 101, 255].repeat(32 * 32);
-                    draw_image(&mut frame, 32, 32, &draw, &RenderDiagnostics::new());
+                    let mut target = Target {
+                        pixels: &mut frame,
+                        left: 0,
+                        top: 0,
+                        width: 32,
+                        height: 32,
+                    };
+                    draw_image(&mut target, &draw, &RenderDiagnostics::new());
                     frame
                 };
                 assert_eq!(
@@ -124,7 +131,14 @@ fn shape_snap_does_not_move_its_fixed_ancestor_clip() {
         blend_mode: BlendMode::SrcOver,
     };
     let mut frame = vec![0; 8 * 8 * 4];
-    draw_shape(&mut frame, 8, 8, &draw, &RenderDiagnostics::new());
+    let mut target = Target {
+        pixels: &mut frame,
+        left: 0,
+        top: 0,
+        width: 8,
+        height: 8,
+    };
+    draw_shape(&mut target, &draw, &RenderDiagnostics::new());
 
     let alpha = |x: usize, y: usize| frame[(y * 8 + x) * 4 + 3];
     assert_eq!(alpha(1, 2), 0, "content snapping moved the clip left");

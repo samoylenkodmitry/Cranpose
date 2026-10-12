@@ -1,4 +1,10 @@
-//! Experimental watchOS host runtime, using Cranpose's software renderer.
+//! Experimental watchOS host runtime.
+//!
+//! watchOS gives an app no Metal of its own, so the host draws with
+//! SpriteKit: each frame the runtime hands it the scene as sprites
+//! ([`Application::sprites`]), and SpriteKit puts them on the GPU. The same
+//! scene rasterizes on the CPU as well ([`Application::pixels`]), which is
+//! what snapshots and tests read.
 //!
 //! The native host owns presentation and feeds physical surface sizes, touch
 //! positions in points, crown deltas, and lifecycle changes into this runtime.
@@ -13,6 +19,7 @@ use std::rc::Rc;
 use cranpose_app_shell::{AppShell, default_root_key};
 use cranpose_foundation::PointerSource;
 use cranpose_render_pixels::PixelsRenderer;
+pub use cranpose_render_pixels::sprites::{SPRITE_FLOATS, SpriteFrame, TextureUpload, field};
 use cranpose_services::{
     SystemTheme,
     host::{LifecycleState, dispatch_lifecycle_state},
@@ -28,19 +35,21 @@ use crate::platform_env::PlatformEnvironment;
 )]
 pub struct SurfaceError;
 
-/// One watch UI composition and its retained RGBA framebuffer.
+/// One watch UI composition, drawn as sprites or into a retained RGBA
+/// framebuffer on request.
 ///
-/// Create and use this object on the native host's main thread. The framebuffer
-/// is borrowed until the next mutable call; a presenter must retain its own
-/// image storage when the operating system displays frames asynchronously.
+/// Create and use this object on the native host's main thread.
 pub struct Application {
     shell: AppShell<PixelsRenderer>,
     pixels: Vec<u8>,
+    sprites: SpriteFrame,
     width: u32,
     height: u32,
     density: f32,
     active: bool,
     needs_present: bool,
+    pixels_stale: bool,
+    sprites_stale: bool,
     environment: Rc<PlatformEnvironment>,
 }
 
@@ -93,11 +102,14 @@ impl Application {
         Ok(Self {
             shell,
             pixels,
+            sprites: SpriteFrame::default(),
             width,
             height,
             density,
             active: false,
             needs_present: true,
+            pixels_stale: true,
+            sprites_stale: true,
             environment,
         })
     }
@@ -140,11 +152,13 @@ impl Application {
         surface.set_buffer_size(width, height);
         surface.set_viewport(width as f32 / density, height as f32 / density);
         self.needs_present = true;
+        self.pixels_stale = true;
+        self.sprites_stale = true;
         Ok(())
     }
 
-    /// Advances the shared frame clock, rasterizing only when the picture changes.
-    /// Returns whether a new image should be presented.
+    /// Advances the shared frame clock. Returns whether the picture changed,
+    /// so a new frame should be presented.
     pub fn tick(&mut self, elapsed_nanos: u64) -> bool {
         if !self.active {
             return false;
@@ -153,16 +167,41 @@ impl Application {
         if !self.needs_present && !result.visual_changed {
             return false;
         }
-        self.shell.primary().with_renderer(|renderer| {
-            renderer.draw_scaled(&mut self.pixels, self.width, self.height, self.density);
-        });
         self.needs_present = false;
+        self.pixels_stale = true;
+        self.sprites_stale = true;
         true
     }
 
-    /// Borrows the latest row-major, straight-alpha RGBA8 image.
-    pub fn pixels(&self) -> &[u8] {
+    /// The current picture as a row-major, straight-alpha RGBA8 image,
+    /// rasterized on the CPU when it changed.
+    pub fn pixels(&mut self) -> &[u8] {
+        if self.pixels_stale {
+            self.shell.primary().with_renderer(|renderer| {
+                renderer.draw_scaled(&mut self.pixels, self.width, self.height, self.density);
+            });
+            self.pixels_stale = false;
+        }
         &self.pixels
+    }
+
+    /// The sprites [`Self::sprites`] composed last, without composing.
+    pub fn last_sprites(&self) -> &SpriteFrame {
+        &self.sprites
+    }
+
+    /// The current picture as sprites for SpriteKit, with the textures it
+    /// first uses and those it no longer does; see
+    /// [`cranpose_render_pixels::sprites`]. Composed when the picture
+    /// changed; until it changes again, the same frame, uploads included.
+    pub fn sprites(&mut self) -> &SpriteFrame {
+        if self.sprites_stale {
+            self.shell.primary().with_renderer(|renderer| {
+                renderer.compose_sprites(&mut self.sprites, self.width, self.height, self.density);
+            });
+            self.sprites_stale = false;
+        }
+        &self.sprites
     }
 
     /// Returns the physical image width.
