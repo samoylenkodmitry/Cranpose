@@ -129,8 +129,10 @@ fn sprite_records(app: &mut Application) -> Vec<Vec<f32>> {
     use cranpose::watchos::SPRITE_FLOATS;
     app.sprites()
         .sprites()
-        .chunks_exact(SPRITE_FLOATS)
-        .map(<[f32]>::to_vec)
+        .as_chunks::<SPRITE_FLOATS>()
+        .0
+        .iter()
+        .map(|sprite| sprite.to_vec())
         .collect()
 }
 

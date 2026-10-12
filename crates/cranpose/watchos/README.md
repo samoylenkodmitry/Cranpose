@@ -1,6 +1,8 @@
 # Experimental watchOS host
 
-The watchOS host runs an existing Rust composable through `cranpose::watchos::Application` and the software renderer. Cranpose supplies the SwiftUI presenter, Objective-C++ bridge and generated Rust runner. The app supplies its Rust UI, manifest and bundle identity.
+The watchOS host runs an existing Rust composable through `cranpose::watchos::Application`. Cranpose supplies the SwiftUI and SpriteKit presenter, Objective-C++ bridge and generated Rust runner. The app supplies its Rust UI, manifest and bundle identity.
+
+watchOS gives an app no Metal of its own, so the GPU is reached through SpriteKit. Each frame the runtime hands the presenter the scene as sprites (`cranpose_render_pixels::sprites`): filled and stroked rounded rects, arcs and lines with a solid colour or a two-colour gradient travel as numbers to one shared `SKShader`, which works out the same coverage as the software renderer. Text, shadows, images and the shapes the shader does not cover are rasterized once on the CPU into textures that stay while the item stays; moving an item by whole pixels moves its sprite and keeps its texture. SpriteKit's frame loop drives the frames, and a node changes only when its sprite does. `Application::pixels` rasterizes the same scene on the CPU for snapshots and tests.
 
 ## Build
 
@@ -56,5 +58,6 @@ simulator app, captures evidence and removes the simulator created for the
 check. `just test-watchos` runs the portable renderer, runtime and packager
 checks. `just watchos` runs the Apple build and simulator check.
 
-Simulator checks cover startup and presentation. Measure performance and
-battery use, and test native gestures, on a physical watch.
+Simulator checks cover startup and presentation, and the simulator draws the
+SpriteKit sprites on the Mac's GPU. Measure performance and battery use, and
+test native gestures, on a physical watch.
