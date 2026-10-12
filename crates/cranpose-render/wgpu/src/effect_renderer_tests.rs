@@ -242,7 +242,10 @@ fn blit_specialization_preserves_sampling_masks_and_blending() {
                                 scissor: Some((1, 2, 61, 28)),
                                 rounded_mask,
                                 blend_mode,
-                                dest_viewport: Some((phase, phase, 64.0 - phase, 32.0 - phase)),
+                                dest_viewport: Some(BlitDest {
+                                    rect: (phase, phase, 64.0 - phase, 32.0 - phase),
+                                    target: (64, 32),
+                                }),
                                 source_viewport: Some((3.0 + phase, 7.0 + phase, 13.0, 17.0)),
                                 sample_mode,
                             };
