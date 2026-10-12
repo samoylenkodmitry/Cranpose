@@ -138,6 +138,26 @@ impl Service {
         }
     }
 
+    /// The keys an Apple platform reads the same sentence from as well.
+    ///
+    /// A watch measures the pulse every few seconds only during a workout,
+    /// and starting one asks to save workouts, under a key of its own.
+    pub const fn apple_more_keys(self) -> &'static [&'static str] {
+        match self {
+            Service::HeartRate => &["NSHealthUpdateUsageDescription"],
+            _ => &[],
+        }
+    }
+
+    /// The background modes a watch app runs this service under: the
+    /// workout that the heart rate is read through.
+    pub const fn watch_background_modes(self) -> &'static [&'static str] {
+        match self {
+            Service::HeartRate => &["workout-processing"],
+            _ => &[],
+        }
+    }
+
     /// Whether this service takes a sentence to show the person.
     pub const fn takes_reason(self) -> bool {
         self.apple_key().is_some()
@@ -721,8 +741,9 @@ fn android_opening_activity(opens: &[&str]) -> String {
     text
 }
 
-/// The Apple usage descriptions the declaration becomes, as a property list
-/// to merge into an `Info.plist`.
+/// The Apple usage descriptions the declaration becomes, with the watch
+/// background modes its services run under, as a property list to merge
+/// into an `Info.plist`.
 ///
 /// It is a property list of its own, so an Apple build merges it with one
 /// line and no tool beyond the ones macOS ships:
@@ -737,12 +758,23 @@ pub fn apple_usage(capabilities: &Capabilities<'_>) -> String {
          \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
          <plist version=\"1.0\">\n<dict>\n",
     );
+    let mut modes: BTreeSet<&str> = BTreeSet::new();
     for entry in capabilities.uses {
+        modes.extend(entry.service.watch_background_modes());
         let (Some(key), Some(reason)) = (entry.service.apple_key(), entry.reason) else {
             continue;
         };
-        let _ = writeln!(text, "\t<key>{key}</key>");
-        let _ = writeln!(text, "\t<string>{}</string>", escape_xml(reason));
+        for key in std::iter::once(key).chain(entry.service.apple_more_keys().iter().copied()) {
+            let _ = writeln!(text, "\t<key>{key}</key>");
+            let _ = writeln!(text, "\t<string>{}</string>", escape_xml(reason));
+        }
+    }
+    if !modes.is_empty() {
+        text.push_str("\t<key>WKBackgroundModes</key>\n\t<array>\n");
+        for mode in modes {
+            let _ = writeln!(text, "\t\t<string>{mode}</string>");
+        }
+        text.push_str("\t</array>\n");
     }
     text.push_str("</dict>\n</plist>\n");
     text

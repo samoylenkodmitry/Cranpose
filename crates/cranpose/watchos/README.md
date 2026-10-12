@@ -65,6 +65,18 @@ the click, the one tap that WatchKit plays without a tone: one click for a
 vibration, and one where each buzz of a waveform starts. The click has a
 single strength, so amplitudes have no effect on a watch.
 
+## Heart rate
+
+With the `cranpose/heart-rate` feature and `Use::heart_rate` in the build
+script, `cranpose_services::heart_rate` reads the wearer's pulse through
+HealthKit. A watch measures the pulse every few seconds only during a workout,
+so reading starts a workout session, and stopping ends it and discards its
+workout: nothing is saved to Health. The declaration writes its sentence under
+`NSHealthShareUsageDescription` and `NSHealthUpdateUsageDescription`, because
+a session needs permission to save workouts, and adds the `workout-processing`
+background mode. The App ID needs the HealthKit capability, so that the
+signing profile carries the HealthKit entitlements.
+
 ## Validation
 
 `python3 smoke.py BUNDLE EVIDENCE_DIRECTORY` installs and launches a built
