@@ -81,7 +81,15 @@ impl ScrollIndicatorSpec {
 /// Whether a list is scrollable at all is a separate question, and Wear leaves
 /// it to `ScreenScaffold` rather than to the adapter — so it is asked here,
 /// against the list's own travel, and not inside the geometry.
+///
+/// Read during draw, it subscribes that draw to the list: the geometry comes
+/// from the last measure pass, which no snapshot records, so the anchor that
+/// every scroll moves and the summary that counts the rows stand for it. They
+/// are read before the early return, so a list that grows past its viewport
+/// gets its indicator too.
 pub fn indicator_for_scaling_list(state: &WearScalingListState) -> Option<IndicatorGeometry> {
+    state.anchor();
+    state.summary();
     let info = state.layout_info();
     let travel = info.travel();
     if travel <= 0.0 || info.viewport <= 0.0 || info.content <= info.viewport {
