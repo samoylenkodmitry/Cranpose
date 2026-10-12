@@ -8,11 +8,18 @@ use alloc::{
     vec,
     vec::Vec,
 };
-use core::{cmp::max, convert::TryInto, num::NonZeroU32, ptr, sync::atomic::Ordering};
+use core::{
+    cmp::max,
+    convert::TryInto,
+    num::NonZeroU32,
+    ptr,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use arrayvec::ArrayVec;
 use glow::HasContext;
 use naga::FastHashMap;
+use parking_lot::MutexGuard;
 
 use super::{conv, lock, MaybeMutex, PrivateCapabilities};
 use crate::auxil::map_naga_stage;
@@ -525,17 +532,23 @@ impl super::Device {
                 group_to_binding_to_slot: group_to_binding_to_slot.into_boxed_slice(),
                 force_point_size,
             })
-            .or_insert_with(|| unsafe {
-                Self::create_program(
-                    gl,
-                    shaders,
-                    layout,
-                    label,
-                    multiview_mask,
-                    force_point_size,
-                    self.shared.shading_language_version,
-                    self.shared.private_caps,
-                )
+            .or_insert_with(|| {
+                let created = unsafe {
+                    Self::create_program(
+                        gl,
+                        shaders,
+                        layout,
+                        label,
+                        multiview_mask,
+                        force_point_size,
+                        self.shared.shading_language_version,
+                        self.shared.private_caps,
+                    )
+                };
+                if created.is_ok() {
+                    self.shared.unread_links.fetch_add(1, Ordering::Relaxed);
+                }
+                created
             })
             .to_owned()?;
         drop(guard);
@@ -759,18 +772,37 @@ impl PendingLink {
 }
 
 impl super::PipelineInner {
-    /// What the linked program tells, read once, at its first use.
-    pub(super) unsafe fn linked(&self, gl: &glow::Context) -> Arc<super::LinkedProgram> {
+    /// Reads the program's link once, when a submission first uses it.
+    /// `unread` counts the programs whose link no command read yet.
+    pub(super) unsafe fn read_link(
+        &self,
+        gl: &glow::Context,
+        unread: &AtomicUsize,
+    ) -> MutexGuard<'_, super::ProgramLink> {
         let mut link = self.link.lock();
         if let Some(pending) = link.pending.take() {
+            unread.fetch_sub(1, Ordering::Relaxed);
             link.linked = Some(Arc::new(unsafe { pending.finish(gl, self.program) }));
         }
-        link.linked.clone().unwrap_or_default()
+        link
+    }
+
+    /// What the linked program tells, read at its first use.
+    pub(super) unsafe fn linked(
+        &self,
+        gl: &glow::Context,
+        unread: &AtomicUsize,
+    ) -> Arc<super::LinkedProgram> {
+        unsafe { self.read_link(gl, unread) }
+            .linked
+            .clone()
+            .unwrap_or_default()
     }
 
     /// Deletes the program, with its shaders when no command used it.
-    unsafe fn delete(&self, gl: &glow::Context) {
+    unsafe fn delete(&self, gl: &glow::Context, unread: &AtomicUsize) {
         if let Some(pending) = self.link.lock().pending.take() {
+            unread.fetch_sub(1, Ordering::Relaxed);
             unsafe { pending.delete_shaders(gl) };
         }
         unsafe { gl.delete_program(self.program) };
@@ -1784,7 +1816,7 @@ impl crate::Device for super::Device {
                 Ok(ref p) => p.program != pipeline.inner.program,
                 Err(_) => false,
             });
-            unsafe { pipeline.inner.delete(gl) };
+            unsafe { pipeline.inner.delete(gl, &self.shared.unread_links) };
         }
 
         self.counters.render_pipelines.sub(1);
@@ -1821,7 +1853,7 @@ impl crate::Device for super::Device {
                 Ok(ref p) => p.program != pipeline.inner.program,
                 Err(_) => false,
             });
-            unsafe { pipeline.inner.delete(gl) };
+            unsafe { pipeline.inner.delete(gl, &self.shared.unread_links) };
         }
 
         self.counters.compute_pipelines.sub(1);
