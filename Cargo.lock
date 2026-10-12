@@ -1289,10 +1289,16 @@ version = "0.9.31"
 name = "cranpose-audio"
 version = "0.9.31"
 dependencies = [
+ "block2 0.6.2",
  "cpal",
  "cranpose-services",
+ "dispatch2",
  "log",
  "ndk",
+ "objc2 0.6.4",
+ "objc2-avf-audio",
+ "objc2-core-audio-types",
+ "objc2-foundation 0.3.2",
  "parking_lot",
 ]
 
@@ -4232,6 +4238,7 @@ dependencies = [
  "bitflags 2.13.2",
  "block2 0.6.2",
  "objc2 0.6.4",
+ "objc2-core-audio-types",
  "objc2-foundation 0.3.2",
 ]
 

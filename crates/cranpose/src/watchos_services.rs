@@ -58,11 +58,17 @@ impl Haptics for WatchHaptics {
         });
     }
 
-    /// One click where each buzz of the pattern starts.
+    /// One click, whatever the length and strength.
     ///
-    /// A waveform only vibrates on every other platform. Unless the watch is
+    /// A vibration is silent on every other platform. Unless the watch is
     /// silenced, WatchKit plays a tone with every tap it offers apps but the
     /// click: watchOS ships a sound for each of the others.
+    fn vibrate(&self, _duration_ms: u32, _amplitude: u8) {
+        play(WKHapticType::Click);
+    }
+
+    /// One click where each buzz of the pattern starts, silent for the same
+    /// reason as [`vibrate`](Haptics::vibrate).
     fn play_pattern(&self, pattern: &HapticPattern) {
         for (start, _) in buzz_starts(pattern) {
             on_main_after(start, |_| play_now(WKHapticType::Click));

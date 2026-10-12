@@ -5,7 +5,7 @@ Jetpack Compose model: a function describes the screen, state changes update the
 screen, and modifiers control layout, input and appearance.
 
 The same UI code runs on Linux, macOS, Windows, Android, Wear OS, iOS and the web.
-The experimental watchOS host uses the software renderer. Cranpose also places
+The experimental watchOS host draws through SpriteKit. Cranpose also places
 Rust screens inside Android Compose and UIKit apps.
 
 ## Run a counter
@@ -93,7 +93,7 @@ DirectX through WGPU. Android and web also support GL/GLES.
 | Android and Wear OS | `android`, `renderer-wgpu` | `android_main!` and the Android Gradle plugin |
 | iOS | `ios`, `renderer-wgpu` | Xcode host and iOS entry point |
 | Web | `web`, `renderer-wgpu` | Wasm entry point and browser canvas |
-| watchOS, experimental | `watchos` | SwiftUI host and software renderer |
+| watchOS, experimental | `watchos` | SwiftUI host and SpriteKit renderer |
 
 The [platform guide](https://docs.rs/cranpose/latest/cranpose/_docs/platforms/index.html)
 links the target-specific setup. The

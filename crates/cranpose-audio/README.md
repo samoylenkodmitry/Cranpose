@@ -4,7 +4,7 @@
 
 ## Setup
 
-For Cranpose apps, enable `cranpose/audio` on Android and `cranpose/audio-desktop` on desktop. Android and Wear OS use AAudio. Desktop uses `cpal` and needs the host audio development libraries; Linux builds require ALSA development headers. Direct users of `cranpose-audio` can select the `aaudio` or `cpal-backend` crate feature.
+For Cranpose apps, enable `cranpose/audio` on Android and watchOS and `cranpose/audio-desktop` on desktop. Android and Wear OS use AAudio, and watchOS uses `AVAudioEngine`. Desktop uses `cpal` and needs the host audio development libraries; Linux builds require ALSA development headers. Direct users of `cranpose-audio` can select the `aaudio`, `avaudio` or `cpal-backend` crate feature.
 
 Install the engine once on the UI thread before composition:
 
@@ -25,7 +25,7 @@ fn play_wav(wav_bytes: &[u8]) -> Result<(), AudioError> {
 
 The UI thread decodes supported WAV clips and sends bounded commands to the audio thread. The callback mixes up to 32 voices, applies playback rate, pan, volume, and the effects or music bus, then clamps the output. The callback performs bounded work and uses a lock-free queue. Other containers return `AudioError::UnsupportedFormat`; clips use mono or stereo `f32` samples.
 
-Android uses AAudio from API 26 onward. The backend requests low-latency, 32-bit float stereo output. Device disconnects stop the stream; later playback opens a fresh stream. Desktop `cpal` pauses after the mixer reports idle on its next engine call.
+Android uses AAudio from API 26 onward. The backend requests low-latency, 32-bit float stereo output. Device disconnects stop the stream; later playback opens a fresh stream. watchOS renders stereo float at the output's rate into an `AVAudioSourceNode`, in the ambient session category; when the system stops the engine, later playback opens a new one. Desktop `cpal` pauses after the mixer reports idle on its next engine call.
 
 ## Links
 

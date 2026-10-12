@@ -16,6 +16,9 @@ use crate::mixer::{Mixer, MixerSeed, RenderStatus};
 #[cfg(all(feature = "aaudio", target_os = "android"))]
 mod aaudio;
 
+#[cfg(all(feature = "avaudio", target_os = "watchos"))]
+mod avaudio;
+
 #[cfg(all(
     feature = "cpal-backend",
     not(any(target_os = "android", target_arch = "wasm32"))
@@ -92,6 +95,7 @@ pub trait AudioSink: Send + Sync {
 /// Whether this build has a real output device compiled in.
 pub fn is_compiled() -> bool {
     cfg!(all(feature = "aaudio", target_os = "android"))
+        || cfg!(all(feature = "avaudio", target_os = "watchos"))
         || cfg!(all(
             feature = "cpal-backend",
             not(any(target_os = "android", target_arch = "wasm32"))
@@ -101,13 +105,18 @@ pub fn is_compiled() -> bool {
 /// Opens the platform output device, starts it, and runs `renderer` on it.
 ///
 /// Each arm is a separate `cfg` block, so the explicit returns are what keeps
-/// exactly one of them live per target instead of one expression with three
-/// conditional halves.
+/// exactly one of them live per target instead of one expression with four
+/// conditional parts.
 #[expect(clippy::needless_return)]
 pub fn open(renderer: Box<dyn Renderer>) -> Result<Box<dyn AudioSink>, AudioError> {
     #[cfg(all(feature = "aaudio", target_os = "android"))]
     {
         return aaudio::open(renderer);
+    }
+
+    #[cfg(all(feature = "avaudio", target_os = "watchos"))]
+    {
+        return avaudio::open(renderer);
     }
 
     #[cfg(all(
@@ -120,6 +129,7 @@ pub fn open(renderer: Box<dyn Renderer>) -> Result<Box<dyn AudioSink>, AudioErro
 
     #[cfg(not(any(
         all(feature = "aaudio", target_os = "android"),
+        all(feature = "avaudio", target_os = "watchos"),
         all(
             feature = "cpal-backend",
             not(any(target_os = "android", target_arch = "wasm32"))
