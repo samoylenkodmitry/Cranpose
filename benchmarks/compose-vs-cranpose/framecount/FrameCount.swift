@@ -11,9 +11,9 @@
 // (`CACurrentMediaTime`, the clock the frames are stamped with), waiting for
 // its window to appear:
 //        open -W -n FrameCount.app --args --pid PID --until T --out FILE.json
-// With `--launched L --slow-fps F --slow-window S` as well, the capture ends
-// early, its end written as `stopped`, once the app is S seconds past its
-// launch L and presented fewer than F frames a second over the last S.
+// With `--launched L --slow-fps F --slow-seconds S` as well, the capture ends
+// early, its end written as `stopped`, once the app presented fewer than F
+// frames in each of the last S whole seconds since its launch L.
 // or, for a picture of the window at its full resolution:
 //        open -W -n FrameCount.app --args --pid PID --screenshot FILE.png
 // Launched through `open`, macOS attributes the capture to FrameCount.app
@@ -34,7 +34,7 @@ struct Options {
     var until = 0.0
     var launched = 0.0
     var slowFps = 0.0
-    var slowWindow = 0.0
+    var slowSeconds = 0
     var out = ""
     var screenshot = ""
 
@@ -48,7 +48,7 @@ struct Options {
             case "--until": until = Double(value) ?? 0
             case "--launched": launched = Double(value) ?? 0
             case "--slow-fps": slowFps = Double(value) ?? 0
-            case "--slow-window": slowWindow = Double(value) ?? 0
+            case "--slow-seconds": slowSeconds = Int(value) ?? 0
             case "--out": out = value
             case "--screenshot": screenshot = value
             default: throw Failure.usage
@@ -57,10 +57,16 @@ struct Options {
         if pid <= 0 || (seconds <= 0 && until <= 0) || (out.isEmpty && screenshot.isEmpty) { throw Failure.usage }
     }
 
-    /// Whether, at `now`, the app ran below `slowFps` over the last
-    /// `slowWindow` seconds, given the frames it presented since then.
-    func slow(at now: Double, framesInWindow: Int) -> Bool {
-        slowFps > 0 && now - launched >= slowWindow && Double(framesInWindow) < slowFps * slowWindow
+    /// Whether, at `now`, each of the last `slowSeconds` whole seconds since
+    /// the launch held fewer than `slowFps` of the frames `frames` counts
+    /// between two times.
+    func slow(at now: Double, frames: (Double, Double) -> Int) -> Bool {
+        let done = Int(now - launched)
+        guard slowFps > 0, slowSeconds > 0, done >= slowSeconds else { return false }
+        return (done - slowSeconds..<done).allSatisfy { second in
+            let start = launched + Double(second)
+            return Double(frames(start, start + 1)) < slowFps
+        }
     }
 }
 
@@ -74,7 +80,7 @@ enum Failure: Error, CustomStringConvertible {
         switch self {
         case .usage:
             return "usage: FrameCount --pid PID (--seconds S --out FILE.json | --until T --out FILE.json"
-                + " [--launched L --slow-fps F --slow-window S] | --screenshot FILE.png)"
+                + " [--launched L --slow-fps F --slow-seconds S] | --screenshot FILE.png)"
         case .noPermission: return "FrameCount has no Screen Recording permission"
         case .noWindow(let pid): return "process \(pid) shows no window"
         case .unwritable(let path): return "cannot write \(path)"
@@ -100,11 +106,11 @@ final class Frames: NSObject, SCStreamOutput {
         lock.unlock()
     }
 
-    /// The frames presented after `start`, counted from the newest.
-    func count(after start: Double) -> Int {
+    /// The frames presented from `start` until `end`, counted from the newest.
+    func count(from start: Double, until end: Double) -> Int {
         lock.lock()
         defer { lock.unlock() }
-        return times.reversed().prefix { $0 > start }.count
+        return times.reversed().prefix { $0 >= start }.count { $0 < end }
     }
 
     func taken() -> [Double] {
@@ -187,7 +193,7 @@ func measure(_ options: Options) async throws -> [String: Any] {
         let left = end - CACurrentMediaTime()
         try await Task.sleep(nanoseconds: UInt64(max(0, min(0.25, left)) * 1_000_000_000))
         let now = CACurrentMediaTime()
-        if options.slow(at: now, framesInWindow: frames.count(after: now - options.slowWindow)) {
+        if options.slow(at: now, frames: frames.count(from:until:)) {
             stopped = now
             break
         }

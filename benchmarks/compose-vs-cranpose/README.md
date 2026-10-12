@@ -364,9 +364,10 @@ leaves it, then a second time. Every leg is one launch measured from its start
 command for 10 s (`--run`), the same span for every app, and keeps the frames
 of every second from the launch; the dashboard charts those seconds for every
 framework, the first starts and the second starts apart. A leg whose app
-presented fewer than 10 frames a second over the last 5 s ends there, marked
-`stopped`: on every harness, `ab.py` and `desktop.py` too, the rest of it would
-only repeat that the app is slow. In Chrome a first start begins with
+presented fewer than 30 frames in each of 5 seconds in a row ends there,
+marked `stopped`, on every harness, `ab.py` and `desktop.py` too: the rest of
+it would only repeat that the app is slow. Seconds in a row, not an average,
+so a slow start that the app then outruns does not end it. In Chrome a first start begins with
 Chrome's data cleared (`pm clear com.android.chrome`, then its first-run
 screen passed with "Stay signed out"): only that empties its compiled GPU
 programs, which DevTools' cache clearing and `pm trim-caches` leave. The

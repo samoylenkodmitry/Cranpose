@@ -134,5 +134,45 @@ class DevicePresentCountTest(unittest.TestCase):
         self.assertEqual(self.count(poll, newest='2000', total='5'), ('3000', 6))
 
 
+class SlowRunTest(unittest.TestCase):
+    """`perf_window.sh` ends a run once each of the last five whole seconds
+    since the launch held fewer presents than the threshold."""
+
+    def slow(self, polls, start=100.0):
+        source = (BENCHMARK / 'perf_window.sh').read_text()
+        program = re.search(r'awk -v start="\$START" -v fps="\$SLOW_FPS" -v seconds="\$SLOW_SECONDS" ' + r"'(.*?)' " + r'"\$COUNTS"',
+                            source, re.S).group(1)
+        with tempfile.NamedTemporaryFile('w', suffix='.txt', delete=False) as handle:
+            handle.write(''.join(f'{at} {total}\n' for at, total in polls))
+        result = subprocess.run(['awk', '-v', f'start={start}', '-v', 'fps=30', '-v', 'seconds=5', program, handle.name],
+                                capture_output=True, text=True)
+        Path(handle.name).unlink()
+        return result.returncode == 0
+
+    @staticmethod
+    def polls(per_second, start=100.0):
+        """A poll every half second, presenting `per_second[k]` frames in second `k`."""
+        polls, total = [], 0
+        for second, frames in enumerate(per_second):
+            for half in (0.5, 1.0):
+                total += frames // 2 if half == 0.5 else frames - frames // 2
+                polls.append((start + second + half, total))
+        return polls
+
+    def test_a_slow_start_the_app_then_outruns_runs_on(self):
+        # Cranpose in Chrome on the Mate 20 X: content in its fourth second.
+        self.assertFalse(self.slow(self.polls([1, 1, 6, 58, 61, 60, 60])))
+
+    def test_five_slow_seconds_in_a_row_end_the_run(self):
+        self.assertTrue(self.slow(self.polls([2, 15, 20, 25, 28])))
+
+    def test_one_fast_second_among_slow_ones_runs_on(self):
+        self.assertFalse(self.slow(self.polls([20, 20, 31, 20, 20])))
+        self.assertTrue(self.slow(self.polls([20, 20, 31, 20, 20, 20, 20, 20])))
+
+    def test_a_run_younger_than_five_seconds_runs_on(self):
+        self.assertFalse(self.slow(self.polls([0, 0, 0, 0])))
+
+
 if __name__ == '__main__':
     unittest.main()

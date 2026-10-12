@@ -30,7 +30,7 @@ HERE = Path(__file__).resolve().parent
 # file by its path.
 sys.path[:0] = [str(HERE), str(HERE.parent.parent / 'scripts')]
 from android_robot_device import device_lock  # noqa: E402  (the shared per-device lock)
-from timelines import SLOW_FPS, SLOW_WINDOW_S, STARTS  # noqa: E402,F401  (STARTS: the harnesses' starts)
+from timelines import SLOW_FPS, SLOW_SECONDS, STARTS  # noqa: E402,F401  (STARTS: the harnesses' starts)
 APPS = {
     'cranpose': {
         'package': 'dev.perfcompare.cranpose',
@@ -753,7 +753,7 @@ class PageTarget:
 def measure_run(device, app, scenario, args, destination, run_s=None):
     """One cold launch, measured from the start command for `run_s` seconds
     (`args.run` unless given), or until it presented fewer than `SLOW_FPS`
-    frames a second over `SLOW_WINDOW_S`: every frame the layer presented,
+    frames in each of `SLOW_SECONDS` seconds in a row: every frame the layer presented,
     the CPU every process of the app spent since it started, the clocks and
     the memory held at the end. Nothing of the run is left out: its first
     seconds, the launch and the first frames included, count as the rest do.
@@ -771,7 +771,7 @@ def measure_run(device, app, scenario, args, destination, run_s=None):
     layer = target.layer(device)
     output = device.shell('sh', REMOTE_WINDOW, ','.join(map(str, pids)), target.package, layer,
                           f'{launched + run_s:.2f}', str(args.interval), '1' if target.gfx else '0',
-                          f'{launched:.2f}', str(SLOW_FPS), str(SLOW_WINDOW_S), timeout=run_s + 60)
+                          f'{launched:.2f}', str(SLOW_FPS), str(SLOW_SECONDS), timeout=run_s + 60)
     (destination / f'{target.name}-{scenario}-{int(time.time())}.txt').write_text(output)
     lines = output.splitlines()
     if any(line.strip() == 'STAT' for line in lines):
