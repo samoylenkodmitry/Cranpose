@@ -57,6 +57,9 @@ wgpu = { workspace = true, features = [
     "parking_lot",
     "vulkan",
     "wgsl",
+    # Pipelines take their stages specialized and folded as naga modules
+    # (`shader_fold`).
+    "naga-ir",
 ] }
 
 # Fast-core affinity for the frame-critical threads (`fast_cores`): safe
@@ -70,6 +73,9 @@ wgpu = { workspace = true, features = [
     "parking_lot",
     "dx12",
     "wgsl",
+    # Pipelines take their stages specialized and folded as naga modules
+    # (`shader_fold`).
+    "naga-ir",
     "static-dxc",
 ] }
 
@@ -79,6 +85,9 @@ wgpu = { workspace = true, features = [
     "parking_lot",
     "metal",
     "wgsl",
+    # Pipelines take their stages specialized and folded as naga modules
+    # (`shader_fold`).
+    "naga-ir",
 ] }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "linux"), not(target_os = "windows"), not(target_os = "macos")))'.dependencies]
@@ -87,6 +96,9 @@ wgpu = { workspace = true, features = [
     "parking_lot",
     "vulkan",
     "wgsl",
+    # Pipelines take their stages specialized and folded as naga modules
+    # (`shader_fold`).
+    "naga-ir",
 ] }
 
 [target.'cfg(target_os = "android")'.dependencies]
@@ -95,6 +107,9 @@ wgpu = { workspace = true, features = [
     "parking_lot",
     "vulkan",
     "wgsl",
+    # Pipelines take their stages specialized and folded as naga modules
+    # (`shader_fold`).
+    "naga-ir",
 ] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

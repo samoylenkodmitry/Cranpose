@@ -30,6 +30,7 @@ mod effect_sample_domain;
 mod effect_semantics;
 mod elevation_shadow;
 mod every_screen_pipelines;
+mod folded_stages;
 mod font_feature_settings_pixels;
 mod frame_driven_layer;
 mod glass_layer_cache;

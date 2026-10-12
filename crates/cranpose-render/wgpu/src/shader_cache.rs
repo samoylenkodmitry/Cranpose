@@ -254,7 +254,7 @@ impl PipelineJob {
             ),
             "RuntimeShader Effect Pipeline",
             &factory.layout,
-            &module.module,
+            (&module.module, &module.module),
             "effect_fs",
             &constants,
             wgpu::ColorTargetState {

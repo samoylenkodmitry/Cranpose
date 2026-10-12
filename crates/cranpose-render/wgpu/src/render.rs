@@ -1072,6 +1072,9 @@ fn shape_shader_code(mode: RunBufferMode) -> ShaderCode {
     }
 }
 
+/// The vertex entry point of every fullscreen strip.
+pub(crate) const FULLSCREEN_VS: &str = "fullscreen_vs";
+
 /// A pipeline that draws one full-screen triangle strip from `fullscreen_vs`
 /// into a single color target, the shape every effect and composite pass
 /// shares; `constants` fixes the shader's override constants.
@@ -1082,7 +1085,7 @@ pub(crate) fn create_fullscreen_strip_pipeline(
     log_label: &str,
     label: &'static str,
     layout: &wgpu::PipelineLayout,
-    module: &wgpu::ShaderModule,
+    (vertex_module, fragment_module): (&wgpu::ShaderModule, &wgpu::ShaderModule),
     fragment_entry: &'static str,
     constants: &[(&str, f64)],
     target: wgpu::ColorTargetState,
@@ -1095,8 +1098,8 @@ pub(crate) fn create_fullscreen_strip_pipeline(
             label: Some(label),
             layout: Some(layout),
             vertex: wgpu::VertexState {
-                module,
-                entry_point: Some("fullscreen_vs"),
+                module: vertex_module,
+                entry_point: Some(FULLSCREEN_VS),
                 buffers: &[],
                 compilation_options: wgpu::PipelineCompilationOptions {
                     constants,
@@ -1104,7 +1107,7 @@ pub(crate) fn create_fullscreen_strip_pipeline(
                 },
             },
             fragment: Some(wgpu::FragmentState {
-                module,
+                module: fragment_module,
                 entry_point: Some(fragment_entry),
                 targets: &[Some(target)],
                 compilation_options: wgpu::PipelineCompilationOptions {
@@ -1812,7 +1815,7 @@ pub(crate) fn create_shape_pipeline(
     } = key.program(mode);
     let blend = (depth != ShapeDepth::Interior).then(|| blend_state_for_mode(blend_mode));
     let instance_layout = record_vertex_layouts().map(Some);
-    let module = shader.module();
+    let stages = shader.stages((vertex_entry, fragment_entry), &constants);
 
     create_render_pipeline_logged(
         device,
@@ -1824,19 +1827,19 @@ pub(crate) fn create_shape_pipeline(
             label: Some("Shape Pipeline"),
             layout: Some(shader.layout()),
             vertex: wgpu::VertexState {
-                module,
+                module: &stages.vertex,
                 entry_point: Some(vertex_entry),
                 compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &constants,
+                    constants: stages.constants,
                     ..wgpu::PipelineCompilationOptions::default()
                 },
                 buffers: &instance_layout,
             },
             fragment: Some(wgpu::FragmentState {
-                module,
+                module: &stages.fragment,
                 entry_point: Some(fragment_entry),
                 compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &constants,
+                    constants: stages.constants,
                     ..wgpu::PipelineCompilationOptions::default()
                 },
                 targets: &[Some(wgpu::ColorTargetState {

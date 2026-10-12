@@ -57,6 +57,8 @@ mod run_geometry;
 mod run_store;
 mod scene;
 mod shader_cache;
+#[cfg(not(target_arch = "wasm32"))]
+mod shader_fold;
 mod shaders;
 mod shape_pipelines;
 mod shared_shader;
@@ -108,6 +110,7 @@ pub use render::{
     frame_clear_color, frames_presented, pipelines_created, pipelines_created_off_frame,
 };
 pub use scene::{HitRegion, Scene};
+pub use shared_shader::shader_stages_folded;
 
 /// The optional device features the renderer exploits when the adapter
 /// offers them: pipeline caching (see `pipeline_disk_cache`), the
