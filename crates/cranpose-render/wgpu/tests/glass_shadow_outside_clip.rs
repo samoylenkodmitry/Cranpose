@@ -41,39 +41,14 @@ fn capture(shadow: bool) -> Option<Vec<u8>> {
         .map(|(frame, _)| frame.pixels)
 }
 
-fn inside_card(x: usize, y: usize) -> bool {
-    let (x, y) = (x as f32, y as f32);
-    (CARD[0]..CARD[0] + CARD[2]).contains(&x) && (CARD[1]..CARD[1] + CARD[3]).contains(&y)
-}
-
 #[test]
 fn a_clipped_glass_cards_drop_shadow_falls_outside_the_card() {
     let Some(with_shadow) = capture(true) else {
         return;
     };
     let without_shadow = capture(false).expect("headless WGPU init failed mid-suite");
-    let mut outside_differing = 0usize;
-    let mut outside_max_delta = 0u8;
-    for (index, (a, b)) in with_shadow
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .zip(without_shadow.as_chunks::<4>().0)
-        .enumerate()
-    {
-        let (x, y) = (index % FRAME_WIDTH as usize, index / FRAME_WIDTH as usize);
-        if inside_card(x, y) {
-            continue;
-        }
-        let delta = a
-            .iter()
-            .zip(b)
-            .map(|(p, q)| p.abs_diff(*q))
-            .max()
-            .unwrap_or(0);
-        outside_max_delta = outside_max_delta.max(delta);
-        outside_differing += usize::from(delta > 0);
-    }
+    let (outside_differing, outside_max_delta) =
+        support::difference_outside(FRAME_WIDTH, &with_shadow, &without_shadow, CARD);
     eprintln!(
         "shadow on vs off outside the card: {outside_differing} pixels differ, max delta \
          {outside_max_delta}"

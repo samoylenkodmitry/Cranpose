@@ -1146,6 +1146,37 @@ pub fn assert_bytes_within(label: &str, width: u32, a: &[u8], b: &[u8], toleranc
     );
 }
 
+/// How many pixels of two RGBA frames of `width` pixels per row differ
+/// outside `rect`, and by how many levels at most.
+pub fn difference_outside(width: u32, a: &[u8], b: &[u8], rect: [f32; 4]) -> (usize, u8) {
+    let inside = |x: f32, y: f32| {
+        (rect[0]..rect[0] + rect[2]).contains(&x) && (rect[1]..rect[1] + rect[3]).contains(&y)
+    };
+    let mut differing = 0usize;
+    let mut max_delta = 0u8;
+    for (index, (a, b)) in a
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0)
+        .enumerate()
+    {
+        let (x, y) = (index % width as usize, index / width as usize);
+        if inside(x as f32, y as f32) {
+            continue;
+        }
+        let delta = a
+            .iter()
+            .zip(b)
+            .map(|(p, q)| p.abs_diff(*q))
+            .max()
+            .unwrap_or(0);
+        max_delta = max_delta.max(delta);
+        differing += usize::from(delta > 0);
+    }
+    (differing, max_delta)
+}
+
 pub fn rect_modifier(rect: [f32; 4]) -> Modifier {
     Modifier::empty().offset(rect[0], rect[1]).size(Size {
         width: rect[2],

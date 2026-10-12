@@ -979,9 +979,12 @@ fn plan_backdrop(
         .unwrap_or_default();
     let rect = backdrop.rect.translate(snap.x, snap.y);
     let clip = backdrop.clip.map(|clip| clip.translate(snap.x, snap.y));
+    // The effect writes past its rect by the output padding it declares: the
+    // shadow it casts, a rim past its edge.
+    let reach = expand_rect(rect, backdrop.effect.output_padding());
     let visible = match clip {
-        Some(clip) => rect.intersect(clip)?,
-        None => rect,
+        Some(clip) => reach.intersect(clip)?,
+        None => reach,
     };
     let visible = DeviceRect::from_logical(visible, scale).intersect(target_rect)?;
     let support = match output_support(&backdrop.effect) {
@@ -991,7 +994,7 @@ fn plan_backdrop(
         ),
         None => None,
     };
-    let padding = (backdrop.effect.input_padding() + backdrop.effect.output_padding()) * scale;
+    let padding = backdrop.effect.input_padding() * scale;
     let expanded = visible.expand(padding.ceil());
     let capture_bounds = capture_bounds.unwrap_or(expanded);
     let reach = match backdrop.reach {
@@ -1144,17 +1147,48 @@ fn child_device_placement(
     scale: f32,
     target_rect: DeviceRect,
 ) -> (DeviceRect, Option<DeviceRect>) {
-    let dest_bounds_logical =
-        quad_bounds(child.transform.map_rect(child.local_bounds)).translate(snap.x, snap.y);
-    let dest = DeviceRect::from_logical(dest_bounds_logical, scale);
+    let dest = child_device_rect(child, child.local_bounds, snap, scale);
+    (dest, child_visible(child, dest, snap, scale, target_rect))
+}
+
+/// `local`, a rect in the child's own space, on the device.
+fn child_device_rect(child: &ChildLayer, local: Rect, snap: Point, scale: f32) -> DeviceRect {
+    let logical = quad_bounds(child.transform.map_rect(local)).translate(snap.x, snap.y);
+    DeviceRect::from_logical(logical, scale)
+}
+
+/// The part of `rect` the child's clip and the target leave visible.
+fn child_visible(
+    child: &ChildLayer,
+    rect: DeviceRect,
+    snap: Point,
+    scale: f32,
+    target_rect: DeviceRect,
+) -> Option<DeviceRect> {
     let clipped = match child.clip {
-        Some(clip) => dest.intersect(DeviceRect::from_logical(
+        Some(clip) => rect.intersect(DeviceRect::from_logical(
             clip.translate(snap.x, snap.y),
             scale,
         )),
-        None => Some(dest),
+        None => Some(rect),
     };
-    (dest, clipped.and_then(|rect| rect.intersect(target_rect)))
+    clipped.and_then(|rect| rect.intersect(target_rect))
+}
+
+/// What a child's backdrop effect writes: the child's bounds and the output
+/// padding the effect declares around them -- the shadow it casts, a rim past
+/// its edge -- within the child's clip and the target. The bounds alone cut
+/// that shadow at a rectangle around the child.
+fn backdrop_written(
+    child: &ChildLayer,
+    effect: &RenderEffect,
+    snap: Point,
+    scale: f32,
+    target_rect: DeviceRect,
+) -> Option<DeviceRect> {
+    let local = expand_rect(child.local_bounds, effect.output_padding());
+    let reach = child_device_rect(child, local, snap, scale);
+    child_visible(child, reach, snap, scale, target_rect)
 }
 
 /// What the page shows of a child's rendered surface: the child's clip
@@ -3582,7 +3616,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             dest,
             snap,
         } = placement;
-        let padding = ((backdrop.input_padding() + backdrop.output_padding()) * scale).ceil();
+        let padding = (backdrop.input_padding() * scale).ceil();
         let expanded = visible.expand(padding);
         let capture_rect = expanded
             .intersect(pass.capture_bounds().unwrap_or(expanded))
@@ -4096,16 +4130,24 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .map(|anchor| snap_delta_for_anchor(anchor, scale))
             .unwrap_or_default();
         let rect = effect.rect.translate(snap.x, snap.y);
+        let output_padding = effect
+            .effect
+            .as_ref()
+            .map_or(0.0, RenderEffect::output_padding);
+        // The effect writes over its rect and the output padding around it.
+        let written = expand_rect(rect, output_padding);
         let visible = match effect.clip {
-            Some(clip) => rect.intersect(clip.translate(snap.x, snap.y)),
-            None => Some(rect),
+            Some(clip) => written.intersect(clip.translate(snap.x, snap.y)),
+            None => Some(written),
         };
         let Some(visible) = visible else {
             return Ok(None);
         };
-        let padding = effect.effect.as_ref().map_or(0.0, |effect| {
-            effect.input_padding() + effect.output_padding()
-        }) * scale;
+        let padding = effect
+            .effect
+            .as_ref()
+            .map_or(0.0, |effect| effect.input_padding() + output_padding)
+            * scale;
         let target_rect = pass.target_rect();
         let Some(source_rect) = DeviceRect::from_logical(rect, scale)
             .expand(padding.ceil())
@@ -4257,7 +4299,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         if !self.renderer.ablation.stages
             && child.backdrop_alpha != 0.0
             && let Some(backdrop) = &child.backdrop
-            && let Some(visible) = visible_device
+            && let Some(visible) =
+                backdrop_written(child, backdrop, snap, scale, pass.target_rect())
             && let Some(support) =
                 child_composite_support(child, backdrop.output_support(), snap, scale, visible)
         {
