@@ -39,7 +39,15 @@ impl Application {
         self.0.resize(width, height, density)
     }
     pub fn tick(&mut self, elapsed: u64) -> bool { self.0.tick(elapsed) }
-    pub fn pixels(&self) -> &[u8] { self.0.pixels() }
+    pub fn pixels(&mut self) -> &[u8] { self.0.pixels() }
+    pub fn sprites(&mut self) -> &[f32] { self.0.sprites().sprites() }
+    pub fn upload_count(&self) -> usize { self.0.last_sprites().uploads().len() }
+    fn upload(&self, index: usize) -> Option<&cranpose::watchos::TextureUpload> { self.0.last_sprites().uploads().get(index) }
+    pub fn upload_id(&self, index: usize) -> u32 { self.upload(index).map_or(0, |upload| upload.id) }
+    pub fn upload_width(&self, index: usize) -> u32 { self.upload(index).map_or(0, |upload| upload.width) }
+    pub fn upload_height(&self, index: usize) -> u32 { self.upload(index).map_or(0, |upload| upload.height) }
+    pub fn upload_pixels(&self, index: usize) -> &[u8] { self.upload(index).map_or(&[], |upload| upload.pixels.as_slice()) }
+    pub fn releases(&self) -> &[u32] { self.0.last_sprites().releases() }
     pub fn width(&self) -> u32 { self.0.width() }
     pub fn height(&self) -> u32 { self.0.height() }
     pub fn touch(&mut self, phase: u8, x: f32, y: f32) { self.0.touch(phase, x, y); }
@@ -57,7 +65,14 @@ mod ffi {
         fn create_application(width: u32, height: u32, density: f32) -> Result<Box<Application>>;
         fn resize(self: &mut Application, width: u32, height: u32, density: f32) -> Result<()>;
         fn tick(self: &mut Application, elapsed_nanos: u64) -> bool;
-        fn pixels(self: &Application) -> &[u8];
+        fn pixels(self: &mut Application) -> &[u8];
+        fn sprites(self: &mut Application) -> &[f32];
+        fn upload_count(self: &Application) -> usize;
+        fn upload_id(self: &Application, index: usize) -> u32;
+        fn upload_width(self: &Application, index: usize) -> u32;
+        fn upload_height(self: &Application, index: usize) -> u32;
+        fn upload_pixels(self: &Application, index: usize) -> &[u8];
+        fn releases(self: &Application) -> &[u32];
         fn width(self: &Application) -> u32;
         fn height(self: &Application) -> u32;
         fn touch(self: &mut Application, phase: u8, x: f32, y: f32);

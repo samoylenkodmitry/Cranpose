@@ -25,21 +25,35 @@ bool CPResize(uint32_t width, uint32_t height, float density) {
     }
 }
 
-CGImageRef CPFrame(uint64_t elapsed) {
-    if (!app || !(*app)->tick(elapsed)) return nullptr;
-    auto pixels = (*app)->pixels();
-    CFDataRef data = CFDataCreate(kCFAllocatorDefault, pixels.data(), pixels.size());
-    if (!data) return nullptr;
-    CGDataProviderRef provider = CGDataProviderCreateWithCFData(data);
-    CFRelease(data);
-    if (!provider) return nullptr;
-    CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-    CGImageRef image = CGImageCreate((*app)->width(), (*app)->height(), 8, 32,
-        (*app)->width() * 4, space, kCGImageAlphaLast | kCGBitmapByteOrder32Big,
-        provider, nullptr, false, kCGRenderingIntentDefault);
-    CGColorSpaceRelease(space);
-    CGDataProviderRelease(provider);
-    return image;
+bool CPTick(uint64_t elapsed) { return app && (*app)->tick(elapsed); }
+
+const float *CPSprites(size_t *count) {
+    *count = 0;
+    if (!app) return nullptr;
+    auto sprites = (*app)->sprites();
+    *count = sprites.size();
+    return sprites.data();
+}
+
+size_t CPUploadCount(void) { return app ? (*app)->upload_count() : 0; }
+
+const uint8_t *CPUpload(size_t index, uint32_t *id, uint32_t *width, uint32_t *height) {
+    *id = 0;
+    *width = 0;
+    *height = 0;
+    if (!app) return nullptr;
+    *id = (*app)->upload_id(index);
+    *width = (*app)->upload_width(index);
+    *height = (*app)->upload_height(index);
+    return (*app)->upload_pixels(index).data();
+}
+
+size_t CPReleaseCount(void) { return app ? (*app)->releases().size() : 0; }
+
+uint32_t CPRelease(size_t index) {
+    if (!app) return 0;
+    auto releases = (*app)->releases();
+    return index < releases.size() ? releases[index] : 0;
 }
 
 void CPTouch(uint8_t phase, float x, float y) { if (app) (*app)->touch(phase, x, y); }
