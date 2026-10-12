@@ -30,24 +30,60 @@ fn snapped_anchor_origin(anchor: Point) -> Point {
     Point::new(anchor.x.round(), anchor.y.round())
 }
 
-fn snap_delta_for_anchor(anchor: Point) -> Point {
+pub(crate) fn snap_delta_for_anchor(anchor: Point) -> Point {
     let snapped = snapped_anchor_origin(anchor);
     Point::new(snapped.x - anchor.x, snapped.y - anchor.y)
 }
 
-#[derive(Clone, Copy)]
-struct ClipBounds {
-    min_x: i32,
-    min_y: i32,
-    max_x: i32,
-    max_y: i32,
+/// A window of the device frame: the RGBA8 pixels `left..left + width` by
+/// `top..top + height`, row by row. The whole frame is the window at the
+/// origin; a sprite's texture is the window around the one item it holds.
+pub(crate) struct Target<'a> {
+    pub pixels: &'a mut [u8],
+    pub left: i32,
+    pub top: i32,
+    pub width: u32,
+    pub height: u32,
 }
 
-fn clip_rect_to_bounds(
+impl Target<'_> {
+    fn index(&self, x: i32, y: i32) -> usize {
+        (((y - self.top) as u32 * self.width + (x - self.left) as u32) * 4) as usize
+    }
+
+    fn pixel(&mut self, x: i32, y: i32) -> &mut [u8] {
+        let index = self.index(x, y);
+        &mut self.pixels[index..index + 4]
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ClipBounds {
+    pub min_x: i32,
+    pub min_y: i32,
+    pub max_x: i32,
+    pub max_y: i32,
+}
+
+/// The whole pixels of `rect` cut to `clip` and to the target's window.
+fn clip_rect_to_bounds(rect: Rect, clip: Option<Rect>, target: &Target) -> Option<ClipBounds> {
+    clip_rect_to_window(
+        rect,
+        clip,
+        ClipBounds {
+            min_x: target.left,
+            min_y: target.top,
+            max_x: target.left + target.width as i32,
+            max_y: target.top + target.height as i32,
+        },
+    )
+}
+
+/// The whole pixels of `rect` cut to `clip` and to `window`.
+pub(crate) fn clip_rect_to_window(
     rect: Rect,
     clip: Option<Rect>,
-    width: u32,
-    height: u32,
+    window: ClipBounds,
 ) -> Option<ClipBounds> {
     let mut min_x = rect.x;
     let mut min_y = rect.y;
@@ -61,24 +97,19 @@ fn clip_rect_to_bounds(
         max_y = max_y.min(clip_rect.y + clip_rect.height);
     }
 
-    min_x = min_x.max(0.0);
-    min_y = min_y.max(0.0);
-    max_x = max_x.min(width as f32);
-    max_y = max_y.min(height as f32);
+    min_x = min_x.max(window.min_x as f32);
+    min_y = min_y.max(window.min_y as f32);
+    max_x = max_x.min(window.max_x as f32);
+    max_y = max_y.min(window.max_y as f32);
 
     if max_x <= min_x || max_y <= min_y {
         return None;
     }
 
-    let min_x = min_x.floor() as i32;
-    let min_y = min_y.floor() as i32;
-    let max_x = max_x.ceil() as i32;
-    let max_y = max_y.ceil() as i32;
-
-    let min_x = min_x.clamp(0, width as i32);
-    let min_y = min_y.clamp(0, height as i32);
-    let max_x = max_x.clamp(0, width as i32);
-    let max_y = max_y.clamp(0, height as i32);
+    let min_x = (min_x.floor() as i32).clamp(window.min_x, window.max_x);
+    let min_y = (min_y.floor() as i32).clamp(window.min_y, window.max_y);
+    let max_x = (max_x.ceil() as i32).clamp(window.min_x, window.max_x);
+    let max_y = (max_y.ceil() as i32).clamp(window.min_y, window.max_y);
 
     if min_x >= max_x || min_y >= max_y {
         return None;
@@ -145,49 +176,93 @@ fn draw_raster_scene(
     text_resources: &SoftwareTextResources,
 ) {
     clear_frame(frame);
-    let mut ordered_items =
-        Vec::with_capacity(scene.shapes.len() + scene.images.len() + scene.texts.len());
-    for (index, shape) in scene.shapes.iter().enumerate() {
-        ordered_items.push((shape.z_index, RenderItem::Shape(index)));
+    let mut target = Target {
+        pixels: frame,
+        left: 0,
+        top: 0,
+        width,
+        height,
+    };
+    for item in scene.ordered_items() {
+        draw_item(&mut target, scene, item, diagnostics, text_resources);
     }
-    for (index, image) in scene.images.iter().enumerate() {
-        ordered_items.push((image.z_index, RenderItem::Image(index)));
-    }
-    for (index, text) in scene.texts.iter().enumerate() {
-        ordered_items.push((text.z_index, RenderItem::Text(index)));
-    }
-    for (index, shadow) in scene.shadows.iter().enumerate() {
-        ordered_items.push((shadow.z_index, RenderItem::Shadow(index)));
-    }
-    ordered_items.sort_unstable_by_key(|(z, _)| *z);
+}
 
-    for (_, item) in ordered_items {
+/// Draws one item of `scene` into `target`.
+pub(crate) fn draw_item(
+    target: &mut Target,
+    scene: &RasterScene,
+    item: RenderItem,
+    diagnostics: &RenderDiagnostics,
+    text_resources: &SoftwareTextResources,
+) {
+    match item {
+        RenderItem::Shape(index) => draw_shape(target, &scene.shapes[index], diagnostics),
+        RenderItem::Image(index) => draw_image(target, &scene.images[index], diagnostics),
+        RenderItem::Shadow(index) => draw_shadow(target, &scene.shadows[index], diagnostics),
+        RenderItem::Text(index) => draw_text(target, &scene.texts[index], diagnostics, text_resources),
+    }
+}
+
+impl RasterScene {
+    /// The pixels `item` can reach before its clip, for the items drawn into
+    /// a frame directly; text reaches what its rasterized image covers.
+    pub(crate) fn item_reach(&self, item: RenderItem) -> Option<Rect> {
         match item {
             RenderItem::Shape(index) => {
-                draw_shape(frame, width, height, &scene.shapes[index], diagnostics);
+                let placed = place_shape(&self.shapes[index])?;
+                Some(placed.coverage.reach(placed.rect))
             }
             RenderItem::Image(index) => {
-                draw_image(frame, width, height, &scene.images[index], diagnostics);
+                let draw = &self.images[index];
+                let snap = draw.snap_anchor.map(snap_delta_for_anchor).unwrap_or_default();
+                Some(draw.rect.translate(snap.x, snap.y))
             }
             RenderItem::Shadow(index) => {
-                draw_shadow(frame, width, height, &scene.shadows[index], diagnostics);
+                let draw = &self.shadows[index];
+                let snap = draw.snap_anchor.map(snap_delta_for_anchor).unwrap_or_default();
+                Some(draw.shadow.bounds.translate(snap.x, snap.y))
             }
-            RenderItem::Text(index) => {
-                draw_text(
-                    frame,
-                    width,
-                    height,
-                    &scene.texts[index],
-                    diagnostics,
-                    text_resources,
-                );
-            }
+            RenderItem::Text(_) => None,
         }
+    }
+
+    /// Every item, in the order they are drawn.
+    pub(crate) fn ordered_items(&self) -> Vec<RenderItem> {
+        let mut ordered = Vec::with_capacity(
+            self.shapes.len() + self.images.len() + self.texts.len() + self.shadows.len(),
+        );
+        ordered.extend(
+            self.shapes
+                .iter()
+                .enumerate()
+                .map(|(index, shape)| (shape.z_index, RenderItem::Shape(index))),
+        );
+        ordered.extend(
+            self.images
+                .iter()
+                .enumerate()
+                .map(|(index, image)| (image.z_index, RenderItem::Image(index))),
+        );
+        ordered.extend(
+            self.texts
+                .iter()
+                .enumerate()
+                .map(|(index, text)| (text.z_index, RenderItem::Text(index))),
+        );
+        ordered.extend(
+            self.shadows
+                .iter()
+                .enumerate()
+                .map(|(index, shadow)| (shadow.z_index, RenderItem::Shadow(index))),
+        );
+        ordered.sort_unstable_by_key(|(z, _)| *z);
+        ordered.into_iter().map(|(_, item)| item).collect()
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RenderItem {
+pub(crate) enum RenderItem {
     Shape(usize),
     Image(usize),
     Text(usize),
@@ -197,9 +272,7 @@ enum RenderItem {
 /// Draws one pass of an elevation shadow: its color at the shadow's
 /// coverage of each pixel's centre.
 fn draw_shadow(
-    frame: &mut [u8],
-    width: u32,
-    height: u32,
+    target: &mut Target,
     draw: &crate::scene::ShadowDraw,
     diagnostics: &RenderDiagnostics,
 ) {
@@ -211,7 +284,7 @@ fn draw_shadow(
     let clip = draw
         .clip
         .map(|clip| clip.translate(snap_delta.x, snap_delta.y));
-    let Some(bounds) = clip_rect_to_bounds(shadow.bounds, clip, width, height) else {
+    let Some(bounds) = clip_rect_to_bounds(shadow.bounds, clip, target) else {
         return;
     };
     let color = [
@@ -220,15 +293,14 @@ fn draw_shadow(
         draw.color.b(),
         draw.color.a(),
     ];
-    for py in bounds.min_y.max(0)..bounds.max_y.min(height as i32) {
-        for px in bounds.min_x.max(0)..bounds.max_x.min(width as i32) {
+    for py in bounds.min_y..bounds.max_y {
+        for px in bounds.min_x..bounds.max_x {
             let coverage = shadow.coverage(px as f32 + 0.5, py as f32 + 0.5);
             if coverage <= 0.0 {
                 continue;
             }
-            let idx = ((py as u32 * width + px as u32) * 4) as usize;
             blend_pixel(
-                &mut frame[idx..idx + 4],
+                target.pixel(px, py),
                 [color[0], color[1], color[2], color[3] * coverage],
                 BlendMode::SrcOver,
                 diagnostics,
@@ -237,19 +309,21 @@ fn draw_shadow(
     }
 }
 
-fn draw_shape(
-    frame: &mut [u8],
-    width: u32,
-    height: u32,
-    draw: &crate::scene::DrawShape,
-    diagnostics: &RenderDiagnostics,
-) {
+/// A shape where its snap puts it: its rect, the coverage of each pixel and
+/// the origin its gradient's dither is measured from.
+pub(crate) struct PlacedShape {
+    pub rect: Rect,
+    pub coverage: ShapeCoverage,
+    pub dither_origin: Point,
+}
+
+/// `draw` where its snap puts it; `None` when it covers nothing.
+pub(crate) fn place_shape(draw: &crate::scene::DrawShape) -> Option<PlacedShape> {
     let snap_delta = draw
         .snap_anchor
         .map(snap_delta_for_anchor)
         .unwrap_or_default();
     let rect = draw.rect.translate(snap_delta.x, snap_delta.y);
-    let clip = draw.clip;
     let dither_origin = draw
         .snap_anchor
         .map(snapped_anchor_origin)
@@ -272,10 +346,24 @@ fn draw_shape(
     } else {
         rect
     };
-    let Some(coverage) = ShapeCoverage::of(draw, rect, snap_delta) else {
+    let coverage = ShapeCoverage::of(draw, rect, snap_delta)?;
+    Some(PlacedShape {
+        rect,
+        coverage,
+        dither_origin,
+    })
+}
+
+fn draw_shape(target: &mut Target, draw: &crate::scene::DrawShape, diagnostics: &RenderDiagnostics) {
+    let Some(PlacedShape {
+        rect,
+        coverage,
+        dither_origin,
+    }) = place_shape(draw)
+    else {
         return;
     };
-    let Some(clip_bounds) = clip_rect_to_bounds(coverage.reach(rect), clip, width, height) else {
+    let Some(clip_bounds) = clip_rect_to_bounds(coverage.reach(rect), draw.clip, target) else {
         return;
     };
 
@@ -292,8 +380,7 @@ fn draw_shape(
                 if let Some(bytes) = opaque
                     && coverage >= 1.0
                 {
-                    let idx = ((py as u32 * width + px as u32) * 4) as usize;
-                    frame[idx..idx + 4].copy_from_slice(&bytes);
+                    target.pixel(px, py).copy_from_slice(&bytes);
                     continue;
                 }
 
@@ -304,13 +391,7 @@ fn draw_shape(
                 if alpha <= 0.0 {
                     continue;
                 }
-                let idx = ((py as u32 * width + px as u32) * 4) as usize;
-                blend_pixel(
-                    &mut frame[idx..idx + 4],
-                    sample,
-                    draw.blend_mode,
-                    diagnostics,
-                );
+                blend_pixel(target.pixel(px, py), sample, draw.blend_mode, diagnostics);
             }
         }
     }
@@ -476,7 +557,7 @@ fn stroke_row_runs(
 
 /// How much of a pixel a shape covers, decided once per shape: a line, an
 /// arc band, a stroked outline or a fill, placed where its snap moved it.
-enum ShapeCoverage {
+pub(crate) enum ShapeCoverage {
     Line(LineGeometry),
     Trapezoid(Trapezoid),
     Arc(ArcGeometry),
@@ -536,7 +617,7 @@ impl ShapeCoverage {
     /// The pixels it can cover: a slice's own box, which its edges reach
     /// half a pixel past, an arc's band, otherwise the shape's `rect`. An
     /// arc's `rect` is the disc around its whole circle.
-    fn reach(&self, rect: Rect) -> Rect {
+    pub(crate) fn reach(&self, rect: Rect) -> Rect {
         match self {
             Self::Trapezoid(trapezoid) => expand_rect(trapezoid.bounds(), 0.5),
             Self::Arc(arc) => expand_rect(arc.bounds(), INK_REACH),
@@ -580,13 +661,7 @@ impl ShapeCoverage {
     }
 }
 
-fn draw_image(
-    frame: &mut [u8],
-    width: u32,
-    height: u32,
-    draw: &ImageDraw,
-    diagnostics: &RenderDiagnostics,
-) {
+fn draw_image(target: &mut Target, draw: &ImageDraw, diagnostics: &RenderDiagnostics) {
     let snap_delta = draw
         .snap_anchor
         .map(snap_delta_for_anchor)
@@ -598,7 +673,7 @@ fn draw_image(
         return;
     }
 
-    let Some(clip_bounds) = clip_rect_to_bounds(rect, clip, width, height) else {
+    let Some(clip_bounds) = clip_rect_to_bounds(rect, clip, target) else {
         return;
     };
 
@@ -641,13 +716,7 @@ fn draw_image(
                 continue;
             }
 
-            let dst_idx = ((py as u32 * width + px as u32) * 4) as usize;
-            blend_pixel(
-                &mut frame[dst_idx..dst_idx + 4],
-                sample,
-                draw.blend_mode,
-                diagnostics,
-            );
+            blend_pixel(target.pixel(px, py), sample, draw.blend_mode, diagnostics);
         }
     }
 }
@@ -690,9 +759,7 @@ fn sample_image_linear(image: &cranpose_ui_graphics::ImageBitmap, x: f32, y: f32
 }
 
 fn draw_text(
-    frame: &mut [u8],
-    width: u32,
-    height: u32,
+    target: &mut Target,
     draw: &TextDraw,
     diagnostics: &RenderDiagnostics,
     text_resources: &SoftwareTextResources,
@@ -758,21 +825,11 @@ fn draw_text(
         width: image.width() as f32,
         height: image.height() as f32,
     };
-    blit_rasterized_text_image(
-        frame,
-        width,
-        height,
-        blit_rect,
-        draw.clip,
-        &image,
-        diagnostics,
-    );
+    blit_rasterized_text_image(target, blit_rect, draw.clip, &image, diagnostics);
 }
 
 fn blit_rasterized_text_image(
-    frame: &mut [u8],
-    width: u32,
-    height: u32,
+    target: &mut Target,
     rect: Rect,
     clip: Option<Rect>,
     image: &cranpose_ui_graphics::ImageBitmap,
@@ -781,7 +838,7 @@ fn blit_rasterized_text_image(
     if rect.width <= 0.0 || rect.height <= 0.0 {
         return;
     }
-    let Some(clip_bounds) = clip_rect_to_bounds(rect, clip, width, height) else {
+    let Some(clip_bounds) = clip_rect_to_bounds(rect, clip, target) else {
         return;
     };
 
@@ -807,13 +864,7 @@ fn blit_rasterized_text_image(
                 continue;
             }
 
-            let dst_idx = ((py as u32 * width + px as u32) * 4) as usize;
-            blend_pixel(
-                &mut frame[dst_idx..dst_idx + 4],
-                src,
-                BlendMode::SrcOver,
-                diagnostics,
-            );
+            blend_pixel(target.pixel(px, py), src, BlendMode::SrcOver, diagnostics);
         }
     }
 }

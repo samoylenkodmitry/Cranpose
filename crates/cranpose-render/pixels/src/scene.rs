@@ -8,7 +8,7 @@ use cranpose_ui_graphics::{
     Point, Rect, RoundedCornerShape, Stroke, Trapezoid,
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct DrawShape {
     pub rect: Rect,
     pub snap_anchor: Option<Point>,
@@ -24,7 +24,30 @@ pub(crate) struct DrawShape {
     pub blend_mode: BlendMode,
 }
 
+/// A point moved by `dx`, `dy`.
+fn shifted(point: Point, dx: f32, dy: f32) -> Point {
+    Point::new(point.x + dx, point.y + dy)
+}
+
 impl DrawShape {
+    /// The shape moved by `dx`, `dy`, with no clip.
+    pub(crate) fn translated(&self, dx: f32, dy: f32) -> Self {
+        Self {
+            rect: self.rect.translate(dx, dy),
+            snap_anchor: self.snap_anchor.map(|anchor| shifted(anchor, dx, dy)),
+            arc: self.arc.map(|arc| ArcGeometry {
+                center: shifted(arc.center, dx, dy),
+                ..arc
+            }),
+            line: self
+                .line
+                .map(|line| line.placed(shifted(line.start, dx, dy), shifted(line.end, dx, dy), 1.0)),
+            trapezoid: self.trapezoid.map(|trapezoid| trapezoid.translate(dx, dy)),
+            clip: None,
+            ..self.clone()
+        }
+    }
+
     /// The shape `params` resolved, drawn `z_index`-th.
     pub(crate) fn of_params(params: ShapeDrawParams, z_index: usize) -> Self {
         Self {
@@ -44,7 +67,7 @@ impl DrawShape {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct TextDraw {
     pub rect: Rect,
     pub snap_anchor: Option<Point>,
@@ -73,13 +96,49 @@ pub(crate) struct ImageDraw {
 
 /// One pass of a layer's elevation shadow: Skia's round rect shadow in
 /// device pixels, its color and the clip it is cut to.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct ShadowDraw {
     pub shadow: ShadowRRect,
     pub snap_anchor: Option<Point>,
     pub color: Color,
     pub z_index: usize,
     pub clip: Option<Rect>,
+}
+
+impl TextDraw {
+    /// The text moved by `dx`, `dy`, with no clip.
+    pub(crate) fn translated(&self, dx: f32, dy: f32) -> Self {
+        Self {
+            rect: self.rect.translate(dx, dy),
+            snap_anchor: self.snap_anchor.map(|anchor| shifted(anchor, dx, dy)),
+            clip: None,
+            ..self.clone()
+        }
+    }
+}
+
+impl ImageDraw {
+    /// The image moved by `dx`, `dy`, with no clip.
+    pub(crate) fn translated(&self, dx: f32, dy: f32) -> Self {
+        Self {
+            rect: self.rect.translate(dx, dy),
+            snap_anchor: self.snap_anchor.map(|anchor| shifted(anchor, dx, dy)),
+            clip: None,
+            ..self.clone()
+        }
+    }
+}
+
+impl ShadowDraw {
+    /// The shadow moved by `dx`, `dy`, with no clip.
+    pub(crate) fn translated(&self, dx: f32, dy: f32) -> Self {
+        Self {
+            shadow: self.shadow.translated(dx, dy),
+            snap_anchor: self.snap_anchor.map(|anchor| shifted(anchor, dx, dy)),
+            clip: None,
+            ..*self
+        }
+    }
 }
 
 pub(crate) struct RasterScene {
