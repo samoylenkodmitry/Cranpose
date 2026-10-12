@@ -148,6 +148,57 @@ fn vertex_shading_requires_an_aligned_placement_and_viewport_without_turns() {
 /// branches they decide removed. Every program a segment can select must
 /// still lower to WebGL's GLSL ES 300 that way.
 #[test]
+fn a_depth_pass_draws_with_the_programs_a_pass_without_one_compiled() {
+    use cranpose_ui_graphics::{FRAGMENT_KIND_LINE, FRAGMENT_KIND_STROKE, FRAGMENT_KIND_TRAPEZOID};
+
+    // A driver compiles a program once: pipelines that differ only in their
+    // depth state then cost no compile of their own.
+    let mode = crate::run_store::RunBufferMode {
+        storage: true,
+        trig_fill: false,
+    };
+    let program = |key: ShapePipelineKey| {
+        let program = key.program(mode);
+        (
+            program.vertex_entry,
+            program.fragment_entry,
+            program.constants,
+        )
+    };
+    let fill = 1 << FRAGMENT_KIND_FILL;
+    let segments = [
+        fill_segment(false, false, true),
+        fill_segment(true, false, true),
+        RecordSegment {
+            kinds: fill | (1 << FRAGMENT_KIND_STROKE),
+            ..fill_segment(false, false, true)
+        },
+        RecordSegment {
+            kinds: fill | (1 << FRAGMENT_KIND_LINE) | (1 << FRAGMENT_KIND_TRAPEZOID),
+            ..fill_segment(false, false, true)
+        },
+    ];
+    let mut interiors = Vec::new();
+    for segment in segments {
+        let plain = key(segment);
+        let tested = ShapePipelineKey {
+            depth: ShapeDepth::Tested,
+            ..plain
+        };
+        assert_eq!(program(tested), program(plain), "{plain:?}");
+        let interior = tested
+            .interior()
+            .unwrap_or_else(|| panic!("{tested:?} lays interiors down"));
+        interiors.push((interior, program(interior)));
+    }
+    assert!(
+        interiors.windows(2).all(|pair| pair[0] == pair[1]),
+        "every variant on one tier and turns lays its interiors down with one pipeline: \
+         {interiors:?}"
+    );
+}
+
+#[test]
 fn every_shape_program_lowers_to_webgl_with_its_decided_branches_removed() {
     use cranpose_ui_graphics::{
         FRAGMENT_KIND_ARC, FRAGMENT_KIND_LINE, FRAGMENT_KIND_STROKE, FRAGMENT_KIND_TRAPEZOID,

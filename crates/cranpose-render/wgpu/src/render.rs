@@ -1769,7 +1769,10 @@ impl ShapePipelineKey {
     /// The pipeline that lays down the opaque interiors of this key's
     /// draws, if they have any: plain source-over draws. A turned record's
     /// layer draws in place only under a rigid turn, which keeps the
-    /// interior's half-pixel inset from the fill's edge exact.
+    /// interior's half-pixel inset from the fill's edge exact. The interior
+    /// shader reads only the tier and the turns, so every variant shares one
+    /// pipeline per tier and turns: one compile, and draws of different
+    /// variants lay their interiors down together.
     pub(crate) fn interior(self) -> Option<Self> {
         (self.depth == ShapeDepth::Tested
             && !self.variant.rounded()
@@ -1777,7 +1780,7 @@ impl ShapePipelineKey {
             && !self.variant.ablation.material
             && !self.variant.ablation.fill)
             .then_some(Self {
-                variant: self.variant.general(),
+                variant: ShapeVariant::GENERAL,
                 depth: ShapeDepth::Interior,
                 ..self
             })
@@ -1807,7 +1810,7 @@ impl ShapePipelineKey {
 pub(crate) struct ShapeProgram {
     pub(crate) vertex_entry: &'static str,
     pub(crate) fragment_entry: &'static str,
-    pub(crate) constants: [(&'static str, f64); 15],
+    pub(crate) constants: [(&'static str, f64); 14],
 }
 
 impl ShapePipelineKey {
@@ -1836,7 +1839,6 @@ impl ShapePipelineKey {
             ("SHAPE_DITHER", f64::from(u8::from(variant.dither))),
             ("SHAPE_TURNS", turns.constant()),
             ("SHAPE_TIER", f64::from(tier as u8)),
-            ("SHAPE_DEPTH", f64::from(u8::from(depth != ShapeDepth::Off))),
             ("SHAPE_BANDS", f64::from(u8::from(mode.storage))),
             ("SHAPE_TRIG_FILLED", f64::from(u8::from(mode.trig_fill))),
             ("SHAPE_FLAT", f64::from(u8::from(variant.ablation.material))),
