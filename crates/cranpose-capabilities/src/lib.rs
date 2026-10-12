@@ -758,7 +758,7 @@ pub fn apple_usage(capabilities: &Capabilities<'_>) -> String {
          \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
          <plist version=\"1.0\">\n<dict>\n",
     );
-    let mut modes = BTreeSet::new();
+    let mut modes: BTreeSet<&str> = BTreeSet::new();
     for entry in capabilities.uses {
         modes.extend(entry.service.watch_background_modes());
         let (Some(key), Some(reason)) = (entry.service.apple_key(), entry.reason) else {

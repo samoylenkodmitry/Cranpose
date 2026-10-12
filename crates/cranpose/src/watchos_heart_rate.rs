@@ -274,7 +274,7 @@ fn latest(builder: &HKLiveWorkoutBuilder) -> HeartRate {
 fn heart_rate_type() -> Retained<HKQuantityType> {
     // SAFETY: the identifier is HealthKit's own constant, and HealthKit
     // knows the type on every watch.
-    unsafe { HKQuantityType::quantityTypeForIdentifier(HKQuantityTypeIdentifierHeartRate) }
+    unsafe { HKObjectType::quantityTypeForIdentifier(HKQuantityTypeIdentifierHeartRate) }
         .expect("HealthKit has a heart-rate type")
 }
 
