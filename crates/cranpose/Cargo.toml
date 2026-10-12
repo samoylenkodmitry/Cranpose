@@ -186,6 +186,13 @@ robot = ["cranpose-app-shell/test-support"] # Enable robot testing support (cran
 # framework and compiles a Swift shim, which an app that sells nothing should
 # not pay for. Harmless to enable on non-Apple targets — it compiles away.
 storekit = ["dep:cranpose-storekit"]
+# The wearer's heart rate on watchOS through HealthKit, behind
+# `cranpose_services::heart_rate`. Off by default because it links HealthKit,
+# which the App Store checks against the Info.plist entries and the HealthKit
+# capability that `cranpose_capabilities::Use::heart_rate` and the App ID
+# bring. Android reads the declared sensor without it, and elsewhere it
+# compiles away.
+heart-rate = ["dep:objc2-health-kit"]
 # Messages and streams between an iPhone app and the same app on its Apple
 # Watch through WatchConnectivity, behind `cranpose_services::wearable`. On
 # Android the Gradle service "wearable" brings the Wear OS link instead.
@@ -633,9 +640,11 @@ objc2-foundation = { version = "0.3", default-features = false, optional = true,
     "block2",
     "NSBundle",
     "NSData",
+    "NSDate",
     "NSError",
     "NSObject",
     "NSPathUtilities",
+    "NSSet",
     "NSString",
 ] }
 block2 = { version = "0.6", optional = true }
@@ -655,6 +664,26 @@ oslog = { version = "0.2", default-features = false, optional = true }
 objc2-watch-kit = { version = "0.3.2", default-features = false, optional = true, features = [
     "std",
     "WKInterfaceDevice",
+] }
+# The heart-rate reader (`watchos_heart_rate`), under `heart-rate`.
+objc2-health-kit = { version = "0.3.2", default-features = false, optional = true, features = [
+    "std",
+    "block2",
+    "HKDefines",
+    "HKHealthStore",
+    "HKLiveWorkoutBuilder",
+    "HKLiveWorkoutDataSource",
+    "HKObject",
+    "HKObjectType",
+    "HKQuantity",
+    "HKSample",
+    "HKStatistics",
+    "HKTypeIdentifiers",
+    "HKUnit",
+    "HKWorkout",
+    "HKWorkoutBuilder",
+    "HKWorkoutConfiguration",
+    "HKWorkoutSession",
 ] }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "linux"), not(target_os = "windows"), not(target_os = "macos"), not(target_os = "ios")))'.dependencies]

@@ -634,6 +634,9 @@ mod apple_wearable;
 #[cfg(all(feature = "watchos", target_os = "watchos"))]
 mod watchos_services;
 
+#[cfg(all(feature = "watchos", feature = "heart-rate", target_os = "watchos"))]
+mod watchos_heart_rate;
+
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod ios_media;
 

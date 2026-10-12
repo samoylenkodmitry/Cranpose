@@ -2359,6 +2359,7 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose/src/apple_microphone.rs",
         "crates/cranpose/src/apple_wearable.rs",
         "crates/cranpose/src/watchos_services.rs",
+        "crates/cranpose/src/watchos_heart_rate.rs",
         "crates/cranpose/src/desktop_accessibility.rs",
         "crates/cranpose/src/macos_cursor.rs",
         "crates/cranpose/src/windows_cursor.rs",
@@ -2415,6 +2416,7 @@ fn unsafe_blocks_have_nearby_safety_invariants() {
         "crates/cranpose-audio/src/ring.rs",
         "crates/cranpose-audio/src/backend/aaudio.rs",
         "crates/cranpose-audio/src/backend/avaudio.rs",
+        "crates/cranpose/src/watchos_heart_rate.rs",
         "crates/cranpose-render/wgpu/src/pipeline_disk_cache.rs",
         "crates/cranpose/src/android_entry.rs",
     ];

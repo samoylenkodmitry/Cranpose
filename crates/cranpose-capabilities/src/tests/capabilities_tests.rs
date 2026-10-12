@@ -277,7 +277,24 @@ fn heart_rate_asks_for_the_health_permission_and_body_sensors_only_up_to_api_35(
     let text = json(&pulse);
     assert!(text.contains("\"permissionsUpTo\""));
     assert!(text.contains("{ \"name\": \"android.permission.BODY_SENSORS\", \"maxSdk\": 35 }"));
-    assert!(apple_usage(&pulse).contains("NSHealthShareUsageDescription"));
+    let usage = apple_usage(&pulse);
+    for key in [
+        "<key>NSHealthShareUsageDescription</key>",
+        "<key>NSHealthUpdateUsageDescription</key>",
+    ] {
+        assert!(
+            usage.contains(&format!(
+                "\t{key}\n\t<string>Plays to your pulse. Nothing leaves this watch.</string>"
+            )),
+            "{usage}"
+        );
+    }
+    assert!(
+        usage.contains(
+            "\t<key>WKBackgroundModes</key>\n\t<array>\n\t\t<string>workout-processing</string>\n\t</array>\n"
+        ),
+        "{usage}"
+    );
     assert!(rust_source(&pulse).contains("Use::heart_rate(\"Plays to your pulse."));
 }
 
@@ -287,4 +304,7 @@ fn an_application_that_does_not_declare_heart_rate_names_no_body_sensor() {
     assert!(!manifest.contains("BODY_SENSORS"));
     assert!(!manifest.contains("READ_HEART_RATE"));
     assert!(android_permissions_up_to(&SCANNER).is_empty());
+    let usage = apple_usage(&SCANNER);
+    assert!(!usage.contains("NSHealth"), "{usage}");
+    assert!(!usage.contains("WKBackgroundModes"), "{usage}");
 }

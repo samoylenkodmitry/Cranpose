@@ -1,8 +1,8 @@
 #![expect(unsafe_code)]
 
 //! The platform services of the watchOS host: the application's folders,
-//! taps, the microphone, and with the `wearable` feature the link to the
-//! iPhone app.
+//! taps, the microphone, with the `heart-rate` feature the wearer's pulse,
+//! and with the `wearable` feature the link to the iPhone app.
 
 use std::sync::{Arc, Once};
 
@@ -22,6 +22,8 @@ pub(crate) fn register() {
         set_host_controller(Arc::new(WatchHost));
         set_platform_haptics(Arc::new(WatchHaptics));
         crate::apple_microphone::register();
+        #[cfg(feature = "heart-rate")]
+        crate::watchos_heart_rate::register();
         #[cfg(feature = "wearable")]
         crate::apple_wearable::register();
     });
