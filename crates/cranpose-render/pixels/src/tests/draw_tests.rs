@@ -714,3 +714,99 @@ fn a_line_covers_each_pixel_as_its_geometry_says() {
         }
     }
 }
+
+/// Asserts every pixel of a white shape drawn over the clear colour has the
+/// grey its coverage gives it. A pixel the rasterizer skips but the shape
+/// covers stays the clear colour and fails here.
+fn assert_frame_matches_coverage(label: &str, frame: &[u8], coverage: impl Fn(Point) -> f32) {
+    for y in 0..CANVAS {
+        for x in 0..CANVAS {
+            let expected =
+                18.0 + (255.0 - 18.0) * coverage(Point::new(x as f32 + 0.5, y as f32 + 0.5));
+            let actual = f32::from(frame[((y * CANVAS + x) * 4) as usize]);
+            assert!(
+                (actual - expected).abs() <= 1.0,
+                "{label}: pixel ({x}, {y}) is {actual}, its coverage says {expected}"
+            );
+        }
+    }
+}
+
+#[test]
+fn arcs_cover_each_pixel_as_their_geometry_says() {
+    use std::f32::consts::{FRAC_PI_2, PI};
+
+    use cranpose_ui_graphics::{ArcGeometry, StrokeCap, TAU};
+    let center = Point::new(31.3, 32.7);
+    for (inner, outer) in [(0.0, 9.0), (10.0, 11.0), (19.25, 21.75), (24.0, 30.0)] {
+        for (start, sweep) in [
+            (0.0, TAU),
+            (0.2, 0.5),
+            (-0.4, FRAC_PI_2),
+            (PI - 0.3, 0.6),
+            (1.0, 4.5),
+        ] {
+            for cap in [StrokeCap::Butt, StrokeCap::Round, StrokeCap::Square] {
+                let arc = ArcGeometry::new(center, inner, outer, start, sweep, cap);
+                // The recorder keeps the disc around the whole circle as the
+                // arc's rect.
+                let mut shape = shape_template(Rect {
+                    x: center.x - outer,
+                    y: center.y - outer,
+                    width: outer * 2.0,
+                    height: outer * 2.0,
+                });
+                shape.arc = Some(arc);
+                let frame = render_shape(shape);
+                assert_frame_matches_coverage(
+                    &format!("arc {inner}..{outer} from {start} by {sweep} {cap:?}"),
+                    &frame,
+                    |point| shape_sdf::arc_coverage(point, &arc),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn stroked_rounded_rects_cover_each_pixel_as_their_geometry_says() {
+    use cranpose_ui_graphics::{RoundedCornerShape, Stroke, StrokeCap};
+    let rect = Rect {
+        x: 6.4,
+        y: 9.8,
+        width: 50.5,
+        height: 41.25,
+    };
+    for shape_radii in [
+        None,
+        Some(RoundedCornerShape::uniform(0.3)),
+        Some(RoundedCornerShape::uniform(6.0)),
+        Some(RoundedCornerShape::new(2.0, 11.0, 0.0, 17.5)),
+        Some(RoundedCornerShape::uniform(100.0)),
+    ] {
+        for half_width in [0.5, 1.5, 4.25] {
+            for join in [StrokeJoin::Miter, StrokeJoin::Round, StrokeJoin::Bevel] {
+                let stroke = Stroke {
+                    width: half_width * 2.0,
+                    cap: StrokeCap::Butt,
+                    join,
+                };
+                let mut shape = shape_template(rect);
+                shape.shape = shape_radii;
+                shape.stroke = Some(stroke);
+                let frame = render_shape(shape);
+                let radii = shape_radii.map(|corners| {
+                    corners.resolve(
+                        (rect.width - half_width * 2.0).max(0.0),
+                        (rect.height - half_width * 2.0).max(0.0),
+                    )
+                });
+                assert_frame_matches_coverage(
+                    &format!("stroke {shape_radii:?} half width {half_width} {join:?}"),
+                    &frame,
+                    |point| shape_sdf::stroked_rect_coverage(point, rect, radii, half_width, join),
+                );
+            }
+        }
+    }
+}
