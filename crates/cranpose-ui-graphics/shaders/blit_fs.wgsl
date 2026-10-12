@@ -10,6 +10,7 @@ struct BlitUniforms {
     sampling: vec4<f32>,     // x = 0 => linear, x = 1 => nearest texel
     dest_clip: vec4<f32>,    // left, top, right, bottom of the destination rect in clip space
     source_viewport: vec4<f32>, // x, y, width, height in source pixels
+    depth: vec4<f32>,        // x = the quad's depth: its place in a pass that lays opaque interiors down first
 }
 @group(1) @binding(0) var<uniform> blit: BlitUniforms;
 
@@ -26,7 +27,7 @@ fn blit_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     output.position = vec4<f32>(
         mix(blit.dest_clip.x, blit.dest_clip.z, corner.x),
         mix(blit.dest_clip.w, blit.dest_clip.y, corner.y),
-        0.0,
+        blit.depth.x,
         1.0,
     );
     return output;

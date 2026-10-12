@@ -5,7 +5,7 @@ fn projective_blit_vs(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
     let x = (input.position.x / blit.viewport.x) * 2.0 - 1.0;
     let y = 1.0 - (input.position.y / blit.viewport.y) * 2.0;
-    output.clip_position = vec4<f32>(x, y, 0.0, 1.0);
+    output.clip_position = vec4<f32>(x, y, blit.depth.x, 1.0);
     return output;
 }
 
