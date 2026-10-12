@@ -51,6 +51,20 @@ generated workspace at a checkout. Published app manifests use the resolved
 published dependency. The generated runner starts with app features disabled;
 pass `--features` to select app features.
 
+## Sound and haptics
+
+With the `cranpose/audio` feature, `cranpose_audio` plays through an
+`AVAudioEngine` whose source node runs the mixer. The audio session is in the
+ambient category: the sound mixes with other apps' audio and stays quiet while
+the watch is silenced. The engine starts on the first sound and pauses after
+the mixer goes idle, and a new one opens after the system stops it, for
+instance when headphones connect.
+
+`HapticFeedback` events map to WatchKit's taps. Vibrations and waveforms play
+the click, the one tap that WatchKit plays without a tone: one click for a
+vibration, and one where each buzz of a waveform starts. The click has a
+single strength, so amplitudes have no effect on a watch.
+
 ## Validation
 
 `python3 smoke.py BUNDLE EVIDENCE_DIRECTORY` installs and launches a built

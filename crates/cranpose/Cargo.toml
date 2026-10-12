@@ -137,8 +137,8 @@ web = [
 # The real-time audio engine (`cranpose_audio`), registered into
 # `cranpose_services::audio`. Off by default: an app that plays no sound should
 # not carry a mixer or an output device. On Android this is the AAudio backend,
-# which needs no Java glue.
-audio = ["dep:cranpose-audio", "cranpose-audio/aaudio"]
+# which needs no Java glue, and on watchOS AVAudioEngine.
+audio = ["dep:cranpose-audio", "cranpose-audio/aaudio", "cranpose-audio/avaudio"]
 # Adds the desktop output device (cpal) so sound works while developing on
 # macOS, Windows or Linux. Linux builds need the ALSA development headers.
 audio-desktop = ["audio", "cranpose-audio/cpal-backend"]

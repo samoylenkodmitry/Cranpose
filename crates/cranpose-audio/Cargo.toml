@@ -9,7 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "Real-time audio engine for Cranpose (AAudio on Android/Wear OS, cpal on desktop)"
+description = "Real-time audio engine for Cranpose (AAudio on Android/Wear OS, AVAudioEngine on watchOS, cpal on desktop)"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -26,8 +26,18 @@ parking_lot = "0.12.5"
 [features]
 # The AAudio output device. Costs nothing off Android: `ndk` is only declared
 # for the Android target, and cranpose already depends on it there.
-default = ["aaudio"]
+default = ["aaudio", "avaudio"]
 aaudio = ["dep:ndk"]
+# The AVAudioEngine output device on watchOS. Costs nothing elsewhere: its
+# dependencies are only declared for the watchOS target.
+avaudio = [
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "dep:objc2-avf-audio",
+    "dep:objc2-core-audio-types",
+    "dep:block2",
+    "dep:dispatch2",
+]
 # The cpal output device for desktop development. Off by default because cpal
 # links a system audio library (ALSA on Linux, CoreAudio on macOS, WASAPI on
 # Windows) that a build machine may not have headers for.
@@ -35,6 +45,35 @@ cpal-backend = ["dep:cpal"]
 
 [target.'cfg(target_os = "android")'.dependencies]
 ndk = { version = "0.9.0", default-features = false, features = ["audio"], optional = true }
+
+[target.'cfg(target_os = "watchos")'.dependencies]
+objc2 = { version = "0.6", optional = true }
+objc2-foundation = { version = "0.3", default-features = false, optional = true, features = [
+    "std",
+    "NSError",
+    "NSString",
+] }
+objc2-avf-audio = { version = "0.3.2", default-features = false, optional = true, features = [
+    "std",
+    "block2",
+    "objc2-core-audio-types",
+    "AVAudioEngine",
+    "AVAudioFormat",
+    "AVAudioIONode",
+    "AVAudioMixerNode",
+    "AVAudioNode",
+    "AVAudioSession",
+    "AVAudioSessionTypes",
+    "AVAudioSourceNode",
+    "AVAudioTypes",
+] }
+objc2-core-audio-types = { version = "0.3.2", default-features = false, optional = true, features = [
+    "std",
+    "objc2",
+    "CoreAudioBaseTypes",
+] }
+block2 = { version = "0.6", optional = true }
+dispatch2 = { version = "0.3", optional = true }
 
 [target.'cfg(not(any(target_os = "android", target_arch = "wasm32")))'.dependencies]
 cpal = { version = "0.18.2", optional = true }
