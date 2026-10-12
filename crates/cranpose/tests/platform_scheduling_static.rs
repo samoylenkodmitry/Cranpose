@@ -2149,6 +2149,7 @@ fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
         "apple_microphone.rs",
         "apple_wearable.rs",
         "watchos_services.rs",
+        "watchos_heart_rate.rs",
         "desktop_accessibility.rs",
         "macos_cursor.rs",
         "windows_cursor.rs",
