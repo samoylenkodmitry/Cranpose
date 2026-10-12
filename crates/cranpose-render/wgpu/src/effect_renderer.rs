@@ -1051,15 +1051,16 @@ fn fullscreen_pipeline_job(
     let shader = shader.clone();
     let constants = constants.to_vec();
     Box::new(move || {
+        let stages = shader.stages((crate::render::FULLSCREEN_VS, fragment_entry), &constants);
         crate::render::create_fullscreen_strip_pipeline(
             &device,
             cache.as_ref(),
             &format!("effect {label} entry={fragment_entry}"),
             label,
             shader.layout(),
-            shader.module(),
+            (&stages.vertex, &stages.fragment),
             fragment_entry,
-            &constants,
+            stages.constants,
             wgpu::ColorTargetState {
                 format: surface_format,
                 blend: Some(blend),
@@ -1083,7 +1084,7 @@ fn projective_pipeline_job(
     let shader = shader.clone();
     let constants = [("PROJECTIVE_TEXELS", if texels { 1.0 } else { 0.0 })];
     Box::new(move || {
-        let module = shader.module();
+        let stages = shader.stages(("projective_blit_vs", "projective_blit_fs"), &constants);
         crate::render::create_render_pipeline_logged(
             &device,
             cache.as_ref(),
@@ -1092,7 +1093,7 @@ fn projective_pipeline_job(
                 label: Some(label),
                 layout: Some(shader.layout()),
                 vertex: wgpu::VertexState {
-                    module,
+                    module: &stages.vertex,
                     entry_point: Some("projective_blit_vs"),
                     buffers: &[Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<ProjectiveBlitVertex>() as u64,
@@ -1104,12 +1105,12 @@ fn projective_pipeline_job(
                         }],
                     })],
                     compilation_options: wgpu::PipelineCompilationOptions {
-                        constants: &constants,
+                        constants: stages.constants,
                         ..wgpu::PipelineCompilationOptions::default()
                     },
                 },
                 fragment: Some(wgpu::FragmentState {
-                    module,
+                    module: &stages.fragment,
                     entry_point: Some("projective_blit_fs"),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: surface_format,
@@ -1117,7 +1118,7 @@ fn projective_pipeline_job(
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                     compilation_options: wgpu::PipelineCompilationOptions {
-                        constants: &constants,
+                        constants: stages.constants,
                         ..wgpu::PipelineCompilationOptions::default()
                     },
                 }),
