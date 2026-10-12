@@ -341,19 +341,88 @@ fn a_rounded_bar_at_a_fractional_place_inside_a_panel_that_holds_it_draws_in_pla
 }
 
 #[test]
-fn a_rounded_bar_a_panel_cuts_keeps_its_surface() {
+fn a_rounded_bar_a_panel_cuts_draws_in_place_as_its_surface_would() {
     let Some((frames, isolated)) = both_graphs(|offscreen| in_panel(60.0, offscreen)) else {
         return;
     };
-    assert_eq!(
-        isolated,
-        [1, 1],
-        "a clip that cuts the rounded one leaves a surface"
+    assert_eq!(isolated, [0, 1], "in place, then through a surface");
+    // In place the panel cuts the bar as it cuts anything else it clips: it
+    // keeps the pixels whose centres it holds. The surface's composite keeps
+    // the column its edge crosses too.
+    let panel_right = 10.25 + 60.0;
+    let past_panel = |x: usize| x as f32 + 0.5 > panel_right;
+    let page = &frames[0][..4];
+    let leaked: Vec<_> = (0..HEIGHT as usize)
+        .flat_map(|y| (0..WIDTH as usize).map(move |x| (x, y)))
+        .filter(|&(x, y)| {
+            let at = (y * WIDTH as usize + x) * 4;
+            past_panel(x) && &frames[0][at..at + 4] != page
+        })
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "nothing shows past the panel: {leaked:?}"
     );
+    let differing = support::differing_pixels(WIDTH, &frames[0], &frames[1]);
+    let off_edge: Vec<_> = differing
+        .iter()
+        .filter(|(x, y, _, _)| !on_the_bar_edge(*x, *y) && !past_panel(*x))
+        .copied()
+        .collect();
+    assert!(
+        off_edge.is_empty(),
+        "inside the panel only the bar's edge differs: {}",
+        support::describe_differing(&off_edge)
+    );
+}
+
+/// `in_panel`'s panel, 60 wide so it cuts the bar, inside a layer turned by
+/// 12 degrees about the page's origin and moved right, drawn in place or
+/// `offscreen`.
+fn turned_panel(offscreen: bool) -> RenderGraph {
+    let (sin, cos) = 12f32.to_radians().sin_cos();
+    let turn = ProjectiveTransform::from_homogeneous([
+        [cos, -sin, 30.0],
+        [sin, cos, 0.0],
+        [0.0, 0.0, 1.0],
+    ]);
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: WIDTH as f32,
+        height: HEIGHT as f32,
+    };
+    let mut page = in_panel(60.0, false);
+    let content = std::mem::take(&mut page.root.children);
+    page.root.children = vec![RenderNode::Layer(Box::new(
+        shared_test_support::layer_node(
+            bounds,
+            turn,
+            GraphicsLayer {
+                compositing_strategy: if offscreen {
+                    CompositingStrategy::Offscreen
+                } else {
+                    CompositingStrategy::Auto
+                },
+                ..GraphicsLayer::default()
+            },
+            content,
+        ),
+    ))];
+    page
+}
+
+#[test]
+fn a_turned_layer_whose_panel_cuts_a_rounded_bar_draws_as_its_surface_would() {
+    // Under a turn no scissor cuts the bar; only the turned layer's surface
+    // keeps the panel's cut.
+    let Some((frames, _)) = both_graphs(turned_panel) else {
+        return;
+    };
     let differing = support::differing_pixels(WIDTH, &frames[0], &frames[1]);
     assert!(
         differing.is_empty(),
-        "both draw through the surface: {}",
+        "the turned layer draws through its surface, which alone keeps the panel's cut: {}",
         support::describe_differing(&differing)
     );
 }

@@ -127,6 +127,21 @@ pub(crate) fn canonicalized_scaled_rect(rect: Rect, scale: f32) -> Rect {
     }
 }
 
+/// `rect` in device pixels at `scale`: snapped to the device grid when
+/// `snapped`.
+pub(crate) fn device_rect(rect: Rect, scale: f32, snapped: bool) -> Rect {
+    if snapped {
+        canonicalized_scaled_rect(rect, scale)
+    } else {
+        Rect {
+            x: rect.x * scale,
+            y: rect.y * scale,
+            width: rect.width * scale,
+            height: rect.height * scale,
+        }
+    }
+}
+
 pub(crate) fn canonicalized_scaled_quad(quad: [[f32; 2]; 4], scale: f32) -> [[f32; 2]; 4] {
     quad.map(|[x, y]| {
         [

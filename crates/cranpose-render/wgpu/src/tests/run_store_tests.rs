@@ -245,7 +245,7 @@ fn a_placement_folds_its_snap_delta_clip_and_filter_into_the_uniform() {
             width: 3.0,
             height: 4.0,
         }),
-        clip_radius: 0.0,
+        rounding: None,
         alpha: 0.5,
         color_filter: Some(Arc::new(ColorFilter::modulate(Color(0.5, 0.25, 1.0, 1.0)))),
     };

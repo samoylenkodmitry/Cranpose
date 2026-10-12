@@ -5,7 +5,7 @@ use cranpose_core::collections::map::{Entry, HashMap};
 use cranpose_render_common::{graph::DrawCommandId, style_shared::apply_layer_to_color};
 use cranpose_ui_graphics::{
     ARC_BUCKETS, BrushRecord, Color, FRAGMENT_KIND_ARC, GradientStopRecord, GraphicsLayer,
-    RecordLane, RecordSegment, RecordTables, ShapeRecordBody, ShapeRecordCurve,
+    RecordLane, RecordSegment, RecordTables, Rect, ShapeRecordBody, ShapeRecordCurve,
     band_class_segments, strip_index_pattern, strip_indices, strip_vertices,
 };
 
@@ -17,8 +17,7 @@ use crate::{
         place_upload, write_mapped,
     },
     geometry::{
-        SegmentTransform, canonicalized_scaled_rect, snap_delta_for_anchor,
-        snapped_anchor_device_origin,
+        SegmentTransform, device_rect, snap_delta_for_anchor, snapped_anchor_device_origin,
     },
     idle_pool::IDLE_FRAMES,
     run_geometry::ShapeFill,
@@ -140,18 +139,31 @@ pub(crate) struct PlacementData {
 /// `placement`'s clip in device pixels at `root_scale` as x, y, width and
 /// height: snapped to the device grid when the placement is.
 pub(crate) fn device_clip(placement: &Placement, root_scale: f32) -> Option<[f32; 4]> {
-    let clip = placement.clip?;
-    let device = if placement.snap_anchor.is_some() {
-        canonicalized_scaled_rect(clip, root_scale)
-    } else {
-        cranpose_ui_graphics::Rect {
-            x: clip.x * root_scale,
-            y: clip.y * root_scale,
-            width: clip.width * root_scale,
-            height: clip.height * root_scale,
-        }
-    };
-    Some([device.x, device.y, device.width, device.height])
+    placement
+        .clip
+        .map(|clip| placement_device_rect(placement, clip, root_scale))
+}
+
+/// The rect a placement's records test in device pixels: a rounded clip's
+/// whole rect, from which the draw's scissor cuts what the clips above
+/// leave, else the clip.
+fn tested_device_clip(placement: &Placement, root_scale: f32) -> Option<[f32; 4]> {
+    let rounding = placement.rounding.filter(|_| placement.clip_rounded());
+    rounding
+        .map(|rounding| rounding.rect)
+        .or(placement.clip)
+        .map(|clip| placement_device_rect(placement, clip, root_scale))
+}
+
+/// `rect` in device pixels at `root_scale` as x, y, width and height:
+/// snapped to the device grid when `placement` is.
+pub(crate) fn placement_device_rect(
+    placement: &Placement,
+    rect: Rect,
+    root_scale: f32,
+) -> [f32; 4] {
+    let device = device_rect(rect, root_scale, placement.snap_anchor.is_some());
+    [device.x, device.y, device.width, device.height]
 }
 
 impl PlacementData {
@@ -170,7 +182,7 @@ impl PlacementData {
         if placement.paints() {
             flags |= PLACEMENT_PAINTED;
         }
-        let clip = match device_clip(placement, root_scale) {
+        let clip = match tested_device_clip(placement, root_scale) {
             Some(clip) => {
                 flags |= PLACEMENT_CLIPPED;
                 clip
@@ -215,11 +227,10 @@ impl PlacementData {
             clip,
             dither_origin: [dither_origin.x, dither_origin.y],
             alpha: placement.alpha,
-            clip_radius: if placement.clip_rounded() {
-                placement.clip_radius * root_scale
-            } else {
-                0.0
-            },
+            clip_radius: placement
+                .rounding
+                .filter(|_| placement.clip_rounded())
+                .map_or(0.0, |rounding| rounding.radius * root_scale),
             color_matrix,
             color_offset,
             transform,
