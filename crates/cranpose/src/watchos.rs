@@ -192,16 +192,14 @@ impl Application {
 
     /// The current picture as sprites for SpriteKit, with the textures it
     /// first uses and those it no longer does; see
-    /// [`cranpose_render_pixels::sprites`]. Composed when the picture changed;
-    /// asked again for an unchanged picture, it uploads and releases nothing.
+    /// [`cranpose_render_pixels::sprites`]. Composed when the picture
+    /// changed; until it changes again, the same frame, uploads included.
     pub fn sprites(&mut self) -> &SpriteFrame {
         if self.sprites_stale {
             self.shell.primary().with_renderer(|renderer| {
                 renderer.compose_sprites(&mut self.sprites, self.width, self.height, self.density);
             });
             self.sprites_stale = false;
-        } else {
-            self.sprites.settle();
         }
         &self.sprites
     }

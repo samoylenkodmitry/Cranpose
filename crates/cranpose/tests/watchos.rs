@@ -185,7 +185,6 @@ fn sprites_carry_shapes_as_numbers_and_text_as_a_kept_texture() {
         .expect("the text is a texture sprite");
 
     assert!(!app.tick(16_000_001), "an unchanged picture presents nothing");
-    assert!(app.sprites().uploads().is_empty());
     assert_eq!(sprite_records(&mut app), first);
 
     shift_sink.get().expect("composed").set(3.0);

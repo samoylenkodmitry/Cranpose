@@ -131,13 +131,6 @@ impl SpriteFrame {
         &self.releases
     }
 
-    /// Keeps the sprites and forgets the uploads and releases already handed
-    /// over, for a frame whose picture did not change.
-    pub fn settle(&mut self) {
-        self.uploads.clear();
-        self.releases.clear();
-    }
-
     pub(crate) fn compose(
         &mut self,
         scene: &RasterScene,
