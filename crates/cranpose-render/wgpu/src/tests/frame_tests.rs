@@ -179,8 +179,12 @@ fn a_backdrop_keeps_its_capture_and_records_the_part_of_it_inside_the_effects_ou
         (planned.visible, planned.capture_rect, planned.support)
     };
     let (whole_visible, whole_capture, whole_support) = plan(shader.clone());
-    assert_eq!(whole_visible, DeviceRect::from_logical(rect, 2.0));
-    assert_eq!(whole_capture, whole_visible.expand(10.0).snap_out());
+    assert_eq!(
+        whole_visible,
+        DeviceRect::from_logical(rect, 2.0).expand(6.0),
+        "the effect writes over its rect and the output padding around it"
+    );
+    assert_eq!(whole_capture, whole_visible.expand(4.0).snap_out());
     assert_eq!(whole_support, None);
 
     shader.set_output_support(Some(Rect {

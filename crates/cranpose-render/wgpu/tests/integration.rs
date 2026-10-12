@@ -33,6 +33,7 @@ mod every_screen_pipelines;
 mod folded_stages;
 mod font_feature_settings_pixels;
 mod frame_driven_layer;
+mod glass_button_shadow_reach;
 mod glass_layer_cache;
 mod glass_output_support;
 mod glass_reference_shader;

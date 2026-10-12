@@ -173,7 +173,10 @@ pub(crate) fn split_scissors(
         return None;
     }
     let reach = reach(shader, specialization, origin, layer_pixel_rect);
+    // Without a drop shadow, a ring shadow or an ellipse blend, the glass
+    // writes nothing past its outline and the gradient band around it.
     let bounds = if raised(specialization, "GLASS_SHADOW_OFF")
+        && raised(specialization, "GLASS_RING_SHADOW_OFF")
         && raised(specialization, "GLASS_ELLIPSE_BLEND_OFF")
     {
         let visible = pixel_rect(
