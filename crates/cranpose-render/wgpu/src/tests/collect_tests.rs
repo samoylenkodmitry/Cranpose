@@ -214,7 +214,7 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
                 WalkContext {
                     offset: Point::new(0.3, 0.7),
                     visual_clip: None,
-                    clip_radius: 0.0,
+                    rounding: None,
                     snap_anchor: None,
                     translated,
                     raster_scale: RasterScale::Exact(1.0),
@@ -369,37 +369,6 @@ fn a_rounded_layer_with_uneven_corners_isolates_shapes_in_a_corner() {
 }
 
 #[test]
-fn a_rounded_layer_under_a_clip_that_cuts_it_or_another_rounded_clip_isolates() {
-    let layer = rounded_layer(
-        20.0,
-        shapes_run(vec![white_rect(rect(0.0, 0.0, 200.0, 100.0))]),
-    );
-    let context = |visual_clip: Option<Rect>, clip_radius: f32| WalkContext {
-        offset: Point::new(10.0, 10.0),
-        visual_clip,
-        clip_radius,
-        snap_anchor: None,
-        translated: false,
-        raster_scale: RasterScale::Exact(1.0),
-        light: ShadowLight::for_window(100.0, 100.0, 1.0, 1.0),
-        wants_pixel_sensitive: false,
-        update: 0,
-    };
-    assert!(matches!(
-        placement_in(&layer, &context(Some(rect(0.0, 0.0, 400.0, 400.0)), 0.0)),
-        Placement::DirectRounded(..)
-    ));
-    assert!(matches!(
-        placement_in(&layer, &context(Some(rect(0.0, 0.0, 150.0, 400.0)), 0.0)),
-        Placement::Isolated
-    ));
-    assert!(matches!(
-        placement_in(&layer, &context(Some(rect(0.0, 0.0, 400.0, 400.0)), 8.0)),
-        Placement::Isolated
-    ));
-}
-
-#[test]
 fn a_rounded_layer_its_parent_clip_holds_draws_in_place_whatever_the_float_sums() {
     // From the workspace port on a phone: the bar lies inside the panel's
     // clip, but the panel clip met with the bar's rect sums its width an
@@ -419,7 +388,7 @@ fn a_rounded_layer_its_parent_clip_holds_draws_in_place_whatever_the_float_sums(
     let panel = WalkContext {
         offset: Point::default(),
         visual_clip: Some(rect(900.0, 204.33334, 380.0, 147.66666)),
-        clip_radius: 0.0,
+        rounding: None,
         snap_anchor: None,
         translated: false,
         raster_scale: RasterScale::Exact(1.0),
@@ -431,23 +400,27 @@ fn a_rounded_layer_its_parent_clip_holds_draws_in_place_whatever_the_float_sums(
         placement_in(&bar, &panel),
         Placement::DirectRounded(..)
     ));
+    let rounding = Some(ClipRounding {
+        rect: rect(979.3333, 220.33334, 218.33333, 4.0),
+        radius: 2.0,
+    });
     let rounded = WalkContext {
         visual_clip: Some(rect(979.3333, 220.33334, 218.33333, 4.0)),
-        clip_radius: 2.0,
+        rounding,
         ..panel
     };
     assert_eq!(
-        radius_within(Some(rect(979.3333, 220.33334, 218.33333, 4.0)), &rounded),
-        2.0
+        rounding_within(Some(rect(979.3333, 220.33334, 218.33333, 4.0)), &rounded),
+        rounding
     );
     assert_eq!(
-        radius_within(None, &rounded),
-        2.0,
+        rounding_within(None, &rounded),
+        rounding,
         "a layer with no clip keeps the rounding"
     );
     assert_eq!(
-        radius_within(Some(rect(979.3333, 220.33334, 100.0, 4.0)), &rounded),
-        0.0,
+        rounding_within(Some(rect(979.3333, 220.33334, 100.0, 4.0)), &rounded),
+        None,
         "a clip that cuts the rounded one keeps none"
     );
 }
@@ -480,13 +453,13 @@ fn shapes_of_a_rounded_layer_drawn_in_place_take_its_radius_and_nothing_else_doe
         scene.children.is_empty(),
         "the rounded layer composites nothing"
     );
-    let radii: Vec<f32> = scene
+    let radii: Vec<Option<f32>> = scene
         .scene
         .runs
         .iter()
-        .map(|run| run.placement.clip_radius)
+        .map(|run| run.placement.rounding.map(|rounding| rounding.radius))
         .collect();
-    assert_eq!(radii, vec![20.0, 0.0]);
+    assert_eq!(radii, vec![Some(20.0), None]);
     assert_eq!(
         scene.scene.runs[0].placement.clip,
         Some(rect(0.0, 0.0, 200.0, 100.0))

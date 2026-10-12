@@ -28,6 +28,28 @@ impl SnapAnchor {
     }
 }
 
+/// The rounded rect of a clip that records drawn in place take coverage
+/// from, as a layer clipped to it composites through the same mask: whole,
+/// in logical units, even where a rect clip above cuts into it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ClipRounding {
+    pub rect: Rect,
+    pub radius: f32,
+}
+
+/// Edges this close count as one: a clip met through other sums lands a few
+/// ulps away from the rect it bounds.
+const CLIP_HOLD_SLACK: f32 = 1e-3;
+
+/// Whether `outer` holds `inner` whole, its edges taken within
+/// [`CLIP_HOLD_SLACK`].
+pub(crate) fn clip_holds(outer: Rect, inner: Rect) -> bool {
+    inner.x >= outer.x - CLIP_HOLD_SLACK
+        && inner.y >= outer.y - CLIP_HOLD_SLACK
+        && inner.x + inner.width <= outer.x + outer.width + CLIP_HOLD_SLACK
+        && inner.y + inner.height <= outer.y + outer.height + CLIP_HOLD_SLACK
+}
+
 /// Where a recording's record space lands in the scene: the logical
 /// offset of its origin, the rigid anchor it snaps with, the clip its
 /// records take, and the paint every record takes on the way to the
@@ -36,11 +58,10 @@ impl SnapAnchor {
 pub(crate) struct Placement {
     pub offset: Point,
     pub snap_anchor: Option<SnapAnchor>,
+    /// The rect nothing outside of is drawn; within a rounding, the part
+    /// of its rect that the clips above leave.
     pub clip: Option<Rect>,
-    /// The corner radius `clip` is rounded with, in logical units; `0.0`
-    /// for a rect clip. Records take the rounded rect's coverage, as a layer
-    /// clipped to it composites through the same mask.
-    pub clip_radius: f32,
+    pub rounding: Option<ClipRounding>,
     pub alpha: f32,
     /// Boxed: few layers filter, and inline the 4x5 matrix took 84 of a
     /// run draw's 184 bytes.
@@ -59,23 +80,29 @@ impl Placement {
             offset,
             snap_anchor,
             clip,
-            clip_radius: 0.0,
+            rounding: None,
             alpha: 1.0,
             color_filter: None,
         }
     }
 
-    /// The placement with `clip` rounded at `radius`.
-    pub(crate) fn with_clip_radius(self, radius: f32) -> Self {
-        Self {
-            clip_radius: radius,
-            ..self
-        }
+    /// The placement whose records take the coverage of `rounding`.
+    pub(crate) fn with_rounding(self, rounding: Option<ClipRounding>) -> Self {
+        Self { rounding, ..self }
     }
 
     /// Whether the clip has rounded corners the records take coverage from.
     pub(crate) fn clip_rounded(&self) -> bool {
-        self.clip.is_some() && self.clip_radius > 0.0
+        self.clip.is_some() && self.rounding.is_some()
+    }
+
+    /// Whether a rect clip above cuts into the rounding: only the draw's
+    /// scissor, which a draw under a turn has none of, cuts its records.
+    pub(crate) fn rounding_cut(&self) -> bool {
+        self.rounding.is_some_and(|rounding| {
+            self.clip
+                .is_none_or(|clip| !clip_holds(clip, rounding.rect))
+        })
     }
 
     /// A placement that paints its records with the layer's alpha and
@@ -91,7 +118,7 @@ impl Placement {
             offset,
             snap_anchor,
             clip,
-            clip_radius: 0.0,
+            rounding: None,
             alpha: layer.alpha.clamp(0.0, 1.0),
             color_filter: layer.color_filter.as_ref().map(|filter| Arc::new(*filter)),
         }
@@ -286,9 +313,8 @@ pub(crate) struct ImageDraw {
     pub color_filter: Option<ColorFilter>,
     pub sampling: ImageSampling,
     pub clip: Option<Rect>,
-    /// The corner radius of `clip` when the image takes a rounded clip in
-    /// place; `0.0` for a rect clip.
-    pub clip_radius: f32,
+    /// The rounded clip the image takes in place.
+    pub rounding: Option<ClipRounding>,
     pub blend_mode: BlendMode,
     pub src_rect: Option<Rect>,
     pub motion_context_animated: bool,
@@ -597,7 +623,7 @@ impl CompositorScene {
         alpha: f32,
         color_filter: Option<ColorFilter>,
         sampling: ImageSampling,
-        (clip, clip_radius): (Option<Rect>, f32),
+        (clip, rounding): (Option<Rect>, Option<ClipRounding>),
         src_rect: Option<Rect>,
         blend_mode: BlendMode,
         motion_context_animated: bool,
@@ -615,7 +641,7 @@ impl CompositorScene {
             color_filter,
             sampling,
             clip,
-            clip_radius,
+            rounding,
             blend_mode,
             src_rect,
             motion_context_animated,

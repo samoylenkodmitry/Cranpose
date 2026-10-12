@@ -108,11 +108,7 @@ pub(crate) fn hash_capture_ops<H: Hasher>(
                     0u8.hash(state);
                     hash_run_item_with_clip(
                         run,
-                        if run.placement.clip_rounded() {
-                            run.placement.clip
-                        } else {
-                            window.clipped_logical(run.placement.clip, scale)
-                        },
+                        window.clipped_logical(run.placement.clip, scale),
                         window.x,
                         window.y,
                         scale,

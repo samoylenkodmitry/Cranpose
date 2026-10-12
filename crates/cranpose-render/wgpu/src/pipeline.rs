@@ -33,8 +33,8 @@ use cranpose_ui_graphics::{
 };
 
 use crate::scene::{
-    CompositorScene, DrawnText, Placement, RRectShadowDraw, RunDraw, Scene, ShadowDraw, SnapAnchor,
-    TextDraw,
+    ClipRounding, CompositorScene, DrawnText, Placement, RRectShadowDraw, RunDraw, Scene,
+    ShadowDraw, SnapAnchor, TextDraw,
 };
 
 mod style;
@@ -1746,7 +1746,7 @@ pub(crate) fn push_draw_primitive(
     layer_bounds: Rect,
     layer: &GraphicsLayer,
     clip: Option<Rect>,
-    clip_radius: f32,
+    rounding: Option<ClipRounding>,
     snap_anchor: Option<SnapAnchor>,
     scene: &mut CompositorScene,
     blend_mode: Option<BlendMode>,
@@ -1758,7 +1758,7 @@ pub(crate) fn push_draw_primitive(
             snap_anchor,
             clip,
         )
-        .with_clip_radius(clip_radius);
+        .with_rounding(rounding);
         scene.push_loose(blended(shape, blend_mode), placement);
         return;
     }
@@ -1766,7 +1766,7 @@ pub(crate) fn push_draw_primitive(
     struct SceneEmitter<'a> {
         scene: &'a mut CompositorScene,
         snap_anchor: Option<SnapAnchor>,
-        clip_radius: f32,
+        rounding: Option<ClipRounding>,
     }
 
     impl DrawPrimitiveSink for SceneEmitter<'_> {
@@ -1782,7 +1782,7 @@ pub(crate) fn push_draw_primitive(
                 params.alpha,
                 params.color_filter,
                 params.sampling,
-                (params.clip, self.clip_radius),
+                (params.clip, self.rounding),
                 params.src_rect,
                 params.blend_mode,
                 params.motion_context_animated,
@@ -1825,7 +1825,7 @@ pub(crate) fn push_draw_primitive(
     let mut emitter = SceneEmitter {
         scene,
         snap_anchor,
-        clip_radius,
+        rounding,
     };
     emit_draw_primitive(
         primitive,

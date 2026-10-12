@@ -12,7 +12,7 @@ use cranpose_ui_graphics::{
 
 use crate::{
     capture_hash::capture_hasher,
-    geometry::{canonicalized_scaled_rect, snap_delta_for_anchor},
+    geometry::{device_rect, snap_delta_for_anchor},
     render::hash_f32_for_cache,
     run_store::device_clip,
     scene::{CompositorScene, DrawOp, DrawOpKind, RunDraw},
@@ -168,16 +168,7 @@ fn device_edges(rect: [f32; 4], offset: Point, scale: f32, canonicalize: bool) -
 }
 
 fn clip_contains(clip: Rect, edges: &Edges, scale: f32, canonicalize: bool) -> bool {
-    let device = if canonicalize {
-        canonicalized_scaled_rect(clip, scale)
-    } else {
-        Rect {
-            x: clip.x * scale,
-            y: clip.y * scale,
-            width: clip.width * scale,
-            height: clip.height * scale,
-        }
-    };
+    let device = device_rect(clip, scale, canonicalize);
     device.x <= edges.left
         && device.y <= edges.top
         && device.x + device.width >= edges.right

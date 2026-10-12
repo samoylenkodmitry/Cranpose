@@ -907,6 +907,40 @@ pub(crate) fn hash_device_rect<H: Hasher>(
     hash_device_offset(rect.height, 0.0, root_scale, state);
 }
 
+/// Hashes the rect `placement` is clipped to, `clip`, and its rounding, in
+/// device pixels from `origin`.
+fn hash_placement_clips<H: Hasher>(
+    placement: &crate::scene::Placement,
+    clip: Option<Rect>,
+    (origin_x, origin_y): (f32, f32),
+    root_scale: f32,
+    state: &mut H,
+) {
+    let rounding = placement.rounding;
+    for (rect, radius) in [
+        (clip, 0.0),
+        (
+            rounding.map(|rounding| rounding.rect),
+            rounding.map_or(0.0, |rounding| rounding.radius),
+        ),
+    ] {
+        rect.is_some().hash(state);
+        if let Some(rect) = rect {
+            let [x, y, width, height] =
+                crate::run_store::placement_device_rect(placement, rect, root_scale);
+            for value in [
+                x - origin_x,
+                y - origin_y,
+                width,
+                height,
+                radius * root_scale,
+            ] {
+                hash_f32_for_cache(value, state);
+            }
+        }
+    }
+}
+
 pub(crate) fn hash_run_item_with_clip<H: Hasher>(
     run: &RunDraw,
     clip: Option<Rect>,
@@ -962,25 +996,7 @@ pub(crate) fn hash_run_item_with_clip<H: Hasher>(
             }
         }
     }
-    let clipped = crate::scene::Placement {
-        clip,
-        ..placement.clone()
-    };
-    match crate::run_store::device_clip(&clipped, root_scale) {
-        Some([x, y, width, height]) => {
-            1u8.hash(state);
-            for value in [
-                x - origin_x,
-                y - origin_y,
-                width,
-                height,
-                placement.clip_radius * root_scale,
-            ] {
-                hash_f32_for_cache(value, state);
-            }
-        }
-        None => 0u8.hash(state),
-    }
+    hash_placement_clips(placement, clip, (origin_x, origin_y), root_scale, state);
     if tables.segments[run.segments.start as usize..run.segments.end as usize]
         .iter()
         .any(|segment| segment.gradient || segment.vertex_gradient)
@@ -6967,20 +6983,12 @@ impl DeviceRoundedClip {
     /// The rounded clip `image` takes at `root_scale`, scaled as a run's
     /// placement scales its clip.
     fn of(image: &ImageDraw, root_scale: f32) -> Option<Self> {
-        let clip = image.clip.filter(|_| image.clip_radius > 0.0)?;
-        let device = if image.snap_anchor.is_some() {
-            crate::geometry::canonicalized_scaled_rect(clip, root_scale)
-        } else {
-            Rect {
-                x: clip.x * root_scale,
-                y: clip.y * root_scale,
-                width: clip.width * root_scale,
-                height: clip.height * root_scale,
-            }
-        };
+        let rounding = image.rounding.filter(|_| image.clip.is_some())?;
+        let device =
+            crate::geometry::device_rect(rounding.rect, root_scale, image.snap_anchor.is_some());
         Some(Self {
             rect: [device.x, device.y, device.width, device.height],
-            radius: image.clip_radius * root_scale,
+            radius: rounding.radius * root_scale,
         })
     }
 }

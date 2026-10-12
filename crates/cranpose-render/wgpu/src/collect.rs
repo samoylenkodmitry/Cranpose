@@ -23,8 +23,8 @@ use crate::{
         push_text_style_draws,
     },
     scene::{
-        BackdropLayer, CompositorScene, LayerRoundedClip, Placement as RunPlacement, RunDraw,
-        SceneCapacityHint, ShadowDraw, SnapAnchor,
+        BackdropLayer, ClipRounding, CompositorScene, LayerRoundedClip, Placement as RunPlacement,
+        RunDraw, SceneCapacityHint, ShadowDraw, SnapAnchor, clip_holds,
     },
 };
 
@@ -191,8 +191,8 @@ impl ChildLayer {
 struct WalkContext {
     offset: Point,
     visual_clip: Option<Rect>,
-    /// The corner radius `visual_clip` is rounded with; `0.0` for a rect.
-    clip_radius: f32,
+    /// The rounded clip `visual_clip` cuts from, whole.
+    rounding: Option<ClipRounding>,
     snap_anchor: Option<SnapAnchor>,
     translated: bool,
     raster_scale: RasterScale,
@@ -582,18 +582,21 @@ fn can_draw_in_place(
 /// quad's edges are not anti-aliased, where a turned surface filters them),
 /// shadow texts and elevation shadows their clips leave whole (a clip turned
 /// off the pixel grid is no scissor; a text's own glyphs are cut to its clip
-/// before the turn), and children that draw in place unclipped.
+/// before the turn), no rounding a clip cuts into (only a scissor cuts it),
+/// and children that draw in place unclipped.
 fn content_draws_in_place(content: &LayerScene) -> bool {
     let scene = &content.scene;
     let whole =
         |rect: Rect, clip: Option<Rect>| clip.is_none_or(|clip| clip.intersect(rect) == Some(rect));
-    let source_over = |run: &RunDraw| {
-        run.segment_records()
-            .all(|segment| segment.blend == BlendMode::SrcOver)
+    let run_draws_alike = |run: &RunDraw| {
+        !run.placement.rounding_cut()
+            && run
+                .segment_records()
+                .all(|segment| segment.blend == BlendMode::SrcOver)
     };
     scene.backdrop_layers.is_empty()
         && scene.effect_layers.is_empty()
-        && scene.runs.iter().all(source_over)
+        && scene.runs.iter().all(run_draws_alike)
         && scene.shadow_draws.iter().all(|shadow| {
             !shadow.requires_surface()
                 && shadow.texts.iter().all(|text| whole(text.rect, text.clip))
@@ -636,53 +639,25 @@ fn child_placement(layer: &LayerNode, raster_scale: RasterScale) -> Placement {
     }
 }
 
-/// The radius the layer's clip keeps: the rounding it entered with, while
-/// its own clip, `layer_clip`, holds the rounded one. A clip that cuts the
-/// rounded one is a rect nothing under it may round; what reaches its
-/// corners kept the rounded layer on a surface.
-fn radius_within(layer_clip: Option<Rect>, context: &WalkContext) -> f32 {
+/// The rounding the layer's clip keeps: the one it entered with, while its
+/// own clip, `layer_clip`, holds what is left of the rounded one. A clip
+/// that cuts further is a rect nothing under it may round; what reaches
+/// its corners kept the rounded layer on a surface.
+fn rounding_within(layer_clip: Option<Rect>, context: &WalkContext) -> Option<ClipRounding> {
     let keeps = match (layer_clip, context.visual_clip) {
         (None, _) => true,
         (Some(own), Some(rounded)) => clip_holds(own, rounded),
         (Some(_), None) => false,
     };
-    if keeps { context.clip_radius } else { 0.0 }
+    context.rounding.filter(|_| keeps)
 }
 
-/// Edges this close count as one: a clip met through other sums lands a few
-/// ulps away from the rect it bounds.
-const CLIP_HOLD_SLACK: f32 = 1e-3;
-
-/// Whether `outer` holds `inner` whole, its edges taken within
-/// [`CLIP_HOLD_SLACK`].
-fn clip_holds(outer: Rect, inner: Rect) -> bool {
-    inner.x >= outer.x - CLIP_HOLD_SLACK
-        && inner.y >= outer.y - CLIP_HOLD_SLACK
-        && inner.x + inner.width <= outer.x + outer.width + CLIP_HOLD_SLACK
-        && inner.y + inner.height <= outer.y + outer.height + CLIP_HOLD_SLACK
-}
-
-/// How `child` places under `context`: a rounded clip draws in place only
-/// where nothing above clips into it, and never inside another rounded
+/// How `child` places under `context`: a rounded clip draws in place,
+/// whatever rect clips above cut from it, but never inside another rounded
 /// clip, whose radius a placement could not carry beside its own.
 fn placement_in(child: &LayerNode, context: &WalkContext) -> Placement {
     match child_placement(child, context.raster_scale) {
-        Placement::DirectRounded(translation, radius) => {
-            let clip = child.visual_clip_rect().map(|clip| {
-                clip.translate(
-                    context.offset.x + translation.x,
-                    context.offset.y + translation.y,
-                )
-            });
-            let whole = context
-                .visual_clip
-                .is_none_or(|outer| clip.is_some_and(|clip| clip_holds(outer, clip)));
-            if whole && context.clip_radius == 0.0 {
-                Placement::DirectRounded(translation, radius)
-            } else {
-                Placement::Isolated
-            }
-        }
+        Placement::DirectRounded(..) if context.rounding.is_some() => Placement::Isolated,
         placement => placement,
     }
 }
@@ -867,7 +842,7 @@ pub(crate) fn collect_root(
     let context = WalkContext {
         offset: Point::default(),
         visual_clip: None,
-        clip_radius: 0.0,
+        rounding: None,
         snap_anchor: None,
         translated: false,
         raster_scale: RasterScale::Exact(root_scale),
@@ -995,7 +970,7 @@ fn isolated_child(
     let content_context = WalkContext {
         offset: Point::default(),
         visual_clip: None,
-        clip_radius: 0.0,
+        rounding: None,
         snap_anchor: None,
         translated: context.translated || layer.translated_content_context,
         raster_scale,
@@ -1160,7 +1135,7 @@ fn collect_into(
     if visual_clip.is_some_and(|clip| clip.is_empty()) {
         return context.wants_pixel_sensitive && layer_has_pixel_sensitive_subtree(layer);
     }
-    let clip_radius = radius_within(layer_clip, &context);
+    let rounding = rounding_within(layer_clip, &context);
     let translated = context.translated || layer.translated_content_context;
     let allow_rigid_snap = translated || !layer.motion_context_animated;
     let boundary_anchor =
@@ -1190,7 +1165,7 @@ fn collect_into(
             .translate(context.offset.x, context.offset.y),
         local_layer: &local_layer,
         visual_clip,
-        clip_radius,
+        rounding,
         anchor: layer_anchor,
         motion_context_animated: layer.motion_context_animated || translated,
     };
@@ -1203,7 +1178,7 @@ fn collect_into(
                 let child_context = WalkContext {
                     offset: context.offset,
                     visual_clip,
-                    clip_radius,
+                    rounding,
                     snap_anchor: translated_anchor,
                     translated,
                     raster_scale: context.raster_scale,
@@ -1247,7 +1222,7 @@ struct ContentContext<'a> {
     layer_bounds: Rect,
     local_layer: &'a GraphicsLayer,
     visual_clip: Option<Rect>,
-    clip_radius: f32,
+    rounding: Option<ClipRounding>,
     anchor: Option<SnapAnchor>,
     motion_context_animated: bool,
 }
@@ -1320,22 +1295,22 @@ fn collect_child(
             &mut out.scene,
         );
     }
-    let (visual_clip, clip_radius) = match radius {
-        Some(radius) => (
-            resolve_clip(
-                context.visual_clip,
-                child
-                    .visual_clip_rect()
-                    .map(|clip| clip.translate(child_offset.x, child_offset.y)),
-            ),
-            radius,
-        ),
-        None => (context.visual_clip, context.clip_radius),
+    let (visual_clip, rounding) = match radius {
+        Some(radius) => {
+            let clip = child
+                .visual_clip_rect()
+                .map(|clip| clip.translate(child_offset.x, child_offset.y));
+            (
+                resolve_clip(context.visual_clip, clip),
+                clip.map(|rect| ClipRounding { rect, radius }),
+            )
+        }
+        None => (context.visual_clip, context.rounding),
     };
     let child_context = WalkContext {
         offset: child_offset,
         visual_clip,
-        clip_radius,
+        rounding,
         snap_anchor: child_anchor,
         ..context
     };
@@ -1517,7 +1492,7 @@ fn push_primitive(
         layer_bounds,
         local_layer,
         visual_clip,
-        clip_radius,
+        rounding,
         anchor: snap_anchor,
         motion_context_animated,
     } = *content;
@@ -1539,11 +1514,7 @@ fn push_primitive(
                 layer_bounds,
                 local_layer,
                 clip,
-                if clip == visual_clip {
-                    clip_radius
-                } else {
-                    0.0
-                },
+                rounding.filter(|_| clip == visual_clip),
                 snap_anchor,
                 &mut out.scene,
                 None,
@@ -1590,7 +1561,7 @@ fn push_draw_run(out: &mut LayerScene, run: &DrawRunNode, content: &ContentConte
         layer_bounds,
         local_layer,
         visual_clip,
-        clip_radius,
+        rounding,
         anchor: snap_anchor,
         motion_context_animated,
     } = *content;
@@ -1601,7 +1572,7 @@ fn push_draw_run(out: &mut LayerScene, run: &DrawRunNode, content: &ContentConte
         visual_clip,
         local_layer,
     )
-    .with_clip_radius(clip_radius);
+    .with_rounding(rounding);
     let recording = &*run.recording;
     // A run of shapes alone draws as one run, read without its segments.
     if run.summary.shapes_only() {
@@ -1640,7 +1611,7 @@ fn push_draw_run(out: &mut LayerScene, run: &DrawRunNode, content: &ContentConte
                         layer_bounds,
                         local_layer,
                         visual_clip,
-                        clip_radius,
+                        rounding,
                         snap_anchor,
                         &mut out.scene,
                         None,
