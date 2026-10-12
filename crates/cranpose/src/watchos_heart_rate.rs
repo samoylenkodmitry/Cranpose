@@ -10,17 +10,22 @@
 //! workout background mode into the Info.plist, and the App ID needs the
 //! HealthKit capability.
 //!
+//! A running workout keeps a watch app alive off screen, so the workout ends
+//! when the app leaves the screen and starts again when it comes back, for as
+//! long as something reads.
+//!
 //! Every HealthKit object here lives on the main thread.
 
 use std::{
     cell::{Cell, RefCell},
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 
 use block2::RcBlock;
 use cranpose_services::{
     HeartRate, HeartRateError, HeartRateMonitor, HeartRatePermission, HeartRateStatus,
+    LifecycleObserver, LifecycleState, current_lifecycle_state, observe_lifecycle,
     publish_heart_rate, publish_heart_rate_permission, set_platform_heart_rate,
 };
 use dispatch2::{DispatchQueue, run_on_main};
@@ -40,7 +45,10 @@ use crate::apple_mobile::on_main_after;
 const POLL: Duration = Duration::from_secs(1);
 
 pub(crate) fn register() {
+    static FOLLOWS_THE_APP: OnceLock<LifecycleObserver> = OnceLock::new();
     set_platform_heart_rate(Arc::new(WatchHeartRate));
+    FOLLOWS_THE_APP
+        .get_or_init(|| observe_lifecycle(|event| run_on_main(move |_| follow_the_app(event.to))));
 }
 
 struct WatchHeartRate;
@@ -57,6 +65,9 @@ thread_local! {
     static STORE: Retained<HKHealthStore> = unsafe { HKHealthStore::new() };
     static WORKOUT: RefCell<Option<Workout>> = const { RefCell::new(None) };
     static TURN: Cell<u64> = const { Cell::new(0) };
+    /// Whether something reads: between `start` and `stop`, whether or not
+    /// the app is on screen.
+    static READING: Cell<bool> = const { Cell::new(false) };
 }
 
 impl HeartRateMonitor for WatchHeartRate {
@@ -113,21 +124,59 @@ impl HeartRateMonitor for WatchHeartRate {
     }
 
     fn start(&self) -> Result<(), HeartRateError> {
-        run_on_main(|_| start_workout()).map_err(HeartRateError::Failed)
+        run_on_main(|_| {
+            READING.set(true);
+            // Off screen it waits for the app to come back.
+            if matches!(
+                current_lifecycle_state(),
+                LifecycleState::Paused | LifecycleState::Stopped
+            ) {
+                return Ok(());
+            }
+            start_workout()
+        })
+        .map_err(HeartRateError::Failed)
     }
 
     fn stop(&self) {
         run_on_main(|_| {
-            let Some(workout) = WORKOUT.take() else {
-                return;
-            };
-            // SAFETY: ending the session and dropping its workout on the
-            // thread that started them.
-            unsafe {
-                workout.session.end();
-                workout.builder.discardWorkout();
-            }
+            READING.set(false);
+            end_workout();
         });
+    }
+}
+
+/// Ends the workout when the app leaves the screen, and starts it again when
+/// the app comes back while something still reads.
+fn follow_the_app(state: LifecycleState) {
+    match state {
+        LifecycleState::Resumed if READING.get() => {
+            if let Err(error) = start_workout() {
+                log::warn!("cranpose: the heart-rate workout did not start again: {error}");
+            }
+        }
+        LifecycleState::Paused | LifecycleState::Stopped => {
+            if WORKOUT.with_borrow(Option::is_some) {
+                end_workout();
+                publish_heart_rate(HeartRate {
+                    status: HeartRateStatus::Acquiring,
+                    bpm: None,
+                });
+            }
+        }
+        _ => {}
+    }
+}
+
+fn end_workout() {
+    let Some(workout) = WORKOUT.take() else {
+        return;
+    };
+    // SAFETY: ending the session and dropping its workout on the thread that
+    // started them.
+    unsafe {
+        workout.session.end();
+        workout.builder.discardWorkout();
     }
 }
 
