@@ -52,6 +52,18 @@ impl RunGlyph {
     }
 }
 
+/// Where a glyph of a run draws from the run's raster origin, and in what
+/// color: what a quad drawn of it needs, without the atlas key it is looked
+/// up by.
+#[derive(Clone, Copy)]
+pub(crate) struct RunGlyphBox {
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+    pub(crate) width: u16,
+    pub(crate) height: u16,
+    pub(crate) color: Color,
+}
+
 /// A run's drawing glyphs, 16 bytes each where a placement takes 72: what
 /// a segment's glyphs share is held once, as their face.
 #[derive(Clone)]
@@ -94,6 +106,17 @@ impl RunGlyphs {
         Some(Self {
             faces: Rc::clone(&scratch.last_faces),
             glyphs: Rc::from(scratch.glyphs.as_slice()),
+        })
+    }
+
+    /// Each glyph's box and color.
+    pub(crate) fn boxes(&self) -> impl ExactSizeIterator<Item = RunGlyphBox> + '_ {
+        self.glyphs.iter().map(|glyph| RunGlyphBox {
+            x: glyph.x,
+            y: glyph.y,
+            width: glyph.width,
+            height: glyph.height,
+            color: self.faces[usize::from(glyph.face)].color,
         })
     }
 
