@@ -177,7 +177,7 @@ void main() {
 /// The scene SpriteKit draws: one node per sprite, in drawing order.
 final class CranposeScene: SKScene {
     private let epoch = ProcessInfo.processInfo.systemUptime
-    private let shader: SKShader = {
+    private let spriteShader: SKShader = {
         let shader = SKShader(source: shaderSource)
         shader.attributes = attributeNames.map { SKAttribute(name: $0, type: .vectorFloat4) }
         return shader
@@ -273,7 +273,7 @@ final class CranposeScene: SKScene {
             let node = SKSpriteNode(color: .white, size: .zero)
             node.anchorPoint = CGPoint(x: 0, y: 1)
             node.zPosition = CGFloat(nodes.count)
-            node.shader = shader
+            node.shader = spriteShader
             addChild(node)
             nodes.append(node)
         }
