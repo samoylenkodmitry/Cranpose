@@ -2366,6 +2366,7 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose-storekit/src/tests/apple_tests.rs",
         "crates/cranpose-audio/src/ring.rs",
         "crates/cranpose-audio/src/backend/aaudio.rs",
+        "crates/cranpose-audio/src/backend/avaudio.rs",
         "crates/cranpose-render/wgpu/src/worker_pool.rs",
         "crates/cranpose-render/wgpu/src/pipeline_disk_cache.rs",
         "crates/cranpose-render/wgpu/src/run_entry.rs",
