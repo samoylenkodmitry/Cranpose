@@ -143,11 +143,8 @@ impl RenderState {
     /// Renders `frames` frames and spreads them over the list's buffers,
     /// whatever their channel layout. Channels the renderer did not produce
     /// get its last one; frames past a short buffer are dropped.
-    ///
-    /// # Safety
-    ///
-    /// `list` must point to a valid list whose buffers each hold `frames`
-    /// frames of `mNumberChannels` interleaved floats.
+    // SAFETY: the caller passes a valid list whose buffers each hold `frames`
+    // frames of `mNumberChannels` interleaved floats.
     unsafe fn fill(&mut self, frames: usize, list: NonNull<AudioBufferList>) {
         // SAFETY: the caller vouches for the list.
         let count = unsafe { (*list.as_ptr()).mNumberBuffers } as usize;

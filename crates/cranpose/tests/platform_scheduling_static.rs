@@ -2414,6 +2414,7 @@ fn unsafe_blocks_have_nearby_safety_invariants() {
         "crates/cranpose/src/ios_accessibility.rs",
         "crates/cranpose-audio/src/ring.rs",
         "crates/cranpose-audio/src/backend/aaudio.rs",
+        "crates/cranpose-audio/src/backend/avaudio.rs",
         "crates/cranpose-render/wgpu/src/pipeline_disk_cache.rs",
         "crates/cranpose/src/android_entry.rs",
     ];
