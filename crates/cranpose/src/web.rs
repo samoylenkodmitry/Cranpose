@@ -303,6 +303,13 @@ pub async fn run(
         }
     };
 
+    // Sized before its context exists, the canvas gets its drawing buffer
+    // at this size; sized after, WebGL makes it again.
+    let render_scale = crate::web_surface_scale::web_canvas_buffer_scale(scale_factor);
+    let (buffer_width, buffer_height) =
+        crate::web_surface_scale::web_canvas_device_size(css_width, css_height, scale_factor, None);
+    canvas.set_width(buffer_width);
+    canvas.set_height(buffer_height);
     let surface = instance
         .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
         .map_err(|e| format!("failed to create surface: {e:?}"))?;
@@ -318,11 +325,6 @@ pub async fn run(
         .map_err(|e| format!("failed to find suitable adapter: {e:?}"))?;
 
     let adapter_info = adapter.get_info();
-    let render_scale = crate::web_surface_scale::web_canvas_buffer_scale(scale_factor);
-    let (buffer_width, buffer_height) =
-        crate::web_surface_scale::web_canvas_device_size(css_width, css_height, scale_factor, None);
-    canvas.set_width(buffer_width);
-    canvas.set_height(buffer_height);
     let adapter_limits = adapter.limits();
     let required_limits =
         required_limits_for_web_backend(adapter_info.backend, adapter_limits.clone());
@@ -813,6 +815,7 @@ pub async fn run(
     canvas_watch.follow();
 
     let render_loop_for_deadline = render_loop.clone();
+    #[cfg(feature = "webview")]
     let request_frame_for_loop = request_frame.clone();
     let presenter = CanvasPresenter::new(
         surface.clone(),

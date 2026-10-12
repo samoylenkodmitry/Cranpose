@@ -118,7 +118,7 @@ use alloc::{boxed::Box, string::String, string::ToString as _, sync::Arc, vec::V
 use core::{
     fmt,
     ops::Range,
-    sync::atomic::{AtomicU32, AtomicU8},
+    sync::atomic::{AtomicU32, AtomicU8, AtomicUsize},
 };
 use parking_lot::Mutex;
 
@@ -296,6 +296,9 @@ struct AdapterShared {
     shading_language_version: naga::back::glsl::Version,
     next_shader_id: AtomicU32,
     program_cache: Mutex<ProgramCache>,
+    /// Programs whose link no command read yet: while any, a submission
+    /// reads the links of the programs it uses before its commands.
+    unread_links: AtomicUsize,
     es: bool,
 
     /// Result of `gl.get_parameter_i32(glow::MAX_SAMPLES)`.
@@ -316,6 +319,7 @@ impl fmt::Debug for AdapterShared {
             shading_language_version,
             next_shader_id,
             program_cache: _,
+            unread_links,
             es,
             max_msaa_samples,
         } = self;
@@ -327,6 +331,7 @@ impl fmt::Debug for AdapterShared {
             .field("options", options)
             .field("shading_language_version", shading_language_version)
             .field("next_shader_id", next_shader_id)
+            .field("unread_links", unread_links)
             .field("es", es)
             .field("max_msaa_samples", max_msaa_samples)
             .finish_non_exhaustive()

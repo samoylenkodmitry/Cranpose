@@ -955,6 +955,7 @@ impl super::Adapter {
                     options: backend_options,
                     shading_language_version,
                     next_shader_id: Default::default(),
+                    unread_links: Default::default(),
                     program_cache: Default::default(),
                     es: es_ver.is_some(),
                     max_msaa_samples: max_samples,
