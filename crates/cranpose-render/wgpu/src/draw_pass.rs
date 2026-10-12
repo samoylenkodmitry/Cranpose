@@ -4,7 +4,7 @@ use cranpose_ui_graphics::{BlendMode, Rect, RuntimeShader};
 
 use crate::{
     effect_renderer::{
-        CompositeBatchItem, CompositeSampleMode, PreparedCompositeDraw,
+        BlitDest, CompositeBatchItem, CompositeSampleMode, PreparedCompositeDraw,
         PreparedProjectiveComposite, PreparedShaderDraw, ProjectiveCompositeItem, QuadPlacement,
         RoundedCompositeMask, ShaderCompositeBatchItem, SubstrateRegions,
     },
@@ -1997,7 +1997,10 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     scissor,
                     rounded_mask: mask_in_target(*rounded_mask, offset),
                     blend_mode: supported_blend_mode(*blend_mode),
-                    dest_viewport: Some(dest),
+                    dest_viewport: Some(BlitDest {
+                        rect: dest,
+                        target: self.target_size(),
+                    }),
                     source_viewport: *source_viewport,
                     sample_mode: *sample_mode,
                 };

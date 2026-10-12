@@ -324,9 +324,35 @@ struct BlitUniforms {
     mask_radii: [f32; 4],
     mask_enabled: [f32; 4],
     sampling: [f32; 4],
-    dest_viewport: [f32; 4],
+    dest_clip: [f32; 4],
     source_viewport: [f32; 4],
 }
+
+/// Where a blit lands: `rect` (x, y, width, height) in the pixels of a
+/// target `target` pixels in size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BlitDest {
+    pub(crate) rect: (f32, f32, f32, f32),
+    pub(crate) target: (u32, u32),
+}
+
+impl BlitDest {
+    /// The rect's left, top, right and bottom in clip space, where the
+    /// blit's vertex stage places its quad.
+    fn clip(self) -> [f32; 4] {
+        let (x, y, width, height) = self.rect;
+        let (target_width, target_height) = (self.target.0 as f32, self.target.1 as f32);
+        [
+            x / target_width * 2.0 - 1.0,
+            1.0 - y / target_height * 2.0,
+            (x + width) / target_width * 2.0 - 1.0,
+            1.0 - (y + height) / target_height * 2.0,
+        ]
+    }
+}
+
+/// The whole target in clip space: a blit with no destination rect.
+const WHOLE_TARGET_CLIP: [f32; 4] = [-1.0, 1.0, 1.0, -1.0];
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -540,7 +566,7 @@ struct CompositePassOptions {
     scissor: Option<(u32, u32, u32, u32)>,
     rounded_mask: Option<RoundedCompositeMask>,
     blend_mode: BlendMode,
-    dest_viewport: Option<(f32, f32, f32, f32)>,
+    dest_viewport: Option<BlitDest>,
     source_viewport: Option<(f32, f32, f32, f32)>,
     sample_mode: CompositeSampleMode,
 }
@@ -937,7 +963,7 @@ pub(crate) struct CompositeBatchItem<'a> {
     pub(crate) scissor: Option<(u32, u32, u32, u32)>,
     pub(crate) rounded_mask: Option<RoundedCompositeMask>,
     pub(crate) blend_mode: BlendMode,
-    pub(crate) dest_viewport: Option<(f32, f32, f32, f32)>,
+    pub(crate) dest_viewport: Option<BlitDest>,
     pub(crate) source_viewport: Option<(f32, f32, f32, f32)>,
     pub(crate) sample_mode: CompositeSampleMode,
 }
@@ -1041,7 +1067,7 @@ fn fullscreen_pipeline_job(
     cache: Option<&wgpu::PipelineCache>,
     label: &'static str,
     shader: &SharedShader,
-    fragment_entry: &'static str,
+    (vertex_entry, fragment_entry): (&'static str, &'static str),
     constants: &[(&'static str, f64)],
     surface_format: wgpu::TextureFormat,
     blend: wgpu::BlendState,
@@ -1051,7 +1077,7 @@ fn fullscreen_pipeline_job(
     let shader = shader.clone();
     let constants = constants.to_vec();
     Box::new(move || {
-        let stages = shader.stages((crate::render::FULLSCREEN_VS, fragment_entry), &constants);
+        let stages = shader.stages((vertex_entry, fragment_entry), &constants);
         crate::render::create_fullscreen_strip_pipeline(
             &device,
             cache.as_ref(),
@@ -1059,7 +1085,7 @@ fn fullscreen_pipeline_job(
             label,
             shader.layout(),
             (&stages.vertex, &stages.fragment),
-            fragment_entry,
+            (vertex_entry, fragment_entry),
             stages.constants,
             wgpu::ColorTargetState {
                 format: surface_format,
@@ -1563,7 +1589,7 @@ impl EffectRenderer {
             self.pipeline_cache.as_ref(),
             "Blur Pipeline",
             &self.blur_shader,
-            "blur_fs",
+            (crate::render::FULLSCREEN_VS, "blur_fs"),
             &[("BLUR_TILE_MODE", tile_mode as f64)],
             self.surface_format,
             wgpu::BlendState::REPLACE,
@@ -1633,7 +1659,7 @@ impl EffectRenderer {
             self.pipeline_cache.as_ref(),
             "Mean Pipeline",
             &self.blur_shader,
-            "blur_mean_fs",
+            (crate::render::FULLSCREEN_VS, "blur_mean_fs"),
             &[],
             self.surface_format,
             wgpu::BlendState::REPLACE,
@@ -1651,7 +1677,7 @@ impl EffectRenderer {
             self.pipeline_cache.as_ref(),
             "Blur Downsample Pipeline",
             &self.blur_shader,
-            "blur_downsample_fs",
+            (crate::render::FULLSCREEN_VS, "blur_downsample_fs"),
             &[
                 ("BLUR_BLOCK", f64::from(block)),
                 ("BLUR_TILE_MODE", tile_mode as f64),
@@ -1667,7 +1693,7 @@ impl EffectRenderer {
             self.pipeline_cache.as_ref(),
             "Offset Pipeline",
             &self.offset_shader,
-            "offset_fs",
+            (crate::render::FULLSCREEN_VS, "offset_fs"),
             &[],
             self.surface_format,
             wgpu::BlendState::REPLACE,
@@ -1717,7 +1743,7 @@ impl EffectRenderer {
             self.pipeline_cache.as_ref(),
             label,
             &self.blit_shader,
-            "blit_fs",
+            ("blit_vs", "blit_fs"),
             &[(
                 "BLIT_UNMASKED_NEAREST",
                 if unmasked_nearest { 1.0 } else { 0.0 },
@@ -2840,7 +2866,10 @@ impl EffectRenderer {
                     scissor: None,
                     rounded_mask: None,
                     blend_mode: BlendMode::Src,
-                    dest_viewport: Some((0.0, 0.0, source.width as f32, source.height as f32)),
+                    dest_viewport: Some(BlitDest {
+                        rect: (0.0, 0.0, source.width as f32, source.height as f32),
+                        target: (packed.width, packed.height),
+                    }),
                     source_viewport: None,
                     sample_mode: CompositeSampleMode::Linear,
                 },
@@ -3018,7 +3047,6 @@ impl EffectRenderer {
                 [0.0, 0.0, 0.0, 0.0],
             )
         };
-        let dest_viewport_uniform = options.dest_viewport.unwrap_or((0.0, 0.0, 0.0, 0.0));
         let source_viewport_uniform = options.source_viewport.unwrap_or((0.0, 0.0, 0.0, 0.0));
         BlitUniforms {
             alpha: [options.alpha.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
@@ -3031,12 +3059,9 @@ impl EffectRenderer {
                 0.0,
                 0.0,
             ],
-            dest_viewport: [
-                dest_viewport_uniform.0,
-                dest_viewport_uniform.1,
-                dest_viewport_uniform.2,
-                dest_viewport_uniform.3,
-            ],
+            dest_clip: options
+                .dest_viewport
+                .map_or(WHOLE_TARGET_CLIP, BlitDest::clip),
             source_viewport: [
                 source_viewport_uniform.0,
                 source_viewport_uniform.1,

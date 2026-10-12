@@ -3,7 +3,6 @@
 @fragment
 fn blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let tex_size = vec2<f32>(textureDimensions(input_texture));
-    let use_dest_viewport = blit.dest_viewport.z > 0.0 && blit.dest_viewport.w > 0.0;
     let use_source_viewport = blit.source_viewport.z > 0.0 && blit.source_viewport.w > 0.0;
     var source_origin = vec2<f32>(0.0);
     var source_size = tex_size;
@@ -13,18 +12,6 @@ fn blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     }
     let dest_pos = input.position.xy;
     var source_pos = source_origin + input.uv * source_size;
-    if use_dest_viewport {
-        let viewport_max = blit.dest_viewport.xy + blit.dest_viewport.zw;
-        if dest_pos.x < blit.dest_viewport.x || dest_pos.y < blit.dest_viewport.y ||
-            dest_pos.x >= viewport_max.x || dest_pos.y >= viewport_max.y {
-            discard;
-        }
-        let local_dest = dest_pos - blit.dest_viewport.xy;
-        source_pos = vec2<f32>(
-            source_origin.x + local_dest.x * source_size.x / blit.dest_viewport.z,
-            source_origin.y + local_dest.y * source_size.y / blit.dest_viewport.w,
-        );
-    }
     if use_source_viewport {
         // Held to the viewport's texel centers: a viewport is one packed
         // region of the texture, and a bilinear tap at its edge reads as a
