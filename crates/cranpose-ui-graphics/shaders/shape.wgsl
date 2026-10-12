@@ -278,6 +278,12 @@ struct Placement {
     transform_reserved: vec2<f32>,
 }
 
+// The placement of the record the vertex stage draws, which
+// `record_vertex` sets once. Every helper reads it here: taken by value at
+// each call, its 160 bytes were copied at every call site, and Mali's
+// compiler took longer on each copy.
+var<private> placement: Placement;
+
 // The prefix the glyph stage shares. Shapes read neither the transform nor
 // `origin`: a turned record carries its turn in its placement.
 struct Uniforms {
@@ -413,7 +419,7 @@ const TURNS_NONE: u32 = 0u;
 const TURNS_ALL: u32 = 1u;
 const TURNS_MIXED: u32 = 2u;
 
-fn placement_turned(placement: Placement) -> bool {
+fn placement_turned() -> bool {
     return (SHAPE_TURNS == TURNS_ALL)
         | ((SHAPE_TURNS == TURNS_MIXED) & ((placement.flags & PLACEMENT_TURNED) != 0u));
 }
@@ -432,15 +438,13 @@ fn record_placement(record: ShapeRecord) -> Placement {
     return uniforms.placement;
 }
 
-// The device coordinate the CPU would have written: rounded to the 1/16
+// The device coordinates the CPU would have written: rounded to the 1/16
 // device pixel grid when the placement is snapped, so a rigidly moving
-// subtree lands on the same sub-pixel phase every frame.
-fn canonical(value: f32) -> f32 {
-    return sign(value) * floor(abs(value) * 16.0 + 0.5) / 16.0;
-}
-
-fn device_coordinate(value: f32, canonicalize: bool) -> f32 {
-    return select(value, canonical(value), canonicalize);
+// subtree lands on the same sub-pixel phase every frame. Four at a time:
+// Mali's compiler expands every call, and a call per coordinate took it
+// longer.
+fn device_coordinates(values: vec4<f32>, canonicalize: bool) -> vec4<f32> {
+    return select(values, sign(values) * floor(abs(values) * 16.0 + 0.5) / 16.0, canonicalize);
 }
 
 struct RecordGeometry {
@@ -452,21 +456,20 @@ struct RecordGeometry {
     trig: vec4<f32>,
 }
 
-fn record_geometry(record: ShapeRecord, placement: Placement) -> RecordGeometry {
+fn record_geometry(record: ShapeRecord) -> RecordGeometry {
     let kind = record.flags & 3u;
     let stroked = (DRAWS_STROKES | DRAWS_LINES)
         & ((record.flags & RECORD_STROKED) != 0u && kind != RECORD_KIND_ARC);
     let half_width = select(0.0, record.stroke_width * 0.5, stroked);
     let scale = placement.root_scale;
     let canonicalize = (placement.flags & PLACEMENT_CANONICALIZE) != 0u;
-    let left = device_coordinate((record.rect.x - half_width + placement.offset.x) * scale, canonicalize);
-    let top = device_coordinate((record.rect.y - half_width + placement.offset.y) * scale, canonicalize);
-    let right = device_coordinate(
-        (record.rect.x + record.rect.z + half_width + placement.offset.x) * scale, canonicalize);
-    let bottom = device_coordinate(
-        (record.rect.y + record.rect.w + half_width + placement.offset.y) * scale, canonicalize);
+    let edges = device_coordinates(
+        (vec4<f32>(record.rect.xy - half_width, record.rect.xy + record.rect.zw + half_width)
+            + placement.offset.xyxy) * scale,
+        canonicalize,
+    );
     var geometry: RecordGeometry;
-    geometry.rect = vec4<f32>(left, top, right - left, bottom - top);
+    geometry.rect = vec4<f32>(edges.xy, edges.zw - edges.xy);
     geometry.canonicalize = canonicalize;
     geometry.scale = scale;
     if (DRAWS_ARCS & (kind == RECORD_KIND_ARC)) {
@@ -481,7 +484,7 @@ fn record_geometry(record: ShapeRecord, placement: Placement) -> RecordGeometry 
 // placement passes the colour through; a painting one quantizes it to
 // 8-bit sRGB, applies the layer alpha and then the colour filter, in the
 // order the CPU brush resolution applies them.
-fn paint(color: vec4<f32>, placement: Placement) -> vec4<f32> {
+fn paint(color: vec4<f32>) -> vec4<f32> {
     if ((placement.flags & PLACEMENT_PAINTED) == 0u) {
         return color;
     }
@@ -494,13 +497,15 @@ fn paint(color: vec4<f32>, placement: Placement) -> vec4<f32> {
     return painted;
 }
 
-// A gradient endpoint: relative to the record's device rect, with an
-// infinite coordinate meaning the rect's far edge (positive) or origin.
-fn resolve_gradient_point(origin: f32, extent: f32, value: f32) -> f32 {
-    if (abs(value) < INFINITE_GRADIENT_POINT) {
-        return origin + value;
-    }
-    return select(origin, origin + extent, value > 0.0);
+// Gradient endpoint coordinates: relative to the record's device rect,
+// with an infinite coordinate meaning the rect's far edge (positive) or
+// origin.
+fn resolve_gradient_points(origin: vec4<f32>, extent: vec4<f32>, value: vec4<f32>) -> vec4<f32> {
+    return select(
+        select(origin, origin + extent, value > vec4<f32>(0.0)),
+        origin + value,
+        abs(value) < vec4<f32>(INFINITE_GRADIENT_POINT),
+    );
 }
 
 fn resolved_radii(record: ShapeRecord, scale: f32) -> vec4<f32> {
@@ -566,12 +571,7 @@ fn fill_interior(rect: vec4<f32>, radii: vec4<f32>) -> vec4<f32> {
 const ARC_INSET_SLACK: f32 = 0.015625;
 
 fn linear_gradient_line(params: vec4<f32>, rect: vec4<f32>, canonicalize: bool) -> vec4<f32> {
-    return vec4<f32>(
-        device_coordinate(resolve_gradient_point(rect.x, rect.z, params.x), canonicalize),
-        device_coordinate(resolve_gradient_point(rect.y, rect.w, params.y), canonicalize),
-        device_coordinate(resolve_gradient_point(rect.x, rect.z, params.z), canonicalize),
-        device_coordinate(resolve_gradient_point(rect.y, rect.w, params.w), canonicalize),
-    );
+    return device_coordinates(resolve_gradient_points(rect.xyxy, rect.zwzw, params), canonicalize);
 }
 
 // A linear gradient between two stops at a vertex: the stops' colours and
@@ -606,20 +606,23 @@ fn vertex_gradient_color(record: ShapeRecord, rect: vec4<f32>, geometry: RecordG
 
 // The rect a slice of a path fill resolves its brush against: the one it
 // carries in its radii, the same for every slice of the fill.
-fn slice_brush_rect(record: ShapeRecord, placement: Placement) -> vec4<f32> {
+fn slice_brush_rect(record: ShapeRecord) -> vec4<f32> {
     let scale = placement.root_scale;
     return vec4<f32>((record.radii.xy + placement.offset) * scale, record.radii.zw * scale);
 }
 
 fn shape_output(
     record: ShapeRecord,
-    placement: Placement,
     geometry: RecordGeometry,
     position: vec2<f32>,
+    past: bool,
 ) -> VertexOutput {
     var output: VertexOutput;
-    output.clip_position = clip_position(position, placement);
-    output.color = paint(record.color, placement);
+    output.clip_position = clip_position(position);
+    if (past) {
+        return output;
+    }
+    output.color = paint(record.color);
     output.world_pos = vec4<f32>(position, position - placement.dither_origin);
     output.rect = geometry.rect;
     let scale = geometry.scale;
@@ -629,7 +632,7 @@ fn shape_output(
     let trapezoid = (DRAWS_LINES & (kind == RECORD_KIND_LINE)) & is_trapezoid(line_cap);
 
     if (trapezoid) {
-        let frame = trapezoid_frame(record, placement);
+        let frame = trapezoid_frame(record);
         let open = (record.flags >> RECORD_JOIN_SHIFT) & 3u;
         let width = max(frame.sides.y - frame.sides.x, TRAPEZOID_MIN_WIDTH);
         let lengths = vec2<f32>(
@@ -658,7 +661,7 @@ fn shape_output(
         );
         output.rect = vec4<f32>(low, high - low);
     } else if (DRAWS_SEGMENTS & (kind == RECORD_KIND_LINE)) {
-        let line = line_frame(record, placement);
+        let line = line_frame(record);
         let cap = line_cap;
         output.radii = vec4<f32>(0.0);
         output.stroke_params = vec4<f32>(
@@ -721,7 +724,7 @@ fn shape_output(
             output.arc_params = vec4<f32>(0.0);
         }
     }
-    if ((SHAPE_TURNS == TURNS_MIXED) & placement_turned(placement)) {
+    if ((SHAPE_TURNS == TURNS_MIXED) & placement_turned()) {
         output.stroke_params.y = f32(u32(output.stroke_params.y) | SHAPE_FLAG_TURNED);
     }
 
@@ -734,7 +737,7 @@ fn shape_output(
 
     output.gradient_params = vec4<f32>(0.0);
     output.brush = vec4<u32>(0u);
-    let brush_rect = select(geometry.rect, slice_brush_rect(record, placement), trapezoid);
+    let brush_rect = select(geometry.rect, slice_brush_rect(record), trapezoid);
     if (!SHAPE_SOLID & (record.brush != 0u)) {
         let brush = brush_at(record.brush - 1u);
         let rect = brush_rect;
@@ -742,20 +745,11 @@ fn shape_output(
         let params = brush.params * scale;
         if (brush.kind == BRUSH_LINEAR) {
             output.gradient_params = linear_gradient_line(params, rect, canonicalize);
-        } else if (brush.kind == BRUSH_RADIAL) {
-            output.gradient_params = vec4<f32>(
-                device_coordinate(rect.x + params.x, canonicalize),
-                device_coordinate(rect.y + params.y, canonicalize),
-                max(params.z, 1.1920929e-7),
-                0.0,
-            );
         } else {
-            output.gradient_params = vec4<f32>(
-                device_coordinate(rect.x + params.x, canonicalize),
-                device_coordinate(rect.y + params.y, canonicalize),
-                0.0,
-                0.0,
-            );
+            // A radial gradient's centre and radius, or a sweep's centre.
+            let center = device_coordinates((rect.xy + params.xy).xyxy, canonicalize).xy;
+            let radius = select(0.0, max(params.z, 1.1920929e-7), brush.kind == BRUSH_RADIAL);
+            output.gradient_params = vec4<f32>(center, radius, 0.0);
         }
         output.brush = vec4<u32>(
             brush.kind | (brush.stop_count << BRUSH_COUNT_SHIFT),
@@ -792,57 +786,50 @@ fn collapsed() -> VertexOutput {
 // Vertex stage
 //
 fn record_vertex(record: ShapeRecord, local: u32) -> VertexOutput {
+    placement = record_placement(record);
     if ((DRAWS_ARCS | DRAWS_LINES) & ((record.flags & RECORD_ARC_DEGENERATE) != 0u)) {
         return collapsed();
     }
-    let placement = record_placement(record);
-    let geometry = record_geometry(record, placement);
+    let geometry = record_geometry(record);
+    // A vertex past the record's own (`past`) sits at the device position
+    // of its last one, so nothing rasterizes between them. Each corner
+    // function is called from one site, its last corner standing in for
+    // the vertices past it: Mali's compiler expands every call.
     var position: vec2<f32>;
+    var past: bool;
     let line_cap = (record.flags >> RECORD_CAP_SHIFT) & 3u;
     if ((DRAWS_LINES & ((record.flags & 3u) == RECORD_KIND_LINE)) & is_trapezoid(line_cap)) {
         position = trapezoid_corner(
-            trapezoid_frame(record, placement),
+            trapezoid_frame(record),
             (record.flags >> RECORD_JOIN_SHIFT) & 3u,
-            placement_turned(placement),
+            placement_turned(),
             min(local, 3u),
         );
-        if (local >= 4u) {
-            return pinned(position, placement);
-        }
+        past = local >= 4u;
     } else if (DRAWS_SEGMENTS & ((record.flags & 3u) == RECORD_KIND_LINE)) {
-        let line = line_frame(record, placement);
-        if (local >= 4u) {
-            return pinned(line_corner(line, line_cap, 3u), placement);
-        }
-        position = line_corner(line, line_cap, local);
+        position = line_corner(line_frame(record), line_cap, min(local, 3u));
+        past = local >= 4u;
     } else if (DRAWS_BANDS & ((record.flags & RECORD_ARC_BANDED) != 0u)) {
         let segments = 1u << ((record.flags >> RECORD_BAND_CLASS_SHIFT) & RECORD_BAND_CLASS_MASK);
-        if (local >= segments * 2u + 2u) {
-            return pinned(
-                band_position(record, placement, geometry.trig, segments, 1u, segments),
-                placement,
-            );
-        }
-        position =
-            band_position(record, placement, geometry.trig, local >> 1u, local & 1u, segments);
+        let last = min(local, segments * 2u + 1u);
+        position = band_position(record, geometry.trig, last >> 1u, last & 1u, segments);
+        past = local >= segments * 2u + 2u;
     } else {
-        if (local >= 4u) {
-            return pinned(geometry.rect.xy + geometry.rect.zw, placement);
-        }
+        past = local >= 4u;
         let uv = vec2<f32>(f32(local >> 1u), f32(local & 1u));
-        if (placement_turned(placement)) {
-            let margin = BAND_MARGIN;
-            position = geometry.rect.xy - margin + uv * (geometry.rect.zw + 2.0 * margin);
-        } else {
-            position = geometry.rect.xy + uv * geometry.rect.zw;
-        }
+        let margin = select(0.0, BAND_MARGIN, placement_turned() & !past);
+        position = select(
+            geometry.rect.xy - margin + uv * (geometry.rect.zw + 2.0 * margin),
+            geometry.rect.xy + geometry.rect.zw,
+            past,
+        );
     }
-    return shape_output(record, placement, geometry, position);
+    return shape_output(record, geometry, position, past);
 }
 
-fn clip_position(drawn: vec2<f32>, placement: Placement) -> vec4<f32> {
+fn clip_position(drawn: vec2<f32>) -> vec4<f32> {
     var position = drawn;
-    if (placement_turned(placement)) {
+    if (placement_turned()) {
         position = vec2<f32>(
             placement.transform.x * position.x + placement.transform.y * position.y,
             placement.transform.z * position.x + placement.transform.w * position.y,
@@ -868,14 +855,6 @@ fn fragment_turned(input: VertexOutput) -> bool {
     return (SHAPE_TURNS == TURNS_ALL)
         | ((SHAPE_TURNS == TURNS_MIXED)
             & ((u32(max(input.stroke_params.y, 0.0)) & SHAPE_FLAG_TURNED) != 0u));
-}
-
-// A vertex past the record's own, at the device position of its last
-// one: nothing rasterizes between them.
-fn pinned(position: vec2<f32>, placement: Placement) -> VertexOutput {
-    var output: VertexOutput;
-    output.clip_position = clip_position(position, placement);
-    return output;
 }
 
 // Depth steps one record apart: 2^-20, a whole number of ulps below 1, so
@@ -961,10 +940,9 @@ fn vs_record_gradient_slice(
 ) -> GradientSliceOutput {
     let full = placed_record_vertex(record, vertex_idx, instance);
     let slice = slice_output(full);
-    let placement = record_placement(record);
     let ramp = vertex_gradient_ramp(
         record,
-        slice_brush_rect(record, placement),
+        slice_brush_rect(record),
         false,
         placement.root_scale,
         full.world_pos.xy,
@@ -1016,12 +994,12 @@ fn vs_record_interior(
         return output;
     }
     let depth = record_depth(instance);
-    let placement = record_placement(record);
-    let color = paint(record.color, placement);
+    placement = record_placement(record);
+    let color = paint(record.color);
     if (color.a < 1.0 || depth <= 0.0) {
         return output;
     }
-    let geometry = record_geometry(record, placement);
+    let geometry = record_geometry(record);
     let radii = select(vec4<f32>(0.0), resolved_radii(record, geometry.scale), kind == RECORD_KIND_ROUND_RECT);
     var interior = fill_interior(geometry.rect, radii);
     if ((placement.flags & PLACEMENT_CLIPPED) != 0u) {
@@ -1036,7 +1014,7 @@ fn vs_record_interior(
     }
     let local = min(vertex_idx, 3u);
     let corner = vec2<f32>(f32(local >> 1u), f32(local & 1u));
-    output.clip_position = clip_position(mix(interior.xy, interior.zw, corner), placement);
+    output.clip_position = clip_position(mix(interior.xy, interior.zw, corner));
     output.clip_position.z = depth;
     output.color = color;
     return output;
@@ -1079,7 +1057,7 @@ struct LineFrame {
     half_width: f32,
 }
 
-fn line_frame(record: ShapeRecord, placement: Placement) -> LineFrame {
+fn line_frame(record: ShapeRecord) -> LineFrame {
     let scale = placement.root_scale;
     let start = (record.arc_geometry.xy + placement.offset) * scale;
     let end = (record.arc_geometry.zw + placement.offset) * scale;
@@ -1141,7 +1119,7 @@ struct TrapezoidFrame {
 // zero; the rasterizer gives such a slice few pixels or none.
 const TRAPEZOID_MIN_WIDTH: f32 = 1.0e-6;
 
-fn trapezoid_frame(record: ShapeRecord, placement: Placement) -> TrapezoidFrame {
+fn trapezoid_frame(record: ShapeRecord) -> TrapezoidFrame {
     let scale = placement.root_scale;
     return TrapezoidFrame(
         (record.arc_normalized.xy + placement.offset.x) * scale,
@@ -1222,7 +1200,6 @@ fn band_padded_range(mid: f32, ring_half: f32, start: f32, sweep: f32) -> vec2<f
 
 fn band_position(
     record: ShapeRecord,
-    placement: Placement,
     trig: vec4<f32>,
     boundary: u32,
     side: u32,
