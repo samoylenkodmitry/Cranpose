@@ -1550,7 +1550,7 @@ fn platform_drivers_set_density_through_app_shell() {
 
 #[test]
 fn web_primary_pointer_stream_is_captured_until_release_or_cancel() {
-    let source = crate_source("src/web.rs");
+    let source = crate_source("src/web_pointer.rs");
 
     assert!(
         source.contains("set_pointer_capture(event.pointer_id())"),
@@ -1562,6 +1562,19 @@ fn web_primary_pointer_stream_is_captured_until_release_or_cancel() {
             .count()
             >= 2,
         "web pointer-up and pointer-cancel must both release canvas pointer capture"
+    );
+}
+
+#[test]
+fn web_later_fingers_join_the_first_fingers_gesture() {
+    let source = crate_source("src/web_pointer.rs");
+
+    assert!(
+        source.contains("(!event.is_primary())")
+            && source.contains("app.secondary_pointer_pressed(id, at.x, at.y, None)")
+            && source.contains("app.secondary_pointer_moved(id, at.x, at.y, None)")
+            && source.contains("app.secondary_pointer_released(id, at.x, at.y, None)"),
+        "a web finger after the first must reach the secondary pointer API, as on Android and iOS, instead of moving the primary cursor"
     );
 }
 

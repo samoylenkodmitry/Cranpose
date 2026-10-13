@@ -79,6 +79,12 @@ noop = [
     "dep:smallvec",
 ]
 parking_lot = ["dep:parking_lot"]
+portable-wgsl = [
+    "wgsl",
+    "dep:naga",
+    "naga/wgsl-in",
+    "naga/wgsl-out",
+]
 serde = [
     "wgpu-core?/serde",
     "wgpu-types/serde",

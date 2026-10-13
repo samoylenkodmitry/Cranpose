@@ -353,6 +353,23 @@ cannot use the surface's textures, since none is acquired and a presented one
 cannot be submitted, so `wgpu-core` accepts both results of the wait, as
 upstream's trunk does.
 
+### Safari gets WGSL without texture and sampler `let`s
+
+Safari 26 rejects WGSL that names a texture or a sampler with `let`, such as
+`let texture = base_color_texture;`, with "'texture_2d<f32>' cannot be used as
+the type of a 'let'". That is the `texture_and_sampler_let` language feature,
+which Chrome has and WebKit does not. Bevy 0.20's PBR shaders use it in 32
+places, so on an iPhone every material with a texture failed to build its
+pipeline and was not drawn.
+
+The `portable-wgsl` feature reads, on a WebGPU device whose browser does not
+list the feature in `navigator.gpu.wgslLanguageFeatures`, every WGSL module
+that has such a `let` with naga and writes it back without the names, so
+the texture or sampler is written where the name was used. A browser that
+has the feature gets the source as it is. The feature adds naga's WGSL
+reader and writer to a wasm build, so only crates that bring such shaders
+turn it on: `cranpose-bevy` does on the web.
+
 ### Update the fork
 
 1. Copy the new upstream versions' crates.io sources over the crate
