@@ -328,20 +328,21 @@ use cranpose_app_shell::FrameUpdateResult;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 
 use super::{
-    App, ControlFlow, DesktopRect, FramePacingMode, HandedPress, HeldPressStep, LoopControlInputs,
-    NativeWindowOptions, NativeWindowPointerState, NativeWindowPollingDragSession,
-    NativeWindowPositionObservation, NativeWindowPositionOrigin, PendingNativeWindowPositions,
-    PressBelongsHere, PressToHandOver, PrimaryPointerGesturePollAction, RootId, WindowFocus,
-    WinitWindowId, clamp_rect_to_monitor_delta, desired_frame_latency, event_loop_control_flow,
+    App, ControlFlow, DesktopRect, FramePacingMode, HandedPress, HeldPressStep,
+    IDLE_PREFETCH_MARGIN, LoopControlInputs, NativeWindowOptions, NativeWindowPointerState,
+    NativeWindowPollingDragSession, NativeWindowPositionObservation, NativeWindowPositionOrigin,
+    PendingNativeWindowPositions, PressBelongsHere, PressToHandOver,
+    PrimaryPointerGesturePollAction, RootId, WindowFocus, WinitWindowId,
+    clamp_rect_to_monitor_delta, desired_frame_latency, event_loop_control_flow,
     frame_cap_interval, frame_interval_for_mode, free_running_frame, held_press_after_step,
-    held_press_step, held_press_to_hand_over, initial_present_redraw_needed,
-    native_window_drag_poll_deadline, native_window_options_change_is_position_only,
-    native_window_position_poll_needed, native_window_redraw_held_while_hidden,
-    nearest_monitor_to_rect, next_frame_anchor, occlusion_leaves_a_frame_owed,
-    pace_after_empty_redraw, physical_outer_origin_from_surface, physical_surface_local_pointer,
-    physical_surface_origin_from_outer, physical_surface_rect_contains_pointer,
-    pointer_button_frame_request, press_belongs_here, press_to_hand_over,
-    primary_declaration_host_needs_direct_update, primary_frame_waker,
+    held_press_step, held_press_to_hand_over, idle_prefetch_deadline,
+    initial_present_redraw_needed, native_window_drag_poll_deadline,
+    native_window_options_change_is_position_only, native_window_position_poll_needed,
+    native_window_redraw_held_while_hidden, nearest_monitor_to_rect, next_frame_anchor,
+    occlusion_leaves_a_frame_owed, pace_after_empty_redraw, physical_outer_origin_from_surface,
+    physical_surface_local_pointer, physical_surface_origin_from_outer,
+    physical_surface_rect_contains_pointer, pointer_button_frame_request, press_belongs_here,
+    press_to_hand_over, primary_declaration_host_needs_direct_update, primary_frame_waker,
     primary_frame_waker_uses_event_proxy, primary_launch_requires_initial_redraw,
     primary_pointer_gesture_poll_action, primary_pointer_move_should_recover_press,
     primary_surface_redraw_drives_app, primary_viewport_for_surface_size,
@@ -1879,4 +1880,31 @@ fn a_window_shown_again_is_new_to_the_press_that_is_still_down() {
     assert!(!super::window_shown_again_takes_a_held_press(false, true));
     assert!(!super::window_shown_again_takes_a_held_press(true, false));
     assert!(!super::window_shown_again_takes_a_held_press(false, false));
+}
+
+#[test]
+fn idle_prefetch_passes_stop_before_the_next_frame() {
+    let now = Instant::now();
+    let interval = std::time::Duration::from_micros(8_333);
+    let next_frame = now + std::time::Duration::from_millis(5);
+    assert_eq!(
+        idle_prefetch_deadline(now, None, true, Some(next_frame)),
+        None,
+        "frames that run back to back leave no idle time"
+    );
+    assert_eq!(
+        idle_prefetch_deadline(now, Some(interval), true, Some(next_frame)),
+        Some(next_frame - IDLE_PREFETCH_MARGIN),
+        "a pending frame starts at its paced time"
+    );
+    assert_eq!(
+        idle_prefetch_deadline(now, Some(interval), false, Some(next_frame)),
+        Some(now + interval - IDLE_PREFETCH_MARGIN),
+        "with no frame pending, the next comes no sooner than an interval"
+    );
+    assert!(
+        idle_prefetch_deadline(now, Some(interval), true, None)
+            .is_some_and(|deadline| deadline < now),
+        "a pending frame with no paced time may start now"
+    );
 }

@@ -860,6 +860,26 @@ impl App {
         self.sync_native_windows(event_loop);
     }
 
+    /// Composes the rows the last frame left beyond lazy lists' viewports
+    /// while the loop waits for the next frame ([`idle_prefetch_deadline`]).
+    fn prefetch_while_waiting(
+        &mut self,
+        frame_interval: Option<Duration>,
+        needs_redraw: bool,
+        next_frame_time: Option<Instant>,
+    ) {
+        if let Some(app) = &mut self.app
+            && let Some(deadline) = idle_prefetch_deadline(
+                Instant::now(),
+                frame_interval,
+                needs_redraw,
+                next_frame_time,
+            )
+        {
+            app.run_idle_prefetch(Some(deadline), |_| false);
+        }
+    }
+
     fn handle_primary_frame_requested(&mut self, event_loop: &dyn ActiveEventLoop) {
         if !self.primary_frames_enabled() {
             return;
@@ -3474,6 +3494,29 @@ struct LoopControlInputs {
     next_event_time: Option<Instant>,
 }
 
+/// How long before the next frame idle prefetch passes stop.
+const IDLE_PREFETCH_MARGIN: Duration = Duration::from_millis(1);
+
+/// Until when idle prefetch passes may run while the loop waits: a margin
+/// before the next frame, which a pending one starts at `next_frame_time`,
+/// and which otherwise comes no sooner than a frame interval from `now`.
+/// `None` where frames run back to back (no frame interval): then no pass
+/// runs.
+fn idle_prefetch_deadline(
+    now: Instant,
+    frame_interval: Option<Duration>,
+    needs_redraw: bool,
+    next_frame_time: Option<Instant>,
+) -> Option<Instant> {
+    let interval = frame_interval?;
+    let next_frame = if needs_redraw {
+        next_frame_time.unwrap_or(now)
+    } else {
+        now + interval
+    };
+    next_frame.checked_sub(IDLE_PREFETCH_MARGIN)
+}
+
 fn event_loop_control_flow(now: Instant, inputs: LoopControlInputs) -> ControlFlow {
     let due = |deadline: Option<Instant>| deadline.is_some_and(|deadline| deadline <= now);
     if inputs.robot_needs_poll
@@ -5486,6 +5529,10 @@ impl ApplicationHandler for App {
             return;
         };
         let registry = Rc::clone(&self.native_window_registry);
+        // The loop runs idle prefetch passes while it waits for a frame
+        // (`idle_prefetch_deadline`): a lazy list leaves them the items beyond
+        // its viewport that its scroll does not soon reach.
+        cranpose_ui::set_idle_prefetch_passes(true);
         let mut app = native_window::with_native_window_registry(&registry, || {
             AppShell::new_with_size_and_density(
                 renderer,
@@ -6959,6 +7006,8 @@ impl ApplicationHandler for App {
             ControlFlow::Wait => |diag: &mut PacingDiag| &mut diag.control_flow_wait,
         });
         event_loop.set_control_flow(control_flow);
+
+        self.prefetch_while_waiting(frame_interval, needs_redraw, next_frame_time);
     }
 }
 
