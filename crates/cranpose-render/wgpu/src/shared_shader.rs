@@ -9,7 +9,14 @@ static NO_SHADER_FOLD: crate::debug_toggles::DebugToggle =
     crate::debug_toggles::DebugToggle::new("CRANPOSE_NO_SHADER_FOLD");
 
 #[cfg(not(target_arch = "wasm32"))]
+static NO_SHADER_FLATTEN: crate::debug_toggles::DebugToggle =
+    crate::debug_toggles::DebugToggle::new("CRANPOSE_NO_SHADER_FLATTEN");
+
+#[cfg(not(target_arch = "wasm32"))]
 static STAGES_FOLDED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(not(target_arch = "wasm32"))]
+static STAGES_FLATTENED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The pipeline stages this process built specialized and folded, each
 /// carrying only the code its override constants keep.
@@ -17,6 +24,19 @@ pub fn shader_stages_folded() -> u64 {
     #[cfg(not(target_arch = "wasm32"))]
     {
         STAGES_FOLDED.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        0
+    }
+}
+
+/// The folded stages this process also flattened: every call inlined and
+/// every struct variable split into its members.
+pub fn shader_stages_flattened() -> u64 {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        STAGES_FLATTENED.load(std::sync::atomic::Ordering::Relaxed)
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -211,7 +231,8 @@ impl SharedShader {
     }
 
     /// The `stage` of entry point `entry` with `constants`, specialized and
-    /// folded into a module of its own.
+    /// folded into a module of its own, and flattened where wgpu takes the
+    /// flattened module.
     #[cfg(not(target_arch = "wasm32"))]
     fn folded(
         &self,
@@ -219,6 +240,52 @@ impl SharedShader {
         entry: &str,
         constants: &[(&str, f64)],
     ) -> Option<wgpu::ShaderModule> {
+        let mut module = self.specialized(stage, entry, constants)?;
+        if !NO_SHADER_FLATTEN.equals("1") {
+            match crate::shader_flatten::flatten(&mut module) {
+                Ok(()) => {
+                    naga::compact::compact(&mut module, naga::compact::KeepUnused::No);
+                    if let Some(shader) = self.created(module) {
+                        STAGES_FOLDED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        STAGES_FLATTENED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        return Some(shader);
+                    }
+                    log::error!(
+                        "[shader-flatten] {} {entry}: wgpu refused the flattened stage",
+                        self.label
+                    );
+                }
+                Err(error) => {
+                    log::debug!(
+                        "[shader-flatten] {} {entry} stays folded: {}",
+                        self.label,
+                        error.0
+                    );
+                }
+            }
+            // The passes left the module part flattened.
+            module = self.specialized(stage, entry, constants)?;
+        }
+        naga::compact::compact(&mut module, naga::compact::KeepUnused::No);
+        STAGES_FOLDED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Some(
+            self.device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some(self.label),
+                    source: wgpu::ShaderSource::Naga(Cow::Owned(module)),
+                }),
+        )
+    }
+
+    /// The `stage` of entry point `entry` specialized by `constants` and
+    /// folded (see [`crate::shader_fold`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn specialized(
+        &self,
+        stage: naga::ShaderStage,
+        entry: &str,
+        constants: &[(&str, f64)],
+    ) -> Option<naga::Module> {
         let (module, info) = self.parsed()?;
         let constants: naga::back::PipelineConstants = constants
             .iter()
@@ -237,16 +304,35 @@ impl SharedShader {
             );
         })
         .ok()?;
-        let mut specialized = specialized.into_owned();
-        crate::shader_fold::fold(&mut specialized);
-        STAGES_FOLDED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Some(
-            self.device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some(self.label),
-                    source: wgpu::ShaderSource::Naga(Cow::Owned(specialized)),
-                }),
-        )
+        let mut folded = specialized.into_owned();
+        crate::shader_fold::fold(&mut folded);
+        Some(folded)
+    }
+
+    /// The shader module of `module`, or `None` where wgpu's validation
+    /// refuses it: wgpu validates a naga module as it creates it, and an
+    /// error scope keeps that error from the device.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn created(&self, module: naga::Module) -> Option<wgpu::ShaderModule> {
+        let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let shader = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(self.label),
+                source: wgpu::ShaderSource::Naga(Cow::Owned(module)),
+            });
+        // A native device reports the error as it creates the module, so
+        // the scope's result is ready when popped.
+        let mut popped = std::pin::pin!(scope.pop());
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        match popped.as_mut().poll(&mut context) {
+            std::task::Poll::Ready(None) => Some(shader),
+            std::task::Poll::Ready(Some(error)) => {
+                log::error!("[shader-flatten] {}: {error}", self.label);
+                None
+            }
+            std::task::Poll::Pending => None,
+        }
     }
 }
 
