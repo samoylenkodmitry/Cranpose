@@ -1065,6 +1065,7 @@ impl Mirror {
     }
 
     /// Brings the mirror to `elements`, which differ from the ones it shows.
+    #[inline(never)]
     fn show(
         &mut self,
         document: &Document,

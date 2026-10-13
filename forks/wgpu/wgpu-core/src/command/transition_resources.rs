@@ -53,6 +53,7 @@ impl Global {
     }
 }
 
+#[inline(never)]
 pub(crate) fn transition_resources(
     state: &mut EncodingState,
     buffer_transitions: Vec<wgt::BufferTransition<Arc<Buffer>>>,

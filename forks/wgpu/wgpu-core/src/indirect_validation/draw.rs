@@ -244,6 +244,7 @@ impl Draw {
     }
 
     /// Injects a compute pass that will validate all indirect draws in the current render pass.
+    #[inline(never)]
     pub(crate) fn inject_validation_pass(
         &self,
         device: &Arc<Device>,

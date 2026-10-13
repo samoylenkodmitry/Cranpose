@@ -140,6 +140,7 @@ impl Canvas {
 }
 
 /// The inspector over a window of `viewport`, its controls inside `area`.
+#[inline(never)]
 pub(super) fn build(state: &mut InspectorState, viewport: Size, area: Rect) -> RenderGraph {
     state.controls.clear();
     let mut canvas = Canvas {

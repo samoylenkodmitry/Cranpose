@@ -600,6 +600,7 @@ impl Global {
         (id, err)
     }
 
+    #[inline(never)]
     pub fn compute_pass_end(&self, pass: &mut ComputePass) -> Result<(), EncoderStateError> {
         profiling::scope!(
             "CommandEncoder::run_compute_pass {}",
@@ -654,6 +655,7 @@ impl Global {
     }
 }
 
+#[inline(never)]
 pub(super) fn encode_compute_pass(
     parent_state: &mut EncodingState<InnerCommandEncoder>,
     mut base: BasePass<ArcComputeCommand, Infallible>,

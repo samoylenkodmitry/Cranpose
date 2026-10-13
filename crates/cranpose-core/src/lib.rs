@@ -4823,6 +4823,8 @@ impl SlotsHost {
         SlotTableDebugStats::from_parts(local, lifecycle, retention)
     }
 
+    #[cold]
+    #[inline(never)]
     pub(crate) fn debug_snapshot(&self) -> slot::SlotDebugSnapshot {
         let inner = self.inner.borrow();
         let mut snapshot = inner.table.debug_snapshot();

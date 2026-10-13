@@ -3228,6 +3228,7 @@ fn draw_mesh_tasks(
     Ok(())
 }
 
+#[inline(never)]
 fn multi_draw_indirect(
     state: &mut State,
     indirect_draw_validation_batcher: &mut crate::indirect_validation::DrawBatcher,
@@ -3421,6 +3422,7 @@ fn multi_draw_indirect(
     Ok(())
 }
 
+#[inline(never)]
 fn multi_draw_indirect_count(
     state: &mut State,
     device: &Arc<Device>,

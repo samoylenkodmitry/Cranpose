@@ -161,6 +161,7 @@ impl Global {
     }
 }
 
+#[inline(never)]
 pub(super) fn clear_buffer(
     state: &mut EncodingState,
     dst_buffer: Arc<Buffer>,
@@ -234,6 +235,7 @@ pub(super) fn clear_buffer(
 /// distinguish it from [`clear_texture`]. [`clear_texture`], used internally by
 /// this function, is a lower-level function that encodes a texture clear
 /// operation without validating it.
+#[inline(never)]
 pub(super) fn clear_texture_cmd(
     state: &mut EncodingState,
     dst_texture: Arc<Texture>,

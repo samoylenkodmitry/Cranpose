@@ -3853,6 +3853,8 @@ impl GpuRenderer {
     }
 
     /// See [`crate::WgpuRenderer::first_screen_pipelines`].
+    #[cold]
+    #[inline(never)]
     pub(crate) fn first_screen_pipelines(&self) -> Option<Vec<u8>> {
         self.recorder.first_screen_records(self.adapter_backend)
     }
@@ -4304,6 +4306,7 @@ impl GpuRenderer {
     /// A texture of the given size that stays transparent: the input of a
     /// runtime shader whose layer draws nothing itself, so the shader needs
     /// no surface pass and reads the same empty content every frame.
+    #[inline(never)]
     pub(crate) fn transparent_source<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,

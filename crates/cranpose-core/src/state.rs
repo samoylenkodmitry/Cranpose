@@ -851,6 +851,8 @@ impl WriteTarget<'_> {
     }
 }
 
+#[cold]
+#[inline(never)]
 fn check_chain_integrity(
     head: &Rc<StateRecord>,
     id: ObjectId,

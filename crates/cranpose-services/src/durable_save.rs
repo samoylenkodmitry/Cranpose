@@ -268,6 +268,7 @@ fn run_callback(save: impl FnOnce() -> Result<(), DurableSaveError>) -> bool {
 /// waits within its budget before sampling fresh values. A timeout does not
 /// cancel a running write. Retry a failed or timed-out boundary before relying
 /// on restoration. Web writes execute synchronously on the browser thread.
+#[inline(never)]
 pub fn run_durable_saves(deadline: Duration) -> DurableSaveOutcome {
     #[cfg(not(target_arch = "wasm32"))]
     {

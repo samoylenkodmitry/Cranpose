@@ -3297,6 +3297,7 @@ impl Device {
         Ok(tlas.try_raw(snatch_guard)?)
     }
 
+    #[inline(never)]
     fn create_external_texture_binding<'a>(
         &'a self,
         binding: u32,

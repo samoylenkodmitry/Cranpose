@@ -473,6 +473,7 @@ impl Global {
     }
 }
 
+#[inline(never)]
 pub(super) fn write_timestamp(
     state: &mut EncodingState,
     query_set: Arc<QuerySet>,
@@ -497,6 +498,7 @@ pub(super) fn write_timestamp(
     Ok(())
 }
 
+#[inline(never)]
 pub(super) fn resolve_query_set(
     state: &mut EncodingState<'_, '_, InnerCommandEncoder>,
     query_set: Arc<QuerySet>,

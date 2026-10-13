@@ -1090,6 +1090,11 @@ impl CommandEncoder {
         }
     }
 
+    /// Encodes the recorded commands. Each command kind but the render pass
+    /// encodes in a function of its own (`#[inline(never)]`): inlined, every
+    /// kind joined the one function each submission runs, and a WebAssembly
+    /// page compiles a function whole at its first call, so its first frame
+    /// compiled compute, copy, query and ray tracing encoding it never ran.
     fn encode_commands(
         device: &Arc<Device>,
         cmd_buf_data: &mut CommandBufferMutable,
@@ -1866,6 +1871,7 @@ impl Global {
     }
 }
 
+#[inline(never)]
 pub(crate) fn push_debug_group(
     state: &mut EncodingState,
     label: &str,
@@ -1883,6 +1889,7 @@ pub(crate) fn push_debug_group(
     Ok(())
 }
 
+#[inline(never)]
 pub(crate) fn insert_debug_marker(
     state: &mut EncodingState,
     label: &str,
@@ -1898,6 +1905,7 @@ pub(crate) fn insert_debug_marker(
     Ok(())
 }
 
+#[inline(never)]
 pub(crate) fn pop_debug_group(state: &mut EncodingState) -> Result<(), CommandEncoderError> {
     if *state.debug_scope_depth == 0 {
         return Err(DebugGroupError::InvalidPop.into());

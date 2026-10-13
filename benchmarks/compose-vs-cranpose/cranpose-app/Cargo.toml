@@ -7,8 +7,13 @@ license = "Apache-2.0 OR MIT"
 publish = false
 
 # wasm-pack's wasm-opt reads the instructions rustc emits for the browser.
+# `-ocimfs=100` keeps wasm-opt from folding each function that has a single
+# caller into that caller, whatever its size. A page compiles a function whole
+# at its first call, so those folds made functions of over 100 KB whose unused
+# branches a first visit compiled: on a Mate 20 X the gauntlet's first frame
+# came 110-170 ms sooner without them.
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-O3", "--all-features"]
+wasm-opt = ["-O3", "-ocimfs=100", "--all-features"]
 
 [lib]
 name = "perf_compare"

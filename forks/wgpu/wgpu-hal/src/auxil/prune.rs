@@ -24,6 +24,7 @@ use naga::{
 
 /// `module` without the branches its constants decide, with its info; the
 /// module as it is when none is decided.
+#[inline(never)]
 pub fn prune_decided_branches<'a>(
     module: Cow<'a, Module>,
     info: Cow<'a, ModuleInfo>,

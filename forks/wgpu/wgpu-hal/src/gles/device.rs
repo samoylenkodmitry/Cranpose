@@ -403,96 +403,121 @@ impl super::Device {
                 }
             };
 
-            let (module, info) = naga::back::pipeline_constants::process_overrides(
-                &naga.module,
-                &naga.info,
-                Some((naga_stage, stage.entry_point)),
-                stage.constants,
-            )
-            .map_err(|e| {
-                let msg = format!("{e}");
-                crate::PipelineError::PipelineConstants(map_naga_stage(naga_stage), msg)
-            })?;
-            let (module, info) = crate::auxil::prune::prune_decided_branches(module, info)
-                .map_err(|msg| {
-                    crate::PipelineError::PipelineConstants(map_naga_stage(naga_stage), msg)
-                })?;
-
-            let entry_point_index = module
-                .entry_points
-                .iter()
-                .position(|ep| ep.name.as_str() == stage.entry_point)
-                .ok_or(crate::PipelineError::EntryPoint(naga_stage))?;
-
-            use naga::proc::BoundsCheckPolicy;
-            // The image bounds checks require the TEXTURE_LEVELS feature available in GL core 4.3+.
-            let version = gl.version();
-            let image_check = if !version.is_embedded && (version.major, version.minor) >= (4, 3) {
-                BoundsCheckPolicy::ReadZeroSkipWrite
-            } else {
-                BoundsCheckPolicy::Unchecked
-            };
-
-            // Other bounds check are either provided by glsl or not implemented yet.
-            let policies = naga::proc::BoundsCheckPolicies {
-                index: BoundsCheckPolicy::Unchecked,
-                buffer: BoundsCheckPolicy::Unchecked,
-                image_load: image_check,
-                binding_array: BoundsCheckPolicy::Unchecked,
-            };
-
-            let mut output = String::new();
-            let force_point_size =
-                context.force_point_size && naga_stage == naga::ShaderStage::Vertex;
-            let needs_temp_options = stage.zero_initialize_workgroup_memory
-                != context.layout.naga_options.zero_initialize_workgroup_memory
-                || force_point_size;
-            let mut temp_options;
-            let naga_options = if needs_temp_options {
-                // We use a conditional here, as cloning the naga_options could be expensive
-                // That is, we want to avoid doing that unless we cannot avoid it
-                temp_options = context.layout.naga_options.clone();
-                temp_options.zero_initialize_workgroup_memory =
-                    stage.zero_initialize_workgroup_memory;
-                temp_options
-                    .writer_flags
-                    .set(glsl::WriterFlags::FORCE_POINT_SIZE, force_point_size);
-                &temp_options
-            } else {
-                &context.layout.naga_options
-            };
-            let mut writer = glsl::Writer::new(
-                &mut output,
-                &module,
-                &info,
-                naga_options,
-                &pipeline_options,
-                policies,
-            )
-            .map_err(|e| {
-                let msg = format!("{e}");
-                crate::PipelineError::Linkage(map_naga_stage(naga_stage), msg)
-            })?;
-
-            let reflection_info = writer.write().map_err(|e| {
-                let msg = format!("{e}");
-                crate::PipelineError::Linkage(map_naga_stage(naga_stage), msg)
-            })?;
-
-            log::debug!("Naga generated shader:\n{output}");
-
-            context.consume_reflection(
+            Cow::Owned(Self::naga_glsl(
                 gl,
-                &module,
-                info.get_entry_point(entry_point_index),
-                reflection_info,
-                naga_stage,
+                naga,
+                (naga_stage, stage),
+                context,
                 program,
-            );
-            Cow::Owned(output)
+                &pipeline_options,
+            )?)
         };
 
         unsafe { Self::compile_shader(gl, &source, naga_stage, stage.module.label.as_deref()) }
+    }
+
+    /// The GLSL naga writes for a stage of a module it holds as IR. The
+    /// built-in shaders take GLSL templates, so this stays out of
+    /// [`Self::create_shader`]: a WebAssembly page compiles a function whole at
+    /// its first call, and every pipeline's first call would compile naga's
+    /// writer with it.
+    #[inline(never)]
+    fn naga_glsl(
+        gl: &glow::Context,
+        naga: &crate::NagaShader,
+        (naga_stage, stage): (naga::ShaderStage, &crate::ProgrammableStage<super::ShaderModule>),
+        context: CompilationContext,
+        program: glow::Program,
+        pipeline_options: &naga::back::glsl::PipelineOptions,
+    ) -> Result<String, crate::PipelineError> {
+        use naga::back::glsl;
+        let (module, info) = naga::back::pipeline_constants::process_overrides(
+            &naga.module,
+            &naga.info,
+            Some((naga_stage, stage.entry_point)),
+            stage.constants,
+        )
+        .map_err(|e| {
+            let msg = format!("{e}");
+            crate::PipelineError::PipelineConstants(map_naga_stage(naga_stage), msg)
+        })?;
+        let (module, info) = crate::auxil::prune::prune_decided_branches(module, info)
+            .map_err(|msg| {
+                crate::PipelineError::PipelineConstants(map_naga_stage(naga_stage), msg)
+            })?;
+
+        let entry_point_index = module
+            .entry_points
+            .iter()
+            .position(|ep| ep.name.as_str() == stage.entry_point)
+            .ok_or(crate::PipelineError::EntryPoint(naga_stage))?;
+
+        use naga::proc::BoundsCheckPolicy;
+        // The image bounds checks require the TEXTURE_LEVELS feature available in GL core 4.3+.
+        let version = gl.version();
+        let image_check = if !version.is_embedded && (version.major, version.minor) >= (4, 3) {
+            BoundsCheckPolicy::ReadZeroSkipWrite
+        } else {
+            BoundsCheckPolicy::Unchecked
+        };
+
+        // Other bounds check are either provided by glsl or not implemented yet.
+        let policies = naga::proc::BoundsCheckPolicies {
+            index: BoundsCheckPolicy::Unchecked,
+            buffer: BoundsCheckPolicy::Unchecked,
+            image_load: image_check,
+            binding_array: BoundsCheckPolicy::Unchecked,
+        };
+
+        let mut output = String::new();
+        let force_point_size =
+            context.force_point_size && naga_stage == naga::ShaderStage::Vertex;
+        let needs_temp_options = stage.zero_initialize_workgroup_memory
+            != context.layout.naga_options.zero_initialize_workgroup_memory
+            || force_point_size;
+        let mut temp_options;
+        let naga_options = if needs_temp_options {
+            // We use a conditional here, as cloning the naga_options could be expensive
+            // That is, we want to avoid doing that unless we cannot avoid it
+            temp_options = context.layout.naga_options.clone();
+            temp_options.zero_initialize_workgroup_memory =
+                stage.zero_initialize_workgroup_memory;
+            temp_options
+                .writer_flags
+                .set(glsl::WriterFlags::FORCE_POINT_SIZE, force_point_size);
+            &temp_options
+        } else {
+            &context.layout.naga_options
+        };
+        let mut writer = glsl::Writer::new(
+            &mut output,
+            &module,
+            &info,
+            naga_options,
+            pipeline_options,
+            policies,
+        )
+        .map_err(|e| {
+            let msg = format!("{e}");
+            crate::PipelineError::Linkage(map_naga_stage(naga_stage), msg)
+        })?;
+
+        let reflection_info = writer.write().map_err(|e| {
+            let msg = format!("{e}");
+            crate::PipelineError::Linkage(map_naga_stage(naga_stage), msg)
+        })?;
+
+        log::debug!("Naga generated shader:\n{output}");
+
+        context.consume_reflection(
+            gl,
+            &module,
+            info.get_entry_point(entry_point_index),
+            reflection_info,
+            naga_stage,
+            program,
+        );
+        Ok(output)
     }
 
     unsafe fn create_pipeline<'a>(

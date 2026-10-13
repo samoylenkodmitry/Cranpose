@@ -10,8 +10,13 @@ publish = false
 [lints]
 workspace = true
 
+# `-ocimfs=100` keeps wasm-opt from folding each function that has a single
+# caller into that caller, whatever its size. A page compiles a function whole
+# at its first call, so those folds made functions of over 100 KB whose unused
+# branches a first visit compiled: on a Mate 20 X the gauntlet's first frame
+# came 110-170 ms sooner without them.
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-Oz", "--all-features"]
+wasm-opt = ["-Oz", "-ocimfs=100", "--all-features"]
 
 [lib]
 name = "desktop_app"
