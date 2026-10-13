@@ -1,11 +1,14 @@
 use std::{
     alloc::System,
     hash::{Hash, Hasher},
+    sync::Arc,
 };
 
+use cranpose_core::{DefaultScheduler, Runtime};
 use cranpose_foundation::{
     BasicModifierNodeContext, DelegatableNode, DynModifierElement, ModifierNode, ModifierNodeChain,
     ModifierNodeElement, NodeCapabilities, NodeState, modifier_element,
+    text::{TextFieldBuffer, TextFieldState},
 };
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 
@@ -164,7 +167,40 @@ fn invalidations_taken_after_every_update_allocate_nothing() {
 /// One test, so no other test's allocations land in these regions: the
 /// counting allocator counts every thread.
 #[test]
-fn modifier_chain_updates_stay_within_their_allocation_budgets() {
+fn updates_stay_within_their_allocation_budgets() {
     a_chain_whose_element_changes_content_in_place_updates_without_allocating();
     invalidations_taken_after_every_update_allocate_nothing();
+    text_field_edits_copy_the_text_once_and_reads_copy_nothing();
+}
+
+const TEXT_BYTES: usize = 64 * 1024;
+
+fn text_field_edits_copy_the_text_once_and_reads_copy_nothing() {
+    let _runtime = Runtime::new(Arc::new(DefaultScheduler));
+    let state = TextFieldState::new("x".repeat(TEXT_BYTES));
+
+    let region = Region::new(GLOBAL);
+    for _ in 0..UPDATES {
+        let _ = state.selection();
+        let _ = state.composition();
+    }
+    let change = region.change();
+    assert_eq!(change.allocations, 0, "reads copied the text: {change:?}");
+
+    let region = Region::new(GLOBAL);
+    state.edit(TextFieldBuffer::place_cursor_at_start);
+    let change = region.change();
+    assert!(
+        change.bytes_allocated < 2 * TEXT_BYTES && change.reallocations == 0,
+        "a cursor move copied the text more than once: {change:?}"
+    );
+
+    state.edit(|buffer| buffer.insert("a"));
+    let region = Region::new(GLOBAL);
+    state.edit(|buffer| buffer.insert("b"));
+    let change = region.change();
+    assert!(
+        change.bytes_allocated < 2 * TEXT_BYTES && change.reallocations == 0,
+        "a typed character that joins the undo group copied the text more than once: {change:?}"
+    );
 }

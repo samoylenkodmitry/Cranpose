@@ -1,7 +1,7 @@
 use smallvec::SmallVec;
 use unicode_segmentation::GraphemeCursor;
 
-use super::TextRange;
+use super::{TextFieldValue, TextRange};
 
 /// A mutable text buffer that can be edited.
 ///
@@ -354,6 +354,14 @@ impl TextFieldBuffer {
             .ok()
             .flatten()
             .unwrap_or(self.text.len())
+    }
+
+    pub(crate) fn into_value(self) -> TextFieldValue {
+        TextFieldValue {
+            text: self.text,
+            selection: self.selection,
+            composition: self.composition,
+        }
     }
 
     /// Returns the selected text for copy operations.

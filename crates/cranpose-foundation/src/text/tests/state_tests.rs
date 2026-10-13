@@ -56,6 +56,40 @@ fn flushing_an_undo_group_breaks_the_coalescing_between_two_edits() {
 }
 
 #[test]
+fn undo_skips_cursor_moves_and_restores_the_text_before_the_typing() {
+    with_test_runtime(|| {
+        let state = TextFieldState::new("");
+        state.edit(|buffer| buffer.insert("a"));
+        state.edit(|buffer| buffer.insert("b"));
+        state.edit(TextFieldBuffer::move_cursor_left);
+        state.edit(|buffer| buffer.insert("c"));
+        assert_eq!(state.text(), "acb");
+
+        state.undo();
+        assert_eq!(state.text(), "ab", "the first undo takes back the c");
+        state.undo();
+        assert_eq!(
+            state.text(),
+            "",
+            "the second undo takes back the typing, not the cursor move"
+        );
+        assert!(!state.can_undo());
+    });
+}
+
+#[test]
+fn a_cursor_move_keeps_the_redo_history() {
+    with_test_runtime(|| {
+        let state = TextFieldState::new("");
+        state.edit(|buffer| buffer.insert("ab"));
+        state.undo();
+        state.edit(TextFieldBuffer::place_cursor_at_start);
+        assert!(state.redo(), "moving the cursor dropped the redo");
+        assert_eq!(state.text(), "ab");
+    });
+}
+
+#[test]
 fn new_state_has_cursor_at_end() {
     with_test_runtime(|| {
         let state = TextFieldState::new("Hello");
