@@ -1,0 +1,10 @@
+[package]
+name = "demo-scene"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The Bevy scene the engine examples draw: PBR shapes, cascaded shadows, point lights and bloom"
+
+[dependencies]
+bevy = { workspace = true, features = ["default_app", "3d_bevy_render", "multi_threaded", "std"] }

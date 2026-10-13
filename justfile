@@ -50,6 +50,7 @@ toolchains:
 fmt:
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all --manifest-path apps/isolated-demo/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all --manifest-path apps/engines/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/perf-data/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/egui-app/Cargo.toml
@@ -64,6 +65,7 @@ fmt:
 fmt-check:
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all --check
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all --check --manifest-path apps/isolated-demo/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all --check --manifest-path apps/engines/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/perf-data/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/egui-app/Cargo.toml

@@ -1,0 +1,26 @@
+[workspace]
+resolver = "3"
+members = ["bevy-in-cranpose", "cranpose-bevy", "cranpose-hud-bevy", "demo-scene"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+bevy = { version = "0.20", default-features = false }
+cranpose = { path = "../../crates/cranpose", default-features = false }
+cranpose-bevy = { path = "cranpose-bevy" }
+demo-scene = { path = "demo-scene" }
+wgpu = { version = "30", default-features = false }
+
+# Bevy pins the upstream wgpu release; this resolves it to the Cranpose fork,
+# so Bevy and Cranpose share one wgpu crate and one device.
+[patch.crates-io]
+wgpu = { path = "wgpu-shim" }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

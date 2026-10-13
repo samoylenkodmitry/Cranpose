@@ -1,0 +1,19 @@
+[package]
+name = "cranpose-hud-bevy"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "A Bevy game with a Cranpose HUD drawn on Bevy's wgpu device"
+
+[dependencies]
+bevy = { workspace = true, features = [
+    "default_app",
+    "default_platform",
+    "3d_bevy_render",
+    "ui_api",
+    "ui_bevy_render",
+] }
+cranpose = { workspace = true, features = ["renderer-wgpu", "embedded-default-font"] }
+cranpose-bevy = { workspace = true }
+demo-scene = { workspace = true }

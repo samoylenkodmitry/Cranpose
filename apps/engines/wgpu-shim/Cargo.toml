@@ -1,0 +1,38 @@
+[package]
+name = "wgpu"
+version = "30.0.12"
+edition = "2024"
+publish = false
+description = "Bevy's wgpu resolved to Cranpose's wgpu fork, so both share one device type"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+fork = { package = "cranpose-wgpu", path = "../../../forks/wgpu/wgpu", default-features = false }
+
+[features]
+default = ["fork/default"]
+angle = ["fork/angle"]
+counters = ["fork/counters"]
+custom = ["fork/custom"]
+drm = ["fork/drm"]
+dx12 = ["fork/dx12"]
+exhaust = ["fork/exhaust"]
+fragile-send-sync-non-atomic-wasm = ["fork/fragile-send-sync-non-atomic-wasm"]
+gles = ["fork/gles"]
+glsl = ["fork/glsl"]
+metal = ["fork/metal"]
+naga-ir = ["fork/naga-ir"]
+noop = ["fork/noop"]
+parking_lot = ["fork/parking_lot"]
+serde = ["fork/serde"]
+spirv = ["fork/spirv"]
+static-dxc = ["fork/static-dxc"]
+std = ["fork/std"]
+strict_asserts = ["fork/strict_asserts"]
+trace = ["fork/trace"]
+vulkan = ["fork/vulkan"]
+vulkan-portability = ["fork/vulkan-portability"]
+web = ["fork/web"]
+webgl = ["fork/webgl"]
+webgpu = ["fork/webgpu"]
+wgsl = ["fork/wgsl"]
