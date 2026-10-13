@@ -2452,6 +2452,10 @@ struct TextGlyphAtlas {
     cursor_x: u32,
     cursor_y: u32,
     row_height: u32,
+    /// The glyphs placed since [`Self::flush_uploads`], in the order they
+    /// were placed, and their coverage one after another.
+    pending: Vec<GlyphAtlasEntry>,
+    pending_coverage: Vec<u8>,
     upload_scratch: Vec<u8>,
 }
 
@@ -2501,6 +2505,8 @@ impl TextGlyphAtlas {
             cursor_x: TEXT_GLYPH_ATLAS_PADDING,
             cursor_y: TEXT_GLYPH_ATLAS_PADDING,
             row_height: 0,
+            pending: Vec::new(),
+            pending_coverage: Vec::new(),
             upload_scratch: Vec::new(),
         }
     }
@@ -2597,11 +2603,12 @@ impl TextGlyphAtlas {
         Some(entry)
     }
 
+    /// The atlas entry of `glyph`, placed now if the atlas does not hold it
+    /// yet; a placed glyph reaches the texture at [`Self::flush_uploads`].
+    /// `None` when the atlas is full.
     fn upload_glyph(
         &mut self,
         glyph: &SoftwareGlyphAtlasGlyph,
-        queue: &wgpu::Queue,
-        executor: &mut WgpuFrameGraphExecutor,
         frame_stats: &mut gpu_stats::FrameStats,
     ) -> Option<GlyphAtlasEntry> {
         let key = GlyphAtlasSlotKey::new(glyph.key, glyph.color);
@@ -2613,44 +2620,94 @@ impl TextGlyphAtlas {
         let width = u32::try_from(glyph.mask.width).ok()?;
         let height = u32::try_from(glyph.mask.height).ok()?;
         let entry = self.allocate(width, height)?;
-        self.upload_scratch.clear();
         let correction = key.luminance.correction();
-        self.upload_scratch.extend(
+        self.pending_coverage.extend(
             glyph
                 .mask
                 .alpha
                 .iter()
                 .map(|&coverage| correction.apply(coverage)),
         );
-
-        let upload_stats = executor.upload_texture(
-            queue,
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: u32::from(entry.x),
-                    y: u32::from(entry.y),
-                    z: 0,
-                },
-                aspect: wgpu::TextureAspect::All,
-            },
-            &self.upload_scratch,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(width),
-                rows_per_image: Some(height),
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-        frame_stats.record_command_stats(upload_stats);
+        self.pending.push(entry);
         frame_stats.record_text_glyph_atlas_miss(width, height);
         self.entries.put(key, entry);
         Some(entry)
+    }
+
+    /// Writes the glyphs placed since the last call to the texture, one
+    /// write for each run of them placed side by side on a row. The atlas
+    /// never places a glyph where one was, so the run's padding and the
+    /// rows under its shorter glyphs are empty, and the write leaves them
+    /// so. A frame calls this before it submits draws that read them.
+    fn flush_uploads(
+        &mut self,
+        queue: &wgpu::Queue,
+        executor: &mut WgpuFrameGraphExecutor,
+        frame_stats: &mut gpu_stats::FrameStats,
+    ) {
+        let mut coverage = 0;
+        let mut run_start = 0;
+        while run_start < self.pending.len() {
+            let first = self.pending[run_start];
+            let mut run_end = run_start + 1;
+            while self
+                .pending
+                .get(run_end)
+                .is_some_and(|next| next.y == first.y && next.x > self.pending[run_end - 1].x)
+            {
+                run_end += 1;
+            }
+            let run = &self.pending[run_start..run_end];
+            let last = run[run.len() - 1];
+            let x = u32::from(first.x);
+            let width = u32::from(last.x) + u32::from(last.width) - x;
+            let height = run
+                .iter()
+                .map(|entry| u32::from(entry.height))
+                .max()
+                .unwrap_or(0);
+            self.upload_scratch.clear();
+            self.upload_scratch.resize((width * height) as usize, 0);
+            for entry in run {
+                let glyph_width = usize::from(entry.width);
+                let left = usize::from(entry.x) - x as usize;
+                for row in 0..usize::from(entry.height) {
+                    let source = coverage + row * glyph_width;
+                    let target = row * width as usize + left;
+                    self.upload_scratch[target..target + glyph_width]
+                        .copy_from_slice(&self.pending_coverage[source..source + glyph_width]);
+                }
+                coverage += glyph_width * usize::from(entry.height);
+            }
+            let upload_stats = executor.upload_texture(
+                queue,
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x,
+                        y: u32::from(first.y),
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &self.upload_scratch,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(width),
+                    rows_per_image: Some(height),
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            frame_stats.record_command_stats(upload_stats);
+            run_start = run_end;
+        }
+        self.pending.clear();
+        self.pending_coverage.clear();
     }
 }
 
@@ -6034,12 +6091,10 @@ impl GpuRenderer {
         &mut self,
         glyph: &SoftwareGlyphAtlasGlyph,
     ) -> Result<GlyphAtlasEntry, String> {
-        if let Some(entry) = self.text_glyph_atlas.upload_glyph(
-            glyph,
-            &self.queue,
-            &mut self.frame_graph_executor,
-            &mut self.frame_stats,
-        ) {
+        if let Some(entry) = self
+            .text_glyph_atlas
+            .upload_glyph(glyph, &mut self.frame_stats)
+        {
             return Ok(entry);
         }
 
@@ -6052,6 +6107,16 @@ impl GpuRenderer {
             },
         );
         Err("text glyph atlas filled and was reset".to_string())
+    }
+
+    /// Writes the glyphs the pass placed in the atlas to its texture, ahead
+    /// of the submit that draws them.
+    pub(crate) fn flush_glyph_uploads(&mut self) {
+        self.text_glyph_atlas.flush_uploads(
+            &self.queue,
+            &mut self.frame_graph_executor,
+            &mut self.frame_stats,
+        );
     }
 
     fn glyph_atlas_entry_for_cached(
