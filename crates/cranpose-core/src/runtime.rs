@@ -443,6 +443,7 @@ struct TaskEntry {
 }
 
 pub fn label_next_ui_task(label: impl Into<String>) {
+    thread_state::watch_thread_exit();
     let label = label.into();
     thread_state::runtimes(|state| *state.next_task_label.borrow_mut() = Some(label));
 }
@@ -894,6 +895,7 @@ pub struct Runtime {
 
 impl Runtime {
     pub fn new(scheduler: SchedulerRef) -> Self {
+        thread_state::watch_thread_exit();
         let inner = Rc::new(RuntimeInner::new(scheduler));
         let runtime = Self { inner };
         let handle = runtime.handle();
@@ -955,6 +957,7 @@ impl Drop for Runtime {
                 *last = None;
             }
         });
+        thread_state::release_when_idle();
     }
 }
 
@@ -1654,7 +1657,7 @@ pub(crate) fn enter_state_teardown_scope() -> StateTeardownScope {
 
 impl Drop for StateTeardownScope {
     fn drop(&mut self) {
-        thread_state::try_runtimes(|state| {
+        let finished = thread_state::try_runtimes(|state| {
             let depth = &state.state_teardown_depth;
             let next = depth.get().saturating_sub(1);
             depth.set(next);
@@ -1664,7 +1667,11 @@ impl Drop for StateTeardownScope {
                     release_state(&deferred.runtime, deferred.id);
                 }
             }
+            next == 0
         });
+        if finished == Some(true) {
+            thread_state::release_when_idle();
+        }
     }
 }
 

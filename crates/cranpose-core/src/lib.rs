@@ -255,6 +255,7 @@ fn register_location_key_debug_info(key: Key, file: &str, line: u32, column: u32
         let mut registry = state.location_keys.borrow_mut();
         match registry.entry(key) {
             std::collections::hash_map::Entry::Vacant(entry) => {
+                thread_state::watch_thread_exit();
                 entry.insert(info());
                 None
             }

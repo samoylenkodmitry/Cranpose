@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, path::Path};
 use crate::test_layout::{collect_sources, workspace_members};
 
 const FRAMEWORK_CRATES: &str = "crates/";
-const BUDGET: usize = 17;
+const BUDGET: usize = 18;
 
 pub(crate) fn run_at(root: &Path) -> Result<(), String> {
     check(root, BUDGET)

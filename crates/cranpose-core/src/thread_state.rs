@@ -1,6 +1,7 @@
 use std::{
     any::Any,
     cell::{Cell, RefCell},
+    ops::Deref,
     rc::Rc,
 };
 
@@ -27,6 +28,7 @@ pub(crate) struct ThreadCells {
     pub(crate) in_event_handler: Cell<bool>,
     pub(crate) in_applied_snapshot: Cell<bool>,
     pub(crate) scope_activity_epoch: Cell<u64>,
+    pub(crate) thread_exiting: Cell<bool>,
     #[cfg(any(test, debug_assertions))]
     pub(crate) location_key_collisions: Cell<usize>,
     #[cfg(all(test, debug_assertions))]
@@ -48,6 +50,7 @@ impl ThreadCells {
             in_event_handler: Cell::new(false),
             in_applied_snapshot: Cell::new(false),
             scope_activity_epoch: Cell::new(1),
+            thread_exiting: Cell::new(false),
             #[cfg(any(test, debug_assertions))]
             location_key_collisions: Cell::new(0),
             #[cfg(all(test, debug_assertions))]
@@ -99,6 +102,37 @@ impl SnapshotThreadState {
             retired_record_values: RefCell::new(Vec::new()),
             retire_depth: Cell::new(0),
         }
+    }
+
+    fn release(&self) -> Self {
+        let released = Self::new();
+        let Self {
+            runtime,
+            runtime_lock_depth: _,
+            global,
+            current,
+            apply_observers,
+            last_writes,
+            extra_state_objects,
+            last_unused_record_cleanup,
+            pinning,
+            active_updates,
+            pending_writes,
+            retired_record_values,
+            retire_depth: _,
+        } = self;
+        move_into(runtime, &released.runtime);
+        move_into(global, &released.global);
+        move_into(current, &released.current);
+        move_into(apply_observers, &released.apply_observers);
+        move_into(last_writes, &released.last_writes);
+        move_into(extra_state_objects, &released.extra_state_objects);
+        move_into(pinning, &released.pinning);
+        move_into(active_updates, &released.active_updates);
+        move_into(pending_writes, &released.pending_writes);
+        move_into(retired_record_values, &released.retired_record_values);
+        last_unused_record_cleanup.set(0);
+        released
     }
 }
 
@@ -153,12 +187,141 @@ impl RuntimeThreadState {
             source_stack: RefCell::new(Vec::new()),
         }
     }
+
+    fn has_live_runtime(&self) -> bool {
+        self.state_teardown_depth.get() > 0 || !self.registered_runtimes.borrow().is_empty()
+    }
+
+    fn release(&self) -> Self {
+        let released = Self::new();
+        let Self {
+            next_runtime_id: _,
+            active_runtimes,
+            last_runtime,
+            registered_runtimes,
+            next_task_label,
+            state_owners,
+            state_teardown_depth: _,
+            deferred_state_releases,
+            current_composer,
+            spare_commands,
+            bridges,
+            #[cfg(any(test, debug_assertions))]
+            location_keys,
+            #[cfg(debug_assertions)]
+            scope_labels,
+            #[cfg(debug_assertions)]
+            scope_invalidation_sources,
+            #[cfg(all(feature = "inspection", debug_assertions))]
+            recomposition_counters,
+            #[cfg(feature = "inspection")]
+            source_stack,
+        } = self;
+        move_into(active_runtimes, &released.active_runtimes);
+        move_into(last_runtime, &released.last_runtime);
+        move_into(registered_runtimes, &released.registered_runtimes);
+        move_into(next_task_label, &released.next_task_label);
+        move_into(state_owners, &released.state_owners);
+        move_into(deferred_state_releases, &released.deferred_state_releases);
+        move_into(current_composer, &released.current_composer);
+        move_into(spare_commands, &released.spare_commands);
+        move_into(bridges, &released.bridges);
+        #[cfg(any(test, debug_assertions))]
+        move_into(location_keys, &released.location_keys);
+        #[cfg(debug_assertions)]
+        move_into(scope_labels, &released.scope_labels);
+        #[cfg(debug_assertions)]
+        move_into(
+            scope_invalidation_sources,
+            &released.scope_invalidation_sources,
+        );
+        #[cfg(all(feature = "inspection", debug_assertions))]
+        move_into(recomposition_counters, &released.recomposition_counters);
+        #[cfg(feature = "inspection")]
+        move_into(source_stack, &released.source_stack);
+        released
+    }
+}
+
+fn move_into<T>(from: &RefCell<T>, into: &RefCell<T>) {
+    if let (Ok(mut from), Ok(mut into)) = (from.try_borrow_mut(), into.try_borrow_mut()) {
+        std::mem::swap(&mut *from, &mut *into);
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+pub(crate) struct Kept<T>(std::mem::ManuallyDrop<T>);
+
+#[cfg(target_os = "android")]
+pub(crate) struct Kept<T>(T);
+
+impl<T> Kept<T> {
+    #[cfg(not(target_os = "android"))]
+    const fn new(value: T) -> Self {
+        Self(std::mem::ManuallyDrop::new(value))
+    }
+
+    #[cfg(target_os = "android")]
+    const fn new(value: T) -> Self {
+        Self(value)
+    }
+}
+
+impl<T> Deref for Kept<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+const _: () = assert!(
+    !std::mem::needs_drop::<Kept<SnapshotThreadState>>()
+        && !std::mem::needs_drop::<Kept<RuntimeThreadState>>()
+);
+
+#[cfg(not(target_os = "android"))]
+struct ThreadExit;
+
+#[cfg(not(target_os = "android"))]
+impl Drop for ThreadExit {
+    fn drop(&mut self) {
+        CELLS.with(|cells| cells.thread_exiting.set(true));
+        release_when_idle();
+    }
 }
 
 thread_local! {
     static CELLS: ThreadCells = const { ThreadCells::new() };
-    static SNAPSHOTS: SnapshotThreadState = const { SnapshotThreadState::new() };
-    static RUNTIMES: RuntimeThreadState = const { RuntimeThreadState::new() };
+    static SNAPSHOTS: Kept<SnapshotThreadState> = const { Kept::new(SnapshotThreadState::new()) };
+    static RUNTIMES: Kept<RuntimeThreadState> = const { Kept::new(RuntimeThreadState::new()) };
+}
+
+#[cfg(not(target_os = "android"))]
+thread_local! {
+    static THREAD_EXIT: ThreadExit = const { ThreadExit };
+}
+
+pub(crate) fn watch_thread_exit() {
+    #[cfg(not(target_os = "android"))]
+    let _ = THREAD_EXIT.try_with(|_| ());
+}
+
+pub(crate) fn release_when_idle() {
+    if !CELLS.with(|cells| cells.thread_exiting.get()) {
+        return;
+    }
+    let Some(runtimes) = RUNTIMES
+        .try_with(|state| (!state.has_live_runtime()).then(|| state.release()))
+        .ok()
+        .flatten()
+    else {
+        return;
+    };
+    let snapshots = SNAPSHOTS.try_with(|state| state.release()).ok();
+    drop(runtimes);
+    drop(snapshots);
 }
 
 pub(crate) fn cells<R>(f: impl FnOnce(&ThreadCells) -> R) -> R {
@@ -166,17 +329,17 @@ pub(crate) fn cells<R>(f: impl FnOnce(&ThreadCells) -> R) -> R {
 }
 
 pub(crate) fn snapshots<R>(f: impl FnOnce(&SnapshotThreadState) -> R) -> R {
-    SNAPSHOTS.with(f)
+    SNAPSHOTS.with(|state| f(state))
 }
 
 pub(crate) fn try_snapshots<R>(f: impl FnOnce(&SnapshotThreadState) -> R) -> Option<R> {
-    SNAPSHOTS.try_with(f).ok()
+    SNAPSHOTS.try_with(|state| f(state)).ok()
 }
 
 pub(crate) fn runtimes<R>(f: impl FnOnce(&RuntimeThreadState) -> R) -> R {
-    RUNTIMES.with(f)
+    RUNTIMES.with(|state| f(state))
 }
 
 pub(crate) fn try_runtimes<R>(f: impl FnOnce(&RuntimeThreadState) -> R) -> Option<R> {
-    RUNTIMES.try_with(f).ok()
+    RUNTIMES.try_with(|state| f(state)).ok()
 }

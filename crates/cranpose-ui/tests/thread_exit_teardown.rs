@@ -1,19 +1,7 @@
-use std::{
-    cell::RefCell,
-    future::pending,
-    rc::Rc,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
-};
+use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::{
-    Composition, DisposableEffect, EventSender, LaunchedEffectAsync, MemoryApplier,
-    OwnedMutableState, location_key, mutableStateOf, ownedMutableStateOf, remember,
-    rememberCoroutineScope, rememberEventStream, rememberMutableStateOf, schedule_frame,
-    snapshot_v2::register_apply_observer,
+    OwnedMutableState, mutableStateOf, ownedMutableStateOf, snapshot_v2::register_apply_observer,
 };
 use cranpose_foundation::{
     lazy::{LazyListScope, rememberLazyListState},
@@ -34,25 +22,13 @@ use cranpose_ui::{
 };
 use cranpose_ui_graphics::Size;
 
+use crate::thread_exit::{
+    exit_while_another_thread_composes, hold_composition_at_thread_exit, live_state,
+    touch_the_holder_after_another_runtime, touch_the_holder_first,
+};
+
 thread_local! {
     static HELD_SCREEN: RefCell<Option<TestComposition>> = const { RefCell::new(None) };
-    static HELD_COMPOSITION: RefCell<Option<Composition<MemoryApplier>>> =
-        const { RefCell::new(None) };
-}
-
-fn live_state() {
-    let count = rememberMutableStateOf(|| 0u32);
-    let holder = remember(|| ownedMutableStateOf(String::from("held")));
-    rememberCoroutineScope().launch(pending());
-    let _events = rememberEventStream((), |_: EventSender<u32>| ());
-    LaunchedEffectAsync((), |_| std::boxed::Box::pin(pending()));
-    DisposableEffect((), move |scope| {
-        let _ = holder.with(|state| state.value());
-        scope.on_dispose(move || {
-            count.set(1);
-            schedule_frame();
-        })
-    });
 }
 
 fn screen() {
@@ -126,53 +102,6 @@ fn composed_screen() -> TestComposition {
     composition
 }
 
-fn held_composition(disposed: &Arc<AtomicBool>) -> Composition<MemoryApplier> {
-    let mut composition = Composition::new(MemoryApplier::new());
-    composition
-        .render(location_key(file!(), line!(), column!()), &mut || {
-            live_state();
-            let disposed = Arc::clone(disposed);
-            DisposableEffect((), move |scope| {
-                scope.on_dispose(move || disposed.store(true, Ordering::Release))
-            });
-        })
-        .expect("the composition renders");
-    composition
-}
-
-fn exit_while_another_thread_composes(body: impl FnOnce() + Send + 'static) {
-    let (composing, wait_for_composing) = mpsc::channel();
-    let mut worker = Some(std::thread::spawn(move || {
-        body();
-        wait_for_composing
-            .recv()
-            .expect("the joining thread composes");
-    }));
-    let mut joining = Composition::new(MemoryApplier::new());
-    joining
-        .render(location_key(file!(), line!(), column!()), &mut || {
-            if let Some(worker) = worker.take() {
-                composing.send(()).expect("the worker waits");
-                worker.join().expect("the thread exits without a panic");
-            }
-        })
-        .expect("the joining composition renders");
-}
-
-fn hold_composition_at_thread_exit(before_hold: fn()) {
-    let disposed = Arc::new(AtomicBool::new(false));
-    let held_disposed = Arc::clone(&disposed);
-    exit_while_another_thread_composes(move || {
-        before_hold();
-        let composition = held_composition(&held_disposed);
-        HELD_COMPOSITION.with(|held| *held.borrow_mut() = Some(composition));
-    });
-    assert!(
-        disposed.load(Ordering::Acquire),
-        "thread exit runs the held composition's dispose callbacks"
-    );
-}
-
 fn hold_screen_at_thread_exit(before_hold: fn()) {
     exit_while_another_thread_composes(move || {
         before_hold();
@@ -193,17 +122,12 @@ fn a_thread_exits_while_its_screen_is_still_alive() {
 
 #[test]
 fn a_composition_held_in_a_thread_local_touched_first_drops_at_thread_exit() {
-    hold_composition_at_thread_exit(|| {
-        HELD_COMPOSITION.with(|held| assert!(held.borrow().is_none()));
-    });
+    hold_composition_at_thread_exit(touch_the_holder_first);
 }
 
 #[test]
 fn a_composition_held_in_a_thread_local_touched_after_another_runtime_drops_at_thread_exit() {
-    hold_composition_at_thread_exit(|| {
-        drop(Composition::new(MemoryApplier::new()));
-        HELD_COMPOSITION.with(|held| assert!(held.borrow().is_none()));
-    });
+    hold_composition_at_thread_exit(touch_the_holder_after_another_runtime);
 }
 
 #[test]

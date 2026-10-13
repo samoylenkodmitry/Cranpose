@@ -25,6 +25,8 @@ mod text_overflow_ellipsis_integration;
 mod text_prepared_cache_annotations_integration;
 #[cfg(feature = "southeast-asian-line-breaks")]
 mod thai_line_breaks;
+#[path = "support/thread_exit.rs"]
+mod thread_exit;
 mod thread_exit_teardown;
 mod wear_list_and_painters;
 mod widget_composition;

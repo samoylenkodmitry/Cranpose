@@ -27,7 +27,10 @@ pub(crate) fn with_runtime<T>(f: impl FnOnce(&mut SnapshotRuntime) -> T) -> T {
     crate::thread_state::snapshots(|state| {
         let _scope = RuntimeLockGuard::enter(&state.runtime_lock_depth);
         let mut runtime = state.runtime.borrow_mut();
-        f(runtime.get_or_insert_with(SnapshotRuntime::new))
+        f(runtime.get_or_insert_with(|| {
+            crate::thread_state::watch_thread_exit();
+            SnapshotRuntime::new()
+        }))
     })
 }
 
