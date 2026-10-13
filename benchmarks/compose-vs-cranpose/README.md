@@ -563,7 +563,11 @@ its first start after what the apps keep between launches is removed
 (`APP_STATE`: compiled Metal shaders, in the cache unbundled apps share and
 in each bundle's own, the web views' WebKit caches, Chrome's Metal shaders and
 the Cranpose app's pipeline cache; a browser app gets a new Chrome profile),
-then its second start. Every leg is one launch measured from its start for
+from a fresh copy of its program, as installing it leaves one (its bundle,
+or its directory where its libraries lie beside it), then its second start
+from that copy. macOS checks a program the first time it runs, 0.2 to 0.3 s
+for the 10 MB Cranpose bench on macm3: without the copy only the apps rebuilt
+since an earlier run, Cranpose's every night, paid it. Every leg is one launch measured from its start for
 10 s (`--run`), the same span for every app: FrameCount waits for the app's window, records the
 time of every frame and says where its capture began, so the frames of every
 second from the launch are kept. A leg disturbed by other processes stays in
