@@ -20,7 +20,7 @@ const GODOT: EngineInfo = EngineInfo {
 struct Imported {
     rid: Rid,
     godot: GodotTexture,
-    twin: wgpu::Texture,
+    receiver: wgpu::Texture,
     texture: ExternalTexture,
     since: u64,
 }
@@ -154,7 +154,7 @@ impl CranposeWindowDemo {
         if let Some(shown) = self.shown.as_ref() {
             surface
                 .gpu()
-                .receive(&shown.godot, &shown.twin, Alpha::Opaque);
+                .receive(&shown.godot, &shown.receiver, Alpha::Opaque);
         }
     }
 }
@@ -167,14 +167,17 @@ fn viewport_texture(viewport: &Gd<SubViewport>) -> Option<Rid> {
 
 fn import(surface: &mut Surface, rid: Rid, since: u64) -> Result<Imported, String> {
     let godot = surface.godot_texture(rid)?;
-    let twin = surface.gpu().twin(&godot);
-    let view = twin.create_view(&wgpu::TextureViewDescriptor::default());
-    let texture = ExternalTexture::new(twin.width(), twin.height(), true, view)
+    let receiver = surface
+        .gpu()
+        .receiver(&godot)
+        .map_err(|error| error.to_string())?;
+    let view = receiver.create_view(&wgpu::TextureViewDescriptor::default());
+    let texture = ExternalTexture::new(receiver.width(), receiver.height(), true, view)
         .map_err(|error| error.to_string())?;
     Ok(Imported {
         rid,
         godot,
-        twin,
+        receiver,
         texture,
         since,
     })

@@ -10,7 +10,8 @@ use objc2_metal::{
     MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLDevice,
     MTLLibrary, MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder,
     MTLRenderPassDescriptor, MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLSharedEvent,
-    MTLStoreAction, MTLTexture,
+    MTLStorageMode, MTLStoreAction, MTLTexture, MTLTextureDescriptor, MTLTextureType,
+    MTLTextureUsage,
 };
 use wgpu::hal::{self, api::Metal};
 
@@ -140,7 +141,11 @@ pub(crate) unsafe fn engine_texture(handle: u64) -> Result<EngineTexture, Intero
 }
 
 pub(crate) fn twin_texture(gpu: &GpuContext, texture: NativeTexture) -> wgpu::Texture {
-    gpu.device.create_texture(&wgpu::TextureDescriptor {
+    gpu.device.create_texture(&twin_descriptor(texture))
+}
+
+fn twin_descriptor(texture: NativeTexture) -> wgpu::TextureDescriptor<'static> {
+    wgpu::TextureDescriptor {
         label: Some("engine texture twin"),
         size: wgpu::Extent3d {
             width: texture.width,
@@ -156,7 +161,7 @@ pub(crate) fn twin_texture(gpu: &GpuContext, texture: NativeTexture) -> wgpu::Te
             | wgpu::TextureUsages::COPY_SRC
             | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
-    })
+    }
 }
 
 fn raw_texture(texture: &wgpu::Texture) -> Option<EngineTexture> {
@@ -172,6 +177,61 @@ fn hal_queue(gpu: &GpuContext) -> Option<impl std::ops::Deref<Target = hal::meta
 }
 
 impl QueueBridge {
+    /// wgpu clears a texture it created before the first pass that reads it,
+    /// because wgpu never sees the engine queue's copies into it. A receiver
+    /// is a Metal texture that wgpu takes as written.
+    pub(crate) fn receiver(
+        &self,
+        gpu: &GpuContext,
+        engine: &EngineTexture,
+        texture: NativeTexture,
+    ) -> Result<wgpu::Texture, InteropError> {
+        // SAFETY: a 2D descriptor without mip levels; the size is the size of
+        // a live engine texture.
+        let descriptor = unsafe {
+            MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+                engine.pixelFormat(),
+                texture.width as usize,
+                texture.height as usize,
+                false,
+            )
+        };
+        descriptor.setUsage(MTLTextureUsage::ShaderRead | MTLTextureUsage::RenderTarget);
+        descriptor.setStorageMode(MTLStorageMode::Private);
+        let raw = self
+            .device
+            .newTextureWithDescriptor(&descriptor)
+            .ok_or(InteropError::MissingHandle("receiver MTLTexture"))?;
+        let size = hal::CopyExtent {
+            width: texture.width,
+            height: texture.height,
+            depth: 1,
+        };
+        // SAFETY: `raw` is a live 2D texture with one layer and one mip level
+        // in `texture.format`, the format the engine texture maps to.
+        let hal_texture = unsafe {
+            hal::metal::Device::texture_from_raw(
+                raw,
+                texture.format,
+                MTLTextureType::Type2D,
+                1,
+                1,
+                size,
+                None,
+            )
+        };
+        // SAFETY: `raw` was created on this device with the size, format and
+        // usage of the twin descriptor. Callers receive into it before
+        // Cranpose first samples it, which writes every pixel.
+        Ok(unsafe {
+            gpu.device.create_texture_from_hal::<Metal>(
+                hal_texture,
+                &twin_descriptor(texture),
+                wgpu::TextureUses::UNINITIALIZED,
+            )
+        })
+    }
+
     pub(crate) fn receive(
         &self,
         gpu: &GpuContext,

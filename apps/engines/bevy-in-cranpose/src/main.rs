@@ -62,15 +62,16 @@ fn Root() {
             states.frame.set(Some(frame));
         }
         let (since, frames) = counter.get();
-        if now.saturating_sub(since) >= 500_000_000 {
+        let frames = frames + 1;
+        let elapsed = now.saturating_sub(since);
+        if elapsed >= 500_000_000 {
             if since != 0 {
-                states
-                    .fps
-                    .set((u64::from(frames) * 1_000_000_000 / now.saturating_sub(since)) as u32);
+                let per_second = (u64::from(frames) * 1_000_000_000 + elapsed / 2) / elapsed;
+                states.fps.set(per_second as u32);
             }
             counter.set((now, 0));
         } else {
-            counter.set((since, frames + 1));
+            counter.set((since, frames));
         }
     });
     EngineWindow(BEVY, states, target_size);

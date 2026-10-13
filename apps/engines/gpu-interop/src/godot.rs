@@ -85,14 +85,22 @@ impl GodotGpu {
     }
 
     /// A wgpu texture with the size and format of `texture`, which Cranpose
-    /// renders into or samples.
+    /// renders into.
     pub fn twin(&self, texture: &GodotTexture) -> wgpu::Texture {
         metal::twin_texture(&self.gpu, texture.native)
     }
 
-    /// Copies `from`, as Godot's queue last wrote it, into `into`. Cranpose's
-    /// next submit waits for the copy, and the copy waits for Cranpose's last
-    /// frame.
+    /// A wgpu texture with the size and format of `texture`, which
+    /// [`Self::receive`] copies `texture` into and Cranpose samples. Receive
+    /// into it before Cranpose first samples it.
+    pub fn receiver(&self, texture: &GodotTexture) -> Result<wgpu::Texture, InteropError> {
+        self.bridge
+            .receiver(&self.gpu, &texture.raw, texture.native)
+    }
+
+    /// Copies `from`, as Godot's queue last wrote it, into `into`, a texture
+    /// from [`Self::receiver`]. Cranpose's next submit waits for the copy, and
+    /// the copy waits for Cranpose's last frame.
     pub fn receive(&self, from: &GodotTexture, into: &wgpu::Texture, alpha: Alpha) {
         self.bridge.receive(&self.gpu, &from.raw, into, alpha);
     }
