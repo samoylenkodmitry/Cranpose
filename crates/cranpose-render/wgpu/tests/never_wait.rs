@@ -123,10 +123,18 @@ fn settled(graph: RenderGraph) -> CapturedFrame {
     support::capture_graph(&mut reference, graph, SIZE, SIZE)
 }
 
+/// An empty page, for a renderer's own first frame.
+fn empty_page() -> RenderGraph {
+    support::page_graph(SIZE, SIZE, Vec::new())
+}
+
 /// The first frame of `graph` on a renderer whose pipelines compile in the
 /// background, asserted to have drawn one placeholder, and that renderer.
 fn first_frame(graph: &RenderGraph) -> (support::LockedRenderer, CapturedFrame) {
     let mut renderer = support::headless_renderer_compiling_in_background().expect("GPU required");
+    // The renderer's own first frame learns its pipelines before it draws
+    // and may find the effect's built: the effect first draws in a later one.
+    support::capture_graph(&mut renderer, empty_page(), SIZE, SIZE);
     let frame = support::capture_graph(&mut renderer, graph.clone(), SIZE, SIZE);
     let stats = renderer.last_frame_stats().expect("frame statistics");
     assert_eq!(

@@ -3394,6 +3394,13 @@ pub struct GpuRenderer {
     last_frame_stats: Option<gpu_stats::FrameStatsSnapshot>,
     pending_frame_warmup_frames: u8,
     frame_count: u64,
+    /// Whether the next frame first learns its pipelines: see
+    /// [`Self::discover_frame_pipelines`].
+    #[cfg(not(target_arch = "wasm32"))]
+    discovers_next_frame: bool,
+    /// Whether the frame drawing learns its pipelines and draws nothing.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) discovering: bool,
     /// How many requested shader warm-ups this renderer has queued.
     shader_warm_ups_queued: usize,
 }
@@ -3567,6 +3574,17 @@ impl GpuRenderer {
         let effects_started = Instant::now();
         let pipeline_compiler =
             PipelineCompiler::for_compilation(pipeline_compilation, adapter_backend);
+        // A launch with no record of its first screen learns its first
+        // frame's pipelines before it draws, where they compile side by side.
+        // `CRANPOSE_FIRST_FRAME_DISCOVERY=0` draws it pass by pass instead.
+        #[cfg(not(target_arch = "wasm32"))]
+        static FIRST_FRAME_DISCOVERY: DebugToggle =
+            DebugToggle::new("CRANPOSE_FIRST_FRAME_DISCOVERY");
+        #[cfg(not(target_arch = "wasm32"))]
+        let discovers_first_frame = !FIRST_FRAME_DISCOVERY.equals("0")
+            && adapter_backend == wgpu::Backend::Metal
+            && pipeline_compiler.is_active()
+            && !records.shapes.iter().any(|shape| shape.first_screen);
         let depth_gate = crate::depth_gate::DepthGate::new(
             crate::draw_pass::lays_interiors_first(adapter_backend),
             pipeline_compiler.is_active(),
@@ -3779,6 +3797,10 @@ impl GpuRenderer {
             last_frame_stats: None,
             pending_frame_warmup_frames: 0,
             frame_count: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            discovers_next_frame: discovers_first_frame,
+            #[cfg(not(target_arch = "wasm32"))]
+            discovering: false,
             shader_warm_ups_queued: 0,
         };
         #[cfg(not(target_arch = "wasm32"))]
@@ -4722,6 +4744,11 @@ impl GpuRenderer {
     /// those were drawn while the draws that use them were left out.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn background_pipelines_landed(&mut self) {
+        self.drop_kept_drawing();
+    }
+
+    /// Drops the layers and the blurred shadows earlier frames drew and kept.
+    fn drop_kept_drawing(&mut self) {
         self.layer_cache.clear();
         self.shadow_surface_cache.clear();
         self.shadow_surface_cache_bytes = 0;
@@ -4968,9 +4995,9 @@ impl GpuRenderer {
         output_mode: OutputMode,
         output: Option<(&wgpu::TextureView, &wgpu::BindGroup)>,
     ) -> Result<(), String> {
-        let device = self.device.clone();
-        let queue = self.queue.clone();
-        let graph_start = Instant::now();
+        #[cfg(target_arch = "wasm32")]
+        let (device, queue, graph_start) =
+            (self.device.clone(), self.queue.clone(), Instant::now());
         let FramePacket {
             root,
             overlay,
@@ -4982,48 +5009,26 @@ impl GpuRenderer {
 
         #[cfg(not(target_arch = "wasm32"))]
         let (result, submitted) = {
-            let mut executor = std::mem::take(&mut self.frame_graph_executor);
-            let mut frame_graph = WgpuFrameGraph::new(Some("Renderer Frame Graph"));
-            let surface = frame_graph.import_surface("renderer-surface");
-            frame_graph.add_fallible_recorded_command_pass(
-                Some("Renderer Frame Pass"),
-                &[],
-                &[surface],
-                |frame_encoder| {
-                    self.encode_frame(
-                        frame_encoder,
-                        &root,
-                        overlay.as_ref(),
-                        Rc::clone(&page),
-                        root_scale,
-                        clear,
-                        output_mode,
-                        output,
-                    )
-                },
-            );
-            let after_build = Instant::now();
-            let execution = executor.execute_recorded_graph(&device, &queue, frame_graph);
-            let after_execute = Instant::now();
-            self.frame_graph_executor = executor;
-            self.recall_frame_uploads();
-            if let Some(total_ms) = should_log_wgpu_render_stage(graph_start, after_execute) {
-                log::warn!(
-                    "[wgpu-render-stage:graph] total_ms={total_ms:.2} build_ms={:.2} execute_ms={:.2}",
-                    instant_ms(graph_start, after_build),
-                    instant_ms(after_build, after_execute),
+            if std::mem::take(&mut self.discovers_next_frame) {
+                self.discover_frame_pipelines(
+                    &root,
+                    overlay.as_ref(),
+                    &page,
+                    root_scale,
+                    clear,
+                    output_mode,
+                    output,
                 );
             }
-            match execution {
-                Ok(execution) => {
-                    if execution.stats.pass_count > 0 {
-                        self.frame_stats.record_command_stats(execution.stats);
-                    }
-                    (Ok(()), true)
-                }
-                Err(crate::frame_graph::FrameGraphError::NoDeclaredPasses) => (Ok(()), false),
-                Err(error) => (Err(error.to_string()), false),
-            }
+            self.execute_frame_graph(
+                &root,
+                overlay.as_ref(),
+                &page,
+                root_scale,
+                clear,
+                output_mode,
+                output,
+            )
         };
 
         #[cfg(target_arch = "wasm32")]
@@ -5079,6 +5084,106 @@ impl GpuRenderer {
         result
     }
 
+    /// Records and submits the frame through the frame graph: whether it
+    /// recorded without error, and whether it submitted anything.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[expect(clippy::too_many_arguments)]
+    fn execute_frame_graph(
+        &mut self,
+        root: &LayerScene,
+        overlay: Option<&LayerScene>,
+        page: &Rc<OffscreenTarget>,
+        root_scale: f32,
+        clear: wgpu::Color,
+        output_mode: OutputMode,
+        output: Option<(&wgpu::TextureView, &wgpu::BindGroup)>,
+    ) -> (Result<(), String>, bool) {
+        let device = self.device.clone();
+        let queue = self.queue.clone();
+        let graph_start = Instant::now();
+        let mut executor = std::mem::take(&mut self.frame_graph_executor);
+        let mut frame_graph = WgpuFrameGraph::new(Some("Renderer Frame Graph"));
+        let surface = frame_graph.import_surface("renderer-surface");
+        frame_graph.add_fallible_recorded_command_pass(
+            Some("Renderer Frame Pass"),
+            &[],
+            &[surface],
+            |frame_encoder| {
+                self.encode_frame(
+                    frame_encoder,
+                    root,
+                    overlay,
+                    Rc::clone(page),
+                    root_scale,
+                    clear,
+                    output_mode,
+                    output,
+                )
+            },
+        );
+        let after_build = Instant::now();
+        let execution = executor.execute_recorded_graph(&device, &queue, frame_graph);
+        let after_execute = Instant::now();
+        self.frame_graph_executor = executor;
+        self.recall_frame_uploads();
+        if let Some(total_ms) = should_log_wgpu_render_stage(graph_start, after_execute) {
+            log::warn!(
+                "[wgpu-render-stage:graph] total_ms={total_ms:.2} build_ms={:.2} execute_ms={:.2}",
+                instant_ms(graph_start, after_build),
+                instant_ms(after_build, after_execute),
+            );
+        }
+        match execution {
+            Ok(execution) => {
+                if execution.stats.pass_count > 0 {
+                    self.frame_stats.record_command_stats(execution.stats);
+                }
+                (Ok(()), true)
+            }
+            Err(crate::frame_graph::FrameGraphError::NoDeclaredPasses) => (Ok(()), false),
+            Err(error) => (Err(error.to_string()), false),
+        }
+    }
+
+    /// Walks the frame once drawing nothing, so every pass queues the
+    /// pipelines it lacks on the compiler's threads, and they compile side by
+    /// side; the frame drawn next waits for them where it draws. Drawn pass
+    /// after pass instead, each pass asked for its pipelines only after the
+    /// passes before it had theirs: with no Metal shader cached, the
+    /// gauntlet's first frame on an Apple M3 Pro waited for two such waves
+    /// of pipelines. What the walk kept, the layers and the blurred shadows,
+    /// holds nothing drawn and is dropped, and what it counted toward
+    /// caching a layer, a fill, an effect or a source is forgotten: the
+    /// frame drawn next starts from the state the walk found, a renderer's
+    /// first frame's.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[expect(clippy::too_many_arguments)]
+    fn discover_frame_pipelines(
+        &mut self,
+        root: &LayerScene,
+        overlay: Option<&LayerScene>,
+        page: &Rc<OffscreenTarget>,
+        root_scale: f32,
+        clear: wgpu::Color,
+        output_mode: OutputMode,
+        output: Option<(&wgpu::TextureView, &wgpu::BindGroup)>,
+    ) {
+        self.discovering = true;
+        let (result, _) =
+            self.execute_frame_graph(root, overlay, page, root_scale, clear, output_mode, output);
+        self.discovering = false;
+        if let Err(error) = result {
+            log::warn!(
+                "[gpu-pipeline] the walk that learns the first frame's pipelines failed: {error}"
+            );
+        }
+        self.drop_kept_drawing();
+        self.backdrop_gates.clear();
+        self.fill_gates.clear();
+        self.effect_gates.clear();
+        self.source_gates.clear();
+    }
+
     /// Records the frame: the root and overlay layer scenes into the frame's
     /// target, the output conversion when the target is not the presented
     /// image, and the viewport uniforms the recorded passes claimed.
@@ -5101,7 +5206,11 @@ impl GpuRenderer {
             root_scale,
             wgpu::LoadOp::Clear(clear),
         )?;
-        if let Some((output_view, bind_group)) = output {
+        #[cfg(not(target_arch = "wasm32"))]
+        let discovering = self.discovering;
+        #[cfg(target_arch = "wasm32")]
+        let discovering = false;
+        if !discovering && let Some((output_view, bind_group)) = output {
             match output_mode {
                 OutputMode::Display => &self.output_converter,
                 OutputMode::Screenshot => &self.screenshot_converter,
@@ -5118,7 +5227,9 @@ impl GpuRenderer {
         }
         self.stage_frame_uploads(recorder);
         self.shape_pipelines.request_wanted();
-        self.depth_gate.end_frame();
+        if !discovering {
+            self.depth_gate.end_frame();
+        }
         self.pipeline_compiler.end_frame();
         self.viewport_uniforms.uploads.finish_frame();
         self.run_store.finish_frame();
@@ -5564,8 +5675,16 @@ impl GpuRenderer {
     /// with a depth buffer, the one laying down its opaque interiors: the
     /// compiler's threads build the missing ones after the first while this
     /// thread builds that one.
+    /// Queues every shape pipeline `pipelines` names that is missing, and
+    /// forgets them: a pass that learns its pipelines draws none.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn discover_run_pipelines(&mut self, pipelines: &mut PipelineDemand) {
+        self.shape_pipelines.prefetch(pipelines, true);
+        pipelines.clear();
+    }
+
     pub(crate) fn ensure_run_pipelines(&mut self, pipelines: &mut PipelineDemand) {
-        self.shape_pipelines.prefetch(pipelines);
+        self.shape_pipelines.prefetch(pipelines, false);
         for (key, vertices) in pipelines.drain() {
             self.ensure_shape_pipeline(key, vertices);
             if let Some(interior) = key.interior() {
