@@ -21,8 +21,8 @@ pipeline switch, the dedicated Vulkan allocations, the GL point size, the
 GL state tracker, the web surface usages, the boxed GL copy commands, the
 Vulkan command pools that give a burst's memory back, the GL shaders
 without the branches their constants decide, the GL program status read
-only on failure, the GLSL templates and the GL link reads below, and
-`cranpose-wgpu-core` is at 30.0.12 to require it and to make template
+only on failure, the GLSL templates, the GL link reads and the WebGL extensions below,
+and `cranpose-wgpu-core` is at 30.0.12 to require it and to make template
 modules. `cranpose-wgpu` is at 30.0.13 for the WebGPU pipeline discovery
 below and to require them.
 
@@ -183,6 +183,27 @@ failed link then reads the shaders' status and logs to report which stage
 failed, and the program's log is read only for debug logging. In Chrome on
 a Huawei Mate 20 X the gauntlet's pipeline creation at start went from
 about 396 to 302 ms (two profiles each).
+
+### WebGL enables only the extensions the device uses
+
+`glow` asks for every WebGL extension it knows as it wraps a context, and
+WebGL enables an extension when the page asks for it: each ask can wait
+for the browser's GPU process. Chrome on a Huawei Mate 20 X offers 15 of
+them, and asking for all took 16-24 ms of every start, before the page
+could build a program. After `wgpu_hal::gles::ask_only_for_used_extensions`,
+which Cranpose's web launcher calls, the device gives the context its own
+`getSupportedExtensions` and `getExtension` while `glow` wraps it. They
+answer only for the extensions `glow` uses or that name the adapter
+(`WEBGL_debug_renderer_info`, `WEBGL_lose_context`,
+`KHR_parallel_shader_compile`, `EXT_disjoint_timer_query_webgl2`), and the
+device deletes them after, so the prototype's methods answer again. Such an
+adapter reports capabilities for those extensions alone: float render
+targets, anisotropic filtering, per-target blending, sample shading,
+compressed and 16-bit normalized formats and multiview are off on WebGL,
+and Cranpose's renderer uses none of them. Without the call an adapter asks
+for every extension, as upstream's does, so other users of the fork, such
+as a game engine making its own device, keep them all. On the Mate the
+page's extension asks went from 12-24 ms to under 2 ms.
 
 ### GL programs are read when a submission first needs one
 
