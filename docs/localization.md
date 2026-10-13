@@ -108,7 +108,8 @@ cranpose::install_font_file(
 Text laid out from the next frame on uses the faces for the characters the
 app's other fonts lack, and a style that names the family selects them. A
 variable font is instanced at each listed weight. The file is read once and
-kept for the life of the process.
+kept for the life of the process. `cranpose::install_font_bytes` installs a
+font the app embeds, such as a small script font it always ships.
 
 Language identifiers preserve script and region (`sr-Latn`, `sr-Cyrl`, `fr-CA`).
 To use several ordered language preferences supplied by your platform host:

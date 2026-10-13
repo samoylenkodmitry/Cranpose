@@ -19,7 +19,7 @@ use cranpose_ui::text::{FontFamily, FontStyle, FontWeight};
 
 use crate::{
     font_source::{FontLoadError, read_font_file},
-    software_text_raster::SoftwareTextFont,
+    software_text_raster::{SoftwareTextFont, SoftwareTextFontError},
 };
 
 static INSTALLED: Mutex<Vec<SoftwareTextFont>> = Mutex::new(Vec::new());
@@ -30,23 +30,41 @@ static INSTALLED_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// `weights`; a variable font is instanced at each weight.
 ///
 /// Text laid out from the next frame on uses the faces for the characters the
-/// app's own fonts lack, and a style naming `family` selects them. The file is
-/// read once and kept for the life of the process; installing it again adds
-/// nothing.
+/// app's own fonts lack, and a style naming `family` selects them; text that
+/// names no family keeps the app's own faces, also for the letters the
+/// installed font has too. The file is read once and kept for the life of
+/// the process; installing it again adds nothing.
 pub fn install_font_file(
     family: &FontFamily,
     path: &Path,
     weights: &[FontWeight],
 ) -> Result<(), FontLoadError> {
     let bytes = read_font_file(path)?;
+    install(family, bytes, weights).map_err(|source| FontLoadError::Parse {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+/// Installs a font the app holds for the life of the process, such as one
+/// embedded in it, as [`install_font_file`] installs a file.
+pub fn install_font_bytes(
+    family: &FontFamily,
+    bytes: &'static [u8],
+    weights: &[FontWeight],
+) -> Result<(), FontLoadError> {
+    install(family, bytes, weights).map_err(|source| FontLoadError::ParseBytes { source })
+}
+
+fn install(
+    family: &FontFamily,
+    bytes: &'static [u8],
+    weights: &[FontWeight],
+) -> Result<(), SoftwareTextFontError> {
     let faces = weights
         .iter()
         .map(|&weight| {
             SoftwareTextFont::from_registered_bytes(family, weight, FontStyle::Normal, bytes)
-                .map_err(|source| FontLoadError::Parse {
-                    path: path.to_path_buf(),
-                    source,
-                })
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut installed = INSTALLED.lock().unwrap_or_else(PoisonError::into_inner);
