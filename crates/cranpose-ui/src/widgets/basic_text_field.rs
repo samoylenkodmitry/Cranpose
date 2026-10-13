@@ -11,7 +11,9 @@ use std::{
 use cranpose_core::{MutableState, NodeId, SideEffect, mutableStateOf, remember};
 use cranpose_foundation::{
     modifier_element,
-    text::{InputTransformation, TextFieldLineLimits, TextFieldState, TextRange},
+    text::{
+        InputTransformation, OutputTransformation, TextFieldLineLimits, TextFieldState, TextRange,
+    },
 };
 use cranpose_ui_graphics::{Color, Point, Rect};
 
@@ -112,9 +114,17 @@ impl LongPressWatcher {
         let Some(metrics) = self.controller.metrics() else {
             return;
         };
-        let text = self.state.text();
-        let offset = window_pos_to_offset(&text, &self.style, &metrics, self.start, 0.0);
-        let (word_start, word_end) = crate::word_boundaries::find_word_boundaries(&text, offset);
+        let presentation = self.controller.presentation(self.state);
+        let offset = presentation.to_source(window_pos_to_offset(
+            presentation.text(),
+            &self.style,
+            &metrics,
+            self.start,
+            0.0,
+        ));
+        let (word_start, word_end) = self
+            .state
+            .with_text(|text| crate::word_boundaries::find_word_boundaries(text, offset));
         self.state.edit(|buffer| {
             buffer.select(TextRange::new(word_start, word_end));
         });
@@ -255,6 +265,10 @@ pub struct BasicTextFieldOptions {
     /// Changes or rejects each edit the person makes, such as a length
     /// limit or a filter on what can be typed.
     pub input_transformation: Option<InputTransformation>,
+    /// Changes how the field shows its text without changing the text.
+    /// Make it once, with `remember`: the field lays out again whenever it
+    /// gets a different one.
+    pub output_transformation: Option<OutputTransformation>,
 }
 
 impl Default for BasicTextFieldOptions {
@@ -267,6 +281,7 @@ impl Default for BasicTextFieldOptions {
             keyboard_options: KeyboardOptions::default(),
             on_keyboard_action: None,
             input_transformation: None,
+            output_transformation: None,
         }
     }
 }
@@ -362,7 +377,7 @@ fn TextFieldNode(
         text_style: crate::localization::apply_text_locale(options.text_style),
         ..options
     };
-    let _text = state.text();
+    state.with_text(|_| ());
     let _selection = state.selection();
 
     let controller =
@@ -375,6 +390,7 @@ fn TextFieldNode(
         .with_show_keyboard_on_focus(options.show_keyboard_on_focus)
         .with_keyboard(options.keyboard_options, options.on_keyboard_action)
         .with_input_transformation(options.input_transformation)
+        .with_output_transformation(options.output_transformation)
         .with_handle_controller(controller.clone())
         .with_modal_depth(modal_depth);
     if let Some(refs) = decorator {
@@ -442,7 +458,7 @@ fn BringCaretIntoView(
         return;
     };
 
-    let text = state.text();
+    let presentation = controller.presentation(state);
     let selection = state.selection();
 
     let key = (
@@ -458,7 +474,12 @@ fn BringCaretIntoView(
         let Some(metrics) = controller.metrics_now() else {
             return;
         };
-        let caret = caret_window_rect(&text, &style, &metrics, selection.start);
+        let caret = caret_window_rect(
+            presentation.text(),
+            &style,
+            &metrics,
+            presentation.to_shown(selection.start),
+        );
         responder.bring_into_view(caret, ime_bottom);
     });
 }
@@ -517,7 +538,8 @@ fn SelectionHandles(
         return;
     };
 
-    let text = state.text();
+    let presentation = controller.presentation(state);
+    let text = presentation.text();
 
     let press_watcher: Rc<Cell<Option<(u32, u32)>>> =
         remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
@@ -576,10 +598,10 @@ fn SelectionHandles(
 
     if selection.collapsed() {
         let (tip, caret_rect) = caret_window_geometry(
-            &text,
+            text,
             &style,
             &metrics,
-            selection.start,
+            presentation.to_shown(selection.start),
             LineAffinity::Upstream,
         );
         let on_drag = drag_caret_closure(state, style.clone(), controller, Rc::clone(&drag_bias));
@@ -653,12 +675,11 @@ fn SelectionHandles(
             );
         }
     } else {
-        let start = selection.min();
-        let end = selection.max();
+        let (start, end) = presentation.range_to_shown(selection);
         let (start_tip, start_rect) =
-            caret_window_geometry(&text, &style, &metrics, start, LineAffinity::Downstream);
+            caret_window_geometry(text, &style, &metrics, start, LineAffinity::Downstream);
         let (end_tip, end_rect) =
-            caret_window_geometry(&text, &style, &metrics, end, LineAffinity::Upstream);
+            caret_window_geometry(text, &style, &metrics, end, LineAffinity::Upstream);
 
         let last_dragged_start = Rc::clone(&last_dragged);
         let last_dragged_end = Rc::clone(&last_dragged);
@@ -781,9 +802,9 @@ fn SelectionHandles(
 
     let loupe_target = drag_pos.value().and_then(|finger| {
         let bias = drag_bias.get().map_or(0.0, |grab| grab.bias());
-        let offset = window_pos_to_offset(&text, &style, &metrics, finger, bias);
+        let offset = window_pos_to_offset(text, &style, &metrics, finger, bias);
         let (_, caret_rect) =
-            caret_window_geometry(&text, &style, &metrics, offset, LineAffinity::Upstream);
+            caret_window_geometry(text, &style, &metrics, offset, LineAffinity::Upstream);
         loupe_target_for_drag(finger, caret_rect.y + caret_rect.height, caret_rect.height)
     });
     SelectionLoupe(loupe_target);
@@ -817,9 +838,15 @@ fn drag_caret_closure(
         let Some(metrics) = controller.metrics() else {
             return;
         };
-        let text = state.text();
+        let presentation = controller.presentation(state);
         let bias = drag_bias.get().map_or(0.0, |grab| grab.bias());
-        let offset = window_pos_to_offset(&text, &style, &metrics, window_pos, bias);
+        let offset = presentation.to_source(window_pos_to_offset(
+            presentation.text(),
+            &style,
+            &metrics,
+            window_pos,
+            bias,
+        ));
         state.set_selection(TextRange::new(offset, offset));
         crate::cursor_animation::suspend_cursor_blink();
         crate::request_render_invalidation();
@@ -840,16 +867,26 @@ fn drag_edge_closure(
         let Some(metrics) = controller.metrics() else {
             return;
         };
-        let text = state.text();
+        let presentation = controller.presentation(state);
         let bias = drag_bias.get().map_or(0.0, |grab| grab.bias());
-        let dragged_offset = window_pos_to_offset(&text, &style, &metrics, window_pos, bias);
+        let dragged_offset = presentation.to_source(window_pos_to_offset(
+            presentation.text(),
+            &style,
+            &metrics,
+            window_pos,
+            bias,
+        ));
         let selection = state.selection();
         let fixed_edge = match dragged {
             HandleKind::SelectionStart => selection.max(),
             _ => selection.min(),
         };
-        let (min, max) =
-            selection_after_handle_drag(dragged, fixed_edge, dragged_offset, text.len());
+        let (min, max) = selection_after_handle_drag(
+            dragged,
+            fixed_edge,
+            dragged_offset,
+            state.with_text(str::len),
+        );
         state.set_selection(TextRange::new(min, max));
         crate::request_render_invalidation();
     })

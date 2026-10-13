@@ -10,10 +10,12 @@ use cranpose_foundation::{
     LayoutModifierNode, Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement,
     NodeCapabilities, NodeState, PointerEvent, PointerEventKind, PointerInputNode,
     SemanticsConfiguration, SemanticsNode, Size,
-    text::{TextFieldLineLimits, TextFieldState, TextRange},
+    text::{OutputTransformation, TextFieldLineLimits, TextFieldState, TextRange},
 };
 use cranpose_ui_graphics::{Brush, Color, Point, ProjectiveTransform};
 use cranpose_ui_layout::ceil_to_px;
+
+use crate::text_field_presentation::{FieldPresentation, PresentationCache};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct TextFieldHandleMetrics {
@@ -46,6 +48,7 @@ struct TextFieldHandleControllerInner {
     geometry: MutableState<u64>,
     gesture_claim: RefCell<Option<Rc<Cell<bool>>>>,
     press_track: Cell<Option<MutableState<Option<PointerPressTrack>>>>,
+    presentation: RefCell<Option<Rc<PresentationCache>>>,
 }
 
 impl TextFieldHandleController {
@@ -57,6 +60,7 @@ impl TextFieldHandleController {
                 geometry: mutableStateOf(0u64),
                 gesture_claim: RefCell::new(None),
                 press_track: Cell::new(None),
+                presentation: RefCell::new(None),
             }),
         }
     }
@@ -128,6 +132,20 @@ impl TextFieldHandleController {
             self.inner.press_track.set(Some(press_track));
             self.bump(&self.inner.activation);
         }
+    }
+
+    pub(crate) fn adopt_presentation(&self, cache: &Rc<PresentationCache>) {
+        let mut slot = self.inner.presentation.borrow_mut();
+        if !slot.as_ref().is_some_and(|held| Rc::ptr_eq(held, cache)) {
+            *slot = Some(Rc::clone(cache));
+        }
+    }
+
+    /// The field's text as shown, from the field's own cache once its node
+    /// exists.
+    pub(crate) fn presentation(&self, state: TextFieldState) -> Rc<FieldPresentation> {
+        let cache = self.inner.presentation.borrow().clone();
+        cache.unwrap_or_default().get(state)
     }
 
     pub fn press(&self) -> Option<PointerPressTrack> {
@@ -212,6 +230,7 @@ pub(crate) struct TextFieldLayoutHandle {
     state: TextFieldState,
     node_id: Rc<Cell<Option<cranpose_core::NodeId>>>,
     wrap_width: Rc<Cell<Option<f32>>>,
+    presentation: Rc<PresentationCache>,
 }
 
 impl TextFieldLayoutHandle {
@@ -221,7 +240,7 @@ impl TextFieldLayoutHandle {
     ) -> std::rc::Rc<crate::text::PreparedTextLayout> {
         crate::text::prepare_text_layout_for_node(
             self.node_id.get(),
-            &Rc::new(crate::text::AnnotatedString::from(self.state.text())),
+            &self.presentation.get(self.state).shown,
             &std::sync::Arc::new(style.clone()),
             crate::text::TextLayoutOptions::default(),
             self.wrap_width.get(),
@@ -315,6 +334,43 @@ pub(crate) fn range_visual_line_rects(
     rects
 }
 
+/// The text offset under a point of the field's content: the hit on the
+/// shown text, mapped back to the text.
+fn hit_test_offset(
+    state: TextFieldState,
+    refs: &TextFieldRefs,
+    style: &TextStyle,
+    x: f32,
+    y: f32,
+) -> usize {
+    let presentation = refs.presentation.get(state);
+    presentation.to_source(crate::text::offset_for_position_wrapped(
+        presentation.text(),
+        style,
+        refs.node_id.get(),
+        refs.wrap_width.get(),
+        refs.line_height.get(),
+        x,
+        y,
+    ))
+}
+
+fn selection_anchor_at(
+    state: TextFieldState,
+    pos: usize,
+    granularity: crate::text_selection::SelectionGranularity,
+) -> crate::text_selection::SelectionAnchor {
+    state.with_text(|text| crate::text_selection::SelectionAnchor::at(text, pos, granularity))
+}
+
+fn dragged_selection(
+    state: TextFieldState,
+    anchor: crate::text_selection::SelectionAnchor,
+    pos: usize,
+) -> TextRange {
+    state.with_text(|text| anchor.dragged_to(text, pos))
+}
+
 fn build_focus_handler(
     state: TextFieldState,
     refs: &TextFieldRefs,
@@ -337,6 +393,7 @@ fn build_focus_handler(
             content_origin: refs.content_origin.clone(),
             scroll_offset: refs.scroll_offset.clone(),
             wrap_width: refs.wrap_width.clone(),
+            presentation: refs.presentation.clone(),
             style: style.clone(),
         },
     )
@@ -439,6 +496,9 @@ pub(crate) struct TextFieldRefs {
     pub keyboard_options: Rc<Cell<crate::KeyboardOptions>>,
     pub keyboard_action: Rc<RefCell<Option<crate::KeyboardActionHandler>>>,
     pub input_transformation: Rc<RefCell<Option<cranpose_foundation::text::InputTransformation>>>,
+    /// The field's text as shown, shared by its layout, drawing, pointer
+    /// input, handles and platform caret geometry.
+    pub(crate) presentation: Rc<PresentationCache>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -472,6 +532,7 @@ impl TextFieldRefs {
             keyboard_options: Rc::default(),
             keyboard_action: Rc::default(),
             input_transformation: Rc::default(),
+            presentation: Rc::default(),
         }
     }
 
@@ -497,7 +558,7 @@ pub struct TextFieldModifierNode {
     cursor_brush: Brush,
     selection_brush: Brush,
     line_limits: TextFieldLineLimits,
-    cached_text: String,
+    cached_revision: u64,
     cached_selection: TextRange,
     node_state: NodeState,
     measured_size: Rc<Cell<Size>>,
@@ -537,7 +598,6 @@ impl TextFieldModifierNode {
         refs: TextFieldRefs,
         decorated: bool,
     ) -> Self {
-        let value = state.value();
         let refs_line_height = refs.line_height.clone();
         let refs_wrap_width = refs.wrap_width.clone();
         let line_limits = TextFieldLineLimits::default();
@@ -553,8 +613,8 @@ impl TextFieldModifierNode {
             cursor_brush: Brush::solid(DEFAULT_CURSOR_COLOR),
             selection_brush: Brush::solid(DEFAULT_SELECTION_COLOR),
             line_limits,
-            cached_text: value.text,
-            cached_selection: value.selection,
+            cached_revision: state.text_revision(),
+            cached_selection: state.selection(),
             node_state: NodeState::new(),
             measured_size: Rc::new(Cell::new(Size {
                 width: 0.0,
@@ -612,15 +672,11 @@ impl TextFieldModifierNode {
                 refs.scroll_offset.set(0.0);
                 return 0.0;
             }
-            let text = state.text();
-            let pos = state.selection().start.min(text.len());
-            let text_width = crate::text::measure_text(
-                &crate::text::AnnotatedString::from(text.as_str()),
-                &style,
-            )
-            .width;
+            let presentation = refs.presentation.get(state);
+            let pos = presentation.to_shown(state.selection().start);
+            let text_width = crate::text::measure_text(&presentation.shown, &style).width;
             let cursor_x = crate::text::measure_text(
-                &crate::text::AnnotatedString::from(&text[..pos]),
+                &crate::text::AnnotatedString::from(&presentation.text()[..pos]),
                 &style,
             )
             .width;
@@ -663,8 +719,8 @@ impl TextFieldModifierNode {
         modal_depth: usize,
     ) -> Rc<dyn Fn(PointerEvent)> {
         use crate::text_selection::{
-            MULTI_TAP_SLOP_PX, MULTI_TAP_TIMEOUT_MS, SelectionAnchor, SelectionGranularity,
-            classify_tap_count, resolve_selection_tap_count, tap_selection_granularity,
+            MULTI_TAP_SLOP_PX, MULTI_TAP_TIMEOUT_MS, SelectionGranularity, classify_tap_count,
+            resolve_selection_tap_count, tap_selection_granularity,
         };
 
         Rc::new(move |event: PointerEvent| {
@@ -684,16 +740,7 @@ impl TextFieldModifierNode {
                     request_pointer_focus(state, &refs, line_limits, &style, modal_depth);
 
                     let now = web_time::Instant::now();
-                    let text = state.text();
-                    let pos = crate::text::offset_for_position_wrapped(
-                        &text,
-                        &style,
-                        refs.node_id.get(),
-                        refs.wrap_width.get(),
-                        refs.line_height.get(),
-                        click_x,
-                        click_y,
-                    );
+                    let pos = hit_test_offset(state, &refs, &style, click_x, click_y);
 
                     let previous = refs.last_click_pos.get().and_then(|(px, py)| {
                         let count = refs.click_count.get();
@@ -728,7 +775,7 @@ impl TextFieldModifierNode {
                     );
 
                     let granularity = tap_selection_granularity(effective_count);
-                    let anchor = SelectionAnchor::at(&text, pos, granularity);
+                    let anchor = selection_anchor_at(state, pos, granularity);
                     refs.drag_anchor.set(Some(anchor));
                     state.edit(|buffer| match granularity {
                         SelectionGranularity::Caret => buffer.place_cursor_before_char(pos),
@@ -757,18 +804,8 @@ impl TextFieldModifierNode {
                     if let Some(anchor) = refs.drag_anchor.get()
                         && *refs.is_focused.borrow()
                     {
-                        let text = state.text();
-                        let current_pos = crate::text::offset_for_position_wrapped(
-                            &text,
-                            &style,
-                            refs.node_id.get(),
-                            refs.wrap_width.get(),
-                            refs.line_height.get(),
-                            click_x,
-                            click_y,
-                        );
-
-                        state.set_selection(anchor.dragged_to(&text, current_pos));
+                        let current_pos = hit_test_offset(state, &refs, &style, click_x, click_y);
+                        state.set_selection(dragged_selection(state, anchor, current_pos));
 
                         crate::request_render_invalidation();
 
@@ -836,12 +873,18 @@ impl TextFieldModifierNode {
             state: self.state,
             node_id: self.refs.node_id.clone(),
             wrap_width: self.measured_wrap_width.clone(),
+            presentation: self.refs.presentation.clone(),
         }
     }
 
     /// Returns the current text.
     pub fn text(&self) -> String {
         self.state.text()
+    }
+
+    /// The field's text as shown, shared rather than copied.
+    pub(crate) fn shown_text(&self) -> Rc<crate::text::AnnotatedString> {
+        Rc::clone(&self.refs.presentation.get(self.state).shown)
     }
 
     pub fn style(&self) -> &TextStyle {
@@ -875,18 +918,18 @@ impl TextFieldModifierNode {
     }
 
     fn measure_text_content(&self, wrap_width: Option<f32>) -> crate::text::TextMetrics {
-        let text = self.state.text();
+        let presentation = self.refs.presentation.get(self.state);
         let node_id = self.refs.node_id.get();
-        let annotated = crate::text::AnnotatedString::from(text.as_str());
+        let annotated = &*presentation.shown;
         let metrics = match wrap_width {
             Some(max_width) => crate::text::measure_text_with_options_for_node(
                 node_id,
-                &annotated,
+                annotated,
                 &self.style,
                 crate::text::TextLayoutOptions::default(),
                 Some(max_width),
             ),
-            None => crate::text::measure_text_for_node(node_id, &annotated, &self.style),
+            None => crate::text::measure_text_for_node(node_id, annotated, &self.style),
         };
         self.measured_line_height.set(metrics.line_height);
         metrics
@@ -927,18 +970,12 @@ impl TextFieldModifierNode {
     }
 
     fn update_cached_state(&mut self) -> bool {
-        let value = self.state.value();
-        let text_changed = value.text != self.cached_text;
-        let selection_changed = value.selection != self.cached_selection;
-
-        if text_changed {
-            self.cached_text = value.text;
-        }
-        if selection_changed {
-            self.cached_selection = value.selection;
-        }
-
-        text_changed || selection_changed
+        let revision = self.state.text_revision();
+        let selection = self.state.selection();
+        let changed = revision != self.cached_revision || selection != self.cached_selection;
+        self.cached_revision = revision;
+        self.cached_selection = selection;
+        changed
     }
 }
 
@@ -1120,6 +1157,7 @@ impl DrawModifierNode for TextFieldModifierNode {
         let direct_manipulation = self.refs.direct_manipulation.clone();
         let press_track = self.refs.press_track;
         let gesture_claimed = self.refs.gesture_claimed.clone();
+        let presentation_cache = self.refs.presentation.clone();
 
         Some(Rc::new(move |scope| {
             let size = scope.size();
@@ -1142,7 +1180,8 @@ impl DrawModifierNode for TextFieldModifierNode {
 
             let mut primitives = Vec::new();
 
-            let text = state.text();
+            let presentation = presentation_cache.get(state);
+            let text = presentation.text();
             let selection = state.selection();
             let line_height = cached_line_height.get();
 
@@ -1172,8 +1211,7 @@ impl DrawModifierNode for TextFieldModifierNode {
             };
 
             if let Some(comp_range) = state.composition() {
-                let comp_start = comp_range.min();
-                let comp_end = comp_range.max();
+                let (comp_start, comp_end) = presentation.range_to_shown(comp_range);
 
                 if comp_start < comp_end && comp_end <= text.len() {
                     let underline_brush = cranpose_ui_graphics::Brush::solid(
@@ -1182,7 +1220,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                     let underline_height: f32 = 2.0;
 
                     for line_rect in range_visual_line_rects(
-                        &text,
+                        text,
                         &style,
                         node_id.get(),
                         measured_wrap_width.get(),
@@ -1209,9 +1247,9 @@ impl DrawModifierNode for TextFieldModifierNode {
             }
 
             if selection.collapsed() && crate::cursor_animation::is_cursor_visible() {
-                let pos = selection.start.min(text.len());
+                let pos = presentation.to_shown(selection.start);
                 let (line_index, line_start) = caret_visual_line_for_offset(
-                    &text,
+                    text,
                     &style,
                     node_id.get(),
                     measured_wrap_width.get(),
@@ -1261,6 +1299,7 @@ impl DrawModifierNode for TextFieldModifierNode {
         let measured_wrap_width = self.measured_wrap_width.clone();
         let node_id = self.refs.node_id.clone();
         let pan_resolver = self.cached_pan_resolver.clone();
+        let presentation_cache = self.refs.presentation.clone();
 
         Some(Rc::new(move |scope| {
             let size = scope.size();
@@ -1271,7 +1310,9 @@ impl DrawModifierNode for TextFieldModifierNode {
             if selection.collapsed() {
                 return;
             }
-            let text = state.text();
+            let presentation = presentation_cache.get(state);
+            let text = presentation.text();
+            let (selection_start, selection_end) = presentation.range_to_shown(selection);
             let line_height = cached_line_height.get();
             let (viewport_width, viewport_height) = content_viewport(measured_size.get(), size);
             let pan = pan_resolver(viewport_width);
@@ -1285,14 +1326,14 @@ impl DrawModifierNode for TextFieldModifierNode {
             let mut primitives = Vec::new();
             let (box_off, box_h) = crate::text::glyph_line_box(&style, line_height);
             for sel_rect in range_visual_line_rects(
-                &text,
+                text,
                 &style,
                 node_id.get(),
                 measured_wrap_width.get(),
                 pan,
                 line_height,
-                selection.min(),
-                selection.max(),
+                selection_start,
+                selection_end,
             ) {
                 let sel_rect = cranpose_ui_graphics::Rect {
                     y: sel_rect.y + box_off,
@@ -1349,9 +1390,12 @@ pub(crate) fn merge_text_field_semantics(
     }));
     config.set_selection = Some(cranpose_foundation::SemanticsSetSelection::new(
         move |anchor, focus| {
-            let text = state.text();
-            let anchor = text.floor_char_boundary(anchor);
-            let focus = text.floor_char_boundary(focus);
+            let (anchor, focus) = state.with_text(|text| {
+                (
+                    text.floor_char_boundary(anchor),
+                    text.floor_char_boundary(focus),
+                )
+            });
             state.set_selection(TextRange::new(anchor, focus));
             crate::cursor_animation::reset_cursor_blink();
             crate::request_render_invalidation();
@@ -1399,6 +1443,8 @@ pub struct TextFieldElement {
     keyboard_action: Option<crate::KeyboardActionHandler>,
     /// Left out of equality and hashing, as `keyboard_action` is.
     input_transformation: Option<cranpose_foundation::text::InputTransformation>,
+    /// Compared by identity and left out of hashing.
+    output_transformation: Option<OutputTransformation>,
     handle_controller: Option<TextFieldHandleController>,
     modal_depth: usize,
     decorator: Option<TextFieldRefs>,
@@ -1416,6 +1462,7 @@ impl TextFieldElement {
             keyboard_options: crate::KeyboardOptions::default(),
             keyboard_action: None,
             input_transformation: None,
+            output_transformation: None,
             handle_controller: None,
             modal_depth: 0,
             decorator: None,
@@ -1469,6 +1516,15 @@ impl TextFieldElement {
         self
     }
 
+    /// Sets how the field shows its text.
+    pub fn with_output_transformation(
+        mut self,
+        transformation: Option<OutputTransformation>,
+    ) -> Self {
+        self.output_transformation = transformation;
+        self
+    }
+
     /// Installs the finger-handle metrics channel shared with the composable.
     pub fn with_handle_controller(mut self, controller: TextFieldHandleController) -> Self {
         self.handle_controller = Some(controller);
@@ -1517,12 +1573,29 @@ impl PartialEq for TextFieldElement {
             && self.line_limits == other.line_limits
             && self.show_keyboard_on_focus == other.show_keyboard_on_focus
             && self.keyboard_options == other.keyboard_options
+            && self.output_transformation == other.output_transformation
             && self.modal_depth == other.modal_depth
             && self.decorator == other.decorator
     }
 }
 
 impl Eq for TextFieldElement {}
+
+impl TextFieldElement {
+    /// Gives the field's refs what its input reads when it runs: keyboard,
+    /// action handler and transformations.
+    fn hand_input_options_to(&self, refs: &TextFieldRefs) {
+        refs.keyboard_options.set(self.keyboard_options);
+        refs.keyboard_action.replace(self.keyboard_action.clone());
+        refs.input_transformation
+            .replace(self.input_transformation.clone());
+        refs.presentation
+            .set_transformation(self.output_transformation.clone());
+        if let Some(controller) = &self.handle_controller {
+            controller.adopt_presentation(&refs.presentation);
+        }
+    }
+}
 
 impl ModifierNodeElement for TextFieldElement {
     type Node = TextFieldModifierNode;
@@ -1539,13 +1612,7 @@ impl ModifierNodeElement for TextFieldElement {
             modal_depth: self.modal_depth,
             show_keyboard_on_focus: self.show_keyboard_on_focus,
         });
-        node.refs.keyboard_options.set(self.keyboard_options);
-        node.refs
-            .keyboard_action
-            .replace(self.keyboard_action.clone());
-        node.refs
-            .input_transformation
-            .replace(self.input_transformation.clone());
+        self.hand_input_options_to(&node.refs);
         if let Some(controller) = self.handle_controller.clone() {
             node = node.with_handle_controller(controller);
         }
@@ -1573,13 +1640,7 @@ impl ModifierNodeElement for TextFieldElement {
         {
             crate::text_input_session::notify_text_input_focus_gained();
         }
-        node.refs.keyboard_options.set(self.keyboard_options);
-        node.refs
-            .keyboard_action
-            .replace(self.keyboard_action.clone());
-        node.refs
-            .input_transformation
-            .replace(self.input_transformation.clone());
+        self.hand_input_options_to(&node.refs);
         node.rebuild_cached_closures();
 
         if node.update_cached_state() {}
