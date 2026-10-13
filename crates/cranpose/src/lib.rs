@@ -21,6 +21,10 @@ mod chunked_read;
 #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
 pub mod embedded_view;
 #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+mod external_frames;
+#[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+pub use external_frames::{ExternalFrames, FrameTexture, FrameWriter};
+#[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
 mod gpu_context;
 #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
 pub use gpu_context::{GpuContext, GpuRequirements, gpu_context};

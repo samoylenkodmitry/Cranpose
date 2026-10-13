@@ -154,6 +154,14 @@ impl ExternalTexture {
     pub fn height(&self) -> u32 {
         self.height
     }
+
+    /// Whether a bitmap from [`frame`](Self::frame), or another clone of this
+    /// texture, is still alive. A renderer draws the texture only through such
+    /// a bitmap, so once none is alive, no draw of it is waiting for the GPU
+    /// queue.
+    pub fn bitmaps_alive(&self) -> bool {
+        Arc::strong_count(&self.handle) > 1
+    }
 }
 
 static NEXT_EXTERNAL_TEXTURE: AtomicU64 = AtomicU64::new(0);
