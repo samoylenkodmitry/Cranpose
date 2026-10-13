@@ -1162,7 +1162,7 @@ impl App {
         native: &mut NativeWindowSurface,
         registry: &Rc<native_window::NativeWindowRegistry>,
         why: &str,
-    ) {
+    ) -> bool {
         let started = Instant::now();
         let presented = Self::redraw_native_window(app, native, registry);
         trace_native_window_timing!(
@@ -1171,6 +1171,7 @@ impl App {
             why,
             started.elapsed().as_millis()
         );
+        presented
     }
 
     fn let_go_of_windows_no_longer_declared(
@@ -1730,16 +1731,8 @@ impl App {
             desired_frame_latency(self.frame_pacing_mode(), monitor_refresh_interval(&window)),
         )?;
         surface.configure(&context.gpu.device, &surface_config);
-        let placeholder_presented = present_initial_placeholder_frame_cleared_to(
-            &surface,
-            &context.gpu.device,
-            &context.gpu.queue,
-            surface_format,
-            "native window initial present",
-            cranpose_render_wgpu::frame_clear_color(options.transparent),
-        );
         trace_native_window_timing!(
-            "{} configure {}ms placeholder_presented={placeholder_presented} alpha={:?}",
+            "{} configure {}ms alpha={:?}",
             options.title,
             create_started.elapsed().as_millis(),
             surface_config.alpha_mode
@@ -1818,7 +1811,20 @@ impl App {
             active_drag: None,
             held_press: None,
         };
-        Self::present_before_the_desktop_composites(app, &mut native, &registry, "first frame");
+        // The first frame takes the surface's first texture, which on macOS
+        // is the only one a window not yet on screen gets; the placeholder
+        // stands in for a frame that could not be drawn.
+        if !Self::present_before_the_desktop_composites(app, &mut native, &registry, "first frame")
+        {
+            present_initial_placeholder_frame_cleared_to(
+                &native.surface,
+                &context.gpu.device,
+                &context.gpu.queue,
+                surface_format,
+                "native window initial present",
+                cranpose_render_wgpu::frame_clear_color(native.options.transparent),
+            );
+        }
         Ok(native)
     }
 

@@ -16,15 +16,16 @@ formatting, spelling and diff gates skip the forks.
 
 Upstream: <https://github.com/gfx-rs/wgpu>, commit
 `40f4a34ebaf56f9a046231f54125ad046239d3f3` (`wgpu-hal` 30.0.1).
-`cranpose-wgpu-hal` is at 30.0.12 for the catch-up barrier, the Metal
+`cranpose-wgpu-hal` is at 30.0.13 for the catch-up barrier, the Metal
 pipeline switch, the dedicated Vulkan allocations, the GL point size, the
 GL state tracker, the web surface usages, the boxed GL copy commands, the
 Vulkan command pools that give a burst's memory back, the GL shaders
 without the branches their constants decide, the GL program status read
-only on failure, the GLSL templates, the GL link reads and the WebGL extensions below,
-and `cranpose-wgpu-core` is at 30.0.13 to require it, to make template
+only on failure, the GLSL templates, the GL link reads, the WebGL extensions
+and the first Metal drawable of a window off screen below,
+and `cranpose-wgpu-core` is at 30.0.14 to require it, to make template
 modules and to configure a surface while another thread submits.
-`cranpose-wgpu` is at 30.0.14 for the WebGPU pipeline discovery below and to
+`cranpose-wgpu` is at 30.0.15 for the WebGPU pipeline discovery below and to
 require them.
 
 | fork | upstream |
@@ -335,6 +336,22 @@ window, and the error stopped Bevy's renderer. Work submitted after the wait
 cannot use the surface's textures, since none is acquired and a presented one
 cannot be submitted, so `wgpu-core` accepts both results of the wait, as
 upstream's trunk does.
+
+### A window off screen gets its Metal layer's first drawable
+
+On macOS, `wgpu-hal` refuses a drawable while the window's occlusion state
+is not visible: a drawable presented to a window off screen waits for a
+display refresh that does not come, and with the layer's timeout off
+`nextDrawable` then blocks (gfx-rs/wgpu#8309). The rule also refuses the
+first drawable of a window that is not shown yet, though the layer has
+presented nothing then and `nextDrawable` returns at once. A window drawn
+before it is shown therefore came up empty, and its first frame waited
+until the window server had it on screen, about 40 ms after `setIsVisible`
+on an Apple M5.
+
+The fork hands out a layer's first drawable whatever the window's state;
+every later one follows upstream's rule. Cranpose draws a desktop window's
+first frame before it shows the window, so the window comes up with it.
 
 ### Update the fork
 
