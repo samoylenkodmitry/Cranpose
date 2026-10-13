@@ -4027,6 +4027,7 @@ fn semantics_node_from_parts(
     node
 }
 
+#[inline(never)]
 fn build_semantics_node_from_live_nodes(
     applier: &mut MemoryApplier,
     node: &MeasuredNode,
@@ -4195,6 +4196,7 @@ fn semantics_role_from_layout_box(layout_box: &LayoutBox) -> SemanticsRole {
     }
 }
 
+#[inline(never)]
 fn build_semantics_node_from_layout_box(layout_box: &LayoutBox, origin: Point) -> SemanticsNode {
     let rect = layout_box.rect;
     let content = Point {

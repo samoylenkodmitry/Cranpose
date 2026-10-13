@@ -132,6 +132,7 @@ pub fn tile_count(source: Rect, destination: Rect) -> usize {
 /// Returns a single stretched quad when the insets leave no middle, or when the
 /// destination is too small to hold the corners — the picture stays sensible
 /// instead of drawing corners on top of each other.
+#[inline(never)]
 pub fn nine_patch_quads(
     source: Rect,
     destination: Rect,

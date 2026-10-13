@@ -975,6 +975,7 @@ impl Global {
     }
 }
 
+#[inline(never)]
 pub(super) fn copy_buffer_to_buffer(
     state: &mut EncodingState,
     src_buffer: &Arc<Buffer>,
@@ -1133,6 +1134,7 @@ pub(super) fn copy_buffer_to_buffer(
     Ok(())
 }
 
+#[inline(never)]
 pub(super) fn copy_buffer_to_texture(
     state: &mut EncodingState,
     source: &wgt::TexelCopyBufferInfo<Arc<Buffer>>,
@@ -1251,6 +1253,7 @@ pub(super) fn copy_buffer_to_texture(
     Ok(())
 }
 
+#[inline(never)]
 pub(super) fn copy_texture_to_buffer(
     state: &mut EncodingState,
     source: &TexelCopyTextureInfo,
@@ -1376,6 +1379,7 @@ pub(super) fn copy_texture_to_buffer(
     Ok(())
 }
 
+#[inline(never)]
 pub(super) fn copy_texture_to_texture(
     state: &mut EncodingState,
     source: &TexelCopyTextureInfo,

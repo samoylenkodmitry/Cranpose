@@ -246,7 +246,8 @@ strip = true
 panic = "abort"
 ```
 
-Build with `cargo build --release`. For Linux apps, `desktop-x11` or
+Build with `cargo build --release`. A web build also limits how wasm-opt inlines;
+see [Run in a browser](docs/guide.md#run-in-a-browser). For Linux apps, `desktop-x11` or
 `desktop-wayland` selects one display backend. `desktop` includes both.
 See the [binary size guide](docs/binary_size.md) for feature choices and size builds.
 

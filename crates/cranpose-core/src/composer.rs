@@ -577,6 +577,8 @@ impl ComposerRuntimeState {
             .and_then(std::rc::Weak::upgrade)
     }
 
+    #[cold]
+    #[inline(never)]
     fn retention_debug_stats(&self, host_key: usize) -> crate::retention::RetentionDebugStats {
         self.retention_by_host
             .borrow()

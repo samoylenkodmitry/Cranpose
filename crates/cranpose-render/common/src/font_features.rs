@@ -43,6 +43,7 @@ pub(crate) fn enabled_feature_tags(settings: &str) -> Vec<[u8; 4]> {
     tags
 }
 
+#[inline(never)]
 fn parse_font_feature(entry: &str) -> Option<FontFeature> {
     let (tag, rest) = split_feature_tag(entry.trim())?;
     let tag: [u8; 4] = tag.as_bytes().try_into().ok()?;

@@ -2073,6 +2073,7 @@ pub fn rasterize_annotated_text_region<'a>(
 }
 
 #[expect(clippy::too_many_arguments)]
+#[inline(never)]
 fn rasterize_styled_text_region(
     text: StyledTextRef<'_>,
     rect: Rect,
@@ -5046,6 +5047,7 @@ fn build_fill_mask(outlined: &OutlinedGlyph, bounds: GlyphPixelBounds) -> Option
     })
 }
 
+#[inline(never)]
 fn build_stroke_mask(
     font: &impl Font,
     glyph: &Glyph,

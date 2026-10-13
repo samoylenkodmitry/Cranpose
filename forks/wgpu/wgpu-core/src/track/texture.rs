@@ -66,6 +66,7 @@ impl ComplexTextureState {
     ///
     /// This state will be initialized with the UNKNOWN state, a special state
     /// which means the trakcer knows nothing about the state.
+    #[inline(never)]
     fn new(mip_level_count: u32, array_layer_count: u32) -> Self {
         Self {
             mips: iter::repeat_with(|| {
@@ -316,6 +317,7 @@ impl TextureUsageScope {
     ///
     /// If the given tracker uses IDs higher than the length of internal vectors,
     /// the vectors will be extended. A call to set_size is not needed.
+    #[inline(never)]
     pub fn merge_usage_scope(
         &mut self,
         scope: &Self,
@@ -543,6 +545,7 @@ impl TextureTracker {
     ///
     /// If the ID is higher than the length of internal vectors,
     /// the vectors will be extended. A call to set_size is not needed.
+    #[inline(never)]
     pub fn set_from_tracker(&mut self, tracker: &Self) {
         let incoming_size = tracker.start_set.size();
         if incoming_size > self.start_set.size() {

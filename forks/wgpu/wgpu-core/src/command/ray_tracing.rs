@@ -191,6 +191,7 @@ impl Global {
     }
 }
 
+#[inline(never)]
 pub(crate) fn build_acceleration_structures(
     state: &mut EncodingState,
     blas: Vec<OwnedBlasBuildEntry<ArcReferences>>,
