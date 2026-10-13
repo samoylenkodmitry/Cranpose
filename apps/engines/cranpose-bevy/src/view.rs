@@ -96,7 +96,7 @@ impl BevyView {
             self.shown = self
                 .pending
                 .drain(..=ready)
-                .last()
+                .next_back()
                 .map(|(texture, _)| texture);
         }
         self.shown.as_ref().map(|texture| texture.frame(frame))
