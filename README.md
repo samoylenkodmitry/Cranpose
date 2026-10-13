@@ -172,7 +172,9 @@ a window opens with the template's star chart.
 The template's GitHub workflows build every target below on each pull request,
 on GitHub's Linux, Windows and macOS machines, so a Windows or Linux computer is
 enough to get iPhone and Apple Watch builds. A tag publishes them in a GitHub
-release. The template's [TestFlight guide](https://github.com/samoylenkodmitry/cranpose-showcase/blob/main/docs/testflight.md)
+release. `cranpose-build build --platform ios --on github` builds the current
+working tree on a GitHub macOS runner and downloads the package; see
+[Build Apple apps without a Mac](docs/guide.md#build-apple-apps-without-a-mac). The template's [TestFlight guide](https://github.com/samoylenkodmitry/cranpose-showcase/blob/main/docs/testflight.md)
 sets up your own Apple account and uploads the iPhone app, with the Apple Watch
 app inside, to TestFlight from a workflow.
 
@@ -220,7 +222,9 @@ The watch app is a separate composable for small screens, drawn through
 SpriteKit; [crates/cranpose/watchos](crates/cranpose/watchos/README.md) describes
 the watchOS host. For Intel Macs, use `x86_64-apple-ios` through the manual steps
 in the [iOS guide](docs/guide.md#run-on-ios). A physical device needs a
-certificate and a provisioning profile.
+certificate and a provisioning profile, or an unsigned `.ipa` that
+[xtool](https://xtool.sh) signs with your Apple account. On Windows or Linux,
+[build the Apple packages on GitHub](docs/guide.md#build-apple-apps-without-a-mac).
 
 ### Web
 
