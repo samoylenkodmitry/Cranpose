@@ -138,6 +138,18 @@ fn separate_compositions_and_framework_overrides_do_not_share_language() {
 }
 
 #[test]
+fn serbian_framework_strings_keep_the_script_the_app_asks_for() {
+    let app = Catalog::from_resources("en", &[]).expect("catalog");
+    let mut seen = Vec::new();
+    for tag in ["sr", "sr-Latn"] {
+        let _composition = run_test_composition(|| {
+            ProvideLocalization(&app, locale(tag), || seen.push(UiString::Copy.resolve()));
+        });
+    }
+    assert_eq!(seen, ["Копирај", "Kopiraj"]);
+}
+
+#[test]
 fn generated_accessors_and_borrowed_arguments_work_without_a_provider() {
     let mut seen = Vec::new();
     run_test_composition(|| {

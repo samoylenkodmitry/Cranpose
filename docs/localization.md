@@ -274,8 +274,9 @@ It also does not turn translated text into markup or rich-text annotations.
 
 Text-selection menus, caret-action menus, selection containers, default search
 hints, and the tab-bar search accessory use the `cranpose-ui` namespace. English,
-Spanish, French, German, Brazilian Portuguese, Russian, Serbian Latin, Arabic,
-Hindi, Indonesian, Simplified Chinese, Japanese, and Korean catalogs are bundled only with localization
+Spanish, French, German, Brazilian Portuguese, Russian, Serbian in Cyrillic (`sr`)
+and Latin (`sr-Latn`), Turkish, Arabic, Hindi, Indonesian, Vietnamese, Thai,
+Simplified Chinese, Japanese, and Korean catalogs are bundled only with localization
 enabled. Application catalogs take precedence for matching messages; omitted
 entries retain the library translation. For example `locales/fr/cranpose-ui.ftl`:
 

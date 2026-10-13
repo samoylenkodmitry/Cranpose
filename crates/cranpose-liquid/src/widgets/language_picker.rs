@@ -46,11 +46,9 @@ pub fn LiquidLanguagePicker(controller: LocalizationController) {
                 let mut heading_style = typography.headline.clone();
                 heading_style.span_style.color = Some(colors.label);
                 Text(title.clone(), Modifier::empty(), heading_style);
-                Text(
-                    current_name.clone(),
-                    Modifier::empty(),
-                    typography.body.clone(),
-                );
+                let mut current_style = typography.body.clone();
+                current_style.span_style.color = Some(colors.secondary_label);
+                Text(current_name.clone(), Modifier::empty(), current_style);
 
                 let state_name = current_name.as_str().to_owned();
                 let toggle_modifier =
