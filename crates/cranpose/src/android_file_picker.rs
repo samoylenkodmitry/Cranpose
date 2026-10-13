@@ -16,11 +16,11 @@ use std::{
 };
 
 use cranpose_services::{
-    Content, ContentEntry, ContentError, ContentFolder, ContentFolderRef, ContentFuture,
-    ContentHandle, ContentMetadata, ContentReader, ContentReaderRef, ContentResolver, ContentSink,
-    ContentSinkRef, ContentStream, ContentStreamRef, DEFAULT_CHUNK_LEN, FilePicker,
-    FilePickerError, FilePickerOptions, PickerFuture, RecoveredPick, SaveDocumentRequest,
-    set_platform_content_resolver, set_platform_file_picker,
+    BlockingSink, Content, ContentEntry, ContentError, ContentFolder, ContentFolderRef,
+    ContentFuture, ContentHandle, ContentMetadata, ContentReaderRef, ContentResolver,
+    ContentSinkRef, ContentStream, ContentStreamRef, FilePicker, FilePickerError,
+    FilePickerOptions, PickerFuture, RecoveredPick, SaveDocumentRequest, open_threaded,
+    set_platform_content_resolver, set_platform_file_picker, threaded_sink,
 };
 use jni::{
     EnvUnowned, Outcome, jni_sig, jni_str,
@@ -151,12 +151,9 @@ impl FilePicker for AndroidFilePicker {
     ) -> PickerFuture<Result<Option<ContentSinkRef>, FilePickerError>> {
         let created = present_create_document(request);
         Box::pin(async move {
-            Ok(created.await?.map(|uri| {
-                Rc::new(AndroidSink {
-                    uri,
-                    file: std::cell::RefCell::new(None),
-                }) as ContentSinkRef
-            }))
+            Ok(created
+                .await?
+                .map(|uri| threaded_sink(AndroidSink { uri, file: None })))
         })
     }
 
@@ -453,51 +450,27 @@ impl Content for AndroidDocument {
         self.metadata.clone()
     }
 
+    /// The provider opens and reads the document on a thread of its own: a
+    /// cloud provider may download it first.
     fn open(&self) -> ContentFuture<'_, Result<ContentReaderRef, ContentError>> {
         let uri = self.metadata.identifier.clone();
-        Box::pin(async move {
-            let file =
-                open_content_uri(&uri).map_err(|error| ContentError::Io(error.to_string()))?;
-            Ok(Rc::new(DescriptorReader {
-                file: std::cell::RefCell::new(Some(file)),
-            }) as ContentReaderRef)
-        })
+        open_threaded(
+            move || open_content_uri(&uri).map_err(|error| ContentError::Io(error.to_string())),
+            |error| ContentError::Io(error.to_string()),
+        )
     }
 }
 
-struct DescriptorReader {
-    file: std::cell::RefCell<Option<File>>,
-}
-
-impl ContentReader for DescriptorReader {
-    fn read_chunk(&self) -> ContentFuture<'_, Result<Option<Vec<u8>>, ContentError>> {
-        Box::pin(async move {
-            let mut slot = self.file.borrow_mut();
-            let Some(file) = slot.as_mut() else {
-                return Ok(None);
-            };
-            let mut buffer = vec![0u8; DEFAULT_CHUNK_LEN];
-            let filled = crate::chunked_read::fill_buffer(file, &mut buffer)
-                .map_err(|error| ContentError::Io(error.to_string()))?;
-            if filled == 0 {
-                *slot = None;
-                return Ok(None);
-            }
-            buffer.truncate(filled);
-            Ok(Some(buffer))
-        })
-    }
-}
-
+/// A document the person created, opened for writing at the first write, on
+/// the sink's thread.
 struct AndroidSink {
     uri: String,
-    file: std::cell::RefCell<Option<File>>,
+    file: Option<File>,
 }
 
 impl AndroidSink {
-    fn writer(&self) -> Result<std::cell::RefMut<'_, Option<File>>, ContentError> {
-        let mut slot = self.file.borrow_mut();
-        if slot.is_none() {
+    fn writer(&mut self) -> Result<&mut File, ContentError> {
+        if self.file.is_none() {
             let fd = call_activity(|env, activity| {
                 let uri = env.new_string(&self.uri).map_err(|e| e.to_string())?;
                 let uri_obj: &JObject = uri.as_ref();
@@ -517,35 +490,29 @@ impl AndroidSink {
             // SAFETY: `cranposeOpenUriWrite` detaches the descriptor from its
             // `ParcelFileDescriptor`, transferring ownership to this process;
             // the `File` closes it on drop.
-            *slot = Some(unsafe { File::from_raw_fd(fd) });
+            self.file = Some(unsafe { File::from_raw_fd(fd) });
         }
-        Ok(slot)
+        self.file
+            .as_mut()
+            .ok_or_else(|| ContentError::Io("sink is already finished".into()))
     }
 }
 
-impl ContentSink for AndroidSink {
-    fn write_chunk(&self, bytes: Vec<u8>) -> ContentFuture<'_, Result<(), ContentError>> {
-        Box::pin(async move {
-            let mut slot = self.writer()?;
-            let file = slot
-                .as_mut()
-                .ok_or_else(|| ContentError::Io("sink is already finished".into()))?;
-            file.write_all(&bytes)
-                .map_err(|error| ContentError::Io(error.to_string()))
-        })
+impl BlockingSink for AndroidSink {
+    fn write(&mut self, bytes: &[u8]) -> Result<(), ContentError> {
+        self.writer()?
+            .write_all(bytes)
+            .map_err(|error| ContentError::Io(error.to_string()))
     }
 
-    fn finish(&self) -> ContentFuture<'_, Result<(), ContentError>> {
-        Box::pin(async move {
-            let mut slot = self.writer()?;
-            let Some(mut file) = slot.take() else {
-                return Ok(());
-            };
-            file.flush()
-                .map_err(|error| ContentError::Io(error.to_string()))?;
-            file.sync_all()
-                .map_err(|error| ContentError::Io(error.to_string()))
-        })
+    fn finish(&mut self) -> Result<(), ContentError> {
+        let file = self.writer()?;
+        file.flush()
+            .map_err(|error| ContentError::Io(error.to_string()))?;
+        file.sync_all()
+            .map_err(|error| ContentError::Io(error.to_string()))?;
+        self.file = None;
+        Ok(())
     }
 }
 

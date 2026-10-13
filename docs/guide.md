@@ -2048,7 +2048,10 @@ async fn read_document(content: ContentHandle) -> anyhow::Result<String> {
 ```
 
 For large files, call `open()` and read chunks with `read_chunk()`.
+The framework's readers and sinks read and write on a thread of their own, so a copy of a large file leaves the UI thread free.
+`copy_content(&*content, &sink, |bytes| ...)` copies one into the other and reports the bytes copied so far.
 Use `rememberSaveDocumentLauncher` for output documents and `rememberOpenFilesLauncher` for multiple files.
+Use `rememberExportFileLauncher` to save a copy of a file the app already has, such as a recording; on iOS the chooser takes the file itself, without a staging copy.
 [Cranamp's import code](https://github.com/samoylenkodmitry/cranamp/blob/main/src/audio.rs) loads audio through these content APIs.
 
 ### Play media
@@ -2183,7 +2186,7 @@ This pattern plays two pulses with a 40-millisecond pause.
 
 - **HTTP:** `local_http_client`, `HttpClient`, `HttpRequest`.
 - **URLs:** `local_uri_handler`.
-- **Documents:** `rememberOpenFileLauncher`, `rememberSaveDocumentLauncher`, `ContentHandle`.
+- **Documents:** `rememberOpenFileLauncher`, `rememberSaveDocumentLauncher`, `rememberExportFileLauncher`, `ContentHandle`.
 - **Share:** `local_share_sheet`, `ShareContent`.
 - **Receive shared content:** `rememberIncomingContent`.
 - **Preferences and directories:** `preferences`, `application_directories`.

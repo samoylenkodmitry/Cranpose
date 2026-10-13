@@ -1,7 +1,6 @@
 use std::{
-    cell::RefCell,
     fs::File,
-    io::{Read, Write},
+    io::Write,
     path::{Path, PathBuf},
     rc::Rc,
     time::UNIX_EPOCH,
@@ -9,8 +8,8 @@ use std::{
 
 use super::{
     Content, ContentEntry, ContentError, ContentFolder, ContentFolderRef, ContentFuture,
-    ContentHandle, ContentMetadata, ContentReader, ContentReaderRef, ContentSink, ContentSinkRef,
-    DEFAULT_CHUNK_LEN,
+    ContentHandle, ContentMetadata, ContentReaderRef, ContentSinkRef,
+    threaded::{BlockingSink, open_threaded, run_threaded, threaded_sink},
 };
 
 fn io_error(path: &Path, error: std::io::Error) -> ContentError {
@@ -71,57 +70,23 @@ impl Content for FileContent {
     }
 
     fn open(&self) -> ContentFuture<'_, Result<ContentReaderRef, ContentError>> {
+        let opened = self.path.clone();
         let path = self.path.clone();
-        Box::pin(async move {
-            let file = File::open(&path).map_err(|error| io_error(&path, error))?;
-            Ok(Rc::new(FileReader {
-                path,
-                file: RefCell::new(Some(file)),
-            }) as ContentReaderRef)
-        })
+        open_threaded(
+            move || File::open(&opened).map_err(|error| io_error(&opened, error)),
+            move |error| io_error(&path, error),
+        )
     }
 
     fn read_all(&self) -> ContentFuture<'_, Result<Vec<u8>, ContentError>> {
         let path = self.path.clone();
-        Box::pin(async move { std::fs::read(&path).map_err(|error| io_error(&path, error)) })
+        run_threaded(move || std::fs::read(&path).map_err(|error| io_error(&path, error)))
     }
 }
 
 /// A shared handle to the file at `path`.
 pub fn file_content(path: impl Into<PathBuf>) -> ContentHandle {
     Rc::new(FileContent::new(path))
-}
-
-struct FileReader {
-    path: PathBuf,
-    file: RefCell<Option<File>>,
-}
-
-impl ContentReader for FileReader {
-    fn read_chunk(&self) -> ContentFuture<'_, Result<Option<Vec<u8>>, ContentError>> {
-        Box::pin(async move {
-            let mut slot = self.file.borrow_mut();
-            let Some(file) = slot.as_mut() else {
-                return Ok(None);
-            };
-            let mut buffer = vec![0u8; DEFAULT_CHUNK_LEN];
-            let mut filled = 0;
-            while filled < buffer.len() {
-                match file.read(&mut buffer[filled..]) {
-                    Ok(0) => break,
-                    Ok(read) => filled += read,
-                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                    Err(error) => return Err(io_error(&self.path, error)),
-                }
-            }
-            if filled == 0 {
-                *slot = None;
-                return Ok(None);
-            }
-            buffer.truncate(filled);
-            Ok(Some(buffer))
-        })
-    }
 }
 
 /// A directory on the local filesystem.
@@ -179,11 +144,13 @@ pub fn file_folder(path: impl Into<PathBuf>) -> ContentFolderRef {
 }
 
 /// A file being written through a temporary sibling, renamed on
-/// [`ContentSink::finish`] so a partial write never replaces a good file.
+/// [`ContentSink::finish`](super::ContentSink::finish) so a partial write
+/// never replaces a good file. Its [`handle`](FileSink::handle) writes on a
+/// thread of its own.
 pub struct FileSink {
     destination: PathBuf,
     staging: PathBuf,
-    file: RefCell<Option<File>>,
+    file: Option<File>,
 }
 
 impl FileSink {
@@ -198,13 +165,13 @@ impl FileSink {
         Ok(Self {
             destination,
             staging,
-            file: RefCell::new(Some(file)),
+            file: Some(file),
         })
     }
 
-    /// A shared handle to this sink.
+    /// A shared handle to this sink, which writes on a thread of its own.
     pub fn handle(self) -> ContentSinkRef {
-        Rc::new(self)
+        threaded_sink(self)
     }
 
     /// The path this sink commits to.
@@ -222,37 +189,33 @@ fn staging_path(destination: &Path) -> PathBuf {
     destination.with_file_name(name)
 }
 
-impl ContentSink for FileSink {
-    fn write_chunk(&self, bytes: Vec<u8>) -> ContentFuture<'_, Result<(), ContentError>> {
-        Box::pin(async move {
-            let mut slot = self.file.borrow_mut();
-            let file = slot
-                .as_mut()
-                .ok_or_else(|| ContentError::Io("sink is already finished".into()))?;
-            file.write_all(&bytes)
-                .map_err(|error| io_error(&self.staging, error))
-        })
+impl BlockingSink for FileSink {
+    fn write(&mut self, bytes: &[u8]) -> Result<(), ContentError> {
+        let file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| ContentError::Io("sink is already finished".into()))?;
+        file.write_all(bytes)
+            .map_err(|error| io_error(&self.staging, error))
     }
 
-    fn finish(&self) -> ContentFuture<'_, Result<(), ContentError>> {
-        Box::pin(async move {
-            let Some(mut file) = self.file.borrow_mut().take() else {
-                return Ok(());
-            };
-            file.flush()
-                .map_err(|error| io_error(&self.staging, error))?;
-            file.sync_all()
-                .map_err(|error| io_error(&self.staging, error))?;
-            drop(file);
-            std::fs::rename(&self.staging, &self.destination)
-                .map_err(|error| io_error(&self.destination, error))
-        })
+    fn finish(&mut self) -> Result<(), ContentError> {
+        let Some(mut file) = self.file.take() else {
+            return Ok(());
+        };
+        file.flush()
+            .map_err(|error| io_error(&self.staging, error))?;
+        file.sync_all()
+            .map_err(|error| io_error(&self.staging, error))?;
+        drop(file);
+        std::fs::rename(&self.staging, &self.destination)
+            .map_err(|error| io_error(&self.destination, error))
     }
 }
 
 impl Drop for FileSink {
     fn drop(&mut self) {
-        if self.file.borrow().is_some() {
+        if self.file.is_some() {
             let _ = std::fs::remove_file(&self.staging);
         }
     }

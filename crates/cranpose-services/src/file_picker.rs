@@ -181,6 +181,36 @@ pub trait FilePicker {
         Box::pin(async { Err(FilePickerError::UnsupportedPlatform) })
     }
 
+    /// Presents a save-destination chooser for the local file at `path` and
+    /// puts a copy of it there. Resolves to `false` if cancelled.
+    ///
+    /// The default streams the file into [`save_document`](Self::save_document)
+    /// with the reads and writes off the UI thread; a backend whose chooser
+    /// takes the file itself overrides it and skips that copy.
+    fn export_file(
+        &self,
+        path: std::path::PathBuf,
+        request: SaveDocumentRequest,
+    ) -> PickerFuture<Result<bool, FilePickerError>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let saving = self.save_document(request);
+            Box::pin(async move {
+                let Some(sink) = saving.await? else {
+                    return Ok(false);
+                };
+                let file = crate::content::file_content(path);
+                crate::content::copy_content(&*file, &sink, |_| {}).await?;
+                Ok(true)
+            })
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (path, request);
+            Box::pin(async { Err(FilePickerError::UnsupportedPlatform) })
+        }
+    }
+
     /// Presents a chooser for a folder the app may keep writing to across runs,
     /// resolving to the durable handle accepted by
     /// [`crate::writable_folder::open_writable_folder`].

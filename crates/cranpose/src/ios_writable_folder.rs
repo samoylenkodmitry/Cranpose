@@ -173,7 +173,7 @@ impl FolderReader for BookmarkReader {
         let path = self.path.clone();
         let filled = store.with_scope(|_| {
             let _ = &path;
-            crate::chunked_read::fill_buffer(file, &mut buffer)
+            cranpose_services::read_full(file, &mut buffer)
         })?;
         if filled == 0 {
             self.file = None;
