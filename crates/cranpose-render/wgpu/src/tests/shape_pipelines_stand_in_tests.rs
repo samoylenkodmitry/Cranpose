@@ -32,7 +32,7 @@ fn pipelines() -> (
     let pipelines = ShapePipelines::new(
         ListingBuilder(Arc::clone(&built)),
         wgpu::Backend::Vulkan,
-        &PipelineCompiler::spawn(),
+        &PipelineCompiler::spawn(wgpu::Backend::Vulkan),
         [],
         PipelineRecorder::default(),
     );

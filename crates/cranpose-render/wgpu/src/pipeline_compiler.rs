@@ -85,10 +85,19 @@ const LANE_FINISH_WAIT: web_time::Duration = web_time::Duration::from_secs(5);
 /// The warm-up lane's threads: a launch after an update compiles the last
 /// launch's first screen there, dozens of pipelines of a few hundred
 /// milliseconds each on a slow device's driver, and one thread left its
-/// first frame waiting for them one at a time.
+/// first frame waiting for them one at a time. Metal compiles in the
+/// system's compiler service, side by side, while the thread that asked
+/// waits: with no Metal shader cached, the gauntlet's first frame on an
+/// Apple M3 Pro (12 cores) waits for 14 pipelines of 40 to 140 ms each, up
+/// to five of them for one pass, and on 10 threads each pass starts all of
+/// its own at once.
 #[cfg(not(target_arch = "wasm32"))]
-fn warm_up_threads() -> usize {
-    std::thread::available_parallelism().map_or(1, |cores| (cores.get() / 2).clamp(1, 3))
+fn warm_up_threads(backend: wgpu::Backend) -> usize {
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    match backend {
+        wgpu::Backend::Metal => cores.saturating_sub(2).clamp(3, 10),
+        _ => (cores / 2).clamp(1, 3),
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -298,9 +307,12 @@ pub(crate) enum PipelineCompilation {
 }
 
 impl PipelineCompiler {
-    pub(crate) fn for_compilation(compilation: PipelineCompilation) -> Self {
+    pub(crate) fn for_compilation(
+        compilation: PipelineCompilation,
+        backend: wgpu::Backend,
+    ) -> Self {
         match compilation {
-            PipelineCompilation::Background => Self::spawn(),
+            PipelineCompilation::Background => Self::spawn(backend),
             PipelineCompilation::Inline => Self::inactive(),
         }
     }
@@ -311,7 +323,9 @@ impl PipelineCompiler {
         Self::default()
     }
 
-    pub(crate) fn spawn() -> Self {
+    pub(crate) fn spawn(
+        #[cfg_attr(target_arch = "wasm32", expect(unused_variables))] backend: wgpu::Backend,
+    ) -> Self {
         #[cfg(not(target_arch = "wasm32"))]
         {
             static BACKGROUND_PIPELINES: crate::debug_toggles::DebugToggle =
@@ -330,7 +344,7 @@ impl PipelineCompiler {
             let spawned = std::iter::once(("cranpose-pipelines", false))
                 .chain(std::iter::repeat_n(
                     ("cranpose-warm-up", true),
-                    warm_up_threads(),
+                    warm_up_threads(backend),
                 ))
                 .try_for_each(|(name, warm_ups)| -> std::io::Result<()> {
                     spawn_thread(
@@ -357,6 +371,14 @@ impl PipelineCompiler {
         {
             Self::inactive()
         }
+    }
+
+    /// How many threads take warm-ups.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn warm_up_threads(&self) -> usize {
+        self.workers
+            .as_ref()
+            .map_or(0, |workers| workers.threads.saturating_sub(1))
     }
 
     /// Where the background threads say a pipeline landed; none for an

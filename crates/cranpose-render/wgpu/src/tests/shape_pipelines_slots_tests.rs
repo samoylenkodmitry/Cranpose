@@ -67,7 +67,7 @@ fn gated() -> (GatedBuilder, Gate) {
 #[test]
 fn a_draw_waits_for_the_warm_up_building_its_value_instead_of_building_again() {
     let (builder, gate) = gated();
-    let mut slots = Slots::new(&PipelineCompiler::spawn(), builder);
+    let mut slots = Slots::new(&PipelineCompiler::spawn(wgpu::Backend::Vulkan), builder);
     let warmed = key(BlendMode::DstOut);
     slots.warm(warmed);
     assert_eq!(
@@ -105,7 +105,7 @@ fn an_inactive_compiler_warms_nothing_and_draws_build_where_they_ask() {
 #[test]
 fn a_draw_can_start_its_pipeline_ahead_of_unrelated_warm_ups() {
     let (builder, gate) = gated();
-    let mut slots = Slots::new(&PipelineCompiler::spawn(), builder);
+    let mut slots = Slots::new(&PipelineCompiler::spawn(wgpu::Backend::Vulkan), builder);
     let background = key(BlendMode::DstOut);
     let drawn = key(BlendMode::SrcOver);
     slots.warm(background);
@@ -135,7 +135,7 @@ fn a_draw_can_start_its_pipeline_ahead_of_unrelated_warm_ups() {
 #[test]
 fn a_frame_queues_two_of_its_wants_and_the_rest_wait_for_the_next_frame() {
     let (builder, gate) = gated();
-    let mut slots = Slots::new(&PipelineCompiler::spawn(), builder);
+    let mut slots = Slots::new(&PipelineCompiler::spawn(wgpu::Backend::Vulkan), builder);
     let first = key(BlendMode::SrcOver);
     let second = key(BlendMode::DstOut);
     let third = key(BlendMode::Plus);
@@ -170,7 +170,7 @@ fn a_frame_queues_two_of_its_wants_and_the_rest_wait_for_the_next_frame() {
 #[test]
 fn dropping_the_slots_cancels_the_queued_build() {
     let (builder, gate) = gated();
-    let shared = PipelineCompiler::spawn();
+    let shared = PipelineCompiler::spawn(wgpu::Backend::Vulkan);
     let mut slots = Slots::new(&shared, builder);
     let first = key(BlendMode::SrcOver);
     slots.want(first, 300);
@@ -191,7 +191,7 @@ fn dropping_the_slots_cancels_the_queued_build() {
 #[test]
 fn a_frames_heaviest_wanted_pipeline_builds_first() {
     let (builder, gate) = gated();
-    let mut slots = Slots::new(&PipelineCompiler::spawn(), builder);
+    let mut slots = Slots::new(&PipelineCompiler::spawn(wgpu::Backend::Vulkan), builder);
     let light = key(BlendMode::DstOut);
     let heavy = key(BlendMode::SrcIn);
     let middle = key(BlendMode::Dst);
@@ -223,7 +223,7 @@ fn a_frames_heaviest_wanted_pipeline_builds_first() {
 #[test]
 fn a_heavier_pipeline_wanted_while_another_builds_goes_before_lighter_earlier_ones() {
     let (builder, gate) = gated();
-    let mut slots = Slots::new(&PipelineCompiler::spawn(), builder);
+    let mut slots = Slots::new(&PipelineCompiler::spawn(wgpu::Backend::Vulkan), builder);
     let first = key(BlendMode::DstOut);
     let earlier = key(BlendMode::Dst);
     let heavier = key(BlendMode::SrcIn);
@@ -252,7 +252,7 @@ fn a_heavier_pipeline_wanted_while_another_builds_goes_before_lighter_earlier_on
 #[test]
 fn a_frame_that_ended_before_queuing_its_wants_leaves_none_for_the_next() {
     let (builder, gate) = gated();
-    let mut slots = Slots::new(&PipelineCompiler::spawn(), builder);
+    let mut slots = Slots::new(&PipelineCompiler::spawn(wgpu::Backend::Vulkan), builder);
     let stale = key(BlendMode::DstOut);
     let current = key(BlendMode::SrcIn);
     slots.want(stale, 1_000_000);
@@ -276,7 +276,7 @@ fn a_frame_that_ended_before_queuing_its_wants_leaves_none_for_the_next() {
 #[test]
 fn a_key_the_latest_frame_no_longer_wants_is_not_built() {
     let (builder, gate) = gated();
-    let mut slots = Slots::new(&PipelineCompiler::spawn(), builder);
+    let mut slots = Slots::new(&PipelineCompiler::spawn(wgpu::Backend::Vulkan), builder);
     let building = key(BlendMode::SrcIn);
     let dropped = key(BlendMode::DstOut);
     slots.want(building, 300);
