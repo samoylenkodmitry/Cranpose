@@ -51,6 +51,27 @@ generated workspace at a checkout. Published app manifests use the resolved
 published dependency. The generated runner starts with app features disabled;
 pass `--features` to select app features.
 
+## Crown
+
+The crown reaches the app through SwiftUI's `digitalCrownRotation`, at medium
+sensitivity and without a stride: with a stride, SwiftUI steps the value and
+settles it on a step after the hand stops. After a quick turn SwiftUI also
+keeps moving the value for a second or more, slowing it each frame, while the
+event's velocity, which follows the hand, is already zero. The host passes
+the changes while the hand turns the crown and drops that fling, so the app's
+crown stops when the crown does. While the crown turns, SwiftUI's value also
+trails the hand by a few frames; the host leads it by 0.25 units per unit of
+the event's velocity, a lead that goes back to nothing as the turn stops. In a watchOS 27 simulator, turned by
+`XCUIDevice.rotateDigitalCrown`, one full turn at one turn per second gives
+about 9.4 units, and a turn in a third of a second gives 11.7 units in 0.37
+seconds where SwiftUI's value goes on for 1.4 seconds more. With the lead, a
+quarter turn in an eighth of a second reaches the app about 10 ms before the
+turn's end instead of 55 to 75 ms after it.
+
+WatchKit's crown sequencer, which a SwiftUI app reaches through its root
+interface controller, takes the focus but delivers nothing, on a watch and in
+the simulator.
+
 ## Sound and haptics
 
 With the `cranpose/audio` feature, `cranpose_audio` plays through an

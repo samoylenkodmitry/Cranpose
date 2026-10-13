@@ -286,11 +286,67 @@ final class CranposeScene: SKScene {
     }
 }
 
-/// The crown's running value. A plain object rather than view state: the
-/// crown moves on every event, and view state would rebuild the view (and
-/// the SpriteKit view in it) each time before the event reached the app.
+/// The crown as SwiftUI reports it, less SwiftUI's fling. A plain object
+/// rather than view state: the crown moves on every event, and view state
+/// would rebuild the view (and the SpriteKit view in it) each time before the
+/// event reached the app.
+///
+/// After a quick turn SwiftUI keeps moving the value for a second or more,
+/// slowing it each frame, while the event's velocity, which follows the
+/// hand, is already zero. A game steered with that value keeps moving after
+/// the crown stops. So once the velocity has been above zero and drops to
+/// zero, the changes go nowhere until the crown is idle. The first changes of
+/// a turn come with a zero velocity too, before SwiftUI has measured one, and
+/// those count.
+///
+/// SwiftUI's value also trails the hand by a few frames while it turns. The
+/// velocity does not, so the reading leads the value by a share of it.
+///
+/// WatchKit's crown sequencer, which a SwiftUI app reaches through its root
+/// interface controller, takes the focus but delivers nothing, on a watch and
+/// in the simulator.
 final class CrownReading {
+    /// How far the value is led by the event's velocity, in crown units per
+    /// unit of velocity. SwiftUI's value trails the hand by a few frames,
+    /// while the velocity follows the hand; leading by a share of it makes up
+    /// most of the delay. The lead goes back to nothing as the velocity does,
+    /// so a turn adds up to what SwiftUI reports.
+    static let leadPerVelocity = 0.25
+
     var value = 0.0
+    private var offset = 0.0
+    private var turning = false
+    private var led = 0.0
+
+    /// The change to hand the app for this event, or nil while SwiftUI
+    /// flings and nothing is left to give back.
+    func change(_ event: DigitalCrownEvent) -> Double? {
+        let delta = event.offset - offset
+        offset = event.offset
+        if event.velocity != 0 {
+            turning = true
+            return delta + moveLead(to: Self.leadPerVelocity * event.velocity)
+        }
+        if turning {
+            return nonzero(moveLead(to: 0))
+        }
+        return delta
+    }
+
+    /// What is left of the lead when the crown comes to rest.
+    func idle() -> Double? {
+        turning = false
+        return nonzero(moveLead(to: 0))
+    }
+
+    private func moveLead(to next: Double) -> Double {
+        defer { led = next }
+        return next - led
+    }
+
+    private func nonzero(_ change: Double) -> Double? {
+        change == 0 ? nil : change
+    }
 }
 
 @MainActor
@@ -344,15 +400,19 @@ struct CranposeView: View {
             .contentShape(Rectangle())
             .focusable()
             .digitalCrownRotation(
-                // Each new value goes to the app as it arrives, as the change
-                // from the one before.
-                Binding(get: { model.crown.value }, set: { value in
-                    let delta = value - model.crown.value
-                    model.crown.value = value
-                    CPCrown(Float(delta), model.elapsed / 1_000_000)
-                }),
-                from: -1_000_000, through: 1_000_000, by: 1, sensitivity: .medium,
-                isContinuous: true, isHapticFeedbackEnabled: false)
+                Binding(get: { model.crown.value }, set: { model.crown.value = $0 }),
+                from: -1_000_000, through: 1_000_000, sensitivity: .medium,
+                isContinuous: true, isHapticFeedbackEnabled: false,
+                onChange: { event in
+                    if let delta = model.crown.change(event) {
+                        CPCrown(Float(delta), model.elapsed / 1_000_000)
+                    }
+                },
+                onIdle: {
+                    if let rest = model.crown.idle() {
+                        CPCrown(Float(rest), model.elapsed / 1_000_000)
+                    }
+                })
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { event in
                     if !touching {
