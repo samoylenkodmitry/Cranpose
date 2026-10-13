@@ -91,22 +91,8 @@ impl TextRange {
         let start = self.min().min(text.len());
         let end = self.max().min(text.len());
 
-        let start = if text.is_char_boundary(start) {
-            start
-        } else {
-            (0..start)
-                .rev()
-                .find(|&i| text.is_char_boundary(i))
-                .unwrap_or(0)
-        };
-
-        let end = if text.is_char_boundary(end) {
-            end
-        } else {
-            (end..=text.len())
-                .find(|&i| text.is_char_boundary(i))
-                .unwrap_or(text.len())
-        };
+        let start = text.floor_char_boundary(start);
+        let end = text.ceil_char_boundary(end);
 
         if start <= end { &text[start..end] } else { "" }
     }

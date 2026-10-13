@@ -1361,8 +1361,8 @@ pub(crate) fn merge_text_field_semantics(
     config.set_selection = Some(cranpose_foundation::SemanticsSetSelection::new(
         move |anchor, focus| {
             let text = state.text();
-            let anchor = floor_char_boundary(&text, anchor);
-            let focus = floor_char_boundary(&text, focus);
+            let anchor = text.floor_char_boundary(anchor);
+            let focus = text.floor_char_boundary(focus);
             state.set_selection(TextRange::new(anchor, focus));
             crate::cursor_animation::reset_cursor_blink();
             crate::request_render_invalidation();
@@ -1370,14 +1370,6 @@ pub(crate) fn merge_text_field_semantics(
         },
     ));
     config.text_selection = Some(state.selection());
-}
-
-fn floor_char_boundary(text: &str, index: usize) -> usize {
-    let mut index = index.min(text.len());
-    while !text.is_char_boundary(index) {
-        index -= 1;
-    }
-    index
 }
 
 impl PointerInputNode for TextFieldModifierNode {

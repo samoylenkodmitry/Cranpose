@@ -27,6 +27,7 @@ cranpose-animation = { workspace = true }
 cranpose-ui-layout = { workspace = true }
 cranpose-ui-graphics = { workspace = true }
 smallvec = "1.16"
+unicode-segmentation = { workspace = true }
 futures-task = "0.3"
 icu_properties = { version = "2.3", default-features = false, features = ["compiled_data"] }
 icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"], optional = true }

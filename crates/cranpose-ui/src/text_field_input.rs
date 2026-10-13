@@ -1,4 +1,5 @@
 use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState, TextRange};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
     key_event::{KeyCode, KeyEvent},
@@ -41,110 +42,41 @@ pub(crate) fn handle_key_event_impl(
 
         KeyCode::ArrowLeft => {
             state.set_desired_column(None);
-            if event.modifiers.command_or_ctrl() && !event.modifiers.shift {
-                let text = state.text();
-                let target = find_word_start(&text, state.selection().start);
-                state.edit(|buffer| buffer.place_cursor_before_char(target));
-            } else if event.modifiers.shift {
-                state.edit(cranpose_foundation::text::TextFieldBuffer::extend_selection_left);
-            } else {
-                let text = state.text();
-                let sel = state.selection();
-                let target = if !sel.collapsed() {
-                    sel.min()
-                } else if sel.start > 0 {
-                    text[..sel.start]
-                        .char_indices()
-                        .last()
-                        .map_or(0, |(i, _)| i)
+            state.edit(|buffer| {
+                if event.modifiers.command_or_ctrl() && !event.modifiers.shift {
+                    let target = find_word_start(buffer.text(), buffer.selection().start);
+                    buffer.place_cursor_before_char(target);
+                } else if event.modifiers.shift {
+                    buffer.extend_selection_left();
                 } else {
-                    0
-                };
-                state.edit(|buffer| buffer.place_cursor_before_char(target));
-            }
+                    buffer.move_cursor_left();
+                }
+            });
             true
         }
 
         KeyCode::ArrowRight => {
             state.set_desired_column(None);
-            if event.modifiers.command_or_ctrl() && !event.modifiers.shift {
-                let text = state.text();
-                let target = find_word_end(&text, state.selection().end);
-                state.edit(|buffer| buffer.place_cursor_before_char(target));
-            } else if event.modifiers.shift {
-                state.edit(cranpose_foundation::text::TextFieldBuffer::extend_selection_right);
-            } else {
-                let text = state.text();
-                let sel = state.selection();
-                let target = if !sel.collapsed() {
-                    sel.max()
-                } else if sel.end < text.len() {
-                    text[sel.end..]
-                        .char_indices()
-                        .nth(1)
-                        .map_or(text.len(), |(i, _)| sel.end + i)
+            state.edit(|buffer| {
+                if event.modifiers.command_or_ctrl() && !event.modifiers.shift {
+                    let target = find_word_end(buffer.text(), buffer.selection().end);
+                    buffer.place_cursor_before_char(target);
+                } else if event.modifiers.shift {
+                    buffer.extend_selection_right();
                 } else {
-                    text.len()
-                };
-                state.edit(|buffer| buffer.place_cursor_before_char(target));
-            }
+                    buffer.move_cursor_right();
+                }
+            });
             true
         }
 
         KeyCode::ArrowUp => {
-            let text = state.text();
-            let sel = state.selection();
-            let cursor = sel.end;
-            let text_before = &text[..cursor.min(text.len())];
-            let line_start = text_before.rfind('\n').map_or(0, |i| i + 1);
-            let col = cursor - line_start;
-            let column = state.desired_column().unwrap_or_else(|| {
-                state.set_desired_column(Some(col));
-                col
-            });
-            let target = if line_start == 0 {
-                state.set_desired_column(None);
-                0
-            } else {
-                let prev_end = line_start - 1;
-                let prev_start = text[..prev_end].rfind('\n').map_or(0, |i| i + 1);
-                prev_start + column.min(prev_end - prev_start)
-            };
-            if event.modifiers.shift {
-                state.edit(|buffer| buffer.select(TextRange::new(sel.start, target)));
-            } else {
-                state.edit(|buffer| buffer.place_cursor_before_char(target));
-            }
+            move_line(state, event.modifiers.shift, LineStep::Up);
             true
         }
 
         KeyCode::ArrowDown => {
-            let text = state.text();
-            let sel = state.selection();
-            let cursor = sel.end;
-            let text_before = &text[..cursor.min(text.len())];
-            let line_start = text_before.rfind('\n').map_or(0, |i| i + 1);
-            let col = cursor - line_start;
-            let column = state.desired_column().unwrap_or_else(|| {
-                state.set_desired_column(Some(col));
-                col
-            });
-            let line_end = text[cursor..].find('\n').map_or(text.len(), |i| cursor + i);
-            let target = if line_end >= text.len() {
-                state.set_desired_column(None);
-                text.len()
-            } else {
-                let next_start = line_end + 1;
-                let next_end = text[next_start..]
-                    .find('\n')
-                    .map_or(text.len(), |i| next_start + i);
-                next_start + column.min(next_end - next_start)
-            };
-            if event.modifiers.shift {
-                state.edit(|buffer| buffer.select(TextRange::new(sel.start, target)));
-            } else {
-                state.edit(|buffer| buffer.place_cursor_before_char(target));
-            }
+            move_line(state, event.modifiers.shift, LineStep::Down);
             true
         }
 
@@ -153,10 +85,12 @@ pub(crate) fn handle_key_event_impl(
             if event.modifiers.command_or_ctrl() {
                 state.edit(cranpose_foundation::text::TextFieldBuffer::place_cursor_at_start);
             } else {
-                let text = state.text();
-                let pos = state.selection().start;
-                let line_start = text[..pos.min(text.len())].rfind('\n').map_or(0, |i| i + 1);
-                state.edit(|buffer| buffer.place_cursor_before_char(line_start));
+                state.edit(|buffer| {
+                    let text = buffer.text();
+                    let pos = buffer.selection().start.min(text.len());
+                    let line_start = text[..pos].rfind('\n').map_or(0, |i| i + 1);
+                    buffer.place_cursor_before_char(line_start);
+                });
             }
             true
         }
@@ -166,10 +100,12 @@ pub(crate) fn handle_key_event_impl(
             if event.modifiers.command_or_ctrl() {
                 state.edit(cranpose_foundation::text::TextFieldBuffer::place_cursor_at_end);
             } else {
-                let text = state.text();
-                let pos = state.selection().start;
-                let line_end = text[pos..].find('\n').map_or(text.len(), |i| pos + i);
-                state.edit(|buffer| buffer.place_cursor_before_char(line_end));
+                state.edit(|buffer| {
+                    let text = buffer.text();
+                    let pos = buffer.selection().start.min(text.len());
+                    let line_end = text[pos..].find('\n').map_or(text.len(), |i| pos + i);
+                    buffer.place_cursor_before_char(line_end);
+                });
             }
             true
         }
@@ -195,4 +131,56 @@ pub(crate) fn handle_key_event_impl(
 
         _ => false,
     }
+}
+
+#[derive(Clone, Copy)]
+enum LineStep {
+    Up,
+    Down,
+}
+
+/// Moves the cursor to the line above or below, keeping the column it had
+/// before the first vertical move. Columns count characters, so the cursor
+/// lands on a character boundary in any script.
+fn move_line(state: &TextFieldState, extend_selection: bool, step: LineStep) {
+    state.edit(|buffer| {
+        let text = buffer.text();
+        let selection = buffer.selection();
+        let cursor = selection.end.min(text.len());
+        let line_start = text[..cursor].rfind('\n').map_or(0, |i| i + 1);
+        let column = state.desired_column().unwrap_or_else(|| {
+            let column = text[line_start..cursor].graphemes(true).count();
+            state.set_desired_column(Some(column));
+            column
+        });
+        let line = match step {
+            LineStep::Up => line_start.checked_sub(1).map(|end| {
+                let start = text[..end].rfind('\n').map_or(0, |i| i + 1);
+                (start, end)
+            }),
+            LineStep::Down => text[cursor..].find('\n').map(|i| {
+                let start = cursor + i + 1;
+                let end = text[start..].find('\n').map_or(text.len(), |i| start + i);
+                (start, end)
+            }),
+        };
+        let target = match line {
+            Some((start, end)) => text[start..end]
+                .grapheme_indices(true)
+                .nth(column)
+                .map_or(end, |(i, _)| start + i),
+            None => {
+                state.set_desired_column(None);
+                match step {
+                    LineStep::Up => 0,
+                    LineStep::Down => text.len(),
+                }
+            }
+        };
+        if extend_selection {
+            buffer.select(TextRange::new(selection.start, target));
+        } else {
+            buffer.place_cursor_before_char(target);
+        }
+    });
 }

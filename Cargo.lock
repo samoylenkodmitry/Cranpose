@@ -1374,6 +1374,7 @@ dependencies = [
  "log",
  "smallvec",
  "stats_alloc",
+ "unicode-segmentation",
  "web-time",
 ]
 
@@ -1655,6 +1656,7 @@ dependencies = [
  "stats_alloc",
  "thiserror 2.0.21",
  "tiny-skia",
+ "unicode-segmentation",
  "web-time",
 ]
 

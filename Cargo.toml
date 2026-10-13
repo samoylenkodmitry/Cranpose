@@ -100,6 +100,7 @@ cranpose-ui-graphics = { path = "crates/cranpose-ui-graphics", version = "0.9.39
 cranpose-ui-layout = { path = "crates/cranpose-ui-layout", version = "0.9.39" }
 
 cursor-icon = "1.2"
+unicode-segmentation = "1.13.3"
 web-time = "1.1"
 
 # Rules that AGENTS.md states as prose, enforced by the compiler instead.

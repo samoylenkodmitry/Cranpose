@@ -188,12 +188,14 @@ impl TextFieldState {
         hasher.finish()
     }
 
-    /// Gets the desired column for up/down navigation.
+    /// Gets the desired column for up/down navigation, in characters
+    /// (extended grapheme clusters) from the start of the line.
     pub fn desired_column(&self) -> Option<usize> {
         self.inner().borrow().desired_column.get()
     }
 
-    /// Sets the desired column for up/down navigation.
+    /// Sets the desired column for up/down navigation, in characters
+    /// (extended grapheme clusters) from the start of the line.
     pub fn set_desired_column(&self, col: Option<usize>) {
         self.inner().borrow().desired_column.set(col);
     }
