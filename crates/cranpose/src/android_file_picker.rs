@@ -713,7 +713,7 @@ impl Future for FolderNext {
     }
 }
 
-#[cfg(feature = "media")]
+#[cfg(feature = "media-backend")]
 pub fn content_uri_length(uri: &str) -> Option<u64> {
     let length = call_activity(|env, activity| {
         let argument = env.new_string(uri).map_err(|error| error.to_string())?;
@@ -724,7 +724,7 @@ pub fn content_uri_length(uri: &str) -> Option<u64> {
             jni_sig!("(Ljava/lang/String;)J"),
             &[JValue::Object(argument)],
         )
-        .and_then(|value| value.j())
+        .and_then(jni::JValueOwned::j)
         .map_err(|error| error.to_string())
     })
     .ok()?;

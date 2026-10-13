@@ -174,7 +174,12 @@ camera-desktop = [
 # the platform's own `MediaPlayer` cannot read a document a provider streams,
 # and the Android backend wraps this one with the media session. iOS and the web
 # use their platform stack, and there the backend compiles away.
-media = ["dep:cranpose-media"]
+media = ["media-backend", "cranpose-media/all-codecs"]
+# The same backend reading only WAV files of PCM samples, such as an app's own
+# recordings, without the code of the other containers and codecs.
+media-wav = ["media-backend", "cranpose-media/wav"]
+# Internal: the backend itself, with no codec. Enable `media` or `media-wav`.
+media-backend = ["dep:cranpose-media"]
 renderer-pixels = ["cranpose-render-pixels"]
 watchos = [
     "renderer-pixels",

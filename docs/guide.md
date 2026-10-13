@@ -2072,6 +2072,7 @@ fn play_track(uri: String) -> Result<(), MediaError> {
 ```
 
 Call this from a user action. Use `pause_media`, `seek_media_fraction` and `set_media_volume` for controls.
+An app that plays only WAV files of PCM samples, such as its own recordings, enables `media-wav` in place of `media` and leaves out the other codecs.
 For game sounds, enable `audio`; use `audio-desktop` on desktop.
 See [Cranamp](https://github.com/samoylenkodmitry/cranamp) for a player app.
 

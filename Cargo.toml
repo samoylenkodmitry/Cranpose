@@ -84,7 +84,7 @@ cranpose-fonts-cjk-data-1 = { path = "crates/cranpose-fonts-cjk-data-1", version
 cranpose-fonts-cjk-data-2 = { path = "crates/cranpose-fonts-cjk-data-2", version = "0.9.35" }
 cranpose-fonts-cjk-data-3 = { path = "crates/cranpose-fonts-cjk-data-3", version = "0.9.35" }
 cranpose-macros = { path = "crates/cranpose-macros", version = "0.9.35" }
-cranpose-media = { path = "crates/cranpose-media", version = "0.9.35" }
+cranpose-media = { path = "crates/cranpose-media", version = "0.9.35", default-features = false }
 cranpose-platform-android = { path = "crates/cranpose-platform/android", version = "0.9.35" }
 cranpose-platform-desktop-winit = { path = "crates/cranpose-platform/desktop-winit", version = "0.9.35", default-features = false }
 cranpose-platform-web = { path = "crates/cranpose-platform/web", version = "0.9.35" }

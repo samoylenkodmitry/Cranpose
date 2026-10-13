@@ -73,7 +73,7 @@ impl AndroidMediaPlayer {
     fn call_bool(&self, name: &'static jni::strings::JNIStr, default: bool) -> bool {
         let called = with_android_activity_env(&self.app, |env, activity| {
             env.call_method(&activity, name, jni_sig!("()Z"), &[])
-                .and_then(|value| value.z())
+                .and_then(jni::JValueOwned::z)
                 .map_err(|error| {
                     clear_pending_android_jni_exception(env);
                     error.to_string()
@@ -109,10 +109,9 @@ impl AndroidMediaPlayer {
 
     fn publish_session(&self, state: jint) {
         let progress = playback_progress();
-        let duration = progress
-            .duration
-            .map(|duration| duration.as_millis().min(jlong::MAX as u128) as jlong)
-            .unwrap_or(NO_DURATION);
+        let duration = progress.duration.map_or(NO_DURATION, |duration| {
+            duration.as_millis().min(jlong::MAX as u128) as jlong
+        });
         self.call(
             jni_str!("cranposeMediaSessionUpdate"),
             jni_sig!("(IJJF)V"),

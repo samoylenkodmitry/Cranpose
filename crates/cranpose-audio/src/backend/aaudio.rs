@@ -235,10 +235,10 @@ fn apply_operation(
             }
         }
         StreamOperation::Resume => {
-            if stream.state() == AudioStreamState::Started {
-                if let Err(error) = stream.request_stop() {
-                    log::warn!("failed to settle the AAudio stream before starting it: {error}");
-                }
+            if stream.state() == AudioStreamState::Started
+                && let Err(error) = stream.request_stop()
+            {
+                log::warn!("failed to settle the AAudio stream before starting it: {error}");
             }
             if let Err(error) = stream.request_start() {
                 log::warn!("failed to restart the AAudio stream: {error}");

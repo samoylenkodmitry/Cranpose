@@ -94,7 +94,7 @@ pub(crate) fn register(
     if capabilities.has(cranpose_capabilities::Service::Microphone) {
         crate::android_microphone::register(app.clone());
     }
-    #[cfg(feature = "media")]
+    #[cfg(feature = "media-backend")]
     crate::android_media::register(app.clone());
     set_platform_launch_args(Arc::new(read_launch_arguments(&app)));
     #[cfg(feature = "playbilling")]
