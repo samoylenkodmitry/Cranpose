@@ -1798,10 +1798,21 @@ public class CranposeActivity extends NativeActivity {
         }
     }
 
+    /** The provider's descriptors of the documents being written, by the
+     * number of the copy that each Rust writer holds. */
+    private final java.util.concurrent.ConcurrentHashMap<Integer, ParcelFileDescriptor> cranposeWrites =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     /**
      * Opens a {@code content://} document for writing, truncating it first, and
-     * returns a detached file descriptor the Rust caller owns and closes. Used
-     * to stream a saved document instead of buffering it.
+     * returns a copy of its file descriptor that the Rust caller owns and
+     * closes. Used to stream a saved document instead of buffering it.
+     *
+     * <p>The provider's own descriptor stays here until
+     * {@link #cranposeFinishUriWrite} closes it. A provider such as the media
+     * store records the document's size when that descriptor closes; a detached
+     * descriptor never closes, and the document kept the size of its first
+     * bytes, or none.
      */
     public int cranposeOpenUriWrite(String uriString) throws IOException {
         ParcelFileDescriptor descriptor =
@@ -1809,7 +1820,30 @@ public class CranposeActivity extends NativeActivity {
         if (descriptor == null) {
             throw new IOException("no writable descriptor for " + uriString);
         }
-        return descriptor.detachFd();
+        int fd = descriptor.dup().detachFd();
+        cranposeWrites.put(fd, descriptor);
+        return fd;
+    }
+
+    /**
+     * Closes the provider's descriptor of the write whose copy is {@code fd},
+     * before the Rust caller closes that copy. With {@code error} null the
+     * document is complete; otherwise the provider hears why it is not.
+     */
+    public void cranposeFinishUriWrite(int fd, String error) {
+        ParcelFileDescriptor descriptor = cranposeWrites.remove(fd);
+        if (descriptor == null) {
+            return;
+        }
+        try {
+            if (error == null) {
+                descriptor.close();
+            } else {
+                descriptor.closeWithError(error);
+            }
+        } catch (IOException failure) {
+            android.util.Log.w("cranpose", "a written document did not close", failure);
+        }
     }
 
     /** Metadata for one document as {@code name\tmime\tsize\tmodified}, or
