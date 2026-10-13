@@ -370,6 +370,17 @@ has the feature gets the source as it is. The feature adds naga's WGSL
 reader and writer to a wasm build, so only crates that bring such shaders
 turn it on: `cranpose-bevy` does on the web.
 
+### GL contexts keep the 60 varying components the standard grants
+
+Brave adds noise to WebGL parameters against fingerprinting, so on some sites
+it reports 59 for `MAX_VARYING_COMPONENTS`, below the 60 that GL 3.3, GLES 3.0
+and WebGL2 guarantee. `wgpu-hal` divided that by four, so the device allowed
+14 inter-stage variables, and a pipeline with 15, such as Cranpose's shape
+pipeline, failed validation on a GPU that runs it. Cranpose's HUD over a Bevy
+game drew nothing in Brave on a Mate 20 X on github.io, while the same page on
+localhost, where the noise left 60, drew it. The GL adapter now takes at least
+60 components.
+
 ### Update the fork
 
 1. Copy the new upstream versions' crates.io sources over the crate
