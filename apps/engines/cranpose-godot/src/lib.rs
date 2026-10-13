@@ -8,9 +8,4 @@ mod surface;
 mod window_demo;
 mod world;
 
-use godot::prelude::*;
-
-struct CranposeExtension;
-
-#[gdextension]
-unsafe impl ExtensionLibrary for CranposeExtension {}
+cranpose_gpu_interop::godot_extension!(CranposeExtension);

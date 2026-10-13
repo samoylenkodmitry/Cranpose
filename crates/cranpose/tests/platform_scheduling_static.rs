@@ -2373,6 +2373,8 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose-render/wgpu/src/pipeline_disk_cache.rs",
         "crates/cranpose-render/wgpu/src/run_entry.rs",
         "crates/cranpose-render/wgpu/src/stage_executor.rs",
+        "apps/engines/gpu-interop/src/godot.rs",
+        "apps/engines/gpu-interop/src/metal.rs",
     ];
     let guard_source = Path::new("crates/cranpose/tests/platform_scheduling_static.rs");
     let mut offenders = Vec::new();
@@ -2979,13 +2981,9 @@ fn collect_text_sources(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).expect("failed to read source directory") {
         let path = entry.expect("failed to read source directory entry").path();
         if path.is_dir() {
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            if matches!(name, "target" | ".git" | ".gradle" | "build") {
-                continue;
+            if !is_build_output(&path) {
+                collect_text_sources(&path, out);
             }
-            collect_text_sources(&path, out);
             continue;
         }
         let extension = path.extension().and_then(|extension| extension.to_str());
@@ -3121,11 +3119,19 @@ fn collect_sources(dir: &Path, extension: &str, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(dir).expect("failed to read cranpose source directory") {
         let path = entry.expect("failed to read source directory entry").path();
         if path.is_dir() {
-            collect_sources(&path, extension, out);
+            if !is_build_output(&path) {
+                collect_sources(&path, extension, out);
+            }
         } else if path.extension().and_then(|found| found.to_str()) == Some(extension) {
             out.push(path);
         }
     }
+}
+
+fn is_build_output(dir: &Path) -> bool {
+    dir.file_name()
+        .and_then(|name| name.to_str())
+        .is_none_or(|name| matches!(name, "target" | ".git" | ".gradle" | "build"))
 }
 
 #[test]
