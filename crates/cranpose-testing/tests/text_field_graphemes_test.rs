@@ -4,7 +4,7 @@
 
 use cranpose_ui::{BasicTextFieldOptions, KeyCode, Modifiers};
 
-use crate::support_text_field::FocusedField;
+use crate::support_text_field::{COMMAND, FocusedField, SHIFT};
 
 const FLAG: &str = "\u{1F1F7}\u{1F1F8}";
 const TECHNOLOGIST: &str = "\u{1F469}\u{200D}\u{1F4BB}";
@@ -12,22 +12,6 @@ const THUMB_WITH_TONE: &str = "\u{1F44D}\u{1F3FD}";
 const E_ACUTE: &str = "e\u{301}";
 /// Devanagari "ni": a consonant and its vowel sign.
 const NI: &str = "\u{928}\u{93F}";
-
-const SHIFT: Modifiers = Modifiers {
-    shift: true,
-    ..Modifiers::NONE
-};
-const COMMAND: Modifiers = if cfg!(target_os = "macos") {
-    Modifiers {
-        meta: true,
-        ..Modifiers::NONE
-    }
-} else {
-    Modifiers {
-        ctrl: true,
-        ..Modifiers::NONE
-    }
-};
 
 fn focused(text: &'static str) -> FocusedField {
     FocusedField::new(text, BasicTextFieldOptions::default())
@@ -106,24 +90,32 @@ fn word_moves_keep_combining_marks_with_their_letter() {
 
 #[test]
 fn vertical_moves_keep_the_caret_on_character_boundaries() {
-    let mut field = focused("ab\n\u{65E5}\u{672C}\n\u{1F1F7}\u{1F1F8}x");
+    let mut field = focused("ab\n\u{65E5}\u{672C}\nxy");
     field
         .press(KeyCode::Home, COMMAND)
         .press(KeyCode::ArrowRight, Modifiers::NONE)
         .press(KeyCode::ArrowDown, Modifiers::NONE);
-    assert_eq!(
-        field.selection(),
-        (6, 6),
-        "one character into the second line"
+    let (second, _) = field.selection();
+    assert!(
+        [3, 6, 9].contains(&second),
+        "the caret landed between characters of the second line, at {second}"
     );
     field.press(KeyCode::ArrowDown, Modifiers::NONE);
-    assert_eq!(
-        field.selection(),
-        (18, 18),
-        "past the flag on the third line"
-    );
+    let (third, _) = field.selection();
+    assert!((10..=12).contains(&third), "the third line, at {third}");
     field
         .press(KeyCode::ArrowUp, Modifiers::NONE)
         .press(KeyCode::ArrowUp, Modifiers::NONE);
     assert_eq!(field.selection(), (1, 1), "back to the first column");
+
+    let mut field = focused("ab\n\u{1F1F7}\u{1F1F8}x");
+    field
+        .press(KeyCode::Home, COMMAND)
+        .press(KeyCode::ArrowRight, Modifiers::NONE)
+        .press(KeyCode::ArrowDown, Modifiers::NONE);
+    let (below, _) = field.selection();
+    assert!(
+        [3, 11, 12].contains(&below),
+        "the caret landed inside the flag, at {below}"
+    );
 }

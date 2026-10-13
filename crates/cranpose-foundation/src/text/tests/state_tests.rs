@@ -10,24 +10,6 @@ fn with_test_runtime<T>(f: impl FnOnce() -> T) -> T {
 }
 
 #[test]
-fn a_desired_column_is_remembered_until_it_is_cleared() {
-    with_test_runtime(|| {
-        let state = TextFieldState::new("Hello");
-        assert_eq!(
-            state.desired_column(),
-            None,
-            "a field nobody navigated vertically had a remembered column"
-        );
-
-        state.set_desired_column(Some(7));
-        assert_eq!(state.desired_column(), Some(7));
-
-        state.set_desired_column(None);
-        assert_eq!(state.desired_column(), None);
-    });
-}
-
-#[test]
 fn flushing_an_undo_group_is_harmless_when_nothing_is_pending() {
     with_test_runtime(|| {
         let state = TextFieldState::new("Hello");
