@@ -1,7 +1,6 @@
 use std::{
     collections::BTreeMap,
     panic::{AssertUnwindSafe, catch_unwind},
-    rc::Rc,
     sync::{
         Arc, Mutex, OnceLock, PoisonError,
         atomic::{AtomicU64, Ordering},
@@ -119,51 +118,26 @@ pub fn DurableSaveEffect<K: PartialEq + 'static>(
     );
 }
 
-pub(crate) struct LocalSave {
-    store: PreferencesRef,
-    key: String,
-    read: Box<dyn Fn() -> Option<String>>,
-}
+mod local_saves;
 
-pub(crate) struct LocalSaveRegistration {
-    id: u64,
-    thread: std::marker::PhantomData<Rc<()>>,
-}
-
-impl Drop for LocalSaveRegistration {
-    fn drop(&mut self) {
-        crate::thread_state::try_with(|state| {
-            let removed = state.local_saves.borrow_mut().remove(&self.id);
-            drop(removed);
-        });
-    }
-}
-
-pub(crate) fn register_local_preference_save(
-    store: PreferencesRef,
-    key: String,
-    read: impl Fn() -> Option<String> + 'static,
-) -> LocalSaveRegistration {
-    let id = NEXT_SAVE.fetch_add(1, Ordering::Relaxed);
-    crate::thread_state::with(|state| {
-        state.local_saves.borrow_mut().insert(
-            id,
-            Rc::new(LocalSave {
-                store,
-                key,
-                read: Box::new(read),
-            }),
-        )
-    });
-    LocalSaveRegistration {
-        id,
-        thread: std::marker::PhantomData,
-    }
-}
+pub use local_saves::SaveableRegistration;
+pub(crate) use local_saves::{LocalSaves, forget, register as register_local, saved};
 
 struct PreferenceBatch {
     store: PreferencesRef,
     values: BTreeMap<String, String>,
+    forget: Vec<Arc<local_saves::Forget>>,
+}
+
+impl PreferenceBatch {
+    fn removed_keys(&self) -> Vec<String> {
+        if self.forget.is_empty() {
+            return Vec::new();
+        }
+        let mut keys = self.store.keys();
+        keys.retain(|key| self.forget.iter().any(|forget| forget.matches(key)));
+        keys
+    }
 }
 
 #[derive(Default)]
@@ -173,22 +147,35 @@ struct SaveBatch {
 }
 
 impl SaveBatch {
-    fn push(&mut self, store: &PreferencesRef, key: &str, value: String) {
-        if let Some(batch) = self
+    fn for_store(&mut self, store: &PreferencesRef) -> &mut PreferenceBatch {
+        let index = match self
             .preferences
-            .iter_mut()
-            .find(|batch| Arc::ptr_eq(&batch.store, store))
+            .iter()
+            .position(|batch| Arc::ptr_eq(&batch.store, store))
         {
-            batch.values.insert(key.to_owned(), value);
-        } else {
-            self.preferences.push(PreferenceBatch {
-                store: Arc::clone(store),
-                values: BTreeMap::from([(key.to_owned(), value)]),
-            });
-        }
+            Some(index) => index,
+            None => {
+                self.preferences.push(PreferenceBatch {
+                    store: Arc::clone(store),
+                    values: BTreeMap::new(),
+                    forget: Vec::new(),
+                });
+                self.preferences.len() - 1
+            }
+        };
+        &mut self.preferences[index]
     }
 
-    fn collect() -> Self {
+    fn push(&mut self, store: &PreferencesRef, key: String, value: String) {
+        self.for_store(store).values.insert(key, value);
+    }
+
+    fn forget(&mut self, store: &PreferencesRef, keys: Arc<local_saves::Forget>) {
+        self.for_store(store).forget.push(keys);
+    }
+
+    /// The work to do now, and what of this thread's saves it covers.
+    fn collect() -> (Self, local_saves::Sampled) {
         let mut batch = Self {
             callbacks: saves()
                 .lock()
@@ -198,15 +185,8 @@ impl SaveBatch {
                 .collect(),
             ..Self::default()
         };
-        let local: Vec<_> = crate::thread_state::with(|state| {
-            state.local_saves.borrow().values().cloned().collect()
-        });
-        for save in local {
-            if let Some(value) = (save.read)() {
-                batch.push(&save.store, &save.key, value);
-            }
-        }
-        batch
+        let sampled = local_saves::sample(&mut batch);
+        (batch, sampled)
     }
 
     fn is_empty(&self) -> bool {
@@ -221,7 +201,7 @@ impl SaveBatch {
                 SaveWork::Preference { store, key, read } => {
                     match catch_unwind(AssertUnwindSafe(read)) {
                         Ok(value) => {
-                            self.push(store, key, value);
+                            self.push(store, key.clone(), value);
                             true
                         }
                         Err(_) => false,
@@ -231,7 +211,9 @@ impl SaveBatch {
         }
         for batch in self.preferences {
             succeeded &= run_callback(|| {
-                batch.store.set_many(&batch.values)?;
+                batch
+                    .store
+                    .update_many(&batch.values, &batch.removed_keys())?;
                 batch.store.flush()?;
                 Ok(())
             });
@@ -274,11 +256,14 @@ pub fn run_durable_saves(deadline: Duration) -> DurableSaveOutcome {
     #[cfg(target_arch = "wasm32")]
     {
         let started = web_time::Instant::now();
-        let batch = SaveBatch::collect();
+        let (batch, sampled) = SaveBatch::collect();
         if batch.is_empty() {
             return DurableSaveOutcome::Nothing;
         }
         let result = batch.run();
+        if result == DurableSaveOutcome::Completed {
+            sampled.completed();
+        }
         if result == DurableSaveOutcome::Completed && started.elapsed() > deadline {
             DurableSaveOutcome::TimedOut
         } else {

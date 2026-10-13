@@ -42,7 +42,7 @@ pub(super) fn run(deadline: Duration) -> DurableSaveOutcome {
     let Some(permit) = acquire(deadline) else {
         return DurableSaveOutcome::TimedOut;
     };
-    let Ok(batch) = catch_unwind(AssertUnwindSafe(SaveBatch::collect)) else {
+    let Ok((batch, sampled)) = catch_unwind(AssertUnwindSafe(SaveBatch::collect)) else {
         return DurableSaveOutcome::Failed;
     };
     if batch.is_empty() {
@@ -62,7 +62,12 @@ pub(super) fn run(deadline: Duration) -> DurableSaveOutcome {
         return DurableSaveOutcome::Failed;
     }
     match receive.recv_timeout(deadline.saturating_sub(started.elapsed())) {
-        Ok(outcome) => outcome,
+        Ok(outcome) => {
+            if outcome == DurableSaveOutcome::Completed {
+                sampled.completed();
+            }
+            outcome
+        }
         Err(mpsc::RecvTimeoutError::Timeout) => DurableSaveOutcome::TimedOut,
         Err(mpsc::RecvTimeoutError::Disconnected) => DurableSaveOutcome::Failed,
     }

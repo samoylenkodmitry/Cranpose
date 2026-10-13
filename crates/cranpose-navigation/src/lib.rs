@@ -4,5 +4,7 @@
 mod controller;
 mod host;
 
-pub use controller::{NavController, NavOptions, rememberNavController};
+pub use controller::{
+    NavController, NavOptions, rememberNavController, rememberSaveableNavController,
+};
 pub use host::{NavHost, NavHostWith};

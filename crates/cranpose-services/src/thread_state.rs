@@ -1,7 +1,8 @@
+#[cfg(target_arch = "wasm32")]
+use std::rc::Rc;
 use std::{
     cell::{Cell, RefCell},
-    collections::{BTreeMap, HashMap},
-    rc::Rc,
+    collections::HashMap,
 };
 
 use crate::{
@@ -10,7 +11,7 @@ use crate::{
     composition_locals::ServiceLocals,
     content::ContentResolverRef,
     device_info::DeviceInfoRef,
-    durable_save::LocalSave,
+    durable_save::LocalSaves,
     file_picker::{FilePickerRef, RecoveredPick},
     share_sheet::ShareSheetRef,
     theme::SystemTheme,
@@ -28,7 +29,7 @@ pub(crate) struct ServiceThreadState {
     pub(crate) accessibility_state: Cell<AccessibilityState>,
     pub(crate) platform_system_theme: Cell<Option<SystemTheme>>,
     pub(crate) detected_system_theme: Cell<Option<SystemTheme>>,
-    pub(crate) local_saves: RefCell<BTreeMap<u64, Rc<LocalSave>>>,
+    pub(crate) local_saves: RefCell<LocalSaves>,
     pub(crate) recovered_picks: RefCell<HashMap<String, RecoveredPick>>,
     pub(crate) in_flight_request: RefCell<Option<String>>,
     pub(crate) registered_request_keys: RefCell<HashMap<String, usize>>,
@@ -57,7 +58,7 @@ impl ServiceThreadState {
             }),
             platform_system_theme: Cell::new(None),
             detected_system_theme: Cell::new(None),
-            local_saves: RefCell::new(BTreeMap::new()),
+            local_saves: RefCell::default(),
             recovered_picks: RefCell::new(HashMap::new()),
             in_flight_request: RefCell::new(None),
             registered_request_keys: RefCell::new(HashMap::new()),

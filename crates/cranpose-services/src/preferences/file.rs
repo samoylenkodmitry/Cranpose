@@ -170,9 +170,16 @@ impl PreferencesStore for FilePreferences {
         self.mutate(|entries| update(entries, key, value))
     }
 
-    fn set_many(&self, values: &BTreeMap<String, String>) -> Result<(), PreferencesError> {
+    fn update_many(
+        &self,
+        values: &BTreeMap<String, String>,
+        removed: &[String],
+    ) -> Result<(), PreferencesError> {
         self.mutate(|entries| {
             let mut changed = false;
+            for key in removed {
+                changed |= entries.remove(key).is_some();
+            }
             for (key, value) in values {
                 changed |= update(entries, key, value);
             }

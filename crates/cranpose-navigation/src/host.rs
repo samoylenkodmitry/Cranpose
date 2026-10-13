@@ -1,9 +1,9 @@
 use cranpose_animation::{AnimationType, Easing, tween};
 use cranpose_coroflow::ProvideViewModelStore;
-use cranpose_services::BackHandler;
+use cranpose_services::{BackHandler, ProvideSaveableScope};
 use cranpose_ui::{Crossfade, composable};
 
-use crate::controller::NavController;
+use crate::controller::{Entry, NavController};
 
 /// How long Compose's `NavHost` fades between destinations.
 const DEFAULT_TRANSITION_MILLIS: u64 = 700;
@@ -41,7 +41,10 @@ const DEFAULT_TRANSITION_MILLIS: u64 = 700;
 /// back stack while there is a screen beneath the top one. Every entry has
 /// its own view model store: `viewModel` in a screen finds the screen's view
 /// models, which are kept while other screens cover it and dropped once it is
-/// popped and has faded out.
+/// popped and has faded out. Every entry also has its own
+/// [`SaveableScope`](cranpose_services::SaveableScope), so `rememberSaveable`
+/// in a screen keeps that visit's state while it is covered and forgets it
+/// once it is popped.
 #[composable(no_skip)]
 pub fn NavHost<R, F>(controller: NavController<R>, content: F)
 where
@@ -70,9 +73,16 @@ where
         controller.navigate_up();
     });
     Crossfade(top, transition, move |entry| {
-        if let Some(entry) = entry {
-            let route = entry.route;
-            ProvideViewModelStore(entry.store, || content(route));
+        if let Some(Entry {
+            route,
+            store,
+            saveables,
+            ..
+        }) = entry
+        {
+            ProvideSaveableScope(saveables, || {
+                ProvideViewModelStore(store, || content(route));
+            });
         }
     });
 }
