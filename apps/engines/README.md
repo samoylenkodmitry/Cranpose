@@ -28,6 +28,10 @@ godot --path cranpose-godot/project res://window.tscn
 godot --path cranpose-godot/project res://hud.tscn
 ```
 
+Build and run each example with its own `cargo` command. One command for both
+Bevy examples merges their Bevy features, and `bevy-in-cranpose` then carries
+the game's windowing and gamepad polling.
+
 The editor's first import builds the extension list; Godot 4.7.2's headless
 import can crash after that step while it loads the editor layout, which
 leaves the project ready to run.

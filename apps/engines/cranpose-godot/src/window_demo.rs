@@ -105,47 +105,64 @@ impl INode for CranposeWindowDemo {
 impl CranposeWindowDemo {
     fn engine_frame(&mut self) -> Option<ExternalTexture> {
         let (width, height) = self.bridge.size.0.get();
-        let viewport = self.viewport.as_mut()?;
         if width == 0 || height == 0 {
             return None;
         }
+        let now = Engine::singleton().get_process_frames();
+        let rendered = self.viewport.as_ref().and_then(viewport_texture);
+        self.copy_rendered(rendered, now);
+        let viewport = self.viewport.as_mut()?;
         let wanted = Vector2i::new(width as i32, height as i32);
         if viewport.get_size() != wanted {
             viewport.set_size(wanted);
         }
-        let texture_rid = viewport.get_texture()?.get_rid();
-        let rid = RenderingServer::singleton().texture_get_rd_texture(texture_rid);
-        if !rid.is_valid() {
-            return None;
-        }
-        let now = Engine::singleton().get_process_frames();
-        if self
-            .candidate
-            .as_ref()
-            .is_some_and(|candidate| candidate.since < now)
-        {
-            self.shown = self.candidate.take();
-        }
+        let next = viewport_texture(viewport)?;
         let known = |imported: &Option<Imported>| {
             imported
                 .as_ref()
-                .is_some_and(|imported| imported.rid == rid)
+                .is_some_and(|imported| imported.rid == next)
         };
-        let surface = self.surface.as_mut()?;
         if !known(&self.shown) && !known(&self.candidate) {
-            match import(surface, rid, now) {
+            let surface = self.surface.as_mut()?;
+            match import(surface, next, now) {
                 Ok(imported) => self.candidate = Some(imported),
                 Err(error) => {
                     godot_error!("Godot viewport texture: {error}");
                 }
             }
         }
-        let shown = self.shown.as_ref()?;
-        surface
-            .gpu()
-            .receive(&shown.godot, &shown.twin, Alpha::Opaque);
-        Some(shown.texture.clone())
+        self.shown.as_ref().map(|shown| shown.texture.clone())
     }
+
+    fn copy_rendered(&mut self, current: Option<Rid>, now: u64) {
+        let Some(surface) = self.surface.as_ref() else {
+            return;
+        };
+        let rendered = self
+            .candidate
+            .as_ref()
+            .is_some_and(|candidate| candidate.since < now);
+        if rendered {
+            self.shown = self.candidate.take();
+        } else if self
+            .shown
+            .as_ref()
+            .is_none_or(|shown| Some(shown.rid) != current)
+        {
+            return;
+        }
+        if let Some(shown) = self.shown.as_ref() {
+            surface
+                .gpu()
+                .receive(&shown.godot, &shown.twin, Alpha::Opaque);
+        }
+    }
+}
+
+fn viewport_texture(viewport: &Gd<SubViewport>) -> Option<Rid> {
+    let rid =
+        RenderingServer::singleton().texture_get_rd_texture(viewport.get_texture()?.get_rid());
+    rid.is_valid().then_some(rid)
 }
 
 fn import(surface: &mut Surface, rid: Rid, since: u64) -> Result<Imported, String> {

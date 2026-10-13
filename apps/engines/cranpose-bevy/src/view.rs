@@ -5,7 +5,6 @@ use bevy::{
     prelude::*,
     render::{
         RenderPlugin,
-        pipelined_rendering::PipelinedRenderingPlugin,
         texture::{ManualTextureView, ManualTextureViews},
     },
     tasks::tick_global_task_pools_on_main_thread,
@@ -23,7 +22,8 @@ const CRANPOSE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 pub struct BevyView {
     app: App,
     gpu: GpuContext,
-    texture: ExternalTexture,
+    shown: Option<ExternalTexture>,
+    pending: Vec<(ExternalTexture, u64)>,
     frame: u64,
 }
 
@@ -46,8 +46,7 @@ impl BevyView {
                     exit_condition: ExitCondition::DontExit,
                     close_when_requested: false,
                     ..default()
-                })
-                .disable::<PipelinedRenderingPlugin>(),
+                }),
         );
         setup(&mut app, RenderTarget::TextureView(TARGET));
         while app.plugins_state() == PluginsState::Adding {
@@ -59,7 +58,8 @@ impl BevyView {
         Ok(Self {
             app,
             gpu: gpu.clone(),
-            texture,
+            shown: None,
+            pending: vec![(texture, 0)],
             frame: 0,
         })
     }
@@ -69,20 +69,37 @@ impl BevyView {
     }
 
     pub fn size(&self) -> (u32, u32) {
-        (self.texture.width(), self.texture.height())
+        self.pending
+            .last()
+            .map(|(texture, _)| texture)
+            .or(self.shown.as_ref())
+            .map_or((0, 0), |texture| (texture.width(), texture.height()))
     }
 
     pub fn resize(&mut self, width: u32, height: u32) -> Result<(), ImageBitmapError> {
         if self.size() != (width, height) {
-            self.texture = attach_target(&mut self.app, &self.gpu, width, height)?;
+            let texture = attach_target(&mut self.app, &self.gpu, width, height)?;
+            self.pending.push((texture, self.frame));
         }
         Ok(())
     }
 
-    pub fn update(&mut self) -> ImageBitmap {
+    pub fn update(&mut self) -> Option<ImageBitmap> {
         self.app.update();
         self.frame += 1;
-        self.texture.frame(self.frame)
+        let frame = self.frame;
+        if let Some(ready) = self
+            .pending
+            .iter()
+            .rposition(|(_, attached)| frame >= attached + 2)
+        {
+            self.shown = self
+                .pending
+                .drain(..=ready)
+                .last()
+                .map(|(texture, _)| texture);
+        }
+        self.shown.as_ref().map(|texture| texture.frame(frame))
     }
 }
 

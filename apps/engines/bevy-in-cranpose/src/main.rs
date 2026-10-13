@@ -58,7 +58,9 @@ fn Root() {
             },
         };
         bevy.world_mut().resource_mut::<SceneControls>().0 = states.controls.value();
-        states.frame.set(Some(bevy.update()));
+        if let Some(frame) = bevy.update() {
+            states.frame.set(Some(frame));
+        }
         let (since, frames) = counter.get();
         if now.saturating_sub(since) >= 500_000_000 {
             if since != 0 {
