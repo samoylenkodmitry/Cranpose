@@ -6131,6 +6131,9 @@ impl GpuRenderer {
             return Ok(entry);
         }
 
+        // The draws queued so far bind the full atlas: the glyphs they placed
+        // reach it before a new atlas takes its place.
+        self.flush_glyph_uploads();
         self.text_glyph_atlas.reset(
             &self.device,
             &self.image_bind_group_layout,
