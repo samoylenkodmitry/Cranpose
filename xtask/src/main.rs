@@ -397,8 +397,9 @@ fn print_thread_local_budget_usage() {
          \n\
          Counts the statics declared in `thread_local!` blocks in the sources of\n\
          the workspace crates under crates/, tests excluded, and fails when the\n\
-         total differs from the budget. On Android every such static takes one\n\
-         of the process's pthread keys for the rest of its life."
+         total differs from the budget. A name declared twice in one file, as\n\
+         cfg alternatives are, counts once. On Android every such static takes\n\
+         one of the process's pthread keys for the rest of its life."
     );
 }
 

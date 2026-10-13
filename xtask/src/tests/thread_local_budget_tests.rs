@@ -26,6 +26,16 @@ thread_local! {
 
 std::thread_local!(static ONE_LINE: Cell<bool> = const { Cell::new(false) });
 
+#[cfg(not(target_os = "android"))]
+thread_local! {
+    static PLATFORM: Cell<u8> = const { Cell::new(0) };
+}
+
+#[cfg(target_os = "android")]
+thread_local! {
+    static PLATFORM: Cell<u8> = const { Cell::new(1) };
+}
+
 fn nested() -> u64 {
     thread_local! {
         static NESTED: Cell<u64> = const { Cell::new(0) };
@@ -65,25 +75,25 @@ fn the_real_workspace_stays_at_its_thread_local_budget() {
 }
 
 #[test]
-fn counts_each_static_of_every_declaration_form_and_nothing_else() {
+fn counts_each_static_of_every_declaration_form_once_and_nothing_else() {
     let root = workspace();
-    check(root.path(), 4).expect("four statics in framework sources");
+    check(root.path(), 5).expect("five statics in framework sources");
 }
 
 #[test]
 fn a_static_over_the_budget_fails_with_the_android_key_limit() {
     let root = workspace();
-    let error = check(root.path(), 3).expect_err("four statics exceed a budget of three");
-    assert!(error.contains("declare 4 statics"), "{error}");
+    let error = check(root.path(), 4).expect_err("five statics exceed a budget of four");
+    assert!(error.contains("declare 5 statics"), "{error}");
     assert!(error.contains("pthread key"), "{error}");
     assert!(error.contains("out of TLS keys"), "{error}");
-    assert!(error.contains("   4 crates/probe"), "{error}");
+    assert!(error.contains("   5 crates/probe"), "{error}");
 }
 
 #[test]
 fn a_budget_above_the_count_asks_to_be_lowered() {
     let root = workspace();
-    let error = check(root.path(), 5).expect_err("a slack budget fails");
+    let error = check(root.path(), 6).expect_err("a slack budget fails");
     assert!(error.contains("lower BUDGET"), "{error}");
-    assert!(error.contains("to 4"), "{error}");
+    assert!(error.contains("to 5"), "{error}");
 }

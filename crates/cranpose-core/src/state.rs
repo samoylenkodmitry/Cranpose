@@ -1669,7 +1669,7 @@ impl<T: Clone + 'static> MutableState<T> {
     }
 
     pub(crate) fn from_lease(lease: &Rc<runtime::StateHandleLease>) -> Self {
-        Self::from_parts(lease.id(), lease.runtime().id())
+        Self::from_parts(lease.id(), lease.runtime_id())
     }
 
     pub fn is_alive(&self) -> bool {

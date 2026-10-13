@@ -257,3 +257,23 @@ fn a_launcher_is_idle_again_once_the_chooser_resolves() {
     clear_platform_file_picker();
     clear_launcher_state();
 }
+
+thread_local! {
+    static HELD: RefCell<Option<Composition<MemoryApplier>>> = const { RefCell::new(None) };
+}
+
+#[test]
+fn a_launcher_held_in_a_thread_local_touched_first_drops_at_thread_exit() {
+    std::thread::spawn(|| {
+        HELD.with(|held| assert!(held.borrow().is_none()));
+        let composition = render(|| {
+            cranpose_services::rememberOpenFileLauncher(
+                "test.thread-exit",
+                |_: LauncherResult<Option<ContentHandle>>| {},
+            );
+        });
+        HELD.with(|held| *held.borrow_mut() = Some(composition));
+    })
+    .join()
+    .expect("thread exit drops the held launcher without a panic");
+}

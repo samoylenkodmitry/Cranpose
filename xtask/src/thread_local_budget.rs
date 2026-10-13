@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{collections::BTreeSet, path::Path};
 
 use crate::test_layout::{collect_sources, workspace_members};
 
@@ -68,7 +68,7 @@ fn statics_per_crate(root: &Path) -> Result<Vec<(String, usize)>, String> {
 
 fn thread_local_statics(source: &str) -> usize {
     let code = code_only(source);
-    let mut count = 0;
+    let mut names = BTreeSet::new();
     let mut rest = code.as_slice();
     while let Some(position) = find(rest, b"thread_local!") {
         let after = &rest[position + b"thread_local!".len()..];
@@ -79,30 +79,43 @@ fn thread_local_statics(source: &str) -> usize {
             rest = &after[open..];
             continue;
         }
-        let (statics, consumed) = statics_in_block(&after[open..]);
-        count += statics;
+        let consumed = statics_in_block(&after[open..], &mut names);
         rest = &after[open + consumed..];
     }
-    count
+    names.len()
 }
 
-fn statics_in_block(block: &[u8]) -> (usize, usize) {
+fn statics_in_block<'a>(block: &'a [u8], names: &mut BTreeSet<&'a [u8]>) -> usize {
     let mut depth = 0usize;
-    let mut statics = 0;
     for (index, &byte) in block.iter().enumerate() {
         match byte {
             b'{' | b'(' | b'[' => depth += 1,
             b'}' | b')' | b']' => {
                 depth -= 1;
                 if depth == 0 {
-                    return (statics, index + 1);
+                    return index + 1;
                 }
             }
-            b's' if depth == 1 && is_static_keyword(block, index) => statics += 1,
+            b's' if depth == 1 && is_static_keyword(block, index) => {
+                names.insert(static_name(&block[index + b"static".len()..]));
+            }
             _ => {}
         }
     }
-    (statics, block.len())
+    block.len()
+}
+
+fn static_name(after_keyword: &[u8]) -> &[u8] {
+    let start = after_keyword
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(after_keyword.len());
+    let name = &after_keyword[start..];
+    let end = name
+        .iter()
+        .position(|&byte| !is_word_byte(byte))
+        .unwrap_or(name.len());
+    &name[..end]
 }
 
 fn is_static_keyword(code: &[u8], index: usize) -> bool {

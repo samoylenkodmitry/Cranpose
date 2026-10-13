@@ -76,6 +76,12 @@ pub(crate) struct SnapshotThreadState {
     pub(crate) retire_depth: Cell<usize>,
 }
 
+impl Drop for SnapshotThreadState {
+    fn drop(&mut self) {
+        crate::runtime::forget_registered_runtimes();
+    }
+}
+
 impl SnapshotThreadState {
     const fn new() -> Self {
         Self {
