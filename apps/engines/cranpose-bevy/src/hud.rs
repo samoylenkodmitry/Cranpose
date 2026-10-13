@@ -57,8 +57,8 @@ struct HudShared(Arc<Mutex<SharedTarget>>);
 
 #[derive(Default)]
 struct SharedTarget {
-    image: Option<AssetId<Image>>,
-    texture: Option<HudTexture>,
+    wanted: Vec<AssetId<Image>>,
+    textures: Vec<(AssetId<Image>, HudTexture)>,
 }
 
 #[derive(Clone)]
@@ -67,8 +67,17 @@ struct HudTexture {
     view: wgpu::TextureView,
 }
 
+struct HudImage {
+    handle: Handle<Image>,
+    size: UVec2,
+}
+
 #[derive(Resource)]
-struct HudImage(Handle<Image>);
+struct HudImages {
+    material: Handle<HudMaterial>,
+    shown: HudImage,
+    pending: Option<HudImage>,
+}
 
 struct HudView {
     view: GuestView,
@@ -140,20 +149,25 @@ impl Plugin for CranposeHudPlugin {
     }
 }
 
+fn hud_image(images: &mut Assets<Image>, size: UVec2) -> HudImage {
+    let mut image = Image::new_target_texture(size.x, size.y, CRANPOSE_FORMAT, Some(HUD_FORMAT));
+    image.data = None;
+    image.asset_usage = RenderAssetUsages::RENDER_WORLD;
+    HudImage {
+        handle: images.add(image),
+        size,
+    }
+}
+
 fn spawn_hud(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<HudMaterial>>,
-    shared: Res<HudShared>,
 ) {
-    let mut image = Image::new_target_texture(1, 1, CRANPOSE_FORMAT, Some(HUD_FORMAT));
-    image.data = None;
-    image.asset_usage = RenderAssetUsages::RENDER_WORLD;
-    image.copy_on_resize = false;
-    let image = images.add(image);
-    if let Ok(mut shared) = shared.0.lock() {
-        shared.image = Some(image.id());
-    }
+    let shown = hud_image(&mut images, UVec2::ONE);
+    let material = materials.add(HudMaterial {
+        texture: shown.handle.clone(),
+    });
     commands.spawn((
         Node {
             position_type: PositionType::Absolute,
@@ -161,37 +175,46 @@ fn spawn_hud(
             height: Val::Percent(100.0),
             ..default()
         },
-        MaterialNode(materials.add(HudMaterial {
-            texture: image.clone(),
-        })),
+        MaterialNode(material.clone()),
         GlobalZIndex(i32::MAX),
     ));
-    commands.insert_resource(HudImage(image));
+    commands.insert_resource(HudImages {
+        material,
+        shown,
+        pending: None,
+    });
 }
 
 fn share_target(images: Res<RenderAssets<GpuImage>>, shared: Res<HudShared>) {
     let Ok(mut shared) = shared.0.lock() else {
         return;
     };
-    let Some(gpu_image) = shared.image.and_then(|id| images.get(id)) else {
-        return;
-    };
-    let texture: &wgpu::Texture = &gpu_image.texture;
-    if shared
-        .texture
-        .as_ref()
-        .is_some_and(|current| current.texture == *texture)
-    {
-        return;
+    let SharedTarget { wanted, textures } = &mut *shared;
+    textures.retain(|(id, _)| wanted.contains(id));
+    for id in wanted.iter() {
+        let Some(gpu_image) = images.get(*id) else {
+            continue;
+        };
+        let texture: &wgpu::Texture = &gpu_image.texture;
+        if textures
+            .iter()
+            .any(|(shared_id, shared)| shared_id == id && shared.texture == *texture)
+        {
+            continue;
+        }
+        textures.retain(|(shared_id, _)| shared_id != id);
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(CRANPOSE_FORMAT),
+            ..default()
+        });
+        textures.push((
+            *id,
+            HudTexture {
+                texture: texture.clone(),
+                view,
+            },
+        ));
     }
-    let view = texture.create_view(&wgpu::TextureViewDescriptor {
-        format: Some(CRANPOSE_FORMAT),
-        ..default()
-    });
-    shared.texture = Some(HudTexture {
-        texture: texture.clone(),
-        view,
-    });
 }
 
 fn route_input(
@@ -236,68 +259,82 @@ fn draw_hud(world: &mut World) {
     else {
         return;
     };
-    let width = window.physical_width();
-    let height = window.physical_height();
+    let size = UVec2::new(window.physical_width(), window.physical_height());
     let density = window.scale_factor();
-    if width == 0 || height == 0 {
+    if size.x == 0 || size.y == 0 || !ensure_view(world, density) {
         return;
     }
-    let image = world.resource::<HudImage>().0.id();
-    let resize = world
-        .resource::<Assets<Image>>()
-        .get(image)
-        .is_some_and(|image| image.size() != UVec2::new(width, height));
-    if resize && let Some(mut image) = world.resource_mut::<Assets<Image>>().get_mut(image) {
-        image.resize(wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        });
-    }
-    if world.get_non_send::<HudView>().is_none() {
-        let Some(gpu) = world.get_resource::<HudGpu>().map(|gpu| gpu.0.clone()) else {
-            return;
-        };
-        let factory = Arc::clone(&world.resource::<HudContent>().0);
-        let content = factory(world);
-        match AppLauncher::new().create_guest_view(
-            &gpu,
-            CRANPOSE_FORMAT,
-            width,
-            height,
-            density,
-            content,
-        ) {
-            Ok(mut view) => {
-                view.shell().renderer().set_transparent_background(true);
-                world.insert_non_send(HudView {
-                    view,
-                    drawn_into: None,
-                });
-            }
-            Err(error) => {
-                error!("Cranpose HUD: {error}");
-                return;
-            }
+    let shared = world.resource::<HudShared>().clone();
+    let texture_of = |image: &HudImage| {
+        shared.0.lock().ok().and_then(|shared| {
+            shared
+                .textures
+                .iter()
+                .find(|(id, _)| *id == image.handle.id())
+                .map(|(_, texture)| texture.clone())
+        })
+    };
+    let images = world.resource::<HudImages>();
+    let ready = images
+        .pending
+        .as_ref()
+        .and_then(|pending| texture_of(pending).map(|texture| (pending.size, texture, true)))
+        .or_else(|| texture_of(&images.shown).map(|texture| (images.shown.size, texture, false)));
+    if let Some((target_size, target, promote)) = ready {
+        draw_into(world, target_size, density, &target);
+        if promote {
+            promote_pending(world);
         }
     }
-    let target = world
-        .resource::<HudShared>()
-        .0
-        .lock()
-        .ok()
-        .and_then(|shared| shared.texture.clone());
+    world.resource_scope(|world, mut images: Mut<HudImages>| {
+        let wanted_size = images
+            .pending
+            .as_ref()
+            .map_or(images.shown.size, |pending| pending.size);
+        if wanted_size != size {
+            images.pending = Some(hud_image(&mut world.resource_mut::<Assets<Image>>(), size));
+        }
+        if let Ok(mut shared) = shared.0.lock() {
+            shared.wanted.clear();
+            shared.wanted.push(images.shown.handle.id());
+            shared
+                .wanted
+                .extend(images.pending.as_ref().map(|pending| pending.handle.id()));
+        }
+    });
+}
+
+fn ensure_view(world: &mut World, density: f32) -> bool {
+    if world.get_non_send::<HudView>().is_some() {
+        return true;
+    }
+    let Some(gpu) = world.get_resource::<HudGpu>().map(|gpu| gpu.0.clone()) else {
+        return false;
+    };
+    let factory = Arc::clone(&world.resource::<HudContent>().0);
+    let content = factory(world);
+    match AppLauncher::new().create_guest_view(&gpu, CRANPOSE_FORMAT, 1, 1, density, content) {
+        Ok(mut view) => {
+            view.shell().renderer().set_transparent_background(true);
+            world.insert_non_send(HudView {
+                view,
+                drawn_into: None,
+            });
+            true
+        }
+        Err(error) => {
+            error!("Cranpose HUD: {error}");
+            false
+        }
+    }
+}
+
+fn draw_into(world: &mut World, size: UVec2, density: f32, target: &HudTexture) {
     let Some(mut hud) = world.get_non_send_mut::<HudView>() else {
         return;
     };
-    if let Err(error) = hud.view.resize(width, height, density) {
+    if let Err(error) = hud.view.resize(size.x, size.y, density) {
         error!("Cranpose HUD resize: {error}");
-        return;
-    }
-    let Some(target) = target else {
-        return;
-    };
-    if (target.texture.width(), target.texture.height()) != (width, height) {
         return;
     }
     if hud.drawn_into.as_ref() != Some(&target.texture) {
@@ -307,4 +344,19 @@ fn draw_hud(world: &mut World) {
     if let Err(error) = hud.view.draw(&target.texture, &target.view) {
         error!("Cranpose HUD draw: {error}");
     }
+}
+
+fn promote_pending(world: &mut World) {
+    world.resource_scope(|world, mut images: Mut<HudImages>| {
+        let Some(pending) = images.pending.take() else {
+            return;
+        };
+        if let Some(mut material) = world
+            .resource_mut::<Assets<HudMaterial>>()
+            .get_mut(&images.material)
+        {
+            material.texture = pending.handle.clone();
+        }
+        images.shown = pending;
+    });
 }

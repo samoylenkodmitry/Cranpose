@@ -22,6 +22,7 @@ struct Imported {
     godot: GodotTexture,
     twin: wgpu::Texture,
     texture: ExternalTexture,
+    since: u64,
 }
 
 #[derive(GodotClass)]
@@ -32,7 +33,8 @@ pub struct CranposeWindowDemo {
     viewport: Option<Gd<SubViewport>>,
     surface: Option<Surface>,
     bridge: WindowBridge,
-    imported: Option<Imported>,
+    shown: Option<Imported>,
+    candidate: Option<Imported>,
     frame: u64,
     since_report: f64,
 }
@@ -116,31 +118,45 @@ impl CranposeWindowDemo {
         if !rid.is_valid() {
             return None;
         }
-        let surface = self.surface.as_mut()?;
+        let now = Engine::singleton().get_process_frames();
         if self
-            .imported
+            .candidate
             .as_ref()
-            .is_none_or(|imported| imported.rid != rid)
+            .is_some_and(|candidate| candidate.since < now)
         {
-            let godot = match surface.godot_texture(rid) {
-                Ok(texture) => texture,
+            self.shown = self.candidate.take();
+        }
+        let known = |imported: &Option<Imported>| {
+            imported
+                .as_ref()
+                .is_some_and(|imported| imported.rid == rid)
+        };
+        let surface = self.surface.as_mut()?;
+        if !known(&self.shown) && !known(&self.candidate) {
+            match import(surface, rid, now) {
+                Ok(imported) => self.candidate = Some(imported),
                 Err(error) => {
                     godot_error!("Godot viewport texture: {error}");
-                    return None;
                 }
-            };
-            let twin = surface.gpu().twin(&godot);
-            let view = twin.create_view(&wgpu::TextureViewDescriptor::default());
-            let texture = ExternalTexture::new(twin.width(), twin.height(), true, view).ok()?;
-            self.imported = Some(Imported {
-                rid,
-                godot,
-                twin,
-                texture,
-            });
+            }
         }
-        let imported = self.imported.as_ref()?;
-        surface.gpu().receive(&imported.godot, &imported.twin);
-        Some(imported.texture.clone())
+        let shown = self.shown.as_ref()?;
+        surface.gpu().receive(&shown.godot, &shown.twin);
+        Some(shown.texture.clone())
     }
+}
+
+fn import(surface: &mut Surface, rid: Rid, since: u64) -> Result<Imported, String> {
+    let godot = surface.godot_texture(rid)?;
+    let twin = surface.gpu().twin(&godot);
+    let view = twin.create_view(&wgpu::TextureViewDescriptor::default());
+    let texture = ExternalTexture::new(twin.width(), twin.height(), true, view)
+        .map_err(|error| error.to_string())?;
+    Ok(Imported {
+        rid,
+        godot,
+        twin,
+        texture,
+        since,
+    })
 }
