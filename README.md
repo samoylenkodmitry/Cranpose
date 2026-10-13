@@ -249,6 +249,12 @@ component in an Android Compose screen. Kotlin calls the generated UniFFI API;
 `AndroidView` hosts the Cranpose surface. The [native demos](apps/native-demo/README.md)
 contain Android and UIKit host apps.
 
+The [game engines guide](docs/guide.md#game-engines) puts a Bevy scene inside a
+Cranpose layout, or a Cranpose HUD over a Bevy or Godot game, on one GPU device.
+[cranpose-engines](https://github.com/samoylenkodmitry/cranpose-engines) has the
+crates, the examples, starter templates and the
+[examples in your browser](https://samoylenkodmitry.github.io/cranpose-engines/).
+
 The [native views guide](docs/guide.md#native-views) places Android views and UIKit
 controls inside Cranpose. Examples pass state and events across the boundary.
 The [IntelliJ plugin template](https://github.com/samoylenkodmitry/cranpose-intellij-plugin-template)

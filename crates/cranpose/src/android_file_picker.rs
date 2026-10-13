@@ -5,7 +5,7 @@ use std::{
     fs::File,
     future::Future,
     io::{self, Write},
-    os::fd::FromRawFd,
+    os::fd::{AsRawFd, FromRawFd},
     pin::Pin,
     rc::Rc,
     sync::{
@@ -487,14 +487,46 @@ impl AndroidSink {
             if fd < 0 {
                 return Err(ContentError::PermissionDenied(self.uri.clone()));
             }
-            // SAFETY: `cranposeOpenUriWrite` detaches the descriptor from its
-            // `ParcelFileDescriptor`, transferring ownership to this process;
-            // the `File` closes it on drop.
+            // SAFETY: `cranposeOpenUriWrite` detaches a copy of the
+            // descriptor from its `ParcelFileDescriptor`, transferring
+            // ownership of the copy to this process; the `File` closes it on
+            // drop.
             self.file = Some(unsafe { File::from_raw_fd(fd) });
         }
         self.file
             .as_mut()
             .ok_or_else(|| ContentError::Io("sink is already finished".into()))
+    }
+
+    /// Closes the provider's descriptor, so it records the document as
+    /// complete, or with `error` as failed; then this copy closes.
+    fn close(&mut self, error: Option<&str>) {
+        let Some(file) = self.file.take() else { return };
+        let fd = file.as_raw_fd();
+        let closed = call_activity(|env, activity| {
+            let error = match error {
+                Some(error) => JObject::from(env.new_string(error).map_err(|e| e.to_string())?),
+                None => JObject::null(),
+            };
+            env.call_method(
+                &activity,
+                jni_str!("cranposeFinishUriWrite"),
+                jni_sig!("(ILjava/lang/String;)V"),
+                &[JValue::Int(fd), JValue::Object(&error)],
+            )
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+        });
+        if let Err(error) = closed {
+            log::warn!("cranpose: the document {} did not close: {error}", self.uri);
+        }
+        drop(file);
+    }
+}
+
+impl Drop for AndroidSink {
+    fn drop(&mut self) {
+        self.close(Some("the app stopped writing the document"));
     }
 }
 
@@ -511,7 +543,7 @@ impl BlockingSink for AndroidSink {
             .map_err(|error| ContentError::Io(error.to_string()))?;
         file.sync_all()
             .map_err(|error| ContentError::Io(error.to_string()))?;
-        self.file = None;
+        self.close(None);
         Ok(())
     }
 }

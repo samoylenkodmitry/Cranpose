@@ -1,3 +1,4 @@
+use cranpose_render_common::software_text_raster::SoftwareGlyphAtlasMask;
 use cranpose_ui::text::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::Color;
 
@@ -84,9 +85,19 @@ fn run_quads<'a>(
 }
 
 fn queue_glyph(renderer: &mut GpuRenderer, key: u64, x: f32, commands: &mut Vec<GlyphDrawCmd>) {
-    let run = test_run(0);
-    let glyphs = run_glyphs(&run);
-    let quads = run_quads(renderer, &glyphs, &run);
+    queue_run(renderer, key, x, &test_run(0), commands);
+}
+
+/// Queues `run` drawn at `x` with the atlas the renderer holds now.
+fn queue_run(
+    renderer: &mut GpuRenderer,
+    key: u64,
+    x: f32,
+    run: &TestRun,
+    commands: &mut Vec<GlyphDrawCmd>,
+) {
+    let glyphs = run_glyphs(run);
+    let quads = run_quads(renderer, &glyphs, run);
     assert!(renderer.emit_retained_text_glyph_run_if_ready(
         TextGlyphRunCacheKey(key),
         quads,
@@ -848,4 +859,52 @@ fn runs_under_different_clips_each_keep_their_own_pixels() {
             );
         }
     }
+}
+
+/// A white glyph of `side` × `side` texels, glyph `id` of its font.
+fn solid_glyph(id: u32, side: usize) -> SoftwareGlyphAtlasGlyph {
+    SoftwareGlyphAtlasGlyph {
+        key: SoftwareGlyphAtlasKey {
+            font_hash: 0,
+            glyph_id: id,
+            scale_x_bits: 0,
+            scale_y_bits: 0,
+            embolden_px_bits: 0,
+            slant_bits: 0,
+        },
+        mask: SoftwareGlyphAtlasMask {
+            alpha: vec![1.0; side * side].into(),
+            width: side,
+            height: side,
+        },
+        x: 0,
+        y: 0,
+        color: Color(1.0, 1.0, 1.0, 1.0),
+    }
+}
+
+#[test]
+fn a_glyph_placed_before_the_atlas_fills_reaches_the_atlas_its_draws_bind() {
+    let (_lock, mut renderer) = test_renderer();
+    let placed = renderer
+        .glyph_atlas_entry_for(&solid_glyph(1, 2))
+        .expect("the glyph fits");
+    let mut run = test_run(0);
+    run.1 = [placed];
+    let mut commands = Vec::new();
+    queue_run(&mut renderer, 1, 0.0, &run, &mut commands);
+    let side = renderer.text_glyph_atlas.size() as usize;
+    assert!(
+        renderer
+            .glyph_atlas_entry_for(&solid_glyph(2, side))
+            .is_err(),
+        "a glyph as large as the atlas fills it"
+    );
+    let target = draw_queued(&mut renderer, &commands);
+    assert_white_columns(
+        &renderer,
+        &target,
+        |x| x < 2,
+        "the glyph placed before the atlas filled",
+    );
 }

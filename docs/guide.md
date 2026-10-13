@@ -28,6 +28,7 @@ Effects manage tasks and resources for the lifetime of a composable.
 
 Start with **Get started** for a new app. **Compose integration** adds Rust UI
 to an Android Compose app. **Native views** adds platform controls to Rust UI.
+**Game engines** puts a game engine's scene in Rust UI, or Rust UI over a game.
 
 ## Get started
 
@@ -487,24 +488,22 @@ compiled large functions with branches its first screen never ran. With the
 limit, the first frame of a heavy page on a Mate 20 X came 110-170 ms sooner,
 and frames after it cost the same.
 
-For a release, record the pipelines the first screen draws with and build
-again with them. On WebGL the page then builds them as it starts, and the
-browser compiles them while the page composes its first screen instead of
-during the first frame. On a Mate 20 X this showed the first screen of a
-heavy page about 0.3 s sooner. The recorder runs the built page in headless
-Chrome; it is `scripts/web/record_first_screen.mjs` in the Cranpose repository
-and needs Node.js. Outside macOS, set `CHROME` to the Chrome executable:
+Build a release page with [cranpose-build](https://github.com/samoylenkodmitry/cranpose-build)
+0.3.0 or later:
 
 ```sh
-wasm-pack build --target web --out-dir pkg --no-default-features --features web,renderer-wgpu
-node path/to/cranpose/scripts/web/record_first_screen.mjs . index.html target/first_screen_pipelines.bin
-CRANPOSE_FIRST_SCREEN_PIPELINES=target/first_screen_pipelines.bin \
-    wasm-pack build --target web --out-dir pkg --no-default-features --features web,renderer-wgpu
+cranpose-build build --platform web --release
 ```
 
-Record again after the first screen or the Cranpose version changes. A
-recording written by a Cranpose release that lays out pipeline keys
-differently builds nothing.
+It builds the module with wasm-pack, opens the page in headless Chrome at a
+phone's and a desktop's viewport to record the pipelines its first screen draws
+with, and builds the module again with them embedded. On WebGL the page then
+builds those pipelines as it starts, and the browser compiles them while the
+page composes its first screen instead of during the first frame. On a Mate 20
+X this showed the first screen of a heavy page about 0.3 s sooner. The page
+directory, with the HTML page, `pkg/` and the assets, is the `application`
+directory of the build under `dist/cranpose/web/release`. `CHROME` names the Chrome executable when it is
+not in a usual place; without Chrome the build keeps the page it built first.
 
 ## Ownership
 
@@ -4209,3 +4208,90 @@ fn VolumeScreen() {
 Native children draw above Cranpose content. The conditional slot keeps the native
 slider clear of the Cranpose dialog. Dismiss the dialog through the scrim or back
 action; the factory creates a slider with the saved Rust value.
+
+## Game engines
+
+**Show a game engine's scene in your layout, or draw your interface over a game.**
+
+Cranpose and the engine render with one GPU device, so frames pass between them
+as textures and no pixels go through the CPU. The
+[cranpose-engines](https://github.com/samoylenkodmitry/cranpose-engines)
+repository has the Bevy and Godot crates, examples you can run, and templates
+to start a project from.
+
+### Show a Bevy scene in a Cranpose app
+
+Ask the window's device for Bevy's features, start Bevy with your scene, and
+show it like any other composable:
+
+```rust
+use cranpose::{prelude::*, *};
+use cranpose_bevy::{BevyScene, rememberBevyView};
+
+fn main() -> Result<(), LaunchError> {
+    AppLauncher::new()
+        .with_gpu_requirements(cranpose_bevy::gpu_requirements())
+        .try_run(Root)
+}
+
+#[composable]
+fn Root() {
+    let bevy = rememberBevyView(scene::build);
+    if let Some(bevy) = bevy {
+        BevyScene(Modifier::empty().fill_max_size(), bevy);
+    }
+}
+```
+
+`scene::build(app, target)` adds your systems to Bevy's app and gives its
+camera the `target` Cranpose shows. Bevy runs on a thread of its own, so the
+interface keeps its frame rate when Bevy's frames take longer; in a browser it
+runs inside Cranpose's frame. `bevy.send(|world| ...)` changes Bevy's world
+from the interface.
+
+### Draw a HUD over a Bevy game
+
+Add the plugin, and mark the camera the HUD draws over:
+
+```rust
+use bevy::prelude::*;
+use cranpose_bevy::hud::{CranposeHudPlugin, HudCamera};
+
+fn main() -> AppExit {
+    App::new()
+        .add_plugins(DefaultPlugins)
+        .add_plugins(CranposeHudPlugin::new(|_world| Box::new(|| hud::Panel())))
+        .add_systems(Startup, |mut commands: Commands| {
+            commands.spawn((Camera3d::default(), HudCamera));
+        })
+        .run()
+}
+```
+
+The closure gets Bevy's world once, to share state with the game's systems,
+and returns the HUD's root. `HudInput` tells the game whether the HUD took the
+pointer or the keys.
+
+### Draw a HUD over a Godot game
+
+`cranpose_godot::Surface` draws a composition on a `CanvasLayer`, on Godot's
+own Metal device. Declare the extension with
+`cranpose_godot::godot_extension!(Extension)`, give a node a `Surface`, call
+`draw` every frame and pass input events to `input` first. It runs on macOS
+with Godot's Metal driver for now.
+
+### Render into Cranpose from your own engine
+
+These are the APIs the engine crates build on:
+
+- `gpu_context()` returns the device, queue, adapter and instance a
+  composition draws with. `AppLauncher::with_gpu_requirements` asks that
+  device for the features and limits your renderer needs.
+- `ExternalTexture` shows a texture your renderer drew on that device through
+  `ImageBitmap`. Call `frame(number)` with a new number for each new content.
+- `ExternalFrames` takes frames from a renderer on another thread.
+  `writer.begin()` gives a texture to draw into, and `writer.publish(number)`
+  hands it over once the work is submitted. `next_frame()` gives the
+  composition the newest frame. Neither side waits for the other.
+- `GuestView` draws a composition into a texture on someone else's device,
+  for a HUD over your renderer's frame.
