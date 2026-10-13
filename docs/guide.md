@@ -487,24 +487,22 @@ compiled large functions with branches its first screen never ran. With the
 limit, the first frame of a heavy page on a Mate 20 X came 110-170 ms sooner,
 and frames after it cost the same.
 
-For a release, record the pipelines the first screen draws with and build
-again with them. On WebGL the page then builds them as it starts, and the
-browser compiles them while the page composes its first screen instead of
-during the first frame. On a Mate 20 X this showed the first screen of a
-heavy page about 0.3 s sooner. The recorder runs the built page in headless
-Chrome; it is `scripts/web/record_first_screen.mjs` in the Cranpose repository
-and needs Node.js. Outside macOS, set `CHROME` to the Chrome executable:
+Build a release page with [cranpose-build](https://github.com/samoylenkodmitry/cranpose-build)
+0.3.0 or later:
 
 ```sh
-wasm-pack build --target web --out-dir pkg --no-default-features --features web,renderer-wgpu
-node path/to/cranpose/scripts/web/record_first_screen.mjs . index.html target/first_screen_pipelines.bin
-CRANPOSE_FIRST_SCREEN_PIPELINES=target/first_screen_pipelines.bin \
-    wasm-pack build --target web --out-dir pkg --no-default-features --features web,renderer-wgpu
+cranpose-build build --platform web --release
 ```
 
-Record again after the first screen or the Cranpose version changes. A
-recording written by a Cranpose release that lays out pipeline keys
-differently builds nothing.
+It builds the module with wasm-pack, opens the page in headless Chrome at a
+phone's and a desktop's viewport to record the pipelines its first screen draws
+with, and builds the module again with them embedded. On WebGL the page then
+builds those pipelines as it starts, and the browser compiles them while the
+page composes its first screen instead of during the first frame. On a Mate 20
+X this showed the first screen of a heavy page about 0.3 s sooner. The page
+directory, with the HTML page, `pkg/` and the assets, is the `application`
+directory of the build under `dist/cranpose/web/release`. `CHROME` names the Chrome executable when it is
+not in a usual place; without Chrome the build keeps the page it built first.
 
 ## Ownership
 
