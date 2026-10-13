@@ -39,7 +39,7 @@
 //! }
 //! ```
 
-use std::{cell::RefCell, rc::Rc};
+use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOfWithPolicy};
 use cranpose_macros::composable;
@@ -74,8 +74,8 @@ pub struct LaunchArgs {
     debuggable: bool,
 }
 
-/// Shared handle to a [`LaunchArgs`] snapshot.
-pub type LaunchArgsRef = Rc<LaunchArgs>;
+/// Shared handle to a [`LaunchArgs`] snapshot, readable from any thread.
+pub type LaunchArgsRef = Arc<LaunchArgs>;
 
 impl LaunchArgs {
     /// Builds a snapshot from named values.
@@ -215,39 +215,42 @@ fn parse_boolean(text: &str) -> Option<bool> {
     }
 }
 
-thread_local! {
-    static PLATFORM_LAUNCH_ARGS: RefCell<Option<LaunchArgsRef>> = const { RefCell::new(None) };
-    static DEFAULT_LAUNCH_ARGS: RefCell<Option<LaunchArgsRef>> = const { RefCell::new(None) };
-}
+static PLATFORM_LAUNCH_ARGS: RwLock<Option<LaunchArgsRef>> = RwLock::new(None);
+static DEFAULT_LAUNCH_ARGS: OnceLock<LaunchArgsRef> = OnceLock::new();
 
 /// Installs the launch arguments reported by the platform, replacing any
-/// previous snapshot.
+/// previous snapshot for every thread of the process.
 ///
 /// Android calls this at startup with the launching intent's extras, and again
 /// from `onNewIntent`. A backend that replaces the snapshot after startup must
 /// also force a root render, because a plain shared cell is not reactive.
 pub fn set_platform_launch_args(args: LaunchArgsRef) {
-    PLATFORM_LAUNCH_ARGS.with(|cell| *cell.borrow_mut() = Some(args));
+    *PLATFORM_LAUNCH_ARGS
+        .write()
+        .unwrap_or_else(PoisonError::into_inner) = Some(args);
 }
 
 /// Removes any platform-reported launch arguments (tests and teardown).
 pub fn clear_platform_launch_args() {
-    PLATFORM_LAUNCH_ARGS.with(|cell| *cell.borrow_mut() = None);
+    *PLATFORM_LAUNCH_ARGS
+        .write()
+        .unwrap_or_else(PoisonError::into_inner) = None;
 }
 
 /// The launch arguments this app was started with.
 ///
 /// The platform snapshot if one was installed, otherwise the command line.
+/// Every thread reads the same snapshot, so worker threads see the values the
+/// platform delivered to the UI thread.
 pub fn launch_args() -> LaunchArgsRef {
-    if let Some(args) = PLATFORM_LAUNCH_ARGS.with(|cell| cell.borrow().clone()) {
-        return args;
+    if let Some(args) = PLATFORM_LAUNCH_ARGS
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+    {
+        return Arc::clone(args);
     }
-    DEFAULT_LAUNCH_ARGS.with(|cell| {
-        let mut cached = cell.borrow_mut();
-        cached
-            .get_or_insert_with(|| Rc::new(default_launch_args()))
-            .clone()
-    })
+    Arc::clone(DEFAULT_LAUNCH_ARGS.get_or_init(|| Arc::new(default_launch_args())))
 }
 
 /// Whether the OS considers this build debuggable — see
@@ -302,7 +305,7 @@ pub fn launch_args_from_command_line(
 pub fn local_launch_args() -> CompositionLocal<LaunchArgsRef> {
     crate::composition_locals::cached_local(
         |locals| &locals.launch_args,
-        || compositionLocalOfWithPolicy(launch_args, Rc::ptr_eq),
+        || compositionLocalOfWithPolicy(launch_args, Arc::ptr_eq),
     )
 }
 

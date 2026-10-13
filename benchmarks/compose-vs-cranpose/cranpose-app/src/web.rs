@@ -3,7 +3,7 @@
 //! reads as `--tier=12 --freeze=120` does on a desktop, and the scenario is
 //! the gauntlet unless `?scenario=` says another.
 
-use std::rc::Rc;
+use std::sync::Arc;
 
 use cranpose::{AppLauncher, launch_args_from_command_line, set_platform_launch_args};
 use wasm_bindgen::prelude::*;
@@ -36,7 +36,7 @@ pub async fn run_gauntlet(canvas_id: &str) -> Result<(), JsValue> {
         .ok_or_else(|| JsValue::from_str("no window"))?
         .location()
         .search()?;
-    set_platform_launch_args(Rc::new(launch_args_from_command_line(
+    set_platform_launch_args(Arc::new(launch_args_from_command_line(
         launch_tokens(&query),
         false,
     )));

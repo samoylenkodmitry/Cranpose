@@ -983,7 +983,7 @@ fn android_launch_arguments_reach_the_service_registry() {
     assert!(
         services_source.contains("jni_str!(\"cranposeEncodeLaunchArguments\")")
             && services_source
-                .contains("set_platform_launch_args(Rc::new(read_launch_arguments(&app)))"),
+                .contains("set_platform_launch_args(Arc::new(read_launch_arguments(&app)))"),
         "the Android backend should pull the launching intent's extras at startup, where getIntent() is already populated, instead of racing a push from onCreate"
     );
     assert!(

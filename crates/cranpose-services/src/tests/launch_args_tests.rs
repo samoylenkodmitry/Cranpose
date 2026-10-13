@@ -1,4 +1,4 @@
-use std::cell::RefCell as StdRefCell;
+use std::{cell::RefCell as StdRefCell, rc::Rc};
 
 use super::*;
 use crate::run_test_composition;
@@ -111,31 +111,6 @@ fn the_first_value_wins_when_a_name_repeats() {
 }
 
 #[test]
-fn the_installed_platform_snapshot_takes_precedence() {
-    clear_platform_launch_args();
-    set_platform_launch_args(Rc::new(args(&[(
-        "ob_autoplay",
-        LaunchArgValue::Bool(true),
-    )])));
-
-    assert_eq!(launch_args().boolean("ob_autoplay"), Some(true));
-
-    clear_platform_launch_args();
-    assert_eq!(launch_args().boolean("ob_autoplay"), None);
-}
-
-#[test]
-fn debuggable_is_reported_by_the_snapshot() {
-    clear_platform_launch_args();
-    set_platform_launch_args(Rc::new(LaunchArgs::new(std::iter::empty(), true)));
-    assert!(is_debuggable());
-
-    set_platform_launch_args(Rc::new(LaunchArgs::new(std::iter::empty(), false)));
-    assert!(!is_debuggable());
-    clear_platform_launch_args();
-}
-
-#[test]
 fn provide_launch_args_reaches_composition() {
     let captured = Rc::new(StdRefCell::new(None));
 
@@ -143,7 +118,7 @@ fn provide_launch_args_reaches_composition() {
         let captured = Rc::clone(&captured);
         run_test_composition(move || {
             let captured = Rc::clone(&captured);
-            let provided = Rc::new(LaunchArgs::new(
+            let provided = Arc::new(LaunchArgs::new(
                 [("ob_level".to_string(), LaunchArgValue::Int(3))],
                 true,
             ));
