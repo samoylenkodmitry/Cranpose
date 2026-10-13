@@ -96,7 +96,7 @@ pub(crate) fn register(
     }
     #[cfg(feature = "media")]
     crate::android_media::register(app.clone());
-    set_platform_launch_args(Rc::new(read_launch_arguments(&app)));
+    set_platform_launch_args(Arc::new(read_launch_arguments(&app)));
     #[cfg(feature = "playbilling")]
     {
         crate::android_purchases::register(app.clone());
@@ -352,7 +352,7 @@ pub(crate) fn apply_pending_platform_signals(
         .ok()
         .and_then(|mut slot| slot.take())
     {
-        set_platform_launch_args(Rc::new(decode_launch_arguments(&payload)));
+        set_platform_launch_args(Arc::new(decode_launch_arguments(&payload)));
         if let Some(shell) = shell {
             shell.request_root_render();
         }

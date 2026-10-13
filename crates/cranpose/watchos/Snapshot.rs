@@ -1,7 +1,7 @@
 use std::{
     fs::File,
     io::{BufWriter, Write},
-    rc::Rc,
+    sync::Arc,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if frames == 0 {
         return Err("frames must be nonzero".into());
     }
-    cranpose::set_platform_launch_args(Rc::new(cranpose::launch_args_from_command_line(
+    cranpose::set_platform_launch_args(Arc::new(cranpose::launch_args_from_command_line(
         args.iter().skip(6).cloned(),
         true,
     )));
