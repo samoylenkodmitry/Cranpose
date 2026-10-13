@@ -4027,6 +4027,7 @@ fn labeled_field(
                                                             max_lines,
                                                         }
                                                     },
+                                                    ..BasicTextFieldOptions::default()
                                                 },
                                             );
                                         },
@@ -4116,6 +4117,7 @@ fn labeled_code_field(
                                                             max_lines,
                                                         }
                                                     },
+                                                    ..BasicTextFieldOptions::default()
                                                 },
                                             );
                                         },
