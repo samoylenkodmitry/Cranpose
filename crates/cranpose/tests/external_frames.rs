@@ -30,6 +30,10 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
+        Self::with_format(wgpu::TextureFormat::Rgba8Unorm)
+    }
+
+    fn with_format(format: wgpu::TextureFormat) -> Self {
         let scene: Rc<OnceCell<Scene>> = Rc::new(OnceCell::new());
         let composed = Rc::clone(&scene);
         let mut view = AppLauncher::new()
@@ -41,7 +45,7 @@ impl Harness {
                 composed.get_or_init(|| {
                     let frames = ExternalFrames::new(
                         &gpu,
-                        wgpu::TextureFormat::Rgba8Unorm,
+                        format,
                         wgpu::TextureUsages::RENDER_ATTACHMENT,
                         true,
                     );
@@ -163,4 +167,25 @@ fn a_target_that_is_never_published_goes_back_to_the_writer() {
         assert_ne!(&texture, skipped.texture());
         assert_eq!(harness.draw_next(), expected, "round {round}");
     }
+}
+
+// Cranpose draws a frame's bytes as stored, as it draws any image. A device
+// that cannot view an sRGB texture without the conversion, such as WebGL2,
+// gets them through a pass that encodes the frame again.
+#[test]
+fn an_srgb_frame_shows_the_bytes_its_writer_rendered() {
+    let mut harness = Harness::with_format(wgpu::TextureFormat::Rgba8UnormSrgb);
+    // Linear 0.2158605 is sRGB byte 128.
+    let gray = wgpu::Color {
+        r: 0.2158605,
+        g: 0.2158605,
+        b: 0.2158605,
+        a: 1.0,
+    };
+    harness.render_elsewhere(gray);
+    let shown = harness.draw_next();
+    assert!(
+        shown[..3].iter().all(|channel| channel.abs_diff(128) <= 1) && shown[3] == 255,
+        "shown {shown:?}"
+    );
 }

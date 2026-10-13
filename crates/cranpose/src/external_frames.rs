@@ -49,6 +49,7 @@ struct Ring {
     size: (u32, u32),
     next: u64,
     slots: Vec<Slot>,
+    encoder: Option<SrgbEncoder>,
 }
 
 struct Slot {
@@ -56,6 +57,27 @@ struct Slot {
     view: wgpu::TextureView,
     shown: ExternalTexture,
     state: State,
+    // What the encoder reads and writes for this slot, when the ring has one.
+    encode: Option<EncodeTarget>,
+}
+
+// Cranpose samples a texture as stored, so it reads an sRGB frame through a
+// view without the sRGB conversion. A device that cannot view a texture in a
+// second format, such as WebGL2, gets a second texture of the format without
+// the conversion instead, which this pass fills from the frame when the
+// writer publishes it.
+#[derive(Clone)]
+struct SrgbEncoder {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    layout: wgpu::BindGroupLayout,
+    pipeline: wgpu::RenderPipeline,
+}
+
+#[derive(Clone)]
+struct EncodeTarget {
+    frame: wgpu::BindGroup,
+    shown: wgpu::TextureView,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -76,6 +98,13 @@ impl ExternalFrames {
         usage: wgpu::TextureUsages,
         opaque: bool,
     ) -> Self {
+        let views_in_two_formats = gpu
+            .adapter
+            .get_downlevel_capabilities()
+            .flags
+            .contains(wgpu::DownlevelFlags::VIEW_FORMATS);
+        let encoder = (format.is_srgb() && !views_in_two_formats)
+            .then(|| SrgbEncoder::new(gpu, format.remove_srgb_suffix()));
         Self {
             ring: Arc::new(Mutex::new(Ring {
                 gpu: gpu.clone(),
@@ -85,6 +114,7 @@ impl ExternalFrames {
                 size: (0, 0),
                 next: 1,
                 slots: Vec::with_capacity(MAX_TEXTURES),
+                encoder,
             })),
         }
     }
@@ -168,6 +198,20 @@ impl FrameWriter {
     /// were not shown yet are dropped, and so are older targets that were
     /// never published.
     pub fn publish(&self, number: u64) {
+        let encode = {
+            let ring = lock(&self.ring);
+            let Some(slot) = ring
+                .slots
+                .iter()
+                .find(|slot| slot.state == State::Writing(number))
+            else {
+                return;
+            };
+            ring.encoder.clone().zip(slot.encode.clone())
+        };
+        if let Some((encoder, target)) = encode {
+            encoder.encode(&target);
+        }
         let mut ring = lock(&self.ring);
         let Some(index) = ring
             .slots
@@ -206,11 +250,63 @@ impl FrameTexture {
 
 impl Ring {
     fn new_slot(&self, width: u32, height: u32) -> Option<Slot> {
-        // Cranpose samples a texture as stored, so it reads an sRGB texture
-        // through a view without the sRGB conversion.
         let sampled = self.format.remove_srgb_suffix();
         let view_formats = [sampled];
-        let texture = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
+        let texture = self.new_texture(
+            width,
+            height,
+            self.format,
+            self.usage,
+            if sampled == self.format || self.encoder.is_some() {
+                &[]
+            } else {
+                &view_formats
+            },
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let (shown, encode) = match &self.encoder {
+            Some(encoder) => {
+                let shown = self
+                    .new_texture(
+                        width,
+                        height,
+                        sampled,
+                        wgpu::TextureUsages::RENDER_ATTACHMENT,
+                        &[],
+                    )
+                    .create_view(&wgpu::TextureViewDescriptor::default());
+                let target = EncodeTarget {
+                    frame: encoder.bind(&view),
+                    shown: shown.clone(),
+                };
+                (shown, Some(target))
+            }
+            None => (
+                texture.create_view(&wgpu::TextureViewDescriptor {
+                    format: Some(sampled),
+                    ..Default::default()
+                }),
+                None,
+            ),
+        };
+        Some(Slot {
+            view,
+            shown: ExternalTexture::new(width, height, self.opaque, shown).ok()?,
+            texture,
+            state: State::Free,
+            encode,
+        })
+    }
+
+    fn new_texture(
+        &self,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+        usage: wgpu::TextureUsages,
+        view_formats: &[wgpu::TextureFormat],
+    ) -> wgpu::Texture {
+        self.gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("external frame"),
             size: wgpu::Extent3d {
                 width,
@@ -220,24 +316,104 @@ impl Ring {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: self.format,
-            usage: self.usage | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: if sampled == self.format {
-                &[]
-            } else {
-                &view_formats
-            },
-        });
-        let shown = texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(sampled),
-            ..Default::default()
-        });
-        Some(Slot {
-            view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
-            shown: ExternalTexture::new(width, height, self.opaque, shown).ok()?,
-            texture,
-            state: State::Free,
+            format,
+            usage: usage | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats,
         })
+    }
+}
+
+impl SrgbEncoder {
+    fn new(gpu: &GpuContext, target: wgpu::TextureFormat) -> Self {
+        let device = &gpu.device;
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("external frame encode"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("external_frames_encode.wgsl").into()),
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("external frame encode"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("external frame encode"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("external frame encode"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("cover"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("encode"),
+                compilation_options: Default::default(),
+                targets: &[Some(target.into())],
+            }),
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        Self {
+            device: (*gpu.device).clone(),
+            queue: (*gpu.queue).clone(),
+            layout,
+            pipeline,
+        }
+    }
+
+    fn bind(&self, frame: &wgpu::TextureView) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("external frame encode"),
+            layout: &self.layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(frame),
+            }],
+        })
+    }
+
+    // Submits the pass after the writer's work, so it reads the frame done.
+    fn encode(&self, target: &EncodeTarget) {
+        let mut commands = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("external frame encode"),
+            });
+        {
+            let mut pass = commands.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("external frame encode"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target.shown,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &target.frame, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        self.queue.submit([commands.finish()]);
     }
 }
 

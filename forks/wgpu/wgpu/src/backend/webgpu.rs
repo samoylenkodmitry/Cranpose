@@ -2,6 +2,8 @@
 
 mod defined_non_null_js_value;
 mod ext_bindings;
+#[cfg(feature = "portable-wgsl")]
+mod portable_wgsl;
 #[allow(clippy::allow_attributes)]
 pub(crate) mod webgpu_sys;
 
@@ -1048,6 +1050,8 @@ fn future_request_device(
                     error_scope_count: Rc::new(Cell::new(0)),
                     pipeline_discovery: Rc::default(),
                     background_pipelines: Rc::default(),
+                    #[cfg(feature = "portable-wgsl")]
+                    handle_lets: portable_wgsl::browser_has_handle_lets(),
                 }
                 .into(),
                 WebQueue {
@@ -1280,6 +1284,10 @@ pub struct WebDevice {
     /// The pipelines compiling in the background since they were last
     /// taken, while background compiles are on, or `None` while they are off.
     background_pipelines: Rc<RefCell<Option<js_sys::Array>>>,
+    /// The browser's WGSL compiler accepts a `let` that names a texture or a
+    /// sampler (the `texture_and_sampler_let` language feature).
+    #[cfg(feature = "portable-wgsl")]
+    handle_lets: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -2062,6 +2070,12 @@ impl dispatch::DeviceInterface for WebDevice {
             }
             #[cfg(feature = "wgsl")]
             crate::ShaderSource::Wgsl(ref code) => {
+                #[cfg(feature = "portable-wgsl")]
+                let rewritten = (!self.handle_lets)
+                    .then(|| portable_wgsl::without_handle_lets(code))
+                    .flatten();
+                #[cfg(feature = "portable-wgsl")]
+                let code: &str = rewritten.as_deref().unwrap_or(code);
                 let shader_module = webgpu_sys::GpuShaderModuleDescriptor::new(code);
                 Ok((
                     shader_module,

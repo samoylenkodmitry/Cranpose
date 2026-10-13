@@ -8,9 +8,7 @@ use std::{
     sync::Arc,
 };
 
-use cranpose_app_shell::{
-    AppShell, FrameSchedule, PlatformFrameDriver, PointerSource, default_root_key,
-};
+use cranpose_app_shell::{AppShell, FrameSchedule, PlatformFrameDriver, default_root_key};
 use cranpose_platform_web::WebPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
 use wasm_bindgen::{JsCast, prelude::*};
@@ -128,16 +126,7 @@ fn canvas_css_size(canvas: &HtmlCanvasElement) -> (f64, f64) {
     (rect.width().max(1.0), rect.height().max(1.0))
 }
 
-fn web_pointer_source(event: &PointerEvent) -> PointerSource {
-    match event.pointer_type().as_str() {
-        "touch" => PointerSource::Touch,
-        "pen" => PointerSource::Stylus,
-        "mouse" => PointerSource::Mouse,
-        _ => PointerSource::Unknown,
-    }
-}
-
-fn web_modifiers(event: &web_sys::MouseEvent) -> cranpose_app_shell::Modifiers {
+pub(crate) fn web_modifiers(event: &web_sys::MouseEvent) -> cranpose_app_shell::Modifiers {
     cranpose_app_shell::Modifiers {
         shift: event.shift_key(),
         ctrl: event.ctrl_key(),
@@ -567,89 +556,12 @@ pub async fn run(
         closure.forget();
     }
 
-    {
-        let app = app.clone();
-        let platform = platform.clone();
-        let request_frame = request_frame.clone();
-        let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
-            event.prevent_default();
-            let x = event.offset_x() as f64;
-            let y = event.offset_y() as f64;
-            let logical = platform.borrow().pointer_position(x, y);
-            if let Ok(mut app_mut) = app.try_borrow_mut() {
-                app_mut.set_pointer_source(web_pointer_source(&event));
-                app_mut.set_modifiers(web_modifiers(&event));
-                app_mut.set_cursor(logical.x, logical.y);
-                request_frame();
-            }
-        }) as Box<dyn FnMut(_)>);
-        canvas.add_event_listener_with_callback("pointermove", closure.as_ref().unchecked_ref())?;
-        closure.forget();
-    }
-
-    {
-        let app = app.clone();
-        let platform = platform.clone();
-        let pointer_canvas = canvas.clone();
-        let request_frame = request_frame.clone();
-        let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
-            event.prevent_default();
-            let _ = pointer_canvas.set_pointer_capture(event.pointer_id());
-            let x = event.offset_x() as f64;
-            let y = event.offset_y() as f64;
-            let logical = platform.borrow().pointer_position(x, y);
-            if let Ok(mut app_mut) = app.try_borrow_mut() {
-                app_mut.set_pointer_source(web_pointer_source(&event));
-                app_mut.set_modifiers(web_modifiers(&event));
-                let event_time = app_mut.realtime_pointer_event_time(None);
-                app_mut.set_cursor_at_event_time(logical.x, logical.y, event_time);
-                app_mut.pointer_pressed_at_event_time(event_time);
-                request_frame();
-            }
-        }) as Box<dyn FnMut(_)>);
-        canvas.add_event_listener_with_callback("pointerdown", closure.as_ref().unchecked_ref())?;
-        closure.forget();
-    }
-
-    {
-        let app = app.clone();
-        let platform = platform.clone();
-        let pointer_canvas = canvas.clone();
-        let request_frame = request_frame.clone();
-        let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
-            event.prevent_default();
-            let x = event.offset_x() as f64;
-            let y = event.offset_y() as f64;
-            let logical = platform.borrow().pointer_position(x, y);
-            if let Ok(mut app_mut) = app.try_borrow_mut() {
-                app_mut.set_pointer_source(web_pointer_source(&event));
-                app_mut.set_modifiers(web_modifiers(&event));
-                let event_time = app_mut.realtime_pointer_event_time(None);
-                app_mut.pointer_released_at_position_event_time(logical.x, logical.y, event_time);
-                request_frame();
-            }
-            let _ = pointer_canvas.release_pointer_capture(event.pointer_id());
-        }) as Box<dyn FnMut(_)>);
-        canvas.add_event_listener_with_callback("pointerup", closure.as_ref().unchecked_ref())?;
-        closure.forget();
-    }
-
-    {
-        let app = app.clone();
-        let pointer_canvas = canvas.clone();
-        let request_frame = request_frame.clone();
-        let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
-            event.prevent_default();
-            if let Ok(mut app_mut) = app.try_borrow_mut() {
-                app_mut.cancel_gesture();
-                request_frame();
-            }
-            let _ = pointer_canvas.release_pointer_capture(event.pointer_id());
-        }) as Box<dyn FnMut(_)>);
-        canvas
-            .add_event_listener_with_callback("pointercancel", closure.as_ref().unchecked_ref())?;
-        closure.forget();
-    }
+    crate::web_pointer::listen(
+        &canvas,
+        app.clone(),
+        platform.clone(),
+        request_frame.clone(),
+    )?;
 
     {
         let app = app.clone();
