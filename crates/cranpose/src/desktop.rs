@@ -5891,8 +5891,17 @@ impl ApplicationHandler for App {
                 let robot_surface_dirty_before_update = false;
                 let primary_surface_dirty_before_update = self.primary_surface_dirty;
                 app.set_density(window.scale_factor() as f32);
+                // A frame drawn before the window shows leaves animations
+                // where the first composition put them: nobody has seen the
+                // frames a step would skip.
                 #[cfg_attr(not(feature = "robot"), expect(unused_variables))]
-                let update_result = update_app_with_native_window_registry(app, &registry);
+                let update_result = if self.primary_show_pending {
+                    native_window::with_native_window_registry(&registry, || {
+                        app.update_without_frame()
+                    })
+                } else {
+                    update_app_with_native_window_registry(app, &registry)
+                };
                 wrap_primary_window_for_frame(
                     app,
                     surface,
