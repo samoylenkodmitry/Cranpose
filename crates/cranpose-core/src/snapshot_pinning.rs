@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use crate::{
     snapshot_double_index_heap::{SnapshotDoubleIndexHeap, SnapshotDoubleIndexHeapDebugStats},
     snapshot_id_set::{SnapshotId, SnapshotIdSet},
+    thread_state::ThreadState,
 };
 
 /// A handle to a pinned snapshot. Dropping this handle releases the pin.
@@ -74,7 +75,8 @@ impl PinningTable {
 }
 
 thread_local! {
-    static PINNING_TABLE: RefCell<PinningTable> = RefCell::new(PinningTable::new());
+    static PINNING_TABLE: ThreadState<RefCell<PinningTable>> =
+        ThreadState::new(RefCell::new(PinningTable::new()));
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

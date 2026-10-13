@@ -32,6 +32,7 @@ use crate::{
     snapshot_pinning::{self, PinHandle},
     snapshot_weak_set::SnapshotWeakSetDebugStats,
     state::{StateObject, StateRecord},
+    thread_state::ThreadState,
 };
 
 mod global;
@@ -396,7 +397,8 @@ impl AnySnapshot {
 }
 
 thread_local! {
-    static CURRENT_SNAPSHOT: RefCell<Option<AnySnapshot>> = const { RefCell::new(None) };
+    static CURRENT_SNAPSHOT: ThreadState<RefCell<Option<AnySnapshot>>> =
+        const { ThreadState::new(RefCell::new(None)) };
 }
 
 /// Get the current snapshot, or None if not in a snapshot context.
@@ -569,15 +571,18 @@ impl Hash for ObserverId {
 }
 
 thread_local! {
-    static APPLY_OBSERVERS: RefCell<HashMap<ObserverId, ApplyObserver>> = RefCell::new(HashMap::default());
+    static APPLY_OBSERVERS: ThreadState<RefCell<HashMap<ObserverId, ApplyObserver>>> =
+        ThreadState::new(RefCell::new(HashMap::default()));
 }
 
 thread_local! {
-    static LAST_WRITES: RefCell<HashMap<StateObjectId, SnapshotId>> = RefCell::new(HashMap::default());
+    static LAST_WRITES: ThreadState<RefCell<HashMap<StateObjectId, SnapshotId>>> =
+        ThreadState::new(RefCell::new(HashMap::default()));
 }
 
 thread_local! {
-    static EXTRA_STATE_OBJECTS: RefCell<crate::snapshot_weak_set::SnapshotWeakSet> = RefCell::new(crate::snapshot_weak_set::SnapshotWeakSet::new());
+    static EXTRA_STATE_OBJECTS: ThreadState<RefCell<crate::snapshot_weak_set::SnapshotWeakSet>> =
+        ThreadState::new(RefCell::new(crate::snapshot_weak_set::SnapshotWeakSet::new()));
 }
 
 const UNUSED_RECORD_CLEANUP_INTERVAL: SnapshotId = 2;

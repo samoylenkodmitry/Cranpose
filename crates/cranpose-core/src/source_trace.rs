@@ -3,6 +3,9 @@
 #[cfg(feature = "inspection")]
 use std::cell::RefCell;
 
+#[cfg(feature = "inspection")]
+use crate::thread_state::ThreadState;
+
 /// A composable definition active when a layout node was emitted.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceLocation {
@@ -114,7 +117,8 @@ impl Eq for RecompositionCounter {}
 thread_local! {
     static TRACK_RECOMPOSITIONS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static NEXT_INSTANCE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    static COUNTERS: RefCell<Vec<std::rc::Weak<crate::RecomposeScopeInner>>> = const { RefCell::new(Vec::new()) };
+    static COUNTERS: ThreadState<RefCell<Vec<std::rc::Weak<crate::RecomposeScopeInner>>>> =
+        const { ThreadState::new(RefCell::new(Vec::new())) };
 }
 
 /// Enables counters for composable instances on this preview's composition thread.
@@ -166,7 +170,8 @@ fn record_composition(
 
 #[cfg(feature = "inspection")]
 thread_local! {
-    static STACK: RefCell<Vec<SourceLocation>> = const { RefCell::new(Vec::new()) };
+    static STACK: ThreadState<RefCell<Vec<SourceLocation>>> =
+        const { ThreadState::new(RefCell::new(Vec::new())) };
 }
 
 /// Restores the composition origin stack when the function returns or unwinds.

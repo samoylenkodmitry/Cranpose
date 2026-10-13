@@ -7,7 +7,8 @@ const PREEXISTING_SNAPSHOT_ID: SnapshotId = 1;
 const INITIAL_GLOBAL_SNAPSHOT_ID: SnapshotId = PREEXISTING_SNAPSHOT_ID + 1;
 
 thread_local! {
-    static SNAPSHOT_RUNTIME: RefCell<Option<SnapshotRuntime>> = const { RefCell::new(None) };
+    static SNAPSHOT_RUNTIME: ThreadState<RefCell<Option<SnapshotRuntime>>> =
+        const { ThreadState::new(RefCell::new(None)) };
 }
 
 thread_local! {

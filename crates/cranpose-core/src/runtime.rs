@@ -23,6 +23,7 @@ use crate::{
     collections::map::HashMap,
     platform::{RuntimeScheduler, SchedulerRef},
     state::{MutationPolicy, NeverEqual},
+    thread_state::ThreadState,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -443,7 +444,8 @@ struct TaskEntry {
 }
 
 thread_local! {
-    static NEXT_TASK_LABEL: RefCell<Option<String>> = const { RefCell::new(None) };
+    static NEXT_TASK_LABEL: ThreadState<RefCell<Option<String>>> =
+        const { ThreadState::new(RefCell::new(None)) };
 }
 
 pub fn label_next_ui_task(label: impl Into<String>) {
@@ -947,7 +949,7 @@ impl Drop for Runtime {
             return;
         }
         unregister_runtime_handle(self.inner.runtime_id);
-        LAST_RUNTIME.with(|slot| {
+        let _ = LAST_RUNTIME.try_with(|slot| {
             let should_clear = slot
                 .borrow()
                 .as_ref()
@@ -1051,7 +1053,7 @@ pub struct TaskHandle {
 }
 
 struct DeferredStateRelease {
-    runtime: RuntimeHandle,
+    runtime: Weak<RuntimeInner>,
     id: StateId,
 }
 
@@ -1065,20 +1067,20 @@ impl StateHandleLease {
         self.id
     }
 
-    pub(crate) fn runtime(&self) -> RuntimeHandle {
-        self.runtime.clone()
+    pub(crate) fn runtime_id(&self) -> RuntimeId {
+        self.runtime.id()
     }
 }
 
 impl Drop for StateHandleLease {
     fn drop(&mut self) {
-        defer_state_release(self.runtime.clone(), self.id);
+        defer_state_release(&self.runtime, self.id);
     }
 }
 
 thread_local! {
-    static STATE_OWNERS: RefCell<Vec<Vec<Rc<StateHandleLease>>>> =
-        const { RefCell::new(Vec::new()) };
+    static STATE_OWNERS: ThreadState<RefCell<Vec<Vec<Rc<StateHandleLease>>>>> =
+        const { ThreadState::new(RefCell::new(Vec::new())) };
 }
 
 struct StateOwnerFrame;
@@ -1199,12 +1201,6 @@ impl RuntimeHandle {
 
     pub(crate) fn try_with_state_arena<R>(&self, f: impl FnOnce(&StateArena) -> R) -> Option<R> {
         self.inner.upgrade().map(|inner| f(&inner.state_arena))
-    }
-
-    fn release_state_immediate(&self, id: StateId) {
-        if let Some(inner) = self.inner.upgrade() {
-            inner.state_arena.release(id);
-        }
     }
 
     pub fn state_arena_stats(&self) -> (usize, usize) {
@@ -1557,11 +1553,14 @@ impl futures_task::ArcWake for RuntimeTaskWaker {
 
 thread_local! {
     static NEXT_RUNTIME_ID: Cell<u32> = const { Cell::new(1) };
-    static ACTIVE_RUNTIMES: RefCell<Vec<RuntimeHandle>> = const { RefCell::new(Vec::new()) };
-    static LAST_RUNTIME: RefCell<Option<RuntimeHandle>> = const { RefCell::new(None) };
+    static ACTIVE_RUNTIMES: ThreadState<RefCell<Vec<RuntimeHandle>>> =
+        const { ThreadState::new(RefCell::new(Vec::new())) };
+    static LAST_RUNTIME: ThreadState<RefCell<Option<RuntimeHandle>>> =
+        const { ThreadState::new(RefCell::new(None)) };
     static REGISTERED_RUNTIMES: RefCell<HashMap<RuntimeId, RuntimeHandle>> = RefCell::new(HashMap::default());
     static STATE_TEARDOWN_DEPTH: Cell<usize> = const { Cell::new(0) };
-    static DEFERRED_STATE_RELEASES: RefCell<Vec<DeferredStateRelease>> = const { RefCell::new(Vec::new()) };
+    static DEFERRED_STATE_RELEASES: ThreadState<RefCell<Vec<DeferredStateRelease>>> =
+        const { ThreadState::new(RefCell::new(Vec::new())) };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1579,26 +1578,39 @@ pub struct RuntimeThreadLocalDebugStats {
 /// Returns the most recently pushed active runtime, or the last known runtime.
 /// Used by fling animation and other components that need access to the runtime.
 pub fn current_runtime_handle() -> Option<RuntimeHandle> {
-    if let Some(handle) = ACTIVE_RUNTIMES.with(|stack| stack.borrow().last().cloned()) {
+    if let Some(handle) = ACTIVE_RUNTIMES
+        .try_with(|stack| stack.borrow().last().cloned())
+        .ok()
+        .flatten()
+    {
         return Some(handle);
     }
-    LAST_RUNTIME.with(|slot| slot.borrow().clone())
+    LAST_RUNTIME
+        .try_with(|slot| slot.borrow().clone())
+        .ok()
+        .flatten()
 }
 
 pub(crate) fn runtime_handle_by_id(id: RuntimeId) -> Option<RuntimeHandle> {
-    REGISTERED_RUNTIMES.with(|registry| registry.borrow().get(&id).cloned())
+    REGISTERED_RUNTIMES
+        .try_with(|registry| registry.borrow().get(&id).cloned())
+        .ok()
+        .flatten()
 }
 
 pub(crate) fn with_state_arena_by_id<R>(
     id: RuntimeId,
     f: impl FnOnce(&StateArena) -> R,
 ) -> Option<R> {
-    let inner = REGISTERED_RUNTIMES.with(|registry| {
-        registry
-            .borrow()
-            .get(&id)
-            .and_then(|handle| handle.inner.upgrade())
-    })?;
+    let inner = REGISTERED_RUNTIMES
+        .try_with(|registry| {
+            registry
+                .borrow()
+                .get(&id)
+                .and_then(|handle| handle.inner.upgrade())
+        })
+        .ok()
+        .flatten()?;
     Some(f(&inner.state_arena))
 }
 
@@ -1643,30 +1655,39 @@ fn register_runtime_handle(handle: &RuntimeHandle) {
     });
 }
 
+pub(crate) fn forget_registered_runtimes() {
+    let _ = REGISTERED_RUNTIMES.try_with(RefCell::take);
+}
+
 fn unregister_runtime_handle(id: RuntimeId) {
-    REGISTERED_RUNTIMES.with(|registry| {
+    let _ = REGISTERED_RUNTIMES.try_with(|registry| {
         registry.borrow_mut().remove(&id);
     });
 }
 
-fn defer_state_release(runtime: RuntimeHandle, id: StateId) {
-    let teardown_active = STATE_TEARDOWN_DEPTH.with(|depth| depth.get() > 0);
-    if teardown_active {
-        DEFERRED_STATE_RELEASES.with(|releases| {
-            releases
-                .borrow_mut()
-                .push(DeferredStateRelease { runtime, id });
-        });
-    } else {
-        runtime.release_state_immediate(id);
+fn release_state(runtime: &Weak<RuntimeInner>, id: StateId) {
+    if let Some(inner) = runtime.upgrade() {
+        inner.state_arena.release(id);
     }
 }
 
+fn defer_state_release(runtime: &RuntimeHandle, id: StateId) {
+    if STATE_TEARDOWN_DEPTH.get() == 0 {
+        release_state(&runtime.inner, id);
+        return;
+    }
+    let deferred = DeferredStateRelease {
+        runtime: Weak::clone(&runtime.inner),
+        id,
+    };
+    let _ = DEFERRED_STATE_RELEASES.try_with(|releases| releases.borrow_mut().push(deferred));
+}
+
 fn flush_deferred_state_releases() {
-    DEFERRED_STATE_RELEASES.with(|releases| {
+    let _ = DEFERRED_STATE_RELEASES.try_with(|releases| {
         let mut releases = releases.borrow_mut();
         while let Some(deferred) = releases.pop() {
-            deferred.runtime.release_state_immediate(deferred.id);
+            release_state(&deferred.runtime, deferred.id);
         }
     });
 }

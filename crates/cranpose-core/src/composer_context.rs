@@ -4,10 +4,11 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use crate::{Composer, ComposerCore};
+use crate::{Composer, ComposerCore, thread_state::ThreadState};
 
 thread_local! {
-    static CURRENT_COMPOSER: RefCell<Option<Rc<ComposerCore>>> = const { RefCell::new(None) };
+    static CURRENT_COMPOSER: ThreadState<RefCell<Option<Rc<ComposerCore>>>> =
+        const { ThreadState::new(RefCell::new(None)) };
 }
 
 /// How many threads have a composer installed. Code outside any
@@ -99,7 +100,10 @@ pub(crate) fn with_current_core<R>(f: impl FnOnce(&ComposerCore) -> R) -> Option
     if !any_composer_installed() {
         return None;
     }
-    CURRENT_COMPOSER.with(|current| current.borrow().as_deref().map(f))
+    CURRENT_COMPOSER
+        .try_with(|current| current.borrow().as_deref().map(f))
+        .ok()
+        .flatten()
 }
 
 /// Return the current thread's composer.
@@ -107,10 +111,13 @@ pub fn current_composer() -> Option<Composer> {
     if !any_composer_installed() {
         return None;
     }
-    CURRENT_COMPOSER.with(|current| {
-        let core = current.borrow().as_ref()?.clone();
-        Some(Composer::from_core(core))
-    })
+    CURRENT_COMPOSER
+        .try_with(|current| {
+            let core = current.borrow().as_ref()?.clone();
+            Some(Composer::from_core(core))
+        })
+        .ok()
+        .flatten()
 }
 
 pub fn note_nested_slots_host(host: &std::rc::Rc<crate::SlotsHost>) {

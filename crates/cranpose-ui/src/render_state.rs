@@ -230,7 +230,7 @@ pub struct AppContextScope;
 
 impl Drop for AppContextScope {
     fn drop(&mut self) {
-        CURRENT_APP_CONTEXT.with(|stack| {
+        let _ = CURRENT_APP_CONTEXT.try_with(|stack| {
             stack.borrow_mut().pop();
         });
     }

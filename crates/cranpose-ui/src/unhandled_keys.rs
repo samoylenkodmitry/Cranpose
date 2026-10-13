@@ -48,7 +48,8 @@ pub fn UnhandledKeyEvents(handler: impl Fn(&KeyEvent) -> bool + 'static) {
         });
         HANDLERS.with(|handlers| handlers.borrow_mut().push((id, latest)));
         scope.on_dispose(move || {
-            HANDLERS.with(|handlers| handlers.borrow_mut().retain(|(held, _)| *held != id));
+            let _ =
+                HANDLERS.try_with(|handlers| handlers.borrow_mut().retain(|(held, _)| *held != id));
         })
     });
 }

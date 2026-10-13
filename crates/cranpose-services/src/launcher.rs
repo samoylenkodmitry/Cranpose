@@ -174,7 +174,7 @@ impl KeyRegistration {
 
 impl Drop for KeyRegistration {
     fn drop(&mut self) {
-        REGISTERED_KEYS.with(|keys| {
+        let _ = REGISTERED_KEYS.try_with(|keys| {
             let mut keys = keys.borrow_mut();
             if let Some(count) = keys.get_mut(&self.request_key) {
                 *count -= 1;

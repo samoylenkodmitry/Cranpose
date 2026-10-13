@@ -20,6 +20,7 @@ use crate::{
     retention::{RetainKey, RetentionManager},
     runtime,
     slot::{FinishGroupResult, GroupStart, GroupStartKind, PayloadKind, RootNodeIds, ValueSlotId},
+    thread_state::ThreadState,
 };
 
 pub struct ValueSlotHandle<'pass, T: 'static> {
@@ -177,7 +178,8 @@ thread_local! {
     /// Applied command queues for the next passes' composers to fill. A
     /// composer takes the last one kept; nested passes finish first, so each
     /// pass gets back the storage a pass at its depth grew.
-    static SPARE_COMMANDS: RefCell<Vec<CommandQueue>> = const { RefCell::new(Vec::new()) };
+    static SPARE_COMMANDS: ThreadState<RefCell<Vec<CommandQueue>>> =
+        const { ThreadState::new(RefCell::new(Vec::new())) };
 }
 
 fn spare_commands() -> CommandQueue {

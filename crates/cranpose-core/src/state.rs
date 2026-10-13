@@ -20,6 +20,7 @@ use crate::{
     snapshot_v2::{
         AnySnapshot, GlobalSnapshot, advance_global_snapshot, allocate_record_id, current_snapshot,
     },
+    thread_state::ThreadState,
     with_current_composer_opt,
 };
 
@@ -502,8 +503,8 @@ fn commit_merged_record_locked(
 std::thread_local! {
     // Record values displaced inside snapshot bookkeeping, and how many
     // operations that hold them back are running.
-    static RETIRED_RECORD_VALUES: RefCell<Vec<Box<dyn RecordValue>>> =
-        const { RefCell::new(Vec::new()) };
+    static RETIRED_RECORD_VALUES: ThreadState<RefCell<Vec<Box<dyn RecordValue>>>> =
+        const { ThreadState::new(RefCell::new(Vec::new())) };
     static RETIRE_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 
@@ -1139,8 +1140,10 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
 }
 
 thread_local! {
-    static ACTIVE_UPDATES: RefCell<HashSet<ObjectId>> = RefCell::new(HashSet::default());
-    static PENDING_WRITES: RefCell<HashSet<ObjectId>> = RefCell::new(HashSet::default());
+    static ACTIVE_UPDATES: ThreadState<RefCell<HashSet<ObjectId>>> =
+        ThreadState::new(RefCell::new(HashSet::default()));
+    static PENDING_WRITES: ThreadState<RefCell<HashSet<ObjectId>>> =
+        ThreadState::new(RefCell::new(HashSet::default()));
 }
 
 pub(crate) struct UpdateScope {
@@ -1686,7 +1689,7 @@ impl<T: Clone + 'static> MutableState<T> {
     }
 
     pub(crate) fn from_lease(lease: &Rc<runtime::StateHandleLease>) -> Self {
-        Self::from_parts(lease.id(), lease.runtime().id())
+        Self::from_parts(lease.id(), lease.runtime_id())
     }
 
     pub fn is_alive(&self) -> bool {

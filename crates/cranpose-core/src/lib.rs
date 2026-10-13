@@ -35,6 +35,7 @@ mod snapshot_weak_set;
 pub mod source_trace;
 mod stable_index;
 mod state;
+mod thread_state;
 #[doc(hidden)]
 pub use source_trace::__source_scope;
 pub mod subcompose;
@@ -258,8 +259,8 @@ struct LocationKeyDebugInfo {
 
 #[cfg(any(test, debug_assertions))]
 thread_local! {
-    static LOCATION_KEY_REGISTRY: RefCell<HashMap<Key, LocationKeyDebugInfo>> =
-        RefCell::new(HashMap::default());
+    static LOCATION_KEY_REGISTRY: thread_state::ThreadState<RefCell<HashMap<Key, LocationKeyDebugInfo>>> =
+        thread_state::ThreadState::new(RefCell::new(HashMap::default()));
     static LOCATION_KEY_COLLISION_COUNT: Cell<usize> = const { Cell::new(0) };
 }
 
@@ -669,10 +670,11 @@ impl Hash for LocalKey {
 
 thread_local! {
     #[cfg(debug_assertions)]
-    static DEBUG_SCOPE_LABELS: RefCell<HashMap<usize, &'static str>> = RefCell::new(HashMap::default());
+    static DEBUG_SCOPE_LABELS: thread_state::ThreadState<RefCell<HashMap<usize, &'static str>>> =
+        thread_state::ThreadState::new(RefCell::new(HashMap::default()));
     #[cfg(debug_assertions)]
-    static DEBUG_SCOPE_INVALIDATION_SOURCES: RefCell<HashMap<usize, HashSet<String>>> =
-        RefCell::new(HashMap::default());
+    static DEBUG_SCOPE_INVALIDATION_SOURCES: thread_state::ThreadState<RefCell<HashMap<usize, HashSet<String>>>> =
+        thread_state::ThreadState::new(RefCell::new(HashMap::default()));
     #[cfg(all(test, debug_assertions))]
     static DEBUG_SCOPE_TRACKING_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
 }

@@ -14,4 +14,5 @@ mod snapshot_observation;
 mod snapshot_runtime_thread_isolation;
 mod state_hooks;
 mod static_locals;
+mod thread_exit_disposal;
 mod value_slot_handle_ui;

@@ -31,6 +31,7 @@ use crate::{
     hooks::{mutableStateOfNeverEqual, remember},
     runtime::{RuntimeHandle, TaskHandle, current_runtime_handle},
     state::{MutableState, State},
+    thread_state::ThreadState,
 };
 
 /// Spawns `future` on the current runtime's UI task queue.
@@ -550,8 +551,8 @@ impl<T: Send + 'static> EventSender<T> {
 }
 
 thread_local! {
-    static BRIDGES: RefCell<std::collections::HashMap<u64, Rc<dyn std::any::Any>>> =
-        RefCell::new(std::collections::HashMap::new());
+    static BRIDGES: ThreadState<RefCell<std::collections::HashMap<u64, Rc<dyn std::any::Any>>>> =
+        ThreadState::new(RefCell::new(std::collections::HashMap::new()));
 }
 
 static NEXT_BRIDGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -587,7 +588,7 @@ impl<T: Send + 'static> Bridge<T> {
 
 impl<T: Send + 'static> Drop for Bridge<T> {
     fn drop(&mut self) {
-        BRIDGES.with(|bridges| bridges.borrow_mut().remove(&self.id));
+        let _ = BRIDGES.try_with(|bridges| bridges.borrow_mut().remove(&self.id));
         self.channel.close();
     }
 }

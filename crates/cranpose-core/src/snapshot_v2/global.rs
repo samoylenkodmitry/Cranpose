@@ -63,7 +63,8 @@ impl GlobalSnapshot {
 }
 
 thread_local! {
-    static GLOBAL_SNAPSHOT: RefCell<Option<Rc<GlobalSnapshot>>> = const { RefCell::new(None) };
+    static GLOBAL_SNAPSHOT: ThreadState<RefCell<Option<Rc<GlobalSnapshot>>>> =
+        const { ThreadState::new(RefCell::new(None)) };
 }
 
 #[cfg(test)]
