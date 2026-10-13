@@ -13,6 +13,9 @@ use crate::gles::ShaderClearProgram;
 const GL_UNMASKED_VENDOR_WEBGL: u32 = 0x9245;
 const GL_UNMASKED_RENDERER_WEBGL: u32 = 0x9246;
 
+// The fewest varying components GL 3.3 and GLES 3.0 allow a context to have.
+const MIN_VARYING_COMPONENTS: u32 = 60;
+
 impl super::Adapter {
     pub fn get_glsl_version(&self) -> naga::back::glsl::Version {
         self.shared.shading_language_version
@@ -845,12 +848,11 @@ impl super::Adapter {
                 // will make deprecated constants unavailable.
                 let max_varying_components =
                     unsafe { gl.get_parameter_i32(glow::MAX_VARYING_COMPONENTS) } as u32;
-                if max_varying_components == 0 {
-                    // default value for max_inter_stage_shader_variables
-                    15
-                } else {
-                    max_varying_components / 4
-                }
+                // Every GL 3.3 and GLES 3.0 context has at least 60 varying
+                // components. Brave adds noise to WebGL parameters against
+                // fingerprinting and reports less, such as 59, which the GPU
+                // under it does not have as a limit.
+                max_varying_components.max(MIN_VARYING_COMPONENTS) / 4
             },
             max_color_attachments,
             max_color_attachment_bytes_per_sample,
