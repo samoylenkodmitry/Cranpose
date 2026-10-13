@@ -107,7 +107,7 @@ pub use self::egl::{Instance, Surface};
 #[cfg(webgl)]
 pub use self::web::AdapterContext;
 #[cfg(webgl)]
-pub use self::web::{Instance, Surface};
+pub use self::web::{Instance, Surface, ask_only_for_used_extensions};
 
 #[cfg(windows)]
 use self::wgl::AdapterContext;

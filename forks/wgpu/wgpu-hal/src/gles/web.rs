@@ -1,10 +1,86 @@
 use alloc::{format, string::String, vec::Vec};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use glow::HasContext;
 use parking_lot::{Mutex, RwLock};
 use wasm_bindgen::{JsCast, JsValue};
 
 use super::TextureFormatDesc;
+
+/// Whether adapters made from now on ask only for the extensions `glow`
+/// uses or that name the adapter; see [`ask_only_for_used_extensions`].
+static ONLY_USED_EXTENSIONS: AtomicBool = AtomicBool::new(false);
+
+/// Makes the adapters made from now on ask the browser only for the WebGL
+/// extensions `glow` uses or that name the adapter, and report capabilities
+/// for those alone: no float render targets, anisotropic filtering,
+/// per-target blending, sample shading, compressed or 16-bit normalized
+/// formats or multiview. WebGL enables an extension when the page asks for
+/// it, and each ask can wait for the browser's GPU process: Chrome on a Mali
+/// phone offers 15, and asking for all took 16-24 ms of every start. By
+/// default an adapter asks for every extension, as upstream's does.
+pub fn ask_only_for_used_extensions() {
+    ONLY_USED_EXTENSIONS.store(true, Ordering::Relaxed);
+}
+
+/// The extensions an adapter made after [`ask_only_for_used_extensions`]
+/// enables: the ones `glow` itself uses or that name the adapter.
+fn enables_extension(name: &str) -> bool {
+    matches!(
+        name,
+        "WEBGL_debug_renderer_info"
+            | "WEBGL_lose_context"
+            | "KHR_parallel_shader_compile"
+            | "EXT_disjoint_timer_query_webgl2"
+    )
+}
+
+/// `glow`'s context for `webgl2_context`. After
+/// [`ask_only_for_used_extensions`] only the extensions [`enables_extension`]
+/// names are enabled and reported: `glow` asks for every extension it knows
+/// as it wraps a context, and while it does, the context's own
+/// `getSupportedExtensions` and `getExtension` answer from those extensions
+/// alone; then they are deleted and the prototype's answer again. A context
+/// that refuses the properties is wrapped as `glow` wraps it.
+fn glow_context(webgl2_context: &web_sys::WebGl2RenderingContext) -> glow::Context {
+    if !ONLY_USED_EXTENSIONS.load(Ordering::Relaxed) {
+        return glow::Context::from_webgl2_context(webgl2_context.clone());
+    }
+    let names = js_sys::Array::new();
+    let enabled = js_sys::Map::new();
+    for name in webgl2_context.get_supported_extensions().iter().flat_map(|names| names.iter()) {
+        if let Some(text) = name.as_string().filter(|text| enables_extension(text)) {
+            if let Ok(Some(extension)) = webgl2_context.get_extension(&text) {
+                names.push(&name);
+                enabled.set(&name, &extension);
+            }
+        }
+    }
+    let context: &js_sys::Object = webgl2_context.as_ref();
+    let answers = [
+        ("getSupportedExtensions", bound_method(&names, "slice")),
+        ("getExtension", bound_method(&enabled, "get")),
+    ];
+    let shadowed = answers.iter().all(|(property, answer)| {
+        answer.as_ref().is_some_and(|answer| {
+            js_sys::Reflect::set(context, &JsValue::from_str(property), answer).unwrap_or(false)
+        })
+    });
+    let gl = shadowed.then(|| glow::Context::from_webgl2_context(webgl2_context.clone()));
+    for (property, _) in &answers {
+        let _ = js_sys::Reflect::delete_property(context, &JsValue::from_str(property));
+    }
+    gl.unwrap_or_else(|| glow::Context::from_webgl2_context(webgl2_context.clone()))
+}
+
+/// `target`'s method `name`, bound to `target`.
+fn bound_method(target: &JsValue, name: &str) -> Option<js_sys::Function> {
+    js_sys::Reflect::get(target, &JsValue::from_str(name))
+        .ok()?
+        .dyn_into::<js_sys::Function>()
+        .ok()
+        .map(|method| method.bind0(target))
+}
 
 /// A wrapper around a [`glow::Context`] to provide a fake `lock()` api that makes it compatible
 /// with the `AdapterContext` API from the EGL implementation.
@@ -129,7 +205,7 @@ impl crate::Instance for Instance {
         surface_hint: Option<&Surface>,
     ) -> Vec<crate::ExposedAdapter<super::Api>> {
         if let Some(surface_hint) = surface_hint {
-            let gl = glow::Context::from_webgl2_context(surface_hint.webgl2_context.clone());
+            let gl = glow_context(&surface_hint.webgl2_context);
 
             unsafe {
                 super::Adapter::expose(
@@ -196,7 +272,7 @@ impl super::Adapter {
         webgl2_context: web_sys::WebGl2RenderingContext,
         options: wgt::GlBackendOptions,
     ) -> Option<crate::ExposedAdapter<super::Api>> {
-        let glow_context = glow::Context::from_webgl2_context(webgl2_context.clone());
+        let glow_context = glow_context(&webgl2_context);
         unsafe {
             Self::expose(
                 AdapterContext {

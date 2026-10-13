@@ -291,6 +291,10 @@ pub async fn run(
     let width = css_width.round() as u32;
     let height = css_height.round() as u32;
     let backend_preference = requested_web_backend(&window);
+    // Cranpose's renderer needs no WebGL extension beyond the ones `glow`
+    // itself uses, and each one a page enables can wait for the browser's GPU
+    // process (forks/README.md).
+    wgpu::hal::gles::ask_only_for_used_extensions();
     let mut instance_desc =
         wgpu::InstanceDescriptor::new_with_display_handle(Box::new(BrowserDisplayHandle));
     instance_desc.backends = instance_backends(backend_preference);
