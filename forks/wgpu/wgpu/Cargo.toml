@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.87.0"
 name = "cranpose-wgpu"
-version = "30.0.14"
+version = "30.0.15"
 authors = ["gfx-rs developers"]
 build = "build.rs"
 exclude = ["Cargo.lock"]

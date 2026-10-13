@@ -4717,6 +4717,16 @@ impl GpuRenderer {
         }
     }
 
+    /// Drops what earlier frames drew and kept, the layers and the blurred
+    /// shadows: pipelines the browser compiled in the background landed, and
+    /// those were drawn while the draws that use them were left out.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn background_pipelines_landed(&mut self) {
+        self.layer_cache.clear();
+        self.shadow_surface_cache.clear();
+        self.shadow_surface_cache_bytes = 0;
+    }
+
     /// Notes an effect drawn as its placeholder, or left out, while its
     /// pipelines compile, and waits for the next one to land.
     pub(crate) fn note_placeholder(&mut self) {

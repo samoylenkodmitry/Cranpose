@@ -1047,6 +1047,7 @@ fn future_request_device(
                     ident: crate::cmp::Identifier::create(),
                     error_scope_count: Rc::new(Cell::new(0)),
                     pipeline_discovery: Rc::default(),
+                    background_pipelines: Rc::default(),
                 }
                 .into(),
                 WebQueue {
@@ -1276,6 +1277,9 @@ pub struct WebDevice {
     /// The `createRenderPipelineAsync` promises of the pipelines created
     /// while pipeline discovery is on, or `None` while it is off.
     pipeline_discovery: Rc<RefCell<Option<js_sys::Array>>>,
+    /// The pipelines compiling in the background since they were last
+    /// taken, while background compiles are on, or `None` while they are off.
+    background_pipelines: Rc<RefCell<Option<js_sys::Array>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -1433,9 +1437,9 @@ pub struct WebPipelineLayout {
 
 #[derive(Debug, Clone)]
 pub struct WebRenderPipeline {
-    /// `None` for a pipeline created during pipeline discovery, which never
-    /// draws.
-    pub(crate) inner: Option<webgpu_sys::GpuRenderPipeline>,
+    /// Empty for a pipeline created during pipeline discovery, which never
+    /// draws, and for one compiling in the background until it compiled.
+    pub(crate) inner: Rc<OnceCell<webgpu_sys::GpuRenderPipeline>>,
     /// Unique identifier for this RenderPipeline.
     ident: crate::cmp::Identifier,
 }
@@ -1891,7 +1895,7 @@ impl PipelineDraws {
         &mut self,
         pipeline: &'a dispatch::DispatchRenderPipeline,
     ) -> Option<&'a webgpu_sys::GpuRenderPipeline> {
-        let pipeline = pipeline.as_webgpu().inner.as_ref().filter(|_| !self.discovering);
+        let pipeline = pipeline.as_webgpu().inner.get().filter(|_| !self.discovering);
         self.skipping = pipeline.is_none();
         pipeline
     }
@@ -1919,6 +1923,28 @@ impl WebDevice {
             .unwrap_or_else(js_sys::Array::new);
         let settled = wasm_bindgen_futures::JsFuture::from(Promise::all_settled(&pending));
         async move { DiscoveredPipelines(settled.await.unwrap_or_else(|error| error)) }
+    }
+
+    /// Turns background compiles on: see `Device::compile_pipelines_in_background`.
+    pub(crate) fn compile_pipelines_in_background(&self) {
+        let mut pending = self.background_pipelines.borrow_mut();
+        if pending.is_none() {
+            *pending = Some(js_sys::Array::new());
+        }
+    }
+
+    /// Takes the pipelines compiling in the background: see
+    /// `Device::take_background_pipelines`.
+    pub(crate) fn take_background_pipelines(
+        &self,
+    ) -> Option<impl Future<Output = ()> + 'static> {
+        let mut background = self.background_pipelines.borrow_mut();
+        let pending = background.as_mut().filter(|pending| pending.length() > 0)?;
+        let taken = core::mem::replace(pending, js_sys::Array::new());
+        let settled = wasm_bindgen_futures::JsFuture::from(Promise::all_settled(&taken));
+        Some(async move {
+            let _ = settled.await;
+        })
     }
 
     /// Wrap a foreign `webgpu_sys::GpuTexture` (e.g. from a canvas `getCurrentTexture()`) as a
@@ -2458,14 +2484,23 @@ impl dispatch::DeviceInterface for WebDevice {
         mapped_desc.set_primitive(&mapped_primitive);
 
         // During pipeline discovery the browser compiles the pipeline in the
-        // background, beside the others, and this one never draws.
-        let discovered = self.pipeline_discovery.borrow().as_ref().map(|pending| {
+        // background, beside the others, and this one never draws. In the
+        // background it compiles the same way, and this one draws once it
+        // compiled.
+        let render_pipeline = Rc::new(OnceCell::new());
+        if let Some(pending) = self.pipeline_discovery.borrow().as_ref() {
             pending.push(&self.inner.create_render_pipeline_async(&mapped_desc));
-        });
-        let render_pipeline = match discovered {
-            Some(()) => None,
-            None => Some(self.inner.create_render_pipeline(&mapped_desc).unwrap()),
-        };
+        } else if let Some(pending) = self.background_pipelines.borrow().as_ref() {
+            let compiling = self.inner.create_render_pipeline_async(&mapped_desc);
+            let compiled = Rc::clone(&render_pipeline);
+            pending.push(&wasm_bindgen_futures::future_to_promise(async move {
+                let pipeline = wasm_bindgen_futures::JsFuture::from(compiling).await?;
+                let _ = compiled.set(pipeline.unchecked_into());
+                Ok(JsValue::UNDEFINED)
+            }));
+        } else {
+            let _ = render_pipeline.set(self.inner.create_render_pipeline(&mapped_desc).unwrap());
+        }
 
         WebRenderPipeline {
             inner: render_pipeline,
@@ -3159,8 +3194,8 @@ impl dispatch::RenderPipelineInterface for WebRenderPipeline {
     fn get_bind_group_layout(&self, index: u32) -> dispatch::DispatchBindGroupLayout {
         let bind_group_layout = self
             .inner
-            .as_ref()
-            .expect("a pipeline created during pipeline discovery has no bind group layouts")
+            .get()
+            .expect("a pipeline that has not compiled has no bind group layouts")
             .get_bind_group_layout(index);
 
         WebBindGroupLayout {

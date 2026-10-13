@@ -458,6 +458,34 @@ impl Device {
             .is_some()
     }
 
+    /// Compiles every render pipeline this `Device` creates from now on in
+    /// the background, when it is on the WebGPU backend, and returns whether
+    /// it does. The browser compiles each through `createRenderPipelineAsync`,
+    /// beside the others; until it has, the draws that use the pipeline are
+    /// left out, and from then on they draw. Created one after another
+    /// instead, new pipelines hold the browser's GPU process, and every
+    /// frame of the page, until each compiled. Pipeline discovery takes
+    /// precedence while it is on.
+    #[cfg(webgpu)]
+    pub fn compile_pipelines_in_background(&self) -> bool {
+        self.inner
+            .as_webgpu_opt()
+            .map(crate::backend::webgpu::WebDevice::compile_pipelines_in_background)
+            .is_some()
+    }
+
+    /// Takes the pipelines compiling in the background since the last call,
+    /// with a future that resolves once each compiled or failed; `None` when
+    /// none was created. A frame that left their draws out draws again then.
+    #[cfg(webgpu)]
+    pub fn take_background_pipelines(
+        &self,
+    ) -> Option<impl core::future::Future<Output = ()> + 'static> {
+        self.inner
+            .as_webgpu_opt()
+            .and_then(crate::backend::webgpu::WebDevice::take_background_pipelines)
+    }
+
     /// Ends pipeline discovery. The future resolves once every pipeline
     /// created during it compiled or failed, to those pipelines: keep them
     /// until the same pipelines are created again, so the browser still has
