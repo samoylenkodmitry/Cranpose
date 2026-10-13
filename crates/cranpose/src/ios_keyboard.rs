@@ -9,7 +9,11 @@ use std::{
     },
 };
 
-use cranpose_ui::text_input_session::{PlatformTextInputHandler, set_platform_text_input_handler};
+use cranpose_foundation::text::previous_grapheme_boundary;
+use cranpose_ui::{
+    ImeAction, ImeEditorState, KeyboardCapitalization, KeyboardOptions, KeyboardType,
+    text_input_session::{PlatformTextInputHandler, set_platform_text_input_handler},
+};
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
     rc::Retained,
@@ -21,15 +25,27 @@ use objc2_foundation::{
 };
 use objc2_ui_kit::{
     NSObjectUIAccessibility, NSWritingDirection, UIAccessibilityConvertFrameToScreenCoordinates,
-    UIAccessibilityIdentification, UIKeyInput, UIResponder, UITextInput, UITextInputDelegate,
+    UIAccessibilityIdentification, UIKeyInput, UIKeyboardType, UIResponder, UIReturnKeyType,
+    UITextAutocapitalizationType, UITextAutocorrectionType, UITextInput, UITextInputDelegate,
     UITextInputStringTokenizer, UITextInputTokenizer, UITextInputTraits, UITextLayoutDirection,
-    UITextPosition, UITextRange, UITextSelectionRect, UITextStorageDirection, UIView,
+    UITextPosition, UITextRange, UITextSelectionRect, UITextSpellCheckingType,
+    UITextStorageDirection, UIView,
 };
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 struct Mirror {
     text: String,
     sel: (usize, usize),
+    keyboard: KeyboardOptions,
+    single_line: bool,
+}
+
+impl Mirror {
+    /// Whether the return key runs the field's action rather than adding a
+    /// line.
+    fn return_runs_action(&self) -> bool {
+        self.single_line || self.keyboard.ime_action.resolve(false) != ImeAction::None
+    }
 }
 
 fn mirror() -> &'static Mutex<Mirror> {
@@ -37,20 +53,42 @@ fn mirror() -> &'static Mutex<Mirror> {
     M.get_or_init(|| Mutex::new(Mirror::default()))
 }
 
-pub(crate) fn set_mirror(text: String, sel_start: usize, sel_end: usize) {
+pub(crate) fn set_mirror(state: ImeEditorState) {
     let Ok(mut m) = mirror().lock() else {
         return;
     };
-    let len = text.len();
-    let sel = (sel_start.min(len), sel_end.min(len));
-    let text_changed = m.text != text;
+    let len = state.text.len();
+    let sel = (state.selection_start.min(len), state.selection_end.min(len));
+    let text_changed = m.text != state.text;
     let selection_changed = m.sel != sel;
-    m.text = text;
+    let keyboard_changed =
+        m.keyboard != state.keyboard_options || m.single_line != state.single_line;
+    m.text = state.text;
     m.sel = sel;
+    m.keyboard = state.keyboard_options;
+    m.single_line = state.single_line;
     drop(m);
     if text_changed || selection_changed {
         tell_input_delegate(text_changed);
     }
+    if keyboard_changed {
+        reload_keyboard();
+    }
+}
+
+/// Asks UIKit to read the input traits again, which it otherwise reads
+/// only when the view becomes first responder.
+fn reload_keyboard() {
+    if MainThreadMarker::new().is_none() {
+        return;
+    }
+    crate::thread_state::with(|state| {
+        if let Some(view) = state.ios.key_input_view.borrow().as_ref()
+            && view.isFirstResponder()
+        {
+            view.reloadInputViews();
+        }
+    });
 }
 
 /// Tells the keyboard and VoiceOver that the app changed the text or moved
@@ -129,8 +167,9 @@ pub(crate) fn hide_from_reader() {
     });
 }
 
-fn read_mirror() -> Mirror {
-    mirror().lock().map(|m| m.clone()).unwrap_or_default()
+/// Reads the mirror in place. `f` must not lock it again.
+fn with_mirror<R: Default>(f: impl FnOnce(&Mirror) -> R) -> R {
+    mirror().lock().map(|m| f(&m)).unwrap_or_default()
 }
 
 type CaretGeom = cranpose_ui::text_field_focus::ImeCaretGeometry;
@@ -173,6 +212,8 @@ fn native_rect(rect: cranpose_ui::Rect) -> CGRect {
 pub(crate) enum ImeOp {
     Replace(usize, usize, String),
     SetSelection(usize, usize),
+    /// The return key, where it runs the field's keyboard action.
+    Action,
 }
 
 fn ops() -> &'static Mutex<Vec<ImeOp>> {
@@ -225,6 +266,39 @@ fn set_selection(start: usize, end: usize) {
         m.sel = (start.min(len), end.min(len));
     }
     queue_op(ImeOp::SetSelection(start, end));
+}
+
+fn ios_keyboard_type(keyboard_type: KeyboardType) -> UIKeyboardType {
+    match keyboard_type {
+        KeyboardType::Text => UIKeyboardType::Default,
+        KeyboardType::Ascii | KeyboardType::Password => UIKeyboardType::ASCIICapable,
+        KeyboardType::Number | KeyboardType::NumberPassword => UIKeyboardType::NumberPad,
+        KeyboardType::Phone => UIKeyboardType::PhonePad,
+        KeyboardType::Uri => UIKeyboardType::URL,
+        KeyboardType::Email => UIKeyboardType::EmailAddress,
+        KeyboardType::Decimal => UIKeyboardType::DecimalPad,
+    }
+}
+
+/// iOS has no return key for Previous, so it shows the default one.
+fn ios_return_key(action: ImeAction) -> UIReturnKeyType {
+    match action {
+        ImeAction::Go => UIReturnKeyType::Go,
+        ImeAction::Search => UIReturnKeyType::Search,
+        ImeAction::Send => UIReturnKeyType::Send,
+        ImeAction::Next => UIReturnKeyType::Next,
+        ImeAction::Done => UIReturnKeyType::Done,
+        ImeAction::Default | ImeAction::None | ImeAction::Previous => UIReturnKeyType::Default,
+    }
+}
+
+fn ios_capitalization(capitalization: KeyboardCapitalization) -> UITextAutocapitalizationType {
+    match capitalization {
+        KeyboardCapitalization::None => UITextAutocapitalizationType::None,
+        KeyboardCapitalization::Characters => UITextAutocapitalizationType::AllCharacters,
+        KeyboardCapitalization::Words => UITextAutocapitalizationType::Words,
+        KeyboardCapitalization::Sentences => UITextAutocapitalizationType::Sentences,
+    }
 }
 
 fn shift_utf16(text: &str, from: usize, count: isize) -> usize {
@@ -359,28 +433,75 @@ define_class!(
 
     unsafe impl NSObjectProtocol for KeyInputView {}
 
-    unsafe impl UITextInputTraits for KeyInputView {}
+    unsafe impl UITextInputTraits for KeyInputView {
+        #[unsafe(method(keyboardType))]
+        fn keyboard_type(&self) -> UIKeyboardType {
+            ios_keyboard_type(with_mirror(|m| m.keyboard).keyboard_type)
+        }
+
+        #[unsafe(method(returnKeyType))]
+        fn return_key_type(&self) -> UIReturnKeyType {
+            ios_return_key(with_mirror(|m| m.keyboard.ime_action.resolve(m.single_line)))
+        }
+
+        #[unsafe(method(autocapitalizationType))]
+        fn autocapitalization_type(&self) -> UITextAutocapitalizationType {
+            ios_capitalization(with_mirror(|m| m.keyboard).capitalization)
+        }
+
+        #[unsafe(method(autocorrectionType))]
+        fn autocorrection_type(&self) -> UITextAutocorrectionType {
+            if with_mirror(|m| m.keyboard.corrects()) {
+                UITextAutocorrectionType::Yes
+            } else {
+                UITextAutocorrectionType::No
+            }
+        }
+
+        #[unsafe(method(spellCheckingType))]
+        fn spell_checking_type(&self) -> UITextSpellCheckingType {
+            if with_mirror(|m| m.keyboard.corrects()) {
+                UITextSpellCheckingType::Yes
+            } else {
+                UITextSpellCheckingType::No
+            }
+        }
+
+        #[unsafe(method(isSecureTextEntry))]
+        fn is_secure_text_entry(&self) -> bool {
+            with_mirror(|m| m.keyboard.keyboard_type.is_password())
+        }
+    }
 
     unsafe impl UIKeyInput for KeyInputView {
         #[unsafe(method(hasText))]
         fn has_text(&self) -> bool {
-            !read_mirror().text.is_empty()
+            with_mirror(|m| !m.text.is_empty())
         }
 
         #[unsafe(method(insertText:))]
         fn insert_text(&self, text: &NSString) {
-            let m = read_mirror();
-            apply_replace(m.sel.0, m.sel.1, &text.to_string());
+            let text = text.to_string();
+            let (sel, runs_action) = with_mirror(|m| (m.sel, m.return_runs_action()));
+            if text == "\n" && runs_action {
+                queue_op(ImeOp::Action);
+            } else {
+                apply_replace(sel.0, sel.1, &text);
+            }
         }
 
+        /// Deletes the selection, or the whole character before the caret.
         #[unsafe(method(deleteBackward))]
         fn delete_backward(&self) {
-            let m = read_mirror();
-            if m.sel.0 != m.sel.1 {
-                apply_replace(m.sel.0, m.sel.1, "");
-            } else if m.sel.0 > 0 {
-                let prev = shift_utf16(&m.text, m.sel.0, -1);
-                apply_replace(prev, m.sel.0, "");
+            let (start, end) = with_mirror(|m| {
+                if m.sel.0 != m.sel.1 {
+                    m.sel
+                } else {
+                    (previous_grapheme_boundary(&m.text, m.sel.0), m.sel.0)
+                }
+            });
+            if start < end {
+                apply_replace(start, end, "");
             }
         }
     }
@@ -388,14 +509,12 @@ define_class!(
     unsafe impl UITextInput for KeyInputView {
         #[unsafe(method_id(textInRange:))]
         fn text_in_range(&self, range: &UITextRange) -> Option<Retained<NSString>> {
-            let m = read_mirror();
             let (s, e) = TextRange::bounds(range);
-            let (s, e) = (s.min(m.text.len()), e.min(m.text.len()));
-            if s <= e && m.text.is_char_boundary(s) && m.text.is_char_boundary(e) {
-                Some(NSString::from_str(&m.text[s..e]))
-            } else {
-                Some(NSString::from_str(""))
-            }
+            with_mirror(|m| {
+                let (s, e) = (s.min(m.text.len()), e.min(m.text.len()));
+                let text = m.text.get(s..e).filter(|_| s <= e).unwrap_or("");
+                Some(NSString::from_str(text))
+            })
         }
 
         #[unsafe(method(replaceRange:withText:))]
@@ -406,8 +525,8 @@ define_class!(
 
         #[unsafe(method_id(selectedTextRange))]
         fn selected_text_range(&self) -> Option<Retained<UITextRange>> {
-            let m = read_mirror();
-            Some(urange(TextRange::make(m.sel.0, m.sel.1, self.mtm())))
+            let sel = with_mirror(|m| m.sel);
+            Some(urange(TextRange::make(sel.0, sel.1, self.mtm())))
         }
 
         #[unsafe(method(setSelectedTextRange:))]
@@ -440,8 +559,8 @@ define_class!(
         #[unsafe(method(setMarkedText:selectedRange:))]
         fn set_marked_text_selected_range(&self, marked: Option<&NSString>, _sel: NSRange) {
             let text = marked.map(ToString::to_string).unwrap_or_default();
-            let m = read_mirror();
-            apply_replace(m.sel.0, m.sel.1, &text);
+            let sel = with_mirror(|m| m.sel);
+            apply_replace(sel.0, sel.1, &text);
         }
 
         #[unsafe(method(unmarkText))]
@@ -454,7 +573,7 @@ define_class!(
 
         #[unsafe(method_id(endOfDocument))]
         fn end_of_document(&self) -> Retained<UITextPosition> {
-            upos(TextPosition::make(read_mirror().text.len(), self.mtm()))
+            upos(TextPosition::make(with_mirror(|m| m.text.len()), self.mtm()))
         }
 
         #[unsafe(method_id(textRangeFromPosition:toPosition:))]
@@ -476,8 +595,8 @@ define_class!(
             position: &UITextPosition,
             offset: isize,
         ) -> Option<Retained<UITextPosition>> {
-            let m = read_mirror();
-            let byte = shift_utf16(&m.text, TextPosition::offset(position).min(m.text.len()), offset);
+            let from = TextPosition::offset(position);
+            let byte = with_mirror(|m| shift_utf16(&m.text, from.min(m.text.len()), offset));
             Some(upos(TextPosition::make(byte, self.mtm())))
         }
 
@@ -492,8 +611,8 @@ define_class!(
                 UITextLayoutDirection::Left | UITextLayoutDirection::Up => -offset,
                 _ => offset,
             };
-            let m = read_mirror();
-            let byte = shift_utf16(&m.text, TextPosition::offset(position).min(m.text.len()), signed);
+            let from = TextPosition::offset(position);
+            let byte = with_mirror(|m| shift_utf16(&m.text, from.min(m.text.len()), signed));
             Some(upos(TextPosition::make(byte, self.mtm())))
         }
 
@@ -508,12 +627,8 @@ define_class!(
 
         #[unsafe(method(offsetFromPosition:toPosition:))]
         fn offset_from_to(&self, from: &UITextPosition, to: &UITextPosition) -> isize {
-            let m = read_mirror();
-            utf16_offset(
-                &m.text,
-                TextPosition::offset(from).min(m.text.len()),
-                TextPosition::offset(to).min(m.text.len()),
-            )
+            let (from, to) = (TextPosition::offset(from), TextPosition::offset(to));
+            with_mirror(|m| utf16_offset(&m.text, from.min(m.text.len()), to.min(m.text.len())))
         }
 
         #[unsafe(method_id(tokenizer))]
@@ -548,14 +663,16 @@ define_class!(
             position: &UITextPosition,
             direction: UITextLayoutDirection,
         ) -> Option<Retained<UITextRange>> {
-            let m = read_mirror();
-            let p = TextPosition::offset(position).min(m.text.len());
-            let (s, e) = match direction {
-                UITextLayoutDirection::Left | UITextLayoutDirection::Up => {
-                    (shift_utf16(&m.text, p, -1), p)
+            let from = TextPosition::offset(position);
+            let (s, e) = with_mirror(|m| {
+                let p = from.min(m.text.len());
+                match direction {
+                    UITextLayoutDirection::Left | UITextLayoutDirection::Up => {
+                        (shift_utf16(&m.text, p, -1), p)
+                    }
+                    _ => (p, shift_utf16(&m.text, p, 1)),
                 }
-                _ => (p, shift_utf16(&m.text, p, 1)),
-            };
+            });
             Some(urange(TextRange::make(s, e, self.mtm())))
         }
 
@@ -575,15 +692,16 @@ define_class!(
         fn first_rect_for_range(&self, range: &UITextRange) -> CGRect {
             let (s, e) = TextRange::bounds(range);
             let geom = read_caret_geom();
-            let text = read_mirror().text;
-            native_rect(geom.range_rect(character_for_byte(&text, s), character_for_byte(&text, e)))
+            let (s, e) =
+                with_mirror(|m| (character_for_byte(&m.text, s), character_for_byte(&m.text, e)));
+            native_rect(geom.range_rect(s, e))
         }
 
         #[unsafe(method(caretRectForPosition:))]
         fn caret_rect_for_position(&self, position: &UITextPosition) -> CGRect {
             let geom = read_caret_geom();
-            let text = read_mirror().text;
-            native_rect(geom.caret_rect(character_for_byte(&text, TextPosition::offset(position))))
+            let byte = TextPosition::offset(position);
+            native_rect(geom.caret_rect(with_mirror(|m| character_for_byte(&m.text, byte))))
         }
 
         #[unsafe(method_id(selectionRectsForRange:))]
@@ -597,8 +715,7 @@ define_class!(
         #[unsafe(method_id(closestPositionToPoint:))]
         fn closest_position_to_point(&self, point: CGPoint) -> Option<Retained<UITextPosition>> {
             let geom = read_caret_geom();
-            let text = read_mirror().text;
-            let byte = byte_for_point(&geom, &text, point);
+            let byte = with_mirror(|m| byte_for_point(&geom, &m.text, point));
             Some(upos(TextPosition::make(byte, self.mtm())))
         }
 
@@ -610,16 +727,14 @@ define_class!(
         ) -> Option<Retained<UITextPosition>> {
             let (s, e) = TextRange::bounds(range);
             let geom = read_caret_geom();
-            let text = read_mirror().text;
-            let byte = byte_for_point(&geom, &text, point).clamp(s, e);
+            let byte = with_mirror(|m| byte_for_point(&geom, &m.text, point)).clamp(s, e);
             Some(upos(TextPosition::make(byte, self.mtm())))
         }
 
         #[unsafe(method_id(characterRangeAtPoint:))]
         fn character_range_at_point(&self, point: CGPoint) -> Option<Retained<UITextRange>> {
             let geom = read_caret_geom();
-            let text = read_mirror().text;
-            let byte = byte_for_point(&geom, &text, point);
+            let byte = with_mirror(|m| byte_for_point(&geom, &m.text, point));
             Some(urange(TextRange::make(byte, byte, self.mtm())))
         }
 

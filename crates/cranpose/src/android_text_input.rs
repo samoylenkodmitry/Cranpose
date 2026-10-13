@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use android_activity::AndroidAppWaker;
 use cranpose_app_shell::ImeEditorState;
+use cranpose_ui::{ImeAction, KeyboardCapitalization, KeyboardOptions, KeyboardType};
 use jni::{
     EnvUnowned, Outcome, jni_sig, jni_str,
     objects::{JClass, JObject, JString, JValue},
@@ -137,6 +138,109 @@ fn utf16_offset(text: &str, byte_offset: usize) -> i32 {
     text[..offset].encode_utf16().count() as i32
 }
 
+const IME_ACTION_UNSPECIFIED: i32 = 0;
+const IME_ACTION_NONE: i32 = 1;
+const IME_ACTION_GO: i32 = 2;
+const IME_ACTION_SEARCH: i32 = 3;
+const IME_ACTION_SEND: i32 = 4;
+const IME_ACTION_NEXT: i32 = 5;
+const IME_ACTION_DONE: i32 = 6;
+const IME_ACTION_PREVIOUS: i32 = 7;
+
+/// The action an `InputConnection.performEditorAction` code names;
+/// `IME_ACTION_UNSPECIFIED` and unknown codes stand for the field's own.
+pub(crate) fn ime_action_from_android(code: i32) -> ImeAction {
+    match code {
+        IME_ACTION_NONE => ImeAction::None,
+        IME_ACTION_GO => ImeAction::Go,
+        IME_ACTION_SEARCH => ImeAction::Search,
+        IME_ACTION_SEND => ImeAction::Send,
+        IME_ACTION_NEXT => ImeAction::Next,
+        IME_ACTION_DONE => ImeAction::Done,
+        IME_ACTION_PREVIOUS => ImeAction::Previous,
+        _ => ImeAction::Default,
+    }
+}
+
+/// `EditorInfo.inputType` and the action part of `imeOptions` for a field's
+/// keyboard, as Compose's Android text input sets them.
+fn android_editor_info(options: &KeyboardOptions, single_line: bool) -> (i32, i32) {
+    const TYPE_MASK_CLASS: i32 = 0xf;
+    const TYPE_TEXT_FLAG_AUTO_CORRECT: i32 = 0x8000;
+    const TYPE_TEXT_FLAG_MULTI_LINE: i32 = 0x20000;
+    const IME_FLAG_NO_ENTER_ACTION: i32 = 0x4000_0000;
+
+    let (mut input_type, mut ime_options) = android_input_class(options.keyboard_type);
+    ime_options |= android_ime_action(options.ime_action, single_line);
+    if input_type & TYPE_MASK_CLASS == TYPE_CLASS_TEXT {
+        if !single_line {
+            input_type |= TYPE_TEXT_FLAG_MULTI_LINE;
+            if options.ime_action == ImeAction::Default {
+                ime_options |= IME_FLAG_NO_ENTER_ACTION;
+            }
+        }
+        input_type |= android_capitalization(options.capitalization);
+        if options.corrects() {
+            input_type |= TYPE_TEXT_FLAG_AUTO_CORRECT;
+        }
+    }
+    (input_type, ime_options)
+}
+
+const TYPE_CLASS_TEXT: i32 = 0x1;
+
+/// The input class and variation of a keyboard type, and the `imeOptions`
+/// flags it needs.
+fn android_input_class(keyboard_type: KeyboardType) -> (i32, i32) {
+    const TYPE_CLASS_NUMBER: i32 = 0x2;
+    const TYPE_CLASS_PHONE: i32 = 0x3;
+    const TYPE_TEXT_VARIATION_URI: i32 = 0x10;
+    const TYPE_TEXT_VARIATION_EMAIL_ADDRESS: i32 = 0x20;
+    const TYPE_TEXT_VARIATION_PASSWORD: i32 = 0x80;
+    const TYPE_NUMBER_VARIATION_PASSWORD: i32 = 0x10;
+    const TYPE_NUMBER_FLAG_DECIMAL: i32 = 0x2000;
+    const IME_FLAG_FORCE_ASCII: i32 = i32::MIN;
+
+    match keyboard_type {
+        KeyboardType::Text => (TYPE_CLASS_TEXT, 0),
+        KeyboardType::Ascii => (TYPE_CLASS_TEXT, IME_FLAG_FORCE_ASCII),
+        KeyboardType::Number => (TYPE_CLASS_NUMBER, 0),
+        KeyboardType::Phone => (TYPE_CLASS_PHONE, 0),
+        KeyboardType::Uri => (TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_URI, 0),
+        KeyboardType::Email => (TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_EMAIL_ADDRESS, 0),
+        KeyboardType::Password => (TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_PASSWORD, 0),
+        KeyboardType::NumberPassword => (TYPE_CLASS_NUMBER | TYPE_NUMBER_VARIATION_PASSWORD, 0),
+        KeyboardType::Decimal => (TYPE_CLASS_NUMBER | TYPE_NUMBER_FLAG_DECIMAL, 0),
+    }
+}
+
+fn android_ime_action(action: ImeAction, single_line: bool) -> i32 {
+    match action {
+        ImeAction::Default if single_line => IME_ACTION_DONE,
+        ImeAction::Default => IME_ACTION_UNSPECIFIED,
+        ImeAction::None => IME_ACTION_NONE,
+        ImeAction::Go => IME_ACTION_GO,
+        ImeAction::Search => IME_ACTION_SEARCH,
+        ImeAction::Send => IME_ACTION_SEND,
+        ImeAction::Previous => IME_ACTION_PREVIOUS,
+        ImeAction::Next => IME_ACTION_NEXT,
+        ImeAction::Done => IME_ACTION_DONE,
+    }
+}
+
+fn android_capitalization(capitalization: KeyboardCapitalization) -> i32 {
+    const TYPE_TEXT_FLAG_CAP_CHARACTERS: i32 = 0x1000;
+    const TYPE_TEXT_FLAG_CAP_WORDS: i32 = 0x2000;
+    const TYPE_TEXT_FLAG_CAP_SENTENCES: i32 = 0x4000;
+
+    match capitalization {
+        KeyboardCapitalization::None => 0,
+        KeyboardCapitalization::Characters => TYPE_TEXT_FLAG_CAP_CHARACTERS,
+        KeyboardCapitalization::Words => TYPE_TEXT_FLAG_CAP_WORDS,
+        KeyboardCapitalization::Sentences => TYPE_TEXT_FLAG_CAP_SENTENCES,
+    }
+}
+
 pub(crate) fn show_android_text_input(
     app: &android_activity::AndroidApp,
     queue: &Arc<AndroidImeEventQueue>,
@@ -145,6 +249,7 @@ pub(crate) fn show_android_text_input(
     let handle = retain_ime_queue_handle(queue);
     let sel_start = utf16_offset(&state.text, state.selection_start);
     let sel_end = utf16_offset(&state.text, state.selection_end);
+    let (input_type, ime_options) = android_editor_info(&state.keyboard_options, state.single_line);
 
     let result = with_android_activity_env(app, |env, activity| {
         let class = load_cranpose_java_class(env, &activity, TEXT_INPUT_CLASS)?;
@@ -156,14 +261,15 @@ pub(crate) fn show_android_text_input(
         env.call_static_method(
             class,
             jni_str!("show"),
-            jni_sig!("(Landroid/app/Activity;JLjava/lang/String;IIZ)I"),
+            jni_sig!("(Landroid/app/Activity;JLjava/lang/String;IIII)I"),
             &[
                 JValue::Object(&activity),
                 JValue::Long(handle.raw()),
                 JValue::Object(&text),
                 JValue::Int(sel_start),
                 JValue::Int(sel_end),
-                JValue::Bool(state.single_line),
+                JValue::Int(input_type),
+                JValue::Int(ime_options),
             ],
         )
         .and_then(jni::JValueOwned::i)

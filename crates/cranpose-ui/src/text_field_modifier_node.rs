@@ -327,6 +327,10 @@ fn build_focus_handler(
         refs.focus_node.get(),
         line_limits,
         refs.focus_options.get().show_keyboard_on_focus,
+        crate::text_field_handler::KeyboardRefs {
+            options: refs.keyboard_options.clone(),
+            action: refs.keyboard_action.clone(),
+        },
         crate::text_field_handler::CaretGeometryRefs {
             local_to_window: refs.local_to_window.clone(),
             content_origin: refs.content_origin.clone(),
@@ -428,6 +432,10 @@ pub(crate) struct TextFieldRefs {
     pub press_track: MutableState<Option<PointerPressTrack>>,
     pub gesture_claimed: Rc<Cell<bool>>,
     focus_options: Rc<Cell<TextFieldFocusOptions>>,
+    /// The keyboard the field asks for, read when it gains focus and when
+    /// its action runs.
+    pub keyboard_options: Rc<Cell<crate::KeyboardOptions>>,
+    pub keyboard_action: Rc<RefCell<Option<crate::KeyboardActionHandler>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -458,6 +466,8 @@ impl TextFieldRefs {
                 modal_depth: 0,
                 show_keyboard_on_focus: true,
             })),
+            keyboard_options: Rc::default(),
+            keyboard_action: Rc::default(),
         }
     }
 
@@ -1404,6 +1414,10 @@ pub struct TextFieldElement {
     cursor_color: Color,
     line_limits: TextFieldLineLimits,
     show_keyboard_on_focus: bool,
+    keyboard_options: crate::KeyboardOptions,
+    /// Left out of equality and hashing: the element updates its node in
+    /// every composition, which hands the node the latest closure.
+    keyboard_action: Option<crate::KeyboardActionHandler>,
     handle_controller: Option<TextFieldHandleController>,
     modal_depth: usize,
     decorator: Option<TextFieldRefs>,
@@ -1418,6 +1432,8 @@ impl TextFieldElement {
             cursor_color: DEFAULT_CURSOR_COLOR,
             line_limits: TextFieldLineLimits::default(),
             show_keyboard_on_focus: true,
+            keyboard_options: crate::KeyboardOptions::default(),
+            keyboard_action: None,
             handle_controller: None,
             modal_depth: 0,
             decorator: None,
@@ -1447,6 +1463,18 @@ impl TextFieldElement {
     /// requests it, including when the field is already focused.
     pub fn with_show_keyboard_on_focus(mut self, show: bool) -> Self {
         self.show_keyboard_on_focus = show;
+        self
+    }
+
+    /// Sets the software keyboard the field asks for, and what runs its
+    /// action key.
+    pub fn with_keyboard(
+        mut self,
+        options: crate::KeyboardOptions,
+        action: Option<crate::KeyboardActionHandler>,
+    ) -> Self {
+        self.keyboard_options = options;
+        self.keyboard_action = action;
         self
     }
 
@@ -1484,6 +1512,7 @@ impl Hash for TextFieldElement {
         self.style.render_hash().hash(state);
         self.line_limits.hash(state);
         self.show_keyboard_on_focus.hash(state);
+        self.keyboard_options.hash(state);
         self.modal_depth.hash(state);
         self.decorator.as_ref().map(TextFieldRefs::key).hash(state);
     }
@@ -1496,6 +1525,7 @@ impl PartialEq for TextFieldElement {
             && self.cursor_color == other.cursor_color
             && self.line_limits == other.line_limits
             && self.show_keyboard_on_focus == other.show_keyboard_on_focus
+            && self.keyboard_options == other.keyboard_options
             && self.modal_depth == other.modal_depth
             && self.decorator == other.decorator
     }
@@ -1518,6 +1548,10 @@ impl ModifierNodeElement for TextFieldElement {
             modal_depth: self.modal_depth,
             show_keyboard_on_focus: self.show_keyboard_on_focus,
         });
+        node.refs.keyboard_options.set(self.keyboard_options);
+        node.refs
+            .keyboard_action
+            .replace(self.keyboard_action.clone());
         if let Some(controller) = self.handle_controller.clone() {
             node = node.with_handle_controller(controller);
         }
@@ -1545,6 +1579,10 @@ impl ModifierNodeElement for TextFieldElement {
         {
             crate::text_input_session::notify_text_input_focus_gained();
         }
+        node.refs.keyboard_options.set(self.keyboard_options);
+        node.refs
+            .keyboard_action
+            .replace(self.keyboard_action.clone());
         node.rebuild_cached_closures();
 
         if node.update_cached_state() {}

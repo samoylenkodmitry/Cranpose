@@ -54,7 +54,17 @@ impl AndroidImeSession {
         if self.last_synced.borrow().as_ref() == Some(&state) {
             return;
         }
-        match update_android_text_input_state(&self.app, &state) {
+        // The keyboard reads its options when its session starts, so a
+        // change of them starts it again.
+        let keyboard_changed = self.last_synced.borrow().as_ref().is_some_and(|last| {
+            last.keyboard_options != state.keyboard_options || last.single_line != state.single_line
+        });
+        let synced = if keyboard_changed {
+            show_android_text_input(&self.app, &self.queue, &state)
+        } else {
+            update_android_text_input_state(&self.app, &state)
+        };
+        match synced {
             Ok(()) => {
                 *self.last_synced.borrow_mut() = Some(state);
             }
@@ -77,6 +87,7 @@ impl AndroidImeSession {
                 selection_end: 0,
                 composition: None,
                 single_line: true,
+                keyboard_options: cranpose_ui::KeyboardOptions::default(),
             }
         });
 

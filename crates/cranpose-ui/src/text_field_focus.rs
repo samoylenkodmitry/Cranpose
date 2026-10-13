@@ -32,6 +32,8 @@ pub struct ImeEditorState {
     /// Whether the field is single-line (platforms use this to pick the
     /// keyboard action, e.g. Android `IME_ACTION_DONE` vs newline).
     pub single_line: bool,
+    /// The software keyboard the field asks for.
+    pub keyboard_options: crate::KeyboardOptions,
 }
 
 /// Window-space caret geometry for the focused field, used by platforms whose
@@ -151,6 +153,14 @@ pub trait FocusedTextFieldHandler {
     /// handler cannot expose its state.
     fn editor_state(&self) -> Option<ImeEditorState> {
         None
+    }
+    /// Runs the field's keyboard action: the platform's action key, or the
+    /// action key's Enter. [`ImeAction::Default`](crate::ImeAction::Default)
+    /// stands for the field's own action. Returns whether the field handled
+    /// it.
+    fn perform_ime_action(&self, action: crate::ImeAction) -> bool {
+        let _ = action;
+        false
     }
     /// Window-space caret geometry (see [`ImeCaretGeometry`]) for coordinate-based
     /// platform text input. `None` when the handler cannot expose it (e.g. the
@@ -349,6 +359,16 @@ impl TextFieldFocusState {
         }
     }
 
+    fn dispatch_ime_action(&self, action: crate::ImeAction) -> bool {
+        let handled = self
+            .focused_handler()
+            .is_some_and(|handler| handler.perform_ime_action(action));
+        if handled {
+            self.note_edit();
+        }
+        handled
+    }
+
     fn focused_editor_state(&self) -> Option<ImeEditorState> {
         self.focused_handler()
             .and_then(|handler| handler.editor_state())
@@ -530,6 +550,13 @@ pub fn dispatch_ime_set_selection(start_bytes: usize, end_bytes: usize) -> bool 
     crate::render_state::with_text_field_focus(|state| {
         state.dispatch_ime_set_selection(start_bytes, end_bytes)
     })
+}
+
+/// Runs the focused field's keyboard action, as the platform's action key
+/// asks. [`ImeAction::Default`](crate::ImeAction::Default) stands for the
+/// field's own action. Returns whether a focused field handled it.
+pub fn dispatch_ime_action(action: crate::ImeAction) -> bool {
+    crate::render_state::with_text_field_focus(|state| state.dispatch_ime_action(action))
 }
 
 /// How many edits the focused text fields of the current app context took

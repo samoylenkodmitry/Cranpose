@@ -47,6 +47,7 @@ pub mod focus_order;
 pub mod font_scale;
 mod interaction;
 mod key_event;
+mod keyboard_options;
 pub mod layout;
 pub mod layout_direction;
 pub mod lazy_item;
@@ -142,7 +143,7 @@ pub use focus_manager::{FocusManager, local_focus_manager, request_focus_from_pl
 pub use focus_navigation::{KeyboardFocusTarget, keyboard_focus_target};
 pub use focus_order::{
     FocusEntry, collect_focus_order, collect_focus_order_under, focus_order_len,
-    selectable_group_of, set_focus_order,
+    selectable_group_of, set_focus_order, take_requested_focus_move,
 };
 pub use font_scale::{FontScaleCurve, MAX_FONT_SCALE_KNOTS};
 pub use interaction::{
@@ -152,6 +153,10 @@ pub use interaction::{
     rememberMutableInteractionSource,
 };
 pub use key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers};
+pub use keyboard_options::{
+    ImeAction, KeyboardActionHandler, KeyboardActionScope, KeyboardCapitalization, KeyboardOptions,
+    KeyboardType,
+};
 pub use layout::{
     LayoutAllocationDebugStats, LayoutBox, LayoutEngine, LayoutMeasurements, LayoutNodeData,
     LayoutNodeKind, LayoutTree, MeasureLayoutOptions, SemanticsAction, SemanticsCallback,

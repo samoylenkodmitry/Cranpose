@@ -2561,6 +2561,7 @@ impl cranpose_ui::text_field_focus::FocusedTextFieldHandler for TextFieldDispatc
             selection_end: 2,
             composition: Some((0, 3)),
             single_line: true,
+            keyboard_options: cranpose_ui::KeyboardOptions::default(),
         })
     }
 }

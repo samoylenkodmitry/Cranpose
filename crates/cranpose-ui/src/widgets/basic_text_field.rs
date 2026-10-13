@@ -19,6 +19,7 @@ use crate::{
     bring_into_view::local_bring_into_view_responder,
     clipboard_session::{clipboard_can_paste, clipboard_paste_into_focus, clipboard_write_text},
     composable,
+    keyboard_options::{KeyboardActionHandler, KeyboardOptions},
     layout::{
         core::Alignment,
         policies::{BoxMeasurePolicy, EmptyMeasurePolicy},
@@ -245,6 +246,12 @@ pub struct BasicTextFieldOptions {
     /// Changing this to `true` while focused also requests the keyboard.
     /// Changing it to `false` preserves an already visible keyboard.
     pub show_keyboard_on_focus: bool,
+    /// The software keyboard the field asks for and its action key.
+    pub keyboard_options: KeyboardOptions,
+    /// Runs the keyboard's action key, and Enter in a single-line field.
+    /// Without it the action's default runs: Next and Previous move focus,
+    /// Done hides the software keyboard.
+    pub on_keyboard_action: Option<KeyboardActionHandler>,
 }
 
 impl Default for BasicTextFieldOptions {
@@ -254,6 +261,8 @@ impl Default for BasicTextFieldOptions {
             cursor_color: Color(0.0, 0.478, 1.0, 1.0),
             line_limits: TextFieldLineLimits::default(),
             show_keyboard_on_focus: true,
+            keyboard_options: KeyboardOptions::default(),
+            on_keyboard_action: None,
         }
     }
 }
@@ -360,6 +369,7 @@ fn TextFieldNode(
         .with_cursor_color(options.cursor_color)
         .with_line_limits(options.line_limits)
         .with_show_keyboard_on_focus(options.show_keyboard_on_focus)
+        .with_keyboard(options.keyboard_options, options.on_keyboard_action)
         .with_handle_controller(controller.clone())
         .with_modal_depth(modal_depth);
     if let Some(refs) = decorator {

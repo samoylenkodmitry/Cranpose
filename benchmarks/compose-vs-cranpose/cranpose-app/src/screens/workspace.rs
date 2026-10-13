@@ -1306,6 +1306,7 @@ fn SearchBox(modifier: Modifier) {
             cursor_color: Color::TRANSPARENT,
             line_limits: TextFieldLineLimits::SingleLine,
             show_keyboard_on_focus: false,
+            ..BasicTextFieldOptions::default()
         },
         move |scope| {
             Box(

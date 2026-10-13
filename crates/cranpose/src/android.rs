@@ -154,8 +154,6 @@ fn system_theme_from_android(
     }
 }
 
-const IME_ACTION_DONE: i32 = 6;
-
 fn drain_accessibility_activations(
     shell: &mut AppShell<WgpuRenderer>,
     elements: &crate::accessibility::AccessibilitySnapshot,
@@ -357,23 +355,7 @@ fn dispatch_android_ime_event(shell: &mut AppShell<WgpuRenderer>, event: Android
             }
         }
         AndroidImeEvent::EditorAction { action } => {
-            if action == IME_ACTION_DONE {
-                let _ = shell.on_ime_finish_composing();
-                shell.clear_text_field_focus();
-            } else {
-                for event_type in [
-                    cranpose_app_shell::KeyEventType::KeyDown,
-                    cranpose_app_shell::KeyEventType::KeyUp,
-                ] {
-                    let key = KeyEvent::new(
-                        cranpose_app_shell::KeyCode::Enter,
-                        "",
-                        cranpose_app_shell::Modifiers::NONE,
-                        event_type,
-                    );
-                    let _ = shell.on_key_event(&key);
-                }
-            }
+            let _ = shell.on_ime_action(crate::android_text_input::ime_action_from_android(action));
         }
         AndroidImeEvent::ImeInsetsChanged { bottom_px } => {
             if set_android_ime_bottom_px(bottom_px) {

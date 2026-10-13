@@ -242,10 +242,13 @@ impl<F: FnMut() + 'static> IosApp<F> {
                 crate::ios_keyboard::ImeOp::SetSelection(start, end) => {
                     shell.on_ime_set_selection(start, end);
                 }
+                crate::ios_keyboard::ImeOp::Action => {
+                    shell.on_ime_action(cranpose_ui::ImeAction::Default);
+                }
             }
         }
         if let Some(state) = shell.ime_editor_state() {
-            crate::ios_keyboard::set_mirror(state.text, state.selection_start, state.selection_end);
+            crate::ios_keyboard::set_mirror(state);
         }
         if let Some(geom) = shell.ime_caret_geometry() {
             crate::ios_keyboard::set_caret_geometry(geom);

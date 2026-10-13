@@ -12,6 +12,12 @@ use crate::{
     text_field_input::handle_key_event_impl,
 };
 
+/// The field's keyboard, as its latest composition set it.
+pub(crate) struct KeyboardRefs {
+    pub options: Rc<Cell<crate::KeyboardOptions>>,
+    pub action: Rc<RefCell<Option<crate::KeyboardActionHandler>>>,
+}
+
 #[derive(Clone)]
 pub(crate) struct CaretGeometryRefs {
     pub local_to_window: Rc<Cell<ProjectiveTransform>>,
@@ -26,6 +32,7 @@ pub(crate) struct TextFieldHandler {
     target_node: Option<cranpose_core::NodeId>,
     line_limits: TextFieldLineLimits,
     show_keyboard_on_focus: bool,
+    keyboard: KeyboardRefs,
     geometry: CaretGeometryRefs,
 }
 
@@ -36,6 +43,7 @@ impl TextFieldHandler {
         target_node: Option<cranpose_core::NodeId>,
         line_limits: TextFieldLineLimits,
         show_keyboard_on_focus: bool,
+        keyboard: KeyboardRefs,
         geometry: CaretGeometryRefs,
     ) -> Rc<Self> {
         Rc::new(Self {
@@ -44,8 +52,13 @@ impl TextFieldHandler {
             target_node,
             line_limits,
             show_keyboard_on_focus,
+            keyboard,
             geometry,
         })
+    }
+
+    fn single_line(&self) -> bool {
+        matches!(self.line_limits, TextFieldLineLimits::SingleLine)
     }
 
     fn on_text_mutated(&self) {
@@ -75,6 +88,10 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
 
         if event.event_type != KeyEventType::KeyDown {
             return false;
+        }
+
+        if event.key_code == crate::key_event::KeyCode::Enter && self.single_line() {
+            return self.perform_ime_action(crate::ImeAction::Default);
         }
 
         let consumed = handle_key_event_impl(&self.state, event, self.line_limits);
@@ -212,12 +229,37 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
     fn editor_state(&self) -> Option<crate::text_field_focus::ImeEditorState> {
         let value = self.state.value();
         Some(crate::text_field_focus::ImeEditorState {
-            text: value.text.clone(),
             selection_start: value.selection.min(),
             selection_end: value.selection.max(),
             composition: value.composition.map(|range| (range.min(), range.max())),
-            single_line: matches!(self.line_limits, TextFieldLineLimits::SingleLine),
+            text: value.text,
+            single_line: self.single_line(),
+            keyboard_options: self.keyboard.options.get(),
         })
+    }
+
+    /// Finishes any composition, then runs the field's resolved action: a
+    /// new line where that is [`ImeAction::None`](crate::ImeAction::None) in a
+    /// multi-line field, else its handler or default. A single-line field
+    /// whose action is `None` does nothing and leaves the press unhandled.
+    fn perform_ime_action(&self, action: crate::ImeAction) -> bool {
+        let field_action = self.keyboard.options.get().ime_action;
+        let action = match action {
+            crate::ImeAction::Default => field_action,
+            action => action,
+        }
+        .resolve(self.single_line());
+        self.finish_composition();
+        if action == crate::ImeAction::None {
+            if self.single_line() {
+                return false;
+            }
+            self.insert_text("\n");
+            return true;
+        }
+        let handler = self.keyboard.action.borrow().clone();
+        crate::keyboard_options::run_keyboard_action(action, handler.as_ref());
+        true
     }
 
     fn caret_geometry(&self) -> Option<ImeCaretGeometry> {
