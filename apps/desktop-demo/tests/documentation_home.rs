@@ -73,6 +73,33 @@ fn click_control(robot: &mut RobotTestRule<TestRenderer>, label: &str) -> bool {
     clicked
 }
 
+/// The guide's last section as the reader shows it: its title, its first
+/// line, and the words that end it.
+struct FinalSection {
+    title: &'static str,
+    lead: String,
+    ending: String,
+}
+
+fn final_guide_section() -> FinalSection {
+    let guide = include_str!("../../../docs/guide.md");
+    let (_, section) = guide.rsplit_once("\n## ").expect("the guide has sections");
+    let (title, body) = section
+        .split_once('\n')
+        .expect("the last section has a body");
+    let first_line = |text: &str| text.trim().trim_matches('*').replace('`', "");
+    let lead = body
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(first_line);
+    let ending = guide.trim_end().lines().last().map(first_line);
+    FinalSection {
+        title,
+        lead: lead.expect("the last section has a first line"),
+        ending: ending.expect("the guide has a last line"),
+    }
+}
+
 fn open_final_guide_section(robot: &mut RobotTestRule<TestRenderer>) {
     assert!(click_control(robot, "Welcome"));
     for _ in 1..include_str!("../../../docs/guide.md")
@@ -767,6 +794,7 @@ fn compact_reader_can_scroll_the_final_paragraph_above_the_pinned_repository_lin
         combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
     open_final_guide_section(&mut robot);
+    let ending = final_guide_section().ending;
     let mut previous_footer_y = None;
     let mut end_layout = None;
     let mut visible_labels = Vec::new();
@@ -782,7 +810,7 @@ fn compact_reader_can_scroll_the_final_paragraph_above_the_pinned_repository_lin
         let final_paragraph = rects.iter().find_map(|(bounds, label)| {
             label
                 .as_deref()
-                .filter(|label| label.contains("saved Rust value"))
+                .filter(|label| label.contains(&ending))
                 .map(|_| *bounds)
         });
         let footer = rects
@@ -814,19 +842,16 @@ fn compact_wheel_reveals_the_current_chapter_after_reading_to_the_end() {
         combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
     open_final_guide_section(&mut robot);
-    assert!(robot
-        .find_by_text("Place a platform control in your Cranpose layout.")
-        .exists());
+    let section = final_guide_section();
+    assert!(robot.find_by_text(&section.lead).exists());
     assert!(click_control(&mut robot, "Back to wheel"));
     let current = semantic_bounds(
         &cranpose_testing::placed_semantics_from_shell(robot.shell_mut()).expect("current wheel"),
-        "Native views",
+        section.title,
     );
     assert!(current.y >= 0.0 && current.y + current.height <= 780.0);
-    assert!(click_control(&mut robot, "Native views"));
-    assert!(robot
-        .find_by_text("Place a platform control in your Cranpose layout.")
-        .exists());
+    assert!(click_control(&mut robot, section.title));
+    assert!(robot.find_by_text(&section.lead).exists());
 }
 
 #[test]
