@@ -45,7 +45,7 @@ pub fn UnhandledKeyEvents(handler: impl Fn(&KeyEvent) -> bool + 'static) {
             state.unhandled_key_handlers.borrow_mut().push((id, latest));
         });
         scope.on_dispose(move || {
-            crate::thread_state::with(|state| {
+            crate::thread_state::try_with(|state| {
                 state
                     .unhandled_key_handlers
                     .borrow_mut()

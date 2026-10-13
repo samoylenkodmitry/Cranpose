@@ -96,7 +96,7 @@ pub(crate) fn with_current_core<R>(f: impl FnOnce(&ComposerCore) -> R) -> Option
     if !any_composer_installed() {
         return None;
     }
-    thread_state::runtimes(|state| state.current_composer.borrow().as_deref().map(f))
+    thread_state::try_runtimes(|state| state.current_composer.borrow().as_deref().map(f)).flatten()
 }
 
 /// Return the current thread's composer.
@@ -104,10 +104,11 @@ pub fn current_composer() -> Option<Composer> {
     if !any_composer_installed() {
         return None;
     }
-    thread_state::runtimes(|state| {
+    thread_state::try_runtimes(|state| {
         let core = state.current_composer.borrow().as_ref()?.clone();
         Some(Composer::from_core(core))
     })
+    .flatten()
 }
 
 pub fn note_nested_slots_host(host: &std::rc::Rc<crate::SlotsHost>) {

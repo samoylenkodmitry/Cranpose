@@ -222,7 +222,7 @@ pub struct AppContextScope;
 
 impl Drop for AppContextScope {
     fn drop(&mut self) {
-        crate::thread_state::with(|state| {
+        crate::thread_state::try_with(|state| {
             state.app_context_stack.borrow_mut().pop();
         });
     }

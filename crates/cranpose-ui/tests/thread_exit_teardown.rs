@@ -1,58 +1,120 @@
-use std::{rc::Rc, sync::mpsc};
+use std::{
+    cell::RefCell,
+    future::pending,
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+};
 
 use cranpose_core::{
-    Composition, DisposableEffect, LaunchedEffectAsync, MemoryApplier, OwnedMutableState,
-    location_key, mutableStateOf, ownedMutableStateOf, remember, rememberCoroutineScope,
-    rememberEventStream, rememberMutableStateOf, snapshot_v2::register_apply_observer,
+    Composition, DisposableEffect, EventSender, LaunchedEffectAsync, MemoryApplier,
+    OwnedMutableState, location_key, mutableStateOf, ownedMutableStateOf, remember,
+    rememberCoroutineScope, rememberEventStream, rememberMutableStateOf, schedule_frame,
+    snapshot_v2::register_apply_observer,
+};
+use cranpose_foundation::{
+    lazy::{LazyListScope, rememberLazyListState},
+    text::TextFieldState,
 };
 use cranpose_ui::{
     Modifier, TestComposition, Text, TextStyle, UnhandledKeyEvents, announce, measure_layout,
     run_test_composition,
     widgets::{
-        box_widget::{Box, BoxSpec},
-        column::{Column, ColumnSpec},
+        animated_visibility::{AnimatedVisibility, EnterTransition, ExitTransition},
+        basic_text_field::BasicTextField,
+        icon::IconButton,
+        lazy_list::{LazyColumn, LazyColumnSpec},
+        scaffold::Scaffold,
+        slider::{Slider, SliderSpec},
+        spacer::Spacer,
     },
 };
 use cranpose_ui_graphics::Size;
 
-fn screen() {
+thread_local! {
+    static HELD_SCREEN: RefCell<Option<TestComposition>> = const { RefCell::new(None) };
+    static HELD_COMPOSITION: RefCell<Option<Composition<MemoryApplier>>> =
+        const { RefCell::new(None) };
+}
+
+fn live_state() {
     let count = rememberMutableStateOf(|| 0u32);
     let holder = remember(|| ownedMutableStateOf(String::from("held")));
-    rememberCoroutineScope().launch(std::future::pending());
-    let _events = rememberEventStream::<u32, _, _, _>((), |_sender| ());
+    rememberCoroutineScope().launch(pending());
+    let _events = rememberEventStream((), |_: EventSender<u32>| ());
+    LaunchedEffectAsync((), |_| std::boxed::Box::pin(pending()));
     DisposableEffect((), move |scope| {
         let _ = holder.with(|state| state.value());
-        scope.on_dispose(move || count.set(1))
+        scope.on_dispose(move || {
+            count.set(1);
+            schedule_frame();
+        })
     });
-    LaunchedEffectAsync((), |_| std::boxed::Box::pin(std::future::pending()));
-    Column(
-        Modifier::empty().fill_max_width().clip_to_bounds(),
-        ColumnSpec::default(),
+}
+
+fn screen() {
+    live_state();
+    UnhandledKeyEvents(|_| false);
+    announce("left behind");
+    Scaffold(
+        Modifier::empty().clip_to_bounds(),
         || {
+            IconButton(Modifier::empty(), "Close", || {}, || {});
+        },
+        || {
+            Slider(
+                Modifier::empty().size(Size::new(200.0, 48.0)),
+                0.5,
+                |_value| {},
+                || {},
+                SliderSpec::default(),
+                |_scope| {},
+            );
+        },
+        |_padding| {
             Text(
                 "left behind",
                 Modifier::empty().fill_max_width(),
                 TextStyle::default(),
             );
-            Box(
-                Modifier::empty().fill_max_size().height(10.0),
-                BoxSpec::default(),
-                || {},
+            BasicTextField(
+                TextFieldState::new("hello world"),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+            AnimatedVisibility(
+                true,
+                EnterTransition::none(),
+                ExitTransition::none(),
+                || {
+                    Spacer(Modifier::empty().size_points(5.0, 5.0));
+                },
+            );
+            LazyColumn(
+                Modifier::empty().fill_max_size(),
+                rememberLazyListState(),
+                LazyColumnSpec::default(),
+                |scope| {
+                    scope.items(20, |_index| {
+                        Spacer(Modifier::empty().size_points(50.0, 20.0));
+                    });
+                },
             );
         },
     );
-    UnhandledKeyEvents(|_| false);
-    announce("left behind");
 }
 
-fn composed_with_state_left_behind() -> TestComposition {
+fn composed_screen() -> TestComposition {
     let mut composition = run_test_composition(screen);
     let root = composition.root().expect("a composed root");
     let handle = composition.runtime_handle();
     {
         let mut applier = composition.applier_mut();
         applier.set_runtime_handle(handle);
-        measure_layout(&mut applier, root, Size::new(200.0, 400.0)).expect("the screen measures");
+        measure_layout(&mut applier, root, Size::new(400.0, 800.0)).expect("the screen measures");
         applier.clear_runtime_handle();
     }
     let observed: OwnedMutableState<u32> = ownedMutableStateOf(7);
@@ -61,6 +123,20 @@ fn composed_with_state_left_behind() -> TestComposition {
     })));
     let pending = mutableStateOf(None::<OwnedMutableState<u32>>);
     pending.set(Some(ownedMutableStateOf(9)));
+    composition
+}
+
+fn held_composition(disposed: &Arc<AtomicBool>) -> Composition<MemoryApplier> {
+    let mut composition = Composition::new(MemoryApplier::new());
+    composition
+        .render(location_key(file!(), line!(), column!()), &mut || {
+            live_state();
+            let disposed = Arc::clone(disposed);
+            DisposableEffect((), move |scope| {
+                scope.on_dispose(move || disposed.store(true, Ordering::Release))
+            });
+        })
+        .expect("the composition renders");
     composition
 }
 
@@ -83,12 +159,62 @@ fn exit_while_another_thread_composes(body: impl FnOnce() + Send + 'static) {
         .expect("the joining composition renders");
 }
 
-#[test]
-fn a_thread_that_drops_its_composition_exits_with_framework_state_left_behind() {
-    exit_while_another_thread_composes(|| drop(composed_with_state_left_behind()));
+fn hold_composition_at_thread_exit(before_hold: fn()) {
+    let disposed = Arc::new(AtomicBool::new(false));
+    let held_disposed = Arc::clone(&disposed);
+    exit_while_another_thread_composes(move || {
+        before_hold();
+        let composition = held_composition(&held_disposed);
+        HELD_COMPOSITION.with(|held| *held.borrow_mut() = Some(composition));
+    });
+    assert!(
+        disposed.load(Ordering::Acquire),
+        "thread exit runs the held composition's dispose callbacks"
+    );
+}
+
+fn hold_screen_at_thread_exit(before_hold: fn()) {
+    exit_while_another_thread_composes(move || {
+        before_hold();
+        let screen = composed_screen();
+        HELD_SCREEN.with(|held| *held.borrow_mut() = Some(screen));
+    });
 }
 
 #[test]
-fn a_thread_exits_while_its_composition_is_still_alive() {
-    exit_while_another_thread_composes(|| std::mem::forget(composed_with_state_left_behind()));
+fn a_thread_that_drops_its_screen_exits_with_framework_state_left_behind() {
+    exit_while_another_thread_composes(|| drop(composed_screen()));
+}
+
+#[test]
+fn a_thread_exits_while_its_screen_is_still_alive() {
+    exit_while_another_thread_composes(|| std::mem::forget(composed_screen()));
+}
+
+#[test]
+fn a_composition_held_in_a_thread_local_touched_first_drops_at_thread_exit() {
+    hold_composition_at_thread_exit(|| {
+        HELD_COMPOSITION.with(|held| assert!(held.borrow().is_none()));
+    });
+}
+
+#[test]
+fn a_composition_held_in_a_thread_local_touched_after_another_runtime_drops_at_thread_exit() {
+    hold_composition_at_thread_exit(|| {
+        drop(Composition::new(MemoryApplier::new()));
+        HELD_COMPOSITION.with(|held| assert!(held.borrow().is_none()));
+    });
+}
+
+#[test]
+fn a_screen_held_in_a_thread_local_touched_first_drops_at_thread_exit() {
+    hold_screen_at_thread_exit(|| HELD_SCREEN.with(|held| assert!(held.borrow().is_none())));
+}
+
+#[test]
+fn a_screen_held_in_a_thread_local_touched_after_another_screen_drops_at_thread_exit() {
+    hold_screen_at_thread_exit(|| {
+        drop(run_test_composition(|| {}));
+        HELD_SCREEN.with(|held| assert!(held.borrow().is_none()));
+    });
 }

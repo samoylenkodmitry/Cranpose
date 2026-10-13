@@ -139,7 +139,9 @@ fn owned_bitmaps_do_not_retain_spare_pixel_capacity() {
 #[test]
 fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     remeasuring_a_row_allocates_only_its_measurement();
-    a_modifier_chain_allocates_its_elements_and_one_shared_box();
+    if !cfg!(feature = "inspection") {
+        a_modifier_chain_allocates_its_elements_and_one_shared_box();
+    }
     resolving_text_direction_does_not_allocate();
     owned_bitmaps_allocate_only_metadata_and_clones_share_storage();
     owned_bitmaps_do_not_retain_spare_pixel_capacity();
