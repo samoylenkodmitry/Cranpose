@@ -128,6 +128,7 @@ pub(crate) const CLEAR_COLOR: wgpu::Color = wgpu::Color {
 };
 const MAX_TEXTURE_CACHE_ITEMS: usize = 256;
 const MAX_IMAGE_TEXTURE_CACHE_BYTES: usize = 256 * 1024 * 1024;
+const MAX_EXTERNAL_TEXTURE_BINDINGS: usize = 8;
 
 const DEFAULT_WGPU_RENDER_STAGE_TELEMETRY_THRESHOLD_MS: f64 = 4.0;
 
@@ -2335,20 +2336,24 @@ fn survive_gpu_errors_enabled() -> bool {
 }
 
 struct CachedImageTexture {
-    alpha_mask: bool,
+    bind_groups: ImageBindGroups,
     _texture: wgpu::Texture,
     _view: wgpu::TextureView,
-    nearest_bind_group: wgpu::BindGroup,
-    linear_bind_group: wgpu::BindGroup,
     bytes: usize,
 }
 
-impl CachedImageTexture {
+struct ImageBindGroups {
+    alpha_mask: bool,
+    nearest: wgpu::BindGroup,
+    linear: wgpu::BindGroup,
+}
+
+impl ImageBindGroups {
     fn binding(&self, sampling: ImageSampling) -> ImageBinding {
         ImageBinding {
             bind_group: match sampling {
-                ImageSampling::Nearest => self.nearest_bind_group.clone(),
-                ImageSampling::Linear => self.linear_bind_group.clone(),
+                ImageSampling::Nearest => self.nearest.clone(),
+                ImageSampling::Linear => self.linear.clone(),
             },
             alpha_mask: self.alpha_mask,
         }
@@ -3342,6 +3347,7 @@ pub struct GpuRenderer {
     run_store: RunStore,
     image_texture_cache: BoundedLruCache<u64, CachedImageTexture>,
     image_texture_cache_bytes: usize,
+    external_texture_bindings: BoundedLruCache<u64, ImageBindGroups>,
     text_image_cache: BoundedLruCache<TextImageCacheKey, CachedTextImage>,
     text_glyph_atlas: TextGlyphAtlas,
     text_glyph_run_cache: BoundedLruCache<TextGlyphRunCacheKey, CachedTextGlyphRun>,
@@ -3716,6 +3722,9 @@ impl GpuRenderer {
                 MAX_TEXTURE_CACHE_ITEMS,
             ),
             image_texture_cache_bytes: 0,
+            external_texture_bindings: BoundedLruCache::with_capacity_at_least_one(
+                MAX_EXTERNAL_TEXTURE_BINDINGS,
+            ),
             text_image_cache: BoundedLruCache::with_capacity_at_least_one(
                 MAX_TEXT_IMAGE_CACHE_ITEMS,
             ),
@@ -4188,8 +4197,11 @@ impl GpuRenderer {
         image: &ImageBitmap,
         sampling: ImageSampling,
     ) -> Result<ImageBinding, String> {
+        if image.format() == cranpose_ui_graphics::ImagePixelFormat::External {
+            return self.external_texture_binding(image, sampling);
+        }
         if let Some(cached) = self.image_texture_cache.get(&image.id()) {
-            return Ok(cached.binding(sampling));
+            return Ok(cached.bind_groups.binding(sampling));
         }
 
         let size = wgpu::Extent3d {
@@ -4238,19 +4250,14 @@ impl GpuRenderer {
         self.frame_stats.record_command_stats(upload_stats);
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let nearest_bind_group = self.image_bind_group(&view, &self.image_nearest_sampler);
-        let linear_bind_group = self.image_bind_group(&view, &self.image_linear_sampler);
-
         let bytes = image.pixels().len();
         let cached = CachedImageTexture {
-            alpha_mask,
+            bind_groups: self.image_bind_groups(&view, alpha_mask),
             _texture: texture,
             _view: view,
-            nearest_bind_group,
-            linear_bind_group,
             bytes,
         };
-        let binding = cached.binding(sampling);
+        let binding = cached.bind_groups.binding(sampling);
         if let Some(replaced) = self.image_texture_cache.put(image.id(), cached) {
             self.image_texture_cache_bytes = self
                 .image_texture_cache_bytes
@@ -4267,6 +4274,32 @@ impl GpuRenderer {
                 self.image_texture_cache_bytes.saturating_sub(evicted.bytes);
         }
         Ok(binding)
+    }
+
+    fn external_texture_binding(
+        &mut self,
+        image: &ImageBitmap,
+        sampling: ImageSampling,
+    ) -> Result<ImageBinding, String> {
+        let key = image.storage_id();
+        if let Some(bind_groups) = self.external_texture_bindings.get(&key) {
+            return Ok(bind_groups.binding(sampling));
+        }
+        let view = image
+            .external_handle::<wgpu::TextureView>()
+            .ok_or("an external texture's handle is not a wgpu::TextureView")?;
+        let bind_groups = self.image_bind_groups(view, false);
+        let binding = bind_groups.binding(sampling);
+        self.external_texture_bindings.put(key, bind_groups);
+        Ok(binding)
+    }
+
+    fn image_bind_groups(&self, view: &wgpu::TextureView, alpha_mask: bool) -> ImageBindGroups {
+        ImageBindGroups {
+            alpha_mask,
+            nearest: self.image_bind_group(view, &self.image_nearest_sampler),
+            linear: self.image_bind_group(view, &self.image_linear_sampler),
+        }
     }
 
     fn image_bind_group(

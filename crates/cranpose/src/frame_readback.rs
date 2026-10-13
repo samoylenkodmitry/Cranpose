@@ -53,6 +53,7 @@ impl FrameTarget {
         }
     }
 
+    #[cfg(feature = "embed")]
     pub(crate) fn size(&self) -> (u32, u32) {
         (self.width, self.height)
     }

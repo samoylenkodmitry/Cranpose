@@ -184,6 +184,11 @@ pub struct AppSettings {
     /// Override the developer inspector default. Unset enables it in debug builds;
     /// installing a robot driver defaults it to disabled unless explicitly set.
     pub developer_inspector: Option<bool>,
+    /// What code that renders with Cranpose's device needs from it beyond
+    /// Cranpose's own requests. The desktop window and embedded views ask
+    /// for it.
+    #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+    pub gpu_requirements: crate::GpuRequirements,
     /// Development options for debugging and performance monitoring
     pub dev_options: cranpose_app_shell::DevOptions,
     /// Initial desktop frame pacing mode.
@@ -236,6 +241,8 @@ impl Default for AppSettings {
             android_overlay_window: None,
             headless: false,
             developer_inspector: None,
+            #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+            gpu_requirements: crate::GpuRequirements::default(),
             dev_options: cranpose_app_shell::DevOptions::default(),
             #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
             frame_pacing_mode: FramePacingMode::Vsync,
@@ -571,6 +578,32 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
         }
     }
 
+    /// Creates content that draws into textures on another program's GPU
+    /// device, such as a game engine's HUD, without starting an application.
+    ///
+    /// The host drives input, resizing and frames through the returned view.
+    /// Uses the launcher's fonts.
+    #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+    pub fn create_guest_view(
+        self,
+        gpu: &crate::GpuContext,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+        density: f32,
+        content: impl FnMut() + 'static,
+    ) -> Result<crate::GuestView, crate::GuestViewError> {
+        crate::GuestView::new(
+            &self.into_settings(),
+            gpu,
+            format,
+            width,
+            height,
+            density,
+            content,
+        )
+    }
+
     /// Creates content inside a native host without starting an application.
     ///
     /// The host drives input, resizing and frames through the returned component.
@@ -636,6 +669,15 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
     /// * `application_id` - for example `com.example.notes`.
     pub fn with_application_id(mut self, application_id: impl Into<String>) -> Self {
         self.settings.application_id = Some(application_id.into());
+        self
+    }
+
+    /// Ask Cranpose's GPU device for what code rendering with it needs, such
+    /// as a game engine drawing into textures the composition shows. The
+    /// desktop window and embedded views ask for it.
+    #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+    pub fn with_gpu_requirements(mut self, requirements: crate::GpuRequirements) -> Self {
+        self.settings.gpu_requirements = requirements;
         self
     }
 

@@ -696,7 +696,10 @@ fn draw_image(target: &mut Target, draw: &ImageDraw, diagnostics: &RenderDiagnos
 
     let img_width = draw.image.width();
     let img_height = draw.image.height();
-    if img_width == 0 || img_height == 0 {
+    if img_width == 0
+        || img_height == 0
+        || draw.image.format() == cranpose_ui_graphics::ImagePixelFormat::External
+    {
         return;
     }
 
