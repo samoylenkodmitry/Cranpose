@@ -114,6 +114,7 @@ use crate::{
     composable,
     density::Density,
     fling_animation::FlingAnimation,
+    layout_direction::LayoutDirection,
     modifier::{GraphicsLayer, Modifier, PointerEventKind, PointerInputScope, TransformOrigin},
     round_scaling_list::{
         CentreAnchor, PlacedRow, ScaleAlpha, ScalingParams, leading_auto_centring_spacer,
@@ -124,7 +125,7 @@ use crate::{
         MeasurePolicy as SubcomposeMeasurePolicy, SubcomposeChild, SubcomposeLayoutNode,
         SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,
     },
-    widgets::Layout,
+    widgets::{Layout, PaddingValues},
 };
 
 /// The channel one item's scale and alpha travel down.
@@ -326,8 +327,8 @@ impl IndicatorState {
                 item.index += base;
             }
         }
-        let mut before = density.to_px(density.dp(spec.content_padding_top));
-        let mut after = density.to_px(density.dp(spec.content_padding_bottom));
+        let mut before = density.to_px(density.dp(spec.content_padding.top));
+        let mut after = density.to_px(density.dp(spec.content_padding.bottom));
         if let Some(anchor) = spec.auto_centering {
             let index = anchor.index.min(count - 1);
             let spacing = density.dp(spec.item_spacing);
@@ -753,10 +754,10 @@ pub struct WearScalingLazyColumnSpec {
     pub scaling: ScalingParams,
     /// `Arrangement.spacedBy(4.dp)`, Wear's default.
     pub item_spacing: f32,
-    pub content_padding_start: f32,
-    pub content_padding_end: f32,
-    pub content_padding_top: f32,
-    pub content_padding_bottom: f32,
+    /// Compose's `contentPadding`: the top and bottom edges add space before
+    /// the first item and after the last, the start and end edges inset every
+    /// item.
+    pub content_padding: PaddingValues,
     /// Which item sits on the centre line at rest. `None` places the content
     /// from the top instead, which is what `autoCentering = null` does.
     pub auto_centering: Option<CentreAnchor>,
@@ -784,10 +785,7 @@ impl Default for WearScalingLazyColumnSpec {
         Self {
             scaling: ScalingParams::WEAR,
             item_spacing: 4.0,
-            content_padding_start: 0.0,
-            content_padding_end: 0.0,
-            content_padding_top: 0.0,
-            content_padding_bottom: 0.0,
+            content_padding: PaddingValues::default(),
             auto_centering: Some(CentreAnchor::default()),
             compositing_strategy: CompositingStrategy::Auto,
             beyond_bounds_item_count: 2,
@@ -796,11 +794,9 @@ impl Default for WearScalingLazyColumnSpec {
 }
 
 impl WearScalingLazyColumnSpec {
-    pub fn content_padding(mut self, horizontal: f32, vertical: f32) -> Self {
-        self.content_padding_start = horizontal;
-        self.content_padding_end = horizontal;
-        self.content_padding_top = vertical;
-        self.content_padding_bottom = vertical;
+    /// Pads the content on all four edges, as Compose's `contentPadding`.
+    pub fn content_padding(mut self, padding: PaddingValues) -> Self {
+        self.content_padding = padding;
         self
     }
 
@@ -1153,7 +1149,7 @@ impl MeasurePolicy for WearItemMeasurePolicy {
 /// WearScalingLazyColumn(
 ///     Modifier::empty().fill_max_size(),
 ///     state.clone(),
-///     WearScalingLazyColumnSpec::default().content_padding(18.0, 34.0),
+///     WearScalingLazyColumnSpec::default().content_padding(PaddingValues::symmetric(18.0, 34.0)),
 ///     |scope| {
 ///         scope.item(|| ListHeader(Modifier::empty(), header_spec, || Text(...)));
 ///         scope.items(rows.len(), move |index| { ... });
@@ -1187,11 +1183,12 @@ where
 /// composition, so they travel in a cell rather than in a policy value. The
 /// policy itself is remembered once and never rebuilt, which is what lets the
 /// slot table survive from frame to frame.
-#[derive(Default)]
+#[derive(Default, PartialEq)]
 struct WearScalingListInputs {
     spec: WearScalingLazyColumnSpec,
     anchor: CentreAnchor,
     content: WearScalingListContent,
+    direction: LayoutDirection,
 }
 
 /// The node half of [`WearScalingLazyColumn`], with its items already declared.
@@ -1224,14 +1221,18 @@ pub fn WearScalingLazyColumnNode(
     transforms
         .borrow_mut()
         .resize_with(content.items.len(), WearItemTransform::new);
+    let direction = crate::layout_direction();
     let inputs_changed = {
         let mut current = inputs.borrow_mut();
-        let changed =
-            current.spec != spec || current.anchor != anchor || current.content != content;
+        let next = WearScalingListInputs {
+            spec,
+            anchor,
+            content,
+            direction,
+        };
+        let changed = *current != next;
         if changed {
-            current.spec = spec;
-            current.anchor = anchor;
-            current.content = content;
+            *current = next;
         }
         changed
     };
@@ -1283,7 +1284,7 @@ pub fn WearScalingLazyColumnNode(
         node.set_measure_policy(Rc::clone(&policy));
         node.set_captured_context(captured_context);
         node.set_density(composed_density);
-        node.set_layout_direction(crate::layout_direction());
+        node.set_layout_direction(direction);
         if inputs_changed {
             node.invalidate_subcomposition();
         }
@@ -1361,7 +1362,7 @@ fn measure_wear_scaling_list(
         constraints.min_height
     };
 
-    let inset = density.dp(spec.content_padding_start) + density.dp(spec.content_padding_end);
+    let inset = density.dp(spec.content_padding.start) + density.dp(spec.content_padding.end);
     let item_width = (width - inset).max(0.0);
     let child_constraints = Constraints {
         min_width: 0.0,
@@ -1409,7 +1410,7 @@ fn measure_wear_scaling_list(
     );
 
     let anchored_top = if top_aligned {
-        density.dp(spec.content_padding_top)
+        density.dp(spec.content_padding.top)
     } else {
         round_to_px(
             viewport * 0.5 - anchored.height * 0.5 - anchor.offset,
@@ -1501,7 +1502,7 @@ fn measure_wear_scaling_list(
     window.sort_unstable_by_key(|row| row.index);
 
     let composed = window.len();
-    let left = density.dp(spec.content_padding_start);
+    let left = density.dp(spec.content_padding.physical(inputs.direction).left);
     let mut visible = 0usize;
     let result = {
         let handles = transforms.borrow();

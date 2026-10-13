@@ -10,7 +10,7 @@ use cranpose_ui::{
         WearButtonSpec, WearColors, WearScalingLazyColumn, WearScalingLazyColumnSpec,
         WearScalingListState, WearTextStyle,
     },
-    Alignment, Box as CranposeBox, BoxSpec, Color, Modifier, Size, Text,
+    Alignment, Box as CranposeBox, BoxSpec, Color, Modifier, PaddingValues, Size, Text,
 };
 
 const WATCH: f32 = 454.0;
@@ -185,7 +185,8 @@ pub fn wear_tab() {
                     WearScalingLazyColumn(
                         Modifier::empty().fill_max_size(),
                         list,
-                        WearScalingLazyColumnSpec::default().content_padding(SIDE, VERTICAL),
+                        WearScalingLazyColumnSpec::default()
+                            .content_padding(PaddingValues::symmetric(SIDE, VERTICAL)),
                         move |scope| {
                             let rows = rows();
                             let types = rows.iter().map(Row::content_type).collect::<Vec<_>>();

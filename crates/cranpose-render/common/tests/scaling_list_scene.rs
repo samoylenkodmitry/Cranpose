@@ -11,7 +11,7 @@ use cranpose_render_common::{
     scene_builder::build_graph_from_applier,
 };
 use cranpose_ui::{
-    Color, LayoutEngine, Modifier, Size, Text,
+    Color, LayoutEngine, Modifier, PaddingValues, Size, Text,
     round_scaling_list::CentreAnchor,
     widgets::{
         BoxSpec,
@@ -59,7 +59,8 @@ fn scaling_list_scene() -> LayerNode {
         WearScalingLazyColumn(
             Modifier::empty().fill_max_size(),
             state,
-            WearScalingLazyColumnSpec::default().content_padding(18.0, 34.0),
+            WearScalingLazyColumnSpec::default()
+                .content_padding(PaddingValues::symmetric(18.0, 34.0)),
             |scope| {
                 scope.items(
                     LazyItems::new(ROWS.len()).key(|index: usize| index as u64),
@@ -140,7 +141,8 @@ fn tappable_list_scene(count: usize) -> (Scene, Vec<usize>, Rc<RefCell<Vec<usize
         WearScalingLazyColumn(
             Modifier::empty().fill_max_size(),
             state,
-            WearScalingLazyColumnSpec::default().content_padding(18.0, 34.0),
+            WearScalingLazyColumnSpec::default()
+                .content_padding(PaddingValues::symmetric(18.0, 34.0)),
             move |scope| {
                 scope.items(
                     LazyItems::new(count).key(|index: usize| index as u64),

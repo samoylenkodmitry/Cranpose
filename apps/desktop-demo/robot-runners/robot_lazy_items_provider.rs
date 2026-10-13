@@ -6,6 +6,7 @@ use cranpose_foundation::lazy::{rememberLazyListState, LazyListScopeExt, LazyLis
 use cranpose_macros::composable;
 use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::{
+    PaddingValues,
     widgets::*, Color, ColumnSpec, LinearArrangement, Modifier, RowSpec, TextStyle,
     VerticalAlignment,
 };
@@ -28,7 +29,7 @@ fn lazy_list_with_provider(state: LazyListState, data: Rc<Vec<ProviderItem>>) {
         state,
         LazyColumnSpec::new()
             .vertical_arrangement(LinearArrangement::SpacedBy(4.0))
-            .content_padding(8.0, 8.0),
+            .content_padding(PaddingValues::symmetric(0.0, 8.0)),
         |scope| {
             let data_clone = Rc::clone(&data);
             scope.items_with_provider(
@@ -54,7 +55,7 @@ fn lazy_list_with_indexed_provider(state: LazyListState, data: Rc<Vec<ProviderIt
         state,
         LazyColumnSpec::new()
             .vertical_arrangement(LinearArrangement::SpacedBy(4.0))
-            .content_padding(8.0, 8.0),
+            .content_padding(PaddingValues::symmetric(0.0, 8.0)),
         |scope| {
             let data_clone = Rc::clone(&data);
             scope.items_indexed_with_provider(

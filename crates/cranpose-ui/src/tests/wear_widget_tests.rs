@@ -49,7 +49,8 @@ fn measured_colors() -> WearColors {
 }
 
 fn settings_spec() -> WearScalingLazyColumnSpec {
-    WearScalingLazyColumnSpec::default().content_padding(SETTINGS_SIDE, SCREEN_VERTICAL)
+    WearScalingLazyColumnSpec::default()
+        .content_padding(PaddingValues::symmetric(SETTINGS_SIDE, SCREEN_VERTICAL))
 }
 
 type CapturedListState = Rc<RefCell<Option<WearScalingListState>>>;
@@ -641,7 +642,8 @@ fn header_and_rows() -> Vec<f32> {
 }
 
 fn indicator_at_vertical_padding(vertical: f32) -> IndicatorGeometry {
-    let spec = WearScalingLazyColumnSpec::default().content_padding(SETTINGS_SIDE, vertical);
+    let spec = WearScalingLazyColumnSpec::default()
+        .content_padding(PaddingValues::symmetric(SETTINGS_SIDE, vertical));
     let (mut composition, captured_state) = compose_fixed_rows(header_and_rows(), spec);
     let root = composition.root().expect("list root");
     let _ = tree(&mut composition, root);
@@ -869,7 +871,8 @@ fn compose_credits_screen() -> (TestComposition, CapturedListState) {
                     WearScalingLazyColumn(
                         Modifier::empty().fill_max_size(),
                         inner,
-                        WearScalingLazyColumnSpec::default().content_padding(30.0, SCREEN_VERTICAL),
+                        WearScalingLazyColumnSpec::default()
+                            .content_padding(PaddingValues::symmetric(30.0, SCREEN_VERTICAL)),
                         move |scope| {
                             let lines = [
                                 "ORBIT BREAKER",

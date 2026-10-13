@@ -17,7 +17,7 @@ use cranpose_ui::{
     text::{FontWeight, SpanStyle},
     widgets::{BoxWithConstraints, BoxWithConstraintsScope, LazyColumn, LazyColumnSpec},
     Brush, Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii, GraphicsLayer, LayerShape,
-    LinearArrangement, Modifier, RoundedCornerShape, Row, RowSpec, Text, TextStyle,
+    LinearArrangement, Modifier, PaddingValues, RoundedCornerShape, Row, RowSpec, Text, TextStyle,
     VerticalAlignment,
 };
 use serde::Deserialize;
@@ -1350,7 +1350,7 @@ fn StoriesPane(
                         list_state,
                         LazyColumnSpec::new()
                             .vertical_arrangement(LinearArrangement::SpacedBy(10.0))
-                            .content_padding(4.0, 4.0),
+                            .content_padding(PaddingValues::symmetric(0.0, 4.0)),
                         move |scope| match list_news_state_for_items.clone() {
                             NewsState::Idle => {
                                 scope.item_keyed(Some(0), None, move || {
@@ -1778,7 +1778,9 @@ fn ThreadPane(
                                                     .vertical_arrangement(
                                                         LinearArrangement::SpacedBy(10.0),
                                                     )
-                                                    .content_padding(4.0, 4.0),
+                                                    .content_padding(PaddingValues::symmetric(
+                                                        0.0, 4.0,
+                                                    )),
                                                 {
                                                     let comments = Arc::clone(&comments);
                                                     let data = data.clone();

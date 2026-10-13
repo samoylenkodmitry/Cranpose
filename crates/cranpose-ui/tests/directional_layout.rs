@@ -6,7 +6,7 @@ use cranpose_ui::{
 
 use crate::text_measured_layout_integration::layout_composition;
 
-fn tagged<'a>(node: &'a LayoutBox, tag: &str) -> &'a LayoutBox {
+pub(crate) fn tagged<'a>(node: &'a LayoutBox, tag: &str) -> &'a LayoutBox {
     fn find<'a>(node: &'a LayoutBox, tag: &str) -> Option<&'a LayoutBox> {
         if node
             .node_data

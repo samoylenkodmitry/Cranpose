@@ -6,6 +6,7 @@ use cranpose::{
 };
 use cranpose_testing::sample_screenshot_pixel_logical;
 use cranpose_ui::{
+    PaddingValues,
     round_scaling_list::CentreAnchor,
     widgets::wear::{
         rememberWearScalingListState, WearScalingLazyColumn, WearScalingLazyColumnSpec,
@@ -96,7 +97,7 @@ fn wear_list() {
     WearScalingLazyColumn(
         Modifier::empty().size(Size::new(454.0, 454.0)),
         state,
-        WearScalingLazyColumnSpec::default().content_padding(18.0, 34.0),
+        WearScalingLazyColumnSpec::default().content_padding(PaddingValues::symmetric(18.0, 34.0)),
         |scope| {
             scope.items(LazyItems::new(9).key(|index: usize| index as u64), |_| {
                 Box(

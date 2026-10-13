@@ -5,7 +5,7 @@ use cranpose_core::location_key;
 use cranpose_foundation::lazy::LazyItems;
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui::{
-    Color, Modifier,
+    Color, Modifier, PaddingValues,
     round_scaling_list::CentreAnchor,
     widgets::{
         Box, BoxSpec, Spacer,
@@ -73,7 +73,8 @@ fn render_faded_rows(fill: (f32, f32, f32)) -> Option<Probe> {
                 .fill_max_size()
                 .background(Color::from_rgb_u8(0, 0, 0)),
             state,
-            WearScalingLazyColumnSpec::default().content_padding(18.0, 34.0),
+            WearScalingLazyColumnSpec::default()
+                .content_padding(PaddingValues::symmetric(18.0, 34.0)),
             |scope| {
                 scope.items(
                     LazyItems::new(ROWS).key(|index: usize| index as u64),
@@ -203,7 +204,8 @@ fn a_real_faded_row_capsule_composites_through_the_layer_too() {
                 .fill_max_size()
                 .background(Color::from_rgb_u8(0, 0, 0)),
             state,
-            WearScalingLazyColumnSpec::default().content_padding(18.0, 34.0),
+            WearScalingLazyColumnSpec::default()
+                .content_padding(PaddingValues::symmetric(18.0, 34.0)),
             move |scope| {
                 scope.items(
                     LazyItems::new(WIDGET_ROWS).key(|index: usize| index as u64),

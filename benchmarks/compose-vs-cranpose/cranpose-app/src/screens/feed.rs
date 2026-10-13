@@ -70,7 +70,7 @@ pub fn FeedScreen(load: FeedLoad) {
         list_state,
         LazyColumnSpec::new()
             .vertical_arrangement(LinearArrangement::spaced_by(12.0 * s))
-            .content_padding(12.0 * s, 12.0 * s),
+            .content_padding(PaddingValues::symmetric(0.0, 12.0 * s)),
         move |scope| {
             let items = posts.clone();
             scope.items(

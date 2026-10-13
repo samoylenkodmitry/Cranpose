@@ -13,7 +13,9 @@ use cranpose_foundation::{
     text::TextFieldState,
     SemanticsConfiguration,
 };
-use cranpose_ui::{Alignment, HorizontalAlignment, LinearArrangement, VerticalAlignment};
+use cranpose_ui::{
+    Alignment, HorizontalAlignment, LinearArrangement, PaddingValues, VerticalAlignment,
+};
 
 pub const GLASS_FEED_LIST_TAG: &str = "GlassFeedList";
 
@@ -126,7 +128,7 @@ fn FeedList(list_state: LazyListState) {
         list_state,
         LazyColumnSpec::new()
             .vertical_arrangement(LinearArrangement::SpacedBy(CARD_SPACING))
-            .content_padding(CHROME_CLEARANCE, 24.0),
+            .content_padding(PaddingValues::new(0.0, CHROME_CLEARANCE, 0.0, 24.0)),
         move |scope| {
             scope.items(
                 LazyItems::new(FEED_ROWS).key(|index: usize| index as u64),

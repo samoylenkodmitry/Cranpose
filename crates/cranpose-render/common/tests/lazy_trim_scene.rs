@@ -9,7 +9,7 @@ use cranpose_render_common::{
     scene_builder::{build_graph_from_applier, update_graph_from_applier_report},
 };
 use cranpose_ui::{
-    LayoutEngine, LinearArrangement, Modifier, Size, Text, TextStyle,
+    LayoutEngine, LinearArrangement, Modifier, PaddingValues, Size, Text, TextStyle,
     widgets::{LazyColumn, LazyColumnSpec},
 };
 use scene_probe::painted_text;
@@ -30,7 +30,7 @@ fn TrimmableList(dropped: MutableState<usize>) {
         Modifier::empty().fill_max_size(),
         state,
         LazyColumnSpec::default()
-            .content_padding(100.0, 128.0)
+            .content_padding(PaddingValues::new(0.0, 100.0, 0.0, 128.0))
             .vertical_arrangement(LinearArrangement::spaced_by(12.0)),
         move |scope| {
             let bodies = visible.clone();
