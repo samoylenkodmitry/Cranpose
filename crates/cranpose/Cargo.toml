@@ -28,6 +28,8 @@ ignored = ["cranpose-render-pixels"]
 localized-arabic = ["dep:cranpose-fonts", "cranpose-fonts/arabic"]
 localized-devanagari = ["dep:cranpose-fonts", "cranpose-fonts/devanagari"]
 localized-cjk = ["dep:cranpose-fonts", "cranpose-fonts/cjk"]
+# Wrap Thai, Lao, Khmer and Burmese lines between words (ICU's dictionaries).
+southeast-asian-line-breaks = ["cranpose-ui/southeast-asian-line-breaks"]
 localization = ["cranpose-ui/localization", "cranpose-liquid/localization", "cranpose-services/localization", "dep:sys-locale", "text-shaping"]
 localization-formatting = ["localization", "cranpose-ui/localization-formatting"]
 text-shaping = ["cranpose-render-common/text-shaping"]

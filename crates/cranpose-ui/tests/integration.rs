@@ -23,6 +23,8 @@ mod text_measured_layout_integration;
 mod text_options_contract_integration;
 mod text_overflow_ellipsis_integration;
 mod text_prepared_cache_annotations_integration;
+#[cfg(feature = "southeast-asian-line-breaks")]
+mod thai_line_breaks;
 mod wear_list_and_painters;
 mod widget_composition;
 mod window_root_routing_scratch;
