@@ -1,9 +1,12 @@
 use std::sync::Arc;
 
-use cranpose_app_shell::{AppShell, default_root_key};
-use cranpose_render_wgpu::{WgpuRenderer, WgpuTextSystem};
+use cranpose_app_shell::AppShell;
+use cranpose_render_wgpu::WgpuRenderer;
 
-use crate::{AppSettings, frame_readback::FrameTarget, offscreen_instance::OFFSCREEN_INSTANCE};
+use crate::{
+    AppSettings, GpuContext, GuestView, GuestViewError, frame_readback::FrameTarget,
+    offscreen_instance::OFFSCREEN_INSTANCE,
+};
 
 const FRAME_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -43,16 +46,13 @@ pub enum EmbeddedViewError {
 ///
 /// [Self::draw] renders to a reusable GPU target and reads pixels only when
 /// changed. This portable adapter copies pixels; it is not a zero-copy native
-/// surface. Hosts with a Rust GPU integration can instead use
-/// `AppShell<WgpuRenderer>` to render directly into their texture.
+/// surface. Hosts with a Rust GPU integration draw into their own texture
+/// through [`GuestView`] instead.
 pub struct EmbeddedView {
-    shell: AppShell<WgpuRenderer>,
+    view: GuestView,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     target: FrameTarget,
-    dirty: bool,
-    visible: bool,
-    density: f32,
 }
 
 impl EmbeddedView {
@@ -67,7 +67,7 @@ impl EmbeddedView {
         density: f32,
         content: impl FnMut() + 'static,
     ) -> Result<Self, EmbeddedViewError> {
-        validate_size(width, height, density, u32::MAX)?;
+        validate_readback_size(width, height, density)?;
         let adapter = pollster::block_on(OFFSCREEN_INSTANCE.request_adapter(
             &wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::LowPower,
@@ -82,41 +82,27 @@ impl EmbeddedView {
                 memory_hints: crate::gpu_limits::mobile_memory_hints(),
                 ..Default::default()
             }))?;
-        validate_size(
+        let gpu = GpuContext {
+            instance: OFFSCREEN_INSTANCE.clone(),
+            adapter,
+            device: Arc::new(device),
+            queue: Arc::new(queue),
+        };
+        let view = GuestView::new(
+            settings,
+            &gpu,
+            FRAME_FORMAT,
             width,
             height,
             density,
-            device.limits().max_texture_dimension_2d,
-        )?;
-        let device = Arc::new(device);
-        let queue = Arc::new(queue);
-        let mut renderer = WgpuRenderer::with_text_system(WgpuTextSystem::from_font_set(
-            settings.resolve_font_set(),
-        ));
-        renderer.init_gpu(
-            Arc::clone(&device),
-            Arc::clone(&queue),
-            FRAME_FORMAT,
-            adapter.get_info().backend,
-            adapter.get_downlevel_capabilities().flags,
-        );
-        let shell = AppShell::new_with_size_and_density(
-            renderer,
-            default_root_key(),
             content,
-            (width, height),
-            (width as f32 / density, height as f32 / density),
-            density,
-        );
-        let target = FrameTarget::new(&device, width, height, FRAME_FORMAT);
+        )?;
+        let target = FrameTarget::new(&gpu.device, width, height, FRAME_FORMAT);
         Ok(Self {
-            shell,
-            device,
-            queue,
+            view,
+            device: gpu.device,
+            queue: gpu.queue,
             target,
-            dirty: true,
-            visible: true,
-            density,
         })
     }
 
@@ -126,7 +112,7 @@ impl EmbeddedView {
     /// honor `frame_schedule()` after each draw. Native controls keep their own
     /// touch, focus and accessibility handling.
     pub fn shell(&mut self) -> &mut AppShell<WgpuRenderer> {
-        &mut self.shell
+        self.view.shell()
     }
 
     /// Updates physical dimensions and density after native layout changes.
@@ -139,27 +125,10 @@ impl EmbeddedView {
         height: u32,
         density: f32,
     ) -> Result<(), EmbeddedViewError> {
-        validate_size(
-            width,
-            height,
-            density,
-            self.device.limits().max_texture_dimension_2d,
-        )?;
-        let size_changed = self.target.size() != (width, height);
-        let density_changed = self.density != density;
-        if !size_changed && !density_changed {
-            return Ok(());
-        }
-        if size_changed {
+        validate_readback_size(width, height, density)?;
+        if self.view.resize(width, height, density)? {
             self.target = FrameTarget::new(&self.device, width, height, FRAME_FORMAT);
         }
-        self.shell
-            .primary()
-            .set_viewport(width as f32 / density, height as f32 / density);
-        self.shell.set_density(density);
-        self.density = density;
-        self.shell.set_buffer_size(width, height);
-        self.dirty = true;
         Ok(())
     }
 
@@ -167,17 +136,7 @@ impl EmbeddedView {
     ///
     /// Becoming visible requests a fresh frame without destroying the composition.
     pub fn set_visible(&mut self, visible: bool) {
-        if self.visible == visible {
-            return;
-        }
-        self.visible = visible;
-        if visible {
-            self.shell.notify_app_resumed();
-            self.dirty = true;
-        } else {
-            self.shell.cancel_gesture();
-            self.shell.notify_app_paused();
-        }
+        self.view.set_visible(visible);
     }
 
     /// Advances the component and writes tightly packed premultiplied RGBA pixels.
@@ -187,44 +146,38 @@ impl EmbeddedView {
     /// The native host presents at [Self::pixel_size] and then reconciles native
     /// children using [crate::native_view::NativeViewHost::layout].
     pub fn draw(&mut self, pixels: &mut Vec<u8>) -> Result<bool, EmbeddedViewError> {
-        if !self.visible {
+        if !self.view.draw(self.target.texture(), self.target.view())? {
             return Ok(false);
         }
-        let update = self.shell.update();
-        let owed = self.shell.take_frame_owed();
-        if !(self.dirty || owed || update.visual_changed || self.shell.needs_redraw()) {
-            return Ok(false);
-        }
-        let (width, height) = self.target.size();
-        self.shell
-            .renderer()
-            .render(self.target.texture(), self.target.view(), width, height)
-            .map_err(|error| EmbeddedViewError::Render(format!("{error:?}")))?;
         self.target.read_into(&self.device, &self.queue, pixels)?;
-        self.dirty = false;
         Ok(true)
     }
 
     /// Physical dimensions of the image produced by [Self::draw].
     pub fn pixel_size(&self) -> (u32, u32) {
-        self.target.size()
+        self.view.pixel_size()
     }
 }
 
-fn validate_size(
-    width: u32,
-    height: u32,
-    density: f32,
-    limit: u32,
-) -> Result<(), EmbeddedViewError> {
-    if width == 0
-        || height == 0
-        || width > limit
-        || height > limit
-        || u64::from(width) * u64::from(height) > 16 * 1024 * 1024
-        || !density.is_finite()
-        || density <= 0.0
-    {
+impl From<GuestViewError> for EmbeddedViewError {
+    fn from(error: GuestViewError) -> Self {
+        match error {
+            GuestViewError::InvalidSize {
+                width,
+                height,
+                density,
+            } => Self::InvalidSize {
+                width,
+                height,
+                density,
+            },
+            GuestViewError::Render(message) => Self::Render(message),
+        }
+    }
+}
+
+fn validate_readback_size(width: u32, height: u32, density: f32) -> Result<(), EmbeddedViewError> {
+    if u64::from(width) * u64::from(height) > 16 * 1024 * 1024 {
         return Err(EmbeddedViewError::InvalidSize {
             width,
             height,

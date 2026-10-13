@@ -1,9 +1,14 @@
 //! Image bitmap primitives used by render backends.
 
 use std::{
+    any::Any,
     borrow::Cow,
     hash::{BuildHasher, Hash, Hasher},
-    sync::Arc,
+    panic::AssertUnwindSafe,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use thiserror::Error;
@@ -31,6 +36,9 @@ pub enum ImagePixelFormat {
         /// RGB channels shared by every pixel, including transparent pixels.
         color: [u8; 3],
     },
+    /// No pixels in memory: a GPU texture another renderer draws, made by
+    /// [`ExternalTexture`]. Software renderers draw it transparent.
+    External,
 }
 
 /// Immutable image data used by UI primitives and render backends.
@@ -46,8 +54,109 @@ struct ImageBitmapData {
     id: u64,
     opaque: bool,
     format: ImagePixelFormat,
-    pixels: Box<[u8]>,
+    storage: ImageStorage,
 }
+
+enum ImageStorage {
+    Pixels(Box<[u8]>),
+    External { key: u64, handle: ExternalHandle },
+}
+
+type ExternalHandle = Arc<AssertUnwindSafe<Box<dyn Any + Send + Sync>>>;
+
+impl std::fmt::Debug for ImageStorage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pixels(pixels) => write!(formatter, "Pixels({} bytes)", pixels.len()),
+            Self::External { key, .. } => write!(formatter, "External({key:#x})"),
+        }
+    }
+}
+
+/// A GPU texture that another renderer, such as a game engine, draws into,
+/// shown through Cranpose's image primitives.
+///
+/// The handle belongs to the renderer that draws the scene: the wgpu
+/// renderer draws a `wgpu::TextureView` and samples it as stored, so an sRGB
+/// texture needs a non-sRGB view. Software renderers draw it transparent.
+///
+/// Draw [`frame`](Self::frame) with the number of the texture's current
+/// content. Image ids include that number, so every cache keyed by an image
+/// id draws the new content once the number changes.
+#[derive(Clone)]
+pub struct ExternalTexture {
+    key: u64,
+    width: u32,
+    height: u32,
+    opaque: bool,
+    handle: ExternalHandle,
+}
+
+impl std::fmt::Debug for ExternalTexture {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ExternalTexture")
+            .field("key", &self.key)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ExternalTexture {
+    /// Wraps a renderer's texture handle of `width` by `height` pixels.
+    /// `opaque` promises that every pixel the texture holds has full alpha.
+    pub fn new(
+        width: u32,
+        height: u32,
+        opaque: bool,
+        handle: impl Any + Send + Sync,
+    ) -> Result<Self, ImageBitmapError> {
+        if width == 0 || height == 0 {
+            return Err(ImageBitmapError::InvalidDimensions);
+        }
+        let serial = NEXT_EXTERNAL_TEXTURE.fetch_add(1, Ordering::Relaxed);
+        let mut hasher = foldhash::quality::FixedState::default().build_hasher();
+        ImagePixelFormat::External.hash(&mut hasher);
+        serial.hash(&mut hasher);
+        Ok(Self {
+            key: hasher.finish(),
+            width,
+            height,
+            opaque,
+            handle: Arc::new(AssertUnwindSafe(Box::new(handle))),
+        })
+    }
+
+    /// The bitmap that draws content number `frame` of this texture.
+    pub fn frame(&self, frame: u64) -> ImageBitmap {
+        ImageBitmap {
+            data: Arc::new(ImageBitmapData {
+                width: self.width,
+                height: self.height,
+                id: self.key ^ frame.wrapping_mul(0x9E37_79B9_7F4A_7C15),
+                opaque: self.opaque,
+                format: ImagePixelFormat::External,
+                storage: ImageStorage::External {
+                    key: self.key,
+                    handle: Arc::clone(&self.handle),
+                },
+            }),
+        }
+    }
+
+    /// Width in pixels.
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Height in pixels.
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+}
+
+static NEXT_EXTERNAL_TEXTURE: AtomicU64 = AtomicU64::new(0);
 
 /// Texture sampling mode for image primitives.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -245,6 +354,7 @@ impl ImageBitmap {
         let expected = match format {
             ImagePixelFormat::Rgba8 => expected,
             ImagePixelFormat::Alpha8 { .. } => expected / 4,
+            ImagePixelFormat::External => 0,
         };
 
         let bytes = pixels.as_ref();
@@ -263,6 +373,7 @@ impl ImageBitmap {
                 .iter()
                 .all(|pixel| pixel[3] == u8::MAX),
             ImagePixelFormat::Alpha8 { .. } => bytes.iter().all(|alpha| *alpha == u8::MAX),
+            ImagePixelFormat::External => false,
         };
         Ok(Self {
             data: Arc::new(ImageBitmapData {
@@ -271,14 +382,32 @@ impl ImageBitmap {
                 id,
                 opaque,
                 format,
-                pixels: pixels.into(),
+                storage: ImageStorage::Pixels(pixels.into()),
             }),
         })
     }
 
-    /// Content-derived bitmap identity used by renderer caches.
+    /// Content-derived bitmap identity used by renderer caches. Each frame
+    /// of an [`ExternalTexture`] has its own id.
     pub fn id(&self) -> u64 {
         self.data.id
+    }
+
+    /// Identity of the bitmap's storage: the same for every frame of an
+    /// [`ExternalTexture`], equal to [`Self::id`] for pixel bitmaps.
+    pub fn storage_id(&self) -> u64 {
+        match &self.data.storage {
+            ImageStorage::External { key, .. } => *key,
+            ImageStorage::Pixels(_) => self.data.id,
+        }
+    }
+
+    /// The renderer handle of an [`ExternalTexture`] frame, when it is a `T`.
+    pub fn external_handle<T: 'static>(&self) -> Option<&T> {
+        match &self.data.storage {
+            ImageStorage::External { handle, .. } => handle.downcast_ref(),
+            ImageStorage::Pixels(_) => None,
+        }
     }
 
     /// Width in pixels.
@@ -291,9 +420,13 @@ impl ImageBitmap {
         self.data.height
     }
 
-    /// Returns the raw pixel bytes in [`Self::format`].
+    /// Returns the raw pixel bytes in [`Self::format`], empty for an
+    /// [`ExternalTexture`] frame.
     pub fn pixels(&self) -> &[u8] {
-        &self.data.pixels
+        match &self.data.storage {
+            ImageStorage::Pixels(pixels) => pixels,
+            ImageStorage::External { .. } => &[],
+        }
     }
 
     /// Returns the storage format of [`Self::pixels`].
@@ -301,7 +434,8 @@ impl ImageBitmap {
         self.data.format
     }
 
-    /// Returns the unpremultiplied RGBA8 pixel at a row-major index.
+    /// Returns the unpremultiplied RGBA8 pixel at a row-major index;
+    /// transparent for an [`ExternalTexture`] frame.
     ///
     /// # Panics
     /// Panics when `index` is outside the image.
@@ -309,13 +443,15 @@ impl ImageBitmap {
         match self.format() {
             ImagePixelFormat::Rgba8 => self.pixels().as_chunks::<4>().0[index],
             ImagePixelFormat::Alpha8 { color: [r, g, b] } => [r, g, b, self.pixels()[index]],
+            ImagePixelFormat::External => [0; 4],
         }
     }
 
-    /// Returns tightly packed RGBA8 bytes, borrowing RGBA images and expanding alpha masks.
+    /// Returns tightly packed RGBA8 bytes, borrowing RGBA images and expanding
+    /// alpha masks; empty for an [`ExternalTexture`] frame.
     pub fn rgba8_pixels(&self) -> Cow<'_, [u8]> {
         match self.format() {
-            ImagePixelFormat::Rgba8 => Cow::Borrowed(self.pixels()),
+            ImagePixelFormat::Rgba8 | ImagePixelFormat::External => Cow::Borrowed(self.pixels()),
             ImagePixelFormat::Alpha8 { color: [r, g, b] } => {
                 let mut pixels = Vec::with_capacity(self.pixels().len() * 4);
                 for &alpha in self.pixels() {
