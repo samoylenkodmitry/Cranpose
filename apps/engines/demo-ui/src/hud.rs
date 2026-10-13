@@ -5,17 +5,17 @@ use std::{
 
 use cranpose::{liquid::prelude::*, prelude::*};
 
-use crate::{Controls, MUTED, text_style};
+use crate::{Controls, MUTED, SceneSliders, WALK_HINT, text_style};
 
 pub enum HudCommand {
-    DropShape,
+    BackToStart,
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
 pub struct Stats {
     pub fps: u32,
-    pub shapes: usize,
-    pub energy: f32,
+    pub altitude: f32,
+    pub stamina: f32,
     pub size: (u32, u32),
 }
 
@@ -76,7 +76,7 @@ pub fn Hud(bridge: HudBridge) {
                 StatusPanel(bridge.engine, stats);
                 FrameChip(stats);
                 SettingsPanel(controls);
-                ActionBar(controls, bridge.clone());
+                ActionBar(bridge.clone());
             },
         );
     });
@@ -99,23 +99,15 @@ fn StatusPanel(engine: &'static str, stats: MutableState<Stats>) {
                 text_style(12.0, MUTED),
             );
             Meter(
-                "Energy",
-                stats.value().energy,
+                "Stamina",
+                stats.value().stamina,
                 [
                     Color::from_rgb_u8(255, 94, 98),
                     Color::from_rgb_u8(255, 196, 92),
                 ],
             );
-            Meter(
-                "Shapes",
-                (stats.value().shapes as f32 / 40.0).min(1.0),
-                [
-                    Color::from_rgb_u8(58, 123, 213),
-                    Color::from_rgb_u8(0, 210, 255),
-                ],
-            );
             Text(
-                format!("{} shapes in the scene", stats.value().shapes),
+                format!("Altitude {:.0} m", stats.value().altitude),
                 Modifier::empty(),
                 text_style(13.0, MUTED),
             );
@@ -187,34 +179,13 @@ fn SettingsPanel(controls: MutableState<Controls>) {
         ColumnSpec::default().vertical_arrangement(LinearArrangement::SpacedBy(10.0)),
         move || {
             Text("Scene", Modifier::empty(), text_style(18.0, Color::WHITE));
-            Text("Sun", Modifier::empty(), text_style(13.0, MUTED));
-            LiquidSlider(
-                Modifier::empty().fill_max_width(),
-                controls.value().sun,
-                move |value| controls.update(|c| c.sun = value),
-            );
-            Text("Bloom", Modifier::empty(), text_style(13.0, MUTED));
-            LiquidSlider(
-                Modifier::empty().fill_max_width(),
-                controls.value().bloom / 0.8,
-                move |value| controls.update(|c| c.bloom = value * 0.8),
-            );
-            Text(
-                "Camera distance",
-                Modifier::empty(),
-                text_style(13.0, MUTED),
-            );
-            LiquidSlider(
-                Modifier::empty().fill_max_width(),
-                (controls.value().distance - 6.0) / 18.0,
-                move |value| controls.update(|c| c.distance = 6.0 + value * 18.0),
-            );
+            SceneSliders(controls);
         },
     );
 }
 
 #[composable]
-fn ActionBar(controls: MutableState<Controls>, bridge: HudBridge) {
+fn ActionBar(bridge: HudBridge) {
     Row(
         panel(Modifier::empty().align(Alignment::BOTTOM_CENTER)).padding_symmetric(16.0, 12.0),
         RowSpec::default()
@@ -225,38 +196,16 @@ fn ActionBar(controls: MutableState<Controls>, bridge: HudBridge) {
             GlassButton(
                 Modifier::empty(),
                 GlassButtonSpec::glass(),
-                move || commands.borrow_mut().push(HudCommand::DropShape),
+                move || commands.borrow_mut().push(HudCommand::BackToStart),
                 || {
                     Text(
-                        "Drop a cube",
+                        "Back to start",
                         Modifier::empty(),
                         text_style(15.0, Color::WHITE),
                     );
                 },
             );
-            GlassButton(
-                Modifier::empty(),
-                GlassButtonSpec::glass(),
-                move || {
-                    controls.update(|c| {
-                        let defaults = Controls::default();
-                        c.yaw = defaults.yaw;
-                        c.pitch = defaults.pitch;
-                        c.distance = defaults.distance;
-                    })
-                },
-                || {
-                    Text(
-                        "Reset view",
-                        Modifier::empty(),
-                        text_style(15.0, Color::WHITE),
-                    );
-                },
-            );
-            Text("Animate", Modifier::empty(), text_style(15.0, Color::WHITE));
-            LiquidToggle(Modifier::empty(), controls.value().spin, move |on| {
-                controls.update(|c| c.spin = on)
-            });
+            Text(WALK_HINT, Modifier::empty(), text_style(14.0, MUTED));
         },
     );
 }

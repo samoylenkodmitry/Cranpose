@@ -1,275 +1,313 @@
-use std::f32::consts::{FRAC_PI_2, TAU};
+use std::f32::consts::TAU;
 
 use bevy::{
-    camera::{Hdr, RenderTarget},
-    light::{CascadeShadowConfigBuilder, GlobalAmbientLight},
+    asset::RenderAssetUsages,
+    camera::{Exposure, Hdr, RenderTarget},
+    image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor},
+    light::{
+        Atmosphere, AtmosphereEnvironmentMapLight, CascadeShadowConfigBuilder, NotShadowCaster,
+        atmosphere::ScatteringMedium, light_consts::lux,
+    },
+    math::Affine2,
+    mesh::{Indices, PrimitiveTopology},
+    pbr::{AtmosphereSettings, DistanceFog, FogFalloff},
     post_process::bloom::Bloom,
     prelude::*,
-    render::view::Tonemapping,
+    render::{
+        render_resource::{Extent3d, TextureDimension, TextureFormat},
+        view::Tonemapping,
+    },
 };
 use demo_ui::Controls;
+use nature::{MeshData, Stride, Terrain, Valley, Walker};
+
+const SEED: u32 = 7;
+const WATER_TILE: f32 = 9.0;
 
 #[derive(Resource, Clone, Copy, Default, PartialEq, Deref, DerefMut)]
 pub struct SceneControls(pub Controls);
 
-#[derive(Component)]
-pub struct Spin(f32);
-
-#[derive(Component)]
-struct Falling {
-    speed: f32,
-    rest: f32,
+#[derive(Resource, Clone, Copy, Default, PartialEq)]
+pub struct SceneStats {
+    pub altitude: f32,
+    pub stamina: f32,
 }
 
 #[derive(Resource)]
-pub struct DropAssets {
-    mesh: Handle<Mesh>,
-    materials: Vec<Handle<StandardMaterial>>,
+struct Explorer {
+    terrain: Terrain,
+    walker: Walker,
+    respawn: u32,
 }
 
-#[derive(Component)]
-struct Bob {
-    phase: f32,
-    base: f32,
-}
+#[derive(Resource)]
+struct WaterMaterial(Handle<StandardMaterial>);
 
 pub fn build(app: &mut App, target: RenderTarget) {
+    let valley = Valley::new(SEED);
     app.insert_resource(SceneControls::default())
-        .insert_resource(ClearColor(Color::srgb(0.015, 0.02, 0.045)))
-        .insert_resource(GlobalAmbientLight {
-            brightness: 160.0,
-            ..default()
+        .init_resource::<SceneStats>()
+        .insert_resource(Explorer {
+            terrain: valley.terrain,
+            walker: Walker::start(&valley.terrain),
+            respawn: 0,
         })
         .add_systems(
             Startup,
             move |commands: Commands,
                   meshes: ResMut<Assets<Mesh>>,
-                  materials: ResMut<Assets<StandardMaterial>>| {
-                spawn(commands, meshes, materials, target.clone())
+                  materials: ResMut<Assets<StandardMaterial>>,
+                  images: ResMut<Assets<Image>>,
+                  media: ResMut<Assets<ScatteringMedium>>| {
+                spawn(
+                    commands,
+                    meshes,
+                    materials,
+                    images,
+                    media,
+                    &valley,
+                    target.clone(),
+                )
             },
         )
-        .init_resource::<SceneStats>()
-        .add_systems(Update, (orbit, sun, spin, bob, bloom, fall, count));
+        .add_systems(Update, (walk, sky, water));
+}
+
+fn mesh(data: &MeshData) -> Mesh {
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, data.positions.clone())
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, data.normals.clone())
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, data.colors.clone())
+    .with_inserted_indices(Indices::U32(data.indices.clone()))
+}
+
+fn water_normals() -> Image {
+    const SIZE: u32 = 256;
+    let mut pixels = Vec::with_capacity((SIZE * SIZE * 4) as usize);
+    let waves = [
+        (3.0, 1.0, 0.0, 0.5),
+        (5.0, -2.0, 1.3, 0.3),
+        (-4.0, 7.0, 2.1, 0.2),
+        (11.0, 3.0, 0.7, 0.12),
+    ];
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let (u, v) = (x as f32 / SIZE as f32 * TAU, y as f32 / SIZE as f32 * TAU);
+            let (mut dx, mut dy) = (0.0, 0.0);
+            for (kx, ky, phase, amplitude) in waves {
+                let slope = (kx * u + ky * v + phase).cos() * amplitude;
+                dx += slope * kx * 0.06;
+                dy += slope * ky * 0.06;
+            }
+            let normal = Vec3::new(-dx, -dy, 1.0).normalize();
+            pixels.extend(
+                [normal.x, normal.y, normal.z].map(|c| ((c * 0.5 + 0.5) * 255.0).round() as u8),
+            );
+            pixels.push(255);
+        }
+    }
+    let mut image = Image::new(
+        Extent3d {
+            width: SIZE,
+            height: SIZE,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        pixels,
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::Repeat,
+        address_mode_v: ImageAddressMode::Repeat,
+        ..ImageSamplerDescriptor::linear()
+    });
+    image
 }
 
 fn spawn(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut media: ResMut<Assets<ScatteringMedium>>,
+    valley: &Valley,
     target: RenderTarget,
 ) {
+    commands.spawn(Atmosphere::earth(
+        media.add(ScatteringMedium::earth(256, 256)),
+    ));
     commands.spawn((
         Camera3d::default(),
         Hdr,
-        Tonemapping::TonyMcMapface,
-        Bloom::NATURAL,
         target,
-        Transform::from_xyz(8.0, 6.0, 8.0).looking_at(Vec3::ZERO, Vec3::Y),
+        AtmosphereSettings::default(),
+        AtmosphereEnvironmentMapLight::default(),
+        Exposure::SUNLIGHT,
+        Tonemapping::AcesFitted,
+        Bloom::NATURAL,
+        DistanceFog::default(),
+        Transform::default(),
     ));
     commands.spawn((
         DirectionalLight {
-            illuminance: 12_000.0,
+            illuminance: lux::RAW_SUNLIGHT,
             shadow_maps_enabled: true,
             ..default()
         },
         CascadeShadowConfigBuilder {
-            first_cascade_far_bound: 6.0,
-            maximum_distance: 40.0,
+            first_cascade_far_bound: 12.0,
+            maximum_distance: 160.0,
             ..default()
         }
         .build(),
         Transform::default(),
     ));
+    let terrain = &valley.terrain;
     commands.spawn((
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(40.0, 40.0))),
+        Mesh3d(meshes.add(mesh(&terrain.mesh()))),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.16, 0.17, 0.2),
-            perceptual_roughness: 0.85,
+            perceptual_roughness: 0.95,
             ..default()
         })),
     ));
-    commands.spawn((
-        Mesh3d(meshes.add(Cylinder::new(0.45, 5.0))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.85, 0.82, 0.76),
-            metallic: 0.2,
-            perceptual_roughness: 0.4,
-            ..default()
-        })),
-        Transform::from_xyz(0.0, 2.5, 0.0),
-    ));
-    let shapes = [
-        meshes.add(Cuboid::new(1.3, 1.3, 1.3)),
-        meshes.add(Sphere::new(0.8).mesh().uv(48, 24)),
-        meshes.add(Torus::new(0.45, 0.95)),
-    ];
-    let palette = [
-        Color::srgb(0.95, 0.33, 0.36),
-        Color::srgb(0.25, 0.6, 0.98),
-        Color::srgb(0.98, 0.78, 0.25),
-        Color::srgb(0.35, 0.86, 0.6),
-        Color::srgb(0.72, 0.45, 0.98),
-        Color::srgb(0.98, 0.55, 0.22),
-        Color::srgb(0.3, 0.86, 0.92),
-        Color::srgb(0.95, 0.4, 0.75),
-    ];
-    for (index, color) in palette.into_iter().enumerate() {
-        let angle = index as f32 / palette.len() as f32 * TAU;
-        let position = Vec3::new(angle.cos() * 5.0, 1.2, angle.sin() * 5.0);
-        commands.spawn((
-            Mesh3d(shapes[index % shapes.len()].clone()),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: color,
-                metallic: if index % 2 == 0 { 0.7 } else { 0.05 },
-                perceptual_roughness: if index % 2 == 0 { 0.25 } else { 0.55 },
-                ..default()
-            })),
-            Transform::from_translation(position),
-            Spin(0.6 + index as f32 * 0.15),
-            Bob {
-                phase: angle,
-                base: position.y,
-            },
-        ));
+    let water = terrain.water_mesh(1);
+    let uvs: Vec<[f32; 2]> = water
+        .positions
+        .iter()
+        .map(|p| [p[0] / WATER_TILE, p[2] / WATER_TILE])
+        .collect();
+    let mut water_mesh = mesh(&water).with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    if let Err(error) = water_mesh.generate_tangents() {
+        warn!("water tangents: {error}");
     }
-    commands.insert_resource(DropAssets {
-        mesh: shapes[0].clone(),
-        materials: palette
-            .iter()
-            .map(|color| {
-                materials.add(StandardMaterial {
-                    base_color: *color,
-                    metallic: 0.5,
-                    perceptual_roughness: 0.35,
-                    ..default()
-                })
-            })
-            .collect(),
+    let water_material = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.09, 0.27, 0.32, 0.8),
+        alpha_mode: AlphaMode::Blend,
+        perceptual_roughness: 0.05,
+        reflectance: 0.6,
+        normal_map_texture: Some(images.add(water_normals())),
+        ..default()
     });
-    let glow = meshes.add(Sphere::new(0.32).mesh().uv(32, 16));
-    for (index, emissive) in [
-        LinearRgba::rgb(14.0, 4.0, 1.2),
-        LinearRgba::rgb(1.5, 6.0, 16.0),
-        LinearRgba::rgb(4.0, 14.0, 6.0),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let angle = index as f32 / 3.0 * TAU + 0.5;
-        let position = Vec3::new(angle.cos() * 2.4, 3.6, angle.sin() * 2.4);
-        commands.spawn((
-            Mesh3d(glow.clone()),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: Color::BLACK,
-                emissive,
-                ..default()
-            })),
-            Transform::from_translation(position),
-            Bob {
-                phase: angle * 2.0,
-                base: position.y,
-            },
-            children![PointLight {
-                color: Color::linear_rgb(emissive.red, emissive.green, emissive.blue),
-                intensity: 60_000.0,
-                range: 9.0,
-                ..default()
-            }],
-        ));
-    }
-}
-
-fn orbit(controls: Res<SceneControls>, mut cameras: Query<&mut Transform, With<Camera3d>>) {
-    let pitch = controls.pitch.clamp(0.05, FRAC_PI_2 - 0.05);
-    let eye = Vec3::new(
-        controls.yaw.cos() * pitch.cos(),
-        pitch.sin(),
-        controls.yaw.sin() * pitch.cos(),
-    ) * controls.distance;
-    for mut transform in &mut cameras {
-        *transform = Transform::from_translation(eye + Vec3::Y * 1.2)
-            .looking_at(Vec3::new(0.0, 1.4, 0.0), Vec3::Y);
-    }
-}
-
-fn sun(controls: Res<SceneControls>, mut lights: Query<&mut Transform, With<DirectionalLight>>) {
-    for mut transform in &mut lights {
-        *transform = Transform::from_rotation(Quat::from_euler(
-            EulerRot::YXZ,
-            controls.sun * TAU,
-            -0.75,
-            0.0,
-        ));
-    }
-}
-
-fn spin(controls: Res<SceneControls>, time: Res<Time>, mut shapes: Query<(&mut Transform, &Spin)>) {
-    if !controls.spin {
-        return;
-    }
-    for (mut transform, spin) in &mut shapes {
-        transform.rotate_y(spin.0 * time.delta_secs());
-        transform.rotate_x(spin.0 * 0.5 * time.delta_secs());
-    }
-}
-
-fn bob(controls: Res<SceneControls>, time: Res<Time>, mut shapes: Query<(&mut Transform, &Bob)>) {
-    if !controls.spin {
-        return;
-    }
-    let now = time.elapsed_secs();
-    for (mut transform, bob) in &mut shapes {
-        transform.translation.y = bob.base + (now * 1.6 + bob.phase).sin() * 0.35;
-    }
-}
-
-fn bloom(controls: Res<SceneControls>, mut blooms: Query<&mut Bloom>) {
-    for mut bloom in &mut blooms {
-        bloom.intensity = controls.bloom;
-    }
-}
-
-pub fn drop_shape(mut commands: Commands, assets: Res<DropAssets>, shapes: Query<(), With<Spin>>) {
-    let index = shapes.iter().count();
-    let angle = index as f32 * 2.399_963;
-    let radius = 2.0 + (index % 5) as f32 * 1.4;
-    let material = assets.materials[index % assets.materials.len()].clone();
     commands.spawn((
-        Mesh3d(assets.mesh.clone()),
-        MeshMaterial3d(material),
-        Transform::from_xyz(angle.cos() * radius, 9.0, angle.sin() * radius)
-            .with_scale(Vec3::splat(0.6)),
-        Spin(0.4 + (index % 7) as f32 * 0.2),
-        Falling {
-            speed: 0.0,
-            rest: 0.4,
-        },
+        Mesh3d(meshes.add(water_mesh)),
+        MeshMaterial3d(water_material.clone()),
+        NotShadowCaster,
     ));
-}
-
-#[derive(Resource, Clone, Copy, Default, PartialEq)]
-pub struct SceneStats {
-    pub shapes: usize,
-}
-
-fn count(shapes: Query<(), With<Spin>>, mut stats: ResMut<SceneStats>) {
-    let shapes = shapes.iter().count();
-    if stats.shapes != shapes {
-        stats.shapes = shapes;
-    }
-}
-
-fn fall(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut shapes: Query<(Entity, &mut Transform, &mut Falling)>,
-) {
-    for (entity, mut transform, mut falling) in &mut shapes {
-        falling.speed += 18.0 * time.delta_secs();
-        transform.translation.y -= falling.speed * time.delta_secs();
-        if transform.translation.y <= falling.rest {
-            transform.translation.y = falling.rest;
-            commands.entity(entity).remove::<Falling>();
+    commands.insert_resource(WaterMaterial(water_material));
+    let solid = materials.add(StandardMaterial {
+        perceptual_roughness: 0.85,
+        ..default()
+    });
+    let thin = materials.add(StandardMaterial {
+        perceptual_roughness: 0.8,
+        double_sided: true,
+        cull_mode: None,
+        ..default()
+    });
+    for group in &valley.groups {
+        let shape = meshes.add(mesh(&group.mesh));
+        let material = if group.double_sided {
+            thin.clone()
+        } else {
+            solid.clone()
+        };
+        for placement in &group.placements {
+            let transform = Transform {
+                translation: Vec3::from(placement.position),
+                rotation: Quat::from_rotation_y(placement.yaw),
+                scale: Vec3::splat(placement.scale),
+            };
+            let mut entity = commands.spawn((
+                Mesh3d(shape.clone()),
+                MeshMaterial3d(material.clone()),
+                transform,
+            ));
+            if group.double_sided {
+                entity.insert(NotShadowCaster);
+            }
         }
     }
+}
+
+fn walk(
+    time: Res<Time>,
+    controls: Res<SceneControls>,
+    mut explorer: ResMut<Explorer>,
+    mut stats: ResMut<SceneStats>,
+    mut cameras: Query<&mut Transform, With<Camera3d>>,
+) {
+    let Explorer {
+        terrain,
+        walker,
+        respawn,
+    } = &mut *explorer;
+    if *respawn != controls.respawn {
+        *walker = Walker::start(terrain);
+        *respawn = controls.respawn;
+    }
+    let stride = Stride {
+        forward: controls.walk.forward_axis(),
+        right: controls.walk.right_axis(),
+        run: controls.walk.run,
+    };
+    walker.step(terrain, stride, controls.yaw, time.delta_secs().min(0.1));
+    let eye = Vec3::from(walker.eye());
+    let target = Vec3::from(walker.look_at(controls.yaw, controls.pitch));
+    for mut transform in &mut cameras {
+        *transform = Transform::from_translation(eye).looking_at(target, Vec3::Y);
+    }
+    let next = SceneStats {
+        altitude: walker.position[1],
+        stamina: walker.stamina,
+    };
+    if *stats != next {
+        *stats = next;
+    }
+}
+
+fn sky(
+    controls: Res<SceneControls>,
+    mut lights: Query<&mut Transform, With<DirectionalLight>>,
+    mut fogs: Query<&mut DistanceFog>,
+    mut blooms: Query<&mut Bloom>,
+) {
+    if !controls.is_changed() {
+        return;
+    }
+    let sun = nature::sun(controls.time_of_day);
+    let toward = Vec3::from(sun.toward);
+    for mut transform in &mut lights {
+        *transform = Transform::default().looking_to(-toward, Vec3::Y);
+    }
+    let visibility = 700.0 - controls.fog * 620.0;
+    for mut fog in &mut fogs {
+        fog.color = Color::srgba(0.62, 0.7, 0.8, 1.0);
+        fog.directional_light_color =
+            Color::linear_rgba(sun.color[0], sun.color[1], sun.color[2], 0.5);
+        fog.directional_light_exponent = 24.0;
+        fog.falloff = FogFalloff::from_visibility_colors(
+            visibility,
+            Color::srgb(0.35, 0.4, 0.48),
+            Color::srgb(0.75, 0.8, 0.86),
+        );
+    }
+    for mut bloom in &mut blooms {
+        bloom.intensity = controls.bloom * 0.5;
+    }
+}
+
+fn water(
+    time: Res<Time>,
+    water: Res<WaterMaterial>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let Some(mut material) = materials.get_mut(&water.0) else {
+        return;
+    };
+    let t = time.elapsed_secs();
+    material.uv_transform = Affine2::from_translation(Vec2::new(t * 0.02, t * 0.013));
 }

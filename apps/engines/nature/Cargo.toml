@@ -1,0 +1,9 @@
+[package]
+name = "nature"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "A procedural valley with a river, trees, flowers and grass, and walking through it, for every engine example"
+
+[dependencies]

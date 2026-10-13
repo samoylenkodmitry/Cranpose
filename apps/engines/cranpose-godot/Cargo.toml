@@ -14,4 +14,5 @@ cranpose = { workspace = true, features = ["renderer-wgpu", "embedded-default-fo
 cranpose-gpu-interop = { workspace = true, features = ["godot"] }
 demo-ui = { workspace = true }
 godot = { workspace = true }
+nature = { workspace = true }
 wgpu = { workspace = true }

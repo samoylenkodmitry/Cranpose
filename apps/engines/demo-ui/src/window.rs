@@ -5,7 +5,7 @@ use std::{
 
 use cranpose::{liquid::prelude::*, prelude::*};
 
-use crate::{Controls, MUTED, text_style};
+use crate::{Controls, MUTED, SceneSliders, WALK_HINT, text_style};
 
 #[derive(Clone, Copy, PartialEq)]
 pub struct EngineInfo {
@@ -96,41 +96,7 @@ fn ControlPanel(engine: EngineInfo, controls: MutableState<Controls>, fps: Mutab
                         Modifier::empty(),
                         text_style(13.0, MUTED),
                     );
-                    Labeled("Sun", move || {
-                        LiquidSlider(
-                            Modifier::empty().fill_max_width(),
-                            controls.value().sun,
-                            move |value| controls.update(|c| c.sun = value),
-                        );
-                    });
-                    Labeled("Camera distance", move || {
-                        LiquidSlider(
-                            Modifier::empty().fill_max_width(),
-                            (controls.value().distance - 6.0) / 18.0,
-                            move |value| controls.update(|c| c.distance = 6.0 + value * 18.0),
-                        );
-                    });
-                    Labeled("Bloom", move || {
-                        LiquidSlider(
-                            Modifier::empty().fill_max_width(),
-                            controls.value().bloom / 0.8,
-                            move |value| controls.update(|c| c.bloom = value * 0.8),
-                        );
-                    });
-                    Row(
-                        Modifier::empty().fill_max_width(),
-                        RowSpec::default().vertical_alignment(VerticalAlignment::CenterVertically),
-                        move || {
-                            Text(
-                                "Animate",
-                                Modifier::empty().weight(1.0),
-                                text_style(15.0, Color::WHITE),
-                            );
-                            LiquidToggle(Modifier::empty(), controls.value().spin, move |on| {
-                                controls.update(|c| c.spin = on)
-                            });
-                        },
-                    );
+                    SceneSliders(controls);
                     Spacer(Modifier::empty().weight(1.0));
                     Text(
                         format!("{} frames: {} per second", engine.name, fps.value()),
@@ -138,24 +104,12 @@ fn ControlPanel(engine: EngineInfo, controls: MutableState<Controls>, fps: Mutab
                         text_style(13.0, Color::from_rgb_u8(150, 220, 170)),
                     );
                     Text(
-                        "Drag the scene to orbit.",
+                        format!("Click the scene first. {WALK_HINT}"),
                         Modifier::empty(),
                         text_style(13.0, MUTED),
                     );
                 },
             );
-        },
-    );
-}
-
-#[composable]
-fn Labeled(label: &'static str, content: impl FnMut() + 'static) {
-    Column(
-        Modifier::empty().fill_max_width(),
-        ColumnSpec::default().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
-        move || {
-            Text(label, Modifier::empty(), text_style(15.0, Color::WHITE));
-            content();
         },
     );
 }
@@ -167,6 +121,8 @@ fn Viewport(engine: EngineInfo, states: WindowStates, target_size: TargetSize) {
     } = states;
     let shape = RoundedCornerShape::uniform(28.0);
     let last = remember(|| Rc::new(Cell::new(None::<Point>))).with(Rc::clone);
+    let focus = remember(FocusRequester::new).with(Clone::clone);
+    let press_focus = focus.clone();
     Box(
         Modifier::empty()
             .weight(1.0)
@@ -178,6 +134,9 @@ fn Viewport(engine: EngineInfo, states: WindowStates, target_size: TargetSize) {
                 Color::BLACK,
                 Color::BLACK,
             )
+            .focus_requester(&focus)
+            .focus_target()
+            .on_key_event(move |event| walk_key(controls, event))
             .draw_behind(move |scope| {
                 let size = scope.size();
                 let density = current_density();
@@ -197,21 +156,24 @@ fn Viewport(engine: EngineInfo, states: WindowStates, target_size: TargetSize) {
             })
             .pointer_input((), move |scope| {
                 let last = Rc::clone(&last);
+                let focus = press_focus.clone();
                 async move {
                     scope
                         .await_pointer_event_scope(|events| async move {
                             loop {
                                 let event = events.await_pointer_event().await;
                                 match event.kind {
-                                    PointerEventKind::Down => last.set(Some(event.position)),
+                                    PointerEventKind::Down => {
+                                        let _ = focus.request_focus();
+                                        last.set(Some(event.position));
+                                    }
                                     PointerEventKind::Move => {
                                         if let Some(previous) = last.get() {
-                                            let dx = event.position.x - previous.x;
-                                            let dy = event.position.y - previous.y;
-                                            controls.update(|c| {
-                                                c.yaw += dx * 0.008;
-                                                c.pitch = (c.pitch + dy * 0.006).clamp(0.05, 1.5);
-                                            });
+                                            let (dx, dy) = (
+                                                event.position.x - previous.x,
+                                                event.position.y - previous.y,
+                                            );
+                                            controls.update(|c| c.look(dx, dy));
                                             last.set(Some(event.position));
                                             event.consume();
                                         }
@@ -232,7 +194,7 @@ fn Viewport(engine: EngineInfo, states: WindowStates, target_size: TargetSize) {
                 Modifier::empty()
                     .align(Alignment::BOTTOM_START)
                     .padding(20.0)
-                    .width(360.0),
+                    .width(380.0),
                 Glass::regular(),
                 move || {
                     Column(
@@ -257,10 +219,10 @@ fn Viewport(engine: EngineInfo, states: WindowStates, target_size: TargetSize) {
             GlassButton(
                 Modifier::empty().align(Alignment::TOP_END).padding(20.0),
                 GlassButtonSpec::glass(),
-                move || controls.set(Controls::default()),
+                move || controls.update(Controls::back_to_start),
                 || {
                     Text(
-                        "Reset view",
+                        "Back to start",
                         Modifier::empty(),
                         text_style(15.0, Color::WHITE),
                     );
@@ -268,4 +230,13 @@ fn Viewport(engine: EngineInfo, states: WindowStates, target_size: TargetSize) {
             );
         },
     );
+}
+
+fn walk_key(controls: MutableState<Controls>, event: &KeyEvent) -> bool {
+    let mut walk = controls.value().walk;
+    let handled = walk.key(event.key_code, event.event_type == KeyEventType::KeyDown);
+    if handled {
+        controls.update(|c| c.walk = walk);
+    }
+    handled
 }

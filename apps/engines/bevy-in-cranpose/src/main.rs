@@ -12,7 +12,7 @@ use demo_ui::{EngineInfo, EngineWindow, TargetSize, rememberWindowStates};
 const BEVY: EngineInfo = EngineInfo {
     name: "Bevy",
     description: "Bevy 0.20 renders this scene on Cranpose's wgpu device. Cranpose shows the frame as an image, clips it and draws glass over it. No pixels are copied.",
-    features: "PBR, cascaded shadows, point lights, HDR bloom",
+    features: "Earth atmosphere, cascaded shadows, fog, bloom",
 };
 
 fn main() -> Result<(), LaunchError> {

@@ -6,7 +6,7 @@ use bevy::{
 };
 use cranpose_bevy::hud::{CranposeHudPlugin, HudPointer};
 use demo_scene::{SceneControls, SceneStats};
-use demo_ui::{HudBridge, HudCommand, Stats};
+use demo_ui::{Controls, HudBridge, HudCommand, Stats, Walk};
 
 fn main() -> AppExit {
     let mut app = App::new();
@@ -23,14 +23,15 @@ fn main() -> AppExit {
         world.insert_non_send(bridge.clone());
         Box::new(move || demo_ui::Hud(bridge.clone()))
     }))
-    .add_systems(Update, (orbit_with_mouse, sync_hud, run_commands));
+    .add_systems(Update, (look_and_walk, run_commands, sync_hud).chain());
     demo_scene::build(&mut app, RenderTarget::default());
     app.run()
 }
 
-fn orbit_with_mouse(
+fn look_and_walk(
     bridge: Option<NonSend<HudBridge>>,
     buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
     motion: Res<AccumulatedMouseMotion>,
     pointer: Res<HudPointer>,
 ) {
@@ -40,13 +41,24 @@ fn orbit_with_mouse(
     else {
         return;
     };
-    if !buttons.pressed(MouseButton::Left) || pointer.captured || motion.delta == Vec2::ZERO {
-        return;
+    let held = |codes: [KeyCode; 2]| keys.any_pressed(codes);
+    let walk = Walk {
+        forward: held([KeyCode::KeyW, KeyCode::ArrowUp]),
+        back: held([KeyCode::KeyS, KeyCode::ArrowDown]),
+        left: held([KeyCode::KeyA, KeyCode::ArrowLeft]),
+        right: held([KeyCode::KeyD, KeyCode::ArrowRight]),
+        run: held([KeyCode::ShiftLeft, KeyCode::ShiftRight]),
+    };
+    let looking =
+        buttons.pressed(MouseButton::Left) && !pointer.captured && motion.delta != Vec2::ZERO;
+    if states.controls.value().walk != walk || looking {
+        states.controls.update(|controls| {
+            controls.walk = walk;
+            if looking {
+                controls.look(motion.delta.x, motion.delta.y);
+            }
+        });
     }
-    states.controls.update(|controls| {
-        controls.yaw += motion.delta.x * 0.008;
-        controls.pitch = (controls.pitch + motion.delta.y * 0.006).clamp(0.05, 1.5);
-    });
 }
 
 fn sync_hud(
@@ -70,7 +82,7 @@ fn sync_hud(
     }
     *since_report += time.delta_secs();
     *frames += 1;
-    if *since_report < 0.5 {
+    if *since_report < 0.25 {
         return;
     }
     let size = windows
@@ -79,23 +91,24 @@ fn sync_hud(
         .unwrap_or_default();
     states.stats.set(Stats {
         fps: (*frames as f32 / *since_report).round() as u32,
-        shapes: scene.shapes,
-        energy: 0.5 + 0.45 * (time.elapsed_secs() * 0.7).sin(),
+        altitude: scene.altitude,
+        stamina: scene.stamina,
         size,
     });
     *since_report = 0.0;
     *frames = 0;
 }
 
-fn run_commands(bridge: Option<NonSend<HudBridge>>, mut commands: Commands) {
+fn run_commands(bridge: Option<NonSend<HudBridge>>) {
     let Some(bridge) = bridge else {
+        return;
+    };
+    let Some(states) = bridge.states.get().copied() else {
         return;
     };
     for command in bridge.commands.borrow_mut().drain(..) {
         match command {
-            HudCommand::DropShape => {
-                commands.run_system_cached(demo_scene::drop_shape);
-            }
+            HudCommand::BackToStart => states.controls.update(Controls::back_to_start),
         }
     }
 }

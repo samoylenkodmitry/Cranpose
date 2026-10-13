@@ -1,5 +1,5 @@
 use cranpose::prelude::ExternalTexture;
-use cranpose_gpu_interop::godot::GodotTexture;
+use cranpose_gpu_interop::godot::{Alpha, GodotTexture};
 use demo_ui::{EngineInfo, WindowBridge};
 use godot::{
     classes::{
@@ -14,7 +14,7 @@ use crate::{surface::Surface, world::DemoWorld};
 const GODOT: EngineInfo = EngineInfo {
     name: "Godot",
     description: "Godot 4.7 renders this scene with its own Metal renderer. Cranpose renders on the same Metal device, shows the frame as an image, clips it and draws glass over it. Frames cross between the two queues by GPU copies; no pixels pass through the CPU.",
-    features: "Forward+, shadows, omni lights, glow",
+    features: "Procedural sky, shadows, SSAO, fog, glow",
 };
 
 struct Imported {
@@ -141,7 +141,9 @@ impl CranposeWindowDemo {
             }
         }
         let shown = self.shown.as_ref()?;
-        surface.gpu().receive(&shown.godot, &shown.twin);
+        surface
+            .gpu()
+            .receive(&shown.godot, &shown.twin, Alpha::Opaque);
         Some(shown.texture.clone())
     }
 }

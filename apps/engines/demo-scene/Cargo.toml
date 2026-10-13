@@ -9,3 +9,4 @@ description = "The Bevy scene the engine examples draw: PBR shapes, cascaded sha
 [dependencies]
 bevy = { workspace = true, features = ["default_app", "3d_bevy_render", "multi_threaded", "std"] }
 demo-ui = { workspace = true }
+nature = { workspace = true }

@@ -1,13 +1,16 @@
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicU64, Ordering},
 };
 
 use cranpose::GpuContext;
 use objc2::{Message, rc::Retained, runtime::ProtocolObject};
+use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBlitCommandEncoder, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue, MTLDevice,
-    MTLSharedEvent, MTLTexture,
+    MTLLibrary, MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLRenderCommandEncoder,
+    MTLRenderPassDescriptor, MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLSharedEvent,
+    MTLStoreAction, MTLTexture,
 };
 use wgpu::hal::{self, api::Metal};
 
@@ -15,7 +18,36 @@ use crate::{InteropError, NativeTexture};
 
 const MAX_COMMAND_BUFFERS: usize = 4096;
 
+const OPAQUE_COPY: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+struct Corner { float4 position [[position]]; };
+vertex Corner copy_vertex(uint id [[vertex_id]]) {
+    float2 p = float2(float((id << 1) & 2), float(id & 2));
+    Corner corner;
+    corner.position = float4(p * 2.0 - 1.0, 0.0, 1.0);
+    return corner;
+}
+fragment float4 copy_fragment(Corner corner [[stage_in]], texture2d<float, access::read> source [[texture(0)]]) {
+    return float4(source.read(uint2(corner.position.xy)).rgb, 1.0);
+}
+"#;
+
+type Pipeline = Retained<ProtocolObject<dyn MTLRenderPipelineState>>;
+
+/// What a copy does with the source's alpha.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Alpha {
+    /// Copies alpha as stored.
+    Keep,
+    /// Writes full alpha, for a source that is opaque but leaves alpha
+    /// undefined, such as Godot's viewport textures where the sky is.
+    Opaque,
+}
+
 pub(crate) struct QueueBridge {
+    device: Retained<ProtocolObject<dyn MTLDevice>>,
+    opaque_copies: Mutex<Vec<(MTLPixelFormat, Pipeline)>>,
     engine_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
     cranpose_done: Retained<ProtocolObject<dyn MTLSharedEvent>>,
     engine_done: Retained<ProtocolObject<dyn MTLSharedEvent>>,
@@ -59,6 +91,7 @@ pub(crate) unsafe fn gpu_context(
         .ok_or_else(|| InteropError::NoAdapter(name.clone()))?;
     let features = adapter.features() - wgpu::Features::all_experimental_mask();
     let limits = adapter.limits();
+    let bridge_device = device.clone();
     let open = hal::OpenDevice::<Metal> {
         device: unsafe { hal::metal::Device::device_from_raw(device, features, &limits) },
         queue: unsafe { hal::metal::Queue::queue_from_raw(own_queue, 1.0) },
@@ -87,6 +120,8 @@ pub(crate) unsafe fn gpu_context(
             queue: Arc::new(queue),
         },
         QueueBridge {
+            device: bridge_device,
+            opaque_copies: Mutex::new(Vec::new()),
             engine_queue,
             cranpose_done,
             engine_done,
@@ -142,12 +177,13 @@ impl QueueBridge {
         gpu: &GpuContext,
         engine: &EngineTexture,
         cranpose: &wgpu::Texture,
+        alpha: Alpha,
     ) {
         let Some(cranpose) = raw_texture(cranpose) else {
             return;
         };
         let after = self.cranpose_value.load(Ordering::Acquire);
-        self.copy_on_engine_queue(gpu, after, engine, &cranpose);
+        self.copy_on_engine_queue(gpu, after, engine, &cranpose, alpha);
     }
 
     pub(crate) fn begin_frame(&self, gpu: &GpuContext) -> u64 {
@@ -176,7 +212,7 @@ impl QueueBridge {
         let Some(cranpose) = raw_texture(cranpose) else {
             return;
         };
-        self.copy_on_engine_queue(gpu, value, &cranpose, engine);
+        self.copy_on_engine_queue(gpu, value, &cranpose, engine, Alpha::Keep);
     }
 
     fn copy_on_engine_queue(
@@ -185,17 +221,27 @@ impl QueueBridge {
         after: u64,
         from: &EngineTexture,
         to: &EngineTexture,
+        alpha: Alpha,
     ) {
         let Some(command_buffer) = self.engine_queue.commandBuffer() else {
             return;
         };
         let signal = self.engine_value.fetch_add(1, Ordering::AcqRel) + 1;
         command_buffer.encodeWaitForEvent_value(self.cranpose_done.as_ref(), after);
-        if let Some(blit) = command_buffer.blitCommandEncoder() {
-            // SAFETY: both textures are live and 2D with one size and format;
-            // the twin of an engine texture is created that way.
-            unsafe { blit.copyFromTexture_toTexture(from, to) };
-            blit.endEncoding();
+        let opaque = match alpha {
+            Alpha::Keep => None,
+            Alpha::Opaque => self.opaque_copy(to.pixelFormat()),
+        };
+        match opaque {
+            Some(pipeline) => encode_opaque_copy(&command_buffer, &pipeline, from, to),
+            None => {
+                if let Some(blit) = command_buffer.blitCommandEncoder() {
+                    // SAFETY: both textures are live and 2D with one size and
+                    // format; the twin of an engine texture is created that way.
+                    unsafe { blit.copyFromTexture_toTexture(from, to) };
+                    blit.endEncoding();
+                }
+            }
         }
         command_buffer.encodeSignalEvent_value(self.engine_done.as_ref(), signal);
         command_buffer.commit();
@@ -203,4 +249,61 @@ impl QueueBridge {
             queue.add_wait_event(self.engine_done.clone(), signal);
         }
     }
+}
+
+impl QueueBridge {
+    fn opaque_copy(&self, format: MTLPixelFormat) -> Option<Pipeline> {
+        let mut pipelines = self.opaque_copies.lock().ok()?;
+        if let Some((_, pipeline)) = pipelines.iter().find(|(known, _)| *known == format) {
+            return Some(pipeline.clone());
+        }
+        let library = self
+            .device
+            .newLibraryWithSource_options_error(&NSString::from_str(OPAQUE_COPY), None)
+            .ok()?;
+        let descriptor = MTLRenderPipelineDescriptor::new();
+        descriptor.setVertexFunction(
+            library
+                .newFunctionWithName(&NSString::from_str("copy_vertex"))
+                .as_deref(),
+        );
+        descriptor.setFragmentFunction(
+            library
+                .newFunctionWithName(&NSString::from_str("copy_fragment"))
+                .as_deref(),
+        );
+        // SAFETY: index 0 is within Metal's colour attachment array.
+        unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(0) }.setPixelFormat(format);
+        let pipeline = self
+            .device
+            .newRenderPipelineStateWithDescriptor_error(&descriptor)
+            .ok()?;
+        pipelines.push((format, pipeline.clone()));
+        Some(pipeline)
+    }
+}
+
+fn encode_opaque_copy(
+    command_buffer: &ProtocolObject<dyn MTLCommandBuffer>,
+    pipeline: &ProtocolObject<dyn MTLRenderPipelineState>,
+    from: &EngineTexture,
+    to: &EngineTexture,
+) {
+    let pass = MTLRenderPassDescriptor::renderPassDescriptor();
+    // SAFETY: index 0 is within Metal's colour attachment array.
+    let target = unsafe { pass.colorAttachments().objectAtIndexedSubscript(0) };
+    target.setTexture(Some(to));
+    target.setLoadAction(MTLLoadAction::DontCare);
+    target.setStoreAction(MTLStoreAction::Store);
+    let Some(encoder) = command_buffer.renderCommandEncoderWithDescriptor(&pass) else {
+        return;
+    };
+    encoder.setRenderPipelineState(pipeline);
+    // SAFETY: the shader reads texture 0 at the pixel it writes; both
+    // textures are live and have one size.
+    unsafe {
+        encoder.setFragmentTexture_atIndex(Some(from), 0);
+        encoder.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
+    }
+    encoder.endEncoding();
 }

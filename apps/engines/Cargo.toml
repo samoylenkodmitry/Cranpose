@@ -8,6 +8,7 @@ members = [
     "demo-scene",
     "demo-ui",
     "gpu-interop",
+    "nature",
 ]
 
 [workspace.package]
@@ -21,6 +22,7 @@ cranpose = { path = "../../crates/cranpose", default-features = false }
 cranpose-bevy = { path = "cranpose-bevy" }
 demo-scene = { path = "demo-scene" }
 demo-ui = { path = "demo-ui" }
+nature = { path = "nature" }
 godot = { version = "0.5.5", features = ["api-4-7"] }
 cranpose-gpu-interop = { path = "gpu-interop" }
 wgpu = { version = "30", default-features = false }

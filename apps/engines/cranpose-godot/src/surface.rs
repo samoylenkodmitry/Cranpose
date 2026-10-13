@@ -1,16 +1,19 @@
-use cranpose::{AppLauncher, GuestView};
+use cranpose::{
+    AppLauncher, GuestView,
+    prelude::{KeyCode, KeyEvent, KeyEventType, Modifiers},
+};
 use cranpose_gpu_interop::godot::{GodotGpu, GodotTexture};
 use godot::{
     classes::{
-        CanvasItemMaterial, CanvasLayer, DisplayServer, InputEvent, InputEventMouseButton,
-        InputEventMouseMotion, RdTextureFormat, RdTextureView, RenderingDevice, RenderingServer,
-        Texture2Drd, TextureRect,
+        CanvasItemMaterial, CanvasLayer, DisplayServer, InputEvent, InputEventKey,
+        InputEventMouseButton, InputEventMouseMotion, RdTextureFormat, RdTextureView,
+        RenderingDevice, RenderingServer, Texture2Drd, TextureRect,
         canvas_item_material::BlendMode,
         control::{LayoutPreset, MouseFilter},
         rendering_device::{DataFormat, TextureUsageBits},
         texture_rect::{ExpandMode, StretchMode},
     },
-    global::MouseButton,
+    global::{Key, MouseButton},
     prelude::*,
 };
 
@@ -111,6 +114,17 @@ impl Surface {
 
     pub fn input(&mut self, event: &Gd<InputEvent>) -> bool {
         let shell = self.view.shell();
+        if let Ok(key) = event.clone().try_cast::<InputEventKey>() {
+            let Some(code) = key_code(key.get_physical_keycode()) else {
+                return false;
+            };
+            let kind = if key.is_pressed() {
+                KeyEventType::KeyDown
+            } else {
+                KeyEventType::KeyUp
+            };
+            return shell.on_key_event(&KeyEvent::new(code, "", Modifiers::NONE, kind));
+        }
         if let Ok(motion) = event.clone().try_cast::<InputEventMouseMotion>() {
             let position = motion.get_position() / self.density;
             shell.set_cursor(position.x, position.y);
@@ -180,4 +194,19 @@ impl Drop for Surface {
             self.rd.free_rid(output.rid);
         }
     }
+}
+
+fn key_code(key: Key) -> Option<KeyCode> {
+    Some(match key {
+        Key::W => KeyCode::W,
+        Key::A => KeyCode::A,
+        Key::S => KeyCode::S,
+        Key::D => KeyCode::D,
+        Key::UP => KeyCode::ArrowUp,
+        Key::DOWN => KeyCode::ArrowDown,
+        Key::LEFT => KeyCode::ArrowLeft,
+        Key::RIGHT => KeyCode::ArrowRight,
+        Key::SHIFT => KeyCode::ShiftLeft,
+        _ => return None,
+    })
 }

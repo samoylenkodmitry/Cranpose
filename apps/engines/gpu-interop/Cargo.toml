@@ -18,6 +18,7 @@ wgpu = { workspace = true, features = ["metal", "std", "wgsl"] }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 objc2 = "0.6.3"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSError"] }
 objc2-metal = { version = "0.3.2", default-features = false, features = [
     "std",
     "MTLDevice",
@@ -30,4 +31,8 @@ objc2-metal = { version = "0.3.2", default-features = false, features = [
     "MTLCommandEncoder",
     "MTLBlitCommandEncoder",
     "MTLEvent",
+    "MTLLibrary",
+    "MTLRenderPipeline",
+    "MTLRenderPass",
+    "MTLRenderCommandEncoder",
 ] }

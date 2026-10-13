@@ -2723,6 +2723,7 @@ dependencies = [
  "cranpose-gpu-interop",
  "demo-ui",
  "godot",
+ "nature",
  "wgpu",
 ]
 
@@ -2733,6 +2734,7 @@ dependencies = [
  "cranpose",
  "godot",
  "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
  "objc2-metal 0.3.2",
  "pollster",
  "thiserror 2.0.21",
@@ -3125,6 +3127,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "demo-ui",
+ "nature",
 ]
 
 [[package]]
@@ -4703,6 +4706,10 @@ name = "nanoserde-derive"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a846cbc04412cf509efcd8f3694b114fc700a035fb5a37f21517f9fb019f1ebc"
+
+[[package]]
+name = "nature"
+version = "0.1.0"
 
 [[package]]
 name = "ndk"

@@ -9,6 +9,7 @@ use godot::{
     prelude::*,
 };
 
+pub use crate::metal::Alpha;
 use crate::{
     InteropError, NativeTexture,
     metal::{self, EngineTexture, QueueBridge},
@@ -92,8 +93,8 @@ impl GodotGpu {
     /// Copies `from`, as Godot's queue last wrote it, into `into`. Cranpose's
     /// next submit waits for the copy, and the copy waits for Cranpose's last
     /// frame.
-    pub fn receive(&self, from: &GodotTexture, into: &wgpu::Texture) {
-        self.bridge.receive(&self.gpu, &from.raw, into);
+    pub fn receive(&self, from: &GodotTexture, into: &wgpu::Texture, alpha: Alpha) {
+        self.bridge.receive(&self.gpu, &from.raw, into, alpha);
     }
 
     /// Call before Cranpose draws a frame.
