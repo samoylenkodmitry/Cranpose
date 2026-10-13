@@ -364,6 +364,9 @@ pub struct SoftwareTextFontSet {
     fonts: Arc<[SoftwareTextFont]>,
     registered_families: Arc<[FontFamilyKey]>,
     default_index: Option<usize>,
+    /// How many of `fonts`, at its end, are installed faces.
+    #[cfg(feature = "installed-fonts")]
+    installed: usize,
 }
 
 impl SoftwareTextFontSet {
@@ -389,7 +392,31 @@ impl SoftwareTextFontSet {
             fonts: Arc::from(fonts),
             registered_families: Arc::from(registered_families),
             default_index,
+            #[cfg(feature = "installed-fonts")]
+            installed: 0,
         }
+    }
+
+    /// This set with the faces installed through
+    /// [`install_font_file`](crate::installed_fonts::install_font_file) after
+    /// its own, or `None` while no face was installed since it was built.
+    ///
+    /// Installed faces only join the end, so every face keeps its index and a
+    /// style resolves to the face it resolved to before; the installed faces
+    /// cover the characters the set's own faces lack.
+    #[cfg(feature = "installed-fonts")]
+    pub fn with_installed_faces(&self) -> Option<Self> {
+        if crate::installed_fonts::installed_font_generation() == self.installed {
+            return None;
+        }
+        let installed = crate::installed_fonts::installed_faces();
+        let own = &self.fonts[..self.fonts.len() - self.installed];
+        let mut faces = Vec::with_capacity(own.len() + installed.len());
+        faces.extend_from_slice(own);
+        faces.extend_from_slice(&installed);
+        let mut set = Self::from_faces(faces);
+        set.installed = installed.len();
+        Some(set)
     }
 
     pub fn from_fonts_or_default(fonts: &[&'static [u8]]) -> Self {

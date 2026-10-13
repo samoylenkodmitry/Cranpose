@@ -349,7 +349,7 @@ struct ReadFontFile {
 
 static READ_FONT_FILES: Mutex<Vec<ReadFontFile>> = Mutex::new(Vec::new());
 
-fn read_font_file(path: &Path) -> Result<&'static [u8], FontLoadError> {
+pub(crate) fn read_font_file(path: &Path) -> Result<&'static [u8], FontLoadError> {
     let read = std::fs::read(path).map_err(|source| FontLoadError::Read {
         path: path.to_path_buf(),
         source,

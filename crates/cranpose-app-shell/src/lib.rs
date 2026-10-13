@@ -202,6 +202,9 @@ pub(crate) struct ShellApp {
     pub(crate) window_roots_seen: Option<u64>,
     /// Frames with a rebuilt scene since draw observations were last pruned.
     pub(crate) rebuilt_frames_since_observation_prune: u32,
+    /// The installed-font generation the renderers last took in.
+    #[cfg(feature = "installed-fonts")]
+    pub(crate) installed_fonts: usize,
 }
 
 /// The application: one runtime, one composition, and a surface per window
@@ -662,6 +665,8 @@ where
             text_input_router_installed: false,
             window_roots_seen: None,
             rebuilt_frames_since_observation_prune: 0,
+            #[cfg(feature = "installed-fonts")]
+            installed_fonts: 0,
         };
         let mut shell = Self {
             app,

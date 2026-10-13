@@ -202,6 +202,8 @@ pub use cranpose_fonts::FontPack;
 pub use cranpose_render_common::font_source::{
     ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS, FontLoadError, SoftwareTextFontRegistry,
 };
+#[cfg(feature = "installed-fonts")]
+pub use cranpose_render_common::installed_fonts::install_font_file;
 /// Shared font data accepted by [`AppLauncher::with_font_face_bytes`].
 pub use cranpose_render_common::software_text_raster::FontBytes;
 pub use host_environment::{host_density, system_font_directory};

@@ -22,6 +22,8 @@ workspace = true
 default = []
 # Embed the framework fallback font (~1.3 MiB) used when the app provides no fonts.
 embedded-default-font = ["cranpose-render-common/embedded-default-font"]
+# Fonts an app installs while it runs; see `cranpose-render-common`.
+installed-fonts = ["cranpose-render-common/installed-fonts"]
 
 [dependencies]
 cranpose-render-common = { workspace = true }
@@ -34,3 +36,10 @@ log = "0.4"
 
 [dev-dependencies]
 cranpose-render-common = { workspace = true, features = ["embedded-default-font"] }
+# Path-only dev-deps: stripped from the published manifest (publish order ignores dev edges).
+cranpose-app-shell = { path = "../../cranpose-app-shell" }
+cranpose-macros = { path = "../../cranpose-macros" }
+
+[[test]]
+name = "installed_fonts"
+required-features = ["installed-fonts", "cranpose-app-shell/installed-fonts"]

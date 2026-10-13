@@ -22,6 +22,9 @@ workspace = true
 default = []
 clipboard-native = ["dep:arboard"]
 test-support = []
+# Fonts an app installs while it runs: renderers take them in before the next
+# frame's layout.
+installed-fonts = ["cranpose-render-common/installed-fonts"]
 
 [dependencies]
 cranpose-core = { workspace = true, features = ["internal"] }

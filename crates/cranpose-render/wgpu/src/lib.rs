@@ -1175,16 +1175,36 @@ impl Default for WgpuRenderer {
     }
 }
 
+/// Gives `app_context` the measurer its text lays out with, over `fonts`.
+fn install_text_measurer(app_context: &cranpose_ui::AppContext, fonts: &SoftwareTextFontSet) {
+    app_context.set_text_measurer(SoftwareTextMeasurer::from_font_set(fonts.clone(), 8192));
+}
+
 impl Renderer for WgpuRenderer {
     type Scene = Scene;
     type Error = WgpuRendererError;
 
     fn attach_app_context_services(&mut self, app_context: &cranpose_ui::AppContext) {
-        app_context.set_text_measurer(SoftwareTextMeasurer::from_font_set(
-            self.frontend.text_fonts.clone(),
-            8192,
-        ));
+        install_text_measurer(app_context, &self.frontend.text_fonts);
         self.frontend.app_context = Some(app_context.downgrade());
+    }
+
+    #[cfg(feature = "installed-fonts")]
+    fn apply_installed_fonts(&mut self, app_context: &cranpose_ui::AppContext) {
+        let Some(fonts) = self.frontend.text_fonts.with_installed_faces() else {
+            return;
+        };
+        let attached = self
+            .frontend
+            .app_context
+            .as_ref()
+            .and_then(std::rc::Weak::upgrade)
+            .is_some_and(|attached| std::ptr::eq(&*attached, app_context));
+        if attached {
+            install_text_measurer(app_context, &fonts);
+        }
+        self.frontend.text_state = TextSystemState::from_font_set(fonts.clone());
+        self.frontend.text_fonts = fonts;
     }
 
     fn set_root_scale(&mut self, scale: f32) {

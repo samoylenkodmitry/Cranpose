@@ -6241,6 +6241,15 @@ impl GpuRenderer {
     /// frame drew for [`TEXT_GLYPH_RUN_IDLE_FRAMES`] the CPU cache, and the
     /// arena takes back the quads dropped retained runs held.
     fn begin_text_glyph_run_frame(&mut self) {
+        #[cfg(feature = "installed-fonts")]
+        if let Some(fonts) = self.text_fonts.with_installed_faces() {
+            // Text drawn before the install may show a missing glyph where an
+            // installed face now has one.
+            self.text_fonts = fonts;
+            self.text_image_cache.clear();
+            self.text_glyph_run_cache.clear();
+            self.text_glyph_gpu_run_cache.clear();
+        }
         self.text_glyph_run_frame += 1;
         let frame = self.text_glyph_run_frame;
         let demand = std::mem::take(&mut self.text_glyph_runs_drawn).saturating_mul(2);
