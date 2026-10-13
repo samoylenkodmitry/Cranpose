@@ -185,9 +185,9 @@ pub struct AppSettings {
     /// installing a robot driver defaults it to disabled unless explicitly set.
     pub developer_inspector: Option<bool>,
     /// What code that renders with Cranpose's device needs from it beyond
-    /// Cranpose's own requests. The desktop window and embedded views ask
-    /// for it.
-    #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+    /// Cranpose's own requests. The desktop window, the web page and embedded
+    /// views ask for it.
+    #[cfg(feature = "renderer-wgpu")]
     pub gpu_requirements: crate::GpuRequirements,
     /// Development options for debugging and performance monitoring
     pub dev_options: cranpose_app_shell::DevOptions,
@@ -241,7 +241,7 @@ impl Default for AppSettings {
             android_overlay_window: None,
             headless: false,
             developer_inspector: None,
-            #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+            #[cfg(feature = "renderer-wgpu")]
             gpu_requirements: crate::GpuRequirements::default(),
             dev_options: cranpose_app_shell::DevOptions::default(),
             #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
@@ -583,7 +583,7 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
     ///
     /// The host drives input, resizing and frames through the returned view.
     /// Uses the launcher's fonts.
-    #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+    #[cfg(feature = "renderer-wgpu")]
     pub fn create_guest_view(
         self,
         gpu: &crate::GpuContext,
@@ -674,8 +674,8 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
 
     /// Ask Cranpose's GPU device for what code rendering with it needs, such
     /// as a game engine drawing into textures the composition shows. The
-    /// desktop window and embedded views ask for it.
-    #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+    /// desktop window, the web page and embedded views ask for it.
+    #[cfg(feature = "renderer-wgpu")]
     pub fn with_gpu_requirements(mut self, requirements: crate::GpuRequirements) -> Self {
         self.settings.gpu_requirements = requirements;
         self

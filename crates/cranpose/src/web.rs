@@ -295,10 +295,7 @@ pub async fn run(
     let width = css_width.round() as u32;
     let height = css_height.round() as u32;
     let backend_preference = requested_web_backend(&window);
-    // Cranpose's renderer needs no WebGL extension beyond the ones `glow`
-    // itself uses, and each one a page enables can wait for the browser's GPU
-    // process (forks/README.md).
-    wgpu::hal::gles::ask_only_for_used_extensions();
+    limit_webgl_extensions(settings.gpu_requirements);
     let mut instance_desc =
         wgpu::InstanceDescriptor::new_with_display_handle(Box::new(BrowserDisplayHandle));
     instance_desc.backends = instance_backends(backend_preference);
@@ -334,8 +331,10 @@ pub async fn run(
 
     let adapter_info = adapter.get_info();
     let adapter_limits = adapter.limits();
-    let required_limits =
-        required_limits_for_web_backend(adapter_info.backend, adapter_limits.clone());
+    let required_limits = settings.gpu_requirements.limits_on(
+        &adapter,
+        required_limits_for_web_backend(adapter_info.backend, adapter_limits.clone()),
+    );
     log::info!(
         "Web backend preference={:?}, selected backend={:?}, max_texture_dimension_2d={}",
         backend_preference,
@@ -346,7 +345,8 @@ pub async fn run(
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("Main Device"),
-            required_features: cranpose_render_wgpu::optional_device_features(&adapter),
+            required_features: cranpose_render_wgpu::optional_device_features(&adapter)
+                | settings.gpu_requirements.features_on(&adapter),
             required_limits,
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             memory_hints: wgpu::MemoryHints::default(),
@@ -431,10 +431,19 @@ pub async fn run(
     let fonts = settings.resolve_font_set();
     fold_glass_on_mobile_devices(&window);
     let mut renderer = WgpuRenderer::with_font_set(fonts);
-    #[expect(clippy::arc_with_non_send_sync)]
+    let (device, queue) = (Arc::new(device), Arc::new(queue));
+    let content = crate::gpu_context::provide_gpu_context(
+        crate::GpuContext {
+            instance: instance.clone(),
+            adapter: adapter.clone(),
+            device: Arc::clone(&device),
+            queue: Arc::clone(&queue),
+        },
+        content,
+    );
     let discovery = PipelineDiscovery::new(GpuTarget {
-        device: Arc::new(device),
-        queue: Arc::new(queue),
+        device,
+        queue,
         surface_format: crate::surface_format::display_surface_view_format(surface_format),
         backend: adapter_info.backend,
         downlevel: adapter.get_downlevel_capabilities().flags,
@@ -1176,6 +1185,16 @@ fn instance_backends(preference: WebBackendPreference) -> wgpu::Backends {
         WebBackendPreference::Auto => wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL,
         WebBackendPreference::WebGpu => wgpu::Backends::BROWSER_WEBGPU,
         WebBackendPreference::Gl => wgpu::Backends::GL,
+    }
+}
+
+// Cranpose's renderer needs no WebGL extension beyond the ones `glow` itself
+// uses, and each one a page enables can wait for the browser's GPU process
+// (forks/README.md). Code that renders with Cranpose's device, such as a game
+// engine, says what it needs, and then gets every one.
+fn limit_webgl_extensions(requirements: crate::GpuRequirements) {
+    if requirements == crate::GpuRequirements::default() {
+        wgpu::hal::gles::ask_only_for_used_extensions();
     }
 }
 
