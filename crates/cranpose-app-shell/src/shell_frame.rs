@@ -1012,7 +1012,7 @@ impl<R: Renderer> RootSurface<R> {
             let (count, chars) = fields
                 .iter()
                 .filter(|(rank, _)| *rank <= max_rank)
-                .fold((0, 0), |(count, chars), (_, field)| {
+                .fold((0_usize, 0_usize), |(count, chars), (_, field)| {
                     (count + 1, chars + field.len())
                 });
             chars + count.saturating_sub(1) * DEV_OVERLAY_SEPARATOR.len()
