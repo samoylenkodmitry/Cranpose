@@ -1445,6 +1445,10 @@ where
         let content_clone = content.clone();
         let density = density.max(f32::EPSILON);
         let platform_env = android_platform_env();
+        // The frame loop runs idle prefetch passes while it waits for a frame
+        // (`prefetch_while_waiting`): a lazy list leaves them the items
+        // beyond its viewport that its scroll does not soon reach.
+        cranpose_ui::set_idle_prefetch_passes(true);
         let mut shell = AppShell::new_with_size_and_density(
             renderer,
             default_root_key(),

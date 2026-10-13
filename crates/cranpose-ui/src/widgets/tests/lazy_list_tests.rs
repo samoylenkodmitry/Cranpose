@@ -181,25 +181,41 @@ fn measured_item_cache_keeps_only_items_whose_slots_are_retained() {
 }
 
 #[test]
+fn a_frame_composes_only_the_new_items_its_scroll_reaches_where_idle_passes_run() {
+    let mut frame = BeyondBoundsComposition::new(false, 6.0);
+    assert!(
+        frame.admits(false, 4.0),
+        "an item the scroll reaches next frame"
+    );
+    assert!(!frame.admits(false, 4.0 + 120.0));
+    assert!(frame.wants_prefetch, "the farther item waits for a pass");
+
+    let mut at_rest = BeyondBoundsComposition::new(false, 0.0);
+    assert!(at_rest.admits(true, 0.0), "a composed item stays composed");
+    assert!(!at_rest.admits(false, 0.0));
+    assert!(at_rest.wants_prefetch);
+}
+
+#[test]
 fn a_frame_leaves_the_next_new_item_for_an_idle_pass_once_enough_are_ready() {
-    let mut frame = BeyondBoundsComposition::new(false);
+    let mut frame = BeyondBoundsComposition::new(false, f32::INFINITY);
     for _ in 0..IDLE_PREFETCH_READY_BEYOND_BOUNDS_ITEMS {
-        assert!(frame.admits(true));
+        assert!(frame.admits(true, 0.0));
     }
     assert!(!frame.wants_prefetch);
-    assert!(!frame.admits(false));
+    assert!(!frame.admits(false, 0.0));
     assert!(frame.wants_prefetch);
 }
 
 #[test]
 fn a_frame_composes_new_items_only_until_enough_are_ready() {
-    let mut frame = BeyondBoundsComposition::new(false);
-    assert!(frame.admits(true));
+    let mut frame = BeyondBoundsComposition::new(false, f32::INFINITY);
+    assert!(frame.admits(true, 0.0));
     for _ in 1..IDLE_PREFETCH_READY_BEYOND_BOUNDS_ITEMS {
-        assert!(frame.admits(false));
+        assert!(frame.admits(false, 0.0));
     }
     assert!(
-        !frame.admits(false),
+        !frame.admits(false, 0.0),
         "the items a frame composes count as ready: a wider window gives it \
          no more to compose"
     );
@@ -208,22 +224,22 @@ fn a_frame_composes_new_items_only_until_enough_are_ready() {
 
 #[test]
 fn a_frame_with_none_ready_composes_as_many_as_it_keeps_ready() {
-    let mut frame = BeyondBoundsComposition::new(false);
+    let mut frame = BeyondBoundsComposition::new(false, f32::INFINITY);
     for _ in 0..IDLE_PREFETCH_READY_BEYOND_BOUNDS_ITEMS {
-        assert!(frame.admits(false));
+        assert!(frame.admits(false, 0.0));
     }
-    assert!(!frame.admits(false));
+    assert!(!frame.admits(false, 0.0));
     assert!(frame.wants_prefetch);
 }
 
 #[test]
 fn an_idle_pass_composes_one_new_item_and_asks_for_the_next() {
-    let mut idle = BeyondBoundsComposition::new(true);
+    let mut idle = BeyondBoundsComposition::new(true, f32::INFINITY);
     for _ in 0..3 {
-        assert!(idle.admits(true));
+        assert!(idle.admits(true, 0.0));
     }
-    assert!(idle.admits(false));
+    assert!(idle.admits(false, 0.0));
     assert!(!idle.wants_prefetch);
-    assert!(!idle.admits(false));
+    assert!(!idle.admits(false, 0.0));
     assert!(idle.wants_prefetch);
 }

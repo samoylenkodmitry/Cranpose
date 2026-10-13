@@ -21,7 +21,7 @@ where
         (self.measure)(index)
     }
 
-    fn keep_beyond(&mut self, index: usize) -> BeyondItem {
+    fn keep_beyond(&mut self, index: usize, _distance: f32) -> BeyondItem {
         if (self.keep)(index) {
             BeyondItem::Kept
         } else {
@@ -298,7 +298,7 @@ fn placed_beyond_items_sit_on_both_sides_of_the_viewport_items() {
             create_test_item(index, 50.0)
         }
 
-        fn keep_beyond(&mut self, index: usize) -> BeyondItem {
+        fn keep_beyond(&mut self, index: usize, _distance: f32) -> BeyondItem {
             BeyondItem::Placed(create_test_item(index, 50.0))
         }
     }
