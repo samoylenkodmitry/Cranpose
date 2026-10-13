@@ -7045,7 +7045,7 @@ pub fn try_run(
     let surface_wake = event_proxy.clone();
     crate::desktop_host_surface::install(move || surface_wake.wake_up());
 
-    #[cfg(feature = "media")]
+    #[cfg(feature = "media-backend")]
     cranpose_media::install();
 
     #[cfg(all(feature = "camera-desktop", target_os = "macos"))]

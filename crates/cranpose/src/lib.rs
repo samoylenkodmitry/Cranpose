@@ -99,7 +99,7 @@ mod android_jni;
 mod android_keyboard;
 #[cfg(any(test, all(feature = "android", target_os = "android")))]
 mod android_launch_args;
-#[cfg(all(feature = "android", feature = "media", target_os = "android"))]
+#[cfg(all(feature = "android", feature = "media-backend", target_os = "android"))]
 mod android_media;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_microphone;
@@ -291,7 +291,7 @@ pub use composition_api::*;
 /// Glass controls, themes and motion for Cranpose apps.
 /// Import common components with `use cranpose::liquid::prelude::*;`.
 pub use cranpose_liquid as liquid;
-#[cfg(feature = "media")]
+#[cfg(feature = "media-backend")]
 pub use cranpose_media::{SoftwareMediaPlayer, path_from_uri, uri_for_path};
 /// Whether the host's current application theme is dark.
 pub use cranpose_services::isSystemInDarkTheme;
