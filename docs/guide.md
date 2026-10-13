@@ -271,6 +271,7 @@ and packages the `.so` for each ABI. Open **My app** from the device launcher.
 ### Run on iOS
 
 An iOS build needs macOS and Xcode with the iOS SDK. A simulator runs on a Mac.
+From Windows or Linux, [build on GitHub](#build-apple-apps-without-a-mac).
 Use an iPhone or iPad for device tests. Device installs require an Apple development
 identity and a provisioning profile.
 
@@ -337,29 +338,64 @@ For a physical device, use the `aarch64-apple-ios` target and sign the bundle wi
 your Apple development identity and provisioning profile. The
 [iOS build scripts](../apps/ios-demo/ios/build-app.sh) show the bundle and signature steps.
 
-### Build Apple targets with GitHub Actions
+### Build Apple apps without a Mac
 
-From a Windows or Linux workstation, push the project to GitHub and build on a
-macOS runner. [Standard hosted runners are free for public repositories](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
-The runner supplies Xcode. This workflow compiles the manual app for the ARM simulator:
+Apple's SDK license allows the SDK only on Apple computers, so macOS and iOS code
+compiles on a Mac. [Cranpose Build](https://github.com/samoylenkodmitry/cranpose-build)
+can use a GitHub-hosted macOS runner for that step and bring the package back to a
+Windows or Linux computer. [Standard hosted runners are free for public repositories](https://docs.github.com/en/actions/reference/runners/github-hosted-runners);
+private repositories spend the account's Actions minutes.
 
-```yaml
-name: iOS simulator
-on: [push, workflow_dispatch]
-jobs:
-  ios:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v7
-      - run: rustup toolchain install stable --profile minimal
-      - run: rustup target add aarch64-apple-ios-sim --toolchain stable
-      - run: cargo +stable build --bin my-app --target aarch64-apple-ios-sim --no-default-features --features ios,renderer-wgpu
+Install Cranpose Build and the [GitHub CLI](https://cli.github.com), sign in with
+`gh auth login`, and push the project to GitHub with `origin` as its remote. For the
+manual package above, add `CranposeBuild.toml` beside `Cargo.toml` so the iOS bundle
+uses the `Info.plist` from **Run on iOS**:
+
+```toml
+[app]
+name = "My app"
+identifier = "com.example.myapp"
+
+[ios]
+plist = "ios/Info.plist"
 ```
 
-Save the workflow as `.github/workflows/ios.yml`. Add the bundle steps from **Run on
-iOS** to produce an app. Device distribution also needs certificates and profiles
-from your Apple developer account. A macOS runner builds and tests remotely; local
-simulator interaction still needs a Mac.
+The showcase starter already has this file and the workflow. From the package
+directory:
+
+```sh
+cranpose-build init-ci
+git add .github/workflows/cranpose-build.yml CranposeBuild.toml
+git commit -m "Build Apple packages on GitHub"
+git push
+cranpose-build build --platform ios --on github
+```
+
+`init-ci` writes a workflow that GitHub accepts only from the default branch.
+`--on github` commits the working tree to a temporary branch without changing your
+index or files, starts the workflow on that branch and downloads the package into
+`dist/cranpose/<platform>/<profile>`. Ctrl+C cancels the run.
+
+| Platform | Package | What another person needs |
+| --- | --- | --- |
+| `mac`, `mac-intel` | Ad-hoc signed `.app` | A Mac. They choose **Open Anyway** in **System Settings > Privacy & Security** after the first launch attempt. Notarization removes that step and needs a paid Apple Developer Program membership. |
+| `ios` | Unsigned `.ipa` | An iPhone or iPad and a tool that signs the app with their Apple account: xtool, AltStore or SideStore. With a free Apple ID the app runs for 7 days, and an account can install 3 apps. |
+| `ios-sim`, `ios-sim-intel` | Simulator `.app` | A Mac with the iOS Simulator. |
+
+TestFlight and the App Store need a paid membership. The showcase's
+[TestFlight guide](https://github.com/samoylenkodmitry/cranpose-showcase/blob/main/docs/testflight.md)
+uploads from a workflow, so that path also needs no Mac.
+
+[xtool](https://xtool.sh) installs the `.ipa` on your own iPhone over USB from Linux,
+or from Windows inside WSL. It asks for your Apple account once:
+
+```sh
+cranpose-build devices --platform ios
+cranpose-build run --platform ios --on github --device <UDID>
+```
+
+xtool signs the app for that device under its own bundle ID, so open the app from
+the home screen. The iOS Simulator runs only on a Mac.
 
 ### Run in a browser
 
