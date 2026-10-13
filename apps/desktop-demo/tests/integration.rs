@@ -14,6 +14,7 @@ mod demo_fonts_parse;
 mod demo_tab_navigation_test;
 mod documentation_home;
 mod font_variations;
+mod guide_wheel_drags;
 mod liquid_page_support;
 mod liquid_pass_inventory;
 mod liquid_scroll_phase;

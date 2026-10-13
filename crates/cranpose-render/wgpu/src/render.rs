@@ -3565,7 +3565,8 @@ impl GpuRenderer {
         );
 
         let effects_started = Instant::now();
-        let pipeline_compiler = PipelineCompiler::for_compilation(pipeline_compilation);
+        let pipeline_compiler =
+            PipelineCompiler::for_compilation(pipeline_compilation, adapter_backend);
         let depth_gate = crate::depth_gate::DepthGate::new(
             crate::draw_pass::lays_interiors_first(adapter_backend),
             pipeline_compiler.is_active(),

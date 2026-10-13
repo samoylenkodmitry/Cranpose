@@ -73,12 +73,30 @@ fn click_control(robot: &mut RobotTestRule<TestRenderer>, label: &str) -> bool {
     clicked
 }
 
+const GUIDE: &str = include_str!("../../../docs/guide.md");
+
+/// The guide's last chapter: its title and the bold sentence it opens with.
+fn final_chapter() -> (&'static str, &'static str) {
+    let (_, chapter) = GUIDE.rsplit_once("\n## ").expect("a chapter");
+    let (title, body) = chapter.split_once('\n').expect("a chapter title");
+    let lead = body
+        .trim_start()
+        .strip_prefix("**")
+        .and_then(|lead| lead.split_once("**"))
+        .map(|(lead, _)| lead)
+        .expect("a chapter lead");
+    (title, lead)
+}
+
+/// The last line of the guide, which the reader shows within its last
+/// paragraph.
+fn final_line() -> &'static str {
+    GUIDE.trim_end().rsplit('\n').next().expect("a line").trim()
+}
+
 fn open_final_guide_section(robot: &mut RobotTestRule<TestRenderer>) {
     assert!(click_control(robot, "Welcome"));
-    for _ in 1..include_str!("../../../docs/guide.md")
-        .matches("\n## ")
-        .count()
-    {
+    for _ in 1..GUIDE.matches("\n## ").count() {
         assert!(click_control(robot, "Next section"));
     }
 }
@@ -782,7 +800,7 @@ fn compact_reader_can_scroll_the_final_paragraph_above_the_pinned_repository_lin
         let final_paragraph = rects.iter().find_map(|(bounds, label)| {
             label
                 .as_deref()
-                .filter(|label| label.contains("saved Rust value"))
+                .filter(|label| label.contains(final_line()))
                 .map(|_| *bounds)
         });
         let footer = rects
@@ -813,20 +831,17 @@ fn compact_wheel_reveals_the_current_chapter_after_reading_to_the_end() {
     let mut robot = RobotTestRule::new(390, 780, TestRenderer::default(), || {
         combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
+    let (title, lead) = final_chapter();
     open_final_guide_section(&mut robot);
-    assert!(robot
-        .find_by_text("Place a platform control in your Cranpose layout.")
-        .exists());
+    assert!(robot.find_by_text(lead).exists());
     assert!(click_control(&mut robot, "Back to wheel"));
     let current = semantic_bounds(
         &cranpose_testing::placed_semantics_from_shell(robot.shell_mut()).expect("current wheel"),
-        "Native views",
+        title,
     );
     assert!(current.y >= 0.0 && current.y + current.height <= 780.0);
-    assert!(click_control(&mut robot, "Native views"));
-    assert!(robot
-        .find_by_text("Place a platform control in your Cranpose layout.")
-        .exists());
+    assert!(click_control(&mut robot, title));
+    assert!(robot.find_by_text(lead).exists());
 }
 
 #[test]

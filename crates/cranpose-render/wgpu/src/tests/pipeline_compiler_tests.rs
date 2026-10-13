@@ -8,7 +8,7 @@ use super::{CompileLane, PipelineCompiler};
 /// queue order, on several threads, so they may finish in any.
 #[test]
 fn each_lane_runs_its_jobs_off_the_calling_thread() {
-    let compiler = PipelineCompiler::spawn();
+    let compiler = PipelineCompiler::spawn(wgpu::Backend::Vulkan);
     assert!(compiler.is_active());
     let caller = std::thread::current().id();
     for lane in [CompileLane::Demanded, CompileLane::WarmUp] {
@@ -33,7 +33,7 @@ fn each_lane_runs_its_jobs_off_the_calling_thread() {
 
 #[test]
 fn a_demanded_job_runs_while_a_warm_up_is_still_compiling() {
-    let compiler = PipelineCompiler::spawn();
+    let compiler = PipelineCompiler::spawn(wgpu::Backend::Vulkan);
     let (started, warm_up_started) = mpsc::channel();
     let (release, blocked) = mpsc::channel::<()>();
     compiler.enqueue(CompileLane::WarmUp, move || {
@@ -56,7 +56,7 @@ fn a_demanded_job_runs_while_a_warm_up_is_still_compiling() {
 /// Holds every warm-up thread of `compiler` until the returned senders
 /// drop, so nothing queued for them lands meanwhile.
 pub(crate) fn hold_warm_ups(compiler: &PipelineCompiler) -> Vec<mpsc::Sender<()>> {
-    hold(compiler, CompileLane::WarmUp, super::warm_up_threads())
+    hold(compiler, CompileLane::WarmUp, compiler.warm_up_threads())
 }
 
 /// Holds `count` threads of `compiler` inside jobs on `lane` until the
@@ -85,9 +85,9 @@ fn hold(compiler: &PipelineCompiler, lane: CompileLane, count: usize) -> Vec<mps
 /// demanded lane's own thread is busy.
 #[test]
 fn demanded_jobs_compile_on_idle_warm_up_threads_once_spread() {
-    let compiler = PipelineCompiler::spawn();
+    let compiler = PipelineCompiler::spawn(wgpu::Backend::Vulkan);
     compiler.spread_demand(true);
-    let threads = 1 + super::warm_up_threads();
+    let threads = 1 + compiler.warm_up_threads();
     let _held = hold(&compiler, CompileLane::Demanded, threads);
 }
 
@@ -95,7 +95,7 @@ fn demanded_jobs_compile_on_idle_warm_up_threads_once_spread() {
 /// thread, so no more compiles run beside the frame's.
 #[test]
 fn a_demanded_job_waits_for_its_own_thread_until_spread() {
-    let compiler = PipelineCompiler::spawn();
+    let compiler = PipelineCompiler::spawn(wgpu::Backend::Vulkan);
     let held = hold(&compiler, CompileLane::Demanded, 1);
     let (ran, demanded_ran) = mpsc::channel();
     compiler.enqueue(CompileLane::Demanded, move || ran.send(()).unwrap());
@@ -118,9 +118,9 @@ fn a_demanded_job_waits_for_its_own_thread_until_spread() {
 /// takes the demanded job, though the warm-up was queued first.
 #[test]
 fn a_warm_up_waits_while_demanded_jobs_are_queued() {
-    let compiler = PipelineCompiler::spawn();
+    let compiler = PipelineCompiler::spawn(wgpu::Backend::Vulkan);
     compiler.spread_demand(true);
-    let threads = 1 + super::warm_up_threads();
+    let threads = 1 + compiler.warm_up_threads();
     let mut held = hold(&compiler, CompileLane::Demanded, threads);
     let (ran, order) = mpsc::channel();
     let warm_up = ran.clone();
@@ -144,10 +144,10 @@ fn a_warm_up_waits_while_demanded_jobs_are_queued() {
 
 #[test]
 fn dropping_every_handle_skips_the_jobs_not_started() {
-    let compiler = PipelineCompiler::spawn();
+    let compiler = PipelineCompiler::spawn(wgpu::Backend::Vulkan);
     let handle = compiler.clone();
     let (started, observed) = mpsc::channel();
-    let threads = super::warm_up_threads();
+    let threads = compiler.warm_up_threads();
     let releases: Vec<_> = (0..threads)
         .map(|_| {
             let (release, blocked) = mpsc::channel::<()>();
@@ -203,7 +203,7 @@ fn the_last_handle_waits_for_the_compile_in_flight() {
         atomic::{AtomicBool, Ordering},
     };
 
-    let compiler = PipelineCompiler::spawn();
+    let compiler = PipelineCompiler::spawn(wgpu::Backend::Vulkan);
     let (started, compiling) = mpsc::channel();
     let finished = Arc::new(AtomicBool::new(false));
     let done = Arc::clone(&finished);
@@ -238,7 +238,7 @@ fn build_one(compiler: &PipelineCompiler) {
 
 #[test]
 fn a_pipeline_landing_after_a_placeholder_wakes_the_app_once() {
-    let compiler = PipelineCompiler::spawn();
+    let compiler = PipelineCompiler::spawn(wgpu::Backend::Vulkan);
     let landing = compiler
         .landing()
         .expect("a spawned compiler reports landings");
@@ -264,7 +264,7 @@ fn a_pipeline_landing_after_a_placeholder_wakes_the_app_once() {
 
 #[test]
 fn a_pipeline_landing_before_its_placeholder_is_noted_still_counts() {
-    let compiler = PipelineCompiler::spawn();
+    let compiler = PipelineCompiler::spawn(wgpu::Backend::Vulkan);
     let landing = compiler
         .landing()
         .expect("a spawned compiler reports landings");
@@ -275,4 +275,16 @@ fn a_pipeline_landing_before_its_placeholder_is_noted_still_counts() {
         landing.landed(),
         "a pipeline built during the frame that drew the placeholder replaces it next frame"
     );
+}
+
+/// Metal compiles in the system's compiler service, so a Metal compiler
+/// keeps more warm-ups running side by side than one whose driver compiles
+/// in the thread that asks.
+#[test]
+fn a_metal_compiler_runs_more_warm_ups_side_by_side() {
+    let metal = PipelineCompiler::spawn(wgpu::Backend::Metal);
+    let vulkan = PipelineCompiler::spawn(wgpu::Backend::Vulkan);
+    assert!(metal.warm_up_threads() >= 3);
+    assert!(metal.warm_up_threads() >= vulkan.warm_up_threads());
+    let _held = hold(&metal, CompileLane::WarmUp, metal.warm_up_threads());
 }

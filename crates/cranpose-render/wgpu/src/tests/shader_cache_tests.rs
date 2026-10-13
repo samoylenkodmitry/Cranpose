@@ -136,7 +136,7 @@ fn build_general(
 #[test]
 fn a_new_material_waits_for_its_own_parts_rather_than_draw_with_the_general() {
     let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
-    let mut cache = cache(&device, PipelineCompiler::spawn());
+    let mut cache = cache(&device, PipelineCompiler::spawn(wgpu::Backend::Vulkan));
     let shader = split_shader();
     let mode = RuntimeShaderPipelineMode::Replace;
     build_general(&mut cache, &shader, mode);
@@ -171,7 +171,7 @@ fn two_flag_material(text: &'static str, green: f64) -> RuntimeShader {
 #[test]
 fn a_first_screens_shared_stand_in_draws_its_materials_before_their_own() {
     let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
-    let compiler = PipelineCompiler::spawn();
+    let compiler = PipelineCompiler::spawn(wgpu::Backend::Vulkan);
     let holds = hold_warm_ups(&compiler);
     let mut cache = cache(&device, compiler);
     let text: &'static str = Box::leak(
@@ -269,7 +269,7 @@ fn a_first_screens_shared_stand_in_draws_its_materials_before_their_own() {
 #[test]
 fn an_override_that_is_not_a_fold_compiles_inside_the_frame() {
     let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
-    let mut cache = cache(&device, PipelineCompiler::spawn());
+    let mut cache = cache(&device, PipelineCompiler::spawn(wgpu::Backend::Vulkan));
     let mut shader = split_shader();
     shader.set_specialization_exact(false);
     let (_, fit) = cache
@@ -291,7 +291,7 @@ fn an_override_that_is_not_a_fold_compiles_inside_the_frame() {
 #[test]
 fn a_warmed_general_pipeline_is_ready_before_its_first_draw() {
     let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
-    let mut cache = cache(&device, PipelineCompiler::spawn());
+    let mut cache = cache(&device, PipelineCompiler::spawn(wgpu::Backend::Vulkan));
     let shader = RuntimeShader::new(&valid_shader());
     let mode = RuntimeShaderPipelineMode::PremultipliedSrcOver;
     cache.warm(&shader, mode);
@@ -326,7 +326,7 @@ fn a_warmed_general_pipeline_is_ready_before_its_first_draw() {
 #[test]
 fn a_drawn_specialization_does_not_wait_for_its_queued_warm_up() {
     let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
-    let compiler = PipelineCompiler::spawn();
+    let compiler = PipelineCompiler::spawn(wgpu::Backend::Vulkan);
     let (release, blocked) = std::sync::mpsc::channel::<()>();
     compiler.enqueue(CompileLane::WarmUp, move || {
         let _ = blocked.recv();
@@ -363,7 +363,7 @@ fn a_drawn_specialization_does_not_wait_for_its_queued_warm_up() {
 #[test]
 fn an_invalid_shader_disables_every_variant_once() {
     let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
-    let mut cache = cache(&device, PipelineCompiler::spawn());
+    let mut cache = cache(&device, PipelineCompiler::spawn(wgpu::Backend::Vulkan));
     let mut shader = RuntimeShader::new("this is not wgsl");
     shader.set_override("RED", 1.0);
     let mode = RuntimeShaderPipelineMode::Replace;

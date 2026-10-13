@@ -2131,6 +2131,10 @@ impl Composer {
         core
     }
 
+    /// Applies a subcomposition's commands. The pass holds a state teardown
+    /// scope from its start until this returns, as a root pass does: the
+    /// states a removed group remembered stay readable until the nodes it
+    /// emitted are detached, whose modifier nodes may read them.
     fn flush_subcompose_pass(
         &self,
         mut commands: CommandQueue,
@@ -2164,6 +2168,7 @@ impl Composer {
         root: Option<NodeId>,
         f: impl FnOnce(&Composer) -> R,
     ) -> Result<R, NodeError> {
+        let _teardown = crate::runtime::enter_state_teardown_scope();
         let runtime_handle = self.runtime_handle();
         let locals = self.current_local_stack();
         let core = self.spin_up_subcompose_core(slots, root, &runtime_handle, locals);
@@ -2237,6 +2242,7 @@ impl Composer {
         context: &CapturedCompositionContext,
         f: impl FnOnce(&Composer) -> R,
     ) -> Result<(R, Vec<RecomposeScope>), NodeError> {
+        let _teardown = crate::runtime::enter_state_teardown_scope();
         let runtime_handle = self.runtime_handle();
         let locals = context.locals.clone();
         let core = self.spin_up_subcompose_core(slots, root, &runtime_handle, locals);

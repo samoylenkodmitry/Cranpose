@@ -5465,6 +5465,14 @@ impl ApplicationHandler for App {
             "primary window initial present",
         );
 
+        // The first composition reads the window's theme. Without it the
+        // theme is detected by running a system command (`defaults` on
+        // macOS), and the theme set after it recomposes what read it.
+        if let Some(theme) = window.theme() {
+            self.platform_env
+                .set_system_theme(system_theme_from_winit(theme));
+        }
+
         let text_system = WgpuTextSystem::from_font_set(self.settings.resolve_font_set());
         let initial_scale = window.scale_factor();
         let renderer = wgpu_renderer_for_surface(
@@ -5548,11 +5556,6 @@ impl ApplicationHandler for App {
         platform.set_scale_factor(initial_scale);
         let request_initial_redraw =
             primary_launch_requires_initial_redraw(self.primary_visible(), self.settings.headless);
-
-        if let Some(theme) = window.theme() {
-            self.platform_env
-                .set_system_theme(system_theme_from_winit(theme));
-        }
 
         self.window = Some(window);
         self.surface = Some(surface);

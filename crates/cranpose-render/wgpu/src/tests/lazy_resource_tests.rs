@@ -27,7 +27,7 @@ fn resource_is_created_only_when_first_requested() {
 fn a_request_during_the_warm_up_waits_for_it_instead_of_creating_twice() {
     use std::{sync::mpsc, time::Duration};
 
-    let compiler = PipelineCompiler::spawn();
+    let compiler = PipelineCompiler::spawn(wgpu::Backend::Vulkan);
     let resource = LazyGpuResource::new("warmed");
     let (started, observed) = mpsc::channel();
     let (release, blocked) = mpsc::channel::<()>();
