@@ -24,7 +24,7 @@ fn modifier_local_key_identity_is_retained_per_key() {
 #[test]
 fn modifier_local_provider_type_mismatch_falls_back_to_default() {
     let key = ModifierLocalKey::new(|| 7_i32);
-    let mut providers = HashMap::new();
+    let mut providers = HashMap::default();
     providers.insert(
         key.token().id(),
         ProviderRecord::new(Rc::new(String::from("wrong")) as Rc<dyn Any>, 4),
@@ -42,7 +42,7 @@ fn modifier_local_provider_type_mismatch_falls_back_to_default() {
 #[test]
 fn modifier_local_ancestor_type_mismatch_falls_back_to_default() {
     let key = ModifierLocalKey::new(|| 11_i32);
-    let providers = HashMap::new();
+    let providers = HashMap::default();
     let mut dependencies = Vec::new();
     let mut ancestor_lookup = |token: &ModifierLocalToken| {
         if *token == key.token() {
@@ -66,7 +66,7 @@ fn modifier_local_ancestor_type_mismatch_falls_back_to_default() {
 #[test]
 fn modifier_local_fallback_cache_reconciles_mismatched_cached_value() {
     let key = ModifierLocalKey::new(|| 23_i32);
-    let providers = HashMap::new();
+    let providers = HashMap::default();
     let mut dependencies = Vec::new();
     let mut ancestor_lookup = empty_ancestor_lookup;
     let cache_is_typed = {

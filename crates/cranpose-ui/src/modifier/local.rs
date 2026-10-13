@@ -1,11 +1,11 @@
 use std::{
     any::{Any, TypeId},
-    collections::{HashMap, HashSet},
     fmt,
     hash::{Hash, Hasher},
     rc::Rc,
 };
 
+use cranpose_core::collections::map::{HashMap, HashSet};
 use cranpose_foundation::{
     DelegatableNode, InvalidationKind, ModifierInvalidation, ModifierInvalidations, ModifierNode,
     ModifierNodeChain, ModifierNodeElement, NodeCapabilities, NodeState,
@@ -463,7 +463,7 @@ impl<'a> ModifierLocalReadScope<'a> {
             providers,
             ancestor_lookup,
             dependencies,
-            fallbacks: HashMap::new(),
+            fallbacks: HashMap::default(),
         }
     }
 
@@ -550,8 +550,8 @@ impl ModifierLocalManager {
             return ModifierInvalidations::new();
         }
 
-        let mut providers: HashMap<ModifierLocalId, ProviderRecord> = HashMap::new();
-        let mut seen_consumers = HashSet::new();
+        let mut providers: HashMap<ModifierLocalId, ProviderRecord> = HashMap::default();
+        let mut seen_consumers = HashSet::default();
         let mut invalidations = ModifierInvalidations::new();
 
         chain.for_each_node_with_capability(NodeCapabilities::MODIFIER_LOCALS, |_ref, node| {

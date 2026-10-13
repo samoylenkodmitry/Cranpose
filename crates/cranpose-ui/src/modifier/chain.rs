@@ -63,17 +63,7 @@ pub struct ModifierChainHandle {
 
 impl Default for ModifierChainHandle {
     fn default() -> Self {
-        Self {
-            chain: ModifierNodeChain::new(),
-            layout_direction: crate::LayoutDirection::Ltr,
-            pending_invalidations: None,
-            resolved: ResolvedModifiers::default(),
-            capabilities: NodeCapabilities::default(),
-            aggregate_child_capabilities: NodeCapabilities::default(),
-            modifier_locals: None,
-            debug_logging: false,
-            revision: next_revision(),
-        }
+        Self::with_chain(ModifierNodeChain::new())
     }
 }
 
@@ -91,6 +81,26 @@ fn next_revision() -> u64 {
 impl ModifierChainHandle {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn with_chain(chain: ModifierNodeChain) -> Self {
+        Self {
+            chain,
+            layout_direction: crate::LayoutDirection::Ltr,
+            pending_invalidations: None,
+            resolved: ResolvedModifiers::default(),
+            capabilities: NodeCapabilities::default(),
+            aggregate_child_capabilities: NodeCapabilities::default(),
+            modifier_locals: None,
+            debug_logging: false,
+            revision: next_revision(),
+        }
+    }
+
+    /// The handle of a layout node's chain: the chain's nodes attach once
+    /// the node has its id, at [`Self::move_to_node`].
+    pub(crate) fn detached() -> Self {
+        Self::with_chain(ModifierNodeChain::detached())
     }
 
     pub(crate) fn for_layout_direction(layout_direction: crate::LayoutDirection) -> Self {

@@ -1,10 +1,13 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, HashSet, VecDeque},
+    collections::VecDeque,
     rc::Rc,
 };
 
-use cranpose_core::NodeId;
+use cranpose_core::{
+    NodeId,
+    collections::map::{HashMap, HashSet},
+};
 use cranpose_foundation::FocusState;
 
 pub(crate) trait FocusTargetHandle {
@@ -23,10 +26,10 @@ struct FocusInvalidationManager {
 impl FocusInvalidationManager {
     fn new() -> Self {
         Self {
-            dirty_nodes: HashSet::new(),
+            dirty_nodes: HashSet::default(),
             is_processing: false,
             active_focus_target: None,
-            focus_targets: HashMap::new(),
+            focus_targets: HashMap::default(),
             pending_focus_requests: VecDeque::new(),
             dispatching_focus: false,
         }

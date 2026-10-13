@@ -323,13 +323,14 @@ struct SharedPlainText {
 fn with_shared_plain_text<R>(text: &str, read: impl FnOnce(&SharedPlainText) -> R) -> R {
     use std::{
         cell::RefCell,
-        collections::HashMap,
         hash::{Hash, Hasher},
     };
 
+    use cranpose_core::collections::map::HashMap;
+
     const POOL_CAPACITY: usize = 256;
     thread_local! {
-        static POOL: RefCell<HashMap<u64, SharedPlainText>> = RefCell::new(HashMap::new());
+        static POOL: RefCell<HashMap<u64, SharedPlainText>> = RefCell::new(HashMap::default());
     }
 
     let mut hasher = cranpose_ui_graphics::FxHasher::default();

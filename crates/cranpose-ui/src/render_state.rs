@@ -2,13 +2,14 @@
 use std::sync::{Mutex, OnceLock};
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     rc::{Rc, Weak},
     sync::Arc,
 };
 
 use cranpose_core::{
-    NodeId, SnapshotStateObserver, collections::map::HashSet, current_runtime_handle,
+    NodeId, SnapshotStateObserver,
+    collections::map::{HashMap, HashSet},
+    current_runtime_handle,
 };
 
 pub(crate) type ModifierChainTraceCallback =
@@ -214,7 +215,7 @@ impl RenderState {
 std::thread_local! {
     static NEXT_APP_CONTEXT_ID: Cell<std::num::NonZeroU64> = const { Cell::new(std::num::NonZeroU64::MIN) };
     static CURRENT_APP_CONTEXT: RefCell<Vec<Weak<AppContext>>> = const { RefCell::new(Vec::new()) };
-    static APP_CONTEXTS: RefCell<HashMap<AppContextId, Weak<AppContext>>> = RefCell::new(HashMap::new());
+    static APP_CONTEXTS: RefCell<HashMap<AppContextId, Weak<AppContext>>> = RefCell::new(HashMap::default());
 }
 
 fn next_app_context_id() -> AppContextId {
@@ -587,6 +588,16 @@ pub(crate) fn layout_frame_arena_placement_scratch_count() -> usize {
         .layout_frame_arena
         .borrow()
         .available_placement_scratch_count()
+}
+
+/// Runs `f` on the current app context's layout node registry and returns
+/// that context's id.
+pub(crate) fn with_current_layout_node_registry(
+    f: impl FnOnce(&crate::widgets::nodes::layout_node::LayoutNodeRegistryState),
+) -> AppContextId {
+    let context = require_current_app_context("layout node registry access");
+    f(&context.layout_node_registry);
+    context.id
 }
 
 pub(crate) fn with_layout_node_registry<R>(

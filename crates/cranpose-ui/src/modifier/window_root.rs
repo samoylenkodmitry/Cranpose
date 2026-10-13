@@ -12,13 +12,12 @@
 use std::{
     any::Any,
     cell::{Cell, RefCell},
-    collections::HashMap,
     fmt,
     hash::{Hash, Hasher},
     rc::Rc,
 };
 
-use cranpose_core::{Applier, MemoryApplier, NodeId};
+use cranpose_core::{Applier, MemoryApplier, NodeId, collections::map::HashMap};
 use cranpose_foundation::{
     Constraints, DelegatableNode, InvalidationKind, LayoutModifierNode, Measurable, ModifierNode,
     ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState, Size,

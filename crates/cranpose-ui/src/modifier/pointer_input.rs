@@ -1,7 +1,7 @@
 use std::{
     any::TypeId,
     cell::{Cell, RefCell},
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     fmt,
     future::Future,
     hash::{Hash, Hasher},
@@ -11,7 +11,7 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-use cranpose_core::hash::default;
+use cranpose_core::{collections::map::HashMap, hash::default};
 use cranpose_foundation::{
     DelegatableNode, ModifierNode, ModifierNodeContext, ModifierNodeElement, NodeCapabilities,
     NodeState, PointerInputNode, impl_pointer_input_node,
@@ -81,7 +81,7 @@ pub(crate) struct PointerInputTaskRegistry {
 impl PointerInputTaskRegistry {
     pub(crate) fn new() -> Self {
         Self {
-            tasks: RefCell::new(HashMap::new()),
+            tasks: RefCell::new(HashMap::default()),
         }
     }
 
