@@ -185,7 +185,6 @@ pub struct AppSettings {
     /// installing a robot driver defaults it to disabled unless explicitly set.
     pub developer_inspector: Option<bool>,
     /// Development options for debugging and performance monitoring
-    #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
     pub dev_options: cranpose_app_shell::DevOptions,
     /// Initial desktop frame pacing mode.
     #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
@@ -237,7 +236,6 @@ impl Default for AppSettings {
             android_overlay_window: None,
             headless: false,
             developer_inspector: None,
-            #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
             dev_options: cranpose_app_shell::DevOptions::default(),
             #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
             frame_pacing_mode: FramePacingMode::Vsync,
@@ -1122,11 +1120,13 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
         self
     }
 
-    /// Enable FPS counter overlay (desktop only).
+    /// Enable FPS counter overlay on desktop and web.
     ///
     /// When enabled, displays a real-time FPS counter in the top-right corner.
     /// This is rendered directly by the renderer (not via composition) so it
-    /// doesn't affect performance measurements.
+    /// doesn't affect performance measurements. A viewport too narrow for the
+    /// whole line shows fewer fields, the frame rate and frame work last.
+    /// Android and iOS do not draw the overlay.
     ///
     /// # Example
     ///
@@ -1147,7 +1147,6 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
     ///         });
     /// }
     /// ```
-    #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
     pub fn with_fps_counter(mut self, enabled: bool) -> Self {
         self.settings.dev_options.fps_counter = enabled;
         self
@@ -1188,37 +1187,6 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
     /// Enable clickable frame pacing controls in the desktop development overlay.
     #[cfg(not(all(feature = "desktop-shell", feature = "renderer-wgpu")))]
     pub fn with_frame_pacing_controls(self, enabled: bool) -> Self {
-        let _ = enabled;
-        self
-    }
-
-    /// Enable FPS counter overlay (desktop only).
-    ///
-    /// When enabled, displays a real-time FPS counter in the top-right corner.
-    /// This is rendered directly by the renderer (not via composition) so it
-    /// doesn't affect performance measurements.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use cranpose::AppLauncher;
-    ///
-    /// #[cfg(all(
-    ///     feature = "desktop-shell",
-    ///     feature = "renderer-wgpu",
-    ///     not(target_os = "android")
-    /// ))]
-    /// {
-    ///     AppLauncher::new()
-    ///         .with_title("My App")
-    ///         .with_fps_counter(true)
-    ///         .run(|| {
-    ///             // Your composable UI here
-    ///         });
-    /// }
-    /// ```
-    #[cfg(not(all(feature = "desktop-shell", feature = "renderer-wgpu")))]
-    pub fn with_fps_counter(self, enabled: bool) -> Self {
         let _ = enabled;
         self
     }

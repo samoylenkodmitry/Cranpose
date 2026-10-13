@@ -26,21 +26,17 @@ impl LazyPrefetchState {
     }
 }
 
-thread_local! {
-    static IDLE_PASSES_RUN: Cell<bool> = const { Cell::new(false) };
-}
-
 /// Says whether the shell on this thread runs idle prefetch passes between
 /// frames, as [`with_lazy_prefetch_pass`] describes. Where they run, a list
 /// leaves to them the new items beyond its viewport that its scroll does not
 /// reach within two frames, all of them at rest; where they do not, it
 /// composes them in its frame. Call it before the shell's first composition.
 pub fn set_idle_prefetch_passes(run: bool) {
-    IDLE_PASSES_RUN.with(|passes| passes.set(run));
+    crate::thread_state::cells(|cells| cells.idle_prefetch_passes.set(run));
 }
 
 pub(crate) fn idle_prefetch_passes_run() -> bool {
-    IDLE_PASSES_RUN.with(Cell::get)
+    crate::thread_state::cells(|cells| cells.idle_prefetch_passes.get())
 }
 
 fn with_state<R>(f: impl FnOnce(&LazyPrefetchState) -> R) -> R {

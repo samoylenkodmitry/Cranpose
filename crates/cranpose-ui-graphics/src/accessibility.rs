@@ -1,5 +1,3 @@
-use std::cell::Cell;
-
 /// What the person set in the system's accessibility settings.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AccessibilityOptions {
@@ -28,18 +26,20 @@ pub struct AccessibilityOptions {
 
 impl Default for AccessibilityOptions {
     fn default() -> Self {
-        Self {
-            font_scale: 1.0,
-            reduce_motion: false,
-            reduce_transparency: false,
-            increase_contrast: false,
-            bold_text: false,
-            invert_colors: false,
-        }
+        Self::DEFAULT
     }
 }
 
 impl AccessibilityOptions {
+    pub(crate) const DEFAULT: Self = Self {
+        font_scale: 1.0,
+        reduce_motion: false,
+        reduce_transparency: false,
+        increase_contrast: false,
+        bold_text: false,
+        invert_colors: false,
+    };
+
     /// The options with the font scale made a plain number: finite and above
     /// zero, else 1.0.
     pub fn normalized(mut self) -> Self {
@@ -50,31 +50,15 @@ impl AccessibilityOptions {
     }
 }
 
-thread_local! {
-    static PLATFORM_ACCESSIBILITY_OPTIONS: Cell<AccessibilityOptions> =
-        const { Cell::new(AccessibilityOptions {
-            font_scale: 1.0,
-            reduce_motion: false,
-            reduce_transparency: false,
-            increase_contrast: false,
-            bold_text: false,
-            invert_colors: false,
-        }) };
-}
-
 /// Installs what the platform reports. A backend calls this at start and on
 /// every change, and forces a root render when the answer is true, so the
 /// theme, the glass and the animations read the new options.
 pub fn set_platform_accessibility_options(options: AccessibilityOptions) -> bool {
     let options = options.normalized();
-    PLATFORM_ACCESSIBILITY_OPTIONS.with(|cell| {
-        let changed = cell.get() != options;
-        cell.set(options);
-        changed
-    })
+    crate::thread_state::with(|state| state.accessibility_options.replace(options) != options)
 }
 
 /// What the platform last reported.
 pub fn platform_accessibility_options() -> AccessibilityOptions {
-    PLATFORM_ACCESSIBILITY_OPTIONS.with(Cell::get)
+    crate::thread_state::with(|state| state.accessibility_options.get())
 }

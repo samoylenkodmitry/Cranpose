@@ -9,7 +9,7 @@ fn an_in_flight_request_outlives_the_process_that_started_it() {
     begin_request("test.pick");
     assert_eq!(in_flight_request().as_deref(), Some("test.pick"));
 
-    IN_FLIGHT.with(|slot| *slot.borrow_mut() = None);
+    crate::thread_state::with(|state| *state.in_flight_request.borrow_mut() = None);
     assert_eq!(
         in_flight_request().as_deref(),
         Some("test.pick"),

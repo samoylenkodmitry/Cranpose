@@ -499,23 +499,18 @@ fn commit_merged_record_locked(
     })
 }
 
-std::thread_local! {
-    // Record values displaced inside snapshot bookkeeping, and how many
-    // operations that hold them back are running.
-    static RETIRED_RECORD_VALUES: RefCell<Vec<Box<dyn RecordValue>>> =
-        const { RefCell::new(Vec::new()) };
-    static RETIRE_DEPTH: Cell<usize> = const { Cell::new(0) };
-}
-
 /// Drops `value`, a record value displaced inside snapshot bookkeeping, once
 /// the outermost [`RetiredValuesScope`] ends, or now when none is open: its
 /// destructor may read or write state.
 pub(crate) fn retire_record_value(value: Box<dyn RecordValue>) {
-    if RETIRE_DEPTH.with(Cell::get) == 0 {
-        drop(value);
-    } else {
-        RETIRED_RECORD_VALUES.with(|retired| retired.borrow_mut().push(value));
-    }
+    let held = crate::thread_state::try_snapshots(|state| {
+        if state.retire_depth.get() == 0 {
+            return Some(value);
+        }
+        state.retired_record_values.borrow_mut().push(value);
+        None
+    });
+    drop(held);
 }
 
 /// Holds back the drop of retired record values until the outermost scope
@@ -524,22 +519,21 @@ pub(crate) struct RetiredValuesScope(());
 
 impl RetiredValuesScope {
     pub(crate) fn enter() -> Self {
-        RETIRE_DEPTH.with(|depth| depth.set(depth.get() + 1));
+        crate::thread_state::snapshots(|state| {
+            state.retire_depth.set(state.retire_depth.get() + 1);
+        });
         Self(())
     }
 }
 
 impl Drop for RetiredValuesScope {
     fn drop(&mut self) {
-        let outermost = RETIRE_DEPTH.with(|depth| {
-            depth.set(depth.get() - 1);
-            depth.get() == 0
+        let retired = crate::thread_state::snapshots(|state| {
+            let depth = state.retire_depth.get() - 1;
+            state.retire_depth.set(depth);
+            (depth == 0).then(|| state.retired_record_values.take())
         });
-        if outermost {
-            let retired =
-                RETIRED_RECORD_VALUES.with(|retired| std::mem::take(&mut *retired.borrow_mut()));
-            drop(retired);
-        }
+        drop(retired);
     }
 }
 
@@ -1138,11 +1132,6 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
     }
 }
 
-thread_local! {
-    static ACTIVE_UPDATES: RefCell<HashSet<ObjectId>> = RefCell::new(HashSet::default());
-    static PENDING_WRITES: RefCell<HashSet<ObjectId>> = RefCell::new(HashSet::default());
-}
-
 pub(crate) struct UpdateScope {
     id: ObjectId,
     finished: bool,
@@ -1150,11 +1139,9 @@ pub(crate) struct UpdateScope {
 
 impl UpdateScope {
     pub(crate) fn new(id: ObjectId) -> Self {
-        ACTIVE_UPDATES.with(|active| {
-            active.borrow_mut().insert(id);
-        });
-        PENDING_WRITES.with(|pending| {
-            pending.borrow_mut().remove(&id);
+        crate::thread_state::snapshots(|state| {
+            state.active_updates.borrow_mut().insert(id);
+            state.pending_writes.borrow_mut().remove(&id);
         });
         Self {
             id,
@@ -1164,10 +1151,10 @@ impl UpdateScope {
 
     pub(crate) fn finish(mut self) -> bool {
         self.finished = true;
-        ACTIVE_UPDATES.with(|active| {
-            active.borrow_mut().remove(&self.id);
-        });
-        PENDING_WRITES.with(|pending| pending.borrow_mut().remove(&self.id))
+        crate::thread_state::snapshots(|state| {
+            state.active_updates.borrow_mut().remove(&self.id);
+            state.pending_writes.borrow_mut().remove(&self.id)
+        })
     }
 }
 
@@ -1176,21 +1163,17 @@ impl Drop for UpdateScope {
         if self.finished {
             return;
         }
-        ACTIVE_UPDATES.with(|active| {
-            active.borrow_mut().remove(&self.id);
-        });
-        PENDING_WRITES.with(|pending| {
-            pending.borrow_mut().remove(&self.id);
+        crate::thread_state::snapshots(|state| {
+            state.active_updates.borrow_mut().remove(&self.id);
+            state.pending_writes.borrow_mut().remove(&self.id);
         });
     }
 }
 
 fn mark_update_write(id: ObjectId) {
-    ACTIVE_UPDATES.with(|active| {
-        if active.borrow().contains(&id) {
-            PENDING_WRITES.with(|pending| {
-                pending.borrow_mut().insert(id);
-            });
+    crate::thread_state::snapshots(|state| {
+        if state.active_updates.borrow().contains(&id) {
+            state.pending_writes.borrow_mut().insert(id);
         }
     });
 }
@@ -1686,7 +1669,7 @@ impl<T: Clone + 'static> MutableState<T> {
     }
 
     pub(crate) fn from_lease(lease: &Rc<runtime::StateHandleLease>) -> Self {
-        Self::from_parts(lease.id(), lease.runtime().id())
+        Self::from_parts(lease.id(), lease.runtime_id())
     }
 
     pub fn is_alive(&self) -> bool {

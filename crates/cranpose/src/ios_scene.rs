@@ -1,15 +1,13 @@
 #![expect(unsafe_code)]
 
-use std::cell::RefCell;
-
 use objc2::{
     ClassType, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, rc::Retained,
     runtime::AnyClass,
 };
 use objc2_foundation::{NSObject, NSObjectProtocol};
 use objc2_ui_kit::{
-    UIScene, UISceneConnectionOptions, UISceneDelegate, UISceneSession, UIView, UIWindow,
-    UIWindowScene, UIWindowSceneDelegate,
+    UIScene, UISceneConnectionOptions, UISceneDelegate, UISceneSession, UIView, UIWindowScene,
+    UIWindowSceneDelegate,
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
@@ -32,7 +30,9 @@ define_class!(
             _options: &UISceneConnectionOptions,
         ) {
             if let Some(window_scene) = scene.downcast_ref::<UIWindowScene>() {
-                SCENE.with(|cell| *cell.borrow_mut() = Some(window_scene.retain()));
+                crate::thread_state::with(|state| {
+                    *state.ios.window_scene.borrow_mut() = Some(window_scene.retain());
+                });
                 link();
             }
         }
@@ -46,11 +46,6 @@ impl SceneDelegate {
         let this = Self::alloc(mtm).set_ivars(());
         unsafe { msg_send![super(this), init] }
     }
-}
-
-thread_local! {
-    static SCENE: RefCell<Option<Retained<UIWindowScene>>> = const { RefCell::new(None) };
-    static WINDOW: RefCell<Option<Retained<UIWindow>>> = const { RefCell::new(None) };
 }
 
 pub(crate) fn register_class() {
@@ -72,7 +67,7 @@ pub(crate) fn hold_window(window: &dyn Window) {
     let Some(ui_window) = ui_window else {
         return;
     };
-    WINDOW.with(|cell| *cell.borrow_mut() = Some(ui_window));
+    crate::thread_state::with(|state| *state.ios.window.borrow_mut() = Some(ui_window));
     link();
 }
 
@@ -80,20 +75,18 @@ fn link() {
     if MainThreadMarker::new().is_none() {
         return;
     }
-    SCENE.with(|scene_cell| {
-        let scene_borrow = scene_cell.borrow();
+    crate::thread_state::with(|state| {
+        let scene_borrow = state.ios.window_scene.borrow();
         let Some(scene) = scene_borrow.as_ref() else {
             return;
         };
-        WINDOW.with(|window_cell| {
-            let window_borrow = window_cell.borrow();
-            let Some(window) = window_borrow.as_ref() else {
-                return;
-            };
-            if window.windowScene().is_none() {
-                window.setWindowScene(Some(scene));
-                window.makeKeyAndVisible();
-            }
-        });
+        let window_borrow = state.ios.window.borrow();
+        let Some(window) = window_borrow.as_ref() else {
+            return;
+        };
+        if window.windowScene().is_none() {
+            window.setWindowScene(Some(scene));
+            window.makeKeyAndVisible();
+        }
     });
 }

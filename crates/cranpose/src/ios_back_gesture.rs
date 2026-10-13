@@ -1,7 +1,5 @@
 #![expect(unsafe_code)]
 
-use std::cell::RefCell;
-
 use cranpose_services::push_back_request;
 use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained, sel};
 use objc2_foundation::{NSObject, NSObjectProtocol};
@@ -12,7 +10,7 @@ define_class!(
     #[thread_kind = MainThreadOnly]
     #[name = "CranposeBackGestureTarget"]
     #[ivars = ()]
-    struct BackGestureTarget;
+    pub(crate) struct BackGestureTarget;
 
     unsafe impl NSObjectProtocol for BackGestureTarget {}
 
@@ -31,10 +29,6 @@ impl BackGestureTarget {
         let this = Self::alloc(mtm).set_ivars(());
         unsafe { msg_send![super(this), init] }
     }
-}
-
-thread_local! {
-    static TARGET: RefCell<Option<Retained<BackGestureTarget>>> = const { RefCell::new(None) };
 }
 
 pub(crate) fn register() {
@@ -57,5 +51,5 @@ pub(crate) fn register() {
     };
     recognizer.setEdges(UIRectEdge::Left);
     root_view.addGestureRecognizer(&recognizer);
-    TARGET.with(|cell| *cell.borrow_mut() = Some(target));
+    crate::thread_state::with(|state| *state.ios.back_gesture_target.borrow_mut() = Some(target));
 }

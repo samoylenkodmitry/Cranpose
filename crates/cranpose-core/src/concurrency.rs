@@ -549,15 +549,11 @@ impl<T: Send + 'static> EventSender<T> {
     }
 }
 
-thread_local! {
-    static BRIDGES: RefCell<std::collections::HashMap<u64, Rc<dyn std::any::Any>>> =
-        RefCell::new(std::collections::HashMap::new());
-}
-
 static NEXT_BRIDGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 fn deliver_bridged<T: Send + 'static>(bridge: u64, event: T) {
-    let channel = BRIDGES.with(|bridges| bridges.borrow().get(&bridge).cloned());
+    let channel =
+        crate::thread_state::runtimes(|state| state.bridges.borrow().get(&bridge).cloned());
     let Some(channel) = channel else {
         log::debug!("event bridge {bridge} is gone, one event dropped");
         return;
@@ -576,8 +572,9 @@ impl<T: Send + 'static> Bridge<T> {
     fn new() -> Self {
         let id = NEXT_BRIDGE.fetch_add(1, Ordering::Relaxed);
         let channel = Rc::new(EventChannel::<T>::new());
-        BRIDGES.with(|bridges| {
-            bridges
+        crate::thread_state::runtimes(|state| {
+            state
+                .bridges
                 .borrow_mut()
                 .insert(id, Rc::clone(&channel) as Rc<dyn std::any::Any>)
         });
@@ -587,7 +584,7 @@ impl<T: Send + 'static> Bridge<T> {
 
 impl<T: Send + 'static> Drop for Bridge<T> {
     fn drop(&mut self) {
-        BRIDGES.with(|bridges| bridges.borrow_mut().remove(&self.id));
+        crate::thread_state::try_runtimes(|state| state.bridges.borrow_mut().remove(&self.id));
         self.channel.close();
     }
 }

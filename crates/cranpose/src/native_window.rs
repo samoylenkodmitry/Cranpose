@@ -16,7 +16,7 @@ use std::collections::HashMap;
     not(target_arch = "wasm32")
 ))]
 use std::hash::Hash;
-use std::{cell::RefCell, fmt, rc::Rc};
+use std::{fmt, rc::Rc};
 
 use cranpose_core::MutableState;
 use cranpose_ui::{Modifier, Point, PointerEventKind, PointerInputScope, Size, composable};
@@ -801,7 +801,7 @@ type NativeWindowDragHandler = Rc<dyn Fn() -> bool>;
 type NativeWindowResizeHandler = Rc<dyn Fn(WindowResizeDirection)>;
 
 #[derive(Clone, Default)]
-struct NativeWindowDispatchContext {
+pub(crate) struct NativeWindowDispatchContext {
     drag_handler: Option<NativeWindowDragHandler>,
     resize_handler: Option<NativeWindowResizeHandler>,
 }
@@ -843,7 +843,7 @@ struct NativeWindowRegistration {
 ))]
 #[derive(Default)]
 pub(crate) struct NativeWindowRegistry {
-    windows: RefCell<HashMap<NativeWindowKey, NativeWindowRequest>>,
+    windows: std::cell::RefCell<HashMap<NativeWindowKey, NativeWindowRequest>>,
     next_revision: Cell<u64>,
 }
 
@@ -900,20 +900,6 @@ impl NativeWindowRegistry {
     }
 }
 
-#[cfg(all(
-    feature = "native-windows",
-    feature = "renderer-wgpu",
-    not(target_arch = "wasm32")
-))]
-thread_local! {
-    static CURRENT_NATIVE_WINDOW_REGISTRY: crate::scoped_weak_stack::ScopedWeakStack<NativeWindowRegistry> =
-        const { crate::scoped_weak_stack::ScopedWeakStack::new() };
-}
-
-thread_local! {
-    static CURRENT_NATIVE_WINDOW_DISPATCH: RefCell<Vec<NativeWindowDispatchContext>> = const { RefCell::new(Vec::new()) };
-}
-
 fn request_native_window_drag() -> bool {
     current_native_window_dispatch_context()
         .and_then(|context| context.drag_handler)
@@ -938,7 +924,7 @@ pub(crate) fn with_native_window_registry<R>(
     registry: &Rc<NativeWindowRegistry>,
     f: impl FnOnce() -> R,
 ) -> R {
-    CURRENT_NATIVE_WINDOW_REGISTRY.with(|stack| stack.with_scope(registry, f))
+    crate::thread_state::with(|state| state.native_window_registry.with_scope(registry, f))
 }
 
 #[cfg(all(
@@ -947,7 +933,7 @@ pub(crate) fn with_native_window_registry<R>(
     not(target_arch = "wasm32")
 ))]
 fn current_native_window_registry() -> Option<Rc<NativeWindowRegistry>> {
-    CURRENT_NATIVE_WINDOW_REGISTRY.with(crate::scoped_weak_stack::ScopedWeakStack::current)
+    crate::thread_state::with(|state| state.native_window_registry.current())
 }
 
 #[cfg(all(
@@ -979,7 +965,7 @@ pub(crate) fn clear_native_window_requests(registry: &NativeWindowRegistry) {
 }
 
 fn current_native_window_dispatch_context() -> Option<NativeWindowDispatchContext> {
-    CURRENT_NATIVE_WINDOW_DISPATCH.with(|stack| stack.borrow().last().cloned())
+    crate::thread_state::with(|state| state.native_window_dispatch.borrow().last().cloned())
 }
 
 #[cfg(all(
@@ -995,14 +981,14 @@ fn with_native_window_dispatch_context<R>(
 
     impl Drop for DispatchContextGuard {
         fn drop(&mut self) {
-            CURRENT_NATIVE_WINDOW_DISPATCH.with(|stack| {
-                stack.borrow_mut().pop();
+            crate::thread_state::with(|state| {
+                state.native_window_dispatch.borrow_mut().pop();
             });
         }
     }
 
-    CURRENT_NATIVE_WINDOW_DISPATCH.with(|stack| {
-        stack.borrow_mut().push(context);
+    crate::thread_state::with(|state| {
+        state.native_window_dispatch.borrow_mut().push(context);
     });
     let _guard = DispatchContextGuard;
     f()

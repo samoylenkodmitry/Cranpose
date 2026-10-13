@@ -507,10 +507,12 @@ impl Modifier {
     ///
     /// Example: `Modifier::empty().clip_to_bounds()`
     pub fn clip_to_bounds(self) -> Self {
-        thread_local! {
-            static CLIP_TO_BOUNDS: Modifier = Modifier::with_element(ClipToBoundsElement::new());
-        }
-        let modifier = CLIP_TO_BOUNDS.with(Clone::clone);
+        let modifier = crate::thread_state::with(|state| {
+            state
+                .clip_to_bounds
+                .get_or_init(|| Modifier::with_element(ClipToBoundsElement::new()))
+                .clone()
+        });
         let modifier =
             modifier.with_inspector_metadata(inspector_metadata("clipToBounds", |info| {
                 info.add_property("clipToBounds", "true");

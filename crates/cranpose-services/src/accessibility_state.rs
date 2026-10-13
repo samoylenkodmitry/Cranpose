@@ -2,8 +2,6 @@
 //! that speaks guidance, slows an automatic step down or drops a gesture-only
 //! path while a screen reader is on.
 
-use std::cell::Cell;
-
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf};
 use cranpose_macros::composable;
 
@@ -16,25 +14,16 @@ pub struct AccessibilityState {
     pub screen_reader_on: bool,
 }
 
-thread_local! {
-    static PLATFORM_ACCESSIBILITY_STATE: Cell<AccessibilityState> =
-        const { Cell::new(AccessibilityState { screen_reader_on: false }) };
-}
-
 /// Installs what the platform reports. A backend calls this on every check
 /// and forces a root render when the answer is true, so composition reads
 /// the new state.
 pub fn set_platform_accessibility_state(state: AccessibilityState) -> bool {
-    PLATFORM_ACCESSIBILITY_STATE.with(|cell| {
-        let changed = cell.get() != state;
-        cell.set(state);
-        changed
-    })
+    crate::thread_state::with(|thread| thread.accessibility_state.replace(state) != state)
 }
 
 /// What the platform last reported.
 pub fn platform_accessibility_state() -> AccessibilityState {
-    PLATFORM_ACCESSIBILITY_STATE.with(Cell::get)
+    crate::thread_state::with(|state| state.accessibility_state.get())
 }
 
 /// The state a composable reads: what the platform reported, unless a

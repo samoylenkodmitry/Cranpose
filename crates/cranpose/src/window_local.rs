@@ -1,4 +1,4 @@
-use std::{cell::RefCell, fmt};
+use std::fmt;
 
 use cranpose_core::{CompositionLocal, ProvidedValue, compositionLocalOf};
 use cranpose_foundation::{
@@ -8,15 +8,11 @@ use cranpose_ui::Modifier;
 
 use crate::native_window::WindowState;
 
-thread_local! {
-    static WINDOW_STATE: RefCell<Option<CompositionLocal<Option<WindowState>>>> =
-        const { RefCell::new(None) };
-}
-
 fn window_state_local() -> CompositionLocal<Option<WindowState>> {
-    WINDOW_STATE.with(|slot| {
-        slot.borrow_mut()
-            .get_or_insert_with(|| compositionLocalOf(|| None))
+    crate::thread_state::with(|state| {
+        state
+            .window_state_local
+            .get_or_init(|| compositionLocalOf(|| None))
             .clone()
     })
 }

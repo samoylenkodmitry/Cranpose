@@ -6,14 +6,10 @@
 //! The wcKSRD optical program samples both sharp and blurred rays from one
 //! captured backdrop so displacement never reveals a second scene layer.
 
-use std::{
-    cell::RefCell,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{
     Color, PlaceholderShape, Rect, RenderEffect, RuntimeShader, ShaderPlaceholder, SubstrateSpec,
-    render_effect::ShaderSpecializationCache,
 };
 
 /// One pipeline-overridable flag of `liquid_glass.wgsl` and the uniform
@@ -348,10 +344,12 @@ fn pinned_refraction_mode(uniforms: &[f32]) -> Option<u8> {
     matches!(mode, 0.0 | 1.0 | 2.0 | 3.0).then_some(mode as u8)
 }
 
+pub(crate) const GLASS_SPECIALIZATION_CACHE_CAPACITY: usize = 32;
+
 /// A material's specialization, and with folding off, the folded one its
 /// large draws take.
 #[derive(PartialEq)]
-struct GlassCacheKey {
+pub(crate) struct GlassCacheKey {
     own: GlassSpecializationKey,
     large_draws: Option<GlassSpecializationKey>,
 }
@@ -465,11 +463,6 @@ impl GlassSpecializationKey {
 /// than the process: a test of the folds asks for them whatever the platform.
 pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: bool) {
     const _: () = assert!(LIQUID_GLASS_SPECIALIZATIONS.len() <= u32::BITS as usize);
-    const CACHE_CAPACITY: usize = 32;
-    thread_local! {
-        static CACHE: RefCell<ShaderSpecializationCache<GlassCacheKey, CACHE_CAPACITY>> =
-            const { RefCell::new(ShaderSpecializationCache::new()) };
-    }
     let uniforms = shader.uniforms();
     let content_mask = slot(uniforms, 112) > 0.5;
     let own = GlassSpecializationKey::for_uniforms(uniforms, folds);
@@ -478,15 +471,18 @@ pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: boo
         large_draws: (!folds).then(|| own.folded(uniforms)),
     };
     shader.set_preserves_transparency(content_mask);
-    CACHE.with_borrow_mut(|cache| {
-        cache.apply(shader, key, |shader, key| match &key.large_draws {
-            Some(large) => shader.specialize_with_large_draws(
-                LARGE_GLASS_DRAW_PIXELS,
-                |shader| large.apply(shader),
-                |shader| key.own.apply(shader),
-            ),
-            None => key.own.apply(shader),
-        });
+    crate::thread_state::with(|state| {
+        state
+            .glass_specializations
+            .borrow_mut()
+            .apply(shader, key, |shader, key| match &key.large_draws {
+                Some(large) => shader.specialize_with_large_draws(
+                    LARGE_GLASS_DRAW_PIXELS,
+                    |shader| large.apply(shader),
+                    |shader| key.own.apply(shader),
+                ),
+                None => key.own.apply(shader),
+            });
     });
 }
 

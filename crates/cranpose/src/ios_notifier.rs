@@ -1,7 +1,6 @@
 #![expect(unsafe_code)]
 
 use std::{
-    cell::RefCell,
     collections::HashMap,
     sync::{Arc, Mutex, OnceLock},
 };
@@ -73,15 +72,13 @@ impl Notifier for IosNotifier {
     }
 }
 
-thread_local! {
-    static DELEGATE: RefCell<Option<Retained<NotificationDelegate>>> = const { RefCell::new(None) };
-}
-
 fn install_delegate() {
     let delegate = NotificationDelegate::new();
     let center = UNUserNotificationCenter::currentNotificationCenter();
     center.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
-    DELEGATE.with(|cell| *cell.borrow_mut() = Some(delegate));
+    crate::thread_state::with(|state| {
+        *state.ios.notification_delegate.borrow_mut() = Some(delegate);
+    });
 }
 
 define_class!(
@@ -89,7 +86,7 @@ define_class!(
     #[thread_kind = MainThreadOnly]
     #[name = "CranposeNotificationDelegate"]
     #[ivars = ()]
-    struct NotificationDelegate;
+    pub(crate) struct NotificationDelegate;
 
     unsafe impl NSObjectProtocol for NotificationDelegate {}
 

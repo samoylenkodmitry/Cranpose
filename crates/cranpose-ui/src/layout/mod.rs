@@ -1065,20 +1065,16 @@ fn snapshot_node_data(
         });
     modifier_slices.publish_window_geometry(top_left, window_transform, size);
 
-    let data = LayoutNodeData::new(
+    let data = LayoutNodeData {
+        #[cfg(feature = "inspection")]
+        source_trace: applier
+            .with_node::<LayoutNode, _>(node_id, |node| node.source_trace.clone())
+            .unwrap_or_default(),
         modifier,
         resolved_modifiers,
         modifier_slices,
         semantics,
         kind,
-    );
-    #[cfg(feature = "inspection")]
-    let data = {
-        let mut data = data;
-        data.source_trace = applier
-            .with_node::<LayoutNode, _>(node_id, |node| node.source_trace.clone())
-            .unwrap_or_default();
-        data
     };
     Ok((data, window_transform))
 }

@@ -121,22 +121,22 @@ fn push_pending_input_from_android_key_event(
     true
 }
 
-thread_local! {
-    static ANDROID_PLATFORM_ENV: Rc<crate::platform_env::PlatformEnvironment> =
-        crate::platform_env::PlatformEnvironment::new();
-    static ANDROID_IME_DENSITY: Cell<f32> = const { Cell::new(1.0) };
-}
-
 pub(crate) fn android_platform_env() -> Rc<crate::platform_env::PlatformEnvironment> {
-    ANDROID_PLATFORM_ENV.with(Rc::clone)
+    crate::thread_state::with(|state| {
+        Rc::clone(
+            state
+                .android_platform_env
+                .get_or_init(crate::platform_env::PlatformEnvironment::new),
+        )
+    })
 }
 
 fn set_android_ime_density(density: f32) {
-    ANDROID_IME_DENSITY.with(|cell| cell.set(density.max(f32::EPSILON)));
+    crate::thread_state::with(|state| state.android_ime_density.set(density.max(f32::EPSILON)));
 }
 
 fn set_android_ime_bottom_px(bottom_px: i32) -> bool {
-    let density = ANDROID_IME_DENSITY.with(Cell::get);
+    let density = crate::thread_state::with(|state| state.android_ime_density.get());
     let bottom = (bottom_px.max(0) as f32) / density;
     let insets = cranpose_ui::EdgeInsets {
         bottom,

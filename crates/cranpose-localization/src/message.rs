@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc, sync::OnceLock};
+use std::{rc::Rc, sync::OnceLock};
 
 use fluent_bundle::{FluentArgs, FluentBundle, FluentError, FluentResource, FluentValue};
 
@@ -100,6 +100,8 @@ pub(crate) fn fluent_args<'a>(arguments: &'a [Argument<'_>]) -> FluentArgs<'a> {
         .collect()
 }
 
+pub(crate) type SourceBundle = Result<Rc<FluentBundle<&'static FluentResource>>, String>;
+
 impl SourceCatalog {
     /// Defines source-language Fluent data. Macros validate it before compilation.
     pub const fn new(source_locale: &'static str, resource: &'static str) -> Self {
@@ -110,13 +112,10 @@ impl SourceCatalog {
         }
     }
 
-    fn bundle(&'static self) -> Result<Rc<FluentBundle<&'static FluentResource>>, String> {
-        type SourceBundle = Result<Rc<FluentBundle<&'static FluentResource>>, String>;
-        thread_local! {
-            static SOURCES: RefCell<BTreeMap<usize, SourceBundle>> = const { RefCell::new(BTreeMap::new()) };
-        }
-        SOURCES.with(|sources| {
-            sources
+    fn bundle(&'static self) -> SourceBundle {
+        crate::thread_state::with(|state| {
+            state
+                .source_bundles
                 .borrow_mut()
                 .entry(std::ptr::from_ref(self).addr())
                 .or_insert_with(|| self.prepare().map(Rc::new))

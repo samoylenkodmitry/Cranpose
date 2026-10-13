@@ -28,8 +28,8 @@ impl GlobalSnapshot {
 
     /// Get or create the global snapshot instance.
     pub fn get_or_create() -> Rc<Self> {
-        GLOBAL_SNAPSHOT.with(|cell| {
-            let mut snapshot = cell.borrow_mut();
+        crate::thread_state::snapshots(|state| {
+            let mut snapshot = state.global.borrow_mut();
             if let Some(global) = snapshot.as_ref() {
                 return Rc::clone(global);
             }
@@ -62,14 +62,10 @@ impl GlobalSnapshot {
     }
 }
 
-thread_local! {
-    static GLOBAL_SNAPSHOT: RefCell<Option<Rc<GlobalSnapshot>>> = const { RefCell::new(None) };
-}
-
 #[cfg(test)]
 pub(crate) fn clear_global_snapshot_for_tests() {
-    GLOBAL_SNAPSHOT.with(|cell| {
-        *cell.borrow_mut() = None;
+    crate::thread_state::snapshots(|state| {
+        *state.global.borrow_mut() = None;
     });
 }
 

@@ -664,16 +664,16 @@ pub fn collect_modifier_slices(chain: &ModifierNodeChain) -> ModifierNodeSlices 
 #[derive(Default)]
 pub(crate) struct SlicesSnapshot(std::cell::Cell<Option<Rc<ModifierNodeSlices>>>);
 
-thread_local! {
-    static EMPTY_SLICES: Rc<ModifierNodeSlices> = Rc::default();
-}
-
 impl SlicesSnapshot {
     pub(crate) fn get(&self) -> Rc<ModifierNodeSlices> {
         let snapshot = self.0.take();
         let shared = snapshot.clone();
         self.0.set(snapshot);
-        shared.unwrap_or_else(|| EMPTY_SLICES.with(Rc::clone))
+        shared.unwrap_or_else(|| {
+            crate::thread_state::with(|state| {
+                Rc::clone(state.empty_slices.get_or_init(Rc::default))
+            })
+        })
     }
 
     /// Collects `chain`'s slices into the snapshot. Its storage is reused

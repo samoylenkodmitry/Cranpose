@@ -21,9 +21,9 @@ impl std::fmt::Debug for SnapshotWeakSet {
 }
 
 impl SnapshotWeakSet {
-    pub(crate) fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
-            entries: Vec::with_capacity(16),
+            entries: Vec::new(),
         }
     }
 

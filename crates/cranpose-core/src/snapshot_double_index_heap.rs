@@ -29,8 +29,14 @@ pub struct SnapshotDoubleIndexHeap {
 
 impl SnapshotDoubleIndexHeap {
     /// Creates a new empty heap with default capacity
-    pub fn new() -> Self {
-        Self::with_capacity(INITIAL_CAPACITY)
+    pub const fn new() -> Self {
+        Self {
+            size: 0,
+            values: Vec::new(),
+            index: Vec::new(),
+            handles: Vec::new(),
+            first_free_handle: 0,
+        }
     }
 
     /// Creates a new empty heap with specified initial capacity
@@ -127,7 +133,9 @@ impl SnapshotDoubleIndexHeap {
             return;
         }
 
-        let new_capacity = capacity.max(self.values.capacity() * 2);
+        let new_capacity = capacity
+            .max(self.values.capacity() * 2)
+            .max(INITIAL_CAPACITY);
 
         self.values.reserve(new_capacity - self.values.capacity());
         self.index.reserve(new_capacity - self.index.capacity());

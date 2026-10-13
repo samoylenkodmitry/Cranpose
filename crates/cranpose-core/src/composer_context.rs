@@ -1,14 +1,9 @@
 use std::{
-    cell::RefCell,
     rc::Rc,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use crate::{Composer, ComposerCore};
-
-thread_local! {
-    static CURRENT_COMPOSER: RefCell<Option<Rc<ComposerCore>>> = const { RefCell::new(None) };
-}
+use crate::{Composer, ComposerCore, thread_state};
 
 /// How many threads have a composer installed. Code outside any
 /// composition, as a draw closure's branch guards are, reads this instead of
@@ -42,7 +37,7 @@ pub fn enter(composer: &Composer) -> ComposerScopeGuard {
 
 fn replace_current(composer: Option<Rc<ComposerCore>>) -> Option<Rc<ComposerCore>> {
     let installs = composer.is_some();
-    let previous = CURRENT_COMPOSER.with(|current| current.replace(composer));
+    let previous = thread_state::runtimes(|state| state.current_composer.replace(composer));
     match (previous.is_some(), installs) {
         (false, true) => {
             INSTALLED_COMPOSERS.fetch_add(1, Ordering::Relaxed);
@@ -67,8 +62,9 @@ pub(crate) fn without_composer<R>(f: impl FnOnce() -> R) -> R {
 /// # Panics
 /// Panics if there is no active composer.
 pub fn with_composer<R>(f: impl FnOnce(&Composer) -> R) -> R {
-    CURRENT_COMPOSER.with(|current| {
-        let core = current
+    thread_state::runtimes(|state| {
+        let core = state
+            .current_composer
             .borrow()
             .as_ref()
             .expect("with_composer: no active composer")
@@ -84,9 +80,10 @@ pub fn with_composer<R>(f: impl FnOnce(&Composer) -> R) -> R {
 /// Panics if there is no active composer.
 #[doc(hidden)]
 pub fn __current_composer() -> Composer {
-    CURRENT_COMPOSER.with(|current| {
+    thread_state::runtimes(|state| {
         Composer::from_core(
-            current
+            state
+                .current_composer
                 .borrow()
                 .as_ref()
                 .expect("with_composer: no active composer")
@@ -99,7 +96,7 @@ pub(crate) fn with_current_core<R>(f: impl FnOnce(&ComposerCore) -> R) -> Option
     if !any_composer_installed() {
         return None;
     }
-    CURRENT_COMPOSER.with(|current| current.borrow().as_deref().map(f))
+    thread_state::try_runtimes(|state| state.current_composer.borrow().as_deref().map(f)).flatten()
 }
 
 /// Return the current thread's composer.
@@ -107,10 +104,11 @@ pub fn current_composer() -> Option<Composer> {
     if !any_composer_installed() {
         return None;
     }
-    CURRENT_COMPOSER.with(|current| {
-        let core = current.borrow().as_ref()?.clone();
+    thread_state::try_runtimes(|state| {
+        let core = state.current_composer.borrow().as_ref()?.clone();
         Some(Composer::from_core(core))
     })
+    .flatten()
 }
 
 pub fn note_nested_slots_host(host: &std::rc::Rc<crate::SlotsHost>) {

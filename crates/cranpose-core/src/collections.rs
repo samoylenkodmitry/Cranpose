@@ -6,6 +6,24 @@ pub mod bounded_lru;
 pub mod pass_aged;
 pub mod rare;
 
+/// A hash map with a fixed hash seed. Unlike [`map::HashMap`], an empty one
+/// can be made in a `const` context, which a `thread_local!` initializer
+/// needs to stay eagerly initialized.
+pub type FixedHashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::FixedState>;
+
+/// The set counterpart of [`FixedHashMap`].
+pub type FixedHashSet<K> = std::collections::HashSet<K, foldhash::fast::FixedState>;
+
+/// An empty [`FixedHashMap`].
+pub const fn fixed_hash_map<K, V>() -> FixedHashMap<K, V> {
+    std::collections::HashMap::with_hasher(foldhash::fast::FixedState::with_seed(0))
+}
+
+/// An empty [`FixedHashSet`].
+pub const fn fixed_hash_set<K>() -> FixedHashSet<K> {
+    std::collections::HashSet::with_hasher(foldhash::fast::FixedState::with_seed(0))
+}
+
 #[cfg(feature = "std-hash")]
 pub mod map {
     pub use std::collections::{

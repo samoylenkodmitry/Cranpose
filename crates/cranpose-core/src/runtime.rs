@@ -12,7 +12,6 @@ use std::{
     },
     task::{Context, Poll, Waker},
     thread::ThreadId,
-    thread_local,
 };
 
 #[cfg(any(feature = "internal", test))]
@@ -23,6 +22,7 @@ use crate::{
     collections::map::HashMap,
     platform::{RuntimeScheduler, SchedulerRef},
     state::{MutationPolicy, NeverEqual},
+    thread_state,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -301,9 +301,9 @@ pub struct RuntimeId(u32);
 
 impl RuntimeId {
     fn next() -> Self {
-        NEXT_RUNTIME_ID.with(|next| {
-            let id = next.get();
-            next.set(id.wrapping_add(1));
+        thread_state::runtimes(|state| {
+            let id = state.next_runtime_id.get();
+            state.next_runtime_id.set(id.wrapping_add(1));
             Self(id)
         })
     }
@@ -442,12 +442,10 @@ struct TaskEntry {
     waker: Waker,
 }
 
-thread_local! {
-    static NEXT_TASK_LABEL: RefCell<Option<String>> = const { RefCell::new(None) };
-}
-
 pub fn label_next_ui_task(label: impl Into<String>) {
-    NEXT_TASK_LABEL.with(|held| *held.borrow_mut() = Some(label.into()));
+    thread_state::watch_thread_exit();
+    let label = label.into();
+    thread_state::runtimes(|state| *state.next_task_label.borrow_mut() = Some(label));
 }
 
 impl RuntimeInner {
@@ -588,8 +586,7 @@ impl RuntimeInner {
     fn spawn_ui_task(&self, future: Pin<Box<dyn Future<Output = ()> + 'static>>) -> u64 {
         let id = self.next_task_id.get();
         self.next_task_id.set(id + 1);
-        let label = NEXT_TASK_LABEL
-            .with(|held| held.borrow_mut().take())
+        let label = thread_state::runtimes(|state| state.next_task_label.borrow_mut().take())
             .unwrap_or_else(|| "unnamed".to_string());
         let runnable = Arc::new(AtomicBool::new(true));
         let waker = RuntimeTaskWaker::new(self, Arc::clone(&runnable)).into_waker();
@@ -898,11 +895,17 @@ pub struct Runtime {
 
 impl Runtime {
     pub fn new(scheduler: SchedulerRef) -> Self {
+        thread_state::watch_thread_exit();
         let inner = Rc::new(RuntimeInner::new(scheduler));
         let runtime = Self { inner };
         let handle = runtime.handle();
-        register_runtime_handle(&handle);
-        LAST_RUNTIME.with(|slot| *slot.borrow_mut() = Some(handle));
+        thread_state::runtimes(|state| {
+            state
+                .registered_runtimes
+                .borrow_mut()
+                .insert(handle.id(), handle.clone());
+            *state.last_runtime.borrow_mut() = Some(handle);
+        });
         runtime
     }
 
@@ -946,16 +949,15 @@ impl Drop for Runtime {
         if Rc::strong_count(&self.inner) != 1 {
             return;
         }
-        unregister_runtime_handle(self.inner.runtime_id);
-        LAST_RUNTIME.with(|slot| {
-            let should_clear = slot
-                .borrow()
-                .as_ref()
-                .is_some_and(|handle| handle.id() == self.inner.runtime_id);
-            if should_clear {
-                *slot.borrow_mut() = None;
+        let id = self.inner.runtime_id;
+        thread_state::try_runtimes(|state| {
+            state.registered_runtimes.borrow_mut().remove(&id);
+            let mut last = state.last_runtime.borrow_mut();
+            if last.as_ref().is_some_and(|handle| handle.id() == id) {
+                *last = None;
             }
         });
+        thread_state::release_when_idle();
     }
 }
 
@@ -1050,8 +1052,8 @@ pub struct TaskHandle {
     runtime: RuntimeHandle,
 }
 
-struct DeferredStateRelease {
-    runtime: RuntimeHandle,
+pub(crate) struct DeferredStateRelease {
+    runtime: Weak<RuntimeInner>,
     id: StateId,
 }
 
@@ -1065,27 +1067,22 @@ impl StateHandleLease {
         self.id
     }
 
-    pub(crate) fn runtime(&self) -> RuntimeHandle {
-        self.runtime.clone()
+    pub(crate) fn runtime_id(&self) -> RuntimeId {
+        self.runtime.id()
     }
 }
 
 impl Drop for StateHandleLease {
     fn drop(&mut self) {
-        defer_state_release(self.runtime.clone(), self.id);
+        defer_state_release(&self.runtime, self.id);
     }
-}
-
-thread_local! {
-    static STATE_OWNERS: RefCell<Vec<Vec<Rc<StateHandleLease>>>> =
-        const { RefCell::new(Vec::new()) };
 }
 
 struct StateOwnerFrame;
 
 impl Drop for StateOwnerFrame {
     fn drop(&mut self) {
-        STATE_OWNERS.with(|owners| owners.borrow_mut().pop());
+        thread_state::runtimes(|state| state.state_owners.borrow_mut().pop());
     }
 }
 
@@ -1107,11 +1104,12 @@ impl Drop for StateOwnerFrame {
 /// states to whoever is building the value puts them back on the object's
 /// lifetime: the slot drops the value, the value drops the states.
 pub(crate) fn collecting_states<T>(build: impl FnOnce() -> T) -> (T, Vec<Rc<StateHandleLease>>) {
-    STATE_OWNERS.with(|owners| owners.borrow_mut().push(Vec::new()));
+    thread_state::runtimes(|state| state.state_owners.borrow_mut().push(Vec::new()));
     let frame = StateOwnerFrame;
     let value = build();
-    let states = STATE_OWNERS.with(|owners| {
-        owners
+    let states = thread_state::runtimes(|state| {
+        state
+            .state_owners
             .borrow_mut()
             .last_mut()
             .map(std::mem::take)
@@ -1122,7 +1120,7 @@ pub(crate) fn collecting_states<T>(build: impl FnOnce() -> T) -> (T, Vec<Rc<Stat
 }
 
 fn hand_to_current_owner(lease: &Rc<StateHandleLease>) -> bool {
-    STATE_OWNERS.with(|owners| match owners.borrow_mut().last_mut() {
+    thread_state::runtimes(|state| match state.state_owners.borrow_mut().last_mut() {
         Some(owner) => {
             owner.push(Rc::clone(lease));
             true
@@ -1199,12 +1197,6 @@ impl RuntimeHandle {
 
     pub(crate) fn try_with_state_arena<R>(&self, f: impl FnOnce(&StateArena) -> R) -> Option<R> {
         self.inner.upgrade().map(|inner| f(&inner.state_arena))
-    }
-
-    fn release_state_immediate(&self, id: StateId) {
-        if let Some(inner) = self.inner.upgrade() {
-            inner.state_arena.release(id);
-        }
     }
 
     pub fn state_arena_stats(&self) -> (usize, usize) {
@@ -1547,21 +1539,10 @@ impl futures_task::ArcWake for RuntimeTaskWaker {
     #[cfg(target_arch = "wasm32")]
     fn wake_by_ref(arc_self: &Arc<Self>) {
         arc_self.runnable.store(true, Ordering::Release);
-        REGISTERED_RUNTIMES.with(|registry| {
-            if let Some(handle) = registry.borrow().get(&arc_self.runtime_id).cloned() {
-                handle.schedule();
-            }
-        });
+        if let Some(handle) = runtime_handle_by_id(arc_self.runtime_id) {
+            handle.schedule();
+        }
     }
-}
-
-thread_local! {
-    static NEXT_RUNTIME_ID: Cell<u32> = const { Cell::new(1) };
-    static ACTIVE_RUNTIMES: RefCell<Vec<RuntimeHandle>> = const { RefCell::new(Vec::new()) };
-    static LAST_RUNTIME: RefCell<Option<RuntimeHandle>> = const { RefCell::new(None) };
-    static REGISTERED_RUNTIMES: RefCell<HashMap<RuntimeId, RuntimeHandle>> = RefCell::new(HashMap::default());
-    static STATE_TEARDOWN_DEPTH: Cell<usize> = const { Cell::new(0) };
-    static DEFERRED_STATE_RELEASES: RefCell<Vec<DeferredStateRelease>> = const { RefCell::new(Vec::new()) };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1579,32 +1560,43 @@ pub struct RuntimeThreadLocalDebugStats {
 /// Returns the most recently pushed active runtime, or the last known runtime.
 /// Used by fling animation and other components that need access to the runtime.
 pub fn current_runtime_handle() -> Option<RuntimeHandle> {
-    if let Some(handle) = ACTIVE_RUNTIMES.with(|stack| stack.borrow().last().cloned()) {
-        return Some(handle);
-    }
-    LAST_RUNTIME.with(|slot| slot.borrow().clone())
+    thread_state::try_runtimes(|state| {
+        if let Some(handle) = state.active_runtimes.borrow().last() {
+            return Some(handle.clone());
+        }
+        state.last_runtime.borrow().clone()
+    })
+    .flatten()
 }
 
 pub(crate) fn runtime_handle_by_id(id: RuntimeId) -> Option<RuntimeHandle> {
-    REGISTERED_RUNTIMES.with(|registry| registry.borrow().get(&id).cloned())
+    thread_state::try_runtimes(|state| state.registered_runtimes.borrow().get(&id).cloned())
+        .flatten()
+}
+
+pub(crate) fn forget_registered_runtimes() {
+    thread_state::try_runtimes(|state| state.registered_runtimes.take());
 }
 
 pub(crate) fn with_state_arena_by_id<R>(
     id: RuntimeId,
     f: impl FnOnce(&StateArena) -> R,
 ) -> Option<R> {
-    let inner = REGISTERED_RUNTIMES.with(|registry| {
-        registry
+    let inner = thread_state::try_runtimes(|state| {
+        state
+            .registered_runtimes
             .borrow()
             .get(&id)
             .and_then(|handle| handle.inner.upgrade())
-    })?;
+    })
+    .flatten()?;
     Some(f(&inner.state_arena))
 }
 
 pub(crate) fn live_recompose_scope_count() -> usize {
-    REGISTERED_RUNTIMES.with(|registry| {
-        registry
+    thread_state::runtimes(|state| {
+        state
+            .registered_runtimes
             .borrow()
             .values()
             .map(RuntimeHandle::live_recompose_scope_count)
@@ -1613,92 +1605,90 @@ pub(crate) fn live_recompose_scope_count() -> usize {
 }
 
 pub fn debug_runtime_thread_local_stats() -> RuntimeThreadLocalDebugStats {
-    let (active_runtimes_len, active_runtimes_cap) = ACTIVE_RUNTIMES.with(|stack| {
-        let stack = stack.borrow();
-        (stack.len(), stack.capacity())
-    });
-    let (registered_runtimes_len, registered_runtimes_cap) = REGISTERED_RUNTIMES.with(|registry| {
-        let registry = registry.borrow();
-        (registry.len(), registry.capacity())
-    });
-    let (deferred_state_releases_len, deferred_state_releases_cap) =
-        DEFERRED_STATE_RELEASES.with(|releases| {
-            let releases = releases.borrow();
-            (releases.len(), releases.capacity())
-        });
-
-    RuntimeThreadLocalDebugStats {
-        active_runtimes_len,
-        active_runtimes_cap,
-        registered_runtimes_len,
-        registered_runtimes_cap,
-        deferred_state_releases_len,
-        deferred_state_releases_cap,
-    }
-}
-
-fn register_runtime_handle(handle: &RuntimeHandle) {
-    REGISTERED_RUNTIMES.with(|registry| {
-        registry.borrow_mut().insert(handle.id(), handle.clone());
-    });
-}
-
-fn unregister_runtime_handle(id: RuntimeId) {
-    REGISTERED_RUNTIMES.with(|registry| {
-        registry.borrow_mut().remove(&id);
-    });
-}
-
-fn defer_state_release(runtime: RuntimeHandle, id: StateId) {
-    let teardown_active = STATE_TEARDOWN_DEPTH.with(|depth| depth.get() > 0);
-    if teardown_active {
-        DEFERRED_STATE_RELEASES.with(|releases| {
-            releases
-                .borrow_mut()
-                .push(DeferredStateRelease { runtime, id });
-        });
-    } else {
-        runtime.release_state_immediate(id);
-    }
-}
-
-fn flush_deferred_state_releases() {
-    DEFERRED_STATE_RELEASES.with(|releases| {
-        let mut releases = releases.borrow_mut();
-        while let Some(deferred) = releases.pop() {
-            deferred.runtime.release_state_immediate(deferred.id);
+    thread_state::runtimes(|state| {
+        let active = state.active_runtimes.borrow();
+        let registered = state.registered_runtimes.borrow();
+        let deferred = state.deferred_state_releases.borrow();
+        RuntimeThreadLocalDebugStats {
+            active_runtimes_len: active.len(),
+            active_runtimes_cap: active.capacity(),
+            registered_runtimes_len: registered.len(),
+            registered_runtimes_cap: registered.capacity(),
+            deferred_state_releases_len: deferred.len(),
+            deferred_state_releases_cap: deferred.capacity(),
         }
+    })
+}
+
+fn defer_state_release(runtime: &RuntimeHandle, id: StateId) {
+    let deferred = thread_state::try_runtimes(|state| {
+        if state.state_teardown_depth.get() == 0 {
+            return false;
+        }
+        state
+            .deferred_state_releases
+            .borrow_mut()
+            .push(DeferredStateRelease {
+                runtime: Weak::clone(&runtime.inner),
+                id,
+            });
+        true
     });
+    if deferred != Some(true) {
+        release_state(&runtime.inner, id);
+    }
+}
+
+fn release_state(runtime: &Weak<RuntimeInner>, id: StateId) {
+    if let Some(inner) = runtime.upgrade() {
+        inner.state_arena.release(id);
+    }
 }
 
 pub(crate) struct StateTeardownScope;
 
 pub(crate) fn enter_state_teardown_scope() -> StateTeardownScope {
-    STATE_TEARDOWN_DEPTH.with(|depth| depth.set(depth.get() + 1));
+    thread_state::try_runtimes(|state| {
+        let depth = &state.state_teardown_depth;
+        depth.set(depth.get() + 1);
+    });
     StateTeardownScope
 }
 
 impl Drop for StateTeardownScope {
     fn drop(&mut self) {
-        STATE_TEARDOWN_DEPTH.with(|depth| {
+        let finished = thread_state::try_runtimes(|state| {
+            let depth = &state.state_teardown_depth;
             let next = depth.get().saturating_sub(1);
             depth.set(next);
             if next == 0 {
-                flush_deferred_state_releases();
+                let mut releases = state.deferred_state_releases.borrow_mut();
+                while let Some(deferred) = releases.pop() {
+                    release_state(&deferred.runtime, deferred.id);
+                }
             }
+            next == 0
         });
+        if finished == Some(true) {
+            thread_state::release_when_idle();
+        }
     }
 }
 
 pub(crate) fn push_active_runtime(handle: &RuntimeHandle) {
-    register_runtime_handle(handle);
-    ACTIVE_RUNTIMES.with(|stack| stack.borrow_mut().push(handle.clone()));
-    LAST_RUNTIME.with(|slot| *slot.borrow_mut() = Some(handle.clone()));
+    thread_state::runtimes(|state| {
+        state
+            .registered_runtimes
+            .borrow_mut()
+            .insert(handle.id(), handle.clone());
+        state.active_runtimes.borrow_mut().push(handle.clone());
+        *state.last_runtime.borrow_mut() = Some(handle.clone());
+    });
 }
 
 pub(crate) fn pop_active_runtime() {
-    ACTIVE_RUNTIMES.with(|stack| {
-        stack.borrow_mut().pop();
+    thread_state::runtimes(|state| {
+        state.active_runtimes.borrow_mut().pop();
     });
 }
 

@@ -300,18 +300,11 @@ impl Purchases for PlatformPurchases {
 
 #[cfg(not(target_arch = "wasm32"))]
 type StoreListener = Arc<dyn Fn() + Send + Sync>;
-#[cfg(target_arch = "wasm32")]
-type StoreListener = std::rc::Rc<dyn Fn()>;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn store_listeners() -> &'static Mutex<Vec<(u64, StoreListener)>> {
     static LISTENERS: OnceLock<Mutex<Vec<(u64, StoreListener)>>> = OnceLock::new();
     LISTENERS.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-#[cfg(target_arch = "wasm32")]
-thread_local! {
-    static STORE_LISTENERS: std::cell::RefCell<Vec<(u64, StoreListener)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 static NEXT_STORE_LISTENER_ID: AtomicU64 = AtomicU64::new(1);
@@ -328,7 +321,7 @@ impl Drop for StoreObserver {
             listeners.retain(|(id, _)| *id != self.id);
         }
         #[cfg(target_arch = "wasm32")]
-        STORE_LISTENERS.with(|listeners| listeners.borrow_mut().retain(|(id, _)| *id != self.id));
+        crate::thread_state::with(|state| state.store_listeners.remove(self.id));
     }
 }
 
@@ -356,11 +349,7 @@ pub fn observe_store_news(listener: impl Fn() + Send + Sync + 'static) -> StoreO
 #[cfg(target_arch = "wasm32")]
 pub fn observe_store_news(listener: impl Fn() + 'static) -> StoreObserver {
     let id = NEXT_STORE_LISTENER_ID.fetch_add(1, Ordering::Relaxed);
-    STORE_LISTENERS.with(|listeners| {
-        listeners
-            .borrow_mut()
-            .push((id, std::rc::Rc::new(listener)));
-    });
+    crate::thread_state::with(|state| state.store_listeners.add(id, std::rc::Rc::new(listener)));
     StoreObserver { id }
 }
 
@@ -377,13 +366,7 @@ pub fn note_store_news() {
         })
         .unwrap_or_default();
     #[cfg(target_arch = "wasm32")]
-    let listeners = STORE_LISTENERS.with(|listeners| {
-        listeners
-            .borrow()
-            .iter()
-            .map(|(_, listener)| std::rc::Rc::clone(listener))
-            .collect::<Vec<_>>()
-    });
+    let listeners = crate::thread_state::with(|state| state.store_listeners.all());
     for listener in listeners {
         listener();
     }

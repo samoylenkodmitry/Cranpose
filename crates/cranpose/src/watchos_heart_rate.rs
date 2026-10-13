@@ -17,7 +17,7 @@
 //! Every HealthKit object here lives on the main thread.
 
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     sync::{Arc, OnceLock},
     time::Duration,
 };
@@ -60,14 +60,35 @@ struct Workout {
     turn: u64,
 }
 
-thread_local! {
-    // SAFETY: creating the store has no preconditions.
-    static STORE: Retained<HKHealthStore> = unsafe { HKHealthStore::new() };
-    static WORKOUT: RefCell<Option<Workout>> = const { RefCell::new(None) };
-    static TURN: Cell<u64> = const { Cell::new(0) };
+pub(crate) struct HeartRateThreadState {
+    store: OnceCell<Retained<HKHealthStore>>,
+    workout: RefCell<Option<Workout>>,
+    turn: Cell<u64>,
     /// Whether something reads: between `start` and `stop`, whether or not
     /// the app is on screen.
-    static READING: Cell<bool> = const { Cell::new(false) };
+    reading: Cell<bool>,
+}
+
+impl HeartRateThreadState {
+    pub(crate) const fn new() -> Self {
+        Self {
+            store: OnceCell::new(),
+            workout: RefCell::new(None),
+            turn: Cell::new(0),
+            reading: Cell::new(false),
+        }
+    }
+}
+
+fn heart_rate_state<R>(f: impl FnOnce(&HeartRateThreadState) -> R) -> R {
+    crate::thread_state::with(|state| f(&state.heart_rate))
+}
+
+fn with_store<R>(f: impl FnOnce(&HKHealthStore) -> R) -> R {
+    heart_rate_state(|state| {
+        // SAFETY: creating the store has no preconditions.
+        f(state.store.get_or_init(|| unsafe { HKHealthStore::new() }))
+    })
 }
 
 impl HeartRateMonitor for WatchHeartRate {
@@ -86,7 +107,7 @@ impl HeartRateMonitor for WatchHeartRate {
     /// rate counts as granted and sees no reading.
     fn permission(&self) -> HeartRatePermission {
         let status = run_on_main(|_| {
-            STORE.with(|store| {
+            with_store(|store| {
                 // SAFETY: the store and the workout type are valid objects.
                 unsafe { store.authorizationStatusForType(&HKObjectType::workoutType()) }
             })
@@ -109,7 +130,7 @@ impl HeartRateMonitor for WatchHeartRate {
             let answered = RcBlock::new(|_done: Bool, _error: *mut NSError| {
                 DispatchQueue::main().exec_async(|| publish_heart_rate_permission(true));
             });
-            STORE.with(|store| {
+            with_store(|store| {
                 // SAFETY: the sets and the block outlive the call; HealthKit
                 // copies the block until the person answers.
                 unsafe {
@@ -125,7 +146,7 @@ impl HeartRateMonitor for WatchHeartRate {
 
     fn start(&self) -> Result<(), HeartRateError> {
         run_on_main(|_| {
-            READING.set(true);
+            heart_rate_state(|state| state.reading.set(true));
             // Off screen it waits for the app to come back.
             if matches!(
                 current_lifecycle_state(),
@@ -140,7 +161,7 @@ impl HeartRateMonitor for WatchHeartRate {
 
     fn stop(&self) {
         run_on_main(|_| {
-            READING.set(false);
+            heart_rate_state(|state| state.reading.set(false));
             end_workout();
         });
     }
@@ -150,26 +171,26 @@ impl HeartRateMonitor for WatchHeartRate {
 /// the app comes back while something still reads.
 fn follow_the_app(state: LifecycleState) {
     match state {
-        LifecycleState::Resumed if READING.get() => {
+        LifecycleState::Resumed if heart_rate_state(|heart| heart.reading.get()) => {
             if let Err(error) = start_workout() {
                 log::warn!("cranpose: the heart-rate workout did not start again: {error}");
             }
         }
-        LifecycleState::Paused | LifecycleState::Stopped => {
-            if WORKOUT.with_borrow(Option::is_some) {
-                end_workout();
-                publish_heart_rate(HeartRate {
-                    status: HeartRateStatus::Acquiring,
-                    bpm: None,
-                });
-            }
+        LifecycleState::Paused | LifecycleState::Stopped
+            if heart_rate_state(|heart| heart.workout.borrow().is_some()) =>
+        {
+            end_workout();
+            publish_heart_rate(HeartRate {
+                status: HeartRateStatus::Acquiring,
+                bpm: None,
+            });
         }
         _ => {}
     }
 }
 
 fn end_workout() {
-    let Some(workout) = WORKOUT.take() else {
+    let Some(workout) = heart_rate_state(|state| state.workout.take()) else {
         return;
     };
     // SAFETY: ending the session and dropping its workout on the thread that
@@ -181,10 +202,10 @@ fn end_workout() {
 }
 
 fn start_workout() -> Result<(), String> {
-    if WORKOUT.with_borrow(Option::is_some) {
+    if heart_rate_state(|state| state.workout.borrow().is_some()) {
         return Ok(());
     }
-    STORE.with(|store| {
+    with_store(|store| {
         // SAFETY: a new configuration, set before any session reads it.
         let configuration = unsafe {
             let configuration = HKWorkoutConfiguration::new();
@@ -221,13 +242,16 @@ fn start_workout() -> Result<(), String> {
             builder.beginCollectionWithStartDate_completion(&now, &began);
             builder
         };
-        let turn = TURN.get().wrapping_add(1);
-        TURN.set(turn);
-        WORKOUT.set(Some(Workout {
-            session,
-            builder,
-            turn,
-        }));
+        let turn = heart_rate_state(|state| {
+            let turn = state.turn.get().wrapping_add(1);
+            state.turn.set(turn);
+            *state.workout.borrow_mut() = Some(Workout {
+                session,
+                builder,
+                turn,
+            });
+            turn
+        });
         poll(turn);
         Ok(())
     })
@@ -237,8 +261,10 @@ fn start_workout() -> Result<(), String> {
 /// the workout of `turn` runs.
 fn poll(turn: u64) {
     on_main_after(POLL, move |_| {
-        let reading = WORKOUT.with_borrow(|workout| {
-            workout
+        let reading = heart_rate_state(|state| {
+            state
+                .workout
+                .borrow()
                 .as_ref()
                 .filter(|workout| workout.turn == turn)
                 .map(|workout| latest(&workout.builder))

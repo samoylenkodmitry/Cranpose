@@ -61,7 +61,8 @@ fn tell_input_delegate(text_changed: bool) {
     if MainThreadMarker::new().is_none() {
         return;
     }
-    VIEW.with(|cell| {
+    crate::thread_state::with(|state| {
+        let cell = &state.ios.key_input_view;
         if let Some(view) = cell.borrow().as_ref() {
             view.notify_input_delegate(text_changed);
         }
@@ -81,7 +82,8 @@ pub(crate) fn describe_for_reader(
     identifier: &str,
 ) -> Option<Retained<AnyObject>> {
     let mtm = MainThreadMarker::new()?;
-    VIEW.with(|cell| {
+    crate::thread_state::with(|state| {
+        let cell = &state.ios.key_input_view;
         let view = cell.borrow().clone()?;
         if !view.isFirstResponder() {
             return None;
@@ -104,7 +106,8 @@ pub(crate) fn describe_for_reader(
 }
 
 pub(crate) fn reader_input_active() -> bool {
-    VIEW.with(|cell| {
+    crate::thread_state::with(|state| {
+        let cell = &state.ios.key_input_view;
         cell.borrow()
             .as_ref()
             .is_some_and(|view| view.isFirstResponder())
@@ -117,7 +120,8 @@ pub(crate) fn hide_from_reader() {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
-    VIEW.with(|cell| {
+    crate::thread_state::with(|state| {
+        let cell = &state.ios.key_input_view;
         if let Some(view) = cell.borrow().as_ref() {
             let object: &NSObject = view;
             object.setIsAccessibilityElement(false, mtm);
@@ -342,11 +346,7 @@ fn urange(range: Retained<TextRange>) -> Retained<UITextRange> {
     unsafe { Retained::cast_unchecked(range) }
 }
 
-thread_local! {
-    static VIEW: RefCell<Option<Retained<KeyInputView>>> = const { RefCell::new(None) };
-}
-
-struct KeyInputIvars {
+pub(crate) struct KeyInputIvars {
     delegate: RefCell<Option<Retained<ProtocolObject<dyn UITextInputDelegate>>>>,
 }
 
@@ -355,7 +355,7 @@ define_class!(
     #[thread_kind = MainThreadOnly]
     #[name = "CranposeKeyInputView"]
     #[ivars = KeyInputIvars]
-    struct KeyInputView;
+    pub(crate) struct KeyInputView;
 
     unsafe impl NSObjectProtocol for KeyInputView {}
 
@@ -705,7 +705,7 @@ pub(crate) fn register() {
     {
         root_view.addSubview(&view);
     }
-    VIEW.with(|cell| *cell.borrow_mut() = Some(view.clone()));
+    crate::thread_state::with(|state| *state.ios.key_input_view.borrow_mut() = Some(view.clone()));
     set_platform_text_input_handler(
         Rc::new(IosKeyboard { view }) as Rc<dyn PlatformTextInputHandler>
     );

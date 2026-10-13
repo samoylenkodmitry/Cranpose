@@ -35,7 +35,7 @@ impl WindowInsets {
 /// thread), so the platform that provides it and the app that reads it observe
 /// one shared local.
 pub fn local_safe_area_insets() -> CompositionLocal<EdgeInsets> {
-    crate::environment_locals::ENVIRONMENT_LOCALS.with(|locals| {
+    crate::thread_state::with_environment(|locals| {
         locals
             .safe_area
             .get_or_init(|| compositionLocalOf(EdgeInsets::default))
@@ -56,7 +56,7 @@ pub fn local_safe_area_insets() -> CompositionLocal<EdgeInsets> {
 /// Like [`local_safe_area_insets`], the same `CompositionLocal` instance is
 /// returned on every call (cached per thread).
 pub fn local_ime_insets() -> CompositionLocal<EdgeInsets> {
-    crate::environment_locals::ENVIRONMENT_LOCALS.with(|locals| {
+    crate::thread_state::with_environment(|locals| {
         locals
             .ime
             .get_or_init(|| compositionLocalOf(EdgeInsets::default))

@@ -72,11 +72,7 @@ pub fn observe_back_requests(listener: impl Fn() + Send + Sync + 'static) -> Bac
 #[cfg(target_arch = "wasm32")]
 pub fn observe_back_requests(listener: impl Fn() + 'static) -> BackRequestObserver {
     let id = NEXT_LISTENER_ID.fetch_add(1, Ordering::Relaxed);
-    BACK_LISTENERS.with(|listeners| {
-        listeners
-            .borrow_mut()
-            .push((id, std::rc::Rc::new(listener)));
-    });
+    crate::thread_state::with(|state| state.back_listeners.add(id, std::rc::Rc::new(listener)));
     BackRequestObserver { id }
 }
 
@@ -84,11 +80,6 @@ pub fn observe_back_requests(listener: impl Fn() + 'static) -> BackRequestObserv
 fn back_listeners() -> &'static Mutex<Vec<(u64, BackListener)>> {
     static LISTENERS: OnceLock<Mutex<Vec<(u64, BackListener)>>> = OnceLock::new();
     LISTENERS.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-#[cfg(target_arch = "wasm32")]
-thread_local! {
-    static BACK_LISTENERS: std::cell::RefCell<Vec<(u64, BackListener)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -101,12 +92,7 @@ fn latest_back_listener() -> Option<BackListener> {
 
 #[cfg(target_arch = "wasm32")]
 fn latest_back_listener() -> Option<BackListener> {
-    BACK_LISTENERS.with(|listeners| {
-        listeners
-            .borrow()
-            .last()
-            .map(|(_, listener)| std::rc::Rc::clone(listener))
-    })
+    crate::thread_state::with(|state| state.back_listeners.last())
 }
 
 /// A back observer installed by [`observe_back_requests`].
@@ -121,7 +107,7 @@ impl Drop for BackRequestObserver {
             listeners.retain(|(id, _)| *id != self.id);
         }
         #[cfg(target_arch = "wasm32")]
-        BACK_LISTENERS.with(|listeners| listeners.borrow_mut().retain(|(id, _)| *id != self.id));
+        crate::thread_state::with(|state| state.back_listeners.remove(self.id));
     }
 }
 

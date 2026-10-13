@@ -519,18 +519,14 @@ impl PartialEq for TextModifierElement {
 /// How many recent text styles [`shared_text_style`] keeps.
 const SHARED_TEXT_STYLES: usize = 16;
 
-thread_local! {
-    /// Styles texts were composed with, those in use toward the front.
-    static RECENT_TEXT_STYLES: RefCell<Vec<Arc<TextStyle>>> = const { RefCell::new(Vec::new()) };
-}
-
 /// `style` shared with the texts recently composed with an equal one, so a
 /// screen of texts in a few styles keeps a few copies, not one a text, and
 /// a node updated to an element of the same style compares pointers. A
 /// style none of the kept [`SHARED_TEXT_STYLES`] equals gets a copy of its
 /// own, kept first; the last kept one goes.
 pub(crate) fn shared_text_style(style: TextStyle) -> Arc<TextStyle> {
-    RECENT_TEXT_STYLES.with_borrow_mut(|recent| {
+    crate::thread_state::with(|state| {
+        let mut recent = state.recent_text_styles.borrow_mut();
         match recent.iter().position(|kept| **kept == style) {
             Some(0) => Arc::clone(&recent[0]),
             // One step toward the front: styles in use stay among the first

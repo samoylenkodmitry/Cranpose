@@ -219,17 +219,11 @@ pub fn background_app() {
 
 #[cfg(not(target_arch = "wasm32"))]
 type Observer = Arc<dyn Fn(LifecycleEvent) + Send + Sync>;
-#[cfg(target_arch = "wasm32")]
-type Observer = std::rc::Rc<dyn Fn(LifecycleEvent)>;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn observers() -> &'static Mutex<Vec<(u64, Observer)>> {
     static SLOT: OnceLock<Mutex<Vec<(u64, Observer)>>> = OnceLock::new();
     SLOT.get_or_init(|| Mutex::new(Vec::new()))
-}
-#[cfg(target_arch = "wasm32")]
-thread_local! {
-    static OBSERVERS: std::cell::RefCell<Vec<(u64, Observer)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 static LIFECYCLE_STATE: AtomicU8 = AtomicU8::new(LifecycleState::Created as u8);
@@ -246,7 +240,7 @@ impl Drop for LifecycleObserver {
             list.retain(|(id, _)| *id != self.id);
         }
         #[cfg(target_arch = "wasm32")]
-        OBSERVERS.with(|list| list.borrow_mut().retain(|(id, _)| *id != self.id));
+        crate::thread_state::with(|state| state.lifecycle_observers.remove(self.id));
     }
 }
 /// Observes host lifecycle transitions until the returned handle is dropped.
@@ -264,7 +258,11 @@ pub fn observe_lifecycle(
 #[cfg(target_arch = "wasm32")]
 pub fn observe_lifecycle(observer: impl Fn(LifecycleEvent) + 'static) -> LifecycleObserver {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    OBSERVERS.with(|list| list.borrow_mut().push((id, std::rc::Rc::new(observer))));
+    crate::thread_state::with(|state| {
+        state
+            .lifecycle_observers
+            .add(id, std::rc::Rc::new(observer));
+    });
     LifecycleObserver { id }
 }
 /// Publishes a lifecycle transition from the platform host.
@@ -281,12 +279,7 @@ pub fn dispatch_lifecycle(event: LifecycleEvent) {
         })
         .unwrap_or_default();
     #[cfg(target_arch = "wasm32")]
-    let callbacks = OBSERVERS.with(|list| {
-        list.borrow()
-            .iter()
-            .map(|(_, callback)| std::rc::Rc::clone(callback))
-            .collect::<Vec<_>>()
-    });
+    let callbacks = crate::thread_state::with(|state| state.lifecycle_observers.all());
     for callback in callbacks {
         callback(event);
     }
