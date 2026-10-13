@@ -1,5 +1,3 @@
-mod hud;
-
 use bevy::{
     camera::RenderTarget,
     input::mouse::AccumulatedMouseMotion,
@@ -7,8 +5,8 @@ use bevy::{
     window::{PrimaryWindow, WindowResolution},
 };
 use cranpose_bevy::hud::{CranposeHudPlugin, HudPointer};
-use demo_scene::{Controls, SceneStats};
-use hud::{HudBridge, HudCommand, Stats};
+use demo_scene::{SceneControls, SceneStats};
+use demo_ui::{HudBridge, HudCommand, Stats};
 
 fn main() -> AppExit {
     let mut app = App::new();
@@ -21,9 +19,9 @@ fn main() -> AppExit {
         ..default()
     }))
     .add_plugins(CranposeHudPlugin::new(|world: &mut World| {
-        let bridge = HudBridge::default();
+        let bridge = HudBridge::new("Bevy");
         world.insert_non_send(bridge.clone());
-        Box::new(move || hud::Hud(bridge.clone()))
+        Box::new(move || demo_ui::Hud(bridge.clone()))
     }))
     .add_systems(Update, (orbit_with_mouse, sync_hud, run_commands));
     demo_scene::build(&mut app, RenderTarget::default());
@@ -53,7 +51,7 @@ fn orbit_with_mouse(
 
 fn sync_hud(
     bridge: Option<NonSend<HudBridge>>,
-    mut controls: ResMut<Controls>,
+    mut controls: ResMut<SceneControls>,
     scene: Res<SceneStats>,
     time: Res<Time>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -67,8 +65,8 @@ fn sync_hud(
         return;
     };
     let wanted = states.controls.value();
-    if *controls != wanted {
-        *controls = wanted;
+    if controls.0 != wanted {
+        controls.0 = wanted;
     }
     *since_report += time.delta_secs();
     *frames += 1;

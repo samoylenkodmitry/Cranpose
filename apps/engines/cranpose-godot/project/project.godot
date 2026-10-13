@@ -1,0 +1,16 @@
+config_version=5
+
+[application]
+
+config/name="Cranpose in Godot"
+run/main_scene="res://hud.tscn"
+config/features=PackedStringArray("4.7", "Forward Plus")
+
+[display]
+
+window/size/viewport_width=2640
+window/size/viewport_height=1640
+
+[rendering]
+
+rendering_device/driver.macos="metal"

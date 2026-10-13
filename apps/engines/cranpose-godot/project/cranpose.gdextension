@@ -1,0 +1,8 @@
+[configuration]
+entry_symbol = "gdext_rust_init"
+compatibility_minimum = 4.7
+reloadable = false
+
+[libraries]
+macos.debug = "res://../../target/debug/libcranpose_godot.dylib"
+macos.release = "res://../../target/release/libcranpose_godot.dylib"

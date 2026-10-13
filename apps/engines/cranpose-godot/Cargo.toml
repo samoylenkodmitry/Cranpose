@@ -1,0 +1,17 @@
+[package]
+name = "cranpose-godot"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "A Godot extension: a Cranpose HUD over Godot's 3D scene, and Godot's 3D scene inside a Cranpose window"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+cranpose = { workspace = true, features = ["renderer-wgpu", "embedded-default-font"] }
+cranpose-gpu-interop = { workspace = true, features = ["godot"] }
+demo-ui = { workspace = true }
+godot = { workspace = true }
+wgpu = { workspace = true }

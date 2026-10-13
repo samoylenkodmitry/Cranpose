@@ -7,29 +7,10 @@ use bevy::{
     prelude::*,
     render::view::Tonemapping,
 };
+use demo_ui::Controls;
 
-#[derive(Resource, Clone, Copy, PartialEq)]
-pub struct Controls {
-    pub yaw: f32,
-    pub pitch: f32,
-    pub distance: f32,
-    pub sun: f32,
-    pub bloom: f32,
-    pub spin: bool,
-}
-
-impl Default for Controls {
-    fn default() -> Self {
-        Self {
-            yaw: 0.6,
-            pitch: 0.42,
-            distance: 13.0,
-            sun: 0.35,
-            bloom: 0.3,
-            spin: true,
-        }
-    }
-}
+#[derive(Resource, Clone, Copy, Default, PartialEq, Deref, DerefMut)]
+pub struct SceneControls(pub Controls);
 
 #[derive(Component)]
 pub struct Spin(f32);
@@ -53,7 +34,7 @@ struct Bob {
 }
 
 pub fn build(app: &mut App, target: RenderTarget) {
-    app.insert_resource(Controls::default())
+    app.insert_resource(SceneControls::default())
         .insert_resource(ClearColor(Color::srgb(0.015, 0.02, 0.045)))
         .insert_resource(GlobalAmbientLight {
             brightness: 160.0,
@@ -198,7 +179,7 @@ fn spawn(
     }
 }
 
-fn orbit(controls: Res<Controls>, mut cameras: Query<&mut Transform, With<Camera3d>>) {
+fn orbit(controls: Res<SceneControls>, mut cameras: Query<&mut Transform, With<Camera3d>>) {
     let pitch = controls.pitch.clamp(0.05, FRAC_PI_2 - 0.05);
     let eye = Vec3::new(
         controls.yaw.cos() * pitch.cos(),
@@ -211,7 +192,7 @@ fn orbit(controls: Res<Controls>, mut cameras: Query<&mut Transform, With<Camera
     }
 }
 
-fn sun(controls: Res<Controls>, mut lights: Query<&mut Transform, With<DirectionalLight>>) {
+fn sun(controls: Res<SceneControls>, mut lights: Query<&mut Transform, With<DirectionalLight>>) {
     for mut transform in &mut lights {
         *transform = Transform::from_rotation(Quat::from_euler(
             EulerRot::YXZ,
@@ -222,7 +203,7 @@ fn sun(controls: Res<Controls>, mut lights: Query<&mut Transform, With<Direction
     }
 }
 
-fn spin(controls: Res<Controls>, time: Res<Time>, mut shapes: Query<(&mut Transform, &Spin)>) {
+fn spin(controls: Res<SceneControls>, time: Res<Time>, mut shapes: Query<(&mut Transform, &Spin)>) {
     if !controls.spin {
         return;
     }
@@ -232,7 +213,7 @@ fn spin(controls: Res<Controls>, time: Res<Time>, mut shapes: Query<(&mut Transf
     }
 }
 
-fn bob(controls: Res<Controls>, time: Res<Time>, mut shapes: Query<(&mut Transform, &Bob)>) {
+fn bob(controls: Res<SceneControls>, time: Res<Time>, mut shapes: Query<(&mut Transform, &Bob)>) {
     if !controls.spin {
         return;
     }
@@ -242,7 +223,7 @@ fn bob(controls: Res<Controls>, time: Res<Time>, mut shapes: Query<(&mut Transfo
     }
 }
 
-fn bloom(controls: Res<Controls>, mut blooms: Query<&mut Bloom>) {
+fn bloom(controls: Res<SceneControls>, mut blooms: Query<&mut Bloom>) {
     for mut bloom in &mut blooms {
         bloom.intensity = controls.bloom;
     }

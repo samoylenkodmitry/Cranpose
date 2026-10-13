@@ -1,6 +1,14 @@
 [workspace]
 resolver = "3"
-members = ["bevy-in-cranpose", "cranpose-bevy", "cranpose-hud-bevy", "demo-scene"]
+members = [
+    "bevy-in-cranpose",
+    "cranpose-bevy",
+    "cranpose-godot",
+    "cranpose-hud-bevy",
+    "demo-scene",
+    "demo-ui",
+    "gpu-interop",
+]
 
 [workspace.package]
 edition = "2024"
@@ -12,6 +20,9 @@ bevy = { version = "0.20", default-features = false }
 cranpose = { path = "../../crates/cranpose", default-features = false }
 cranpose-bevy = { path = "cranpose-bevy" }
 demo-scene = { path = "demo-scene" }
+demo-ui = { path = "demo-ui" }
+godot = { version = "0.5.5", features = ["api-4-7"] }
+cranpose-gpu-interop = { path = "gpu-interop" }
 wgpu = { version = "30", default-features = false }
 
 # Bevy pins the upstream wgpu release; this resolves it to the Cranpose fork,

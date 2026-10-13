@@ -7,17 +7,30 @@ Cranpose and game engines on one GPU device, in both directions. Tracked in
 | --- | --- |
 | `bevy-in-cranpose` | A Bevy 0.20 scene with cascaded shadows, point lights and HDR bloom inside a Cranpose window. Cranpose clips it, casts a shadow around it and draws glass over it. Drag the scene to orbit. |
 | `cranpose-hud-bevy` | A Bevy game window with a Cranpose HUD over the 3D scene. The HUD reads game state, sends commands back, and takes only the clicks that land on it. |
+| `cranpose-godot` | A Godot 4.7 extension with both directions: `window.tscn` shows Godot's 3D scene inside a Cranpose window, `hud.tscn` draws a Cranpose HUD over it. macOS with Metal. |
 
 ![Bevy inside Cranpose](screenshots/bevy-in-cranpose.jpg)
 
 ![Cranpose HUD in Bevy](screenshots/cranpose-hud-bevy.jpg)
+
+![Godot inside Cranpose](screenshots/godot-in-cranpose.jpg)
+
+![Cranpose HUD in Godot](screenshots/cranpose-hud-godot.jpg)
 
 Run them from this directory:
 
 ```sh
 cargo run -p bevy-in-cranpose
 cargo run -p cranpose-hud-bevy
+cargo build -p cranpose-godot
+godot --path cranpose-godot/project --import
+godot --path cranpose-godot/project res://window.tscn
+godot --path cranpose-godot/project res://hud.tscn
 ```
+
+The editor's first import builds the extension list; Godot 4.7.2's headless
+import can crash after that step while it loads the editor layout, which
+leaves the project ready to run.
 
 ## How the device is shared
 
@@ -37,3 +50,26 @@ a package, so the re-export package is needed.
   `GuestView` on Bevy's device, draws it into a Bevy image each frame, and
   shows that image over the scene with premultiplied alpha. `HudPointer` tells
   the game whether the HUD took the current press.
+
+## How Godot is bridged
+
+Godot renders through its own Metal driver, so Cranpose cannot share its
+`wgpu::Device`. `cranpose-gpu-interop`, the one crate with unsafe code, builds
+a wgpu device on Godot's `MTLDevice` from the handles
+`RenderingDevice.get_driver_resource` returns.
+
+Cranpose submits to a queue of its own. wgpu opens a Metal command buffer for
+each pass and holds them until it submits, and Godot's queue allows 64
+uncompleted command buffers, which Godot and a Cranpose frame with glass
+together exhaust. Each frame, one command buffer on Godot's queue hands the
+textures over:
+
+- **Godot to Cranpose:** it waits for Cranpose's last frame, copies the
+  `SubViewport` texture into a texture Cranpose samples, and signals an event
+  that Cranpose's next submit waits for.
+- **Cranpose to Godot:** it waits for the event Cranpose's frame signals and
+  copies the frame into the texture a `TextureRect` shows. Godot's own command
+  buffers that read it come later on the same queue, so Metal orders them
+  after the copy.
+
+The copies run on the GPU; no pixels pass through the CPU.

@@ -3,8 +3,9 @@ use std::{
     rc::Rc,
 };
 
-use cranpose::{liquid::prelude::*, prelude::*, text::TextUnit};
-use demo_scene::Controls;
+use cranpose::{liquid::prelude::*, prelude::*};
+
+use crate::{Controls, MUTED, text_style};
 
 pub enum HudCommand {
     DropShape,
@@ -24,10 +25,21 @@ pub struct HudStates {
     pub stats: MutableState<Stats>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct HudBridge {
+    pub engine: &'static str,
     pub states: Rc<OnceCell<HudStates>>,
     pub commands: Rc<RefCell<Vec<HudCommand>>>,
+}
+
+impl HudBridge {
+    pub fn new(engine: &'static str) -> Self {
+        Self {
+            engine,
+            states: Rc::default(),
+            commands: Rc::default(),
+        }
+    }
 }
 
 impl PartialEq for HudBridge {
@@ -37,16 +49,6 @@ impl PartialEq for HudBridge {
 }
 
 const PANEL: Color = Color::from_rgba_u8(14, 18, 30, 170);
-const MUTED: Color = Color::from_rgb_u8(200, 206, 220);
-
-fn text_style(size: f32, color: Color) -> TextStyle {
-    TextStyle::from_span_style(SpanStyle {
-        color: Some(color),
-        font_size: TextUnit::Sp(size),
-        ..Default::default()
-    })
-}
-
 fn panel(modifier: Modifier) -> Modifier {
     modifier
         .shadow_with(
@@ -65,13 +67,13 @@ pub fn Hud(bridge: HudBridge) {
     let controls = rememberMutableStateOf(Controls::default);
     let stats = rememberMutableStateOf(Stats::default);
     bridge.states.get_or_init(|| HudStates { controls, stats });
-    LiquidTheme(LiquidThemeSpec::default(), move || {
+    LiquidTheme(crate::dark_theme(), move || {
         let bridge = bridge.clone();
         Box(
             Modifier::empty().fill_max_size().padding(20.0),
             BoxSpec::default(),
             move || {
-                StatusPanel(stats);
+                StatusPanel(bridge.engine, stats);
                 FrameChip(stats);
                 SettingsPanel(controls);
                 ActionBar(controls, bridge.clone());
@@ -81,7 +83,7 @@ pub fn Hud(bridge: HudBridge) {
 }
 
 #[composable]
-fn StatusPanel(stats: MutableState<Stats>) {
+fn StatusPanel(engine: &'static str, stats: MutableState<Stats>) {
     Column(
         panel(Modifier::empty().align(Alignment::TOP_START).width(300.0)).padding(18.0),
         ColumnSpec::default().vertical_arrangement(LinearArrangement::SpacedBy(10.0)),
@@ -92,7 +94,7 @@ fn StatusPanel(stats: MutableState<Stats>) {
                 text_style(20.0, Color::WHITE),
             );
             Text(
-                "Drawn by Cranpose on Bevy's wgpu device, over Bevy's 3D frame.",
+                format!("Drawn by Cranpose on {engine}'s GPU device, over {engine}'s 3D frame."),
                 Modifier::empty(),
                 text_style(12.0, MUTED),
             );

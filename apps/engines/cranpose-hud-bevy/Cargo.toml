@@ -17,3 +17,4 @@ bevy = { workspace = true, features = [
 cranpose = { workspace = true, features = ["renderer-wgpu", "embedded-default-font"] }
 cranpose-bevy = { workspace = true }
 demo-scene = { workspace = true }
+demo-ui = { workspace = true }

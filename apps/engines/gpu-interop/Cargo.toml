@@ -1,0 +1,33 @@
+[package]
+name = "cranpose-gpu-interop"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "wgpu devices and textures made from another renderer's native GPU objects; the one Cranpose crate with unsafe code"
+
+[features]
+godot = ["dep:godot"]
+
+[dependencies]
+cranpose = { workspace = true, features = ["renderer-wgpu"] }
+godot = { workspace = true, optional = true }
+pollster = "0.4"
+thiserror = "2"
+wgpu = { workspace = true, features = ["metal", "std", "wgsl"] }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+objc2 = "0.6.3"
+objc2-metal = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "MTLDevice",
+    "MTLCommandQueue",
+    "MTLResource",
+    "MTLTexture",
+    "MTLTypes",
+    "MTLPixelFormat",
+    "MTLCommandBuffer",
+    "MTLCommandEncoder",
+    "MTLBlitCommandEncoder",
+    "MTLEvent",
+] }
