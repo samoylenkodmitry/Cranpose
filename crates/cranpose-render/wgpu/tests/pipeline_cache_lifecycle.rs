@@ -27,11 +27,15 @@ use crate::support::{
 
 const CACHE_FILE: &str = "CRANPOSE_PIPELINE_CACHE_FILE";
 const CACHE_ENABLED: &str = "CRANPOSE_PIPELINE_DISK_CACHE";
+/// These launches count the pipelines their first frame builds itself; a
+/// first frame that learns its pipelines first builds them off the frame.
+const DISCOVERY: &str = "CRANPOSE_FIRST_FRAME_DISCOVERY";
 
 struct CacheFiles {
     root: PathBuf,
     previous_file: Option<OsString>,
     previous_enabled: Option<OsString>,
+    previous_discovery: Option<OsString>,
 }
 
 impl CacheFiles {
@@ -51,8 +55,10 @@ impl CacheFiles {
             root,
             previous_file: debug_toggle_os(CACHE_FILE),
             previous_enabled: debug_toggle_os(CACHE_ENABLED),
+            previous_discovery: debug_toggle_os(DISCOVERY),
         };
         set_debug_toggle_os(CACHE_ENABLED, Some(std::ffi::OsStr::new("1")));
+        set_debug_toggle_os(DISCOVERY, Some(std::ffi::OsStr::new("0")));
         files
     }
 
@@ -67,6 +73,7 @@ impl Drop for CacheFiles {
     fn drop(&mut self) {
         set_debug_toggle_os(CACHE_FILE, self.previous_file.as_deref());
         set_debug_toggle_os(CACHE_ENABLED, self.previous_enabled.as_deref());
+        set_debug_toggle_os(DISCOVERY, self.previous_discovery.as_deref());
         let _ = fs::remove_dir_all(&self.root);
     }
 }
@@ -92,6 +99,7 @@ fn cache_process(test: &str, cache: &Path, environment: &[(&str, &OsStr)]) -> st
         .args(["--exact", test, "--nocapture"])
         .env(CACHE_FILE, cache)
         .env(CACHE_ENABLED, "1")
+        .env(DISCOVERY, "0")
         .envs(environment.iter().copied())
         .output()
         .expect("launch cache lifecycle process");

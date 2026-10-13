@@ -124,11 +124,12 @@ impl<B: KeyedBuild> ShapePipelines<B> {
 
     /// Queues on the warm-up lane the build of every pipeline `demand` names
     /// that is missing, with the opaque interiors a depth pass lays down
-    /// first, except the first missing one: the pass builds that one itself
-    /// while the compiler's threads build the others, and then waits for
-    /// those instead of building each in turn.
-    pub(crate) fn prefetch(&mut self, demand: &PipelineDemand) {
-        let mut first_missing = true;
+    /// first. Unless `all`, the first missing one is left out: the pass builds
+    /// that one itself while the compiler's threads build the others, and
+    /// then waits for those instead of building each in turn. A pass that
+    /// draws nothing, to learn its pipelines, queues them all.
+    pub(crate) fn prefetch(&mut self, demand: &PipelineDemand, all: bool) {
+        let mut first_missing = !all;
         for key in demand
             .keys()
             .flat_map(|key| std::iter::once(key).chain(key.interior()))
@@ -205,6 +206,12 @@ impl PipelineDemand {
     /// Each key, in the order it was added.
     pub(crate) fn keys(&self) -> impl Iterator<Item = ShapePipelineKey> + '_ {
         self.0.iter().map(|(key, _)| *key)
+    }
+
+    /// Forgets every key.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn clear(&mut self) {
+        self.0.clear();
     }
 
     /// Each key with its vertices, leaving the demand empty.

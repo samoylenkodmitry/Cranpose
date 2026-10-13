@@ -502,14 +502,30 @@ impl GpuRenderer {
             (depth, CompileLane::WarmUp),
             &mut |_| {},
         );
-        if let Some(depth_keys) = prep.depth_keys.take() {
-            self.await_depth_pipelines(&prep.batches, &scratch, &depth_keys);
+        #[cfg(not(target_arch = "wasm32"))]
+        let discovering = self.discovering;
+        #[cfg(target_arch = "wasm32")]
+        let discovering = false;
+        if discovering {
+            // The pass learns its pipelines and draws nothing: every one it
+            // lacks compiles beside the others.
+            #[cfg(not(target_arch = "wasm32"))]
+            self.discover_run_pipelines(&mut prep.pipelines);
+        } else {
+            if let Some(depth_keys) = prep.depth_keys.take() {
+                self.await_depth_pipelines(&prep.batches, &scratch, &depth_keys);
+            }
+            self.ensure_run_pipelines(&mut prep.pipelines);
         }
-        self.ensure_run_pipelines(&mut prep.pipelines);
         let batches = prep.batches;
         scratch.arena_draws = prep.arena_draws;
         scratch.pipelines = prep.pipelines;
         scratch.held = prep.held;
+        if discovering {
+            drop(batches);
+            self.return_pass_scratch(scratch);
+            return prepared.map(|()| true);
+        }
         let buffers = if prepared.is_ok() {
             self.upload_pass_buffers(recorder, &scratch)
         } else {
