@@ -13,7 +13,8 @@ Cranpose brings the Jetpack Compose model to Rust. Composable functions describe
 the UI. State changes trigger recomposition. Modifiers control layout, input and
 graphics. Cranpose supplies the platform window and device services.
 
-Use the same Rust UI on Linux, macOS, Windows, Android, Wear OS, iOS and the web.
+Use the same Rust UI on Linux, macOS, Windows, Android, Wear OS, iOS, Apple Watch
+and the web.
 Add Cranpose screens to an existing Android Compose or UIKit app, or place native
 controls inside a Cranpose screen.
 
@@ -38,9 +39,10 @@ frameworks on the same phone and on a Mac.
 
 | App | Platforms | Get it |
 | --- | --- | --- |
-| [Cranamp](https://github.com/samoylenkodmitry/cranamp), a music player with pixel skins and a skin editor | Windows, macOS, Linux, Android, iOS, web | [Google Play](https://play.google.com/store/apps/details?id=com.cranamp.app), [App Store](https://apps.apple.com/app/id6818451356), [browser](https://samoylenkodmitry.github.io/cranamp/) |
+| [Cranamp](https://cranamp.dmitrysamoylenko.in/), a music player with pixel skins and a skin editor ([source](https://github.com/samoylenkodmitry/cranamp)) | Windows, macOS, Linux, Android, iOS, web | [Google Play](https://play.google.com/store/apps/details?id=com.cranamp.app), [App Store](https://apps.apple.com/app/id6818451356), [Microsoft Store](https://apps.microsoft.com/detail/9N0XTC9PGM8X), [AUR](https://aur.archlinux.org/packages/cranamp), [browser](https://samoylenkodmitry.github.io/cranamp/) |
+| [Cranslate](https://cranslate.dmitrysamoylenko.in/), an offline speech translator for a phone and a watch | Android, Wear OS, iOS, Apple Watch | [Google Play](https://play.google.com/store/apps/details?id=com.cranslate.app), [App Store](https://apps.apple.com/app/id6821701915) |
 | CranScan, a document and receipt scanner with on-device text recognition | Android, iOS | [Google Play](https://play.google.com/store/apps/details?id=com.cranscan.app), [App Store](https://apps.apple.com/app/id6795579921) |
-| Orbit Breaker, a brick-breaking game for round Wear OS watches | Wear OS | [Google Play](https://play.google.com/store/apps/details?id=com.dmitry.orbitbreaker) |
+| [Orbit Breaker](https://orbitbreaker.dmitrysamoylenko.in/), a brick-breaking game for watches, steered with the crown | Wear OS, Apple Watch | [Google Play](https://play.google.com/store/apps/details?id=com.dmitry.orbitbreaker), [App Store](https://apps.apple.com/app/id6821956842) |
 
 ## Start an app
 
@@ -57,12 +59,13 @@ For a terminal workflow, clone the same template:
 ```sh
 git clone https://github.com/samoylenkodmitry/cranpose-showcase.git my-app
 cd my-app
-cargo run --features desktop,renderer-wgpu
+cargo run --release
 ```
 
-Replace the sample screens in `src/screens`. The template places data access in
-`src/data` and view models in `src/presentation`. Android Gradle files, iOS scripts
-and a web build script share the Rust UI.
+Replace the sample screens in `src/screens`, and the watch screens in `src/watch`.
+The template places data access in `src/data` and view models in
+`src/presentation`. Android and Wear OS Gradle modules, iOS and Apple Watch
+scripts and a web build script share the Rust code.
 
 [Run the showcase](https://samoylenkodmitry.github.io/cranpose-showcase/) to explore
 the template's navigation, adaptive layout and Liquid components.
@@ -142,51 +145,82 @@ covers [ownership](docs/guide.md#ownership), [state](docs/guide.md#state),
 
 ## Build for a platform
 
-Run these commands from the showcase template root.
+### First build
 
-| Target | Build machine and tools | Test device |
+1. Install a C toolchain. On macOS run `xcode-select --install`. On Ubuntu or
+   Debian run `sudo apt install build-essential`. On Windows install
+   **Visual Studio Build Tools** with **Desktop development with C++**.
+2. Install Rust from <https://rustup.rs>. On macOS and Linux:
+
+   ```sh
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   ```
+
+   On Windows, run `rustup-init.exe` from the same page. Open a new terminal
+   afterwards.
+3. Get the template and run it:
+
+   ```sh
+   git clone https://github.com/samoylenkodmitry/cranpose-showcase.git my-app
+   cd my-app
+   cargo run --release
+   ```
+
+The first build compiles several hundred crates and takes several minutes. Then
+a window opens with the template's star chart.
+
+The template's GitHub workflows build every target below on each pull request,
+on GitHub's Linux, Windows and macOS machines, so a Windows or Linux computer is
+enough to get iPhone and Apple Watch builds. A tag publishes them in a GitHub
+release. The template's [TestFlight guide](https://github.com/samoylenkodmitry/cranpose-showcase/blob/main/docs/testflight.md)
+sets up your own Apple account and uploads the iPhone app, with the Apple Watch
+app inside, to TestFlight from a workflow.
+
+### Targets
+
+Run these commands from the template root.
+
+| Target | Build machine and tools | Command |
 | --- | --- | --- |
-| Desktop | The target OS, Rust and a Vulkan, Metal or DirectX 12 driver | Linux, Mac or Windows computer |
-| Android / Wear OS | Windows, Linux or macOS; Android SDK, NDK and JDK 17 | Android device, watch or emulator |
-| iOS | Mac with Xcode and an iOS simulator runtime | iPhone, iPad or Mac simulator |
-| Web | Windows, Linux or macOS; Rust and `wasm-pack` | Browser with WebGL2 or WebGPU and a compatible GPU driver |
+| Desktop | The target OS, Rust and a Vulkan, Metal or DirectX 12 driver | `cargo run --release` |
+| Web | Any OS; `wasm32-unknown-unknown` target and `wasm-pack` | `./build-web.sh` |
+| Android phone | Any OS; Android SDK, NDK 28, JDK 17 and `cargo-ndk` | `cd android && ./gradlew :app:assembleDebug -PshowcaseAbi=arm64-v8a` |
+| Wear OS | The same as Android | `cd android && ./gradlew :wear:assembleDebug -PshowcaseAbi=armeabi-v7a` |
+| iOS simulator | Mac with Xcode and an iOS simulator runtime | `./ios/run-sim.sh` |
+| iOS device, with the watch app inside | Mac with Xcode 27 | `PROFILE=release WITH_WATCH=1 ./ios/build-app.sh aarch64-apple-ios` |
+| Apple Watch simulator | Mac with Xcode 27, the watchOS simulator and Python 3.11 | `python3 watchos/build.py --smoke` |
+| Apple Watch device | Mac with Xcode 27 and Python 3.11 | `python3 watchos/build.py --target device` |
 
-### Desktop
+The template's [README](https://github.com/samoylenkodmitry/cranpose-showcase#targets)
+says where each command puts its output and which Rust targets to add.
+
+### Android and Wear OS
+
+From the `android` folder, install an APK on a device, watch or emulator:
 
 ```sh
-cargo run --features desktop,renderer-wgpu
-```
-
-### Android
-
-Build for an ARM64 device:
-
-```sh
-cd android
-./gradlew :app:assembleDebug -PshowcaseAbi=arm64-v8a
 adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb install -r wear/build/outputs/apk/debug/wear-debug.apk
 ```
 
-On Windows, use `gradlew.bat`. The [Android guide](docs/guide.md#run-on-android)
-covers SDK setup, emulator ABIs and the Gradle host.
+`-PshowcaseAbi` picks the processor: `arm64-v8a` for phones and Apple Silicon
+emulators, `x86_64` for Intel and AMD emulators, `armeabi-v7a` for most Wear OS
+watches. On Windows, use `gradlew.bat`. The [Android guide](docs/guide.md#run-on-android)
+covers SDK setup and the Gradle host.
 
-### iOS
-
-On Apple Silicon:
+### iOS and Apple Watch
 
 ```sh
-rustup target add aarch64-apple-ios-sim aarch64-apple-ios
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-watchos aarch64-apple-watchos-sim
 ./ios/run-sim.sh
+python3 watchos/build.py --smoke
 ```
 
-For Intel Macs, use `x86_64-apple-ios` through the manual steps in the
-[iOS guide](docs/guide.md#run-on-ios). A physical device also needs a development
+The watch app is a separate composable for small screens, drawn through
+SpriteKit; [crates/cranpose/watchos](crates/cranpose/watchos/README.md) describes
+the watchOS host. For Intel Macs, use `x86_64-apple-ios` through the manual steps
+in the [iOS guide](docs/guide.md#run-on-ios). A physical device needs a
 certificate and a provisioning profile.
-
-GitHub macOS runners supply Xcode for remote builds. Standard hosted runners are
-free for public repositories. The guide provides an
-[iOS workflow](docs/guide.md#build-apple-targets-with-github-actions) for developers
-with Windows or Linux workstations.
 
 ### Web
 

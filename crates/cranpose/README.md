@@ -4,7 +4,8 @@ Build desktop, mobile and web apps with Rust functions. Cranpose follows the
 Jetpack Compose model: a function describes the screen, state changes update the
 screen, and modifiers control layout, input and appearance.
 
-The same UI code runs on Linux, macOS, Windows, Android, Wear OS, iOS and the web.
+The same UI code runs on Linux, macOS, Windows, Android, Wear OS, iOS, Apple Watch
+and the web.
 The experimental watchOS host draws through SpriteKit. Cranpose also places
 Rust screens inside Android Compose and UIKit apps.
 
