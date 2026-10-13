@@ -168,6 +168,12 @@ pub trait FocusedTextFieldHandler {
     fn caret_geometry(&self) -> Option<ImeCaretGeometry> {
         None
     }
+    /// The field's window bounds in logical pixels, for platforms that
+    /// place a native editor over the field (Android autofill). `None`
+    /// before the field is laid out.
+    fn window_bounds(&self) -> Option<cranpose_ui_graphics::Rect> {
+        None
+    }
 }
 
 pub(crate) struct TextFieldFocusState {
@@ -378,6 +384,11 @@ impl TextFieldFocusState {
         self.focused_handler()
             .and_then(|handler| handler.caret_geometry())
     }
+
+    fn focused_window_bounds(&self) -> Option<cranpose_ui_graphics::Rect> {
+        self.focused_handler()
+            .and_then(|handler| handler.window_bounds())
+    }
 }
 
 /// Requests focus for a text field composed at [`crate::modal::local_modal_depth`]
@@ -578,6 +589,12 @@ pub fn focused_editor_state() -> Option<ImeEditorState> {
 /// or `None` when no field is focused or it exposes no geometry.
 pub fn focused_caret_geometry() -> Option<ImeCaretGeometry> {
     crate::render_state::with_text_field_focus(TextFieldFocusState::focused_caret_geometry)
+}
+
+/// Window bounds of the focused field in logical pixels, or `None` when no
+/// field is focused or it has not been laid out.
+pub fn focused_field_bounds() -> Option<cranpose_ui_graphics::Rect> {
+    crate::render_state::with_text_field_focus(TextFieldFocusState::focused_window_bounds)
 }
 
 #[cfg(test)]

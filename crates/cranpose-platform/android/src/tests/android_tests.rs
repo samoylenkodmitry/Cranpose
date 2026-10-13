@@ -34,3 +34,25 @@ fn pointer_position_applies_surface_offset_before_density() {
     assert_eq!(logical.x, 100.0);
     assert_eq!(logical.y, 100.0);
 }
+
+#[test]
+fn physical_rect_inverts_pointer_position_and_covers_whole_pixels() {
+    let mut platform = AndroidPlatform::new();
+    platform.set_scale_factor(2.75);
+    platform.set_input_surface_offset_px(10.0, 4.0);
+    let rect = cranpose_ui_graphics::Rect {
+        x: 20.1,
+        y: 30.0,
+        width: 100.0,
+        height: 40.3,
+    };
+
+    let [left, top, width, height] = platform.physical_rect(rect);
+
+    let top_left = platform.pointer_position(f64::from(left), f64::from(top));
+    let bottom_right = platform.pointer_position(f64::from(left + width), f64::from(top + height));
+    assert!(top_left.x <= rect.x && top_left.y <= rect.y);
+    assert!(bottom_right.x >= rect.x + rect.width && bottom_right.y >= rect.y + rect.height);
+    assert!(rect.x - top_left.x < 1.0 / 2.75);
+    assert!(bottom_right.y - (rect.y + rect.height) < 1.0 / 2.75);
+}

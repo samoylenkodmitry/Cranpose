@@ -61,9 +61,9 @@ impl TextFieldDecoratorElement {
             self.style.clone(),
             self.modal_depth,
         );
-        let field_transform = Rc::clone(&self.refs.local_to_window);
+        let field_window = Rc::clone(&self.refs.window);
         Rc::new(move |event: PointerEvent| {
-            if let Some(inverse) = field_transform.get().inverse() {
+            if let Some(inverse) = field_window.get().local_to_window.inverse() {
                 field(event.copy_with_local_position(inverse.map_point(event.global_position)));
             }
         })

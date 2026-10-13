@@ -2553,6 +2553,9 @@ public class CranposeActivity extends NativeActivity {
      *
      * <p>Re-applied from {@code onWindowFocusChanged} because the window can hand
      * focus elsewhere (dialogs, IME) and not give it back to the content view.
+     * A text editor that has focus keeps it there: taking it would close the
+     * keyboard whenever a popup over the window closes, an autofill dropdown
+     * among them.
      */
     private void focusNativeContentView() {
         View content = findViewById(android.R.id.content);
@@ -2602,7 +2605,8 @@ public class CranposeActivity extends NativeActivity {
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
-        if (hasFocus) {
+        View focused = getCurrentFocus();
+        if (hasFocus && (focused == null || !focused.onCheckIsTextEditor())) {
             focusNativeContentView();
         }
     }

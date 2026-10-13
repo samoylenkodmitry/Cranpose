@@ -31,8 +31,11 @@ fn page_styled(texts: &[(&str, Rect)], style: TextStyle) -> Page {
             let key = registrar.subscribe();
             let geometry = Rc::new(SelectableGeometry::default());
             geometry
-                .local_to_window
-                .set(ProjectiveTransform::translation(rect.x, rect.y));
+                .window
+                .set(cranpose_ui_graphics::WindowCoordinates {
+                    size: Size::default(),
+                    local_to_window: ProjectiveTransform::translation(rect.x, rect.y),
+                });
             geometry.set_content_size(Size {
                 width: rect.width,
                 height: rect.height,

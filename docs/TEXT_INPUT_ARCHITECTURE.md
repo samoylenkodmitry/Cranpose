@@ -76,7 +76,7 @@ to its native editor:
 
 | Platform | Native configuration | Action key |
 | --- | --- | --- |
-| Android | `EditorInfo.inputType` and `imeOptions`, as Compose's Android text input sets them | `performEditorAction` |
+| Android | `EditorInfo.inputType` and `imeOptions`, as Compose's Android text input sets them; the content type as the editor view's autofill hint | `performEditorAction` |
 | iOS | `UITextInputTraits` of the key input view, `textContentType` among them, reloaded when they change | the return key's `insertText("\n")` |
 | Web | `inputmode`, `enterkeyhint`, `autocapitalize`, `autocorrect`, `spellcheck` and `autocomplete` on the hidden editor; a password keyboard opens the password input | Enter in the one-line editor |
 | Desktop | none | Enter |
@@ -133,7 +133,16 @@ and debug output shows only the text's length. See
 
 ## Current limits
 
-Android does not autofill text fields: its hidden editor view does not yet
-serve autofill values or sit where the field is. The default UI measurement fallback
+On Android one hidden editor view stands for the focused field. The shell
+reports the field's window bounds (`ime_field_bounds`), and the view moves
+over them, so autofill anchors its suggestions to the field. A field with a
+content type makes the view autofillable: it reports the hint, `AUTOFILL_TYPE_TEXT`
+and the field's text, and a fill replaces the text through the IME queue.
+Moving focus to another field tells `AutofillManager` the view left one
+field and entered the next. A fill sets the focused field only, so a login
+form fills its username and its password one after the other; Compose fills
+every field of the form at once.
+
+The default UI measurement fallback
 is monospaced; a host can install a font-backed `TextMeasurer` through its text
 service.

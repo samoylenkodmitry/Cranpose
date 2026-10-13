@@ -35,7 +35,7 @@ fn focused_state(
             secure: false,
         },
         CaretGeometryRefs {
-            local_to_window: Rc::new(Cell::new(ProjectiveTransform::identity())),
+            window: Rc::default(),
             content_origin: Rc::default(),
             scroll_offset: Rc::new(Cell::new(0.0)),
             wrap_width: Rc::new(Cell::new(None)),
