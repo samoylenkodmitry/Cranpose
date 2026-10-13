@@ -4,11 +4,9 @@ pub(crate) enum SurfaceFrame {
     Skip,
 }
 
+/// The wgpu instance a native window's GPU is opened through.
 #[cfg(any(feature = "desktop-shell", all(feature = "ios", target_os = "ios")))]
-pub(crate) fn create_wgpu_surface_and_adapter(
-    window: &std::sync::Arc<dyn winit::window::Window>,
-) -> Result<(wgpu::Instance, wgpu::Surface<'static>, wgpu::Adapter), crate::app_launcher::LaunchError>
-{
+pub(crate) fn new_instance() -> wgpu::Instance {
     let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     instance_descriptor.backends = wgpu::Backends::all();
     // Windows stretches the last frame of a swapchain made from the window
@@ -17,20 +15,35 @@ pub(crate) fn create_wgpu_surface_and_adapter(
     // size. `WGPU_DX12_PRESENTATION_SYSTEM=Hwnd` restores the old one.
     instance_descriptor.backend_options.dx12.presentation_system =
         wgpu::Dx12SwapchainKind::DxgiFromVisual.with_env();
-    let instance = wgpu::Instance::new(instance_descriptor);
+    wgpu::Instance::new(instance_descriptor)
+}
 
-    let surface = instance
-        .create_surface(window.clone())
-        .map_err(crate::app_launcher::LaunchError::SurfaceCreate)?;
-
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+/// The high-performance adapter of `instance`, one that presents to
+/// `surface` when one is given.
+#[cfg(any(feature = "desktop-shell", all(feature = "ios", target_os = "ios")))]
+pub(crate) fn request_adapter(
+    instance: &wgpu::Instance,
+    surface: Option<&wgpu::Surface<'_>>,
+) -> Result<wgpu::Adapter, wgpu::RequestAdapterError> {
+    pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
-        compatible_surface: Some(&surface),
+        compatible_surface: surface,
         force_fallback_adapter: false,
         apply_limit_buckets: false,
     }))
-    .map_err(crate::app_launcher::LaunchError::NoAdapter)?;
+}
 
+#[cfg(any(feature = "desktop-shell", all(feature = "ios", target_os = "ios")))]
+pub(crate) fn create_wgpu_surface_and_adapter(
+    window: &std::sync::Arc<dyn winit::window::Window>,
+) -> Result<(wgpu::Instance, wgpu::Surface<'static>, wgpu::Adapter), crate::app_launcher::LaunchError>
+{
+    let instance = new_instance();
+    let surface = instance
+        .create_surface(window.clone())
+        .map_err(crate::app_launcher::LaunchError::SurfaceCreate)?;
+    let adapter = request_adapter(&instance, Some(&surface))
+        .map_err(crate::app_launcher::LaunchError::NoAdapter)?;
     Ok((instance, surface, adapter))
 }
 

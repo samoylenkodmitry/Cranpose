@@ -666,6 +666,8 @@ struct App {
     primary_redraw_pending: bool,
     primary_surface_dirty: bool,
     primary_initial_present_pending: bool,
+    /// The primary window's GPU, opening while the platform starts.
+    gpu_start: GpuStart,
     vsync_interval: Duration,
     exiting: bool,
     file_drops: crate::desktop_incoming::FileDrops,
@@ -683,6 +685,7 @@ impl App {
         content: impl FnMut() + 'static,
         launch_error: Rc<RefCell<Option<LaunchError>>>,
         event_proxy: EventLoopProxy,
+        gpu_start: GpuStart,
     ) -> Self {
         let recorder = settings
             .record_to
@@ -745,6 +748,7 @@ impl App {
             primary_redraw_pending: false,
             primary_surface_dirty: false,
             primary_initial_present_pending: false,
+            gpu_start,
             vsync_interval: default_vsync_interval(),
             exiting: false,
             file_drops: crate::desktop_incoming::FileDrops::default(),
@@ -1597,6 +1601,30 @@ impl App {
             options.y = Some(position.y);
             options.position_origin = NativeWindowPositionOrigin::Screen;
         }
+    }
+
+    /// The GPU the primary window draws with, and `window`'s surface on it:
+    /// the one opened while the platform started, or else one opened now.
+    fn primary_gpu(
+        &mut self,
+        window: &Arc<dyn Window>,
+    ) -> Result<(OpenedGpu, wgpu::Surface<'static>), LaunchError> {
+        if let Some(opened) = self.gpu_start.for_window(window) {
+            return Ok(opened);
+        }
+        let (instance, surface, adapter) =
+            crate::wgpu_surface::create_wgpu_surface_and_adapter(window)?;
+        let (device, queue) = request_primary_device(&adapter, self.settings.gpu_requirements)
+            .map_err(LaunchError::DeviceCreate)?;
+        Ok((
+            OpenedGpu {
+                instance,
+                adapter,
+                device,
+                queue,
+            },
+            surface,
+        ))
     }
 
     fn resolve_native_window_options(&self, options: &NativeWindowOptions) -> NativeWindowOptions {
@@ -5393,37 +5421,23 @@ impl ApplicationHandler for App {
             }
         };
 
-        let (instance, surface, adapter) =
-            match crate::wgpu_surface::create_wgpu_surface_and_adapter(&window) {
-                Ok(triple) => triple,
-                Err(error) => {
-                    self.abort_launch(event_loop, error);
-                    return;
-                }
-            };
-        let adapter_info = adapter.get_info();
-        self.vsync_interval = monitor_refresh_interval(&window);
-
-        let (device, queue) = match pollster::block_on(
-            adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("Main Device"),
-                required_features: cranpose_render_wgpu::optional_device_features(&adapter)
-                    | self.settings.gpu_requirements.features_on(&adapter),
-                required_limits: self
-                    .settings
-                    .gpu_requirements
-                    .limits_on(&adapter, wgpu::Limits::default()),
-                experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                memory_hints: wgpu::MemoryHints::default(),
-                trace: wgpu::Trace::Off,
-            }),
-        ) {
-            Ok(pair) => pair,
+        let (
+            OpenedGpu {
+                instance,
+                adapter,
+                device,
+                queue,
+            },
+            surface,
+        ) = match self.primary_gpu(&window) {
+            Ok(gpu) => gpu,
             Err(error) => {
-                self.abort_launch(event_loop, LaunchError::DeviceCreate(error));
+                self.abort_launch(event_loop, error);
                 return;
             }
         };
+        let adapter_info = adapter.get_info();
+        self.vsync_interval = monitor_refresh_interval(&window);
 
         let size = window.surface_size();
         let surface_caps = surface.get_capabilities(&adapter);
@@ -6992,6 +7006,67 @@ fn bound_park_for_robot(
     }
 }
 
+/// The device a desktop app's primary window draws with, requested on a
+/// thread of its own as the app starts, while the platform starts its event
+/// loop: on an Apple M5 the device took 10 to 12 ms, and the event loop
+/// 40 ms before the window could be made.
+struct GpuStart(Option<std::thread::JoinHandle<Option<OpenedGpu>>>);
+
+struct OpenedGpu {
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+}
+
+impl GpuStart {
+    fn open(requirements: crate::gpu_context::GpuRequirements) -> Self {
+        let opening = std::thread::Builder::new()
+            .name("cranpose-gpu-start".into())
+            .spawn(move || {
+                let instance = crate::wgpu_surface::new_instance();
+                let adapter = crate::wgpu_surface::request_adapter(&instance, None).ok()?;
+                let (device, queue) = request_primary_device(&adapter, requirements).ok()?;
+                Some(OpenedGpu {
+                    instance,
+                    adapter,
+                    device,
+                    queue,
+                })
+            });
+        Self(opening.ok())
+    }
+
+    /// The opened GPU with `window`'s surface, when its adapter presents to
+    /// that surface.
+    fn for_window(
+        &mut self,
+        window: &Arc<dyn Window>,
+    ) -> Option<(OpenedGpu, wgpu::Surface<'static>)> {
+        let gpu = self.0.take()?.join().ok()??;
+        let surface = gpu.instance.create_surface(window.clone()).ok()?;
+        gpu.adapter
+            .is_surface_supported(&surface)
+            .then_some((gpu, surface))
+    }
+}
+
+/// The device the primary window draws with, on `adapter`.
+fn request_primary_device(
+    adapter: &wgpu::Adapter,
+    requirements: crate::gpu_context::GpuRequirements,
+) -> Result<(wgpu::Device, wgpu::Queue), wgpu::RequestDeviceError> {
+    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("Main Device"),
+        required_features: cranpose_render_wgpu::optional_device_features(adapter)
+            | requirements.features_on(adapter),
+        required_limits: requirements.limits_on(adapter, wgpu::Limits::default()),
+        experimental_features: wgpu::ExperimentalFeatures::disabled(),
+        memory_hints: wgpu::MemoryHints::default(),
+        trace: wgpu::Trace::Off,
+    }))
+}
+
 fn build_event_loop() -> Result<EventLoop, winit::error::EventLoopError> {
     #[cfg(all(target_os = "linux", feature = "desktop-x11"))]
     if std::env::var_os("DISPLAY").is_some_and(|display| !display.is_empty()) {
@@ -7023,6 +7098,7 @@ pub fn try_run(
 ) -> Result<(), LaunchError> {
     crate::application_id::register(settings.application_id.as_deref());
 
+    let gpu_start = GpuStart::open(settings.gpu_requirements);
     let event_loop = build_event_loop().map_err(LaunchError::EventLoopCreate)?;
     let event_proxy = event_loop.create_proxy();
     let launch_error = Rc::new(RefCell::new(None));
@@ -7068,7 +7144,13 @@ pub fn try_run(
     crate::process_info::install();
 
     settings.start_process();
-    let mut app = App::new(settings, content, Rc::clone(&launch_error), event_proxy);
+    let mut app = App::new(
+        settings,
+        content,
+        Rc::clone(&launch_error),
+        event_proxy,
+        gpu_start,
+    );
 
     #[cfg(feature = "robot")]
     if let Some(controller) = robot_controller {
