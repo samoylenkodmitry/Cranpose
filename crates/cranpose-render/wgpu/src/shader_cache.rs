@@ -898,8 +898,8 @@ fn create_runtime_shader_module(
     source_hash: u64,
     backend: wgpu::Backend,
 ) -> Option<RuntimeShaderModule> {
-    let position_independent = match validate_runtime_shader_source(source, backend) {
-        Ok(independent) => independent,
+    let (parsed, position_independent) = match validate_runtime_shader_source(source, backend) {
+        Ok(validated) => validated,
         Err(err) => {
             log::warn!(
                 "Disabling RuntimeShader (hash={source_hash}): {err}. Falling back to pass-through."
@@ -910,13 +910,32 @@ fn create_runtime_shader_module(
     Some(RuntimeShaderModule {
         module: device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("RuntimeShader Effect"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
+            source: validated_source(source, parsed),
         }),
         position_independent,
     })
 }
 
-fn validate_runtime_shader_source(source: &str, backend: wgpu::Backend) -> Result<bool, String> {
+/// The shader source wgpu takes: natively the module validation parsed, so
+/// wgpu does not parse the text again (the liquid glass shader is 56 KB of
+/// WGSL); a browser takes the text.
+#[cfg(not(target_arch = "wasm32"))]
+fn validated_source(_text: &str, parsed: naga::Module) -> wgpu::ShaderSource<'static> {
+    wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(parsed))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn validated_source(text: &str, _parsed: naga::Module) -> wgpu::ShaderSource<'_> {
+    wgpu::ShaderSource::Wgsl(text.into())
+}
+
+/// The parsed `source` and whether its fragment stage ignores the pixel
+/// position, once it holds the entry points a runtime shader needs and
+/// validates for `backend`.
+fn validate_runtime_shader_source(
+    source: &str,
+    backend: wgpu::Backend,
+) -> Result<(naga::Module, bool), String> {
     let module =
         naga::front::wgsl::parse_str(source).map_err(|err| format!("WGSL parse error: {err}"))?;
 
@@ -946,11 +965,8 @@ fn validate_runtime_shader_source(source: &str, backend: wgpu::Backend) -> Resul
 
     validate_runtime_shader_backend_support(&module, &module_info, backend)?;
 
-    Ok(fragment_position_independent(
-        &module,
-        &module_info,
-        fragment,
-    ))
+    let position_independent = fragment_position_independent(&module, &module_info, fragment);
+    Ok((module, position_independent))
 }
 
 fn is_position(binding: &Option<naga::Binding>) -> bool {
