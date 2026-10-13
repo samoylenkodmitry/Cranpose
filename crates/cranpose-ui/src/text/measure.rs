@@ -2128,7 +2128,7 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
     out: &mut DisplayLines,
 ) {
     let line_text = &text.text[line_range.clone()];
-    let boundaries = char_boundaries(line_text);
+    let boundaries = cluster_boundaries(line_text);
     let measure_context =
         LineMeasureContext::new(measurer, text, &line_range, style, boundaries.len());
     if let Some(measured_width) =
@@ -2143,6 +2143,7 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
         return;
     }
     let first = out.len();
+    let breaks = LineBreaks::new(line_text, &boundaries);
     let mut start_idx = 0usize;
 
     while start_idx < boundaries.len() - 1 {
@@ -2170,28 +2171,22 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
             }
         }
 
-        let wrap_idx = choose_wrap_break(line_text, &boundaries, start_idx, best, line_break);
+        let wrap_idx = choose_wrap_break(&breaks, start_idx, best, line_break);
         let mut effective_wrap_idx = wrap_idx;
         let can_hyphenate = hyphens == Hyphens::Auto
             && wrap_idx == best
             && best < boundaries.len() - 1
-            && is_break_inside_word(line_text, &boundaries, wrap_idx);
+            && is_break_inside_word(&breaks, wrap_idx);
         narrow_to_break(
             hold,
             &measure_context,
-            (line_text, &boundaries),
+            &breaks,
             (start_idx, best),
             (can_hyphenate, limit.elides_next(out.len())),
         );
         if can_hyphenate {
-            effective_wrap_idx = resolve_auto_hyphen_break(
-                measurer,
-                line_text,
-                style,
-                &boundaries,
-                start_idx,
-                wrap_idx,
-            );
+            effective_wrap_idx =
+                resolve_auto_hyphen_break(measurer, style, &breaks, start_idx, wrap_idx);
         }
 
         let broke_at_word_boundary = effective_wrap_idx > start_idx
@@ -2236,7 +2231,7 @@ fn wrap_line_with_word_balance<M: TextMeasurer + ?Sized>(
     out: &mut DisplayLines,
 ) -> bool {
     let line_text = &text.text[line_range.clone()];
-    let boundaries = char_boundaries(line_text);
+    let boundaries = cluster_boundaries(line_text);
     let measure_context =
         LineMeasureContext::new(measurer, text, &line_range, style, boundaries.len());
     if let Some(measured_width) =
@@ -2249,7 +2244,7 @@ fn wrap_line_with_word_balance<M: TextMeasurer + ?Sized>(
         ));
         return true;
     }
-    let breakpoints = collect_word_breakpoints(line_text, &boundaries);
+    let breakpoints = collect_word_breakpoints(&LineBreaks::new(line_text, &boundaries));
     if breakpoints.len() <= 2 {
         return false;
     }
@@ -2324,12 +2319,44 @@ fn wrap_line_with_word_balance<M: TextMeasurer + ?Sized>(
     out.len() > first
 }
 
-fn collect_word_breakpoints(line: &str, boundaries: &[usize]) -> Vec<usize> {
+/// Where a line may wrap: after whitespace and, in Thai and the other scripts
+/// written without spaces between words, between its words.
+struct LineBreaks<'a> {
+    line: &'a str,
+    boundaries: &'a [usize],
+    /// Character indexes inside words of a script written without spaces
+    /// before which the line may wrap, ascending. Empty for other text.
+    words: Vec<usize>,
+}
+
+impl<'a> LineBreaks<'a> {
+    fn new(line: &'a str, boundaries: &'a [usize]) -> Self {
+        Self {
+            line,
+            boundaries,
+            words: super::word_breaks::unspaced_word_breaks(line, boundaries),
+        }
+    }
+
+    /// Whether character `idx` is whitespace.
+    fn is_space(&self, idx: usize) -> bool {
+        self.line[self.boundaries[idx]..self.boundaries[idx + 1]]
+            .chars()
+            .all(char::is_whitespace)
+    }
+
+    /// Whether the line may wrap before character `idx`, which is not the
+    /// first.
+    fn before(&self, idx: usize) -> bool {
+        self.is_space(idx - 1) || self.words.binary_search(&idx).is_ok()
+    }
+}
+
+fn collect_word_breakpoints(breaks: &LineBreaks<'_>) -> Vec<usize> {
+    let boundaries = breaks.boundaries;
     let mut points = vec![0usize];
     for idx in 1..boundaries.len() - 1 {
-        let prev = &line[boundaries[idx - 1]..boundaries[idx]];
-        let current = &line[boundaries[idx]..boundaries[idx + 1]];
-        if prev.chars().all(char::is_whitespace) && !current.chars().all(char::is_whitespace) {
+        if breaks.before(idx) && !breaks.is_space(idx) {
             points.push(idx);
         }
     }
@@ -2341,13 +2368,12 @@ fn collect_word_breakpoints(line: &str, boundaries: &[usize]) -> Vec<usize> {
 }
 
 fn choose_wrap_break(
-    line: &str,
-    boundaries: &[usize],
+    breaks: &LineBreaks<'_>,
     start_idx: usize,
     best: usize,
     _line_break: LineBreak,
 ) -> usize {
-    if best >= boundaries.len() - 1 {
+    if best >= breaks.boundaries.len() - 1 {
         return best;
     }
 
@@ -2355,13 +2381,10 @@ fn choose_wrap_break(
         return best;
     }
 
-    for idx in (start_idx + 1..=best).rev() {
-        let prev = &line[boundaries[idx - 1]..boundaries[idx]];
-        if prev.chars().all(char::is_whitespace) {
-            return idx;
-        }
-    }
-    best
+    (start_idx + 1..=best)
+        .rev()
+        .find(|&idx| breaks.before(idx))
+        .unwrap_or(best)
 }
 
 /// Narrows `hold` to the widths a line from `start_idx` breaks the same at
@@ -2373,10 +2396,11 @@ fn choose_wrap_break(
 fn narrow_to_break<M: TextMeasurer + ?Sized>(
     hold: &mut Option<WrapHold>,
     measure_context: &LineMeasureContext<'_, M>,
-    (line, boundaries): (&str, &[usize]),
+    breaks: &LineBreaks<'_>,
     (start_idx, best): (usize, usize),
     (hyphenated, elided): (bool, bool),
 ) {
+    let boundaries = breaks.boundaries;
     let end = boundaries.len() - 1;
     if elided && best < end {
         if let Some(hold) = hold {
@@ -2391,7 +2415,7 @@ fn narrow_to_break<M: TextMeasurer + ?Sized>(
     let Some(hold) = hold else {
         return;
     };
-    let (fits, pulls_up) = wrap_break_widths(line, boundaries, start_idx, best);
+    let (fits, pulls_up) = wrap_break_widths(breaks, start_idx, best);
     let width = |idx| measure_context.measure_char_range(boundaries, start_idx, idx);
     hold.narrow(
         fits.map_or(f32::NEG_INFINITY, width),
@@ -2405,12 +2429,11 @@ fn narrow_to_break<M: TextMeasurer + ?Sized>(
 /// and the first that would take the break past it (`None` when none
 /// would).
 fn wrap_break_widths(
-    line: &str,
-    boundaries: &[usize],
+    breaks: &LineBreaks<'_>,
     start_idx: usize,
     best: usize,
 ) -> (Option<usize>, Option<usize>) {
-    let end = boundaries.len() - 1;
+    let end = breaks.boundaries.len() - 1;
     // A line takes its first character whether it fits or not.
     if best <= start_idx + 1 {
         return (None, (best < end).then_some(best + 1));
@@ -2418,39 +2441,35 @@ fn wrap_break_widths(
     if best >= end {
         return (Some(end), None);
     }
-    let after_space = |idx: usize| {
-        line[boundaries[idx - 1]..boundaries[idx]]
-            .chars()
-            .all(char::is_whitespace)
-    };
-    match (start_idx + 1..=best).rev().find(|&idx| after_space(idx)) {
+    match (start_idx + 1..=best).rev().find(|&idx| breaks.before(idx)) {
         Some(wrap_idx) => {
-            let next = (best + 1..end).find(|&idx| after_space(idx)).unwrap_or(end);
+            let next = (best + 1..end)
+                .find(|&idx| breaks.before(idx))
+                .unwrap_or(end);
             (Some(wrap_idx), Some(next))
         }
         None => (Some(best), Some(best + 1)),
     }
 }
 
-fn is_break_inside_word(line: &str, boundaries: &[usize], break_idx: usize) -> bool {
-    if break_idx == 0 || break_idx >= boundaries.len() - 1 {
+fn is_break_inside_word(breaks: &LineBreaks<'_>, break_idx: usize) -> bool {
+    if break_idx == 0 || break_idx >= breaks.boundaries.len() - 1 {
         return false;
     }
-    let prev = &line[boundaries[break_idx - 1]..boundaries[break_idx]];
-    let next = &line[boundaries[break_idx]..boundaries[break_idx + 1]];
-    !prev.chars().all(char::is_whitespace) && !next.chars().all(char::is_whitespace)
+    !breaks.before(break_idx) && !breaks.is_space(break_idx)
 }
 
 fn resolve_auto_hyphen_break<M: TextMeasurer + ?Sized>(
     measurer: &M,
-    line: &str,
     style: &TextStyle,
-    boundaries: &[usize],
+    breaks: &LineBreaks<'_>,
     start_idx: usize,
     break_idx: usize,
 ) -> usize {
-    if let Some(candidate) = measurer.choose_auto_hyphen_break(line, style, start_idx, break_idx)
-        && is_valid_auto_hyphen_break(line, boundaries, start_idx, break_idx, candidate)
+    let boundaries = breaks.boundaries;
+    if let Some(candidate) =
+        measurer.choose_auto_hyphen_break(breaks.line, style, start_idx, break_idx)
+        && is_valid_auto_hyphen_break(breaks, start_idx, break_idx, candidate)
     {
         return candidate;
     }
@@ -2458,18 +2477,17 @@ fn resolve_auto_hyphen_break<M: TextMeasurer + ?Sized>(
 }
 
 fn is_valid_auto_hyphen_break(
-    line: &str,
-    boundaries: &[usize],
+    breaks: &LineBreaks<'_>,
     start_idx: usize,
     break_idx: usize,
     candidate_idx: usize,
 ) -> bool {
-    let end_idx = boundaries.len().saturating_sub(1);
+    let end_idx = breaks.boundaries.len().saturating_sub(1);
     candidate_idx > start_idx
         && candidate_idx < end_idx
         && candidate_idx <= break_idx
         && candidate_idx >= start_idx + AUTO_HYPHEN_MIN_SEGMENT_CHARS
-        && is_break_inside_word(line, boundaries, candidate_idx)
+        && is_break_inside_word(breaks, candidate_idx)
 }
 
 fn choose_auto_hyphen_break_fallback(
@@ -2693,7 +2711,7 @@ fn fit_ellipsis<M: TextMeasurer + ?Sized>(
         }
     };
 
-    let boundaries = char_boundaries(&source.text[source_range.clone()]);
+    let boundaries = cluster_boundaries(&source.text[source_range.clone()]);
     let elided_line = |kept_chars: usize| {
         fitting_line(DisplayLineText::Ellipsized(placement.elide(
             source,
@@ -2772,16 +2790,30 @@ impl ElisionSearch {
     }
 }
 
-fn char_boundaries(text: &str) -> Vec<usize> {
+/// The byte offsets a line may split `text` at: before each character but
+/// the combining marks, which stay with the letter they sit on (a Thai vowel
+/// or tone mark, a Devanagari vowel sign, an accent), and at its end.
+fn cluster_boundaries(text: &str) -> Vec<usize> {
     let mut out = Vec::with_capacity(text.chars().count() + 1);
     out.push(0);
-    for (idx, _) in text.char_indices() {
-        if idx != 0 {
+    for (idx, ch) in text.char_indices() {
+        if idx != 0 && !is_combining_mark(ch) {
             out.push(idx);
         }
     }
     out.push(text.len());
     out
+}
+
+/// Whether `ch` combines with the character before it.
+fn is_combining_mark(ch: char) -> bool {
+    use icu_properties::{
+        CodePointMapData,
+        props::{GeneralCategory, GeneralCategoryGroup},
+    };
+    // No character before the combining diacritics block is a mark.
+    ch >= '\u{300}'
+        && GeneralCategoryGroup::Mark.contains(CodePointMapData::<GeneralCategory>::new().get(ch))
 }
 
 #[cfg(test)]

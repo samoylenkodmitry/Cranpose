@@ -9,6 +9,7 @@ pub mod paragraph;
 mod shared_text;
 pub mod style;
 pub mod unit;
+mod word_breaks;
 
 pub use annotated_string::{
     AnnotatedString, LinkAnnotation, LinkKey, RangeStyle, RenderString, SpanBoundaries,

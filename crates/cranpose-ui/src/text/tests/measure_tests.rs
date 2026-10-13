@@ -1613,7 +1613,7 @@ fn widest_fitting_elision(
     max_width: f32,
     placement: EllipsisPlacement,
 ) -> String {
-    let boundaries = char_boundaries(&source.text);
+    let boundaries = cluster_boundaries(&source.text);
     (0..boundaries.len())
         .rev()
         .map(|kept| placement.elide(source, 0..source.text.len(), &boundaries, kept))

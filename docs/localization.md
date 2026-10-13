@@ -88,6 +88,11 @@ the fonts the application needs. Register the corresponding `ARABIC_FONT_PACK`,
 These optional assets retain the source character maps and include their
 licenses in `cranpose-fonts`.
 
+Thai, Lao, Khmer and Burmese put no space between words. Enable
+`southeast-asian-line-breaks` so their lines wrap between words, which ICU's
+dictionaries find; without it they wrap where the line runs out. In every
+script a line keeps a combining mark with the letter it sits on.
+
 Language identifiers preserve script and region (`sr-Latn`, `sr-Cyrl`, `fr-CA`).
 To use several ordered language preferences supplied by your platform host:
 
