@@ -16,14 +16,15 @@ formatting, spelling and diff gates skip the forks.
 
 Upstream: <https://github.com/gfx-rs/wgpu>, commit
 `40f4a34ebaf56f9a046231f54125ad046239d3f3` (`wgpu-hal` 30.0.1).
-`cranpose-wgpu-hal` is at 30.0.11 for the catch-up barrier, the Metal
+`cranpose-wgpu-hal` is at 30.0.12 for the catch-up barrier, the Metal
 pipeline switch, the dedicated Vulkan allocations, the GL point size, the
 GL state tracker, the web surface usages, the boxed GL copy commands, the
 Vulkan command pools that give a burst's memory back, the GL shaders
 without the branches their constants decide, the GL program status read
-only on failure and the GLSL templates below, and `cranpose-wgpu-core` and
-`cranpose-wgpu` are at 30.0.11 to require it and to make template modules.
-`cranpose-wgpu` is at 30.0.12 for the WebGPU pipeline discovery below.
+only on failure, the GLSL templates and the GL link reads below, and
+`cranpose-wgpu-core` is at 30.0.12 to require it and to make template
+modules. `cranpose-wgpu` is at 30.0.13 for the WebGPU pipeline discovery
+below and to require them.
 
 | fork | upstream |
 | --- | --- |
@@ -182,6 +183,22 @@ failed link then reads the shaders' status and logs to report which stage
 failed, and the program's log is read only for debug logging. In Chrome on
 a Huawei Mate 20 X the gauntlet's pipeline creation at start went from
 about 396 to 302 ms (two profiles each).
+
+### GL programs are read when a submission first needs one
+
+WebGL answers a program query only once the GPU process has run every
+command sent before it, and a phone's Chrome links one program at a time.
+Upstream's GL device reads each program's link as it makes the pipeline,
+so making the pipelines waits for every link. The fork's device sends the
+link and leaves it unread; a submission reads the links of the programs it
+uses before it replays its commands, so the read waits for the links alone
+and not for the draws sent before them. Once a submission has waited for
+a read, it also reads every other unread link: the GPU process has run
+those links too, so each costs only its reply, where a later frame's first
+use would wait for every frame sent before it. In Chrome on a Huawei Mate
+20 X a gauntlet frame early after the first waited 12-43 ms for the one
+program the first frame did not draw with; with the read in the first
+frame, frames two to five took 25-30 ms less in all.
 
 ### The GL queue skips calls that set what the context holds
 
