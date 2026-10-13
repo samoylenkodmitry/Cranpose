@@ -551,7 +551,7 @@ impl ModifierLocalManager {
         }
 
         let mut providers: HashMap<ModifierLocalId, ProviderRecord> = HashMap::default();
-        let mut seen_consumers = HashSet::default();
+        let mut seen_consumers: HashSet<usize> = HashSet::default();
         let mut invalidations = ModifierInvalidations::new();
 
         chain.for_each_node_with_capability(NodeCapabilities::MODIFIER_LOCALS, |_ref, node| {
