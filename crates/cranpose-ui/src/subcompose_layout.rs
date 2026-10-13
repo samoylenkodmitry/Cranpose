@@ -1,11 +1,11 @@
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
-    collections::HashMap,
     rc::Rc,
 };
 
 use cranpose_core::{
     Composer, NodeError, NodeId, Phase, SlotId, SlotTable, SlotsHost, SubcomposeState,
+    collections::map::HashMap,
 };
 use cranpose_foundation::{
     InvalidationKind, ModifierInvalidation, ModifierInvalidations, NodeCapabilities,
@@ -1634,7 +1634,7 @@ impl SubcomposeLayoutNodeInner {
     fn new(measure_policy: Rc<MeasurePolicy>) -> Self {
         Self {
             modifier: Modifier::empty(),
-            modifier_chain: ModifierChainHandle::new(),
+            modifier_chain: ModifierChainHandle::detached(),
             resolved_modifiers: ResolvedModifiers::default(),
             modifier_capabilities: NodeCapabilities::default(),
             state: SubcomposeState::default(),

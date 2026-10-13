@@ -580,6 +580,16 @@ pub(crate) fn layout_frame_arena_placement_scratch_count() -> usize {
         .available_placement_scratch_count()
 }
 
+/// Runs `f` on the current app context's layout node registry and returns
+/// that context's id.
+pub(crate) fn with_current_layout_node_registry(
+    f: impl FnOnce(&crate::widgets::nodes::layout_node::LayoutNodeRegistryState),
+) -> AppContextId {
+    let context = require_current_app_context("layout node registry access");
+    f(&context.layout_node_registry);
+    context.id
+}
+
 pub(crate) fn with_layout_node_registry<R>(
     f: impl FnOnce(&crate::widgets::nodes::layout_node::LayoutNodeRegistryState) -> R,
 ) -> R {

@@ -1,12 +1,11 @@
 use std::{
     any::TypeId,
     cell::{Cell, RefCell},
-    collections::HashMap,
     hash::{Hash, Hasher},
     rc::Rc,
 };
 
-use cranpose_core::{Node, NodeId};
+use cranpose_core::{Node, NodeId, collections::map::HashMap};
 use cranpose_foundation::{
     InvalidationKind, ModifierInvalidation, ModifierInvalidations, NodeCapabilities,
     SemanticsConfiguration,
@@ -592,7 +591,7 @@ impl LayoutNode {
             #[cfg(feature = "inspection")]
             source_trace: cranpose_core::source_trace::current_source_trace(),
             modifier,
-            modifier_chain: ModifierChainHandle::new(),
+            modifier_chain: ModifierChainHandle::detached(),
             measure_policy,
             density: crate::density::Density::default(),
             children: Vec::new(),
@@ -970,9 +969,10 @@ impl LayoutNode {
             unregister_layout_node(owner_context_id, existing);
         }
         self.layout_state.borrow_mut().set_node_id(id);
+        // The new entry holds the node's parent, capabilities and modifier
+        // locals as they are now.
         let owner_context_id = register_layout_node(id, self);
         self.owner_context_id.set(Some(owner_context_id));
-        self.refresh_registry_state();
 
         let mut context = self.modifier_chain.context(Some(id));
         self.modifier_chain.move_to_node(previous, &mut context);
@@ -1458,7 +1458,7 @@ pub(crate) struct LayoutNodeRegistryState {
 impl LayoutNodeRegistryState {
     pub(crate) fn new() -> Self {
         Self {
-            entries: RefCell::new(HashMap::new()),
+            entries: RefCell::new(HashMap::default()),
             virtual_node_id_counter: Cell::new(VIRTUAL_NODE_ID_START),
         }
     }
@@ -1488,7 +1488,7 @@ impl LayoutNodeRegistryState {
             let retained = entries
                 .len()
                 .max(MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY);
-            let mut rebuilt = HashMap::new();
+            let mut rebuilt = HashMap::default();
             rebuilt.reserve(retained);
             rebuilt.extend(entries.drain());
             *entries = rebuilt;
@@ -1559,14 +1559,7 @@ pub(crate) fn register_layout_node(
     id: NodeId,
     node: &LayoutNode,
 ) -> crate::render_state::AppContextId {
-    let owner_context_id = crate::render_state::current_app_context_id();
-    let _ = crate::render_state::with_layout_node_registry_by_app_context(
-        owner_context_id,
-        |registry| {
-            registry.register(id, node);
-        },
-    );
-    owner_context_id
+    crate::render_state::with_current_layout_node_registry(|registry| registry.register(id, node))
 }
 
 pub(crate) fn unregister_layout_node(

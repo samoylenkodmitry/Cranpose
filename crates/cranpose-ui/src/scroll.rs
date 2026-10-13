@@ -10,12 +10,11 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
-    hash::{DefaultHasher, Hash, Hasher},
+    hash::{Hash, Hasher},
     rc::{Rc, Weak},
 };
 
-use cranpose_core::{MutableState, NodeId};
+use cranpose_core::{MutableState, NodeId, collections::map::HashMap};
 use cranpose_foundation::{
     Constraints, DelegatableNode, LayoutModifierNode, Measurable, ModifierNode,
     ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState,
@@ -33,7 +32,7 @@ struct InvalidationCallbacks {
 impl InvalidationCallbacks {
     fn new() -> Self {
         Self {
-            callbacks: RefCell::new(Rc::new(HashMap::new())),
+            callbacks: RefCell::new(Rc::new(HashMap::default())),
             next_id: Cell::new(1),
         }
     }
@@ -323,7 +322,7 @@ impl ScrollState {
 
     /// Get the unique ID of this ScrollState
     pub fn id(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = cranpose_core::hash::default::new();
         self.inner.runtime_state_id().hash(&mut hasher);
         hasher.finish()
     }
@@ -489,7 +488,7 @@ pub(crate) struct ScrollMotionContextStore {
 impl ScrollMotionContextStore {
     pub(crate) fn new() -> Self {
         Self {
-            contexts: RefCell::new(HashMap::new()),
+            contexts: RefCell::new(HashMap::default()),
         }
     }
 
@@ -682,7 +681,7 @@ impl ModifierNodeElement for ScrollElement {
     }
 
     fn key(&self) -> Option<u64> {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = cranpose_core::hash::default::new();
         self.state.id().hash(&mut hasher);
         self.reverse_scrolling.hash(&mut hasher);
         self.is_vertical.hash(&mut hasher);

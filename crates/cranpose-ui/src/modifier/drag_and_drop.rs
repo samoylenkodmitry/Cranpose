@@ -9,13 +9,12 @@
 use std::{
     any::Any,
     cell::{Cell, RefCell},
-    collections::HashMap,
     fmt,
     hash::{Hash, Hasher},
     rc::Rc,
 };
 
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_foundation::{
     DelegatableNode, InvalidationKind, ModifierNode, ModifierNodeContext, ModifierNodeElement,
     NodeCapabilities, NodeState, PointerEvent, PointerEventKind, PointerInputNode,

@@ -7,11 +7,10 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     rc::Rc,
 };
 
-use cranpose_core::{NodeId, SlotId};
+use cranpose_core::{NodeId, SlotId, collections::map::HashMap};
 use cranpose_foundation::lazy::{
     BeyondItem, LazyItemSource, LazyListIntervalContent, LazyListMeasureConfig,
     LazyListMeasureResult, LazyListMeasuredItem, LazyListState, SmallNodeVec, SmallOffsetVec,

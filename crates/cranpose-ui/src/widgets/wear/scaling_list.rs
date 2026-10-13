@@ -93,7 +93,7 @@
 
 use std::{
     cell::{Cell, RefCell},
-    hash::{DefaultHasher, Hash, Hasher},
+    hash::{Hash, Hasher},
     rc::Rc,
 };
 
@@ -419,7 +419,7 @@ impl WearScalingListState {
     }
 
     fn id(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = cranpose_core::hash::default::new();
         self.inner.runtime_state_id().hash(&mut hasher);
         hasher.finish()
     }

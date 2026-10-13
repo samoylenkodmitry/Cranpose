@@ -2,13 +2,13 @@
 
 use std::{
     cell::RefCell,
-    collections::HashSet,
     hash::{Hash, Hasher},
     rc::Rc,
 };
 
 use cranpose_core::{
-    MutableState, OwnedMutableState, RuntimeHandle, State, remember, with_current_composer,
+    MutableState, OwnedMutableState, RuntimeHandle, State, collections::map::HashSet, remember,
+    with_current_composer,
 };
 use cranpose_foundation::{
     DelegatableNode, InvalidationKind, ModifierNode, ModifierNodeContext, ModifierNodeElement,
@@ -93,8 +93,8 @@ impl MutableInteractionSource {
             inner: MutableState::with_runtime(
                 Rc::new(MutableInteractionSourceInner {
                     next_id: RefCell::new(1),
-                    active_presses: RefCell::new(HashSet::new()),
-                    active_hovers: RefCell::new(HashSet::new()),
+                    active_presses: RefCell::new(HashSet::default()),
+                    active_hovers: RefCell::new(HashSet::default()),
                     pressed: OwnedMutableState::with_runtime(false, runtime.clone()),
                     hovered: OwnedMutableState::with_runtime(false, runtime.clone()),
                     last_interaction: OwnedMutableState::with_runtime(None, runtime.clone()),
@@ -109,7 +109,7 @@ impl MutableInteractionSource {
     }
 
     pub fn id(&self) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = cranpose_core::hash::default::new();
         self.inner.runtime_state_id().hash(&mut hasher);
         hasher.finish()
     }

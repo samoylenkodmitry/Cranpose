@@ -2430,6 +2430,13 @@ pub struct ModifierNodeChain {
     head_sentinel: SentinelNode,
     tail_sentinel: SentinelNode,
     ordered_nodes: Vec<(NodeLink, NodeCapabilities, NodeCapabilities)>,
+    /// Whether the chain's nodes are attached. A node that joins an attached
+    /// chain attaches as it joins; one that joins a detached chain waits for
+    /// [`Self::attach_nodes`].
+    attached: bool,
+    /// Whether [`Self::detach_nodes`] cleared the links that
+    /// [`Self::repair_chain`] restores.
+    links_cleared: bool,
 }
 
 /// Buffers the reconciliation of a chain reuses, held per thread rather than
@@ -2594,7 +2601,6 @@ fn update_entry_in_place(
     }
     let same_element = entry.element.as_ref().equals_element(element.as_ref());
     let capabilities = element.capabilities();
-    attach_if_detached(entry, context);
     if !same_element || element.requires_update() {
         element.update_node(&mut *entry.node.borrow_mut());
         entry.element = element.clone();
@@ -2610,17 +2616,12 @@ fn update_entry_in_place(
     true
 }
 
-fn attach_if_detached(entry: &ModifierNodeEntry, context: &mut dyn ModifierNodeContext) {
-    let attached = entry.node.borrow().node_state().is_attached();
-    if !attached {
-        attach_node_tree(&mut *entry.node.borrow_mut(), context);
-    }
-}
-
-/// A new entry for `element` and its node, attached and updated.
+/// A new entry for `element` and its node, updated, and attached when
+/// `attach`, as it joins an attached chain.
 fn fresh_entry(
     element: DynModifierElement,
     context: &mut dyn ModifierNodeContext,
+    attach: bool,
 ) -> ModifierNodeEntry {
     let capabilities = element.capabilities();
     let entry = ModifierNodeEntry::new(
@@ -2630,7 +2631,9 @@ fn fresh_entry(
         element.hash_code(),
         capabilities,
     );
-    attach_node_tree(&mut *entry.node.borrow_mut(), context);
+    if attach {
+        attach_node_tree(&mut *entry.node.borrow_mut(), context);
+    }
     element.update_node(&mut *entry.node.borrow_mut());
     request_auto_invalidations(context, capabilities);
     entry
@@ -2639,13 +2642,14 @@ fn fresh_entry(
 /// Matches `element`, at `new_pos` of the rebuilt tail, against the old
 /// entries: one of its type and key whose node can take it is updated and
 /// marked for `new_pos`, and `None` is returned; otherwise the element's
-/// new entry is.
+/// new entry is, attached when `attach`.
 fn reconcile_element(
     element: DynModifierElement,
     new_pos: usize,
     (old_entries, index): (&mut [ModifierNodeEntry], &EntryIndex),
     (used, match_order): (&mut [bool], &mut [Option<usize>]),
     context: &mut dyn ModifierNodeContext,
+    attach: bool,
 ) -> Option<ModifierNodeEntry> {
     let element_type = element.element_type();
     let node_type = element.node_type();
@@ -2663,17 +2667,16 @@ fn reconcile_element(
             element: &element,
         },
     ) else {
-        return Some(fresh_entry(element, context));
+        return Some(fresh_entry(element, context, attach));
     };
     let entry = &mut old_entries[idx];
     if !element.can_update_node(&*entry.node.borrow()) {
-        return Some(fresh_entry(element, context));
+        return Some(fresh_entry(element, context, attach));
     }
 
     used[idx] = true;
     match_order[idx] = Some(new_pos);
     let same_element = entry.element.as_ref().equals_element(element.as_ref());
-    attach_if_detached(entry, context);
     if !same_element || element.requires_update() {
         element.update_node(&mut *entry.node.borrow_mut());
         entry.element = element;
@@ -2694,7 +2697,16 @@ fn reconcile_element(
 }
 
 impl ModifierNodeChain {
+    /// An attached chain: its nodes attach as they join it.
     pub fn new() -> Self {
+        let mut chain = Self::detached();
+        chain.attached = true;
+        chain
+    }
+
+    /// A detached chain: its nodes attach at [`Self::attach_nodes`], as a
+    /// layout node's do once the node has its id.
+    pub fn detached() -> Self {
         let mut chain = Self {
             entries: Vec::new(),
             aggregated_capabilities: NodeCapabilities::empty(),
@@ -2702,6 +2714,8 @@ impl ModifierNodeChain {
             head_sentinel: SentinelNode::new(),
             tail_sentinel: SentinelNode::new(),
             ordered_nodes: Vec::new(),
+            attached: false,
+            links_cleared: false,
         };
         chain.sync_chain_links();
         chain
@@ -2709,13 +2723,22 @@ impl ModifierNodeChain {
 
     /// Detaches all nodes in the chain.
     pub fn detach_nodes(&mut self) {
+        if !self.attached {
+            return;
+        }
+        self.attached = false;
         for entry in &self.entries {
             detach_node_tree(&mut *entry.node.borrow_mut());
         }
+        self.links_cleared = !self.entries.is_empty();
     }
 
     /// Attaches all nodes in the chain.
     pub fn attach_nodes(&mut self, context: &mut dyn ModifierNodeContext) {
+        if self.attached {
+            return;
+        }
+        self.attached = true;
         for entry in &self.entries {
             attach_node_tree(&mut *entry.node.borrow_mut(), context);
         }
@@ -2724,7 +2747,9 @@ impl ModifierNodeChain {
     /// Rebuilds the internal chain links (parent/child relationships).
     /// This should be called if nodes have been detached but are intended to be reused.
     pub fn repair_chain(&mut self) {
-        self.sync_chain_links();
+        if self.links_cleared {
+            self.sync_chain_links();
+        }
     }
 
     /// Reconcile the chain against the provided elements, attaching newly
@@ -2858,6 +2883,7 @@ impl ModifierNodeChain {
                 (&mut old_entries, &index),
                 (&mut scratch.old_used, &mut scratch.match_order),
                 context,
+                self.attached,
             );
             scratch.final_slots.push(fresh);
         }
@@ -3145,6 +3171,7 @@ impl ModifierNodeChain {
     }
 
     fn sync_chain_links(&mut self) {
+        self.links_cleared = false;
         self.rebuild_ordered_nodes();
 
         self.head_sentinel.node_state().set_parent_link(None);
