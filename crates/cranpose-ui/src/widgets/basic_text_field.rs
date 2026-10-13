@@ -340,6 +340,7 @@ where
                 Modifier::empty(),
                 options.clone(),
                 Some(refs.clone()),
+                false,
             )
         }),
     };
@@ -359,18 +360,19 @@ pub fn BasicTextFieldWithOptions(
     modifier: Modifier,
     options: BasicTextFieldOptions,
 ) -> NodeId {
-    TextFieldNode(state, modifier, options, None)
+    TextFieldNode(state, modifier, options, None, false)
 }
 
 /// The field's node, and the handles and caret tracking around it. With
 /// `decorator`, the decoration box sharing those refs takes the field's
-/// input, focus and semantics.
+/// input, focus and semantics. A `secure` field holds a secret.
 #[composable]
-fn TextFieldNode(
+pub(crate) fn TextFieldNode(
     state: TextFieldState,
     modifier: Modifier,
     options: BasicTextFieldOptions,
     decorator: Option<TextFieldRefs>,
+    secure: bool,
 ) -> NodeId {
     #[cfg(feature = "localization")]
     let options = BasicTextFieldOptions {
@@ -391,6 +393,7 @@ fn TextFieldNode(
         .with_keyboard(options.keyboard_options, options.on_keyboard_action)
         .with_input_transformation(options.input_transformation)
         .with_output_transformation(options.output_transformation)
+        .secure(secure)
         .with_handle_controller(controller.clone())
         .with_modal_depth(modal_depth);
     if let Some(refs) = decorator {
@@ -405,7 +408,13 @@ fn TextFieldNode(
 
     BringCaretIntoView(state, options.text_style.clone(), controller.clone());
 
-    SelectionHandles(state, options.text_style, controller, options.cursor_color);
+    SelectionHandles(
+        state,
+        options.text_style,
+        controller,
+        options.cursor_color,
+        secure,
+    );
 
     node
 }
@@ -494,6 +503,7 @@ fn SelectionHandles(
     style: TextStyle,
     controller: TextFieldHandleController,
     accent: Color,
+    secure: bool,
 ) {
     let selection = state.selection();
     let current_range = (selection.min(), selection.max());
@@ -775,6 +785,7 @@ fn SelectionHandles(
                 },
                 drag_pos.value().is_none(),
                 slide_point,
+                !secure,
                 can_paste,
                 move || {
                     if let Some(text) = dispatch_copy() {

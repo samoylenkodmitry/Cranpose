@@ -217,14 +217,15 @@ pub use pointer_dispatch::{
     schedule_pointer_repass,
 };
 pub use primitives::{
-    AnimatedVisibility, BasicText, BasicTextField, BasicTextFieldDecorated,
+    AnimatedVisibility, BasicSecureTextField, BasicText, BasicTextField, BasicTextFieldDecorated,
     BasicTextFieldDecorationScope, BasicTextFieldOptions, BasicTextFieldWithOptions,
     BasicTextWithOptions, BitmapPainter, BitmapRegionPainter, Box, BoxScope, BoxSpec,
     BoxWithConstraints, BoxWithConstraintsScope, BoxWithConstraintsScopeImpl, Button, ButtonSpec,
     Canvas, Column, ColumnSpec, ContentScale, Crossfade, DEFAULT_ALPHA, EnterTransition,
-    ExitTransition, ForEach, Image, Layout, LayoutNode, Painter, Row, RowSpec, Spacer,
-    SubcomposeLayout, SvgPainter, SvgPainterError, Text, TextWithOptions, fade_in, fade_out,
-    rememberSvg, slide_in_vertically, slide_out_vertically,
+    ExitTransition, ForEach, Image, Layout, LayoutNode, Painter, Row, RowSpec,
+    SecureTextFieldOptions, Spacer, SubcomposeLayout, SvgPainter, SvgPainterError, Text,
+    TextObfuscationMode, TextWithOptions, fade_in, fade_out, rememberSvg, slide_in_vertically,
+    slide_out_vertically,
 };
 #[cfg(any(test, feature = "test-helpers"))]
 #[doc(hidden)]

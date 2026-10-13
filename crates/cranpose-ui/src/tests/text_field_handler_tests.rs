@@ -32,6 +32,7 @@ fn focused_state(
             keyboard_options: Rc::default(),
             keyboard_action: Rc::default(),
             transformation: Rc::default(),
+            secure: false,
         },
         CaretGeometryRefs {
             local_to_window: Rc::new(Cell::new(ProjectiveTransform::identity())),

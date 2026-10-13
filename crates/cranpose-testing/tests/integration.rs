@@ -19,6 +19,7 @@ mod pointer_input_integration_test;
 mod remember_keyed_test;
 mod render_invalidation_test;
 mod robot_input;
+mod secure_text_field_test;
 mod support_text_field;
 mod teardown_survivor_state_test;
 mod text_field_caret_moves_test;
