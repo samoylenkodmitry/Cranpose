@@ -464,6 +464,16 @@ to force one.
 `wasm-pack` creates the WebAssembly module and JavaScript loader in `pkg`. The
 canvas ID matches the first argument to `run_web`.
 
+To show the frame rate, turn on the counter in the launcher with
+`AppLauncher::new().with_fps_counter(true)`. The renderer draws it in the top
+right corner, outside the composition, on desktop and on the web. It shows
+frames per second, the frame interval average, p95 and maximum, the work time
+of a frame and recompositions per second. A narrow window shows fewer fields
+and keeps the frame rate and the work time.
+[Cranpose Markets](https://samoylenkodmitry.github.io/cranpose-markets/)
+([source](https://github.com/samoylenkodmitry/cranpose-markets)) shows it on
+a screen of live market data.
+
 Give wasm-opt a limit for functions with a single caller in `Cargo.toml`:
 
 ```toml
