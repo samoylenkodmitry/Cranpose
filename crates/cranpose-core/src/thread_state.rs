@@ -3,6 +3,7 @@ use std::{
     cell::{Cell, RefCell},
     ops::Deref,
     rc::Rc,
+    thread::LocalKey,
 };
 
 use crate::{
@@ -79,12 +80,6 @@ pub(crate) struct SnapshotThreadState {
     pub(crate) retire_depth: Cell<usize>,
 }
 
-impl Drop for SnapshotThreadState {
-    fn drop(&mut self) {
-        crate::runtime::forget_registered_runtimes();
-    }
-}
-
 impl SnapshotThreadState {
     const fn new() -> Self {
         Self {
@@ -104,11 +99,10 @@ impl SnapshotThreadState {
         }
     }
 
-    fn release(&self) -> Self {
-        let released = Self::new();
+    fn swap_contents(&self, other: &Self) {
         let Self {
             runtime,
-            runtime_lock_depth: _,
+            runtime_lock_depth,
             global,
             current,
             apply_observers,
@@ -119,19 +113,29 @@ impl SnapshotThreadState {
             active_updates,
             pending_writes,
             retired_record_values,
-            retire_depth: _,
+            retire_depth,
         } = self;
-        move_into(runtime, &released.runtime);
-        move_into(global, &released.global);
-        move_into(current, &released.current);
-        move_into(apply_observers, &released.apply_observers);
-        move_into(last_writes, &released.last_writes);
-        move_into(extra_state_objects, &released.extra_state_objects);
-        move_into(pinning, &released.pinning);
-        move_into(active_updates, &released.active_updates);
-        move_into(pending_writes, &released.pending_writes);
-        move_into(retired_record_values, &released.retired_record_values);
-        last_unused_record_cleanup.set(0);
+        swap_values(runtime, &other.runtime);
+        runtime_lock_depth.swap(&other.runtime_lock_depth);
+        swap_values(global, &other.global);
+        swap_values(current, &other.current);
+        swap_values(apply_observers, &other.apply_observers);
+        swap_values(last_writes, &other.last_writes);
+        swap_values(extra_state_objects, &other.extra_state_objects);
+        last_unused_record_cleanup.swap(&other.last_unused_record_cleanup);
+        swap_values(pinning, &other.pinning);
+        swap_values(active_updates, &other.active_updates);
+        swap_values(pending_writes, &other.pending_writes);
+        swap_values(retired_record_values, &other.retired_record_values);
+        retire_depth.swap(&other.retire_depth);
+    }
+
+    fn release(&self) -> Self {
+        let released = Self::new();
+        self.swap_contents(&released);
+        self.runtime_lock_depth
+            .set(released.runtime_lock_depth.get());
+        self.retire_depth.set(released.retire_depth.get());
         released
     }
 }
@@ -192,16 +196,15 @@ impl RuntimeThreadState {
         self.state_teardown_depth.get() > 0 || !self.registered_runtimes.borrow().is_empty()
     }
 
-    fn release(&self) -> Self {
-        let released = Self::new();
+    fn swap_contents(&self, other: &Self) {
         let Self {
-            next_runtime_id: _,
+            next_runtime_id,
             active_runtimes,
             last_runtime,
             registered_runtimes,
             next_task_label,
             state_owners,
-            state_teardown_depth: _,
+            state_teardown_depth,
             deferred_state_releases,
             current_composer,
             spare_commands,
@@ -217,61 +220,145 @@ impl RuntimeThreadState {
             #[cfg(feature = "inspection")]
             source_stack,
         } = self;
-        move_into(active_runtimes, &released.active_runtimes);
-        move_into(last_runtime, &released.last_runtime);
-        move_into(registered_runtimes, &released.registered_runtimes);
-        move_into(next_task_label, &released.next_task_label);
-        move_into(state_owners, &released.state_owners);
-        move_into(deferred_state_releases, &released.deferred_state_releases);
-        move_into(current_composer, &released.current_composer);
-        move_into(spare_commands, &released.spare_commands);
-        move_into(bridges, &released.bridges);
+        next_runtime_id.swap(&other.next_runtime_id);
+        swap_values(active_runtimes, &other.active_runtimes);
+        swap_values(last_runtime, &other.last_runtime);
+        swap_values(registered_runtimes, &other.registered_runtimes);
+        swap_values(next_task_label, &other.next_task_label);
+        swap_values(state_owners, &other.state_owners);
+        state_teardown_depth.swap(&other.state_teardown_depth);
+        swap_values(deferred_state_releases, &other.deferred_state_releases);
+        swap_values(current_composer, &other.current_composer);
+        swap_values(spare_commands, &other.spare_commands);
+        swap_values(bridges, &other.bridges);
         #[cfg(any(test, debug_assertions))]
-        move_into(location_keys, &released.location_keys);
+        swap_values(location_keys, &other.location_keys);
         #[cfg(debug_assertions)]
-        move_into(scope_labels, &released.scope_labels);
+        swap_values(scope_labels, &other.scope_labels);
         #[cfg(debug_assertions)]
-        move_into(
+        swap_values(
             scope_invalidation_sources,
-            &released.scope_invalidation_sources,
+            &other.scope_invalidation_sources,
         );
         #[cfg(all(feature = "inspection", debug_assertions))]
-        move_into(recomposition_counters, &released.recomposition_counters);
+        swap_values(recomposition_counters, &other.recomposition_counters);
         #[cfg(feature = "inspection")]
-        move_into(source_stack, &released.source_stack);
+        swap_values(source_stack, &other.source_stack);
+    }
+
+    fn release(&self) -> Self {
+        let released = Self::new();
+        self.swap_contents(&released);
+        self.next_runtime_id.set(released.next_runtime_id.get());
+        self.state_teardown_depth
+            .set(released.state_teardown_depth.get());
         released
     }
 }
 
-fn move_into<T>(from: &RefCell<T>, into: &RefCell<T>) {
-    if let (Ok(mut from), Ok(mut into)) = (from.try_borrow_mut(), into.try_borrow_mut()) {
-        std::mem::swap(&mut *from, &mut *into);
+fn swap_values<T>(first: &RefCell<T>, second: &RefCell<T>) {
+    if let (Ok(mut first), Ok(mut second)) = (first.try_borrow_mut(), second.try_borrow_mut()) {
+        std::mem::swap(&mut *first, &mut *second);
     }
 }
 
 #[cfg(not(target_os = "android"))]
 pub(crate) struct Kept<T>(std::mem::ManuallyDrop<T>);
 
-#[cfg(target_os = "android")]
-pub(crate) struct Kept<T>(T);
-
+#[cfg(not(target_os = "android"))]
 impl<T> Kept<T> {
-    #[cfg(not(target_os = "android"))]
     const fn new(value: T) -> Self {
         Self(std::mem::ManuallyDrop::new(value))
     }
-
-    #[cfg(target_os = "android")]
-    const fn new(value: T) -> Self {
-        Self(value)
-    }
 }
 
+#[cfg(not(target_os = "android"))]
 impl<T> Deref for Kept<T> {
     type Target = T;
 
     fn deref(&self) -> &T {
         &self.0
+    }
+}
+
+#[cfg(target_os = "android")]
+pub(crate) trait RescueAtThreadExit {
+    fn rescue(&mut self);
+}
+
+#[cfg(target_os = "android")]
+pub(crate) struct Kept<T: RescueAtThreadExit>(T);
+
+#[cfg(target_os = "android")]
+impl<T: RescueAtThreadExit> Kept<T> {
+    const fn new(value: T) -> Self {
+        Self(value)
+    }
+}
+
+#[cfg(target_os = "android")]
+impl<T: RescueAtThreadExit> Deref for Kept<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+#[cfg(target_os = "android")]
+impl<T: RescueAtThreadExit> Drop for Kept<T> {
+    fn drop(&mut self) {
+        self.0.rescue();
+    }
+}
+
+#[cfg(target_os = "android")]
+#[derive(Default)]
+pub(crate) struct RescuedThreadState {
+    snapshots: RefCell<Option<SnapshotThreadState>>,
+    runtimes: RefCell<Option<RuntimeThreadState>>,
+}
+
+#[cfg(target_os = "android")]
+impl RescueAtThreadExit for RuntimeThreadState {
+    fn rescue(&mut self) {
+        let Some(rescued) =
+            crate::runtime::share_rescue(self.registered_runtimes.get_mut().values())
+        else {
+            return;
+        };
+        let snapshots = SNAPSHOTS.try_with(|state| state.release()).ok();
+        let mut rescued_snapshots = rescued.snapshots.borrow_mut();
+        if rescued_snapshots.is_none() {
+            *rescued_snapshots = snapshots;
+        }
+        drop(rescued_snapshots);
+        *rescued.runtimes.borrow_mut() = Some(std::mem::replace(self, Self::new()));
+    }
+}
+
+#[cfg(target_os = "android")]
+impl RescueAtThreadExit for SnapshotThreadState {
+    fn rescue(&mut self) {
+        let Some(Some(rescued)) = RUNTIMES
+            .try_with(|state| {
+                crate::runtime::share_rescue(state.registered_runtimes.borrow().values())
+            })
+            .ok()
+        else {
+            return;
+        };
+        *rescued.snapshots.borrow_mut() = Some(std::mem::replace(self, Self::new()));
+    }
+}
+
+#[cfg(target_os = "android")]
+pub(crate) fn restore(rescued: &RescuedThreadState) {
+    if let Some(saved) = rescued.runtimes.take() {
+        let _ = RUNTIMES.try_with(|current| current.swap_contents(&saved));
+    }
+    if let Some(saved) = rescued.snapshots.take() {
+        let _ = SNAPSHOTS.try_with(|current| current.swap_contents(&saved));
     }
 }
 
@@ -342,4 +429,21 @@ pub(crate) fn runtimes<R>(f: impl FnOnce(&RuntimeThreadState) -> R) -> R {
 
 pub(crate) fn try_runtimes<R>(f: impl FnOnce(&RuntimeThreadState) -> R) -> Option<R> {
     RUNTIMES.try_with(|state| f(state)).ok()
+}
+
+/// Runs `f` on this thread's value of `key`, or on a fresh value from `fresh`
+/// once thread exit has destroyed it, so a destructor that runs late at thread
+/// exit finds an empty framework state instead of aborting the process.
+pub fn with_or_fresh<T: 'static, R>(
+    key: &'static LocalKey<T>,
+    fresh: impl FnOnce() -> T,
+    f: impl FnOnce(&T) -> R,
+) -> R {
+    let mut f = Some(f);
+    let mut call = |state: &T| f.take().map(|f| f(state));
+    key.try_with(&mut call)
+        .ok()
+        .flatten()
+        .or_else(|| call(&fresh()))
+        .expect("the closure runs on exactly one state")
 }

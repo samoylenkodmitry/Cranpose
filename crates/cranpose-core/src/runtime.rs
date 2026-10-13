@@ -433,6 +433,8 @@ struct RuntimeInner {
     forgotten_movables: RefCell<Vec<Key>>,
     next_movable_content_id: Cell<u64>,
     runtime_id: RuntimeId,
+    #[cfg(target_os = "android")]
+    rescued: RefCell<Option<Rc<thread_state::RescuedThreadState>>>,
 }
 
 struct TaskEntry {
@@ -476,6 +478,8 @@ impl RuntimeInner {
             forgotten_movables: RefCell::new(Vec::new()),
             next_movable_content_id: Cell::new(1),
             runtime_id: RuntimeId::next(),
+            #[cfg(target_os = "android")]
+            rescued: RefCell::new(None),
         }
     }
 
@@ -907,6 +911,13 @@ impl Runtime {
             *state.last_runtime.borrow_mut() = Some(handle);
         });
         runtime
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn restore_thread_state(&self) {
+        if let Some(rescued) = self.inner.rescued.take() {
+            thread_state::restore(&rescued);
+        }
     }
 
     pub fn handle(&self) -> RuntimeHandle {
@@ -1574,8 +1585,21 @@ pub(crate) fn runtime_handle_by_id(id: RuntimeId) -> Option<RuntimeHandle> {
         .flatten()
 }
 
-pub(crate) fn forget_registered_runtimes() {
-    thread_state::try_runtimes(|state| state.registered_runtimes.take());
+#[cfg(target_os = "android")]
+pub(crate) fn share_rescue<'a>(
+    handles: impl Iterator<Item = &'a RuntimeHandle>,
+) -> Option<Rc<thread_state::RescuedThreadState>> {
+    let live: Vec<Rc<RuntimeInner>> = handles
+        .filter_map(|handle| handle.inner.upgrade())
+        .collect();
+    let shared = live
+        .iter()
+        .find_map(|inner| inner.rescued.borrow().clone())
+        .or_else(|| (!live.is_empty()).then(Rc::default))?;
+    for inner in &live {
+        *inner.rescued.borrow_mut() = Some(Rc::clone(&shared));
+    }
+    Some(shared)
 }
 
 pub(crate) fn with_state_arena_by_id<R>(

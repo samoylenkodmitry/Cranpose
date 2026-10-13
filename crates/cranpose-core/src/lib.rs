@@ -37,6 +37,8 @@ mod stable_index;
 mod state;
 #[doc(hidden)]
 pub use source_trace::__source_scope;
+#[doc(hidden)]
+pub use thread_state::with_or_fresh;
 pub mod subcompose;
 mod thread_state;
 

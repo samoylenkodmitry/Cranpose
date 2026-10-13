@@ -40,5 +40,5 @@ thread_local! {
 }
 
 pub(crate) fn with<R>(f: impl FnOnce(&RenderThreadState) -> R) -> R {
-    STATE.with(f)
+    cranpose_core::with_or_fresh(&STATE, RenderThreadState::new, f)
 }

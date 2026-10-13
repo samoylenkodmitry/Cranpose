@@ -100,11 +100,15 @@ fn local_view_model_store() -> CompositionLocal<Option<ViewModelStore>> {
         static LOCAL: RefCell<Option<CompositionLocal<Option<ViewModelStore>>>> =
             const { RefCell::new(None) };
     }
-    LOCAL.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| compositionLocalOf(|| None))
-            .clone()
-    })
+    cranpose_core::with_or_fresh(
+        &LOCAL,
+        || RefCell::new(None),
+        |cell| {
+            cell.borrow_mut()
+                .get_or_insert_with(|| compositionLocalOf(|| None))
+                .clone()
+        },
+    )
 }
 
 /// Gives `content` its own [`ViewModelStore`], whose view models live as long
