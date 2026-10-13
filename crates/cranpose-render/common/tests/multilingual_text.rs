@@ -134,6 +134,19 @@ fn mixed_text_keeps_latin_and_arabic_runs_in_their_own_direction() {
 }
 
 #[test]
+fn shaped_text_that_ends_or_pauses_with_a_line_break_draws_every_line() {
+    for text in ["Укупно 1.352,96\n", "Укупно\n\nИзнос 400,00", "مرحبا\n"] {
+        let glyphs = drawn(text);
+        let letters = text.chars().filter(|c| !c.is_whitespace()).count();
+        assert!(
+            glyphs.len() >= letters / 2,
+            "{text:?} drew {} glyph(s) for {letters} letter(s)",
+            glyphs.len()
+        );
+    }
+}
+
+#[test]
 fn devanagari_conjunct_is_one_cursor_cluster() {
     let measurer = SoftwareTextMeasurer::from_font_set(fonts(), 32);
     let style = style();
