@@ -294,14 +294,14 @@ pub async fn run(
     let mut instance_desc =
         wgpu::InstanceDescriptor::new_with_display_handle(Box::new(BrowserDisplayHandle));
     instance_desc.backends = instance_backends(backend_preference);
-    let instance = match backend_preference {
-        WebBackendPreference::Auto => {
-            wgpu::util::new_instance_with_webgpu_detection(instance_desc).await
-        }
-        WebBackendPreference::WebGpu | WebBackendPreference::Gl => {
-            wgpu::Instance::new(instance_desc)
-        }
-    };
+    if backend_preference == WebBackendPreference::Auto
+        && !crate::web_webgpu_ask::webgpu_present().await
+    {
+        instance_desc
+            .backends
+            .remove(wgpu::Backends::BROWSER_WEBGPU);
+    }
+    let instance = wgpu::Instance::new(instance_desc);
 
     // Sized before its context exists, the canvas gets its drawing buffer
     // at this size; sized after, WebGL makes it again.
