@@ -451,6 +451,7 @@ pub async fn run(
     )));
     app.borrow_mut()
         .set_semantics_enabled(settings.web_accessibility_on_start);
+    app.borrow_mut().set_dev_options(settings.dev_options);
     crate::accessibility::install_inspector(&mut app.borrow_mut(), settings.developer_inspector);
     let platform = Rc::new(RefCell::new(WebPlatform::default()));
     platform.borrow_mut().set_scale_factor(scale_factor);
@@ -846,6 +847,7 @@ pub async fn run(
     let webview_canvas = canvas.clone();
 
     *render_loop.borrow_mut() = Some(Closure::wrap(Box::new(move || {
+        let frame_started_at = web_time::Instant::now();
         frame_pending.set(false);
         frame_running.set(true);
         canvas_watch.follow();
@@ -885,7 +887,7 @@ pub async fn run(
             app.borrow().needs_redraw(),
         );
         if present_required {
-            presenter.present(&app);
+            presenter.present(&app, frame_started_at);
         }
 
         frame_running.set(false);
@@ -943,8 +945,9 @@ impl CanvasPresenter {
 
     /// Draws `app` into the canvas's next image and presents it, or
     /// reconfigures a surface the browser reports lost. While the first
-    /// frame's pipelines compile, the canvas keeps what it shows.
-    fn present(&self, app: &RefCell<AppShell<WgpuRenderer>>) {
+    /// frame's pipelines compile, the canvas keeps what it shows. A
+    /// presented frame counts in the frame statistics from `started_at`.
+    fn present(&self, app: &RefCell<AppShell<WgpuRenderer>>, started_at: web_time::Instant) {
         if !self.discovery.may_draw() {
             return;
         }
@@ -971,6 +974,7 @@ impl CanvasPresenter {
                         log::error!("render failed: {err:?}");
                     }
                     app_mut.renderer().present(output);
+                    app_mut.record_presented_frame(started_at, web_time::Instant::now());
                 }
                 self.discovery.end_frame(&self.redraw);
                 self.dirty.set(false);
