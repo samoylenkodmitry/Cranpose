@@ -1034,6 +1034,17 @@ impl WgpuRenderer {
         }
     }
 
+    /// Drops what earlier frames drew and kept, once the pipelines the
+    /// browser compiled in the background landed
+    /// (`wgpu::Device::compile_pipelines_in_background`): those frames left
+    /// out the draws that use them.
+    #[cfg(target_arch = "wasm32")]
+    pub fn background_pipelines_landed(&mut self) {
+        if let PresentBackend::Sync(gpu_renderer) = &mut self.backend {
+            gpu_renderer.background_pipelines_landed();
+        }
+    }
+
     /// Return the WGPU device when GPU resources are initialized.
     /// Sync backend only (desktop/web reconfigure paths); the threaded
     /// runtime owns its device on the present thread.

@@ -8,6 +8,13 @@
 //! `createRenderPipelineAsync` the same twelve compiled side by side in
 //! 0.21 to 0.25 s, and creating them again afterwards took 3 ms in all.
 //!
+//! Every frame after it creates the pipelines it lacks in the background
+//! (`wgpu::Device::compile_pipelines_in_background`): drawn one after
+//! another, the 19 pipelines the demo's Liquid UI tab first needed held
+//! Chrome's GPU process, and the page, 1.4 s on an Apple M5 with no Metal
+//! shader cached. The frame leaves out the draws that wait for one, and the
+//! page draws again when they landed.
+//!
 //! On WebGL the first screen's pipelines an earlier run of the app recorded
 //! (see [`FIRST_SCREEN_PIPELINES`]) build as the renderer starts. Chrome's
 //! GPU process links each program one at a time, about 40 ms on a Mate 20
@@ -67,6 +74,9 @@ pub(crate) struct PipelineDiscovery {
     /// Whether this is a recording run whose first screen is still to be
     /// left in [`RECORDED`].
     recording: std::cell::Cell<bool>,
+    /// Whether pipelines compiled in the background landed since the last
+    /// frame, which drew without them.
+    landed: Rc<std::cell::Cell<bool>>,
 }
 
 impl PipelineDiscovery {
@@ -77,6 +87,7 @@ impl PipelineDiscovery {
             target,
             stage: Rc::new(RefCell::new(Stage::Cold)),
             recording: std::cell::Cell::new(recording),
+            landed: Rc::default(),
         }
     }
 
@@ -121,11 +132,18 @@ impl PipelineDiscovery {
                     _compiled: compiled,
                 }
             }
-            Stage::Cold | Stage::Redrawing { .. } | Stage::Done => Stage::Done,
+            Stage::Cold => {
+                self.target.device.compile_pipelines_in_background();
+                Stage::Done
+            }
+            Stage::Redrawing { .. } | Stage::Done => Stage::Done,
             current @ (Stage::Discovering | Stage::Compiling) => current,
         };
         if matches!(*stage, Stage::Discovering | Stage::Redrawing { .. }) {
             renderer.begin_discovery_frame();
+        }
+        if self.landed.take() {
+            renderer.background_pipelines_landed();
         }
     }
 
@@ -170,8 +188,22 @@ impl PipelineDiscovery {
                     redraw();
                 });
             }
-            Stage::Redrawing { .. } => *stage = Stage::Done,
-            Stage::Cold | Stage::Compiling | Stage::Landed(_) | Stage::Done => {}
+            Stage::Redrawing { .. } => {
+                *stage = Stage::Done;
+                self.target.device.compile_pipelines_in_background();
+            }
+            Stage::Done => {
+                if let Some(compiling) = self.target.device.take_background_pipelines() {
+                    let landed = Rc::clone(&self.landed);
+                    let redraw = Rc::clone(redraw);
+                    wasm_bindgen_futures::spawn_local(async move {
+                        compiling.await;
+                        landed.set(true);
+                        redraw();
+                    });
+                }
+            }
+            Stage::Cold | Stage::Compiling | Stage::Landed(_) => {}
         }
     }
 }

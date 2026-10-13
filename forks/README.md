@@ -24,8 +24,8 @@ without the branches their constants decide, the GL program status read
 only on failure, the GLSL templates, the GL link reads and the WebGL extensions below,
 and `cranpose-wgpu-core` is at 30.0.13 to require it, to make template
 modules and to configure a surface while another thread submits.
-`cranpose-wgpu` is at 30.0.14 for the WebGPU pipeline discovery below and to
-require them.
+`cranpose-wgpu` is at 30.0.15 for the WebGPU pipeline discovery and the
+background compiles below and to require them.
 
 | fork | upstream |
 | --- | --- |
@@ -324,6 +324,23 @@ failed. Cranpose's web shell draws its first frame this way, then installs
 a new renderer and draws the frame again once they compiled. On the M5
 the gauntlet's first frame showed after 0.5 to 0.75 s instead of 1.0 to
 1.25 s, the same to the pixel.
+
+### WebGPU pipelines compile in the background after the first frame
+
+A pipeline the page creates after its first frame went to the browser's
+`createRenderPipeline`, which Chrome compiles in its GPU process one after
+another while nothing it is given draws. On an Apple M5 with no Metal shader
+cached, the 19 pipelines the desktop demo's Liquid UI tab first needed held
+every frame of the page 1.4 s, and another 0.2 s after.
+
+`Device::compile_pipelines_in_background` sends every render pipeline the
+device creates from then on to `createRenderPipelineAsync`. The pipeline
+object exists at once; its draws are left out until the browser compiled
+it, as a pipeline discovery leaves them out, and from then on it draws.
+`Device::take_background_pipelines` returns a future for the pipelines
+created since the last call, which a renderer awaits to drop what it drew
+without them and draw again. Cranpose's web shell turns it on after the
+first frame, whose pipelines discovery compiles.
 
 ### A surface configures while another thread submits
 

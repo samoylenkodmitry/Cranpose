@@ -244,7 +244,6 @@ impl LayerCache {
 
     /// Releases every raster: they may hold a placeholder drawn while a
     /// pipeline compiled.
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn clear(&mut self) {
         while let Some((_, entry)) = self.entries.pop_lru() {
             self.release(entry.retained);
