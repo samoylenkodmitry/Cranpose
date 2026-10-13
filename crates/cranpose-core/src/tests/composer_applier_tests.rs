@@ -2326,3 +2326,44 @@ fn a_batch_of_scene_nodes_resolves_like_one_node_at_a_time() {
         ]
     );
 }
+
+#[test]
+fn a_bubble_after_a_move_in_the_same_batch_marks_the_new_ancestors() {
+    let mut applier = test_applier();
+    let (grandparent, parent, child) = dirty_flag_tree(&mut applier);
+    let other = applier.create(Box::new(DirtyFlagNode::default()));
+    insert_child_with_reparenting(&mut applier, grandparent, other);
+    for id in [grandparent, parent, child, other] {
+        applier
+            .with_node::<DirtyFlagNode, _>(id, |node| node.needs_semantics.set(false))
+            .expect("tree node exists");
+    }
+
+    // One batch: a semantics bubble passes `parent`, `parent` moves under
+    // `other`, and a second semantics bubble from `child` must reach `other`
+    // although the first one passed `parent`.
+    let mut commands = CommandQueue::default();
+    commands.push(Command::BubbleDirty {
+        node_id: child,
+        bubble: DirtyBubble::SEMANTICS,
+    });
+    commands.push(Command::AttachChild {
+        parent_id: other,
+        child_id: parent,
+        insert_index: None,
+        bubble: DirtyBubble::LAYOUT_AND_MEASURE,
+    });
+    commands.push(Command::BubbleDirty {
+        node_id: child,
+        bubble: DirtyBubble::SEMANTICS,
+    });
+    commands.apply(&mut applier).expect("the batch applies");
+
+    let marked = applier
+        .with_node::<DirtyFlagNode, _>(other, |node| node.needs_semantics.get())
+        .expect("the new parent exists");
+    assert!(
+        marked,
+        "the moved node's new parent holds a dirty descendant"
+    );
+}
