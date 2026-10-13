@@ -496,11 +496,13 @@ cranpose-build build --platform web --release
 ```
 
 It builds the module with wasm-pack, opens the page in headless Chrome at a
-phone's and a desktop's viewport to record the pipelines its first screen draws
-with, and builds the module again with them embedded. On WebGL the page then
-builds those pipelines as it starts, and the browser compiles them while the
-page composes its first screen instead of during the first frame. On a Mate 20
-X this showed the first screen of a heavy page about 0.3 s sooner. The page
+phone's and a desktop's viewport, on WebGL and on WebGPU where Chrome has it,
+to record the pipelines its first screen draws with, and builds the module
+again with them embedded. The page then builds those pipelines as it starts,
+and the browser compiles them while the page composes its first screen instead
+of during the first frame. On a Mate 20 X on WebGL this showed the first screen
+of a heavy page about 0.3 s sooner, and on an Apple M5 on WebGPU with no shader
+cached about 0.15 s sooner. The page
 directory, with the HTML page, `pkg/` and the assets, is the `application`
 directory of the build under `dist/cranpose/web/release`. `CHROME` names the Chrome executable when it is
 not in a usual place; without Chrome the build keeps the page it built first.

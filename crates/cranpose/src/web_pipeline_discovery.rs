@@ -15,15 +15,21 @@
 //! shader cached. The frame leaves out the draws that wait for one, and the
 //! page draws again when they landed.
 //!
-//! On WebGL the first screen's pipelines an earlier run of the app recorded
-//! (see [`FIRST_SCREEN_PIPELINES`]) build as the renderer starts. Chrome's
-//! GPU process links each program one at a time, about 40 ms on a Mate 20
-//! X, and would otherwise sit idle while the page composes, then link all
-//! thirteen of the gauntlet's while its first frame waits: that frame ended
-//! at 1.11-1.21 s with them built at start, 1.45-1.57 s without. WebGPU
-//! builds none at start: Chrome compiles its discovery side by side on an
-//! M3 Pro, and a set recorded at another screen size than the first
-//! frame's added compiles there without moving the first content.
+//! The first screen's pipelines an earlier run of the app recorded (see
+//! [`FIRST_SCREEN_PIPELINES`]) build as the renderer starts. On WebGL
+//! Chrome's GPU process links each program one at a time, about 40 ms on a
+//! Mate 20 X, and would otherwise sit idle while the page composes, then
+//! link all thirteen of the gauntlet's while its first frame waits: that
+//! frame ended at 1.11-1.21 s with them built at start, 1.45-1.57 s
+//! without. On WebGPU they begin the first frame's discovery, so Chrome
+//! compiles them while the page composes: on an Apple M5 with no Metal
+//! shader cached the gauntlet's first content came at 0.57-0.66 s with a
+//! set that matched its first frame, 0.71-0.85 s without one.
+//!
+//! The frame a discovery learned its pipelines from draws as soon as they
+//! compiled, without waiting for the next animation frame and the update
+//! that runs first: with Metal's shader cache warm the gauntlet's first
+//! content came at 0.30-0.34 s, 0.33-0.39 s when it waited.
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
@@ -91,12 +97,23 @@ impl PipelineDiscovery {
         }
     }
 
-    /// Installs the first renderer, and on WebGL builds the recorded first
-    /// screen's pipelines, which the browser links beside the page's start.
-    pub(crate) fn start(&self, renderer: &mut WgpuRenderer) {
+    /// Installs the first renderer and builds the recorded first screen's
+    /// pipelines, which the browser compiles beside the page's start.
+    pub(crate) async fn start(&self, renderer: &mut WgpuRenderer) {
         self.install(renderer);
         if self.target.backend == wgpu::Backend::Gl {
             renderer.build_first_screen_pipelines(FIRST_SCREEN_PIPELINES);
+        } else if !FIRST_SCREEN_PIPELINES.is_empty()
+            && self.target.device.begin_pipeline_discovery()
+        {
+            *self.stage.borrow_mut() = Stage::Discovering;
+            renderer.begin_discovery_frame();
+            renderer.build_first_screen_pipelines(FIRST_SCREEN_PIPELINES);
+            // Chrome sends WebGPU calls to its GPU process at a microtask
+            // checkpoint: yielding once lets it compile them while the page
+            // composes its first screen.
+            let yielded = js_sys::Promise::resolve(&wasm_bindgen::JsValue::UNDEFINED);
+            let _ = wasm_bindgen_futures::JsFuture::from(yielded).await;
         }
     }
 
@@ -166,10 +183,11 @@ impl PipelineDiscovery {
     }
 
     /// Ends the frame that drew: after discovery, waits for the browser to
-    /// compile what it learned and calls `redraw` once it has. A recording
-    /// run draws on until its first screen is left: a screen that holds
-    /// still would draw no frame after the first screen ended.
-    pub(crate) fn end_frame(&self, redraw: &Rc<dyn Fn()>) {
+    /// compile what it learned and calls `draw_now` once it has. A
+    /// recording run asks `redraw` for frames until its first screen is
+    /// left: a screen that holds still would draw no frame after the first
+    /// screen ended.
+    pub(crate) fn end_frame(&self, redraw: &Rc<dyn Fn()>, draw_now: &Rc<dyn Fn()>) {
         if self.recording.get() {
             // Asked after this frame: a frame asked during one is dropped.
             let redraw = Rc::clone(redraw);
@@ -181,11 +199,11 @@ impl PipelineDiscovery {
                 *stage = Stage::Compiling;
                 let compiling = self.target.device.end_pipeline_discovery();
                 let landed = Rc::clone(&self.stage);
-                let redraw = Rc::clone(redraw);
+                let draw_now = Rc::clone(draw_now);
                 wasm_bindgen_futures::spawn_local(async move {
                     let compiled = compiling.await;
                     *landed.borrow_mut() = Stage::Landed(compiled);
-                    redraw();
+                    draw_now();
                 });
             }
             Stage::Redrawing { .. } => {
