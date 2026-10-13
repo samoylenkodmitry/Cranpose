@@ -437,7 +437,7 @@ pub async fn run(
         backend: adapter_info.backend,
         downlevel: adapter.get_downlevel_capabilities().flags,
     });
-    discovery.start(&mut renderer);
+    discovery.start(&mut renderer).await;
 
     // The page runs idle prefetch passes between frames (`web_idle_prefetch`):
     // a lazy list leaves them the items beyond its viewport that its scroll
@@ -757,6 +757,7 @@ pub async fn run(
         surface_dirty.clone(),
         request_frame.clone(),
         discovery,
+        Rc::downgrade(&app),
     );
     let document_for_loop = document.clone();
     let cursors_for_loop = RefCell::new(crate::web_cursor::WebCursors::new(
@@ -840,8 +841,13 @@ struct CanvasPresenter {
     dirty: Rc<Cell<bool>>,
     request_frame: Rc<dyn Fn()>,
     discovery: PipelineDiscovery,
-    /// Draws again once the first frame's pipelines compiled.
+    /// Asks for a frame that draws again.
     redraw: Rc<dyn Fn()>,
+    /// Draws the frame the app holds at once, outside an animation frame:
+    /// once the first frame's pipelines compiled, the frame they were
+    /// discovered for shows without waiting for the next animation frame
+    /// and the update it runs first.
+    draw_now: Rc<dyn Fn()>,
 }
 
 impl CanvasPresenter {
@@ -851,7 +857,8 @@ impl CanvasPresenter {
         dirty: Rc<Cell<bool>>,
         request_frame: Rc<dyn Fn()>,
         discovery: PipelineDiscovery,
-    ) -> Self {
+        app: std::rc::Weak<RefCell<AppShell<WgpuRenderer>>>,
+    ) -> Rc<Self> {
         let redraw: Rc<dyn Fn()> = {
             let dirty = dirty.clone();
             let request_frame = request_frame.clone();
@@ -860,14 +867,26 @@ impl CanvasPresenter {
                 request_frame();
             })
         };
-        Self {
-            surface,
-            config,
-            dirty,
-            request_frame,
-            discovery,
-            redraw,
-        }
+        Rc::new_cyclic(|presenter: &std::rc::Weak<Self>| {
+            let presenter = presenter.clone();
+            let request_redraw = Rc::clone(&redraw);
+            let draw_now: Rc<dyn Fn()> =
+                Rc::new(move || match (presenter.upgrade(), app.upgrade()) {
+                    (Some(presenter), Some(app)) if app.try_borrow_mut().is_ok() => {
+                        presenter.present(&app, web_time::Instant::now());
+                    }
+                    _ => request_redraw(),
+                });
+            Self {
+                surface,
+                config,
+                dirty,
+                request_frame,
+                discovery,
+                redraw,
+                draw_now,
+            }
+        })
     }
 
     /// Draws `app` into the canvas's next image and presents it, or
@@ -903,7 +922,7 @@ impl CanvasPresenter {
                     app_mut.renderer().present(output);
                     app_mut.record_presented_frame(started_at, web_time::Instant::now());
                 }
-                self.discovery.end_frame(&self.redraw);
+                self.discovery.end_frame(&self.redraw, &self.draw_now);
                 self.dirty.set(false);
             }
             SurfaceFrame::Reconfigure => {
