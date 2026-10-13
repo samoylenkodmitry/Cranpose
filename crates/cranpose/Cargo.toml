@@ -256,6 +256,8 @@ web-sys = { version = "0.3", optional = true, features = [
     "CanvasRenderingContext2d",
     "ImageData",
     "Performance",
+    # Lazy list items composed between frames (`web_idle_prefetch`)
+    "IdleDeadline",
     "MouseEvent",
     "EventTarget",
     "Touch",

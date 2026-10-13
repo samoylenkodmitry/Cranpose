@@ -441,6 +441,10 @@ pub async fn run(
     });
     discovery.start(&mut renderer);
 
+    // The page runs idle prefetch passes between frames (`web_idle_prefetch`):
+    // a lazy list leaves them the items beyond its viewport that its scroll
+    // does not soon reach.
+    cranpose_ui::set_idle_prefetch_passes(true);
     let app = Rc::new(RefCell::new(AppShell::new_with_size_and_density(
         renderer,
         default_root_key(),
@@ -846,6 +850,7 @@ pub async fn run(
     #[cfg(feature = "webview")]
     let webview_canvas = canvas.clone();
 
+    let idle_prefetch = crate::web_idle_prefetch::IdlePrefetch::new(&app);
     *render_loop.borrow_mut() = Some(Closure::wrap(Box::new(move || {
         let frame_started_at = web_time::Instant::now();
         frame_pending.set(false);
@@ -898,6 +903,7 @@ pub async fn run(
         };
         let schedule = app.borrow().schedule_platform_frame(&frame_driver);
         frame_driver.also_wake_at(schedule, accessibility.borrow().sync_wake());
+        idle_prefetch.queue_after_frame(frame_started_at);
     }) as Box<dyn FnMut()>));
 
     request_frame();

@@ -374,6 +374,13 @@ where
         result
     }
 
+    /// Whether a lazy list waits for [`Self::run_idle_prefetch`].
+    pub fn has_idle_prefetch_work(&self) -> bool {
+        self.app
+            .app_context
+            .enter(cranpose_ui::has_lazy_prefetch_requests)
+    }
+
     /// Composes lazy list items that frames left beyond their viewports for
     /// later, in layout passes, at most four of them. A pass runs while
     /// `deadline`, if any, still leaves room for the recent cost of one full pass

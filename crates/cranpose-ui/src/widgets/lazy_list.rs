@@ -35,6 +35,11 @@ use crate::{
 const EXPENSIVE_RETAINED_REUSABLE_SLOTS: usize = 128;
 const IDLE_PREFETCH_READY_BEYOND_BOUNDS_ITEMS: usize = 2;
 const IDLE_PREFETCH_ITEMS_PER_PASS: usize = 1;
+/// Where idle prefetch passes run, a scrolling frame composes the new items
+/// beyond its viewport that its scroll would bring to the edge within this
+/// many frames, and leaves the farther ones to the passes. A fast scroll
+/// reaches the ready items, a slow one leaves them all.
+const REACH_FRAMES: f32 = 2.0;
 
 #[derive(Clone, Copy)]
 struct LazyItemMeasureContext {
@@ -649,10 +654,10 @@ impl LazyItemSource for LazyListItems<'_, '_, '_> {
         item
     }
 
-    fn keep_beyond(&mut self, index: usize) -> BeyondItem {
+    fn keep_beyond(&mut self, index: usize, distance: f32) -> BeyondItem {
         let composed = self.composed(index);
         if let Some(beyond) = self.beyond.as_mut()
-            && !beyond.admits(composed)
+            && !beyond.admits(composed, distance)
         {
             return BeyondItem::Declined;
         }
@@ -670,7 +675,9 @@ impl LazyItemSource for LazyListItems<'_, '_, '_> {
 
 /// Measures the list's viewport. While it scrolls, and in an idle prefetch
 /// pass, the items beyond it compose as [`BeyondBoundsComposition`] decides,
-/// and an item left for later asks for a pass for the list `node_id`.
+/// and an item left for later asks for a pass for the list `node_id`. So do
+/// they at rest where the shell runs idle prefetch passes, unless the list
+/// holds the focus and places them.
 fn measure_lazy_viewport(
     mut items: LazyListItems<'_, '_, '_>,
     config: &LazyListMeasureConfig,
@@ -683,8 +690,17 @@ fn measure_lazy_viewport(
     if idle_pass {
         inputs.state.hold_scroll_window();
     }
-    if idle_pass || items.scroll_delta.abs() > 0.001 {
-        items.beyond = Some(BeyondBoundsComposition::new(idle_pass));
+    let scrolling = items.scroll_delta.abs() > 0.001;
+    let passes_run = crate::lazy_prefetch::idle_prefetch_passes_run();
+    if idle_pass {
+        items.beyond = Some(BeyondBoundsComposition::new(true, f32::INFINITY));
+    } else if scrolling || (passes_run && !items.place_beyond) {
+        let reach = if passes_run {
+            items.scroll_delta.abs() * REACH_FRAMES
+        } else {
+            f32::INFINITY
+        };
+        items.beyond = Some(BeyondBoundsComposition::new(false, reach));
     }
     let result = measure_lazy_list_with_beyond_bounds_policy(
         items_count,
@@ -700,20 +716,24 @@ fn measure_lazy_viewport(
     result
 }
 
-/// Which items beyond the viewport a scrolling list composes, in order away
-/// from it. Composed items stay composed. A frame composes new ones until
-/// enough composed items lie ahead, counting its own; the next is left for
-/// an idle prefetch pass, which composes one.
+/// Which items beyond the viewport a list composes, in order away from it.
+/// Composed items stay composed. A frame composes new ones that start within
+/// its reach until enough composed items lie ahead, counting its own; the
+/// next is left for an idle prefetch pass, which composes one.
 #[derive(Clone, Copy)]
 struct BeyondBoundsComposition {
     idle_pass: bool,
     ready: usize,
     frontier: usize,
+    /// How far past the viewport a new item may start for a frame to compose
+    /// it. Where idle prefetch passes run, the distance its scroll covers in
+    /// [`REACH_FRAMES`] frames, none at rest: the passes compose the rest.
+    reach: f32,
     wants_prefetch: bool,
 }
 
 impl BeyondBoundsComposition {
-    fn new(idle_pass: bool) -> Self {
+    fn new(idle_pass: bool, reach: f32) -> Self {
         Self {
             idle_pass,
             ready: 0,
@@ -722,16 +742,18 @@ impl BeyondBoundsComposition {
             } else {
                 IDLE_PREFETCH_READY_BEYOND_BOUNDS_ITEMS
             },
+            reach,
             wants_prefetch: false,
         }
     }
 
-    fn admits(&mut self, composed: bool) -> bool {
+    fn admits(&mut self, composed: bool, distance: f32) -> bool {
         if composed {
             self.ready += 1;
             return true;
         }
-        let deferred = !self.idle_pass && self.ready >= IDLE_PREFETCH_READY_BEYOND_BOUNDS_ITEMS;
+        let deferred = !self.idle_pass
+            && (self.ready >= IDLE_PREFETCH_READY_BEYOND_BOUNDS_ITEMS || distance >= self.reach);
         if deferred || self.frontier == 0 {
             self.wants_prefetch = true;
             return false;

@@ -33,6 +33,9 @@ pub(crate) struct ThreadCells {
     pub(crate) modal_counting_contexts: Cell<usize>,
     pub(crate) placement_pass: PlacementPass,
     pub(crate) last_unhandled_key_handler_id: Cell<u64>,
+    /// Whether the shell on this thread runs idle prefetch passes
+    /// ([`crate::set_idle_prefetch_passes`]).
+    pub(crate) idle_prefetch_passes: Cell<bool>,
 }
 
 const _: () = assert!(!std::mem::needs_drop::<ThreadCells>());
@@ -49,6 +52,7 @@ impl ThreadCells {
             modal_counting_contexts: Cell::new(0),
             placement_pass: PlacementPass::new(),
             last_unhandled_key_handler_id: Cell::new(0),
+            idle_prefetch_passes: Cell::new(false),
         }
     }
 }

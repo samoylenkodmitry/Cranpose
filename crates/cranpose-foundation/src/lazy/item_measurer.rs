@@ -261,6 +261,7 @@ where
         let after_count = self
             .beyond_bounds_item_count
             .min(self.items_count - current_index);
+        let mut distance = (current_offset - self.effective_viewport_size).max(0.0);
 
         for kept_after in 0..after_count {
             if kept_after >= self.guaranteed_after_beyond_bounds_item_count
@@ -268,12 +269,14 @@ where
             {
                 break;
             }
-            match self.source.keep_beyond(current_index) {
+            match self.source.keep_beyond(current_index, distance) {
                 BeyondItem::Declined => break,
-                BeyondItem::Kept => {}
+                BeyondItem::Kept => distance += self.estimated_item_extent(),
                 BeyondItem::Placed(mut item) => {
                     item.offset = current_offset;
-                    current_offset += item.main_axis_size + self.config.spacing;
+                    let extent = item.main_axis_size + self.config.spacing;
+                    current_offset += extent;
+                    distance += extent;
                     items.push(item);
                 }
             }
@@ -290,17 +293,24 @@ where
         let before_count = self.beyond_bounds_item_count.min(first_index);
         let mut placed = Vec::new();
         let mut before_offset = first_offset;
+        // An item before the viewport is as far past its edge as its end.
+        let mut distance = (self.config.spacing - first_offset).max(0.0);
         for kept_before in 0..before_count {
             if kept_before >= self.guaranteed_before_beyond_bounds_item_count
                 && start_time.elapsed() > DEFAULT_TIME_BUDGET
             {
                 break;
             }
-            match self.source.keep_beyond(first_index - 1 - kept_before) {
+            match self
+                .source
+                .keep_beyond(first_index - 1 - kept_before, distance)
+            {
                 BeyondItem::Declined => break,
-                BeyondItem::Kept => {}
+                BeyondItem::Kept => distance += self.estimated_item_extent(),
                 BeyondItem::Placed(mut item) => {
-                    before_offset -= item.main_axis_size + self.config.spacing;
+                    let extent = item.main_axis_size + self.config.spacing;
+                    before_offset -= extent;
+                    distance += extent;
                     item.offset = before_offset;
                     placed.push(item);
                 }

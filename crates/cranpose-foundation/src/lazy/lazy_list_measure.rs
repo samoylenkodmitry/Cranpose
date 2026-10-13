@@ -95,9 +95,11 @@ pub trait LazyItemSource {
     fn measure(&mut self, index: usize) -> LazyListMeasuredItem;
 
     /// Keeps the item at `index`, which lies beyond the viewport, composed
-    /// ahead of a scroll. A source places either every beyond item it keeps
-    /// in a pass or none.
-    fn keep_beyond(&mut self, index: usize) -> BeyondItem;
+    /// ahead of a scroll. `distance` says how far past the viewport's edge
+    /// the item starts: measured for the items between, estimated from the
+    /// average item size for the ones kept unplaced. A source places either
+    /// every beyond item it keeps in a pass or none.
+    fn keep_beyond(&mut self, index: usize, distance: f32) -> BeyondItem;
 }
 
 struct MeasureEveryItem<F>(F);
@@ -110,7 +112,7 @@ where
         (self.0)(index)
     }
 
-    fn keep_beyond(&mut self, index: usize) -> BeyondItem {
+    fn keep_beyond(&mut self, index: usize, _distance: f32) -> BeyondItem {
         (self.0)(index);
         BeyondItem::Kept
     }
