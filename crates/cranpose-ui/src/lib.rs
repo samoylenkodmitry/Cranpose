@@ -154,8 +154,8 @@ pub use interaction::{
 };
 pub use key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 pub use keyboard_options::{
-    ImeAction, KeyboardActionHandler, KeyboardActionScope, KeyboardCapitalization, KeyboardOptions,
-    KeyboardType,
+    ContentType, ImeAction, KeyboardActionHandler, KeyboardActionScope, KeyboardCapitalization,
+    KeyboardOptions, KeyboardType,
 };
 pub use layout::{
     LayoutAllocationDebugStats, LayoutBox, LayoutEngine, LayoutMeasurements, LayoutNodeData,

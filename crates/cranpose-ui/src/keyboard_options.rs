@@ -83,6 +83,28 @@ impl ImeAction {
     }
 }
 
+/// What a text field holds, so autofill and password managers can offer to
+/// fill it: Compose's `ContentType`. Web and iOS pass it to the platform;
+/// Android does not fill text fields yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ContentType {
+    Username,
+    Password,
+    /// A username the person is choosing.
+    NewUsername,
+    /// A password the person is choosing, for which a password manager can
+    /// suggest a strong one.
+    NewPassword,
+    EmailAddress,
+    PhoneNumber,
+    PersonFullName,
+    PostalAddress,
+    PostalCode,
+    CreditCardNumber,
+    /// A one-time code from a text message.
+    SmsOtpCode,
+}
+
 /// The software keyboard a text field asks for: Compose's `KeyboardOptions`.
 /// Platforms without a software keyboard ignore everything but the action,
 /// which Enter runs in a single-line field.
@@ -94,6 +116,9 @@ pub struct KeyboardOptions {
     /// never do.
     pub auto_correct: bool,
     pub ime_action: ImeAction,
+    /// What the field holds, for autofill. Compose sets this through the
+    /// field's semantics.
+    pub content_type: Option<ContentType>,
 }
 
 impl Default for KeyboardOptions {
@@ -103,6 +128,7 @@ impl Default for KeyboardOptions {
             capitalization: KeyboardCapitalization::None,
             auto_correct: true,
             ime_action: ImeAction::Default,
+            content_type: None,
         }
     }
 }

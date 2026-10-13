@@ -9,9 +9,9 @@ use cranpose_core::remember;
 use cranpose_foundation::text::TextFieldLineLimits;
 use cranpose_testing::robot::TestRenderer;
 use cranpose_ui::{
-    BasicTextFieldOptions, BasicTextFieldWithOptions, Column, ColumnSpec, FocusRequester,
-    ImeAction, KeyCode, KeyEvent, KeyboardActionHandler, KeyboardOptions, KeyboardType, Modifier,
-    TextFieldState,
+    BasicTextFieldOptions, BasicTextFieldWithOptions, Column, ColumnSpec, ContentType,
+    FocusRequester, ImeAction, KeyCode, KeyEvent, KeyboardActionHandler, KeyboardOptions,
+    KeyboardType, Modifier, TextFieldState,
 };
 
 use crate::support_text_field::{RecordingKeyboard, shell_with_keyboard};
@@ -245,6 +245,7 @@ fn the_platform_editor_reads_the_field_keyboard_options() {
         keyboard_type: KeyboardType::Email,
         auto_correct: false,
         ime_action: ImeAction::Go,
+        content_type: Some(ContentType::EmailAddress),
         ..KeyboardOptions::default()
     };
     let mut form = Form::new(options, TextFieldLineLimits::SingleLine, Handler::None);
