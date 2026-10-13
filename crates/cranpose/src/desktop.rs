@@ -96,6 +96,23 @@ macro_rules! trace_native_window_timing {
     };
 }
 
+/// Updates the app for a frame of the primary window. A frame drawn before
+/// the window shows leaves animations where the first composition put them:
+/// nobody has seen the frames a step would skip.
+fn update_primary_for_frame(
+    app: &mut AppShell<WgpuRenderer>,
+    registry: &Rc<native_window::NativeWindowRegistry>,
+    before_show: bool,
+) -> FrameUpdateResult {
+    native_window::with_native_window_registry(registry, || {
+        if before_show {
+            app.update_without_frame()
+        } else {
+            app.update()
+        }
+    })
+}
+
 fn update_app_with_native_window_registry(
     app: &mut AppShell<WgpuRenderer>,
     registry: &Rc<native_window::NativeWindowRegistry>,
@@ -5458,7 +5475,7 @@ impl ApplicationHandler for App {
 
         let present_mode = desktop_present_mode(&surface_caps, self.frame_pacing_mode());
         log_desktop_present_mode(self.frame_pacing_mode(), present_mode, &surface_caps);
-        let surface_config = match surface_config_for_window(
+        let mut surface_config = match surface_config_for_window(
             &surface_caps,
             surface_format,
             size.width.max(1),
@@ -5540,6 +5557,25 @@ impl ApplicationHandler for App {
             self.primary_wrap_size,
         )
         .or(self.primary_wrap_size);
+        // A window that wrapped its content has its new size already; the
+        // first frame is drawn at it, before the resize event arrives.
+        let size = window.surface_size();
+        if (size.width, size.height) != (surface_config.width, surface_config.height) {
+            let viewport = primary_viewport_for_surface_size(
+                &self.settings,
+                size.width,
+                size.height,
+                window.scale_factor(),
+            );
+            configure_app_surface_size(
+                &mut app,
+                &surface,
+                &mut surface_config,
+                size.width,
+                size.height,
+                viewport,
+            );
+        }
         let shows = primary_window_should_show(headless, app.primary_has_content());
 
         let mut dev_options = self.settings.dev_options.clone();
@@ -5891,17 +5927,9 @@ impl ApplicationHandler for App {
                 let robot_surface_dirty_before_update = false;
                 let primary_surface_dirty_before_update = self.primary_surface_dirty;
                 app.set_density(window.scale_factor() as f32);
-                // A frame drawn before the window shows leaves animations
-                // where the first composition put them: nobody has seen the
-                // frames a step would skip.
                 #[cfg_attr(not(feature = "robot"), expect(unused_variables))]
-                let update_result = if self.primary_show_pending {
-                    native_window::with_native_window_registry(&registry, || {
-                        app.update_without_frame()
-                    })
-                } else {
-                    update_app_with_native_window_registry(app, &registry)
-                };
+                let update_result =
+                    update_primary_for_frame(app, &registry, self.primary_show_pending);
                 wrap_primary_window_for_frame(
                     app,
                     surface,
