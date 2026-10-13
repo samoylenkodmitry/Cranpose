@@ -540,6 +540,7 @@ impl<A: Applier + 'static> Composition<A> {
         if ids.is_empty() {
             return Ok(());
         }
+        let _teardown = runtime::enter_state_teardown_scope();
         let host = self.slots_host();
         let composer = Composer::new_with_shared_state(
             Rc::clone(&self.composer_state),
