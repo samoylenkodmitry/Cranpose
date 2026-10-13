@@ -1,5 +1,6 @@
 use cranpose_ui::{
-    TextMeasurer, TextMetrics, TextStyle,
+    AppContext, TextLayoutOptions, TextMeasurer, TextMetrics, TextOverflow, TextStyle,
+    prepare_text_layout, set_text_measurer,
     text::{AnnotatedString, TextUnit},
     text_layout_result::TextLayoutResult,
 };
@@ -78,4 +79,25 @@ impl TextMeasurer for ContractMeasurer {
     ) -> Option<usize> {
         measured_break_char.checked_sub(1)
     }
+}
+
+/// The lines `text` wraps into at `max_chars` characters of the contract
+/// measurer's width.
+pub(crate) fn wrapped_lines(text: &str, max_chars: usize) -> Vec<String> {
+    let options = TextLayoutOptions {
+        overflow: TextOverflow::Clip,
+        soft_wrap: true,
+        max_lines: usize::MAX,
+        min_lines: 1,
+    };
+    let prepared = AppContext::new().enter(|| {
+        set_text_measurer(ContractMeasurer);
+        prepare_text_layout(
+            &AnnotatedString::from(text),
+            &TextStyle::default(),
+            options,
+            Some(max_chars as f32 * CHAR_WIDTH),
+        )
+    });
+    prepared.text.text.lines().map(str::to_owned).collect()
 }

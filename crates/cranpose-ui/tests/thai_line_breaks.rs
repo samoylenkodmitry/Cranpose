@@ -2,12 +2,7 @@
 //! dictionary finds, and Latin text beside it still wraps at its spaces. A
 //! word longer than the line splits, but never before a vowel or tone mark.
 
-use cranpose_ui::{
-    AppContext, TextLayoutOptions, TextOverflow, TextStyle, prepare_text_layout, set_text_measurer,
-    text::AnnotatedString,
-};
-
-use crate::text_contract_measurer::{CHAR_WIDTH, ContractMeasurer};
+use crate::text_contract_measurer::wrapped_lines;
 
 /// "Thai is written without spaces between words", word by word.
 const WORDS: [&str; 9] = [
@@ -21,25 +16,6 @@ const WORDS: [&str; 9] = [
     "ระหว่าง",
     "คำ",
 ];
-
-fn wrapped_lines(text: &str, max_chars: usize) -> Vec<String> {
-    let options = TextLayoutOptions {
-        overflow: TextOverflow::Clip,
-        soft_wrap: true,
-        max_lines: usize::MAX,
-        min_lines: 1,
-    };
-    let prepared = AppContext::new().enter(|| {
-        set_text_measurer(ContractMeasurer);
-        prepare_text_layout(
-            &AnnotatedString::from(text),
-            &TextStyle::default(),
-            options,
-            Some(max_chars as f32 * CHAR_WIDTH),
-        )
-    });
-    prepared.text.text.lines().map(str::to_owned).collect()
-}
 
 #[test]
 fn a_thai_line_wraps_between_words() {
