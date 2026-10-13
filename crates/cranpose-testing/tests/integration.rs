@@ -19,5 +19,6 @@ mod remember_keyed_test;
 mod render_invalidation_test;
 mod robot_input;
 mod teardown_survivor_state_test;
+mod text_field_graphemes_test;
 mod text_modifier_updates_test;
 mod window_coordinates_test;

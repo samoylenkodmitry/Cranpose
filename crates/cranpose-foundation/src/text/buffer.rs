@@ -1,4 +1,7 @@
-use super::TextRange;
+use smallvec::SmallVec;
+use unicode_segmentation::GraphemeCursor;
+
+use super::{TextFieldValue, TextRange};
 
 /// A mutable text buffer that can be edited.
 ///
@@ -11,7 +14,12 @@ use super::TextRange;
 /// And for manipulating cursor/selection:
 /// - [`place_cursor_at_end`](Self::place_cursor_at_end)
 /// - [`place_cursor_before_char`](Self::place_cursor_before_char)
+/// - [`move_cursor_left`](Self::move_cursor_left)
 /// - [`select_all`](Self::select_all)
+///
+/// Keyboard editing steps over whole user-perceived characters, Unicode's
+/// extended grapheme clusters: a flag, an emoji joined with zero-width
+/// joiners, a letter with its combining marks. Offsets are UTF-8 bytes.
 ///
 /// # Example
 ///
@@ -134,24 +142,24 @@ impl TextFieldBuffer {
         self.replace(range, "");
     }
 
-    /// Deletes the character before the cursor (backspace).
+    /// Deletes the selection, or the character before the cursor (backspace).
     pub fn delete_before_cursor(&mut self) {
         if self.has_selection() {
             self.delete(self.selection);
         } else if self.selection.start > 0 {
             let pos = self.selection.start;
-            let prev_pos = self.prev_char_boundary(pos);
+            let prev_pos = self.prev_grapheme_boundary(pos);
             self.delete(TextRange::new(prev_pos, pos));
         }
     }
 
-    /// Deletes the character after the cursor (delete key).
+    /// Deletes the selection, or the character after the cursor (delete key).
     pub fn delete_after_cursor(&mut self) {
         if self.has_selection() {
             self.delete(self.selection);
         } else if self.selection.start < self.text.len() {
             let pos = self.selection.start;
-            let next_pos = self.next_char_boundary(pos);
+            let next_pos = self.next_grapheme_boundary(pos);
             self.delete(TextRange::new(pos, next_pos));
         }
     }
@@ -172,14 +180,15 @@ impl TextFieldBuffer {
             .saturating_add(after_bytes)
             .min(self.text.len());
 
-        start = self.clamp_prev_boundary(start);
-        end = self.clamp_next_boundary(end);
+        start = self.text.floor_char_boundary(start);
+        end = self.text.ceil_char_boundary(end);
 
         if start >= end {
             return;
         }
 
-        let mut ranges = Vec::new();
+        // At most two ranges, either side of a composition, in text order.
+        let mut ranges: SmallVec<[(usize, usize); 2]> = SmallVec::new();
         if let Some(comp) = self.composition {
             let comp_start = comp.min();
             let comp_end = comp.max();
@@ -202,22 +211,9 @@ impl TextFieldBuffer {
             return;
         }
 
-        ranges.sort_by_key(|(range_start, _)| *range_start);
-        let total_removed: usize = ranges.iter().map(|(s, e)| e - s).sum();
-        if total_removed == 0 {
-            return;
+        for &(range_start, range_end) in ranges.iter().rev() {
+            self.text.replace_range(range_start..range_end, "");
         }
-
-        let original_text = self.text.clone();
-        let mut new_text = String::with_capacity(original_text.len().saturating_sub(total_removed));
-        let mut last = 0usize;
-        for (range_start, range_end) in &ranges {
-            if last < *range_start {
-                new_text.push_str(&original_text[last..*range_start]);
-            }
-            last = *range_end;
-        }
-        new_text.push_str(&original_text[last..]);
 
         let removed_before = |pos: usize| -> usize {
             let mut removed = 0usize;
@@ -236,9 +232,8 @@ impl TextFieldBuffer {
         let cursor_pos = selection.min();
         let new_cursor = cursor_pos
             .saturating_sub(removed_before(cursor_pos))
-            .min(new_text.len());
+            .min(self.text.len());
 
-        self.text = new_text;
         self.selection = TextRange::cursor(new_cursor);
         self.composition = self.composition.map(|comp| {
             let comp_start = comp.min().saturating_sub(removed_before(comp.min()));
@@ -272,6 +267,28 @@ impl TextFieldBuffer {
         self.selection = TextRange::cursor(pos);
     }
 
+    /// Collapses a selection to its start, or moves the cursor one character
+    /// to the left (the left arrow key).
+    pub fn move_cursor_left(&mut self) {
+        let target = if self.has_selection() {
+            self.selection.min()
+        } else {
+            self.prev_grapheme_boundary(self.selection.start)
+        };
+        self.selection = TextRange::cursor(target);
+    }
+
+    /// Collapses a selection to its end, or moves the cursor one character to
+    /// the right (the right arrow key).
+    pub fn move_cursor_right(&mut self) {
+        let target = if self.has_selection() {
+            self.selection.max()
+        } else {
+            self.next_grapheme_boundary(self.selection.end)
+        };
+        self.selection = TextRange::cursor(target);
+    }
+
     /// Selects all text.
     pub fn select_all(&mut self) {
         self.selection = TextRange::all(self.text.len());
@@ -290,7 +307,7 @@ impl TextFieldBuffer {
     /// cursor is represented; see [`TextRange`].
     pub fn extend_selection_left(&mut self) {
         if self.selection.end > 0 {
-            let cursor = self.prev_char_boundary(self.selection.end);
+            let cursor = self.prev_grapheme_boundary(self.selection.end);
             self.selection = TextRange::new(self.selection.start, cursor);
         }
     }
@@ -301,7 +318,7 @@ impl TextFieldBuffer {
     /// [`Self::extend_selection_left`].
     pub fn extend_selection_right(&mut self) {
         if self.selection.end < self.text.len() {
-            let cursor = self.next_char_boundary(self.selection.end);
+            let cursor = self.next_grapheme_boundary(self.selection.end);
             self.selection = TextRange::new(self.selection.start, cursor);
         }
     }
@@ -316,35 +333,34 @@ impl TextFieldBuffer {
         self.composition = range.map(|r| r.coerce_in(self.text.len()));
     }
 
-    fn prev_char_boundary(&self, from: usize) -> usize {
-        let mut pos = from.saturating_sub(1);
-        while pos > 0 && !self.text.is_char_boundary(pos) {
-            pos -= 1;
-        }
-        pos
+    /// The cursor holds the whole text as its one chunk, so it never asks
+    /// for more context and a step always succeeds.
+    fn grapheme_cursor(&self, from: usize) -> GraphemeCursor {
+        let from = self.text.floor_char_boundary(from);
+        GraphemeCursor::new(from, self.text.len(), true)
     }
 
-    fn next_char_boundary(&self, from: usize) -> usize {
-        let mut pos = from + 1;
-        while pos < self.text.len() && !self.text.is_char_boundary(pos) {
-            pos += 1;
-        }
-        pos.min(self.text.len())
+    fn prev_grapheme_boundary(&self, from: usize) -> usize {
+        self.grapheme_cursor(from)
+            .prev_boundary(&self.text, 0)
+            .ok()
+            .flatten()
+            .unwrap_or(0)
     }
 
-    fn clamp_prev_boundary(&self, from: usize) -> usize {
-        if self.text.is_char_boundary(from) {
-            from
-        } else {
-            self.prev_char_boundary(from)
-        }
+    fn next_grapheme_boundary(&self, from: usize) -> usize {
+        self.grapheme_cursor(from)
+            .next_boundary(&self.text, 0)
+            .ok()
+            .flatten()
+            .unwrap_or(self.text.len())
     }
 
-    fn clamp_next_boundary(&self, from: usize) -> usize {
-        if self.text.is_char_boundary(from) {
-            from
-        } else {
-            self.next_char_boundary(from)
+    pub(crate) fn into_value(self) -> TextFieldValue {
+        TextFieldValue {
+            text: self.text,
+            selection: self.selection,
+            composition: self.composition,
         }
     }
 

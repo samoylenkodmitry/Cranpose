@@ -1,111 +1,65 @@
+//! Word boundaries for keyboard word moves and double-click selection.
+//!
+//! A word is a run of characters that start with an alphanumeric code point
+//! or `_`. Characters are extended grapheme clusters, so a letter keeps its
+//! combining marks and a boundary never splits an emoji.
+
+use unicode_segmentation::UnicodeSegmentation;
+
+fn is_word(grapheme: &str) -> bool {
+    grapheme
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_alphanumeric() || c == '_')
+}
+
+/// The start of the word before `pos`, past any non-word characters between.
 pub fn find_word_start(text: &str, pos: usize) -> usize {
-    if pos == 0 || text.is_empty() {
-        return 0;
-    }
-
-    let chars_before: Vec<(usize, char)> = text[..pos.min(text.len())].char_indices().collect();
-
-    if chars_before.is_empty() {
-        return 0;
-    }
-
-    let mut idx = chars_before.len();
-
-    while idx > 0 {
-        let c = chars_before[idx - 1].1;
-        if c.is_alphanumeric() || c == '_' {
-            break;
+    let pos = text.floor_char_boundary(pos);
+    let mut word_start = None;
+    for (index, grapheme) in text[..pos].grapheme_indices(true).rev() {
+        if is_word(grapheme) {
+            word_start = Some(index);
+        } else if let Some(start) = word_start {
+            return start;
         }
-        idx -= 1;
     }
-
-    while idx > 0 {
-        let c = chars_before[idx - 1].1;
-        if !c.is_alphanumeric() && c != '_' {
-            break;
-        }
-        idx -= 1;
-    }
-
-    if idx == 0 { 0 } else { chars_before[idx].0 }
+    0
 }
 
+/// The end of the word after `pos`, past any non-word characters between.
 pub fn find_word_end(text: &str, pos: usize) -> usize {
-    let len = text.len();
-    if pos >= len || text.is_empty() {
-        return len;
-    }
-
-    let chars_after: Vec<(usize, char)> = text[pos.min(len)..]
-        .char_indices()
-        .map(|(i, c)| (pos + i, c))
-        .collect();
-
-    if chars_after.is_empty() {
-        return len;
-    }
-
-    let mut idx = 0;
-
-    while idx < chars_after.len() {
-        let c = chars_after[idx].1;
-        if c.is_alphanumeric() || c == '_' {
-            break;
+    let pos = text.floor_char_boundary(pos);
+    let mut in_word = false;
+    for (index, grapheme) in text[pos..].grapheme_indices(true) {
+        if is_word(grapheme) {
+            in_word = true;
+        } else if in_word {
+            return pos + index;
         }
-        idx += 1;
     }
-
-    while idx < chars_after.len() {
-        let c = chars_after[idx].1;
-        if !c.is_alphanumeric() && c != '_' {
-            break;
-        }
-        idx += 1;
-    }
-
-    if idx >= chars_after.len() {
-        len
-    } else {
-        chars_after[idx].0
-    }
+    text.len()
 }
 
+/// The word that touches `pos`, or the empty range at `pos` where no word
+/// does.
 pub fn find_word_boundaries(text: &str, pos: usize) -> (usize, usize) {
-    if text.is_empty() {
-        return (0, 0);
+    let pos = text.floor_char_boundary(pos);
+    let word_after = text[pos..].graphemes(true).next().is_some_and(is_word);
+    let word_before = text[..pos].graphemes(true).next_back().is_some_and(is_word);
+    if !word_after && !word_before {
+        return (pos, pos);
     }
-
-    let pos = pos.min(text.len());
-
-    let char_at_pos = text[pos..].chars().next();
-
-    let is_word_char = |c: char| c.is_alphanumeric() || c == '_';
-
-    if char_at_pos.is_none_or(|c| !is_word_char(c)) {
-        let char_before = text[..pos].chars().last();
-        if char_before.is_none_or(|c| !is_word_char(c)) {
-            return (pos, pos);
-        }
-    }
-
-    let mut start = pos;
-    for (i, c) in text[..pos].char_indices().rev() {
-        if !is_word_char(c) {
-            start = i + c.len_utf8();
-            break;
-        }
-        start = i;
-    }
-
-    let mut end = pos;
-    for (i, c) in text[pos..].char_indices() {
-        if !is_word_char(c) {
-            end = pos + i;
-            break;
-        }
-        end = pos + i + c.len_utf8();
-    }
-
+    let start = text[..pos]
+        .grapheme_indices(true)
+        .rev()
+        .take_while(|(_, grapheme)| is_word(grapheme))
+        .last()
+        .map_or(pos, |(index, _)| index);
+    let end = text[pos..]
+        .grapheme_indices(true)
+        .find(|(_, grapheme)| !is_word(grapheme))
+        .map_or(text.len(), |(index, _)| pos + index);
     (start, end)
 }
 

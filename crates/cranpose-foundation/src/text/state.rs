@@ -52,6 +52,40 @@ const UNDO_CAPACITY: usize = 100;
 
 const UNDO_COALESCE_MS: u128 = 1000;
 
+/// Spare room in an edit's copy of the text, so a typed character does not
+/// grow the copy and move the whole text a second time.
+const EDIT_HEADROOM_BYTES: usize = 64;
+
+/// What an edit changed, against the value before it.
+struct EditChange {
+    text_changed: bool,
+    /// A one-byte insert right after the cursor that does not end in
+    /// whitespace: typing that joins the pending undo group.
+    continues_typing: bool,
+}
+
+impl EditChange {
+    fn between(before: &TextFieldValue, after: &TextFieldBuffer) -> Option<Self> {
+        let selection = after.selection();
+        let text_changed = after.text() != before.text;
+        if !text_changed
+            && selection == before.selection
+            && after.composition() == before.composition
+        {
+            return None;
+        }
+        let single_byte_insert = after.len() == before.text.len() + 1;
+        let cursor_followed = selection.start == before.selection.start + 1
+            || selection.start == before.selection.end + 1;
+        Some(Self {
+            text_changed,
+            continues_typing: single_byte_insert
+                && cursor_followed
+                && !after.text().ends_with(char::is_whitespace),
+        })
+    }
+}
+
 pub struct TextFieldStateInner {
     is_editing: bool,
     listeners: Vec<ChangeListener>,
@@ -60,7 +94,6 @@ pub struct TextFieldStateInner {
     desired_column: Cell<Option<usize>>,
     last_edit_time: Cell<Option<web_time::Instant>>,
     pending_undo_snapshot: RefCell<Option<TextFieldValue>>,
-    line_offsets_cache: RefCell<Option<Vec<usize>>>,
 }
 
 struct EditGuard<'a> {
@@ -122,7 +155,7 @@ pub struct TextFieldState {
 
 impl std::fmt::Debug for TextFieldState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.value.with(|v| {
+        self.value.read(|v| {
             f.debug_struct("TextFieldState")
                 .field("text", &v.text)
                 .field("selection", &v.selection)
@@ -147,7 +180,6 @@ impl TextFieldState {
                     desired_column: Cell::new(None),
                     last_edit_time: Cell::new(None),
                     pending_undo_snapshot: RefCell::new(None),
-                    line_offsets_cache: RefCell::new(None),
                 })),
                 runtime.clone(),
             ),
@@ -170,7 +202,6 @@ impl TextFieldState {
                     desired_column: Cell::new(None),
                     last_edit_time: Cell::new(None),
                     pending_undo_snapshot: RefCell::new(None),
-                    line_offsets_cache: RefCell::new(None),
                 })),
                 runtime.clone(),
             ),
@@ -188,12 +219,14 @@ impl TextFieldState {
         hasher.finish()
     }
 
-    /// Gets the desired column for up/down navigation.
+    /// Gets the desired column for up/down navigation, in characters
+    /// (extended grapheme clusters) from the start of the line.
     pub fn desired_column(&self) -> Option<usize> {
         self.inner().borrow().desired_column.get()
     }
 
-    /// Sets the desired column for up/down navigation.
+    /// Sets the desired column for up/down navigation, in characters
+    /// (extended grapheme clusters) from the start of the line.
     pub fn set_desired_column(&self, col: Option<usize>) {
         self.inner().borrow().desired_column.set(col);
     }
@@ -201,55 +234,23 @@ impl TextFieldState {
     /// Returns the current text content.
     /// Creates composition dependency when read during composition.
     pub fn text(&self) -> String {
-        self.value.with(|v| v.text.clone())
+        self.value.read(|v| v.text.clone())
     }
 
     /// Returns the current selection range.
     pub fn selection(&self) -> TextRange {
-        self.value.with(|v| v.selection)
+        self.value.read(|v| v.selection)
     }
 
     /// Returns the current composition (IME) range, if any.
     pub fn composition(&self) -> Option<TextRange> {
-        self.value.with(|v| v.composition)
-    }
-
-    /// Returns cached line start offsets for efficient multiline operations.
-    ///
-    /// Each entry is the byte offset where a line starts. For example:
-    /// - "ab\ncd" -> [0, 3] (line 0 starts at 0, line 1 starts at 3)
-    /// - "" -> `0`
-    ///
-    /// The cache is lazily computed on first access and invalidated on text change.
-    /// This avoids O(n) string splitting on every frame during selection rendering.
-    pub fn line_offsets(&self) -> Vec<usize> {
-        let inner_state = self.inner();
-        let inner = inner_state.borrow();
-
-        if let Some(ref offsets) = *inner.line_offsets_cache.borrow() {
-            return offsets.clone();
-        }
-
-        let text = self.text();
-        let mut offsets = vec![0];
-        for (i, c) in text.char_indices() {
-            if c == '\n' {
-                offsets.push(i + 1);
-            }
-        }
-
-        *inner.line_offsets_cache.borrow_mut() = Some(offsets.clone());
-        offsets
-    }
-
-    fn invalidate_line_cache(&self) {
-        self.inner().borrow().line_offsets_cache.borrow_mut().take();
+        self.value.read(|v| v.composition)
     }
 
     /// Copies the selected text without modifying the clipboard.
     /// Returns the selected text, or None if no selection.
     pub fn copy_selection(&self) -> Option<String> {
-        self.value.with(|v| {
+        self.value.read(|v| {
             let selection = v.selection;
             if selection.collapsed() {
                 return None;
@@ -263,7 +264,7 @@ impl TextFieldState {
     /// Returns the current value snapshot.
     /// Creates composition dependency when read during composition.
     pub fn value(&self) -> TextFieldValue {
-        self.value.with(Clone::clone)
+        self.value.read(Clone::clone)
     }
 
     /// Adds a listener that is called when the value changes.
@@ -280,7 +281,7 @@ impl TextFieldState {
     /// Sets the selection directly without going through undo stack.
     /// Use this for transient selection changes like during drag selection.
     pub fn set_selection(&self, selection: TextRange) {
-        let new_value = self.value.with(|v| {
+        let new_value = self.value.read(|v| {
             let len = v.text.len();
             TextFieldValue {
                 text: v.text.clone(),
@@ -309,7 +310,7 @@ impl TextFieldState {
         let inner_state = self.inner();
         let mut inner = inner_state.borrow_mut();
         if let Some(previous_state) = inner.undo_stack.pop_back() {
-            let current = self.value.with(Clone::clone);
+            let current = self.value.read(Clone::clone);
             inner.redo_stack.push_back(current);
             inner.last_edit_time.set(None);
             drop(inner);
@@ -326,7 +327,7 @@ impl TextFieldState {
         let inner_state = self.inner();
         let mut inner = inner_state.borrow_mut();
         if let Some(redo_state) = inner.redo_stack.pop_back() {
-            let current = self.value.with(Clone::clone);
+            let current = self.value.read(Clone::clone);
             inner.undo_stack.push_back(current);
             drop(inner);
             self.value.set(redo_state);
@@ -361,99 +362,62 @@ impl TextFieldState {
             return false;
         };
 
-        let current = self.value();
-        let mut buffer = TextFieldBuffer::with_selection(&current.text, current.selection);
-        if let Some(comp) = current.composition {
-            buffer.set_composition(Some(comp));
-        }
+        let mut buffer = self.value.read(|current| {
+            let mut text = String::with_capacity(current.text.len() + EDIT_HEADROOM_BYTES);
+            text.push_str(&current.text);
+            let mut buffer = TextFieldBuffer::with_selection(text, current.selection);
+            buffer.set_composition(current.composition);
+            buffer
+        });
 
         f(&mut buffer);
 
-        let new_value = TextFieldValue {
-            text: buffer.text().to_string(),
-            selection: buffer.selection(),
-            composition: buffer.composition(),
+        let Some(change) = self
+            .value
+            .read(|current| EditChange::between(current, &buffer))
+        else {
+            return true;
         };
 
-        let changed = new_value != current;
-        let text_changed = new_value.text != current.text;
-
-        if text_changed {
-            self.invalidate_line_cache();
-        }
-
-        if changed {
+        // Undo history records text changes, as Compose's does. A move of the
+        // cursor or selection only ends the typing group before it.
+        if !change.text_changed {
+            inner.borrow().last_edit_time.set(None);
+        } else {
             let now = web_time::Instant::now();
-
-            let should_break_group = {
-                let inner_state = self.inner();
-                let inner = inner_state.borrow();
-
-                let timeout_expired = inner
-                    .last_edit_time
-                    .get()
-                    .is_none_or(|last| now.duration_since(last).as_millis() > UNDO_COALESCE_MS);
-
-                if timeout_expired {
-                    true
-                } else {
-                    let text_delta = new_value.text.len() as i64 - current.text.len() as i64;
-                    let is_single_char_insert = text_delta == 1;
-
-                    let ends_with_whitespace = new_value.text.ends_with(char::is_whitespace);
-
-                    let cursor_jumped = new_value.selection.start != current.selection.start + 1
-                        && new_value.selection.start != current.selection.end + 1;
-
-                    !is_single_char_insert || ends_with_whitespace || cursor_jumped
-                }
-            };
-
-            {
-                let inner_state = self.inner();
-                let inner = inner_state.borrow();
-
-                if should_break_group {
-                    let pending = inner.pending_undo_snapshot.take();
-                    drop(inner);
-
-                    let inner_state = self.inner();
-                    let mut inner = inner_state.borrow_mut();
-                    if let Some(snapshot) = pending {
-                        if inner.undo_stack.len() >= UNDO_CAPACITY {
-                            inner.undo_stack.pop_front();
-                        }
-                        inner.undo_stack.push_back(snapshot);
+            let mut inner = inner.borrow_mut();
+            let timeout_expired = inner
+                .last_edit_time
+                .get()
+                .is_none_or(|last| now.duration_since(last).as_millis() > UNDO_COALESCE_MS);
+            // The value before this edit, while the state still holds it.
+            let snapshot = || Some(self.value.read(Clone::clone));
+            if timeout_expired || !change.continues_typing {
+                if let Some(pending) = inner.pending_undo_snapshot.take() {
+                    if inner.undo_stack.len() >= UNDO_CAPACITY {
+                        inner.undo_stack.pop_front();
                     }
-                    inner.redo_stack.clear();
-                    drop(inner);
-                    self.inner()
-                        .borrow()
-                        .pending_undo_snapshot
-                        .replace(Some(current));
-                } else {
-                    if inner.pending_undo_snapshot.borrow().is_none() {
-                        inner.pending_undo_snapshot.replace(Some(current));
-                    }
-                    drop(inner);
-                    self.inner().borrow_mut().redo_stack.clear();
+                    inner.undo_stack.push_back(pending);
                 }
-
-                self.inner().borrow().last_edit_time.set(Some(now));
+                inner.pending_undo_snapshot.replace(snapshot());
+            } else if inner.pending_undo_snapshot.borrow().is_none() {
+                inner.pending_undo_snapshot.replace(snapshot());
             }
-
-            self.value.set(new_value.clone());
+            inner.redo_stack.clear();
+            inner.last_edit_time.set(Some(now));
         }
+
+        self.value.set(buffer.into_value());
 
         drop(guard);
 
-        if changed {
-            let listener_count = self.inner().borrow().listeners.len();
+        let listener_count = inner.borrow().listeners.len();
+        if listener_count > 0 {
+            let value = self.value.get_non_reactive();
             for i in 0..listener_count {
-                let inner_state = self.inner();
-                let inner = inner_state.borrow();
+                let inner = inner.borrow();
                 if i < inner.listeners.len() {
-                    (inner.listeners[i])(&new_value);
+                    (inner.listeners[i])(&value);
                 }
             }
         }

@@ -25,6 +25,7 @@ cranpose-macros = { workspace = true }
 cranpose-ui-graphics = { workspace = true }
 cranpose-ui-layout = { workspace = true }
 smallvec = "1.16"
+unicode-segmentation = { workspace = true }
 web-time = { workspace = true }
 log = "0.4"
 

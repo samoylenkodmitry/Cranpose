@@ -182,8 +182,8 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
     fn set_composing_region(&self, start_bytes: usize, end_bytes: usize) {
         self.state.edit(|buffer| {
             let text = buffer.text();
-            let start = floor_char_boundary(text, start_bytes.min(end_bytes));
-            let end = floor_char_boundary(text, start_bytes.max(end_bytes));
+            let start = text.floor_char_boundary(start_bytes.min(end_bytes));
+            let end = text.floor_char_boundary(start_bytes.max(end_bytes));
             if start == end {
                 buffer.set_composition(None);
             } else {
@@ -201,8 +201,8 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
 
     fn set_selection(&self, start_bytes: usize, end_bytes: usize) {
         let text = self.state.value().text;
-        let start = floor_char_boundary(&text, start_bytes.min(end_bytes));
-        let end = floor_char_boundary(&text, start_bytes.max(end_bytes));
+        let start = text.floor_char_boundary(start_bytes.min(end_bytes));
+        let end = text.floor_char_boundary(start_bytes.max(end_bytes));
         self.state
             .set_selection(cranpose_foundation::text::TextRange::new(start, end));
         crate::cursor_animation::reset_cursor_blink();
@@ -247,14 +247,6 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
             local_to_window: g.local_to_window.get(),
         })
     }
-}
-
-fn floor_char_boundary(text: &str, index: usize) -> usize {
-    let mut index = index.min(text.len());
-    while index > 0 && !text.is_char_boundary(index) {
-        index -= 1;
-    }
-    index
 }
 
 #[cfg(test)]
