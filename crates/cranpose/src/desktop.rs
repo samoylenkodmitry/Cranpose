@@ -3608,7 +3608,7 @@ fn note_native_window_presented(state: Option<WindowState>, presented: bool) {
 }
 
 #[derive(Default)]
-struct PacingDiag {
+pub(crate) struct PacingDiag {
     presents: u32,
     redraw_events: u32,
     updates: u32,
@@ -3620,10 +3620,6 @@ struct PacingDiag {
     window_started: Option<Instant>,
 }
 
-thread_local! {
-    static PACING_DIAG: RefCell<PacingDiag> = RefCell::new(PacingDiag::default());
-}
-
 fn pacing_diag_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_PACING_DIAG").is_some())
@@ -3633,8 +3629,8 @@ fn record_pacing_event(counter: fn(&mut PacingDiag) -> &mut u32) {
     if !pacing_diag_enabled() {
         return;
     }
-    PACING_DIAG.with(|cell| {
-        let Ok(mut diag) = cell.try_borrow_mut() else {
+    crate::thread_state::with(|state| {
+        let Ok(mut diag) = state.pacing_diag.try_borrow_mut() else {
             return;
         };
         *counter(&mut diag) += 1;

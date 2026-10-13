@@ -2,10 +2,6 @@ use std::cell::{Cell, RefCell};
 
 use cranpose_core::NodeId;
 
-thread_local! {
-    static ARMED_LOGS: Cell<usize> = const { Cell::new(0) };
-}
-
 const MAX_PENDING: usize = 4096;
 
 pub(crate) struct SemanticsLayoutLog {
@@ -37,7 +33,8 @@ impl SemanticsLayoutLog {
         if self.armed.replace(armed) == armed {
             return;
         }
-        let _ = ARMED_LOGS.try_with(|logs| {
+        crate::thread_state::cells(|cells| {
+            let logs = &cells.armed_semantics_layout_logs;
             logs.set(if armed {
                 logs.get() + 1
             } else {
@@ -83,7 +80,7 @@ impl Drop for SemanticsLayoutLog {
 }
 
 pub(crate) fn record_layout_change(node: NodeId, stamp: &mut u64) {
-    if ARMED_LOGS.try_with(Cell::get).unwrap_or(0) == 0 {
+    if crate::thread_state::cells(|cells| cells.armed_semantics_layout_logs.get()) == 0 {
         return;
     }
     crate::render_state::with_current_semantics_layout_log(|log| log.record(node, stamp));

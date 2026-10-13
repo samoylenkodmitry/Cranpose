@@ -855,25 +855,15 @@ impl WgpuFrameGraphExecutor {
     }
 }
 
-std::thread_local! {
-    static UPLOAD_WRITE_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
-
 fn note_upload_write() {
-    UPLOAD_WRITE_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
+    crate::thread_state::with(|state| {
+        let calls = &state.upload_write_calls;
+        calls.set(calls.get().saturating_add(1));
+    });
 }
 
 pub(crate) fn take_upload_write_calls() -> u32 {
-    UPLOAD_WRITE_CALLS.with(|calls| calls.replace(0))
-}
-
-std::thread_local! {
-    static RENDER_PASS_LABELS: std::cell::RefCell<Vec<(String, u32)>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
-
-std::thread_local! {
-    static RENDER_PASS_PIXELS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    crate::thread_state::with(|state| state.upload_write_calls.replace(0))
 }
 
 /// Accounts one render pass: its first color target's area, the tile
@@ -889,13 +879,15 @@ pub(crate) fn note_render_pass(descriptor: &wgpu::RenderPassDescriptor<'_>) {
             let texture = attachment.view.texture();
             u64::from(texture.width()) * u64::from(texture.height())
         });
-    RENDER_PASS_PIXELS.with(|total| total.set(total.get().saturating_add(pixels)));
-    if frame_graph_pass_telemetry_threshold_ms().is_none() {
-        return;
-    }
-    let label = fence_profile::bucket_label(descriptor);
-    RENDER_PASS_LABELS.with(|labels| {
-        let mut labels = labels.borrow_mut();
+    let telemetry = frame_graph_pass_telemetry_threshold_ms().is_some();
+    let label = telemetry.then(|| fence_profile::bucket_label(descriptor));
+    crate::thread_state::with(|state| {
+        let total = &state.render_pass_pixels;
+        total.set(total.get().saturating_add(pixels));
+        let Some(label) = label else {
+            return;
+        };
+        let mut labels = state.render_pass_labels.borrow_mut();
         match labels.last_mut() {
             Some((name, count)) if *name == label => *count += 1,
             _ => labels.push((label, 1)),
@@ -909,8 +901,8 @@ fn note_texture_copy(size: [u32; 2]) {
         return;
     }
     let label = format!("Copy {}x{}", size[0], size[1]);
-    RENDER_PASS_LABELS.with(|labels| {
-        let mut labels = labels.borrow_mut();
+    crate::thread_state::with(|state| {
+        let mut labels = state.render_pass_labels.borrow_mut();
         match labels.last_mut() {
             Some((name, count)) if *name == label => *count += 1,
             _ => labels.push((label, 1)),
@@ -919,11 +911,11 @@ fn note_texture_copy(size: [u32; 2]) {
 }
 
 fn take_render_pass_pixels() -> u64 {
-    RENDER_PASS_PIXELS.with(|total| total.replace(0))
+    crate::thread_state::with(|state| state.render_pass_pixels.replace(0))
 }
 
 fn take_render_pass_labels() -> Vec<(String, u32)> {
-    RENDER_PASS_LABELS.with(|labels| std::mem::take(&mut *labels.borrow_mut()))
+    crate::thread_state::with(|state| state.render_pass_labels.take())
 }
 
 static RENDER_STAGE_TELEMETRY_MS: DebugToggle =
@@ -2490,8 +2482,6 @@ mod tests;
 /// Lives beside the executor because it is the only other place that may
 /// finish an encoder and submit it.
 pub(crate) mod fence_profile {
-    use std::cell::RefCell;
-
     use web_time::Instant;
 
     const DEFAULT_REPORT_EVERY_FRAMES: u32 = 60;
@@ -2524,24 +2514,30 @@ pub(crate) mod fence_profile {
         })
     }
 
-    #[derive(Default)]
-    struct Profile {
+    pub(crate) struct Profile {
         current_label: Option<String>,
         totals: Vec<(String, f64, u32)>,
         frames: u32,
         pending: Vec<(Option<String>, wgpu::CommandBuffer)>,
     }
 
-    thread_local! {
-        static PROFILE: RefCell<Profile> = RefCell::new(Profile::default());
+    impl Profile {
+        pub(crate) const fn new() -> Self {
+            Self {
+                current_label: None,
+                totals: Vec::new(),
+                frames: 0,
+                pending: Vec::new(),
+            }
+        }
     }
 
     pub(super) struct FrameRecording;
 
     impl Drop for FrameRecording {
         fn drop(&mut self) {
-            PROFILE.with(|profile| {
-                let mut profile = profile.borrow_mut();
+            crate::thread_state::with(|state| {
+                let mut profile = state.fence_profile.borrow_mut();
                 profile.pending.clear();
                 profile.current_label = None;
             });
@@ -2595,8 +2591,8 @@ pub(crate) mod fence_profile {
         encoder: &mut wgpu::CommandEncoder,
         next_label: Option<&str>,
     ) {
-        PROFILE.with(|profile| {
-            let mut profile = profile.borrow_mut();
+        crate::thread_state::with(|state| {
+            let mut profile = state.fence_profile.borrow_mut();
             if whole_frame() && next_label.is_some() {
                 profile
                     .current_label
@@ -2622,8 +2618,8 @@ pub(crate) mod fence_profile {
         if let Some(before_passes) = before_passes {
             submit_and_wait(device, queue, before_passes.finish());
         }
-        PROFILE.with(|profile| {
-            let mut profile = profile.borrow_mut();
+        crate::thread_state::with(|state| {
+            let mut profile = state.fence_profile.borrow_mut();
             let mut pending = std::mem::take(&mut profile.pending);
             for (label, commands) in pending.drain(..) {
                 let recorded = submit_and_wait(device, queue, commands);

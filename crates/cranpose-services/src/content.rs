@@ -528,25 +528,22 @@ pub trait ContentResolver {
 /// Shared handle to a [`ContentResolver`].
 pub type ContentResolverRef = Rc<dyn ContentResolver>;
 
-thread_local! {
-    static PLATFORM_RESOLVER: RefCell<Option<ContentResolverRef>> = const { RefCell::new(None) };
-}
-
 /// Installs the platform content resolver (Android's `ContentResolver`, the
 /// iOS document store, the browser's blob registry).
 pub fn set_platform_content_resolver(resolver: ContentResolverRef) {
-    PLATFORM_RESOLVER.with(|cell| *cell.borrow_mut() = Some(resolver));
+    crate::thread_state::with(|state| *state.content_resolver.borrow_mut() = Some(resolver));
 }
 
 /// Removes any installed platform content resolver.
 pub fn clear_platform_content_resolver() {
-    PLATFORM_RESOLVER.with(|cell| *cell.borrow_mut() = None);
+    crate::thread_state::with(|state| *state.content_resolver.borrow_mut() = None);
 }
 
 /// Resolves `uri` through the platform resolver, falling back to the local
 /// filesystem for `file://` URIs and plain paths.
 pub fn resolve_content(uri: &str) -> Option<ContentHandle> {
-    if let Some(resolver) = PLATFORM_RESOLVER.with(|cell| cell.borrow().clone())
+    if let Some(resolver) =
+        crate::thread_state::with(|state| state.content_resolver.borrow().clone())
         && let Some(content) = resolver.resolve(uri)
     {
         return Some(content);

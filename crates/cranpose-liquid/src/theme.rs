@@ -292,27 +292,11 @@ impl Default for LiquidThemeSpec {
     }
 }
 
-struct ThemeLocals {
-    colors: OnceCell<CompositionLocal<LiquidColors>>,
-    typography: OnceCell<CompositionLocal<LiquidTypography>>,
-    glass_tint: OnceCell<CompositionLocal<GlassTintAmount>>,
-    segmented: OnceCell<CompositionLocal<Option<LiquidSegmentedStyle>>>,
-}
-
-thread_local! {
-    static LOCALS: ThemeLocals = const { ThemeLocals {
-        colors: OnceCell::new(),
-        typography: OnceCell::new(),
-        glass_tint: OnceCell::new(),
-        segmented: OnceCell::new(),
-    } };
-}
-
 fn theme_local<T: Clone + PartialEq + 'static>(
-    cell: impl FnOnce(&ThemeLocals) -> &OnceCell<CompositionLocal<T>>,
+    cell: impl FnOnce(&crate::thread_state::LiquidThreadState) -> &OnceCell<CompositionLocal<T>>,
     default: fn() -> T,
 ) -> CompositionLocal<T> {
-    LOCALS.with(|locals| {
+    crate::thread_state::with(|locals| {
         cell(locals)
             .get_or_init(|| compositionLocalOf(default))
             .clone()

@@ -145,6 +145,16 @@ const COMMANDS: &[XtaskCommand] = &[
         },
         print_usage: print_test_layout_usage,
     },
+    XtaskCommand {
+        name: "thread-local-budget",
+        run: |args| {
+            if let Some(extra) = args.first() {
+                return Err(format!("unknown thread-local-budget option `{extra}`"));
+            }
+            thread_local_budget::run_at(&workspace_root()?)
+        },
+        print_usage: print_thread_local_budget_usage,
+    },
 ];
 
 fn run(args: Vec<String>) -> Result<(), String> {
@@ -188,6 +198,7 @@ fn print_usage() {
            duplication-gate      Diff-scoped copy-paste budget\n\
            ci-gate-reachability  Every `just` recipe CI runs must be reachable from `ci`/`ci-full`\n\
            test-layout          Every integration test file and robot runner must be linked into its binary\n\
+           thread-local-budget  Framework `thread_local!` statics must stay at their budget\n\
          \n\
          bundle-macos options:\n\
            --package <name>       Cargo package to build [desktop-app]\n\
@@ -377,6 +388,17 @@ fn print_robot_suite_partition_usage() {
          runs, and the reverse. CI splits the suite across those two halves;\n\
          an example dropped from one and not added to the other stops running\n\
          anywhere, in silence.\n"
+    );
+}
+
+fn print_thread_local_budget_usage() {
+    eprintln!(
+        "usage: cargo xtask thread-local-budget\n\
+         \n\
+         Counts the statics declared in `thread_local!` blocks in the sources of\n\
+         the workspace crates under crates/, tests excluded, and fails when the\n\
+         total differs from the budget. On Android every such static takes one\n\
+         of the process's pthread keys for the rest of its life."
     );
 }
 
@@ -3076,6 +3098,7 @@ fn wait_for_crates_io(tag_or_version: &str) -> Result<(), String> {
 }
 
 mod test_layout;
+mod thread_local_budget;
 
 mod gate_diff {
     use std::{

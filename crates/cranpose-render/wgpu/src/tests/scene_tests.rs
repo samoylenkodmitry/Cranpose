@@ -108,9 +108,10 @@ fn full_scene_pool_recycles_the_latest_shadow_storage() {
         .map(|_| CompositorScene::new())
         .collect();
     drop(earlier);
-    SCENE_BUFFER_POOL.with(|pool| assert_eq!(pool.borrow().len(), SCENE_BUFFER_POOL_LIMIT));
+    let pooled = || crate::thread_state::with(|state| state.scene_buffer_pool.borrow().len());
+    assert_eq!(pooled(), SCENE_BUFFER_POOL_LIMIT);
     drop(scene);
-    SCENE_BUFFER_POOL.with(|pool| assert_eq!(pool.borrow().len(), SCENE_BUFFER_POOL_LIMIT));
+    assert_eq!(pooled(), SCENE_BUFFER_POOL_LIMIT);
 
     let mut next = CompositorScene::new();
     let recycled = next.take_shadow_recorder();
@@ -169,8 +170,8 @@ fn a_run_pushed_after_loose_primitives_draws_above_them() {
 #[test]
 fn scene_drop_skips_pooling_when_the_pool_is_held() {
     let scene = CompositorScene::new();
-    SCENE_BUFFER_POOL.with(|pool| {
-        let _held = pool.borrow_mut();
+    crate::thread_state::with(|state| {
+        let _held = state.scene_buffer_pool.borrow_mut();
         let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(scene)));
         assert!(
             dropped.is_ok(),

@@ -1,6 +1,4 @@
 use std::{
-    cell::RefCell,
-    collections::HashMap,
     rc::Rc,
     sync::{
         Arc,
@@ -86,11 +84,7 @@ impl ShareSheet for WebShareSheet {
 
 struct WebNotifier;
 
-type ActiveNotification = (web_sys::Notification, Closure<dyn FnMut()>);
-
-thread_local! {
-    static ACTIVE_NOTIFICATIONS: RefCell<HashMap<String, ActiveNotification>> = RefCell::new(HashMap::new());
-}
+pub(crate) type ActiveNotification = (web_sys::Notification, Closure<dyn FnMut()>);
 
 impl WebNotifier {
     fn granted() -> bool {
@@ -129,8 +123,10 @@ impl Notifier for WebNotifier {
         }) as Box<dyn FnMut()>);
         notification.set_onclick(Some(on_click.as_ref().unchecked_ref()));
 
-        let previous = ACTIVE_NOTIFICATIONS.with(|active| {
-            active
+        let previous = crate::thread_state::with(|state| {
+            state
+                .web
+                .active_notifications
                 .borrow_mut()
                 .insert(request.id.clone(), (notification, on_click))
         });
@@ -140,9 +136,9 @@ impl Notifier for WebNotifier {
     }
 
     fn cancel(&self, id: &str) {
-        if let Some((notification, _closure)) =
-            ACTIVE_NOTIFICATIONS.with(|active| active.borrow_mut().remove(id))
-        {
+        if let Some((notification, _closure)) = crate::thread_state::with(|state| {
+            state.web.active_notifications.borrow_mut().remove(id)
+        }) {
             notification.close();
         }
     }

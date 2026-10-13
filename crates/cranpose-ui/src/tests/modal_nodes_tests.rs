@@ -17,7 +17,7 @@ fn may_be_live(composition: &mut TestComposition, count: bool) -> bool {
 }
 
 fn counting_contexts() -> usize {
-    COUNTING_CONTEXTS.with(Cell::get)
+    crate::thread_state::cells(|cells| cells.modal_counting_contexts.get())
 }
 
 fn toggled(modal: MutableState<bool>) -> Modifier {

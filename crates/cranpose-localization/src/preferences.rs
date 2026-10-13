@@ -1,9 +1,6 @@
-use std::{
-    cell::RefCell,
-    sync::{
-        Arc, Mutex, Weak,
-        atomic::{AtomicU64, Ordering},
-    },
+use std::sync::{
+    Arc, Mutex, Weak,
+    atomic::{AtomicU64, Ordering},
 };
 
 use crate::{Catalog, DeferredMessage, Language, Locale, LocalizationError, Translator};
@@ -228,13 +225,13 @@ impl Localization {
 
     /// Resolves a deferred message on any thread using its cached formatter.
     pub fn format(&self, message: &DeferredMessage) -> Result<String, LocalizationError> {
-        THREAD_FORMATTER.with(|cache| {
-            let mut cache = cache.borrow_mut();
+        crate::thread_state::with(|state| {
+            let mut cache = state.formatter.borrow_mut();
             let revision = self.revision();
             if !cache.as_ref().is_some_and(|cached| {
                 cached.owner.as_ptr() == Arc::as_ptr(&self.0) && cached.revision == revision
             }) {
-                *cache = Some(Cached {
+                *cache = Some(CachedFormatter {
                     owner: Arc::downgrade(&self.0),
                     revision,
                     translator: self.translator(),
@@ -251,12 +248,8 @@ impl Localization {
     }
 }
 
-struct Cached {
+pub(crate) struct CachedFormatter {
     owner: Weak<Data>,
     revision: u64,
     translator: Translator,
-}
-
-thread_local! {
-    static THREAD_FORMATTER: RefCell<Option<Cached>> = const { RefCell::new(None) };
 }

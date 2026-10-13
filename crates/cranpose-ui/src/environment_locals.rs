@@ -28,34 +28,36 @@ pub(crate) struct EnvironmentLocals {
         OnceCell<CompositionLocal<Option<crate::LocalizationController>>>,
 }
 
-thread_local! {
-    pub(crate) static ENVIRONMENT_LOCALS: EnvironmentLocals = const { EnvironmentLocals {
-        density: OnceCell::new(),
-        direction: OnceCell::new(),
-        safe_area: OnceCell::new(),
-        ime: OnceCell::new(),
-        clipboard: OnceCell::new(),
-        focus_manager: OnceCell::new(),
-        announcer: OnceCell::new(),
-        modal_depth: OnceCell::new(),
-        lazy_item_key: OnceCell::new(),
-        bring_into_view: OnceCell::new(),
-        selection_registrar: OnceCell::new(),
-        on_light_surface: OnceCell::new(),
-        popup_registry: OnceCell::new(),
-        popup_viewport: OnceCell::new(),
-        #[cfg(feature = "localization")]
-        translator: OnceCell::new(),
-        #[cfg(feature = "localization")]
-        text_locales: OnceCell::new(),
-        #[cfg(feature = "localization")]
-        localization_controller: OnceCell::new(),
-    } };
+impl EnvironmentLocals {
+    pub(crate) const fn new() -> Self {
+        Self {
+            density: OnceCell::new(),
+            direction: OnceCell::new(),
+            safe_area: OnceCell::new(),
+            ime: OnceCell::new(),
+            clipboard: OnceCell::new(),
+            focus_manager: OnceCell::new(),
+            announcer: OnceCell::new(),
+            modal_depth: OnceCell::new(),
+            lazy_item_key: OnceCell::new(),
+            bring_into_view: OnceCell::new(),
+            selection_registrar: OnceCell::new(),
+            on_light_surface: OnceCell::new(),
+            popup_registry: OnceCell::new(),
+            popup_viewport: OnceCell::new(),
+            #[cfg(feature = "localization")]
+            translator: OnceCell::new(),
+            #[cfg(feature = "localization")]
+            text_locales: OnceCell::new(),
+            #[cfg(feature = "localization")]
+            localization_controller: OnceCell::new(),
+        }
+    }
 }
 
 pub(crate) fn cached_local<T: Clone>(
     cell: impl FnOnce(&EnvironmentLocals) -> &OnceCell<T>,
     initialize: impl FnOnce() -> T,
 ) -> T {
-    ENVIRONMENT_LOCALS.with(|locals| cell(locals).get_or_init(initialize).clone())
+    crate::thread_state::with_environment(|locals| cell(locals).get_or_init(initialize).clone())
 }

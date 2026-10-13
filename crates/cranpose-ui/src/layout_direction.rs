@@ -50,7 +50,7 @@ impl LayoutDirection {
 
 /// The [`CompositionLocal`] carrying the current layout direction.
 pub fn local_layout_direction() -> CompositionLocal<LayoutDirection> {
-    crate::environment_locals::ENVIRONMENT_LOCALS.with(|locals| {
+    crate::thread_state::with_environment(|locals| {
         locals
             .direction
             .get_or_init(|| compositionLocalOf(LayoutDirection::default))
@@ -60,7 +60,7 @@ pub fn local_layout_direction() -> CompositionLocal<LayoutDirection> {
 
 /// The layout direction in force here.
 pub fn layout_direction() -> LayoutDirection {
-    crate::environment_locals::ENVIRONMENT_LOCALS.with(|locals| {
+    crate::thread_state::with_environment(|locals| {
         locals
             .direction
             .get_or_init(|| compositionLocalOf(LayoutDirection::default))

@@ -3,9 +3,7 @@ use crate::snapshot_v2::runtime::TestRuntimeGuard;
 
 fn reset_runtime() -> TestRuntimeGuard {
     let guard = reset_runtime_for_tests();
-    GLOBAL_SNAPSHOT.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
+    super::clear_global_snapshot_for_tests();
     guard
 }
 

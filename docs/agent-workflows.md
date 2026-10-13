@@ -12,6 +12,7 @@ Read only the sections required by the current operation. These are project requ
 ## Rust and API conventions
 
 - No unsafe code.
+- Add per-thread state as a field of the crate's existing thread-local struct (its `thread_state.rs`), never as a new `thread_local!` static: on Android each static takes one of about 128 pthread keys the whole process shares, and `cargo xtask thread-local-budget` fails on a new one.
 - `unwrap()` is forbidden
 - Use KISS, DRY and SOLID; duplicated code of ten or more lines needs a shared abstraction.
 - Fix root causes completely; do not leave partial changes, deprecated paths or compatibility layers in this pre-alpha repository.

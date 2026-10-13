@@ -1,5 +1,3 @@
-use std::cell::Cell;
-
 use super::{RenderEffect, RuntimeShader};
 
 #[test]
@@ -79,7 +77,7 @@ fn unchanged_override_lookups_share_one_hash_computation() {
     let mut shader = RuntimeShader::new("");
     shader.set_override("FLAG", 1.0);
     shader.set_override("SCALE", 0.5);
-    OVERRIDE_HASH_COMPUTATIONS.with(|count| count.set(0));
+    crate::thread_state::with(|state| state.override_hash_computations.set(0));
     let expected = shader.overrides_hash();
     for _ in 0..24 {
         let mut copy = shader.clone();
@@ -88,7 +86,10 @@ fn unchanged_override_lookups_share_one_hash_computation() {
         assert!(!copy.clear_override("ABSENT"));
         assert_eq!(copy.overrides_hash(), expected);
     }
-    assert_eq!(OVERRIDE_HASH_COMPUTATIONS.with(Cell::get), 1);
+    assert_eq!(
+        crate::thread_state::with(|state| state.override_hash_computations.get()),
+        1
+    );
 }
 
 #[test]

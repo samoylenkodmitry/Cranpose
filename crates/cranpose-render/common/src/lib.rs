@@ -42,6 +42,7 @@ pub mod text_measure;
 pub mod text_paint;
 #[cfg(feature = "text-shaping")]
 mod text_shaping;
+mod thread_state;
 
 #[cfg(test)]
 #[path = "tests/pointer_slices.rs"]

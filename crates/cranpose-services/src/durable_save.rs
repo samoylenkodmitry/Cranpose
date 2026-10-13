@@ -1,5 +1,4 @@
 use std::{
-    cell::RefCell,
     collections::BTreeMap,
     panic::{AssertUnwindSafe, catch_unwind},
     rc::Rc,
@@ -120,14 +119,10 @@ pub fn DurableSaveEffect<K: PartialEq + 'static>(
     );
 }
 
-struct LocalSave {
+pub(crate) struct LocalSave {
     store: PreferencesRef,
     key: String,
     read: Box<dyn Fn() -> Option<String>>,
-}
-
-thread_local! {
-    static LOCAL_SAVES: RefCell<BTreeMap<u64, Rc<LocalSave>>> = const { RefCell::new(BTreeMap::new()) };
 }
 
 pub(crate) struct LocalSaveRegistration {
@@ -137,8 +132,8 @@ pub(crate) struct LocalSaveRegistration {
 
 impl Drop for LocalSaveRegistration {
     fn drop(&mut self) {
-        let _ = LOCAL_SAVES.try_with(|saves| {
-            let removed = saves.borrow_mut().remove(&self.id);
+        crate::thread_state::try_with(|state| {
+            let removed = state.local_saves.borrow_mut().remove(&self.id);
             drop(removed);
         });
     }
@@ -150,8 +145,8 @@ pub(crate) fn register_local_preference_save(
     read: impl Fn() -> Option<String> + 'static,
 ) -> LocalSaveRegistration {
     let id = NEXT_SAVE.fetch_add(1, Ordering::Relaxed);
-    LOCAL_SAVES.with(|saves| {
-        saves.borrow_mut().insert(
+    crate::thread_state::with(|state| {
+        state.local_saves.borrow_mut().insert(
             id,
             Rc::new(LocalSave {
                 store,
@@ -203,7 +198,9 @@ impl SaveBatch {
                 .collect(),
             ..Self::default()
         };
-        let local: Vec<_> = LOCAL_SAVES.with(|saves| saves.borrow().values().cloned().collect());
+        let local: Vec<_> = crate::thread_state::with(|state| {
+            state.local_saves.borrow().values().cloned().collect()
+        });
         for save in local {
             if let Some(value) = (save.read)() {
                 batch.push(&save.store, &save.key, value);

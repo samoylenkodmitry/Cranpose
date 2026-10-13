@@ -69,23 +69,24 @@ fn log_layout_invalidation_dispatch(
 /// The running layout pass and how many placed nodes it has cleared and not
 /// placed again yet: the nodes it unplaces, unless their parents place them
 /// before it ends. Ids start past 0, the pass a node no pass cleared names.
-struct PlacementPass {
+pub(crate) struct PlacementPass {
     id: Cell<u64>,
     unplaced: Cell<usize>,
 }
 
-thread_local! {
-    static PLACEMENT_PASS: PlacementPass = const {
-        PlacementPass {
+impl PlacementPass {
+    pub(crate) const fn new() -> Self {
+        Self {
             id: Cell::new(1),
             unplaced: Cell::new(0),
         }
-    };
+    }
 }
 
 /// Starts the placement bookkeeping of a layout pass.
 pub(crate) fn begin_placement_pass() {
-    PLACEMENT_PASS.with(|pass| {
+    crate::thread_state::cells(|cells| {
+        let pass = &cells.placement_pass;
         pass.id.set(pass.id.get() + 1);
         pass.unplaced.set(0);
     });
@@ -93,7 +94,10 @@ pub(crate) fn begin_placement_pass() {
 
 /// The running pass, when it has left a node unplaced that it found placed.
 pub(crate) fn placement_pass_with_unplaced_nodes() -> Option<u64> {
-    PLACEMENT_PASS.with(|pass| (pass.unplaced.get() > 0).then(|| pass.id.get()))
+    crate::thread_state::cells(|cells| {
+        let pass = &cells.placement_pass;
+        (pass.unplaced.get() > 0).then(|| pass.id.get())
+    })
 }
 
 /// Retained layout state for a LayoutNode.
@@ -204,7 +208,8 @@ impl LayoutState {
     /// Whether the running pass cleared the flag of this node while it was
     /// placed, so placing it again changes nothing the scene draws.
     fn restore_placement(&self) -> bool {
-        PLACEMENT_PASS.with(|pass| {
+        crate::thread_state::cells(|cells| {
+            let pass = &cells.placement_pass;
             let restored = self.cleared_in_pass == pass.id.get();
             if restored {
                 pass.unplaced.set(pass.unplaced.get().saturating_sub(1));
@@ -221,7 +226,8 @@ impl LayoutState {
             return;
         }
         self.is_placed = false;
-        self.cleared_in_pass = PLACEMENT_PASS.with(|pass| {
+        self.cleared_in_pass = crate::thread_state::cells(|cells| {
+            let pass = &cells.placement_pass;
             pass.unplaced.set(pass.unplaced.get() + 1);
             pass.id.get()
         });
@@ -534,13 +540,14 @@ pub struct LayoutNode {
 
 pub(crate) const RECYCLED_LAYOUT_NODE_POOL_LIMIT: usize = 128;
 
-thread_local! {
-    static EMPTY_MEASURE_POLICY: Rc<dyn MeasurePolicy> =
-        Rc::new(crate::layout::policies::EmptyMeasurePolicy);
-}
-
-fn empty_measure_policy() -> Rc<dyn MeasurePolicy> {
-    EMPTY_MEASURE_POLICY.with(Rc::clone)
+pub(crate) fn empty_measure_policy() -> Rc<dyn MeasurePolicy> {
+    crate::thread_state::with(|state| {
+        Rc::clone(
+            state
+                .empty_measure_policy
+                .get_or_init(|| Rc::new(crate::layout::policies::EmptyMeasurePolicy)),
+        )
+    })
 }
 
 impl LayoutNode {

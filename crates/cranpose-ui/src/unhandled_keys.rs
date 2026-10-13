@@ -5,12 +5,7 @@ use cranpose_macros::composable;
 
 use crate::KeyEvent;
 
-type KeyHandler = Rc<RefCell<Rc<dyn Fn(&KeyEvent) -> bool>>>;
-
-thread_local! {
-    static HANDLERS: RefCell<Vec<(u64, KeyHandler)>> = const { RefCell::new(Vec::new()) };
-    static NEXT_ID: RefCell<u64> = const { RefCell::new(0) };
-}
+pub(crate) type KeyHandler = Rc<RefCell<Rc<dyn Fn(&KeyEvent) -> bool>>>;
 
 /// Hands `handler` every key event no control took: none was focused, a
 /// focused control let the key pass, and no text field is taking typing.
@@ -41,14 +36,21 @@ pub fn UnhandledKeyEvents(handler: impl Fn(&KeyEvent) -> bool + 'static) {
     .with(Rc::clone);
     *latest.borrow_mut() = Rc::new(handler);
     DisposableEffect((), move |scope| {
-        let id = NEXT_ID.with(|next| {
-            let mut next = next.borrow_mut();
-            *next += 1;
-            *next
+        let id = crate::thread_state::cells(|cells| {
+            let id = cells.last_unhandled_key_handler_id.get() + 1;
+            cells.last_unhandled_key_handler_id.set(id);
+            id
         });
-        HANDLERS.with(|handlers| handlers.borrow_mut().push((id, latest)));
+        crate::thread_state::with(|state| {
+            state.unhandled_key_handlers.borrow_mut().push((id, latest));
+        });
         scope.on_dispose(move || {
-            HANDLERS.with(|handlers| handlers.borrow_mut().retain(|(held, _)| *held != id));
+            crate::thread_state::with(|state| {
+                state
+                    .unhandled_key_handlers
+                    .borrow_mut()
+                    .retain(|(held, _)| *held != id);
+            });
         })
     });
 }
@@ -57,8 +59,9 @@ pub fn UnhandledKeyEvents(handler: impl Fn(&KeyEvent) -> bool + 'static) {
 /// last first, and says whether one of them took it. The platform shells
 /// call this with each key the focused controls and text fields let pass.
 pub fn dispatch_unhandled_key_event(event: &KeyEvent) -> bool {
-    let handlers: Vec<KeyHandler> = HANDLERS.with(|handlers| {
-        handlers
+    let handlers: Vec<KeyHandler> = crate::thread_state::with(|state| {
+        state
+            .unhandled_key_handlers
             .borrow()
             .iter()
             .rev()

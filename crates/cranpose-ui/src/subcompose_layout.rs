@@ -170,19 +170,17 @@ pub struct SubcomposeMeasureScopeImpl<'a> {
     shadow_stash: Option<(Vec<NodeId>, Vec<NodeId>)>,
 }
 
-thread_local! {
-    static CLEAN_SLOT_SKIPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
 fn record_clean_slot_skip() {
-    CLEAN_SLOT_SKIPS.with(|count| count.set(count.get() + 1));
+    crate::thread_state::cells(|cells| {
+        cells.clean_slot_skips.set(cells.clean_slot_skips.get() + 1);
+    });
 }
 
 /// Number of subcompose measure passes on this thread that reused a retained
 /// slot without a compose walk. Diagnostic surface for tests and telemetry;
 /// see [`SubcomposeMeasureScope::subcompose`] for when a slot may skip.
 pub fn clean_slot_skip_count() -> u64 {
-    CLEAN_SLOT_SKIPS.with(Cell::get)
+    crate::thread_state::cells(|cells| cells.clean_slot_skips.get())
 }
 
 struct SubcomposeMeasureScopeInit<'a> {

@@ -63,6 +63,7 @@ mod shape_pipelines;
 mod shared_shader;
 #[cfg(test)]
 mod test_support;
+mod thread_state;
 
 use std::{rc::Rc, sync::Arc};
 

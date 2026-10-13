@@ -21,15 +21,11 @@ pub(crate) struct ServiceLocals {
     pub(crate) lifecycle: OnceCell<CompositionLocal<crate::host::LifecycleState>>,
 }
 
-thread_local! {
-    static LOCALS: ServiceLocals = ServiceLocals::default();
-}
-
 pub(crate) fn cached_local<T: Clone + 'static>(
     cell: impl FnOnce(&ServiceLocals) -> &OnceCell<CompositionLocal<T>>,
     initialize: impl FnOnce() -> CompositionLocal<T>,
 ) -> CompositionLocal<T> {
-    LOCALS.with(|locals| cell(locals).get_or_init(initialize).clone())
+    crate::thread_state::with(|state| cell(&state.locals).get_or_init(initialize).clone())
 }
 
 #[cfg(test)]

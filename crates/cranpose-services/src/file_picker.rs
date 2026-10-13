@@ -13,7 +13,7 @@
 //! [`crate::launcher`], which own the request across host recreation and hand
 //! the result back through a callback.
 
-use std::{cell::RefCell, future::Future, pin::Pin, rc::Rc};
+use std::{future::Future, pin::Pin, rc::Rc};
 
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOfWithPolicy};
 use cranpose_macros::composable;
@@ -201,26 +201,22 @@ pub trait FilePicker {
 /// Shared handle to a [`FilePicker`].
 pub type FilePickerRef = Rc<dyn FilePicker>;
 
-thread_local! {
-    static PLATFORM_FILE_PICKER: RefCell<Option<FilePickerRef>> = const { RefCell::new(None) };
-}
-
 /// Registers the platform-provided chooser (Android SAF / iOS UIDocumentPicker).
 ///
 /// The cranpose crate's Android and iOS backends call this during startup, when
 /// they have access to the Activity / root view controller. Once registered it
 /// takes precedence over the built-in desktop/web choosers.
 pub fn set_platform_file_picker(picker: FilePickerRef) {
-    PLATFORM_FILE_PICKER.with(|cell| *cell.borrow_mut() = Some(picker));
+    crate::thread_state::with(|state| *state.file_picker.borrow_mut() = Some(picker));
 }
 
 /// Removes any registered platform chooser (used in tests and teardown).
 pub fn clear_platform_file_picker() {
-    PLATFORM_FILE_PICKER.with(|cell| *cell.borrow_mut() = None);
+    crate::thread_state::with(|state| *state.file_picker.borrow_mut() = None);
 }
 
 fn registered_platform_file_picker() -> Option<FilePickerRef> {
-    PLATFORM_FILE_PICKER.with(|cell| cell.borrow().clone())
+    crate::thread_state::with(|state| state.file_picker.borrow().clone())
 }
 
 struct PlatformFilePicker;
