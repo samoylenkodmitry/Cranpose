@@ -286,15 +286,41 @@ final class CranposeScene: SKScene {
     }
 }
 
-/// The crown's running value. A plain object rather than view state: the
-/// crown moves on every event, and view state would rebuild the view (and
-/// the SpriteKit view in it) each time before the event reached the app.
+/// The crown as SwiftUI reports it, less SwiftUI's fling. A plain object
+/// rather than view state: the crown moves on every event, and view state
+/// would rebuild the view (and the SpriteKit view in it) each time before the
+/// event reached the app.
 ///
-/// The crown is read through SwiftUI. WatchKit's crown sequencer, which a
-/// SwiftUI app reaches through its root interface controller, delivered
-/// nothing on a watch running watchOS 27.
+/// After a quick turn SwiftUI keeps moving the value for a second or more,
+/// slowing it each frame, while the event's velocity, which follows the
+/// hand, is already zero. A game steered with that value keeps moving after
+/// the crown stops. So once the velocity has been above zero and drops to
+/// zero, the changes go nowhere until the crown is idle. The first changes of
+/// a turn come with a zero velocity too, before SwiftUI has measured one, and
+/// those count.
+///
+/// WatchKit's crown sequencer, which a SwiftUI app reaches through its root
+/// interface controller, takes the focus but delivers nothing, on a watch and
+/// in the simulator.
 final class CrownReading {
     var value = 0.0
+    private var offset = 0.0
+    private var turning = false
+
+    /// The change since the last event, or nil while SwiftUI flings.
+    func change(_ event: DigitalCrownEvent) -> Double? {
+        let delta = event.offset - offset
+        offset = event.offset
+        if event.velocity != 0 {
+            turning = true
+            return delta
+        }
+        return turning ? nil : delta
+    }
+
+    func idle() {
+        turning = false
+    }
 }
 
 @MainActor
@@ -348,18 +374,15 @@ struct CranposeView: View {
             .contentShape(Rectangle())
             .focusable()
             .digitalCrownRotation(
-                // Each new value goes to the app as it arrives, as the change
-                // from the one before. Without a stride: with one, SwiftUI
-                // steps the value and settles it on a step after the hand
-                // stops, so the app saw the crown late and saw it move after
-                // it stopped.
-                Binding(get: { model.crown.value }, set: { value in
-                    let delta = value - model.crown.value
-                    model.crown.value = value
-                    CPCrown(Float(delta), model.elapsed / 1_000_000)
-                }),
+                Binding(get: { model.crown.value }, set: { model.crown.value = $0 }),
                 from: -1_000_000, through: 1_000_000, sensitivity: .medium,
-                isContinuous: true, isHapticFeedbackEnabled: false)
+                isContinuous: true, isHapticFeedbackEnabled: false,
+                onChange: { event in
+                    if let delta = model.crown.change(event) {
+                        CPCrown(Float(delta), model.elapsed / 1_000_000)
+                    }
+                },
+                onIdle: { model.crown.idle() })
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { event in
                     if !touching {

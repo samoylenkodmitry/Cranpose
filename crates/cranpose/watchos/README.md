@@ -55,10 +55,18 @@ pass `--features` to select app features.
 
 The crown reaches the app through SwiftUI's `digitalCrownRotation`, at medium
 sensitivity and without a stride: with a stride, SwiftUI steps the value and
-settles it on a step after the hand stops, so the app saw the crown late and
-saw it move after it stopped. WatchKit's crown sequencer, which a SwiftUI app
-reaches through its root interface controller, delivered nothing on a watch
-running watchOS 27.
+settles it on a step after the hand stops. After a quick turn SwiftUI also
+keeps moving the value for a second or more, slowing it each frame, while the
+event's velocity, which follows the hand, is already zero. The host passes
+the changes while the hand turns the crown and drops that fling, so the app's
+crown stops when the crown does. In a watchOS 27 simulator, turned by
+`XCUIDevice.rotateDigitalCrown`, one full turn at one turn per second gives
+about 9.4 units, and a turn in a third of a second gives 11.7 units in 0.37
+seconds where SwiftUI's value goes on for 1.4 seconds more.
+
+WatchKit's crown sequencer, which a SwiftUI app reaches through its root
+interface controller, takes the focus but delivers nothing, on a watch and in
+the simulator.
 
 ## Sound and haptics
 
