@@ -343,6 +343,8 @@ where
     ) -> FrameUpdateResult {
         let frame_start = Instant::now();
 
+        #[cfg(feature = "installed-fonts")]
+        self.apply_installed_fonts();
         self.sync_window_roots_in_context();
         self.run_layout_phase_in_context();
         let after_initial_layout = Instant::now();
@@ -401,6 +403,22 @@ where
             }
             passes > 0
         })
+    }
+
+    /// Gives every renderer the fonts installed since the last frame, before
+    /// this frame lays text out.
+    #[cfg(feature = "installed-fonts")]
+    fn apply_installed_fonts(&mut self) {
+        let generation = cranpose_render_common::installed_fonts::installed_font_generation();
+        if generation == self.app.installed_fonts {
+            return;
+        }
+        self.app.installed_fonts = generation;
+        for surface in &mut self.surfaces {
+            surface
+                .renderer
+                .apply_installed_fonts(&self.app.app_context);
+        }
     }
 
     #[cfg(test)]

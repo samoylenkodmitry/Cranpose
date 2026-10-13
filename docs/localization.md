@@ -93,6 +93,24 @@ Thai, Lao, Khmer and Burmese put no space between words. Enable
 dictionaries find; without it they wrap where the line runs out. In every
 script a line keeps a combining mark with the letter it sits on.
 
+An app can also download a font instead of embedding it, for example only
+for the users who pick a language that needs it. Enable `installed-fonts`
+and install the file once it is on disk, at startup or while the app runs:
+
+```rust
+cranpose::install_font_file(
+    &FontFamily::named("Noto Sans Thai"),
+    &fonts_dir.join("NotoSansThai-VF.ttf"),
+    &[FontWeight::NORMAL, FontWeight::BOLD],
+)?;
+```
+
+Text laid out from the next frame on uses the faces for the characters the
+app's other fonts lack, and a style that names the family selects them. A
+variable font is instanced at each listed weight. The file is read once and
+kept for the life of the process. `cranpose::install_font_bytes` installs a
+font the app embeds, such as a small script font it always ships.
+
 Language identifiers preserve script and region (`sr-Latn`, `sr-Cyrl`, `fr-CA`).
 To use several ordered language preferences supplied by your platform host:
 

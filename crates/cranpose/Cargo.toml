@@ -30,6 +30,14 @@ localized-devanagari = ["dep:cranpose-fonts", "cranpose-fonts/devanagari"]
 localized-cjk = ["dep:cranpose-fonts", "cranpose-fonts/cjk"]
 # Wrap Thai, Lao, Khmer and Burmese lines between words (ICU's dictionaries).
 southeast-asian-line-breaks = ["cranpose-ui/southeast-asian-line-breaks"]
+# Fonts an app installs while it runs, such as a font pack it downloads:
+# `install_font_file`.
+installed-fonts = [
+    "cranpose-app-shell/installed-fonts",
+    "cranpose-render-common/installed-fonts",
+    "cranpose-render-wgpu?/installed-fonts",
+    "cranpose-render-pixels?/installed-fonts",
+]
 localization = ["cranpose-ui/localization", "cranpose-liquid/localization", "cranpose-services/localization", "dep:sys-locale", "text-shaping"]
 localization-formatting = ["localization", "cranpose-ui/localization-formatting"]
 text-shaping = ["cranpose-render-common/text-shaping"]

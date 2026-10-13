@@ -22,6 +22,8 @@ mod graph_hash;
 pub mod graph_scene;
 pub mod hit_graph;
 pub mod image_compare;
+#[cfg(feature = "installed-fonts")]
+pub mod installed_fonts;
 pub mod layer_composition;
 mod layer_recycling;
 pub mod layer_shadow;
@@ -190,6 +192,15 @@ pub trait Renderer {
     /// Renderers that provide text measurement or other per-app services should install
     /// them here rather than as constructor side effects.
     fn attach_app_context_services(&mut self, _app_context: &cranpose_ui::AppContext) {}
+
+    /// Takes in the fonts installed since the renderer last looked (see
+    /// `installed_fonts::install_font_file`). A renderer that installed the
+    /// app's text measurer installs one with the new faces, so text lays out
+    /// again with them.
+    ///
+    /// AppShell calls this before the layout of a frame that follows an
+    /// install.
+    fn apply_installed_fonts(&mut self, _app_context: &cranpose_ui::AppContext) {}
 
     /// Sets how many device pixels the renderer draws for one logical unit.
     ///

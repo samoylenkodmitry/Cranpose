@@ -23,6 +23,8 @@ pub enum PixelsRendererError {
 pub struct PixelsRenderer {
     scene: Scene,
     text_resources: SoftwareTextResources,
+    /// The app context this renderer gave its text measurer.
+    app_context: Option<std::rc::Weak<cranpose_ui::AppContext>>,
 }
 
 impl Default for PixelsRenderer {
@@ -36,6 +38,7 @@ impl PixelsRenderer {
         Self {
             scene: Scene::new(),
             text_resources: SoftwareTextResources::default(),
+            app_context: None,
         }
     }
 
@@ -107,6 +110,23 @@ impl Renderer for PixelsRenderer {
             self.text_resources.clone(),
             64,
         ));
+        self.app_context = Some(app_context.downgrade());
+    }
+
+    #[cfg(feature = "installed-fonts")]
+    fn apply_installed_fonts(&mut self, app_context: &cranpose_ui::AppContext) {
+        let Some(resources) = self.text_resources.with_installed_faces() else {
+            return;
+        };
+        self.text_resources = resources;
+        let attached = self
+            .app_context
+            .as_ref()
+            .and_then(std::rc::Weak::upgrade)
+            .is_some_and(|attached| std::ptr::eq(&*attached, app_context));
+        if attached {
+            self.attach_app_context_services(app_context);
+        }
     }
 
     fn scene(&self) -> &Self::Scene {

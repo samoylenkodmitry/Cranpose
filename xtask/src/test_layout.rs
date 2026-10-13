@@ -217,9 +217,11 @@ pub(crate) fn unlinked_integration_tests(root: &Path) -> Result<Vec<PathBuf>, St
     let mut unlinked = Vec::new();
     for member in workspace_members(root)? {
         let crate_dir = root.join(&member);
-        if !opts_out_of_autotests(&read_toml(&crate_dir.join("Cargo.toml"))?) {
+        let manifest = read_toml(&crate_dir.join("Cargo.toml"))?;
+        if !opts_out_of_autotests(&manifest) {
             continue;
         }
+        let targets = test_target_paths(&manifest);
         let integration = crate_dir.join(INTEGRATION_ROOT);
         let Ok(source) = std::fs::read_to_string(&integration) else {
             continue;
@@ -233,7 +235,12 @@ pub(crate) fn unlinked_integration_tests(root: &Path) -> Result<Vec<PathBuf>, St
                 continue;
             };
             let is_test_file = path.extension().is_some_and(|extension| extension == "rs");
-            if is_test_file && stem != "integration" && !declared.iter().any(|name| name == stem) {
+            let own_target = targets.iter().any(|target| crate_dir.join(target) == path);
+            if is_test_file
+                && stem != "integration"
+                && !own_target
+                && !declared.iter().any(|name| name == stem)
+            {
                 unlinked.push(path);
             }
         }
@@ -281,19 +288,33 @@ fn opts_out_of_autotests(manifest: &toml::Value) -> bool {
         == Some(false)
 }
 
-/// A `[[test]]` without a `path` is found by cargo at `tests/<name>.rs`.
 fn declares_integration_target(manifest: &toml::Value) -> bool {
+    test_target_paths(manifest)
+        .iter()
+        .any(|path| path == Path::new(INTEGRATION_ROOT))
+}
+
+/// The root file of each `[[test]]` target, relative to the crate; one
+/// without a `path` is found by cargo at `tests/<name>.rs`.
+fn test_target_paths(manifest: &toml::Value) -> Vec<PathBuf> {
     manifest
         .get("test")
         .and_then(toml::Value::as_array)
-        .is_some_and(|targets| {
-            targets.iter().any(
-                |target| match target.get("path").and_then(toml::Value::as_str) {
-                    Some(path) => Path::new(path) == Path::new(INTEGRATION_ROOT),
-                    None => target.get("name").and_then(toml::Value::as_str) == Some("integration"),
-                },
-            )
+        .map(|targets| {
+            targets
+                .iter()
+                .filter_map(
+                    |target| match target.get("path").and_then(toml::Value::as_str) {
+                        Some(path) => Some(PathBuf::from(path)),
+                        None => target
+                            .get("name")
+                            .and_then(toml::Value::as_str)
+                            .map(|name| PathBuf::from(format!("tests/{name}.rs"))),
+                    },
+                )
+                .collect()
         })
+        .unwrap_or_default()
 }
 
 fn read_toml(path: &Path) -> Result<toml::Value, String> {

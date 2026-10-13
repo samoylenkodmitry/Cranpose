@@ -31,6 +31,8 @@ backend-gles = ["wgpu/gles", "naga/glsl-out"]
 gl-templates = ["dep:cranpose-gl-templates", "dep:cranpose-ui-graphics"]
 # Embed the framework fallback font (~1.3 MiB) used when the app provides no fonts.
 embedded-default-font = ["cranpose-render-common/embedded-default-font"]
+# Fonts an app installs while it runs; see `cranpose-render-common`.
+installed-fonts = ["cranpose-render-common/installed-fonts"]
 
 [dependencies]
 cranpose-render-common = { workspace = true }
@@ -143,3 +145,9 @@ stats_alloc = "0.1.10"
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+
+# Its own process: an installed font joins every renderer in the process.
+[[test]]
+name = "installed_fonts"
+path = "tests/installed_fonts.rs"
+required-features = ["installed-fonts", "cranpose-app-shell/installed-fonts"]

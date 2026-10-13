@@ -48,6 +48,9 @@ embedded-default-font = []
 text-hyphenation = ["dep:hyphenation"]
 text-hyphenation-embedded = ["text-hyphenation", "hyphenation/embed_all"]
 text-shaping = ["dep:rustybuzz", "dep:unicode-bidi", "dep:unicode-script"]
+# Fonts an app installs while it runs, such as a downloaded font pack: every
+# font set takes them in at its next frame.
+installed-fonts = []
 
 [[test]]
 name = "integration"

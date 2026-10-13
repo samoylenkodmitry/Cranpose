@@ -39,6 +39,15 @@ impl SoftwareTextResources {
     pub fn fonts(&self) -> &SoftwareTextFontSet {
         &self.fonts
     }
+
+    /// These resources with the faces installed since they were made, or
+    /// `None` while no face was installed since.
+    #[cfg(feature = "installed-fonts")]
+    pub fn with_installed_faces(&self) -> Option<Self> {
+        self.fonts
+            .with_installed_faces()
+            .map(|fonts| Self { fonts })
+    }
 }
 
 impl Default for SoftwareTextResources {
