@@ -304,7 +304,8 @@ impl<'a> AnnotatedTextLayout<'a> {
         let line = self.lines.get(line_index)?;
         let mut x = offset;
         #[cfg(feature = "text-shaping")]
-        if let Some((bidi_offset, bidi)) = &self.bidi
+        if !line.range.is_empty()
+            && let Some((bidi_offset, bidi)) = &self.bidi
             && let Some(paragraph) = bidi.paragraphs.iter().find(|paragraph| {
                 paragraph.range.start + bidi_offset <= line.range.start
                     && paragraph.range.end + bidi_offset >= line.range.end
