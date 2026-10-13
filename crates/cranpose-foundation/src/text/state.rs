@@ -7,7 +7,7 @@ use std::{
 
 use cranpose_core::MutableState;
 
-use super::{TextFieldBuffer, TextRange};
+use super::{InputTransformation, TextFieldBuffer, TextRange};
 
 /// Immutable snapshot of text field content.
 ///
@@ -357,6 +357,16 @@ impl TextFieldState {
     where
         F: FnOnce(&mut TextFieldBuffer),
     {
+        self.edit_as_user(None, f)
+    }
+
+    /// Edits as a person's input does: `f`, then `transformation` when `f`
+    /// changed the text. Text field input edits through here, and app code
+    /// through [`edit`](Self::edit).
+    pub fn edit_as_user<F>(&self, transformation: Option<&InputTransformation>, f: F) -> bool
+    where
+        F: FnOnce(&mut TextFieldBuffer),
+    {
         let inner = self.inner();
         let Ok(guard) = EditGuard::new(&inner) else {
             return false;
@@ -371,6 +381,13 @@ impl TextFieldState {
         });
 
         f(&mut buffer);
+        if let Some(transformation) = transformation {
+            self.value.read(|current| {
+                if buffer.text() != current.text {
+                    transformation.transform(current, &mut buffer);
+                }
+            });
+        }
 
         let Some(change) = self
             .value

@@ -64,15 +64,16 @@ through [`cursor_animation.rs`](../crates/cranpose-ui/src/cursor_animation.rs).
 ## Keyboard options and actions
 
 `BasicTextFieldOptions::keyboard_options` takes Compose's `KeyboardOptions`:
-keyboard type, capitalization, autocorrection and IME action. The focused
+keyboard type, capitalization, autocorrection, IME action and the
+`ContentType` autofill and password managers read. The focused
 field reports them in `ImeEditorState`, and each platform adapter maps them
 to its native editor:
 
 | Platform | Native configuration | Action key |
 | --- | --- | --- |
 | Android | `EditorInfo.inputType` and `imeOptions`, as Compose's Android text input sets them | `performEditorAction` |
-| iOS | `UITextInputTraits` of the key input view, reloaded when they change | the return key's `insertText("\n")` |
-| Web | `inputmode`, `enterkeyhint`, `autocapitalize`, `autocorrect` and `spellcheck` on the hidden editor; a password keyboard opens the password input | Enter in the one-line editor |
+| iOS | `UITextInputTraits` of the key input view, `textContentType` among them, reloaded when they change | the return key's `insertText("\n")` |
+| Web | `inputmode`, `enterkeyhint`, `autocapitalize`, `autocorrect`, `spellcheck` and `autocomplete` on the hidden editor; a password keyboard opens the password input | Enter in the one-line editor |
 | Desktop | none | Enter |
 
 Enter in a single-line field and the platform's action key run the field's
@@ -85,9 +86,22 @@ always adds a line, since the browser does not tell its action key from
 Enter. The shared types live in
 [`keyboard_options.rs`](../crates/cranpose-ui/src/keyboard_options.rs).
 
+## Input transformations
+
+`BasicTextFieldOptions::input_transformation` takes Compose's
+`InputTransformation`, which changes or rejects each edit a person makes:
+typing, pasting, deleting, cutting and IME composition. It sees the value
+before the edit and the buffer after it. `max_length`, `by_value` and `then`
+build the common ones. The field's input goes through
+`TextFieldState::edit_as_user`; the app's own `edit` calls and edits that
+only move the cursor skip the transformation. `max_length` also lets a
+shortening edit through, so text the app put past the limit can be deleted.
+See [`input_transformation.rs`](../crates/cranpose-foundation/src/text/input_transformation.rs).
+
 ## Current limits
 
-Autofill hints, input/output transformations and a secure text field remain
-outside the current public surface. The default UI measurement fallback
+Android does not autofill text fields: its hidden editor view does not yet
+serve autofill values or sit where the field is. Output transformations and
+a secure text field remain outside the current public surface. The default UI measurement fallback
 is monospaced; a host can install a font-backed `TextMeasurer` through its text
 service.

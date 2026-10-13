@@ -11,7 +11,7 @@ use std::{
 
 use cranpose_foundation::text::previous_grapheme_boundary;
 use cranpose_ui::{
-    ImeAction, ImeEditorState, KeyboardCapitalization, KeyboardOptions, KeyboardType,
+    ContentType, ImeAction, ImeEditorState, KeyboardCapitalization, KeyboardOptions, KeyboardType,
     text_input_session::{PlatformTextInputHandler, set_platform_text_input_handler},
 };
 use objc2::{
@@ -26,10 +26,10 @@ use objc2_foundation::{
 use objc2_ui_kit::{
     NSObjectUIAccessibility, NSWritingDirection, UIAccessibilityConvertFrameToScreenCoordinates,
     UIAccessibilityIdentification, UIKeyInput, UIKeyboardType, UIResponder, UIReturnKeyType,
-    UITextAutocapitalizationType, UITextAutocorrectionType, UITextInput, UITextInputDelegate,
-    UITextInputStringTokenizer, UITextInputTokenizer, UITextInputTraits, UITextLayoutDirection,
-    UITextPosition, UITextRange, UITextSelectionRect, UITextSpellCheckingType,
-    UITextStorageDirection, UIView,
+    UITextAutocapitalizationType, UITextAutocorrectionType, UITextContentType, UITextInput,
+    UITextInputDelegate, UITextInputStringTokenizer, UITextInputTokenizer, UITextInputTraits,
+    UITextLayoutDirection, UITextPosition, UITextRange, UITextSelectionRect,
+    UITextSpellCheckingType, UITextStorageDirection, UIView,
 };
 
 #[derive(Default)]
@@ -292,6 +292,30 @@ fn ios_return_key(action: ImeAction) -> UIReturnKeyType {
     }
 }
 
+fn ios_content_type(content_type: ContentType) -> &'static UITextContentType {
+    use objc2_ui_kit::{
+        UITextContentTypeCreditCardNumber, UITextContentTypeEmailAddress,
+        UITextContentTypeFullStreetAddress, UITextContentTypeName, UITextContentTypeNewPassword,
+        UITextContentTypeOneTimeCode, UITextContentTypePassword, UITextContentTypePostalCode,
+        UITextContentTypeTelephoneNumber, UITextContentTypeUsername,
+    };
+    // SAFETY: UIKit defines these constants for the process's lifetime.
+    unsafe {
+        match content_type {
+            ContentType::Username | ContentType::NewUsername => UITextContentTypeUsername,
+            ContentType::Password => UITextContentTypePassword,
+            ContentType::NewPassword => UITextContentTypeNewPassword,
+            ContentType::EmailAddress => UITextContentTypeEmailAddress,
+            ContentType::PhoneNumber => UITextContentTypeTelephoneNumber,
+            ContentType::PersonFullName => UITextContentTypeName,
+            ContentType::PostalAddress => UITextContentTypeFullStreetAddress,
+            ContentType::PostalCode => UITextContentTypePostalCode,
+            ContentType::CreditCardNumber => UITextContentTypeCreditCardNumber,
+            ContentType::SmsOtpCode => UITextContentTypeOneTimeCode,
+        }
+    }
+}
+
 fn ios_capitalization(capitalization: KeyboardCapitalization) -> UITextAutocapitalizationType {
     match capitalization {
         KeyboardCapitalization::None => UITextAutocapitalizationType::None,
@@ -470,6 +494,13 @@ define_class!(
         #[unsafe(method(isSecureTextEntry))]
         fn is_secure_text_entry(&self) -> bool {
             with_mirror(|m| m.keyboard.keyboard_type.is_password())
+        }
+
+        #[unsafe(method_id(textContentType))]
+        fn text_content_type(&self) -> Option<Retained<UITextContentType>> {
+            with_mirror(|m| m.keyboard.content_type)
+                .map(ios_content_type)
+                .map(Retained::from)
         }
     }
 

@@ -28,9 +28,10 @@ fn focused_state(
         None,
         line_limits,
         true,
-        KeyboardRefs {
-            options: Rc::default(),
-            action: Rc::default(),
+        InputRefs {
+            keyboard_options: Rc::default(),
+            keyboard_action: Rc::default(),
+            transformation: Rc::default(),
         },
         CaretGeometryRefs {
             local_to_window: Rc::new(Cell::new(ProjectiveTransform::identity())),

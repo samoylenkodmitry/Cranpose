@@ -242,6 +242,15 @@ impl TextFieldBuffer {
         self.has_changes = true;
     }
 
+    /// Replaces the buffer's text, selection and composition with `value`'s:
+    /// how an input transformation rejects an edit.
+    pub fn reset_to(&mut self, value: &TextFieldValue) {
+        self.text.clear();
+        self.text.push_str(&value.text);
+        self.selection = value.selection;
+        self.composition = value.composition;
+    }
+
     /// Clears all text.
     pub fn clear(&mut self) {
         self.text.clear();

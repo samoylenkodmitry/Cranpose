@@ -6,7 +6,7 @@ use cranpose_ui::{
     Column, ColumnSpec, FocusRequester, Modifier, TextFieldState,
 };
 
-use crate::support_keyboard::shell_with_keyboard;
+use crate::support_text_field::shell_with_keyboard;
 
 fn check_keyboard_focus(decorated: bool, show_keyboard_on_focus: bool) {
     let requester = FocusRequester::new();

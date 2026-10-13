@@ -17,7 +17,7 @@ use std::{
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::{
-    ImeAction, KeyboardCapitalization, KeyboardOptions, KeyboardType,
+    ContentType, ImeAction, KeyboardCapitalization, KeyboardOptions, KeyboardType,
     text_field_focus::{self, ImeCaretGeometry, ImeEditorState},
 };
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
@@ -490,7 +490,6 @@ fn hidden_editor(document: &Document, kind: EditorKind) -> Result<HtmlElement, J
     editor.set_attribute("tabindex", "-1")?;
     if kind == EditorKind::Secret {
         editor.set_attribute("type", "password")?;
-        editor.set_attribute("autocomplete", "current-password")?;
     }
     editor.style().set_css_text(
         "position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;\
@@ -517,7 +516,31 @@ fn apply_keyboard(
         web_capitalization(keyboard.capitalization),
     )?;
     editor.set_attribute("autocorrect", if corrects { "on" } else { "off" })?;
-    editor.set_attribute("spellcheck", if corrects { "true" } else { "false" })
+    editor.set_attribute("spellcheck", if corrects { "true" } else { "false" })?;
+    match keyboard.content_type {
+        Some(content_type) => editor.set_attribute("autocomplete", web_autocomplete(content_type)),
+        // A password editor without a content type asks for the saved
+        // password, as a login field's does.
+        None if editor.get_attribute("type").as_deref() == Some("password") => {
+            editor.set_attribute("autocomplete", "current-password")
+        }
+        None => editor.remove_attribute("autocomplete"),
+    }
+}
+
+fn web_autocomplete(content_type: ContentType) -> &'static str {
+    match content_type {
+        ContentType::Username | ContentType::NewUsername => "username",
+        ContentType::Password => "current-password",
+        ContentType::NewPassword => "new-password",
+        ContentType::EmailAddress => "email",
+        ContentType::PhoneNumber => "tel",
+        ContentType::PersonFullName => "name",
+        ContentType::PostalAddress => "street-address",
+        ContentType::PostalCode => "postal-code",
+        ContentType::CreditCardNumber => "cc-number",
+        ContentType::SmsOtpCode => "one-time-code",
+    }
 }
 
 fn web_input_mode(keyboard_type: KeyboardType) -> &'static str {
