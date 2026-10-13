@@ -27,7 +27,7 @@ pub(crate) struct CranposeThreadState {
     #[cfg(feature = "localization")]
     pub(crate) system_languages_local:
         OnceCell<CompositionLocal<std::rc::Rc<[cranpose_ui::Locale]>>>,
-    #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+    #[cfg(feature = "renderer-wgpu")]
     pub(crate) gpu_context_local:
         OnceCell<cranpose_core::StaticCompositionLocal<Option<crate::GpuContext>>>,
     #[cfg(debug_assertions)]
@@ -74,7 +74,7 @@ impl CranposeThreadState {
             android_host_window_registry: ScopedWeakStack::new(),
             #[cfg(feature = "localization")]
             system_languages_local: OnceCell::new(),
-            #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+            #[cfg(feature = "renderer-wgpu")]
             gpu_context_local: OnceCell::new(),
             #[cfg(debug_assertions)]
             unlabeled_controls_warned: RefCell::new(std::collections::HashSet::new()),

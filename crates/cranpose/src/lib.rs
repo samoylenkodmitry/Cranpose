@@ -15,17 +15,17 @@ mod android_file_picker;
 /// An in-process Cranpose component driven by its native host.
 #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
 pub mod embedded_view;
-#[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+#[cfg(feature = "renderer-wgpu")]
 mod external_frames;
-#[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+#[cfg(feature = "renderer-wgpu")]
 pub use external_frames::{ExternalFrames, FrameTexture, FrameWriter};
-#[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+#[cfg(feature = "renderer-wgpu")]
 mod gpu_context;
-#[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+#[cfg(feature = "renderer-wgpu")]
 pub use gpu_context::{GpuContext, GpuRequirements, gpu_context};
-#[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+#[cfg(feature = "renderer-wgpu")]
 mod guest_view;
-#[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+#[cfg(feature = "renderer-wgpu")]
 pub use guest_view::{GuestView, GuestViewError};
 #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
 mod frame_readback;

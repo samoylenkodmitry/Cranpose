@@ -343,11 +343,16 @@ console_error_panic_hook = "0.1"
 cranpose-ui-graphics = { workspace = true }
 # Awaits the Async Clipboard API's promises (`web_clipboard`).
 wasm-bindgen-futures = "0.4"
+# The page runs on one thread without wasm atomics, so wgpu's objects may be
+# Send and Sync there; an engine's texture then shows as an ExternalTexture,
+# whose handle is Send and Sync on every target. Bevy turns the same feature
+# on for its own web builds.
 wgpu = { workspace = true, optional = true, features = [
     "std",
     "webgpu",
     "webgl",
     "wgsl",
+    "fragile-send-sync-non-atomic-wasm",
 ] }
 
 # The process readings in `process_info`: `getrusage`, `sysconf`, and on the
