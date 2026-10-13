@@ -227,8 +227,8 @@ pub use navigation::{
     take_back_requests, take_exit_request,
 };
 pub use network_status::{
-    NetworkMonitor, NetworkMonitorRef, NetworkStatus, clear_platform_network_monitor,
-    network_monitor, network_status, set_platform_network_monitor,
+    Connectivity, Metering, NetworkMonitor, NetworkMonitorRef, NetworkStatus,
+    clear_platform_network_monitor, network_monitor, network_status, set_platform_network_monitor,
 };
 pub use notifier::{
     Notifier, NotifierRef, NotifyRequest, ProvideNotifier, clear_platform_notifier,

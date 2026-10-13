@@ -7,8 +7,8 @@ use std::{
 };
 
 use cranpose_services::{
-    DeviceInfo, HapticEffect, HapticFeedback, HapticPattern, Haptics, NetworkMonitor,
-    NetworkStatus, Notifier, NotifyRequest, ShareContent, ShareError, ShareSheet,
+    Connectivity, DeviceInfo, HapticEffect, HapticFeedback, HapticPattern, Haptics, Metering,
+    NetworkMonitor, NetworkStatus, Notifier, NotifyRequest, ShareContent, ShareError, ShareSheet,
     set_platform_device_info, set_platform_haptics, set_platform_network_monitor,
     set_platform_notifier, set_platform_share_sheet,
 };
@@ -223,11 +223,17 @@ impl DeviceInfo for WebDeviceInfo {
 
 struct WebNetworkMonitor;
 
+/// `navigator.onLine` observes connectivity. Browsers do not say whether a
+/// connection is metered, so metering stays unknown.
 impl NetworkMonitor for WebNetworkMonitor {
     fn status(&self) -> NetworkStatus {
         NetworkStatus {
-            online: NETWORK_ONLINE.load(Ordering::Acquire),
-            metered: false,
+            connectivity: if NETWORK_ONLINE.load(Ordering::Acquire) {
+                Connectivity::Online
+            } else {
+                Connectivity::Offline
+            },
+            metering: Metering::Unknown,
         }
     }
 
@@ -242,18 +248,14 @@ fn register_network_monitor() {
     let Some(window) = web_sys::window() else {
         return;
     };
-    let online = Arc::new(AtomicBool::new(window.navigator().on_line()));
-
+    NETWORK_ONLINE.store(window.navigator().on_line(), Ordering::Release);
     for (event, value) in [("online", true), ("offline", false)] {
-        let online = Arc::clone(&online);
         let closure = Closure::wrap(Box::new(move || {
-            online.store(value, Ordering::Release);
+            NETWORK_ONLINE.store(value, Ordering::Release);
         }) as Box<dyn FnMut()>);
         let _ = window.add_event_listener_with_callback(event, closure.as_ref().unchecked_ref());
         closure.forget();
     }
-
-    NETWORK_ONLINE.store(online.load(Ordering::Acquire), Ordering::Release);
     set_platform_network_monitor(Arc::new(WebNetworkMonitor));
 }
 
