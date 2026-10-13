@@ -29,7 +29,7 @@ mod range;
 mod state;
 
 pub use buffer::TextFieldBuffer;
-pub use graphemes::{next_grapheme_boundary, previous_grapheme_boundary};
+pub use graphemes::{floor_grapheme_boundary, next_grapheme_boundary, previous_grapheme_boundary};
 pub use input_transformation::InputTransformation;
 pub use line_limits::{TextFieldLineLimits, filter_for_single_line};
 pub use range::TextRange;

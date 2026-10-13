@@ -91,7 +91,7 @@ pub struct TextFieldStateInner {
     listeners: Vec<ChangeListener>,
     undo_stack: VecDeque<TextFieldValue>,
     redo_stack: VecDeque<TextFieldValue>,
-    desired_column: Cell<Option<usize>>,
+    desired_x: Cell<Option<f32>>,
     last_edit_time: Cell<Option<web_time::Instant>>,
     pending_undo_snapshot: RefCell<Option<TextFieldValue>>,
 }
@@ -177,7 +177,7 @@ impl TextFieldState {
                     listeners: Vec::new(),
                     undo_stack: VecDeque::new(),
                     redo_stack: VecDeque::new(),
-                    desired_column: Cell::new(None),
+                    desired_x: Cell::new(None),
                     last_edit_time: Cell::new(None),
                     pending_undo_snapshot: RefCell::new(None),
                 })),
@@ -199,7 +199,7 @@ impl TextFieldState {
                     listeners: Vec::new(),
                     undo_stack: VecDeque::new(),
                     redo_stack: VecDeque::new(),
-                    desired_column: Cell::new(None),
+                    desired_x: Cell::new(None),
                     last_edit_time: Cell::new(None),
                     pending_undo_snapshot: RefCell::new(None),
                 })),
@@ -219,16 +219,16 @@ impl TextFieldState {
         hasher.finish()
     }
 
-    /// Gets the desired column for up/down navigation, in characters
-    /// (extended grapheme clusters) from the start of the line.
-    pub fn desired_column(&self) -> Option<usize> {
-        self.inner().borrow().desired_column.get()
+    /// Where up and down arrows keep the caret: its x within its line, in
+    /// layout pixels, from before the first of a run of vertical moves.
+    pub fn desired_x(&self) -> Option<f32> {
+        self.inner().borrow().desired_x.get()
     }
 
-    /// Sets the desired column for up/down navigation, in characters
-    /// (extended grapheme clusters) from the start of the line.
-    pub fn set_desired_column(&self, col: Option<usize>) {
-        self.inner().borrow().desired_column.set(col);
+    /// Sets or clears the x that vertical moves keep; any other edit or
+    /// caret move clears it.
+    pub fn set_desired_x(&self, x: Option<f32>) {
+        self.inner().borrow().desired_x.set(x);
     }
 
     /// Returns the current text content.

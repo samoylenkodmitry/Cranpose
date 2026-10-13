@@ -336,6 +336,7 @@ fn build_focus_handler(
             local_to_window: refs.local_to_window.clone(),
             content_origin: refs.content_origin.clone(),
             scroll_offset: refs.scroll_offset.clone(),
+            wrap_width: refs.wrap_width.clone(),
             style: style.clone(),
         },
     )

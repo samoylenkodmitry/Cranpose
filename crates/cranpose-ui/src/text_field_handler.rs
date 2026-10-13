@@ -11,7 +11,7 @@ use cranpose_ui_graphics::ProjectiveTransform;
 use crate::{
     text::{AnnotatedString, TextStyle, measure_text},
     text_field_focus::ImeCaretGeometry,
-    text_field_input::handle_key_event_impl,
+    text_field_input::{KeyInput, handle_key_event_impl},
 };
 
 /// The field's keyboard and input filter, as its latest composition set
@@ -27,6 +27,7 @@ pub(crate) struct CaretGeometryRefs {
     pub local_to_window: Rc<Cell<ProjectiveTransform>>,
     pub content_origin: Rc<RefCell<crate::modifier::CoordinatorRect>>,
     pub scroll_offset: Rc<Cell<f32>>,
+    pub wrap_width: Rc<Cell<Option<f32>>>,
     pub style: TextStyle,
 }
 
@@ -108,8 +109,13 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
         let consumed = handle_key_event_impl(
             &self.state,
             event,
-            self.line_limits,
-            self.input.transformation.borrow().as_ref(),
+            &KeyInput {
+                line_limits: self.line_limits,
+                transformation: self.input.transformation.borrow().as_ref(),
+                style: &self.geometry.style,
+                node_id: self.node_id,
+                wrap_width: self.geometry.wrap_width.get(),
+            },
         );
 
         if consumed {
@@ -130,7 +136,7 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
         }
 
         self.edit_as_user(|buffer| buffer.delete_surrounding(before_bytes, after_bytes));
-        self.state.set_desired_column(None);
+        self.state.set_desired_x(None);
         self.on_text_mutated();
     }
 

@@ -24,6 +24,17 @@ pub fn next_grapheme_boundary(text: &str, offset: usize) -> usize {
         .unwrap_or(text.len())
 }
 
+/// `offset` where it is a boundary, else the boundary before it: where a
+/// position found inside a character lands.
+pub fn floor_grapheme_boundary(text: &str, offset: usize) -> usize {
+    let mut at = cursor(text, offset);
+    if at.is_boundary(text, 0).unwrap_or(true) {
+        at.cur_cursor()
+    } else {
+        previous_grapheme_boundary(text, offset)
+    }
+}
+
 /// The cursor holds the whole text as its one chunk, so it never asks for
 /// more context and a step always succeeds.
 fn cursor(text: &str, offset: usize) -> GraphemeCursor {

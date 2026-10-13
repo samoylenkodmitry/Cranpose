@@ -11,6 +11,24 @@ use cranpose_ui::{
     Modifiers, PlatformTextInputHandler, TextFieldState,
 };
 
+pub(crate) const SHIFT: Modifiers = Modifiers {
+    shift: true,
+    ..Modifiers::NONE
+};
+
+/// The platform's command key: Cmd on macOS, Ctrl elsewhere.
+pub(crate) const COMMAND: Modifiers = if cfg!(target_os = "macos") {
+    Modifiers {
+        meta: true,
+        ..Modifiers::NONE
+    }
+} else {
+    Modifiers {
+        ctrl: true,
+        ..Modifiers::NONE
+    }
+};
+
 #[derive(Default)]
 pub(crate) struct RecordingKeyboard {
     pub(crate) calls: RefCell<Vec<&'static str>>,

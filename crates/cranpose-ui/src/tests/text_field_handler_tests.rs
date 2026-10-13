@@ -37,6 +37,7 @@ fn focused_state(
             local_to_window: Rc::new(Cell::new(ProjectiveTransform::identity())),
             content_origin: Rc::default(),
             scroll_offset: Rc::new(Cell::new(0.0)),
+            wrap_width: Rc::new(Cell::new(None)),
             style: TextStyle::default(),
         },
     );

@@ -19,7 +19,7 @@ the buffer checks character boundaries for each edit. See
 ## Composition and input
 
 `BasicTextField` is the simple entry point. `BasicTextFieldWithOptions` exposes
-its text style, cursor color, line limits and software-keyboard focus policy.
+its text style, cursor color, line limits, keyboard options and input filter.
 `BasicTextFieldDecorated` lets a decoration box place labels, placeholders,
 icons and other content around the inner field. The decoration box owns the
 field's semantics, focus and pointer input. Its scope requires the decoration
@@ -32,6 +32,11 @@ by composition. Text entry, deletion, cursor movement, line navigation and
 selection extension are handled in
 [`text_field_input.rs`](../crates/cranpose-ui/src/text_field_input.rs) and
 [`text_field_handler.rs`](../crates/cranpose-ui/src/text_field_handler.rs).
+Keyboard edits and moves step over whole characters (extended grapheme
+clusters). Up, Down, Home and End follow the laid-out lines, wrapped where the
+field wraps, and Up and Down keep the caret's x from the first of a run of
+vertical moves. Left and Right follow the paragraph's reading direction: in a
+right-to-left paragraph Left moves forward, as in Compose.
 The focused handler is registered and dispatched through
 [`text_field_focus.rs`](../crates/cranpose-ui/src/text_field_focus.rs).
 
