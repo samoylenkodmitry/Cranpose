@@ -1,144 +1,164 @@
+use std::{
+    sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel},
+    thread::JoinHandle,
+};
+
 use bevy::{
     app::PluginsState,
     camera::{ManualTextureViewHandle, RenderTarget},
     math::UVec2,
     prelude::*,
     render::{
-        RenderPlugin,
+        Render, RenderApp, RenderPlugin, RenderSystems,
+        extract_resource::{ExtractResource, ExtractResourcePlugin},
         texture::{ManualTextureView, ManualTextureViews},
     },
     tasks::tick_global_task_pools_on_main_thread,
     window::ExitCondition,
 };
-use cranpose::{
-    GpuContext,
-    prelude::{ExternalTexture, ImageBitmap, ImageBitmapError},
-};
+use cranpose::{ExternalFrames, FrameWriter, GpuContext, prelude::ImageBitmap};
 
 const TARGET: ManualTextureViewHandle = ManualTextureViewHandle(0);
-const BEVY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
-const CRANPOSE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
+type Command = Box<dyn FnOnce(&mut World) + Send>;
+
+/// A Bevy app that runs on its own thread and renders with Cranpose's device,
+/// for a composition to show.
+///
+/// The composition calls [`Self::show`] once per frame. Each call lets Bevy
+/// run one update and returns the newest frame Bevy finished, so the
+/// composition never waits for Bevy, and Bevy never waits for the composition.
+///
+/// Bevy must be built without its window plugins (the `bevy_winit` feature),
+/// since windows belong to Cranpose and Bevy's thread is not the main thread.
 pub struct BevyView {
-    app: App,
-    gpu: GpuContext,
-    shown: Option<ExternalTexture>,
-    pending: Vec<(ExternalTexture, u64)>,
-    frame: u64,
+    frames: ExternalFrames,
+    ticks: Option<SyncSender<()>>,
+    commands: Sender<Command>,
+    thread: Option<JoinHandle<()>>,
 }
+
+#[derive(Resource, Clone, Copy, ExtractResource)]
+#[extract_app(RenderApp)]
+struct FrameNumber(u64);
+
+#[derive(Resource)]
+struct Publisher(FrameWriter);
 
 impl BevyView {
+    /// Starts Bevy on its own thread. `setup` adds the scene and gets the
+    /// render target its camera draws into.
     pub fn new(
         gpu: &GpuContext,
-        width: u32,
-        height: u32,
-        setup: impl FnOnce(&mut App, RenderTarget),
-    ) -> Result<Self, ImageBitmapError> {
-        let mut app = App::new();
-        app.add_plugins(
-            DefaultPlugins
-                .set(RenderPlugin {
-                    render_creation: crate::render_creation(gpu),
-                    ..default()
-                })
-                .set(WindowPlugin {
-                    primary_window: None,
-                    exit_condition: ExitCondition::DontExit,
-                    close_when_requested: false,
-                    ..default()
-                }),
-        );
-        setup(&mut app, RenderTarget::TextureView(TARGET));
-        while app.plugins_state() == PluginsState::Adding {
-            tick_global_task_pools_on_main_thread();
-        }
-        app.finish();
-        app.cleanup();
-        let texture = attach_target(&mut app, gpu, width, height)?;
+        setup: impl FnOnce(&mut App, RenderTarget) + Send + 'static,
+    ) -> std::io::Result<Self> {
+        let frames = ExternalFrames::new(gpu, FORMAT, wgpu::TextureUsages::RENDER_ATTACHMENT, true);
+        let writer = frames.writer();
+        let (ticks, tick_receiver) = sync_channel(1);
+        let (commands, command_receiver) = channel();
+        let gpu = gpu.clone();
+        let thread = std::thread::Builder::new()
+            .name("bevy".into())
+            .spawn(move || {
+                let app = start(&gpu, writer.clone(), setup);
+                run(app, &writer, &tick_receiver, &command_receiver);
+            })?;
         Ok(Self {
-            app,
-            gpu: gpu.clone(),
-            shown: None,
-            pending: vec![(texture, 0)],
-            frame: 0,
+            frames,
+            ticks: Some(ticks),
+            commands,
+            thread: Some(thread),
         })
     }
 
-    pub fn world_mut(&mut self) -> &mut World {
-        self.app.world_mut()
-    }
-
-    pub fn size(&self) -> (u32, u32) {
-        self.pending
-            .last()
-            .map(|(texture, _)| texture)
-            .or(self.shown.as_ref())
-            .map_or((0, 0), |texture| (texture.width(), texture.height()))
-    }
-
-    pub fn resize(&mut self, width: u32, height: u32) -> Result<(), ImageBitmapError> {
-        if self.size() != (width, height) {
-            let texture = attach_target(&mut self.app, &self.gpu, width, height)?;
-            self.pending.push((texture, self.frame));
+    /// Asks Bevy for frames of `width` by `height` pixels, lets it run one
+    /// more update, and returns the newest frame it finished since the last
+    /// call.
+    pub fn show(&self, width: u32, height: u32) -> Option<ImageBitmap> {
+        self.frames.set_size(width, height);
+        if let Some(ticks) = self.ticks.as_ref() {
+            // A full channel means Bevy has not started the last update yet.
+            let _ = ticks.try_send(());
         }
-        Ok(())
+        self.frames.next_frame()
     }
 
-    pub fn update(&mut self) -> Option<ImageBitmap> {
-        self.app.update();
-        self.frame += 1;
-        let frame = self.frame;
-        if let Some(ready) = self
-            .pending
-            .iter()
-            .rposition(|(_, attached)| frame >= attached + 2)
-        {
-            self.shown = self
-                .pending
-                .drain(..=ready)
-                .next_back()
-                .map(|(texture, _)| texture);
-        }
-        self.shown.as_ref().map(|texture| texture.frame(frame))
+    /// Runs `command` on Bevy's world before its next update.
+    pub fn send(&self, command: impl FnOnce(&mut World) + Send + 'static) {
+        let _ = self.commands.send(Box::new(command));
     }
 }
 
-fn attach_target(
-    app: &mut App,
-    gpu: &GpuContext,
-    width: u32,
-    height: u32,
-) -> Result<ExternalTexture, ImageBitmapError> {
-    if width == 0 || height == 0 {
-        return Err(ImageBitmapError::InvalidDimensions);
+impl Drop for BevyView {
+    fn drop(&mut self) {
+        self.ticks = None;
+        if let Some(thread) = self.thread.take()
+            && thread.join().is_err()
+        {
+            error!("Bevy's thread panicked");
+        }
     }
-    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("Bevy view"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: BEVY_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-        view_formats: &[CRANPOSE_FORMAT],
-    });
-    let view_of = |format| {
-        texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(format),
-            ..default()
-        })
-    };
-    app.world_mut().resource_mut::<ManualTextureViews>().insert(
-        TARGET,
-        ManualTextureView {
-            texture_view: view_of(BEVY_FORMAT).into(),
-            size: UVec2::new(width, height),
-            view_format: BEVY_FORMAT,
-        },
-    );
-    ExternalTexture::new(width, height, true, view_of(CRANPOSE_FORMAT))
+}
+
+fn start(gpu: &GpuContext, writer: FrameWriter, setup: impl FnOnce(&mut App, RenderTarget)) -> App {
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(RenderPlugin {
+                render_creation: crate::render_creation(gpu),
+                ..default()
+            })
+            .set(WindowPlugin {
+                primary_window: None,
+                exit_condition: ExitCondition::DontExit,
+                close_when_requested: false,
+                ..default()
+            }),
+    )
+    .add_plugins(ExtractResourcePlugin::<FrameNumber>::default());
+    if let Some(render) = app.get_sub_app_mut(RenderApp) {
+        render
+            .insert_resource(Publisher(writer))
+            .add_systems(Render, publish.in_set(RenderSystems::Cleanup));
+    }
+    setup(&mut app, RenderTarget::TextureView(TARGET));
+    while app.plugins_state() == PluginsState::Adding {
+        tick_global_task_pools_on_main_thread();
+    }
+    app.finish();
+    app.cleanup();
+    app
+}
+
+fn run(mut app: App, writer: &FrameWriter, ticks: &Receiver<()>, commands: &Receiver<Command>) {
+    while ticks.recv().is_ok() {
+        for command in commands.try_iter() {
+            command(app.world_mut());
+        }
+        // Every texture is in use while the composition has not drawn the
+        // frames published so far, so Bevy waits for the next tick.
+        let Some(target) = writer.begin() else {
+            continue;
+        };
+        let texture = target.texture();
+        let world = app.world_mut();
+        world.resource_mut::<ManualTextureViews>().insert(
+            TARGET,
+            ManualTextureView {
+                texture_view: target.view().clone().into(),
+                size: UVec2::new(texture.width(), texture.height()),
+                view_format: FORMAT,
+            },
+        );
+        world.insert_resource(FrameNumber(target.number()));
+        app.update();
+    }
+}
+
+// Runs in the render world after it submitted the frame's work.
+fn publish(frame: Option<Res<FrameNumber>>, publisher: Res<Publisher>) {
+    if let Some(frame) = frame {
+        publisher.0.publish(frame.0);
+    }
 }

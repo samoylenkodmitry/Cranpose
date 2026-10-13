@@ -10,10 +10,11 @@ description = "Bevy and Cranpose on one wgpu device: Bevy scenes inside Cranpose
 bevy = { workspace = true, features = [
     "default_app",
     "3d_bevy_render",
-    "ui_api",
-    "ui_bevy_render",
     "multi_threaded",
     "std",
 ] }
 cranpose = { workspace = true, features = ["renderer-wgpu"] }
 wgpu = { workspace = true }
+
+[dev-dependencies]
+cranpose = { workspace = true, features = ["renderer-wgpu"] }

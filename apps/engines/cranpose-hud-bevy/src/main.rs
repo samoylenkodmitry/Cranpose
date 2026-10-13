@@ -4,7 +4,7 @@ use bevy::{
     prelude::*,
     window::{PrimaryWindow, WindowResolution},
 };
-use cranpose_bevy::hud::{CranposeHudPlugin, HudPointer};
+use cranpose_bevy::hud::{CranposeHudPlugin, HudCamera, HudPointer};
 use demo_scene::{SceneControls, SceneStats};
 use demo_ui::{Controls, HudBridge, HudCommand, Stats, Walk};
 
@@ -23,9 +23,16 @@ fn main() -> AppExit {
         world.insert_non_send(bridge.clone());
         Box::new(move || demo_ui::Hud(bridge.clone()))
     }))
+    .add_systems(PostStartup, draw_hud_over_the_camera)
     .add_systems(Update, (look_and_walk, run_commands, sync_hud).chain());
     demo_scene::build(&mut app, RenderTarget::default());
     app.run()
+}
+
+fn draw_hud_over_the_camera(mut commands: Commands, cameras: Query<Entity, With<Camera3d>>) {
+    for camera in &cameras {
+        commands.entity(camera).insert(HudCamera);
+    }
 }
 
 fn look_and_walk(

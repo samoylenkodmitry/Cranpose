@@ -50,15 +50,25 @@ workspace patches crates.io's `wgpu` with it. Bevy and Cranpose then use one
 with no copies and no unsafe code. Cargo ignores a `[patch]` entry that renames
 a package, so the re-export package is needed.
 
-- **Bevy inside Cranpose.** `cranpose_bevy::BevyView` creates Bevy's renderer
-  from Cranpose's device (`cranpose::gpu_context()`) without a window or
-  pipelined rendering, renders into a texture, and hands each frame to Cranpose
-  as an `ExternalTexture` frame. The app asks the window's device for Bevy's
-  features with `AppLauncher::with_gpu_requirements`.
+- **Bevy inside Cranpose.** `cranpose_bevy::BevyView` runs Bevy on a thread
+  of its own, with Bevy's renderer on Cranpose's device
+  (`cranpose::gpu_context()`). The composition calls `BevyView::show` once per
+  frame: Bevy may run one more update, and the composition gets the newest frame
+  Bevy finished. Frames pass through `cranpose::ExternalFrames`, a ring of at
+  most four textures: Bevy's render world publishes a frame once its work is
+  submitted, and a texture goes back to Bevy once Cranpose shows a newer frame
+  and holds no bitmap of the old one. Neither side waits for the other, so the
+  interface keeps its frame rate when Bevy's frames take longer. The app asks
+  the window's device for Bevy's features with
+  `AppLauncher::with_gpu_requirements`. Bevy must be built without
+  `bevy_winit`, since its thread is not the main thread.
 - **Cranpose HUD in Bevy.** `cranpose_bevy::hud::CranposeHudPlugin` creates a
-  `GuestView` on Bevy's device, draws it into a Bevy image each frame, and
-  shows that image over the scene with premultiplied alpha. `HudPointer` tells
-  the game whether the HUD took the current press.
+  `GuestView` on Bevy's device and draws the HUD over the camera marked with
+  `HudCamera`. Cranpose draws on Bevy's main thread into one of two textures,
+  only when the composition changed, while the render world reads the other.
+  A pass after Bevy's upscaling blends the newest HUD over the camera's final
+  image with premultiplied alpha, at the target's size from the same frame.
+  `HudPointer` tells the game whether the HUD took the current press.
 
 ## How Godot is bridged
 
