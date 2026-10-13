@@ -88,10 +88,13 @@ the fonts the application needs. Register the corresponding `ARABIC_FONT_PACK`,
 These optional assets retain the source character maps and include their
 licenses in `cranpose-fonts`.
 
-Thai, Lao, Khmer and Burmese put no space between words. Enable
-`southeast-asian-line-breaks` so their lines wrap between words, which ICU's
-dictionaries find; without it they wrap where the line runs out. In every
-script a line keeps a combining mark with the letter it sits on.
+Chinese and Japanese lines wrap between characters, but a line never starts
+with closing punctuation or a small kana and never ends with opening
+punctuation. Korean wraps at its spaces. Thai, Lao, Khmer and Burmese put no
+space between words. Enable `southeast-asian-line-breaks` so their lines wrap
+between words, which ICU's dictionaries find; without it they wrap where the
+line runs out. In every script a line keeps a combining mark with the letter
+it sits on.
 
 An app can also download a font instead of embedding it, for example only
 for the users who pick a language that needs it. Enable `installed-fonts`
