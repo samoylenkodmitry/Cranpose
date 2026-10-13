@@ -495,6 +495,7 @@ impl GpuRenderer {
             .iter()
             .try_for_each(|segment| prep.segment(self, segment, &mut scratch));
         prep.finish(self);
+        self.flush_glyph_uploads();
         self.prefetch_overlay_pipelines(
             &prep.batches,
             &scratch,
