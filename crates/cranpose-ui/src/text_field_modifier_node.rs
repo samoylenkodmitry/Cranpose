@@ -387,6 +387,7 @@ fn build_focus_handler(
             keyboard_options: refs.keyboard_options.clone(),
             keyboard_action: refs.keyboard_action.clone(),
             transformation: refs.input_transformation.clone(),
+            secure: refs.is_secure(),
         },
         crate::text_field_handler::CaretGeometryRefs {
             local_to_window: refs.local_to_window.clone(),
@@ -467,6 +468,8 @@ impl crate::focus_dispatch::FocusTargetHandle for TextFieldFocusBridge {
 struct TextFieldFocusOptions {
     modal_depth: usize,
     show_keyboard_on_focus: bool,
+    /// The field holds a secret: no copy or cut, masked semantics.
+    secure: bool,
 }
 
 #[derive(Clone)]
@@ -528,6 +531,7 @@ impl TextFieldRefs {
             focus_options: Rc::new(Cell::new(TextFieldFocusOptions {
                 modal_depth: 0,
                 show_keyboard_on_focus: true,
+                secure: false,
             })),
             keyboard_options: Rc::default(),
             keyboard_action: Rc::default(),
@@ -540,6 +544,11 @@ impl TextFieldRefs {
     /// keyed by them.
     pub(crate) fn key(&self) -> u64 {
         Rc::as_ptr(&self.is_focused) as usize as u64
+    }
+
+    /// Whether the field holds a secret.
+    pub(crate) fn is_secure(&self) -> bool {
+        self.focus_options.get().secure
     }
 }
 
@@ -579,7 +588,7 @@ pub struct TextFieldModifierNode {
 impl std::fmt::Debug for TextFieldModifierNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TextFieldModifierNode")
-            .field("text", &self.state.text())
+            .field("text", &debug_text(self.state, self.refs.is_secure()))
             .field("style", &self.style)
             .field("is_focused", &*self.refs.is_focused.borrow())
             .finish()
@@ -1356,7 +1365,7 @@ impl DrawModifierNode for TextFieldModifierNode {
 impl SemanticsNode for TextFieldModifierNode {
     fn merge_semantics(&self, config: &mut SemanticsConfiguration) {
         if !self.decorated {
-            merge_text_field_semantics(self.state, self.line_limits, config);
+            merge_text_field_semantics(self.state, self.line_limits, self.refs.is_secure(), config);
         }
     }
 
@@ -1372,16 +1381,37 @@ impl SemanticsNode for TextFieldModifierNode {
 
 /// What an editable field tells accessibility, from the node that takes its
 /// input.
+/// A field's text for debug output: its length alone when it is a secret.
+fn debug_text(state: TextFieldState, secure: bool) -> String {
+    if secure {
+        state.with_text(|text| format!("<{} secret bytes>", text.len()))
+    } else {
+        state.text()
+    }
+}
+
 pub(crate) fn merge_text_field_semantics(
     state: TextFieldState,
     line_limits: TextFieldLineLimits,
+    secure: bool,
     config: &mut SemanticsConfiguration,
 ) {
-    let text = state.text();
-    if config.content_description.is_none() {
-        config.content_description = Some(text.clone());
+    if secure {
+        // A reader hears one dot for each character, as native password
+        // fields read, and never the text.
+        config.password = true;
+        config.text = Some(state.with_text(|text| {
+            unicode_segmentation::UnicodeSegmentation::graphemes(text, true)
+                .map(|_| '\u{2022}')
+                .collect()
+        }));
+    } else {
+        let text = state.text();
+        if config.content_description.is_none() {
+            config.content_description = Some(text.clone());
+        }
+        config.text = Some(text);
     }
-    config.text = Some(text);
     config.is_editable_text = true;
     config.is_clickable = true;
     config.multiline = !matches!(line_limits, TextFieldLineLimits::SingleLine);
@@ -1445,6 +1475,7 @@ pub struct TextFieldElement {
     input_transformation: Option<cranpose_foundation::text::InputTransformation>,
     /// Compared by identity and left out of hashing.
     output_transformation: Option<OutputTransformation>,
+    secure: bool,
     handle_controller: Option<TextFieldHandleController>,
     modal_depth: usize,
     decorator: Option<TextFieldRefs>,
@@ -1463,6 +1494,7 @@ impl TextFieldElement {
             keyboard_action: None,
             input_transformation: None,
             output_transformation: None,
+            secure: false,
             handle_controller: None,
             modal_depth: 0,
             decorator: None,
@@ -1525,6 +1557,13 @@ impl TextFieldElement {
         self
     }
 
+    /// Marks the field as holding a secret: no copy or cut, semantics and
+    /// debug output without its text.
+    pub(crate) fn secure(mut self, secure: bool) -> Self {
+        self.secure = secure;
+        self
+    }
+
     /// Installs the finger-handle metrics channel shared with the composable.
     pub fn with_handle_controller(mut self, controller: TextFieldHandleController) -> Self {
         self.handle_controller = Some(controller);
@@ -1542,7 +1581,7 @@ impl TextFieldElement {
 impl std::fmt::Debug for TextFieldElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TextFieldElement")
-            .field("text", &self.state.text())
+            .field("text", &debug_text(self.state, self.secure))
             .field("style", &self.style)
             .field("cursor_color", &self.cursor_color)
             .finish()
@@ -1560,6 +1599,7 @@ impl Hash for TextFieldElement {
         self.line_limits.hash(state);
         self.show_keyboard_on_focus.hash(state);
         self.keyboard_options.hash(state);
+        self.secure.hash(state);
         self.modal_depth.hash(state);
         self.decorator.as_ref().map(TextFieldRefs::key).hash(state);
     }
@@ -1574,6 +1614,7 @@ impl PartialEq for TextFieldElement {
             && self.show_keyboard_on_focus == other.show_keyboard_on_focus
             && self.keyboard_options == other.keyboard_options
             && self.output_transformation == other.output_transformation
+            && self.secure == other.secure
             && self.modal_depth == other.modal_depth
             && self.decorator == other.decorator
     }
@@ -1611,6 +1652,7 @@ impl ModifierNodeElement for TextFieldElement {
         node.refs.focus_options.set(TextFieldFocusOptions {
             modal_depth: self.modal_depth,
             show_keyboard_on_focus: self.show_keyboard_on_focus,
+            secure: self.secure,
         });
         self.hand_input_options_to(&node.refs);
         if let Some(controller) = self.handle_controller.clone() {
@@ -1633,6 +1675,7 @@ impl ModifierNodeElement for TextFieldElement {
         let previous_focus_options = node.refs.focus_options.replace(TextFieldFocusOptions {
             modal_depth: self.modal_depth,
             show_keyboard_on_focus: self.show_keyboard_on_focus,
+            secure: self.secure,
         });
         if self.show_keyboard_on_focus
             && !previous_focus_options.show_keyboard_on_focus

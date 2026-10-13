@@ -751,6 +751,7 @@ fn a_text_selection_menu_composes_copy_cut_and_paste() {
             true,
             None,
             true,
+            true,
             || {},
             || {},
             || {},

@@ -601,7 +601,8 @@ pub fn LiquidTextMenu(
 
 /// A floating Copy / Cut / Paste / Select-all menu shown just above the text
 /// selection. `anchor` places it over the selection;
-/// `visible` is false while a handle drag is in flight. `can_paste` hides the
+/// `visible` is false while a handle drag is in flight. `can_copy` hides Copy
+/// and Cut, as a secret's field does. `can_paste` hides the
 /// Paste item when the clipboard is empty. Each action runs against the
 /// focused field; the caller is expected to dismiss the menu.
 #[expect(clippy::too_many_arguments)]
@@ -610,16 +611,18 @@ pub fn TextSelectionMenu(
     anchor: MenuAnchor,
     visible: bool,
     live_point: Option<cranpose_ui_graphics::Point>,
+    can_copy: bool,
     can_paste: bool,
     on_copy: impl Fn() + 'static,
     on_cut: impl Fn() + 'static,
     on_paste: impl Fn() + 'static,
     on_select_all: impl Fn() + 'static,
 ) {
-    let mut items = vec![
-        TextMenuItem::new(crate::UiString::Copy.resolve(), on_copy),
-        TextMenuItem::new(crate::UiString::Cut.resolve(), on_cut),
-    ];
+    let mut items = Vec::new();
+    if can_copy {
+        items.push(TextMenuItem::new(crate::UiString::Copy.resolve(), on_copy));
+        items.push(TextMenuItem::new(crate::UiString::Cut.resolve(), on_cut));
+    }
     append_edit_actions(&mut items, can_paste, on_paste, on_select_all);
     LiquidTextMenu(anchor, visible, live_point, items);
 }

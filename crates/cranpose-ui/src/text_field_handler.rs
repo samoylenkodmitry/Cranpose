@@ -20,6 +20,8 @@ pub(crate) struct InputRefs {
     pub keyboard_options: Rc<Cell<crate::KeyboardOptions>>,
     pub keyboard_action: Rc<RefCell<Option<crate::KeyboardActionHandler>>>,
     pub transformation: Rc<RefCell<Option<InputTransformation>>>,
+    /// A secret's field keeps its text out of copy and cut.
+    pub secure: bool,
 }
 
 #[derive(Clone)]
@@ -77,7 +79,7 @@ impl TextFieldHandler {
     /// The selection and its text, unless nothing is selected.
     fn selected_text(&self) -> Option<(cranpose_foundation::text::TextRange, String)> {
         let selection = self.state.selection();
-        if selection.collapsed() {
+        if selection.collapsed() || self.input.secure {
             return None;
         }
         self.state.with_text(|text| {

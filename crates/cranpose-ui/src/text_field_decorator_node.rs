@@ -187,7 +187,12 @@ impl ModifierNode for TextFieldDecoratorNode {
 
 impl SemanticsNode for TextFieldDecoratorNode {
     fn merge_semantics(&self, config: &mut SemanticsConfiguration) {
-        merge_text_field_semantics(self.field.state, self.field.line_limits, config);
+        merge_text_field_semantics(
+            self.field.state,
+            self.field.line_limits,
+            self.field.refs.is_secure(),
+            config,
+        );
     }
 }
 

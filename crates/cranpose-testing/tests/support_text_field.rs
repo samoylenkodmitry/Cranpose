@@ -76,19 +76,30 @@ impl FocusedField {
     /// end.
     #[track_caller]
     pub(crate) fn new(text: &'static str, options: BasicTextFieldOptions) -> Self {
+        Self::composed(text, move |state, modifier| {
+            BasicTextFieldWithOptions(state, modifier, options.clone());
+        })
+    }
+
+    /// A focused field that `field` composes from its state and modifier,
+    /// holding `text` with the caret at its end.
+    #[track_caller]
+    pub(crate) fn composed(
+        text: &'static str,
+        field: impl Fn(TextFieldState, Modifier) + 'static,
+    ) -> Self {
         let requester = FocusRequester::new();
         let state = Rc::new(std::cell::Cell::new(None));
         let (content_requester, content_state) = (requester.clone(), state.clone());
         let (shell, _keyboard) = shell_with_keyboard(move || {
-            let field = remember(|| TextFieldState::new(text)).with(|state| *state);
-            content_state.set(Some(field));
-            BasicTextFieldWithOptions(
-                field,
+            let text_state = remember(|| TextFieldState::new(text)).with(|state| *state);
+            content_state.set(Some(text_state));
+            field(
+                text_state,
                 Modifier::empty()
                     .width(300.0)
                     .height(80.0)
                     .focus_requester(&content_requester),
-                options.clone(),
             );
         });
         requester.request_focus().expect("field focus");

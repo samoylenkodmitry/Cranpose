@@ -57,6 +57,7 @@ fn render_collapsed_handles(direct_manipulation: bool) -> crate::renderer::Recor
                 TextStyle::default(),
                 controller,
                 Color(0.0, 0.478, 1.0, 1.0),
+                false,
             );
         });
     };
@@ -117,6 +118,7 @@ fn render_range_menu(direct_manipulation: bool) -> crate::renderer::RecordedRend
                 TextStyle::default(),
                 controller,
                 Color(0.0, 0.478, 1.0, 1.0),
+                false,
             );
         });
     };
@@ -192,6 +194,7 @@ fn render_range_menu_subcomposed(
                         TextStyle::default(),
                         controller,
                         Color(0.0, 0.478, 1.0, 1.0),
+                        false,
                     );
                 },
             );
@@ -278,6 +281,7 @@ fn render_range_menu_lazy_column(
                             TextStyle::default(),
                             controller,
                             Color(0.0, 0.478, 1.0, 1.0),
+                            false,
                         );
                     });
                 },

@@ -118,10 +118,22 @@ transformation put in. See
 [`output_transformation.rs`](../crates/cranpose-foundation/src/text/output_transformation.rs)
 and [`text_field_presentation.rs`](../crates/cranpose-ui/src/text_field_presentation.rs).
 
+## Secure fields
+
+`BasicSecureTextField` is Compose's `BasicSecureTextField`. Its
+`TextObfuscationMode` hides the text behind `obfuscation_character`:
+`RevealLastTyped` (the default) shows a single typed character until the next
+edit or 1.5 s pass, `Hidden` shows none, `Visible` shows the text. It asks for
+a password keyboard without autocorrection, which each platform turns into
+its secure editor: Android's password input type, iOS `secureTextEntry`, the
+web password input. Copy and Cut return nothing and leave the selection menu.
+Semantics carry the password flag and one dot per character, never the text,
+and debug output shows only the text's length. See
+[`secure_text_field.rs`](../crates/cranpose-ui/src/widgets/secure_text_field.rs).
+
 ## Current limits
 
 Android does not autofill text fields: its hidden editor view does not yet
-serve autofill values or sit where the field is. A secure text field remains
-outside the current public surface. The default UI measurement fallback
+serve autofill values or sit where the field is. The default UI measurement fallback
 is monospaced; a host can install a font-backed `TextMeasurer` through its text
 service.
