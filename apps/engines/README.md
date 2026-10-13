@@ -8,6 +8,10 @@ Cranpose and game engines on one GPU device, in both directions. Tracked in
 | `bevy-in-cranpose` | A Bevy 0.20 scene with cascaded shadows, point lights and HDR bloom inside a Cranpose window. Cranpose clips it, casts a shadow around it and draws glass over it. Drag the scene to orbit. |
 | `cranpose-hud-bevy` | A Bevy game window with a Cranpose HUD over the 3D scene. The HUD reads game state, sends commands back, and takes only the clicks that land on it. |
 
+![Bevy inside Cranpose](screenshots/bevy-in-cranpose.jpg)
+
+![Cranpose HUD in Bevy](screenshots/cranpose-hud-bevy.jpg)
+
 Run them from this directory:
 
 ```sh
