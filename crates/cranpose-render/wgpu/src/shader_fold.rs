@@ -18,13 +18,22 @@ use naga::{
 
 /// A value the constants decide.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Value {
+pub(crate) enum Value {
     Bool(bool),
     U32(u32),
     I32(i32),
 }
 
 impl Value {
+    /// The literal holding this value.
+    pub(crate) fn literal(self) -> Literal {
+        match self {
+            Self::Bool(value) => Literal::Bool(value),
+            Self::U32(value) => Literal::U32(value),
+            Self::I32(value) => Literal::I32(value),
+        }
+    }
+
     fn of(literal: &Literal) -> Option<Self> {
         match *literal {
             Literal::Bool(value) => Some(Self::Bool(value)),
@@ -138,7 +147,7 @@ fn cast(value: Value, kind: ScalarKind) -> Option<Value> {
 
 /// The value of each of `function`'s expressions that constants decide,
 /// by handle: an expression refers only to earlier ones.
-fn decided(module: &Module, function: &Function) -> Vec<Option<Value>> {
+pub(crate) fn decided(module: &Module, function: &Function) -> Vec<Option<Value>> {
     let mut values: Vec<Option<Value>> = Vec::with_capacity(function.expressions.len());
     for (_, expression) in function.expressions.iter() {
         let value = |handle: Handle<Expression>| values[handle.index()];
@@ -312,8 +321,8 @@ fn fold_function(module: &Module, function: &mut Function) {
     });
 }
 
-/// Folds `module`, whose overrides are constants already, and drops what no
-/// entry point reaches any more.
+/// Folds `module`, whose overrides are constants already. Compaction then
+/// drops what no entry point reaches any more.
 pub(crate) fn fold(module: &mut Module) {
     // Folding reads only the module's constants: its functions and entry
     // points step out of it meanwhile.
@@ -327,5 +336,4 @@ pub(crate) fn fold(module: &mut Module) {
         fold_function(module, &mut entry_point.function);
     }
     module.entry_points = entry_points;
-    naga::compact::compact(module, naga::compact::KeepUnused::No);
 }

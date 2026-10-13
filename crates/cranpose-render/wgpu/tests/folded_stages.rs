@@ -62,6 +62,7 @@ fn scene() -> RenderGraph {
 #[test]
 fn folded_stages_draw_what_stages_the_device_specializes_draw() {
     let before = cranpose_render_wgpu::shader_stages_folded();
+    let flattened_before = cranpose_render_wgpu::shader_stages_flattened();
     let folded = {
         let Ok(mut renderer) = support::headless_renderer() else {
             return;
@@ -71,6 +72,10 @@ fn folded_stages_draw_what_stages_the_device_specializes_draw() {
     assert!(
         cranpose_render_wgpu::shader_stages_folded() > before,
         "the frame's pipelines took folded stages"
+    );
+    assert!(
+        cranpose_render_wgpu::shader_stages_flattened() > flattened_before,
+        "the frame's pipelines took flattened stages"
     );
     cranpose_render_wgpu::set_debug_toggle(NO_SHADER_FOLD, Some("1"));
     let shared = support::headless_renderer()
