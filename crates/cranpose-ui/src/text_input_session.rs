@@ -103,6 +103,12 @@ pub(crate) fn notify_text_input_focus_lost() {
     }
 }
 
+/// Hides the software keyboard the framework asked for, keeping the field's
+/// focus: a tap on the field asks for it again.
+pub(crate) fn hide_software_keyboard() {
+    notify_text_input_focus_lost();
+}
+
 /// Notifies the framework that the host app was paused (backgrounded — e.g.
 /// Android `onPause`).
 ///

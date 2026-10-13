@@ -1182,7 +1182,18 @@ where
     pub fn on_key_event(&mut self, event: &KeyEvent) -> bool {
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.shell.app.app_context);
-        app_context.enter(|| self.on_key_event_inner(event))
+        app_context.enter(|| {
+            let handled = self.on_key_event_inner(event);
+            self.run_requested_focus_move();
+            handled
+        })
+    }
+
+    /// Makes the focus move a keyboard action asked for during the event.
+    fn run_requested_focus_move(&mut self) {
+        if let Some(direction) = cranpose_ui::take_requested_focus_move() {
+            self.move_focus_in_context(direction);
+        }
     }
 
     fn on_key_event_inner(&mut self, event: &KeyEvent) -> bool {
@@ -1449,6 +1460,34 @@ where
         }
 
         handled
+    }
+
+    /// Runs the focused field's keyboard action, as the software keyboard's
+    /// action key asks: Android's editor action, iOS's return key, the web
+    /// editor's Enter. [`ImeAction::Default`](cranpose_ui::ImeAction::Default)
+    /// stands for the field's own action. Returns `true` if a text field
+    /// handled it.
+    pub fn on_ime_action(&mut self, action: cranpose_ui::ImeAction) -> bool {
+        if self.inspector_owns_keyboard() {
+            return true;
+        }
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.shell.app.app_context);
+        app_context.enter(|| {
+            if !self.receives_focused_input() {
+                return false;
+            }
+            let handled = run_in_mutable_snapshot(|| {
+                cranpose_ui::text_field_focus::dispatch_ime_action(action)
+            })
+            .unwrap_or(false);
+            if handled {
+                self.mark_dirty();
+                self.shell.app.request_layout_pass();
+            }
+            self.run_requested_focus_move();
+            handled
+        })
     }
 
     /// Marks existing text in the focused field as the composing region
@@ -1984,6 +2023,11 @@ where
     /// Primary-surface form of [`SurfaceMut::on_ime_finish_composing`].
     pub fn on_ime_finish_composing(&mut self) -> bool {
         self.primary().on_ime_finish_composing()
+    }
+
+    /// Primary-surface form of [`SurfaceMut::on_ime_action`].
+    pub fn on_ime_action(&mut self, action: cranpose_ui::ImeAction) -> bool {
+        self.primary().on_ime_action(action)
     }
 
     /// Primary-surface form of [`SurfaceMut::on_ime_set_composing_region`].

@@ -1,27 +1,12 @@
 use std::{cell::RefCell, rc::Rc};
 
-use cranpose_app_shell::AppShell;
-use cranpose_core::{location_key, remember, rememberMutableStateOf};
-use cranpose_testing::robot::TestRenderer;
+use cranpose_core::{remember, rememberMutableStateOf};
 use cranpose_ui::{
     BasicTextFieldDecorated, BasicTextFieldOptions, BasicTextFieldWithOptions, Box, BoxSpec,
-    Column, ColumnSpec, FocusRequester, Modifier, PlatformTextInputHandler, TextFieldState,
+    Column, ColumnSpec, FocusRequester, Modifier, TextFieldState,
 };
 
-#[derive(Default)]
-struct Keyboard {
-    calls: RefCell<Vec<&'static str>>,
-}
-
-impl PlatformTextInputHandler for Keyboard {
-    fn show_keyboard(&self) {
-        self.calls.borrow_mut().push("show");
-    }
-
-    fn hide_keyboard(&self) {
-        self.calls.borrow_mut().push("hide");
-    }
-}
+use crate::support_keyboard::shell_with_keyboard;
 
 fn check_keyboard_focus(decorated: bool, show_keyboard_on_focus: bool) {
     let requester = FocusRequester::new();
@@ -30,52 +15,43 @@ fn check_keyboard_focus(decorated: bool, show_keyboard_on_focus: bool) {
     let content_other = other.clone();
     let preference = Rc::new(RefCell::new(None));
     let content_preference = preference.clone();
-    let mut shell = AppShell::new(
-        TestRenderer::default(),
-        location_key(file!(), line!(), column!()),
-        move || {
-            let requester = content_requester.clone();
-            let other = content_other.clone();
-            let preference = content_preference.clone();
-            Column(Modifier::empty(), ColumnSpec::default(), move || {
-                let state = remember(|| TextFieldState::new("Search")).with(|state| *state);
-                let show_keyboard = rememberMutableStateOf(move || show_keyboard_on_focus);
-                *preference.borrow_mut() = Some(show_keyboard);
-                let modifier = Modifier::empty()
-                    .width(200.0)
-                    .height(40.0)
-                    .focus_requester(&requester);
-                let options = if show_keyboard.get() {
-                    BasicTextFieldOptions::default()
-                } else {
-                    BasicTextFieldOptions {
-                        show_keyboard_on_focus: false,
-                        ..Default::default()
-                    }
-                };
-                if decorated {
-                    BasicTextFieldDecorated(state, modifier, options, |inner| {
-                        inner.inner_text_field();
-                    });
-                } else {
-                    BasicTextFieldWithOptions(state, modifier, options);
+    let (mut shell, keyboard) = shell_with_keyboard(move || {
+        let requester = content_requester.clone();
+        let other = content_other.clone();
+        let preference = content_preference.clone();
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            let state = remember(|| TextFieldState::new("Search")).with(|state| *state);
+            let show_keyboard = rememberMutableStateOf(move || show_keyboard_on_focus);
+            *preference.borrow_mut() = Some(show_keyboard);
+            let modifier = Modifier::empty()
+                .width(200.0)
+                .height(40.0)
+                .focus_requester(&requester);
+            let options = if show_keyboard.get() {
+                BasicTextFieldOptions::default()
+            } else {
+                BasicTextFieldOptions {
+                    show_keyboard_on_focus: false,
+                    ..Default::default()
                 }
-                Box(
-                    Modifier::empty()
-                        .size(cranpose_ui::Size::new(200.0, 40.0))
-                        .focus_requester(&other)
-                        .focus_target(),
-                    BoxSpec::default(),
-                    || {},
-                );
-            });
-        },
-    );
-    shell.set_viewport(320.0, 200.0);
-    shell.set_buffer_size(320, 200);
-    let keyboard = Rc::new(Keyboard::default());
-    shell.set_platform_text_input(keyboard.clone());
-    shell.update();
+            };
+            if decorated {
+                BasicTextFieldDecorated(state, modifier, options, |inner| {
+                    inner.inner_text_field();
+                });
+            } else {
+                BasicTextFieldWithOptions(state, modifier, options);
+            }
+            Box(
+                Modifier::empty()
+                    .size(cranpose_ui::Size::new(200.0, 40.0))
+                    .focus_requester(&other)
+                    .focus_target(),
+                BoxSpec::default(),
+                || {},
+            );
+        });
+    });
 
     requester.request_focus().expect("programmatic field focus");
     let expected: &[&str] = if show_keyboard_on_focus {

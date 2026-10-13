@@ -28,6 +28,10 @@ fn focused_state(
         None,
         line_limits,
         true,
+        KeyboardRefs {
+            options: Rc::default(),
+            action: Rc::default(),
+        },
         CaretGeometryRefs {
             local_to_window: Rc::new(Cell::new(ProjectiveTransform::identity())),
             content_origin: Rc::default(),
@@ -324,12 +328,12 @@ fn editor_state_reflects_text_selection_and_composition() {
 }
 
 #[test]
-fn enter_on_single_line_field_is_not_consumed() {
+fn enter_on_single_line_field_runs_its_action_without_a_new_line() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let (state, _focus) = focused_state("abc", TextFieldLineLimits::SingleLine);
 
-        assert!(!text_field_focus::dispatch_key_event(&key_down(
+        assert!(text_field_focus::dispatch_key_event(&key_down(
             KeyCode::Enter,
             ""
         )));

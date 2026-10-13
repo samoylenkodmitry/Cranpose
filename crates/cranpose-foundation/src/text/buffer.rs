@@ -1,7 +1,6 @@
 use smallvec::SmallVec;
-use unicode_segmentation::GraphemeCursor;
 
-use super::{TextFieldValue, TextRange};
+use super::{TextFieldValue, TextRange, next_grapheme_boundary, previous_grapheme_boundary};
 
 /// A mutable text buffer that can be edited.
 ///
@@ -148,7 +147,7 @@ impl TextFieldBuffer {
             self.delete(self.selection);
         } else if self.selection.start > 0 {
             let pos = self.selection.start;
-            let prev_pos = self.prev_grapheme_boundary(pos);
+            let prev_pos = previous_grapheme_boundary(&self.text, pos);
             self.delete(TextRange::new(prev_pos, pos));
         }
     }
@@ -159,7 +158,7 @@ impl TextFieldBuffer {
             self.delete(self.selection);
         } else if self.selection.start < self.text.len() {
             let pos = self.selection.start;
-            let next_pos = self.next_grapheme_boundary(pos);
+            let next_pos = next_grapheme_boundary(&self.text, pos);
             self.delete(TextRange::new(pos, next_pos));
         }
     }
@@ -273,7 +272,7 @@ impl TextFieldBuffer {
         let target = if self.has_selection() {
             self.selection.min()
         } else {
-            self.prev_grapheme_boundary(self.selection.start)
+            previous_grapheme_boundary(&self.text, self.selection.start)
         };
         self.selection = TextRange::cursor(target);
     }
@@ -284,7 +283,7 @@ impl TextFieldBuffer {
         let target = if self.has_selection() {
             self.selection.max()
         } else {
-            self.next_grapheme_boundary(self.selection.end)
+            next_grapheme_boundary(&self.text, self.selection.end)
         };
         self.selection = TextRange::cursor(target);
     }
@@ -307,7 +306,7 @@ impl TextFieldBuffer {
     /// cursor is represented; see [`TextRange`].
     pub fn extend_selection_left(&mut self) {
         if self.selection.end > 0 {
-            let cursor = self.prev_grapheme_boundary(self.selection.end);
+            let cursor = previous_grapheme_boundary(&self.text, self.selection.end);
             self.selection = TextRange::new(self.selection.start, cursor);
         }
     }
@@ -318,7 +317,7 @@ impl TextFieldBuffer {
     /// [`Self::extend_selection_left`].
     pub fn extend_selection_right(&mut self) {
         if self.selection.end < self.text.len() {
-            let cursor = self.next_grapheme_boundary(self.selection.end);
+            let cursor = next_grapheme_boundary(&self.text, self.selection.end);
             self.selection = TextRange::new(self.selection.start, cursor);
         }
     }
@@ -331,29 +330,6 @@ impl TextFieldBuffer {
     /// Sets the composition (IME) range.
     pub fn set_composition(&mut self, range: Option<TextRange>) {
         self.composition = range.map(|r| r.coerce_in(self.text.len()));
-    }
-
-    /// The cursor holds the whole text as its one chunk, so it never asks
-    /// for more context and a step always succeeds.
-    fn grapheme_cursor(&self, from: usize) -> GraphemeCursor {
-        let from = self.text.floor_char_boundary(from);
-        GraphemeCursor::new(from, self.text.len(), true)
-    }
-
-    fn prev_grapheme_boundary(&self, from: usize) -> usize {
-        self.grapheme_cursor(from)
-            .prev_boundary(&self.text, 0)
-            .ok()
-            .flatten()
-            .unwrap_or(0)
-    }
-
-    fn next_grapheme_boundary(&self, from: usize) -> usize {
-        self.grapheme_cursor(from)
-            .next_boundary(&self.text, 0)
-            .ok()
-            .flatten()
-            .unwrap_or(self.text.len())
     }
 
     pub(crate) fn into_value(self) -> TextFieldValue {

@@ -4,7 +4,6 @@ import android.app.Activity;
 import android.content.Context;
 import android.graphics.Rect;
 import android.text.Editable;
-import android.text.InputType;
 import android.text.Selection;
 import android.text.SpannableStringBuilder;
 import android.util.Log;
@@ -67,7 +66,8 @@ public final class CranposeTextInput {
             String text,
             int selStart,
             int selEnd,
-            boolean singleLine
+            int inputType,
+            int imeOptions
     ) {
         try {
             activity.runOnUiThread(() -> {
@@ -75,7 +75,8 @@ public final class CranposeTextInput {
                 if (state == null) {
                     state = new SessionState(queueHandle);
                     state.editable = new SpannableStringBuilder(text);
-                    state.singleLine = singleLine;
+                    state.inputType = inputType;
+                    state.imeOptions = imeOptions;
                     EditorView view = new EditorView(activity, state);
                     state.view = view;
                     setSelectionClamped(state.editable, selStart, selEnd);
@@ -92,7 +93,8 @@ public final class CranposeTextInput {
                 } else {
                     // The session already owns a queue handle; drop the new one.
                     nativeImeReleaseQueue(queueHandle);
-                    state.singleLine = singleLine;
+                    state.inputType = inputType;
+                    state.imeOptions = imeOptions;
                     state.editable.replace(0, state.editable.length(), text);
                     BaseInputConnection.removeComposingSpans(state.editable);
                     setSelectionClamped(state.editable, selStart, selEnd);
@@ -233,7 +235,11 @@ public final class CranposeTextInput {
         final long queueHandle;
         volatile View view;
         volatile boolean disposed;
-        volatile boolean singleLine;
+        /** {@link EditorInfo#inputType} and the action part of
+         * {@link EditorInfo#imeOptions}, worked out natively from the field's
+         * keyboard options. */
+        volatile int inputType;
+        volatile int imeOptions;
         Editable editable;
         /** Content view the keyboard-height listener is attached to. */
         View insetsView;
@@ -320,14 +326,12 @@ public final class CranposeTextInput {
             if (state.disposed) {
                 return null;
             }
-            outAttrs.inputType = state.singleLine
-                    ? InputType.TYPE_CLASS_TEXT
-                    : InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE;
+            outAttrs.inputType = state.inputType;
             // NO_EXTRACT_UI/NO_FULLSCREEN: the fullscreen extract editor would
             // hide the composed UI entirely.
             outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN
                     | EditorInfo.IME_FLAG_NO_EXTRACT_UI
-                    | (state.singleLine ? EditorInfo.IME_ACTION_DONE : EditorInfo.IME_ACTION_NONE);
+                    | state.imeOptions;
             outAttrs.initialSelStart = Selection.getSelectionStart(state.editable);
             outAttrs.initialSelEnd = Selection.getSelectionEnd(state.editable);
             return new Connection(this, state);

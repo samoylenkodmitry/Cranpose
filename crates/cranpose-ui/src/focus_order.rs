@@ -27,6 +27,22 @@ pub fn set_focus_order(entries: Vec<FocusEntry>) {
     crate::render_state::with_focus_dispatch(|state| state.set_focus_order(entries));
 }
 
+/// Asks for focus to move one step in `direction` once the event at hand is
+/// handled. A keyboard action runs inside its key event, before the app
+/// shell knows the layout's focus order; the shell publishes it and moves
+/// afterwards, as it does for Tab.
+pub(crate) fn request_focus_move(direction: crate::FocusDirection) {
+    crate::render_state::with_focus_dispatch(|state| state.request_move(direction));
+}
+
+/// Takes the move a keyboard action asked for, which the app shell makes
+/// after each key and keyboard action event.
+pub fn take_requested_focus_move() -> Option<crate::FocusDirection> {
+    crate::render_state::with_focus_dispatch(
+        crate::focus_dispatch::FocusInvalidationState::take_requested_move,
+    )
+}
+
 /// Reads the published focus order.
 pub fn with_focus_order<T>(reader: impl FnOnce(&[FocusEntry]) -> T) -> T {
     crate::render_state::with_focus_dispatch(|state| state.with_focus_order(reader))

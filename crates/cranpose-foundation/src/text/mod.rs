@@ -22,11 +22,13 @@
 //! ```
 
 mod buffer;
+mod graphemes;
 mod line_limits;
 mod range;
 mod state;
 
 pub use buffer::TextFieldBuffer;
+pub use graphemes::{next_grapheme_boundary, previous_grapheme_boundary};
 pub use line_limits::{TextFieldLineLimits, filter_for_single_line};
 pub use range::TextRange;
 pub use state::{TextFieldState, TextFieldValue};

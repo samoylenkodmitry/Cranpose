@@ -60,13 +60,34 @@ different `TextMeasurer`. A field edit schedules layout for the edited field nod
 affected ancestors; caret visibility and blink changes request a draw. The
 blink state advances on the frame clock at 500 ms intervals while active,
 through [`cursor_animation.rs`](../crates/cranpose-ui/src/cursor_animation.rs).
-The line-start cache is invalidated when field text changes.
+
+## Keyboard options and actions
+
+`BasicTextFieldOptions::keyboard_options` takes Compose's `KeyboardOptions`:
+keyboard type, capitalization, autocorrection and IME action. The focused
+field reports them in `ImeEditorState`, and each platform adapter maps them
+to its native editor:
+
+| Platform | Native configuration | Action key |
+| --- | --- | --- |
+| Android | `EditorInfo.inputType` and `imeOptions`, as Compose's Android text input sets them | `performEditorAction` |
+| iOS | `UITextInputTraits` of the key input view, reloaded when they change | the return key's `insertText("\n")` |
+| Web | `inputmode`, `enterkeyhint`, `autocapitalize`, `autocorrect` and `spellcheck` on the hidden editor; a password keyboard opens the password input | Enter in the one-line editor |
+| Desktop | none | Enter |
+
+Enter in a single-line field and the platform's action key run the field's
+resolved action through `on_keyboard_action`, or the action's default
+without a handler: Next and Previous move focus, Done hides the software
+keyboard and keeps focus, and Go, Search and Send do nothing. In a
+multi-line field the action key adds a line unless the field names an
+action; a hardware Enter always adds a line there. A web multi-line editor
+always adds a line, since the browser does not tell its action key from
+Enter. The shared types live in
+[`keyboard_options.rs`](../crates/cranpose-ui/src/keyboard_options.rs).
 
 ## Current limits
 
-`BasicTextFieldOptions` currently exposes style, cursor color, line limits and
-the software-keyboard focus policy. Compose-style capitalization and IME-action
-options, submit callbacks, input/output transformations and a secure text field
-remain outside the current public surface. The default UI measurement fallback
+Autofill hints, input/output transformations and a secure text field remain
+outside the current public surface. The default UI measurement fallback
 is monospaced; a host can install a font-backed `TextMeasurer` through its text
 service.

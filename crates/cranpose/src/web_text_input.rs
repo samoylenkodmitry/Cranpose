@@ -16,7 +16,10 @@ use std::{
 
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
-use cranpose_ui::text_field_focus::{self, ImeCaretGeometry, ImeEditorState};
+use cranpose_ui::{
+    ImeAction, KeyboardCapitalization, KeyboardOptions, KeyboardType,
+    text_field_focus::{self, ImeCaretGeometry, ImeEditorState},
+};
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{
     Document, Element, HtmlCanvasElement, HtmlElement, HtmlInputElement, HtmlTextAreaElement,
@@ -348,6 +351,14 @@ fn browser_handles_key(event: &web_sys::KeyboardEvent, target: &Element) -> bool
                 .flatten()
                 .is_none();
     }
+    if key == "Enter"
+        && target.has_attribute(EDITOR_ATTRIBUTE)
+        && target.is_instance_of::<HtmlInputElement>()
+    {
+        // A one-line editor does nothing with Enter: the app's key listener
+        // runs the field's keyboard action.
+        return false;
+    }
     (key != "Escape"
         && (target.is_instance_of::<HtmlInputElement>()
             || target.is_instance_of::<HtmlTextAreaElement>()))
@@ -453,7 +464,7 @@ enum EditorKind {
 
 impl EditorKind {
     fn of(state: &ImeEditorState, secret: bool) -> Self {
-        if secret {
+        if secret || state.keyboard_options.keyboard_type.is_password() {
             Self::Secret
         } else if state.single_line {
             Self::Line
@@ -487,6 +498,62 @@ fn hidden_editor(document: &Document, kind: EditorKind) -> Result<HtmlElement, J
          resize:none;overflow:hidden",
     );
     Ok(editor)
+}
+
+/// Asks for the field's software keyboard through the editor's attributes.
+fn apply_keyboard(
+    editor: &HtmlElement,
+    keyboard: &KeyboardOptions,
+    single_line: bool,
+) -> Result<(), JsValue> {
+    let corrects = keyboard.corrects();
+    editor.set_attribute("inputmode", web_input_mode(keyboard.keyboard_type))?;
+    editor.set_attribute(
+        "enterkeyhint",
+        web_enter_key(keyboard.ime_action, single_line),
+    )?;
+    editor.set_attribute(
+        "autocapitalize",
+        web_capitalization(keyboard.capitalization),
+    )?;
+    editor.set_attribute("autocorrect", if corrects { "on" } else { "off" })?;
+    editor.set_attribute("spellcheck", if corrects { "true" } else { "false" })
+}
+
+fn web_input_mode(keyboard_type: KeyboardType) -> &'static str {
+    match keyboard_type {
+        KeyboardType::Text | KeyboardType::Ascii | KeyboardType::Password => "text",
+        KeyboardType::Number | KeyboardType::NumberPassword => "numeric",
+        KeyboardType::Phone => "tel",
+        KeyboardType::Uri => "url",
+        KeyboardType::Email => "email",
+        KeyboardType::Decimal => "decimal",
+    }
+}
+
+/// A multi-line editor's Enter adds a line, so it shows the Enter key.
+fn web_enter_key(action: ImeAction, single_line: bool) -> &'static str {
+    if !single_line {
+        return "enter";
+    }
+    match action.resolve(true) {
+        ImeAction::Go => "go",
+        ImeAction::Search => "search",
+        ImeAction::Send => "send",
+        ImeAction::Next => "next",
+        ImeAction::Previous => "previous",
+        ImeAction::Done => "done",
+        ImeAction::Default | ImeAction::None => "enter",
+    }
+}
+
+fn web_capitalization(capitalization: KeyboardCapitalization) -> &'static str {
+    match capitalization {
+        KeyboardCapitalization::None => "none",
+        KeyboardCapitalization::Characters => "characters",
+        KeyboardCapitalization::Words => "words",
+        KeyboardCapitalization::Sentences => "sentences",
+    }
 }
 
 /// Puts an editor over the text of the focused field, so a browser opens a
@@ -634,6 +701,13 @@ impl WebTextInput {
             return Ok(());
         }
         if let Some(editor) = self.active.borrow().as_ref() {
+            let keyboard_changed = self.shown.borrow().as_ref().is_none_or(|shown| {
+                shown.keyboard_options != state.keyboard_options
+                    || shown.single_line != state.single_line
+            });
+            if keyboard_changed {
+                apply_keyboard(editor, &state.keyboard_options, state.single_line)?;
+            }
             let (anchor, focus) = selection_ends(editor, &state);
             apply_editor_text(editor, &state.text, anchor, focus)?;
         }
@@ -664,6 +738,7 @@ impl WebTextInput {
                 &Placement::of(&self.canvas, shell.viewport_size()),
             )?;
         }
+        apply_keyboard(&editor, &state.keyboard_options, state.single_line)?;
         let (anchor, focus) = selection_ends(&editor, &state);
         apply_editor_text(&editor, &state.text, anchor, focus)?;
         *self.shown.borrow_mut() = Some(state);
