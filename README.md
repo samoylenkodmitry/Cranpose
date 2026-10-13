@@ -7,7 +7,8 @@
 [![CI](https://github.com/samoylenkodmitry/Cranpose/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/samoylenkodmitry/Cranpose/actions/workflows/rust.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20or%20MIT-blue.svg)](#license)
 
-**[Try the showcase in your browser](https://samoylenkodmitry.github.io/cranpose-showcase/)**
+**[Try the showcase in your browser](https://samoylenkodmitry.github.io/cranpose-showcase/)** ·
+**[Watch live market data in Cranpose Markets](https://samoylenkodmitry.github.io/cranpose-markets/)**
 
 Cranpose brings the Jetpack Compose model to Rust. Composable functions describe
 the UI. State changes trigger recomposition. Modifiers control layout, input and
@@ -42,6 +43,7 @@ frameworks on the same phone and on a Mac.
 | [Cranamp](https://cranamp.dmitrysamoylenko.in/), a music player with pixel skins and a skin editor ([source](https://github.com/samoylenkodmitry/cranamp)) | Windows, macOS, Linux, Android, iOS, web | [Google Play](https://play.google.com/store/apps/details?id=com.cranamp.app), [App Store](https://apps.apple.com/app/id6818451356), [Microsoft Store](https://apps.microsoft.com/detail/9N0XTC9PGM8X), [AUR](https://aur.archlinux.org/packages/cranamp), [browser](https://samoylenkodmitry.github.io/cranamp/) |
 | [Cranslate](https://cranslate.dmitrysamoylenko.in/), an offline speech translator for a phone and a watch | Android, Wear OS, iOS, Apple Watch | [Google Play](https://play.google.com/store/apps/details?id=com.cranslate.app), [App Store](https://apps.apple.com/app/id6821701915) |
 | CranScan, a document and receipt scanner with on-device text recognition | Android, iOS | [Google Play](https://play.google.com/store/apps/details?id=com.cranscan.app), [App Store](https://apps.apple.com/app/id6795579921) |
+| [Cranpose Markets](https://samoylenkodmitry.github.io/cranpose-markets/), a live crypto market screen: watchlist, order book, trades and candles from Binance's public feed, with the frame rate on screen ([source](https://github.com/samoylenkodmitry/cranpose-markets)) | web | [browser](https://samoylenkodmitry.github.io/cranpose-markets/) |
 | [Orbit Breaker](https://orbitbreaker.dmitrysamoylenko.in/), a brick-breaking game for watches, steered with the crown | Wear OS, Apple Watch | [Google Play](https://play.google.com/store/apps/details?id=com.dmitry.orbitbreaker), [App Store](https://apps.apple.com/app/id6821956842) |
 
 ## Start an app
