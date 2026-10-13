@@ -327,9 +327,10 @@ fn build_focus_handler(
         refs.focus_node.get(),
         line_limits,
         refs.focus_options.get().show_keyboard_on_focus,
-        crate::text_field_handler::KeyboardRefs {
-            options: refs.keyboard_options.clone(),
-            action: refs.keyboard_action.clone(),
+        crate::text_field_handler::InputRefs {
+            keyboard_options: refs.keyboard_options.clone(),
+            keyboard_action: refs.keyboard_action.clone(),
+            transformation: refs.input_transformation.clone(),
         },
         crate::text_field_handler::CaretGeometryRefs {
             local_to_window: refs.local_to_window.clone(),
@@ -436,6 +437,7 @@ pub(crate) struct TextFieldRefs {
     /// its action runs.
     pub keyboard_options: Rc<Cell<crate::KeyboardOptions>>,
     pub keyboard_action: Rc<RefCell<Option<crate::KeyboardActionHandler>>>,
+    pub input_transformation: Rc<RefCell<Option<cranpose_foundation::text::InputTransformation>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -468,6 +470,7 @@ impl TextFieldRefs {
             })),
             keyboard_options: Rc::default(),
             keyboard_action: Rc::default(),
+            input_transformation: Rc::default(),
         }
     }
 
@@ -857,31 +860,6 @@ impl TextFieldModifierNode {
     /// Returns the selection brush for rendering selection highlight.
     pub fn selection_brush(&self) -> Brush {
         self.selection_brush.clone()
-    }
-
-    /// Inserts text at the current cursor position (for paste operations).
-    pub fn insert_text(&mut self, text: &str) {
-        self.state.edit(|buffer| {
-            buffer.insert(text);
-        });
-    }
-
-    /// Copies the selected text and returns it (for web copy operation).
-    /// Returns None if no selection.
-    pub fn copy_selection(&self) -> Option<String> {
-        self.state.copy_selection()
-    }
-
-    /// Cuts the selected text: copies and deletes it.
-    /// Returns the cut text, or None if no selection.
-    pub fn cut_selection(&mut self) -> Option<String> {
-        let text = self.copy_selection();
-        if text.is_some() {
-            self.state.edit(|buffer| {
-                buffer.delete(buffer.selection());
-            });
-        }
-        text
     }
 
     /// Where the field's content sits in its node, set by slice collection
@@ -1418,6 +1396,8 @@ pub struct TextFieldElement {
     /// Left out of equality and hashing: the element updates its node in
     /// every composition, which hands the node the latest closure.
     keyboard_action: Option<crate::KeyboardActionHandler>,
+    /// Left out of equality and hashing, as `keyboard_action` is.
+    input_transformation: Option<cranpose_foundation::text::InputTransformation>,
     handle_controller: Option<TextFieldHandleController>,
     modal_depth: usize,
     decorator: Option<TextFieldRefs>,
@@ -1434,6 +1414,7 @@ impl TextFieldElement {
             show_keyboard_on_focus: true,
             keyboard_options: crate::KeyboardOptions::default(),
             keyboard_action: None,
+            input_transformation: None,
             handle_controller: None,
             modal_depth: 0,
             decorator: None,
@@ -1475,6 +1456,15 @@ impl TextFieldElement {
     ) -> Self {
         self.keyboard_options = options;
         self.keyboard_action = action;
+        self
+    }
+
+    /// Sets what changes or rejects each edit the person makes.
+    pub fn with_input_transformation(
+        mut self,
+        transformation: Option<cranpose_foundation::text::InputTransformation>,
+    ) -> Self {
+        self.input_transformation = transformation;
         self
     }
 
@@ -1552,6 +1542,9 @@ impl ModifierNodeElement for TextFieldElement {
         node.refs
             .keyboard_action
             .replace(self.keyboard_action.clone());
+        node.refs
+            .input_transformation
+            .replace(self.input_transformation.clone());
         if let Some(controller) = self.handle_controller.clone() {
             node = node.with_handle_controller(controller);
         }
@@ -1583,6 +1576,9 @@ impl ModifierNodeElement for TextFieldElement {
         node.refs
             .keyboard_action
             .replace(self.keyboard_action.clone());
+        node.refs
+            .input_transformation
+            .replace(self.input_transformation.clone());
         node.rebuild_cached_closures();
 
         if node.update_cached_state() {}

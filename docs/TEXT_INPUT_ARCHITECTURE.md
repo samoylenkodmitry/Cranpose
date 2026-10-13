@@ -85,9 +85,21 @@ always adds a line, since the browser does not tell its action key from
 Enter. The shared types live in
 [`keyboard_options.rs`](../crates/cranpose-ui/src/keyboard_options.rs).
 
+## Input transformations
+
+`BasicTextFieldOptions::input_transformation` takes Compose's
+`InputTransformation`, which changes or rejects each edit a person makes:
+typing, pasting, deleting, cutting and IME composition. It sees the value
+before the edit and the buffer after it. `max_length`, `by_value` and `then`
+build the common ones. The field's input goes through
+`TextFieldState::edit_as_user`; the app's own `edit` calls and edits that
+only move the cursor skip the transformation. `max_length` also lets a
+shortening edit through, so text the app put past the limit can be deleted.
+See [`input_transformation.rs`](../crates/cranpose-foundation/src/text/input_transformation.rs).
+
 ## Current limits
 
-Autofill hints, input/output transformations and a secure text field remain
+Autofill hints, output transformations and a secure text field remain
 outside the current public surface. The default UI measurement fallback
 is monospaced; a host can install a font-backed `TextMeasurer` through its text
 service.

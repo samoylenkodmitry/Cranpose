@@ -3,7 +3,9 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState};
+use cranpose_foundation::text::{
+    InputTransformation, TextFieldBuffer, TextFieldLineLimits, TextFieldState,
+};
 use cranpose_ui_graphics::ProjectiveTransform;
 
 use crate::{
@@ -12,10 +14,12 @@ use crate::{
     text_field_input::handle_key_event_impl,
 };
 
-/// The field's keyboard, as its latest composition set it.
-pub(crate) struct KeyboardRefs {
-    pub options: Rc<Cell<crate::KeyboardOptions>>,
-    pub action: Rc<RefCell<Option<crate::KeyboardActionHandler>>>,
+/// The field's keyboard and input filter, as its latest composition set
+/// them.
+pub(crate) struct InputRefs {
+    pub keyboard_options: Rc<Cell<crate::KeyboardOptions>>,
+    pub keyboard_action: Rc<RefCell<Option<crate::KeyboardActionHandler>>>,
+    pub transformation: Rc<RefCell<Option<InputTransformation>>>,
 }
 
 #[derive(Clone)]
@@ -32,7 +36,7 @@ pub(crate) struct TextFieldHandler {
     target_node: Option<cranpose_core::NodeId>,
     line_limits: TextFieldLineLimits,
     show_keyboard_on_focus: bool,
-    keyboard: KeyboardRefs,
+    input: InputRefs,
     geometry: CaretGeometryRefs,
 }
 
@@ -43,7 +47,7 @@ impl TextFieldHandler {
         target_node: Option<cranpose_core::NodeId>,
         line_limits: TextFieldLineLimits,
         show_keyboard_on_focus: bool,
-        keyboard: KeyboardRefs,
+        input: InputRefs,
         geometry: CaretGeometryRefs,
     ) -> Rc<Self> {
         Rc::new(Self {
@@ -52,13 +56,20 @@ impl TextFieldHandler {
             target_node,
             line_limits,
             show_keyboard_on_focus,
-            keyboard,
+            input,
             geometry,
         })
     }
 
     fn single_line(&self) -> bool {
         matches!(self.line_limits, TextFieldLineLimits::SingleLine)
+    }
+
+    /// Edits as the person's input: through the field's input
+    /// transformation.
+    fn edit_as_user(&self, f: impl FnOnce(&mut TextFieldBuffer)) {
+        self.state
+            .edit_as_user(self.input.transformation.borrow().as_ref(), f);
     }
 
     fn on_text_mutated(&self) {
@@ -94,7 +105,12 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
             return self.perform_ime_action(crate::ImeAction::Default);
         }
 
-        let consumed = handle_key_event_impl(&self.state, event, self.line_limits);
+        let consumed = handle_key_event_impl(
+            &self.state,
+            event,
+            self.line_limits,
+            self.input.transformation.borrow().as_ref(),
+        );
 
         if consumed {
             self.on_text_mutated();
@@ -104,9 +120,7 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
     }
 
     fn insert_text(&self, text: &str) {
-        self.state.edit(|buffer| {
-            buffer.insert(text);
-        });
+        self.edit_as_user(|buffer| buffer.insert(text));
         self.on_text_mutated();
     }
 
@@ -115,9 +129,7 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
             return;
         }
 
-        self.state.edit(|buffer| {
-            buffer.delete_surrounding(before_bytes, after_bytes);
-        });
+        self.edit_as_user(|buffer| buffer.delete_surrounding(before_bytes, after_bytes));
         self.state.set_desired_column(None);
         self.on_text_mutated();
     }
@@ -152,15 +164,13 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
         }
 
         let text = text.to_string();
-        self.state.edit(|buffer| {
-            buffer.delete(selection);
-        });
+        self.edit_as_user(|buffer| buffer.delete(selection));
         self.on_text_mutated();
         Some(text)
     }
 
     fn set_composition(&self, text: &str, cursor: Option<(usize, usize)>) {
-        self.state.edit(|buffer| {
+        self.edit_as_user(|buffer| {
             if text.is_empty() {
                 if let Some(range) = buffer.composition() {
                     buffer.delete(range);
@@ -234,7 +244,7 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
             composition: value.composition.map(|range| (range.min(), range.max())),
             text: value.text,
             single_line: self.single_line(),
-            keyboard_options: self.keyboard.options.get(),
+            keyboard_options: self.input.keyboard_options.get(),
         })
     }
 
@@ -243,7 +253,7 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
     /// multi-line field, else its handler or default. A single-line field
     /// whose action is `None` does nothing and leaves the press unhandled.
     fn perform_ime_action(&self, action: crate::ImeAction) -> bool {
-        let field_action = self.keyboard.options.get().ime_action;
+        let field_action = self.input.keyboard_options.get().ime_action;
         let action = match action {
             crate::ImeAction::Default => field_action,
             action => action,
@@ -257,7 +267,7 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
             self.insert_text("\n");
             return true;
         }
-        let handler = self.keyboard.action.borrow().clone();
+        let handler = self.input.keyboard_action.borrow().clone();
         crate::keyboard_options::run_keyboard_action(action, handler.as_ref());
         true
     }

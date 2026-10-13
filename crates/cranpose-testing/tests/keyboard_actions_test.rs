@@ -14,7 +14,7 @@ use cranpose_ui::{
     TextFieldState,
 };
 
-use crate::support_keyboard::{RecordingKeyboard, shell_with_keyboard};
+use crate::support_text_field::{RecordingKeyboard, shell_with_keyboard};
 
 /// How the test's handler answers an action.
 #[derive(Clone, Copy, PartialEq)]

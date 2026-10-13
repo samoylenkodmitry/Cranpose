@@ -1,4 +1,6 @@
-use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState, TextRange};
+use cranpose_foundation::text::{
+    InputTransformation, TextFieldLineLimits, TextFieldState, TextRange,
+};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
@@ -10,32 +12,39 @@ pub(crate) fn handle_key_event_impl(
     state: &TextFieldState,
     event: &KeyEvent,
     line_limits: TextFieldLineLimits,
+    transformation: Option<&InputTransformation>,
 ) -> bool {
     match event.key_code {
         KeyCode::Enter => {
             if line_limits.is_single_line() {
                 false
             } else {
-                state.edit(|buffer| buffer.insert("\n"));
+                state.edit_as_user(transformation, |buffer| buffer.insert("\n"));
                 state.set_desired_column(None);
                 true
             }
         }
 
         _ if !event.text.is_empty() && !event.modifiers.command_or_ctrl() => {
-            state.edit(|buffer| buffer.insert(&event.text));
+            state.edit_as_user(transformation, |buffer| buffer.insert(&event.text));
             state.set_desired_column(None);
             true
         }
 
         KeyCode::Backspace => {
-            state.edit(cranpose_foundation::text::TextFieldBuffer::delete_before_cursor);
+            state.edit_as_user(
+                transformation,
+                cranpose_foundation::text::TextFieldBuffer::delete_before_cursor,
+            );
             state.set_desired_column(None);
             true
         }
 
         KeyCode::Delete => {
-            state.edit(cranpose_foundation::text::TextFieldBuffer::delete_after_cursor);
+            state.edit_as_user(
+                transformation,
+                cranpose_foundation::text::TextFieldBuffer::delete_after_cursor,
+            );
             state.set_desired_column(None);
             true
         }

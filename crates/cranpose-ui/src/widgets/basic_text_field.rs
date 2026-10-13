@@ -11,7 +11,7 @@ use std::{
 use cranpose_core::{MutableState, NodeId, SideEffect, mutableStateOf, remember};
 use cranpose_foundation::{
     modifier_element,
-    text::{TextFieldLineLimits, TextFieldState, TextRange},
+    text::{InputTransformation, TextFieldLineLimits, TextFieldState, TextRange},
 };
 use cranpose_ui_graphics::{Color, Point, Rect};
 
@@ -252,6 +252,9 @@ pub struct BasicTextFieldOptions {
     /// Without it the action's default runs: Next and Previous move focus,
     /// Done hides the software keyboard.
     pub on_keyboard_action: Option<KeyboardActionHandler>,
+    /// Changes or rejects each edit the person makes, such as a length
+    /// limit or a filter on what can be typed.
+    pub input_transformation: Option<InputTransformation>,
 }
 
 impl Default for BasicTextFieldOptions {
@@ -263,6 +266,7 @@ impl Default for BasicTextFieldOptions {
             show_keyboard_on_focus: true,
             keyboard_options: KeyboardOptions::default(),
             on_keyboard_action: None,
+            input_transformation: None,
         }
     }
 }
@@ -370,6 +374,7 @@ fn TextFieldNode(
         .with_line_limits(options.line_limits)
         .with_show_keyboard_on_focus(options.show_keyboard_on_focus)
         .with_keyboard(options.keyboard_options, options.on_keyboard_action)
+        .with_input_transformation(options.input_transformation)
         .with_handle_controller(controller.clone())
         .with_modal_depth(modal_depth);
     if let Some(refs) = decorator {

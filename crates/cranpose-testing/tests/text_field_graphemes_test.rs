@@ -2,13 +2,9 @@
 //! (extended grapheme clusters), as Compose's `BreakIterator` character
 //! instance does, through the public shell input path.
 
-use cranpose_app_shell::AppShell;
-use cranpose_core::{location_key, remember};
-use cranpose_testing::robot::TestRenderer;
-use cranpose_ui::{
-    BasicTextFieldOptions, BasicTextFieldWithOptions, FocusRequester, KeyCode, KeyEvent, Modifier,
-    Modifiers, TextFieldState,
-};
+use cranpose_ui::{BasicTextFieldOptions, KeyCode, Modifiers};
+
+use crate::support_text_field::FocusedField;
 
 const FLAG: &str = "\u{1F1F7}\u{1F1F8}";
 const TECHNOLOGIST: &str = "\u{1F469}\u{200D}\u{1F4BB}";
@@ -33,64 +29,15 @@ const COMMAND: Modifiers = if cfg!(target_os = "macos") {
     }
 };
 
-struct Field {
-    shell: AppShell<TestRenderer>,
-}
-
-impl Field {
-    /// A focused field holding `text`, with the caret at its end.
-    fn new(text: &'static str) -> Self {
-        let requester = FocusRequester::new();
-        let content_requester = requester.clone();
-        let mut shell = AppShell::new(
-            TestRenderer::default(),
-            location_key(file!(), line!(), column!()),
-            move || {
-                let state = remember(|| TextFieldState::new(text)).with(|state| *state);
-                BasicTextFieldWithOptions(
-                    state,
-                    Modifier::empty()
-                        .width(300.0)
-                        .height(80.0)
-                        .focus_requester(&content_requester),
-                    BasicTextFieldOptions::default(),
-                );
-            },
-        );
-        shell.set_viewport(320.0, 100.0);
-        shell.set_buffer_size(320, 100);
-        shell.update();
-        requester.request_focus().expect("field focus");
-        let mut field = Self { shell };
-        field.press(KeyCode::End, Modifiers::NONE);
-        field
-    }
-
-    fn press(&mut self, key: KeyCode, modifiers: Modifiers) -> &mut Self {
-        assert!(
-            self.shell
-                .on_key_event(&KeyEvent::key_down_with_modifiers(key, "", modifiers)),
-            "the focused field takes {key:?}"
-        );
-        self
-    }
-
-    fn text(&mut self) -> String {
-        self.shell.ime_editor_state().expect("focused field").text
-    }
-
-    /// The selection's start and end, lower first.
-    fn selection(&mut self) -> (usize, usize) {
-        let editor = self.shell.ime_editor_state().expect("focused field");
-        (editor.selection_start, editor.selection_end)
-    }
+fn focused(text: &'static str) -> FocusedField {
+    FocusedField::new(text, BasicTextFieldOptions::default())
 }
 
 #[test]
 fn backspace_deletes_the_whole_character_before_the_caret() {
     for cluster in [FLAG, TECHNOLOGIST, THUMB_WITH_TONE, E_ACUTE, NI] {
         let text: &'static str = format!("a{cluster}").leak();
-        let mut field = Field::new(text);
+        let mut field = focused(text);
         field.press(KeyCode::Backspace, Modifiers::NONE);
         assert_eq!(field.text(), "a", "{cluster:?}");
     }
@@ -100,7 +47,7 @@ fn backspace_deletes_the_whole_character_before_the_caret() {
 fn delete_removes_the_whole_character_after_the_caret() {
     for cluster in [FLAG, TECHNOLOGIST, THUMB_WITH_TONE, E_ACUTE, NI] {
         let text: &'static str = format!("{cluster}b").leak();
-        let mut field = Field::new(text);
+        let mut field = focused(text);
         field
             .press(KeyCode::Home, Modifiers::NONE)
             .press(KeyCode::Delete, Modifiers::NONE);
@@ -111,7 +58,7 @@ fn delete_removes_the_whole_character_after_the_caret() {
 #[test]
 fn arrows_step_over_whole_characters() {
     let text: &'static str = format!("a{FLAG}{TECHNOLOGIST}b").leak();
-    let mut field = Field::new(text);
+    let mut field = focused(text);
     let after_flag = 1 + FLAG.len();
     let after_technologist = after_flag + TECHNOLOGIST.len();
 
@@ -129,7 +76,7 @@ fn arrows_step_over_whole_characters() {
 fn shift_arrows_select_whole_characters() {
     let text: &'static str = format!("a{THUMB_WITH_TONE}{E_ACUTE}").leak();
     let end = text.len();
-    let mut field = Field::new(text);
+    let mut field = focused(text);
 
     field.press(KeyCode::ArrowLeft, SHIFT);
     assert_eq!(field.selection(), (end - E_ACUTE.len(), end));
@@ -144,7 +91,7 @@ fn shift_arrows_select_whole_characters() {
 #[test]
 fn word_moves_keep_combining_marks_with_their_letter() {
     let text: &'static str = format!("caf{E_ACUTE} {NI}x").leak();
-    let mut field = Field::new(text);
+    let mut field = focused(text);
     let word_end = 3 + E_ACUTE.len();
 
     field
@@ -159,7 +106,7 @@ fn word_moves_keep_combining_marks_with_their_letter() {
 
 #[test]
 fn vertical_moves_keep_the_caret_on_character_boundaries() {
-    let mut field = Field::new("ab\n\u{65E5}\u{672C}\n\u{1F1F7}\u{1F1F8}x");
+    let mut field = focused("ab\n\u{65E5}\u{672C}\n\u{1F1F7}\u{1F1F8}x");
     field
         .press(KeyCode::Home, COMMAND)
         .press(KeyCode::ArrowRight, Modifiers::NONE)
