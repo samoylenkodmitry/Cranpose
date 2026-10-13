@@ -103,7 +103,7 @@ pub(crate) fn cells<R>(f: impl FnOnce(&ThreadCells) -> R) -> R {
 }
 
 pub(crate) fn with<R>(f: impl FnOnce(&UiThreadState) -> R) -> R {
-    STATE.with(f)
+    cranpose_core::with_or_fresh(&STATE, UiThreadState::new, f)
 }
 
 pub(crate) fn try_with<R>(f: impl FnOnce(&UiThreadState) -> R) -> Option<R> {
@@ -111,5 +111,5 @@ pub(crate) fn try_with<R>(f: impl FnOnce(&UiThreadState) -> R) -> Option<R> {
 }
 
 pub(crate) fn with_environment<R>(f: impl FnOnce(&EnvironmentLocals) -> R) -> R {
-    STATE.with(|state| f(&state.environment))
+    with(|state| f(&state.environment))
 }

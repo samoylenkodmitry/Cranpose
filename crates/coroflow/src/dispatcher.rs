@@ -172,30 +172,33 @@ struct UnconfinedExecutor;
 
 impl Dispatch for UnconfinedExecutor {
     fn dispatch(&self, runnable: Runnable) {
-        let first = CONTEXT.with(|context| {
+        let mut pending = Some(runnable);
+        let queued = CONTEXT.try_with(|context| {
             let mut slot = context.unconfined.borrow_mut();
             match slot.as_mut() {
-                Some(queue) => {
-                    queue.push_back(runnable);
-                    None
-                }
-                None => {
-                    *slot = Some(VecDeque::new());
-                    Some(runnable)
-                }
+                Some(queue) => queue.extend(pending.take()),
+                None => *slot = Some(VecDeque::new()),
             }
         });
-        let mut next = first;
+        let mut next = pending;
         while let Some(runnable) = next {
             runnable.run();
-            next = CONTEXT.with(|context| {
-                let mut slot = context.unconfined.borrow_mut();
-                let popped = slot.as_mut().and_then(VecDeque::pop_front);
-                if popped.is_none() {
-                    *slot = None;
-                }
-                popped
-            });
+            next = queued
+                .is_ok()
+                .then(|| {
+                    CONTEXT
+                        .try_with(|context| {
+                            let mut slot = context.unconfined.borrow_mut();
+                            let popped = slot.as_mut().and_then(VecDeque::pop_front);
+                            if popped.is_none() {
+                                *slot = None;
+                            }
+                            popped
+                        })
+                        .ok()
+                        .flatten()
+                })
+                .flatten();
         }
     }
 }
@@ -318,16 +321,17 @@ pub(crate) struct EnterGuard {
 }
 
 pub(crate) fn enter(dispatcher: &Dispatcher) -> EnterGuard {
-    let previous = CONTEXT.with(|context| context.current.replace(Some(dispatcher.clone())));
+    let previous = CONTEXT
+        .try_with(|context| context.current.replace(Some(dispatcher.clone())))
+        .ok()
+        .flatten();
     EnterGuard { previous }
 }
 
 impl Drop for EnterGuard {
     fn drop(&mut self) {
         let previous = self.previous.take();
-        CONTEXT.with(|context| {
-            context.current.replace(previous);
-        });
+        let _ = CONTEXT.try_with(|context| context.current.replace(previous));
     }
 }
 
@@ -335,7 +339,9 @@ static MAIN: Mutex<Option<(Dispatcher, ThreadId)>> = Mutex::new(None);
 
 pub(crate) fn current_dispatcher() -> Option<Dispatcher> {
     CONTEXT
-        .with(|context| context.current.borrow().clone())
+        .try_with(|context| context.current.borrow().clone())
+        .ok()
+        .flatten()
         .or_else(|| {
             let main = lock(&MAIN);
             main.as_ref()

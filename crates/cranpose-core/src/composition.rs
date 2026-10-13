@@ -576,6 +576,8 @@ impl<A: Applier + 'static> Composition<A> {
 
 impl<A: Applier + 'static> Drop for Composition<A> {
     fn drop(&mut self) {
+        #[cfg(target_os = "android")]
+        self.runtime.restore_thread_state();
         self.teardown = Some(runtime::enter_state_teardown_scope());
     }
 }

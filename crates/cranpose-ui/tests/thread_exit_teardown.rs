@@ -1,7 +1,8 @@
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::{
-    OwnedMutableState, mutableStateOf, ownedMutableStateOf, snapshot_v2::register_apply_observer,
+    DisposableEffect, OwnedMutableState, mutableStateOf, ownedMutableStateOf,
+    snapshot_v2::register_apply_observer,
 };
 use cranpose_foundation::{
     lazy::{LazyListScope, rememberLazyListState},
@@ -31,8 +32,18 @@ thread_local! {
     static HELD_SCREEN: RefCell<Option<TestComposition>> = const { RefCell::new(None) };
 }
 
+fn ui_calls_on_dispose() {
+    DisposableEffect((), |scope| {
+        scope.on_dispose(|| {
+            announce("closed");
+            drop(Modifier::empty().fill_max_width());
+        })
+    });
+}
+
 fn screen() {
     live_state();
+    ui_calls_on_dispose();
     UnhandledKeyEvents(|_| false);
     announce("left behind");
     Scaffold(

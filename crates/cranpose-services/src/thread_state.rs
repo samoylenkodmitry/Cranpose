@@ -111,7 +111,7 @@ thread_local! {
 }
 
 pub(crate) fn with<R>(f: impl FnOnce(&ServiceThreadState) -> R) -> R {
-    STATE.with(f)
+    cranpose_core::with_or_fresh(&STATE, ServiceThreadState::new, f)
 }
 
 pub(crate) fn try_with<R>(f: impl FnOnce(&ServiceThreadState) -> R) -> Option<R> {

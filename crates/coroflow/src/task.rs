@@ -149,7 +149,7 @@ where
 {
     let job = Job::new(launch);
     let id = NEXT_LOCAL_TASK.fetch_add(1, Ordering::Relaxed);
-    LOCAL_TASKS.with(|tasks| {
+    let _ = LOCAL_TASKS.try_with(|tasks| {
         tasks
             .borrow_mut()
             .insert(id, Box::pin(future) as LocalFuture)
@@ -194,7 +194,11 @@ impl Schedule for LocalHandle {
             log::error!("coroflow: a confined dispatcher ran a main-thread task on another thread");
             return;
         }
-        let Some(mut future) = LOCAL_TASKS.with(|tasks| tasks.borrow_mut().remove(&self.id)) else {
+        let Some(mut future) = LOCAL_TASKS
+            .try_with(|tasks| tasks.borrow_mut().remove(&self.id))
+            .ok()
+            .flatten()
+        else {
             return;
         };
         if self.job.cancel_requested() {
@@ -205,7 +209,7 @@ impl Schedule for LocalHandle {
         let waker = Waker::from(Arc::clone(&self));
         match poll_step(future.as_mut(), &self.dispatcher, &waker) {
             Step::Pending => {
-                LOCAL_TASKS.with(|tasks| tasks.borrow_mut().insert(self.id, future));
+                let _ = LOCAL_TASKS.try_with(|tasks| tasks.borrow_mut().insert(self.id, future));
             }
             step => {
                 drop(future);

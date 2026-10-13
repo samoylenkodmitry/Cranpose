@@ -271,6 +271,12 @@ fn a_launcher_held_in_a_thread_local_touched_first_drops_at_thread_exit() {
                 "test.thread-exit",
                 |_: LauncherResult<Option<ContentHandle>>| {},
             );
+            cranpose_core::DisposableEffect((), |scope| {
+                scope.on_dispose(|| {
+                    clear_platform_file_picker();
+                    clear_launcher_state();
+                })
+            });
         });
         HELD.with(|held| *held.borrow_mut() = Some(composition));
     })

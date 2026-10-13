@@ -15,18 +15,22 @@ pub(crate) struct LiquidThreadState {
     pub(crate) glass_light_return: Cell<(f32, f32)>,
 }
 
-thread_local! {
-    static STATE: LiquidThreadState = const {
-        LiquidThreadState {
+impl LiquidThreadState {
+    const fn new() -> Self {
+        Self {
             colors: OnceCell::new(),
             typography: OnceCell::new(),
             glass_tint: OnceCell::new(),
             segmented: OnceCell::new(),
             glass_light_return: Cell::new((0.0, 1.0)),
         }
-    };
+    }
+}
+
+thread_local! {
+    static STATE: LiquidThreadState = const { LiquidThreadState::new() };
 }
 
 pub(crate) fn with<R>(f: impl FnOnce(&LiquidThreadState) -> R) -> R {
-    STATE.with(f)
+    cranpose_core::with_or_fresh(&STATE, LiquidThreadState::new, f)
 }

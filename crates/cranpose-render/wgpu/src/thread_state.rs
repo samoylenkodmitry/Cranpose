@@ -31,7 +31,7 @@ thread_local! {
 }
 
 pub(crate) fn with<R>(f: impl FnOnce(&WgpuThreadState) -> R) -> R {
-    STATE.with(f)
+    cranpose_core::with_or_fresh(&STATE, WgpuThreadState::new, f)
 }
 
 pub(crate) fn try_with<R>(f: impl FnOnce(&WgpuThreadState) -> R) -> Option<R> {

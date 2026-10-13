@@ -47,5 +47,9 @@ thread_local! {
 }
 
 pub(crate) fn with<R>(f: impl FnOnce(&GraphicsThreadState) -> R) -> R {
-    STATE.with(f)
+    let mut f = Some(f);
+    let mut call = |state: &GraphicsThreadState| f.take().map(|f| f(state));
+    let ran = STATE.try_with(&mut call).ok().flatten();
+    ran.or_else(|| call(&GraphicsThreadState::new()))
+        .expect("the closure runs on exactly one state")
 }
