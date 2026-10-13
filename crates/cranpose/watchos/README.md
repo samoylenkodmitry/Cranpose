@@ -51,6 +51,14 @@ generated workspace at a checkout. Published app manifests use the resolved
 published dependency. The generated runner starts with app features disabled;
 pass `--features` to select app features.
 
+## Crown
+
+The crown reaches the app through WatchKit's crown sequencer, as 24 detents
+per turn, the clicks of a rotating bezel. Each movement arrives as it happens.
+SwiftUI's crown modifier is not used: it delivers the crown's value after its
+own deceleration and settles it on a step once the hand stops, so a game
+steered with it keeps moving after the crown does.
+
 ## Sound and haptics
 
 With the `cranpose/audio` feature, `cranpose_audio` plays through an
