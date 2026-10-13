@@ -299,27 +299,53 @@ final class CranposeScene: SKScene {
 /// a turn come with a zero velocity too, before SwiftUI has measured one, and
 /// those count.
 ///
+/// SwiftUI's value also trails the hand by a few frames while it turns. The
+/// velocity does not, so the reading leads the value by a share of it.
+///
 /// WatchKit's crown sequencer, which a SwiftUI app reaches through its root
 /// interface controller, takes the focus but delivers nothing, on a watch and
 /// in the simulator.
 final class CrownReading {
+    /// How far the value is led by the event's velocity, in crown units per
+    /// unit of velocity. SwiftUI's value trails the hand by a few frames,
+    /// while the velocity follows the hand; leading by a share of it makes up
+    /// most of the delay. The lead goes back to nothing as the velocity does,
+    /// so a turn adds up to what SwiftUI reports.
+    static let leadPerVelocity = 0.25
+
     var value = 0.0
     private var offset = 0.0
     private var turning = false
+    private var led = 0.0
 
-    /// The change since the last event, or nil while SwiftUI flings.
+    /// The change to hand the app for this event, or nil while SwiftUI
+    /// flings and nothing is left to give back.
     func change(_ event: DigitalCrownEvent) -> Double? {
         let delta = event.offset - offset
         offset = event.offset
         if event.velocity != 0 {
             turning = true
-            return delta
+            return delta + moveLead(to: Self.leadPerVelocity * event.velocity)
         }
-        return turning ? nil : delta
+        if turning {
+            return nonzero(moveLead(to: 0))
+        }
+        return delta
     }
 
-    func idle() {
+    /// What is left of the lead when the crown comes to rest.
+    func idle() -> Double? {
         turning = false
+        return nonzero(moveLead(to: 0))
+    }
+
+    private func moveLead(to next: Double) -> Double {
+        defer { led = next }
+        return next - led
+    }
+
+    private func nonzero(_ change: Double) -> Double? {
+        change == 0 ? nil : change
     }
 }
 
@@ -382,7 +408,11 @@ struct CranposeView: View {
                         CPCrown(Float(delta), model.elapsed / 1_000_000)
                     }
                 },
-                onIdle: { model.crown.idle() })
+                onIdle: {
+                    if let rest = model.crown.idle() {
+                        CPCrown(Float(rest), model.elapsed / 1_000_000)
+                    }
+                })
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { event in
                     if !touching {
