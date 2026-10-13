@@ -5408,22 +5408,26 @@ impl ApplicationHandler for App {
         let adapter_info = adapter.get_info();
         self.vsync_interval = monitor_refresh_interval(&window);
 
-        let (device, queue) =
-            match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        let (device, queue) = match pollster::block_on(
+            adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("Main Device"),
                 required_features: cranpose_render_wgpu::optional_device_features(&adapter)
                     | self.settings.gpu_requirements.features_on(&adapter),
-                required_limits: self.settings.gpu_requirements.limits_on(&adapter),
+                required_limits: self
+                    .settings
+                    .gpu_requirements
+                    .limits_on(&adapter, wgpu::Limits::default()),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 memory_hints: wgpu::MemoryHints::default(),
                 trace: wgpu::Trace::Off,
-            })) {
-                Ok(pair) => pair,
-                Err(error) => {
-                    self.abort_launch(event_loop, LaunchError::DeviceCreate(error));
-                    return;
-                }
-            };
+            }),
+        ) {
+            Ok(pair) => pair,
+            Err(error) => {
+                self.abort_launch(event_loop, LaunchError::DeviceCreate(error));
+                return;
+            }
+        };
 
         let size = window.surface_size();
         let surface_caps = surface.get_capabilities(&adapter);

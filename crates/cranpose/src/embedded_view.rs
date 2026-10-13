@@ -77,8 +77,12 @@ impl EmbeddedView {
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("Cranpose embedded view"),
-                required_features: cranpose_render_wgpu::optional_device_features(&adapter),
-                required_limits: crate::gpu_limits::mobile_device_limits(adapter.limits()),
+                required_features: cranpose_render_wgpu::optional_device_features(&adapter)
+                    | settings.gpu_requirements.features_on(&adapter),
+                required_limits: settings.gpu_requirements.limits_on(
+                    &adapter,
+                    crate::gpu_limits::mobile_device_limits(adapter.limits()),
+                ),
                 memory_hints: crate::gpu_limits::mobile_memory_hints(),
                 ..Default::default()
             }))?;

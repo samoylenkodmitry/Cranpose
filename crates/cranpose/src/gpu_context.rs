@@ -45,12 +45,13 @@ impl GpuRequirements {
         self.features & (adapter.features() - wgpu::Features::all_experimental_mask())
     }
 
-    /// The limits a device on `adapter` is created with.
-    pub fn limits_on(&self, adapter: &wgpu::Adapter) -> wgpu::Limits {
+    /// The limits a device on `adapter` is created with, where `own` are the
+    /// limits the platform asks for by itself.
+    pub fn limits_on(&self, adapter: &wgpu::Adapter, own: wgpu::Limits) -> wgpu::Limits {
         if self.adapter_limits {
             adapter.limits()
         } else {
-            wgpu::Limits::default()
+            own
         }
     }
 }
