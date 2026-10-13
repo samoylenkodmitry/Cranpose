@@ -103,6 +103,11 @@ pub use camera::{
     rememberCameraLenses, rememberCameraState, rememberCameraStills, request_camera_still,
     set_platform_camera, start_camera, stop_camera,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use content::{
+    BlockingSink, FileContent, FileFolder, FileSink, copy_content, file_content, file_folder,
+    open_threaded, read_full, run_threaded, threaded_sink,
+};
 pub use content::{
     BytesContent, Content, ContentChannel, ContentEntry, ContentError, ContentFolder,
     ContentFolderRef, ContentFuture, ContentHandle, ContentMetadata, ContentReader,
@@ -111,8 +116,6 @@ pub use content::{
     clear_platform_content_resolver, collect_stream, drain_reader, folder_files, percent_decode,
     percent_decode_lossy, resolve_content, set_platform_content_resolver, write_all,
 };
-#[cfg(not(target_arch = "wasm32"))]
-pub use content::{FileContent, FileFolder, FileSink, file_content, file_folder};
 pub use device_info::{
     DeviceInfo, DeviceInfoRef, clear_platform_device_info, device_info, release_free_memory,
     set_platform_device_info,
@@ -180,10 +183,10 @@ pub use launch_args::{
     set_platform_launch_args,
 };
 pub use launcher::{
-    LauncherResult, OpenFileLauncher, OpenFilesLauncher, OpenFolderLauncher, SaveDocumentLauncher,
-    WritableFolderLauncher, clear_launcher_state, rememberOpenFileLauncher,
-    rememberOpenFilesLauncher, rememberOpenFolderLauncher, rememberSaveDocumentLauncher,
-    rememberWritableFolderLauncher,
+    ExportFileLauncher, LauncherResult, OpenFileLauncher, OpenFilesLauncher, OpenFolderLauncher,
+    SaveDocumentLauncher, WritableFolderLauncher, clear_launcher_state, rememberExportFileLauncher,
+    rememberOpenFileLauncher, rememberOpenFilesLauncher, rememberOpenFolderLauncher,
+    rememberSaveDocumentLauncher, rememberWritableFolderLauncher,
 };
 pub use media::{
     AudioFocus, DUCKED_GAIN, EqualizerBand, EqualizerSettings, MediaArtwork, MediaCapabilities,

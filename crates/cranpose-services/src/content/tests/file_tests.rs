@@ -69,8 +69,13 @@ fn a_sink_commits_atomically_and_discards_unfinished_writes() {
 
     let abandoned = root.join("out/abandoned.bin");
     {
-        let sink = FileSink::create(&abandoned).unwrap();
+        let sink = FileSink::create(&abandoned).unwrap().handle();
         pollster::block_on(sink.write_chunk(b"partial".to_vec())).unwrap();
+    }
+    // The sink's thread deletes the staged bytes once the handle is gone.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while staging_path(&abandoned).exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert!(!abandoned.exists());
     assert!(!staging_path(&abandoned).exists());

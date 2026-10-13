@@ -406,6 +406,53 @@ pub fn rememberSaveDocumentLauncher(
     SaveDocumentLauncher { core, on_result }
 }
 
+/// Presents the save-document chooser for a local file and copies the file to
+/// the chosen place; hands back whether it was saved.
+#[derive(Clone)]
+pub struct ExportFileLauncher {
+    core: Rc<LauncherCore>,
+    on_result: Rc<dyn Fn(LauncherResult<bool>)>,
+}
+
+impl ExportFileLauncher {
+    /// Presents the chooser for the file at `path`. A second call while one
+    /// is in front or copying is ignored.
+    pub fn launch(&self, path: std::path::PathBuf, request: SaveDocumentRequest) {
+        if !self.core.begin() {
+            return;
+        }
+        let core = Rc::clone(&self.core);
+        let done = Rc::clone(&self.core);
+        let on_result = Rc::clone(&self.on_result);
+        let future = core.picker.export_file(path, request);
+        core.spawn(async move {
+            let result = future.await;
+            done.end();
+            on_result(result);
+        });
+    }
+
+    /// Whether a chooser presented by this launcher is still in front, or its
+    /// copy still runs.
+    pub fn is_in_flight(&self) -> bool {
+        self.core.in_flight.get()
+    }
+}
+
+/// Remembers an export launcher under `request_key`.
+#[composable]
+#[track_caller]
+pub fn rememberExportFileLauncher(
+    request_key: &'static str,
+    on_result: impl Fn(LauncherResult<bool>) + 'static,
+) -> ExportFileLauncher {
+    let on_result: Rc<dyn Fn(LauncherResult<bool>)> = Rc::new(on_result);
+    let core = remember_core(request_key, move |_recovered| {
+        log::warn!("cranpose: `{request_key}` recovered a pick of another kind");
+    });
+    ExportFileLauncher { core, on_result }
+}
+
 /// Presents the persistent writable-folder chooser and hands the durable handle
 /// back. Store the handle and reopen it with
 /// [`crate::writable_folder::open_writable_folder`].

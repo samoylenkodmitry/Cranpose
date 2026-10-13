@@ -561,9 +561,15 @@ pub fn resolve_content(uri: &str) -> Option<ContentHandle> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use file::{FileContent, FileFolder, FileSink, file_content, file_folder};
+#[cfg(not(target_arch = "wasm32"))]
+pub use threaded::{
+    BlockingSink, copy_content, open_threaded, read_full, run_threaded, threaded_sink,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod file;
+#[cfg(not(target_arch = "wasm32"))]
+mod threaded;
 
 /// Decodes the percent-escapes in a platform content URI, refusing input it
 /// cannot decode exactly.

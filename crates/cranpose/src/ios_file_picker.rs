@@ -1,17 +1,17 @@
 #![expect(unsafe_code)]
 
 use std::{
-    cell::RefCell,
-    io::{Read, Write},
+    cell::{Cell, RefCell},
+    io::Write,
     path::{Path, PathBuf},
     rc::Rc,
 };
 
 use cranpose_services::{
-    Content, ContentEntry, ContentError, ContentFolder, ContentFolderRef, ContentFuture,
-    ContentHandle, ContentMetadata, ContentReader, ContentReaderRef, ContentSink, ContentSinkRef,
-    DEFAULT_CHUNK_LEN, FilePicker, FilePickerError, FilePickerOptions, PickerFuture,
-    SaveDocumentRequest, set_platform_file_picker,
+    BlockingSink, Content, ContentEntry, ContentError, ContentFolder, ContentFolderRef,
+    ContentFuture, ContentHandle, ContentMetadata, ContentReader, ContentReaderRef, ContentSink,
+    ContentSinkRef, FilePicker, FilePickerError, FilePickerOptions, PickerFuture,
+    SaveDocumentRequest, open_threaded, set_platform_file_picker, threaded_sink,
 };
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, rc::Retained,
@@ -92,8 +92,29 @@ impl FilePicker for IosFilePicker {
                 .map_err(|error| ContentError::Io(format!("{}: {error}", staging.display())))?;
             Ok(Some(Rc::new(ExportSink {
                 staging,
-                file: RefCell::new(Some(file)),
+                writer: threaded_sink(Staged { file: Some(file) }),
+                finished: Cell::new(false),
             }) as ContentSinkRef))
+        })
+    }
+
+    /// The export chooser takes the file itself, so nothing is copied before
+    /// it: a hard link under the requested name stands in for the file when
+    /// the names differ.
+    fn export_file(
+        &self,
+        path: PathBuf,
+        request: SaveDocumentRequest,
+    ) -> PickerFuture<Result<bool, FilePickerError>> {
+        let link = exported_link(&path, &request.file_name);
+        let exported = link.as_deref().unwrap_or(&path).to_path_buf();
+        let presented = present(move |mtm| export_picker(mtm, &exported));
+        Box::pin(async move {
+            let picked = presented.await;
+            if let Some(link) = link {
+                let _ = std::fs::remove_file(link);
+            }
+            Ok(!picked?.is_empty())
         })
     }
 
@@ -234,6 +255,15 @@ impl SecurityScope {
         Self { url }
     }
 
+    /// Opens the scope until the returned access is dropped.
+    fn access(self: &Rc<Self>) -> ScopeAccess {
+        let started = unsafe { self.url.startAccessingSecurityScopedResource() };
+        ScopeAccess {
+            scope: Rc::clone(self),
+            started,
+        }
+    }
+
     fn enter<T>(&self, body: impl FnOnce() -> std::io::Result<T>) -> Result<T, ContentError> {
         let accessed = unsafe { self.url.startAccessingSecurityScopedResource() };
         let result = body().map_err(map_io);
@@ -241,6 +271,20 @@ impl SecurityScope {
             unsafe { self.url.stopAccessingSecurityScopedResource() };
         }
         result
+    }
+}
+
+/// A security scope held open.
+struct ScopeAccess {
+    scope: Rc<SecurityScope>,
+    started: bool,
+}
+
+impl Drop for ScopeAccess {
+    fn drop(&mut self) {
+        if self.started {
+            unsafe { self.scope.url.stopAccessingSecurityScopedResource() };
+        }
     }
 }
 
@@ -289,57 +333,31 @@ impl Content for IosFile {
         metadata_for(&self.scope, &self.path)
     }
 
+    /// The file opens inside its security scope, which stays open while the
+    /// reader lives; the reads run on a thread of their own.
     fn open(&self) -> ContentFuture<'_, Result<ContentReaderRef, ContentError>> {
         let scope = Rc::clone(&self.scope);
         let path = self.path.clone();
         Box::pin(async move {
-            let file = scope.enter(|| std::fs::File::open(&path))?;
+            let access = scope.access();
+            let file = std::fs::File::open(&path).map_err(map_io)?;
+            let reader = open_threaded(move || Ok(file), map_io).await?;
             Ok(Rc::new(IosReader {
-                scope,
-                file: RefCell::new(Some(file)),
+                _access: access,
+                reader,
             }) as ContentReaderRef)
         })
-    }
-
-    fn read_all(&self) -> ContentFuture<'_, Result<Vec<u8>, ContentError>> {
-        let scope = Rc::clone(&self.scope);
-        let path = self.path.clone();
-        Box::pin(async move { scope.enter(|| std::fs::read(&path)) })
     }
 }
 
 struct IosReader {
-    scope: Rc<SecurityScope>,
-    file: RefCell<Option<std::fs::File>>,
+    _access: ScopeAccess,
+    reader: ContentReaderRef,
 }
 
 impl ContentReader for IosReader {
     fn read_chunk(&self) -> ContentFuture<'_, Result<Option<Vec<u8>>, ContentError>> {
-        Box::pin(async move {
-            let mut slot = self.file.borrow_mut();
-            let Some(file) = slot.as_mut() else {
-                return Ok(None);
-            };
-            let mut buffer = vec![0u8; DEFAULT_CHUNK_LEN];
-            let filled = self.scope.enter(|| {
-                let mut filled = 0;
-                while filled < buffer.len() {
-                    match file.read(&mut buffer[filled..]) {
-                        Ok(0) => break,
-                        Ok(read) => filled += read,
-                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                        Err(error) => return Err(error),
-                    }
-                }
-                Ok(filled)
-            })?;
-            if filled == 0 {
-                *slot = None;
-                return Ok(None);
-            }
-            buffer.truncate(filled);
-            Ok(Some(buffer))
-        })
+        self.reader.read_chunk()
     }
 }
 
@@ -385,43 +403,27 @@ impl ContentFolder for IosFolder {
     }
 }
 
+/// A document written to a staging file on a thread of its own, then handed
+/// to the export chooser.
 struct ExportSink {
     staging: PathBuf,
-    file: RefCell<Option<std::fs::File>>,
+    writer: ContentSinkRef,
+    finished: Cell<bool>,
 }
 
 impl ContentSink for ExportSink {
     fn write_chunk(&self, bytes: Vec<u8>) -> ContentFuture<'_, Result<(), ContentError>> {
-        Box::pin(async move {
-            let mut slot = self.file.borrow_mut();
-            let file = slot
-                .as_mut()
-                .ok_or_else(|| ContentError::Io("sink is already finished".into()))?;
-            file.write_all(&bytes).map_err(map_io)
-        })
+        self.writer.write_chunk(bytes)
     }
 
     fn finish(&self) -> ContentFuture<'_, Result<(), ContentError>> {
         Box::pin(async move {
-            let Some(mut file) = self.file.borrow_mut().take() else {
+            if self.finished.replace(true) {
                 return Ok(());
-            };
-            file.flush().map_err(map_io)?;
-            file.sync_all().map_err(map_io)?;
-            drop(file);
-
+            }
+            self.writer.finish().await?;
             let staging = self.staging.clone();
-            let exported = present(move |mtm| {
-                let url = NSURL::fileURLWithPath(&objc2_foundation::NSString::from_str(
-                    &staging.to_string_lossy(),
-                ));
-                UIDocumentPickerViewController::initForExportingURLs_asCopy(
-                    UIDocumentPickerViewController::alloc(mtm),
-                    &NSArray::from_slice(&[&*url]),
-                    true,
-                )
-            })
-            .await;
+            let exported = present(move |mtm| export_picker(mtm, &staging)).await;
             let _ = std::fs::remove_file(&self.staging);
             exported
                 .map(|_| ())
@@ -432,8 +434,56 @@ impl ContentSink for ExportSink {
 
 impl Drop for ExportSink {
     fn drop(&mut self) {
-        if self.file.borrow().is_some() {
+        if !self.finished.get() {
             let _ = std::fs::remove_file(&self.staging);
         }
     }
+}
+
+/// The staging file of an [`ExportSink`].
+struct Staged {
+    file: Option<std::fs::File>,
+}
+
+impl BlockingSink for Staged {
+    fn write(&mut self, bytes: &[u8]) -> Result<(), ContentError> {
+        self.file
+            .as_mut()
+            .ok_or_else(|| ContentError::Io("sink is already finished".into()))?
+            .write_all(bytes)
+            .map_err(map_io)
+    }
+
+    fn finish(&mut self) -> Result<(), ContentError> {
+        let Some(mut file) = self.file.take() else {
+            return Ok(());
+        };
+        file.flush().map_err(map_io)?;
+        file.sync_all().map_err(map_io)
+    }
+}
+
+/// The export chooser for the file at `path`, which it copies.
+fn export_picker(mtm: MainThreadMarker, path: &Path) -> Retained<UIDocumentPickerViewController> {
+    let url = NSURL::fileURLWithPath(&objc2_foundation::NSString::from_str(
+        &path.to_string_lossy(),
+    ));
+    UIDocumentPickerViewController::initForExportingURLs_asCopy(
+        UIDocumentPickerViewController::alloc(mtm),
+        &NSArray::from_slice(&[&*url]),
+        true,
+    )
+}
+
+/// A hard link to `path` named `name` in the temporary folder, when `name`
+/// differs from the file's own; `None` exports the file under its own name.
+fn exported_link(path: &Path, name: &str) -> Option<PathBuf> {
+    if name.is_empty() || path.file_name().is_some_and(|own| own == name) {
+        return None;
+    }
+    let folder = cranpose_services::application_directories().ok()?.temporary;
+    std::fs::create_dir_all(&folder).ok()?;
+    let link = folder.join(name);
+    let _ = std::fs::remove_file(&link);
+    std::fs::hard_link(path, &link).ok().map(|()| link)
 }

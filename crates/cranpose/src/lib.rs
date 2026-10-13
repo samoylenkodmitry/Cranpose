@@ -12,11 +12,6 @@ pub use system_languages::{
 
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_file_picker;
-#[cfg(any(
-    all(feature = "android", target_os = "android"),
-    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
-))]
-mod chunked_read;
 /// An in-process Cranpose component driven by its native host.
 #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
 pub mod embedded_view;
