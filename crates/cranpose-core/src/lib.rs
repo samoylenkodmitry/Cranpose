@@ -5,6 +5,7 @@ pub extern crate self as cranpose_core;
 
 mod applier_host;
 mod blocking;
+mod bubble_passes;
 mod callbacks;
 mod composer;
 pub mod composer_context;
@@ -2043,6 +2044,26 @@ pub trait Applier: Any {
     fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError>;
     fn remove(&mut self, id: NodeId) -> Result<(), NodeError>;
 
+    /// Opens a batch of commands, in which no layout pass runs: within it a
+    /// dirty bubble may stop at an ancestor an earlier one passed
+    /// ([`Self::note_bubble_pass`]). Batches nest.
+    fn begin_bubble_batch(&mut self) {}
+
+    /// Closes the batch [`Self::begin_bubble_batch`] opened.
+    fn end_bubble_batch(&mut self) {}
+
+    /// Forgets what the open batch's bubbles passed: a node changed its
+    /// parent, or other code ran, so their marks may no longer reach the root.
+    fn forget_bubble_passes(&mut self) {}
+
+    /// Notes that a dirty bubble carrying `flags` passed the ancestor `id`.
+    /// `true` when one carrying all of them passed it earlier in the open
+    /// batch: that one marked every ancestor above `id`, so this one may
+    /// stop. An applier that keeps no notes answers `false`.
+    fn note_bubble_pass(&mut self, _id: NodeId, _flags: u8) -> bool {
+        false
+    }
+
     /// Records that `parent_id`'s child list changed structurally this frame
     /// (insert, remove, move, or reparent). Incremental scene consumers drain
     /// the recorded parents and re-patch those subtrees so removed nodes are
@@ -2165,11 +2186,18 @@ impl DirtyBubble {
 
     /// Visits each node once for all the flags. The walk goes on past an
     /// ancestor that is already dirty: a scoped layout repass can leave a
-    /// dirty node under a clean ancestor. A virtual start node passes its
-    /// own flags to its parent.
+    /// dirty node under a clean ancestor. It stops at one an earlier walk of
+    /// the same batch of commands passed with its flags
+    /// (`bubble_passes.rs`). A virtual start node passes its own flags to
+    /// its parent.
     fn walk(self, applier: &mut dyn Applier, first: Option<NodeId>, mut start: bool) {
+        let flags =
+            u8::from(self.layout) | u8::from(self.measure) << 1 | u8::from(self.semantics) << 2;
         let mut next = first;
         while let Some(id) = next {
+            if !start && applier.note_bubble_pass(id, flags) {
+                break;
+            }
             let Ok(node) = applier.get_mut(id) else {
                 break;
             };
@@ -2746,7 +2774,9 @@ impl CommandQueue {
     /// Applies the queued commands in order and empties the queue, keeping
     /// its storage. A failed command leaves the queue empty too.
     pub(crate) fn apply(&mut self, applier: &mut dyn Applier) -> Result<(), NodeError> {
+        applier.begin_bubble_batch();
         let result = self.apply_in_order(applier);
+        applier.end_bubble_batch();
         self.clear();
         result
     }
@@ -2864,6 +2894,7 @@ impl CommandPayloads<'_> {
             CommandTag::Callback => {
                 let callback = next_command_payload(&mut self.callbacks, tag)?;
                 Command::Callback(callback).apply_with_cleanup(applier, cleanup)?;
+                applier.forget_bubble_passes();
             }
             CommandTag::AttachChild
             | CommandTag::InsertChild
@@ -3060,6 +3091,9 @@ fn insert_child_with_reparenting(
         .get_mut(child_id)
         .ok()
         .and_then(|node| node.parent());
+    if old_parent != Some(parent_id) {
+        applier.forget_bubble_passes();
+    }
     if let Some(old_parent_id) = old_parent
         && old_parent_id != parent_id
     {
@@ -3125,6 +3159,7 @@ fn detach_child_from_parent(
         match node.parent() {
             Some(existing_parent_id) if existing_parent_id == parent_id => {
                 node.on_removed_from_parent();
+                applier.forget_bubble_passes();
             }
             None => {}
             Some(_) => return Ok(()),
@@ -3378,6 +3413,7 @@ pub struct MemoryApplier {
     recycled_node_prototypes: HashMap<TypeId, Box<dyn Node>>,
     structural_change_parents: Vec<NodeId>,
     virtual_node_ids: HashSet<NodeId>,
+    bubble_passes: bubble_passes::BubblePasses,
 }
 
 /// Reusable ancestry storage for [`MemoryApplier::scene_nodes_attached_to_into`].
@@ -3503,6 +3539,7 @@ impl MemoryApplier {
             recycled_node_prototypes: HashMap::default(),
             structural_change_parents: Vec::new(),
             virtual_node_ids: HashSet::default(),
+            bubble_passes: bubble_passes::BubblePasses::default(),
         }
     }
 
@@ -4335,7 +4372,25 @@ impl Applier for MemoryApplier {
     }
 
     fn remove(&mut self, id: NodeId) -> Result<(), NodeError> {
+        self.bubble_passes.forget();
         self.remove_subtree_postorder(id).map(|_| ())
+    }
+
+    fn begin_bubble_batch(&mut self) {
+        self.bubble_passes.begin_batch();
+    }
+
+    fn end_bubble_batch(&mut self) {
+        self.bubble_passes.end_batch();
+    }
+
+    fn forget_bubble_passes(&mut self) {
+        self.bubble_passes.forget();
+    }
+
+    fn note_bubble_pass(&mut self, id: NodeId, flags: u8) -> bool {
+        self.resolve_node_index(id)
+            .is_some_and(|index| self.bubble_passes.note(index, flags))
     }
 
     fn insert_with_id(&mut self, id: NodeId, node: Box<dyn Node>) -> Result<(), NodeError> {
