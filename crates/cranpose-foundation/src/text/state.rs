@@ -92,6 +92,7 @@ pub struct TextFieldStateInner {
     undo_stack: VecDeque<TextFieldValue>,
     redo_stack: VecDeque<TextFieldValue>,
     desired_x: Cell<Option<f32>>,
+    text_revision: Cell<u64>,
     last_edit_time: Cell<Option<web_time::Instant>>,
     pending_undo_snapshot: RefCell<Option<TextFieldValue>>,
 }
@@ -178,6 +179,7 @@ impl TextFieldState {
                     undo_stack: VecDeque::new(),
                     redo_stack: VecDeque::new(),
                     desired_x: Cell::new(None),
+                    text_revision: Cell::new(0),
                     last_edit_time: Cell::new(None),
                     pending_undo_snapshot: RefCell::new(None),
                 })),
@@ -200,6 +202,7 @@ impl TextFieldState {
                     undo_stack: VecDeque::new(),
                     redo_stack: VecDeque::new(),
                     desired_x: Cell::new(None),
+                    text_revision: Cell::new(0),
                     last_edit_time: Cell::new(None),
                     pending_undo_snapshot: RefCell::new(None),
                 })),
@@ -229,6 +232,27 @@ impl TextFieldState {
     /// caret move clears it.
     pub fn set_desired_x(&self, x: Option<f32>) {
         self.inner().borrow().desired_x.set(x);
+    }
+
+    /// Counts the changes to the text: it differs after each one, so a
+    /// reader that keeps something built from the text knows when to build
+    /// it again without comparing the text.
+    pub fn text_revision(&self) -> u64 {
+        self.inner().borrow().text_revision.get()
+    }
+
+    fn note_text_change(&self) {
+        let inner = self.inner();
+        let inner = inner.borrow();
+        inner
+            .text_revision
+            .set(inner.text_revision.get().wrapping_add(1));
+    }
+
+    /// Reads the text in place through `f`, which must not edit this state.
+    /// Creates a composition dependency when read during composition.
+    pub fn with_text<R>(&self, f: impl FnOnce(&str) -> R) -> R {
+        self.value.read(|value| f(&value.text))
     }
 
     /// Returns the current text content.
@@ -315,6 +339,7 @@ impl TextFieldState {
             inner.last_edit_time.set(None);
             drop(inner);
             self.value.set(previous_state);
+            self.note_text_change();
             true
         } else {
             false
@@ -331,6 +356,7 @@ impl TextFieldState {
             inner.undo_stack.push_back(current);
             drop(inner);
             self.value.set(redo_state);
+            self.note_text_change();
             true
         } else {
             false
@@ -425,6 +451,9 @@ impl TextFieldState {
         }
 
         self.value.set(buffer.into_value());
+        if change.text_changed {
+            self.note_text_change();
+        }
 
         drop(guard);
 

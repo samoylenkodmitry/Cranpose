@@ -796,9 +796,7 @@ fn collect_modifier_slices_into(
 
                 if let Some(text_field_node) = any.downcast_ref::<TextFieldModifierNode>() {
                     slices.text = Some(SliceText::Field(Rc::new(FieldText {
-                        content: Rc::new(crate::text::AnnotatedString::from(
-                            text_field_node.text(),
-                        )),
+                        content: text_field_node.shown_text(),
                         style: text_field_node.style().clone(),
                         layout: text_field_node.layout_handle(),
                         pan: text_field_node.text_pan_resolver(),

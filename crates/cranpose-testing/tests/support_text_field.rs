@@ -124,6 +124,36 @@ impl FocusedField {
         self.shell.ime_editor_state().expect("focused field").text
     }
 
+    /// The text the field shows, after the next frame lays it out.
+    pub(crate) fn shown_text(&mut self) -> String {
+        self.shell.update();
+        self.shell.with_layout_tree(|tree| {
+            fn find(node: &cranpose_ui::LayoutBox) -> Option<String> {
+                node.node_data
+                    .modifier_slices()
+                    .text_content()
+                    .map(|text| text.to_string())
+                    .or_else(|| node.children.iter().find_map(find))
+            }
+            tree.and_then(|tree| find(tree.root())).unwrap_or_default()
+        })
+    }
+
+    /// Taps the field just after `shown_prefix`, the start of what it shows.
+    pub(crate) fn tap_after(&mut self, shown_prefix: &str) -> &mut Self {
+        let x = self.shell.app_context().enter(|| {
+            cranpose_ui::text::measure_text(
+                &cranpose_ui::text::AnnotatedString::from(shown_prefix),
+                &cranpose_ui::TextStyle::default(),
+            )
+            .width
+        });
+        assert!(self.shell.set_cursor(x, 10.0));
+        assert!(self.shell.pointer_pressed());
+        assert!(self.shell.pointer_released());
+        self
+    }
+
     /// The selection's start and end, lower first.
     pub(crate) fn selection(&mut self) -> (usize, usize) {
         let editor = self.shell.ime_editor_state().expect("focused field");

@@ -103,10 +103,25 @@ only move the cursor skip the transformation. `max_length` also lets a
 shortening edit through, so text the app put past the limit can be deleted.
 See [`input_transformation.rs`](../crates/cranpose-foundation/src/text/input_transformation.rs).
 
+## Output transformations
+
+`BasicTextFieldOptions::output_transformation` takes Compose's
+`OutputTransformation`, which changes what the field shows without changing
+its text: inserted separators, or `OutputTransformation::mask` for dots. A
+transformation names its changes in offsets of the text, and the field
+builds the shown text and an offset mapping from them once per change of the
+text. Layout, drawing, the caret, selection highlights and handles, pointer
+hit tests and IME caret geometry work in shown offsets and map through it.
+Editing, semantics and the platform IME text stay in the text's offsets. A
+changed run maps as a whole, so the caret never stands inside text a
+transformation put in. See
+[`output_transformation.rs`](../crates/cranpose-foundation/src/text/output_transformation.rs)
+and [`text_field_presentation.rs`](../crates/cranpose-ui/src/text_field_presentation.rs).
+
 ## Current limits
 
 Android does not autofill text fields: its hidden editor view does not yet
-serve autofill values or sit where the field is. Output transformations and
-a secure text field remain outside the current public surface. The default UI measurement fallback
+serve autofill values or sit where the field is. A secure text field remains
+outside the current public surface. The default UI measurement fallback
 is monospaced; a host can install a font-backed `TextMeasurer` through its text
 service.

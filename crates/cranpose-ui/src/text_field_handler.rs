@@ -28,6 +28,7 @@ pub(crate) struct CaretGeometryRefs {
     pub content_origin: Rc<RefCell<crate::modifier::CoordinatorRect>>,
     pub scroll_offset: Rc<Cell<f32>>,
     pub wrap_width: Rc<Cell<Option<f32>>>,
+    pub presentation: Rc<crate::text_field_presentation::PresentationCache>,
     pub style: TextStyle,
 }
 
@@ -71,6 +72,18 @@ impl TextFieldHandler {
     fn edit_as_user(&self, f: impl FnOnce(&mut TextFieldBuffer)) {
         self.state
             .edit_as_user(self.input.transformation.borrow().as_ref(), f);
+    }
+
+    /// The selection and its text, unless nothing is selected.
+    fn selected_text(&self) -> Option<(cranpose_foundation::text::TextRange, String)> {
+        let selection = self.state.selection();
+        if selection.collapsed() {
+            return None;
+        }
+        self.state.with_text(|text| {
+            let selected = selection.safe_slice(text);
+            (!selected.is_empty()).then(|| (selection, selected.to_owned()))
+        })
     }
 
     fn on_text_mutated(&self) {
@@ -141,35 +154,11 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
     }
 
     fn copy_selection(&self) -> Option<String> {
-        let value = self.state.value();
-        let selection = value.selection;
-
-        if selection.collapsed() {
-            return None;
-        }
-
-        let text = selection.safe_slice(&value.text);
-        if text.is_empty() {
-            return None;
-        }
-
-        Some(text.to_string())
+        self.selected_text().map(|(_, text)| text)
     }
 
     fn cut_selection(&self) -> Option<String> {
-        let value = self.state.value();
-        let selection = value.selection;
-
-        if selection.collapsed() {
-            return None;
-        }
-
-        let text = selection.safe_slice(&value.text);
-        if text.is_empty() {
-            return None;
-        }
-
-        let text = text.to_string();
+        let (selection, text) = self.selected_text()?;
         self.edit_as_user(|buffer| buffer.delete(selection));
         self.on_text_mutated();
         Some(text)
@@ -233,9 +222,12 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
     }
 
     fn set_selection(&self, start_bytes: usize, end_bytes: usize) {
-        let text = self.state.value().text;
-        let start = text.floor_char_boundary(start_bytes.min(end_bytes));
-        let end = text.floor_char_boundary(start_bytes.max(end_bytes));
+        let (start, end) = self.state.with_text(|text| {
+            (
+                text.floor_char_boundary(start_bytes.min(end_bytes)),
+                text.floor_char_boundary(start_bytes.max(end_bytes)),
+            )
+        });
         self.state
             .set_selection(cranpose_foundation::text::TextRange::new(start, end));
         crate::cursor_animation::reset_cursor_blink();
@@ -278,26 +270,30 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
         true
     }
 
+    /// One caret x for each character boundary of the text, measured on the
+    /// text as shown.
     fn caret_geometry(&self) -> Option<ImeCaretGeometry> {
-        let value = self.state.value();
-        let text = value.text.as_str();
-        if text.contains('\n') {
+        let g = &self.geometry;
+        let presentation = g.presentation.get(self.state);
+        let shown = presentation.text();
+        if shown.contains('\n') {
             return None;
         }
-        let g = &self.geometry;
         let content = g.content_origin.borrow().origin();
         let base_x = content.x - g.scroll_offset.get();
         let top = content.y;
         let line_height = measure_text(&AnnotatedString::from("Ag"), &g.style).line_height;
 
-        let mut caret_xs = Vec::with_capacity(text.len() + 1);
-        caret_xs.push(base_x);
-        let mut byte = 0usize;
-        for ch in text.chars() {
-            byte += ch.len_utf8();
-            let advance = measure_text(&AnnotatedString::from(&text[..byte]), &g.style).width;
-            caret_xs.push(base_x + advance);
-        }
+        let caret_xs = self.state.with_text(|text| {
+            let mut caret_xs = Vec::with_capacity(text.len() + 1);
+            caret_xs.push(base_x);
+            for (index, ch) in text.char_indices() {
+                let end = presentation.to_shown(index + ch.len_utf8());
+                let advance = measure_text(&AnnotatedString::from(&shown[..end]), &g.style).width;
+                caret_xs.push(base_x + advance);
+            }
+            caret_xs
+        });
         Some(ImeCaretGeometry {
             caret_xs,
             top,

@@ -25,6 +25,7 @@ mod buffer;
 mod graphemes;
 mod input_transformation;
 mod line_limits;
+mod output_transformation;
 mod range;
 mod state;
 
@@ -32,5 +33,6 @@ pub use buffer::TextFieldBuffer;
 pub use graphemes::{floor_grapheme_boundary, next_grapheme_boundary, previous_grapheme_boundary};
 pub use input_transformation::InputTransformation;
 pub use line_limits::{TextFieldLineLimits, filter_for_single_line};
+pub use output_transformation::{OffsetMapping, OutputChanges, OutputTransformation, ShownText};
 pub use range::TextRange;
 pub use state::{TextFieldState, TextFieldValue};
