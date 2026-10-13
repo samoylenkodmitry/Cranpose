@@ -5,6 +5,7 @@ use std::time::Duration;
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use cranpose_ui::{
+    PaddingValues,
     widgets::{
         Box, BoxSpec, Button, ButtonSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row,
         RowSpec, Text,
@@ -144,7 +145,7 @@ pub(crate) fn main() {
                     state,
                     LazyColumnSpec::default()
                         .vertical_arrangement(LinearArrangement::SpacedBy(10.0))
-                        .content_padding(0.0, 20.0),
+                        .content_padding(PaddingValues::new(0.0, 0.0, 0.0, 20.0)),
                     |scope| {
                         scope.items(100, move |index| {
                             let color = if index % 2 == 0 {

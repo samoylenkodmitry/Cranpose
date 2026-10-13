@@ -273,12 +273,8 @@ fn TickerChange(tickers: Rc<[Ticker]>, index: usize, frame: MutableState<u32>, s
 #[composable]
 fn CardRow(shared: Shared, first: usize) {
     let s = shared.tier.scale;
-    // Cranpose's list pads only along its scroll axis: the rows carry the
-    // side padding Compose's grid takes as content padding.
     Row(
-        Modifier::empty()
-            .fill_max_width()
-            .padding_horizontal(8.0 * s),
+        Modifier::empty().fill_max_width(),
         RowSpec::new().horizontal_arrangement(LinearArrangement::spaced_by(8.0 * s)),
         move || {
             for card in first..first + shared.tier.columns {
@@ -598,9 +594,7 @@ fn Badge(card: usize, frame: MutableState<u32>, s: f32) {
 #[composable]
 fn DeepCluster(cluster: usize, depth: usize, s: f32) {
     Box(
-        Modifier::empty()
-            .fill_max_width()
-            .padding_horizontal(8.0 * s),
+        Modifier::empty().fill_max_width(),
         BoxSpec::default(),
         move || Level(cluster, depth, s),
     );

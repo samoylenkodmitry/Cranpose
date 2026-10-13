@@ -6,6 +6,7 @@ use cranpose_foundation::lazy::{rememberLazyListState, LazyListScopeExt, LazyLis
 use cranpose_macros::composable;
 use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::{
+    PaddingValues,
     widgets::*, Color, ColumnSpec, LinearArrangement, Modifier, RowSpec, TextStyle,
     VerticalAlignment,
 };
@@ -26,7 +27,7 @@ fn lazy_list_with_rc(state: LazyListState, data: Rc<[TestItem]>) {
         state,
         LazyColumnSpec::new()
             .vertical_arrangement(LinearArrangement::SpacedBy(4.0))
-            .content_padding(8.0, 8.0),
+            .content_padding(PaddingValues::symmetric(0.0, 8.0)),
         |scope| {
             scope.items_slice_rc(data, |item| {
                 rc_item_content(item);
@@ -45,7 +46,7 @@ fn lazy_list_with_indexed_rc(state: LazyListState, data: Rc<[TestItem]>) {
         state,
         LazyColumnSpec::new()
             .vertical_arrangement(LinearArrangement::SpacedBy(4.0))
-            .content_padding(8.0, 8.0),
+            .content_padding(PaddingValues::symmetric(0.0, 8.0)),
         |scope| {
             scope.items_indexed_rc(data, |index, item| {
                 indexed_rc_item_content(index, item);

@@ -8,6 +8,7 @@ use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope, LazyListSt
 use cranpose_macros::composable;
 use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::{
+    PaddingValues,
     widgets::*, Color, ColumnSpec, LinearArrangement, Modifier, RowSpec, TextStyle,
     VerticalAlignment,
 };
@@ -49,7 +50,7 @@ fn variable_height_lazy_list(state: LazyListState, stats: MutableState<Lifecycle
         state,
         LazyColumnSpec::new()
             .vertical_arrangement(LinearArrangement::SpacedBy(4.0))
-            .content_padding(8.0, 8.0),
+            .content_padding(PaddingValues::symmetric(0.0, 8.0)),
         |scope| {
             scope.items(LazyItems::new(30).key(|i: usize| i as u64), move |index| {
                 variable_height_item(index, stats);

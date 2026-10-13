@@ -1,7 +1,7 @@
 use cranpose_foundation::lazy::LazyItems;
 use cranpose_testing::{ComposeTestRule, PlacedSemanticsNode};
 use cranpose_ui::{
-    Modifier, Size,
+    Modifier, PaddingValues, Size,
     round_scaling_list::CentreAnchor,
     widgets::{
         BoxSpec,
@@ -20,7 +20,8 @@ fn tappable_list(size: f32) -> PlacedSemanticsNode {
         WearScalingLazyColumn(
             Modifier::empty().fill_max_size(),
             state,
-            WearScalingLazyColumnSpec::default().content_padding(18.0, 34.0),
+            WearScalingLazyColumnSpec::default()
+                .content_padding(PaddingValues::symmetric(18.0, 34.0)),
             move |scope| {
                 scope.items(
                     LazyItems::new(ROWS).key(|index: usize| index as u64),

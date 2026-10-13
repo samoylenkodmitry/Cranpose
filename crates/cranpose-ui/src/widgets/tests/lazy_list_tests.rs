@@ -10,27 +10,10 @@ fn test_lazy_column_spec_default() {
 }
 
 #[test]
-fn test_lazy_column_spec_builder() {
-    let spec = LazyColumnSpec::new()
-        .vertical_arrangement(LinearArrangement::SpacedBy(8.0))
-        .content_padding(16.0, 16.0);
-
-    assert_eq!(spec.vertical_arrangement, LinearArrangement::SpacedBy(8.0));
-    assert_eq!(spec.content_padding_top, 16.0);
-}
-
-#[test]
 fn test_lazy_row_spec_default() {
     let spec = LazyRowSpec::default();
     assert_eq!(spec.horizontal_arrangement, LinearArrangement::Start);
     assert_eq!(spec.beyond_bounds_item_count, 2);
-}
-
-#[test]
-fn test_content_padding_all() {
-    let spec = LazyColumnSpec::new().content_padding_all(24.0);
-    assert_eq!(spec.content_padding_top, 24.0);
-    assert_eq!(spec.content_padding_bottom, 24.0);
 }
 
 #[test]
@@ -41,16 +24,19 @@ fn lazy_list_placements_reuse_output_storage() {
     item.node_ids.push(102);
     item.child_offsets.push(0.0);
     item.child_offsets.push(5.0);
-    let config = LazyListMeasureConfig {
-        is_vertical: true,
-        is_rtl: false,
-        reverse_layout: false,
-        before_content_padding: 0.0,
-        after_content_padding: 0.0,
-        spacing: 0.0,
-        beyond_bounds_item_count: 0,
-        vertical_arrangement: Some(LinearArrangement::Start),
-        horizontal_arrangement: None,
+    let config = LazyListLayoutConfig {
+        measure: LazyListMeasureConfig {
+            is_vertical: true,
+            is_rtl: false,
+            reverse_layout: false,
+            before_content_padding: 0.0,
+            after_content_padding: 0.0,
+            spacing: 0.0,
+            beyond_bounds_item_count: 0,
+            vertical_arrangement: Some(LinearArrangement::Start),
+            horizontal_arrangement: None,
+        },
+        cross_padding: (0.0, 0.0),
     };
     let mut placements = Vec::with_capacity(8);
     let original_capacity = placements.capacity();
@@ -77,16 +63,19 @@ fn lazy_list_placements_retain_offscreen_measured_items_for_renderer_prewarm() {
     partial.node_ids.push(102);
     partial.child_offsets.push(0.0);
 
-    let config = LazyListMeasureConfig {
-        is_vertical: true,
-        is_rtl: false,
-        reverse_layout: false,
-        before_content_padding: 0.0,
-        after_content_padding: 0.0,
-        spacing: 0.0,
-        beyond_bounds_item_count: 2,
-        vertical_arrangement: Some(LinearArrangement::Start),
-        horizontal_arrangement: None,
+    let config = LazyListLayoutConfig {
+        measure: LazyListMeasureConfig {
+            is_vertical: true,
+            is_rtl: false,
+            reverse_layout: false,
+            before_content_padding: 0.0,
+            after_content_padding: 0.0,
+            spacing: 0.0,
+            beyond_bounds_item_count: 2,
+            vertical_arrangement: Some(LinearArrangement::Start),
+            horizontal_arrangement: None,
+        },
+        cross_padding: (0.0, 0.0),
     };
     let mut placements = Vec::new();
 

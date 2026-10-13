@@ -3,7 +3,7 @@ use cranpose_core::location_key;
 use cranpose_foundation::lazy::LazyItems;
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui::{
-    Color, Modifier, Text,
+    Color, Modifier, PaddingValues, Text,
     round_scaling_list::CentreAnchor,
     widgets::wear::{
         ListHeader, ListHeaderSpec, WearColors, WearScalingLazyColumn, WearScalingLazyColumnSpec,
@@ -59,7 +59,8 @@ fn a_wear_scaling_list_puts_its_rows_on_the_glass() {
                 .fill_max_size()
                 .background(colors().background),
             state,
-            WearScalingLazyColumnSpec::default().content_padding(18.0, 34.0),
+            WearScalingLazyColumnSpec::default()
+                .content_padding(PaddingValues::symmetric(18.0, 34.0)),
             |scope| {
                 scope.items(
                     LazyItems::new(HEADERS.len() + 1)

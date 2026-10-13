@@ -275,6 +275,7 @@ pub use widgets::{
     clickable_text::ClickableText,
     lazy_list::{LazyColumn, LazyColumnSpec, LazyRow, LazyRowSpec},
     linked_text::LinkedText,
+    padding_values::PaddingValues,
     popup::{dismiss_top_popup, dismissable_popup_open},
     slider::{Slider, SliderOrientation, SliderScope, SliderSpec},
     swipe_to_dismiss::{

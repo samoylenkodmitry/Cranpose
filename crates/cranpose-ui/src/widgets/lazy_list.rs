@@ -17,13 +17,17 @@ use cranpose_foundation::lazy::{
     measure_lazy_list_with_beyond_bounds_policy,
 };
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo};
-use cranpose_ui_layout::{Constraints, LinearArrangement, MeasureResult, MeasureScope as _};
+use cranpose_ui_layout::{
+    Constraints, LinearArrangement, MeasureResult, MeasureScope as _, round_to_px,
+};
 use smallvec::SmallVec;
 use web_time::Instant;
 
+use super::PaddingValues;
 use crate::{
     composable,
     layout::MeasuredNode,
+    layout_direction::LayoutDirection,
     modifier::{Modifier, Size},
     scroll::{OverscrollEffect, ScrollMotionContextKey, scroll_motion_context_for_key},
     subcompose_layout::{
@@ -56,10 +60,10 @@ struct LazyItemMeasureContext {
 pub struct LazyColumnSpec {
     /// Vertical arrangement for spacing between items.
     pub vertical_arrangement: LinearArrangement,
-    /// Content padding before the first item.
-    pub content_padding_top: f32,
-    /// Content padding after the last item.
-    pub content_padding_bottom: f32,
+    /// Compose's `contentPadding`. The top and bottom edges add space before
+    /// the first item and after the last; the start and end edges inset every
+    /// item.
+    pub content_padding: PaddingValues,
     /// Number of items to compose beyond the visible bounds.
     /// Higher values reduce jank during fast scrolling but use more memory.
     pub beyond_bounds_item_count: usize,
@@ -71,8 +75,7 @@ impl Default for LazyColumnSpec {
     fn default() -> Self {
         Self {
             vertical_arrangement: LinearArrangement::Start,
-            content_padding_top: 0.0,
-            content_padding_bottom: 0.0,
+            content_padding: PaddingValues::default(),
             beyond_bounds_item_count: 2,
             reverse_layout: false,
         }
@@ -89,17 +92,15 @@ impl LazyColumnSpec {
         self
     }
 
-    pub fn content_padding(mut self, top: f32, bottom: f32) -> Self {
-        self.content_padding_top = top;
-        self.content_padding_bottom = bottom;
+    /// Pads the content on all four edges, as Compose's `contentPadding`.
+    pub fn content_padding(mut self, padding: PaddingValues) -> Self {
+        self.content_padding = padding;
         self
     }
 
-    /// Sets uniform content padding for top and bottom.
-    pub fn content_padding_all(mut self, padding: f32) -> Self {
-        self.content_padding_top = padding;
-        self.content_padding_bottom = padding;
-        self
+    /// The same content padding on all four edges.
+    pub fn content_padding_all(self, padding: f32) -> Self {
+        self.content_padding(PaddingValues::all(padding))
     }
 
     pub fn reverse_layout(mut self, reverse: bool) -> Self {
@@ -113,10 +114,10 @@ impl LazyColumnSpec {
 pub struct LazyRowSpec {
     /// Horizontal arrangement for spacing between items.
     pub horizontal_arrangement: LinearArrangement,
-    /// Content padding before the first item.
-    pub content_padding_start: f32,
-    /// Content padding after the last item.
-    pub content_padding_end: f32,
+    /// Compose's `contentPadding`. The start and end edges add space before
+    /// the first item and after the last; the top and bottom edges inset
+    /// every item.
+    pub content_padding: PaddingValues,
     /// Number of items to compose beyond the visible bounds.
     pub beyond_bounds_item_count: usize,
     /// Whether to reverse the layout direction (end-to-start).
@@ -127,8 +128,7 @@ impl Default for LazyRowSpec {
     fn default() -> Self {
         Self {
             horizontal_arrangement: LinearArrangement::Start,
-            content_padding_start: 0.0,
-            content_padding_end: 0.0,
+            content_padding: PaddingValues::default(),
             beyond_bounds_item_count: 2,
             reverse_layout: false,
         }
@@ -145,22 +145,87 @@ impl LazyRowSpec {
         self
     }
 
-    pub fn content_padding(mut self, start: f32, end: f32) -> Self {
-        self.content_padding_start = start;
-        self.content_padding_end = end;
+    /// Pads the content on all four edges, as Compose's `contentPadding`.
+    pub fn content_padding(mut self, padding: PaddingValues) -> Self {
+        self.content_padding = padding;
         self
     }
 
-    /// Sets uniform content padding for start and end.
-    pub fn content_padding_all(mut self, padding: f32) -> Self {
-        self.content_padding_start = padding;
-        self.content_padding_end = padding;
-        self
+    /// The same content padding on all four edges.
+    pub fn content_padding_all(self, padding: f32) -> Self {
+        self.content_padding(PaddingValues::all(padding))
     }
 
     pub fn reverse_layout(mut self, reverse: bool) -> Self {
         self.reverse_layout = reverse;
         self
+    }
+}
+
+/// What a list measures and places with: the main-axis configuration and
+/// the content padding on the physical cross-axis edges, left and right of a
+/// column, top and bottom of a row.
+#[derive(Clone, Debug, PartialEq)]
+struct LazyListLayoutConfig {
+    measure: LazyListMeasureConfig,
+    cross_padding: (f32, f32),
+}
+
+/// A list's content padding along its axes, in layout pixels rounded to the
+/// device grid as Compose's `roundToPx` rounds it.
+struct ResolvedContentPadding {
+    /// Before the first item and after the last, in layout order: a reversed
+    /// column starts at its bottom edge, a reversed row at its end edge.
+    before: f32,
+    after: f32,
+    /// The physical cross-axis edges: left and right of a column, top and
+    /// bottom of a row.
+    cross: (f32, f32),
+    /// The physical main-axis edges: top and bottom of a column, left and
+    /// right of a row.
+    main: (f32, f32),
+}
+
+fn resolve_content_padding(
+    padding: PaddingValues,
+    is_vertical: bool,
+    reverse_layout: bool,
+    direction: LayoutDirection,
+    density: f32,
+) -> ResolvedContentPadding {
+    let px = |value: f32| round_to_px(value.max(0.0), density);
+    let edges = padding.physical(direction);
+    let (left, top, right, bottom) = (
+        px(edges.left),
+        px(edges.top),
+        px(edges.right),
+        px(edges.bottom),
+    );
+    // A row lays out from its start edge; right-to-left placement mirrors it.
+    let (first, last) = if is_vertical {
+        (top, bottom)
+    } else {
+        (px(padding.start), px(padding.end))
+    };
+    let (before, after) = if reverse_layout {
+        (last, first)
+    } else {
+        (first, last)
+    };
+    if is_vertical {
+        ResolvedContentPadding {
+            before,
+            after,
+            cross: (left, right),
+            main: (top, bottom),
+        }
+    } else {
+        ResolvedContentPadding {
+            before,
+            after,
+            cross: (top, bottom),
+            main: (left, right),
+        }
     }
 }
 
@@ -466,7 +531,7 @@ fn recycle_forward_skipped_active_slots(
 /// Internal helper to create a lazy list measure policy.
 struct LazyListMeasureContext<'a> {
     state: &'a LazyListState,
-    config: &'a LazyListMeasureConfig,
+    config: &'a LazyListLayoutConfig,
     measured_item_cache: &'a Rc<RefCell<LazyMeasuredItemCache>>,
     overscroll: &'a OverscrollEffect,
 }
@@ -479,7 +544,8 @@ fn measure_lazy_list_internal(
     context: LazyListMeasureContext<'_>,
 ) -> MeasureResult {
     let state = context.state;
-    let config = context.config;
+    let layout_config = context.config;
+    let config = &layout_config.measure;
     let measured_item_cache = context.measured_item_cache;
     let overscroll = context.overscroll;
     let raw_viewport_size = if is_vertical {
@@ -492,13 +558,15 @@ fn measure_lazy_list_internal(
     } else {
         constraints.max_height
     };
+    let (cross_start, cross_end) = layout_config.cross_padding;
+    let item_cross_axis_size = (cross_axis_size - cross_start - cross_end).max(0.0);
 
     let items_count = content.item_count();
     let retained_reusable_slots = EXPENSIVE_RETAINED_REUSABLE_SLOTS;
     scope.set_reusable_pool_limits(retained_reusable_slots, retained_reusable_slots);
     measured_item_cache
         .borrow_mut()
-        .begin_pass(scope, is_vertical, cross_axis_size);
+        .begin_pass(scope, is_vertical, item_cross_axis_size);
     let near = state.nearest_range();
     if items_count > 0 {
         state.update_scroll_position_if_item_moved(items_count, |slot_id| {
@@ -509,7 +577,7 @@ fn measure_lazy_list_internal(
     let scroll_delta_for_direction = state.peek_scroll_delta();
     let item_measure_inputs = LazyListItemMeasureInputs {
         is_vertical,
-        cross_axis_size,
+        cross_axis_size: item_cross_axis_size,
         content,
         state,
         measured_item_cache,
@@ -540,7 +608,7 @@ fn measure_lazy_list_internal(
         scope,
         &result.visible_items,
         is_vertical,
-        cross_axis_size,
+        item_cross_axis_size,
     );
     log_lazy_cache_telemetry(&result, measured_item_cache);
     let effective_viewport_size = result.viewport_size;
@@ -599,7 +667,7 @@ fn measure_lazy_list_internal(
             items_count,
             is_vertical,
             effective_viewport_size,
-            config,
+            layout_config,
             cross_axis_size,
         );
         let bounce = overscroll.offset();
@@ -1115,10 +1183,12 @@ fn push_lazy_list_placements(
     items_count: usize,
     is_vertical: bool,
     viewport_size: f32,
-    config: &LazyListMeasureConfig,
+    layout_config: &LazyListLayoutConfig,
     cross_axis_size: f32,
 ) {
     use cranpose_ui_layout::Arrangement;
+
+    let config = &layout_config.measure;
 
     placements.clear();
     placements.reserve(visible_items.iter().map(|item| item.node_ids.len()).sum());
@@ -1161,7 +1231,7 @@ fn push_lazy_list_placements(
                 is_vertical,
                 viewport_size,
                 cross_axis_size,
-                config,
+                layout_config,
             );
         }
     } else {
@@ -1173,7 +1243,7 @@ fn push_lazy_list_placements(
                 is_vertical,
                 viewport_size,
                 cross_axis_size,
-                config,
+                layout_config,
             );
         }
     }
@@ -1186,8 +1256,10 @@ fn push_lazy_item_placements(
     is_vertical: bool,
     viewport_size: f32,
     cross_axis_size: f32,
-    config: &LazyListMeasureConfig,
+    layout_config: &LazyListLayoutConfig,
 ) {
+    let config = &layout_config.measure;
+    let (cross_start, cross_end) = layout_config.cross_padding;
     let start = if config.reverse_layout {
         viewport_size - offset - item.main_axis_size
     } else {
@@ -1196,13 +1268,14 @@ fn push_lazy_item_placements(
     for (index, (&node_id, &offset)) in item.node_ids.iter().zip(&item.child_offsets).enumerate() {
         let main = start + offset;
         let (mut x, y) = if is_vertical {
-            (0.0, main)
+            (cross_start, main)
         } else {
-            (main, 0.0)
+            (main, cross_start)
         };
         if config.is_rtl {
             x = if is_vertical {
                 cross_axis_size
+                    - cross_end
                     - item
                         .child_cross_axis_sizes
                         .get(index)
@@ -1257,18 +1330,29 @@ fn LazyColumnImpl(
     let caller_modifier_changed = super::layout::caller_modifier_changed(&modifier);
 
     let composed_density = crate::density::density();
-    let config = LazyListMeasureConfig {
-        is_vertical: true,
-        is_rtl: crate::layout_direction().is_rtl(),
-        reverse_layout: spec.reverse_layout,
-        before_content_padding: spec.content_padding_top,
-        after_content_padding: spec.content_padding_bottom,
-        spacing: spec
-            .vertical_arrangement
-            .spacing(composed_density.density()),
-        beyond_bounds_item_count: spec.beyond_bounds_item_count,
-        vertical_arrangement: Some(spec.vertical_arrangement),
-        horizontal_arrangement: None,
+    let direction = crate::layout_direction();
+    let padding = resolve_content_padding(
+        spec.content_padding,
+        true,
+        spec.reverse_layout,
+        direction,
+        composed_density.density(),
+    );
+    let config = LazyListLayoutConfig {
+        measure: LazyListMeasureConfig {
+            is_vertical: true,
+            is_rtl: direction.is_rtl(),
+            reverse_layout: spec.reverse_layout,
+            before_content_padding: padding.before,
+            after_content_padding: padding.after,
+            spacing: spec
+                .vertical_arrangement
+                .spacing(composed_density.density()),
+            beyond_bounds_item_count: spec.beyond_bounds_item_count,
+            vertical_arrangement: Some(spec.vertical_arrangement),
+            horizontal_arrangement: None,
+        },
+        cross_padding: padding.cross,
     };
     let config_cell =
         cranpose_core::remember(|| Rc::new(RefCell::new(config.clone()))).with(Clone::clone);
@@ -1323,7 +1407,7 @@ fn LazyColumnImpl(
     let scroll_modifier = modifier.clip_to_bounds().lazy_vertical_scroll_with_context(
         state,
         spec.reverse_layout,
-        (spec.content_padding_top, spec.content_padding_bottom),
+        padding.main,
         motion_context,
     );
 
@@ -1347,7 +1431,7 @@ fn LazyColumnImpl(
         node.set_measure_policy(Rc::clone(&policy));
         node.set_captured_context(captured_context);
         node.set_density(composed_density);
-        node.set_layout_direction(crate::layout_direction());
+        node.set_layout_direction(direction);
         if inputs_changed {
             measured_item_cache.borrow_mut().clear();
             node.invalidate_subcomposition();
@@ -1382,20 +1466,31 @@ fn LazyRowImpl(
     let caller_modifier_changed = super::layout::caller_modifier_changed(&modifier);
 
     let composed_density = crate::density::density();
-    let is_rtl = crate::layout_direction().is_rtl();
+    let direction = crate::layout_direction();
+    let is_rtl = direction.is_rtl();
     let reverse_scrolling = spec.reverse_layout ^ is_rtl;
-    let config = LazyListMeasureConfig {
-        is_vertical: false,
-        is_rtl,
-        reverse_layout: spec.reverse_layout,
-        before_content_padding: spec.content_padding_start,
-        after_content_padding: spec.content_padding_end,
-        spacing: spec
-            .horizontal_arrangement
-            .spacing(composed_density.density()),
-        beyond_bounds_item_count: spec.beyond_bounds_item_count,
-        vertical_arrangement: None,
-        horizontal_arrangement: Some(spec.horizontal_arrangement),
+    let padding = resolve_content_padding(
+        spec.content_padding,
+        false,
+        spec.reverse_layout,
+        direction,
+        composed_density.density(),
+    );
+    let config = LazyListLayoutConfig {
+        measure: LazyListMeasureConfig {
+            is_vertical: false,
+            is_rtl,
+            reverse_layout: spec.reverse_layout,
+            before_content_padding: padding.before,
+            after_content_padding: padding.after,
+            spacing: spec
+                .horizontal_arrangement
+                .spacing(composed_density.density()),
+            beyond_bounds_item_count: spec.beyond_bounds_item_count,
+            vertical_arrangement: None,
+            horizontal_arrangement: Some(spec.horizontal_arrangement),
+        },
+        cross_padding: padding.cross,
     };
     let config_cell =
         cranpose_core::remember(|| Rc::new(RefCell::new(config.clone()))).with(Clone::clone);
@@ -1452,7 +1547,7 @@ fn LazyRowImpl(
         .lazy_horizontal_scroll_with_context(
             state,
             reverse_scrolling,
-            (spec.content_padding_start, spec.content_padding_end),
+            padding.main,
             motion_context,
         );
 
@@ -1476,7 +1571,7 @@ fn LazyRowImpl(
         node.set_measure_policy(Rc::clone(&policy));
         node.set_captured_context(captured_context);
         node.set_density(composed_density);
-        node.set_layout_direction(crate::layout_direction());
+        node.set_layout_direction(direction);
         if inputs_changed {
             measured_item_cache.borrow_mut().clear();
             node.invalidate_subcomposition();
