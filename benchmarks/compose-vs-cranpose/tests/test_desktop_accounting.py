@@ -73,9 +73,14 @@ class DesktopRoundsTest(unittest.TestCase):
         app's first start, then its second."""
         measured = []
         self.cleared = []
+        self.programs = []
 
-        def measure(name, args, work, page, stage, label, earlier, profile):
+        def install(name, stage, label):
+            return f'installs/{label}/{name}'
+
+        def measure(name, args, work, page, stage, label, earlier, profile, program=None):
             measured.append(label)
+            self.programs.append(program)
             rate = rates[len(measured) - 1]
             if isinstance(rate, Exception):
                 raise rate
@@ -92,6 +97,7 @@ class DesktopRoundsTest(unittest.TestCase):
         args = SimpleNamespace(parity=False, output=Path('results'), rounds=rounds, max_others=1.5, main=None,
                                release=None, tier=16, run=3.0, browser=browser)
         with patch.object(desktop, 'measure', measure), patch.object(desktop, 'clear_app_state', clear), \
+                patch.object(desktop, 'fresh_install', install), \
                 patch.object(desktop, 'idle_others', return_value=idle), \
                 patch.object(desktop.subprocess, 'run', return_value=SimpleNamespace(stdout='Apple M3 Pro')):
             report = desktop.run(args, [app], 'page', Path('stage'))
@@ -105,6 +111,12 @@ class DesktopRoundsTest(unittest.TestCase):
         self.assertEqual([leg['start'] for leg in scenario['legs']], ['first', 'second'] * 2)
         self.assertEqual(scenario['starts']['first']['summary']['fyne']['fps'], 24.45)
         self.assertEqual(scenario['starts']['second']['summary']['fyne']['fps'], 30.25)
+
+    def test_each_first_start_runs_a_fresh_install_and_the_second_start_runs_the_same(self):
+        self.rounds([24.3, 30.0, 24.6, 30.5], rounds=2)
+        self.assertEqual(self.programs, ['installs/fyne-1-first-1/fyne', 'installs/fyne-1-first-1/fyne',
+                                         'installs/fyne-2-first-1/fyne', 'installs/fyne-2-first-1/fyne'],
+                         'macOS checks a program the first time it runs, as after an install')
 
     def test_a_leg_far_off_the_earlier_ones_of_its_start_is_measured_once_more_and_the_median_decides(self):
         measured, scenario = self.rounds([24.3, 30.0, 60.1, 24.6, 30.5], rounds=2)

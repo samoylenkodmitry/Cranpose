@@ -148,6 +148,33 @@ APPS = {
 }
 
 
+# The apps whose program loads libraries from its own directory, which an
+# install puts there with it: a .NET publish.
+INSTALLED_WITH_DIRECTORY = {'avalonia'}
+
+
+def fresh_install(name, stage, label):
+    """`name`'s program copied where no launch has run it, as installing the
+    app leaves it, and the path to launch. macOS checks a program file the
+    first time it runs: 190 to 320 ms before a fresh copy of the 10 MB
+    Cranpose bench reached its `main` on macm3, 12 ms after. Without a copy
+    only the apps rebuilt since an earlier run paid it, Cranpose's every
+    night. The app's bundle, or its directory where its libraries lie beside
+    it, is copied whole."""
+    executable = Path(str(APPS[name][0]))
+    text = str(executable)
+    if '.app/Contents/MacOS/' in text:
+        installed = Path(text.split('.app/Contents/MacOS/')[0] + '.app')
+    elif name in INSTALLED_WITH_DIRECTORY:
+        installed = executable.parent
+    else:
+        installed = executable
+    target = stage / 'installs' / label / installed.name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(['ditto', str(installed), str(target)], check=True)
+    return str(target / executable.relative_to(installed)) if installed != executable else str(target)
+
+
 class Page(http.server.SimpleHTTPRequestHandler):
     """Serves the web page, and the Roboto files under `fonts/` beside it."""
 
@@ -425,7 +452,7 @@ class App:
     no window from outside the login session, and an app it starts comes to
     the front."""
 
-    def __init__(self, name, args, freeze, work, page, stage, label=None, profile=None):
+    def __init__(self, name, args, freeze, work, page, stage, label=None, profile=None, program=None):
         tier = args.tier
         self.name = name
         self.work = work
@@ -435,6 +462,8 @@ class App:
         template, page = (CHROME_APP, f'{page}/{name}/index.html') if args.browser else (APPS[name], page)
         values = {'tier': tier, 'freeze': freeze, 'page': page, 'profile': profile}
         command = [str(part).format(**values) for part in template]
+        if program:
+            command[0] = program
         variables = {'PERF_TIER': str(tier), 'PERF_FREEZE': str(freeze), 'PERF_FONTS': str(stage / 'fonts')}
         executable, arguments = command[0], command[1:]
         self.log.write_text('')
@@ -512,7 +541,7 @@ def disagrees(fps, earlier):
     return max(fps, reference) > DISAGREEMENT * min(fps, reference)
 
 
-def measure(name, args, work, page, stage, label, earlier, profile):
+def measure(name, args, work, page, stage, label, earlier, profile, program=None):
     """One launch, measured from its start for `--run` seconds: every frame
     its window presented in each second, the CPU the app and every process it
     started spent, the clocks the chip ran at and the memory the app held at
@@ -524,7 +553,7 @@ def measure(name, args, work, page, stage, label, earlier, profile):
     # zero, so what they hold at the end is the run's.
     before = processes()
     launched = time.monotonic()
-    app = App(name, args, 0, work, page, stage, label, profile)
+    app = App(name, args, 0, work, page, stage, label, profile, program)
     try:
         clocks = Clocks()
         server_pid = next((pid for pid, (_, _, _, command) in before.items() if command.endswith(WINDOW_SERVER)),
@@ -664,12 +693,13 @@ def idle_others(span_s=IDLE_SPAN_S):
     return sum(max(0.0, cpu - before[pid][1]) for pid, (_, cpu, _, _) in after.items() if pid in before) / wall
 
 
-def undisturbed_leg(name, args, page, stage, label, earlier, failures, profile, start, idle):
+def undisturbed_leg(name, args, page, stage, label, earlier, failures, profile, start, idle, install):
     """A leg of `start`, measured again, up to three times, while other
     processes spend more than `--max-others` cores above the machine's `idle`
     load in it or it fails. Every
     attempt at a first start begins after the apps' state and Chrome's
-    `profile` are removed; a second start measured again follows the earlier
+    `profile` are removed, on a fresh install of the app's program it leaves
+    in `install`; a second start runs that install and follows the earlier
     ones, its caches as full. Every leg measured is kept, a disturbed one
     marked `disturbed`, and every failed attempt is added to `failures`; none
     when every attempt failed, so one app cannot end the run."""
@@ -677,8 +707,11 @@ def undisturbed_leg(name, args, page, stage, label, earlier, failures, profile, 
     for attempt in range(3):
         if start == STARTS[0]:
             clear_app_state(profile)
+            if not args.browser:
+                install[:] = [fresh_install(name, stage, f'{label}-{attempt + 1}')]
         try:
-            leg = measure(name, args, args.output, page, stage, f'{label}-{attempt + 1}', earlier, profile)
+            leg = measure(name, args, args.output, page, stage, f'{label}-{attempt + 1}', earlier, profile,
+                          install[0] if install else None)
         except (RuntimeError, subprocess.SubprocessError) as failure:
             print(f'{label:16} failed: {failure}', flush=True)
             failures.append({'subject': name, 'start': start, 'label': f'{label}-{attempt + 1}',
@@ -740,12 +773,14 @@ def run(args, apps, page, stage):
             # Chrome's profile of the round: made by the first start, kept
             # for the second.
             profile = stage / f'chrome-profile-{name}-{round_index + 1}'
+            # The program the first start installs, which the second runs.
+            install = []
             for start in STARTS:
                 earlier = [leg['fps'] for leg in legs
                            if leg['subject'] == name and leg['start'] == start and not leg['disturbed']]
                 label = f'{name}-{round_index + 1}-{start}'
                 measured = undisturbed_leg(name, args, page, stage, label, earlier, failures, profile, start,
-                                           idle)
+                                           idle, install)
                 if not measured:
                     # No second start without a first one.
                     break
@@ -755,7 +790,7 @@ def run(args, apps, page, stage):
                     print(f'{name}: {kept[-1]["fps"]} fps disagrees with its earlier legs; measuring once more',
                           flush=True)
                     again = undisturbed_leg(name, args, page, stage, f'{label}-again', earlier, failures,
-                                            profile, start, idle)
+                                            profile, start, idle, install)
                     legs += [{'subject': name, 'round': round_index, 'start': start, **leg} for leg in again]
     chip = subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'], capture_output=True, text=True,
                           check=True).stdout.strip()
