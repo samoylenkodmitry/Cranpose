@@ -77,6 +77,25 @@ fn linked_test_files_and_shared_modules_pass() {
 }
 
 #[test]
+fn a_test_file_that_is_its_own_target_passes() {
+    let root = workspace_with_test_targets(
+        "[[test]]\nname = \"integration\"\npath = \"tests/integration.rs\"\n\n\
+         [[test]]\nname = \"own_process\"\npath = \"tests/own_process.rs\"\n\n\
+         [[test]]\nname = \"by_name\"\n",
+    );
+    for file in ["own_process", "by_name"] {
+        write(
+            &root.path().join(format!("crates/probe/tests/{file}.rs")),
+            "#[test]\nfn runs_as_its_own_binary() {}\n",
+        );
+    }
+
+    let unlinked = unlinked_integration_tests(root.path()).expect("scan the fixture");
+
+    assert!(unlinked.is_empty(), "{unlinked:?}");
+}
+
+#[test]
 fn a_crate_that_discovers_its_own_tests_is_not_checked() {
     let root = workspace_with_crate(None);
     write(
