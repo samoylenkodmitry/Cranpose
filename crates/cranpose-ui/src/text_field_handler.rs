@@ -284,15 +284,13 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
         let top = content.y;
         let line_height = measure_text(&AnnotatedString::from("Ag"), &g.style).line_height;
 
+        // One layout of the shown text answers every caret position.
+        let layout = crate::text::layout_text(&presentation.shown, &g.style);
         let caret_xs = self.state.with_text(|text| {
-            let mut caret_xs = Vec::with_capacity(text.len() + 1);
-            caret_xs.push(base_x);
-            for (index, ch) in text.char_indices() {
-                let end = presentation.to_shown(index + ch.len_utf8());
-                let advance = measure_text(&AnnotatedString::from(&shown[..end]), &g.style).width;
-                caret_xs.push(base_x + advance);
-            }
-            caret_xs
+            std::iter::once(0)
+                .chain(text.char_indices().map(|(index, ch)| index + ch.len_utf8()))
+                .map(|offset| base_x + layout.get_cursor_x(presentation.to_shown(offset)))
+                .collect()
         });
         Some(ImeCaretGeometry {
             caret_xs,
