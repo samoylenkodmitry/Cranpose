@@ -286,37 +286,21 @@ final class CranposeScene: SKScene {
     }
 }
 
-/// The crown, as WatchKit's crown sequencer reports it: each movement as it
-/// happens, in turns. SwiftUI's crown modifier hands a view the crown's value
-/// after its own deceleration, and settles it on a step after the hand stops,
-/// so whatever it steers keeps moving after the crown does.
-final class CrownInput: NSObject, WKCrownDelegate {
-    /// The detents the app sees per turn: a crown turn counts as the 24
-    /// clicks of a rotating bezel.
-    static let detentsPerTurn = 24.0
-    var elapsed: () -> UInt64 = { 0 }
-
-    /// Takes the crown. The sequencer reports only while it has the focus,
-    /// and the system can take the focus away, so this runs each time the app
-    /// becomes active.
-    func focus() {
-        guard let sequencer = WKApplication.shared().rootInterfaceController?.crownSequencer else {
-            return
-        }
-        sequencer.delegate = self
-        sequencer.isHapticFeedbackEnabled = false
-        sequencer.focus()
-    }
-
-    func crownDidRotate(_ crownSequencer: WKCrownSequencer?, rotationalDelta: Double) {
-        CPCrown(Float(rotationalDelta * Self.detentsPerTurn), elapsed() / 1_000_000)
-    }
+/// The crown's running value. A plain object rather than view state: the
+/// crown moves on every event, and view state would rebuild the view (and
+/// the SpriteKit view in it) each time before the event reached the app.
+///
+/// The crown is read through SwiftUI. WatchKit's crown sequencer, which a
+/// SwiftUI app reaches through its root interface controller, delivered
+/// nothing on a watch running watchOS 27.
+final class CrownReading {
+    var value = 0.0
 }
 
 @MainActor
 final class CranposeModel: ObservableObject {
     @Published var error: String?
-    let crown = CrownInput()
+    let crown = CrownReading()
     private(set) var scene = CranposeScene(size: CGSize(width: 1, height: 1))
     private var ready = false
 
@@ -344,10 +328,6 @@ final class CranposeModel: ObservableObject {
     func activate(_ active: Bool) {
         CPActive(active)
         scene.isPaused = !active
-        if active {
-            crown.elapsed = { [weak self] in self?.elapsed ?? 0 }
-            crown.focus()
-        }
     }
 }
 
@@ -366,6 +346,20 @@ struct CranposeView: View {
                 if let error = model.error { Text(error).foregroundStyle(.red) }
             }
             .contentShape(Rectangle())
+            .focusable()
+            .digitalCrownRotation(
+                // Each new value goes to the app as it arrives, as the change
+                // from the one before. Without a stride: with one, SwiftUI
+                // steps the value and settles it on a step after the hand
+                // stops, so the app saw the crown late and saw it move after
+                // it stopped.
+                Binding(get: { model.crown.value }, set: { value in
+                    let delta = value - model.crown.value
+                    model.crown.value = value
+                    CPCrown(Float(delta), model.elapsed / 1_000_000)
+                }),
+                from: -1_000_000, through: 1_000_000, sensitivity: .medium,
+                isContinuous: true, isHapticFeedbackEnabled: false)
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { event in
                     if !touching {

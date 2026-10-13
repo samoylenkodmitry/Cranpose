@@ -53,11 +53,12 @@ pass `--features` to select app features.
 
 ## Crown
 
-The crown reaches the app through WatchKit's crown sequencer, as 24 detents
-per turn, the clicks of a rotating bezel. Each movement arrives as it happens.
-SwiftUI's crown modifier is not used: it delivers the crown's value after its
-own deceleration and settles it on a step once the hand stops, so a game
-steered with it keeps moving after the crown does.
+The crown reaches the app through SwiftUI's `digitalCrownRotation`, at medium
+sensitivity and without a stride: with a stride, SwiftUI steps the value and
+settles it on a step after the hand stops, so the app saw the crown late and
+saw it move after it stopped. WatchKit's crown sequencer, which a SwiftUI app
+reaches through its root interface controller, delivered nothing on a watch
+running watchOS 27.
 
 ## Sound and haptics
 

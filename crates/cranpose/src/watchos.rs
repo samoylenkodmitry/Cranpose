@@ -235,8 +235,7 @@ impl Application {
         }
     }
 
-    /// Routes crown detents through Cranpose's existing detent-to-scroll
-    /// conversion. The host sends 24 detents per turn of the crown, as it turns.
+    /// Routes crown units through Cranpose's existing detent-to-scroll conversion.
     /// The native host supplies the timestamp in milliseconds since launch.
     pub fn crown(&mut self, delta: f32, elapsed_millis: u64) -> bool {
         if !self.active || !delta.is_finite() {
