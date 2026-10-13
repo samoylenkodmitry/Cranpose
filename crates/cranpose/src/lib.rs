@@ -746,6 +746,8 @@ mod web_text_input;
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
 ))]
 mod web_text_span;
+#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
+mod web_webgpu_ask;
 
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 mod web_clipboard;

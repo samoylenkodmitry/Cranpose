@@ -291,17 +291,23 @@ pub async fn run(
     let width = css_width.round() as u32;
     let height = css_height.round() as u32;
     let backend_preference = requested_web_backend(&window);
+    let webgpu_ask = (backend_preference == WebBackendPreference::Auto)
+        .then(crate::web_webgpu_ask::WebGpuAsk::send);
+    // Work that needs no GPU, done while the browser answers the ask.
+    let fonts = settings.resolve_font_set();
+    fold_glass_on_mobile_devices(&window);
+    let mut renderer = WgpuRenderer::with_font_set(fonts);
     let mut instance_desc =
         wgpu::InstanceDescriptor::new_with_display_handle(Box::new(BrowserDisplayHandle));
     instance_desc.backends = instance_backends(backend_preference);
-    let instance = match backend_preference {
-        WebBackendPreference::Auto => {
-            wgpu::util::new_instance_with_webgpu_detection(instance_desc).await
-        }
-        WebBackendPreference::WebGpu | WebBackendPreference::Gl => {
-            wgpu::Instance::new(instance_desc)
-        }
-    };
+    if let Some(ask) = webgpu_ask
+        && !ask.present().await
+    {
+        instance_desc
+            .backends
+            .remove(wgpu::Backends::BROWSER_WEBGPU);
+    }
+    let instance = wgpu::Instance::new(instance_desc);
 
     // Sized before its context exists, the canvas gets its drawing buffer
     // at this size; sized after, WebGL makes it again.
@@ -420,9 +426,6 @@ pub async fn run(
         "Web canvas css={width}x{height}, buffer={actual_width}x{actual_height}, effective_scale={effective_scale:.2}, device_scale={scale_factor:.2}"
     );
 
-    let fonts = settings.resolve_font_set();
-    fold_glass_on_mobile_devices(&window);
-    let mut renderer = WgpuRenderer::with_font_set(fonts);
     #[expect(clippy::arc_with_non_send_sync)]
     let discovery = PipelineDiscovery::new(GpuTarget {
         device: Arc::new(device),

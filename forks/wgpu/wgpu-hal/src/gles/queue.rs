@@ -1629,10 +1629,23 @@ impl crate::Queue for super::Queue {
         // at the program's first draw, it also waits for every command sent
         // before that draw. In Chrome on a Mate 20 X the gauntlet's first
         // frame waited 16 ms in these reads instead of 34 on a second visit.
-        if shared.unread_links.load(Ordering::Relaxed) > 0 {
+        let unread = shared.unread_links.load(Ordering::Relaxed);
+        if unread > 0 {
             for command in command_buffers.iter().flat_map(|cmd_buf| cmd_buf.commands.iter()) {
                 if let C::SetProgram(ref inner) = *command {
                     drop(unsafe { inner.read_link(gl, &shared.unread_links) });
+                }
+            }
+            // The first read waited for the GPU process to run everything
+            // sent before it, every link sent so far among them, so the
+            // links no command here uses cost only their replies now. Read
+            // at a later frame's first use, each would wait for the frames
+            // sent before it: 12-43 ms in an early frame of the gauntlet in
+            // Chrome on a Mate 20 X, for the one program its first frame
+            // did not draw with.
+            if shared.unread_links.load(Ordering::Relaxed) < unread {
+                for program in shared.program_cache.lock().values().flatten() {
+                    drop(unsafe { program.read_link(gl, &shared.unread_links) });
                 }
             }
         }
