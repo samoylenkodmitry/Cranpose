@@ -387,11 +387,8 @@ impl RobotController {
 }
 
 struct DesktopGpuContext {
-    instance: wgpu::Instance,
-    adapter: wgpu::Adapter,
+    gpu: crate::GpuContext,
     adapter_backend: wgpu::Backend,
-    device: Arc<wgpu::Device>,
-    queue: Arc<wgpu::Queue>,
     text_system: WgpuTextSystem,
 }
 
@@ -797,7 +794,7 @@ impl App {
         let Some(device) = self
             .gpu_context
             .as_ref()
-            .map(|context| Arc::clone(&context.device))
+            .map(|context| Arc::clone(&context.gpu.device))
         else {
             return;
         };
@@ -1704,6 +1701,7 @@ impl App {
 
         let options = &request.options;
         let surface = context
+            .gpu
             .instance
             .create_surface(window.clone())
             .map_err(LaunchError::SurfaceCreate)?;
@@ -1712,7 +1710,7 @@ impl App {
             options.title,
             create_started.elapsed().as_millis()
         );
-        let surface_caps = surface.get_capabilities(&context.adapter);
+        let surface_caps = surface.get_capabilities(&context.gpu.adapter);
         let surface_format = select_surface_format(&surface_caps)?;
         let present_mode = desktop_present_mode(&surface_caps, self.frame_pacing_mode());
         log_desktop_present_mode(self.frame_pacing_mode(), present_mode, &surface_caps);
@@ -1726,11 +1724,11 @@ impl App {
             options.transparent,
             desired_frame_latency(self.frame_pacing_mode(), monitor_refresh_interval(&window)),
         )?;
-        surface.configure(&context.device, &surface_config);
+        surface.configure(&context.gpu.device, &surface_config);
         let placeholder_presented = present_initial_placeholder_frame_cleared_to(
             &surface,
-            &context.device,
-            &context.queue,
+            &context.gpu.device,
+            &context.gpu.queue,
             surface_format,
             "native window initial present",
             cranpose_render_wgpu::frame_clear_color(options.transparent),
@@ -1745,11 +1743,11 @@ impl App {
         let scale_factor = window.scale_factor();
         let mut renderer = wgpu_renderer_for_surface(
             context.text_system.clone(),
-            Arc::clone(&context.device),
-            Arc::clone(&context.queue),
+            Arc::clone(&context.gpu.device),
+            Arc::clone(&context.gpu.queue),
             crate::surface_format::display_surface_view_format(surface_format),
             context.adapter_backend,
-            context.adapter.get_downlevel_capabilities().flags,
+            context.gpu.adapter.get_downlevel_capabilities().flags,
             scale_factor,
         );
         renderer.set_transparent_background(options.transparent);
@@ -5406,21 +5404,26 @@ impl ApplicationHandler for App {
         let adapter_info = adapter.get_info();
         self.vsync_interval = monitor_refresh_interval(&window);
 
-        let (device, queue) =
-            match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        let (device, queue) = match pollster::block_on(
+            adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("Main Device"),
-                required_features: cranpose_render_wgpu::optional_device_features(&adapter),
-                required_limits: wgpu::Limits::default(),
+                required_features: cranpose_render_wgpu::optional_device_features(&adapter)
+                    | self.settings.gpu_requirements.features_on(&adapter),
+                required_limits: self
+                    .settings
+                    .gpu_requirements
+                    .limits_on(&adapter, wgpu::Limits::default()),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 memory_hints: wgpu::MemoryHints::default(),
                 trace: wgpu::Trace::Off,
-            })) {
-                Ok(pair) => pair,
-                Err(error) => {
-                    self.abort_launch(event_loop, LaunchError::DeviceCreate(error));
-                    return;
-                }
-            };
+            }),
+        ) {
+            Ok(pair) => pair,
+            Err(error) => {
+                self.abort_launch(event_loop, LaunchError::DeviceCreate(error));
+                return;
+            }
+        };
 
         let size = window.surface_size();
         let surface_caps = surface.get_capabilities(&adapter);
@@ -5485,6 +5488,13 @@ impl ApplicationHandler for App {
             self.abort_launch(event_loop, LaunchError::ContentUnavailable);
             return;
         };
+        let gpu = crate::GpuContext {
+            instance,
+            adapter,
+            device,
+            queue,
+        };
+        let content = crate::gpu_context::provide_gpu_context(gpu.clone(), content);
         let registry = Rc::clone(&self.native_window_registry);
         let mut app = native_window::with_native_window_registry(&registry, || {
             AppShell::new_with_size_and_density(
@@ -5557,11 +5567,8 @@ impl ApplicationHandler for App {
             .filter(|_| !self.settings.headless)
             .map(crate::desktop_lifecycle::WindowPresence::shown);
         self.gpu_context = Some(DesktopGpuContext {
-            instance,
-            adapter,
+            gpu,
             adapter_backend: adapter_info.backend,
-            device,
-            queue,
             text_system,
         });
         self.primary_surface_dirty = request_initial_redraw;

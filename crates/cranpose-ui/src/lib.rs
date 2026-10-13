@@ -110,8 +110,9 @@ pub use cranpose_foundation::{
 };
 pub use cranpose_ui_graphics::{
     BlurredEdgeTreatment, ColorFilter, CursorIcon, CustomPointerIcon, DashPathEffect, Dp,
-    DrawScope, DrawStyle, ImageBitmap, ImagePixelFormat, ImageSampling, Path, PointerIcon,
-    PointerIconError, Stroke, StrokeCap, StrokeJoin, WindowCoordinates,
+    DrawScope, DrawStyle, ExternalTexture, ImageBitmap, ImageBitmapError, ImagePixelFormat,
+    ImageSampling, Path, PointerIcon, PointerIconError, Stroke, StrokeCap, StrokeJoin,
+    WindowCoordinates,
 };
 pub use cranpose_ui_layout::{AlignmentLines, IntrinsicSize, Measurement};
 pub use cursor_animation::{

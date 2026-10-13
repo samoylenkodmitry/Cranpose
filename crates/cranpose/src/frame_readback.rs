@@ -53,10 +53,6 @@ impl FrameTarget {
         }
     }
 
-    pub(crate) fn size(&self) -> (u32, u32) {
-        (self.width, self.height)
-    }
-
     pub(crate) fn texture(&self) -> &wgpu::Texture {
         &self.texture
     }

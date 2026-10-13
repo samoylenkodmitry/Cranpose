@@ -5389,13 +5389,13 @@ impl Device {
                     self.maintain(wgt::PollType::wait_indefinitely(), snatch_guard);
 
                 match maintain_result {
-                    // We're happy
-                    Ok(wgt::PollStatus::QueueEmpty) => {}
-                    Ok(wgt::PollStatus::WaitSucceeded) => {
-                        // After the wait, the queue should be empty. It can only be non-empty
-                        // if another thread is submitting at the same time.
-                        break 'error E::GpuWaitTimeout;
-                    }
+                    // Every submission made before this call has finished. A queue that is
+                    // not empty means another thread submitted since, which happens when
+                    // an engine renders on its own thread with this device. That work
+                    // cannot use this surface's textures: none is acquired, which is
+                    // checked below, and a presented one cannot be submitted. Upstream
+                    // wgpu accepts both results too.
+                    Ok(wgt::PollStatus::QueueEmpty | wgt::PollStatus::WaitSucceeded) => {}
                     Ok(wgt::PollStatus::Poll) => {
                         unreachable!("Cannot get a Poll result from a Wait action.")
                     }
