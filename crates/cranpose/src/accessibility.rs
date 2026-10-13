@@ -1041,11 +1041,9 @@ fn magic_tap_label(details: &SemanticsDetails) -> Option<&str> {
 
 #[cfg(debug_assertions)]
 fn warn_unlabeled(node_id: NodeId) {
-    thread_local! {
-        static WARNED: std::cell::RefCell<std::collections::HashSet<NodeId>> =
-            std::cell::RefCell::new(std::collections::HashSet::new());
-    }
-    if WARNED.with(|warned| warned.borrow_mut().insert(node_id)) {
+    if crate::thread_state::with(|state| {
+        state.unlabeled_controls_warned.borrow_mut().insert(node_id)
+    }) {
         log::warn!(
             "accessibility: control {node_id} takes a click or text but has no label, so a screen reader has nothing to read for it; give it Modifier::content_description or text inside"
         );

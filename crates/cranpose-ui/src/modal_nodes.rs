@@ -16,12 +16,6 @@ use smallvec::SmallVec;
 
 use crate::{subcompose_layout::SubcomposeLayoutNode, widgets::nodes::LayoutNode};
 
-thread_local! {
-    /// App contexts on this thread that count their modal nodes. While none
-    /// does, a semantics change costs one read of this.
-    static COUNTING_CONTEXTS: Cell<usize> = const { Cell::new(0) };
-}
-
 /// One app context's modal nodes.
 #[derive(Default)]
 pub(crate) struct ModalNodes {
@@ -37,7 +31,8 @@ impl ModalNodes {
         if self.counting.replace(counting) == counting {
             return;
         }
-        let _ = COUNTING_CONTEXTS.try_with(|contexts| {
+        crate::thread_state::cells(|cells| {
+            let contexts = &cells.modal_counting_contexts;
             contexts.set(if counting {
                 contexts.get() + 1
             } else {
@@ -114,7 +109,7 @@ pub(crate) fn reach_changed(node: Option<NodeId>) {
     let Some(node) = node else {
         return;
     };
-    if COUNTING_CONTEXTS.try_with(Cell::get).unwrap_or(0) == 0 {
+    if crate::thread_state::cells(|cells| cells.modal_counting_contexts.get()) == 0 {
         return;
     }
     let _ = crate::render_state::with_current_modal_nodes(|nodes| {

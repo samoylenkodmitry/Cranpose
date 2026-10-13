@@ -168,10 +168,14 @@ fn web_key_event_prefix(
 }
 
 fn wheel_uptime_millis() -> u64 {
-    thread_local! {
-        static EPOCH: web_time::Instant = web_time::Instant::now();
-    }
-    EPOCH.with(|epoch| epoch.elapsed().as_millis() as u64)
+    crate::thread_state::with(|state| {
+        state
+            .web
+            .wheel_epoch
+            .get_or_init(web_time::Instant::now)
+            .elapsed()
+            .as_millis() as u64
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

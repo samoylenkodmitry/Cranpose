@@ -2292,7 +2292,7 @@ fn wasm_runtime_scheduler_is_single_threaded() {
     );
     assert!(
         runtime.contains("runtime_id: RuntimeId")
-            && runtime.contains("REGISTERED_RUNTIMES.with")
+            && runtime.contains("runtime_handle_by_id(arc_self.runtime_id)")
             && runtime.contains("#[cfg(target_arch = \"wasm32\")]\n    fn wake_by_ref"),
         "wasm task wakers should route by runtime id instead of storing a Send+Sync scheduler"
     );

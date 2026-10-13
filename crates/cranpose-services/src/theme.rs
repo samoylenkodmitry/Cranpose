@@ -1,5 +1,3 @@
-use std::cell::Cell;
-
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf};
 use cranpose_macros::composable;
 
@@ -9,39 +7,28 @@ pub enum SystemTheme {
     Dark,
 }
 
-thread_local! {
-    static PLATFORM_SYSTEM_THEME: Cell<Option<SystemTheme>> = const { Cell::new(None) };
-}
-
 /// Installs the platform-reported system theme. Platform backends call this at
 /// startup and whenever the OS reports a change (then force a root render so
 /// composition observes it).
 pub fn set_platform_system_theme(theme: SystemTheme) {
-    PLATFORM_SYSTEM_THEME.with(|cell| cell.set(Some(theme)));
+    crate::thread_state::with(|state| state.platform_system_theme.set(Some(theme)));
 }
 
 /// Removes any platform-reported theme (tests and teardown).
 pub fn clear_platform_system_theme() {
-    PLATFORM_SYSTEM_THEME.with(|cell| cell.set(None));
+    crate::thread_state::with(|state| state.platform_system_theme.set(None));
 }
 
 pub fn default_system_theme() -> SystemTheme {
-    if let Some(theme) = PLATFORM_SYSTEM_THEME.with(Cell::get) {
-        return theme;
-    }
-    detected_system_theme()
-}
-
-fn detected_system_theme() -> SystemTheme {
-    thread_local! {
-        static DETECTED: Cell<Option<SystemTheme>> = const { Cell::new(None) };
-    }
-    DETECTED.with(|cell| {
-        if let Some(theme) = cell.get() {
+    crate::thread_state::with(|state| {
+        if let Some(theme) = state.platform_system_theme.get() {
+            return theme;
+        }
+        if let Some(theme) = state.detected_system_theme.get() {
             return theme;
         }
         let theme = detect_system_theme_uncached();
-        cell.set(Some(theme));
+        state.detected_system_theme.set(Some(theme));
         theme
     })
 }

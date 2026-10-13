@@ -162,7 +162,7 @@ struct Crossing {
 
 /// Cuts path fills into [`Trapezoid`]s, reusing its buffers from one fill
 /// to the next.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct PathSlicer {
     edges: Vec<Edge>,
     events: Vec<f32>,
@@ -172,6 +172,16 @@ pub(crate) struct PathSlicer {
 }
 
 impl PathSlicer {
+    pub(crate) const fn new() -> Self {
+        Self {
+            edges: Vec::new(),
+            events: Vec::new(),
+            active: Vec::new(),
+            crossings: Vec::new(),
+            slices: Vec::new(),
+        }
+    }
+
     /// The fill of `contours`, each closed, under `fill_rule`, as slices
     /// from left to right. `None` when a slice's side meets only part of
     /// its neighbour's, as an upright edge inside the fill makes it, when a

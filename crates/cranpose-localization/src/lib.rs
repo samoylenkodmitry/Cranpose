@@ -8,6 +8,7 @@ mod format;
 mod locale;
 mod message;
 mod preferences;
+mod thread_state;
 #[cfg(feature = "formatting")]
 pub use format::{FormatError, LocaleFormatters};
 

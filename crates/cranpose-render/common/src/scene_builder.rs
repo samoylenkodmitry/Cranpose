@@ -1,4 +1,4 @@
-use std::{any::Any, cell::Cell, rc::Rc};
+use std::{any::Any, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId, NodeMarks, collections::map::HashMap};
 use cranpose_ui::{
@@ -93,24 +93,22 @@ impl GraphUpdateReport {
     }
 }
 
-#[cfg(test)]
-thread_local! {
-    static LOWERED_LAYER_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
 fn note_layer_lowered() {
     #[cfg(test)]
-    LOWERED_LAYER_COUNT.with(|count| count.set(count.get() + 1));
+    crate::thread_state::with(|state| {
+        let count = &state.lowered_layer_count;
+        count.set(count.get() + 1);
+    });
 }
 
 #[cfg(test)]
 fn reset_lowered_layer_count() {
-    LOWERED_LAYER_COUNT.with(|count| count.set(0));
+    crate::thread_state::with(|state| state.lowered_layer_count.set(0));
 }
 
 #[cfg(test)]
 fn lowered_layer_count() -> usize {
-    LOWERED_LAYER_COUNT.with(Cell::get)
+    crate::thread_state::with(|state| state.lowered_layer_count.get())
 }
 
 pub fn build_graph_from_layout_tree(root: &LayoutBox, _scale: f32) -> RenderGraph {
@@ -384,10 +382,6 @@ impl DirtyWalk<'_> {
 
 const DIRTY_ANCESTOR: u8 = 1;
 
-thread_local! {
-    static DIRTY_ANCESTRY: Cell<NodeMarks> = Cell::new(NodeMarks::default());
-}
-
 fn walk_dirty_layers(
     applier: &MemoryApplier,
     root: &mut LayerNode,
@@ -396,7 +390,7 @@ fn walk_dirty_layers(
 ) -> Option<ReplaceDirtyLayersReport> {
     let inherited = root.translated_content_context;
     let root_children = AbsOrigin::ROOT.children_of(root);
-    let mut ancestry = DIRTY_ANCESTRY.take();
+    let mut ancestry = crate::thread_state::with(|state| state.dirty_ancestry.take());
     mark_dirty_ancestry(applier, dirty, &mut ancestry);
     let walked = replace_dirty_layers_from_applier(
         applier,
@@ -410,7 +404,7 @@ fn walk_dirty_layers(
         inherited,
         update,
     );
-    DIRTY_ANCESTRY.set(ancestry);
+    crate::thread_state::with(|state| state.dirty_ancestry.set(ancestry));
     walked
 }
 
@@ -836,7 +830,7 @@ fn translated_container(
 /// steps so a step allocates nothing of its own. Every list is empty
 /// between steps, so it holds no layer.
 #[derive(Default)]
-struct TranslateScratch {
+pub(crate) struct TranslateScratch {
     /// The placed children, in their new order.
     placed_fresh: Vec<(NodeId, cranpose_ui::widgets::LayoutState)>,
     old_index_by_id: HashMap<NodeId, usize>,
@@ -848,10 +842,6 @@ struct TranslateScratch {
     kept: Vec<Option<Box<LayerNode>>>,
     /// The children built for the step, in their new order.
     entering: Vec<(NodeId, Box<LayerNode>)>,
-}
-
-thread_local! {
-    static TRANSLATE_SCRATCH: Cell<TranslateScratch> = Cell::new(TranslateScratch::default());
 }
 
 /// Fills `scratch` with `container`'s placed children and the index of its
@@ -1191,7 +1181,7 @@ fn translate_layer_from_data(
     // children it keeps: an unchanged draw reuses its recording, while
     // building the container anew lowered every child layer beneath it too.
     crate::layer_recycling::recycle_primitives(container);
-    let mut scratch = TRANSLATE_SCRATCH.take();
+    let mut scratch = crate::thread_state::with(|state| state.translate_scratch.take());
     let children_unchanged = match translated_children(
         applier,
         container,
@@ -1201,7 +1191,7 @@ fn translate_layer_from_data(
     ) {
         Ok(unchanged) => unchanged,
         Err(reason) => {
-            TRANSLATE_SCRATCH.set(scratch);
+            crate::thread_state::with(|state| state.translate_scratch.set(scratch));
             return translate_bail(reason);
         }
     };
@@ -1241,7 +1231,7 @@ fn translate_layer_from_data(
         children_unchanged,
         geometry,
     );
-    TRANSLATE_SCRATCH.set(scratch);
+    crate::thread_state::with(|state| state.translate_scratch.set(scratch));
     write_own_content_around_children(container, node_id, &modifier_slices, layout_state.size());
     container.hit_test = hit_test_from_slices(&modifier_slices);
 
@@ -1873,7 +1863,7 @@ fn write_node_layer(
     );
 }
 
-struct RecorderSlot {
+pub(crate) struct RecorderSlot {
     generation: u64,
     handles: [Option<Rc<CommandRecording>>; 3],
     /// The allocation of a handle whose recording `acquire_storage` took,
@@ -1882,7 +1872,7 @@ struct RecorderSlot {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct RecorderKey {
+pub(crate) struct RecorderKey {
     node_id: NodeId,
     command_index: u32,
 }
@@ -1896,35 +1886,27 @@ impl From<DrawCommandId> for RecorderKey {
     }
 }
 
-thread_local! {
-    static COMMAND_RECORDINGS: std::cell::RefCell<
-        std::collections::HashMap<RecorderKey, RecorderSlot, cranpose_ui_graphics::FxBuildHasher>,
-    > = std::cell::RefCell::new(std::collections::HashMap::default());
-    static RECORDING_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
 #[doc(hidden)]
 pub fn clear_command_recordings_for_tests() {
-    COMMAND_RECORDINGS.with(|map| map.borrow_mut().clear());
+    crate::thread_state::with(|state| state.command_recordings.borrow_mut().clear());
 }
 
 fn bump_recording_generation() {
-    let generation = RECORDING_GENERATION.with(|cell| {
-        let next = cell.get().wrapping_add(1);
-        cell.set(next);
-        next
-    });
-    if generation.is_multiple_of(512) {
-        COMMAND_RECORDINGS.with(|map| {
-            map.borrow_mut()
+    crate::thread_state::with(|state| {
+        let generation = state.recording_generation.get().wrapping_add(1);
+        state.recording_generation.set(generation);
+        if generation.is_multiple_of(512) {
+            state
+                .command_recordings
+                .borrow_mut()
                 .retain(|_, slot| generation.wrapping_sub(slot.generation) <= 64);
-        });
-    }
+        }
+    });
 }
 
 fn acquire_storage(id: DrawCommandId) -> CommandRecording {
-    COMMAND_RECORDINGS.with(|map| {
-        let mut map = map.borrow_mut();
+    crate::thread_state::with(|state| {
+        let mut map = state.command_recordings.borrow_mut();
         let Some(slot) = map.get_mut(&RecorderKey::from(id)) else {
             return CommandRecording::default();
         };
@@ -1953,9 +1935,9 @@ fn acquire_storage(id: DrawCommandId) -> CommandRecording {
 }
 
 fn publish_recording(id: DrawCommandId, recording: CommandRecording) -> Rc<CommandRecording> {
-    COMMAND_RECORDINGS.with(|map| {
-        let mut map = map.borrow_mut();
-        let generation = RECORDING_GENERATION.with(Cell::get);
+    crate::thread_state::with(|state| {
+        let mut map = state.command_recordings.borrow_mut();
+        let generation = state.recording_generation.get();
         let slot = map
             .entry(RecorderKey::from(id))
             .or_insert_with(|| RecorderSlot {

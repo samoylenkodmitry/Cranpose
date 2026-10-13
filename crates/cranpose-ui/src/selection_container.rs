@@ -10,7 +10,7 @@
 use std::{
     cell::{Cell, RefCell},
     ops::Range,
-    rc::{Rc, Weak},
+    rc::Rc,
 };
 
 use cranpose_core::MutableState;
@@ -200,7 +200,7 @@ impl Selectable {
     }
 }
 
-struct RegistrarInner {
+pub(crate) struct RegistrarInner {
     next_key: Cell<u64>,
     selectables: RefCell<Vec<Selectable>>,
     selection: MutableState<Option<TextSelection>>,
@@ -570,12 +570,6 @@ struct Press {
     released_to_scroll: bool,
 }
 
-thread_local! {
-    /// The container a person last pressed: its selection is the one a copy
-    /// or a select-all acts on, and a press in another container clears it.
-    static ACTIVE: RefCell<Weak<RegistrarInner>> = const { RefCell::new(Weak::new()) };
-}
-
 /// Turns a container's pointer input into its selection.
 pub(crate) struct SelectionGesture {
     registrar: SelectionRegistrar,
@@ -607,7 +601,8 @@ impl SelectionGesture {
     /// Makes this container the one a copy acts on, clearing the selection of
     /// the container pressed before it.
     fn activate(&self) {
-        ACTIVE.with(|active| {
+        crate::thread_state::with(|state| {
+            let active = &state.active_selection;
             let previous = active.borrow().upgrade();
             if let Some(previous) = previous
                 && !Rc::ptr_eq(&previous, &self.registrar.inner)
@@ -619,8 +614,9 @@ impl SelectionGesture {
     }
 
     fn is_active(&self) -> bool {
-        ACTIVE.with(|active| {
-            active
+        crate::thread_state::with(|state| {
+            state
+                .active_selection
                 .borrow()
                 .upgrade()
                 .is_some_and(|held| Rc::ptr_eq(&held, &self.registrar.inner))

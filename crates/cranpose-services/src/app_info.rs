@@ -20,7 +20,7 @@
 //! give. Platform backends install a real one with
 //! [`set_platform_app_info`].
 
-use std::{cell::RefCell, rc::Rc};
+use std::rc::Rc;
 
 /// Reports the packaged identity of the running app.
 pub trait AppInfo {
@@ -51,25 +51,20 @@ impl AppInfo for DefaultAppInfo {
     }
 }
 
-thread_local! {
-    static PLATFORM_APP_INFO: RefCell<Option<AppInfoRef>> = const { RefCell::new(None) };
-}
-
 /// Installs a platform app-info implementation, replacing any previous one.
 pub fn set_platform_app_info(info: AppInfoRef) {
-    PLATFORM_APP_INFO.with(|cell| *cell.borrow_mut() = Some(info));
+    crate::thread_state::with(|state| *state.app_info.borrow_mut() = Some(info));
 }
 
 /// Removes any registered platform app info (tests and teardown).
 pub fn clear_platform_app_info() {
-    PLATFORM_APP_INFO.with(|cell| *cell.borrow_mut() = None);
+    crate::thread_state::with(|state| *state.app_info.borrow_mut() = None);
 }
 
 /// The active app info: the platform implementation if installed, otherwise
 /// the built-in default.
 pub fn app_info() -> AppInfoRef {
-    PLATFORM_APP_INFO
-        .with(|cell| cell.borrow().clone())
+    crate::thread_state::with(|state| state.app_info.borrow().clone())
         .unwrap_or_else(|| Rc::new(DefaultAppInfo))
 }
 

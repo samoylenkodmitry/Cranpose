@@ -16,7 +16,7 @@
 //! backends install richer implementations through
 //! [`set_platform_device_info`].
 
-use std::{cell::RefCell, rc::Rc, time::Duration};
+use std::{rc::Rc, time::Duration};
 
 /// Provides device and process information.
 pub trait DeviceInfo {
@@ -109,25 +109,20 @@ const fn page_size_bytes() -> u64 {
     4096
 }
 
-thread_local! {
-    static PLATFORM_DEVICE_INFO: RefCell<Option<DeviceInfoRef>> = const { RefCell::new(None) };
-}
-
 /// Installs a platform device-info implementation, replacing any previous one.
 pub fn set_platform_device_info(info: DeviceInfoRef) {
-    PLATFORM_DEVICE_INFO.with(|cell| *cell.borrow_mut() = Some(info));
+    crate::thread_state::with(|state| *state.device_info.borrow_mut() = Some(info));
 }
 
 /// Removes any registered platform device info (tests and teardown).
 pub fn clear_platform_device_info() {
-    PLATFORM_DEVICE_INFO.with(|cell| *cell.borrow_mut() = None);
+    crate::thread_state::with(|state| *state.device_info.borrow_mut() = None);
 }
 
 /// The active device info: the platform implementation if installed, otherwise
 /// the built-in default.
 pub fn device_info() -> DeviceInfoRef {
-    PLATFORM_DEVICE_INFO
-        .with(|cell| cell.borrow().clone())
+    crate::thread_state::with(|state| state.device_info.borrow().clone())
         .unwrap_or_else(|| Rc::new(DefaultDeviceInfo))
 }
 

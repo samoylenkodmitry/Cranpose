@@ -23,11 +23,7 @@ const EQUALIZER_BAND_CENTERS_HZ: [f32; 10] = cranpose_services::OCTAVE_BAND_CENT
 const EQUALIZER_RANGE_DB: f32 = 12.0;
 const EQUALIZER_BAND_Q: f32 = 1.41;
 
-thread_local! {
-    static BROWSER: RefCell<Option<Browser>> = const { RefCell::new(None) };
-}
-
-struct Browser {
+pub(crate) struct Browser {
     element: HtmlAudioElement,
     _element_listeners: Vec<Closure<dyn FnMut()>>,
     _session_handlers: Vec<Closure<dyn FnMut(JsValue)>>,
@@ -57,8 +53,8 @@ pub(crate) fn install() {
     element.set_preload("auto");
     let listeners = attach_listeners(&element);
     let handlers = attach_session_handlers();
-    BROWSER.with(|slot| {
-        *slot.borrow_mut() = Some(Browser {
+    crate::thread_state::with(|state| {
+        *state.web.media_browser.borrow_mut() = Some(Browser {
             element,
             _element_listeners: listeners,
             _session_handlers: handlers,
@@ -70,7 +66,7 @@ pub(crate) fn install() {
 }
 
 fn with_browser<R>(action: impl FnOnce(&mut Browser) -> R) -> Option<R> {
-    BROWSER.with(|slot| slot.borrow_mut().as_mut().map(action))
+    crate::thread_state::with(|state| state.web.media_browser.borrow_mut().as_mut().map(action))
 }
 
 fn attach_listeners(element: &HtmlAudioElement) -> Vec<Closure<dyn FnMut()>> {

@@ -463,18 +463,11 @@ pub fn app_update_status() -> AppUpdateStatus {
 
 #[cfg(not(target_arch = "wasm32"))]
 type Observer = Arc<dyn Fn(AppUpdateStatus) + Send + Sync>;
-#[cfg(target_arch = "wasm32")]
-type Observer = std::rc::Rc<dyn Fn(AppUpdateStatus)>;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn observers() -> &'static Mutex<Vec<(u64, Observer)>> {
     static OBSERVERS: OnceLock<Mutex<Vec<(u64, Observer)>>> = OnceLock::new();
     OBSERVERS.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-#[cfg(target_arch = "wasm32")]
-thread_local! {
-    static OBSERVERS: std::cell::RefCell<Vec<(u64, Observer)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 static NEXT_OBSERVER_ID: AtomicU64 = AtomicU64::new(1);
@@ -491,7 +484,7 @@ impl Drop for AppUpdateObserver {
             observers.retain(|(id, _)| *id != self.id);
         }
         #[cfg(target_arch = "wasm32")]
-        OBSERVERS.with(|observers| observers.borrow_mut().retain(|(id, _)| *id != self.id));
+        crate::thread_state::with(|state| state.app_update_observers.remove(self.id));
     }
 }
 
@@ -515,11 +508,11 @@ pub fn observe_app_update_status(
     observer: impl Fn(AppUpdateStatus) + 'static,
 ) -> AppUpdateObserver {
     let id = NEXT_OBSERVER_ID.fetch_add(1, Ordering::Relaxed);
-    let observer: Observer = std::rc::Rc::new(observer);
-    OBSERVERS.with(|observers| {
-        observers
-            .borrow_mut()
-            .push((id, std::rc::Rc::clone(&observer)));
+    let observer: std::rc::Rc<dyn Fn(AppUpdateStatus)> = std::rc::Rc::new(observer);
+    crate::thread_state::with(|state| {
+        state
+            .app_update_observers
+            .add(id, std::rc::Rc::clone(&observer));
     });
     observer(app_update_status());
     AppUpdateObserver { id }
@@ -544,13 +537,7 @@ pub fn set_app_update_status(status: AppUpdateStatus) {
         })
         .unwrap_or_default();
     #[cfg(target_arch = "wasm32")]
-    let observers = OBSERVERS.with(|observers| {
-        observers
-            .borrow()
-            .iter()
-            .map(|(_, observer)| std::rc::Rc::clone(observer))
-            .collect::<Vec<_>>()
-    });
+    let observers = crate::thread_state::with(|state| state.app_update_observers.all());
     for observer in observers {
         observer(status.clone());
     }

@@ -178,7 +178,10 @@ impl ShaderSpecialization {
         }
         *self.overrides_hash.get_or_init(|| {
             #[cfg(test)]
-            OVERRIDE_HASH_COMPUTATIONS.with(|count| count.set(count.get() + 1));
+            crate::thread_state::with(|state| {
+                let count = &state.override_hash_computations;
+                count.set(count.get() + 1);
+            });
             runtime_shader_overrides_hash(self.overrides.iter().copied())
         })
     }
@@ -934,11 +937,6 @@ impl RuntimeShader {
             max_uniforms: Self::MAX_UNIFORMS,
         }
     }
-}
-
-#[cfg(test)]
-thread_local! {
-    static OVERRIDE_HASH_COMPUTATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 impl PartialEq for RuntimeShader {

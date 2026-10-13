@@ -8,7 +8,7 @@
 //! export through a save dialog instead — so `is_supported` is `false` there and
 //! the UI can offer "Save…" rather than "Share".
 
-use std::{cell::RefCell, rc::Rc};
+use std::rc::Rc;
 
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOfWithPolicy};
 use cranpose_macros::composable;
@@ -70,23 +70,19 @@ pub trait ShareSheet {
 
 pub type ShareSheetRef = Rc<dyn ShareSheet>;
 
-thread_local! {
-    static PLATFORM_SHARE_SHEET: RefCell<Option<ShareSheetRef>> = const { RefCell::new(None) };
-}
-
 /// Installs a platform share sheet, replacing any previously installed one.
 /// Backends with main-thread UIKit / Activity access register here.
 pub fn set_platform_share_sheet(share_sheet: ShareSheetRef) {
-    PLATFORM_SHARE_SHEET.with(|cell| *cell.borrow_mut() = Some(share_sheet));
+    crate::thread_state::with(|state| *state.share_sheet.borrow_mut() = Some(share_sheet));
 }
 
 /// Removes any registered platform share sheet (tests and teardown).
 pub fn clear_platform_share_sheet() {
-    PLATFORM_SHARE_SHEET.with(|cell| *cell.borrow_mut() = None);
+    crate::thread_state::with(|state| *state.share_sheet.borrow_mut() = None);
 }
 
 fn registered_platform_share_sheet() -> Option<ShareSheetRef> {
-    PLATFORM_SHARE_SHEET.with(|cell| cell.borrow().clone())
+    crate::thread_state::with(|state| state.share_sheet.borrow().clone())
 }
 
 struct PlatformShareSheet;

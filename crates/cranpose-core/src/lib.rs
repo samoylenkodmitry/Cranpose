@@ -38,6 +38,7 @@ mod state;
 #[doc(hidden)]
 pub use source_trace::__source_scope;
 pub mod subcompose;
+mod thread_state;
 
 #[cfg(feature = "internal")]
 #[doc(hidden)]
@@ -147,18 +148,14 @@ struct AppliedSnapshotFlagGuard {
 
 impl AppliedSnapshotFlagGuard {
     fn enter() -> Self {
-        let previous = IN_APPLIED_SNAPSHOT.with(|flag| {
-            let previous = flag.get();
-            flag.set(true);
-            previous
-        });
+        let previous = thread_state::cells(|cells| cells.in_applied_snapshot.replace(true));
         Self { previous }
     }
 }
 
 impl Drop for AppliedSnapshotFlagGuard {
     fn drop(&mut self) {
-        IN_APPLIED_SNAPSHOT.with(|flag| flag.set(self.previous));
+        thread_state::cells(|cells| cells.in_applied_snapshot.set(self.previous));
     }
 }
 
@@ -178,11 +175,6 @@ impl Drop for AppliedSnapshotFlagGuard {
 /// ```
 pub fn dispatch_ui_event<T>(block: impl FnOnce() -> T) -> Option<T> {
     run_in_mutable_snapshot(block).ok()
-}
-
-thread_local! {
-    pub(crate) static IN_EVENT_HANDLER: Cell<bool> = const { Cell::new(false) };
-    pub(crate) static IN_APPLIED_SNAPSHOT: Cell<bool> = const { Cell::new(false) };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -206,27 +198,23 @@ pub struct EventHandlerScopeGuard {
 
 impl Drop for EventHandlerScopeGuard {
     fn drop(&mut self) {
-        IN_EVENT_HANDLER.with(|flag| flag.set(self.previous));
+        thread_state::cells(|cells| cells.in_event_handler.set(self.previous));
     }
 }
 
 pub fn enter_event_handler_scope() -> EventHandlerScopeGuard {
-    let previous = IN_EVENT_HANDLER.with(|flag| {
-        let previous = flag.get();
-        flag.set(true);
-        previous
-    });
+    let previous = thread_state::cells(|cells| cells.in_event_handler.replace(true));
     EventHandlerScopeGuard { previous }
 }
 
 /// Returns true if currently in an event handler context.
 pub fn in_event_handler() -> bool {
-    IN_EVENT_HANDLER.with(Cell::get)
+    thread_state::cells(|cells| cells.in_event_handler.get())
 }
 
 /// Returns true if currently in an applied snapshot context.
 pub fn in_applied_snapshot() -> bool {
-    IN_APPLIED_SNAPSHOT.with(Cell::get)
+    thread_state::cells(|cells| cells.in_applied_snapshot.get())
 }
 
 use std::{
@@ -250,17 +238,10 @@ pub type NodeId = usize;
 
 #[cfg(any(test, debug_assertions))]
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct LocationKeyDebugInfo {
+pub(crate) struct LocationKeyDebugInfo {
     file: String,
     line: u32,
     column: u32,
-}
-
-#[cfg(any(test, debug_assertions))]
-thread_local! {
-    static LOCATION_KEY_REGISTRY: RefCell<HashMap<Key, LocationKeyDebugInfo>> =
-        RefCell::new(HashMap::default());
-    static LOCATION_KEY_COLLISION_COUNT: Cell<usize> = const { Cell::new(0) };
 }
 
 #[cfg(any(test, debug_assertions))]
@@ -270,8 +251,8 @@ fn register_location_key_debug_info(key: Key, file: &str, line: u32, column: u32
         line,
         column,
     };
-    let collision = LOCATION_KEY_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
+    let collision = thread_state::runtimes(|state| {
+        let mut registry = state.location_keys.borrow_mut();
         match registry.entry(key) {
             std::collections::hash_map::Entry::Vacant(entry) => {
                 entry.insert(info());
@@ -285,7 +266,8 @@ fn register_location_key_debug_info(key: Key, file: &str, line: u32, column: u32
         }
     });
     if let Some((existing, incoming)) = collision {
-        LOCATION_KEY_COLLISION_COUNT.with(|count| {
+        thread_state::cells(|cells| {
+            let count = &cells.location_key_collisions;
             count.set(count.get().saturating_add(1));
         });
         log::error!("location key collision: key={key} first={existing:?} second={incoming:?}");
@@ -309,12 +291,12 @@ pub(crate) fn register_location_key_debug_info_for_test(
 
 #[cfg(test)]
 pub(crate) fn location_key_debug_collision_count_for_test() -> usize {
-    LOCATION_KEY_COLLISION_COUNT.with(Cell::get)
+    thread_state::cells(|cells| cells.location_key_collisions.get())
 }
 
 #[cfg(test)]
 pub(crate) fn location_key_debug_info_for_test(key: Key) -> Option<LocationKeyDebugInfo> {
-    LOCATION_KEY_REGISTRY.with(|registry| registry.borrow().get(&key).cloned())
+    thread_state::runtimes(|state| state.location_keys.borrow().get(&key).cloned())
 }
 
 #[cfg(test)]
@@ -339,23 +321,16 @@ const fn file_location_hash(file: &str) -> u64 {
 /// path's address: a `&'static str` keeps its bytes for the whole run, and
 /// hashing the path on every composable call cost an eighth of composing a
 /// feed item.
-fn static_file_location_hash(file: &'static str) -> u64 {
-    const SLOTS: usize = 64;
-    thread_local! {
-        static HASHES: [Cell<(usize, usize, u64)>; SLOTS] =
-            const { [const { Cell::new((0, 0, 0)) }; SLOTS] };
-    }
+fn static_file_location_hash(cells: &thread_state::ThreadCells, file: &'static str) -> u64 {
     let address = file.as_ptr() as usize;
-    let slot = (address >> 4) % SLOTS;
-    HASHES.with(|hashes| {
-        let (cached_address, cached_len, hash) = hashes[slot].get();
-        if cached_address == address && cached_len == file.len() {
-            return hash;
-        }
-        let hash = file_location_hash(file);
-        hashes[slot].set((address, file.len(), hash));
-        hash
-    })
+    let cached = &cells.file_hashes[(address >> 4) % thread_state::FILE_HASH_SLOTS];
+    let (cached_address, cached_len, hash) = cached.get();
+    if cached_address == address && cached_len == file.len() {
+        return hash;
+    }
+    let hash = file_location_hash(file);
+    cached.set((address, file.len(), hash));
+    hash
 }
 
 const fn position_location_hash(mut hash: u64, line: u32, column: u32) -> u64 {
@@ -402,41 +377,39 @@ pub fn caller_location_key() -> Key {
 /// parameter slot. The key is still made from the location's contents, so
 /// two statics for one location give the same key.
 fn call_site_key(caller: &'static std::panic::Location<'static>) -> Key {
-    const SLOTS: usize = 1024;
-    thread_local! {
-        static KEYS: [Cell<(usize, Key)>; SLOTS] =
-            const { [const { Cell::new((0, 0)) }; SLOTS] };
-    }
     let address = std::ptr::from_ref(caller).addr();
-    let slot = (address >> 3) % SLOTS;
-    KEYS.with(|keys| {
-        let (cached_address, key) = keys[slot].get();
+    thread_state::cells(|cells| {
+        let cached = &cells.call_site_keys[(address >> 3) % thread_state::CALL_SITE_KEY_SLOTS];
+        let (cached_address, key) = cached.get();
         if cached_address == address {
             return key;
         }
         let file = caller.file();
         let key = registered_location_key(
-            static_file_location_hash(file),
+            static_file_location_hash(cells, file),
             file,
             caller.line(),
             caller.column(),
         );
-        keys[slot].set((address, key));
+        cached.set((address, key));
         key
     })
 }
 
 #[derive(Clone, Copy)]
-struct HotOrigin {
+pub(crate) struct HotOrigin {
     file: &'static str,
     line: u32,
     end: u32,
     identity: Key,
 }
 
-thread_local! {
-    static HOT_ORIGIN: std::cell::Cell<HotOrigin> = const {
-        std::cell::Cell::new(HotOrigin { file: "", line: 0, end: 0, identity: 0 })
+impl HotOrigin {
+    pub(crate) const NONE: Self = Self {
+        file: "",
+        line: 0,
+        end: 0,
+        identity: 0,
     };
 }
 
@@ -449,7 +422,7 @@ pub struct HotOriginGuard {
 impl Drop for HotOriginGuard {
     fn drop(&mut self) {
         let previous = self.previous;
-        HOT_ORIGIN.with(|origin| origin.set(previous));
+        thread_state::cells(|cells| cells.hot_origin.set(previous));
     }
 }
 
@@ -468,12 +441,12 @@ pub fn hot_origin(file: &'static str, line: u32, end: u32, identity: Key) -> Hot
         identity,
     };
     HotOriginGuard {
-        previous: HOT_ORIGIN.with(|origin| origin.replace(next)),
+        previous: thread_state::cells(|cells| cells.hot_origin.replace(next)),
     }
 }
 
 fn hot_call_site_key(file: &str, line: u32, column: u32) -> Option<Key> {
-    let origin = HOT_ORIGIN.with(std::cell::Cell::get);
+    let origin = thread_state::cells(|cells| cells.hot_origin.get());
     if origin.file.is_empty() || !(origin.line..=origin.end).contains(&line) || origin.file != file
     {
         return None;
@@ -667,16 +640,6 @@ impl Hash for LocalKey {
     }
 }
 
-thread_local! {
-    #[cfg(debug_assertions)]
-    static DEBUG_SCOPE_LABELS: RefCell<HashMap<usize, &'static str>> = RefCell::new(HashMap::default());
-    #[cfg(debug_assertions)]
-    static DEBUG_SCOPE_INVALIDATION_SOURCES: RefCell<HashMap<usize, HashSet<String>>> =
-        RefCell::new(HashMap::default());
-    #[cfg(all(test, debug_assertions))]
-    static DEBUG_SCOPE_TRACKING_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
-}
-
 /// A composable's body. The scope passes itself when it runs, so the
 /// callback needs neither a second box nor a reference back to its scope; a
 /// capture-free body records how to name its type, to be kept as is.
@@ -685,16 +648,15 @@ struct RecomposeCallback {
     stateless_body: Option<fn() -> TypeId>,
 }
 
-thread_local! {
-    static SCOPE_ACTIVITY_EPOCH: Cell<u64> = const { Cell::new(1) };
-}
-
 fn scope_activity_epoch() -> u64 {
-    SCOPE_ACTIVITY_EPOCH.with(Cell::get)
+    thread_state::cells(|cells| cells.scope_activity_epoch.get())
 }
 
 fn note_scope_activity_change() {
-    let _ = SCOPE_ACTIVITY_EPOCH.try_with(|epoch| epoch.set(epoch.get() + 1));
+    thread_state::cells(|cells| {
+        let epoch = &cells.scope_activity_epoch;
+        epoch.set(epoch.get() + 1);
+    });
 }
 
 /// Runs `read` on what `cell` holds and puts it back: a scope's links are
@@ -857,11 +819,9 @@ impl Drop for RecomposeScopeInner {
         }
         #[cfg(debug_assertions)]
         {
-            let _ = DEBUG_SCOPE_LABELS.try_with(|labels| {
-                labels.borrow_mut().remove(&id);
-            });
-            let _ = DEBUG_SCOPE_INVALIDATION_SOURCES.try_with(|sources| {
-                sources.borrow_mut().remove(&id);
+            thread_state::try_runtimes(|state| {
+                state.scope_labels.borrow_mut().remove(&id);
+                state.scope_invalidation_sources.borrow_mut().remove(&id);
             });
         }
         if self.enqueued.replace(false) {

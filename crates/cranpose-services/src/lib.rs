@@ -47,6 +47,7 @@ mod registry;
 pub mod share_sheet;
 pub mod storage;
 pub mod theme;
+mod thread_state;
 pub mod uri_handler;
 pub mod wearable;
 pub mod wearable_framed;

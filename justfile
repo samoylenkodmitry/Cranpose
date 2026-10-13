@@ -264,6 +264,14 @@ wrapper-gate base="origin/main":
 state-holder-gate:
     python3 scripts/ci/state_holder_gate.py
 
+# Every `thread_local!` static in the framework crates takes one of the
+# process's pthread keys on Android, where bionic allows about 128 for the
+# whole process and std aborts once they run out. New per-thread state goes
+# into the crate's existing thread-state struct; this fails when the count of
+# statics differs from the budget in xtask/src/thread_local_budget.rs.
+thread-local-budget:
+    cargo xtask thread-local-budget
+
 # The modifier matrix's Cranpose and Compose halves are generated from one
 # description (tools/compose-twin/matrix.toml); a hand edit to either, or a
 # description changed without generating, fails here.
@@ -272,7 +280,7 @@ twin-matrix-check:
 
 # The gates fast enough to run before every commit: what `.githooks/pre-commit`
 # runs. Everything here finishes in seconds against a warm xtask build.
-precommit: fmt-check typos complexity-gate duplication-gate wrapper-gate state-holder-gate twin-matrix-check ci-contract-gates
+precommit: fmt-check typos complexity-gate duplication-gate wrapper-gate state-holder-gate thread-local-budget twin-matrix-check ci-contract-gates
 
 # The gates that describe CI to itself: which scheduling class each robot
 # example is in, what a parallel worker can reach, and the twenty-minute cap

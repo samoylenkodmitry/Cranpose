@@ -69,7 +69,7 @@ pub fn localized_message(message: &DeferredMessage) -> LocalizedText {
 /// The translator installed by the nearest [`ProvideLocalization`].
 /// `None` uses each message's inline source-language catalog.
 pub fn local_translator() -> CompositionLocal<Option<Translator>> {
-    crate::environment_locals::ENVIRONMENT_LOCALS.with(|locals| {
+    crate::thread_state::with_environment(|locals| {
         locals
             .translator
             .get_or_init(|| compositionLocalOf(|| None))
@@ -123,7 +123,7 @@ fn provide(translator: Translator, content: impl FnOnce()) {
 }
 
 fn text_locales() -> CompositionLocal<Option<crate::text::LocaleList>> {
-    crate::environment_locals::ENVIRONMENT_LOCALS.with(|locals| {
+    crate::thread_state::with_environment(|locals| {
         locals
             .text_locales
             .get_or_init(|| compositionLocalOf(|| None))

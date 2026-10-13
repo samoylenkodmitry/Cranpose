@@ -3,10 +3,7 @@
 //! [`LiquidModifierExt::glass_effect`] — the analogue of SwiftUI's
 //! `.glassEffect(_:in:)`.
 
-use std::{
-    cell::{Cell, RefCell},
-    sync::OnceLock,
-};
+use std::{cell::RefCell, sync::OnceLock};
 
 use cranpose_ui::{Modifier, current_density};
 use cranpose_ui_graphics::{
@@ -28,19 +25,15 @@ use cranpose_ui_graphics::{
 
 use crate::{appearance::GlassTintAmount, theme::LiquidColors};
 
-thread_local! {
-    static GLASS_LIGHT_RETURN: Cell<(f32, f32)> = const { Cell::new((0.0, 1.0)) };
-}
-
 /// Sets the ambient glass light return direction (screen space, need not be
 /// normalized — the shader normalizes). Feed device attitude here.
 pub fn set_glass_light_direction(direction: (f32, f32)) {
-    GLASS_LIGHT_RETURN.with(|cell| cell.set(direction));
+    crate::thread_state::with(|state| state.glass_light_return.set(direction));
 }
 
 /// The current ambient glass light return direction.
 pub fn glass_light_direction() -> (f32, f32) {
-    GLASS_LIGHT_RETURN.with(Cell::get)
+    crate::thread_state::with(|state| state.glass_light_return.get())
 }
 
 const CAPSULE_CLIP_RADIUS: f32 = 1.0e6;

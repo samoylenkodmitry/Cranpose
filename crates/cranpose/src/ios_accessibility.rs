@@ -1,7 +1,7 @@
 #![expect(unsafe_code)]
 
 use std::{
-    cell::{Cell, OnceCell, RefCell},
+    cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     fmt::Debug,
     rc::Rc,
@@ -951,11 +951,8 @@ fn update_native_element(
 }
 
 fn text_field_traits(mtm: MainThreadMarker) -> UIAccessibilityTraits {
-    thread_local! {
-        static TRAITS: OnceCell<UIAccessibilityTraits> = const { OnceCell::new() };
-    }
-    TRAITS.with(|traits| {
-        *traits.get_or_init(|| {
+    crate::thread_state::with(|state| {
+        *state.ios.text_field_traits.get_or_init(|| {
             let field = UITextField::new(mtm);
             let object: &NSObject = &field;
             object.accessibilityTraits(mtm)

@@ -77,11 +77,11 @@ pub(crate) fn compose_empty_layout(
     modifier: Modifier,
     composed_density: crate::density::Density,
 ) -> NodeId {
-    thread_local! {
-        static EMPTY: Rc<dyn MeasurePolicy> = Rc::new(crate::layout::policies::EmptyMeasurePolicy);
-    }
-    let (id, provided, holds_children) =
-        emit_layout_node(modifier, EMPTY.with(Rc::clone), composed_density);
+    let (id, provided, holds_children) = emit_layout_node(
+        modifier,
+        super::nodes::layout_node::empty_measure_policy(),
+        composed_density,
+    );
     if provided.is_empty() {
         cranpose_core::with_current_composer(|composer| {
             composer.compose_no_children(id, holds_children);
