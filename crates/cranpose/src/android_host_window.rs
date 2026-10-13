@@ -8,8 +8,6 @@ use cranpose_core::MutableState;
 use cranpose_ui::{Point, Size, composable};
 use thiserror::Error;
 
-use crate::scoped_weak_stack::ScopedWeakStack;
-
 const SIZE_EPSILON: f32 = 0.5;
 
 pub(crate) const HOST_WINDOW_CONFIRMATION_TIMEOUT: Duration = Duration::from_millis(500);
@@ -366,20 +364,15 @@ impl AndroidHostWindowRegistry {
     }
 }
 
-thread_local! {
-    static CURRENT_ANDROID_HOST_WINDOW_REGISTRY: ScopedWeakStack<AndroidHostWindowRegistry> =
-        const { ScopedWeakStack::new() };
-}
-
 pub(crate) fn with_android_host_window_registry<R>(
     registry: &Rc<AndroidHostWindowRegistry>,
     f: impl FnOnce() -> R,
 ) -> R {
-    CURRENT_ANDROID_HOST_WINDOW_REGISTRY.with(|stack| stack.with_scope(registry, f))
+    crate::thread_state::with(|state| state.android_host_window_registry.with_scope(registry, f))
 }
 
 fn current_android_host_window_registry() -> Option<Rc<AndroidHostWindowRegistry>> {
-    CURRENT_ANDROID_HOST_WINDOW_REGISTRY.with(ScopedWeakStack::current)
+    crate::thread_state::with(|state| state.android_host_window_registry.current())
 }
 
 pub(crate) fn latest_android_host_window_request(

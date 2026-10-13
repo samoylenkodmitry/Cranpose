@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc};
+use std::rc::Rc;
 
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOfWithPolicy};
 use cranpose_macros::composable;
@@ -26,10 +26,6 @@ pub trait UriHandler {
 
 pub type UriHandlerRef = Rc<dyn UriHandler>;
 
-thread_local! {
-    static PLATFORM_URI_HANDLER: RefCell<Option<UriHandlerRef>> = const { RefCell::new(None) };
-}
-
 /// Installs a platform URI handler, replacing any previously installed one.
 ///
 /// Registered handlers take precedence over the built-in per-platform opener,
@@ -38,16 +34,16 @@ thread_local! {
 /// `UIApplication`-based opener this way (see `cranpose::ios`), because
 /// spawning `open`/`xdg-open` is not available inside the iOS sandbox.
 pub fn set_platform_uri_handler(handler: UriHandlerRef) {
-    PLATFORM_URI_HANDLER.with(|cell| *cell.borrow_mut() = Some(handler));
+    crate::thread_state::with(|state| *state.uri_handler.borrow_mut() = Some(handler));
 }
 
 /// Removes any registered platform URI handler (tests and teardown).
 pub fn clear_platform_uri_handler() {
-    PLATFORM_URI_HANDLER.with(|cell| *cell.borrow_mut() = None);
+    crate::thread_state::with(|state| *state.uri_handler.borrow_mut() = None);
 }
 
 fn registered_platform_uri_handler() -> Option<UriHandlerRef> {
-    PLATFORM_URI_HANDLER.with(|cell| cell.borrow().clone())
+    crate::thread_state::with(|state| state.uri_handler.borrow().clone())
 }
 
 struct PlatformUriHandler;

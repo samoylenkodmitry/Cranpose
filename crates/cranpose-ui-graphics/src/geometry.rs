@@ -6,7 +6,6 @@ use crate::{
     ArcRecordArgs, Brush, Color, ColorFilter, CommandRecorder, CommandRecording, ImageBitmap,
     ImageSampling, PathFillRule, Trapezoid, normalized_band,
     path::{DrawStyle, Path},
-    path_fill::PathSlicer,
     stroke::{LineGeometry, Stroke},
     typography::{
         DrawTextMeasurer, DrawTextStyle, TextAlign, TextMeasurement, TextVerticalAlign,
@@ -17,13 +16,13 @@ use crate::{
 const VECTOR_PATH_MASK_CACHE_ENTRIES: usize = 96;
 const VECTOR_PATH_MASK_CACHE_BYTES: usize = 8 * 1024 * 1024;
 
-struct VectorPathMaskCache {
+pub(crate) struct VectorPathMaskCache {
     entries: Vec<(u64, ImageBitmap)>,
     bytes: usize,
 }
 
 impl VectorPathMaskCache {
-    const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             entries: Vec::new(),
             bytes: 0,
@@ -54,11 +53,6 @@ impl VectorPathMaskCache {
     }
 }
 
-thread_local! {
-    static VECTOR_PATH_MASKS: std::cell::RefCell<VectorPathMaskCache> =
-        const { std::cell::RefCell::new(VectorPathMaskCache::new()) };
-}
-
 fn vector_path_mask_key(
     path: &crate::VectorPath,
     origin: Point,
@@ -86,11 +80,11 @@ fn vector_path_mask_key(
 }
 
 fn vector_path_mask_cache_get(key: u64) -> Option<ImageBitmap> {
-    VECTOR_PATH_MASKS.with(|cache| cache.borrow_mut().get(key))
+    crate::thread_state::with(|state| state.vector_path_masks.borrow_mut().get(key))
 }
 
 fn vector_path_mask_cache_put(key: u64, image: ImageBitmap) {
-    VECTOR_PATH_MASKS.with(|cache| cache.borrow_mut().put(key, image));
+    crate::thread_state::with(|state| state.vector_path_masks.borrow_mut().put(key, image));
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -683,24 +677,16 @@ pub struct TextPrimitive {
 /// collision costs one fresh copy, never the wrong text. The pool clears
 /// itself when full; a live scene re-warms within one frame.
 fn shared_text_str(text: &str) -> Rc<str> {
-    use std::{
-        cell::RefCell,
-        collections::HashMap,
-        hash::{Hash, Hasher},
-    };
+    use std::hash::{Hash, Hasher};
 
     const POOL_CAPACITY: usize = 256;
-    thread_local! {
-        static POOL: RefCell<HashMap<u64, Rc<str>, crate::FxBuildHasher>> =
-            RefCell::new(HashMap::default());
-    }
 
     let mut hasher = crate::FxHasher::default();
     text.hash(&mut hasher);
     let key = hasher.finish();
 
-    POOL.with(|pool| {
-        let mut pool = pool.borrow_mut();
+    crate::thread_state::with(|state| {
+        let mut pool = state.shared_texts.borrow_mut();
         if let Some(shared) = pool.get(&key)
             && &**shared == text
         {
@@ -1291,14 +1277,10 @@ impl DrawScopeDefault {
     /// resolved against the scope's rect; a path that cannot be sliced is
     /// rasterized into a mask instead.
     fn push_path_fill(&mut self, path: &Path, brush: &Brush, blend_mode: BlendMode) {
-        thread_local! {
-            static SLICER: std::cell::RefCell<PathSlicer> =
-                std::cell::RefCell::new(PathSlicer::default());
-        }
         let brush_rect = Rect::from_size(self.size);
         let recording = &mut self.recording;
-        let sliced = SLICER.with(|slicer| {
-            let mut slicer = slicer.borrow_mut();
+        let sliced = crate::thread_state::with(|state| {
+            let mut slicer = state.path_slicer.borrow_mut();
             let contours = path
                 .contours()
                 .iter()

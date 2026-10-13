@@ -6289,6 +6289,56 @@ fn clean_frame_reports_no_visual_work_with_dev_overlay_enabled() {
 }
 
 #[test]
+fn dev_overlay_fits_a_phone_width_viewport() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let overlay_texts = Rc::new(RefCell::new(Vec::new()));
+    let mut shell = AppShell::new(
+        CountingRenderer::with_overlay_texts(Rc::new(Cell::new(0)), Rc::clone(&overlay_texts)),
+        root_key,
+        box_content,
+    );
+    shell.set_dev_options(DevOptions {
+        fps_counter: true,
+        ..Default::default()
+    });
+
+    let draw_overlay = |shell: &mut AppShell<CountingRenderer>, width: f32| {
+        shell.set_viewport(width, 800.0);
+        shell.surfaces[0].dev_overlay_last_refresh = None;
+        shell.reset_fps_stats();
+        for index in 0..10u64 {
+            let started = index * 20_000_000;
+            shell.record_presented_frame_for_test(started, started + 1_000_000);
+        }
+        shell.debug_enter_app_context(cranpose_ui::request_render_invalidation);
+        shell.update();
+        overlay_texts
+            .borrow()
+            .last()
+            .expect("overlay text should be drawn")
+            .clone()
+    };
+
+    let wide = draw_overlay(&mut shell, 1600.0);
+    assert!(
+        wide.contains("recomp/s"),
+        "a wide viewport keeps every field: {wide}"
+    );
+
+    let narrow = draw_overlay(&mut shell, 360.0);
+    // The pill is 7 points per character plus 8 points of padding each side.
+    assert!(
+        narrow.len() as f32 * 7.0 + 16.0 <= 360.0,
+        "the overlay must fit a 360 point viewport: {narrow}"
+    );
+    assert!(
+        narrow.starts_with("50 FPS") && narrow.contains("work 1.0ms"),
+        "a narrow viewport keeps the frame rate and frame work: {narrow}"
+    );
+}
+
+#[test]
 fn dev_overlay_reuses_text_inside_refresh_window_and_updates_after_it() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());

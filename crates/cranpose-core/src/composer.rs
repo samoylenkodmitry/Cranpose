@@ -173,17 +173,8 @@ const SPARE_COMMAND_QUEUES: usize = 8;
 /// spike such as the first composition, and keeping it would hold its memory.
 const SPARE_COMMAND_CAPACITY: usize = 1024;
 
-thread_local! {
-    /// Applied command queues for the next passes' composers to fill. A
-    /// composer takes the last one kept; nested passes finish first, so each
-    /// pass gets back the storage a pass at its depth grew.
-    static SPARE_COMMANDS: RefCell<Vec<CommandQueue>> = const { RefCell::new(Vec::new()) };
-}
-
 fn spare_commands() -> CommandQueue {
-    SPARE_COMMANDS
-        .try_with(|spare| spare.borrow_mut().pop())
-        .ok()
+    crate::thread_state::try_runtimes(|state| state.spare_commands.borrow_mut().pop())
         .flatten()
         .unwrap_or_default()
 }
@@ -193,8 +184,8 @@ pub(crate) fn recycle_commands(commands: CommandQueue) {
     if commands.capacity() > SPARE_COMMAND_CAPACITY {
         return;
     }
-    let _ = SPARE_COMMANDS.try_with(|spare| {
-        let mut spare = spare.borrow_mut();
+    crate::thread_state::try_runtimes(|state| {
+        let mut spare = state.spare_commands.borrow_mut();
         if spare.len() < SPARE_COMMAND_QUEUES {
             spare.push(commands);
         }

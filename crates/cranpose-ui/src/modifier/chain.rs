@@ -1,8 +1,4 @@
-use std::{
-    any::type_name_of_val,
-    cell::{Cell, RefCell},
-    rc::Rc,
-};
+use std::{any::type_name_of_val, cell::RefCell, rc::Rc};
 
 use cranpose_core::NodeId;
 #[expect(unused_imports)]
@@ -68,12 +64,9 @@ impl Default for ModifierChainHandle {
 }
 
 fn next_revision() -> u64 {
-    thread_local! {
-        static LAST_REVISION: Cell<u64> = const { Cell::new(0) };
-    }
-    LAST_REVISION.with(|last| {
-        let revision = last.get() + 1;
-        last.set(revision);
+    crate::thread_state::cells(|cells| {
+        let revision = cells.last_modifier_revision.get() + 1;
+        cells.last_modifier_revision.set(revision);
         revision
     })
 }

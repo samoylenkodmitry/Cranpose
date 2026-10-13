@@ -15,7 +15,7 @@ fn traced_reader(state: MutableState<i32>) {
 }
 
 fn trace_invalidated_scope(tracking: bool) -> (Option<&'static str>, Vec<String>) {
-    DEBUG_SCOPE_TRACKING_OVERRIDE.with(|enabled| enabled.set(Some(tracking)));
+    thread_state::cells(|cells| cells.scope_tracking_override.set(Some(tracking)));
     let mut composition = test_composition();
     let runtime = composition.runtime_handle();
     let state = MutableState::with_runtime(0, runtime);
@@ -34,7 +34,7 @@ fn trace_invalidated_scope(tracking: bool) -> (Option<&'static str>, Vec<String>
         debug_scope_label(scope_id),
         debug_scope_invalidation_sources(scope_id),
     );
-    DEBUG_SCOPE_TRACKING_OVERRIDE.with(|enabled| enabled.set(None));
+    thread_state::cells(|cells| cells.scope_tracking_override.set(None));
     trace
 }
 

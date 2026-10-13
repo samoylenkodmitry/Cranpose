@@ -8,7 +8,7 @@ fn debug_scope_label_env_enabled() -> bool {
 #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
 fn debug_scope_tracking_enabled() -> bool {
     #[cfg(test)]
-    if let Some(enabled) = DEBUG_SCOPE_TRACKING_OVERRIDE.with(Cell::get) {
+    if let Some(enabled) = thread_state::cells(|cells| cells.scope_tracking_override.get()) {
         return enabled;
     }
     debug_scope_label_env_enabled()
@@ -30,8 +30,8 @@ pub fn debug_label_current_scope(name: &'static str) {
     }
     with_current_composer(|composer| {
         if let Some(scope) = composer.current_recompose_scope() {
-            DEBUG_SCOPE_LABELS.with(|labels| {
-                labels.borrow_mut().insert(scope.id(), name);
+            thread_state::runtimes(|state| {
+                state.scope_labels.borrow_mut().insert(scope.id(), name);
             });
         }
     });
@@ -50,8 +50,9 @@ pub(crate) fn debug_record_scope_invalidation(
         Some(id) => format!("slot={} gen={} {value_type}", id.slot(), id.generation()),
         None => value_type.to_string(),
     };
-    DEBUG_SCOPE_INVALIDATION_SOURCES.with(|sources| {
-        sources
+    thread_state::runtimes(|state| {
+        state
+            .scope_invalidation_sources
             .borrow_mut()
             .entry(scope_id)
             .or_default()
@@ -65,7 +66,7 @@ pub fn debug_scope_label(scope_id: usize) -> Option<&'static str> {
     if !debug_scope_tracking_enabled() {
         return None;
     }
-    DEBUG_SCOPE_LABELS.with(|labels| labels.borrow().get(&scope_id).copied())
+    thread_state::runtimes(|state| state.scope_labels.borrow().get(&scope_id).copied())
 }
 
 #[cfg(debug_assertions)]
@@ -74,8 +75,13 @@ pub fn debug_scope_invalidation_sources(scope_id: usize) -> Vec<String> {
     if !debug_scope_tracking_enabled() {
         return Vec::new();
     }
-    DEBUG_SCOPE_INVALIDATION_SOURCES.with(|sources| {
-        let Some(entries) = sources.borrow().get(&scope_id).cloned() else {
+    thread_state::runtimes(|state| {
+        let Some(entries) = state
+            .scope_invalidation_sources
+            .borrow()
+            .get(&scope_id)
+            .cloned()
+        else {
             return Vec::new();
         };
         let mut entries: Vec<_> = entries.into_iter().collect();

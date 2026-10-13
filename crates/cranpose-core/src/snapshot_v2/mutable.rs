@@ -402,11 +402,12 @@ impl MutableSnapshot {
         self.applied.set(true);
         self.state.dispose();
 
-        for (_, state, _) in &applied_info {
-            super::EXTRA_STATE_OBJECTS.with(|cell| {
-                cell.borrow_mut().add_trait_object(state);
-            });
-        }
+        crate::thread_state::snapshots(|snapshots| {
+            let mut extra_state_objects = snapshots.extra_state_objects.borrow_mut();
+            for (_, state, _) in &applied_info {
+                extra_state_objects.add_trait_object(state);
+            }
+        });
 
         let observer_states: Vec<Rc<dyn StateObject>> = applied_info
             .iter()

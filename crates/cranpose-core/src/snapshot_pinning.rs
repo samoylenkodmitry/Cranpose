@@ -1,5 +1,3 @@
-use std::cell::RefCell;
-
 use crate::{
     snapshot_double_index_heap::{SnapshotDoubleIndexHeap, SnapshotDoubleIndexHeapDebugStats},
     snapshot_id_set::{SnapshotId, SnapshotIdSet},
@@ -21,12 +19,12 @@ impl PinHandle {
     }
 }
 
-struct PinningTable {
+pub(crate) struct PinningTable {
     heap: SnapshotDoubleIndexHeap,
 }
 
 impl PinningTable {
-    fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             heap: SnapshotDoubleIndexHeap::new(),
         }
@@ -73,10 +71,6 @@ impl PinningTable {
     }
 }
 
-thread_local! {
-    static PINNING_TABLE: RefCell<PinningTable> = RefCell::new(PinningTable::new());
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SnapshotPinningDebugStats {
     pub pin_count: usize,
@@ -101,7 +95,7 @@ pub struct SnapshotPinningDebugStats {
 pub fn track_pinning(snapshot_id: SnapshotId, invalid: &SnapshotIdSet) -> PinHandle {
     let pinned_id = invalid.lowest(snapshot_id);
 
-    PINNING_TABLE.with(|cell| cell.borrow_mut().add(pinned_id))
+    crate::thread_state::snapshots(|state| state.pinning.borrow_mut().add(pinned_id))
 }
 
 /// Release a pinned snapshot.
@@ -118,8 +112,8 @@ pub fn release_pinning(handle: PinHandle) {
         return;
     }
 
-    PINNING_TABLE.with(|cell| {
-        cell.borrow_mut().remove(handle);
+    crate::thread_state::snapshots(|state| {
+        state.pinning.borrow_mut().remove(handle);
     });
 }
 
@@ -131,24 +125,23 @@ pub fn release_pinning(handle: PinHandle) {
 /// # Time Complexity
 /// O(1)
 pub fn lowest_pinned_snapshot() -> Option<SnapshotId> {
-    PINNING_TABLE.with(|cell| cell.borrow().lowest_pinned())
+    crate::thread_state::snapshots(|state| state.pinning.borrow().lowest_pinned())
 }
 
 /// Get the current count of pinned snapshots (for testing).
 /// Get the current count of pinned snapshots (for testing/debugging).
 pub fn pin_count() -> usize {
-    PINNING_TABLE.with(|cell| cell.borrow().pin_count())
+    crate::thread_state::snapshots(|state| state.pinning.borrow().pin_count())
 }
 
 pub fn debug_snapshot_pinning_stats() -> SnapshotPinningDebugStats {
-    PINNING_TABLE.with(|cell| cell.borrow().debug_stats())
+    crate::thread_state::snapshots(|state| state.pinning.borrow().debug_stats())
 }
 
 #[cfg(test)]
 pub fn reset_pinning_table() {
-    PINNING_TABLE.with(|cell| {
-        let mut table = cell.borrow_mut();
-        table.heap = SnapshotDoubleIndexHeap::new();
+    crate::thread_state::snapshots(|state| {
+        state.pinning.borrow_mut().heap = SnapshotDoubleIndexHeap::new();
     });
 }
 

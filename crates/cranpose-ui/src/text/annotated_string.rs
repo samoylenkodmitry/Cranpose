@@ -315,30 +315,22 @@ pub fn shared_plain_render_string(text: &str) -> std::sync::Arc<RenderString> {
     })
 }
 
-struct SharedPlainText {
+pub(crate) struct SharedPlainText {
     annotated: Rc<AnnotatedString>,
     render: std::cell::OnceCell<std::sync::Arc<RenderString>>,
 }
 
 fn with_shared_plain_text<R>(text: &str, read: impl FnOnce(&SharedPlainText) -> R) -> R {
-    use std::{
-        cell::RefCell,
-        hash::{Hash, Hasher},
-    };
-
-    use cranpose_core::collections::map::HashMap;
+    use std::hash::{Hash, Hasher};
 
     const POOL_CAPACITY: usize = 256;
-    thread_local! {
-        static POOL: RefCell<HashMap<u64, SharedPlainText>> = RefCell::new(HashMap::default());
-    }
 
     let mut hasher = cranpose_ui_graphics::FxHasher::default();
     text.hash(&mut hasher);
     let key = hasher.finish();
 
-    POOL.with(|pool| {
-        let mut pool = pool.borrow_mut();
+    crate::thread_state::with(|state| {
+        let mut pool = state.shared_plain_texts.borrow_mut();
         if let Some(shared) = pool.get(&key)
             && shared.annotated.text == text
         {

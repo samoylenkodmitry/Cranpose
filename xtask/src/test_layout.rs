@@ -72,7 +72,7 @@ pub(crate) fn inline_test_modules(root: &Path) -> Result<Vec<(PathBuf, usize)>, 
     Ok(inline)
 }
 
-fn collect_sources(dir: &Path, sources: &mut Vec<PathBuf>) {
+pub(crate) fn collect_sources(dir: &Path, sources: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };

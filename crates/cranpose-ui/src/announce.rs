@@ -1,5 +1,3 @@
-use std::cell::RefCell;
-
 use cranpose_core::CompositionLocal;
 use cranpose_foundation::LiveRegionMode;
 
@@ -79,11 +77,7 @@ fn push(text: String, mode: LiveRegionMode) {
 }
 
 fn queue<T>(action: impl FnOnce(&mut Vec<Announcement>) -> T) -> T {
-    thread_local! {
-        static PENDING: RefCell<Vec<Announcement>> = const { RefCell::new(Vec::new()) };
-    }
-
-    PENDING.with(|cell| action(&mut cell.borrow_mut()))
+    crate::thread_state::with(|state| action(&mut state.pending_announcements.borrow_mut()))
 }
 
 #[cfg(test)]

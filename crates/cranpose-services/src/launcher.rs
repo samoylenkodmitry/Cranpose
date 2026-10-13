@@ -25,12 +25,7 @@
 //! }
 //! ```
 
-use std::{
-    cell::{Cell, RefCell},
-    collections::HashMap,
-    future::Future,
-    rc::Rc,
-};
+use std::{cell::Cell, future::Future, rc::Rc};
 
 use cranpose_core::{RuntimeHandle, current_runtime_handle};
 use cranpose_macros::composable;
@@ -50,22 +45,18 @@ use crate::{
 /// declining is an outcome, not a failure.
 pub type LauncherResult<T> = Result<T, FilePickerError>;
 
-thread_local! {
-    static RECOVERED: RefCell<HashMap<String, RecoveredPick>> = RefCell::new(HashMap::new());
-    static IN_FLIGHT: RefCell<Option<String>> = const { RefCell::new(None) };
-    static REGISTERED_KEYS: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
-}
-
 const IN_FLIGHT_PREFERENCE: &str = "cranpose.launcher.in-flight";
 
 fn begin_request(request_key: &str) {
-    IN_FLIGHT.with(|slot| *slot.borrow_mut() = Some(request_key.to_string()));
+    crate::thread_state::with(|state| {
+        *state.in_flight_request.borrow_mut() = Some(request_key.to_string());
+    });
     let _ = preferences().set(IN_FLIGHT_PREFERENCE, request_key);
 }
 
 fn finish_request(request_key: &str) {
-    IN_FLIGHT.with(|slot| {
-        let mut slot = slot.borrow_mut();
+    crate::thread_state::with(|state| {
+        let mut slot = state.in_flight_request.borrow_mut();
         if slot.as_deref() == Some(request_key) {
             *slot = None;
         }
@@ -76,8 +67,7 @@ fn finish_request(request_key: &str) {
 }
 
 fn in_flight_request() -> Option<String> {
-    IN_FLIGHT
-        .with(|slot| slot.borrow().clone())
+    crate::thread_state::with(|state| state.in_flight_request.borrow().clone())
         .or_else(|| preferences().get(IN_FLIGHT_PREFERENCE))
 }
 
@@ -87,12 +77,13 @@ fn drain_recovered(picker: &FilePickerRef) {
             log::warn!("cranpose: a recovered pick arrived with no request in flight; dropping it");
             continue;
         };
-        RECOVERED.with(|inbox| inbox.borrow_mut().insert(key, pick));
+        crate::thread_state::with(|state| state.recovered_picks.borrow_mut().insert(key, pick));
     }
 }
 
 fn take_recovered(request_key: &str) -> Option<RecoveredPick> {
-    let recovered = RECOVERED.with(|inbox| inbox.borrow_mut().remove(request_key));
+    let recovered =
+        crate::thread_state::with(|state| state.recovered_picks.borrow_mut().remove(request_key));
     if recovered.is_some() {
         finish_request(request_key);
     }
@@ -102,9 +93,11 @@ fn take_recovered(request_key: &str) -> Option<RecoveredPick> {
 /// Discards every framework-owned launcher record. Used by tests and by host
 /// teardown so one composition's in-flight request never leaks into the next.
 pub fn clear_launcher_state() {
-    RECOVERED.with(|inbox| inbox.borrow_mut().clear());
-    IN_FLIGHT.with(|slot| *slot.borrow_mut() = None);
-    REGISTERED_KEYS.with(|keys| keys.borrow_mut().clear());
+    crate::thread_state::with(|state| {
+        state.recovered_picks.borrow_mut().clear();
+        *state.in_flight_request.borrow_mut() = None;
+        state.registered_request_keys.borrow_mut().clear();
+    });
 }
 
 struct LauncherCore {
@@ -156,8 +149,8 @@ struct KeyRegistration {
 
 impl KeyRegistration {
     fn new(request_key: &str) -> Self {
-        REGISTERED_KEYS.with(|keys| {
-            let mut keys = keys.borrow_mut();
+        crate::thread_state::with(|state| {
+            let mut keys = state.registered_request_keys.borrow_mut();
             let count = keys.entry(request_key.to_string()).or_insert(0);
             *count += 1;
             debug_assert!(
@@ -174,8 +167,8 @@ impl KeyRegistration {
 
 impl Drop for KeyRegistration {
     fn drop(&mut self) {
-        REGISTERED_KEYS.with(|keys| {
-            let mut keys = keys.borrow_mut();
+        crate::thread_state::try_with(|state| {
+            let mut keys = state.registered_request_keys.borrow_mut();
             if let Some(count) = keys.get_mut(&self.request_key) {
                 *count -= 1;
                 if *count == 0 {

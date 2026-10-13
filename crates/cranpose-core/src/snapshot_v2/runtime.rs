@@ -1,4 +1,4 @@
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 
 use super::*;
 
@@ -6,44 +6,37 @@ const PREEXISTING_SNAPSHOT_ID: SnapshotId = 1;
 
 const INITIAL_GLOBAL_SNAPSHOT_ID: SnapshotId = PREEXISTING_SNAPSHOT_ID + 1;
 
-thread_local! {
-    static SNAPSHOT_RUNTIME: RefCell<Option<SnapshotRuntime>> = const { RefCell::new(None) };
-}
+struct RuntimeLockGuard<'a>(&'a Cell<usize>);
 
-thread_local! {
-    static RUNTIME_LOCK_DEPTH: Cell<usize> = const { Cell::new(0) };
-}
-
-struct RuntimeLockGuard;
-
-impl RuntimeLockGuard {
-    fn enter() -> Self {
-        RUNTIME_LOCK_DEPTH.with(|cell| cell.set(cell.get() + 1));
-        Self
+impl<'a> RuntimeLockGuard<'a> {
+    fn enter(depth: &'a Cell<usize>) -> Self {
+        depth.set(depth.get() + 1);
+        Self(depth)
     }
 }
 
-impl Drop for RuntimeLockGuard {
+impl Drop for RuntimeLockGuard<'_> {
     fn drop(&mut self) {
-        RUNTIME_LOCK_DEPTH.with(|cell| {
-            let depth = cell.get();
-            debug_assert!(depth > 0, "runtime lock depth underflow");
-            cell.set(depth.saturating_sub(1));
-        });
+        let depth = self.0.get();
+        debug_assert!(depth > 0, "runtime lock depth underflow");
+        self.0.set(depth.saturating_sub(1));
     }
 }
 
 pub(crate) fn with_runtime<T>(f: impl FnOnce(&mut SnapshotRuntime) -> T) -> T {
-    let _scope = RuntimeLockGuard::enter();
-    SNAPSHOT_RUNTIME.with(|runtime_cell| {
-        let mut runtime = runtime_cell.borrow_mut();
-        f(runtime.get_or_insert_with(SnapshotRuntime::new))
+    crate::thread_state::snapshots(|state| {
+        let _scope = RuntimeLockGuard::enter(&state.runtime_lock_depth);
+        let mut runtime = state.runtime.borrow_mut();
+        f(runtime.get_or_insert_with(|| {
+            crate::thread_state::watch_thread_exit();
+            SnapshotRuntime::new()
+        }))
     })
 }
 
 #[cfg(test)]
 pub(crate) fn runtime_lock_depth() -> usize {
-    RUNTIME_LOCK_DEPTH.with(Cell::get)
+    crate::thread_state::snapshots(|state| state.runtime_lock_depth.get())
 }
 
 pub(crate) fn allocate_snapshot() -> (SnapshotId, SnapshotIdSet) {
@@ -90,7 +83,7 @@ pub(crate) struct SnapshotRuntime {
 }
 
 impl SnapshotRuntime {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mut open = SnapshotIdSet::new();
         open = open.set(INITIAL_GLOBAL_SNAPSHOT_ID);
         Self {

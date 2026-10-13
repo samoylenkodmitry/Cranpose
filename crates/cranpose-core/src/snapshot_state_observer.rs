@@ -582,6 +582,7 @@ impl ReadObservationStack {
     }
 }
 
+#[cfg_attr(feature = "std-hash", expect(clippy::box_collection))]
 enum ObservedIds {
     Small(SmallVec<[ObservedState; 1]>),
     Large(Box<HashMap<StateObjectId, Option<Rc<dyn Any>>>>),

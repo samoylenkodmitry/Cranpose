@@ -1,8 +1,4 @@
-use std::{
-    cell::{Cell, RefCell},
-    collections::VecDeque,
-    rc::Rc,
-};
+use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
 use cranpose_core::{
     NodeId,
@@ -388,19 +384,15 @@ pub fn clear_focus_invalidations() {
 #[path = "tests/focus_dispatch_tests.rs"]
 mod tests;
 
-thread_local! {
-    static KEYBOARD_FOCUS_VISIBLE: Cell<bool> = const { Cell::new(false) };
-}
-
 /// Records how focus last moved: true after Tab or an arrow key, false after
 /// a pointer press. A [`Modifier::focusable`](crate::Modifier::focusable)
 /// draws its ring only while this is true. Returns whether the value changed,
 /// so the caller can ask for a redraw.
 pub fn set_keyboard_focus_visible(visible: bool) -> bool {
-    KEYBOARD_FOCUS_VISIBLE.with(|cell| cell.replace(visible) != visible)
+    crate::thread_state::cells(|cells| cells.keyboard_focus_visible.replace(visible) != visible)
 }
 
 /// Whether the keyboard, and not a pointer, made the last focus move.
 pub fn keyboard_focus_visible() -> bool {
-    KEYBOARD_FOCUS_VISIBLE.with(Cell::get)
+    crate::thread_state::cells(|cells| cells.keyboard_focus_visible.get())
 }

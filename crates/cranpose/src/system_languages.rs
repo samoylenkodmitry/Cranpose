@@ -1,4 +1,4 @@
-use std::{cell::OnceCell, rc::Rc};
+use std::rc::Rc;
 
 use cranpose_core::{CompositionLocal, compositionLocalOf};
 use cranpose_ui::Locale;
@@ -21,11 +21,9 @@ pub fn system_languages() -> Vec<Locale> {
 /// The current host language preferences for this application subtree.
 /// Native configuration changes and app resumes refresh this value automatically.
 pub fn local_system_languages() -> CompositionLocal<Rc<[Locale]>> {
-    thread_local! {
-        static LOCAL: OnceCell<CompositionLocal<Rc<[Locale]>>> = const { OnceCell::new() };
-    }
-    LOCAL.with(|local| {
-        local
+    crate::thread_state::with(|state| {
+        state
+            .system_languages_local
             .get_or_init(|| compositionLocalOf(|| system_languages().into()))
             .clone()
     })

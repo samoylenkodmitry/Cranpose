@@ -49,9 +49,9 @@ pub use global::{GlobalSnapshot, advance_global_snapshot};
 pub use mutable::MutableSnapshot;
 pub use nested::{NestedMutableSnapshot, NestedReadonlySnapshot};
 pub use readonly::ReadonlySnapshot;
+pub(crate) use runtime::{SnapshotRuntime, allocate_snapshot, close_snapshot, with_runtime};
 #[cfg(test)]
 pub(crate) use runtime::{TestRuntimeGuard, reset_runtime_for_tests};
-pub(crate) use runtime::{allocate_snapshot, close_snapshot, with_runtime};
 pub use transparent::{TransparentObserverMutableSnapshot, TransparentObserverSnapshot};
 
 /// Observer that is called when a state object is read.
@@ -395,31 +395,24 @@ impl AnySnapshot {
     }
 }
 
-thread_local! {
-    static CURRENT_SNAPSHOT: RefCell<Option<AnySnapshot>> = const { RefCell::new(None) };
-}
-
 /// Get the current snapshot, or None if not in a snapshot context.
 pub fn current_snapshot() -> Option<AnySnapshot> {
-    CURRENT_SNAPSHOT
-        .try_with(|cell| cell.borrow().clone())
-        .unwrap_or(None)
+    crate::thread_state::try_snapshots(|state| state.current.borrow().clone()).flatten()
 }
 
 pub(crate) fn current_snapshot_reads_into(observer: &ReadObserver) -> bool {
-    CURRENT_SNAPSHOT
-        .try_with(|cell| match &*cell.borrow() {
-            Some(AnySnapshot::TransparentMutable(snapshot)) => {
-                snapshot.can_reuse() && snapshot.reads_into(observer)
-            }
-            _ => false,
-        })
-        .unwrap_or(false)
+    crate::thread_state::try_snapshots(|state| match &*state.current.borrow() {
+        Some(AnySnapshot::TransparentMutable(snapshot)) => {
+            snapshot.can_reuse() && snapshot.reads_into(observer)
+        }
+        _ => false,
+    })
+    .unwrap_or(false)
 }
 
 pub(crate) fn set_current_snapshot(snapshot: Option<AnySnapshot>) {
-    let _ = CURRENT_SNAPSHOT.try_with(|cell| {
-        *cell.borrow_mut() = snapshot;
+    crate::thread_state::try_snapshots(|state| {
+        *state.current.borrow_mut() = snapshot;
     });
 }
 
@@ -429,9 +422,9 @@ struct CurrentSnapshotGuard {
 
 impl CurrentSnapshotGuard {
     fn enter(snapshot: AnySnapshot) -> Self {
-        let previous = CURRENT_SNAPSHOT
-            .try_with(|cell| cell.replace(Some(snapshot)))
-            .unwrap_or(None);
+        let previous =
+            crate::thread_state::try_snapshots(|state| state.current.replace(Some(snapshot)))
+                .flatten();
         Self { previous }
     }
 }
@@ -546,7 +539,7 @@ pub(crate) fn peek_next_snapshot_id() -> SnapshotId {
 }
 
 #[derive(Clone)]
-struct ObserverId(Rc<()>);
+pub(crate) struct ObserverId(Rc<()>);
 
 impl ObserverId {
     fn new() -> Self {
@@ -568,25 +561,9 @@ impl Hash for ObserverId {
     }
 }
 
-thread_local! {
-    static APPLY_OBSERVERS: RefCell<HashMap<ObserverId, ApplyObserver>> = RefCell::new(HashMap::default());
-}
-
-thread_local! {
-    static LAST_WRITES: RefCell<HashMap<StateObjectId, SnapshotId>> = RefCell::new(HashMap::default());
-}
-
-thread_local! {
-    static EXTRA_STATE_OBJECTS: RefCell<crate::snapshot_weak_set::SnapshotWeakSet> = RefCell::new(crate::snapshot_weak_set::SnapshotWeakSet::new());
-}
-
 const UNUSED_RECORD_CLEANUP_INTERVAL: SnapshotId = 2;
 const UNUSED_RECORD_CLEANUP_BUSY_INTERVAL: SnapshotId = 1;
 const UNUSED_RECORD_CLEANUP_MIN_SIZE: usize = 64;
-
-thread_local! {
-    static LAST_UNUSED_RECORD_CLEANUP: Cell<SnapshotId> = const { Cell::new(0) };
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SnapshotV2DebugStats {
@@ -600,38 +577,36 @@ pub struct SnapshotV2DebugStats {
 }
 
 pub fn debug_snapshot_v2_stats() -> SnapshotV2DebugStats {
-    let (apply_observers_len, apply_observers_cap) = APPLY_OBSERVERS.with(|cell| {
-        let observers = cell.borrow();
-        (observers.len(), observers.capacity())
-    });
-    let (last_writes_len, last_writes_cap) = LAST_WRITES.with(|cell| {
-        let writes = cell.borrow();
-        (writes.len(), writes.capacity())
-    });
-    let SnapshotWeakSetDebugStats {
-        len: extra_state_objects_len,
-        capacity: extra_state_objects_cap,
-    } = EXTRA_STATE_OBJECTS.with(|cell| cell.borrow().debug_stats());
-    let last_unused_record_cleanup = LAST_UNUSED_RECORD_CLEANUP.with(Cell::get);
-
-    SnapshotV2DebugStats {
-        apply_observers_len,
-        apply_observers_cap,
-        last_writes_len,
-        last_writes_cap,
-        extra_state_objects_len,
-        extra_state_objects_cap,
-        last_unused_record_cleanup,
-    }
+    crate::thread_state::snapshots(|state| {
+        let observers = state.apply_observers.borrow();
+        let writes = state.last_writes.borrow();
+        let SnapshotWeakSetDebugStats {
+            len: extra_state_objects_len,
+            capacity: extra_state_objects_cap,
+        } = state.extra_state_objects.borrow().debug_stats();
+        SnapshotV2DebugStats {
+            apply_observers_len: observers.len(),
+            apply_observers_cap: observers.capacity(),
+            last_writes_len: writes.len(),
+            last_writes_cap: writes.capacity(),
+            extra_state_objects_len,
+            extra_state_objects_cap,
+            last_unused_record_cleanup: state.last_unused_record_cleanup.get(),
+        }
+    })
 }
 
 /// Register an apply observer.
 ///
 /// Returns a handle that will automatically unregister the observer when dropped.
 pub fn register_apply_observer(observer: ApplyObserver) -> ObserverHandle {
+    crate::thread_state::watch_thread_exit();
     let id = ObserverId::new();
-    APPLY_OBSERVERS.with(|cell| {
-        cell.borrow_mut().insert(id.clone(), observer);
+    crate::thread_state::snapshots(|state| {
+        state
+            .apply_observers
+            .borrow_mut()
+            .insert(id.clone(), observer);
     });
     ObserverHandle {
         kind: ObserverKind::Apply,
@@ -658,8 +633,8 @@ impl Drop for ObserverHandle {
                 // A handle dropped while the thread tears its locals down,
                 // as a coroutine's state can be, finds the registry gone
                 // and has nothing left to remove.
-                let _ = APPLY_OBSERVERS.try_with(|cell| {
-                    cell.borrow_mut().remove(&self.id);
+                crate::thread_state::try_snapshots(|state| {
+                    state.apply_observers.borrow_mut().remove(&self.id);
                 });
             }
         }
@@ -667,59 +642,62 @@ impl Drop for ObserverHandle {
 }
 
 pub(crate) fn notify_apply_observers(modified: &[Rc<dyn StateObject>], snapshot_id: SnapshotId) {
-    APPLY_OBSERVERS.with(|cell| {
-        let observers: Vec<ApplyObserver> = cell.borrow().values().cloned().collect();
-        for observer in observers.into_iter() {
-            observer(modified, snapshot_id);
-        }
+    let observers: Vec<ApplyObserver> = crate::thread_state::snapshots(|state| {
+        state.apply_observers.borrow().values().cloned().collect()
     });
+    for observer in observers {
+        observer(modified, snapshot_id);
+    }
 }
 
 pub(crate) fn set_last_write(id: StateObjectId, snapshot_id: SnapshotId) {
-    LAST_WRITES.with(|cell| {
-        cell.borrow_mut().insert(id, snapshot_id);
+    crate::thread_state::snapshots(|state| {
+        state.last_writes.borrow_mut().insert(id, snapshot_id);
     });
 }
 
 #[cfg(test)]
 pub(crate) fn clear_last_writes() {
-    LAST_WRITES.with(|cell| {
-        cell.borrow_mut().clear();
-    });
+    crate::thread_state::snapshots(|state| state.last_writes.borrow_mut().clear());
 }
 
 pub(crate) fn check_and_overwrite_unused_records_locked() {
     let _retiring = super::state::RetiredValuesScope::enter();
-    EXTRA_STATE_OBJECTS.with(|cell| {
-        cell.borrow_mut()
+    crate::thread_state::snapshots(|state| {
+        state
+            .extra_state_objects
+            .borrow_mut()
             .remove_if(super::state::StateObject::overwrite_unused_records);
     });
 }
 
 pub(crate) fn maybe_check_and_overwrite_unused_records_locked(current_snapshot_id: SnapshotId) {
-    let should_run = EXTRA_STATE_OBJECTS.with(|cell| {
-        let set = cell.borrow();
+    let should_run = crate::thread_state::snapshots(|state| {
+        let set = state.extra_state_objects.borrow();
         if set.is_empty() {
             return false;
         }
-        let last_cleanup = LAST_UNUSED_RECORD_CLEANUP.with(Cell::get);
         let interval = if set.len() >= UNUSED_RECORD_CLEANUP_MIN_SIZE {
             UNUSED_RECORD_CLEANUP_BUSY_INTERVAL
         } else {
             UNUSED_RECORD_CLEANUP_INTERVAL
         };
-        current_snapshot_id.saturating_sub(last_cleanup) >= interval
+        let due =
+            current_snapshot_id.saturating_sub(state.last_unused_record_cleanup.get()) >= interval;
+        if due {
+            state.last_unused_record_cleanup.set(current_snapshot_id);
+        }
+        due
     });
 
     if should_run {
-        LAST_UNUSED_RECORD_CLEANUP.with(|cell| cell.set(current_snapshot_id));
         check_and_overwrite_unused_records_locked();
     }
 }
 
 #[cfg(test)]
 pub(crate) fn clear_unused_record_cleanup_for_tests() {
-    LAST_UNUSED_RECORD_CLEANUP.with(|cell| cell.set(0));
+    crate::thread_state::snapshots(|state| state.last_unused_record_cleanup.set(0));
 }
 
 pub(crate) fn optimistic_merges(

@@ -96,10 +96,13 @@ impl AppContextTextMeasurer {
     /// A shared measurer to hand to
     /// [`DrawScopeDefault::with_text_measurer`](cranpose_ui_graphics::DrawScopeDefault::with_text_measurer).
     pub fn shared() -> Rc<dyn DrawTextMeasurer> {
-        thread_local! {
-            static SHARED: Rc<dyn DrawTextMeasurer> = Rc::new(AppContextTextMeasurer);
-        }
-        SHARED.with(Rc::clone)
+        crate::thread_state::with(|state| {
+            Rc::clone(
+                state
+                    .draw_text_measurer
+                    .get_or_init(|| Rc::new(AppContextTextMeasurer)),
+            )
+        })
     }
 }
 

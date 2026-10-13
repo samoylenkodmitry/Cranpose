@@ -3,8 +3,6 @@
 //! frees whatever it did not take when it ends, so nothing is held between
 //! frames.
 
-use std::cell::RefCell;
-
 use crate::graph::{LayerNode, PrimitiveEntry, PrimitiveNode, RenderNode, TextPrimitiveNode};
 
 #[derive(Default)]
@@ -12,16 +10,12 @@ use crate::graph::{LayerNode, PrimitiveEntry, PrimitiveNode, RenderNode, TextPri
     clippy::vec_box,
     reason = "the boxes are the allocations the pool keeps for reuse"
 )]
-struct Pool {
+pub(crate) struct Pool {
     layers: Vec<Box<LayerNode>>,
     /// Text boxes still holding the text they drew, which the text that
     /// takes one replaces.
     texts: Vec<Box<TextPrimitiveNode>>,
     lists: Vec<Vec<RenderNode>>,
-}
-
-thread_local! {
-    static POOL: RefCell<Pool> = RefCell::new(Pool::default());
 }
 
 impl Pool {
@@ -48,7 +42,7 @@ impl Pool {
 /// Moves every layer box beneath `layer` into the pool, before the layer is
 /// built again in its emptied child list.
 pub(crate) fn recycle_children(layer: &mut LayerNode) {
-    POOL.with(|pool| pool.borrow_mut().recycle_children(layer));
+    crate::thread_state::with(|state| state.layer_pool.borrow_mut().recycle_children(layer));
 }
 
 /// Takes `layer`'s own primitives out of its child list, keeping its child
@@ -67,8 +61,8 @@ pub(crate) fn recycle_primitives(layer: &mut LayerNode) {
         children[first_layer..end].iter().all(is_layer),
         "a layer's own primitives never sit between its child layers"
     );
-    POOL.with(|pool| {
-        let texts = &mut pool.borrow_mut().texts;
+    crate::thread_state::with(|state| {
+        let texts = &mut state.layer_pool.borrow_mut().texts;
         let mut keep_text = |child| {
             if let RenderNode::Primitive(PrimitiveEntry {
                 node: PrimitiveNode::Text(text),
@@ -85,22 +79,21 @@ pub(crate) fn recycle_primitives(layer: &mut LayerNode) {
 
 /// Moves `layer`'s box, and every layer box beneath it, into the pool.
 pub(crate) fn recycle(layer: Box<LayerNode>) {
-    POOL.with(|pool| pool.borrow_mut().recycle_layer(layer));
+    crate::thread_state::with(|state| state.layer_pool.borrow_mut().recycle_layer(layer));
 }
 
 /// Moves an emptied child list into the pool.
 pub(crate) fn recycle_list(list: Vec<RenderNode>) {
     debug_assert!(list.is_empty(), "only an emptied list is recycled");
     if list.capacity() > 0 {
-        POOL.with(|pool| pool.borrow_mut().lists.push(list));
+        crate::thread_state::with(|state| state.layer_pool.borrow_mut().lists.push(list));
     }
 }
 
 /// A child list with room for `capacity` children, recycled when the pool
 /// has one; see [`reserve_nodes`].
 pub(crate) fn child_list(capacity: usize) -> Vec<RenderNode> {
-    let mut list = POOL
-        .with(|pool| pool.borrow_mut().lists.pop())
+    let mut list = crate::thread_state::with(|state| state.layer_pool.borrow_mut().lists.pop())
         .unwrap_or_default();
     reserve_nodes(&mut list, capacity);
     list
@@ -119,13 +112,13 @@ pub(crate) fn reserve_nodes(list: &mut Vec<RenderNode>, additional: usize) {
 }
 
 pub(crate) fn layer_box() -> Box<LayerNode> {
-    POOL.with(|pool| pool.borrow_mut().layers.pop())
+    crate::thread_state::with(|state| state.layer_pool.borrow_mut().layers.pop())
         .unwrap_or_default()
 }
 
 /// `text` in a recycled box when the pool has one.
 pub(crate) fn boxed_text(text: TextPrimitiveNode) -> Box<TextPrimitiveNode> {
-    match POOL.with(|pool| pool.borrow_mut().texts.pop()) {
+    match crate::thread_state::with(|state| state.layer_pool.borrow_mut().texts.pop()) {
         Some(mut recycled) => {
             *recycled = text;
             recycled
@@ -136,8 +129,8 @@ pub(crate) fn boxed_text(text: TextPrimitiveNode) -> Box<TextPrimitiveNode> {
 
 /// Frees what the update did not take.
 pub(crate) fn release() {
-    POOL.with(|pool| {
-        let mut pool = pool.borrow_mut();
+    crate::thread_state::with(|state| {
+        let mut pool = state.layer_pool.borrow_mut();
         pool.layers.clear();
         pool.texts.clear();
         pool.lists.clear();

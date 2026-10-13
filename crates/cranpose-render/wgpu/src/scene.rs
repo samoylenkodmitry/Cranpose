@@ -438,12 +438,7 @@ pub(crate) struct SceneCapacityHint {
 
 const SCENE_BUFFER_POOL_LIMIT: usize = 4;
 
-thread_local! {
-    static SCENE_BUFFER_POOL: std::cell::RefCell<Vec<SceneBuffers>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
-
-struct SceneBuffers {
+pub(crate) struct SceneBuffers {
     runs: Vec<RunDraw>,
     loose: ShapeRecorder,
     images: Vec<ImageDraw>,
@@ -458,8 +453,8 @@ struct SceneBuffers {
 
 impl Drop for CompositorScene {
     fn drop(&mut self) {
-        let _ = SCENE_BUFFER_POOL.try_with(|pool| {
-            let Ok(mut pool) = pool.try_borrow_mut() else {
+        crate::thread_state::try_with(|state| {
+            let Ok(mut pool) = state.scene_buffer_pool.try_borrow_mut() else {
                 return;
             };
             if pool.len() >= SCENE_BUFFER_POOL_LIMIT {
@@ -488,7 +483,9 @@ impl CompositorScene {
     }
 
     pub fn with_capacity(hint: SceneCapacityHint) -> Self {
-        if let Some(buffers) = SCENE_BUFFER_POOL.with(|pool| pool.borrow_mut().pop()) {
+        if let Some(buffers) =
+            crate::thread_state::with(|state| state.scene_buffer_pool.borrow_mut().pop())
+        {
             return Self {
                 runs: buffers.runs,
                 loose: LooseRun {

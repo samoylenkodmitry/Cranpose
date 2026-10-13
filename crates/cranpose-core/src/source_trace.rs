@@ -1,8 +1,5 @@
 //! Optional composition origins for development tools.
 
-#[cfg(feature = "inspection")]
-use std::cell::RefCell;
-
 /// A composable definition active when a layout node was emitted.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceLocation {
@@ -69,11 +66,11 @@ pub struct RecompositionInfo {
 pub fn recomposition_snapshot() -> Vec<RecompositionInfo> {
     #[cfg(all(feature = "inspection", debug_assertions))]
     {
-        if !TRACK_RECOMPOSITIONS.with(std::cell::Cell::get) {
+        if !crate::thread_state::cells(|cells| cells.track_recompositions.get()) {
             return Vec::new();
         }
-        COUNTERS.with(|registry| {
-            let mut registry = registry.borrow_mut();
+        crate::thread_state::runtimes(|state| {
+            let mut registry = state.recomposition_counters.borrow_mut();
             let mut result = Vec::with_capacity(registry.len());
             registry.retain(|weak| {
                 let Some(scope) = crate::RecomposeScope::upgrade(weak) else {
@@ -110,19 +107,12 @@ impl PartialEq for RecompositionCounter {
 #[cfg(all(feature = "inspection", debug_assertions))]
 impl Eq for RecompositionCounter {}
 
-#[cfg(all(feature = "inspection", debug_assertions))]
-thread_local! {
-    static TRACK_RECOMPOSITIONS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static NEXT_INSTANCE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    static COUNTERS: RefCell<Vec<std::rc::Weak<crate::RecomposeScopeInner>>> = const { RefCell::new(Vec::new()) };
-}
-
 /// Enables counters for composable instances on this preview's composition thread.
 /// Tracking defaults to disabled and is compiled out of release builds and builds
 /// without `inspection`. Skipped bodies and source call-site markers are not counted.
 pub fn set_recomposition_tracking(enabled: bool) {
     #[cfg(all(feature = "inspection", debug_assertions))]
-    TRACK_RECOMPOSITIONS.with(|tracking| tracking.set(enabled));
+    crate::thread_state::cells(|cells| cells.track_recompositions.set(enabled));
     #[cfg(not(all(feature = "inspection", debug_assertions)))]
     let _ = enabled;
 }
@@ -134,14 +124,22 @@ fn record_composition(
     line: u32,
     manifest_dir: &'static str,
 ) -> Option<RecompositionCounter> {
-    if !TRACK_RECOMPOSITIONS.with(std::cell::Cell::get) || name.starts_with("__cranpose_call:") {
+    if !crate::thread_state::cells(|cells| cells.track_recompositions.get())
+        || name.starts_with("__cranpose_call:")
+    {
         return None;
     }
     crate::with_current_composer_opt(|composer| {
         let scope = composer.current_recompose_scope()?;
         let counter = scope.inner.recompositions.get_or_init(|| {
-            COUNTERS.with(|registry| registry.borrow_mut().push(scope.downgrade()));
-            let instance_id = NEXT_INSTANCE.with(|next| {
+            crate::thread_state::runtimes(|state| {
+                state
+                    .recomposition_counters
+                    .borrow_mut()
+                    .push(scope.downgrade());
+            });
+            let instance_id = crate::thread_state::cells(|cells| {
+                let next = &cells.next_recomposition_instance;
                 let id = next.get().saturating_add(1);
                 next.set(id);
                 id
@@ -164,11 +162,6 @@ fn record_composition(
     .flatten()
 }
 
-#[cfg(feature = "inspection")]
-thread_local! {
-    static STACK: RefCell<Vec<SourceLocation>> = const { RefCell::new(Vec::new()) };
-}
-
 /// Restores the composition origin stack when the function returns or unwinds.
 #[doc(hidden)]
 pub struct SourceScope {
@@ -180,7 +173,7 @@ pub struct SourceScope {
 impl Drop for SourceScope {
     fn drop(&mut self) {
         #[cfg(feature = "inspection")]
-        STACK.with(|stack| stack.borrow_mut().truncate(self.depth));
+        crate::thread_state::runtimes(|state| state.source_stack.borrow_mut().truncate(self.depth));
     }
 }
 
@@ -194,8 +187,8 @@ pub fn __source_scope(
     manifest_dir: &'static str,
 ) -> SourceScope {
     #[cfg(feature = "inspection")]
-    let depth = STACK.with(|stack| {
-        let mut stack = stack.borrow_mut();
+    let depth = crate::thread_state::runtimes(|state| {
+        let mut stack = state.source_stack.borrow_mut();
         let depth = stack.len();
         stack.push(SourceLocation {
             name,
@@ -219,7 +212,7 @@ pub fn __source_scope(
 /// Captures the active composable definitions, outermost first.
 #[cfg(feature = "inspection")]
 pub fn current_source_trace() -> std::rc::Rc<[SourceLocation]> {
-    STACK.with(|stack| std::rc::Rc::from(stack.borrow().as_slice()))
+    crate::thread_state::runtimes(|state| std::rc::Rc::from(state.source_stack.borrow().as_slice()))
 }
 
 #[cfg(feature = "inspection")]
@@ -228,13 +221,17 @@ pub(crate) struct SourceContext(Vec<SourceLocation>);
 #[cfg(feature = "inspection")]
 impl Drop for SourceContext {
     fn drop(&mut self) {
-        STACK.with(|stack| *stack.borrow_mut() = std::mem::take(&mut self.0));
+        crate::thread_state::runtimes(|state| {
+            *state.source_stack.borrow_mut() = std::mem::take(&mut self.0);
+        });
     }
 }
 
 #[cfg(feature = "inspection")]
 pub(crate) fn restore_source_trace(trace: &[SourceLocation]) -> SourceContext {
-    SourceContext(STACK.with(|stack| stack.replace(trace.to_vec())))
+    SourceContext(crate::thread_state::runtimes(|state| {
+        state.source_stack.replace(trace.to_vec())
+    }))
 }
 
 #[cfg(all(test, feature = "inspection"))]

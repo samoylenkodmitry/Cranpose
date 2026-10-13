@@ -1,5 +1,3 @@
-use std::cell::Cell;
-
 use cranpose_ui::FontScaleCurve;
 use jni::{jni_sig, jni_str, objects::JObject};
 
@@ -11,19 +9,15 @@ const SAMPLE_SP: [f32; 36] = [
     112.0, 128.0, 160.0, 200.0,
 ];
 
-thread_local! {
-    static FONT_SCALE: Cell<FontScaleCurve> = const { Cell::new(FontScaleCurve::linear(1.0)) };
-}
-
 pub(crate) fn font_scale_curve() -> FontScaleCurve {
-    FONT_SCALE.with(Cell::get)
+    crate::thread_state::with(|state| state.android_font_scale.get())
 }
 
 pub(crate) fn refresh_font_scale(app: &android_activity::AndroidApp) -> bool {
     match query_font_scale(app) {
         Ok(curve) => {
             let previous = font_scale_curve();
-            FONT_SCALE.with(|cell| cell.set(curve));
+            crate::thread_state::with(|state| state.android_font_scale.set(curve));
             previous != curve
         }
         Err(error) => {

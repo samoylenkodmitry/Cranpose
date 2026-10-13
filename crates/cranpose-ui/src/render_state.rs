@@ -7,9 +7,7 @@ use std::{
 };
 
 use cranpose_core::{
-    NodeId, SnapshotStateObserver,
-    collections::map::{HashMap, HashSet},
-    current_runtime_handle,
+    NodeId, SnapshotStateObserver, collections::map::HashSet, current_runtime_handle,
 };
 
 pub(crate) type ModifierChainTraceCallback =
@@ -120,17 +118,13 @@ fn new_draw_observer() -> SnapshotStateObserver {
     observer
 }
 
-thread_local! {
-    static CURRENT_DRAW_NODE: std::cell::Cell<Option<NodeId>> = const { std::cell::Cell::new(None) };
-}
-
 struct CurrentDrawNodeGuard {
     previous: Option<NodeId>,
 }
 
 impl Drop for CurrentDrawNodeGuard {
     fn drop(&mut self) {
-        CURRENT_DRAW_NODE.with(|current| current.set(self.previous));
+        crate::thread_state::cells(|cells| cells.current_draw_node.set(self.previous));
     }
 }
 
@@ -138,7 +132,9 @@ pub(crate) fn observe_draw_reads<R>(scope: DrawObservationScope, block: impl FnO
     let context = require_current_app_context("draw observer access");
     let context_id = context.id;
     let _guard = CurrentDrawNodeGuard {
-        previous: CURRENT_DRAW_NODE.with(|current| current.replace(Some(scope.node_id))),
+        previous: crate::thread_state::cells(|cells| {
+            cells.current_draw_node.replace(Some(scope.node_id))
+        }),
     };
     context.draw_observer.observe_reads(
         scope,
@@ -161,7 +157,7 @@ pub(crate) fn observe_draw_reads<R>(scope: DrawObservationScope, block: impl FnO
 /// mid-flight. Callable only from inside a recording draw closure; anywhere
 /// else it degrades to a plain frame request.
 pub fn request_current_draw_redraw() {
-    if let Some(node_id) = CURRENT_DRAW_NODE.with(Cell::get) {
+    if let Some(node_id) = crate::thread_state::cells(|cells| cells.current_draw_node.get()) {
         schedule_draw_repass(node_id);
     }
     request_render_invalidation();
@@ -212,14 +208,9 @@ impl RenderState {
     }
 }
 
-std::thread_local! {
-    static NEXT_APP_CONTEXT_ID: Cell<std::num::NonZeroU64> = const { Cell::new(std::num::NonZeroU64::MIN) };
-    static CURRENT_APP_CONTEXT: RefCell<Vec<Weak<AppContext>>> = const { RefCell::new(Vec::new()) };
-    static APP_CONTEXTS: RefCell<HashMap<AppContextId, Weak<AppContext>>> = RefCell::new(HashMap::default());
-}
-
 fn next_app_context_id() -> AppContextId {
-    NEXT_APP_CONTEXT_ID.with(|next| {
+    crate::thread_state::cells(|cells| {
+        let next = &cells.next_app_context_id;
         let id = next.get();
         next.set(id.checked_add(1).unwrap_or(std::num::NonZeroU64::MIN));
         AppContextId(id)
@@ -231,8 +222,8 @@ pub struct AppContextScope;
 
 impl Drop for AppContextScope {
     fn drop(&mut self) {
-        CURRENT_APP_CONTEXT.with(|stack| {
-            stack.borrow_mut().pop();
+        crate::thread_state::try_with(|state| {
+            state.app_context_stack.borrow_mut().pop();
         });
     }
 }
@@ -276,8 +267,9 @@ impl AppContext {
             drag_and_drop: crate::modifier::DragAndDropState::default(),
         });
         *context.self_weak.borrow_mut() = Rc::downgrade(&context);
-        APP_CONTEXTS.with(|contexts| {
-            contexts
+        crate::thread_state::with(|state| {
+            state
+                .app_contexts
                 .borrow_mut()
                 .insert(context.id, Rc::downgrade(&context));
         });
@@ -321,8 +313,11 @@ impl AppContext {
 
     #[doc(hidden)]
     pub fn enter_scope(self: &Rc<Self>) -> AppContextScope {
-        CURRENT_APP_CONTEXT.with(|stack| {
-            stack.borrow_mut().push(Rc::downgrade(self));
+        crate::thread_state::with(|state| {
+            state
+                .app_context_stack
+                .borrow_mut()
+                .push(Rc::downgrade(self));
         });
         AppContextScope
     }
@@ -353,31 +348,28 @@ impl AppContext {
 impl Drop for AppContext {
     fn drop(&mut self) {
         let id = self.id;
-        let _ = APP_CONTEXTS.try_with(|contexts| {
-            contexts.borrow_mut().remove(&id);
+        crate::thread_state::try_with(|state| {
+            state.app_contexts.borrow_mut().remove(&id);
         });
     }
 }
 
 fn app_context_by_id(id: AppContextId) -> Option<Rc<AppContext>> {
-    APP_CONTEXTS
-        .try_with(|contexts| {
-            let context = contexts.borrow().get(&id).cloned()?;
-            let Some(context) = context.upgrade() else {
-                contexts.borrow_mut().remove(&id);
-                return None;
-            };
-            Some(context)
-        })
-        .ok()
-        .flatten()
+    crate::thread_state::try_with(|state| {
+        let contexts = &state.app_contexts;
+        let context = contexts.borrow().get(&id).cloned()?;
+        let Some(context) = context.upgrade() else {
+            contexts.borrow_mut().remove(&id);
+            return None;
+        };
+        Some(context)
+    })
+    .flatten()
 }
 
 #[cfg(test)]
 fn app_context_registry_entry_count() -> usize {
-    APP_CONTEXTS
-        .try_with(|contexts| contexts.borrow().len())
-        .unwrap_or_default()
+    crate::thread_state::try_with(|state| state.app_contexts.borrow().len()).unwrap_or_default()
 }
 
 pub(crate) fn with_app_context_by_id<R>(
@@ -403,19 +395,17 @@ pub(crate) fn enter_app_context_by_id<R>(id: AppContextId, f: impl FnOnce() -> R
 }
 
 pub(crate) fn current_app_context() -> Option<Rc<AppContext>> {
-    CURRENT_APP_CONTEXT
-        .try_with(|stack| {
-            let mut stack = stack.borrow_mut();
-            loop {
-                let context = stack.last()?;
-                if let Some(context) = context.upgrade() {
-                    return Some(context);
-                }
-                stack.pop();
+    crate::thread_state::try_with(|state| {
+        let mut stack = state.app_context_stack.borrow_mut();
+        loop {
+            let context = stack.last()?;
+            if let Some(context) = context.upgrade() {
+                return Some(context);
             }
-        })
-        .ok()
-        .flatten()
+            stack.pop();
+        }
+    })
+    .flatten()
 }
 
 #[doc(hidden)]

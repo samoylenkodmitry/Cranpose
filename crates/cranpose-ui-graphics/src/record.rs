@@ -1688,16 +1688,12 @@ impl Default for RecordingContent {
     }
 }
 
-thread_local! {
-    /// The shapes every empty recording shares, so making one allocates
-    /// nothing.
-    static NO_SHAPES: Arc<ShapeRecorder> = Arc::new(ShapeRecorder::default());
-}
-
 impl Default for CommandRecording {
     fn default() -> Self {
         Self {
-            shapes: NO_SHAPES.with(Arc::clone),
+            shapes: crate::thread_state::with(|state| {
+                Arc::clone(state.no_shapes.get_or_init(Default::default))
+            }),
             content: RecordingContent::default(),
             fingerprint: OnceCell::new(),
         }

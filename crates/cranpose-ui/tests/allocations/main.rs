@@ -10,6 +10,9 @@ use cranpose_ui::{
 use cranpose_ui_graphics::{Color, Size};
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 
+#[path = "../support/thread_exit.rs"]
+mod thread_exit;
+
 #[global_allocator]
 static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
@@ -134,13 +137,43 @@ fn owned_bitmaps_do_not_retain_spare_pixel_capacity() {
     assert!(released.bytes_deallocated <= 128, "{released:?}");
 }
 
+fn live_bytes_after_second_run(run: impl Fn()) -> isize {
+    run();
+    let region = Region::new(GLOBAL);
+    run();
+    let change = region.change();
+    change.bytes_allocated.cast_signed() - change.bytes_deallocated.cast_signed()
+}
+
+/// A thread that exits while an app thread-local still holds a composition
+/// frees all its framework state, in either order of thread-local teardown.
+fn a_thread_that_held_a_composition_frees_its_memory_at_exit() {
+    let bare_thread = live_bytes_after_second_run(|| {
+        std::thread::spawn(|| ())
+            .join()
+            .expect("an empty thread exits");
+    });
+    for before_hold in [
+        thread_exit::touch_the_holder_first,
+        thread_exit::touch_the_holder_after_another_runtime,
+    ] {
+        let held = live_bytes_after_second_run(|| {
+            thread_exit::hold_composition_at_thread_exit(before_hold);
+        });
+        assert_eq!(held, bare_thread, "the exited thread kept framework memory");
+    }
+}
+
 /// One test, so no other test's allocations land in these regions: the
 /// counting allocator counts every thread.
 #[test]
 fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     remeasuring_a_row_allocates_only_its_measurement();
-    a_modifier_chain_allocates_its_elements_and_one_shared_box();
+    if !cfg!(feature = "inspection") {
+        a_modifier_chain_allocates_its_elements_and_one_shared_box();
+    }
     resolving_text_direction_does_not_allocate();
     owned_bitmaps_allocate_only_metadata_and_clones_share_storage();
     owned_bitmaps_do_not_retain_spare_pixel_capacity();
+    a_thread_that_held_a_composition_frees_its_memory_at_exit();
 }
