@@ -22,9 +22,10 @@ GL state tracker, the web surface usages, the boxed GL copy commands, the
 Vulkan command pools that give a burst's memory back, the GL shaders
 without the branches their constants decide, the GL program status read
 only on failure, the GLSL templates, the GL link reads and the WebGL extensions below,
-and `cranpose-wgpu-core` is at 30.0.12 to require it and to make template
-modules. `cranpose-wgpu` is at 30.0.13 for the WebGPU pipeline discovery
-below and to require them.
+and `cranpose-wgpu-core` is at 30.0.13 to require it, to make template
+modules and to configure a surface while another thread submits.
+`cranpose-wgpu` is at 30.0.14 for the WebGPU pipeline discovery below and to
+require them.
 
 | fork | upstream |
 | --- | --- |
@@ -323,6 +324,17 @@ failed. Cranpose's web shell draws its first frame this way, then installs
 a new renderer and draws the frame again once they compiled. On the M5
 the gauntlet's first frame showed after 0.5 to 0.75 s instead of 1.0 to
 1.25 s, the same to the pixel.
+
+### A surface configures while another thread submits
+
+`Surface::configure` waits for every submission made before the call, then
+failed with `GpuWaitTimeout` when the queue was not empty afterwards. The
+queue is not empty when a game engine renders on its own thread with
+Cranpose's device: Bevy's render thread submitted while Cranpose resized its
+window, and the error stopped Bevy's renderer. Work submitted after the wait
+cannot use the surface's textures, since none is acquired and a presented one
+cannot be submitted, so `wgpu-core` accepts both results of the wait, as
+upstream's trunk does.
 
 ### Update the fork
 
