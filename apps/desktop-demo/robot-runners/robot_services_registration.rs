@@ -8,7 +8,7 @@ use cranpose_services::{
     audio::{AudioClip, AudioError, AudioPlayer, PlaybackParams, SoundId, VoiceId},
     haptics::{HapticFeedback, Haptics},
     image_picker::{ImagePicker, ImagePickerError, ImageSource},
-    network_status::{NetworkMonitor, NetworkStatus},
+    network_status::{Connectivity, Metering, NetworkMonitor, NetworkStatus},
     notifier::{Notifier, NotifyRequest},
     purchases::{Product, PurchaseEvent, Purchases, StorePhase, StoreState},
 };
@@ -85,8 +85,12 @@ struct RegisteredNetwork(bool);
 impl NetworkMonitor for RegisteredNetwork {
     fn status(&self) -> NetworkStatus {
         NetworkStatus {
-            online: self.0,
-            metered: true,
+            connectivity: if self.0 {
+                Connectivity::Online
+            } else {
+                Connectivity::Offline
+            },
+            metering: Metering::Metered,
         }
     }
     fn is_alive(&self) -> bool {
@@ -134,8 +138,12 @@ struct RecoveringNetwork {
 impl NetworkMonitor for RecoveringNetwork {
     fn status(&self) -> NetworkStatus {
         NetworkStatus {
-            online: self.online.load(Ordering::Acquire),
-            metered: false,
+            connectivity: if self.online.load(Ordering::Acquire) {
+                Connectivity::Online
+            } else {
+                Connectivity::Offline
+            },
+            metering: Metering::Unmetered,
         }
     }
     fn is_alive(&self) -> bool {
@@ -207,7 +215,10 @@ pub(crate) fn main() {
             assert!(cranpose_services::default_audio().is_available());
             assert!(cranpose_services::default_haptics().has_amplitude_control());
             assert_eq!(cranpose_services::store_state().phase, StorePhase::Ready);
-            assert!(!cranpose_services::network_status().online);
+            assert_eq!(
+                cranpose_services::network_status().connectivity,
+                Connectivity::Offline
+            );
             cranpose_services::default_notifier().notify(NotifyRequest::new("main", "", ""));
             assert_eq!(
                 pollster::block_on(
@@ -220,7 +231,10 @@ pub(crate) fn main() {
                 assert!(cranpose_services::default_audio().is_available());
                 assert!(cranpose_services::default_haptics().has_amplitude_control());
                 assert_eq!(cranpose_services::store_state().phase, StorePhase::Ready);
-                assert!(!cranpose_services::network_status().online);
+                assert_eq!(
+                cranpose_services::network_status().connectivity,
+                Connectivity::Offline
+            );
                 cranpose_services::default_notifier().notify(NotifyRequest::new("thread", "", ""));
                 assert_eq!(
                     pollster::block_on(
@@ -248,7 +262,10 @@ pub(crate) fn main() {
                 reconnects: AtomicUsize::new(0),
             });
             cranpose_services::set_platform_network_monitor(network.clone());
-            assert!(cranpose_services::network_status().online);
+            assert_eq!(
+                cranpose_services::network_status().connectivity,
+                Connectivity::Online
+            );
             assert_eq!(network.reconnects.load(Ordering::Acquire), 1);
 
             let first_store_observer = cranpose_services::observe_store_news(|| {
@@ -278,7 +295,7 @@ pub(crate) fn main() {
             assert!(!cached_audio.is_available());
             assert!(!cached_haptics.has_amplitude_control());
             assert_eq!(cached_purchases.state().products[0].id, "replacement");
-            assert!(cached_network.status().online);
+            assert_eq!(cached_network.status().connectivity, Connectivity::Online);
             cached_notifier.notify(NotifyRequest::new("replacement", "", ""));
             assert_eq!(REPLACEMENT_NOTIFIER_CALLS.load(Ordering::Relaxed), 1);
             assert_eq!(

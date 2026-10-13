@@ -1,30 +1,49 @@
 //! Network status (connectivity + whether the connection is metered). Apps use
 //! it to defer or confirm large transfers on cellular/metered links.
 //!
-//! The default reports online + unmetered; platform backends can install a real
-//! monitor via [`set_platform_network_monitor`] (iOS `NWPathMonitor`, Android
-//! `ConnectivityManager`, web `navigator.connection`).
+//! Each part is an observation or [`Unknown`](Connectivity::Unknown): with no
+//! platform monitor installed via [`set_platform_network_monitor`], or one
+//! that stopped, both parts are unknown. Android observes both through
+//! `ConnectivityManager`; web observes connectivity through `navigator.onLine`
+//! and cannot tell metering. An app that defers large transfers on metered
+//! links starts one on its own only when the status says
+//! [`Unmetered`](Metering::Unmetered).
 
 use std::sync::{Arc, OnceLock};
 
 use crate::registry::{RecoveryGate, ServiceRegistry};
 
-/// A snapshot of the current network state.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct NetworkStatus {
-    /// Whether the device currently has a usable network path.
-    pub online: bool,
-    /// Whether the active path is metered/expensive (cellular, hotspot, …).
-    pub metered: bool,
+/// Whether the device has a usable network path.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Connectivity {
+    /// A path that can reach the internet.
+    Online,
+    /// No usable path.
+    Offline,
+    /// Nothing observes connectivity: no platform monitor, or one that
+    /// stopped. A request may still succeed.
+    #[default]
+    Unknown,
 }
 
-impl Default for NetworkStatus {
-    fn default() -> Self {
-        Self {
-            online: true,
-            metered: false,
-        }
-    }
+/// Whether the active network path costs the user by the byte.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Metering {
+    /// Cellular, a hotspot, or a network the user marked as metered.
+    Metered,
+    /// Wi-Fi or Ethernet the user did not mark as metered.
+    Unmetered,
+    /// The platform cannot tell, nothing observes the network, or there is
+    /// no active path to meter.
+    #[default]
+    Unknown,
+}
+
+/// A snapshot of the current network state. The default knows nothing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct NetworkStatus {
+    pub connectivity: Connectivity,
+    pub metering: Metering,
 }
 
 /// Reports the current network status.
@@ -78,8 +97,14 @@ fn active_network_monitor() -> NetworkMonitorRef {
 }
 
 impl NetworkMonitor for PlatformNetworkMonitor {
+    /// The monitor's observation, or nothing known while it stays stopped.
     fn status(&self) -> NetworkStatus {
-        active_network_monitor().status()
+        let monitor = active_network_monitor();
+        if monitor.is_alive() {
+            monitor.status()
+        } else {
+            NetworkStatus::default()
+        }
     }
 
     fn is_alive(&self) -> bool {
@@ -102,23 +127,18 @@ pub fn clear_platform_network_monitor() {
     PLATFORM_NETWORK_MONITOR.clear();
 }
 
-/// The active network monitor: the platform one if installed, else the default
-/// (online, unmetered).
+/// The active network monitor: the platform one if installed, else a default
+/// that knows nothing.
 pub fn network_monitor() -> NetworkMonitorRef {
     NETWORK_MONITOR_HANDLE
         .get_or_init(|| Arc::new(PlatformNetworkMonitor))
         .clone()
 }
 
-/// Convenience: the current network status.
+/// The current network status. A stopped platform monitor gets a reconnect
+/// attempt first.
 pub fn network_status() -> NetworkStatus {
-    let monitor = network_monitor();
-    if monitor.is_alive() {
-        NETWORK_RECOVERY.succeeded();
-    } else if NETWORK_RECOVERY.try_start() {
-        monitor.reconnect();
-    }
-    monitor.status()
+    network_monitor().status()
 }
 
 #[cfg(test)]

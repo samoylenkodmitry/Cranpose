@@ -2478,7 +2478,7 @@ public class CranposeActivity extends NativeActivity {
     /** Bytes staged for an in-flight ACTION_CREATE_DOCUMENT save. */
     private ConnectivityManager.NetworkCallback cranposeNetworkCallback;
 
-    /** Current network state (online, metered) changed. */
+    /** Current network state (online, metered) changed; metered is ignored offline. */
     private static native void nativeOnNetworkStatus(boolean online, boolean metered);
     private static native void nativeOnNetworkRegistration(boolean registered);
 
@@ -2982,18 +2982,19 @@ public class CranposeActivity extends NativeActivity {
     }
 
     private void pushNetworkStatus(ConnectivityManager manager) {
-        boolean online = false;
-        boolean metered = true;
+        NetworkCapabilities capabilities;
         try {
             Network network = manager.getActiveNetwork();
-            NetworkCapabilities capabilities =
-                    network == null ? null : manager.getNetworkCapabilities(network);
-            online = capabilities != null
-                    && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
-            metered = online
-                    && !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
+            capabilities = network == null ? null : manager.getNetworkCapabilities(network);
         } catch (Exception ignored) {
+            // A failed read observes nothing: the last report stands, and
+            // before the first one the status stays unknown.
+            return;
         }
+        boolean online = capabilities != null
+                && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+        boolean metered = online
+                && !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED);
         nativeOnNetworkStatus(online, metered);
     }
 

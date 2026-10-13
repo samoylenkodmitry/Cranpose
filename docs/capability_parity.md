@@ -15,7 +15,7 @@ platform backend reports an observed value.
 | Haptics | iOS, Android, and web provide haptics. Desktop uses the service default. |
 | Share | iOS and web provide native share sheets. Android uses `ACTION_SEND` with `CranposeShareProvider`; desktop applications can use file-save services. |
 | Notifications | iOS, Android, desktop, and web provide notification services. Desktop dispatches through `notify-send`, `osascript`, or PowerShell. |
-| Network status | Android uses `ConnectivityManager`; web tracks `navigator.onLine` and online/offline events. iOS and desktop use the framework default, which reports online and unmetered. |
+| Network status | Android observes connectivity and metering through `ConnectivityManager`. Web observes connectivity through `navigator.onLine` and online/offline events; metering stays `Unknown` because browsers do not report it. iOS and desktop have no monitor and report both as `Unknown`. A stopped monitor reports `Unknown` until it reconnects. |
 | Device information | iOS, Android, and desktop report process memory and CPU readings where available. Web reads `navigator.deviceMemory` when the browser exposes the value. Optional readings use `Option` to represent platform availability. |
 | Clipboard | iOS, Android, desktop, and web provide clipboard services. Web paste uses `request_paste` because browser reads complete asynchronously. |
 | Back requests | iOS and Android publish back requests. Desktop apps map keys through their own input policy; web apps use browser navigation. Android predictive back remains disabled through `enableOnBackInvokedCallback=false`. |
@@ -36,8 +36,8 @@ platform backend reports an observed value.
 
 ## Current API gaps
 
-- iOS network status uses the framework's online, unmetered default. An iOS
-  `NWPathMonitor` backend remains future work.
+- iOS and desktop report network status as unknown. `NWPathMonitor`
+  backends for iOS and macOS remain future work.
 - The camera service covers native Apple and Android backends. Web applications
   can call browser camera APIs through application code.
 - iOS media playback reports `analysis: false` and `equalizer: false` through

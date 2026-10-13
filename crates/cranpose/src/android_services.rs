@@ -10,13 +10,14 @@ use std::{
 
 use cranpose_services::{
     BackgroundActivity, BackgroundWork, BatteryStatus, BundledAssetError, BundledAssetReader,
-    BundledAssets, HapticEffect, HapticFeedback, HapticPattern, Haptics, IncomingContent,
-    LaunchArgs, MemoryPressure, NetworkMonitor, NetworkStatus, Notifier, NotifyRequest,
-    PowerCapabilities, PowerMonitor, PowerReading, ShareContent, ShareError, ShareSheet,
-    StreamingAssetReader, ThermalState, publish_incoming_content, publish_memory_pressure,
-    push_notification_deeplink, set_platform_background_activity, set_platform_bundled_assets,
-    set_platform_haptics, set_platform_launch_args, set_platform_network_monitor,
-    set_platform_notifier, set_platform_power_monitor, set_platform_share_sheet,
+    BundledAssets, Connectivity, HapticEffect, HapticFeedback, HapticPattern, Haptics,
+    IncomingContent, LaunchArgs, MemoryPressure, Metering, NetworkMonitor, NetworkStatus, Notifier,
+    NotifyRequest, PowerCapabilities, PowerMonitor, PowerReading, ShareContent, ShareError,
+    ShareSheet, StreamingAssetReader, ThermalState, publish_incoming_content,
+    publish_memory_pressure, push_notification_deeplink, set_platform_background_activity,
+    set_platform_bundled_assets, set_platform_haptics, set_platform_launch_args,
+    set_platform_network_monitor, set_platform_notifier, set_platform_power_monitor,
+    set_platform_share_sheet,
 };
 use jni::{
     EnvUnowned, Outcome, jni_sig, jni_str,
@@ -30,8 +31,13 @@ use crate::{
     android_launch_args::decode_launch_arguments,
 };
 
-static NETWORK_ONLINE: AtomicBool = AtomicBool::new(true);
-static NETWORK_METERED: AtomicBool = AtomicBool::new(false);
+/// What the connectivity callback last reported, in one value so a read
+/// never pairs one report's connectivity with another's metering.
+static NETWORK_OBSERVATION: AtomicU8 = AtomicU8::new(NETWORK_UNOBSERVED);
+const NETWORK_UNOBSERVED: u8 = 0;
+const NETWORK_OFFLINE: u8 = 1;
+const NETWORK_ONLINE_METERED: u8 = 2;
+const NETWORK_ONLINE_UNMETERED: u8 = 3;
 static NETWORK_CALLBACK_REGISTERED: AtomicBool = AtomicBool::new(false);
 
 static INSETS_LEFT_PX: AtomicI32 = AtomicI32::new(0);
@@ -772,9 +778,15 @@ struct AndroidNetworkMonitor {
 
 impl NetworkMonitor for AndroidNetworkMonitor {
     fn status(&self) -> NetworkStatus {
+        let (connectivity, metering) = match NETWORK_OBSERVATION.load(Ordering::Acquire) {
+            NETWORK_OFFLINE => (Connectivity::Offline, Metering::Unknown),
+            NETWORK_ONLINE_METERED => (Connectivity::Online, Metering::Metered),
+            NETWORK_ONLINE_UNMETERED => (Connectivity::Online, Metering::Unmetered),
+            _ => (Connectivity::Unknown, Metering::Unknown),
+        };
         NetworkStatus {
-            online: NETWORK_ONLINE.load(Ordering::Acquire),
-            metered: NETWORK_METERED.load(Ordering::Acquire),
+            connectivity,
+            metering,
         }
     }
 
@@ -847,8 +859,12 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnNetwor
     online: jboolean,
     metered: jboolean,
 ) {
-    NETWORK_ONLINE.store(online, Ordering::Release);
-    NETWORK_METERED.store(metered, Ordering::Release);
+    let observation = match (online, metered) {
+        (false, _) => NETWORK_OFFLINE,
+        (true, true) => NETWORK_ONLINE_METERED,
+        (true, false) => NETWORK_ONLINE_UNMETERED,
+    };
+    NETWORK_OBSERVATION.store(observation, Ordering::Release);
 }
 
 #[doc(hidden)]
