@@ -600,6 +600,7 @@ pub fn debug_snapshot_v2_stats() -> SnapshotV2DebugStats {
 ///
 /// Returns a handle that will automatically unregister the observer when dropped.
 pub fn register_apply_observer(observer: ApplyObserver) -> ObserverHandle {
+    crate::thread_state::watch_thread_exit();
     let id = ObserverId::new();
     crate::thread_state::snapshots(|state| {
         state

@@ -64,6 +64,7 @@ event-listener = "5.4.2"
 name = "integration"
 path = "tests/integration.rs"
 
+
 [[bench]]
 name = "observation_cleanup"
 harness = false
