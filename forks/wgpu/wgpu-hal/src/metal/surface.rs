@@ -40,6 +40,7 @@ impl super::Surface {
             render_layer: Mutex::new(layer),
             swapchain_format: RwLock::new(None),
             extent: RwLock::new(wgt::Extent3d::default()),
+            acquired: core::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -357,11 +358,19 @@ impl crate::Surface for super::Surface {
             // When the window is occluded on macOS, presented drawables get stuck waiting
             // for vsync. Check the window's occlusion state and skip acquisition if
             // the window is not visible - this avoids a 1-second hang in nextDrawable().
+            // A layer's first drawable is the exception: none is presented yet, so
+            // nextDrawable() returns at once, and a window drawn before it is shown
+            // comes up with that frame instead of waiting until it is on screen.
             use objc2::rc::Retained;
 
             // The CAMetalLayer is typically a sublayer; find the hosting window
             // and skip acquisition while it is occluded.
-            if let Some(window) = hosting_window(Retained::into_super(render_layer.clone())) {
+            let window = if self.acquired.load(core::sync::atomic::Ordering::Acquire) {
+                hosting_window(Retained::into_super(render_layer.clone()))
+            } else {
+                None
+            };
+            if let Some(window) = window {
                 const NS_WINDOW_OCCLUSION_STATE_VISIBLE: usize = 1 << 1;
                 let occlusion_state: usize = unsafe { objc2::msg_send![&*window, occlusionState] };
                 if occlusion_state & NS_WINDOW_OCCLUSION_STATE_VISIBLE == 0 {
@@ -378,6 +387,8 @@ impl crate::Surface for super::Surface {
             Some(pair) => pair,
             None => return Err(crate::SurfaceError::Timeout),
         };
+        self.acquired
+            .store(true, core::sync::atomic::Ordering::Release);
 
         let swapchain_format = self.swapchain_format.read().unwrap();
         let extent = self.extent.read();

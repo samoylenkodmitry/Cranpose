@@ -59,6 +59,11 @@ pub(crate) fn current_surface_texture(surface: &wgpu::Surface<'_>, context: &str
     }
 }
 
+#[cfg(any(
+    all(feature = "android", target_os = "android"),
+    all(feature = "ios", target_os = "ios"),
+    all(feature = "web", target_arch = "wasm32")
+))]
 pub(crate) fn present_initial_placeholder_frame(
     surface: &wgpu::Surface<'_>,
     device: &wgpu::Device,

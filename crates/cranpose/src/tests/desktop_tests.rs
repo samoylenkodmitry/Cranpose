@@ -342,11 +342,11 @@ use super::{
     physical_surface_origin_from_outer, physical_surface_rect_contains_pointer,
     pointer_button_frame_request, press_belongs_here, press_to_hand_over,
     primary_declaration_host_needs_direct_update, primary_frame_waker,
-    primary_frame_waker_uses_event_proxy, primary_launch_requires_initial_redraw,
-    primary_pointer_gesture_poll_action, primary_pointer_move_should_recover_press,
-    primary_surface_redraw_drives_app, primary_viewport_for_surface_size,
-    primary_window_should_show, recovered_native_window_drag_start_pointer, scroll_frame_request,
-    should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw,
+    primary_frame_waker_uses_event_proxy, primary_pointer_gesture_poll_action,
+    primary_pointer_move_should_recover_press, primary_surface_redraw_drives_app,
+    primary_viewport_for_surface_size, primary_window_should_show,
+    recovered_native_window_drag_start_pointer, scroll_frame_request, should_chain_no_vsync_redraw,
+    surface_reconfigure_requires_redraw,
 };
 #[cfg(feature = "robot")]
 use super::{
@@ -1072,13 +1072,6 @@ fn the_primary_window_shows_only_content_of_its_own_and_never_headless() {
     assert!(primary_window_should_show(false, true));
     assert!(!primary_window_should_show(false, false));
     assert!(!primary_window_should_show(true, true));
-}
-
-#[test]
-fn visible_primary_launch_requests_initial_redraw() {
-    assert!(primary_launch_requires_initial_redraw(true, false));
-    assert!(!primary_launch_requires_initial_redraw(false, false));
-    assert!(!primary_launch_requires_initial_redraw(true, true));
 }
 
 #[test]

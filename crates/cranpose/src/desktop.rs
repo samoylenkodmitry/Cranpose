@@ -41,8 +41,8 @@ use crate::{
         NativeWindowRequest, WindowFocus, WindowResizeDirection, WindowState,
     },
     wgpu_surface::{
-        SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
-        present_initial_placeholder_frame_cleared_to, surface_present_required,
+        SurfaceFrame, current_surface_texture, present_initial_placeholder_frame_cleared_to,
+        surface_present_required,
     },
     winit_pointer::{
         is_primary_pointer_button, pointer_source_from_button, pointer_source_from_winit,
@@ -665,7 +665,7 @@ struct App {
     last_redraw_empty: bool,
     primary_redraw_pending: bool,
     primary_surface_dirty: bool,
-    primary_initial_present_pending: bool,
+    primary_show_pending: bool,
     vsync_interval: Duration,
     exiting: bool,
     file_drops: crate::desktop_incoming::FileDrops,
@@ -744,7 +744,7 @@ impl App {
             last_redraw_empty: false,
             primary_redraw_pending: false,
             primary_surface_dirty: false,
-            primary_initial_present_pending: false,
+            primary_show_pending: false,
             vsync_interval: default_vsync_interval(),
             exiting: false,
             file_drops: crate::desktop_incoming::FileDrops::default(),
@@ -1434,7 +1434,7 @@ impl App {
                     .as_ref()
                     .is_none_or(crate::desktop_lifecycle::WindowPresence::presentable)
             } else {
-                self.native_windows.is_empty()
+                self.primary_show_pending || self.native_windows.is_empty()
             }
     }
 
@@ -1461,24 +1461,29 @@ impl App {
     }
 
     fn sync_primary_visibility(&mut self) {
+        let visible = self.primary_visible();
         let (Some(window), Some(app)) = (self.window.clone(), self.app.as_mut()) else {
             return;
         };
-        let was_shown = self
-            .primary_shown
-            .load(std::sync::atomic::Ordering::Relaxed);
-        show_primary_when_it_has_content(
-            &self.primary_shown,
-            app,
-            window.as_ref(),
-            self.settings.headless,
-        );
-        if !was_shown
-            && self
-                .primary_shown
-                .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            request_redraw_once(&window, &mut self.primary_redraw_pending);
+        let shows = primary_window_should_show(self.settings.headless, app.primary_has_content());
+        if shows == visible {
+            return;
+        }
+        if shows {
+            // Shown by the redraw that presents its first frame.
+            if !self.primary_show_pending {
+                self.primary_show_pending = true;
+                self.primary_surface_dirty = true;
+                request_redraw_once(&window, &mut self.primary_redraw_pending);
+            }
+        } else {
+            self.primary_show_pending = false;
+            show_primary_when_it_has_content(
+                &self.primary_shown,
+                app,
+                window.as_ref(),
+                self.settings.headless,
+            );
         }
     }
 
@@ -4724,6 +4729,20 @@ fn primary_window_should_show(headless: bool, has_content: bool) -> bool {
     !headless && has_content
 }
 
+/// Shows the primary window that waits for its first frame: once that frame
+/// is presented, or when it cannot be drawn while the window is hidden.
+fn show_pending_primary(
+    pending: &mut bool,
+    shown: &std::sync::atomic::AtomicBool,
+    app: &mut AppShell<WgpuRenderer>,
+    window: &dyn Window,
+    headless: bool,
+) {
+    if std::mem::take(pending) {
+        show_primary_when_it_has_content(shown, app, window, headless);
+    }
+}
+
 fn show_primary_when_it_has_content(
     shown: &std::sync::atomic::AtomicBool,
     app: &mut AppShell<WgpuRenderer>,
@@ -4762,10 +4781,6 @@ fn primary_frame_waker(
             request_redraw();
         }
     }
-}
-
-fn primary_launch_requires_initial_redraw(primary_window_visible: bool, headless: bool) -> bool {
-    primary_surface_redraw_drives_app(primary_window_visible, headless)
 }
 
 fn surface_reconfigure_requires_redraw(width: u32, height: u32) -> bool {
@@ -5457,13 +5472,10 @@ impl ApplicationHandler for App {
         let queue = Arc::new(queue);
 
         surface.configure(&device, &surface_config);
-        present_initial_placeholder_frame(
-            &surface,
-            &device,
-            &queue,
-            surface_format,
-            "primary window initial present",
-        );
+        if let Some(theme) = window.theme() {
+            self.platform_env
+                .set_system_theme(system_theme_from_winit(theme));
+        }
 
         let text_system = WgpuTextSystem::from_font_set(self.settings.resolve_font_set());
         let initial_scale = window.scale_factor();
@@ -5522,7 +5534,7 @@ impl ApplicationHandler for App {
             self.primary_wrap_size,
         )
         .or(self.primary_wrap_size);
-        show_primary_when_it_has_content(&self.primary_shown, &mut app, window.as_ref(), headless);
+        let shows = primary_window_should_show(headless, app.primary_has_content());
 
         let mut dev_options = self.settings.dev_options.clone();
         dev_options.frame_pacing_mode = self.frame_pacing_mode();
@@ -5546,13 +5558,7 @@ impl ApplicationHandler for App {
 
         let mut platform = DesktopWinitPlatform::default();
         platform.set_scale_factor(initial_scale);
-        let request_initial_redraw =
-            primary_launch_requires_initial_redraw(self.primary_visible(), self.settings.headless);
-
-        if let Some(theme) = window.theme() {
-            self.platform_env
-                .set_system_theme(system_theme_from_winit(theme));
-        }
+        let window_id = window.id();
 
         self.window = Some(window);
         self.surface = Some(surface);
@@ -5571,12 +5577,15 @@ impl ApplicationHandler for App {
             adapter_backend: adapter_info.backend,
             text_system,
         });
-        self.primary_surface_dirty = request_initial_redraw;
-        self.primary_initial_present_pending = request_initial_redraw;
+        self.primary_surface_dirty = shows;
+        self.primary_show_pending = shows;
         self.refresh_native_window_requests();
         self.sync_native_windows(event_loop);
-        if request_initial_redraw && let Some(window) = self.window.clone() {
-            request_redraw_once(&window, &mut self.primary_redraw_pending);
+        if shows {
+            // The window is shown by the redraw that presents its first
+            // frame, so it comes up with that frame, and the frame is drawn
+            // before the platform finishes the launch.
+            self.window_event(event_loop, window_id, WindowEvent::RedrawRequested);
         }
     }
 
@@ -5940,7 +5949,15 @@ impl ApplicationHandler for App {
                             // No texture: the window is minimized, occluded or
                             // timed out. The next attempt waits a frame
                             // interval, as after an empty redraw, or the loop
-                            // retries at once and spins a core.
+                            // retries at once and spins a core. A window
+                            // hidden until this frame is shown to draw it.
+                            show_pending_primary(
+                                &mut self.primary_show_pending,
+                                &self.primary_shown,
+                                app,
+                                window.as_ref(),
+                                self.settings.headless,
+                            );
                             pace_after_empty_redraw(
                                 &mut self.last_frame_start_time,
                                 &mut self.last_redraw_empty,
@@ -5971,6 +5988,13 @@ impl ApplicationHandler for App {
                         surface_config.height,
                     ) {
                         log::error!("render failed: {err:?}");
+                        show_pending_primary(
+                            &mut self.primary_show_pending,
+                            &self.primary_shown,
+                            app,
+                            window.as_ref(),
+                            self.settings.headless,
+                        );
                         return;
                     }
                     let after_render = Instant::now();
@@ -5978,9 +6002,15 @@ impl ApplicationHandler for App {
                     window.pre_present_notify();
                     app.renderer().present(output);
                     let after_present = Instant::now();
+                    show_pending_primary(
+                        &mut self.primary_show_pending,
+                        &self.primary_shown,
+                        app,
+                        window.as_ref(),
+                        self.settings.headless,
+                    );
                     record_pacing_event(|diag| &mut diag.presents);
                     self.primary_surface_dirty = false;
-                    self.primary_initial_present_pending = false;
                     app.record_presented_frame(frame_started_at, after_render);
                     log_desktop_frame_telemetry(
                         frame_started_at,
@@ -6088,10 +6118,7 @@ impl ApplicationHandler for App {
         }
 
         if primary_frames_enabled
-            && initial_present_redraw_needed(
-                self.primary_initial_present_pending,
-                self.primary_redraw_pending,
-            )
+            && initial_present_redraw_needed(self.primary_show_pending, self.primary_redraw_pending)
         {
             request_redraw_once(&window, &mut self.primary_redraw_pending);
         }
