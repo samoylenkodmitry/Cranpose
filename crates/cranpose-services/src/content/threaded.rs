@@ -1,10 +1,11 @@
-//! Blocking reads and writes on a thread of their own.
+//! Blocking reads and writes off the thread that awaits them.
 //!
 //! A file, a Storage Access Framework document or a security-scoped file is
 //! read and written with blocking calls. Behind the async [`ContentReader`]
 //! and [`ContentSink`] those calls run here, on a thread per reader or sink,
 //! and the thread that awaits them, usually the UI thread, only hands chunks
-//! over: copying a gigabyte leaves the screen drawing.
+//! over: copying a gigabyte leaves the screen drawing. One-shot work runs on
+//! the shared bounded blocking executor instead.
 
 use std::{
     io::{self, ErrorKind, Read},
@@ -53,19 +54,18 @@ where
     })
 }
 
-/// Runs `work` on a thread of its own and resolves with what it returns.
+/// Runs `work` on the shared bounded blocking executor
+/// ([`cranpose_core::withBlocking`]) and resolves with what it returns. A
+/// burst of work waits for the executor's threads without blocking the
+/// caller.
 pub fn run_threaded<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, ContentError> + Send + 'static,
 ) -> ContentFuture<'static, Result<T, ContentError>> {
-    let done = Signal::new();
-    let reported = done.clone();
-    let spawned = std::thread::Builder::new()
-        .name("cranpose-content-work".into())
-        .spawn(move || reported.set(work()));
-    if let Err(error) = spawned {
-        done.set(Err(not_started(&error)));
-    }
-    Box::pin(async move { done.wait().await.unwrap_or_else(|| Err(gone())) })
+    Box::pin(async move {
+        cranpose_core::withBlocking(work)
+            .await
+            .unwrap_or_else(|error| Err(ContentError::Io(format!("content work: {error}"))))
+    })
 }
 
 /// What a [`threaded_sink`] writes into, on the sink's thread.
