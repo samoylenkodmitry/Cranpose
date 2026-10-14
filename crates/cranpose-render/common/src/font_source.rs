@@ -356,7 +356,7 @@ pub(crate) fn read_font_file(path: &Path) -> Result<&'static [u8], FontLoadError
     })?;
     // Shortened here, while the bytes are still ours, the faces read them in
     // place with no copy.
-    crate::loca_fit::fit_loca(&mut read);
+    crate::full_glyph_count::fit_glyph_tables(&mut read);
     let mut files = READ_FONT_FILES
         .lock()
         .unwrap_or_else(PoisonError::into_inner);

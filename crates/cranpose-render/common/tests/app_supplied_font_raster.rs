@@ -349,6 +349,38 @@ fn a_font_with_the_most_glyphs_a_font_can_hold_draws_from_bytes() {
     assert_draws_the_square(&fonts, &style);
 }
 
+#[test]
+fn a_font_with_the_most_glyphs_a_font_can_hold_draws_each_weight() {
+    let dir = font_dir("full-glyph-count-weights");
+    let path = write_font(&dir, "Full.ttf", &full_glyph_count_font());
+    let family = FontFamily::file_backed(vec![
+        FontFile::new(path.clone()),
+        FontFile::new(path).with_weight(FontWeight::BOLD),
+    ])
+    .expect("a family needs at least one file");
+    let fonts = font_set(&family);
+    let text = SQUARE.to_string();
+    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let mut ink = |weight| {
+        let style = style_for(&family, weight);
+        let rect = measured_block(&fonts, &text, &style);
+        collect(&fonts, rect, &text, &style, &mut cache)
+            .iter()
+            .map(|glyph| glyph.placement().width)
+            .max()
+            .unwrap_or(0)
+    };
+
+    let regular = ink(FontWeight::NORMAL);
+    let bold = ink(FontWeight::BOLD);
+    // 1,025 and 1,250 units of an em of 1000 at 20 px, about 21 and 25 px;
+    // the default instance draws 800 units, 16 px, for both.
+    assert!(
+        bold >= regular + 3,
+        "the bold instance must draw wider: regular={regular} bold={bold}"
+    );
+}
+
 fn assert_draws_the_square(fonts: &SoftwareTextFontSet, style: &TextStyle) {
     let text = SQUARE.to_string();
     let rect = measured_block(fonts, &text, style);
@@ -367,8 +399,10 @@ fn assert_draws_the_square(fonts: &SoftwareTextFontSet, style: &TextStyle) {
     );
 }
 
-/// A TrueType font with 65,535 glyphs, the most its `maxp` table can count:
-/// glyph 1 is a square that [`SQUARE`] maps to, the others are empty.
+/// A variable TrueType font with 65,535 glyphs, the most its `maxp` table can
+/// count: glyph 1 is a square that [`SQUARE`] maps to and that widens along
+/// the weight axis, from 800 units at its default weight of 100; the others
+/// are empty.
 fn full_glyph_count_font() -> Vec<u8> {
     const GLYPHS: u16 = u16::MAX;
     fn be16(out: &mut Vec<u8>, values: &[i32]) {
@@ -409,9 +443,35 @@ fn full_glyph_count_font() -> Vec<u8> {
     );
     be16(&mut cmap, &[1 - code, 1, 0, 0]);
 
-    let tables: [(&[u8; 4], Vec<u8>); 7] = [
+    // One weight axis, 100 to 900 with 100 by default.
+    let mut fvar = Vec::new();
+    be16(&mut fvar, &[1, 0, 16, 2, 1, 20, 0, 8]);
+    fvar.extend_from_slice(b"wght");
+    be16(&mut fvar, &[100, 0, 100, 0, 900, 0, 0, 256]);
+    // At weight 900 the square's left side moves 300 units left and its right
+    // side 300 units right; the four phantom points stay.
+    let mut variation = Vec::new();
+    // One tuple: its 18 bytes of deltas start at byte 10, at the axis' end.
+    be16(&mut variation, &[1, 10, 18, 0x8000, 0x4000]);
+    // Eight x deltas in words, then eight y deltas of zero.
+    variation.push(0x40 | 7);
+    be16(&mut variation, &[-300, 300, 300, -300, 0, 0, 0, 0]);
+    variation.push(0x80 | 7);
+    let mut gvar = Vec::new();
+    let offsets = 4 * (usize::from(GLYPHS) + 1);
+    be16(&mut gvar, &[1, 0, 1, 0, 0, 20, i32::from(GLYPHS), 1]);
+    gvar.extend_from_slice(&((20 + offsets) as u32).to_be_bytes());
+    for glyph in 0..=u32::from(GLYPHS) {
+        let start = if glyph < 2 { 0 } else { variation.len() as u32 };
+        gvar.extend_from_slice(&start.to_be_bytes());
+    }
+    gvar.extend_from_slice(&variation);
+
+    let tables: [(&[u8; 4], Vec<u8>); 9] = [
         (b"cmap", cmap),
+        (b"fvar", fvar),
         (b"glyf", square),
+        (b"gvar", gvar),
         (b"head", head),
         (b"hhea", hhea),
         (b"hmtx", hmtx),
