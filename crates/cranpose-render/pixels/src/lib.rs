@@ -45,6 +45,8 @@ fn pixel_rect(bounds: draw::ClipBounds) -> PixelRect {
 #[derive(Default)]
 pub struct Picture {
     raster: Option<scene::RasterScene>,
+    /// The scene before `raster`, whose storage the next one reuses.
+    spare: scene::RasterScene,
     width: u32,
     height: u32,
     scale: f32,
@@ -116,10 +118,13 @@ impl PixelsRenderer {
         );
     }
 
-    fn raster_scene(&self, scale: f32) -> scene::RasterScene {
+    /// Fills `raster` with the scene at `scale`, keeping its storage.
+    fn fill_raster_scene(&self, raster: &mut scene::RasterScene, scale: f32) {
         match self.scene.graph.as_ref() {
-            Some(graph) => pipeline::build_raster_scene(graph, self.scene.diagnostics(), scale),
-            None => scene::RasterScene::new(),
+            Some(graph) => {
+                pipeline::fill_raster_scene(raster, graph, self.scene.diagnostics(), scale);
+            }
+            None => raster.clear(),
         }
     }
 
@@ -136,7 +141,8 @@ impl PixelsRenderer {
         changed: &mut Vec<PixelRect>,
     ) {
         let scale = valid_scale(scale);
-        let raster = self.raster_scene(scale);
+        let mut raster = std::mem::take(&mut picture.spare);
+        self.fill_raster_scene(&mut raster, scale);
         changed.clear();
         match picture.raster.as_ref() {
             Some(old)
@@ -159,7 +165,9 @@ impl PixelsRenderer {
             }),
             _ => {}
         }
-        picture.raster = Some(raster);
+        if let Some(old) = picture.raster.replace(raster) {
+            picture.spare = old;
+        }
         picture.width = width;
         picture.height = height;
         picture.scale = scale;
@@ -203,7 +211,8 @@ impl PixelsRenderer {
         height: u32,
         scale: f32,
     ) {
-        let scene = self.raster_scene(valid_scale(scale));
+        let mut scene = std::mem::take(&mut frame.scene);
+        self.fill_raster_scene(&mut scene, valid_scale(scale));
         frame.compose(
             &scene,
             width,
@@ -211,6 +220,7 @@ impl PixelsRenderer {
             self.scene.diagnostics(),
             &self.text_resources,
         );
+        frame.scene = scene;
     }
 }
 

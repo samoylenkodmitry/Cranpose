@@ -91,6 +91,8 @@ pub struct TextureUpload {
 /// from frame to frame: compose into the same one every frame.
 #[derive(Default)]
 pub struct SpriteFrame {
+    /// The scene the last frame composed, whose storage the next one reuses.
+    pub(crate) scene: RasterScene,
     sprites: Vec<f32>,
     uploads: Vec<TextureUpload>,
     releases: Vec<u32>,

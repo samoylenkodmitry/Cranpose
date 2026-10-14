@@ -480,7 +480,20 @@ fn push_text_decorations(
     text_brush: &Brush,
     text_clip: Option<Rect>,
 ) {
-    if annotated_text.is_empty() {
+    // A span draws a line only when its style or a span over it has one;
+    // without any, measuring the spans finds nothing to draw.
+    let decorated = |style: &cranpose_ui::text::SpanStyle| {
+        style
+            .text_decoration
+            .is_some_and(|decoration| decoration != TextDecoration::NONE)
+    };
+    if annotated_text.is_empty()
+        || !(decorated(&global_style.span_style)
+            || annotated_text
+                .span_styles
+                .iter()
+                .any(|span| decorated(&span.item)))
+    {
         return;
     }
 
@@ -590,9 +603,22 @@ pub(crate) fn build_raster_scene(
     scale: f32,
 ) -> RasterScene {
     let mut scene = RasterScene::new();
+    fill_raster_scene(&mut scene, graph, diagnostics, scale);
+    scene
+}
+
+/// Replaces what `scene` holds with `graph` drawn at `scale`, keeping the
+/// scene's storage.
+pub(crate) fn fill_raster_scene(
+    scene: &mut RasterScene,
+    graph: &RenderGraph,
+    diagnostics: &RenderDiagnostics,
+    scale: f32,
+) {
+    scene.clear();
     populate_draws_from_graph(
         &graph.root,
-        &mut scene,
+        scene,
         RasterTraversalContext {
             parent_transform: ProjectiveTransform::uniform_scale(scale),
             parent_content_style: GraphicsLayer::default(),
@@ -608,7 +634,6 @@ pub(crate) fn build_raster_scene(
             ),
         },
     );
-    scene
 }
 
 #[derive(Clone, Copy)]

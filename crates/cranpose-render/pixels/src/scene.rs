@@ -158,6 +158,15 @@ impl RasterScene {
         }
     }
 
+    /// Empties the scene and keeps its storage.
+    pub(crate) fn clear(&mut self) {
+        self.shapes.clear();
+        self.images.clear();
+        self.texts.clear();
+        self.shadows.clear();
+        self.order.clear();
+    }
+
     /// Queues `shape` to draw over everything queued before.
     pub(crate) fn push_draw_shape(&mut self, shape: DrawShape) {
         self.order.push(RenderItem::Shape(self.shapes.len()));
