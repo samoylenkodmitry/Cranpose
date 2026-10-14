@@ -281,7 +281,10 @@ pub use text_modifier_node::{TextModifierElement, TextModifierNode};
 pub use unhandled_keys::{UnhandledKeyEvents, dispatch_unhandled_key_event};
 pub use widgets::{
     clickable_text::ClickableText,
-    lazy_list::{LazyColumn, LazyColumnSpec, LazyRow, LazyRowSpec},
+    lazy_list::{
+        GridCells, LazyColumn, LazyColumnSpec, LazyGridState, LazyRow, LazyRowSpec,
+        LazyVerticalGrid, LazyVerticalGridSpec, rememberLazyGridState,
+    },
     linked_text::LinkedText,
     padding_values::PaddingValues,
     popup::{dismiss_top_popup, dismissable_popup_open},

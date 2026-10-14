@@ -37,6 +37,7 @@ fn lazy_list_placements_reuse_output_storage() {
             horizontal_arrangement: None,
         },
         cross_padding: (0.0, 0.0),
+        grid: None,
     };
     let mut placements = Vec::with_capacity(8);
     let original_capacity = placements.capacity();
@@ -76,6 +77,7 @@ fn lazy_list_placements_retain_offscreen_measured_items_for_renderer_prewarm() {
             horizontal_arrangement: None,
         },
         cross_padding: (0.0, 0.0),
+        grid: None,
     };
     let mut placements = Vec::new();
 

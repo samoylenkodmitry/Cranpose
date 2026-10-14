@@ -45,6 +45,10 @@ pub struct LazyListMeasuredItem {
     pub child_offsets: SmallOffsetVec,
     /// Measured cross-axis extent of each root, in the order of `node_ids`.
     pub child_cross_axis_sizes: SmallOffsetVec,
+    /// Cross-axis offset of each root in the order of `node_ids`, for the
+    /// cells of a grid line; empty for a list item, whose roots start at the
+    /// cross-axis start.
+    pub child_cross_offsets: SmallOffsetVec,
 }
 
 impl LazyListMeasuredItem {
@@ -66,6 +70,7 @@ impl LazyListMeasuredItem {
             node_ids: SmallVec::new(),
             child_offsets: SmallVec::new(),
             child_cross_axis_sizes: SmallVec::new(),
+            child_cross_offsets: SmallVec::new(),
         }
     }
 

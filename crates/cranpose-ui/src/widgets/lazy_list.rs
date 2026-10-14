@@ -169,7 +169,15 @@ impl LazyRowSpec {
 struct LazyListLayoutConfig {
     measure: LazyListMeasureConfig,
     cross_padding: (f32, f32),
+    /// Lines of cells instead of single items, for a grid.
+    grid: Option<grid::GridLayout>,
 }
+
+mod grid;
+
+pub use grid::{
+    GridCells, LazyGridState, LazyVerticalGrid, LazyVerticalGridSpec, rememberLazyGridState,
+};
 
 /// A list's content padding along its axes, in layout pixels rounded to the
 /// device grid as Compose's `roundToPx` rounds it.
@@ -536,6 +544,32 @@ struct LazyListMeasureContext<'a> {
     overscroll: &'a OverscrollEffect,
 }
 
+/// The constraint-derived sizes a measure pass works with.
+struct LazyFrame {
+    is_vertical: bool,
+    raw_viewport_size: f32,
+    cross_axis_size: f32,
+    /// The cross-axis size inside the cross-axis content padding.
+    item_cross_axis_size: f32,
+}
+
+impl LazyFrame {
+    fn new(constraints: Constraints, is_vertical: bool, config: &LazyListLayoutConfig) -> Self {
+        let (raw_viewport_size, cross_axis_size) = if is_vertical {
+            (constraints.max_height, constraints.max_width)
+        } else {
+            (constraints.max_width, constraints.max_height)
+        };
+        let (cross_start, cross_end) = config.cross_padding;
+        Self {
+            is_vertical,
+            raw_viewport_size,
+            cross_axis_size,
+            item_cross_axis_size: (cross_axis_size - cross_start - cross_end).max(0.0),
+        }
+    }
+}
+
 fn measure_lazy_list_internal(
     scope: &mut SubcomposeMeasureScopeImpl<'_>,
     constraints: Constraints,
@@ -543,30 +577,37 @@ fn measure_lazy_list_internal(
     content: &LazyListIntervalContent,
     context: LazyListMeasureContext<'_>,
 ) -> MeasureResult {
-    let state = context.state;
-    let layout_config = context.config;
-    let config = &layout_config.measure;
-    let measured_item_cache = context.measured_item_cache;
-    let overscroll = context.overscroll;
-    let raw_viewport_size = if is_vertical {
-        constraints.max_height
-    } else {
-        constraints.max_width
-    };
-    let cross_axis_size = if is_vertical {
-        constraints.max_width
-    } else {
-        constraints.max_height
-    };
-    let (cross_start, cross_end) = layout_config.cross_padding;
-    let item_cross_axis_size = (cross_axis_size - cross_start - cross_end).max(0.0);
-
-    let items_count = content.item_count();
+    let frame = LazyFrame::new(constraints, is_vertical, context.config);
     let retained_reusable_slots = EXPENSIVE_RETAINED_REUSABLE_SLOTS;
     scope.set_reusable_pool_limits(retained_reusable_slots, retained_reusable_slots);
-    measured_item_cache
-        .borrow_mut()
-        .begin_pass(scope, is_vertical, item_cross_axis_size);
+    let (result, count) = match &context.config.grid {
+        Some(grid) => grid::measure_grid_viewport(scope, content, &context, &frame, grid),
+        None => (
+            measure_list_viewport(scope, content, &context, &frame),
+            content.item_count(),
+        ),
+    };
+    log_lazy_cache_telemetry(&result, context.measured_item_cache);
+    place_lazy_list(scope, constraints, &result, count, &context, &frame)
+}
+
+/// Measures the items of a list's viewport, places the focused one and the
+/// sticky header, and registers their measurements.
+fn measure_list_viewport(
+    scope: &mut SubcomposeMeasureScopeImpl<'_>,
+    content: &LazyListIntervalContent,
+    context: &LazyListMeasureContext<'_>,
+    frame: &LazyFrame,
+) -> LazyListMeasureResult {
+    let state = context.state;
+    let config = &context.config.measure;
+    let measured_item_cache = context.measured_item_cache;
+    let items_count = content.item_count();
+    measured_item_cache.borrow_mut().begin_pass(
+        scope,
+        frame.is_vertical,
+        frame.item_cross_axis_size,
+    );
     let near = state.nearest_range();
     if items_count > 0 {
         state.update_scroll_position_if_item_moved(items_count, |slot_id| {
@@ -576,8 +617,8 @@ fn measure_lazy_list_internal(
 
     let scroll_delta_for_direction = state.peek_scroll_delta();
     let item_measure_inputs = LazyListItemMeasureInputs {
-        is_vertical,
-        cross_axis_size: item_cross_axis_size,
+        is_vertical: frame.is_vertical,
+        cross_axis_size: frame.item_cross_axis_size,
         content,
         state,
         measured_item_cache,
@@ -598,20 +639,38 @@ fn measure_lazy_list_internal(
             beyond: None,
         },
         config,
-        raw_viewport_size,
+        frame.raw_viewport_size,
         node_id,
     );
     if let Some(item) = focused_item {
         place_focused_lazy_item(&mut result, item, &item_measure_inputs, config.spacing);
     }
-    pin_sticky_header(scope, &mut result, &item_measure_inputs);
+    pin_sticky_header(&mut result, content.header_indices(), |index| {
+        measure_lazy_list_item(scope, index, &item_measure_inputs)
+    });
     register_visible_lazy_list_child_measurements(
         scope,
         &result.visible_items,
-        is_vertical,
-        item_cross_axis_size,
+        frame.is_vertical,
+        frame.item_cross_axis_size,
     );
-    log_lazy_cache_telemetry(&result, measured_item_cache);
+    result
+}
+
+/// Sizes the list from what it measured and places the items of `result`,
+/// `count` lines of them.
+fn place_lazy_list(
+    scope: &mut SubcomposeMeasureScopeImpl<'_>,
+    constraints: Constraints,
+    result: &LazyListMeasureResult,
+    count: usize,
+    context: &LazyListMeasureContext<'_>,
+    frame: &LazyFrame,
+) -> MeasureResult {
+    let state = context.state;
+    let overscroll = context.overscroll;
+    let is_vertical = frame.is_vertical;
+    let cross_axis_size = frame.cross_axis_size;
     let effective_viewport_size = result.viewport_size;
     overscroll.set_dimension(effective_viewport_size);
 
@@ -665,10 +724,10 @@ fn measure_lazy_list_internal(
             placements,
             density,
             &result.visible_items,
-            items_count,
+            count,
             is_vertical,
             effective_viewport_size,
-            layout_config,
+            context.config,
             cross_axis_size,
         );
         let bounce = overscroll.offset();
@@ -742,46 +801,54 @@ impl LazyItemSource for LazyListItems<'_, '_, '_> {
     }
 }
 
-/// Measures the list's viewport. While it scrolls, and in an idle prefetch
-/// pass, the items beyond it compose as [`BeyondBoundsComposition`] decides,
-/// and an item left for later asks for a pass for the list `node_id`. So do
-/// they at rest where the shell runs idle prefetch passes, unless the list
-/// holds the focus and places them.
+/// How this pass composes the items beyond the viewport. While the list
+/// scrolls, and in an idle prefetch pass, they compose as
+/// [`BeyondBoundsComposition`] decides; so do they at rest where the shell
+/// runs idle prefetch passes, unless the list holds the focus and places them.
+fn beyond_composition(items: &LazyListItems<'_, '_, '_>) -> Option<BeyondBoundsComposition> {
+    if crate::lazy_prefetch::in_lazy_prefetch_pass() {
+        items.inputs.state.hold_scroll_window();
+        return Some(BeyondBoundsComposition::new(true, f32::INFINITY));
+    }
+    let scrolling = items.scroll_delta.abs() > 0.001;
+    let passes_run = crate::lazy_prefetch::idle_prefetch_passes_run();
+    (scrolling || (passes_run && !items.place_beyond)).then(|| {
+        let reach = if passes_run {
+            items.scroll_delta.abs() * REACH_FRAMES
+        } else {
+            f32::INFINITY
+        };
+        BeyondBoundsComposition::new(false, reach)
+    })
+}
+
+/// Asks for a pass for the list `node_id` when this one left an item beyond
+/// the viewport for later.
+fn request_beyond_items(beyond: Option<BeyondBoundsComposition>, node_id: NodeId) {
+    if beyond.is_some_and(|beyond| beyond.wants_prefetch) {
+        crate::lazy_prefetch::request_lazy_prefetch(node_id);
+    }
+}
+
+/// Measures the list's viewport, composing the items beyond it as
+/// [`beyond_composition`] decides.
 fn measure_lazy_viewport(
     mut items: LazyListItems<'_, '_, '_>,
     config: &LazyListMeasureConfig,
     viewport_size: f32,
     node_id: NodeId,
 ) -> LazyListMeasureResult {
+    items.beyond = beyond_composition(&items);
     let inputs = items.inputs;
-    let items_count = inputs.content.item_count();
-    let idle_pass = crate::lazy_prefetch::in_lazy_prefetch_pass();
-    if idle_pass {
-        inputs.state.hold_scroll_window();
-    }
-    let scrolling = items.scroll_delta.abs() > 0.001;
-    let passes_run = crate::lazy_prefetch::idle_prefetch_passes_run();
-    if idle_pass {
-        items.beyond = Some(BeyondBoundsComposition::new(true, f32::INFINITY));
-    } else if scrolling || (passes_run && !items.place_beyond) {
-        let reach = if passes_run {
-            items.scroll_delta.abs() * REACH_FRAMES
-        } else {
-            f32::INFINITY
-        };
-        items.beyond = Some(BeyondBoundsComposition::new(false, reach));
-    }
     let result = measure_lazy_list_with_beyond_bounds_policy(
-        items_count,
+        inputs.content.item_count(),
         inputs.state,
         viewport_size,
         inputs.cross_axis_size,
         config,
         &mut items,
     );
-    if items.beyond.is_some_and(|beyond| beyond.wants_prefetch) {
-        crate::lazy_prefetch::request_lazy_prefetch(node_id);
-    }
+    request_beyond_items(items.beyond, node_id);
     result
 }
 
@@ -898,11 +965,10 @@ fn place_focused_lazy_item(
 /// scroll under it and takes the touches there. A list whose items all fit
 /// keeps its headers where they are.
 fn pin_sticky_header(
-    scope: &mut SubcomposeMeasureScopeImpl<'_>,
     result: &mut LazyListMeasureResult,
-    inputs: &LazyListItemMeasureInputs<'_>,
+    headers: &[usize],
+    measure: impl FnOnce(usize) -> LazyListMeasuredItem,
 ) {
-    let headers = inputs.content.header_indices();
     if headers.is_empty() || !(result.can_scroll_backward || result.can_scroll_forward) {
         return;
     }
@@ -932,7 +998,7 @@ fn pin_sticky_header(
     {
         Some(at) => result.visible_items.remove(at),
         None => {
-            let mut header = measure_lazy_list_item(scope, current, inputs);
+            let mut header = measure(current);
             header.offset = 0.0;
             header
         }
@@ -1320,15 +1386,17 @@ fn push_lazy_item_placements(
     };
     for (index, (&node_id, &offset)) in item.node_ids.iter().zip(&item.child_offsets).enumerate() {
         let main = start + offset;
+        let cell = item.child_cross_offsets.get(index).copied().unwrap_or(0.0);
         let (mut x, y) = if is_vertical {
-            (cross_start, main)
+            (cross_start + cell, main)
         } else {
-            (main, cross_start)
+            (main, cross_start + cell)
         };
         if config.is_rtl {
             x = if is_vertical {
                 cross_axis_size
                     - cross_end
+                    - cell
                     - item
                         .child_cross_axis_sizes
                         .get(index)
@@ -1368,6 +1436,7 @@ fn LazyColumnImpl(
     modifier: Modifier,
     state: LazyListState,
     spec: LazyColumnSpec,
+    grid: Option<grid::GridLayout>,
     content: LazyListContentHandle,
 ) -> NodeId {
     use std::cell::RefCell;
@@ -1406,6 +1475,7 @@ fn LazyColumnImpl(
             horizontal_arrangement: None,
         },
         cross_padding: padding.cross,
+        grid,
     };
     let config_cell =
         cranpose_core::remember(|| Rc::new(RefCell::new(config.clone()))).with(Clone::clone);
@@ -1544,6 +1614,7 @@ fn LazyRowImpl(
             horizontal_arrangement: Some(spec.horizontal_arrangement),
         },
         cross_padding: padding.cross,
+        grid: None,
     };
     let config_cell =
         cranpose_core::remember(|| Rc::new(RefCell::new(config.clone()))).with(Clone::clone);
@@ -1642,6 +1713,7 @@ fn LazyColumnNode(
     modifier: Modifier,
     state: LazyListState,
     spec: LazyColumnSpec,
+    grid: Option<grid::GridLayout>,
     content: LazyListContentHandle,
 ) -> NodeId {
     cranpose_core::debug_label_current_scope("LazyColumnNode");
@@ -1676,7 +1748,7 @@ fn LazyColumnNode(
         cranpose_core::CompositionLocalProvider(
             [crate::bring_into_view::local_bring_into_view_responder().provides(Some(responder))],
             move || {
-                *node_slot = Some(LazyColumnImpl(modifier, state, spec, content));
+                *node_slot = Some(LazyColumnImpl(modifier, state, spec, grid, content));
             },
         );
     }
@@ -1738,6 +1810,7 @@ where
         modifier,
         state,
         spec,
+        None,
         LazyListContentHandle::new(interval_content),
     )
 }
