@@ -7132,6 +7132,9 @@ pub fn try_run(
 
     crate::desktop_power::register();
 
+    #[cfg(target_os = "macos")]
+    crate::apple_network::register();
+
     crate::desktop_bundled_assets::register();
 
     cranpose_services::set_platform_app_updater(Arc::new(
