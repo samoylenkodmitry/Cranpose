@@ -231,6 +231,10 @@ impl ScrollTarget for LazyListState {
             self.can_scroll_backward_non_reactive()
         }
     }
+
+    fn settle_policy(&self) -> Option<ScrollSettlePolicy> {
+        LazyListState::settle_policy(self)
+    }
 }
 
 struct DragGesture<S: ScrollTarget> {

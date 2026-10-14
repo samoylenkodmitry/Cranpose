@@ -481,6 +481,7 @@ Sampled against Compose's `androidx.compose.ui`/`foundation-layout`:
 | `Image`, `Canvas`, `Icon` | Same names | Implemented |
 | `LazyColumn`, `LazyRow` | `LazyColumn`, `LazyRow`; lower-level node functions also exist | Implemented; checked against current source |
 | `LazyListScope.stickyHeader` | `LazyListScope::sticky_header`, `sticky_header_keyed` | Implemented |
+| `HorizontalPager`, `VerticalPager`, `rememberPagerState`, `PagerState.currentPage`, `currentPageOffsetFraction`, `scrollToPage` | Same names in snake case for the methods | Implemented; `animateScrollToPage`, `beyondViewportPageCount` and custom page sizes are not |
 | `Popup`, `Dialog` | Same names, plus `PopupAnchored`/`PopupDismissable`/`PopupDismissableWhen`/`DialogWithScrim` variants | Implemented, plus extensions |
 | `AnimatedVisibility`, `Crossfade` | Same names | Implemented |
 | `Layout`, `SubcomposeLayout` | Same names | Implemented |

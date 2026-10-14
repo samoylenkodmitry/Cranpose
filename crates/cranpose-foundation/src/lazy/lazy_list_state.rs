@@ -248,8 +248,14 @@ struct CachedItemSize {
 }
 
 /// Non-reactive internal state for LazyListState.
+/// Where a scroll that the user let go of comes to rest: given the rest
+/// offset the release would reach, within the first visible item, and the
+/// release velocity, the offset to settle at instead.
+pub type LazySettlePolicy = Rc<dyn Fn(f32, f32) -> f32>;
+
 struct LazyListStateInner {
     scroll_to_be_consumed: f32,
+    settle_policy: Option<LazySettlePolicy>,
 
     pending_scroll_to_index: Option<(usize, f32)>,
 
@@ -350,6 +356,7 @@ impl LazyListState {
             inner: cranpose_core::mutableStateOfNeverEqual(Rc::new(RefCell::new(
                 LazyListStateInner {
                     scroll_to_be_consumed: 0.0,
+                    settle_policy: None,
                     pending_scroll_to_index: None,
                     layout_info: LazyListLayoutInfo::default(),
                     current_can_scroll_forward: false,
@@ -517,6 +524,23 @@ impl LazyListState {
         }
         self.inner
             .with(|rc| rc.borrow_mut().hold_scroll_window = true);
+    }
+
+    /// Installs, or clears, where a drag or a fling the user let go of comes
+    /// to rest: a pager settles on its pages.
+    pub fn set_settle_policy(&self, policy: Option<LazySettlePolicy>) {
+        if !self.inner.is_alive() {
+            return;
+        }
+        self.inner.with(|rc| rc.borrow_mut().settle_policy = policy);
+    }
+
+    /// The installed settle policy, if any.
+    pub fn settle_policy(&self) -> Option<LazySettlePolicy> {
+        if !self.inner.is_alive() {
+            return None;
+        }
+        self.inner.with(|rc| rc.borrow().settle_policy.clone())
     }
 
     /// Scrolls to the specified item index.
