@@ -12,17 +12,28 @@ use hyphenation::{Hyphenator, Language, Load, Standard};
 #[cfg(feature = "text-hyphenation")]
 const MIN_SEGMENT_CHARS: usize = 2;
 
+/// Why a hyphenation dictionary could not be registered.
 #[cfg(feature = "text-hyphenation")]
 #[derive(thiserror::Error, Debug)]
 pub enum HyphenationDictionaryError {
+    /// The locale tag does not name a language that has a hyphenation dictionary.
     #[error("Unsupported hyphenation locale: {0}")]
     UnsupportedLocale(String),
+    /// The dictionary for `locale` could not be read or parsed.
     #[error("Failed to load hyphenation dictionary for {locale}: {message}")]
-    LoadFailed { locale: String, message: String },
+    LoadFailed {
+        /// The locale tag as it was given.
+        locale: String,
+        /// The error text of the dictionary loader.
+        message: String,
+    },
+    /// The dictionary store is unusable because a thread panicked while writing to it.
     #[error("Hyphenation dictionary cache is unavailable")]
     CacheUnavailable,
 }
 
+/// Hyphenation dictionaries by language. Dictionaries that the app registers are used first, and
+/// a dictionary embedded in the build is the fallback when `text-hyphenation-embedded` is on.
 #[cfg(feature = "text-hyphenation")]
 pub struct HyphenationDictionaryStore {
     dictionaries: RwLock<HashMap<Language, Standard>>,
@@ -37,12 +48,15 @@ impl Default for HyphenationDictionaryStore {
 
 #[cfg(feature = "text-hyphenation")]
 impl HyphenationDictionaryStore {
+    /// Creates a store with no registered dictionaries.
     pub fn new() -> Self {
         Self {
             dictionaries: RwLock::new(HashMap::new()),
         }
     }
 
+    /// Registers the dictionary for `locale` read from the file at `path`, replacing an earlier
+    /// one.
     pub fn register_dictionary_path(
         &self,
         locale: &str,
@@ -59,6 +73,7 @@ impl HyphenationDictionaryStore {
         self.store_dictionary(language, dictionary)
     }
 
+    /// Registers the dictionary for `locale` read from `reader`, replacing an earlier one.
     pub fn register_dictionary_reader(
         &self,
         locale: &str,
@@ -106,6 +121,12 @@ impl HyphenationDictionaryStore {
         None
     }
 
+    /// Chooses where to hyphenate the word that contains the break at character
+    /// `measured_break_char` of `line`. `segment_start_char` is the character index where the
+    /// current line segment starts, and the language comes from the first locale of `style`,
+    /// English when it has none. Returns the character index of the break, at least two
+    /// characters after the segment start and not after `measured_break_char`, or `None` when
+    /// the break is not inside a word or no dictionary is available.
     pub fn choose_auto_hyphen_break(
         &self,
         line: &str,
@@ -161,16 +182,20 @@ impl HyphenationDictionaryStore {
     }
 }
 
+/// Stands in for the dictionary store when the `text-hyphenation` feature is off. It never finds
+/// a break.
 #[cfg(not(feature = "text-hyphenation"))]
 #[derive(Default)]
 pub struct HyphenationDictionaryStore;
 
 #[cfg(not(feature = "text-hyphenation"))]
 impl HyphenationDictionaryStore {
+    /// Creates the store.
     pub fn new() -> Self {
         Self
     }
 
+    /// Always returns `None`, because hyphenation is not built in.
     pub fn choose_auto_hyphen_break(
         &self,
         line: &str,
@@ -183,6 +208,9 @@ impl HyphenationDictionaryStore {
     }
 }
 
+/// Chooses a hyphenation break with a store that holds no registered dictionaries, so only a
+/// dictionary embedded in the build can be used. See
+/// `HyphenationDictionaryStore::choose_auto_hyphen_break`.
 pub fn choose_auto_hyphen_break(
     line: &str,
     style: &TextStyle,

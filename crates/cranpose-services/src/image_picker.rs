@@ -21,10 +21,14 @@ use crate::{
 /// Image extensions offered when the picker falls back to the file picker.
 pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "bmp", "heic", "heif"];
 
+/// Why an image could not be picked.
 #[derive(thiserror::Error, Debug)]
 pub enum ImagePickerError {
+    /// The platform has no way to pick an image.
     #[error("image picking is not supported on this platform")]
     Unsupported,
+    /// The platform failed to show the picker or to read the chosen image. The text describes the
+    /// cause.
     #[error("failed to pick an image: {0}")]
     Failed(String),
 }
@@ -48,6 +52,7 @@ pub trait ImagePicker: Send + Sync {
     ) -> PickerFuture<Result<Option<Vec<u8>>, ImagePickerError>>;
 }
 
+/// Shared handle to an [`ImagePicker`].
 pub type ImagePickerRef = Arc<dyn ImagePicker>;
 
 static PLATFORM_IMAGE_PICKER: ServiceRegistry<dyn ImagePicker> = ServiceRegistry::new();
@@ -97,10 +102,14 @@ impl ImagePicker for PlatformImagePicker {
     }
 }
 
+/// Returns the image picker that forwards to the installed platform picker, or else to the file
+/// picker with an image filter.
 pub fn default_image_picker() -> ImagePickerRef {
     Arc::new(PlatformImagePicker)
 }
 
+/// The image picker a composable reads. It is the platform picker unless a composition local
+/// provider above it supplies another one.
 pub fn local_image_picker() -> CompositionLocal<ImagePickerRef> {
     crate::composition_locals::cached_local(
         |locals| &locals.image_picker,
@@ -108,6 +117,7 @@ pub fn local_image_picker() -> CompositionLocal<ImagePickerRef> {
     )
 }
 
+/// Provides the platform image picker to `content` through [`local_image_picker`].
 #[composable]
 pub fn ProvideImagePicker(content: impl FnOnce()) {
     let picker = cranpose_core::remember(default_image_picker).with(|state| state.clone());

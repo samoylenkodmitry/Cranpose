@@ -16,7 +16,9 @@ use crate::{
 /// back to its first.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PathContour {
+    /// Flattened points of the contour, in the path's coordinates.
     pub points: Vec<Point>,
+    /// Whether the contour closes back to its first point.
     pub closed: bool,
 }
 

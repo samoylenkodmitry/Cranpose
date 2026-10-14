@@ -39,6 +39,7 @@ pub(crate) trait KeyedBuild: CompilerSend + CompilerSync + 'static {
 impl KeyedBuild for ShapePipelineFactory {
     type Output = wgpu::RenderPipeline;
 
+    #[cfg(target_arch = "wasm32")]
     fn landed(pipeline: &wgpu::RenderPipeline) -> bool {
         pipeline.is_ready()
     }

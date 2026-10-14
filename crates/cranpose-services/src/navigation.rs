@@ -39,7 +39,9 @@ type BackListener = std::rc::Rc<dyn Fn(BackSignal) + 'static>;
 /// The edge an interactive back gesture starts from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BackEdge {
+    /// The gesture starts at the left edge of the screen.
     Left,
+    /// The gesture starts at the right edge of the screen.
     Right,
 }
 
@@ -57,7 +59,9 @@ pub struct BackEvent {
 /// gesture ends with a back request instead of a step.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BackGesture {
+    /// A finger started the gesture.
     Started(BackEvent),
+    /// The gesture moved; the event gives the new progress.
     Progressed(BackEvent),
     /// The user let go without going back.
     Cancelled,
@@ -119,6 +123,9 @@ pub fn observe_back_requests(listener: impl Fn() + Send + Sync + 'static) -> Bac
     })
 }
 
+/// Registers a callback run whenever a back request arrives. This single-threaded variant is
+/// used on wasm, so the callback does not need to be `Send` or `Sync`. See the native variant
+/// for the contract.
 #[cfg(target_arch = "wasm32")]
 pub fn observe_back_requests(listener: impl Fn() + 'static) -> BackRequestObserver {
     observe_back_signals(move |signal| {

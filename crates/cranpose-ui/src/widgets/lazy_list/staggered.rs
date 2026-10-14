@@ -26,13 +26,17 @@ use crate::{composable, modifier::Modifier};
 /// Options for a [`LazyVerticalStaggeredGrid`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct LazyVerticalStaggeredGridSpec {
+    /// How the width splits into columns.
     pub columns: GridCells,
     /// The space between two items of a lane, in logical pixels.
     pub vertical_item_spacing: f32,
     /// The space between the lanes, in logical pixels.
     pub horizontal_spacing: f32,
+    /// Space around the content, as Compose's `contentPadding`.
     pub content_padding: PaddingValues,
+    /// Number of items to compose beyond the visible bounds.
     pub beyond_bounds_item_count: usize,
+    /// Whether to lay out the items from bottom to top.
     pub reverse_layout: bool,
 }
 
@@ -57,6 +61,7 @@ impl LazyVerticalStaggeredGridSpec {
         self
     }
 
+    /// Sets the space around the content.
     #[must_use]
     pub fn content_padding(mut self, padding: PaddingValues) -> Self {
         self.content_padding = padding;
@@ -67,13 +72,17 @@ impl LazyVerticalStaggeredGridSpec {
 /// Options for a [`LazyHorizontalStaggeredGrid`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct LazyHorizontalStaggeredGridSpec {
+    /// How the height splits into rows.
     pub rows: GridCells,
     /// The space between two items of a lane, in logical pixels.
     pub horizontal_item_spacing: f32,
     /// The space between the lanes, in logical pixels.
     pub vertical_spacing: f32,
+    /// Space around the content, as Compose's `contentPadding`.
     pub content_padding: PaddingValues,
+    /// Number of items to compose beyond the visible bounds.
     pub beyond_bounds_item_count: usize,
+    /// Whether to lay out the items from end to start.
     pub reverse_layout: bool,
 }
 
@@ -98,6 +107,7 @@ impl LazyHorizontalStaggeredGridSpec {
         self
     }
 
+    /// Sets the space around the content.
     #[must_use]
     pub fn content_padding(mut self, padding: PaddingValues) -> Self {
         self.content_padding = padding;
@@ -165,6 +175,12 @@ impl LazyStaggeredGridState {
     /// stops.
     pub fn animate_scroll_to_item(&self, index: usize, offset: f32) {
         crate::AnimateScroll::animate_scroll_to_item(&self.list, index, offset);
+    }
+
+    /// Whether a drag, a fling or an animation moves the grid now:
+    /// Compose's `isScrollInProgress`.
+    pub fn is_scroll_in_progress(&self) -> bool {
+        self.list.is_scroll_in_progress()
     }
 
     /// The state of the column the lanes sit in, for a scroll indicator.

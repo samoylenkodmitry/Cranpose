@@ -12,6 +12,7 @@ pub trait StorageSpace: Send + Sync {
     fn available(&self, path: &Path) -> Option<u64>;
 }
 
+/// Shared handle to a [`StorageSpace`].
 pub type StorageSpaceRef = Arc<dyn StorageSpace>;
 
 static PLATFORM_STORAGE_SPACE: ServiceRegistry<dyn StorageSpace> = ServiceRegistry::new();

@@ -61,13 +61,20 @@ use cranpose_ui_layout::round_to_px;
 
 /// How far a row at the very edge is shrunk and faded.
 pub const EDGE_SCALE: f32 = 0.7;
+/// The opacity of a row at the very edge, from 0.0 (invisible) to 1.0 (opaque).
 pub const EDGE_ALPHA: f32 = 0.5;
 /// The row-height range, as a share of the viewport, over which the transition
 /// band grows from [`MIN_TRANSITION_AREA`] to [`MAX_TRANSITION_AREA`]. A taller
 /// row starts shrinking further from the edge than a short one.
 pub const MIN_ELEMENT_HEIGHT: f32 = 0.2;
+/// Row height, as a share of the viewport, at and above which the transition band is
+/// [`MAX_TRANSITION_AREA`] wide.
 pub const MAX_ELEMENT_HEIGHT: f32 = 0.6;
+/// Share of the viewport, measured from each edge, in which rows at or below [`MIN_ELEMENT_HEIGHT`]
+/// shrink and fade.
 pub const MIN_TRANSITION_AREA: f32 = 0.35;
+/// Share of the viewport, measured from each edge, in which rows at or above [`MAX_ELEMENT_HEIGHT`]
+/// shrink and fade.
 pub const MAX_TRANSITION_AREA: f32 = 0.55;
 
 /// AOSP's `ScalingParams`, as a value rather than six constants.
@@ -78,11 +85,19 @@ pub const MAX_TRANSITION_AREA: f32 = 0.55;
 /// second code path.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScalingParams {
+    /// Scale of a row at the very edge of the viewport. 1.0 leaves rows unscaled.
     pub edge_scale: f32,
+    /// Opacity of a row at the very edge of the viewport. 1.0 leaves rows opaque.
     pub edge_alpha: f32,
+    /// Row height, as a share of the viewport, at and below which the transition band is
+    /// `min_transition_area` wide.
     pub min_element_height: f32,
+    /// Row height, as a share of the viewport, at and above which the transition band is
+    /// `max_transition_area` wide.
     pub max_element_height: f32,
+    /// Share of the viewport, measured from each edge, in which short rows shrink and fade.
     pub min_transition_area: f32,
+    /// Share of the viewport, measured from each edge, in which tall rows shrink and fade.
     pub max_transition_area: f32,
 }
 
@@ -121,7 +136,9 @@ impl ScalingParams {
 /// How much a row is shrunk and faded at a given position.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScaleAlpha {
+    /// Factor applied to the size of the row, between the edge scale and 1.0.
     pub scale: f32,
+    /// Opacity of the row, between the edge alpha and 1.0.
     pub alpha: f32,
 }
 
@@ -192,7 +209,9 @@ pub struct PlacedRow {
     /// walk by this plus the gap; see the module docs for why the walk stacks
     /// scaled sizes at all.
     pub reported_height: f32,
+    /// Factor the row's graphics layer scales it by, 1.0 when unscaled.
     pub scale: f32,
+    /// Opacity of the row, 1.0 when opaque.
     pub alpha: f32,
 }
 
@@ -344,15 +363,19 @@ pub fn place_rows(run: RowRun, heights: &[f32], out: &mut Vec<PlacedRow>) {
 /// itself never moves because a row shrank.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Slot {
+    /// Top edge of the row with nothing scaled, in the unit of the list.
     pub top: f32,
+    /// Full height of the row with nothing scaled, in the unit of the list.
     pub height: f32,
 }
 
 impl Slot {
+    /// Returns the position of the middle of the row, in the unit of the slot.
     pub fn centre(self) -> f32 {
         self.top + self.height * 0.5
     }
 
+    /// Returns the position of the bottom edge of the row, in the unit of the slot.
     pub fn bottom(self) -> f32 {
         self.top + self.height
     }
@@ -384,7 +407,10 @@ pub fn stack_into(heights: impl IntoIterator<Item = f32>, gap: f32, out: &mut Ve
 /// position.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CentreAnchor {
+    /// Index of the item on the centre line.
     pub index: usize,
+    /// Distance from the middle of that item to the content point on the centre line, in the unit
+    /// of the slots. A positive value scrolls the content up.
     pub offset: f32,
 }
 

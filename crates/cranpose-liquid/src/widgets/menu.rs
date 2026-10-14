@@ -24,6 +24,7 @@ use crate::{
 /// One menu entry.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiquidMenuItem {
+    /// The text shown on the row.
     pub label: String,
     /// Optional leading icon (24×24 path data).
     pub icon: Option<&'static str>,
@@ -45,6 +46,7 @@ pub struct LiquidMenuItem {
 }
 
 impl LiquidMenuItem {
+    /// Creates a plain row that shows `label`.
     pub fn new(label: impl Into<String>) -> Self {
         Self {
             label: label.into(),
@@ -66,21 +68,25 @@ impl LiquidMenuItem {
         }
     }
 
+    /// Returns the row with a leading icon, given as path data on a 24 by 24 grid.
     pub fn icon(mut self, icon: &'static str) -> Self {
         self.icon = Some(icon);
         self
     }
 
+    /// Returns the row with its leading check mark shown or hidden.
     pub fn checked(mut self, checked: bool) -> Self {
         self.checked = checked;
         self
     }
 
+    /// Returns the row styled as a destructive action.
     pub fn destructive(mut self) -> Self {
         self.destructive = true;
         self
     }
 
+    /// Returns the row marked as the start of a new section, with a full-width hairline above it.
     pub fn section_start(mut self) -> Self {
         self.section_start = true;
         self
@@ -104,25 +110,33 @@ impl LiquidMenuItem {
 /// by an opening menu surface.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiquidMenuAbsorbedSource {
+    /// The bounds of the source control, in dp, in window coordinates.
     pub rect: Rect,
+    /// The look of the source control.
     pub spec: crate::widgets::GlassButtonSpec,
+    /// The diameter of the source control, in dp.
     pub diameter: f32,
+    /// The path data of the icon of the source control.
     pub icon_path: &'static str,
 }
 
 /// Visual configuration for an anchored liquid dropdown.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LiquidDropdownMenuSpec {
+    /// The layout of the menu.
     pub menu: LiquidMenuSpec,
+    /// The glass controls beside the anchor that the opening menu absorbs.
     pub absorbed: Vec<LiquidMenuAbsorbedSource>,
 }
 
 impl LiquidDropdownMenuSpec {
+    /// Returns the spec with `menu` as the layout of the menu.
     pub fn menu(mut self, menu: LiquidMenuSpec) -> Self {
         self.menu = menu;
         self
     }
 
+    /// Returns the spec with `absorbed` as the controls that the opening menu absorbs.
     pub fn absorbed(mut self, absorbed: Vec<LiquidMenuAbsorbedSource>) -> Self {
         self.absorbed = absorbed;
         self
@@ -280,6 +294,8 @@ fn menu_display_rows(
 }
 
 impl LiquidMenuAbsorbedSource {
+    /// Creates a source from its window bounds `rect`, its look `spec`, its `diameter` and its
+    /// `icon_path`.
     pub fn new(
         rect: Rect,
         spec: crate::widgets::GlassButtonSpec,
@@ -310,6 +326,8 @@ impl Default for LiquidMenuSpec {
 }
 
 impl LiquidMenuSpec {
+    /// Creates a spec for a menu `width` dp wide. A width below 120 becomes 120, and a nonfinite
+    /// width becomes the default of 250.
     pub fn new(width: f32) -> Self {
         Self {
             width: if width.is_finite() {

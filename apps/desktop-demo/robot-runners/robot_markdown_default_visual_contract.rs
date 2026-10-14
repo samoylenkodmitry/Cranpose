@@ -235,7 +235,7 @@ fn log_render_stats(robot: &cranpose::Robot, step: usize) {
     match robot.get_render_stats() {
         Ok(Some(stats)) => {
             println!(
-                "render_stats step={step} submits={} passes={} uploads={} text_hits={} text_misses={} glyph_hits={} glyph_misses={} glyph_miss_pixels={} text_hit_pixels={} text_miss_pixels={} text_raster_bytes={} image_passes={} text_passes={} text_cache_size={}",
+                "render_stats step={step} submits={} passes={} uploads={} text_hits={} text_misses={} glyph_hits={} glyph_misses={} glyph_miss_pixels={} text_hit_pixels={} text_miss_pixels={} text_raster_bytes={} image_passes={} text_passes={}",
                 stats.submit_count,
                 stats.pass_count,
                 stats.upload_bytes,
@@ -249,7 +249,6 @@ fn log_render_stats(robot: &cranpose::Robot, step: usize) {
                 stats.text_image_raster_bytes,
                 stats.image_passes,
                 stats.text_passes,
-                stats.text_cache_size,
             );
         }
         Ok(None) => println!("render_stats step={step} unavailable"),

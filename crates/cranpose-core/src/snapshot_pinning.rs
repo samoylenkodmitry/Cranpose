@@ -71,10 +71,14 @@ impl PinningTable {
     }
 }
 
+/// Counters of the snapshot pins of one thread, for leak and memory checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SnapshotPinningDebugStats {
+    /// Number of snapshots pinned now.
     pub pin_count: usize,
+    /// The lowest pinned snapshot id, or `None` if nothing is pinned.
     pub lowest_pinned_snapshot: Option<SnapshotId>,
+    /// Sizes of the heap that orders the pins.
     pub heap: SnapshotDoubleIndexHeapDebugStats,
 }
 
@@ -134,12 +138,13 @@ pub fn pin_count() -> usize {
     crate::thread_state::snapshots(|state| state.pinning.borrow().pin_count())
 }
 
+/// Returns the counters of the snapshot pins of the current thread.
 pub fn debug_snapshot_pinning_stats() -> SnapshotPinningDebugStats {
     crate::thread_state::snapshots(|state| state.pinning.borrow().debug_stats())
 }
 
 #[cfg(test)]
-pub fn reset_pinning_table() {
+pub(crate) fn reset_pinning_table() {
     crate::thread_state::snapshots(|state| {
         state.pinning.borrow_mut().heap = SnapshotDoubleIndexHeap::new();
     });

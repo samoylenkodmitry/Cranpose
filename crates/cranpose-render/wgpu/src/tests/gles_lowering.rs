@@ -33,7 +33,7 @@ impl ParsedShader {
             constants,
         )
         .map_err(|err| format!("override resolution failed: {err}"))?;
-        let (module, info) = wgpu::hal::auxil::prune::prune_decided_branches(module, info)?;
+        let (module, info) = wgpu_hal::auxil::prune::prune_decided_branches(module, info)?;
         let options = glsl::Options {
             version: glsl::Version::new_gles(300),
             writer_flags: glsl::WriterFlags::ADJUST_COORDINATE_SPACE,

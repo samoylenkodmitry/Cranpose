@@ -29,6 +29,7 @@ pub const INDICATOR_HEIGHT_DP: f32 = 50.0;
 /// `ScrollIndicatorDefaults.indicatorWidth`, whose two values are chosen by
 /// screen size.
 pub const INDICATOR_WIDTH_DP: f32 = 6.0;
+/// The narrower stroke width, used on displays narrower than [`INDICATOR_LARGE_SCREEN_DP`].
 pub const INDICATOR_NARROW_WIDTH_DP: f32 = 5.0;
 /// Wear's own breakpoint: a display at least this wide gets the wider stroke.
 pub const INDICATOR_LARGE_SCREEN_DP: f32 = 225.0;
@@ -41,6 +42,7 @@ pub const INDICATOR_GAP_DP: f32 = 3.0;
 /// `ScrollIndicatorDefaults.minSizeFraction` / `maxSizeFraction` — the thumb's
 /// share of the track is clamped to this range however long the list is.
 pub const INDICATOR_MIN_THUMB: f32 = 0.3;
+/// Largest share of the track the thumb fills.
 pub const INDICATOR_MAX_THUMB: f32 = 0.7;
 
 /// The stroke width Wear would use on a display this wide.
@@ -451,13 +453,21 @@ fn finite(value: f32) -> f32 {
 pub enum IndicatorSegment {
     /// A stroked arc with a round cap, already inset so the caps land on the
     /// nominal bounds. `start` and `sweep` are radians, `0` at 3 o'clock.
-    Arc { start: f32, sweep: f32, alpha: f32 },
+    Arc {
+        /// Angle at which the arc starts, radians.
+        start: f32,
+        /// Angle the arc covers from `start`, radians.
+        sweep: f32,
+        /// Opacity from 0.0 (invisible) to 1.0 (opaque).
+        alpha: f32,
+    },
     /// A filled circle standing in for an arc too short to draw.
     Dot {
         /// Angle of the dot's centre, radians.
         angle: f32,
         /// Radius, in the same unit as the arc's stroke width.
         radius: f32,
+        /// Opacity from 0.0 (invisible) to 1.0 (opaque).
         alpha: f32,
     },
 }
@@ -466,7 +476,9 @@ pub enum IndicatorSegment {
 /// thumb and the track differently without re-deriving the order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IndicatorPart {
+    /// The two track segments, one on each side of the thumb.
     Track,
+    /// The part of the indicator that shows the scroll position.
     Thumb,
 }
 

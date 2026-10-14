@@ -57,6 +57,8 @@ struct SemanticsBinding {
 }
 
 impl SemanticsRequester {
+    /// Creates a requester that no node uses yet. [`Self::invalidate`] does nothing until a
+    /// `semantics_requester` modifier attaches it.
     pub fn new() -> Self {
         Self::default()
     }

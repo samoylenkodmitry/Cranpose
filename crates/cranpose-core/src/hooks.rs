@@ -10,6 +10,8 @@ use crate::{
     },
 };
 
+/// Returns the value `init` made on the first composition at this call site. Later compositions
+/// return the same value until the call site leaves the composition. Compose's `remember`.
 #[track_caller]
 pub fn remember<T: 'static>(init: impl FnOnce() -> T) -> Owned<T> {
     let source = crate::caller_location_key();
@@ -87,6 +89,8 @@ pub fn rememberUpdatedState<T: Clone + 'static>(value: T) -> MutableState<T> {
     })
 }
 
+/// Runs `callback` once on the next frame with the frame time in nanoseconds. Dropping the returned
+/// registration before the frame cancels the callback. Must be called during composition.
 #[cfg(feature = "internal")]
 #[expect(non_snake_case)]
 pub fn withFrameNanos(
@@ -100,6 +104,8 @@ pub fn withFrameNanos(
     })
 }
 
+/// Runs `callback` once on the next frame with the frame time in milliseconds. Dropping the
+/// returned registration before the frame cancels the callback. Must be called during composition.
 #[cfg(feature = "internal")]
 #[expect(non_snake_case)]
 pub fn withFrameMillis(
@@ -176,6 +182,8 @@ pub fn mutableStateOfNeverEqual<T: Clone + 'static>(initial: T) -> MutableState<
     current_runtime("mutableStateOfNeverEqual").alloc_persistent_state(initial)
 }
 
+/// Creates an [`OwnedMutableState`] holding `initial`, which is released when its owner is dropped.
+/// Writing an equal value is not a change. Panics without an active runtime.
 #[expect(non_snake_case)]
 pub fn ownedMutableStateOf<T: Clone + PartialEq + 'static>(initial: T) -> OwnedMutableState<T> {
     OwnedMutableState::with_runtime_structural_eq(initial, current_runtime("ownedMutableStateOf"))
@@ -208,6 +216,8 @@ pub fn try_mutableStateOf<T: Clone + PartialEq + 'static>(initial: T) -> Option<
     Some(runtime.alloc_persistent_state_with_policy(initial, Rc::new(StructuralEqual)))
 }
 
+/// Creates a snapshot-aware list holding `values`. Must be called during composition. Compose's
+/// `mutableStateListOf`.
 #[expect(non_snake_case)]
 pub fn mutableStateListOf<T, I>(values: I) -> SnapshotStateList<T>
 where
@@ -217,11 +227,14 @@ where
     composer_context::with_composer(move |composer| composer.mutable_state_list_of(values))
 }
 
+/// Creates an empty snapshot-aware list. Must be called during composition.
 #[expect(non_snake_case)]
 pub fn mutableStateList<T: Clone + 'static>() -> SnapshotStateList<T> {
     mutableStateListOf(std::iter::empty::<T>())
 }
 
+/// Creates a snapshot-aware map holding `pairs`. Must be called during composition. Compose's
+/// `mutableStateMapOf`.
 #[expect(non_snake_case)]
 pub fn mutableStateMapOf<K, V, I>(pairs: I) -> SnapshotStateMap<K, V>
 where
@@ -232,6 +245,7 @@ where
     composer_context::with_composer(move |composer| composer.mutable_state_map_of(pairs))
 }
 
+/// Creates an empty snapshot-aware map. Must be called during composition.
 #[expect(non_snake_case)]
 pub fn mutableStateMap<K, V>() -> SnapshotStateMap<K, V>
 where
@@ -284,6 +298,8 @@ pub fn rememberMutableStateOf<T: Clone + PartialEq + 'static>(
     })
 }
 
+/// Like [`rememberMutableStateOf`], for a value that cannot be compared or whose every write must
+/// count as a change.
 #[expect(non_snake_case)]
 #[track_caller]
 pub fn rememberMutableStateOfNeverEqual<T: Clone + 'static>(

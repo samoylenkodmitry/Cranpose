@@ -29,10 +29,15 @@ pub trait RowScope {
 
 /// Scope exposed to `BoxWithConstraints` content.
 pub trait BoxWithConstraintsScope: BoxScope {
+    /// Returns the constraints that the parent passed to the layout, in pixels.
     fn constraints(&self) -> Constraints;
+    /// Returns the minimum width constraint as a [`Dp`].
     fn min_width(&self) -> Dp;
+    /// Returns the maximum width constraint as a [`Dp`]. Infinite when the width is unbounded.
     fn max_width(&self) -> Dp;
+    /// Returns the minimum height constraint as a [`Dp`].
     fn min_height(&self) -> Dp;
+    /// Returns the maximum height constraint as a [`Dp`]. Infinite when the height is unbounded.
     fn max_height(&self) -> Dp;
 }
 
@@ -44,6 +49,7 @@ pub struct BoxWithConstraintsScopeImpl {
 }
 
 impl BoxWithConstraintsScopeImpl {
+    /// Creates a scope for `constraints` at a density of 1.0, where one dp is one pixel.
     pub fn new(constraints: Constraints) -> Self {
         Self {
             constraints,
@@ -51,6 +57,7 @@ impl BoxWithConstraintsScopeImpl {
         }
     }
 
+    /// Creates a scope for `constraints` where one dp is `density` pixels.
     pub fn with_density(constraints: Constraints, density: f32) -> Self {
         Self {
             constraints,
@@ -62,10 +69,12 @@ impl BoxWithConstraintsScopeImpl {
         Dp::from_px(Px(raw), Density::from_scale(self.density))
     }
 
+    /// Converts `dp` to pixels at this scope's density.
     pub fn to_px(&self, dp: Dp) -> f32 {
         dp.to_px(Density::from_scale(self.density)).0
     }
 
+    /// Returns the number of pixels in one dp.
     pub fn density(&self) -> f32 {
         self.density
     }

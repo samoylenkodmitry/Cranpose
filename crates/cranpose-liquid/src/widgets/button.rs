@@ -44,6 +44,7 @@ pub enum GlassButtonStyle {
 /// Configuration for [`GlassButton`] / [`GlassIconButton`].
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GlassButtonSpec {
+    /// The look of the button: glass, prominent, plain or destructive.
     pub style: GlassButtonStyle,
     /// Text button sizing; icon buttons use their explicit diameter.
     pub size: GlassButtonSize,
@@ -94,10 +95,12 @@ impl GlassButtonSize {
 }
 
 impl GlassButtonSpec {
+    /// A translucent glass button with a label in the accent color.
     pub fn glass() -> Self {
         Self::default()
     }
 
+    /// A button of accent-tinted glass with white content, for the primary action.
     pub fn prominent() -> Self {
         Self {
             style: GlassButtonStyle::Prominent,
@@ -105,6 +108,7 @@ impl GlassButtonSpec {
         }
     }
 
+    /// A button without material: only the label, with press feedback.
     pub fn plain() -> Self {
         Self {
             style: GlassButtonStyle::Plain,
@@ -112,6 +116,7 @@ impl GlassButtonSpec {
         }
     }
 
+    /// A plain button in the destructive color.
     pub fn destructive() -> Self {
         Self {
             style: GlassButtonStyle::Destructive,
@@ -119,11 +124,14 @@ impl GlassButtonSpec {
         }
     }
 
+    /// Returns the spec with `glass` as its material instead of the material of its style.
     pub fn with_glass(mut self, glass: Glass) -> Self {
         self.glass = Some(glass);
         self
     }
 
+    /// Returns the spec with `color` as its label and icon color instead of the default of its
+    /// style.
     pub fn with_content_color(mut self, color: Color) -> Self {
         self.content_color = Some(color);
         self
@@ -135,6 +143,7 @@ impl GlassButtonSpec {
         self
     }
 
+    /// Returns the spec with a color disc behind the icon of an icon button.
     pub fn with_icon_backplate(mut self, color: Color) -> Self {
         self.icon_backplate = Some(color);
         self
@@ -214,6 +223,8 @@ impl PartialEq for GlassIconButtonGroupItem {
 }
 
 impl GlassIconButtonGroupItem {
+    /// Creates an action that draws `icon_path`, is announced as `content_description` and runs
+    /// `on_click` when pressed. Its look is `GlassButtonSpec::glass`.
     pub fn new(
         icon_path: &'static str,
         content_description: impl Into<String>,
@@ -227,6 +238,7 @@ impl GlassIconButtonGroupItem {
         }
     }
 
+    /// Returns the action with `spec` as its look.
     pub fn with_spec(mut self, spec: GlassButtonSpec) -> Self {
         self.spec = spec;
         self
@@ -279,6 +291,8 @@ pub struct GlassIconButtonGroupSpec {
 }
 
 impl GlassIconButtonGroupSpec {
+    /// Creates a spec for buttons of `diameter` dp, at least 1. The other values keep their
+    /// defaults.
     pub fn new(diameter: f32) -> Self {
         Self {
             diameter: diameter.max(1.0),
@@ -286,16 +300,21 @@ impl GlassIconButtonGroupSpec {
         }
     }
 
+    /// Returns the spec with `spacing` dp between neighboring buttons, at least zero.
     pub fn with_spacing(mut self, spacing: f32) -> Self {
         self.spacing = spacing.max(0.0);
         self
     }
 
+    /// Returns the spec with the scale to which a pressed button grows, at least 1. A value of 1
+    /// means no growth.
     pub fn with_pressed_scale(mut self, pressed_scale: f32) -> Self {
         self.pressed_scale = pressed_scale.max(1.0);
         self
     }
 
+    /// Returns the spec with the distance in dp within which the glass of neighboring buttons
+    /// blends while one is pressed, at least zero.
     pub fn with_glue_radius(mut self, glue_radius: f32) -> Self {
         self.glue_radius = glue_radius.max(0.0);
         self

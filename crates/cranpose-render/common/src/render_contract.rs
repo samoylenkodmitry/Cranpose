@@ -35,19 +35,30 @@ const TRANSLATED_TEXT_DECORATIONS_BUDGET: NormalizedDifferenceBudget = Normalize
     max_pixel_difference: 400,
 };
 
+/// A scene that every backend renders for a shared case, with the frame size it renders at.
 #[derive(Clone)]
 pub struct RenderFixture {
+    /// Frame width in pixels.
     pub width: u32,
+    /// Frame height in pixels.
     pub height: u32,
+    /// The scene to render.
     pub graph: RenderGraph,
+    /// Region of the frame, in pixels, to resample to a fixed size before frames are compared, or
+    /// `None` when frames are compared at their rendered size.
     pub normalized_rect: Option<Rect>,
 }
 
+/// A frame that a backend rendered for a `RenderFixture`.
 #[derive(Clone, Debug)]
 pub struct RenderedFrame {
+    /// Frame width in pixels.
     pub width: u32,
+    /// Frame height in pixels.
     pub height: u32,
+    /// RGBA8 pixels, row by row, four bytes per pixel.
     pub pixels: Vec<u8>,
+    /// The fixture's `normalized_rect`, carried over to the frame.
     pub normalized_rect: Option<Rect>,
 }
 
@@ -57,20 +68,32 @@ struct NormalizedDifferenceBudget {
     max_pixel_difference: u32,
 }
 
+/// A rendering case that every backend must draw alike.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SharedRenderCase {
+    /// A filled rounded rectangle.
     RoundedRect,
+    /// A rectangle cut by a primitive clip.
     PrimitiveClip,
+    /// A subtree drawn at fractional translations.
     TranslatedSubtree,
+    /// Plain text drawn at fractional translations.
     TranslatedPlainText,
+    /// Text with decorations drawn at fractional translations.
     TranslatedTextDecorations,
+    /// Text wrapped over several lines.
     MultilineText,
+    /// Text cut by a clip.
     ClippedText,
+    /// A stroked rounded rectangle.
     StrokedRoundRect,
+    /// A ring segment drawn as an arc band.
     AnnularSector,
+    /// A filled path.
     FilledPath,
 }
 
+/// Every `SharedRenderCase`, for running the whole contract.
 pub const ALL_SHARED_RENDER_CASES: [SharedRenderCase; 10] = [
     SharedRenderCase::RoundedRect,
     SharedRenderCase::PrimitiveClip,
@@ -85,6 +108,7 @@ pub const ALL_SHARED_RENDER_CASES: [SharedRenderCase; 10] = [
 ];
 
 impl SharedRenderCase {
+    /// Short snake_case name of the case, for test names and reports.
     pub fn name(self) -> &'static str {
         match self {
             SharedRenderCase::RoundedRect => "rounded_rect",
@@ -100,6 +124,8 @@ impl SharedRenderCase {
         }
     }
 
+    /// The fixtures to render for this case. A translated case returns two fixtures that differ in
+    /// their fractional offsets.
     pub fn fixtures(self) -> Vec<RenderFixture> {
         match self {
             SharedRenderCase::RoundedRect => vec![rounded_rect_fixture()],
@@ -124,6 +150,8 @@ impl SharedRenderCase {
         }
     }
 
+    /// Checks the frames that were rendered from `fixtures`, in the same order. Panics when the
+    /// frame count is wrong or a frame does not match what the case expects.
     pub fn assert_frames(self, frames: &[RenderedFrame]) {
         match self {
             SharedRenderCase::RoundedRect => {

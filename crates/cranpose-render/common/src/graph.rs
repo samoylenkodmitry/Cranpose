@@ -22,17 +22,25 @@ use crate::{
     text_paint::{TextPaint, TextPaintCache},
 };
 
+/// Reasons a layer is drawn into its own offscreen buffer instead of directly into its parent.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct IsolationReasons {
+    /// The layer asked for offscreen compositing.
     pub explicit_offscreen: bool,
+    /// The layer clips to a shape that is not a rectangle.
     pub shape_clip: bool,
+    /// The layer applies a render effect to its content.
     pub effect: bool,
+    /// The layer applies an effect to what lies behind it.
     pub backdrop: bool,
+    /// The layer's alpha is below one and must apply to its content as a group.
     pub group_opacity: bool,
+    /// The layer uses a blend mode other than source-over.
     pub blend_mode: bool,
 }
 
 impl IsolationReasons {
+    /// Whether at least one reason requires the layer to be isolated.
     pub fn has_any(self) -> bool {
         self.explicit_offscreen
             || self.shape_clip
@@ -43,13 +51,17 @@ impl IsolationReasons {
     }
 }
 
+/// Whether a renderer may keep the rasterized pixels of a layer between frames.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CachePolicy {
+    /// The layer is drawn directly each frame.
     #[default]
     None,
+    /// The layer is a candidate for a raster cache because it is isolated, scaled or rotated.
     Auto,
 }
 
+/// Pointer handling attached to a layer.
 #[derive(Clone)]
 pub struct HitTestNode {
     /// The node's modifier slices, shared rather than copied: they hold its
@@ -59,15 +71,21 @@ pub struct HitTestNode {
     pub handlers: Rc<ModifierNodeSlices>,
 }
 
+/// One draw primitive together with its clip.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DrawPrimitiveNode {
+    /// The shape, image or other primitive to draw.
     pub primitive: DrawPrimitive,
+    /// Rectangle that cuts the primitive, or `None` when it is not clipped.
     pub clip: Option<Rect>,
 }
 
+/// A run of text to draw, with the layout facts that a renderer needs.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextPrimitiveNode {
+    /// Layout node that owns the text.
     pub node_id: NodeId,
+    /// Box of the laid-out text in logical pixels, after alignment and panning.
     pub rect: Rect,
     /// Shared so the renderer can hand the same allocation to every draw it
     /// emits for this node instead of deep-copying the string once per emit.
@@ -78,8 +96,12 @@ pub struct TextPrimitiveNode {
     /// Shared so every frame's draws of this text hand over the same style
     /// instead of copying it.
     pub text_style: std::sync::Arc<TextStyle>,
+    /// Resolved font size in logical pixels.
     pub font_size: f32,
+    /// Options (overflow, soft wrap, line limits) the text was measured with.
     pub layout_options: TextLayoutOptions,
+    /// Rectangle that cuts the glyphs, or `None` when overflow is visible and the text does not
+    /// pan.
     pub clip: Option<Rect>,
     /// What a renderer reads of `text_style` and `text`'s spans to draw the
     /// glyphs, so that drawing a plain text does not load the style.
@@ -129,21 +151,30 @@ impl TextPrimitiveNode {
     }
 }
 
+/// Whether a primitive draws before or after the children of its layer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrimitivePhase {
+    /// Drawn under the children, like a background.
     BeforeChildren,
+    /// Drawn over the children, like a foreground or overlay.
     AfterChildren,
 }
 
+/// The content of a [`PrimitiveEntry`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum PrimitiveNode {
+    /// A draw primitive with its clip.
     Draw(Box<DrawPrimitiveNode>),
+    /// A text run.
     Text(Box<TextPrimitiveNode>),
 }
 
+/// One primitive of a layer together with the phase that orders it against the children.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrimitiveEntry {
+    /// Whether the primitive draws before or after the children of its layer.
     pub phase: PrimitivePhase,
+    /// The primitive.
     pub node: PrimitiveNode,
 }
 
@@ -192,8 +223,11 @@ impl PartialEq for LayerProperties {
     }
 }
 
+/// A node of the render graph that groups content under one set of layer properties: bounds,
+/// transform, clip, graphics layer and children.
 #[derive(Clone)]
 pub struct LayerNode {
+    /// Layout node of this layer, or `None` for the root and the synthetic wrapper layers.
     pub node_id: Option<NodeId>,
     /// Set on the synthetic layer that holds a node's outer draws, those chained
     /// before its graphics layer, around that node's own layer. Scene updates
@@ -208,19 +242,33 @@ pub struct LayerNode {
     /// wraps a coordinator a later padding or offset moves bounds the layer
     /// there instead, as in Compose. `None` when the two agree.
     pub node_bounds: Option<Rect>,
+    /// Maps the layer's local space to its parent's content space, with the placement, the graphics
+    /// layer transform and the parent's content offset applied.
     pub transform_to_parent: ProjectiveTransform,
+    /// Offset in logical pixels of the node's content box from the node origin, for example from
+    /// padding. Children are placed relative to it.
     pub content_offset: Point,
+    /// Whether the layer is inside a motion context such as an animated scroll, where a renderer
+    /// must not snap its content rigidly to the pixel grid.
     pub motion_context_animated: bool,
+    /// Whether the layer moves its content as one translated block, as a scroll container does,
+    /// so a renderer may snap that content to the pixel grid as a whole.
     pub translated_content_context: bool,
+    /// Translation in logical pixels of the content when `translated_content_context` is set.
     pub translated_content_offset: Point,
     /// Where layout placed this layer within its parent's content, before the
     /// parent's content offset. Scene updates add these up from the root, with
     /// each layer's content offset and graphics-layer translation, to find the
     /// window origin of a subtree they rebuild.
     pub origin_in_parent: Point,
+    /// The graphics layer properties; they read as defaults when none were set.
     pub graphics_layer: LayerProperties,
+    /// Whether the layer cuts its content to `local_bounds`.
     pub clip_to_bounds: bool,
+    /// Pointer handling of the node, or `None` when the node has none.
     pub hit_test: Option<HitTestNode>,
+    /// Whether this layer or a layer beneath it has a hit test node. Scene building keeps it
+    /// current.
     pub has_hit_targets: bool,
     /// Whether this subtree publishes live window origins (a text field's
     /// popup anchor, a scroll container's viewport rect). Those sinks are
@@ -232,13 +280,16 @@ pub struct LayerNode {
     /// may skip the whole subtree where those bounds are clipped away. Scene
     /// building keeps it current; `false` promises nothing.
     pub draws_within_bounds: bool,
+    /// The reasons this layer is drawn through its own offscreen buffer.
     pub isolation: IsolationReasons,
+    /// Whether a renderer may keep this layer's pixels between frames.
     pub cache_policy: CachePolicy,
     /// The raster cache hashes, computed the first time a renderer asks and
     /// kept until the layer or a layer beneath it changes.
     pub cache_hashes: Cell<Option<LayerRasterCacheHashes>>,
     /// The scene updates that changed what the layer draws.
     pub content_changes: ContentChanges,
+    /// Content in draw order: primitives, draw runs and child layers.
     pub children: Vec<RenderNode>,
 }
 
@@ -384,6 +435,8 @@ impl LayerNode {
         self.node_bounds.unwrap_or(self.local_bounds)
     }
 
+    /// The rectangle that cuts the layer's content and pointer hits: its bounds when the layer
+    /// clips to bounds or its graphics layer clips, otherwise `None`.
     pub fn clip_rect(&self) -> Option<Rect> {
         (self.clip_to_bounds || self.graphics_layer.clip).then_some(self.local_bounds)
     }
@@ -405,34 +458,44 @@ impl LayerNode {
         })
     }
 
+    /// The render effect applied to the layer's content, if any.
     pub fn effect(&self) -> Option<&RenderEffect> {
         self.graphics_layer.render_effect.as_ref()
     }
 
+    /// The effect applied to what lies behind the layer, if any.
     pub fn backdrop(&self) -> Option<&RenderEffect> {
         self.graphics_layer.backdrop_effect.as_ref()
     }
 
+    /// Alpha of the layer from 0.0 (transparent) to 1.0 (opaque).
     pub fn opacity(&self) -> f32 {
         self.graphics_layer.alpha
     }
 
+    /// How the layer composites onto what lies beneath it.
     pub fn blend_mode(&self) -> BlendMode {
         self.graphics_layer.blend_mode
     }
 
+    /// The color filter applied to the layer's content, if any.
     pub fn color_filter(&self) -> Option<ColorFilter> {
         self.graphics_layer.color_filter
     }
 
+    /// Hash of everything the layer draws into its target: bounds, clip, alpha, children and their
+    /// placement. Equal hashes mean cached pixels are still valid. Computed on first use.
     pub fn target_content_hash(&self) -> u64 {
         self.raster_cache_hashes().target_content
     }
 
+    /// Hash of the layer's content like `target_content_hash`, except that the translated content
+    /// offset is left out, so the hash stays equal while the content only moves.
     pub fn motion_source_content_hash(&self) -> u64 {
         crate::graph_hash::layer_motion_source_content_hash(self)
     }
 
+    /// Hash of the layer's render effect, for keying cached effect output.
     pub fn effect_hash(&self) -> u64 {
         self.raster_cache_hashes().effect
     }
@@ -479,8 +542,10 @@ impl LayerNode {
     }
 }
 
+/// A child of a layer in the render graph.
 #[derive(Clone)]
 pub enum RenderNode {
+    /// A single draw or text primitive.
     Primitive(PrimitiveEntry),
     /// A whole draw command's primitives as one node. A heavy canvas records
     /// thousands of primitives per frame; wrapping each in its own
@@ -489,6 +554,7 @@ pub enum RenderNode {
     /// keeps the recorded vector intact — semantically it is exactly that
     /// many consecutive `Primitive` draw entries with no per-primitive clip.
     DrawRun(DrawRunNode),
+    /// A nested layer.
     Layer(Box<LayerNode>),
 }
 
@@ -498,13 +564,18 @@ pub enum RenderNode {
 /// renderer state under this identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DrawCommandId {
+    /// Layout node that owns the draw command.
     pub node_id: NodeId,
+    /// Index of the command among the draw commands of the node.
     pub command_index: u32,
+    /// Whether the command draws behind the node's content or over it.
     pub placement: DrawPlacement,
 }
 
+/// A run of recorded draw primitives from one draw command, kept together as one node.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DrawRunNode {
+    /// Whether the run draws before or after the children of its layer.
     pub phase: PrimitivePhase,
     /// Which draw command recorded these primitives. `None` only for runs
     /// with no per-command provenance (hand-built tests).
@@ -527,10 +598,12 @@ pub struct DrawRunNode {
 pub type DrawRunSummary = RecordingSummary;
 
 impl DrawRunNode {
+    /// Creates a run for `primitives` that has no draw command provenance.
     pub fn new(phase: PrimitivePhase, primitives: Vec<DrawPrimitive>) -> Self {
         Self::for_command(phase, None, primitives)
     }
 
+    /// Creates a run for `primitives` recorded by the draw command `command`.
     pub fn for_command(
         phase: PrimitivePhase,
         command: Option<DrawCommandId>,
@@ -541,6 +614,7 @@ impl DrawRunNode {
         Self::for_command_shared(phase, command, Rc::new(recording), segments)
     }
 
+    /// Creates a run over `segments` of an existing shared `recording`, without copying it.
     pub fn for_command_shared(
         phase: PrimitivePhase,
         command: Option<DrawCommandId>,
@@ -567,27 +641,34 @@ impl DrawRunNode {
         self.recording.coverage_rects(self.segments.clone())
     }
 
+    /// Number of primitives in the run.
     pub fn len(&self) -> usize {
         self.recording.len_in(&self.segments)
     }
 
+    /// Whether the run holds no primitives.
     pub fn is_empty(&self) -> bool {
         self.recording.is_empty_in(&self.segments)
     }
 }
 
+/// The scene as a tree of layers that a renderer draws.
 #[derive(Clone)]
 pub struct RenderGraph {
+    /// The top layer; every other node of the graph is beneath it.
     pub root: LayerNode,
     /// How many scene updates the graph took: the number of the latest.
     pub update: u64,
 }
 
 impl RenderGraph {
+    /// Creates a graph around `root` at update zero.
     pub fn new(root: LayerNode) -> Self {
         Self { root, update: 0 }
     }
 
+    /// Number of nodes in the graph. A layer counts once and each primitive of a draw run counts on
+    /// its own.
     pub fn node_count(&self) -> usize {
         fn count_layer(layer: &LayerNode) -> usize {
             1 + layer
@@ -604,6 +685,7 @@ impl RenderGraph {
         count_layer(&self.root)
     }
 
+    /// Estimated heap memory held beneath the root layer, in bytes, for memory reports.
     pub fn heap_bytes(&self) -> usize {
         layer_heap_bytes(&self.root)
     }

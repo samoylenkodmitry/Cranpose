@@ -46,26 +46,40 @@ pub const DEFAULT_SYSTEM_FAMILY_WEIGHTS: &[FontWeight] =
 /// ended up with none.
 #[derive(Debug, thiserror::Error)]
 pub enum FontLoadError {
+    /// The family declares an empty list of faces.
     #[error("font family declares no faces")]
     EmptyFamily,
+    /// The family is not backed by font files, so there is nothing to read from disk.
     #[error("font family is not backed by files, so it has nothing to load")]
     NotFileBacked,
+    /// No file for this family exists in the system font directory.
     #[error("no system font file for this family under {directory}")]
-    NoSystemFontFile { directory: PathBuf },
+    NoSystemFontFile {
+        /// The system font directory that was searched.
+        directory: PathBuf,
+    },
+    /// A font file could not be read from the filesystem.
     #[error("failed to read font file {path}: {source}")]
     Read {
+        /// Path of the file that failed to read.
         path: PathBuf,
+        /// The operating system error.
         #[source]
         source: std::io::Error,
     },
+    /// A font file was read but its contents are not a parsable font.
     #[error("failed to parse font file {path}: {source}")]
     Parse {
+        /// Path of the file that failed to parse.
         path: PathBuf,
+        /// The parse failure from the font parser.
         #[source]
         source: SoftwareTextFontError,
     },
+    /// The supplied bytes are not a parsable font, or the variation axes are invalid.
     #[error("failed to parse font bytes: {source}")]
     ParseBytes {
+        /// The parse failure from the font parser.
         #[source]
         source: SoftwareTextFontError,
     },
@@ -105,6 +119,7 @@ impl TolerantLoad {
 }
 
 impl SoftwareTextFontRegistry {
+    /// Creates an empty registry.
     pub fn new() -> Self {
         Self::default()
     }
@@ -322,6 +337,7 @@ impl SoftwareTextFontRegistry {
         &self.faces
     }
 
+    /// Whether no face has been registered yet.
     pub fn is_empty(&self) -> bool {
         self.faces.is_empty()
     }

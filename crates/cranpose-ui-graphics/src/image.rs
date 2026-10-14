@@ -16,12 +16,20 @@ use crate::{BlendMode, Color, Size};
 /// Errors returned while constructing an [`ImageBitmap`].
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ImageBitmapError {
+    /// The width or the height is zero.
     #[error("image dimensions must be greater than zero")]
     InvalidDimensions,
+    /// The byte size of the pixels, width times height times four, does not fit in `usize`.
     #[error("image dimensions are too large")]
     DimensionsTooLarge,
+    /// The pixel buffer length does not match the width, height and pixel format.
     #[error("pixel data length mismatch: expected {expected} bytes, got {actual}")]
-    PixelDataLengthMismatch { expected: usize, actual: usize },
+    PixelDataLengthMismatch {
+        /// Number of bytes the width, height and pixel format require.
+        expected: usize,
+        /// Number of bytes supplied.
+        actual: usize,
+    },
 }
 
 /// Storage format of an immutable bitmap.
@@ -204,10 +212,13 @@ impl ColorFilter {
         Self::Matrix(matrix)
     }
 
+    /// Returns a filter that applies `self` first and then `next`, as a single color matrix.
     pub fn compose(self, next: ColorFilter) -> ColorFilter {
         ColorFilter::Matrix(compose_color_matrices(self.as_matrix(), next.as_matrix()))
     }
 
+    /// Returns the filter as a 4x5 color matrix in row-major order, in the layout
+    /// [`ColorFilter::Matrix`] describes.
     pub fn as_matrix(self) -> [f32; 20] {
         match self {
             Self::Tint(tint) => [
@@ -258,14 +269,20 @@ impl ColorFilter {
         }
     }
 
+    /// Applies the filter to a color given as red, green, blue and alpha from 0.0 to 1.0. Each
+    /// result channel is clamped to that range.
     pub fn apply_rgba(self, rgba: [f32; 4]) -> [f32; 4] {
         apply_color_matrix(self.as_matrix(), rgba)
     }
 
+    /// Whether the filter is a plain modulation, which a renderer can apply by multiplying vertex
+    /// colors instead of sampling a matrix.
     pub fn supports_gpu_vertex_modulation(self) -> bool {
         matches!(self, Self::Modulate(_))
     }
 
+    /// Returns the red, green, blue and alpha factors to multiply into vertex colors when the
+    /// filter is a modulation, and `None` otherwise.
     pub fn gpu_vertex_tint(self) -> Option<[f32; 4]> {
         match self {
             Self::Modulate(tint) => Some([tint.r(), tint.g(), tint.b(), tint.a()]),
@@ -273,6 +290,8 @@ impl ColorFilter {
         }
     }
 
+    /// Returns the blend mode that gives the same result when the filter can be expressed as one:
+    /// `SrcIn` for a tint, `Modulate` for a modulation and `SrcOver` for a matrix.
     pub fn blend_mode(self) -> BlendMode {
         match self {
             Self::Tint(_) => BlendMode::SrcIn,

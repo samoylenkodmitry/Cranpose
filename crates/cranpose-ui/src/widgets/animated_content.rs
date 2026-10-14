@@ -43,7 +43,9 @@ const GONE: f32 = 0.001;
 /// [`using`](Self::using).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ContentTransform {
+    /// Transition that plays on the content that comes in.
     pub enter: EnterTransition,
+    /// Transition that plays on the content that goes out.
     pub exit: ExitTransition,
     /// How the container's size follows the content's; `None` keeps the
     /// container as large as the largest content during the change.
@@ -65,6 +67,7 @@ impl ContentTransform {
 pub struct SizeTransform {
     /// Whether content outside the animating size is clipped.
     pub clip: bool,
+    /// Animation that drives the size change.
     pub animation: AnimationType,
 }
 
@@ -83,7 +86,10 @@ impl Default for SizeTransform {
 /// current content to `toward`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ContentSeek<T> {
+    /// The content that the gesture heads toward.
     pub toward: T,
+    /// How far the gesture has come toward `toward`, from 0.0 (still at the current content) to 1.0
+    /// (at `toward`).
     pub fraction: f32,
 }
 

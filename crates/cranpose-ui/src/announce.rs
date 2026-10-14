@@ -6,7 +6,9 @@ const QUEUE_LIMIT: usize = 32;
 /// Text a screen reader should read out, with no control to move to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Announcement {
+    /// The text the screen reader reads.
     pub text: String,
+    /// Whether the reader waits for its current speech to end or cuts it off.
     pub mode: LiveRegionMode,
 }
 

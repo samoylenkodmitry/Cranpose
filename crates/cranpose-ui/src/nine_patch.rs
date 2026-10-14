@@ -39,9 +39,17 @@ impl PatchFill {
 /// destination size; everything inside grows.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct NinePatchInsets {
+    /// Distance from the left edge of the source to the stretchable middle, in the unit of the
+    /// source.
     pub left: f32,
+    /// Distance from the top edge of the source to the stretchable middle, in the unit of the
+    /// source.
     pub top: f32,
+    /// Distance from the right edge of the source to the stretchable middle, in the unit of the
+    /// source.
     pub right: f32,
+    /// Distance from the bottom edge of the source to the stretchable middle, in the unit of the
+    /// source.
     pub bottom: f32,
 }
 
@@ -96,7 +104,9 @@ fn sanitize(value: f32) -> f32 {
 /// destination to fill.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PatchQuad {
+    /// The part of the source image to read.
     pub source: Rect,
+    /// The part of the destination to fill with that source part.
     pub destination: Rect,
 }
 

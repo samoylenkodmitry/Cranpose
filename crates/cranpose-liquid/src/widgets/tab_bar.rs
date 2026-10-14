@@ -24,8 +24,10 @@ use crate::{
 /// Visual treatment for a tab icon.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LiquidTabIconStyle {
+    /// A tinted symbol in the shared icon frame.
     #[default]
     Plain,
+    /// The icon drawn as an application badge.
     AppBadge,
 }
 
@@ -50,6 +52,7 @@ pub struct LiquidTab {
     pub icon: LiquidTabIcon,
     /// Shared display and accessibility text, including runtime translations.
     pub label: cranpose_ui::SharedText,
+    /// How the icon is drawn: as a plain symbol or as an application badge.
     pub icon_style: LiquidTabIconStyle,
     /// Optical correction for symbols whose path bounds do not fill the
     /// shared icon frame uniformly.
@@ -96,6 +99,8 @@ impl LiquidTab {
         }
     }
 
+    /// Sets the optical scale of the artwork in the shared icon frame, from 0.5 to 1.5. A nonfinite
+    /// scale becomes 1.
     pub fn with_icon_scale(mut self, scale: f32) -> Self {
         self.icon_scale = normalize_icon_scale(scale);
         self

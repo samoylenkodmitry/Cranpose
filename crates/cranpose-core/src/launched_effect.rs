@@ -17,11 +17,10 @@ trait EffectKeySlot {
     fn key(&self) -> &Option<EffectKey>;
     fn key_mut(&mut self) -> &mut Option<EffectKey>;
 
-    fn should_run(&self, key: &EffectKey) -> bool {
-        match self.key() {
-            Some(current) => key.differs_from(current),
-            None => true,
-        }
+    fn should_run<K: PartialEq + 'static>(&self, keys: &K) -> bool {
+        self.key()
+            .as_ref()
+            .is_none_or(|current| !current.holds(keys))
     }
 
     fn set_key(&mut self, key: EffectKey) {
@@ -51,7 +50,9 @@ struct LaunchedEffectCancellation {
 /// fields so carrying it costs nothing until a task is actually spawned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TaskSite {
+    /// The path of the source file, as `file!()` gives it.
     pub file: &'static str,
+    /// The line number in `file`, counted from 1.
     pub line: u32,
 }
 
@@ -220,6 +221,8 @@ impl Drop for LaunchedEffectAsyncState {
     }
 }
 
+/// The scope a [`LaunchedEffect`] receives. It reports whether the effect is still active and
+/// queues follow-up work on the UI thread.
 #[derive(Clone)]
 pub struct LaunchedEffectScope {
     active: Arc<AtomicBool>,
@@ -242,10 +245,13 @@ impl LaunchedEffectScope {
         }
     }
 
+    /// Returns `true` until the effect is cancelled, which happens when its keys change or its call
+    /// site leaves the composition.
     pub fn is_active(&self) -> bool {
         self.active.load(Ordering::SeqCst)
     }
 
+    /// Returns a handle to the runtime that runs the effect.
     pub fn runtime(&self) -> RuntimeHandle {
         self.runtime.clone()
     }
@@ -397,6 +403,9 @@ impl CancelToken {
     }
 }
 
+/// Implements [`LaunchedEffect`] for a call site that has already computed its group key. Call
+/// `LaunchedEffect` instead.
+#[doc(hidden)]
 pub fn __launched_effect_impl<K, F>(group_key: Key, keys: K, effect: F)
 where
     K: PartialEq + 'static,
@@ -404,9 +413,9 @@ where
 {
     with_current_composer(|composer| {
         composer.with_group(group_key, |composer| {
-            let key = EffectKey::new(keys);
             let state = composer.remember_effect::<LaunchedEffectState>();
-            if state.with(|state| state.should_run(&key)) {
+            if state.with(|state| state.should_run(&keys)) {
+                let key = EffectKey::new(keys);
                 state.update(|state| state.set_key(key));
                 let runtime = composer.runtime_handle();
                 let mut effect_opt = Some(effect);
@@ -444,9 +453,9 @@ where
 {
     with_current_composer(|composer| {
         composer.with_group(group_key, |composer| {
-            let key = EffectKey::new(keys);
             let state = composer.remember_effect::<LaunchedEffectAsyncState>();
-            if state.with(|state| state.should_run(&key)) {
+            if state.with(|state| state.should_run(&keys)) {
+                let key = EffectKey::new(keys);
                 state.update(|state| {
                     state.set_key(key);
                     state.set_site(site);

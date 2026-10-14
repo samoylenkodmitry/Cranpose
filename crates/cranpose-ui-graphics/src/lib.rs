@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
 /// Host-provided accessibility preferences shared by animation and rendering.
@@ -43,6 +44,8 @@ mod fx_hash;
 mod geometry;
 mod gradient_blur;
 mod image;
+/// Applies the scale, rotation and perspective of a `GraphicsLayer` to points, rectangles and
+/// quads.
 pub mod layer_transform;
 pub mod liquid_glass;
 mod path;
@@ -85,6 +88,8 @@ pub use typography::*;
 pub use unit::*;
 pub use vector_path::*;
 
+/// The types an application most often imports: geometry, color, brush, image, pointer icon, stroke
+/// and unit types.
 pub mod prelude {
     pub use crate::{
         brush::Brush,

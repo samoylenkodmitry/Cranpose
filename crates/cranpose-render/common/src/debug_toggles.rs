@@ -18,6 +18,8 @@ pub struct DebugToggle {
 }
 
 impl DebugToggle {
+    /// Creates a toggle named after the environment variable `name`; a programmatic override
+    /// of the same name takes precedence over the environment.
     pub const fn new(name: &'static str) -> Self {
         Self {
             name,

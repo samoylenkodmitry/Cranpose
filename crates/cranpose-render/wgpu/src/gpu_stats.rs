@@ -21,11 +21,16 @@ macro_rules! stats_line {
 
 const TOP_ISOLATED_LAYER_LIMIT: usize = 8;
 
+/// A layer the renderer drew into an offscreen texture of its own.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct IsolatedLayerStat {
+    /// The node of the layer, or `None` when no node owns it.
     pub node_id: Option<NodeId>,
+    /// The layer's bounds in logical pixels.
     pub logical_rect: Rect,
+    /// Width of the layer's offscreen texture in device pixels.
     pub width: u32,
+    /// Height of the layer's offscreen texture in device pixels.
     pub height: u32,
 }
 
@@ -51,34 +56,53 @@ impl Default for IsolatedLayerStat {
     }
 }
 
+/// The counters of one drawn frame, from `WgpuRenderer::last_frame_stats`. Pixel counts are in
+/// device pixels.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FrameStatsSnapshot {
+    /// Submissions to the GPU queue during the frame.
     pub submits: u32,
+    /// Command encoders the frame recorded.
     pub encoder_count: u32,
+    /// Submissions to the GPU queue, as counted from the recorded commands; equals `submits`.
     pub submit_count: u32,
+    /// Render passes the frame recorded.
     pub pass_count: u32,
     /// Sum of every render pass's first color target area: the tile traffic a
     /// tiling GPU pays whatever the passes draw.
     pub pass_pixels: u64,
     /// Texture regions copied outside any pass, and their texels.
     pub copy_count: u32,
+    /// Texels of those copies.
     pub copy_pixels: u64,
+    /// Offscreen textures the frame took from the pool or created.
     pub offscreen_acquires: u32,
+    /// Of the acquired offscreen textures, those created because the pool held none that fit.
     pub offscreen_news: u32,
+    /// Bytes of every offscreen texture the frame acquired, new or reused.
     pub offscreen_total_bytes: u64,
+    /// Bytes of the textures the frame used for one frame only.
     pub transient_texture_bytes: u64,
+    /// Bytes of the textures kept between frames: the offscreen pool and the layer cache.
     pub retained_texture_bytes: u64,
+    /// Bytes the frame uploaded to the GPU.
     pub upload_bytes: u64,
     /// Buffer writes the frame staged: uploads that reach the GPU as one
     /// write each, however many draws they carry.
     pub upload_writes: u32,
+    /// Layers the frame drew into an offscreen texture of their own.
     pub isolated_layer_renders: u32,
+    /// Pixels of the offscreen textures of those layers.
     pub isolated_layer_pixels: u64,
+    /// Layers drawn from the layer cache instead of drawn again.
     pub layer_cache_hits: u32,
     /// Capture passes that replayed ops not yet on the page.
     pub capture_fixup_passes: u32,
+    /// Layers drawn anew and stored in the layer cache, because it held no match.
     pub layer_cache_misses: u32,
+    /// Pixels of the layers drawn from the layer cache.
     pub layer_cache_hit_pixels: u64,
+    /// Pixels of the layers drawn anew and stored in the layer cache.
     pub layer_cache_miss_pixels: u64,
     /// Hits per key kind, indexed by `LayerRasterCacheKey::kind_slot`.
     pub layer_cache_hits_by_kind: [u32; LAYER_RASTER_CACHE_KIND_COUNT],
@@ -86,11 +110,18 @@ pub struct FrameStatsSnapshot {
     pub layer_cache_misses_by_kind: [u32; LAYER_RASTER_CACHE_KIND_COUNT],
     /// Stored pixels per key kind, indexed by `LayerRasterCacheKey::kind_slot`.
     pub layer_cache_miss_pixels_by_kind: [u64; LAYER_RASTER_CACHE_KIND_COUNT],
+    /// Shadows drawn from a cached blurred texture.
     pub shadow_shape_cache_hits: u32,
+    /// Shadows blurred anew because the shadow cache held no match.
     pub shadow_shape_cache_misses: u32,
+    /// Pixels composited from the cached shadow textures.
     pub shadow_shape_cache_hit_pixels: u64,
+    /// Pixels of the shadow textures blurred anew.
     pub shadow_shape_cache_miss_pixels: u64,
+    /// Shadows whose source holds more than shapes, such as text, that found no cached texture and
+    /// were blurred anew.
     pub shadow_text_blur_fallbacks: u32,
+    /// Blur passes the frame encoded, each downsample, horizontal and vertical pass counting one.
     pub blur_passes: u32,
     /// Backdrop stages resolved: every stage flushes the page and captures
     /// once, so the layer pass count is one more than this.
@@ -107,10 +138,14 @@ pub struct FrameStatsSnapshot {
     /// twelve glass tails counts once, a composite resolved into its own
     /// texture counts its own pass.
     pub composite_passes: u32,
+    /// Render effects, such as offsets and runtime shaders, the frame applied to an offscreen
+    /// source.
     pub effect_applies: u32,
     /// Pixels shaded by runtime shader composites: what every glass surface
     /// costs a tiling GPU per frame, each capture that re-shades one included.
     pub shader_pixels: u64,
+    /// Pixels the runtime shader draws rasterize once each draw is split into its interior and rim
+    /// regions.
     pub glass_rasterized_pixels: u64,
     /// Pixels the blur passes write: every downsample, horizontal and
     /// vertical pass of a backdrop's blur and of its substrates, within
@@ -127,6 +162,7 @@ pub struct FrameStatsSnapshot {
     /// six per band segment. A tiling GPU stores every vertex's varyings
     /// before it shades a pixel, so this bounds a frame as fill does.
     pub shape_vertices: u64,
+    /// Batches of shape draws the frame recorded.
     pub shape_passes: u32,
     /// Shape draws that took a stand-in while their pipeline compiled: a
     /// general pipeline, or triangles the CPU laid out.
@@ -149,7 +185,9 @@ pub struct FrameStatsSnapshot {
     /// Effects drawn as their placeholder, or left out, because no pipeline
     /// they need had compiled yet.
     pub placeholder_draws: u32,
+    /// Batches of image draws the frame recorded.
     pub image_passes: u32,
+    /// Batches of text draws the frame recorded.
     pub text_passes: u32,
     /// Shape, image, glyph and composite draws recorded this frame. The
     /// `*_passes` counters above count *batches* or passes, so a single image
@@ -158,25 +196,41 @@ pub struct FrameStatsSnapshot {
     /// included: they are one draw each and already counted by `blur_passes`
     /// and `effect_applies`.
     pub draw_calls: u32,
+    /// Texts drawn from the cache of rasterized text images.
     pub text_image_cache_hits: u32,
+    /// Texts rasterized into an image because the cache held none.
     pub text_image_cache_misses: u32,
+    /// Pixels of the text images taken from the cache.
     pub text_image_cache_hit_pixels: u64,
+    /// Pixels of the text images rasterized.
     pub text_image_cache_miss_pixels: u64,
+    /// Bytes of the text images rasterized, four per pixel.
     pub text_image_raster_bytes: u64,
+    /// Glyphs found in the glyph atlas.
     pub text_glyph_atlas_hits: u32,
+    /// Glyphs rasterized and added to the glyph atlas.
     pub text_glyph_atlas_misses: u32,
+    /// Pixels of the glyphs added to the glyph atlas.
     pub text_glyph_atlas_miss_pixels: u64,
     /// Texts whose glyph runs the frame laid out again: a text drawn as it
     /// was before takes its run from the cache.
     pub text_glyph_runs_collected: u32,
+    /// Textures held for reuse at the end of the frame, with the composition target.
     pub offscreen_pool_size: u32,
+    /// Bytes of the textures counted by `offscreen_pool_size`.
     pub offscreen_pool_bytes: u64,
+    /// Rasterized text images in the text image cache at the end of the frame.
     pub text_pool_size: u32,
+    /// Layers in the layer cache at the end of the frame.
     pub layer_cache_size: u32,
+    /// Bytes of the layer cache's textures at the end of the frame.
     pub layer_cache_bytes: u64,
+    /// Image textures cached at the end of the frame.
     pub image_cache_size: u32,
-    pub text_cache_size: u32,
+    /// The largest isolated layers of the frame by pixel area, largest first, in the first
+    /// `top_isolated_layer_count` entries; the rest are `None`.
     pub top_isolated_layers: [Option<IsolatedLayerStat>; TOP_ISOLATED_LAYER_LIMIT],
+    /// How many entries of `top_isolated_layers` are filled, at most eight.
     pub top_isolated_layer_count: usize,
 }
 
@@ -230,6 +284,7 @@ impl FrameStatsSnapshot {
         }
     }
 
+    /// The largest isolated layers of the frame by pixel area, largest first.
     pub fn top_isolated_layers(self) -> impl Iterator<Item = IsolatedLayerStat> {
         self.top_isolated_layers
             .into_iter()
@@ -276,7 +331,7 @@ impl FrameStatsSnapshot {
              stages={} admit={} blur={} substrate={} composite={} effect={} shader_px={:.2}MP glass_raster_px={:.2}MP blur_px={:.2}MP | shape={} shape_fill_px={:.2}MP{} shape_verts={} interiors={} depth_passes={} image={} text={} draws={} | \
              text_img_cache: hit={} miss={} hit_px={:.2}MP miss_px={:.2}MP raster={:.2}MB | \
              text_glyph_atlas: hit={} miss={} miss_px={:.2}MP runs_collected={} | \
-             caches: text_pool={} img={} txt={}",
+             caches: text_pool={} img={}",
             frame_count,
             self.encoder_count,
             self.submit_count,
@@ -338,7 +393,6 @@ impl FrameStatsSnapshot {
             self.text_glyph_runs_collected,
             self.text_pool_size,
             self.image_cache_size,
-            self.text_cache_size,
         );
         for (index, layer) in self.top_isolated_layers().enumerate() {
             stats_line!(
@@ -424,7 +478,6 @@ pub(crate) struct FrameStats {
     pub layer_cache_size: Cell<u32>,
     pub layer_cache_bytes: Cell<u64>,
     pub image_cache_size: Cell<u32>,
-    pub text_cache_size: Cell<u32>,
     top_isolated_layers: RefCell<[Option<IsolatedLayerStat>; TOP_ISOLATED_LAYER_LIMIT]>,
     top_isolated_layer_count: Cell<usize>,
     shadow_shape_cache_miss_log_count: Cell<u32>,
@@ -806,7 +859,6 @@ impl FrameStats {
             layer_cache_size: self.layer_cache_size.get(),
             layer_cache_bytes: self.layer_cache_bytes.get(),
             image_cache_size: self.image_cache_size.get(),
-            text_cache_size: self.text_cache_size.get(),
             top_isolated_layers: *self.top_isolated_layers.borrow(),
             top_isolated_layer_count: self.top_isolated_layer_count.get(),
         }

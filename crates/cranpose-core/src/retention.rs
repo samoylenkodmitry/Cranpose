@@ -10,21 +10,32 @@ use crate::{
     slot::{DetachedSubtree, GroupKey, NodeLifecycle},
 };
 
+/// What a group's content becomes when the group leaves the composition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RetentionMode {
+    /// Disposes the group's content as soon as the group leaves the composition.
     #[default]
     DisposeWhenInactive,
+    /// Detaches the group and keeps its content, so the group returns with its nodes and state when
+    /// its key is composed again. The [`RetentionPolicy`] budget can still evict it.
     RetainWhenInactive,
 }
 
+/// Limits on how much content a composition keeps for groups that left it. Content over a limit is
+/// evicted in the order of the [`RetentionEvictionPolicy`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RetentionBudget {
+    /// Most detached subtrees to keep at once. `None` sets no limit.
     pub max_retained_subtrees: Option<usize>,
+    /// Most heap bytes the retained subtrees may take together. `None` sets no limit.
     pub max_retained_bytes: Option<usize>,
+    /// Most composition passes a subtree may stay retained before it is evicted. `None` sets no age
+    /// limit.
     pub max_age_passes: Option<u64>,
 }
 
 impl RetentionBudget {
+    /// A budget with no limit on any measure.
     pub const UNBOUNDED: Self = Self {
         max_retained_subtrees: None,
         max_retained_bytes: None,
@@ -38,21 +49,30 @@ impl Default for RetentionBudget {
     }
 }
 
+/// Which retained subtree is evicted first when a [`RetentionBudget`] is exceeded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RetentionEvictionPolicy {
+    /// The subtree that was detached the longest ago.
     #[default]
     LeastRecentlyDetached,
+    /// The subtree whose last restore is the oldest. Subtrees never restored go first.
     LeastRecentlyRestored,
+    /// The subtree that takes the most heap memory.
     LargestFirst,
 }
 
+/// How a composition limits and evicts retained content: the budget it may keep and the order in
+/// which it drops subtrees that exceed the budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RetentionPolicy {
+    /// The limits on how much retained content the composition keeps.
     pub budget: RetentionBudget,
+    /// Which retained subtree is evicted first when the budget is exceeded.
     pub eviction: RetentionEvictionPolicy,
 }
 
 impl RetentionPolicy {
+    /// A policy with an unbounded budget that evicts the least recently detached subtree first.
     pub const UNBOUNDED: Self = Self {
         budget: RetentionBudget::UNBOUNDED,
         eviction: RetentionEvictionPolicy::LeastRecentlyDetached,

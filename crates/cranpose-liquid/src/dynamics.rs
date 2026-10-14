@@ -36,8 +36,10 @@ const STRETCH_PER_ACCEL: f32 = 3.5e-5;
 /// The droplet never deforms past these bounds, however violent the fling.
 /// Public so hosting nodes can budget layout headroom for the extremes.
 pub const STRETCH_MIN: f32 = 0.78;
+/// Largest scale along the motion axis.
 pub const STRETCH_MAX: f32 = 1.50;
 const BULGE_PER_ACCELERATION: f32 = 4.5e-4;
+/// Largest leading-edge swell amplitude, in dp.
 pub const BULGE_MAX: f32 = 8.0;
 const ATTACK_TAU: f32 = 0.03;
 const RELEASE_TAU: f32 = 0.11;
@@ -61,6 +63,7 @@ pub struct LiquidPose {
     pub axis: (f32, f32),
     /// Leading-edge swell amplitude (dp) toward `bulge_direction` (radians).
     pub bulge_amplitude: f32,
+    /// Direction of the leading-edge swell, in radians, in the space of `axis`.
     pub bulge_direction: f32,
     /// Smoothed travel speed (dp/s) for auxiliary channels (surface depth,
     /// wobble, chromatic fringe).
@@ -111,6 +114,7 @@ pub struct LiquidDynamics {
 }
 
 impl LiquidDynamics {
+    /// Creates an integrator at rest that reads the animation clock of `runtime`.
     pub fn new(runtime: RuntimeHandle) -> Self {
         Self {
             runtime,

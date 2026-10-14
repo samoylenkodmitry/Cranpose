@@ -54,6 +54,7 @@ pub struct TransformGesture {
 }
 
 impl TransformGesture {
+    /// Creates a gesture that tracks no pointers.
     pub fn new() -> Self {
         Self::default()
     }

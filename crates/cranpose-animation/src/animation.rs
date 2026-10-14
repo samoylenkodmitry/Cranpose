@@ -21,6 +21,8 @@ use cranpose_core::{
 
 /// Trait for types that can be linearly interpolated.
 pub trait Lerp {
+    /// The value `fraction` of the way from `self` to `target`: `self` at
+    /// `0.0`, `target` at `1.0`, and past them outside that range.
     fn lerp(&self, target: &Self, fraction: f32) -> Self;
 }
 
@@ -448,15 +450,24 @@ impl Default for SpringSpec {
 pub struct Spring;
 
 impl Spring {
+    /// A spring that comes to rest without passing its target.
     pub const DampingRatioNoBouncy: f32 = 1.0;
+    /// A spring that passes its target a little before it rests.
     pub const DampingRatioLowBouncy: f32 = 0.75;
+    /// A spring that swings past its target a few times.
     pub const DampingRatioMediumBouncy: f32 = 0.5;
+    /// A spring that swings past its target many times.
     pub const DampingRatioHighBouncy: f32 = 0.2;
 
+    /// The fastest spring.
     pub const StiffnessHigh: f32 = 10_000.0;
+    /// A fast spring.
     pub const StiffnessMedium: f32 = 1_500.0;
+    /// The default spring's stiffness.
     pub const StiffnessMediumLow: f32 = 400.0;
+    /// A slow spring.
     pub const StiffnessLow: f32 = 200.0;
+    /// The slowest spring.
     pub const StiffnessVeryLow: f32 = 50.0;
 }
 
@@ -535,16 +546,21 @@ impl<T: Lerp + Clone + PartialEq + 'static> TransitionAnimationState<T> {
         self.value_state.as_state()
     }
 
-    fn update_values(&self, initial_value: T, target_value: T, spec: InfiniteRepeatableSpec<T>) {
-        let needs_update = {
-            let current_initial = self.initial_value.borrow();
-            let current_target = self.target_value.borrow();
-            *current_initial != initial_value
-                || *current_target != target_value
-                || *self.spec.borrow() != spec
-        };
+    /// Whether `initial_value`, `target_value` or `spec` differ from what the
+    /// animation runs with.
+    fn differs(
+        &self,
+        initial_value: &T,
+        target_value: &T,
+        spec: &InfiniteRepeatableSpec<T>,
+    ) -> bool {
+        *self.initial_value.borrow() != *initial_value
+            || *self.target_value.borrow() != *target_value
+            || *self.spec.borrow() != *spec
+    }
 
-        if needs_update {
+    fn update_values(&self, initial_value: T, target_value: T, spec: InfiniteRepeatableSpec<T>) {
+        if self.differs(&initial_value, &target_value, &spec) {
             *self.initial_value.borrow_mut() = initial_value.clone();
             *self.target_value.borrow_mut() = target_value;
             *self.spec.borrow_mut() = spec;
@@ -631,6 +647,9 @@ fn compute_repeatable_value<T: Lerp + Clone>(
     start.lerp(end, eased)
 }
 
+/// Animations that repeat for as long as their composable stays composed,
+/// from [`rememberInfiniteTransition`]: a spinner, a pulse. Compose's
+/// `InfiniteTransition`.
 #[derive(Clone)]
 pub struct InfiniteTransition {
     inner: Rc<InfiniteTransitionInner>,
@@ -659,6 +678,7 @@ impl InfiniteTransition {
         }
     }
 
+    /// The name the transition was remembered under, for tools.
     pub fn label(&self) -> &str {
         &self.inner.label
     }
@@ -701,6 +721,9 @@ impl InfiniteTransition {
         );
     }
 
+    /// A float that runs from `initial_value` to `target_value` and over
+    /// again as `animation_spec` says, while the transition is composed.
+    /// Compose's `InfiniteTransition.animateFloat`.
     #[expect(non_snake_case)]
     #[track_caller]
     pub fn animateFloat(
@@ -714,6 +737,8 @@ impl InfiniteTransition {
         self.animateValue(initial_value, target_value, animation_spec)
     }
 
+    /// [`animateFloat`](Self::animateFloat) for any value that interpolates.
+    /// Compose's `InfiniteTransition.animateValue`.
     #[expect(non_snake_case)]
     #[track_caller]
     pub fn animateValue<T: Lerp + Clone + PartialEq + 'static>(
@@ -737,15 +762,18 @@ impl InfiniteTransition {
         })
         .with(Rc::clone);
 
-        let animation_state_for_effect = Rc::clone(&animation_state);
-        let spec_for_effect = animation_spec;
-        SideEffect(move || {
-            animation_state_for_effect.update_values(
-                initial_value.clone(),
-                target_value.clone(),
-                spec_for_effect,
-            );
-        });
+        // Most passes ask for the values the animation already runs with,
+        // and register no effect to apply them.
+        if animation_state.differs(&initial_value, &target_value, &animation_spec) {
+            let animation_state_for_effect = Rc::clone(&animation_state);
+            SideEffect(move || {
+                animation_state_for_effect.update_values(
+                    initial_value,
+                    target_value,
+                    animation_spec,
+                );
+            });
+        }
 
         let animation_any: Rc<dyn InfiniteTransitionAnimation> = animation_state.clone();
         let transition_inner = Rc::clone(&self.inner);
@@ -847,6 +875,8 @@ impl InfiniteTransitionInner {
     }
 }
 
+/// Remembers an [`InfiniteTransition`] named `label`, whose animations run
+/// while the caller stays composed. Compose's `rememberInfiniteTransition`.
 #[expect(non_snake_case)]
 #[track_caller]
 pub fn rememberInfiniteTransition(label: &str) -> InfiniteTransition {
@@ -1261,6 +1291,9 @@ pub fn animateValueAsState<T: SpringScalar + PartialEq + 'static>(
     })
 }
 
+/// A float that animates to `target` with `animation` each time `target`
+/// changes; the first composition starts at `target`. Compose's
+/// `animateFloatAsState`.
 #[expect(non_snake_case)]
 #[track_caller]
 pub fn animateFloatAsState(target: f32, animation: AnimationType, label: &str) -> State<f32> {

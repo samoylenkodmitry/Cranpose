@@ -83,10 +83,13 @@ impl Default for LazyColumnSpec {
 }
 
 impl LazyColumnSpec {
+    /// Creates a spec with start arrangement, no content padding, two items beyond the bounds and a
+    /// top-to-bottom layout.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Sets the vertical arrangement of the items, including the space between them.
     pub fn vertical_arrangement(mut self, arrangement: LinearArrangement) -> Self {
         self.vertical_arrangement = arrangement;
         self
@@ -103,6 +106,7 @@ impl LazyColumnSpec {
         self.content_padding(PaddingValues::all(padding))
     }
 
+    /// Sets whether the column lays out from bottom to top.
     pub fn reverse_layout(mut self, reverse: bool) -> Self {
         self.reverse_layout = reverse;
         self
@@ -136,10 +140,13 @@ impl Default for LazyRowSpec {
 }
 
 impl LazyRowSpec {
+    /// Creates a spec with start arrangement, no content padding, two items beyond the bounds and a
+    /// start-to-end layout.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Sets the horizontal arrangement of the items, including the space between them.
     pub fn horizontal_arrangement(mut self, arrangement: LinearArrangement) -> Self {
         self.horizontal_arrangement = arrangement;
         self
@@ -156,6 +163,7 @@ impl LazyRowSpec {
         self.content_padding(PaddingValues::all(padding))
     }
 
+    /// Sets whether the row lays out from end to start.
     pub fn reverse_layout(mut self, reverse: bool) -> Self {
         self.reverse_layout = reverse;
         self

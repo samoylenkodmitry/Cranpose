@@ -26,11 +26,14 @@ use crate::{
     },
 };
 
+/// Returns the velocity of the last fling that started in the current app context, in dp per
+/// second.
 #[cfg(feature = "test-helpers")]
 pub fn last_fling_velocity() -> f32 {
     crate::render_state::debug_last_fling_velocity()
 }
 
+/// Sets the value that [`last_fling_velocity`] returns to zero.
 #[cfg(feature = "test-helpers")]
 pub fn reset_last_fling_velocity() {
     crate::render_state::debug_reset_last_fling_velocity();
@@ -1704,6 +1707,8 @@ fn scroll_impl(
         is_vertical,
         reverse_scrolling,
     });
+    motion_context
+        .observe_activity(|| Box::new(move |active| state.set_scroll_in_progress(active)));
 
     let pointer_input = nested_drag_gesture_input(
         (state.id(), is_vertical),
@@ -1849,6 +1854,8 @@ fn lazy_scroll_impl(
     let list_state = state;
     let state_id = state.inner_ptr() as usize;
     let key = (state_id, is_vertical, reverse_scrolling);
+    motion_context
+        .observe_activity(|| Box::new(move |active| state.set_gesture_scroll_active(active)));
     let overscroll = motion_context.overscroll();
     let translated_content_modifier = Modifier::with_element(TranslatedContentContextElement::new(
         state_id,

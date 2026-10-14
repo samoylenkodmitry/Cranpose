@@ -118,16 +118,21 @@ impl ImageRequest {
 /// Where a request is.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ImageLoadState {
+    /// The image is still being read and decoded.
     Loading,
+    /// The image has loaded and is ready to draw.
     Ready(ImageBitmap),
+    /// Loading failed for the stated reason.
     Failed(ImageLoadError),
 }
 
 /// Why an image did not load.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ImageLoadError {
+    /// The image bytes could not be read from their source. The text describes the cause.
     #[error("could not read the image: {0}")]
     Read(String),
+    /// The bytes were read but could not be decoded as an image. The text describes the cause.
     #[error("could not decode the image: {0}")]
     Decode(String),
 }

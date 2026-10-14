@@ -56,7 +56,6 @@ pub(crate) struct FramePacket {
     pub(crate) root_scale: f32,
     pub(crate) root: LayerScene,
     pub(crate) overlay: Option<LayerScene>,
-    pub(crate) text_cache_len: usize,
     pub(crate) clear: wgpu::Color,
 }
 
@@ -73,8 +72,11 @@ pub(crate) struct FrameSceneStorage {
 /// packet types stay clock-library-free on every target.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PresentTimings {
+    /// When the present stage had acquired the surface texture.
     pub after_acquire_ns: i64,
+    /// When the present stage had rendered the frame's draws.
     pub after_render_ns: i64,
+    /// When the present stage had presented the frame to the surface.
     pub after_present_ns: i64,
 }
 

@@ -186,6 +186,7 @@ impl GposKerning {
         total
     }
 
+    /// Whether the table holds no lookups, so no pair has an adjustment.
     pub fn is_empty(&self) -> bool {
         self.lookups.is_empty()
     }
@@ -504,6 +505,8 @@ pub struct KernedFont {
 }
 
 impl KernedFont {
+    /// Creates a font that applies the pair adjustments of `kerning` when it is given, and no
+    /// other positioning or substitution.
     pub fn new(font: FontArc, kerning: Option<Arc<GposKerning>>) -> Self {
         let ascii = Arc::new(AsciiGlyphs::new());
         Self {

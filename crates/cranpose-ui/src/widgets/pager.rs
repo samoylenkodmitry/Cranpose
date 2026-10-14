@@ -16,7 +16,7 @@ use crate::{
     modifier::Modifier,
     widgets::{
         Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, LazyColumn, LazyColumnSpec,
-        LazyRow, LazyRowSpec,
+        LazyRow, LazyRowSpec, PaddingValues,
     },
 };
 
@@ -38,9 +38,17 @@ pub enum PageSize {
 /// page count.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PagerSpec {
+    /// How long each page is along the pager's axis.
     pub page_size: PageSize,
     /// Logical pixels between two pages.
     pub page_spacing: f32,
+    /// Compose's `contentPadding`. A page comes to rest after the start
+    /// padding, a `PageSize::Fill` page is as long as the pager minus the
+    /// padding at both ends, and the neighbouring pages show in the padding.
+    pub content_padding: PaddingValues,
+    /// Pages composed and laid out beyond the ones in view on each side:
+    /// Compose's `beyondViewportPageCount`.
+    pub beyond_viewport_page_count: usize,
 }
 
 impl Default for PagerSpec {
@@ -48,6 +56,8 @@ impl Default for PagerSpec {
         Self {
             page_size: PageSize::Fill,
             page_spacing: 0.0,
+            content_padding: PaddingValues::default(),
+            beyond_viewport_page_count: 2,
         }
     }
 }
@@ -85,13 +95,33 @@ impl PagerState {
     /// The page that fills most of the pager. A composable that reads it
     /// recomposes while the pager scrolls.
     pub fn current_page(&self) -> usize {
-        let first = self.list.first_visible_item_index();
-        let offset = self.list.first_visible_item_scroll_offset();
-        if offset > self.page_extent() / 2.0 {
-            first + 1
-        } else {
-            first
-        }
+        self.page_at(
+            self.list.first_visible_item_index(),
+            self.list.first_visible_item_scroll_offset(),
+        )
+    }
+
+    /// The page the pager rests on: Compose's `settledPage`. While a drag,
+    /// a fling or an animation moves the pager, it stays the page that
+    /// scroll began on, so a composable that reads it recomposes when a
+    /// scroll starts and when it ends, not on the frames between.
+    pub fn settled_page(&self) -> usize {
+        let (first, offset) = match self.list.position_before_scroll() {
+            Some(start) if self.list.is_scroll_in_progress() => start,
+            // At rest the offset changes only with the page, so the page
+            // alone subscribes.
+            _ => (
+                self.list.first_visible_item_index(),
+                self.list.first_visible_item_scroll_offset_non_reactive(),
+            ),
+        };
+        self.page_at(first, offset)
+    }
+
+    /// Whether a drag, a fling or an animation moves the pager now:
+    /// Compose's `isScrollInProgress`.
+    pub fn is_scroll_in_progress(&self) -> bool {
+        self.list.is_scroll_in_progress()
     }
 
     /// How far the pager stands from [`Self::current_page`], as a fraction of
@@ -124,6 +154,16 @@ impl PagerState {
     /// indicator.
     pub fn lazy_list_state(&self) -> LazyListState {
         self.list
+    }
+
+    /// The page that fills most of the pager when page `first` is the first
+    /// in view, scrolled by `offset`.
+    fn page_at(&self, first: usize, offset: f32) -> usize {
+        if offset > self.page_extent() / 2.0 {
+            first + 1
+        } else {
+            first
+        }
     }
 
     /// How far the start of a page lies from the start of the next one.
@@ -217,10 +257,13 @@ fn Pager(
     });
     BoxWithConstraints(modifier, move |scope| {
         let constraints = scope.constraints();
+        let padding = spec.content_padding;
+        let width = constraints.max_width - padding.start - padding.end;
+        let height = constraints.max_height - padding.top - padding.bottom;
         let (width, height) = match (spec.page_size, horizontal) {
-            (PageSize::Fill, _) => (constraints.max_width, constraints.max_height),
-            (PageSize::Fixed(length), true) => (length, constraints.max_height),
-            (PageSize::Fixed(length), false) => (constraints.max_width, length),
+            (PageSize::Fill, _) => (width, height),
+            (PageSize::Fixed(length), true) => (length, height),
+            (PageSize::Fixed(length), false) => (width, length),
         };
         let content = Rc::clone(&page_content);
         let pages = move |pages: &mut LazyListIntervalContent| {
@@ -241,12 +284,16 @@ fn Pager(
         if horizontal {
             let row = LazyRowSpec {
                 horizontal_arrangement: spacing,
+                content_padding: padding,
+                beyond_bounds_item_count: spec.beyond_viewport_page_count,
                 ..LazyRowSpec::default()
             };
             LazyRow(fill, state.list, row, pages);
         } else {
             let column = LazyColumnSpec {
                 vertical_arrangement: spacing,
+                content_padding: padding,
+                beyond_bounds_item_count: spec.beyond_viewport_page_count,
                 ..LazyColumnSpec::default()
             };
             LazyColumn(fill, state.list, column, pages);

@@ -32,6 +32,8 @@ impl Composer {
         self.commands_mut().push(Command::RemoveNode { id: old_id });
     }
 
+    /// Returns a [`MutableState`] holding the value `init` made on the first composition at this
+    /// call site. Later compositions return the same state, so its value survives recomposition.
     #[track_caller]
     pub fn use_state<T: Clone + 'static>(&self, init: impl FnOnce() -> T) -> MutableState<T> {
         let source = crate::caller_location_key();
@@ -185,12 +187,17 @@ impl Composer {
         id
     }
 
+    /// Emits a node of type `N` as a child of the current parent and returns its id. The first
+    /// composition at this call site calls `init` to make the node. Later compositions reuse that
+    /// node and do not call `init`.
     #[track_caller]
     pub fn emit_node<N: Node + 'static>(&self, init: impl FnOnce() -> N) -> NodeId {
         let source = crate::caller_location_key();
         self.emit_node_box::<N>(source, |_| EmittedNode::Fresh(Box::new(init())))
     }
 
+    /// Emits a node of type `N` as `emit_node` does, reusing a pooled node when one exists. A
+    /// pooled `N` is cleared by `reset`, and otherwise `init` makes a new node.
     #[track_caller]
     pub fn emit_recyclable_node<N: Node + 'static>(
         &self,
@@ -365,6 +372,8 @@ impl Composer {
         self.set_root(Some(id));
     }
 
+    /// Runs `f` on the node `id` as an `N`. Returns an error if the node does not exist or is not
+    /// an `N`.
     pub fn with_node_mut<N: Node + 'static, R>(
         &self,
         id: NodeId,
@@ -382,6 +391,8 @@ impl Composer {
         Ok(f(typed))
     }
 
+    /// Makes the node `id` the parent of the nodes emitted next. Each call needs a matching
+    /// `pop_parent`.
     pub fn push_parent(&self, id: NodeId) {
         let in_subcompose = !self.core.subcompose_stack.borrow().is_empty();
 
@@ -419,6 +430,8 @@ impl Composer {
         }
     }
 
+    /// Closes the parent opened by the matching `push_parent` and sets that node's children to the
+    /// nodes emitted since.
     pub fn pop_parent(&self) {
         let frame_opt = {
             let mut stack = self.parent_stack();
@@ -493,10 +506,12 @@ impl Composer {
         result
     }
 
+    /// Queues `effect` to run after this pass has applied its node changes.
     pub fn register_side_effect(&self, effect: impl FnOnce() + 'static) {
         self.side_effects_mut().push(Box::new(effect));
     }
 
+    /// Removes and returns the side effects queued during this pass.
     pub fn take_side_effects(&self) -> Vec<Box<dyn FnOnce()>> {
         std::mem::take(&mut *self.side_effects_mut())
     }

@@ -5,7 +5,11 @@ use crate::{
     Point, Rect, RenderEffect, RuntimeShader, ShadowPrimitive, Stroke,
 };
 
+/// A hash of the data that decides how something renders, so a renderer can tell cheaply whether a
+/// cached result is still valid.
 pub trait RenderHash {
+    /// Returns a hash over exactly the values that change what is drawn. Equal values give equal
+    /// hashes.
     fn render_hash(&self) -> u64;
 }
 

@@ -29,7 +29,9 @@ pub enum NestedScrollSource {
 /// The axis a scroller moves along.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScrollAxis {
+    /// Content moves up and down.
     Vertical,
+    /// Content moves left and right.
     Horizontal,
 }
 

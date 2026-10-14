@@ -54,6 +54,7 @@ impl<T> Default for Signal<T> {
 }
 
 impl<T> Signal<T> {
+    /// Creates a signal that holds no value yet.
     pub fn new() -> Self {
         Self {
             state: Arc::new(Mutex::new(SignalState {

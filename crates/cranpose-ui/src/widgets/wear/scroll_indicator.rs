@@ -32,6 +32,7 @@ use crate::{
 /// How a [`ScrollIndicator`] is drawn.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScrollIndicatorSpec {
+    /// Colors of the indicator.
     pub colors: WearColors,
     /// How visible the whole indicator is.
     ///
@@ -53,11 +54,13 @@ impl Default for ScrollIndicatorSpec {
 }
 
 impl ScrollIndicatorSpec {
+    /// Sets the colors of the indicator.
     pub fn colors(mut self, colors: WearColors) -> Self {
         self.colors = colors;
         self
     }
 
+    /// Sets how visible the whole indicator is, from 0.0 (hidden) to 1.0 (fully visible).
     pub fn alpha(mut self, alpha: f32) -> Self {
         self.alpha = alpha;
         self

@@ -22,6 +22,8 @@ use crate::{
     slot::{FinishGroupResult, GroupStart, GroupStartKind, PayloadKind, RootNodeIds, ValueSlotId},
 };
 
+/// A typed reference to a value stored in a slot, made by `Composer::use_value_slot`. It is valid
+/// for the composition pass that made it, and `Composer::with_slot_value` reads through it.
 pub struct ValueSlotHandle<'pass, T: 'static> {
     slot: ValueSlotId,
     record: Option<usize>,
@@ -177,6 +179,44 @@ fn spare_commands() -> CommandQueue {
     crate::thread_state::try_runtimes(|state| state.spare_commands.borrow_mut().pop())
         .flatten()
         .unwrap_or_default()
+}
+
+/// The stacks a composer grows while it composes, kept empty between passes
+/// so the next composer on this thread starts with their storage.
+#[derive(Default)]
+pub(crate) struct ComposerStacks {
+    slot_hosts: Vec<Rc<SlotsHost>>,
+    parent_stack: Vec<ParentFrame>,
+    scope_stack: Vec<RecomposeScope>,
+}
+
+/// The most entries a kept stack has room for; a larger one grew in a spike
+/// such as a deep first composition.
+const SPARE_STACK_CAPACITY: usize = 256;
+
+fn spare_composer_stacks() -> ComposerStacks {
+    crate::thread_state::try_runtimes(|state| state.spare_composer_stacks.take())
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// Keeps a dropped composer's emptied stacks for the next composer.
+fn recycle_composer_stacks(mut stacks: ComposerStacks) {
+    let ComposerStacks {
+        slot_hosts,
+        parent_stack,
+        scope_stack,
+    } = &mut stacks;
+    if slot_hosts.capacity() > SPARE_STACK_CAPACITY
+        || parent_stack.capacity() > SPARE_STACK_CAPACITY
+        || scope_stack.capacity() > SPARE_STACK_CAPACITY
+    {
+        return;
+    }
+    slot_hosts.clear();
+    parent_stack.clear();
+    scope_stack.clear();
+    crate::thread_state::try_runtimes(|state| state.spare_composer_stacks.set(Some(stacks)));
 }
 
 /// Keeps an applied, empty command queue for the next pass on this thread.
@@ -718,6 +758,11 @@ impl Drop for ComposerCore {
         if commands.len() == 0 && commands.capacity() > 0 {
             recycle_commands(commands);
         }
+        recycle_composer_stacks(ComposerStacks {
+            slot_hosts: std::mem::take(self.slot_hosts.get_mut()),
+            parent_stack: std::mem::take(self.parent_stack.get_mut()),
+            scope_stack: std::mem::take(self.scope_stack.get_mut()),
+        });
     }
 }
 
@@ -730,32 +775,35 @@ impl ComposerCore {
         root: Option<NodeId>,
         initial_parent_frame: InitialParentFrame,
     ) -> Self {
-        let parent_stack = if let Some(root_id) = root {
-            vec![ParentFrame {
+        let ComposerStacks {
+            slot_hosts,
+            mut parent_stack,
+            scope_stack,
+        } = spare_composer_stacks();
+        if let Some(root_id) = root {
+            parent_stack.push(ParentFrame {
                 id: root_id,
                 previous: ChildList::new(),
                 new_children: ChildList::new(),
                 new_children_membership: None,
                 attach_mode: ParentAttachMode::DeferredSync,
                 synthetic_root: matches!(initial_parent_frame, InitialParentFrame::SyntheticRoot),
-            }]
-        } else {
-            Vec::new()
-        };
+            });
+        }
 
         let commands = spare_commands();
         Self {
             branch_folds: Rc::clone(&shared_state.branch_folds),
             shared_state,
             slots,
-            slot_hosts: RefCell::new(Vec::new()),
+            slot_hosts: RefCell::new(slot_hosts),
             applier,
             runtime,
             parent_stack: RefCell::new(parent_stack),
             subcompose_stack: RefCell::new(Vec::new()),
             root: Cell::new(root),
             commands: RefCell::new(commands),
-            scope_stack: RefCell::new(Vec::new()),
+            scope_stack: RefCell::new(scope_stack),
             subcomposition_owner_scope: RefCell::new(None),
             local_stack: RefCell::new(None),
             side_effects: RefCell::new(Vec::new()),
@@ -770,6 +818,9 @@ impl ComposerCore {
     }
 }
 
+/// The state of one composition pass. It writes the slot table and queues node changes for the
+/// applier. Clones share the same pass. Composable functions reach the current composer through
+/// `with_current_composer`.
 #[derive(Clone)]
 pub struct Composer {
     pub(crate) core: Rc<ComposerCore>,
@@ -913,6 +964,8 @@ impl Composer {
         Self { core }
     }
 
+    /// Creates a composer that writes into `slots` and queues node changes for `applier`. Top-level
+    /// nodes attach under `root`, or have no parent when `root` is `None`.
     pub fn new(
         slots: Rc<SlotsHost>,
         applier: Rc<dyn ApplierHost>,
@@ -947,6 +1000,8 @@ impl Composer {
         self.core.root_render_requested.replace(false)
     }
 
+    /// Returns the slot table host that receives this composer's writes: the innermost host set up
+    /// for a subcomposition, otherwise the composition's own.
     pub fn active_slots_host(&self) -> Rc<SlotsHost> {
         self.core
             .slot_hosts
@@ -1301,6 +1356,8 @@ impl Composer {
         }
     }
 
+    /// Runs `f` with this composer as the current one and its runtime as the active runtime. Both
+    /// are restored when `f` returns.
     pub fn install<R>(&self, f: impl FnOnce(&Composer) -> R) -> R {
         let _composer_guard = composer_context::enter(self);
         runtime::push_active_runtime(&self.core.runtime);
@@ -1640,10 +1697,15 @@ impl Composer {
         group.close();
     }
 
+    /// Runs `f` in a group identified by `key`. Slots and nodes that `f` creates belong to the
+    /// group.
     pub fn with_group<R>(&self, key: Key, f: impl FnOnce(&Composer) -> R) -> R {
         self.with_group_seed(crate::slot::GroupKeySeed::unkeyed(key), f)
     }
 
+    /// Runs `f` in a group identified by `key` that is retained when it leaves the composition,
+    /// with the recompose `options` applied to its scope. A retained group returns with its state
+    /// and nodes when `key` is composed again.
     pub fn cranpose_with_reuse<R>(
         &self,
         key: Key,
@@ -1655,6 +1717,8 @@ impl Composer {
         self.with_group(key, f)
     }
 
+    /// Runs `f` in a group identified by the hash of `key`, so state and nodes follow the key when
+    /// siblings move. Compose's `key`.
     #[track_caller]
     pub fn with_key<K: Hash, R>(&self, key: &K, f: impl FnOnce(&Composer) -> R) -> R {
         let seed = explicit_group_key_seed(key, std::panic::Location::caller());
@@ -1852,6 +1916,8 @@ impl Composer {
         }
     }
 
+    /// Returns the value `init` made on the first composition at this call site. Later compositions
+    /// return the same value until the call site leaves the composition.
     #[track_caller]
     pub fn remember<T: 'static>(&self, init: impl FnOnce() -> T) -> Owned<T> {
         self.remember_at(crate::caller_location_key(), init)
@@ -1886,6 +1952,8 @@ impl Composer {
         self.with_slot_session_mut(|slots| slots.remember_effect::<T>(source))
     }
 
+    /// Reserves the next slot at the call site for a `T` that `init` makes on the first
+    /// composition. Returns a handle for reading the value through `with_slot_value`.
     #[track_caller]
     pub fn use_value_slot<T: 'static>(&self, init: impl FnOnce() -> T) -> ValueSlotHandle<'_, T> {
         let source = crate::caller_location_key();
@@ -1971,6 +2039,7 @@ impl Composer {
         }
     }
 
+    /// Runs `f` with a shared reference to the value in the slot that `handle` names.
     pub fn with_slot_value<'pass, T: 'static, R>(
         &'pass self,
         handle: ValueSlotHandle<'pass, T>,
@@ -1979,6 +2048,7 @@ impl Composer {
         self.with_slots(|slots| f(slots.value_at(handle.slot, handle.record)))
     }
 
+    /// Runs `f` with a mutable reference to the value in the slot that `handle` names.
     pub fn with_slot_value_mut<'pass, T: 'static, R>(
         &'pass self,
         handle: ValueSlotHandle<'pass, T>,
@@ -1987,10 +2057,14 @@ impl Composer {
         self.with_slots_mut(|slots| f(slots.value_at_mut(handle.slot, handle.record)))
     }
 
+    /// Creates a [`MutableState`] holding `initial`, tied to this composer's runtime. It is not
+    /// remembered, so each call makes a new state.
     pub fn mutable_state_of<T: Clone + 'static>(&self, initial: T) -> MutableState<T> {
         MutableState::with_runtime(initial, self.runtime_handle())
     }
 
+    /// Creates a snapshot-aware list holding `values`, tied to this composer's runtime. It is not
+    /// remembered, so each call makes a new list.
     pub fn mutable_state_list_of<T, I>(&self, values: I) -> SnapshotStateList<T>
     where
         T: Clone + 'static,
@@ -1999,6 +2073,8 @@ impl Composer {
         SnapshotStateList::with_runtime(values, self.runtime_handle())
     }
 
+    /// Creates a snapshot-aware map holding `pairs`, tied to this composer's runtime. It is not
+    /// remembered, so each call makes a new map.
     pub fn mutable_state_map_of<K, V, I>(&self, pairs: I) -> SnapshotStateMap<K, V>
     where
         K: Clone + Eq + Hash + 'static,
@@ -2008,11 +2084,15 @@ impl Composer {
         SnapshotStateMap::with_runtime(pairs, self.runtime_handle())
     }
 
+    /// Returns the value of `local` from the innermost enclosing provider, or the local's default
+    /// value when no provider is in scope.
     pub fn read_composition_local<T: Clone + 'static>(&self, local: &CompositionLocal<T>) -> T {
         self.provided_local::<LocalStateEntry<T>>(&local.key)
             .map_or_else(|| local.default_value(), |entry| entry.value())
     }
 
+    /// Returns the value of `local` from the innermost enclosing provider, or the local's default
+    /// value when no provider is in scope.
     pub fn read_static_composition_local<T: Clone + 'static>(
         &self,
         local: &StaticCompositionLocal<T>,
@@ -2030,6 +2110,7 @@ impl Composer {
             .ok()
     }
 
+    /// Returns the recompose scope being composed, or `None` outside any scope.
     pub fn current_recompose_scope(&self) -> Option<RecomposeScope> {
         self.core.scope_stack.borrow().last().cloned()
     }
@@ -2044,6 +2125,7 @@ impl Composer {
             .or_else(|| stack.last().cloned())
     }
 
+    /// Returns the phase of the frame in which this composer is used.
     pub fn phase(&self) -> crate::Phase {
         self.core.phase.get()
     }
@@ -2052,6 +2134,7 @@ impl Composer {
         self.core.phase.set(phase);
     }
 
+    /// Switches the composer to `phase`.
     pub fn enter_phase(&self, phase: crate::Phase) {
         self.set_phase(phase);
     }
@@ -2091,6 +2174,8 @@ impl Composer {
         (result, nodes)
     }
 
+    /// Composes `content` in the slot `slot_id` of `state` and returns its result with the ids of
+    /// the nodes it produced that have no parent. Panics outside the measure and layout phases.
     pub fn subcompose_measurement<R>(
         &self,
         state: &mut SubcomposeState,
@@ -2162,6 +2247,9 @@ impl Composer {
         Ok(())
     }
 
+    /// Composes `f` as an independent pass over the separate slot table `slots` and applies its
+    /// node changes before returning. Top-level nodes from `f` attach under `root`, if any. The
+    /// pass sees the composition locals in scope at the call.
     pub fn subcompose_in<R>(
         &self,
         slots: &Rc<SlotsHost>,
@@ -2289,6 +2377,8 @@ impl Composer {
         }
     }
 
+    /// Skips the currently open group without running it again. Its nodes and remembered values
+    /// stay as the last composition left them.
     pub fn skip_current_group(&self) {
         #[expect(
             clippy::redundant_closure_for_method_calls,
@@ -2297,10 +2387,13 @@ impl Composer {
         self.with_slot_session_mut(|slots| slots.skip_group());
     }
 
+    /// Returns a handle to the runtime of this composer.
     pub fn runtime_handle(&self) -> RuntimeHandle {
         self.core.runtime.clone()
     }
 
+    /// Registers `callback` as the code that recomposes the current scope when state it read
+    /// changes. Does nothing outside a recompose scope.
     pub fn set_recompose_callback<F>(&self, callback: F)
     where
         F: FnMut(&Composer) + 'static,
@@ -2332,6 +2425,7 @@ impl Composer {
         }
     }
 
+    /// Like `set_recompose_callback` for a plain function pointer.
     pub fn set_recompose_fn(&self, callback: fn(&Composer)) {
         self.set_recompose_callback_boxed(Box::new(callback), None);
     }

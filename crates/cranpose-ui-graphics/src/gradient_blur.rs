@@ -10,10 +10,18 @@ use crate::{RenderEffect, RuntimeShader, SubstrateSpec};
 /// Axis and direction used to interpolate the blur radius.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum GradientBlurDirection {
+    /// The blur radius changes from the start radius at the left edge to the end radius at the
+    /// right edge.
     LeftToRight,
+    /// The blur radius changes from the start radius at the right edge to the end radius at the
+    /// left edge.
     RightToLeft,
+    /// The blur radius changes from the start radius at the top edge to the end radius at the
+    /// bottom edge.
     #[default]
     TopToBottom,
+    /// The blur radius changes from the start radius at the bottom edge to the end radius at the
+    /// top edge.
     BottomToTop,
 }
 

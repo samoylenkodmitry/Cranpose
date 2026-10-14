@@ -99,12 +99,19 @@ pub type StateObjectId = usize;
 /// without requiring trait objects, which avoids object-safety issues.
 #[derive(Clone)]
 pub enum AnySnapshot {
+    /// A root read-only snapshot.
     Readonly(Rc<ReadonlySnapshot>),
+    /// A root mutable snapshot, applied to the global state.
     Mutable(Rc<MutableSnapshot>),
+    /// A read-only snapshot nested in a parent snapshot.
     NestedReadonly(Rc<NestedReadonlySnapshot>),
+    /// A mutable snapshot nested in a mutable parent, applied to that parent.
     NestedMutable(Rc<NestedMutableSnapshot>),
+    /// The global snapshot of the thread.
     Global(Rc<GlobalSnapshot>),
+    /// A mutable snapshot whose observers can be replaced after creation.
     TransparentMutable(Rc<TransparentObserverMutableSnapshot>),
+    /// A read-only snapshot whose observer can be replaced after creation.
     TransparentReadonly(Rc<TransparentObserverSnapshot>),
 }
 
@@ -116,7 +123,9 @@ pub enum AnySnapshot {
 /// mutable snapshot.
 #[derive(Clone)]
 pub enum AnyMutableSnapshot {
+    /// A root mutable snapshot, applied to the global state.
     Root(Rc<MutableSnapshot>),
+    /// A mutable snapshot nested in a mutable parent, applied to that parent.
     Nested(Rc<NestedMutableSnapshot>),
 }
 
@@ -176,7 +185,7 @@ impl AnySnapshot {
         }
     }
 
-    /// Get the set of invalid snapshot IDs.
+    /// The state every snapshot kind shares: id, invalid set, observers and flags.
     fn state(&self) -> &SnapshotState {
         match self {
             AnySnapshot::Readonly(s) => &s.state,
@@ -193,6 +202,7 @@ impl AnySnapshot {
         f(&self.state().invalid.borrow())
     }
 
+    /// Returns the ids of snapshots whose writes this snapshot does not see.
     pub fn invalid(&self) -> SnapshotIdSet {
         match self {
             AnySnapshot::Readonly(s) => s.invalid(),
@@ -565,17 +575,28 @@ const UNUSED_RECORD_CLEANUP_INTERVAL: SnapshotId = 2;
 const UNUSED_RECORD_CLEANUP_BUSY_INTERVAL: SnapshotId = 1;
 const UNUSED_RECORD_CLEANUP_MIN_SIZE: usize = 64;
 
+/// Size figures of the snapshot system's bookkeeping on the current thread, from
+/// `debug_snapshot_v2_stats`. `*_len` is the number of entries and `*_cap` the entries that fit
+/// before the storage grows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SnapshotV2DebugStats {
+    /// Registered apply observers.
     pub apply_observers_len: usize,
+    /// Apply observers the observer storage holds before it grows.
     pub apply_observers_cap: usize,
+    /// State objects with a recorded last-write snapshot id.
     pub last_writes_len: usize,
+    /// Entries the last-write record holds before it grows.
     pub last_writes_cap: usize,
+    /// State objects tracked for later cleanup of unused records.
     pub extra_state_objects_len: usize,
+    /// Entries the tracked state object set holds before it grows.
     pub extra_state_objects_cap: usize,
+    /// Id of the snapshot at which unused records were last cleaned up.
     pub last_unused_record_cleanup: SnapshotId,
 }
 
+/// Returns the size figures of the snapshot system's bookkeeping on the current thread.
 pub fn debug_snapshot_v2_stats() -> SnapshotV2DebugStats {
     crate::thread_state::snapshots(|state| {
         let observers = state.apply_observers.borrow();
@@ -642,9 +663,12 @@ impl Drop for ObserverHandle {
 }
 
 pub(crate) fn notify_apply_observers(modified: &[Rc<dyn StateObject>], snapshot_id: SnapshotId) {
-    let observers: Vec<ApplyObserver> = crate::thread_state::snapshots(|state| {
-        state.apply_observers.borrow().values().cloned().collect()
-    });
+    // Called from a copy, since an observer may register or drop observers;
+    // there are few, so the copy stays inline.
+    let observers: smallvec::SmallVec<[ApplyObserver; 4]> =
+        crate::thread_state::snapshots(|state| {
+            state.apply_observers.borrow().values().cloned().collect()
+        });
     for observer in observers {
         observer(modified, snapshot_id);
     }

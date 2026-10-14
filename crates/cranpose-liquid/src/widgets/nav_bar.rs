@@ -14,12 +14,15 @@ use crate::theme::{liquid_colors, liquid_typography};
 /// Configuration for [`LiquidNavBar`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiquidNavBarSpec {
+    /// The title, shown large while the content is at the top and inline once the content scrolled.
     pub title: String,
     /// Scroll distance (dp) over which the large title collapses.
     pub collapse_range: f32,
 }
 
 impl LiquidNavBarSpec {
+    /// Creates a spec for a bar titled `title`, whose large title collapses over 52 dp of
+    /// scrolling.
     pub fn new(title: impl Into<String>) -> Self {
         Self {
             title: title.into(),

@@ -162,18 +162,30 @@ struct FieldText {
     pan: Option<TextPanResolver>,
 }
 
+/// Counts and capacities of the data that modifier node slices hold, for memory diagnostics.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ModifierNodeSlicesDebugStats {
+    /// Number of draw commands.
     pub draw_command_count: usize,
+    /// Allocated capacity of the draw command list, in commands.
     pub draw_command_capacity: usize,
+    /// Number of pointer input handlers.
     pub pointer_input_count: usize,
+    /// Allocated capacity of the pointer input handler list, in handlers.
     pub pointer_input_capacity: usize,
+    /// Whether the node shows text.
     pub has_text_content: bool,
+    /// Whether the node carries a text style.
     pub has_text_style: bool,
+    /// Whether the node carries text layout options.
     pub has_text_layout_options: bool,
+    /// Whether the node carries a prepared text layout.
     pub has_prepared_text_layout: bool,
+    /// Whether the node carries a graphics layer.
     pub has_graphics_layer: bool,
+    /// Whether the graphics layer is read through a resolver that runs when the layer is used.
     pub has_graphics_layer_resolver: bool,
+    /// Heap bytes of the draw command and pointer input handler lists, counted by capacity.
     pub heap_bytes: usize,
 }
 
@@ -261,6 +273,7 @@ fn compose_color_filters(
 }
 
 impl ModifierNodeSlices {
+    /// Returns the node's draw commands in the order they draw.
     pub fn draw_commands(&self) -> &[DrawCommand] {
         &self.draw_commands
     }
@@ -303,6 +316,7 @@ impl ModifierNodeSlices {
         self.rare.get_or_insert_with(Box::default)
     }
 
+    /// Returns the node's pointer input handlers in chain order.
     pub fn pointer_inputs(&self) -> &[Rc<dyn Fn(PointerEvent)>] {
         self.rare().map_or(&[], |rare| &rare.pointer_inputs)
     }
@@ -356,6 +370,7 @@ impl ModifierNodeSlices {
         self.rare()?.pointer_icon.as_ref()
     }
 
+    /// Returns whether the node clips its content to its bounds.
     pub fn clip_to_bounds(&self) -> bool {
         self.clip_to_bounds
     }
@@ -402,19 +417,27 @@ impl ModifierNodeSlices {
         publish_pointer_input_size(rare, size);
     }
 
+    /// Returns whether a scroll container on this node is moving its content, for example in a
+    /// fling or a settle.
     pub fn motion_context_animated(&self) -> bool {
         self.rare().is_some_and(|rare| rare.motion_context_animated)
     }
 
+    /// Returns whether this node is a scroll container that draws its content translated by
+    /// [`Self::translated_content_offset`].
     pub fn translated_content_context(&self) -> bool {
         self.rare()
             .is_some_and(|rare| rare.translated_content_context)
     }
 
+    /// Returns an identifier of that scroll container that stays the same while it lives, or `None`
+    /// when the node is not one.
     pub fn translated_content_context_identity(&self) -> Option<usize> {
         self.rare()?.translated_content_context_identity
     }
 
+    /// Returns the offset in logical pixels by which the scroll container translates its content
+    /// now, or `None` when the node has no such offset.
     pub fn translated_content_offset(&self) -> Option<Point> {
         self.rare()?
             .translated_content_offset_reader
@@ -427,11 +450,13 @@ impl ModifierNodeSlices {
         self.text.is_some()
     }
 
+    /// Returns the plain text the node shows, or `None` when the node shows no text.
     pub fn text_content(&self) -> Option<SliceTextRef<'_, str>> {
         self.annotated_text()
             .map(|text| text.map(|text| text.text.as_str()))
     }
 
+    /// Returns the text the node shows with its span styles, or `None` when the node shows no text.
     pub fn annotated_text(&self) -> Option<SliceTextRef<'_, Rc<crate::text::AnnotatedString>>> {
         Some(SliceTextRef(match self.text.as_ref()? {
             SliceText::Text(layout) => TextBorrow::Layout(layout.annotated_text()),
@@ -453,6 +478,7 @@ impl ModifierNodeSlices {
         )
     }
 
+    /// Returns the style of the text the node shows, or `None` when the node shows no text.
     pub fn text_style(&self) -> Option<SliceTextRef<'_, TextStyle>> {
         Some(SliceTextRef(match self.text.as_ref()? {
             SliceText::Text(layout) => TextBorrow::Layout(layout.style()),
@@ -460,6 +486,8 @@ impl ModifierNodeSlices {
         }))
     }
 
+    /// Returns the layout options of the text the node shows, or `None` when the node shows no
+    /// text. A text field reports the default options.
     pub fn text_layout_options(&self) -> Option<TextLayoutOptions> {
         match self.text.as_ref()? {
             SliceText::Text(layout) => Some(layout.options()),
@@ -510,6 +538,8 @@ impl ModifierNodeSlices {
         }
     }
 
+    /// Returns the graphics layer that the layer modifiers of the chain combine into, or `None`
+    /// when the chain has none.
     pub fn graphics_layer(&self) -> Option<GraphicsLayer> {
         if let Some(resolve) = self
             .rare()
@@ -521,6 +551,7 @@ impl ModifierNodeSlices {
         }
     }
 
+    /// Returns the rounded corner shape the chain sets, or `None` when it sets none.
     pub fn corner_shape(&self) -> Option<RoundedCornerShape> {
         self.corner_shape
     }
@@ -572,11 +603,13 @@ impl ModifierNodeSlices {
         }
     }
 
+    /// Returns these slices holding `handle`, which keeps the node chain they come from alive.
     pub fn with_chain_guard(mut self, handle: ModifierChainHandle) -> Self {
         self.rare_mut().chain_guard = Some(Rc::new(ChainGuard { _handle: handle }));
         self
     }
 
+    /// Returns counts and capacities of the slices' data, for memory diagnostics.
     pub fn debug_stats(&self) -> ModifierNodeSlicesDebugStats {
         let draw_command_bytes = self.draw_commands.capacity() * size_of::<DrawCommand>();
         let pointer_input_capacity = self.rare().map_or(0, |rare| rare.pointer_inputs.capacity());

@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
 use std::sync::PoisonError;
@@ -323,13 +324,16 @@ fn log_update_stage_telemetry(telemetry: UpdateStageTelemetry) {
     );
 }
 
+/// How the shell paces its frames against the display.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum FramePacingMode {
     /// Pace frames to the display refresh interval. The production default:
     /// animations advance once per vsync instead of re-rendering uncapped.
     #[default]
     Vsync,
+    /// Cap frames at 60 per second with a timer, whatever the display refresh rate is.
     Hard60,
+    /// Cap frames at 120 per second with a timer, whatever the display refresh rate is.
     Hard120,
     /// Render as fast as possible. For perf harnesses and robot drivers that
     /// measure work throughput; saturates the GPU if used in a real app.
@@ -337,8 +341,10 @@ pub enum FramePacingMode {
 }
 
 impl FramePacingMode {
+    /// Every pacing mode, in the order the dev overlay lists them.
     pub const ALL: [Self; 4] = [Self::Vsync, Self::Hard60, Self::Hard120, Self::NoVsync];
 
+    /// Returns the short name the dev overlay shows for this mode.
     pub fn label(self) -> &'static str {
         match self {
             Self::Vsync => "VSync",
@@ -348,6 +354,8 @@ impl FramePacingMode {
         }
     }
 
+    /// Returns the frames per second this mode caps at with a timer, or `None` when the mode sets
+    /// no cap.
     pub fn target_fps(self) -> Option<u32> {
         match self {
             Self::Hard60 => Some(60),
@@ -357,16 +365,27 @@ impl FramePacingMode {
     }
 }
 
+/// What the shell needs from the platform loop next: an update now, a display frame, or a wake at a
+/// later time.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameSchedule {
+    /// Whether queued UI tasks, state changes, layout or semantics work can run now, without
+    /// waiting for a display frame.
     pub needs_update: bool,
+    /// Whether the shell wants a display frame because something on screen changed or is animating.
     pub needs_frame: bool,
+    /// When the next timed event, such as a cursor blink, is due. `None` when no timed event is
+    /// waiting.
     pub next_deadline: Option<web_time::Instant>,
 }
 
+/// What one shell update changed.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct FrameUpdateResult {
+    /// Whether the update changed what the surface draws, so a new frame needs to be presented.
     pub visual_changed: bool,
+    /// Whether the update rebuilt the scene because layout or tree structure changed, not only
+    /// drawing.
     pub structure_changed: bool,
     /// Whether this frame's layout moved or resized a node: content in
     /// motion, such as a scroll or a size animation. Compose votes its high
@@ -378,12 +397,20 @@ pub struct FrameUpdateResult {
     pub content_redrawn: bool,
 }
 
+/// The platform's way of waking its loop, used by [`FrameScheduler`] to carry out a
+/// [`FrameSchedule`].
 pub trait PlatformFrameDriver {
+    /// Asks the platform to deliver a display frame.
     fn request_frame(&self);
+    /// Asks the platform to wake its loop at `deadline`. A deadline of the current time means wake
+    /// as soon as possible.
     fn request_wake_at(&self, deadline: web_time::Instant);
+    /// Cancels the wake requested by `request_wake_at`.
     fn clear_wake(&self);
 }
 
+/// Stores the latest [`FrameSchedule`] of a surface so that platform code on other threads can read
+/// it.
 #[derive(Debug)]
 pub struct FrameScheduler {
     update_pending: AtomicBool,
@@ -408,6 +435,7 @@ impl FrameScheduler {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Stores `schedule` as the latest one. A schedule that needs an update drops its deadline.
     pub fn record(&self, schedule: FrameSchedule) {
         self.update_pending
             .store(schedule.needs_update, Ordering::SeqCst);
@@ -421,6 +449,7 @@ impl FrameScheduler {
         };
     }
 
+    /// Stores `schedule` and asks `driver` for the frame or wake it calls for.
     pub fn schedule<D>(&self, schedule: FrameSchedule, driver: &D)
     where
         D: PlatformFrameDriver + ?Sized,
@@ -429,6 +458,7 @@ impl FrameScheduler {
         schedule.apply_to(driver);
     }
 
+    /// Returns the latest stored schedule.
     pub fn snapshot(&self) -> FrameSchedule {
         FrameSchedule {
             needs_update: self.update_pending.load(Ordering::SeqCst),
@@ -439,6 +469,8 @@ impl FrameScheduler {
 }
 
 impl FrameSchedule {
+    /// Asks `driver` for what this schedule calls for: a frame, an immediate wake, a wake at the
+    /// deadline, or no wake.
     pub fn apply_to<D>(self, driver: &D)
     where
         D: PlatformFrameDriver + ?Sized,
@@ -474,7 +506,9 @@ pub struct DevOptions {
     pub recomposition_counter: bool,
     /// Show layout timing breakdown
     pub layout_timing: bool,
+    /// Show buttons in the dev overlay that switch the frame pacing mode.
     pub frame_pacing_controls: bool,
+    /// How the shell paces its frames.
     pub frame_pacing_mode: FramePacingMode,
 }
 
@@ -586,10 +620,14 @@ where
     R: Renderer,
     R::Error: Debug,
 {
+    /// Creates a shell that composes `content` under `root_key`, with an 800 by 600 logical pixel
+    /// viewport and a buffer of the same size in pixels at density 1.0.
     pub fn new(renderer: R, root_key: Key, content: impl FnMut() + 'static) -> Self {
         Self::new_with_size(renderer, root_key, content, (800, 600), (800.0, 600.0))
     }
 
+    /// Creates a shell that composes `content` under `root_key`, with a `buffer_size` in pixels and
+    /// a `viewport` in logical pixels at density 1.0.
     pub fn new_with_size(
         renderer: R,
         root_key: Key,
@@ -937,23 +975,29 @@ where
         &self.app.dev_options
     }
 
+    /// Returns the frame pacing mode set in the dev options.
     pub fn frame_pacing_mode(&self) -> FramePacingMode {
         self.app.dev_options.frame_pacing_mode
     }
 
+    /// Returns the presented-frame cadence in frames per second, as the dev overlay shows it.
     pub fn current_fps(&self) -> f32 {
         self.app.fps_monitor.current_fps()
     }
 
+    /// Returns the frame interval and frame work statistics of the recent presented frames.
     pub fn fps_stats(&self) -> FpsStats {
         self.app.fps_monitor.stats()
     }
 
+    /// Clears the frame statistics and the recomposition count shown by the dev overlay.
     pub fn reset_fps_stats(&mut self) {
         self.app.fps_monitor.reset_stats();
         self.invalidate_dev_overlay_text();
     }
 
+    /// Records when the work for one presented frame started and finished. Platforms call it once
+    /// per presented frame to feed the frame statistics.
     pub fn record_presented_frame(
         &mut self,
         frame_started_at: Instant,
@@ -976,6 +1020,8 @@ where
         self.record_presented_frame(started, finished);
     }
 
+    /// Sets the frame pacing mode and redraws the dev overlay. Platforms read the mode back with
+    /// `frame_pacing_mode`.
     pub fn set_frame_pacing_mode(&mut self, mode: FramePacingMode) {
         if self.app.dev_options.frame_pacing_mode == mode {
             return;
@@ -1007,6 +1053,7 @@ where
         self.process_frame();
     }
 
+    /// Returns the width and height of the primary surface's viewport in logical pixels.
     pub fn viewport_size(&self) -> (f32, f32) {
         self.surfaces[0].viewport
     }
@@ -1017,36 +1064,47 @@ where
         self.surfaces[0].screen_origin = origin;
     }
 
+    /// Sets the size in pixels of the buffer the primary surface renders into.
     pub fn set_buffer_size(&mut self, width: u32, height: u32) {
         self.surfaces[0].buffer_size = (width, height);
     }
 
+    /// Returns the width and height in pixels of the buffer the primary surface renders into.
     pub fn buffer_size(&self) -> (u32, u32) {
         self.surfaces[0].buffer_size
     }
 
+    /// Returns the render scene of the primary surface.
     pub fn scene(&self) -> &R::Scene {
         self.surfaces[0].renderer.scene()
     }
 
+    /// Returns the renderer of the primary surface.
     pub fn renderer(&mut self) -> &mut R {
         &mut self.surfaces[0].renderer
     }
 
+    /// Sets the callback the runtime calls when it schedules a frame. Platforms use it to wake
+    /// their loop. Other threads can call it, so it must be `Send` and `Sync`.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_frame_waker(&mut self, waker: impl Fn() + Send + Sync + 'static) {
         self.app.runtime.set_frame_waker(waker);
     }
 
+    /// Sets the callback the runtime calls when it schedules a frame. Platforms use it to wake
+    /// their loop. Wasm runs on one thread, so the callback need not be `Send`.
     #[cfg(target_arch = "wasm32")]
     pub fn set_frame_waker(&mut self, waker: impl Fn() + 'static) {
         self.app.runtime.set_frame_waker(waker);
     }
 
+    /// Removes the callback set by `set_frame_waker`.
     pub fn clear_frame_waker(&mut self) {
         self.app.runtime.clear_frame_waker();
     }
 
+    /// Returns whether the shell wants a rendered frame: a frame callback or animation is active,
+    /// or a surface's scene is out of date.
     pub fn should_render(&self) -> bool {
         let app_context = Rc::clone(&self.app.app_context);
         app_context.enter(|| {
@@ -1055,6 +1113,8 @@ where
         })
     }
 
+    /// Returns whether the shell has work to run: queued UI tasks, state changes, layout, semantics
+    /// or an active animation.
     pub fn needs_update(&self) -> bool {
         let app_context = Rc::clone(&self.app.app_context);
         app_context.enter(|| {
@@ -1131,6 +1191,8 @@ where
         self.surfaces[0].is_dirty = true;
     }
 
+    /// Asks for the root content to render again from the top on the next update, with a forced
+    /// layout pass.
     pub fn request_root_render(&mut self) {
         self.app.composition.request_root_render();
         self.app.request_forced_layout_pass();
@@ -1219,6 +1281,8 @@ where
         self.app.composition.should_render()
     }
 
+    /// Returns `true` while a one-shot frame callback waits for the next frame. Perpetual frame
+    /// callbacks do not count.
     pub fn has_transient_frame_callbacks(&self) -> bool {
         self.app
             .composition
@@ -1226,6 +1290,7 @@ where
             .has_transient_frame_callbacks()
     }
 
+    /// Returns `true` while a pointer button is held down on a control of the primary surface.
     pub fn has_active_pointer_gesture(&self) -> bool {
         self.surfaces[0].has_active_pointer_gesture()
     }
@@ -1250,12 +1315,16 @@ where
         self.surfaces[0].compute_frame_schedule(&self.app, self.any_surface_dirty())
     }
 
+    /// Computes the frame schedule of the primary surface, stores it in the surface's scheduler and
+    /// returns it.
     pub fn frame_schedule(&self) -> FrameSchedule {
         let schedule = self.compute_frame_schedule();
         self.surfaces[0].frame_scheduler.record(schedule);
         schedule
     }
 
+    /// Computes and stores the frame schedule of the primary surface, then asks `driver` for the
+    /// frame or wake it calls for. Returns the schedule.
     pub fn schedule_platform_frame<D>(&self, driver: &D) -> FrameSchedule
     where
         D: PlatformFrameDriver + ?Sized,
@@ -1265,6 +1334,8 @@ where
         schedule
     }
 
+    /// Returns the schedule last stored by `frame_schedule` or `schedule_platform_frame`, without
+    /// computing a new one.
     pub fn frame_scheduler_snapshot(&self) -> FrameSchedule {
         self.surfaces[0].frame_scheduler.snapshot()
     }
@@ -1282,6 +1353,8 @@ where
         }
     }
 
+    /// Advances the frame clock by `frame_interval` past the later of the last frame time and the
+    /// current time, and runs one update there.
     pub fn update_after_frame_interval(
         &mut self,
         frame_interval: std::time::Duration,
@@ -1461,6 +1534,8 @@ where
         }
     }
 
+    /// Runs one update at the current time: state, input, layout, drawing and semantics. Returns
+    /// what changed.
     pub fn update(&mut self) -> FrameUpdateResult {
         let frame_time = self.app.frame_time_nanos_at(Instant::now());
         self.update_at_frame_time_nanos(frame_time)
@@ -1476,6 +1551,7 @@ where
     }
 }
 
+/// Returns the standard root key to pass to the shell constructors. It is the same on every call.
 pub fn default_root_key() -> Key {
     location_key(file!(), line!(), column!())
 }

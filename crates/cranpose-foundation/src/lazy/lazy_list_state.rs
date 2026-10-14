@@ -232,6 +232,7 @@ pub struct LazyListState {
     can_scroll_forward_state: MutableState<bool>,
     can_scroll_backward_state: MutableState<bool>,
     stats_state: MutableState<LazyLayoutStats>,
+    scroll_in_progress_state: MutableState<bool>,
     inner: MutableState<Rc<RefCell<LazyListStateInner>>>,
 }
 
@@ -259,6 +260,11 @@ struct LazyListStateInner {
     /// The id of the running scroll animation and how to stop it.
     scroll_animation: Option<(u64, Rc<dyn Fn()>)>,
     next_scroll_animation: u64,
+    /// Whether the scroll modifier's drag, fling or settle moves the list.
+    gesture_scrolling: bool,
+    /// The first visible item and its offset where the scroll in progress
+    /// began.
+    scroll_start: Option<(usize, f32)>,
 
     pending_scroll_to_index: Option<(usize, f32)>,
 
@@ -359,12 +365,15 @@ impl LazyListState {
             can_scroll_forward_state: cranpose_core::mutableStateOf(false),
             can_scroll_backward_state: cranpose_core::mutableStateOf(false),
             stats_state: cranpose_core::mutableStateOf(LazyLayoutStats::default()),
+            scroll_in_progress_state: cranpose_core::mutableStateOf(false),
             inner: cranpose_core::mutableStateOfNeverEqual(Rc::new(RefCell::new(
                 LazyListStateInner {
                     scroll_to_be_consumed: 0.0,
                     settle_policy: None,
                     scroll_animation: None,
                     next_scroll_animation: 1,
+                    gesture_scrolling: false,
+                    scroll_start: None,
                     pending_scroll_to_index: None,
                     layout_info: LazyListLayoutInfo::default(),
                     spare_items_info: Vec::new(),
@@ -583,6 +592,7 @@ impl LazyListState {
         if let Some((_, stop)) = previous {
             stop();
         }
+        self.refresh_scroll_in_progress();
         id
     }
 
@@ -598,6 +608,7 @@ impl LazyListState {
                 inner.scroll_animation = None;
             }
         });
+        self.refresh_scroll_in_progress();
     }
 
     /// Stops the running scroll animation, and returns whether one ran.
@@ -606,7 +617,55 @@ impl LazyListState {
             .inner
             .try_with(|rc| rc.borrow_mut().scroll_animation.take())
             .flatten();
-        running.map(|(_, stop)| stop()).is_some()
+        let stopped = running.map(|(_, stop)| stop()).is_some();
+        self.refresh_scroll_in_progress();
+        stopped
+    }
+
+    /// Whether a drag, a fling, a settle or a scroll animation moves the list
+    /// now: Compose's `isScrollInProgress`. A composable that reads it
+    /// recomposes when a scroll starts and when it ends.
+    pub fn is_scroll_in_progress(&self) -> bool {
+        self.scroll_in_progress_state.is_alive() && self.scroll_in_progress_state.get()
+    }
+
+    /// Marks whether a drag, a fling or a settle of the scroll modifier moves
+    /// the list, for [`Self::is_scroll_in_progress`]. The scroll modifier
+    /// calls it; scroll animations mark themselves.
+    pub fn set_gesture_scroll_active(&self, active: bool) {
+        let changed = self.inner.try_with(|rc| {
+            std::mem::replace(&mut rc.borrow_mut().gesture_scrolling, active) != active
+        });
+        if changed == Some(true) {
+            self.refresh_scroll_in_progress();
+        }
+    }
+
+    /// The first visible item and its offset where the scroll in progress
+    /// began, or `None` while no scroll is in progress. A pager keeps its
+    /// settled page from it.
+    pub fn position_before_scroll(&self) -> Option<(usize, f32)> {
+        self.inner.try_with(|rc| rc.borrow().scroll_start).flatten()
+    }
+
+    fn refresh_scroll_in_progress(&self) {
+        if !self.scroll_in_progress_state.is_alive() {
+            return;
+        }
+        let Some(moving) = self.inner.try_with(|rc| {
+            let inner = rc.borrow();
+            inner.gesture_scrolling || inner.scroll_animation.is_some()
+        }) else {
+            return;
+        };
+        if self.scroll_in_progress_state.get_non_reactive() == moving {
+            return;
+        }
+        let start = if moving { self.try_position() } else { None };
+        let _ = self
+            .inner
+            .try_with(|rc| rc.borrow_mut().scroll_start = start);
+        self.scroll_in_progress_state.set(moving);
     }
 
     /// Scrolls to the specified item index.
@@ -1246,7 +1305,7 @@ fn snap_anchor_item_offset(info: &LazyListLayoutInfo, item: &LazyListItemInfo) -
 
 #[cfg(test)]
 #[path = "tests/lazy_list_state_test_helpers.rs"]
-pub mod test_helpers;
+pub(crate) mod test_helpers;
 
 #[cfg(test)]
 #[path = "tests/lazy_list_state_tests.rs"]

@@ -347,6 +347,7 @@ pub struct PaddingNode {
 }
 
 impl PaddingNode {
+    /// Creates a node that pads its content by `padding`, in logical pixels.
     pub fn new(padding: EdgeInsets) -> Self {
         Self {
             padding,
@@ -354,6 +355,7 @@ impl PaddingNode {
         }
     }
 
+    /// Returns the padding on each edge, in logical pixels.
     pub fn padding(&self) -> EdgeInsets {
         self.padding
     }
@@ -472,6 +474,7 @@ pub struct PaddingElement {
 }
 
 impl PaddingElement {
+    /// Creates an element for a node that pads its content by `padding`, in logical pixels.
     pub fn new(padding: EdgeInsets) -> Self {
         Self { padding }
     }
@@ -513,6 +516,7 @@ pub struct BackgroundNode {
 }
 
 impl BackgroundNode {
+    /// Creates a node that fills its bounds with `color` behind its content, with square corners.
     pub fn new(color: Color) -> Self {
         Self {
             color,
@@ -521,10 +525,12 @@ impl BackgroundNode {
         }
     }
 
+    /// Returns the fill color.
     pub fn color(&self) -> Color {
         self.color
     }
 
+    /// Returns the corner shape of the fill, or `None` for square corners.
     pub fn shape(&self) -> Option<RoundedCornerShape> {
         self.shape
     }
@@ -545,6 +551,7 @@ pub struct BackgroundElement {
 }
 
 impl BackgroundElement {
+    /// Creates an element for a node that fills its bounds with `color`.
     pub fn new(color: Color) -> Self {
         Self { color }
     }
@@ -585,6 +592,7 @@ pub struct CornerShapeNode {
 }
 
 impl CornerShapeNode {
+    /// Creates a node that holds `shape` as the current rounded corner shape.
     pub fn new(shape: RoundedCornerShape) -> Self {
         Self {
             shape,
@@ -592,6 +600,7 @@ impl CornerShapeNode {
         }
     }
 
+    /// Returns the corner shape.
     pub fn shape(&self) -> RoundedCornerShape {
         self.shape
     }
@@ -612,6 +621,7 @@ pub struct CornerShapeElement {
 }
 
 impl CornerShapeElement {
+    /// Creates an element for a node that holds `shape` as the current rounded corner shape.
     pub fn new(shape: RoundedCornerShape) -> Self {
         Self { shape }
     }
@@ -949,6 +959,9 @@ pub struct SizeNode {
 }
 
 impl SizeNode {
+    /// Creates a node that limits its content to the given widths and heights, in logical pixels. A
+    /// `None` bound is left open. When `enforce_incoming` is true, the incoming constraints take
+    /// precedence over these bounds.
     pub fn new(
         min_width: Option<f32>,
         max_width: Option<f32>,
@@ -1004,22 +1017,27 @@ impl SizeNode {
         }
     }
 
+    /// Returns the smallest width in logical pixels, or `None` for no minimum.
     pub fn min_width(&self) -> Option<f32> {
         self.min_width
     }
 
+    /// Returns the largest width in logical pixels, or `None` for no maximum.
     pub fn max_width(&self) -> Option<f32> {
         self.max_width
     }
 
+    /// Returns the smallest height in logical pixels, or `None` for no minimum.
     pub fn min_height(&self) -> Option<f32> {
         self.min_height
     }
 
+    /// Returns the largest height in logical pixels, or `None` for no maximum.
     pub fn max_height(&self) -> Option<f32> {
         self.max_height
     }
 
+    /// Returns whether the incoming constraints take precedence over these bounds.
     pub fn enforce_incoming(&self) -> bool {
         self.enforce_incoming
     }
@@ -1204,6 +1222,8 @@ pub struct SizeElement {
 }
 
 impl SizeElement {
+    /// Creates an element that fixes the width and height, in logical pixels. A `None` length is
+    /// left free. The incoming constraints take precedence.
     pub fn new(width: Option<f32>, height: Option<f32>) -> Self {
         Self {
             min_width: width,
@@ -1214,6 +1234,9 @@ impl SizeElement {
         }
     }
 
+    /// Creates an element with the given widths and heights, in logical pixels. A `None` bound is
+    /// left open. When `enforce_incoming` is true, the incoming constraints take precedence over
+    /// these bounds.
     pub fn with_constraints(
         min_width: Option<f32>,
         max_width: Option<f32>,
@@ -1290,6 +1313,8 @@ enum ClickPress {
     Cancelled,
 }
 
+/// Node that reports a click when the primary pointer goes down and up without moving farther than
+/// the drag threshold. Callbacks get positions in the node's local coordinates, in logical pixels.
 pub struct ClickableNode {
     on_press: Option<Rc<dyn Fn(Point)>>,
     on_click: Rc<dyn Fn(Point)>,
@@ -1305,14 +1330,18 @@ impl std::fmt::Debug for ClickableNode {
 }
 
 impl ClickableNode {
+    /// Creates a node that calls `on_click` with the position of the click.
     pub fn new(on_click: impl Fn(Point) + 'static) -> Self {
         Self::with_handler(Rc::new(on_click))
     }
 
+    /// Creates a node that calls the shared callback `on_click` with the position of the click.
     pub fn with_handler(on_click: Rc<dyn Fn(Point)>) -> Self {
         Self::with_handlers(None, on_click)
     }
 
+    /// Creates a node that calls `on_press`, when given, as the pointer goes down, and `on_click`
+    /// on a click. Both get the pointer position.
     pub fn with_handlers(on_press: Option<Rc<dyn Fn(Point)>>, on_click: Rc<dyn Fn(Point)>) -> Self {
         let press_position = Rc::new(Cell::new(ClickPress::Idle));
         let cached_handler =
@@ -1383,6 +1412,7 @@ impl ClickableNode {
         })
     }
 
+    /// Returns the click callback.
     pub fn handler(&self) -> Rc<dyn Fn(Point)> {
         self.on_click.clone()
     }
@@ -1435,6 +1465,7 @@ pub struct ClickableElement {
 }
 
 impl ClickableElement {
+    /// Creates an element that calls `on_click` with the position of the click.
     pub fn new(on_click: impl Fn(Point) + 'static) -> Self {
         Self {
             on_press: None,
@@ -1442,6 +1473,7 @@ impl ClickableElement {
         }
     }
 
+    /// Creates an element that calls the shared callback `on_click` with the position of the click.
     pub fn with_handler(on_click: Rc<dyn Fn(Point)>) -> Self {
         Self {
             on_press: None,
@@ -1449,6 +1481,8 @@ impl ClickableElement {
         }
     }
 
+    /// Creates an element that calls `on_press` as the pointer goes down and `on_click` on a click.
+    /// Both get the pointer position.
     pub fn with_handlers(on_press: Rc<dyn Fn(Point)>, on_click: Rc<dyn Fn(Point)>) -> Self {
         Self {
             on_press: Some(on_press),
@@ -1604,6 +1638,7 @@ pub struct AlphaNode {
 }
 
 impl AlphaNode {
+    /// Creates a node that draws its content at opacity `alpha`, clamped to the range 0.0 to 1.0.
     pub fn new(alpha: f32) -> Self {
         Self {
             alpha: alpha.clamp(0.0, 1.0),
@@ -1627,6 +1662,8 @@ pub struct AlphaElement {
 }
 
 impl AlphaElement {
+    /// Creates an element for a node that draws its content at opacity `alpha`, clamped to the
+    /// range 0.0 to 1.0.
     pub fn new(alpha: f32) -> Self {
         Self {
             alpha: alpha.clamp(0.0, 1.0),
@@ -2181,6 +2218,8 @@ pub struct OffsetNode {
 }
 
 impl OffsetNode {
+    /// Creates a node that moves its content by `x` and `y`, in logical pixels. With `rtl_aware`
+    /// set, a right-to-left layout direction mirrors `x`.
     pub fn new(x: f32, y: f32, rtl_aware: bool) -> Self {
         Self {
             x,
@@ -2191,6 +2230,8 @@ impl OffsetNode {
         }
     }
 
+    /// Returns the offset in logical pixels, with `x` mirrored when the node is RTL aware and the
+    /// layout direction is right-to-left.
     pub fn offset(&self) -> Point {
         Point {
             x: if self.rtl_aware && self.layout_direction.is_rtl() {
@@ -2213,6 +2254,7 @@ impl OffsetNode {
         }
     }
 
+    /// Returns whether a right-to-left layout direction mirrors `x`.
     pub fn rtl_aware(&self) -> bool {
         self.rtl_aware
     }
@@ -2263,6 +2305,8 @@ pub struct OffsetElement {
 }
 
 impl OffsetElement {
+    /// Creates an element that moves content by `x` and `y`, in logical pixels. With `rtl_aware`
+    /// set, a right-to-left layout direction mirrors `x`.
     pub fn new(x: f32, y: f32, rtl_aware: bool) -> Self {
         Self { x, y, rtl_aware }
     }
@@ -2315,6 +2359,8 @@ pub struct FractionalOffsetNode {
 }
 
 impl FractionalOffsetNode {
+    /// Creates a node that moves its content by `x_fraction` of its own width and `y_fraction` of
+    /// its own height.
     pub fn new(x_fraction: f32, y_fraction: f32) -> Self {
         Self {
             x_fraction,
@@ -2323,6 +2369,8 @@ impl FractionalOffsetNode {
         }
     }
 
+    /// Returns the fractions as a point: `x` is the share of the width and `y` the share of the
+    /// height.
     pub fn fractions(&self) -> Point {
         Point {
             x: self.x_fraction,
@@ -2370,6 +2418,8 @@ pub struct FractionalOffsetElement {
 }
 
 impl FractionalOffsetElement {
+    /// Creates an element for a node that moves its content by `x_fraction` of its own width and
+    /// `y_fraction` of its own height.
     pub fn new(x_fraction: f32, y_fraction: f32) -> Self {
         Self {
             x_fraction,
@@ -2412,8 +2462,11 @@ impl ModifierNodeElement for FractionalOffsetElement {
 /// Direction for fill modifiers (horizontal, vertical, or both).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FillDirection {
+    /// Fill the available width.
     Horizontal,
+    /// Fill the available height.
     Vertical,
+    /// Fill the available width and height.
     Both,
 }
 
@@ -2428,6 +2481,7 @@ pub struct FillNode {
 }
 
 impl FillNode {
+    /// Creates a node that fills `fraction` of the available space along `direction`.
     pub fn new(direction: FillDirection, fraction: f32) -> Self {
         Self {
             direction,
@@ -2436,10 +2490,12 @@ impl FillNode {
         }
     }
 
+    /// Returns the axes the node fills.
     pub fn direction(&self) -> FillDirection {
         self.direction
     }
 
+    /// Returns the share of the available space the node fills, from 0.0 to 1.0.
     pub fn fraction(&self) -> f32 {
         self.fraction
     }
@@ -2586,6 +2642,7 @@ pub struct FillElement {
 }
 
 impl FillElement {
+    /// Creates an element that fills `fraction` of the available width.
     pub fn width(fraction: f32) -> Self {
         Self {
             direction: FillDirection::Horizontal,
@@ -2593,6 +2650,7 @@ impl FillElement {
         }
     }
 
+    /// Creates an element that fills `fraction` of the available height.
     pub fn height(fraction: f32) -> Self {
         Self {
             direction: FillDirection::Vertical,
@@ -2600,6 +2658,7 @@ impl FillElement {
         }
     }
 
+    /// Creates an element that fills `fraction` of the available width and height.
     pub fn size(fraction: f32) -> Self {
         Self {
             direction: FillDirection::Both,

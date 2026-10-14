@@ -14,6 +14,7 @@ pub const IMAGE_WGSL: &str = concat!(
     framework_wgsl!("sdf_rounded_rect_fn.wgsl"),
     framework_wgsl!("image.wgsl"),
 );
+/// Draws text glyphs from the glyph atlas texture.
 pub const GLYPH_ATLAS_WGSL: &str = framework_wgsl!("glyph_atlas.wgsl");
 /// Elevation shadows drawn straight into a pass: Skia's round rect shadow
 /// at each pixel.
@@ -27,6 +28,7 @@ pub const BLUR_WGSL: &str = concat!(
     framework_wgsl!("fullscreen_quad_vs.wgsl"),
     framework_wgsl!("blur_fs.wgsl"),
 );
+/// Shifts a layer by an offset in physical pixels, leaving the vacated area transparent.
 pub const OFFSET_WGSL: &str = concat!(
     framework_wgsl!("fullscreen_quad_vs.wgsl"),
     framework_wgsl!("offset_fs.wgsl"),
@@ -40,6 +42,7 @@ pub const BLIT_WGSL: &str = concat!(
     framework_wgsl!("composite_sample_fn.wgsl"),
     framework_wgsl!("blit_fs_main.wgsl"),
 );
+/// Composites a layer under a projective (perspective) transform.
 pub const PROJECTIVE_BLIT_WGSL: &str = concat!(
     framework_wgsl!("projective_blit_fs.wgsl"),
     framework_wgsl!("composite_sample_fn.wgsl"),
