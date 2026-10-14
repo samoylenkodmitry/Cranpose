@@ -26,7 +26,7 @@ use crate::{
     composable,
     modifier::{GraphicsLayer, Modifier},
     widgets::{
-        animated_visibility::{EnterTransition, ExitTransition, TransitionEffects},
+        animated_visibility::{ContainerFrame, EnterTransition, ExitTransition, TransitionEffects},
         box_widget::{Box, BoxSpec},
         layout::Layout,
         shared_transition::{ProvideSharedEntry, SharedEntry, in_shared_transition},
@@ -97,6 +97,8 @@ pub struct ContentSeek<T> {
 pub(crate) struct EntryMotion {
     progress: RefCell<Animatable<f32>>,
     size: Rc<Cell<Size>>,
+    /// The container that slides across its edge measure from.
+    container: Rc<Cell<ContainerFrame>>,
     effects: Cell<TransitionEffects>,
     animation: Cell<AnimationType>,
     /// Whether the content goes, rather than comes or rests.
@@ -112,7 +114,9 @@ impl EntryMotion {
     }
 
     fn layer(&self) -> GraphicsLayer {
-        self.effects.get().layer(self.progress(), self.size.get())
+        self.effects
+            .get()
+            .layer(self.progress(), self.size.get(), self.container.get())
     }
 
     /// Animates toward `target` unless it already runs there or rests there.
@@ -166,8 +170,8 @@ struct ContentState<T> {
     /// Where the container is, inside a shared transition layout.
     coordinates: Rc<Cell<WindowCoordinates>>,
     /// The container's size from its last measure, where a size animation
-    /// starts.
-    last_size: Cell<Size>,
+    /// starts, and its layout direction.
+    frame: Rc<Cell<ContainerFrame>>,
     node: Cell<Option<NodeId>>,
     /// Bumped when leaving content is removed, so the container recomposes
     /// without it.
@@ -186,7 +190,7 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
             content: RefCell::new(None),
             size_transform: Cell::new(None),
             size: RefCell::new(None),
-            last_size: Cell::new(Size::ZERO),
+            frame: Rc::default(),
             coordinates: Rc::default(),
             node: Cell::new(None),
             watcher: RefCell::new(None),
@@ -202,6 +206,7 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
             motion: Rc::new(EntryMotion {
                 progress: RefCell::new(Animatable::new(progress, self.runtime.clone())),
                 size: Rc::new(Cell::new(Size::ZERO)),
+                container: Rc::clone(&self.frame),
                 effects: Cell::new(effects),
                 animation: Cell::new(animation),
                 leaving: Cell::new(false),
@@ -296,6 +301,23 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
         if let Some(index) = entries.iter().position(|entry| same(&entry.value, target)) {
             let current = entries.remove(index);
             entries.push(current);
+        }
+    }
+
+    /// Notes the layout direction when a slide toward the start or the end
+    /// needs it.
+    fn note_direction(&self) {
+        let uses_direction = self
+            .entries
+            .borrow()
+            .iter()
+            .any(|entry| entry.motion.effects.get().uses_direction());
+        if uses_direction {
+            let frame = self.frame.get();
+            self.frame.set(ContainerFrame {
+                rtl: crate::layout_direction::layout_direction().is_rtl(),
+                ..frame
+            });
         }
     }
 
@@ -456,6 +478,7 @@ fn animated_content<T, F>(
     state
         .0
         .sync(&target_state, seek.as_ref(), transition_spec, same);
+    state.0.note_direction();
     watch(&state.0);
     // Subscribes this scope to removals of content that left.
     state.0.removed.get();
@@ -573,7 +596,7 @@ impl<T: Clone + PartialEq + 'static> MeasurePolicy for ContentMeasurePolicy<T> {
             Some(transform) => {
                 let mut animated = state.size.borrow_mut();
                 let animated = animated.get_or_insert_with(|| {
-                    Animatable::new(state.last_size.get(), state.runtime.clone())
+                    Animatable::new(state.frame.get().size, state.runtime.clone())
                 });
                 if animated.target() != current {
                     animated.animateTo(current, transform.animation);
@@ -591,7 +614,10 @@ impl<T: Clone + PartialEq + 'static> MeasurePolicy for ContentMeasurePolicy<T> {
             size.height
                 .clamp(constraints.min_height, constraints.max_height),
         );
-        state.last_size.set(size);
+        state.frame.set(ContainerFrame {
+            size,
+            ..state.frame.get()
+        });
         MeasureResult::new(size, placements)
     }
 
