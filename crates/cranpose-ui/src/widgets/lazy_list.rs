@@ -604,6 +604,7 @@ fn measure_lazy_list_internal(
     if let Some(item) = focused_item {
         place_focused_lazy_item(&mut result, item, &item_measure_inputs, config.spacing);
     }
+    pin_sticky_header(scope, &mut result, &item_measure_inputs);
     register_visible_lazy_list_child_measurements(
         scope,
         &result.visible_items,
@@ -889,6 +890,58 @@ fn place_focused_lazy_item(
             distance
         };
     result.visible_items.insert(position, item);
+}
+
+/// Holds the sticky header of the first visible item at the start of the
+/// viewport, composing it once it scrolled out, until the next header
+/// pushes it out. The header goes last, so it draws over the items that
+/// scroll under it and takes the touches there. A list whose items all fit
+/// keeps its headers where they are.
+fn pin_sticky_header(
+    scope: &mut SubcomposeMeasureScopeImpl<'_>,
+    result: &mut LazyListMeasureResult,
+    inputs: &LazyListItemMeasureInputs<'_>,
+) {
+    let headers = inputs.content.header_indices();
+    if headers.is_empty() || !(result.can_scroll_backward || result.can_scroll_forward) {
+        return;
+    }
+    let Some(first_visible) = result
+        .visible_items
+        .iter()
+        .find(|item| item.offset + item.main_axis_size > 0.0)
+        .map(|item| item.index)
+    else {
+        return;
+    };
+    let following = headers.partition_point(|&header| header <= first_visible);
+    let Some(&current) = following.checked_sub(1).and_then(|at| headers.get(at)) else {
+        return;
+    };
+    let next_offset = headers.get(following).and_then(|&next| {
+        result
+            .visible_items
+            .iter()
+            .find(|item| item.index == next)
+            .map(|item| item.offset)
+    });
+    let mut header = match result
+        .visible_items
+        .iter()
+        .position(|item| item.index == current)
+    {
+        Some(at) => result.visible_items.remove(at),
+        None => {
+            let mut header = measure_lazy_list_item(scope, current, inputs);
+            header.offset = 0.0;
+            header
+        }
+    };
+    header.offset = header.offset.max(0.0);
+    if let Some(next) = next_offset {
+        header.offset = header.offset.min(next - header.main_axis_size);
+    }
+    result.visible_items.push(header);
 }
 
 fn bind_layout_invalidation_callback(

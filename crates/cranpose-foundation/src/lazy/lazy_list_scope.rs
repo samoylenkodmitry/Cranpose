@@ -202,6 +202,22 @@ pub trait LazyListScope {
     where
         I: Into<LazyItems>,
         F: Fn(usize) + 'static;
+
+    /// Adds a header that stays at the start of the viewport while the items
+    /// after it, up to the next header, scroll under it. The next header
+    /// pushes it out. Compose's `stickyHeader`.
+    fn sticky_header<F>(&mut self, content: F)
+    where
+        F: Fn() + 'static,
+    {
+        self.sticky_header_keyed(None, None, content);
+    }
+
+    /// [`LazyListScope::sticky_header`] with a stable identity and/or a reuse
+    /// class, as [`LazyListScope::item_keyed`] takes.
+    fn sticky_header_keyed<F>(&mut self, key: Option<u64>, content_type: Option<u64>, content: F)
+    where
+        F: Fn() + 'static;
 }
 
 /// Internal representation of a lazy list item interval.
@@ -243,6 +259,8 @@ impl std::fmt::Debug for LazyListInterval {
 pub struct LazyListIntervalContent {
     intervals: Vec<LazyListInterval>,
     total_count: usize,
+    /// The indices of the sticky headers, ascending.
+    header_indices: Vec<usize>,
     range_index: RefCell<Option<RangeKeyIndex>>,
 }
 
@@ -260,6 +278,7 @@ impl LazyListIntervalContent {
         Self {
             intervals: Vec::new(),
             total_count: 0,
+            header_indices: Vec::new(),
             range_index: RefCell::new(None),
         }
     }
@@ -285,6 +304,11 @@ impl LazyListIntervalContent {
     /// Returns the intervals.
     pub fn intervals(&self) -> &[LazyListInterval] {
         &self.intervals
+    }
+
+    /// The indices of the sticky headers, ascending.
+    pub fn header_indices(&self) -> &[usize] {
+        &self.header_indices
     }
 
     /// Gets the key for an item at the given global index.
@@ -456,6 +480,14 @@ impl LazyListScope for LazyListIntervalContent {
             content: Rc::new(item_content),
         });
         self.total_count += count;
+    }
+
+    fn sticky_header_keyed<F>(&mut self, key: Option<u64>, content_type: Option<u64>, content: F)
+    where
+        F: Fn() + 'static,
+    {
+        self.header_indices.push(self.total_count);
+        self.item_keyed(key, content_type, content);
     }
 }
 

@@ -20,6 +20,14 @@ and [`lazy_list_state.rs`](../crates/cranpose-foundation/src/lazy/lazy_list_stat
 Subcomposition owns slot reuse and disposal in
 [`subcompose.rs`](../crates/cranpose-core/src/subcompose.rs).
 
+`sticky_header` adds an item that holds the start edge of the list while the
+items after it scroll under it, as Compose's `stickyHeader` does. After the
+viewport pass, the list finds the last header at or before the first visible
+item, composes it when it scrolled out, and moves it to the start edge; the
+next header pushes it out. The header is placed last, so it draws over the
+items under it and takes their touches. Like Compose's, it covers the before
+content padding. A list whose items all fit leaves its headers in place.
+
 Layout submits prefetch requests, and the app shell services them during
 eligible idle time through the ordinary list measurement path. The app shell
 schedules frames. See [`lazy_prefetch.rs`](../crates/cranpose-ui/src/lazy_prefetch.rs)
