@@ -198,8 +198,36 @@ fn robot_app_response(app: &mut AppShell<WgpuRenderer>, command: RobotCommand) -
             app.set_semantics_enabled(enabled);
             RobotResponse::Ok
         }
+        RobotCommand::ChooseMenuItem { tray, labels } => choose_menu_item(tray, &labels)
+            .map_or_else(RobotResponse::Error, |()| RobotResponse::Ok),
         _ => RobotResponse::Error("not an app query".into()),
     }
+}
+
+#[cfg(all(
+    feature = "robot",
+    feature = "desktop-menus",
+    any(
+        target_os = "macos",
+        target_os = "windows",
+        all(target_os = "linux", not(target_arch = "wasm32"))
+    )
+))]
+use crate::desktop_menus::choose as choose_menu_item;
+
+#[cfg(all(
+    feature = "robot",
+    not(all(
+        feature = "desktop-menus",
+        any(
+            target_os = "macos",
+            target_os = "windows",
+            all(target_os = "linux", not(target_arch = "wasm32"))
+        )
+    ))
+))]
+fn choose_menu_item(_tray: bool, _labels: &[String]) -> Result<(), String> {
+    Err("menus need the desktop-menus feature on macOS, Windows or Linux".to_owned())
 }
 
 #[cfg(feature = "robot")]
@@ -1287,6 +1315,14 @@ impl App {
         self.recover_lost_device(event_loop);
         // The menu bar follows the application menu, which waits for the
         // first presented frame.
+        #[cfg(all(
+            feature = "desktop-menus",
+            any(
+                target_os = "macos",
+                target_os = "windows",
+                all(target_os = "linux", not(target_arch = "wasm32"))
+            )
+        ))]
         let menu_bar_due = self.application_menu_installed();
         if let Some(app) = self.app.as_mut() {
             self.integration.about_to_wait(app, &self.event_proxy);
@@ -1303,12 +1339,12 @@ impl App {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(all(feature = "desktop-menus", target_os = "macos"))]
     fn application_menu_installed(&self) -> bool {
         self.application_menu == ApplicationMenu::Installed
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(feature = "desktop-menus", not(target_os = "macos")))]
     fn application_menu_installed(&self) -> bool {
         true
     }
@@ -6599,7 +6635,8 @@ impl ApplicationHandler for App {
                     | RobotCommand::GetLiveUiTaskLabels
                     | RobotCommand::MeasureText { .. }
                     | RobotCommand::HasFocusedTextField
-                    | RobotCommand::SetSemanticsEnabled(_)) => {
+                    | RobotCommand::SetSemanticsEnabled(_)
+                    | RobotCommand::ChooseMenuItem { .. }) => {
                         let _ = controller.tx.send(robot_app_response(app, command));
                     }
                     RobotCommand::LoseGpuDevice => {
@@ -6759,21 +6796,6 @@ impl ApplicationHandler for App {
                         self.exiting = true;
                         event_loop.exit();
                         return;
-                    }
-                    #[cfg(all(
-                        feature = "desktop-menus",
-                        any(
-                            target_os = "macos",
-                            target_os = "windows",
-                            all(target_os = "linux", not(target_arch = "wasm32"))
-                        )
-                    ))]
-                    RobotCommand::ChooseMenuItem { tray, labels } => {
-                        let response = match self.native_menus.choose(tray, &labels) {
-                            Ok(()) => RobotResponse::Ok,
-                            Err(error) => RobotResponse::Error(error),
-                        };
-                        let _ = controller.tx.send(response);
                     }
                 }
             }

@@ -492,20 +492,6 @@ impl NativeMenus {
         }
     }
 
-    /// Chooses the item that `labels` name, as a click on it does: through
-    /// the native menu bar on macOS, else through the event a click queues.
-    #[cfg(feature = "robot")]
-    pub(crate) fn choose(&self, tray: bool, labels: &[String]) -> Result<(), String> {
-        #[cfg(target_os = "macos")]
-        if !tray && self.menu_bar.is_some() {
-            return choose_in_menu_bar(labels);
-        }
-        let id = with_requests(|requests| requests.id_of(tray, labels))
-            .ok_or_else(|| format!("no menu item {labels:?}"))?;
-        queue(NativeEvent::Menu(MenuId::new(id)));
-        Ok(())
-    }
-
     fn build(&mut self) {
         let (tray, menu_bar) = with_requests(|requests| {
             (
@@ -680,84 +666,118 @@ fn accelerator(shortcut: KeyShortcut) -> Option<Accelerator> {
     Some(Accelerator::new(native, key_code(shortcut.key)?))
 }
 
+/// The native key of each key a menu shortcut can take.
+const KEY_CODES: [(KeyCode, Code); 73] = [
+    (KeyCode::A, Code::KeyA),
+    (KeyCode::B, Code::KeyB),
+    (KeyCode::C, Code::KeyC),
+    (KeyCode::D, Code::KeyD),
+    (KeyCode::E, Code::KeyE),
+    (KeyCode::F, Code::KeyF),
+    (KeyCode::G, Code::KeyG),
+    (KeyCode::H, Code::KeyH),
+    (KeyCode::I, Code::KeyI),
+    (KeyCode::J, Code::KeyJ),
+    (KeyCode::K, Code::KeyK),
+    (KeyCode::L, Code::KeyL),
+    (KeyCode::M, Code::KeyM),
+    (KeyCode::N, Code::KeyN),
+    (KeyCode::O, Code::KeyO),
+    (KeyCode::P, Code::KeyP),
+    (KeyCode::Q, Code::KeyQ),
+    (KeyCode::R, Code::KeyR),
+    (KeyCode::S, Code::KeyS),
+    (KeyCode::T, Code::KeyT),
+    (KeyCode::U, Code::KeyU),
+    (KeyCode::V, Code::KeyV),
+    (KeyCode::W, Code::KeyW),
+    (KeyCode::X, Code::KeyX),
+    (KeyCode::Y, Code::KeyY),
+    (KeyCode::Z, Code::KeyZ),
+    (KeyCode::Digit0, Code::Digit0),
+    (KeyCode::Digit1, Code::Digit1),
+    (KeyCode::Digit2, Code::Digit2),
+    (KeyCode::Digit3, Code::Digit3),
+    (KeyCode::Digit4, Code::Digit4),
+    (KeyCode::Digit5, Code::Digit5),
+    (KeyCode::Digit6, Code::Digit6),
+    (KeyCode::Digit7, Code::Digit7),
+    (KeyCode::Digit8, Code::Digit8),
+    (KeyCode::Digit9, Code::Digit9),
+    (KeyCode::F1, Code::F1),
+    (KeyCode::F2, Code::F2),
+    (KeyCode::F3, Code::F3),
+    (KeyCode::F4, Code::F4),
+    (KeyCode::F5, Code::F5),
+    (KeyCode::F6, Code::F6),
+    (KeyCode::F7, Code::F7),
+    (KeyCode::F8, Code::F8),
+    (KeyCode::F9, Code::F9),
+    (KeyCode::F10, Code::F10),
+    (KeyCode::F11, Code::F11),
+    (KeyCode::F12, Code::F12),
+    (KeyCode::ArrowUp, Code::ArrowUp),
+    (KeyCode::ArrowDown, Code::ArrowDown),
+    (KeyCode::ArrowLeft, Code::ArrowLeft),
+    (KeyCode::ArrowRight, Code::ArrowRight),
+    (KeyCode::Home, Code::Home),
+    (KeyCode::End, Code::End),
+    (KeyCode::PageUp, Code::PageUp),
+    (KeyCode::PageDown, Code::PageDown),
+    (KeyCode::Backspace, Code::Backspace),
+    (KeyCode::Delete, Code::Delete),
+    (KeyCode::Enter, Code::Enter),
+    (KeyCode::Tab, Code::Tab),
+    (KeyCode::Space, Code::Space),
+    (KeyCode::Escape, Code::Escape),
+    (KeyCode::Minus, Code::Minus),
+    (KeyCode::Equal, Code::Equal),
+    (KeyCode::BracketLeft, Code::BracketLeft),
+    (KeyCode::BracketRight, Code::BracketRight),
+    (KeyCode::Backslash, Code::Backslash),
+    (KeyCode::Semicolon, Code::Semicolon),
+    (KeyCode::Quote, Code::Quote),
+    (KeyCode::Comma, Code::Comma),
+    (KeyCode::Period, Code::Period),
+    (KeyCode::Slash, Code::Slash),
+    (KeyCode::Backquote, Code::Backquote),
+];
+
 fn key_code(key: KeyCode) -> Option<Code> {
-    use KeyCode as K;
-    Some(match key {
-        K::A => Code::KeyA,
-        K::B => Code::KeyB,
-        K::C => Code::KeyC,
-        K::D => Code::KeyD,
-        K::E => Code::KeyE,
-        K::F => Code::KeyF,
-        K::G => Code::KeyG,
-        K::H => Code::KeyH,
-        K::I => Code::KeyI,
-        K::J => Code::KeyJ,
-        K::K => Code::KeyK,
-        K::L => Code::KeyL,
-        K::M => Code::KeyM,
-        K::N => Code::KeyN,
-        K::O => Code::KeyO,
-        K::P => Code::KeyP,
-        K::Q => Code::KeyQ,
-        K::R => Code::KeyR,
-        K::S => Code::KeyS,
-        K::T => Code::KeyT,
-        K::U => Code::KeyU,
-        K::V => Code::KeyV,
-        K::W => Code::KeyW,
-        K::X => Code::KeyX,
-        K::Y => Code::KeyY,
-        K::Z => Code::KeyZ,
-        K::Digit0 => Code::Digit0,
-        K::Digit1 => Code::Digit1,
-        K::Digit2 => Code::Digit2,
-        K::Digit3 => Code::Digit3,
-        K::Digit4 => Code::Digit4,
-        K::Digit5 => Code::Digit5,
-        K::Digit6 => Code::Digit6,
-        K::Digit7 => Code::Digit7,
-        K::Digit8 => Code::Digit8,
-        K::Digit9 => Code::Digit9,
-        K::F1 => Code::F1,
-        K::F2 => Code::F2,
-        K::F3 => Code::F3,
-        K::F4 => Code::F4,
-        K::F5 => Code::F5,
-        K::F6 => Code::F6,
-        K::F7 => Code::F7,
-        K::F8 => Code::F8,
-        K::F9 => Code::F9,
-        K::F10 => Code::F10,
-        K::F11 => Code::F11,
-        K::F12 => Code::F12,
-        K::ArrowUp => Code::ArrowUp,
-        K::ArrowDown => Code::ArrowDown,
-        K::ArrowLeft => Code::ArrowLeft,
-        K::ArrowRight => Code::ArrowRight,
-        K::Home => Code::Home,
-        K::End => Code::End,
-        K::PageUp => Code::PageUp,
-        K::PageDown => Code::PageDown,
-        K::Backspace => Code::Backspace,
-        K::Delete => Code::Delete,
-        K::Enter => Code::Enter,
-        K::Tab => Code::Tab,
-        K::Space => Code::Space,
-        K::Escape => Code::Escape,
-        K::Minus => Code::Minus,
-        K::Equal => Code::Equal,
-        K::BracketLeft => Code::BracketLeft,
-        K::BracketRight => Code::BracketRight,
-        K::Backslash => Code::Backslash,
-        K::Semicolon => Code::Semicolon,
-        K::Quote => Code::Quote,
-        K::Comma => Code::Comma,
-        K::Period => Code::Period,
-        K::Slash => Code::Slash,
-        K::Backquote => Code::Backquote,
-        _ => return None,
-    })
+    KEY_CODES
+        .iter()
+        .find(|(known, _)| *known == key)
+        .map(|(_, code)| *code)
+}
+
+/// Chooses the item that `labels` name, as a click on it does: through the
+/// native menu bar on macOS once it shows the menu, else through the event a
+/// click queues.
+#[cfg(feature = "robot")]
+pub(crate) fn choose(tray: bool, labels: &[String]) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    if !tray && menu_bar_shows(labels) {
+        return choose_in_menu_bar(labels);
+    }
+    let id = with_requests(|requests| requests.id_of(tray, labels))
+        .ok_or_else(|| format!("no menu item {labels:?}"))?;
+    queue(NativeEvent::Menu(MenuId::new(id)));
+    Ok(())
+}
+
+/// Whether the macOS menu bar has the menu `labels` start with.
+#[cfg(all(feature = "robot", target_os = "macos"))]
+fn menu_bar_shows(labels: &[String]) -> bool {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+    use objc2_foundation::NSString;
+
+    let (Some(mtm), Some(title)) = (MainThreadMarker::new(), labels.first()) else {
+        return false;
+    };
+    NSApplication::sharedApplication(mtm)
+        .mainMenu()
+        .is_some_and(|menu| menu.itemWithTitle(&NSString::from_str(title)).is_some())
 }
 
 /// Performs the action of the macOS menu bar item that `labels` name, as
