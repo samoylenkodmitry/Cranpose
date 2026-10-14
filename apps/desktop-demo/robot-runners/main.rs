@@ -58,6 +58,7 @@ runners! {
     robot_counter_button_release_external_visual,
     robot_counter_conditional_text_top,
     robot_demo,
+    robot_desktop_integration,
     robot_developer_inspector,
     robot_documentation_home,
     robot_double_click,

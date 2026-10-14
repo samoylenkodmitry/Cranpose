@@ -523,6 +523,16 @@ pub mod desktop;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod desktop_accessibility;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
+mod desktop_integration;
+#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
+pub use desktop_integration::{
+    DesktopIntegration, DesktopIntegrationContext, DesktopWaker, DesktopWindow, DesktopWindowId,
+};
+/// The raw window handle traits a [`DesktopWindow`] implements, at the
+/// version the shell uses.
+#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
+pub use raw_window_handle;
+#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod desktop_accessibility_options;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod desktop_bundled_assets;

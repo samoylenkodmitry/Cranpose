@@ -1966,6 +1966,21 @@ fn WindowSizeLabel() {
 Use `.window_drag_area(on_start, on_end)` for a custom title bar and
 `.window_resize_area(direction)` for an edge. `with_visible`, `with_resizable`,
 `with_always_on_top` and `with_transparent` configure the host window.
+
+### Attach a tray icon or a native menu
+
+Cranpose has no tray or menu bar API. `AppLauncher::with_desktop_integration`
+runs a `DesktopIntegration` on the desktop shell's main thread, where crates
+such as `tray-icon` and `muda` need to run:
+
+- `window_opened` gets each window's raw handles (`HasWindowHandle`,
+  `HasDisplayHandle` from `cranpose::raw_window_handle`), the primary window first.
+- `about_to_wait` runs before the event loop waits. Take the tray's or menu's
+  events there.
+- `context.update(|| ...)` writes state as an event handler does, and the app
+  draws the frame the change asks for. `context.waker()` wakes the event loop
+  from another thread, for a source that does not wake it.
+
 ## Platform services
 
 ### Open a link

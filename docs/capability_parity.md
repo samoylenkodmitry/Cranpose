@@ -15,6 +15,7 @@ platform backend reports an observed value.
 | Haptics | iOS, Android, and web provide haptics. Desktop uses the service default. |
 | Share | iOS and web provide native share sheets. Android uses `ACTION_SEND` with `CranposeShareProvider`; desktop applications can use file-save services. |
 | Notifications | iOS, Android, desktop, and web provide notification services. Desktop dispatches through `notify-send`, `osascript`, or PowerShell. |
+| Tray icon and menu bar | No Cranpose API. Desktop apps attach crates such as `tray-icon` and `muda` through `AppLauncher::with_desktop_integration`, which runs on the shell's main thread with each window's raw handles. |
 | Network status | Android observes connectivity and metering through `ConnectivityManager`. Web observes connectivity through `navigator.onLine` and online/offline events; metering stays `Unknown` because browsers do not report it. iOS and desktop have no monitor and report both as `Unknown`. A stopped monitor reports `Unknown` until it reconnects. |
 | Device information | iOS, Android, and desktop report process memory and CPU readings where available. Web reads `navigator.deviceMemory` when the browser exposes the value. Optional readings use `Option` to represent platform availability. |
 | Clipboard | iOS, Android, desktop, and web provide clipboard services. Web paste uses `request_paste` because browser reads complete asynchronously. |
