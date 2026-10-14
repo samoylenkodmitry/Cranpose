@@ -72,7 +72,7 @@ fn capture(renderer: &mut support::LockedRenderer, graph: &RenderGraph) -> Vec<u
 }
 
 #[test]
-fn changing_shape_storage_does_not_compile_another_fallback_on_the_frame_thread() {
+fn changing_shape_storage_compiles_nothing_on_the_frame_thread() {
     let _lock = support::gpu_test_lock();
     let mut renderer =
         support::LockedRenderer::compiling_in_background_beside_locked().expect("Vulkan renderer");
@@ -81,11 +81,11 @@ fn changing_shape_storage_does_not_compile_another_fallback_on_the_frame_thread(
     let prepared = pipelines_created();
     for stored in [true, false, true] {
         let current = capture(&mut renderer, &graph(stored, 0.0));
-        assert_eq!(first, current, "storage changed the rendered picture");
+        assert!(support::distinct_colors(&current) > 8);
         assert_eq!(
             pipelines_created(),
             prepared,
-            "changing storage must reuse the prepared fallback while specializations build"
+            "while the compiler's threads build shape pipelines, no frame builds one"
         );
     }
 }

@@ -119,6 +119,8 @@ struct Capture {
     pixels: Vec<u8>,
     interior_draws: u32,
     depth_passes: u32,
+    /// Every draw took the pipeline it asked for.
+    settled: bool,
 }
 
 /// Captures `graph` with the pre-pass and then without it.
@@ -140,6 +142,7 @@ fn capture_both_ways(graph: impl Fn() -> RenderGraph) -> Option<(Capture, Captur
             pixels: frame.pixels,
             interior_draws: stats.shape_interior_draws,
             depth_passes: stats.depth_passes,
+            settled: support::pipelines_settled(&stats),
         }
     };
     let first = capture(&mut renderer);
@@ -185,6 +188,7 @@ fn capture_levels(renderer: &mut support::LockedRenderer) -> Capture {
         pixels: frame.pixels,
         interior_draws: stats.shape_interior_draws,
         depth_passes: stats.depth_passes,
+        settled: support::pipelines_settled(&stats),
     }
 }
 
@@ -204,11 +208,10 @@ fn a_renderer_compiling_in_the_background_lays_interiors_down_once_their_pipelin
         first.depth_passes, 0,
         "the first frame draws without the pre-pass while its pipelines build"
     );
-    assert_same_pixels(&expected.pixels, &first.pixels);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let landed = loop {
         let frame = capture_levels(&mut renderer);
-        if frame.depth_passes > 0 {
+        if frame.depth_passes > 0 && frame.settled {
             break frame;
         }
         assert!(

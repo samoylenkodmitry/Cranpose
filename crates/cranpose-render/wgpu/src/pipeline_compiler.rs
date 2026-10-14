@@ -129,7 +129,8 @@ impl<T: ?Sized> CompilerSync for T {}
 /// Why a pipeline is queued, which decides the thread that builds it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CompileLane {
-    /// A frame is drawing with a stand-in until this pipeline is ready.
+    /// A frame drew without this pipeline, with a stand-in, a placeholder or
+    /// fallback triangles, or left its draw out, until it is ready.
     Demanded,
     /// No frame has asked for this pipeline yet; it is built ahead of its
     /// first use.
@@ -299,8 +300,9 @@ fn spawn_thread(
 /// Where a renderer compiles its pipelines.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PipelineCompilation {
-    /// On background threads; a draw shows its placeholder, or a first
-    /// screen's shared stand-in, until its own pipeline is ready.
+    /// On background threads; until its own pipeline is ready, a draw shows
+    /// its placeholder, a first screen's shared stand-in or, for a shape,
+    /// fallback triangles, and is left out when it has none of them.
     Background,
     /// Where each is first needed, so no draw uses a stand-in.
     Inline,

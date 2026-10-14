@@ -486,7 +486,7 @@ impl PresentState {
             .store(self.gpu_renderer.needs_frame_warmup(), Ordering::Relaxed);
         self.status
             .drew_placeholder
-            .store(self.gpu_renderer.drew_placeholder, Ordering::Relaxed);
+            .store(self.gpu_renderer.drew_placeholder.get(), Ordering::Relaxed);
         if returns.outcome == PresentOutcome::Presented {
             self.status.presented_frames.fetch_add(1, Ordering::Relaxed);
         }

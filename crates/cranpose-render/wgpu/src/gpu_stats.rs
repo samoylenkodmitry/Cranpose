@@ -128,7 +128,8 @@ pub struct FrameStatsSnapshot {
     /// before it shades a pixel, so this bounds a frame as fill does.
     pub shape_vertices: u64,
     pub shape_passes: u32,
-    /// Shape draws using a general pipeline while their specialization compiles.
+    /// Shape draws that took a stand-in while their pipeline compiled: a
+    /// general pipeline, or triangles the CPU laid out.
     pub shape_pipeline_fallback_draws: u32,
     /// Shape draws using a completed specialized pipeline.
     pub shape_specialized_draws: u32,

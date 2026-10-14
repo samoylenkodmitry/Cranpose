@@ -371,13 +371,13 @@ fn fill_run(solid: usize, gradient: usize) -> RunDraw {
     .expect("recorded run")
 }
 
-/// The vertices each pipeline key draws for `window` of `run`, appended
-/// into a fresh arena chunk.
+/// The records of `window` of `run` a fresh arena chunk takes, and the
+/// pipeline keys they draw with.
 fn arena_wants(
     store: &mut RunStore,
     run: &RunDraw,
     window: std::ops::Range<u32>,
-) -> (u32, Vec<(crate::render::ShapePipelineKey, u64)>) {
+) -> (u32, Vec<crate::render::ShapePipelineKey>) {
     let chunk = store.open_arena();
     let mut wanted = crate::shape_pipelines::PipelineDemand::default();
     let taken = store.append_arena(
@@ -407,12 +407,12 @@ fn an_arena_append_wants_pipelines_for_the_records_its_window_takes() {
     assert_eq!(keys.len(), 2, "solid and gradient fills take two segments");
     let (taken, wanted) = arena_wants(&mut store, &run, 2..5);
     assert_eq!(taken, 3);
-    assert_eq!(wanted, [(keys[0], 4), (keys[1], 8)]);
+    assert_eq!(wanted, keys);
     let (taken, wanted) = arena_wants(&mut store, &run, 0..2);
     assert_eq!(taken, 2);
     assert_eq!(
         wanted,
-        [(keys[0], 8)],
+        [keys[0]],
         "a window that ends inside the first segment wants nothing of the second"
     );
 }
@@ -433,10 +433,10 @@ fn an_arena_chunk_that_fills_up_wants_only_the_records_it_took() {
     let key = arena_key(run.segment_records().next().expect("one segment"));
     let (first, wanted) = arena_wants(&mut store, &run, 0..u32::MAX);
     assert_eq!(first, RECORD_CHUNK as u32);
-    assert_eq!(wanted, [(key, u64::from(first) * 4)]);
+    assert_eq!(wanted, [key]);
     let (rest, wanted) = arena_wants(&mut store, &run, first..u32::MAX);
     assert_eq!(rest, 40);
-    assert_eq!(wanted, [(key, 160)]);
+    assert_eq!(wanted, [key]);
 }
 
 /// The modes the test device offers: the copied one always, the mapped

@@ -4,9 +4,11 @@ use cranpose_ui_graphics::shader_warm_ups_after;
 use crate::support;
 
 /// A renderer builds no pipeline on the creating thread, and its compiler
-/// builds exactly the warm-ups requested so far, each once, and, with no
-/// record of a first screen, the two pipelines every screen draws with:
-/// flat solid rects and text on whole pixels.
+/// builds exactly the warm-ups requested so far, each once, the two
+/// pipelines shapes take while their own compile, and, with no record of a
+/// first screen, the eight most screens draw with: text on whole pixels and
+/// turned, the layer blit sampled both ways and the turned one, rounded
+/// images, shadows and flat solid rects.
 #[test]
 fn a_new_renderer_builds_only_the_requested_warm_ups() {
     let (_lock, (created, created_off_frame, requested), _renderer) =
@@ -27,7 +29,7 @@ fn a_new_renderer_builds_only_the_requested_warm_ups() {
     support::wait_for_background_compiler_idle();
     assert_eq!(
         pipelines_created_off_frame() - created_off_frame,
-        requested as u64 + 2,
-        "the compiler must build the requested warm-ups and every screen's two pipelines"
+        requested as u64 + 10,
+        "the compiler must build the requested warm-ups and every screen's ten pipelines"
     );
 }

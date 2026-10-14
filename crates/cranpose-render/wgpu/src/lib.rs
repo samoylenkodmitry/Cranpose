@@ -37,6 +37,7 @@ mod glyph_run_arena;
 pub(crate) mod gpu_stats;
 mod initial_present;
 mod lazy_resource;
+mod mesh_fallback;
 mod offscreen;
 mod opaque_prefix;
 mod output_conversion;
