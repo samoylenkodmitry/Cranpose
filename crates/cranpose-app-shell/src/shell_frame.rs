@@ -661,6 +661,19 @@ where
             .composition
             .applier_mut()
             .take_structural_change_parents_into(&mut self.pending_dirty_nodes);
+        // A child's z index orders it among its siblings, in its parent's
+        // layer: the parent changed as a child list does.
+        let reordered = self.pending_dirty_nodes.len();
+        cranpose_ui::append_z_order_changes(&mut self.pending_dirty_nodes);
+        if self.pending_dirty_nodes.len() == reordered {
+            return;
+        }
+        let mut applier = self.app.composition.applier_mut();
+        for node in &mut self.pending_dirty_nodes[reordered..] {
+            if let Some(parent) = applier.get_mut(*node).ok().and_then(|child| child.parent()) {
+                *node = parent;
+            }
+        }
     }
 
     #[cfg(test)]

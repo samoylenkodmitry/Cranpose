@@ -21,6 +21,8 @@ struct RenderState {
     modifier_slice_repasses: RefCell<DirtyNodeSet>,
     geometry_scene_nodes: RefCell<DirtyNodeSet>,
     moved_scene_nodes: RefCell<DirtyNodeSet>,
+    /// Nodes whose z index changed: their parents' layers hold the order.
+    z_order_changes: RefCell<DirtyNodeSet>,
     render_invalidated: Cell<bool>,
     pointer_invalidated: Cell<bool>,
     focus_invalidated: Cell<bool>,
@@ -194,6 +196,7 @@ impl RenderState {
             modifier_slice_repasses: RefCell::new(DirtyNodeSet::new()),
             geometry_scene_nodes: RefCell::new(DirtyNodeSet::new()),
             moved_scene_nodes: RefCell::new(DirtyNodeSet::new()),
+            z_order_changes: RefCell::new(DirtyNodeSet::new()),
             render_invalidated: Cell::new(false),
             pointer_invalidated: Cell::new(false),
             focus_invalidated: Cell::new(false),
@@ -910,6 +913,24 @@ pub fn take_draw_repass_nodes_into(output: &mut Vec<NodeId>) {
     });
 }
 
+/// Records that `node_id`'s z index changed. The frame rebuilds the layer of
+/// its parent, which holds the order the parent's children draw and take
+/// taps in.
+pub fn schedule_z_order_change(node_id: NodeId) {
+    with_render_state(|state| {
+        state.z_order_changes.borrow_mut().schedule_repass(node_id);
+        state.render_invalidated.set(true);
+    });
+}
+
+/// Appends the nodes whose z index changed since the last call to `output`,
+/// after what it already holds.
+pub fn append_z_order_changes(output: &mut Vec<NodeId>) {
+    with_render_state(|state| {
+        output.extend(state.z_order_changes.borrow_mut().dirty_nodes.drain());
+    });
+}
+
 /// Returns true if graphics-layer property updates are pending.
 #[doc(hidden)]
 pub fn has_pending_layer_property_repasses() -> bool {
@@ -1262,6 +1283,7 @@ pub fn reset_render_state_for_tests() {
     take_layer_property_repass_nodes_into(&mut layer_nodes);
     let _ = take_layout_repass_nodes();
     let _ = take_modifier_slice_repass_nodes();
+    append_z_order_changes(&mut layer_nodes);
     let _ = take_render_invalidation();
     let _ = take_pointer_invalidation();
     let _ = take_focus_invalidation();

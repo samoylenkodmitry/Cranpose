@@ -1724,10 +1724,11 @@ fn read_node_data<R>(
 ) -> Option<R> {
     let node: &dyn Any = applier.get_ref(node_id).ok()?;
     if let Some(node) = node.downcast_ref::<LayoutNode>() {
+        let z_order = z_ordered_children(applier, &node.children);
         return Some(read(SnapshotNodeData {
             layout_state: node.layout_state(),
             modifier_slices: node.modifier_slices_snapshot(),
-            children: &node.children,
+            children: z_order.as_deref().unwrap_or(&node.children),
             window_root: node.is_window_root(),
         }));
     }
@@ -1735,13 +1736,53 @@ fn read_node_data<R>(
     let layout_state = node.layout_state();
     let modifier_slices = node.modifier_slices_snapshot();
     Some(node.with_active_children(|children| {
+        let z_order = z_ordered_children(applier, children);
         read(SnapshotNodeData {
             layout_state,
             modifier_slices,
-            children,
+            children: z_order.as_deref().unwrap_or(children),
             window_root: false,
         })
     }))
+}
+
+/// `children` in the order they draw and take taps, when a `z_index`
+/// modifier moves one of them: by z index, and in composition order among
+/// equal ones, as Compose's `zSortedChildren`. `None` while the composition
+/// order already is that order, which it always is while no `z_index`
+/// modifier exists.
+fn z_ordered_children(applier: &MemoryApplier, children: &[NodeId]) -> Option<Vec<NodeId>> {
+    if children.len() < 2 || !cranpose_ui::z_index_in_use() {
+        return None;
+    }
+    let mut previous = f32::NEG_INFINITY;
+    let in_order = children.iter().all(|&child| {
+        let z_index = node_z_index(applier, child);
+        let ordered = z_index >= previous;
+        previous = z_index;
+        ordered
+    });
+    if in_order {
+        return None;
+    }
+    let mut ordered: Vec<(f32, NodeId)> = children
+        .iter()
+        .map(|&child| (node_z_index(applier, child), child))
+        .collect();
+    ordered.sort_by(|a, b| a.0.total_cmp(&b.0));
+    Some(ordered.into_iter().map(|(_, child)| child).collect())
+}
+
+fn node_z_index(applier: &MemoryApplier, node_id: NodeId) -> f32 {
+    let Ok(node) = applier.get_ref(node_id) else {
+        return 0.0;
+    };
+    let node: &dyn Any = node;
+    if let Some(node) = node.downcast_ref::<LayoutNode>() {
+        return node.modifier_slices_snapshot().z_index();
+    }
+    node.downcast_ref::<SubcomposeLayoutNode>()
+        .map_or(0.0, |node| node.modifier_slices_snapshot().z_index())
 }
 
 fn hit_test_from_slices(slices: &Rc<ModifierNodeSlices>) -> Option<HitTestNode> {
@@ -2282,6 +2323,10 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
     let mut children = Vec::with_capacity(node.children.len());
     for child in &node.children {
         children.push(layout_box_to_snapshot(child, Some(node)));
+    }
+    if cranpose_ui::z_index_in_use() {
+        // Stable: equal z indices keep the composition order.
+        children.sort_by(|a, b| a.slices.z_index().total_cmp(&b.slices.z_index()));
     }
     let base_graphics_layer = node.node_data.modifier_slices.graphics_layer();
     let has_graphics_layer = base_graphics_layer.is_some();

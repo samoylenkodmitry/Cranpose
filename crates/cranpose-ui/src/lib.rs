@@ -199,7 +199,7 @@ pub use modifier::{
     WindowRootRegistry, WindowRootRoutingScratch, collect_modifier_slices,
     collect_semantics_from_modifier, collect_slices_from_modifier, is_window_root,
     nearest_window_root, nearest_window_roots, nearest_window_roots_into, window_roots,
-    window_roots_revision,
+    window_roots_revision, z_index_in_use,
 };
 #[cfg(feature = "test-helpers")]
 pub use modifier::{last_fling_velocity, reset_last_fling_velocity};
@@ -239,19 +239,19 @@ pub use render_state::{
 };
 #[doc(hidden)]
 pub use render_state::{
-    GeometrySceneNodes, clear_transient_scroll_motion_contexts, debug_last_fling_velocity,
-    debug_reset_last_fling_velocity, has_current_app_context, has_pending_draw_repasses,
-    has_pending_layer_property_repasses, has_pending_layout_repasses, has_pending_measure_repasses,
-    peek_focus_invalidation, peek_layout_invalidation, peek_pointer_invalidation,
-    peek_render_invalidation, pending_layout_repass_nodes_snapshot,
+    GeometrySceneNodes, append_z_order_changes, clear_transient_scroll_motion_contexts,
+    debug_last_fling_velocity, debug_reset_last_fling_velocity, has_current_app_context,
+    has_pending_draw_repasses, has_pending_layer_property_repasses, has_pending_layout_repasses,
+    has_pending_measure_repasses, peek_focus_invalidation, peek_layout_invalidation,
+    peek_pointer_invalidation, peek_render_invalidation, pending_layout_repass_nodes_snapshot,
     pending_measure_repass_nodes_snapshot, prune_draw_observations_to_nodes,
     request_current_draw_redraw, request_focus_invalidation, request_layout_invalidation,
     request_pointer_invalidation, request_render_invalidation, schedule_draw_repass,
-    schedule_layout_repass, schedule_measure_repass, take_draw_repass_nodes,
-    take_draw_repass_nodes_into, take_focus_invalidation, take_geometry_scene_nodes,
-    take_geometry_scene_nodes_into, take_layer_property_repass_nodes_into,
-    take_layout_invalidation, take_layout_repass_nodes, take_measure_repass_nodes,
-    take_pointer_invalidation, take_render_invalidation,
+    schedule_layout_repass, schedule_measure_repass, schedule_z_order_change,
+    take_draw_repass_nodes, take_draw_repass_nodes_into, take_focus_invalidation,
+    take_geometry_scene_nodes, take_geometry_scene_nodes_into,
+    take_layer_property_repass_nodes_into, take_layout_invalidation, take_layout_repass_nodes,
+    take_measure_repass_nodes, take_pointer_invalidation, take_render_invalidation,
 };
 pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
 pub use safe_area::{WindowInsets, local_ime_insets, local_safe_area_insets, window_insets};

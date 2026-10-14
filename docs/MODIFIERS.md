@@ -65,9 +65,9 @@ The UI crate defines built-in element types and the public `Modifier` methods.
 Common groups include:
 
 - Layout: padding, size, fill, weight, offset and intrinsic size.
-- Draw: background, border, clip masks, shadow and graphics layers.
+- Draw: background, border, clip masks, shadow, graphics layers and z index.
 - Input: click, drag and drop, scroll, pointer icons and key input.
-- Focus and accessibility: focus targets, focus rings and semantics.
+- Focus, accessibility and tests: focus targets, focus rings, semantics and test tags.
 - Window roots: modifiers for native window surfaces.
 
 The factories are grouped under
