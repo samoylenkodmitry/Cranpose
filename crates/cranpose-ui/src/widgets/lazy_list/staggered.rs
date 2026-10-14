@@ -273,7 +273,9 @@ pub(super) fn measure_staggered_viewport(
     let state = context.state;
     let available = frame.item_cross_axis_size;
     let lanes = layout.cells.columns(available, layout.spacing);
-    let sizes = CellSizes::new(available, lanes, layout.spacing, scope.density());
+    let sizes = layout
+        .cells
+        .sizes(available, lanes, layout.spacing, scope.density());
     context
         .measured_item_cache
         .borrow_mut()
