@@ -17,7 +17,7 @@ use cranpose_core::{
     MutableState, NodeId, RuntimeHandle, internal::FrameCallbackRegistration, remember,
     with_current_composer, with_key,
 };
-use cranpose_ui_graphics::Size;
+use cranpose_ui_graphics::{Size, WindowCoordinates};
 use cranpose_ui_layout::{
     Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
 };
@@ -29,6 +29,7 @@ use crate::{
         animated_visibility::{EnterTransition, ExitTransition, TransitionEffects},
         box_widget::{Box, BoxSpec},
         layout::Layout,
+        shared_transition::{ProvideSharedEntry, SharedEntry, in_shared_transition},
     },
 };
 
@@ -87,15 +88,20 @@ pub struct ContentSeek<T> {
 }
 
 /// How far one content is in the container, and how it shows on the way.
-struct EntryMotion {
+pub(crate) struct EntryMotion {
     progress: RefCell<Animatable<f32>>,
     size: Rc<Cell<Size>>,
     effects: Cell<TransitionEffects>,
     animation: Cell<AnimationType>,
+    /// Whether the content goes, rather than comes or rests.
+    pub(crate) leaving: Cell<bool>,
+    /// Where the content's box is, its layer included, inside a shared
+    /// transition layout.
+    coordinates: Rc<Cell<WindowCoordinates>>,
 }
 
 impl EntryMotion {
-    fn progress(&self) -> f32 {
+    pub(crate) fn progress(&self) -> f32 {
         self.progress.borrow().state().value()
     }
 
@@ -138,7 +144,6 @@ struct Entry<T> {
     id: u64,
     value: T,
     motion: Rc<EntryMotion>,
-    leaving: bool,
 }
 
 type ContentFn<T> = std::boxed::Box<dyn FnMut(T)>;
@@ -152,6 +157,8 @@ struct ContentState<T> {
     content: RefCell<Option<ContentFn<T>>>,
     size_transform: Cell<Option<SizeTransform>>,
     size: RefCell<Option<Animatable<Size>>>,
+    /// Where the container is, inside a shared transition layout.
+    coordinates: Rc<Cell<WindowCoordinates>>,
     /// The container's size from its last measure, where a size animation
     /// starts.
     last_size: Cell<Size>,
@@ -174,6 +181,7 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
             size_transform: Cell::new(None),
             size: RefCell::new(None),
             last_size: Cell::new(Size::ZERO),
+            coordinates: Rc::default(),
             node: Cell::new(None),
             watcher: RefCell::new(None),
         }
@@ -190,8 +198,9 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
                 size: Rc::new(Cell::new(Size::ZERO)),
                 effects: Cell::new(effects),
                 animation: Cell::new(animation),
+                leaving: Cell::new(false),
+                coordinates: Rc::default(),
             }),
-            leaving: false,
         });
     }
 
@@ -244,7 +253,9 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
             if entry.value == *target {
                 // New content took its enter transition when it was added;
                 // content that turns back runs its own transition backward.
-                entry.leaving = false;
+                // A gesture that seeks away from it makes it the content that
+                // goes, for the shared elements in it.
+                entry.motion.leaving.set(seeking.is_some());
                 match seeking {
                     Some((seek, seek_change)) => {
                         motion.effects.set(seek_change.exit.effects());
@@ -255,13 +266,14 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
             } else if let Some((seek, seek_change)) =
                 seeking.filter(|(seek, _)| seek.toward == entry.value)
             {
-                entry.leaving = false;
+                entry.motion.leaving.set(false);
                 motion.effects.set(seek_change.enter.effects());
                 motion.animation.set(seek_change.enter.animation());
                 motion.snap_to(seek.fraction.clamp(0.0, 1.0));
-            } else if !entry.leaving {
-                entry.leaving = true;
-                if let Some(change) = change.filter(|_| motion.at_rest()) {
+            } else {
+                if !entry.motion.leaving.replace(true)
+                    && let Some(change) = change.filter(|_| motion.at_rest())
+                {
                     motion.effects.set(change.exit.effects());
                     motion.animation.set(change.exit.animation());
                 }
@@ -276,7 +288,10 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
     }
 
     fn animating(&self) -> bool {
-        self.entries.borrow().iter().any(|entry| entry.leaving)
+        self.entries
+            .borrow()
+            .iter()
+            .any(|entry| entry.motion.leaving.get())
             || self
                 .size
                 .borrow()
@@ -300,7 +315,12 @@ fn watch<T: Clone + PartialEq + 'static>(state: &Rc<ContentState<T>>) {
         let removed = {
             let mut entries = state.entries.borrow_mut();
             let before = entries.len();
-            entries.retain(|entry| !(entry.leaving && entry.motion.gone()));
+            // The current content is last; a seek all the way does not
+            // remove it.
+            let current = entries.last().map(|entry| entry.id);
+            entries.retain(|entry| {
+                Some(entry.id) == current || !(entry.motion.leaving.get() && entry.motion.gone())
+            });
             before != entries.len()
         };
         if removed {
@@ -391,6 +411,14 @@ pub fn SeekableAnimatedContent<T, F>(
     } else {
         Modifier::empty()
     };
+    // Inside a shared transition layout the container and its contents say
+    // where they are, which costs the layer fast paths; elsewhere they don't.
+    let shared = in_shared_transition();
+    let modifier = if shared {
+        modifier.report_window_coordinates(Rc::clone(&state.0.coordinates))
+    } else {
+        modifier
+    };
     let policy = ContentMeasurePolicy(state.clone());
     let shown = state.clone();
     let node = Layout(modifier, policy, move || {
@@ -406,14 +434,29 @@ pub fn SeekableAnimatedContent<T, F>(
             let state = state.clone();
             with_key(&id, move || {
                 let layer = Rc::clone(&motion);
+                let entry = Modifier::empty().report_size(Rc::clone(&motion.size));
+                let entry = if shared {
+                    entry.report_window_coordinates(Rc::clone(&motion.coordinates))
+                } else {
+                    entry
+                };
+                let shared_entry = shared.then(|| SharedEntry {
+                    motion: Rc::clone(&motion),
+                    entry: Rc::clone(&motion.coordinates),
+                    container: Rc::clone(&state.0.coordinates),
+                });
                 Box(
-                    Modifier::empty()
-                        .report_size(Rc::clone(&motion.size))
-                        .graphics_layer(move || layer.layer()),
+                    entry.graphics_layer(move || layer.layer()),
                     BoxSpec::new(),
                     move || {
-                        if let Some(content) = state.0.content.borrow_mut().as_mut() {
-                            content(value.clone());
+                        let compose = || {
+                            if let Some(content) = state.0.content.borrow_mut().as_mut() {
+                                content(value.clone());
+                            }
+                        };
+                        match shared_entry.clone() {
+                            Some(entry) => ProvideSharedEntry(entry, compose),
+                            None => compose(),
                         }
                     },
                 );
