@@ -667,6 +667,7 @@ struct App {
     primary_surface_dirty: bool,
     #[cfg(target_os = "macos")]
     application_menu: ApplicationMenu,
+    integration: crate::desktop_integration::Integration,
     primary_initial_present_pending: bool,
     /// The primary window's GPU, opening while the platform starts.
     gpu_start: GpuStart,
@@ -695,6 +696,8 @@ impl App {
             .map(crate::recorder::InputRecorder::new);
         #[cfg(feature = "robot")]
         let robot_app_hook = settings.robot_app_hook.take();
+        let integration =
+            crate::desktop_integration::Integration::new(settings.desktop_integration.take());
         let applied_frame_pacing_mode = settings.frame_pacing_mode;
         let custom_cursor_size = settings.custom_cursor_size;
 
@@ -751,6 +754,7 @@ impl App {
             primary_surface_dirty: false,
             #[cfg(target_os = "macos")]
             application_menu: ApplicationMenu::Owed,
+            integration,
             primary_initial_present_pending: false,
             gpu_start,
             vsync_interval: default_vsync_interval(),
@@ -1223,6 +1227,17 @@ impl App {
         }
     }
 
+    /// What runs before the event loop waits besides the app: the macOS
+    /// application menu once the first frame is presented, and the app's
+    /// desktop integration.
+    fn serve_platform_before_waiting(&mut self) {
+        #[cfg(target_os = "macos")]
+        self.application_menu.install_when_due();
+        if let Some(app) = self.app.as_mut() {
+            self.integration.about_to_wait(app, &self.event_proxy);
+        }
+    }
+
     fn sync_native_windows(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.gpu_context.is_none() {
             return;
@@ -1312,7 +1327,11 @@ impl App {
                     self.let_the_first_window_take_focus(&native);
                     self.remember_native_window_position(&native);
                     self.native_window_ids.insert(native.key, window_id);
+                    let id = crate::DesktopWindowId::Native(native.key.raw());
+                    let window = Arc::clone(&native.window);
                     self.native_windows.insert(window_id, native);
+                    self.integration
+                        .window_opened(id, &*window, app, &self.event_proxy);
                     self.hand_held_press_to_new_window(app, window_id);
                 }
                 Err(error) => {
@@ -2812,6 +2831,11 @@ impl App {
                 self.native_window_ids.remove(&native.key);
                 self.closed_native_windows.insert(native.key);
                 app.remove_window_surface(native.key.raw());
+                self.integration.window_closed(
+                    crate::DesktopWindowId::Native(native.key.raw()),
+                    app,
+                    &self.event_proxy,
+                );
                 keep_window = false;
             }
             WindowEvent::SurfaceResized(new_size) => {
@@ -5597,6 +5621,14 @@ impl ApplicationHandler for App {
         self.app = Some(app);
         self.accessibility = Some(accessibility);
         self.platform = Some(platform);
+        if let (Some(window), Some(app)) = (self.window.as_deref(), self.app.as_mut()) {
+            self.integration.window_opened(
+                crate::DesktopWindowId::Primary,
+                window,
+                app,
+                &self.event_proxy,
+            );
+        }
         cranpose_services::advance_lifecycle(cranpose_services::LifecycleState::Resumed);
         self.primary_presence = self
             .primary_window_id()
@@ -6092,8 +6124,7 @@ impl ApplicationHandler for App {
             event_loop.exit();
             return;
         }
-        #[cfg(target_os = "macos")]
-        self.application_menu.install_when_due();
+        self.serve_platform_before_waiting();
         self.serve_app_requests();
         let now = Instant::now();
         if self.poll_native_window_global_primary_press() {

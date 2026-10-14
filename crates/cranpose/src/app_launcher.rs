@@ -215,6 +215,10 @@ pub struct AppSettings {
     /// Optional path to record input events to (for generating robot tests)
     #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
     pub record_to: Option<PathBuf>,
+    /// Code the desktop shell runs on its main thread. See
+    /// [`AppLauncher::with_desktop_integration`].
+    #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
+    pub desktop_integration: Option<Box<dyn crate::DesktopIntegration>>,
 }
 
 impl Default for AppSettings {
@@ -262,6 +266,8 @@ impl Default for AppSettings {
             robot_app_hook: None,
             #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
             record_to: None,
+            #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
+            desktop_integration: None,
         }
     }
 }
@@ -1053,6 +1059,18 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
     /// pixels a side reads well at every size those desktops draw it.
     pub fn with_window_icon(mut self, icon: ImageBitmap) -> Self {
         self.settings.window_icon = Some(icon);
+        self
+    }
+
+    /// Desktop only: runs `integration` on the shell's main thread. It sees
+    /// each window's raw handles as the window opens, and runs before the
+    /// event loop waits, where it can take the events of its own sources and
+    /// write state through [`DesktopIntegrationContext::update`](crate::DesktopIntegrationContext::update).
+    /// A tray icon or a native menu from a crate such as `tray-icon` or
+    /// `muda` attaches through it.
+    #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
+    pub fn with_desktop_integration(mut self, integration: impl crate::DesktopIntegration) -> Self {
+        self.settings.desktop_integration = Some(Box::new(integration));
         self
     }
 
