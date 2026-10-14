@@ -93,6 +93,67 @@ Restoring keeps the entries beneath the first route the saver cannot read. When
 it cannot read the bottom entry, or nothing was saved, the back stack starts at
 the start route.
 
+## Nested graphs
+
+A `NavHost` composed inside a screen is a nested graph, Android's
+`navigation()` block. Navigating to that screen starts the inner graph at its
+own start route. The inner back stack lives in the screen's view model store,
+so it stays while other screens cover the screen and goes once the screen is
+popped. The back gesture pops the inner graph first and leaves it from the
+inner start. A view model made in the outer screen is shared by the graph's
+screens, the way a graph-scoped view model is on Android:
+
+```rust
+use cranpose_coroflow::viewModel;
+use cranpose_navigation::{NavHost, rememberNavController};
+use cranpose_ui::composable;
+
+#[derive(Clone, PartialEq)]
+enum Screen {
+    Home,
+    SignUp,
+}
+
+#[derive(Clone, PartialEq)]
+enum Step {
+    Name,
+    Address,
+}
+
+#[derive(Default)]
+struct SignUpForm;
+
+#[composable]
+fn App() {
+    let nav = rememberNavController(Screen::Home);
+    NavHost(nav, move |screen| match screen {
+        Screen::Home => HomeScreen(move || nav.navigate(Screen::SignUp)),
+        Screen::SignUp => {
+            let form = viewModel((), |_| SignUpForm);
+            let steps = rememberNavController(Step::Name);
+            NavHost(steps, move |step| {
+                let _form = form.get();
+                match step {
+                    Step::Name => NameStep(move || steps.navigate(Step::Address)),
+                    Step::Address => AddressStep(move || {
+                        nav.pop_back_stack();
+                    }),
+                }
+            });
+        }
+    });
+}
+
+#[composable]
+fn HomeScreen(_sign_up: impl Fn() + 'static) {}
+
+#[composable]
+fn NameStep(_next: impl Fn() + 'static) {}
+
+#[composable]
+fn AddressStep(_done: impl Fn() + 'static) {}
+```
+
 ## Results
 
 A screen returns a value to the screen beneath it through that screen's
