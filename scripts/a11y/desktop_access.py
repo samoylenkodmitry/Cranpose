@@ -84,11 +84,14 @@ class LinuxAdapter(NativeAdapter):
     def _nodes(self):
         desktop = self.api.get_desktop(0)
         pending = [desktop.get_child_at_index(i) for i in range(desktop.get_child_count())]
-        pending = [node for node in pending if node.get_process_id() == self.pid]
+        pending = [node for node in pending if node is not None and node.get_process_id() == self.pid]
         result = []
         while pending:
             native = pending.pop()
-            pending.extend(native.get_child_at_index(i) for i in reversed(range(native.get_child_count())))
+            # A child the app removed during the walk, as a closing dialog's,
+            # reads as None; the next walk sees the tree without it.
+            children = (native.get_child_at_index(i) for i in reversed(range(native.get_child_count())))
+            pending.extend(child for child in children if child is not None)
             interfaces = native.get_interfaces()
             value = native.get_value_iface().get_current_value() if 'Value' in interfaces else None
             if 'Text' in interfaces:
