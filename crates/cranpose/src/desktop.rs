@@ -175,6 +175,33 @@ fn robot_tree_response(app: &mut AppShell<WgpuRenderer>, command: &RobotCommand)
     }
 }
 
+/// The answer to a robot query that the app answers in its own context.
+#[cfg(feature = "robot")]
+fn robot_app_response(app: &mut AppShell<WgpuRenderer>, command: RobotCommand) -> RobotResponse {
+    match command {
+        RobotCommand::GetRuntimeLeakDebugStats => {
+            RobotResponse::RuntimeLeakDebugStats(Box::new(app.debug_runtime_leak_stats()))
+        }
+        RobotCommand::GetLiveUiTaskLabels => {
+            RobotResponse::LiveUiTaskLabels(app.runtime_handle().live_ui_task_labels())
+        }
+        RobotCommand::MeasureText { text, style } => {
+            RobotResponse::TextMetrics(app.debug_enter_app_context(|| {
+                let text = cranpose_ui::text::AnnotatedString::from(text.as_str());
+                cranpose_ui::measure_text(&text, &style)
+            }))
+        }
+        RobotCommand::HasFocusedTextField => RobotResponse::Bool(
+            app.debug_enter_app_context(cranpose_ui::text_field_focus::has_focused_field),
+        ),
+        RobotCommand::SetSemanticsEnabled(enabled) => {
+            app.set_semantics_enabled(enabled);
+            RobotResponse::Ok
+        }
+        _ => RobotResponse::Error("not an app query".into()),
+    }
+}
+
 #[cfg(feature = "robot")]
 fn audit_response(app: &mut AppShell<WgpuRenderer>) -> RobotResponse {
     match cranpose_app_shell::placed_semantics::placed_semantics_from_shell(app) {
@@ -385,6 +412,9 @@ impl RobotController {
         }
     }
 }
+
+#[path = "desktop_device_loss.rs"]
+mod device_loss;
 
 struct DesktopGpuContext {
     gpu: crate::GpuContext,
@@ -668,6 +698,7 @@ struct App {
     #[cfg(target_os = "macos")]
     application_menu: ApplicationMenu,
     integration: crate::desktop_integration::Integration,
+    device_loss: device_loss::DeviceLoss,
     primary_initial_present_pending: bool,
     /// The primary window's GPU, opening while the platform starts.
     gpu_start: GpuStart,
@@ -755,6 +786,7 @@ impl App {
             #[cfg(target_os = "macos")]
             application_menu: ApplicationMenu::Owed,
             integration,
+            device_loss: device_loss::DeviceLoss::default(),
             primary_initial_present_pending: false,
             gpu_start,
             vsync_interval: default_vsync_interval(),
@@ -1230,9 +1262,10 @@ impl App {
     /// What runs before the event loop waits besides the app: the macOS
     /// application menu once the first frame is presented, and the app's
     /// desktop integration.
-    fn serve_platform_before_waiting(&mut self) {
+    fn serve_platform_before_waiting(&mut self, event_loop: &dyn ActiveEventLoop) {
         #[cfg(target_os = "macos")]
         self.application_menu.install_when_due();
+        self.recover_lost_device(event_loop);
         if let Some(app) = self.app.as_mut() {
             self.integration.about_to_wait(app, &self.event_proxy);
         }
@@ -1800,6 +1833,7 @@ impl App {
             context.adapter_backend,
             context.gpu.adapter.get_downlevel_capabilities().flags,
             scale_factor,
+            self.device_loss.handler(&self.event_proxy),
         );
         renderer.set_transparent_background(options.transparent);
         trace_native_window_timing!(
@@ -3962,6 +3996,7 @@ fn surface_config_for_window(
     })
 }
 
+#[expect(clippy::too_many_arguments)]
 fn wgpu_renderer_for_surface(
     text_system: WgpuTextSystem,
     device: Arc<wgpu::Device>,
@@ -3970,9 +4005,11 @@ fn wgpu_renderer_for_surface(
     backend: wgpu::Backend,
     downlevel: wgpu::DownlevelFlags,
     scale_factor: f64,
+    on_device_lost: cranpose_render_wgpu::DeviceLostHandler,
 ) -> WgpuRenderer {
     let mut renderer = WgpuRenderer::with_text_system(text_system);
     renderer.set_root_scale(scale_factor as f32);
+    renderer.set_device_lost_handler(on_device_lost);
     renderer.init_gpu(device, queue, surface_format, backend, downlevel);
     renderer
 }
@@ -5540,6 +5577,7 @@ impl ApplicationHandler for App {
             adapter_info.backend,
             adapter.get_downlevel_capabilities().flags,
             initial_scale,
+            self.device_loss.handler(&self.event_proxy),
         );
 
         let viewport = primary_viewport_for_surface_size(
@@ -5559,7 +5597,10 @@ impl ApplicationHandler for App {
             device,
             queue,
         };
-        let content = crate::gpu_context::provide_gpu_context(gpu.clone(), content);
+        let content = crate::gpu_context::provide_current_gpu_context(
+            self.device_loss.share(gpu.clone()),
+            content,
+        );
         let registry = Rc::clone(&self.native_window_registry);
         let mut app = native_window::with_native_window_registry(&registry, || {
             AppShell::new_with_size_and_density(
@@ -6072,6 +6113,7 @@ impl ApplicationHandler for App {
                     ));
                     #[cfg(target_os = "macos")]
                     self.application_menu.frame_presented();
+                    self.device_loss.presented();
                     #[cfg(feature = "robot")]
                     {
                         self.presented_frame_generation =
@@ -6124,7 +6166,7 @@ impl ApplicationHandler for App {
             event_loop.exit();
             return;
         }
-        self.serve_platform_before_waiting();
+        self.serve_platform_before_waiting(event_loop);
         self.serve_app_requests();
         let now = Instant::now();
         if self.poll_native_window_global_primary_press() {
@@ -6511,33 +6553,17 @@ impl ApplicationHandler for App {
                                     app.renderer().debug_cpu_allocation_stats(),
                                 )));
                     }
-                    RobotCommand::GetRuntimeLeakDebugStats => {
-                        let _ = controller
-                            .tx
-                            .send(RobotResponse::RuntimeLeakDebugStats(Box::new(
-                                app.debug_runtime_leak_stats(),
-                            )));
+                    command @ (RobotCommand::GetRuntimeLeakDebugStats
+                    | RobotCommand::GetLiveUiTaskLabels
+                    | RobotCommand::MeasureText { .. }
+                    | RobotCommand::HasFocusedTextField
+                    | RobotCommand::SetSemanticsEnabled(_)) => {
+                        let _ = controller.tx.send(robot_app_response(app, command));
                     }
-                    RobotCommand::GetLiveUiTaskLabels => {
-                        let _ = controller.tx.send(RobotResponse::LiveUiTaskLabels(
-                            app.runtime_handle().live_ui_task_labels(),
-                        ));
-                    }
-                    RobotCommand::MeasureText { text, style } => {
-                        let metrics = app.debug_enter_app_context(|| {
-                            let text = cranpose_ui::text::AnnotatedString::from(text.as_str());
-                            cranpose_ui::measure_text(&text, &style)
-                        });
-                        let _ = controller.tx.send(RobotResponse::TextMetrics(metrics));
-                    }
-                    RobotCommand::HasFocusedTextField => {
-                        let focused = app.debug_enter_app_context(|| {
-                            cranpose_ui::text_field_focus::has_focused_field()
-                        });
-                        let _ = controller.tx.send(RobotResponse::Bool(focused));
-                    }
-                    RobotCommand::SetSemanticsEnabled(enabled) => {
-                        app.set_semantics_enabled(enabled);
+                    RobotCommand::LoseGpuDevice => {
+                        device_loss::lose_device(
+                            self.gpu_context.as_ref().map(|context| &context.gpu),
+                        );
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::InvokeAppHook { name, argument } => {

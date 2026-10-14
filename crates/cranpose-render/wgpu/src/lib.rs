@@ -307,7 +307,12 @@ pub struct WgpuRenderer {
     backend: PresentBackend,
     renderer_epoch: u64,
     surface_epoch: u64,
+    on_device_lost: Option<DeviceLostHandler>,
 }
+
+/// What a host runs when the device it handed a [`WgpuRenderer`] is lost,
+/// after the loss is logged. It may run on any thread.
+pub type DeviceLostHandler = Arc<dyn Fn() + Send + Sync>;
 
 impl WgpuRenderer {
     /// Create a new WGPU renderer.
@@ -337,7 +342,14 @@ impl WgpuRenderer {
             backend: PresentBackend::None,
             renderer_epoch: 0,
             surface_epoch: 0,
+            on_device_lost: None,
         }
+    }
+
+    /// Runs `handler` when the device of a later `init_gpu` call is lost,
+    /// so the host can open another device and hand it over.
+    pub fn set_device_lost_handler(&mut self, handler: DeviceLostHandler) {
+        self.on_device_lost = Some(handler);
     }
 
     fn sync_gpu_renderer(&self) -> Option<&GpuRenderer> {
@@ -436,6 +448,7 @@ impl WgpuRenderer {
             text_fonts: self.frontend.text_fonts.clone(),
             renderer_epoch: self.renderer_epoch,
             pipeline_compilation,
+            on_device_lost: self.on_device_lost.clone(),
         }
     }
 

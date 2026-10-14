@@ -3450,6 +3450,7 @@ pub(crate) struct GpuRendererInit {
     pub(crate) text_fonts: SoftwareTextFontSet,
     pub(crate) renderer_epoch: u64,
     pub(crate) pipeline_compilation: PipelineCompilation,
+    pub(crate) on_device_lost: Option<crate::DeviceLostHandler>,
 }
 
 impl GpuRenderer {
@@ -3463,6 +3464,7 @@ impl GpuRenderer {
             text_fonts,
             renderer_epoch,
             pipeline_compilation,
+            on_device_lost,
         } = init;
         let display_format = surface_format;
         let construction_started = Instant::now();
@@ -3472,8 +3474,11 @@ impl GpuRenderer {
             device.on_uncaptured_error(Arc::new(move |error| sentry.record(&error)));
         }
         let composition_format = crate::offscreen::composition_format(display_format);
-        device.set_device_lost_callback(|reason, message| {
+        device.set_device_lost_callback(move |reason, message| {
             log::error!("[gpu-device] device lost ({reason:?}): {message}");
+            if let Some(on_device_lost) = &on_device_lost {
+                on_device_lost();
+            }
         });
         let copy_free = UploadMode::copy_free(&device, adapter_backend);
         let mut run_store = RunStore::new(
