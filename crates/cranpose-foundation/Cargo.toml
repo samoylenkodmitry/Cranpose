@@ -24,7 +24,10 @@ cranpose-core = { workspace = true }
 cranpose-macros = { workspace = true }
 cranpose-ui-graphics = { workspace = true }
 cranpose-ui-layout = { workspace = true }
-smallvec = "1.16"
+# `union` stores a spilled-or-inline vector without a separate tag. Other
+# crates turn it on in the workspace build; on here too, a measured lazy
+# item is the same size in every build.
+smallvec = { version = "1.16", features = ["union"] }
 unicode-segmentation = { workspace = true }
 web-time = { workspace = true }
 log = "0.4"
