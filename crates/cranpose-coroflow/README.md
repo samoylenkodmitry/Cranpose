@@ -45,6 +45,13 @@ Persistence happens at the next lifecycle or explicit `run_durable_saves` bounda
 without depending on recomposition. Keep a handle alive until that save completes;
 keeping only a flow does not retain its persistence registration.
 
+`SavedStateHandle::current()`, called in a view model's factory, gives the
+handle of the saveable scope being composed. In a `NavHost` that is the
+back-stack entry's: two visits of one route keep their keys apart, a restored
+back stack brings the values back, and a popped entry's values are removed at
+the next save boundary. An entry of an in-memory back stack keeps them only in
+memory.
+
 ## Android API map
 
 | Android API | Cranpose API |
