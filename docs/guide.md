@@ -2304,6 +2304,63 @@ For large lists, use `LazyItems::new(count).key(...)`. Use `content_type(...)` t
 Give lists a bounded height. Share large datasets with retained row callbacks.
 See the [lazy-list guide](lazy_list_doc.md).
 
+### Show a grid or pages
+
+`LazyVerticalGrid` lays items out in lines of cells. `GridCells::Adaptive` fits as many columns as its minimum width allows. A span gives an item more columns; a span of the whole line suits a section title:
+
+```rust
+use cranpose::prelude::*;
+
+#[composable]
+fn Photos() {
+    let grid = rememberLazyGridState();
+    LazyVerticalGrid(
+        Modifier::empty().fill_max_size(),
+        grid,
+        LazyVerticalGridSpec::new(GridCells::Adaptive(120.0)).spacing(8.0),
+        |scope| {
+            scope.items(LazyItems::new(1).span(|line, _| line.max_line_span), |_| {
+                Text("Recent", Modifier::empty().padding(8.0), TextStyle::default());
+            });
+            scope.items(200, |index| {
+                Text(
+                    format!("Photo {index}"),
+                    Modifier::empty().height(120.0),
+                    TextStyle::default(),
+                );
+            });
+        },
+    );
+}
+```
+
+`LazyVerticalStaggeredGrid` takes the same content for items of their own heights: each goes into the lane that ends first.
+`HorizontalPager` shows one page at a time, and a swipe comes to rest on a page:
+
+```rust
+use cranpose::prelude::*;
+
+#[composable]
+fn Onboarding() {
+    let pager = rememberPagerState(0);
+    HorizontalPager(
+        Modifier::empty().fill_max_size(),
+        pager,
+        PagerSpec::default(),
+        3,
+        |page| {
+            Text(
+                format!("Step {}", page + 1),
+                Modifier::empty().padding(24.0),
+                TextStyle::default(),
+            );
+        },
+    );
+}
+```
+
+`pager.animate_scroll_to_page(page)` turns the pages with a spring. `PageSize::Fixed` shows the next page beside the current one.
+
 ### Adapt to screen size
 
 `report_size_state` reports the container size. Choose the layout from its width.
