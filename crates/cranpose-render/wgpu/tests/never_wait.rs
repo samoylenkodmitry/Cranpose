@@ -128,13 +128,32 @@ fn empty_page() -> RenderGraph {
     support::page_graph(SIZE, SIZE, Vec::new())
 }
 
+/// The white page alone.
+fn white_page() -> RenderGraph {
+    support::page_graph(
+        SIZE,
+        SIZE,
+        vec![support::solid_rect(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: SIZE as f32,
+                height: SIZE as f32,
+            },
+            Color::WHITE,
+        )],
+    )
+}
+
 /// The first frame of `graph` on a renderer whose pipelines compile in the
 /// background, asserted to have drawn one placeholder, and that renderer.
 fn first_frame(graph: &RenderGraph) -> (support::LockedRenderer, CapturedFrame) {
     let mut renderer = support::headless_renderer_compiling_in_background().expect("GPU required");
-    // The renderer's own first frame learns its pipelines before it draws
-    // and may find the effect's built: the effect first draws in a later one.
+    // The pipelines every screen draws with land first, so only the
+    // effect waits: the page's fill, and the pane's composite, which the
+    // first frame of the page draws without the depth pre-pass.
     support::capture_graph(&mut renderer, empty_page(), SIZE, SIZE);
+    support::wait_for_background_compiler_idle();
     let frame = support::capture_graph(&mut renderer, graph.clone(), SIZE, SIZE);
     let stats = renderer.last_frame_stats().expect("frame statistics");
     assert_eq!(
@@ -182,19 +201,7 @@ fn a_backdrop_fills_its_shape_with_its_placeholder_until_its_pipeline_lands() {
     let graph = backdrop_page(shader("placeholder backdrop", Some(RED)));
     let (mut renderer, first) = first_frame(&graph);
     assert_eq!(pane_colors(&first), [[255, 0, 0, 255]]);
-    let without_pane = settled(support::page_graph(
-        SIZE,
-        SIZE,
-        vec![support::solid_rect(
-            Rect {
-                x: 0.0,
-                y: 0.0,
-                width: SIZE as f32,
-                height: SIZE as f32,
-            },
-            Color::WHITE,
-        )],
-    ));
+    let without_pane = settled(white_page());
     let outside = |frame: &CapturedFrame| {
         let mut pixels = frame.pixels.clone();
         for y in PANE.y as u32..(PANE.y + PANE.height) as u32 {

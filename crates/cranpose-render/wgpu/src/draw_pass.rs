@@ -435,7 +435,26 @@ impl GpuRenderer {
         recorder: &mut C,
         scratch: &PassScratch,
     ) -> PassBuffers {
+        let builder = &scratch.meshes.builder;
         PassBuffers {
+            meshes: (!builder.is_empty()).then(|| crate::mesh_fallback::MeshBuffers {
+                vertices: recorder.upload_buffer(
+                    crate::frame_graph::UploadAllocatorSpec::vertex(
+                        "Mesh Fallback Vertex Buffer",
+                        std::mem::size_of::<crate::mesh_fallback::MeshVertex>() as u64,
+                    ),
+                    &self.device,
+                    bytemuck::cast_slice(builder.vertices()),
+                ),
+                indices: recorder.upload_buffer(
+                    crate::frame_graph::UploadAllocatorSpec::index(
+                        "Mesh Fallback Index Buffer",
+                        std::mem::size_of::<u32>() as u64,
+                    ),
+                    &self.device,
+                    bytemuck::cast_slice(builder.indices()),
+                ),
+            }),
             images: (!scratch.image_indices.is_empty()).then(|| {
                 self.upload_image_slot(
                     recorder,
@@ -484,6 +503,7 @@ impl GpuRenderer {
             depth_seq: 0,
             open: None,
             arena_draws: std::mem::take(&mut scratch.arena_draws),
+            meshes: std::mem::take(&mut scratch.meshes),
             pipelines: std::mem::take(&mut scratch.pipelines),
             depth_keys: (takes_depth && !depth).then(PipelineDemand::default),
             chunk_start: 0,
@@ -499,33 +519,18 @@ impl GpuRenderer {
         self.prefetch_overlay_pipelines(
             &prep.batches,
             &scratch,
-            (depth, CompileLane::WarmUp),
+            (depth, self.frame_lane()),
             &mut |_| {},
         );
-        #[cfg(not(target_arch = "wasm32"))]
-        let discovering = self.discovering;
-        #[cfg(target_arch = "wasm32")]
-        let discovering = false;
-        if discovering {
-            // The pass learns its pipelines and draws nothing: every one it
-            // lacks compiles beside the others.
-            #[cfg(not(target_arch = "wasm32"))]
-            self.discover_run_pipelines(&mut prep.pipelines);
-        } else {
-            if let Some(depth_keys) = prep.depth_keys.take() {
-                self.await_depth_pipelines(&prep.batches, &scratch, &depth_keys);
-            }
-            self.ensure_run_pipelines(&mut prep.pipelines);
+        if let Some(depth_keys) = prep.depth_keys.take() {
+            self.await_depth_pipelines(&prep.batches, &scratch, &depth_keys);
         }
+        self.ensure_run_pipelines(&mut prep.pipelines);
         let batches = prep.batches;
         scratch.arena_draws = prep.arena_draws;
+        scratch.meshes = prep.meshes;
         scratch.pipelines = prep.pipelines;
         scratch.held = prep.held;
-        if discovering {
-            drop(batches);
-            self.return_pass_scratch(scratch);
-            return prepared.map(|()| true);
-        }
         let buffers = if prepared.is_ok() {
             self.upload_pass_buffers(recorder, &scratch)
         } else {
@@ -563,6 +568,7 @@ impl GpuRenderer {
                             images: &scratch.image_cmds,
                             glyphs: &scratch.glyph_cmds,
                             arena: &scratch.arena_draws,
+                            meshes: &scratch.meshes.ranges,
                         },
                         &buffers,
                     )
@@ -589,7 +595,9 @@ impl GpuRenderer {
             arena_draws: std::mem::take(&mut self.scratch_arena_draws),
             pipelines: std::mem::take(&mut self.scratch_pipelines),
             held: std::mem::take(&mut self.scratch_held),
+            meshes: std::mem::take(&mut self.scratch_meshes),
         };
+        scratch.meshes.clear();
         scratch.arena_draws.clear();
         scratch.image_vertices.clear();
         scratch.image_indices.clear();
@@ -613,6 +621,7 @@ impl GpuRenderer {
         self.scratch_arena_draws = scratch.arena_draws;
         self.scratch_pipelines = scratch.pipelines;
         self.scratch_held = scratch.held;
+        self.scratch_meshes = scratch.meshes;
     }
 
     /// Starts on `lane` the builds of the image, glyph and shadow pipelines a
@@ -622,8 +631,9 @@ impl GpuRenderer {
     /// pass's composites start theirs as it prepares them. A launch's first
     /// frame needs about fifteen; built one after another where the pass
     /// reached each, they held the gauntlet's first frame 1.1 s on an Apple
-    /// M5 with no Metal shader cached. The pass still builds, or waits for,
-    /// each where it draws with it.
+    /// M5 with no Metal shader cached. Where the compiler's threads run, the
+    /// pass leaves out a draw whose pipeline is still to land; elsewhere it
+    /// builds each where it draws with it.
     fn prefetch_overlay_pipelines(
         &self,
         batches: &[Batch<'_>],
@@ -697,13 +707,14 @@ impl GpuRenderer {
         let target_size = frame.size;
         if frame.depth {
             for batch in batches.iter().rev() {
-                self.draw_shape_batch(pass, batch, cmds.arena, frame, RunStage::Interiors)?;
+                self.draw_shape_batch(pass, batch, cmds.arena, None, frame, RunStage::Interiors)?;
             }
         }
+        let meshes = buffers.run_meshes(cmds.meshes);
         for batch in batches {
             match batch {
                 Batch::StoreRun { .. } | Batch::Arena { .. } => {
-                    self.draw_shape_batch(pass, batch, cmds.arena, frame, RunStage::Paint)?;
+                    self.draw_shape_batch(pass, batch, cmds.arena, meshes, frame, RunStage::Paint)?;
                 }
                 Batch::Images {
                     cmds: range,
@@ -791,13 +802,17 @@ impl GpuRenderer {
         pass: &mut TrackedPass<'_, '_>,
         batch: &Batch<'_>,
         arena: &[RunDrawCall],
+        meshes: Option<crate::mesh_fallback::RunMeshes<'_>>,
         frame: PassFrame,
         stage: RunStage,
     ) -> Result<(), String> {
+        let meshes = meshes.map(|meshes| (meshes, frame.depth));
         match batch {
             Batch::StoreRun { batch, scissor } => {
                 match stage_scissor(frame.scissor(*scissor), batch.clip, stage) {
-                    Some(scissor) => self.draw_store_run(pass, batch, arena, scissor, stage),
+                    Some(scissor) => {
+                        self.draw_store_run(pass, batch, arena, scissor, stage, meshes)
+                    }
                     None => Ok(()),
                 }
             }
@@ -819,7 +834,16 @@ impl GpuRenderer {
                 let Some(scissor) = stage_scissor(frame.scissor(*scissor), *clip, stage) else {
                     return Ok(());
                 };
-                self.draw_arena(pass, *chunk, *uniform_slot, &arena[draws], scissor, stage)
+                let meshes = meshes.map(|(meshes, depth)| (meshes.of(draws.clone()), depth));
+                self.draw_arena(
+                    pass,
+                    *chunk,
+                    *uniform_slot,
+                    &arena[draws],
+                    scissor,
+                    stage,
+                    meshes,
+                )
             }
             _ => Ok(()),
         }
@@ -1122,14 +1146,28 @@ fn visible_run_bounds(run: &RunDraw, viewport_rect: Rect, root_scale: f32) -> Op
 
 /// The per-frame vectors a pass fills: image and glyph geometry and draw
 /// commands, kept on the renderer between frames so they never reallocate.
-/// The quads a pass drew from its scratch, uploaded for its draws: image
-/// vertices and indices, and glyph instances.
+/// The quads a pass drew from its scratch, uploaded for its draws: fallback
+/// triangles, image vertices and indices, and glyph instances.
 #[derive(Default)]
 struct PassBuffers {
+    meshes: Option<crate::mesh_fallback::MeshBuffers>,
     images: Option<crate::render::ImageSlot>,
     shadows: Option<crate::frame_graph::BufferUpload>,
     glyphs: Option<crate::frame_graph::BufferUpload>,
     turned_glyphs: Option<crate::frame_graph::BufferUpload>,
+}
+
+impl PassBuffers {
+    /// The pass's fallback triangles, with `ranges`, the index range of each
+    /// run draw that takes some.
+    fn run_meshes<'a>(
+        &'a self,
+        ranges: &'a [Option<std::ops::Range<u32>>],
+    ) -> Option<crate::mesh_fallback::RunMeshes<'a>> {
+        self.meshes
+            .as_ref()
+            .map(|buffers| crate::mesh_fallback::RunMeshes { ranges, buffers })
+    }
 }
 
 struct PassScratch {
@@ -1145,6 +1183,7 @@ struct PassScratch {
     arena_draws: Vec<RunDrawCall>,
     pipelines: PipelineDemand,
     held: HeldDraws,
+    meshes: crate::mesh_fallback::PassMeshes,
 }
 
 /// The commands a pass's batches draw ranges of.
@@ -1153,6 +1192,8 @@ struct PassCmds<'a> {
     images: &'a [crate::render::ImageDrawCmd],
     glyphs: &'a [crate::render::GlyphDrawCmd],
     arena: &'a [RunDrawCall],
+    /// The fallback index range of each of `arena`'s draws that takes one.
+    meshes: &'a [Option<std::ops::Range<u32>>],
 }
 
 /// Draws each glyph batch's retained runs after its shared quads, and its
@@ -1378,6 +1419,8 @@ struct PassPrep<'a, 's, C> {
     /// Every run draw of the pass, arena chunks' and stored runs', which
     /// their batches draw ranges of.
     arena_draws: Vec<RunDrawCall>,
+    /// The fallback triangles of the run draws whose pipelines compile.
+    meshes: crate::mesh_fallback::PassMeshes,
     /// The shape pipelines the pass's run draws take, prepared once its
     /// batches are made.
     pipelines: PipelineDemand,
@@ -1528,6 +1571,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         let paint_start = self.arena_draws.len();
         renderer.close_arena(open, &mut self.arena_draws);
         let end = self.arena_draws.len();
+        self.mesh_arena(renderer, binding, paint_start..end);
         if end == self.chunk_start {
             return;
         }
@@ -1567,12 +1611,35 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         self.push_held(renderer, binding, held, Some(base));
     }
 
+    /// Lays out as fallback triangles the chunk's draws in `range`, just
+    /// cut or closed, whose shape pipelines still compile, placed as the
+    /// chunk's uniform places them.
+    fn mesh_arena(
+        &mut self,
+        renderer: &GpuRenderer,
+        binding: SegmentBinding,
+        range: std::ops::Range<usize>,
+    ) {
+        let viewport = ViewportUniformParams {
+            depth_base: self.chunk_base as f32,
+            ..binding.bound
+        };
+        renderer.mesh_arena_draws(
+            viewport,
+            range,
+            &self.arena_draws,
+            self.depth,
+            &mut self.meshes,
+        );
+    }
+
     /// Paints the open chunk's draws since its last cut, under the clip
     /// their records share, and keeps the chunk open.
     fn cut_paint(&mut self, renderer: &mut GpuRenderer, binding: SegmentBinding, open: usize) {
         let paint_start = self.arena_draws.len();
         renderer.cut_arena(open, &mut self.arena_draws);
         let end = self.arena_draws.len();
+        self.mesh_arena(renderer, binding, paint_start..end);
         if end > paint_start {
             let uniform_slot = self.chunk_uniform_slot(renderer, binding);
             self.batches.push(Batch::Arena {
@@ -1795,6 +1862,15 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     &window,
                     (self.depth, self.depth_keys.as_mut()),
                     (&mut self.arena_draws, &mut self.pipelines),
+                );
+                renderer.mesh_store_run(
+                    draw,
+                    viewport,
+                    run.segment.scale,
+                    batch.draws.clone(),
+                    &self.arena_draws,
+                    self.depth,
+                    &mut self.meshes,
                 );
                 if self.depth {
                     self.take_depth_range(batch.draws.clone());

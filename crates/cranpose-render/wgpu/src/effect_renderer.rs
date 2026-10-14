@@ -129,6 +129,9 @@ pub(crate) struct EffectRenderer {
     recorder: PipelineRecorder,
     /// One bit per tile mode whose blur family is queued for warm-up.
     blur_families_queued: Cell<u8>,
+    /// Whether a composite was left out this frame while its pipeline
+    /// compiles (see [`Self::take_skipped_draw`]).
+    skipped_draw: Cell<bool>,
     compiler: PipelineCompiler,
     blur_uniform_bind_group_layout: wgpu::BindGroupLayout,
     blur_prepared_draws: Vec<PreparedBlurDraw>,
@@ -1398,6 +1401,7 @@ impl EffectRenderer {
             surface_format,
             adapter_backend,
             debug_command_stats: Cell::new(FrameCommandStats::default()),
+            skipped_draw: Cell::new(false),
             debug_blurs: Cell::new(0),
             debug_substrates: Cell::new(0),
             debug_composites: Cell::new(0),
@@ -1799,16 +1803,65 @@ impl EffectRenderer {
         )
     }
 
+    /// Queues on the warm-up lane the composites most screens with layers
+    /// draw with: blits of either sampling and the projective blit of whole
+    /// texels, without a depth buffer.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn warm_composites(&self, device: &wgpu::Device) {
+        for sampling in [false, true] {
+            let variant = CompositeVariant::new(sampling, false);
+            self.blit_pipeline_target(BlendMode::SrcOver, variant)
+                .0
+                .queue(
+                    &self.compiler,
+                    CompileLane::WarmUp,
+                    self.adapter_backend,
+                    self.blit_pipeline_job(device, BlendMode::SrcOver, variant),
+                );
+        }
+        let texels = CompositeVariant::new(true, false);
+        self.projective_pipeline_target(BlendMode::SrcOver, texels)
+            .0
+            .queue(
+                &self.compiler,
+                CompileLane::WarmUp,
+                self.adapter_backend,
+                self.projective_pipeline_job(device, BlendMode::SrcOver, texels),
+            );
+    }
+
+    /// The blit pipeline for a composite, or `None` while it compiles.
     fn blit_pipeline(
         &self,
         device: &wgpu::Device,
         blend_mode: BlendMode,
         variant: CompositeVariant,
-    ) -> &wgpu::RenderPipeline {
+    ) -> Option<&wgpu::RenderPipeline> {
         let (resource, _, _) = self.blit_pipeline_target(blend_mode, variant);
-        resource.for_draw(&self.recorder, self.adapter_backend, || {
-            self.blit_pipeline_job(device, blend_mode, variant)()
-        })
+        let pipeline = resource
+            .when_ready(&self.recorder, &self.compiler, self.adapter_backend, || {
+                self.blit_pipeline_job(device, blend_mode, variant)
+            })
+            // A nearest-sampled blit of whole texels draws the same through
+            // the general blit while its own compiles.
+            .or_else(|| {
+                variant.sampling.then_some(())?;
+                let general = CompositeVariant::new(false, variant.depth);
+                self.blit_pipeline_target(blend_mode, general).0.built()
+            });
+        self.note_skipped(pipeline.is_none());
+        pipeline
+    }
+
+    fn note_skipped(&self, skipped: bool) {
+        self.skipped_draw.set(self.skipped_draw.get() | skipped);
+    }
+
+    /// Whether a composite was left out since the last call because its
+    /// pipeline compiles: the renderer then asks for the frame after the
+    /// pipeline lands.
+    pub(crate) fn take_skipped_draw(&self) -> bool {
+        self.skipped_draw.replace(false)
     }
 
     fn projective_pipeline_target(
@@ -1853,16 +1906,21 @@ impl EffectRenderer {
         )
     }
 
+    /// The projective blit pipeline for a composite, or `None` while it
+    /// compiles.
     fn projective_blit_pipeline(
         &self,
         device: &wgpu::Device,
         blend_mode: BlendMode,
         variant: CompositeVariant,
-    ) -> &wgpu::RenderPipeline {
+    ) -> Option<&wgpu::RenderPipeline> {
         let (resource, _, _) = self.projective_pipeline_target(blend_mode, variant);
-        resource.for_draw(&self.recorder, self.adapter_backend, || {
-            self.projective_pipeline_job(device, blend_mode, variant)()
-        })
+        let pipeline =
+            resource.when_ready(&self.recorder, &self.compiler, self.adapter_backend, || {
+                self.projective_pipeline_job(device, blend_mode, variant)
+            });
+        self.note_skipped(pipeline.is_none());
+        pipeline
     }
 
     pub(crate) fn max_texture_dim(&self) -> u32 {
@@ -3172,11 +3230,14 @@ impl EffectRenderer {
 
         let mut pass = recorder.begin_color_pass("Blit Composite Pass", dest_view, options.load_op);
 
-        pass.set_pipeline(self.blit_pipeline(
+        let Some(pipeline) = self.blit_pipeline(
             device,
             options.blend_mode,
             CompositeVariant::new(options.unmasked_nearest(), false),
-        ));
+        ) else {
+            return;
+        };
+        pass.set_pipeline(pipeline);
         pass.set_bind_group(0, texture_bind_group, &[]);
         pass.set_bind_group(1, &uniform.bind_group, &[uniform.offset]);
         if let Some((x, y, w, h)) = options.scissor {
@@ -3284,7 +3345,10 @@ impl EffectRenderer {
         (device, viewport): (&wgpu::Device, (u32, u32)),
         draw: &PreparedCompositeDraw<'_>,
     ) {
-        pass.set_pipeline(self.blit_pipeline(device, draw.blend_mode, draw.variant));
+        let Some(pipeline) = self.blit_pipeline(device, draw.blend_mode, draw.variant) else {
+            return;
+        };
+        pass.set_pipeline(pipeline);
         pass.set_bind_group(0, draw.texture_bind_group, &[]);
         pass.set_bind_group(1, &draw.uniform.bind_group, &[draw.uniform.offset]);
         if let Some((x, y, w, h)) = draw.scissor {
@@ -3419,7 +3483,11 @@ impl EffectRenderer {
         (device, viewport): (&wgpu::Device, (u32, u32)),
         draw: &PreparedProjectiveComposite<'_>,
     ) {
-        pass.set_pipeline(self.projective_blit_pipeline(device, draw.blend_mode, draw.variant));
+        let Some(pipeline) = self.projective_blit_pipeline(device, draw.blend_mode, draw.variant)
+        else {
+            return;
+        };
+        pass.set_pipeline(pipeline);
         pass.set_bind_group(0, draw.texture_bind_group, &[]);
         pass.set_bind_group(1, &draw.uniform.bind_group, &[draw.uniform.offset]);
         pass.set_vertex_buffer(0, draw.vertices.slice());
