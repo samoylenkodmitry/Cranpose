@@ -212,39 +212,41 @@ fn log_node_measure_telemetry(
     );
 }
 
-/// The host a layout pass lends its applier to, and the cell that holds the
-/// applier's slot table meanwhile. Between passes they hold an empty applier
-/// and table, and the app context keeps them, so a pass builds neither.
+/// The host a layout pass lends its applier to. Between passes it holds an
+/// empty applier and the app context keeps it, so a pass builds neither.
 pub(crate) struct LayoutHost {
     host: Rc<ConcreteApplierHost<MemoryApplier>>,
-    slots: Rc<RefCell<SlotTable>>,
 }
 
 impl Default for LayoutHost {
     fn default() -> Self {
         Self {
             host: Rc::new(ConcreteApplierHost::new(MemoryApplier::new())),
-            slots: Rc::new(RefCell::new(SlotTable::default())),
         }
     }
 }
 
-/// Lends `target` and its slot table to a [`LayoutHost`] for one pass and
-/// gives them back when dropped, also after a panic.
+/// Lends `target` to a [`LayoutHost`] for one pass and gives it back when
+/// dropped, also after a panic.
 struct ApplierSlotGuard<'a> {
     target: &'a mut MemoryApplier,
     lent: LayoutHost,
+    slots: Rc<RefCell<SlotTable>>,
 }
 
 impl<'a> ApplierSlotGuard<'a> {
     fn new(target: &'a mut MemoryApplier) -> Self {
         let lent = crate::render_state::take_layout_host();
-        {
+        let slots = {
             let mut applier_ref = lent.host.borrow_typed();
             std::mem::swap(target, &mut *applier_ref);
-            std::mem::swap(applier_ref.slots(), &mut *lent.slots.borrow_mut());
+            applier_ref.slots_handle()
+        };
+        Self {
+            target,
+            lent,
+            slots,
         }
-        Self { target, lent }
     }
 
     fn host(&self) -> &Rc<ConcreteApplierHost<MemoryApplier>> {
@@ -252,23 +254,18 @@ impl<'a> ApplierSlotGuard<'a> {
     }
 
     fn slots_handle(&self) -> &Rc<RefCell<SlotTable>> {
-        &self.lent.slots
+        &self.slots
     }
 }
 
 impl Drop for ApplierSlotGuard<'_> {
     fn drop(&mut self) {
-        let LayoutHost { host, slots } = &self.lent;
-        {
-            let mut applier_ref = host.borrow_typed();
-            std::mem::swap(applier_ref.slots(), &mut *slots.borrow_mut());
-            std::mem::swap(self.target, &mut *applier_ref);
-        }
+        let host = &self.lent.host;
+        std::mem::swap(self.target, &mut *host.borrow_typed());
         // A host still shared past the pass stays with whoever holds it.
-        if Rc::strong_count(host) == 1 && Rc::strong_count(slots) == 1 {
+        if Rc::strong_count(host) == 1 {
             crate::render_state::replace_layout_host(LayoutHost {
                 host: Rc::clone(host),
-                slots: Rc::clone(slots),
             });
         }
     }
