@@ -190,8 +190,12 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           image="system-images;android-35;google_apis;x86_64"
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install emulator "$image" >/dev/null
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/avd"
+          echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
+          mkdir -p "$ANDROID_AVD_HOME"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install emulator "$image" | tail -3
           echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n runtime -k "$image" -d pixel_6
+          "$ANDROID_HOME/emulator/emulator" -list-avds
           "$ANDROID_HOME/emulator/emulator" -avd runtime -no-window -no-audio -no-boot-anim \
             -no-snapshot -gpu swiftshader_indirect > "$RUNNER_TEMP/emulator.log" 2>&1 &
           adb wait-for-device
