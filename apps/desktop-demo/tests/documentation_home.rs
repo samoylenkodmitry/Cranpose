@@ -88,10 +88,16 @@ fn final_chapter() -> (&'static str, &'static str) {
     (title, lead)
 }
 
-/// The last line of the guide, which the reader shows within its last
-/// paragraph.
-fn final_line() -> &'static str {
-    GUIDE.trim_end().rsplit('\n').next().expect("a line").trim()
+/// The last line of the guide as the reader shows it within its last
+/// paragraph: inline code drops its backticks.
+fn final_line() -> String {
+    GUIDE
+        .trim_end()
+        .rsplit('\n')
+        .next()
+        .expect("a line")
+        .trim()
+        .replace('`', "")
 }
 
 fn open_final_guide_section(robot: &mut RobotTestRule<TestRenderer>) {
@@ -785,6 +791,7 @@ fn compact_reader_can_scroll_the_final_paragraph_above_the_pinned_repository_lin
         combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
     open_final_guide_section(&mut robot);
+    let final_line = final_line();
     let mut previous_footer_y = None;
     let mut end_layout = None;
     let mut visible_labels = Vec::new();
@@ -800,7 +807,7 @@ fn compact_reader_can_scroll_the_final_paragraph_above_the_pinned_repository_lin
         let final_paragraph = rects.iter().find_map(|(bounds, label)| {
             label
                 .as_deref()
-                .filter(|label| label.contains(final_line()))
+                .filter(|label| label.contains(final_line.as_str()))
                 .map(|_| *bounds)
         });
         let footer = rects
