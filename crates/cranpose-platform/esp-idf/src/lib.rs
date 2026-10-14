@@ -126,34 +126,41 @@ pub fn run(
     framebuffer.set_frame_waker(move || waker.notify());
     framebuffer.set_active(true);
     let mut stats: Option<FrameStats> = None;
+    // The start of the last tick. The next one waits `frame_interval` after
+    // it; a wake before then runs the posted tasks only. The waker fires on
+    // every frame request, the composition's own among them.
+    let mut last_tick: Option<Instant> = None;
     loop {
-        let frame_start = Instant::now();
         framebuffer.run_pending_tasks();
-        let elapsed = frame_start.duration_since(start).as_nanos();
-        if framebuffer.tick(u64::try_from(elapsed).unwrap_or(u64::MAX)) {
-            let updated = Instant::now();
-            presenter.present(&mut framebuffer, &mut panel)?;
-            let presented = Instant::now();
-            let phases = FramePhases {
-                update: updated.duration_since(frame_start),
-                present: presented.duration_since(updated),
-            };
-            match stats.as_mut() {
-                Some(stats) => stats.record(phases, presented),
-                None => {
-                    log::info!(
-                        "first frame after {} ms: update {} ms, draw and send {} ms",
-                        presented.duration_since(start).as_millis(),
-                        phases.update.as_millis(),
-                        phases.present.as_millis(),
-                    );
-                    stats = Some(FrameStats::new(presented));
+        let now = Instant::now();
+        if last_tick.is_none_or(|last| now >= last + config.frame_interval) {
+            last_tick = Some(now);
+            let elapsed = now.duration_since(start).as_nanos();
+            if framebuffer.tick(u64::try_from(elapsed).unwrap_or(u64::MAX)) {
+                let updated = Instant::now();
+                presenter.present(&mut framebuffer, &mut panel)?;
+                let presented = Instant::now();
+                let phases = FramePhases {
+                    update: updated.duration_since(now),
+                    present: presented.duration_since(updated),
+                };
+                match stats.as_mut() {
+                    Some(stats) => stats.record(phases, presented),
+                    None => {
+                        log::info!(
+                            "first frame after {} ms: update {} ms, draw and send {} ms",
+                            presented.duration_since(start).as_millis(),
+                            phases.update.as_millis(),
+                            phases.present.as_millis(),
+                        );
+                        stats = Some(FrameStats::new(presented));
+                    }
                 }
             }
         }
         let schedule = framebuffer.frame_schedule();
         let deadline = if schedule.needs_update || schedule.needs_frame {
-            Some(frame_start + config.frame_interval)
+            last_tick.map(|last| last + config.frame_interval)
         } else {
             schedule.next_deadline
         };
