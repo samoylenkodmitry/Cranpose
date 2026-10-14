@@ -665,6 +665,10 @@ struct App {
     last_redraw_empty: bool,
     primary_redraw_pending: bool,
     primary_surface_dirty: bool,
+    /// Whether the application menu waits for the primary window's first
+    /// presented frame.
+    #[cfg(target_os = "macos")]
+    application_menu_owed: bool,
     primary_initial_present_pending: bool,
     /// The primary window's GPU, opening while the platform starts.
     gpu_start: GpuStart,
@@ -747,6 +751,8 @@ impl App {
             last_redraw_empty: false,
             primary_redraw_pending: false,
             primary_surface_dirty: false,
+            #[cfg(target_os = "macos")]
+            application_menu_owed: true,
             primary_initial_present_pending: false,
             gpu_start,
             vsync_interval: default_vsync_interval(),
@@ -6016,6 +6022,8 @@ impl ApplicationHandler for App {
                         frame_interval,
                         after_acquire.duration_since(acquire_started_at),
                     ));
+                    #[cfg(target_os = "macos")]
+                    install_owed_application_menu(&mut self.application_menu_owed);
                     #[cfg(feature = "robot")]
                     {
                         self.presented_frame_generation =
@@ -7067,6 +7075,15 @@ fn request_primary_device(
     }))
 }
 
+/// Installs the application menu the launch left for after the primary
+/// window's first presented frame (`macos_menu`).
+#[cfg(target_os = "macos")]
+fn install_owed_application_menu(owed: &mut bool) {
+    if std::mem::take(owed) {
+        crate::macos_menu::install_application_menu();
+    }
+}
+
 fn build_event_loop() -> Result<EventLoop, winit::error::EventLoopError> {
     #[cfg(all(target_os = "linux", feature = "desktop-x11"))]
     if std::env::var_os("DISPLAY").is_some_and(|display| !display.is_empty()) {
@@ -7077,6 +7094,13 @@ fn build_event_loop() -> Result<EventLoop, winit::error::EventLoopError> {
             Err(error) => log::warn!("cranpose: the X display is unavailable: {error}"),
         }
     }
+    // winit's menu is installed after the first frame (`macos_menu`).
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::EventLoopBuilderExtMacOS;
+        EventLoop::builder().with_default_menu(false).build()
+    }
+    #[cfg(not(target_os = "macos"))]
     EventLoop::builder().build()
 }
 
