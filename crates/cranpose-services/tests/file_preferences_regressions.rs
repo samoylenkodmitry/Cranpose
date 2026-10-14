@@ -51,10 +51,13 @@ fn batching_preserves_unicode_and_removal_across_reopening() {
     let path = root.join("preferences");
     let store = FilePreferences::at_path(&path);
     store
-        .set_many(&std::collections::BTreeMap::from([
-            ("a=\n%".to_owned(), "👩‍💻\nново=100%".to_owned()),
-            ("remove".to_owned(), "value".to_owned()),
-        ]))
+        .update_many(
+            &std::collections::BTreeMap::from([
+                ("a=\n%".to_owned(), "👩‍💻\nново=100%".to_owned()),
+                ("remove".to_owned(), "value".to_owned()),
+            ]),
+            &[],
+        )
         .expect("batch write");
     store.remove("remove").expect("remove key");
     drop(store);

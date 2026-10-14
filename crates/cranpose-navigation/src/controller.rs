@@ -2,16 +2,32 @@ use std::panic::Location;
 
 use cranpose_core::{MutableState, OwnedMutableState, ownedMutableStateOfNeverEqual};
 use cranpose_coroflow::{ViewModelStore, viewModel};
+use cranpose_services::{SaveableRegistration, SaveableScope, Saver};
+
+mod saved_stack;
 
 /// One screen on the back stack — Android's `NavBackStackEntry`.
 ///
 /// Two entries are equal when they are the same visit, so navigating to the
-/// same route twice gives two entries with their own view models.
+/// same route twice gives two entries with their own view models and saved
+/// state.
 #[derive(Clone)]
 pub(crate) struct Entry<R> {
     id: u64,
     pub(crate) route: R,
     pub(crate) store: ViewModelStore,
+    pub(crate) saveables: SaveableScope,
+}
+
+impl<R> Entry<R> {
+    fn new(id: u64, route: R, stack: &SaveableScope) -> Self {
+        Self {
+            id,
+            route,
+            store: ViewModelStore::default(),
+            saveables: stack.child(id),
+        }
+    }
 }
 
 impl<R> PartialEq for Entry<R> {
@@ -24,30 +40,32 @@ impl<R> PartialEq for Entry<R> {
 pub(crate) struct BackStack<R> {
     entries: Vec<Entry<R>>,
     next_id: u64,
+    /// Where the entries' saved state lives, each entry in a child scope
+    /// named by its id.
+    saveables: SaveableScope,
 }
 
 impl<R: Clone + PartialEq> BackStack<R> {
-    fn new(start: R) -> Self {
+    fn new(start: R, saveables: SaveableScope) -> Self {
         let mut stack = Self {
             entries: Vec::new(),
             next_id: 0,
+            saveables,
         };
         stack.push(start);
         stack
     }
 
     fn push(&mut self, route: R) {
-        self.entries.push(Entry {
-            id: self.next_id,
-            route,
-            store: ViewModelStore::default(),
-        });
+        self.entries
+            .push(Entry::new(self.next_id, route, &self.saveables));
         self.next_id += 1;
     }
 
     /// Removes the entries above the topmost `route`, and that entry too when
     /// `inclusive`. The removed entries are returned so that their view models
     /// are dropped after the back stack is written, not while it is borrowed.
+    /// [`forget`] forgets their saved state.
     fn split_above(&mut self, route: &R, inclusive: bool) -> Vec<Entry<R>> {
         let Some(index) = self.entries.iter().rposition(|entry| entry.route == *route) else {
             return Vec::new();
@@ -67,6 +85,17 @@ impl<R: Clone + PartialEq> BackStack<R> {
     pub(crate) fn can_pop(&self) -> bool {
         self.entries.len() > 1
     }
+}
+
+/// Forgets the saved state of `popped` entries, and returns whether there
+/// was one. Their view models drop once the host has faded them out.
+fn forget<R>(popped: impl IntoIterator<Item = Entry<R>>) -> bool {
+    let mut any = false;
+    for entry in popped {
+        entry.saveables.forget();
+        any = true;
+    }
+    any
 }
 
 /// How [`NavController::navigate_with`] changes the back stack — Android's
@@ -152,33 +181,32 @@ impl<R: Clone + PartialEq + 'static> NavController<R> {
             }
             popped
         });
-        drop(popped);
+        forget(popped);
     }
 
     /// Pops the top entry and returns whether there was one — Android's
     /// `popBackStack()`. Popping the last entry leaves the host empty.
     pub fn pop_back_stack(&self) -> bool {
-        let popped = self.stack.update(|stack| stack.entries.pop());
-        popped.is_some()
+        forget(self.stack.update(|stack| stack.entries.pop()))
     }
 
     /// Pops the entries above the topmost `route`, and that entry too when
     /// `inclusive`, and returns whether anything was popped — Android's
     /// `popBackStack(route, inclusive)`.
     pub fn pop_back_stack_to(&self, route: &R, inclusive: bool) -> bool {
-        let popped = self
-            .stack
-            .update(|stack| stack.split_above(route, inclusive));
-        !popped.is_empty()
+        forget(
+            self.stack
+                .update(|stack| stack.split_above(route, inclusive)),
+        )
     }
 
     /// Pops the top entry when there is one beneath it, and returns whether it
     /// did — Android's `navigateUp()`.
     pub fn navigate_up(&self) -> bool {
-        let popped = self
-            .stack
-            .update(|stack| stack.can_pop().then(|| stack.entries.pop()).flatten());
-        popped.is_some()
+        forget(
+            self.stack
+                .update(|stack| stack.can_pop().then(|| stack.entries.pop()).flatten()),
+        )
     }
 
     /// The route on top of the back stack, `None` once everything is popped.
@@ -203,7 +231,18 @@ impl<R: Clone + PartialEq + 'static> NavController<R> {
 }
 
 struct NavControllerState<R: Clone + 'static> {
+    /// Declared first so that it drops first and reads the back stack one
+    /// last time.
+    _saved: Option<SaveableRegistration>,
     stack: OwnedMutableState<BackStack<R>>,
+}
+
+impl<R: Clone + 'static> NavControllerState<R> {
+    fn controller(&self) -> NavController<R> {
+        NavController {
+            stack: self.stack.handle(),
+        }
+    }
 }
 
 /// A [`NavController`] whose back stack starts at `start` — Android's
@@ -211,13 +250,65 @@ struct NavControllerState<R: Clone + 'static> {
 ///
 /// The back stack lives in the nearest view model store, so a `NavHost`
 /// nested in a screen keeps its back stack while another screen covers that
-/// screen.
+/// screen. It lives only in memory, and so does the `rememberSaveable` state
+/// of its screens: a covered screen gets its state back, and a popped one
+/// forgets it. [`rememberSaveableNavController`] also restores both after the
+/// process restarts.
 #[track_caller]
 pub fn rememberNavController<R: Clone + PartialEq + 'static>(start: R) -> NavController<R> {
-    let state = viewModel(Location::caller(), |_| NavControllerState {
-        stack: ownedMutableStateOfNeverEqual(BackStack::new(start)),
+    let location = Location::caller();
+    let state = viewModel(location, |_| {
+        let saveables = SaveableScope::current().child(location).in_memory();
+        saveables.forget();
+        NavControllerState {
+            _saved: None,
+            stack: ownedMutableStateOfNeverEqual(BackStack::new(start, saveables)),
+        }
     });
-    NavController {
-        stack: state.get().stack.handle(),
-    }
+    state.get().controller()
+}
+
+/// A [`NavController`] whose back stack is saved under `key` at each save
+/// boundary, as `rememberSaveable` state is, and restored when it is next
+/// created, after a process restart too. `saver` gives each route its saved
+/// form; it may read the forms older builds wrote.
+///
+/// The `rememberSaveable` state of each screen is saved with it, apart from
+/// other visits of the same route. A popped screen forgets its state.
+/// Restoring keeps the entries beneath the first route `saver` cannot read;
+/// when it cannot read the bottom one, or nothing was saved, the back stack
+/// starts at `start`.
+#[track_caller]
+pub fn rememberSaveableNavController<R: Clone + PartialEq + 'static>(
+    key: &'static str,
+    start: R,
+    saver: Saver<R>,
+) -> NavController<R> {
+    let state = viewModel(Location::caller(), |_| {
+        let scope = SaveableScope::current();
+        let saveables = scope.child(key);
+        let restored = scope
+            .restore(key)
+            .and_then(|saved| saved_stack::decode(&saved, &saver, &saveables));
+        let stack = match restored {
+            Some(stack) => {
+                saveables.forget_children_except(stack.entries.iter().map(|entry| entry.id));
+                stack
+            }
+            None => {
+                saveables.forget();
+                BackStack::new(start, saveables)
+            }
+        };
+        let stack = ownedMutableStateOfNeverEqual(stack);
+        let handle = stack.handle();
+        let saved = scope.register(key, move || {
+            handle.try_with(|stack| saved_stack::encode(stack, &saver))
+        });
+        NavControllerState {
+            _saved: Some(saved),
+            stack,
+        }
+    });
+    state.get().controller()
 }

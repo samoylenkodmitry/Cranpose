@@ -44,6 +44,55 @@ fn DetailScreen(_id: u32) {}
 stack pop. Use `NavHostWith` for a custom transition and `NavController::navigate_with`
 for pop-up and single-top options.
 
+## Saved state
+
+Each back-stack entry has its own `SaveableScope`, so `rememberSaveable` in a
+screen keeps the state of that visit. A covered screen gets its state back, and
+a popped screen forgets it. Two visits of one route keep apart.
+
+`rememberNavController` keeps the back stack and the screens' saved state in
+memory. `rememberSaveableNavController` saves both at each save boundary and
+restores them when the app starts again. Its `Saver` gives each route a saved
+form and may read the forms that older builds wrote:
+
+```rust
+use cranpose_navigation::{NavHost, rememberSaveableNavController};
+use cranpose_services::Saver;
+use cranpose_ui::composable;
+
+#[derive(Clone, PartialEq)]
+enum Screen {
+    Home,
+    Detail { id: u32 },
+}
+
+fn routes() -> Saver<Screen> {
+    Saver::new(
+        |screen: &Screen| match screen {
+            Screen::Home => "home".to_owned(),
+            Screen::Detail { id } => format!("detail {id}"),
+        },
+        |saved| match saved {
+            "home" => Some(Screen::Home),
+            _ => saved.strip_prefix("detail ")?.parse().ok().map(|id| Screen::Detail { id }),
+        },
+    )
+}
+
+#[composable]
+fn App() {
+    let nav = rememberSaveableNavController("nav", Screen::Home, routes());
+    NavHost(nav, move |screen| match screen {
+        Screen::Home => {}
+        Screen::Detail { id: _ } => {}
+    });
+}
+```
+
+Restoring keeps the entries beneath the first route the saver cannot read. When
+it cannot read the bottom entry, or nothing was saved, the back stack starts at
+the start route.
+
 ## Android API map
 
 | Android API | Cranpose API |
@@ -55,6 +104,8 @@ for pop-up and single-top options.
 | `popUpTo`, inclusive pop, single top | `navigate_with`, `NavOptions` |
 | Current back-stack entry | `current_route`, `back_stack` |
 | View model scoped to a back-stack entry | `cranpose_coroflow::viewModel` inside a screen |
+| `rememberSaveable` in a destination | `rememberSaveable` inside a screen |
+| Back stack restored after process death | `rememberSaveableNavController` with a route `Saver` |
 
 - [API reference on docs.rs](https://docs.rs/cranpose-navigation/latest/cranpose_navigation/)
 - [Source on GitHub](https://github.com/samoylenkodmitry/cranpose/tree/main/crates/cranpose-navigation)

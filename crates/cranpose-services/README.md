@@ -61,6 +61,14 @@ the browser host saves when its page loses foreground visibility or focus.
 Changes do not require another frame to be included. Ordinary recomposition does
 not read, serialize or write preferences again.
 
+Each `rememberSaveable` key lives in the `SaveableScope` where it is composed.
+`ProvideSaveableScope` gives content a child scope, for example one per
+navigation entry, and a scope can keep its values only in memory. When a
+saveable leaves the composition, its last value stays in memory until a save
+boundary writes it, so content that comes back restores it.
+`SaveableScope::forget` drops a scope's values and removes the stored ones at
+the next save boundary, on the save worker.
+
 Call `run_durable_saves(deadline)` on the composition thread for an explicit save
 boundary before discarding a composition or finishing a critical operation.
 `Completed` means all registered callbacks and preference writes succeeded.
@@ -77,7 +85,7 @@ Native saving uses at most one worker and does not queue obsolete batches.
 within the process. Writes synchronize the replacement file; Unix also
 synchronizes its directory. If a write fails, reads include pending changes and
 `PreferencesStore::flush()` retries them. Other processes must not modify that
-file concurrently. Custom backends implement `set_many` to batch their writes.
+file concurrently. Custom backends implement `update_many` to batch their writes and removals.
 
 ## Features and platform adapters
 

@@ -2,8 +2,8 @@ use std::{cell::Cell, sync::Arc, time::Duration};
 
 use cranpose_core::{Composition, MemoryApplier, MutableState, location_key};
 use cranpose_services::{
-    DurableSaveOutcome, MemoryPreferences, PreferencesError, PreferencesStore, Saver,
-    rememberSaveable, run_durable_saves, set_platform_preferences,
+    DurableSaveOutcome, MemoryPreferences, PreferencesError, PreferencesStore, SaveableScope,
+    Saver, rememberSaveable, run_durable_saves, set_platform_preferences,
 };
 
 use super::composition_support::serial;
@@ -29,7 +29,11 @@ impl PreferencesStore for FallibleStore {
         }
     }
     fn remove(&self, key: &str) -> Result<(), PreferencesError> {
-        self.memory.remove(key)
+        if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+            Err(PreferencesError::Io("injected remove failure".into()))
+        } else {
+            self.memory.remove(key)
+        }
     }
     fn clear(&self) -> Result<(), PreferencesError> {
         self.memory.clear()
@@ -69,6 +73,47 @@ fn failed_save_retries_the_latest_value_without_recomposition() {
     );
     assert_eq!(store.get("counter").as_deref(), Some("3"));
     drop(composition);
+    assert_eq!(
+        run_durable_saves(Duration::from_secs(5)),
+        DurableSaveOutcome::Nothing
+    );
+}
+
+#[test]
+fn a_forgotten_scope_restores_nothing_and_its_values_go_once_a_save_completes() {
+    use std::sync::atomic::Ordering;
+    let _guard = serial();
+    let store = Arc::new(FallibleStore::default());
+    set_platform_preferences(store.clone());
+    let mut composition = Composition::new(MemoryApplier::new());
+    let scope = std::cell::RefCell::new(None);
+    composition
+        .render(location_key(file!(), line!(), column!()), || {
+            scope.replace(Some(SaveableScope::current().child("entry")));
+        })
+        .expect("compose");
+    let entry = scope.take().expect("scope");
+    let registration = entry.register("count", || Some("4".to_owned()));
+    assert_eq!(
+        run_durable_saves(Duration::from_secs(5)),
+        DurableSaveOutcome::Completed
+    );
+    drop(registration);
+    assert_eq!(entry.restore("count").as_deref(), Some("4"));
+    entry.forget();
+    assert_eq!(entry.restore("count"), None, "before the store drops it");
+    store.fail.store(true, Ordering::SeqCst);
+    assert_eq!(
+        run_durable_saves(Duration::from_secs(5)),
+        DurableSaveOutcome::Failed
+    );
+    assert_eq!(entry.restore("count"), None, "after a failed save");
+    store.fail.store(false, Ordering::SeqCst);
+    assert_eq!(
+        run_durable_saves(Duration::from_secs(5)),
+        DurableSaveOutcome::Completed
+    );
+    assert!(store.keys().is_empty());
     assert_eq!(
         run_durable_saves(Duration::from_secs(5)),
         DurableSaveOutcome::Nothing

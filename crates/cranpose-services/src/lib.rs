@@ -120,6 +120,7 @@ pub use device_info::{
     DeviceInfo, DeviceInfoRef, clear_platform_device_info, device_info, release_free_memory,
     set_platform_device_info,
 };
+pub use durable_save::SaveableRegistration;
 pub use file_picker::{
     FileFilter, FilePicker, FilePickerError, FilePickerOptions, FilePickerRef, PickerFuture,
     ProvideFilePicker, RecoveredPick, SaveDocumentRequest, clear_platform_file_picker,
@@ -251,8 +252,9 @@ pub use preferences::BrowserPreferences;
 #[cfg(not(target_arch = "wasm32"))]
 pub use preferences::FilePreferences;
 pub use preferences::{
-    MemoryPreferences, PreferencesError, PreferencesRef, PreferencesStore, Saver,
-    clear_platform_preferences, preferences, rememberSaveable, set_platform_preferences,
+    MemoryPreferences, PreferencesError, PreferencesRef, PreferencesStore, ProvideSaveableScope,
+    SaveableScope, Saver, clear_platform_preferences, preferences, rememberSaveable,
+    set_platform_preferences,
 };
 pub use purchases::{
     Product, PurchaseEvent, Purchases, PurchasesRef, StoreObserver, StorePhase, StoreState,

@@ -11,6 +11,7 @@
 
 use std::{
     collections::BTreeMap,
+    rc::Rc,
     sync::{Arc, Mutex, OnceLock},
 };
 
@@ -43,9 +44,17 @@ pub trait PreferencesStore: Send + Sync {
     /// Writes `key`.
     fn set(&self, key: &str, value: &str) -> Result<(), PreferencesError>;
 
-    /// Writes a group of values. File-backed stores replace the file once.
-    /// A failure may leave pending values visible; retry this batch or call `flush`.
-    fn set_many(&self, values: &BTreeMap<String, String>) -> Result<(), PreferencesError> {
+    /// Removes `removed`, then writes `values`, as one group. File-backed
+    /// stores replace the file once. A failure may leave pending changes
+    /// visible; retry this batch or call `flush`.
+    fn update_many(
+        &self,
+        values: &BTreeMap<String, String>,
+        removed: &[String],
+    ) -> Result<(), PreferencesError> {
+        for key in removed {
+            self.remove(key)?;
+        }
         for (key, value) in values {
             self.set(key, value)?;
         }
@@ -347,6 +356,11 @@ where
 /// on the composition thread for an explicit durability boundary. Mutations before
 /// that boundary are captured without another frame; abrupt termination before a
 /// successful flush can lose them. Failed flushes can be retried.
+///
+/// `key` is a key in the [`SaveableScope`] where this is composed, so a
+/// navigation entry's state stays apart from another's. When the composable
+/// leaves the composition its last value is kept and saved at the next
+/// boundary, and a composable that comes back restores it.
 #[expect(non_snake_case)]
 #[track_caller]
 pub fn rememberSaveable<T>(
@@ -358,20 +372,123 @@ where
     T: Clone + 'static,
 {
     cranpose_core::remember(move || {
-        let store = preferences();
-        let restored = store
-            .get(key)
+        let scope = SaveableScope::current();
+        let (store, key) = (scope.store(), scope.key(key));
+        let restored = crate::durable_save::saved(store.as_ref(), &key)
             .and_then(|stored| saver.restore(&stored))
             .unwrap_or_else(initial);
         let owner = cranpose_core::mutableStateOfNeverEqual(restored);
         let state = owner;
-        let registration =
-            crate::durable_save::register_local_preference_save(store, key.to_owned(), move || {
-                state.try_with(|value| saver.save(value))
-            });
+        let registration = crate::durable_save::register_local(store, key, move || {
+            state.try_with(|value| saver.save(value))
+        });
         (owner, registration)
     })
     .with(|(state, _)| *state)
+}
+
+/// Where the [`rememberSaveable`] calls in some content keep their values: a
+/// key namespace, and whether the values are saved in [`preferences`] or kept
+/// only in memory. A navigation host gives each back-stack entry its own, so
+/// two visits of one screen keep apart.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SaveableScope {
+    namespace: Option<Rc<str>>,
+    durable: bool,
+}
+
+fn local_saveable_scope() -> cranpose_core::CompositionLocal<SaveableScope> {
+    crate::composition_locals::cached_local(
+        |locals| &locals.saveable_scope,
+        || {
+            cranpose_core::compositionLocalOf(|| SaveableScope {
+                namespace: None,
+                durable: true,
+            })
+        },
+    )
+}
+
+impl SaveableScope {
+    /// The scope where this is composed: the one [`ProvideSaveableScope`]
+    /// gives, else the root scope, which saves each key as it is in
+    /// [`preferences`]. Call it while composing.
+    pub fn current() -> Self {
+        local_saveable_scope().current()
+    }
+
+    /// The scope named `name` inside this one. It saves where this one does.
+    pub fn child(&self, name: impl std::fmt::Display) -> Self {
+        Self {
+            namespace: Some(self.key(name).into()),
+            durable: self.durable,
+        }
+    }
+
+    /// This scope with its values kept only in memory, until the scope is
+    /// forgotten or the process ends.
+    #[must_use]
+    pub fn in_memory(self) -> Self {
+        Self {
+            durable: false,
+            ..self
+        }
+    }
+
+    /// The value last saved under `key` in this scope.
+    pub fn restore(&self, key: &str) -> Option<String> {
+        crate::durable_save::saved(self.store().as_ref(), &self.key(key))
+    }
+
+    /// Saves what `read` returns under `key` in this scope at each save
+    /// boundary while the registration lives, and keeps its last value once
+    /// it is dropped, as [`rememberSaveable`] does. `read` must not perform
+    /// storage I/O.
+    pub fn register(
+        &self,
+        key: &str,
+        read: impl Fn() -> Option<String> + 'static,
+    ) -> crate::durable_save::SaveableRegistration {
+        crate::durable_save::register_local(self.store(), self.key(key), read)
+    }
+
+    /// Forgets everything saved in this scope: the state of a back-stack
+    /// entry once it is popped. Saves in it stop, and stored values are
+    /// removed at the next save boundary. The root scope forgets nothing.
+    pub fn forget(&self) {
+        self.forget_children_except(std::iter::empty::<&str>());
+    }
+
+    /// Forgets everything saved in this scope apart from the child scopes
+    /// named in `keep`, as [`SaveableScope::forget`] does.
+    pub fn forget_children_except<N: std::fmt::Display>(&self, keep: impl IntoIterator<Item = N>) {
+        let Some(namespace) = &self.namespace else {
+            return;
+        };
+        let keep = keep
+            .into_iter()
+            .map(|name| format!("{namespace}/{name}/"))
+            .collect();
+        crate::durable_save::forget(self.store(), format!("{namespace}/"), keep);
+    }
+
+    fn key(&self, key: impl std::fmt::Display) -> String {
+        match &self.namespace {
+            Some(namespace) => format!("{namespace}/{key}"),
+            None => key.to_string(),
+        }
+    }
+
+    fn store(&self) -> Option<PreferencesRef> {
+        self.durable.then(preferences)
+    }
+}
+
+/// Gives the [`rememberSaveable`] calls in `content` the saveable `scope`.
+#[expect(non_snake_case)]
+#[track_caller]
+pub fn ProvideSaveableScope(scope: SaveableScope, content: impl FnOnce()) {
+    cranpose_core::CompositionLocalProvider([local_saveable_scope().provides(scope)], content);
 }
 
 #[cfg(test)]

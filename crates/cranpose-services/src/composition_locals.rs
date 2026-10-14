@@ -19,6 +19,7 @@ pub(crate) struct ServiceLocals {
     pub(crate) theme: OnceCell<CompositionLocal<crate::theme::SystemTheme>>,
     pub(crate) uri_handler: OnceCell<CompositionLocal<crate::uri_handler::UriHandlerRef>>,
     pub(crate) lifecycle: OnceCell<CompositionLocal<crate::host::LifecycleState>>,
+    pub(crate) saveable_scope: OnceCell<CompositionLocal<crate::preferences::SaveableScope>>,
 }
 
 pub(crate) fn cached_local<T: Clone + 'static>(

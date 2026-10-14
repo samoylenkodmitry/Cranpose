@@ -15,6 +15,15 @@ each route in application code, so the compiler checks route selection.
 Each back-stack entry owns a store for screen view models; the store drops when
 its entry leaves the stack and its exit transition finishes.
 
+Each entry also owns a `SaveableScope` named by its id, inside the controller's
+scope. `rememberSaveable` in a screen saves there, so two visits of one route
+keep apart and a covered screen restores its state. Popping an entry forgets its
+scope: its saves stop, and the stored values go at the next save boundary.
+`rememberSaveableNavController` saves the back stack as `1 <next id>` followed
+by ` <id> <length> <route>` per entry, with each route in the app's `Saver`
+form. On restore it keeps the entries beneath the first unreadable route and
+forgets the saved state of entries that are not on the restored stack.
+
 `ViewModelStoreOwner` scopes stores to a composition subtree. `viewModel(key,
 factory)` resolves an instance from the nearest store, or from the composition
 position outside a provided store. `ProvideViewModelStore` lets a host, preview
@@ -22,8 +31,10 @@ or test supply a store. Lifecycle start and resume effects follow host state.
 
 ## Deliberate differences
 
-- Back-stack and view-model state live in memory. Apps save data across process
-  death through `SavedStateHandle` or `rememberSaveable`.
+- `rememberNavController` keeps the back stack and its screens' saveable state
+  in memory. `rememberSaveableNavController` restores both after process death.
+  View models live in memory; they save data through `SavedStateHandle`, whose
+  namespaces the app names.
 - A covered screen keeps its view models; screen-local `remember` state follows
   composition lifetime.
 - `launch_single_top` compares complete route values. Distinct arguments create
