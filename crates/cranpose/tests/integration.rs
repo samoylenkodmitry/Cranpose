@@ -1,3 +1,5 @@
+#[cfg(feature = "framebuffer")]
+mod framebuffer;
 mod host_effects;
 mod ios_scene_static;
 mod platform_scheduling_static;

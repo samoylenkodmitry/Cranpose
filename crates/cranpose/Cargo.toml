@@ -184,8 +184,12 @@ media-wav = ["media-backend", "cranpose-media/wav"]
 # Internal: the backend itself, with no codec. Enable `media` or `media-wav`.
 media-backend = ["dep:cranpose-media"]
 renderer-pixels = ["cranpose-render-pixels"]
+# A composition the CPU draws into an RGBA framebuffer that the host
+# presents (`cranpose::framebuffer`), for hosts without a GPU: watchOS and
+# microcontrollers such as the ESP32-S3.
+framebuffer = ["renderer-pixels"]
 watchos = [
-    "renderer-pixels",
+    "framebuffer",
     "dep:objc2",
     "dep:objc2-foundation",
     "dep:block2",
@@ -737,6 +741,7 @@ wry = { version = "0.57", default-features = false, features = ["os-webview", "x
 gtk = { version = "0.18.2", optional = true }
 
 [dev-dependencies]
+cranpose-animation.workspace = true
 # Path-only dev-dep: stripped from the published manifest. Turns on the
 # workspace's shared test scratch directory for this crate's own tests.
 cranpose-core = { path = "../cranpose-core", features = ["test-helpers"] }
