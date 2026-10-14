@@ -30,6 +30,8 @@ pub struct SoftwareTextResources {
 }
 
 impl SoftwareTextResources {
+    /// Resources that use the embedded default font when the `embedded-default-font` feature is on,
+    /// and draw no text otherwise.
     pub fn default_font() -> Self {
         Self::from_fonts(&[])
     }
@@ -43,6 +45,7 @@ impl SoftwareTextResources {
         }
     }
 
+    /// The font set that text is measured and drawn with.
     pub fn fonts(&self) -> &SoftwareTextFontSet {
         &self.fonts
     }
@@ -63,14 +66,20 @@ impl Default for SoftwareTextResources {
     }
 }
 
+/// Character width in logical pixels that the fallback metrics use: 0.55 times `font_size`,
+/// where a font size below one counts as one.
 pub fn fallback_char_width(font_size: f32) -> f32 {
     font_size.max(1.0) * 0.55
 }
 
+/// Line height in logical pixels that the fallback metrics use: 1.2 times `font_size`, where a
+/// font size below one counts as one.
 pub fn fallback_line_height(font_size: f32) -> f32 {
     font_size.max(1.0) * 1.2
 }
 
+/// Estimates the metrics of `text` at `font_size` without a font: every character has the
+/// fallback width and every line break starts a line of the fallback height.
 pub fn fallback_text_metrics(text: &str, font_size: f32) -> TextMetrics {
     let line_height = fallback_line_height(font_size);
     let mut line_count = 0usize;
@@ -88,6 +97,9 @@ pub fn fallback_text_metrics(text: &str, font_size: f32) -> TextMetrics {
     }
 }
 
+/// Estimates the x offset in logical pixels of the caret at `byte_offset` of `text` without a
+/// font: the characters before it times the fallback width. An offset past the end counts as the
+/// end.
 pub fn fallback_cursor_x_for_byte_offset(text: &str, byte_offset: usize, font_size: f32) -> f32 {
     let clamped = byte_offset.min(text.len());
     let char_count = if clamped == text.len() {
@@ -100,6 +112,8 @@ pub fn fallback_cursor_x_for_byte_offset(text: &str, byte_offset: usize, font_si
     char_count as f32 * fallback_char_width(font_size)
 }
 
+/// A `TextMeasurer` that measures with the fonts of `SoftwareTextResources` and caches the
+/// metrics by text, font size and style.
 pub struct CachedFontTextMeasurer {
     text_resources: SoftwareTextResources,
     cache: Mutex<TextMetricsCache>,
@@ -145,6 +159,8 @@ impl TextMetricsCache {
 }
 
 impl CachedFontTextMeasurer {
+    /// Creates a measurer for `text_resources` with a metrics cache of `capacity` entries, at least
+    /// one.
     pub fn with_text_resources(text_resources: SoftwareTextResources, capacity: usize) -> Self {
         Self {
             text_resources,

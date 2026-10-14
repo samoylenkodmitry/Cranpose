@@ -10,16 +10,21 @@ use crate::{
     modifier::Modifier, widgets::Layout,
 };
 
+/// Optional settings for a [`Button`].
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ButtonSpec {
+    /// Source that receives the button's press interactions, for example to draw a pressed state.
+    /// `None` records none.
     pub interaction_source: Option<MutableInteractionSource>,
 }
 
 impl ButtonSpec {
+    /// Creates a spec with no interaction source.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Sets the source that receives the button's press interactions.
     pub fn interaction_source(mut self, interaction_source: MutableInteractionSource) -> Self {
         self.interaction_source = Some(interaction_source);
         self

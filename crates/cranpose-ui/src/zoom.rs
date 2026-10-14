@@ -161,10 +161,12 @@ impl ZoomState {
         }
     }
 
+    /// Returns the smallest scale this state allows.
     pub fn min_scale(&self) -> f32 {
         self.inner().min_scale.get()
     }
 
+    /// Returns the largest scale this state allows.
     pub fn max_scale(&self) -> f32 {
         self.inner().max_scale.get()
     }

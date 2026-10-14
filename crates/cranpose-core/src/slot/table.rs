@@ -31,6 +31,7 @@ pub(crate) struct SlotWriteSession<'a> {
     pub(in crate::slot) state: &'a mut SlotWriteSessionState,
 }
 
+/// Storage for the groups, remembered values and nodes that one composition produced.
 pub struct SlotTable {
     storage_id: SlotStorageIdentity,
     pub(super) groups: Vec<GroupRecord>,
@@ -45,6 +46,7 @@ pub struct SlotTable {
 }
 
 impl SlotTable {
+    /// Creates an empty table.
     pub fn new() -> Self {
         Self {
             storage_id: SlotStorageIdentity::new(),

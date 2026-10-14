@@ -13,35 +13,73 @@ use cranpose_core::{CompositionLocal, compositionLocalOfWithPolicy};
 #[cfg(all(target_arch = "wasm32", feature = "web-http"))]
 use futures_util::{StreamExt, stream};
 
+/// Why an HTTP transfer failed.
 #[derive(thiserror::Error, Debug, Clone)]
 pub enum HttpError {
+    /// The platform could not create its HTTP client. The text describes the cause.
     #[error("Failed to build HTTP client: {0}")]
     ClientInit(String),
+    /// The request could not be sent or got no response.
     #[error("Request failed for {url}: {message}")]
-    RequestFailed { url: String, message: String },
+    RequestFailed {
+        /// The URL that was requested.
+        url: String,
+        /// What the platform reported.
+        message: String,
+    },
+    /// The server answered with a status outside the 2xx range.
     #[error("Request failed with status {status} for {url}")]
-    HttpStatus { url: String, status: u16 },
+    HttpStatus {
+        /// The URL that was requested.
+        url: String,
+        /// The status code of the response.
+        status: u16,
+    },
+    /// The response body ended early or could not be read.
     #[error("Failed to read response body for {url}: {message}")]
-    BodyReadFailed { url: String, message: String },
+    BodyReadFailed {
+        /// The URL that was requested.
+        url: String,
+        /// What the platform reported.
+        message: String,
+    },
+    /// The response is not usable, such as a body that is not valid UTF-8 text.
     #[error("Invalid response for {url}: {message}")]
-    InvalidResponse { url: String, message: String },
+    InvalidResponse {
+        /// The URL that was requested.
+        url: String,
+        /// What is wrong with the response.
+        message: String,
+    },
+    /// The browser gave no window object to send the request through.
     #[error("No window object available")]
     NoWindow,
+    /// A worker thread that ran part of the operation panicked.
     #[error("{operation} worker thread panicked")]
-    WorkerPanicked { operation: &'static str },
+    WorkerPanicked {
+        /// The operation that the worker thread ran.
+        operation: &'static str,
+    },
+    /// The operation needs a `cranpose-services` feature that is turned off.
     #[error("{operation} requires cranpose-services feature `{feature}`")]
     UnsupportedFeature {
+        /// The operation that the build cannot run.
         operation: &'static str,
+        /// Name of the `cranpose-services` feature that the operation needs.
         feature: &'static str,
     },
+    /// The caller cancelled the transfer through its [`HttpControl`].
     #[error("Download was cancelled")]
     Cancelled,
+    /// A downloaded file could not be written to disk.
     #[error("Failed to write downloaded file {path}: {message}")]
     FileWrite {
+        /// The path of the file that failed to write.
         path: String,
         /// What the system reported, such as
         /// [`std::io::ErrorKind::StorageFull`] for a full disk.
         kind: std::io::ErrorKind,
+        /// The text of the system error.
         message: String,
     },
 }
@@ -191,11 +229,16 @@ impl HttpControl {
 /// The verbs a request can use.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum HttpMethod {
+    /// Reads the resource.
     #[default]
     Get,
+    /// Asks for the headers only, without the body.
     Head,
+    /// Sends the request body to the server for processing.
     Post,
+    /// Replaces the resource with the request body.
     Put,
+    /// Removes the resource.
     Delete,
 }
 
@@ -215,9 +258,13 @@ impl HttpMethod {
 /// One request.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HttpRequest {
+    /// The absolute URL to request.
     pub url: String,
+    /// The HTTP method of the request.
     pub method: HttpMethod,
+    /// The request headers as name and value pairs, in the order they are sent.
     pub headers: Vec<(String, String)>,
+    /// The request body, or `None` for a request without one.
     pub body: Option<Vec<u8>>,
     /// Resume an interrupted transfer from this byte offset.
     ///
@@ -237,16 +284,19 @@ impl HttpRequest {
         }
     }
 
+    /// Sets the HTTP method of the request.
     pub fn method(mut self, method: HttpMethod) -> Self {
         self.method = method;
         self
     }
 
+    /// Adds a header to the request. Calling it again with the same name adds a second header.
     pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.push((name.into(), value.into()));
         self
     }
 
+    /// Sets the request body.
     pub fn body(mut self, body: impl Into<Vec<u8>>) -> Self {
         self.body = Some(body.into());
         self
@@ -259,9 +309,12 @@ impl HttpRequest {
     }
 }
 
+/// The future that an HTTP operation returns. It is `Send`, so it can run on any thread.
 #[cfg(not(target_arch = "wasm32"))]
 pub type HttpFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, HttpError>> + Send + 'a>>;
 
+/// The future that an HTTP operation returns. It is not `Send` on wasm, because browser objects
+/// belong to the one thread of the page.
 #[cfg(target_arch = "wasm32")]
 pub type HttpFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, HttpError>> + 'a>>;
 
@@ -406,16 +459,19 @@ impl HttpResponse {
         Self::new(url, status, http_body_ref(EmptyBody))
     }
 
+    /// Sets the response headers as name and value pairs.
     pub fn with_headers(mut self, headers: Vec<(String, String)>) -> Self {
         self.headers = headers;
         self
     }
 
+    /// Sets the length of the body in bytes, when the server said.
     pub fn with_content_length(mut self, content_length: Option<u64>) -> Self {
         self.content_length = content_length;
         self
     }
 
+    /// Sets whether the server honoured [`HttpRequest::resume_from`].
     pub fn with_resumed(mut self, resumed: bool) -> Self {
         self.resumed = resumed;
         self
@@ -538,6 +594,9 @@ pub trait HttpClient: Send + Sync {
 /// again, so a call that finds the whole file returns at once.
 #[cfg(not(target_arch = "wasm32"))]
 pub trait PlatformDownloader: Send + Sync {
+    /// Starts or continues the download of `url` into `target`.
+    ///
+    /// Returns the whole length of the file in bytes.
     fn download<'a>(
         &'a self,
         url: &'a str,
@@ -636,8 +695,12 @@ fn file_write_error(target: &Path, error: &std::io::Error) -> HttpError {
     }
 }
 
+/// Shared handle to an [`HttpClient`].
 pub type HttpClientRef = Arc<dyn HttpClient>;
 
+/// Runs `task` for every item with at most `concurrency` tasks at a time, each on its own
+/// thread. Results keep the order of `items`. A `concurrency` of zero counts as one.
+/// Returns [`HttpError::WorkerPanicked`] when a task panics.
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn map_ordered_concurrent<I, T, F, Fut>(
     items: &[I],
@@ -676,6 +739,8 @@ where
     Ok(results)
 }
 
+/// Runs `task` for every item with at most `concurrency` tasks in flight on the browser thread.
+/// Results keep the order of `items`. A `concurrency` of zero counts as one.
 #[cfg(all(target_arch = "wasm32", feature = "web-http"))]
 pub async fn map_ordered_concurrent<I, T, F, Fut>(
     items: &[I],
@@ -699,6 +764,8 @@ where
     Ok(results.into_iter().map(|(_, value)| value).collect())
 }
 
+/// Runs `task` for every item one after another, because this wasm build has no `web-http`
+/// feature. `concurrency` is ignored. Results keep the order of `items`.
 #[cfg(all(target_arch = "wasm32", not(feature = "web-http")))]
 pub async fn map_ordered_concurrent<I, T, F, Fut>(
     items: &[I],
@@ -1270,6 +1337,8 @@ pub fn default_http_client() -> HttpClientRef {
     Arc::new(DefaultHttpClient::new())
 }
 
+/// The HTTP client a composable reads. It is the platform client unless a composition local
+/// provider above it supplies another one.
 pub fn local_http_client() -> CompositionLocal<HttpClientRef> {
     crate::composition_locals::cached_local(
         |locals| &locals.http,

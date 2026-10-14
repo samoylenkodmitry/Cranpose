@@ -39,6 +39,7 @@ impl KeyboardType {
 /// `KeyboardCapitalization`. Only text keyboards capitalize.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum KeyboardCapitalization {
+    /// Capitalizes nothing.
     #[default]
     None,
     /// Every character.
@@ -60,8 +61,11 @@ pub enum ImeAction {
     /// No action: Enter adds a line in a multi-line field and does nothing
     /// in a single-line one.
     None,
+    /// Opens the destination the person typed, such as a web address.
     Go,
+    /// Runs the search for the text typed.
     Search,
+    /// Sends the text typed.
     Send,
     /// Moves focus to the previous field by default.
     Previous,
@@ -88,18 +92,26 @@ impl ImeAction {
 /// platform.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ContentType {
+    /// A username or login name.
     Username,
+    /// A password.
     Password,
     /// A username the person is choosing.
     NewUsername,
     /// A password the person is choosing, for which a password manager can
     /// suggest a strong one.
     NewPassword,
+    /// An email address.
     EmailAddress,
+    /// A phone number.
     PhoneNumber,
+    /// A person's full name.
     PersonFullName,
+    /// A street address.
     PostalAddress,
+    /// A postal code.
     PostalCode,
+    /// A credit card number.
     CreditCardNumber,
     /// A one-time code from a text message.
     SmsOtpCode,
@@ -110,11 +122,14 @@ pub enum ContentType {
 /// which Enter runs in a single-line field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct KeyboardOptions {
+    /// The keys the keyboard offers.
     pub keyboard_type: KeyboardType,
+    /// Which letters the keyboard capitalizes on its own.
     pub capitalization: KeyboardCapitalization,
     /// Whether the keyboard corrects and suggests words. Password keyboards
     /// never do.
     pub auto_correct: bool,
+    /// The action key the keyboard shows. Enter runs the same action in a single-line field.
     pub ime_action: ImeAction,
     /// What the field holds, for autofill. Compose sets this through the
     /// field's semantics.
@@ -171,6 +186,7 @@ impl KeyboardActionScope {
 pub struct KeyboardActionHandler(Rc<dyn Fn(&KeyboardActionScope)>);
 
 impl KeyboardActionHandler {
+    /// Wraps `handler`, which runs on a keyboard action with a [`KeyboardActionScope`].
     pub fn new(handler: impl Fn(&KeyboardActionScope) + 'static) -> Self {
         Self(Rc::new(handler))
     }

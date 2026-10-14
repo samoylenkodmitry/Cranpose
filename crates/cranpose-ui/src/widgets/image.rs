@@ -27,22 +27,35 @@ use crate::{
 #[path = "image_svg.rs"]
 mod image_svg;
 
+/// Alpha value of a fully opaque image, the default for [`Image`].
 pub const DEFAULT_ALPHA: f32 = 1.0;
 #[cfg(feature = "svg")]
 const SVG_RASTER_CACHE_LIMIT: usize = 8;
 
+/// How an image is scaled to fit the bounds it is drawn into. Compose's `ContentScale`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ContentScale {
+    /// Scales both axes by one factor so the whole image fits inside the bounds, leaving space on
+    /// one axis.
     Fit,
+    /// Scales both axes by one factor so the image covers the bounds, cropping what overflows.
     Crop,
+    /// Scales each axis separately so the image fills the bounds, which distorts its aspect ratio.
     FillBounds,
+    /// Scales both axes by one factor so the image width matches the bounds width.
     FillWidth,
+    /// Scales both axes by one factor so the image height matches the bounds height.
     FillHeight,
+    /// Like `Fit`, but never enlarges an image that already fits inside the bounds.
     Inside,
+    /// Draws the image at its own size without scaling.
     None,
 }
 
 impl ContentScale {
+    /// Returns the size of an image of `src_size` after this scale fits it to `dst_size`. For
+    /// `Crop` the result can exceed `dst_size`. Returns zero size if a side of either size is zero
+    /// or negative.
     pub fn scaled_size(self, src_size: Size, dst_size: Size) -> Size {
         if src_size.width <= 0.0
             || src_size.height <= 0.0
@@ -85,6 +98,8 @@ impl ContentScale {
     }
 }
 
+/// The pixels that an [`Image`] draws: a bitmap, a region of a bitmap, a tiled or nine-patch
+/// region, or an SVG. Compose's `Painter`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Painter {
     kind: PainterKind,
@@ -175,6 +190,7 @@ impl Quad {
 }
 
 impl Painter {
+    /// Creates a painter that draws the whole bitmap.
     pub fn from_bitmap(bitmap: ImageBitmap) -> Self {
         Self {
             kind: PainterKind::Bitmap(bitmap),
@@ -236,12 +252,15 @@ impl Painter {
         }
     }
 
+    /// Creates a painter that draws a parsed SVG.
     pub fn from_svg(svg: SvgPainter) -> Self {
         Self {
             kind: PainterKind::Svg(svg),
         }
     }
 
+    /// Returns the size in pixels that the painter has without constraints: the bitmap size, the
+    /// source region size, or the size the SVG declares.
     pub fn intrinsic_size(&self) -> Size {
         match &self.kind {
             PainterKind::Bitmap(bitmap) => bitmap.intrinsic_size(),
@@ -255,6 +274,8 @@ impl Painter {
         }
     }
 
+    /// Returns the bitmap that the painter draws from, or `None` for an SVG painter. Region, tiled
+    /// and nine-patch painters return their whole source bitmap.
     pub fn as_bitmap(&self) -> Option<&ImageBitmap> {
         match &self.kind {
             PainterKind::Bitmap(bitmap) => Some(bitmap),
@@ -283,6 +304,7 @@ impl From<SvgPainter> for Painter {
     }
 }
 
+/// Creates a painter that draws the whole bitmap.
 pub fn BitmapPainter(bitmap: ImageBitmap) -> Painter {
     Painter::from_bitmap(bitmap)
 }
@@ -312,18 +334,30 @@ pub fn NinePatchPainter(
 /// Errors returned while parsing or rasterizing an SVG painter.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SvgPainterError {
+    /// The crate was built without the `svg` feature.
     #[error("SVG support is disabled; enable the cranpose-ui `svg` feature")]
     SvgFeatureDisabled,
+    /// The SVG data could not be parsed. Holds the parser message.
     #[error("failed to parse SVG: {0}")]
     Parse(String),
+    /// A requested raster side was zero, negative or not a finite number.
     #[error("SVG raster dimensions must be greater than zero")]
     InvalidRasterDimensions,
+    /// The requested raster is too large to address.
     #[error("SVG raster dimensions are too large")]
     RasterDimensionsTooLarge,
+    /// Allocating the memory for the raster failed.
     #[error("failed to allocate SVG raster {width}x{height}")]
-    RasterAllocationFailed { width: u32, height: u32 },
+    RasterAllocationFailed {
+        /// Requested raster width in pixels.
+        width: u32,
+        /// Requested raster height in pixels.
+        height: u32,
+    },
+    /// The raster cache could not be locked.
     #[error("SVG raster cache is unavailable")]
     RasterCacheUnavailable,
+    /// Creating the bitmap from the rasterized pixels failed.
     #[error(transparent)]
     ImageBitmap(#[from] cranpose_ui_graphics::ImageBitmapError),
 }
@@ -363,6 +397,8 @@ struct SvgRasterCache {
 }
 
 impl SvgPainter {
+    /// Parses SVG `bytes`. Fails with `SvgFeatureDisabled` when the `svg` feature is off and with
+    /// `Parse` when the data is not valid SVG.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, SvgPainterError> {
         #[cfg(not(feature = "svg"))]
         {
@@ -384,14 +420,19 @@ impl SvgPainter {
         }
     }
 
+    /// Returns an id that clones of this painter share. Painters parsed separately have different
+    /// ids while both are alive.
     pub fn id(&self) -> u64 {
         Arc::as_ptr(&self.inner) as usize as u64
     }
 
+    /// Returns the size in pixels that the SVG document declares.
     pub fn intrinsic_size(&self) -> Size {
         self.inner.intrinsic_size
     }
 
+    /// Rasterizes the SVG into a bitmap of `pixel_size` pixels, rounded up to whole pixels. A few
+    /// recent sizes are cached.
     pub fn rasterize(&self, pixel_size: Size) -> Result<ImageBitmap, SvgPainterError> {
         #[cfg(not(feature = "svg"))]
         {
@@ -509,6 +550,8 @@ impl SvgBytesKey {
     }
 }
 
+/// Parses `bytes` once for the calling composition position and returns the same painter on later
+/// recompositions. The cache key is the address and length of `bytes`.
 pub fn rememberSvg(bytes: &'static [u8]) -> Result<SvgPainter, SvgPainterError> {
     let key = SvgBytesKey::new(bytes);
     cranpose_core::withCurrentComposer(|composer| {

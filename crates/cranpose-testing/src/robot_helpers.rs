@@ -50,44 +50,14 @@ impl SemanticElementLike for SemanticElement {
 /// # Returns
 /// Some((x, y, width, height)) if found, None otherwise.
 pub fn find_text(elem: &SemanticElement, text: &str) -> Option<(f32, f32, f32, f32)> {
-    if let Some(ref t) = elem.text
-        && t.contains(text)
-    {
-        return Some((
-            elem.bounds.x,
-            elem.bounds.y,
-            elem.bounds.width,
-            elem.bounds.height,
-        ));
-    }
-    for child in &elem.children {
-        if let Some(pos) = find_text(child, text) {
-            return Some(pos);
-        }
-    }
-    None
+    find_element_by(std::slice::from_ref(elem), text, text_contains).map(rect_of)
 }
 
 /// Find an element by exact text content, returning bounds (x, y, width, height).
 ///
 /// Useful when partial matches might be ambiguous.
 pub fn find_text_exact(elem: &SemanticElement, text: &str) -> Option<(f32, f32, f32, f32)> {
-    if let Some(ref t) = elem.text
-        && t == text
-    {
-        return Some((
-            elem.bounds.x,
-            elem.bounds.y,
-            elem.bounds.width,
-            elem.bounds.height,
-        ));
-    }
-    for child in &elem.children {
-        if let Some(pos) = find_text_exact(child, text) {
-            return Some(pos);
-        }
-    }
-    None
+    find_element_by(std::slice::from_ref(elem), text, text_equals).map(rect_of)
 }
 
 /// Find an element by text content, returning center coordinates (x, y).
@@ -181,23 +151,9 @@ pub fn find_text_by_prefix(
     elem: &SemanticElement,
     prefix: &str,
 ) -> Option<(f32, f32, f32, f32, String)> {
-    if let Some(ref t) = elem.text
-        && t.starts_with(prefix)
-    {
-        return Some((
-            elem.bounds.x,
-            elem.bounds.y,
-            elem.bounds.width,
-            elem.bounds.height,
-            t.clone(),
-        ));
-    }
-    for child in &elem.children {
-        if let Some(result) = find_text_by_prefix(child, prefix) {
-            return Some(result);
-        }
-    }
-    None
+    let found = find_element_by(std::slice::from_ref(elem), prefix, text_starts_with)?;
+    let (x, y, width, height) = rect_of(found);
+    Some((x, y, width, height, found.text.clone()?))
 }
 
 /// Find element by text prefix in semantics tree.
@@ -251,29 +207,30 @@ fn find_button_in_semantics_by(
     text: &str,
     match_mode: TextMatchMode,
 ) -> Option<(f32, f32, f32, f32)> {
-    let text_owned = text.to_string();
-
-    button_helper_diag(&text_owned, "resolve root bounds");
+    button_helper_diag(text, format_args!("resolve root bounds"));
     let Some(root) = root_bounds(robot) else {
-        button_helper_diag(&text_owned, "root unavailable; using first raw match");
-        let result = find_button_bounds_for_mode(robot, &text_owned, match_mode)
+        button_helper_diag(
+            text,
+            format_args!("root unavailable; using first raw match"),
+        );
+        let result = find_button_bounds_for_mode(robot, text, match_mode)
             .into_iter()
             .next();
-        button_helper_diag(&text_owned, &format!("raw result={result:?}"));
+        button_helper_diag(text, format_args!("raw result={result:?}"));
         return result;
     };
-    button_helper_diag(&text_owned, &format!("root={root:?}"));
-    let mut candidates = find_button_bounds_for_mode(robot, &text_owned, match_mode);
-    button_helper_diag(&text_owned, &format!("candidates={candidates:?}"));
+    button_helper_diag(text, format_args!("root={root:?}"));
+    let mut candidates = find_button_bounds_for_mode(robot, text, match_mode);
+    button_helper_diag(text, format_args!("candidates={candidates:?}"));
     let mut bounds = choose_button_bounds(&candidates, root);
-    button_helper_diag(&text_owned, &format!("chosen={bounds:?}"));
+    button_helper_diag(text, format_args!("chosen={bounds:?}"));
 
     if let Some(current) = visible_bounds(bounds, root) {
-        button_helper_diag(&text_owned, &format!("visible={current:?}"));
+        button_helper_diag(text, format_args!("visible={current:?}"));
         return Some(current);
     }
     if bounds.is_none() {
-        button_helper_diag(&text_owned, "no candidate");
+        button_helper_diag(text, format_args!("no candidate"));
         return None;
     }
 
@@ -282,26 +239,26 @@ fn find_button_in_semantics_by(
             break;
         };
         button_helper_diag(
-            &text_owned,
-            &format!("scroll attempt={attempt} current={current:?}"),
+            text,
+            format_args!("scroll attempt={attempt} current={current:?}"),
         );
 
         let Some((axis, _dir)) = overflow_axis_direction(current, root) else {
-            button_helper_diag(&text_owned, "no overflow axis");
+            button_helper_diag(text, format_args!("no overflow axis"));
             break;
         };
 
         let Some((scroll_delta_x, scroll_delta_y)) = scroll_delta_for_overflow(current, root, axis)
         else {
-            button_helper_diag(&text_owned, "no scroll delta");
+            button_helper_diag(text, format_args!("no scroll delta"));
             break;
         };
         button_helper_diag(
-            &text_owned,
-            &format!("axis={axis:?} delta=({scroll_delta_x:.1},{scroll_delta_y:.1})"),
+            text,
+            format_args!("axis={axis:?} delta=({scroll_delta_x:.1},{scroll_delta_y:.1})"),
         );
 
-        button_helper_diag(&text_owned, "query semantics for scroll anchor");
+        button_helper_diag(text, format_args!("query semantics for scroll anchor"));
         let semantics = match robot.get_semantics() {
             Ok(semantics) => semantics,
             Err(e) => {
@@ -311,45 +268,42 @@ fn find_button_in_semantics_by(
         };
 
         let Some((sx, sy, sw, sh)) = find_scroll_anchor(&semantics, current, root, axis) else {
-            button_helper_diag(&text_owned, "no scroll anchor");
+            button_helper_diag(text, format_args!("no scroll anchor"));
             break;
         };
 
         let start_x = sx + sw / 2.0;
         let start_y = sy + sh / 2.0;
-        button_helper_diag(
-            &text_owned,
-            &format!("mouse_move=({start_x:.1},{start_y:.1})"),
-        );
+        button_helper_diag(text, format_args!("mouse_move=({start_x:.1},{start_y:.1})"));
         let _ = robot.mouse_move(start_x, start_y);
-        button_helper_diag(&text_owned, "mouse_scroll begin");
+        button_helper_diag(text, format_args!("mouse_scroll begin"));
         let _ = robot.mouse_scroll(scroll_delta_x, scroll_delta_y);
-        button_helper_diag(&text_owned, "mouse_scroll end");
+        button_helper_diag(text, format_args!("mouse_scroll end"));
         std::thread::sleep(Duration::from_millis(SCROLL_SETTLE_MS));
-        button_helper_diag(&text_owned, "pump begin");
+        button_helper_diag(text, format_args!("pump begin"));
         let _ = robot.pump_frames(1);
-        button_helper_diag(&text_owned, "pump end");
+        button_helper_diag(text, format_args!("pump end"));
 
-        candidates = find_button_bounds_for_mode(robot, &text_owned, match_mode);
-        button_helper_diag(&text_owned, &format!("next candidates={candidates:?}"));
+        candidates = find_button_bounds_for_mode(robot, text, match_mode);
+        button_helper_diag(text, format_args!("next candidates={candidates:?}"));
         bounds = choose_button_bounds(&candidates, root);
-        button_helper_diag(&text_owned, &format!("next chosen={bounds:?}"));
+        button_helper_diag(text, format_args!("next chosen={bounds:?}"));
         if let Some(current) = visible_bounds(bounds, root) {
-            button_helper_diag(&text_owned, &format!("visible after scroll={current:?}"));
+            button_helper_diag(text, format_args!("visible after scroll={current:?}"));
             return Some(current);
         }
         if bounds.is_some_and(|next| rect_bounds_close(next, current)) {
-            button_helper_diag(&text_owned, "scroll made no candidate progress");
+            button_helper_diag(text, format_args!("scroll made no candidate progress"));
             break;
         }
     }
 
     let result = visible_bounds(bounds, root);
-    button_helper_diag(&text_owned, &format!("final={result:?}"));
+    button_helper_diag(text, format_args!("final={result:?}"));
     result
 }
 
-fn button_helper_diag(text: &str, message: &str) {
+fn button_helper_diag(text: &str, message: std::fmt::Arguments<'_>) {
     if std::env::var_os("CRANPOSE_ROBOT_BUTTON_HELPER_DIAG").is_some() {
         eprintln!("button-helper {text:?}: {message}");
     }
@@ -363,20 +317,12 @@ fn rect_bounds_close(left: RectBounds, right: RectBounds) -> bool {
         && (left.3 - right.3).abs() <= EPSILON
 }
 
-/// Recursively search for text in semantic elements.
-/// Returns the element containing the text.
-pub fn find_by_text_recursive(elements: &[SemanticElement], text: &str) -> Option<SemanticElement> {
-    for elem in elements {
-        if let Some(ref elem_text) = elem.text
-            && elem_text.contains(text)
-        {
-            return Some(elem.clone());
-        }
-        if let Some(found) = find_by_text_recursive(&elem.children, text) {
-            return Some(found);
-        }
-    }
-    None
+/// The first element, depth first, whose text contains `text`.
+pub fn find_by_text_recursive<'a>(
+    elements: &'a [SemanticElement],
+    text: &str,
+) -> Option<&'a SemanticElement> {
+    find_element_by(elements, text, text_contains)
 }
 
 /// Find all clickable elements in a specific Y range.
@@ -410,32 +356,24 @@ pub fn find_clickables_in_range(
     tabs
 }
 
+/// The first element, depth first, whose text is exactly `text`.
 pub fn find_element_by_text_exact<'a>(
     elements: &'a [SemanticElement],
     text: &str,
 ) -> Option<&'a SemanticElement> {
-    for elem in elements {
-        if elem.text.as_deref() == Some(text) {
-            return Some(elem);
-        }
-        if let Some(found) = find_element_by_text_exact(&elem.children, text) {
-            return Some(found);
-        }
-    }
-    None
+    find_element_by(elements, text, text_equals)
 }
 
+/// Bounds (x, y, width, height) of the first element in the robot's current
+/// semantics whose text is exactly `text`.
 pub fn find_bounds_by_text(robot: &cranpose::Robot, text: &str) -> Option<(f32, f32, f32, f32)> {
     let semantics = robot.get_semantics().ok()?;
-    let elem = find_element_by_text_exact(&semantics, text)?;
-    Some((
-        elem.bounds.x,
-        elem.bounds.y,
-        elem.bounds.width,
-        elem.bounds.height,
-    ))
+    find_element_by_text_exact(&semantics, text).map(rect_of)
 }
 
+/// The part of `bounds` (x, y, width, height) that lies inside the union of
+/// the semantics roots, inset by `padding` on every side. `None` when
+/// nothing of it is inside.
 pub fn visible_bounds_in_viewport(
     robot: &cranpose::Robot,
     bounds: (f32, f32, f32, f32),
@@ -444,12 +382,7 @@ pub fn visible_bounds_in_viewport(
     let semantics = robot.get_semantics().ok()?;
     let mut viewport = None;
     for elem in &semantics {
-        let elem_bounds = (
-            elem.bounds.x,
-            elem.bounds.y,
-            elem.bounds.width,
-            elem.bounds.height,
-        );
+        let elem_bounds = rect_of(elem);
         viewport = Some(match viewport {
             Some(existing) => union_bounds(existing, Some(elem_bounds)),
             None => elem_bounds,
@@ -473,21 +406,8 @@ pub fn visible_bounds_in_viewport(
     }
 }
 
-pub fn find_in_subtree_by_text<'a>(
-    elem: &'a SemanticElement,
-    text: &str,
-) -> Option<&'a SemanticElement> {
-    if elem.text.as_deref() == Some(text) {
-        return Some(elem);
-    }
-    for child in &elem.children {
-        if let Some(found) = find_in_subtree_by_text(child, text) {
-            return Some(found);
-        }
-    }
-    None
-}
-
+/// Prints each element's role, text, bounds and clickability, one line per
+/// element, children indented under their parent.
 pub fn print_semantics_with_bounds(elements: &[SemanticElement], indent: usize) {
     for elem in elements {
         let prefix = "  ".repeat(indent);
@@ -507,6 +427,8 @@ pub fn print_semantics_with_bounds(elements: &[SemanticElement], indent: usize) 
     }
 }
 
+/// The smallest rectangle (x, y, width, height) that holds `base` and
+/// `other`.
 pub fn union_bounds(
     base: (f32, f32, f32, f32),
     other: Option<(f32, f32, f32, f32)>,
@@ -525,6 +447,7 @@ pub fn union_bounds(
     (min_x, min_y, max_x - min_x, max_y - min_y)
 }
 
+/// The number of elements whose text is exactly `text`.
 pub fn count_text_in_tree(elements: &[SemanticElement], text: &str) -> usize {
     let mut count = 0;
     for elem in elements {
@@ -536,6 +459,8 @@ pub fn count_text_in_tree(elements: &[SemanticElement], text: &str) -> usize {
     count
 }
 
+/// Pushes onto `results` every element whose text is exactly `text`, depth
+/// first.
 pub fn collect_by_text_exact<'a>(
     elements: &'a [SemanticElement],
     text: &str,
@@ -549,6 +474,7 @@ pub fn collect_by_text_exact<'a>(
     }
 }
 
+/// Counts, per distinct text, the elements whose text starts with `prefix`.
 pub fn collect_text_prefix_counts(
     elements: &[SemanticElement],
     prefix: &str,
@@ -564,6 +490,8 @@ pub fn collect_text_prefix_counts(
     }
 }
 
+/// Asks the robot app to exit, and ends the process with status 0 if the app
+/// has not exited after `timeout`.
 pub fn exit_with_timeout(robot: &cranpose::Robot, timeout: Duration) {
     let done = Arc::new(AtomicBool::new(false));
     let done_thread = Arc::clone(&done);
@@ -578,15 +506,20 @@ pub fn exit_with_timeout(robot: &cranpose::Robot, timeout: Duration) {
     done.store(true, Ordering::Relaxed);
 }
 
+/// The direction along which a row of tabs is laid out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TabAxis {
+    /// Tabs side by side.
     Horizontal,
+    /// Tabs stacked.
     Vertical,
 }
 
 type RectBounds = (f32, f32, f32, f32);
 type LabeledRect = (String, RectBounds);
 
+/// Bounds of the clickable element of each label in `labels` that has one,
+/// paired with its label.
 pub fn collect_tab_bounds(robot: &cranpose::Robot, labels: &[&str]) -> Vec<LabeledRect> {
     let mut tabs = Vec::new();
     for label in labels {
@@ -599,6 +532,8 @@ pub fn collect_tab_bounds(robot: &cranpose::Robot, labels: &[&str]) -> Vec<Label
     tabs
 }
 
+/// The edges (left, top, right, bottom) of the rectangle that holds every
+/// rectangle in `bounds`. `None` for an empty slice.
 pub fn bounds_span(bounds: &[LabeledRect]) -> Option<RectBounds> {
     let mut iter = bounds.iter();
     let (_, (x, y, w, h)) = iter.next()?;
@@ -615,6 +550,7 @@ pub fn bounds_span(bounds: &[LabeledRect]) -> Option<RectBounds> {
     Some((min_x, min_y, max_x, max_y))
 }
 
+/// The axis along which `bounds` spread the most.
 pub fn detect_tab_axis(bounds: &[LabeledRect]) -> Option<TabAxis> {
     let (min_x, min_y, max_x, max_y) = bounds_span(bounds)?;
     let span_x = max_x - min_x;
@@ -626,6 +562,8 @@ pub fn detect_tab_axis(bounds: &[LabeledRect]) -> Option<TabAxis> {
     }
 }
 
+/// The window's bounds in logical pixels: the screenshot's size, else the
+/// bounds of the first semantics root.
 pub fn root_bounds(robot: &cranpose::Robot) -> Option<RectBounds> {
     if let Ok(screenshot) = robot.screenshot()
         && screenshot.logical_width.is_finite()
@@ -642,13 +580,7 @@ pub fn root_bounds(robot: &cranpose::Robot) -> Option<RectBounds> {
     }
 
     let semantics = robot.get_semantics().ok()?;
-    let root = semantics.first()?;
-    Some((
-        root.bounds.x,
-        root.bounds.y,
-        root.bounds.width,
-        root.bounds.height,
-    ))
+    semantics.first().map(rect_of)
 }
 
 const VISIBILITY_PADDING: f32 = 4.0;
@@ -669,6 +601,38 @@ fn text_contains(actual: &str, needle: &str) -> bool {
 
 fn text_equals(actual: &str, needle: &str) -> bool {
     actual == needle
+}
+
+fn text_starts_with(actual: &str, needle: &str) -> bool {
+    actual.starts_with(needle)
+}
+
+/// The first element, depth first, whose own text `matcher` accepts.
+fn find_element_by<'a>(
+    elements: &'a [SemanticElement],
+    text: &str,
+    matcher: TextMatcher,
+) -> Option<&'a SemanticElement> {
+    elements.iter().find_map(|elem| {
+        if elem
+            .text
+            .as_deref()
+            .is_some_and(|actual| matcher(actual, text))
+        {
+            Some(elem)
+        } else {
+            find_element_by(&elem.children, text, matcher)
+        }
+    })
+}
+
+fn rect_of(elem: &SemanticElement) -> RectBounds {
+    (
+        elem.bounds.x,
+        elem.bounds.y,
+        elem.bounds.width,
+        elem.bounds.height,
+    )
 }
 
 fn find_button_bounds_for_mode(
@@ -711,12 +675,7 @@ fn find_button_by(
     matcher: TextMatcher,
 ) -> Option<(f32, f32, f32, f32)> {
     if elem.clickable && has_text_by(elem, text, matcher) {
-        return Some((
-            elem.bounds.x,
-            elem.bounds.y,
-            elem.bounds.width,
-            elem.bounds.height,
-        ));
+        return Some(rect_of(elem));
     }
     elem.children
         .iter()
@@ -731,12 +690,7 @@ fn collect_button_bounds_by(
 ) {
     for elem in elements {
         if elem.clickable && has_text_by(elem, text, matcher) {
-            matches.push((
-                elem.bounds.x,
-                elem.bounds.y,
-                elem.bounds.width,
-                elem.bounds.height,
-            ));
+            matches.push(rect_of(elem));
         }
         collect_button_bounds_by(&elem.children, text, matcher, matches);
     }
@@ -903,12 +857,7 @@ fn find_scroll_anchor(
 
     for elem in elements {
         if elem.clickable {
-            let bounds = (
-                elem.bounds.x,
-                elem.bounds.y,
-                elem.bounds.width,
-                elem.bounds.height,
-            );
+            let bounds = rect_of(elem);
             if is_fully_visible(bounds, root) && intersects_root(bounds, root) {
                 let overlap = cross_axis_overlap(bounds, target, axis);
                 if overlap > 0.0 {
@@ -995,6 +944,7 @@ fn logical_to_screenshot_y(screenshot: &cranpose::RobotScreenshot, y: f32) -> f3
     y * screenshot_scale_y(screenshot)
 }
 
+/// The screenshot's size (width, height) in logical pixels.
 pub fn screenshot_logical_size(screenshot: &cranpose::RobotScreenshot) -> (f32, f32) {
     (
         screenshot_logical_width(screenshot),
@@ -1034,6 +984,8 @@ fn screenshot_pixel_storage_complete(screenshot: &cranpose::RobotScreenshot) -> 
         .is_some_and(|expected| screenshot.pixels.len() >= expected)
 }
 
+/// The RGBA colour at the logical point `(x, y)`, sampled bilinearly from the
+/// pixels around it. `None` outside the screenshot.
 pub fn sample_screenshot_pixel_logical(
     screenshot: &cranpose::RobotScreenshot,
     x: f32,
@@ -1052,6 +1004,9 @@ pub fn sample_screenshot_pixel_logical(
     )
 }
 
+/// The pixel edges (left, top, right, bottom) that cover the logical region
+/// (x, y, width, height), clipped to the screenshot. `None` when nothing of
+/// the region is inside.
 pub fn logical_region_to_pixel_bounds(
     screenshot: &cranpose::RobotScreenshot,
     region: (f32, f32, f32, f32),
@@ -1121,6 +1076,7 @@ pub fn crop_screenshot(
     })
 }
 
+/// Crops the pixels that cover a logical region from a screenshot.
 pub fn crop_screenshot_logical(
     screenshot: &cranpose::RobotScreenshot,
     x: f32,
@@ -1133,19 +1089,29 @@ pub fn crop_screenshot_logical(
     crop_screenshot(screenshot, left, top, right - left, bottom - top)
 }
 
+/// One pixel that differs between two screenshots.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScreenshotPixelDifference {
+    /// Pixel column.
     pub x: u32,
+    /// Pixel row.
     pub y: u32,
+    /// RGBA in the first screenshot.
     pub before: [u8; 4],
+    /// RGBA in the second screenshot.
     pub after: [u8; 4],
+    /// The largest absolute difference of one channel.
     pub difference: u32,
 }
 
+/// How two screenshots of equal size differ.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScreenshotDifferenceStats {
+    /// Pixels whose difference is over the tolerance.
     pub differing_pixels: usize,
+    /// The largest difference of any pixel.
     pub max_difference: u32,
+    /// The first differing pixel in row order.
     pub first_difference: Option<ScreenshotPixelDifference>,
 }
 
@@ -1422,10 +1388,15 @@ fn scroll_for_missing_target(robot: &cranpose::Robot, cfg: ScrollConfig, attempt
 /// Configuration for scroll-into-view helpers so we don't need too many arguments.
 #[derive(Clone, Copy, Debug)]
 pub struct ScrollConfig {
+    /// The x of every drag.
     pub center_x: f32,
+    /// Where a drag that scrolls down starts.
     pub down_from_y: f32,
+    /// Where a drag that scrolls down ends.
     pub down_to_y: f32,
+    /// Where a drag that scrolls up starts.
     pub up_from_y: f32,
+    /// Where a drag that scrolls up ends.
     pub up_to_y: f32,
 }
 

@@ -24,10 +24,15 @@ use crate::nodes::input::types::PointerEvent;
 /// after a modifier node changes state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum InvalidationKind {
+    /// The node's size or placement may have changed, so layout runs again.
     Layout,
+    /// The node's drawn output changed, so it draws again.
     Draw,
+    /// The node's pointer input handling changed.
     PointerInput,
+    /// The node's accessibility semantics changed.
     Semantics,
+    /// The node's focus behavior changed.
     Focus,
 }
 
@@ -260,6 +265,7 @@ impl Default for NodeState {
 }
 
 impl NodeState {
+    /// Creates the state of a node that is not attached to a chain yet and has no capabilities.
     pub const fn new() -> Self {
         Self {
             aggregate_child_capabilities: Cell::new(NodeCapabilities::empty()),
@@ -271,6 +277,8 @@ impl NodeState {
         }
     }
 
+    /// Creates the state of a head or tail marker of a chain. A marker counts as attached and has
+    /// no capabilities.
     pub const fn sentinel() -> Self {
         Self {
             aggregate_child_capabilities: Cell::new(NodeCapabilities::empty()),
@@ -282,19 +290,26 @@ impl NodeState {
         }
     }
 
+    /// Records the capabilities of the node that owns this state. The chain calls it when it adds
+    /// or updates the node.
     pub fn set_capabilities(&self, capabilities: NodeCapabilities) {
         self.capabilities.set(capabilities);
     }
 
+    /// The capabilities of the node that owns this state.
     #[inline]
     pub fn capabilities(&self) -> NodeCapabilities {
         self.capabilities.get()
     }
 
+    /// Records the union of the capabilities of the node that owns this state and of every node
+    /// after it in the chain.
     pub fn set_aggregate_child_capabilities(&self, capabilities: NodeCapabilities) {
         self.aggregate_child_capabilities.set(capabilities);
     }
 
+    /// The union of the capabilities of the node that owns this state and of every node after it in
+    /// the chain. Compose's `aggregateChildKindSet`.
     #[inline]
     pub fn aggregate_child_capabilities(&self) -> NodeCapabilities {
         self.aggregate_child_capabilities.get()
@@ -318,14 +333,19 @@ impl NodeState {
         self.child.get()
     }
 
+    /// Marks the node as attached to a chain or as detached from it.
     pub fn set_attached(&self, attached: bool) {
         self.attached.set(attached);
     }
 
+    /// Whether the node is attached to a chain. It is true after `on_attach` ran and before
+    /// `on_detach` runs.
     pub fn is_attached(&self) -> bool {
         self.attached.get()
     }
 
+    /// Whether this state belongs to the head or tail marker of a chain. A marker is no real
+    /// modifier node.
     pub fn is_sentinel(&self) -> bool {
         self.is_sentinel
     }
@@ -333,7 +353,10 @@ impl NodeState {
 
 /// Provides traversal helpers that mirror Jetpack Compose's [`DelegatableNode`] contract.
 pub trait DelegatableNode {
+    /// The runtime state of this node. Return a `NodeState` field of the node; the chain uses it to
+    /// link the node and to track its capabilities.
     fn node_state(&self) -> &NodeState;
+    /// The union of the capabilities of this node and of every node after it in the chain.
     fn aggregate_child_capabilities(&self) -> NodeCapabilities {
         self.node_state().aggregate_child_capabilities()
     }
@@ -397,10 +420,16 @@ pub trait DelegatableNode {
 /// composition and may optionally react to resets triggered by the runtime
 /// (for example, when reusing nodes across modifier list changes).
 pub trait ModifierNode: Any + DelegatableNode {
+    /// Called once when the node joins an attached chain. `context` receives the invalidation
+    /// requests of the node.
     fn on_attach(&mut self, _context: &mut dyn ModifierNodeContext) {}
 
+    /// Called when the node leaves the chain or when the chain detaches. Release here whatever
+    /// `on_attach` acquired.
     fn on_detach(&mut self) {}
 
+    /// Called when the chain is reset, as Compose's `onReset`. Clear state that belongs to an
+    /// earlier use of the node.
     fn on_reset(&mut self) {}
 
     /// Returns this node as a draw modifier if it implements the trait.
@@ -681,15 +710,16 @@ impl SemanticsReach {
     }
 }
 
-/// Focus state of a focus target node.
-///
 /// Whether a check box or switch is on, off or partly on: Compose's
 /// `ToggleableState`. A check box over a list whose items are partly checked
 /// is `Indeterminate`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ToggleableState {
+    /// The control is on or checked.
     On,
+    /// The control is off or unchecked.
     Off,
+    /// The control is partly on, as a check box over items of which some are checked.
     Indeterminate,
 }
 
@@ -699,6 +729,8 @@ impl From<bool> for ToggleableState {
     }
 }
 
+/// Focus state of a focus target node.
+///
 /// This mirrors Jetpack Compose's FocusState enum which tracks whether
 /// a node is focused, has a focused child, or is inactive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -761,11 +793,17 @@ pub trait FocusNode: ModifierNode {
 /// has no layout node of its own at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SemanticsWidgetRole {
+    /// A control that acts when pressed. Compose's `Role.Button`.
     Button,
+    /// A control that is checked or unchecked. Compose's `Role.Checkbox`.
     Checkbox,
+    /// A control that is on or off. Compose's `Role.Switch`.
     Switch,
+    /// One choice of a set in which only one choice is selected. Compose's `Role.RadioButton`.
     RadioButton,
+    /// One page selector of a tab bar. Compose's `Role.Tab`.
     Tab,
+    /// A picture. Compose's `Role.Image`.
     Image,
     /// A control that opens a list of choices and holds the one that is
     /// picked. Compose's `Role.DropdownList`.
@@ -824,8 +862,11 @@ pub enum SemanticsWidgetRole {
 /// the platform the control is adjustable.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProgressBarRangeInfo {
+    /// The current value, between `start` and `end`.
     pub current: f32,
+    /// The value at the low end of the range.
     pub start: f32,
+    /// The value at the high end of the range.
     pub end: f32,
     /// How many stops sit between `start` and `end`, as Compose counts them.
     /// Zero means the value moves without stops.
@@ -833,6 +874,8 @@ pub struct ProgressBarRangeInfo {
 }
 
 impl ProgressBarRangeInfo {
+    /// Creates range info for `current` between `start` and `end`, with `steps` stops between the
+    /// two ends.
     pub fn new(current: f32, start: f32, end: f32, steps: u32) -> Self {
         Self {
             current,
@@ -863,16 +906,18 @@ impl ProgressBarRangeInfo {
     }
 }
 
-/// How far a container has scrolled along one axis and how far it can go.
-///
 /// How many rows and columns a list holds, so a screen reader can say
 /// "list, 12 items" as its cursor enters. Compose's `CollectionInfo`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CollectionInfo {
+    /// The number of rows the collection holds. A plain list reports its item count here.
     pub rows: usize,
+    /// The number of columns the collection holds. A plain list reports 1.
     pub columns: usize,
 }
 
+/// How far a container has scrolled along one axis and how far it can go.
+///
 /// This is Compose's `ScrollAxisRange` (`verticalScrollAxisRange`,
 /// `horizontalScrollAxisRange`). A lazy list has no whole extent to give, so
 /// it reports the first visible item as the value and one more than that as
@@ -885,14 +930,23 @@ pub struct CollectionInfo {
 /// control a reader or the keyboard moves to is brought in past it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScrollAxisRange {
+    /// The current scroll position, in layout pixels. A lazy list reports the index of its first
+    /// visible item.
     pub value: f32,
+    /// The largest value that `value` reaches, in the same unit.
     pub max_value: f32,
+    /// Whether the container scrolls in reverse, so content starts at the far end. Compose's
+    /// `reverseScrolling`.
     pub reverse: bool,
+    /// The content padding at the start edge of the container, in layout pixels.
     pub content_padding_start: f32,
+    /// The content padding at the end edge of the container, in layout pixels.
     pub content_padding_end: f32,
 }
 
 impl ScrollAxisRange {
+    /// Creates a range for a container at scroll offset `value` that reaches at most `max_value`,
+    /// with no content padding.
     pub fn new(value: f32, max_value: f32, reverse: bool) -> Self {
         Self {
             value,
@@ -913,10 +967,12 @@ impl ScrollAxisRange {
         }
     }
 
+    /// Whether the container can scroll further in the forward direction.
     pub fn can_scroll_forward(&self) -> bool {
         self.value < self.max_value
     }
 
+    /// Whether the container can scroll further in the backward direction.
     pub fn can_scroll_backward(&self) -> bool {
         self.value > 0.0
     }
@@ -933,12 +989,16 @@ pub struct SemanticsScrollBy {
 }
 
 impl SemanticsScrollBy {
+    /// Wraps `handler`, which receives the horizontal and the vertical distance in layout pixels
+    /// and returns whether the container moved.
     pub fn new(handler: impl Fn(f32, f32) -> bool + 'static) -> Self {
         Self {
             handler: Rc::new(handler),
         }
     }
 
+    /// Runs the handler with the distances `dx` and `dy`, in layout pixels. Returns whether the
+    /// container moved.
     pub fn invoke(&self, dx: f32, dy: f32) -> bool {
         (self.handler)(dx, dy)
     }
@@ -969,12 +1029,15 @@ pub struct SemanticsScrollToIndex {
 }
 
 impl SemanticsScrollToIndex {
+    /// Wraps `handler`, which receives a row index counted from zero and returns whether the list
+    /// moved.
     pub fn new(handler: impl Fn(usize) -> bool + 'static) -> Self {
         Self {
             handler: Rc::new(handler),
         }
     }
 
+    /// Runs the handler for the row at `index`, counted from zero. Returns whether the list moved.
     pub fn invoke(&self, index: usize) -> bool {
         (self.handler)(index)
     }
@@ -1006,12 +1069,16 @@ pub struct SemanticsSetProgress {
 }
 
 impl SemanticsSetProgress {
+    /// Wraps `handler`, which receives a value in the range of the control and returns whether the
+    /// control took it.
     pub fn new(handler: impl Fn(f32) -> bool + 'static) -> Self {
         Self {
             handler: Rc::new(handler),
         }
     }
 
+    /// Runs the handler with `value`, in the range of the control. Returns whether the control took
+    /// it.
     pub fn invoke(&self, value: f32) -> bool {
         (self.handler)(value)
     }
@@ -1031,10 +1098,12 @@ impl fmt::Debug for SemanticsSetProgress {
 pub struct SemanticsSetText(Rc<dyn Fn(&str) -> bool>);
 
 impl SemanticsSetText {
+    /// Wraps `handler`, which receives the new text and returns whether the field took it.
     pub fn new(handler: impl Fn(&str) -> bool + 'static) -> Self {
         Self(Rc::new(handler))
     }
 
+    /// Runs the handler with `text`. Returns whether the field took it.
     pub fn invoke(&self, text: &str) -> bool {
         (self.0)(text)
     }
@@ -1055,10 +1124,14 @@ impl fmt::Debug for SemanticsSetText {
 pub struct SemanticsSetSelection(Rc<dyn Fn(usize, usize) -> bool>);
 
 impl SemanticsSetSelection {
+    /// Wraps `handler`, which receives the anchor and the focus offsets of the selection and
+    /// returns whether the field took it.
     pub fn new(handler: impl Fn(usize, usize) -> bool + 'static) -> Self {
         Self(Rc::new(handler))
     }
 
+    /// Runs the handler with the selection from byte offset `anchor` to byte offset `focus`.
+    /// Returns whether the field took it.
     pub fn invoke(&self, anchor: usize, focus: usize) -> bool {
         (self.0)(anchor, focus)
     }
@@ -1076,10 +1149,12 @@ impl fmt::Debug for SemanticsSetSelection {
 pub struct SemanticsExpand(Rc<dyn Fn() -> bool>);
 
 impl SemanticsExpand {
+    /// Wraps `handler`, which returns whether the control opened or closed.
     pub fn new(handler: impl Fn() -> bool + 'static) -> Self {
         Self(Rc::new(handler))
     }
 
+    /// Runs the handler. Returns whether the control opened or closed.
     pub fn invoke(&self) -> bool {
         (self.0)()
     }
@@ -1098,10 +1173,12 @@ impl fmt::Debug for SemanticsExpand {
 pub struct SemanticsLongClick(Rc<dyn Fn() -> bool>);
 
 impl SemanticsLongClick {
+    /// Wraps `handler`, which returns whether the control took the long press.
     pub fn new(handler: impl Fn() -> bool + 'static) -> Self {
         Self(Rc::new(handler))
     }
 
+    /// Runs the handler. Returns whether the control took the long press.
     pub fn invoke(&self) -> bool {
         (self.0)()
     }
@@ -1132,10 +1209,12 @@ impl PartialEq for SemanticsExpand {
 pub struct SemanticsDismiss(Rc<dyn Fn() -> bool>);
 
 impl SemanticsDismiss {
+    /// Wraps `handler`, which returns whether the control was dismissed.
     pub fn new(handler: impl Fn() -> bool + 'static) -> Self {
         Self(Rc::new(handler))
     }
 
+    /// Runs the handler. Returns whether the control was dismissed.
     pub fn invoke(&self) -> bool {
         (self.0)()
     }
@@ -1174,10 +1253,12 @@ impl PartialEq for SemanticsSetSelection {
 pub struct SemanticsMagicTap(Rc<dyn Fn() -> bool>);
 
 impl SemanticsMagicTap {
+    /// Wraps `handler`, which returns whether the control took the magic tap.
     pub fn new(handler: impl Fn() -> bool + 'static) -> Self {
         Self(Rc::new(handler))
     }
 
+    /// Runs the handler. Returns whether the control took the magic tap.
     pub fn invoke(&self) -> bool {
         (self.0)()
     }
@@ -1232,6 +1313,7 @@ pub struct SemanticsCustomAction {
 }
 
 impl SemanticsCustomAction {
+    /// Creates an action that a screen reader lists as `label` and that runs `handler` when chosen.
     pub fn new(label: impl Into<String>, handler: impl Fn() + 'static) -> Self {
         Self {
             label: label.into(),
@@ -1239,6 +1321,7 @@ impl SemanticsCustomAction {
         }
     }
 
+    /// Runs the handler of the action.
     pub fn invoke(&self) {
         (self.handler)();
     }
@@ -1285,7 +1368,9 @@ pub struct CanvasSemanticsNode {
     pub key: u64,
     /// Where the control was drawn, relative to the publishing node.
     pub bounds: cranpose_ui_graphics::Rect,
+    /// What the screen reader reads for the control.
     pub label: String,
+    /// What kind of control it is, as the screen reader announces it.
     pub role: Option<SemanticsWidgetRole>,
     /// Compose's `stateDescription` — what the control currently reads as
     /// ("CAMPAIGN", "3 of 18 gold"), spoken after the label and re-spoken on
@@ -1294,12 +1379,15 @@ pub struct CanvasSemanticsNode {
     /// Compose's `onClick(label = …)`. TalkBack reads it as "double tap to
     /// `<label>`", so it is a verb phrase, not a repeat of the label.
     pub on_click_label: Option<String>,
+    /// Whether the control can be activated.
     pub clickable: bool,
     /// Compose's `selected`, for `Role.RadioButton`/`Role.Tab`.
     pub selected: Option<bool>,
     /// Compose's `toggleableState`, for `Role.Switch`/`Role.Checkbox`.
     pub toggled: Option<ToggleableState>,
+    /// Whether the control accepts input. A disabled control is announced as such.
     pub enabled: bool,
+    /// Named actions that the screen reader lists in its actions menu for the control.
     pub custom_actions: Vec<SemanticsCustomAction>,
 }
 
@@ -1348,37 +1436,45 @@ impl CanvasSemanticsNode {
         }
     }
 
+    /// Returns the node with `role` set.
     pub fn with_role(mut self, role: SemanticsWidgetRole) -> Self {
         self.role = Some(role);
         self
     }
 
+    /// Returns the node with the state description `state` set. Compose's `stateDescription`.
     pub fn with_state_description(mut self, state: impl Into<String>) -> Self {
         self.state_description = Some(state.into());
         self
     }
 
+    /// Returns the node with `label` set as the verb phrase for activation. The node becomes
+    /// clickable.
     pub fn with_click_label(mut self, label: impl Into<String>) -> Self {
         self.on_click_label = Some(label.into());
         self.clickable = true;
         self
     }
 
+    /// Returns the node with its selected state set to `selected`.
     pub fn with_selected(mut self, selected: bool) -> Self {
         self.selected = Some(selected);
         self
     }
 
+    /// Returns the node with its toggle state set to `toggled`. A `bool` converts to `On` or `Off`.
     pub fn with_toggled(mut self, toggled: impl Into<ToggleableState>) -> Self {
         self.toggled = Some(toggled.into());
         self
     }
 
+    /// Returns the node with `enabled` set. A disabled node is announced as such.
     pub fn with_enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self
     }
 
+    /// Returns the node with `action` added to its custom actions.
     pub fn with_custom_action(mut self, action: SemanticsCustomAction) -> Self {
         self.custom_actions.push(action);
         self
@@ -1388,6 +1484,7 @@ impl CanvasSemanticsNode {
 /// Semantics configuration for accessibility.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticsConfiguration {
+    /// What a screen reader reads as the name of the node. Compose's `contentDescription`.
     pub content_description: Option<String>,
     /// Compose's `stateDescription`.
     pub state_description: Option<String>,
@@ -1419,19 +1516,25 @@ pub struct SemanticsConfiguration {
     pub language: Option<String>,
     /// Compose's `Role`.
     pub role: Option<SemanticsWidgetRole>,
+    /// Whether the control is selected. `None` means the control has no selected state.
     pub selected: Option<bool>,
     /// Whether the control is on, off or partly on. Compose's
     /// `toggleableState`.
     pub toggled: Option<ToggleableState>,
+    /// Whether the control accepts input. A disabled control is announced as such.
     pub enabled: bool,
+    /// Whether the control reacts to a click.
     pub is_clickable: bool,
+    /// Whether the node is a text field a user edits.
     pub is_editable_text: bool,
     /// Whether an editable field accepts line breaks, independent of its current text.
     pub multiline: bool,
     /// The text an editable field holds, read as its value. Compose's
     /// `editableText`.
     pub text: Option<String>,
+    /// The selection or the caret of an editable field, as byte offsets into its text.
     pub text_selection: Option<crate::text::TextRange>,
+    /// Named actions that a screen reader lists in its actions menu for the node.
     pub custom_actions: Vec<SemanticsCustomAction>,
     /// Controls this node drew itself instead of laying out. See
     /// [`CanvasSemanticsNode`].
@@ -1729,6 +1832,9 @@ impl SemanticsConfiguration {
         self.live_region = Some(mode);
         self
     }
+    /// Folds `other` into this configuration. A value that `other` sets replaces the value here.
+    /// `enabled` stays true only when both are enabled, the boolean flags turn true when either is
+    /// true, and the lists are appended.
     pub fn merge(&mut self, other: &SemanticsConfiguration) {
         if let Some(description) = &other.content_description {
             self.content_description = Some(description.clone());
@@ -1867,10 +1973,12 @@ impl fmt::Debug for dyn ModifierNode {
 }
 
 impl dyn ModifierNode {
+    /// Returns the node as `Any`, for downcasting to its concrete type.
     pub fn as_any(&self) -> &dyn Any {
         self
     }
 
+    /// Returns the node as mutable `Any`, for downcasting to its concrete type.
     pub fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
@@ -1879,6 +1987,7 @@ impl dyn ModifierNode {
 /// Strongly typed modifier elements that can create and update nodes while
 /// exposing equality/hash/inspector contracts that mirror Jetpack Compose.
 pub trait ModifierNodeElement: fmt::Debug + Hash + PartialEq + 'static {
+    /// The type of node that the element creates and updates.
     type Node: ModifierNode;
 
     /// Creates a new modifier node instance for this element.
@@ -2075,35 +2184,49 @@ impl ModifierInvalidation {
 
 /// Type-erased modifier element used by the runtime to reconcile chains.
 pub trait AnyModifierElement: fmt::Debug {
+    /// The type of node that the element creates.
     fn node_type(&self) -> TypeId;
 
+    /// The type of the element itself.
     fn element_type(&self) -> TypeId;
 
     /// A new node for this element, in the shared cell its chain entry keeps.
     fn create_node(&self) -> Rc<RefCell<dyn ModifierNode>>;
 
+    /// Whether `node` is of the type that this element updates.
     fn can_update_node(&self, node: &dyn ModifierNode) -> bool;
 
+    /// Brings `node` up to date with the data of this element.
     fn update_node(&self, node: &mut dyn ModifierNode);
 
+    /// The key that tells apart several elements of one type, or `None` when the element has none.
     fn key(&self) -> Option<u64>;
 
+    /// The capabilities of the nodes that the element creates.
     fn capabilities(&self) -> NodeCapabilities {
         NodeCapabilities::default()
     }
 
+    /// The hash of the element, computed once when the element was wrapped.
     fn hash_code(&self) -> u64;
 
+    /// Whether `other` is an element of the same type with equal data.
     fn equals_element(&self, other: &dyn AnyModifierElement) -> bool;
 
+    /// The name that inspector tooling shows for the element.
     fn inspector_name(&self) -> &'static str;
 
+    /// Reports each inspector property of the element to `visitor` as a name and a value.
     fn record_inspector_properties(&self, visitor: &mut dyn FnMut(&'static str, String));
 
+    /// Whether the node must be updated even when the new element equals the old one.
     fn requires_update(&self) -> bool;
 
+    /// Whether updating an existing node invalidates all pipeline stages that its capabilities
+    /// cover.
     fn auto_invalidates_on_update(&self) -> bool;
 
+    /// The one pipeline stage that an update invalidates, or `None` to invalidate by capabilities.
     fn update_invalidation_kind(&self) -> Option<InvalidationKind>;
 
     /// Whether this element has composition locals for its content.
@@ -2116,6 +2239,7 @@ pub trait AnyModifierElement: fmt::Debug {
         Vec::new()
     }
 
+    /// Returns the element as `Any`, for downcasting to its concrete type.
     fn as_any(&self) -> &dyn Any;
 }
 
@@ -2508,6 +2632,9 @@ impl DelegatableNode for SentinelNode {
 
 impl ModifierNode for SentinelNode {}
 
+/// A cheap read-only handle on one position of a [`ModifierNodeChain`]: a node or the head or tail
+/// marker. Obtain it from `head`, `tail` or the chain iterators and walk the chain with `parent`
+/// and `child`.
 #[derive(Clone)]
 pub struct ModifierChainNodeRef<'a> {
     chain: &'a ModifierNodeChain,
@@ -2798,10 +2925,6 @@ impl ModifierNodeChain {
         self.update_from_ref_iter(elements.iter(), context);
     }
 
-    /// Reconcile the chain against the provided iterator of element references.
-    ///
-    /// This is the preferred method as it avoids requiring a collected slice,
-    /// enabling zero-allocation traversal of modifier trees.
     /// Updates in place the entries whose elements are of `element_type`,
     /// for `elements` that differ from the chain's only in those: entries and
     /// elements line up one to one, and every other entry stays as it is.
@@ -2827,6 +2950,8 @@ impl ModifierNodeChain {
             .all(|(entry, element)| update_entry_in_place(entry, element, context))
     }
 
+    /// Reconciles the chain against the elements that `elements` yields, without collecting them
+    /// first. See `update_from_slice`.
     pub fn update_from_ref_iter<'a, I>(
         &mut self,
         elements: I,
@@ -2985,10 +3110,12 @@ impl ModifierNodeChain {
         self.sync_chain_links();
     }
 
+    /// The number of nodes in the chain.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    /// Whether the chain holds no nodes.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

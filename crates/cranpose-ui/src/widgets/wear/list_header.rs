@@ -41,13 +41,19 @@ use crate::{
 /// `ListHeaderDefaults` plus `ListHeaderTokens.Height`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ListHeaderSpec {
+    /// Colors of the header. The label uses `on_background`.
     pub colors: WearColors,
+    /// Text style of the label.
     pub text_style: WearTextStyle,
     /// `ListHeaderTokens.Height`.
     pub min_height: f32,
+    /// Space before the label on the start side, in dp.
     pub padding_start: f32,
+    /// Space above the label, in dp.
     pub padding_top: f32,
+    /// Space after the label on the end side, in dp.
     pub padding_end: f32,
+    /// Space below the label, in dp.
     pub padding_bottom: f32,
 }
 
@@ -66,6 +72,7 @@ impl Default for ListHeaderSpec {
 }
 
 impl ListHeaderSpec {
+    /// Sets the colors of the header.
     pub fn colors(mut self, colors: WearColors) -> Self {
         self.colors = colors;
         self

@@ -139,6 +139,8 @@ pub(crate) fn clip_rect_to_window(
     })
 }
 
+/// Draws `scene` into `frame`, an RGBA8 buffer of `width` by `height` pixels, at one device pixel
+/// per logical pixel and with the default font resources.
 pub fn draw_scene(frame: &mut [u8], width: u32, height: u32, scene: &Scene) {
     let text_resources = SoftwareTextResources::default();
     draw_scene_with_text_resources(frame, width, height, scene, &text_resources);

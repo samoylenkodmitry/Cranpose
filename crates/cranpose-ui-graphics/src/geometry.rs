@@ -87,42 +87,57 @@ fn vector_path_mask_cache_put(key: u64, image: ImageBitmap) {
     crate::thread_state::with(|state| state.vector_path_masks.borrow_mut().put(key, image));
 }
 
+/// A position in two dimensions, in logical pixels. Compose's `Offset`.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Point {
+    /// Horizontal coordinate, in logical pixels, growing to the right.
     pub x: f32,
+    /// Vertical coordinate, in logical pixels, growing downward.
     pub y: f32,
 }
 
 impl Point {
+    /// Creates a point from its coordinates.
     pub const fn new(x: f32, y: f32) -> Self {
         Self { x, y }
     }
 
+    /// The origin point `(0.0, 0.0)`.
     pub const ZERO: Point = Point { x: 0.0, y: 0.0 };
 }
 
+/// A width and a height, in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Size {
+    /// Width, in logical pixels.
     pub width: f32,
+    /// Height, in logical pixels.
     pub height: f32,
 }
 
 impl Size {
+    /// Creates a size from a width and a height.
     pub const fn new(width: f32, height: f32) -> Self {
         Self { width, height }
     }
 
+    /// A size of zero width and zero height.
     pub const ZERO: Size = Size {
         width: 0.0,
         height: 0.0,
     };
 }
 
+/// An axis-aligned rectangle given by its top-left corner and its size, in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
+    /// Left edge, in logical pixels.
     pub x: f32,
+    /// Top edge, in logical pixels.
     pub y: f32,
+    /// Width, in logical pixels.
     pub width: f32,
+    /// Height, in logical pixels.
     pub height: f32,
 }
 
@@ -137,6 +152,7 @@ impl Rect {
         height: 0.0,
     };
 
+    /// Creates a rectangle with its top-left corner at `origin` and the given `size`.
     pub fn from_origin_size(origin: Point, size: Size) -> Self {
         Self {
             x: origin.x,
@@ -146,6 +162,7 @@ impl Rect {
         }
     }
 
+    /// Creates a rectangle of `size` with its top-left corner at the origin.
     pub fn from_size(size: Size) -> Self {
         Self {
             x: 0.0,
@@ -155,6 +172,7 @@ impl Rect {
         }
     }
 
+    /// Returns the rectangle moved by `dx` horizontally and `dy` vertically.
     pub fn translate(&self, dx: f32, dy: f32) -> Self {
         Self {
             x: self.x + dx,
@@ -164,6 +182,7 @@ impl Rect {
         }
     }
 
+    /// Whether the point `(x, y)` lies inside the rectangle, edges included.
     pub fn contains(&self, x: f32, y: f32) -> bool {
         x >= self.x && y >= self.y && x <= self.x + self.width && y <= self.y + self.height
     }
@@ -193,6 +212,7 @@ impl Rect {
         }
     }
 
+    /// Returns the smallest rectangle that contains both rectangles.
     pub fn union(&self, other: Rect) -> Rect {
         let left = self.x.min(other.x);
         let top = self.y.min(other.y);
@@ -210,13 +230,18 @@ impl Rect {
 /// Padding values for each edge of a rectangle.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct EdgeInsets {
+    /// Inset on the left edge, in logical pixels.
     pub left: f32,
+    /// Inset on the top edge, in logical pixels.
     pub top: f32,
+    /// Inset on the right edge, in logical pixels.
     pub right: f32,
+    /// Inset on the bottom edge, in logical pixels.
     pub bottom: f32,
 }
 
 impl EdgeInsets {
+    /// Creates insets with `all` on every edge.
     pub fn uniform(all: f32) -> Self {
         Self {
             left: all,
@@ -226,6 +251,7 @@ impl EdgeInsets {
         }
     }
 
+    /// Creates insets with `horizontal` on the left and right and 0.0 on the top and bottom.
     pub fn horizontal(horizontal: f32) -> Self {
         Self {
             left: horizontal,
@@ -234,6 +260,7 @@ impl EdgeInsets {
         }
     }
 
+    /// Creates insets with `vertical` on the top and bottom and 0.0 on the left and right.
     pub fn vertical(vertical: f32) -> Self {
         Self {
             top: vertical,
@@ -242,6 +269,7 @@ impl EdgeInsets {
         }
     }
 
+    /// Creates insets with `horizontal` on the left and right and `vertical` on the top and bottom.
     pub fn symmetric(horizontal: f32, vertical: f32) -> Self {
         Self {
             left: horizontal,
@@ -251,6 +279,7 @@ impl EdgeInsets {
         }
     }
 
+    /// Creates insets from separate left, top, right and bottom values.
     pub fn from_components(left: f32, top: f32, right: f32, bottom: f32) -> Self {
         Self {
             left,
@@ -260,14 +289,17 @@ impl EdgeInsets {
         }
     }
 
+    /// Whether all four insets are 0.0.
     pub fn is_zero(&self) -> bool {
         self.left == 0.0 && self.top == 0.0 && self.right == 0.0 && self.bottom == 0.0
     }
 
+    /// The sum of the left and right insets.
     pub fn horizontal_sum(&self) -> f32 {
         self.left + self.right
     }
 
+    /// The sum of the top and bottom insets.
     pub fn vertical_sum(&self) -> f32 {
         self.top + self.bottom
     }
@@ -293,15 +325,21 @@ impl AddAssign for EdgeInsets {
     }
 }
 
+/// The radius of each corner of a rounded rectangle, in logical pixels.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CornerRadii {
+    /// Radius of the top-left corner, in logical pixels.
     pub top_left: f32,
+    /// Radius of the top-right corner, in logical pixels.
     pub top_right: f32,
+    /// Radius of the bottom-right corner, in logical pixels.
     pub bottom_right: f32,
+    /// Radius of the bottom-left corner, in logical pixels.
     pub bottom_left: f32,
 }
 
 impl CornerRadii {
+    /// Creates radii with the same value on all four corners.
     pub fn uniform(radius: f32) -> Self {
         Self {
             top_left: radius,
@@ -312,12 +350,14 @@ impl CornerRadii {
     }
 }
 
+/// A rectangle shape with rounded corners. Compose's `RoundedCornerShape`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RoundedCornerShape {
     radii: CornerRadii,
 }
 
 impl RoundedCornerShape {
+    /// Creates a shape with a separate radius for each corner, in logical pixels.
     pub fn new(top_left: f32, top_right: f32, bottom_right: f32, bottom_left: f32) -> Self {
         Self {
             radii: CornerRadii {
@@ -329,16 +369,20 @@ impl RoundedCornerShape {
         }
     }
 
+    /// Creates a shape with the same radius on all four corners.
     pub fn uniform(radius: f32) -> Self {
         Self {
             radii: CornerRadii::uniform(radius),
         }
     }
 
+    /// Creates a shape from a `CornerRadii` value.
     pub fn with_radii(radii: CornerRadii) -> Self {
         Self { radii }
     }
 
+    /// Returns the radii for a rectangle of `width` by `height`, with each radius limited to half
+    /// the width and half the height so the corners fit.
     pub fn resolve(&self, width: f32, height: f32) -> CornerRadii {
         let mut resolved = self.radii;
         let max_width = (width / 2.0).max(0.0);
@@ -350,18 +394,24 @@ impl RoundedCornerShape {
         resolved
     }
 
+    /// The radii as given, before any clamping to a size.
     pub fn radii(&self) -> CornerRadii {
         self.radii
     }
 }
 
+/// The pivot point for scaling and rotating a layer, given as fractions of its size. Compose's
+/// `TransformOrigin`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TransformOrigin {
+    /// Horizontal pivot as a fraction of the layer's width, from 0.0 (left) to 1.0 (right).
     pub pivot_fraction_x: f32,
+    /// Vertical pivot as a fraction of the layer's height, from 0.0 (top) to 1.0 (bottom).
     pub pivot_fraction_y: f32,
 }
 
 impl TransformOrigin {
+    /// Creates an origin from fractions of the layer's width and height.
     pub const fn new(pivot_fraction_x: f32, pivot_fraction_y: f32) -> Self {
         Self {
             pivot_fraction_x,
@@ -369,6 +419,7 @@ impl TransformOrigin {
         }
     }
 
+    /// Pivot at the center of the layer.
     pub const CENTER: TransformOrigin = TransformOrigin::new(0.5, 0.5);
 }
 
@@ -378,34 +429,61 @@ impl Default for TransformOrigin {
     }
 }
 
+/// The outline of a graphics layer, used for clipping and for its shadow.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum LayerShape {
+    /// Square corners.
     #[default]
     Rectangle,
+    /// Corners rounded by the given shape.
     Rounded(RoundedCornerShape),
 }
 
+/// The transform, opacity, clip, shadow and effect properties of a layer. Compose's
+/// `GraphicsLayerScope`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GraphicsLayer {
+    /// Opacity of the layer, from 0.0 (transparent) to 1.0 (opaque).
     pub alpha: f32,
+    /// Uniform scale factor for both axes. 1.0 leaves the size unchanged.
     pub scale: f32,
+    /// Horizontal scale factor, multiplied with `scale`. 1.0 leaves the width unchanged.
     pub scale_x: f32,
+    /// Vertical scale factor, multiplied with `scale`. 1.0 leaves the height unchanged.
     pub scale_y: f32,
+    /// Rotation around the x axis, in degrees.
     pub rotation_x: f32,
+    /// Rotation around the y axis, in degrees.
     pub rotation_y: f32,
+    /// Rotation around the z axis, in degrees. Positive values turn clockwise on screen.
     pub rotation_z: f32,
+    /// Distance of the camera from the layer plane. It sets the strength of the perspective for
+    /// `rotation_x` and `rotation_y`; larger values flatten it.
     pub camera_distance: f32,
+    /// The point that scaling and rotation turn around, as fractions of the layer's size.
     pub transform_origin: TransformOrigin,
+    /// Horizontal translation, in layout coordinates.
     pub translation_x: f32,
+    /// Vertical translation, in layout coordinates.
     pub translation_y: f32,
+    /// Shadow elevation in layout units. A value of 0.0 or less draws no shadow.
     pub shadow_elevation: f32,
+    /// Color of the ambient shadow.
     pub ambient_shadow_color: Color,
+    /// Color of the spot shadow.
     pub spot_shadow_color: Color,
+    /// Outline used for clipping and for the shadow.
     pub shape: LayerShape,
+    /// Whether content is clipped to `shape`.
     pub clip: bool,
+    /// Whether the layer renders offscreen before it is composited.
     pub compositing_strategy: CompositingStrategy,
+    /// How the layer's content combines with what is already drawn behind it.
     pub blend_mode: BlendMode,
+    /// Color filter applied to the layer's content, or `None` for none.
     pub color_filter: Option<ColorFilter>,
+    /// Filter applied to the layer's rendered content as a whole, such as a blur. `None` applies
+    /// none.
     pub render_effect: Option<crate::render_effect::RenderEffect>,
     /// Filters the pixels behind this layer. The result shares the layer's
     /// group opacity and blend mode with its content; `ModulateAlpha` applies
@@ -479,39 +557,67 @@ impl Default for GraphicsLayer {
 /// currently guarantees `SrcOver` and `DstOut` behavior.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum BlendMode {
+    /// Clears the destination to transparent where the source draws.
     Clear,
+    /// Replaces the destination with the source.
     Src,
+    /// Keeps the destination and discards the source.
     Dst,
+    /// Draws the source over the destination. This is the default.
     #[default]
     SrcOver,
+    /// Draws the destination over the source.
     DstOver,
+    /// Keeps the source only where the destination is opaque.
     SrcIn,
+    /// Keeps the destination only where the source is opaque.
     DstIn,
+    /// Keeps the source only where the destination is transparent.
     SrcOut,
+    /// Keeps the destination only where the source is transparent.
     DstOut,
+    /// Draws the source over the destination, only where the destination is opaque.
     SrcAtop,
+    /// Draws the destination over the source, only where the source is opaque.
     DstAtop,
+    /// Keeps the source and the destination where the other is transparent.
     Xor,
+    /// Adds the source and destination colors and alphas.
     Plus,
+    /// Multiplies the source and destination colors and alphas.
     Modulate,
+    /// Inverts, multiplies and inverts again, which lightens the result.
     Screen,
+    /// Multiplies or screens depending on the destination color, which raises contrast.
     Overlay,
+    /// Keeps the darker color of each channel.
     Darken,
+    /// Keeps the lighter color of each channel.
     Lighten,
+    /// Brightens the destination by the source color.
     ColorDodge,
+    /// Darkens the destination by the source color.
     ColorBurn,
+    /// Multiplies or screens depending on the source color.
     HardLight,
+    /// A softer version of `HardLight`: darkens or lightens depending on the source color.
     SoftLight,
+    /// Subtracts the darker color from the lighter one in each channel.
     Difference,
+    /// Like `Difference` with lower contrast.
     Exclusion,
+    /// Multiplies the source and destination colors, which darkens the result.
     Multiply,
+    /// Takes the hue of the source with the saturation and luminosity of the destination.
     Hue,
+    /// Takes the saturation of the source with the hue and luminosity of the destination.
     Saturation,
+    /// Takes the hue and saturation of the source with the luminosity of the destination.
     Color,
+    /// Takes the luminosity of the source with the hue and saturation of the destination.
     Luminosity,
 }
 
-/// Controls how a graphics layer is composited into its parent target.
 impl BlendMode {
     /// Every mode in declaration order, so `mode as u32` indexes it.
     pub const ALL: [BlendMode; 29] = [
@@ -547,6 +653,7 @@ impl BlendMode {
     ];
 }
 
+/// How a [`GraphicsLayer`] is composited into its parent. Compose's `CompositingStrategy`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum CompositingStrategy {
     /// Use renderer heuristics (default).
@@ -558,6 +665,7 @@ pub enum CompositingStrategy {
     ModulateAlpha,
 }
 
+/// One recorded draw operation, in scope coordinates. Renderers consume these in draw order.
 #[derive(Clone, Debug, PartialEq)]
 pub enum DrawPrimitive {
     /// Marker emitted by `draw_content()` inside `draw_with_content`.
@@ -565,19 +673,28 @@ pub enum DrawPrimitive {
     Content,
     /// Wrapper to associate a draw primitive with a non-default blend mode.
     Blend {
+        /// The primitive drawn with `blend_mode`.
         primitive: Box<DrawPrimitive>,
+        /// How the wrapped primitive combines with what is already drawn.
         blend_mode: BlendMode,
     },
+    /// A rectangle, filled or stroked.
     Rect {
+        /// The rectangle in scope coordinates.
         rect: Rect,
+        /// Paint for the fill or the stroke.
         brush: Brush,
         /// `None` fills the rect; `Some` strokes its outline, centered on the
         /// edge (so it bleeds `width / 2` outside `rect`).
         stroke: Option<Stroke>,
     },
+    /// A rectangle with rounded corners, filled or stroked.
     RoundRect {
+        /// The rectangle in scope coordinates.
         rect: Rect,
+        /// Paint for the fill or the stroke.
         brush: Brush,
+        /// Corner radii of the rectangle, in logical pixels.
         radii: CornerRadii,
         /// `None` fills the rounded rect; `Some` strokes its outline, centered
         /// on the edge.
@@ -597,11 +714,19 @@ pub enum DrawPrimitive {
         /// first field (like every other variant) so bbox/culling/clip logic
         /// treats an arc exactly like any other primitive.
         rect: Rect,
+        /// Paint for the arc.
         brush: Brush,
+        /// Center of the circle the arc lies on, in scope coordinates.
         center: Point,
+        /// Radius of the stroked centerline, or the outer radius of a filled sector, in logical
+        /// pixels.
         radius: f32,
+        /// Where the arc starts, in radians. `0` points along +X and angles increase clockwise on
+        /// screen.
         start_angle: f32,
+        /// Angle swept from `start_angle`, in radians. A negative value sweeps counter-clockwise.
         sweep_angle: f32,
+        /// `Some` strokes the arc; `None` fills the sector between `inner_radius` and `radius`.
         stroke: Option<Stroke>,
         /// `> 0` turns a filled wedge into an annular sector.
         inner_radius: f32,
@@ -612,9 +737,13 @@ pub enum DrawPrimitive {
         /// The box of the two ends; the stroke reaches half its width past
         /// it, as a stroked rect's does past its rect.
         rect: Rect,
+        /// Paint for the line.
         brush: Brush,
+        /// Start of the segment, in scope coordinates.
         start: Point,
+        /// End of the segment, in scope coordinates.
         end: Point,
+        /// Width and cap of the line.
         stroke: Stroke,
     },
     /// One slice of a filled path, which the draw scope cuts a fill into
@@ -623,14 +752,22 @@ pub enum DrawPrimitive {
         /// The rect `brush` resolves against: the draw scope's own, as a
         /// path's brush resolves in Compose.
         rect: Rect,
+        /// Paint for the slice.
         brush: Brush,
+        /// The slice to fill.
         trapezoid: Trapezoid,
     },
+    /// An image drawn into a destination rectangle.
     Image {
+        /// Destination rectangle in scope coordinates. The image is stretched to fill it.
         rect: Rect,
+        /// The image to draw.
         image: ImageBitmap,
+        /// Opacity from 0.0 (transparent) to 1.0 (opaque).
         alpha: f32,
+        /// Color filter applied to the image, or `None` for none.
         color_filter: Option<ColorFilter>,
+        /// How pixels are sampled when the image is scaled.
         sampling: ImageSampling,
         /// Optional source rectangle in image-pixel coordinates.
         /// When `None`, the entire image is drawn. When `Some`, only the
@@ -660,6 +797,7 @@ pub struct TextPrimitive {
     /// Shared so redrawing an unchanged string each frame clones a pointer
     /// rather than the characters.
     pub text: std::rc::Rc<str>,
+    /// Font, size, alignment and other styling the glyphs are laid out and drawn with.
     pub style: DrawTextStyle,
     /// Text is filled with a single color: the glyph atlas path modulates one
     /// vertex color per glyph. Gradient brushes are resolved to their first
@@ -701,7 +839,6 @@ fn shared_text_str(text: &str) -> Rc<str> {
     })
 }
 
-/// Describes a shadow to be rendered. Each renderer chooses how to blur.
 impl DrawPrimitive {
     /// The primitive moved by `dx`, `dy`. Brush geometry is relative to the
     /// primitive's rect, so it moves along.
@@ -823,41 +960,65 @@ impl DrawPrimitive {
     }
 }
 
+/// A shadow that needs blur processing. Each renderer chooses how to blur. See
+/// [`DrawPrimitive::Shadow`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum ShadowPrimitive {
     /// Drop shadow: render shape behind content, blurred. `cutout` knocks
     /// the element's own (unoffset) shape out of the silhouette before the
     /// blur so translucent surfaces never sample their own shadow.
     Drop {
+        /// The shape drawn and blurred behind the content.
         shape: Box<DrawPrimitive>,
+        /// `Some` cuts the element's own unoffset shape out of the silhouette before the blur.
         cutout: Option<Box<DrawPrimitive>>,
+        /// Blur radius of the shadow, in logical pixels.
         blur_radius: f32,
+        /// How the shadow combines with what is already drawn.
         blend_mode: BlendMode,
     },
     /// Inner shadow: render fill + cutout to offscreen, blur, clip to bounds.
     Inner {
+        /// The shape drawn and blurred to make the shadow.
         fill: Box<DrawPrimitive>,
+        /// The shape cut out of the shadow's silhouette, so it appears only outside that shape.
         cutout: Box<DrawPrimitive>,
+        /// Blur radius of the shadow, in logical pixels.
         blur_radius: f32,
+        /// How the shadow combines with what is already drawn.
         blend_mode: BlendMode,
         /// Element bounds — blurred result must be clipped here.
         clip_rect: Rect,
     },
 }
 
+/// The drawing surface passed to draw modifiers. Compose's `DrawScope`. Every method records a
+/// primitive in scope coordinates, with the origin at the top-left corner of the node, and the
+/// `_blend` forms composite with a given blend mode instead of `SrcOver`.
 pub trait DrawScope {
+    /// Size of the drawing area, in logical pixels.
     fn size(&self) -> Size;
+    /// Marks where the node's own content draws, as Compose's `drawContent()` does in
+    /// `drawWithContent`. Draws recorded before the marker paint under the content and draws after
+    /// it paint over it.
     fn draw_content(&mut self);
+    /// Fills the whole scope rect with `brush`.
     fn draw_rect(&mut self, brush: Brush);
+    /// As `draw_rect`, composited with `blend_mode` instead of `SrcOver`.
     fn draw_rect_blend(&mut self, brush: Brush, blend_mode: BlendMode);
     /// Draws a rectangle at the specified position and size.
     fn draw_rect_at(&mut self, rect: Rect, brush: Brush);
+    /// As `draw_rect_at`, composited with `blend_mode` instead of `SrcOver`.
     fn draw_rect_at_blend(&mut self, rect: Rect, brush: Brush, blend_mode: BlendMode);
+    /// Fills the whole scope rect with rounded corners of `radii`.
     fn draw_round_rect(&mut self, brush: Brush, radii: CornerRadii);
+    /// As `draw_round_rect`, composited with `blend_mode` instead of `SrcOver`.
     fn draw_round_rect_blend(&mut self, brush: Brush, radii: CornerRadii, blend_mode: BlendMode);
     /// Draws a rounded rectangle at the specified position and size.
     fn draw_round_rect_at(&mut self, rect: Rect, brush: Brush, radii: CornerRadii);
+    /// Fills a circle of `radius` around `center`, in scope coordinates.
     fn draw_circle(&mut self, brush: Brush, center: Point, radius: f32);
+    /// As `draw_circle`, composited with `blend_mode` instead of `SrcOver`.
     fn draw_circle_blend(
         &mut self,
         brush: Brush,
@@ -868,9 +1029,11 @@ pub trait DrawScope {
 
     /// Strokes the outline of the whole scope rect.
     fn draw_rect_stroked(&mut self, brush: Brush, stroke: Stroke);
+    /// As `draw_rect_stroked`, composited with `blend_mode` instead of `SrcOver`.
     fn draw_rect_stroked_blend(&mut self, brush: Brush, stroke: Stroke, blend_mode: BlendMode);
     /// Strokes the outline of `rect`.
     fn draw_rect_at_stroked(&mut self, rect: Rect, brush: Brush, stroke: Stroke);
+    /// As `draw_rect_at_stroked`, composited with `blend_mode` instead of `SrcOver`.
     fn draw_rect_at_stroked_blend(
         &mut self,
         rect: Rect,
@@ -880,6 +1043,7 @@ pub trait DrawScope {
     );
     /// Strokes the outline of the whole scope rect with rounded corners.
     fn draw_round_rect_stroked(&mut self, brush: Brush, radii: CornerRadii, stroke: Stroke);
+    /// As `draw_round_rect_stroked`, composited with `blend_mode` instead of `SrcOver`.
     fn draw_round_rect_stroked_blend(
         &mut self,
         brush: Brush,
@@ -895,6 +1059,7 @@ pub trait DrawScope {
         radii: CornerRadii,
         stroke: Stroke,
     );
+    /// As `draw_round_rect_at_stroked`, composited with `blend_mode` instead of `SrcOver`.
     fn draw_round_rect_at_stroked_blend(
         &mut self,
         rect: Rect,
@@ -906,6 +1071,7 @@ pub trait DrawScope {
     /// Strokes a circle outline. Lowers to a stroked rounded rect, so it shares
     /// the fill pipeline and batches with every other shape.
     fn draw_circle_stroked(&mut self, brush: Brush, center: Point, radius: f32, stroke: Stroke);
+    /// As `draw_circle_stroked`, composited with `blend_mode` instead of `SrcOver`.
     fn draw_circle_stroked_blend(
         &mut self,
         brush: Brush,
@@ -936,6 +1102,7 @@ pub trait DrawScope {
         sweep_angle: f32,
         stroke: Stroke,
     );
+    /// As `draw_arc`, composited with `blend_mode` instead of `SrcOver`.
     #[expect(clippy::too_many_arguments)]
     fn draw_arc_blend(
         &mut self,
@@ -954,6 +1121,7 @@ pub trait DrawScope {
     /// for a non-positive width, a non-finite end, or a segment of no length
     /// between butt caps; round and square caps draw a dot there.
     fn draw_line(&mut self, brush: Brush, start: Point, end: Point, stroke: Stroke);
+    /// As `draw_line`, composited with `blend_mode` instead of `SrcOver`.
     fn draw_line_blend(
         &mut self,
         brush: Brush,
@@ -972,6 +1140,7 @@ pub trait DrawScope {
     /// dashes its effect cuts. Where edges meet, a translucent stroke is
     /// painted twice.
     fn draw_path(&mut self, path: &Path, brush: Brush, style: DrawStyle);
+    /// As `draw_path`, composited with `blend_mode` instead of `SrcOver`.
     fn draw_path_blend(
         &mut self,
         path: &Path,
@@ -997,6 +1166,7 @@ pub trait DrawScope {
         start_angle: f32,
         sweep_angle: f32,
     );
+    /// As `draw_annular_sector`, composited with `blend_mode` instead of `SrcOver`.
     #[expect(clippy::too_many_arguments)]
     fn draw_annular_sector_blend(
         &mut self,
@@ -1009,8 +1179,12 @@ pub trait DrawScope {
         blend_mode: BlendMode,
     );
 
+    /// Draws `image` stretched over the whole scope rect.
     fn draw_image(&mut self, image: ImageBitmap);
+    /// As `draw_image`, composited with `blend_mode` instead of `SrcOver`.
     fn draw_image_blend(&mut self, image: ImageBitmap, blend_mode: BlendMode);
+    /// Draws `image` stretched into `rect`, with `alpha` from 0.0 to 1.0 and an optional
+    /// `color_filter`.
     fn draw_image_at(
         &mut self,
         rect: Rect,
@@ -1018,6 +1192,7 @@ pub trait DrawScope {
         alpha: f32,
         color_filter: Option<ColorFilter>,
     );
+    /// As `draw_image_at`, sampling the image with `sampling` instead of nearest-neighbor.
     fn draw_image_at_sampled(
         &mut self,
         rect: Rect,
@@ -1026,6 +1201,7 @@ pub trait DrawScope {
         color_filter: Option<ColorFilter>,
         sampling: ImageSampling,
     );
+    /// As `draw_image_at`, composited with `blend_mode` instead of `SrcOver`.
     fn draw_image_at_blend(
         &mut self,
         rect: Rect,
@@ -1044,6 +1220,7 @@ pub trait DrawScope {
         alpha: f32,
         color_filter: Option<ColorFilter>,
     );
+    /// As `draw_image_src`, sampling the source region with `sampling` instead of nearest-neighbor.
     fn draw_image_src_sampled(
         &mut self,
         image: ImageBitmap,
@@ -1053,6 +1230,7 @@ pub trait DrawScope {
         color_filter: Option<ColorFilter>,
         sampling: ImageSampling,
     );
+    /// As `draw_image_src_sampled`, composited with `blend_mode` instead of `SrcOver`.
     fn draw_image_src_blend(
         &mut self,
         image: ImageBitmap,
@@ -1126,6 +1304,8 @@ pub trait DrawScope {
         );
     }
 
+    /// Consumes the scope and returns the recorded primitives in draw order, including the
+    /// `Content` markers.
     fn into_primitives(self) -> Vec<DrawPrimitive>;
 }
 
@@ -1149,6 +1329,8 @@ pub fn align_text_block(rect: Rect, measurement: TextMeasurement, style: &DrawTe
     Point::new(x, y)
 }
 
+/// The `DrawScope` the framework passes to draw closures. It records the primitives drawn in draw
+/// order.
 #[derive(Default)]
 pub struct DrawScopeDefault {
     size: Size,
@@ -1157,6 +1339,7 @@ pub struct DrawScopeDefault {
 }
 
 impl DrawScopeDefault {
+    /// Creates a scope of `size` without a text measurer, so text is measured by an estimate.
     pub fn new(size: Size) -> Self {
         Self::with_storage(size, None, CommandRecording::default())
     }

@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
 mod alignment;
@@ -19,6 +20,7 @@ pub use constraints::*;
 pub use intrinsics::*;
 pub use pixels::*;
 
+/// The layout API in one import.
 pub mod prelude {
     pub use crate::{
         alignment::{Alignment, HorizontalAlignment, VerticalAlignment},

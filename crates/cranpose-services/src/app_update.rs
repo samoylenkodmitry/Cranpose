@@ -44,6 +44,7 @@ impl DigestAlgorithm {
 /// The digest a downloaded package must match.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PackageDigest {
+    /// How `value` was computed.
     pub algorithm: DigestAlgorithm,
     /// Lower-case hexadecimal.
     pub value: String,
@@ -196,16 +197,19 @@ impl UpdatePackage {
         }
     }
 
+    /// Sets the package size in bytes.
     pub fn with_size(mut self, size: u64) -> Self {
         self.size = Some(size);
         self
     }
 
+    /// Sets the digest that the downloaded bytes must match.
     pub fn with_digest(mut self, digest: PackageDigest) -> Self {
         self.digest = Some(digest);
         self
     }
 
+    /// Sets the release notes of the package.
     pub fn with_notes(mut self, notes: impl Into<String>) -> Self {
         self.notes = Some(notes.into());
         self

@@ -25,9 +25,13 @@ impl RasterScale {
     }
 }
 
+/// Hashes of a layer's content and of its render effect, which key its raster cache entries.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LayerRasterCacheHashes {
+    /// Hash of what the layer draws into its target, as `LayerNode::target_content_hash`
+    /// returns it.
     pub target_content: u64,
+    /// Hash of the layer's render effect.
     pub effect: u64,
 }
 
@@ -60,12 +64,15 @@ impl LayerRasterCacheKind {
     }
 }
 
+/// Identity of a node's cached raster of one kind. It stays the same while the content changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LayerRasterCacheIdentity {
     stable_id: NodeId,
     kind: u8,
 }
 
+/// Key of one cached layer raster. It covers the kind of entry, the owning node, the content and
+/// effect hashes, the layer bounds, the pixel size, the raster scale and the sub-pixel phase.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LayerRasterCacheKey {
     kind: LayerRasterCacheKind,
@@ -97,6 +104,9 @@ fn local_bounds_bits(local_bounds: Rect) -> [u32; 4] {
 }
 
 impl LayerRasterCacheKey {
+    /// Key for the rasterized content of a layer. `content_hash` hashes the content, `local_bounds`
+    /// is the layer's bounds, `pixel_size` is the raster size in pixels, and `device_phase` is the
+    /// layer's sub-pixel position, kept in sixteenth-pixel steps.
     pub fn source_content(
         stable_id: Option<NodeId>,
         content_hash: u64,
@@ -117,6 +127,8 @@ impl LayerRasterCacheKey {
         }
     }
 
+    /// Key for the output of a backdrop effect. `input_hash` hashes the backdrop that the effect
+    /// reads and `effect_hash` hashes the effect.
     pub fn backdrop_effect(
         stable_id: Option<NodeId>,
         input_hash: u64,
@@ -179,6 +191,8 @@ impl LayerRasterCacheKey {
         }
     }
 
+    /// Key for a cached range of the scene, identified by the hash of its content and owned by no
+    /// node.
     pub fn scene_range(
         content_hash: u64,
         local_bounds: Rect,
@@ -227,10 +241,12 @@ impl LayerRasterCacheKey {
         self.kind.identity_kind() as usize
     }
 
+    /// The node that owns the entry, or `None` when the entry belongs to no single node.
     pub fn stable_id(self) -> Option<NodeId> {
         self.stable_id
     }
 
+    /// Whether the key is for a scene range or a prefix snapshot.
     pub fn is_scene_range(self) -> bool {
         matches!(
             self.kind,
@@ -238,10 +254,12 @@ impl LayerRasterCacheKey {
         )
     }
 
+    /// Whether the key is for the rasterized content of a layer.
     pub fn is_source_content(self) -> bool {
         self.kind == LayerRasterCacheKind::SourceContent
     }
 
+    /// The identity of the entry, or `None` when it has no owning node.
     pub fn identity(self) -> Option<LayerRasterCacheIdentity> {
         Some(LayerRasterCacheIdentity {
             stable_id: self.stable_id?,
@@ -249,6 +267,7 @@ impl LayerRasterCacheKey {
         })
     }
 
+    /// Raster size in pixels as width and height.
     pub fn pixel_size(self) -> (u32, u32) {
         (self.pixel_size[0], self.pixel_size[1])
     }
@@ -259,6 +278,7 @@ impl LayerRasterCacheKey {
         self.local_bounds_bits
     }
 
+    /// The device scale the raster is drawn at.
     pub fn raster_scale(self) -> RasterScale {
         self.raster_scale
     }

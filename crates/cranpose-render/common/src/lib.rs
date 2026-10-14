@@ -1,7 +1,9 @@
+#![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
 mod annotated_text;
 mod ascii_glyphs;
+/// Debug switches read from environment variables, with programmatic overrides.
 pub mod debug_toggles;
 pub mod dev_overlay;
 mod direct_mapped_cache;
@@ -10,33 +12,49 @@ mod direct_mapped_cache;
 /// surfaces display this as rgb(75, 75, 86)). One definition so backends
 /// cannot drift.
 pub const FRAME_CLEAR_COLOR: [f32; 4] = [18.0 / 255.0, 18.0 / 255.0, 24.0 / 255.0, 1.0];
+/// CPU sampling of brushes at a point, for the software renderers.
 pub mod brush_sampling;
 mod font_features;
+/// Glyph layout and vertical metrics of a font at one pixel size.
 pub mod font_layout;
 pub mod font_source;
 mod font_tracking;
 mod full_glyph_count;
+/// Blur kernel and rectangle helpers shared by the renderers.
 pub mod geometry;
 pub mod gpos_kerning;
+/// The render graph: the layers and primitives that a scene builds for a renderer to draw.
 pub mod graph;
 mod graph_hash;
+/// The retained scene: the render graph together with the hit targets built from it.
 pub mod graph_scene;
+/// Collecting hit targets from a render graph.
 pub mod hit_graph;
+/// Pixel comparison and resampling of RGBA images, for renderer tests.
 pub mod image_compare;
 #[cfg(feature = "installed-fonts")]
 pub mod installed_fonts;
+/// Rules for when a graphics layer is drawn into its own offscreen buffer and with which alpha.
 pub mod layer_composition;
 mod layer_recycling;
 pub mod layer_shadow;
+/// Transform math of a graphics layer, re-exported from `cranpose_ui_graphics`.
 pub mod layer_transform;
+/// Lowering of draw primitives to the shape, image and text draw calls of a renderer.
 pub mod primitive_emit;
+/// Keys of the cached rasters of layers.
 pub mod raster_cache;
+/// Shared cases that every renderer backend is checked against.
 pub mod render_contract;
+/// Building and updating the render graph from the layout tree.
 pub mod scene_builder;
 pub mod shape_sdf;
+/// CPU text rasterization: fonts, glyph layout and glyph masks.
 pub mod software_text_raster;
+/// Colors, brushes and corner radii resolved against the properties of a graphics layer.
 pub mod style_shared;
 mod text_cache_key;
+/// Automatic hyphenation of text, using dictionaries that the app registers.
 pub mod text_hyphenation;
 pub mod text_mask_gamma;
 pub mod text_measure;
@@ -138,8 +156,10 @@ pub trait HitTestTarget {
 /// Trait describing the minimal surface area required by the application
 /// shell to process pointer events and refresh the frame graph.
 pub trait RenderScene {
+    /// The hit target type that hit testing returns.
     type HitTarget: HitTestTarget + Clone;
 
+    /// Removes the render graph and all hit targets.
     fn clear(&mut self);
 
     /// Performs hit testing at the given coordinates.
@@ -185,7 +205,9 @@ pub trait RenderScene {
 
 /// Abstraction implemented by concrete renderer backends.
 pub trait Renderer {
+    /// The scene type that holds the render graph and the hit targets of this renderer.
     type Scene: RenderScene;
+    /// Error returned when the scene cannot be rebuilt or updated.
     type Error;
 
     /// Installs renderer-provided app services into the target AppContext.
@@ -212,9 +234,12 @@ pub trait Renderer {
     /// the scale with each draw ignore it.
     fn set_root_scale(&mut self, _scale: f32) {}
 
+    /// The scene that holds the render graph and the hit targets.
     fn scene(&self) -> &Self::Scene;
+    /// Mutable access to the scene.
     fn scene_mut(&mut self) -> &mut Self::Scene;
 
+    /// Rebuilds the scene from `layout_tree` for a viewport of the given size.
     fn rebuild_scene(
         &mut self,
         layout_tree: &LayoutTree,
@@ -232,6 +257,8 @@ pub trait Renderer {
         viewport: Size,
     ) -> Result<(), Self::Error>;
 
+    /// Updates the scene for the nodes in `updates` and refreshes the hit targets. The default
+    /// implementation rebuilds the whole scene.
     fn update_scene_from_applier(
         &mut self,
         applier: &mut cranpose_core::MemoryApplier,
@@ -243,6 +270,8 @@ pub trait Renderer {
         self.rebuild_scene_from_applier(applier, root, viewport)
     }
 
+    /// Updates the scene when only what is drawn changed. Hit targets are refreshed only when their
+    /// geometry changed. The default implementation calls `update_scene_from_applier`.
     fn update_visual_scene_from_applier(
         &mut self,
         applier: &mut cranpose_core::MemoryApplier,

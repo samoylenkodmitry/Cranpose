@@ -9,20 +9,25 @@ use crate::{composable, layout::policies::FlexMeasurePolicy, modifier::Modifier}
 /// Specification for Column layout behavior.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ColumnSpec {
+    /// How children are spaced along the vertical axis. Defaults to `Start`.
     pub vertical_arrangement: LinearArrangement,
+    /// How children align on the horizontal axis. Defaults to `Start`.
     pub horizontal_alignment: HorizontalAlignment,
 }
 
 impl ColumnSpec {
+    /// Creates a spec with start arrangement and start alignment.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Sets how children are spaced along the vertical axis.
     pub fn vertical_arrangement(mut self, arrangement: LinearArrangement) -> Self {
         self.vertical_arrangement = arrangement;
         self
     }
 
+    /// Sets how children align on the horizontal axis.
     pub fn horizontal_alignment(mut self, alignment: HorizontalAlignment) -> Self {
         self.horizontal_alignment = alignment;
         self

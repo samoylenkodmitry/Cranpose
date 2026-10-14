@@ -27,6 +27,7 @@ impl<T> Clone for Owned<T> {
 }
 
 impl<T> Owned<T> {
+    /// Creates an owner holding `value`.
     pub fn new(value: T) -> Self {
         Self::with_states(value, Vec::new())
     }

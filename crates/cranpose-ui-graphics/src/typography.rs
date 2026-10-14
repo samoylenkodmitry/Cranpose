@@ -12,8 +12,10 @@ use crate::geometry::Size;
 /// Font style (normal, italic, oblique)
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum FontStyle {
+    /// Upright letterforms.
     #[default]
     Normal,
+    /// Slanted letterforms from the face's italic design.
     Italic,
     /// Rendered as [`FontStyle::Italic`]; no font in the stack ships a separate
     /// oblique face.
@@ -25,14 +27,23 @@ pub enum FontStyle {
 pub struct FontWeight(pub u16);
 
 impl FontWeight {
+    /// Thin, weight 100.
     pub const THIN: FontWeight = FontWeight(100);
+    /// Extra light, weight 200.
     pub const EXTRA_LIGHT: FontWeight = FontWeight(200);
+    /// Light, weight 300.
     pub const LIGHT: FontWeight = FontWeight(300);
+    /// Normal, weight 400.
     pub const NORMAL: FontWeight = FontWeight(400);
+    /// Medium, weight 500.
     pub const MEDIUM: FontWeight = FontWeight(500);
+    /// Semi bold, weight 600.
     pub const SEMI_BOLD: FontWeight = FontWeight(600);
+    /// Bold, weight 700.
     pub const BOLD: FontWeight = FontWeight(700);
+    /// Extra bold, weight 800.
     pub const EXTRA_BOLD: FontWeight = FontWeight(800);
+    /// Black, weight 900.
     pub const BLACK: FontWeight = FontWeight(900);
 
     /// Clamps to the `1..=1000` range every font backend accepts.
@@ -46,6 +57,7 @@ impl FontWeight {
         }
     }
 
+    /// Returns the weight as a number from 1 to 1000.
     pub const fn value(self) -> u16 {
         self.0
     }
@@ -64,18 +76,24 @@ impl Default for FontWeight {
 /// framework's `Text` composable is laid out.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum TextAlign {
+    /// The block starts at the left edge of the box.
     #[default]
     Left,
+    /// The block is centered horizontally in the box.
     Center,
+    /// The block ends at the right edge of the box.
     Right,
 }
 
 /// Vertical placement of the text block inside the box it is drawn in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum TextVerticalAlign {
+    /// The text block starts at the top of the box.
     #[default]
     Top,
+    /// The text block is centered vertically in the box.
     Center,
+    /// The text block ends at the bottom of the box.
     Bottom,
     /// The box's **top edge** is the first line's baseline. Use this when a
     /// layout is specified in baselines rather than boxes; the text then
@@ -102,10 +120,14 @@ pub enum LineHeightAlignment {
 /// Which edges of a text block give their leading back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum LineHeightTrim {
+    /// The first line gives back its leading above the glyphs.
     FirstLineTop,
+    /// The last line gives back its leading below the glyphs.
     LastLineBottom,
+    /// The first line gives back its leading above the glyphs and the last line below them.
     #[default]
     Both,
+    /// Neither edge gives its leading back.
     None,
 }
 
@@ -130,8 +152,11 @@ pub enum LineHeightMode {
 /// [`Default`] is Compose's own, which is what a style that names none gets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LineHeightStyle {
+    /// Where the leading of each line is spent.
     pub alignment: LineHeightAlignment,
+    /// Which edges of the text block give their leading back.
     pub trim: LineHeightTrim,
+    /// What a requested line height means when the font does not fit inside it.
     pub mode: LineHeightMode,
 }
 
@@ -160,8 +185,12 @@ pub struct DrawTextStyle {
     /// Only *named* families resolve: file-backed families are loaded by the
     /// app at startup and looked up by the name in their font tables.
     pub font_family: Option<String>,
+    /// Size of the text, in scope units. A non-positive or non-finite value uses
+    /// `DEFAULT_FONT_SIZE`.
     pub font_size: f32,
+    /// Weight of the face, from 1 to 1000.
     pub font_weight: FontWeight,
+    /// Normal or italic face.
     pub font_style: FontStyle,
     /// Extra advance inserted between characters, in scope units.
     pub letter_spacing: f32,
@@ -171,7 +200,9 @@ pub struct DrawTextStyle {
     /// How the line sits inside that height. `None` takes
     /// [`LineHeightStyle::default`], as a composed `Text` does.
     pub line_height_style: Option<LineHeightStyle>,
+    /// How the text block is placed horizontally inside its box.
     pub align: TextAlign,
+    /// How the text block is placed vertically inside its box.
     pub vertical_align: TextVerticalAlign,
 }
 
@@ -180,6 +211,8 @@ impl DrawTextStyle {
     /// Matches the framework-wide text default.
     pub const DEFAULT_FONT_SIZE: f32 = 14.0;
 
+    /// Creates a style with the given font size, in scope units, and defaults for every other
+    /// field.
     pub fn new(font_size: f32) -> Self {
         Self {
             font_size,
@@ -187,32 +220,38 @@ impl DrawTextStyle {
         }
     }
 
+    /// Sets the font family by name. An empty name selects the framework default family.
     pub fn with_font_family(mut self, family: impl Into<String>) -> Self {
         let family = family.into();
         self.font_family = (!family.is_empty()).then_some(family);
         self
     }
 
+    /// Sets the font size, in scope units.
     pub fn with_font_size(mut self, font_size: f32) -> Self {
         self.font_size = font_size;
         self
     }
 
+    /// Sets the font weight.
     pub fn with_weight(mut self, weight: FontWeight) -> Self {
         self.font_weight = weight;
         self
     }
 
+    /// Sets the font style.
     pub fn with_style(mut self, style: FontStyle) -> Self {
         self.font_style = style;
         self
     }
 
+    /// Sets the extra advance between characters, in scope units.
     pub fn with_letter_spacing(mut self, letter_spacing: f32) -> Self {
         self.letter_spacing = letter_spacing;
         self
     }
 
+    /// Sets the distance between baselines, in scope units. A non-finite value clears it.
     pub fn with_line_height(mut self, line_height: f32) -> Self {
         self.line_height = line_height.is_finite().then_some(line_height);
         self
@@ -224,11 +263,13 @@ impl DrawTextStyle {
         self
     }
 
+    /// Sets how the text block is placed horizontally inside its box.
     pub fn with_align(mut self, align: TextAlign) -> Self {
         self.align = align;
         self
     }
 
+    /// Sets how the text block is placed vertically inside its box.
     pub fn with_vertical_align(mut self, vertical_align: TextVerticalAlign) -> Self {
         self.vertical_align = vertical_align;
         self
@@ -321,6 +362,7 @@ impl TextMeasurement {
 /// back to [`estimate_text_measurement`], which is good enough for layout
 /// smoke tests and wrong for anything that has to line up with real glyphs.
 pub trait DrawTextMeasurer {
+    /// Returns the size and line metrics of `text` laid out in `style`.
     fn measure_text(&self, text: &str, style: &DrawTextStyle) -> TextMeasurement;
 }
 

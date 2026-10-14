@@ -79,13 +79,16 @@ impl LineBox {
 /// one `ab_glyph` reports `descent` in.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FontExtent {
+    /// Distance from the baseline up to the top of the font, as a positive number.
     pub ascent: f32,
+    /// Distance from the baseline down to the bottom of the font, as a positive number.
     pub descent: f32,
     /// `hhea.lineGap`. Only read when a style asks for font padding.
     pub line_gap: f32,
 }
 
 impl FontExtent {
+    /// Creates an extent from `ascent`, `descent` and `line_gap`, all in the same unit.
     pub fn new(ascent: f32, descent: f32, line_gap: f32) -> Self {
         Self {
             ascent,

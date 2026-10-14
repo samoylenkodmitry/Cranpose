@@ -87,6 +87,7 @@ pub struct BytesSource {
 }
 
 impl BytesSource {
+    /// Creates a source that serves `bytes`.
     pub fn new(bytes: Vec<u8>) -> Self {
         Self { bytes }
     }

@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
 /// Kotlin's default number of inner flows [`FlowExt::flat_map_merge`] and

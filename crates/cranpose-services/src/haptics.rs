@@ -287,6 +287,7 @@ pub trait Haptics: Send + Sync {
     }
 }
 
+/// Shared handle to a [`Haptics`] implementation.
 pub type HapticsRef = Arc<dyn Haptics>;
 
 struct NoopHaptics;
@@ -343,12 +344,16 @@ pub fn clear_platform_haptics() {
     PLATFORM_HAPTICS.clear();
 }
 
+/// Returns the haptics that forward to the installed platform implementation. They do nothing
+/// while none is installed.
 pub fn default_haptics() -> HapticsRef {
     DEFAULT_HAPTICS
         .get_or_init(|| Arc::new(PlatformHaptics))
         .clone()
 }
 
+/// The haptics a composable reads. It is the platform haptics unless a composition local provider
+/// above it supplies others.
 pub fn local_haptics() -> CompositionLocal<HapticsRef> {
     crate::composition_locals::cached_local(
         |locals| &locals.haptics,
@@ -356,6 +361,7 @@ pub fn local_haptics() -> CompositionLocal<HapticsRef> {
     )
 }
 
+/// Provides the platform haptics to `content` through [`local_haptics`].
 #[composable]
 pub fn ProvideHaptics(content: impl FnOnce()) {
     let haptics = cranpose_core::remember(default_haptics).with(|state| state.clone());

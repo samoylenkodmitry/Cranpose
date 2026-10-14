@@ -28,6 +28,7 @@ impl<K, V> PassAgedCache<K, V>
 where
     K: Eq + Hash,
 {
+    /// Creates an empty cache bounded to `capacity` entries, or to one when `capacity` is zero.
     pub fn with_capacity_at_least_one(capacity: usize) -> Self {
         Self {
             entries: BoundedLruCache::with_capacity_at_least_one(capacity),
@@ -35,10 +36,12 @@ where
         }
     }
 
+    /// Returns the number of entries the cache holds.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    /// Returns `true` if the cache holds no entries.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -69,6 +72,7 @@ where
             .map(|(key, used)| (key, used.value))
     }
 
+    /// Removes and returns the least recently used entry, or `None` if the cache is empty.
     pub fn pop_lru(&mut self) -> Option<(K, V)> {
         self.entries.pop_lru().map(|(key, used)| (key, used.value))
     }

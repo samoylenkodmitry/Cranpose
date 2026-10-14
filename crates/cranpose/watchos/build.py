@@ -195,16 +195,26 @@ def main():
     source = args.framework_source.resolve() if args.framework_source else None
     patches = ''
     if source:
-        workspace = tomllib.loads((source / 'Cargo.toml').read_text())['workspace']
+        root_manifest = tomllib.loads((source / 'Cargo.toml').read_text())
+        workspace = root_manifest['workspace']
         version = workspace['package']['version']
-        patches = '\n[patch.crates-io]\n'
-        for name, dependency in workspace['dependencies'].items():
-            if isinstance(dependency, dict) and 'path' in dependency:
-                # A patch names the package, which a renamed dependency
-                # (`wgpu = { package = "cranpose-wgpu", ... }`) keeps apart
-                # from its key.
-                package = dependency.get('package', name)
-                patches += f'{package} = {{ path = {json.dumps(str(source / dependency["path"]))} }}\n'
+        # A patch names the package, which a renamed dependency
+        # (`wgpu = { package = "cranpose-wgpu", ... }`) keeps apart from its
+        # key. The workspace's own patches, such as the wgpu fork's, carry on.
+        paths = {
+            dependency.get('package', name): dependency['path']
+            for name, dependency in workspace['dependencies'].items()
+            if isinstance(dependency, dict) and 'path' in dependency
+        }
+        paths.update(
+            (package, dependency['path'])
+            for package, dependency in root_manifest.get('patch', {}).get('crates-io', {}).items()
+            if 'path' in dependency
+        )
+        patches = '\n[patch.crates-io]\n' + ''.join(
+            f'{package} = {{ path = {json.dumps(str(source / path))} }}\n'
+            for package, path in paths.items()
+        )
     else:
         version = '=' + (args.cranpose_version or tomllib.loads(
             (Path(__file__).resolve().parent.parent / 'Cargo.toml').read_text())['package']['version'])

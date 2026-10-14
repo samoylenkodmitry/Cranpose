@@ -50,13 +50,17 @@ impl GridCells {
 /// Options for a [`LazyVerticalGrid`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct LazyVerticalGridSpec {
+    /// How the width splits into columns.
     pub columns: GridCells,
     /// How the lines sit and the space between them.
     pub vertical_arrangement: LinearArrangement,
     /// The space between the cells of a line, in logical pixels.
     pub horizontal_spacing: f32,
+    /// Space around the content, as Compose's `contentPadding`.
     pub content_padding: PaddingValues,
+    /// Number of items to compose beyond the visible bounds.
     pub beyond_bounds_item_count: usize,
+    /// Whether to lay out the lines from bottom to top.
     pub reverse_layout: bool,
 }
 
@@ -81,6 +85,7 @@ impl LazyVerticalGridSpec {
         self
     }
 
+    /// Sets the space around the content.
     #[must_use]
     pub fn content_padding(mut self, padding: PaddingValues) -> Self {
         self.content_padding = padding;
@@ -91,13 +96,17 @@ impl LazyVerticalGridSpec {
 /// Options for a [`LazyHorizontalGrid`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct LazyHorizontalGridSpec {
+    /// How the height splits into rows.
     pub rows: GridCells,
     /// How the lines sit and the space between them.
     pub horizontal_arrangement: LinearArrangement,
     /// The space between the cells of a line, in logical pixels.
     pub vertical_spacing: f32,
+    /// Space around the content, as Compose's `contentPadding`.
     pub content_padding: PaddingValues,
+    /// Number of items to compose beyond the visible bounds.
     pub beyond_bounds_item_count: usize,
+    /// Whether to lay out the lines from end to start.
     pub reverse_layout: bool,
 }
 
@@ -122,6 +131,7 @@ impl LazyHorizontalGridSpec {
         self
     }
 
+    /// Sets the space around the content.
     #[must_use]
     pub fn content_padding(mut self, padding: PaddingValues) -> Self {
         self.content_padding = padding;

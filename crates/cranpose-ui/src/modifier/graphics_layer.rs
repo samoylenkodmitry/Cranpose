@@ -456,12 +456,16 @@ impl Modifier {
 /// Visual parameters for [`Modifier::glass_material`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlassMaterial {
+    /// Radius of the blur applied to what is behind the node.
     pub blur_radius: Dp,
+    /// Color drawn over the blurred backdrop as the node's background.
     pub tint: Color,
+    /// Rounded corners that clip the blur and the tint.
     pub shape: RoundedCornerShape,
 }
 
 impl GlassMaterial {
+    /// Creates a material from its blur radius, tint and shape.
     pub fn new(blur_radius: Dp, tint: Color, shape: RoundedCornerShape) -> Self {
         Self {
             blur_radius,

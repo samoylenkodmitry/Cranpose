@@ -9,20 +9,25 @@ use crate::{composable, layout::policies::FlexMeasurePolicy, modifier::Modifier}
 /// Specification for Row layout behavior.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RowSpec {
+    /// How children are spaced along the horizontal axis. Defaults to `Start`.
     pub horizontal_arrangement: LinearArrangement,
+    /// How children align on the vertical axis. Defaults to `Top`.
     pub vertical_alignment: VerticalAlignment,
 }
 
 impl RowSpec {
+    /// Creates a spec with start arrangement and top alignment.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Sets how children are spaced along the horizontal axis.
     pub fn horizontal_arrangement(mut self, arrangement: LinearArrangement) -> Self {
         self.horizontal_arrangement = arrangement;
         self
     }
 
+    /// Sets how children align on the vertical axis.
     pub fn vertical_alignment(mut self, alignment: VerticalAlignment) -> Self {
         self.vertical_alignment = alignment;
         self

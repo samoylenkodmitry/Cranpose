@@ -1,9 +1,12 @@
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf};
 use cranpose_macros::composable;
 
+/// The light or dark appearance the operating system is set to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SystemTheme {
+    /// The system uses light colors.
     Light,
+    /// The system uses dark colors.
     Dark,
 }
 
@@ -30,6 +33,9 @@ pub fn known_system_theme() -> Option<SystemTheme> {
     })
 }
 
+/// Returns the system theme from the platform report or an earlier detection. When there is none,
+/// it detects the theme once and keeps the result. Detection yields `Light` where the platform
+/// cannot tell.
 pub fn default_system_theme() -> SystemTheme {
     known_system_theme().unwrap_or_else(|| {
         let theme = detect_system_theme_uncached();
@@ -223,6 +229,8 @@ fn theme_from_windows_registry(value: &str) -> Option<SystemTheme> {
     })
 }
 
+/// The system theme a composable reads. It is the platform theme unless a [`ProvideSystemTheme`]
+/// above it supplies another one.
 pub fn local_system_theme() -> CompositionLocal<SystemTheme> {
     crate::composition_locals::cached_local(
         |locals| &locals.theme,
@@ -230,6 +238,7 @@ pub fn local_system_theme() -> CompositionLocal<SystemTheme> {
     )
 }
 
+/// Gives the content below it a fixed system theme, for a preview or a test.
 #[composable]
 pub fn ProvideSystemTheme(theme: SystemTheme, content: impl FnOnce()) {
     let local = local_system_theme();
@@ -238,6 +247,7 @@ pub fn ProvideSystemTheme(theme: SystemTheme, content: impl FnOnce()) {
     });
 }
 
+/// Returns whether the system theme in scope is dark. Compose's `isSystemInDarkTheme`.
 #[composable]
 pub fn isSystemInDarkTheme() -> bool {
     matches!(local_system_theme().current(), SystemTheme::Dark)

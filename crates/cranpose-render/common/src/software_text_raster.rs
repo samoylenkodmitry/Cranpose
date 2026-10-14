@@ -61,8 +61,10 @@ const SOFTWARE_TEXT_KERN_METRICS_SLOTS_LOG2: u32 = 13;
 #[doc(hidden)]
 pub const DEFAULT_SOFTWARE_TEXT_FONT_BYTES: &[u8] = include_bytes!("../assets/NotoSansMerged.ttf");
 
+/// Why a font could not be built for software text.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum SoftwareTextFontError {
+    /// The bytes are not a font file that the parser can read.
     #[error("invalid software text font bytes")]
     InvalidFont,
     /// An explicit axis is unknown, nonfinite, or outside the font’s supported range.
@@ -71,10 +73,14 @@ pub enum SoftwareTextFontError {
         /// OpenType axis tag that could not be applied.
         tag: [u8; 4],
     },
+    /// The embedded default font was requested in a build without the `embedded-default-font`
+    /// feature.
     #[error("embedded default font disabled (feature `embedded-default-font` is off)")]
     EmbeddedFontDisabled,
 }
 
+/// A parsed face that measures and rasterizes text on the CPU, with its family names, weight and
+/// style.
 #[derive(Clone)]
 pub struct SoftwareTextFont {
     font: KernedFont,
@@ -107,6 +113,7 @@ struct SoftwareTextFontMetadata {
 pub struct FontFamilyKey(u64);
 
 impl FontFamilyKey {
+    /// Returns the key of `family`, the same for equal families.
     pub fn of(family: &FontFamily) -> Self {
         let mut state = default_hash::new();
         family.hash(&mut state);
@@ -180,6 +187,8 @@ struct InstancedFace {
 }
 
 impl SoftwareTextFont {
+    /// Parses `bytes` as a face that is not tied to a declared family. Fails with `InvalidFont`
+    /// when the bytes are not a readable font.
     pub fn from_bytes(bytes: impl Into<FontBytes>) -> Result<Self, SoftwareTextFontError> {
         let bytes = bytes.into().fitted();
         let mut hasher = default_hash::new();
@@ -277,6 +286,7 @@ impl SoftwareTextFont {
         })
     }
 
+    /// Names of the families that the face's own `name` table gives it.
     pub fn family_names(&self) -> &[String] {
         &self.metadata.families
     }
@@ -286,10 +296,14 @@ impl SoftwareTextFont {
         self.metadata.registered_family
     }
 
+    /// The face's weight: the declared one for a registered face, otherwise the one its font file
+    /// states.
     pub fn weight(&self) -> FontWeight {
         self.metadata.weight
     }
 
+    /// The face's style: the declared one for a registered face, otherwise the one its font file
+    /// states.
     pub fn style(&self) -> FontStyle {
         self.metadata.style
     }
@@ -358,6 +372,8 @@ impl SoftwareTextFont {
     }
 }
 
+/// Parses the embedded default font, or fails with `EmbeddedFontDisabled` in a build without the
+/// `embedded-default-font` feature.
 pub fn try_default_software_text_font() -> Result<SoftwareTextFont, SoftwareTextFontError> {
     #[cfg(feature = "embedded-default-font")]
     {
@@ -369,10 +385,12 @@ pub fn try_default_software_text_font() -> Result<SoftwareTextFont, SoftwareText
     }
 }
 
+/// The embedded default font, or `None` when the build has none or it cannot be parsed.
 pub fn default_software_text_font() -> Option<SoftwareTextFont> {
     try_default_software_text_font().ok()
 }
 
+/// The faces that text resolves against, with the choice of the default face.
 #[derive(Clone)]
 pub struct SoftwareTextFontSet {
     fonts: Arc<[SoftwareTextFont]>,
@@ -384,10 +402,12 @@ pub struct SoftwareTextFontSet {
 }
 
 impl SoftwareTextFontSet {
+    /// A set with no faces.
     pub fn empty() -> Self {
         Self::from_faces(Vec::new())
     }
 
+    /// A set holding only `font`.
     pub fn from_font(font: SoftwareTextFont) -> Self {
         Self::from_faces(vec![font])
     }
@@ -433,6 +453,8 @@ impl SoftwareTextFontSet {
         Some(set)
     }
 
+    /// Parses each of `fonts` and keeps those that parse. When none parses, the set holds the
+    /// embedded default font if the build has it, and is empty otherwise.
     pub fn from_fonts_or_default(fonts: &[&'static [u8]]) -> Self {
         let mut parsed = Vec::with_capacity(fonts.len().max(1));
         for font in fonts {
@@ -449,6 +471,7 @@ impl SoftwareTextFontSet {
         Self::from_faces(parsed)
     }
 
+    /// The face that serves text with no family preference, or `None` for an empty set.
     pub fn default_font(&self) -> Option<&SoftwareTextFont> {
         self.default_index.and_then(|index| self.fonts.get(index))
     }
@@ -583,6 +606,8 @@ fn font_supports_char(font: &SoftwareTextFont, ch: char) -> bool {
         || font.font.glyph_id(ch).0 != 0
 }
 
+/// Returns the default face of the font set that `fonts` yields, or `None` when that set is
+/// empty.
 pub fn software_text_font_from_fonts_or_default(
     fonts: &[&'static [u8]],
 ) -> Option<SoftwareTextFont> {
@@ -591,6 +616,7 @@ pub fn software_text_font_from_fonts_or_default(
         .cloned()
 }
 
+/// Builds the font set for `fonts`. See `SoftwareTextFontSet::from_fonts_or_default`.
 pub fn software_text_font_set_from_fonts_or_default(
     fonts: &[&'static [u8]],
 ) -> SoftwareTextFontSet {
@@ -1116,6 +1142,7 @@ impl SoftwareTextGlyphMetricsCache {
     }
 }
 
+/// A `TextMeasurer` that measures text with a `SoftwareTextFontSet` and caches the results.
 pub struct SoftwareTextMeasurer {
     fonts: SoftwareTextFontSet,
     cache: Mutex<SoftwareTextMetricsCache>,
@@ -1123,10 +1150,13 @@ pub struct SoftwareTextMeasurer {
 }
 
 impl SoftwareTextMeasurer {
+    /// Creates a measurer for the single face `font` with a metrics cache of `cache_capacity`
+    /// entries.
     pub fn new(font: SoftwareTextFont, cache_capacity: usize) -> Self {
         Self::from_font_set(SoftwareTextFontSet::from_font(font), cache_capacity)
     }
 
+    /// Creates a measurer for `fonts` with a metrics cache of `cache_capacity` entries.
     pub fn from_font_set(fonts: SoftwareTextFontSet, cache_capacity: usize) -> Self {
         Self {
             fonts,
@@ -1135,6 +1165,8 @@ impl SoftwareTextMeasurer {
         }
     }
 
+    /// Creates a measurer for the font set that `fonts` yields, which falls back to the embedded
+    /// default font. See `SoftwareTextFontSet::from_fonts_or_default`.
     pub fn from_fonts_or_default(fonts: &[&'static [u8]], cache_capacity: usize) -> Self {
         Self::from_font_set(
             software_text_font_set_from_fonts_or_default(fonts),
@@ -1146,6 +1178,7 @@ impl SoftwareTextMeasurer {
         self.cache.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Registers the hyphenation dictionary for `locale` read from the file at `path`.
     #[cfg(feature = "text-hyphenation")]
     pub fn register_hyphenation_dictionary_path(
         &self,
@@ -1155,6 +1188,7 @@ impl SoftwareTextMeasurer {
         self.hyphenation.register_dictionary_path(locale, path)
     }
 
+    /// Registers the hyphenation dictionary for `locale` read from `reader`.
     #[cfg(feature = "text-hyphenation")]
     pub fn register_hyphenation_dictionary_reader(
         &self,
@@ -1330,49 +1364,79 @@ enum GlyphRasterStyle {
     Stroke { width_px: f32 },
 }
 
+/// Identifies one rasterized glyph in a glyph atlas: the font, the glyph, and the scale and the
+/// synthetic styling it was drawn with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SoftwareGlyphAtlasKey {
+    /// Hash of the font's content and variation coordinates.
     pub font_hash: u64,
+    /// Glyph index within the font.
     pub glyph_id: u32,
+    /// Bit pattern of the horizontal glyph scale in device pixels per em.
     pub scale_x_bits: u32,
+    /// Bit pattern of the vertical glyph scale in device pixels per em.
     pub scale_y_bits: u32,
+    /// Bit pattern of the synthetic bold growth of the outline in device pixels, zero for none.
     pub embolden_px_bits: u32,
+    /// Bit pattern of the synthetic italic slant, as horizontal shift per unit of height, or zero
+    /// for none.
     pub slant_bits: u32,
 }
 
+/// The coverage mask of one rasterized glyph.
 #[derive(Clone)]
 pub struct SoftwareGlyphAtlasMask {
+    /// Coverage from 0.0 to 1.0 row by row, `width` times `height` values.
     pub alpha: Arc<[f32]>,
+    /// Mask width in pixels.
     pub width: usize,
+    /// Mask height in pixels.
     pub height: usize,
 }
 
+/// A glyph with its mask, where to draw it and in which color.
 #[derive(Clone)]
 pub struct SoftwareGlyphAtlasGlyph {
+    /// Atlas key of the glyph.
     pub key: SoftwareGlyphAtlasKey,
+    /// The coverage mask of the glyph.
     pub mask: SoftwareGlyphAtlasMask,
+    /// Horizontal position of the mask's left edge in device pixels.
     pub x: i32,
+    /// Vertical position of the mask's top edge in device pixels.
     pub y: i32,
+    /// Color the glyph draws with.
     pub color: Color,
 }
 
+/// Where to draw a glyph whose mask the atlas already holds.
 #[derive(Clone, Copy)]
 pub struct SoftwareGlyphAtlasPlacement {
+    /// Atlas key of the glyph.
     pub key: SoftwareGlyphAtlasKey,
+    /// Horizontal position of the mask's left edge in device pixels.
     pub x: i32,
+    /// Vertical position of the mask's top edge in device pixels.
     pub y: i32,
+    /// Mask width in pixels.
     pub width: usize,
+    /// Mask height in pixels.
     pub height: usize,
+    /// Color the glyph draws with.
     pub color: Color,
 }
 
+/// One glyph of a text run for a renderer that draws from a glyph atlas.
 #[derive(Clone)]
 pub enum SoftwareGlyphAtlasRunGlyph {
+    /// The mask is already cached, so only the placement is needed.
     Cached(SoftwareGlyphAtlasPlacement),
+    /// The mask was not cached, so the glyph comes with it.
     New(SoftwareGlyphAtlasGlyph),
 }
 
 impl SoftwareGlyphAtlasRunGlyph {
+    /// The placement of the glyph in either case.
     pub fn placement(&self) -> SoftwareGlyphAtlasPlacement {
         match self {
             Self::Cached(placement) => *placement,
@@ -1397,10 +1461,14 @@ struct GlyphMask {
     origin_y: i32,
 }
 
+/// Counters of a `SoftwareGlyphRasterCache`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SoftwareGlyphRasterCacheStats {
+    /// Number of glyph masks held.
     pub entries: usize,
+    /// Lookups answered from the cache.
     pub hits: u64,
+    /// Lookups that had to rasterize a glyph.
     pub misses: u64,
 }
 
@@ -1548,6 +1616,7 @@ impl CachedAtlasGlyphMetrics {
     }
 }
 
+/// A cache of rasterized glyph masks and kerning pairs, kept across frames.
 pub struct SoftwareGlyphRasterCache {
     masks: BoundedLruCache<GlyphMaskCacheKey, CachedGlyphMask>,
     kerns: DirectMappedCache<KernMetricsKey, f32>,
@@ -1557,6 +1626,7 @@ pub struct SoftwareGlyphRasterCache {
 }
 
 impl SoftwareGlyphRasterCache {
+    /// Creates a cache that holds up to `capacity` glyph masks, and at least one.
     pub fn with_capacity_at_least_one(capacity: usize) -> Self {
         Self {
             masks: BoundedLruCache::with_capacity_at_least_one(capacity),
@@ -1590,6 +1660,7 @@ impl SoftwareGlyphRasterCache {
         kern
     }
 
+    /// Current counters of the cache.
     pub fn stats(&self) -> SoftwareGlyphRasterCacheStats {
         SoftwareGlyphRasterCacheStats {
             entries: self.masks.len(),
@@ -1622,6 +1693,8 @@ impl SoftwareGlyphRasterCache {
         Some(metrics)
     }
 
+    /// Returns the cached glyph for `placement` with its mask, or `None` when the mask has left the
+    /// cache.
     pub fn atlas_glyph_for_placement(
         &mut self,
         placement: &SoftwareGlyphAtlasPlacement,
@@ -1766,6 +1839,9 @@ impl TextStyleSynthesis {
     }
 }
 
+/// Rasterizes `text` with `font` into an RGBA image that covers `rect`, in logical pixels, at
+/// `scale` device pixels per logical pixel. `fallback_color` paints text whose style names no
+/// color, and `font_size` is in logical pixels. Returns `None` when there is nothing to draw.
 pub fn rasterize_text_to_image(
     text: &str,
     rect: Rect,
@@ -1808,6 +1884,7 @@ pub fn rasterize_text_to_image(
     )
 }
 
+/// Like `rasterize_text_to_image`, and reuses glyph masks from `glyph_cache`.
 #[expect(clippy::too_many_arguments)]
 pub fn rasterize_text_to_image_with_glyph_cache(
     text: &str,
@@ -1858,7 +1935,9 @@ pub fn rasterize_text_to_image_with_glyph_cache(
 /// so the run collectors serve both without copying either.
 #[derive(Clone, Copy)]
 pub struct StyledTextRef<'a> {
+    /// The text content.
     pub text: &'a str,
+    /// Styles of ranges of `text`, given as byte ranges.
     pub span_styles: &'a [RangeStyle<SpanStyle>],
 }
 
@@ -2060,6 +2139,8 @@ fn visit_annotated_text_segments<'a>(
     layout.walk(offsets.as_deref(), visit)
 }
 
+/// Rasterizes annotated `text` with `fonts` into an RGBA image that covers `rect`, reusing glyph
+/// masks from `glyph_cache`. Arguments are as for `rasterize_text_to_image`.
 #[expect(clippy::too_many_arguments)]
 pub fn rasterize_annotated_text_to_image_with_glyph_cache<'a>(
     text: impl Into<StyledTextRef<'a>>,
@@ -2343,6 +2424,9 @@ fn walk_solid_text_atlas_segments<'a, T>(
     result.map(|_| ())
 }
 
+/// Appends to `out` every glyph of `text` that puts pixels down, with its mask, for a renderer
+/// that draws solid text from a glyph atlas. Returns `None` when the style cannot be drawn as
+/// solid atlas glyphs. Arguments are as for `rasterize_text_to_image`.
 #[expect(clippy::too_many_arguments)]
 pub fn collect_solid_text_atlas_glyphs(
     text: &AnnotatedString,
@@ -2369,6 +2453,9 @@ pub fn collect_solid_text_atlas_glyphs(
     )
 }
 
+/// Appends to `out` the atlas placements of the glyphs of `text`, without rasterizing anything.
+/// Returns `None` when a glyph has no cached mask or the style cannot be drawn as solid atlas
+/// glyphs. Arguments are as for `rasterize_text_to_image`.
 #[expect(clippy::too_many_arguments)]
 pub fn collect_cached_solid_text_atlas_placements(
     text: &AnnotatedString,
@@ -2423,6 +2510,7 @@ pub fn collect_solid_text_atlas_run<'a>(
     )
 }
 
+/// Measures `text` drawn with `font` in `style` at `font_size` logical pixels.
 pub fn measure_text_with_font(
     text: &str,
     style: &TextStyle,
@@ -2459,6 +2547,8 @@ fn measure_text_with_font_cached(
     measure_text_impl_cached(text, style, font_size, &font.shaped_for(style), cache)
 }
 
+/// Measures annotated `text`, including its span styles, drawn with `font` in `style` at
+/// `font_size` logical pixels.
 pub fn measure_annotated_text_with_font(
     text: &AnnotatedString,
     style: &TextStyle,
@@ -2471,6 +2561,8 @@ pub fn measure_annotated_text_with_font(
     measure_annotated_text_with_resolver(text, style, font_size, font, None)
 }
 
+/// Measures annotated `text` with the faces of `fonts`, choosing a face for each span and
+/// falling back to other faces for characters that the first face lacks.
 pub fn measure_annotated_text_with_font_set(
     text: &AnnotatedString,
     style: &TextStyle,
@@ -2500,6 +2592,8 @@ fn measure_annotated_text_with_font_set_cached(
     measure_annotated_text_with_resolver(text, style, font_size, fonts, Some(cache))
 }
 
+/// Returns the byte offset in `text` of the caret position nearest to the point (`x`, `y`), in
+/// logical pixels in the text's own coordinates.
 pub fn text_offset_for_position_with_font(
     text: &str,
     style: &TextStyle,
@@ -2581,6 +2675,8 @@ pub fn text_offset_for_position_with_font(
     line_start_byte + best_offset.min(line_text.len())
 }
 
+/// Returns the x position in logical pixels of the caret at byte `offset` of `text`. An offset
+/// past the end counts as the end, and one inside a character moves back to its start.
 pub fn cursor_x_for_offset_with_font(
     text: &str,
     style: &TextStyle,
@@ -2609,6 +2705,8 @@ pub fn cursor_x_for_offset_with_font(
     measure_text_impl(&text[..clamped_offset], style, font_size, font.raster_ref()).width
 }
 
+/// Lays out `text` with `font` in `style` and returns the per-character positions and line boxes
+/// as a `TextLayoutResult`.
 pub fn layout_text_with_font(
     text: &str,
     style: &TextStyle,

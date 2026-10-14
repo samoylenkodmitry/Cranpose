@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
 pub mod animation;
@@ -19,6 +20,7 @@ pub use geometry_animation::{animateOffsetAsState, animateRectAsState, animateSi
 pub use transition::{Transition, updateTransition};
 pub use unit_animation::animateDpAsState;
 
+/// The animation API in one import.
 pub mod prelude {
     pub use crate::{
         animation::{

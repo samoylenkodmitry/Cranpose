@@ -45,6 +45,7 @@ use crate::{
 
 /// Bubble size in dp (reference: 350×246 px @3x).
 pub const LOUPE_WIDTH: f32 = 117.0;
+/// Bubble height in dp.
 pub const LOUPE_HEIGHT: f32 = 82.0;
 /// Bubble center height above the grabbed line's vertical mid (dp;
 /// reference: 226 px @3x).
@@ -64,7 +65,9 @@ fn loupe_collapse_tween() -> AnimationType {
 /// mid, in window coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LoupeTarget {
+    /// Horizontal position of the finger, in window coordinates.
     pub focus_x: f32,
+    /// Vertical middle of the grabbed text line, in window coordinates.
     pub line_mid_y: f32,
 }
 

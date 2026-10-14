@@ -103,8 +103,11 @@ pub(crate) struct CachedBatchMeasureInputs<'a> {
 
 /// Base trait for measurement scopes.
 pub trait SubcomposeLayoutScope: cranpose_ui_layout::MeasureScope {
+    /// Returns the constraints that the parent passed to this layout.
     fn constraints(&self) -> Constraints;
 
+    /// Builds a measure result of size `width` by `height`, in logical pixels, with the given
+    /// `placements`.
     fn layout<I>(&mut self, width: f32, height: f32, placements: I) -> MeasureResult
     where
         I: IntoIterator<Item = Placement>,
@@ -761,6 +764,7 @@ pub struct SubcomposeLayoutNode {
 }
 
 impl SubcomposeLayoutNode {
+    /// Creates a node with `modifier` whose children `measure_policy` subcomposes and measures.
     pub fn new(modifier: Modifier, measure_policy: Rc<MeasurePolicy>) -> Self {
         let inner = Rc::new(RefCell::new(SubcomposeLayoutNodeInner::new(measure_policy)));
         let node = Self {
@@ -825,6 +829,7 @@ impl SubcomposeLayoutNode {
         node
     }
 
+    /// Returns a cloneable handle that shares this node's state.
     pub fn handle(&self) -> SubcomposeLayoutNodeHandle {
         SubcomposeLayoutNodeHandle {
             inner: Rc::clone(&self.inner),
@@ -855,6 +860,8 @@ impl SubcomposeLayoutNode {
             .debug_slot_table_groups_for_slot(slot_id)
     }
 
+    /// Replaces the measure policy and invalidates the subcomposition. Does nothing if `policy` is
+    /// the same `Rc` as the current one.
     pub fn set_measure_policy(&mut self, policy: Rc<MeasurePolicy>) {
         let mut inner = self.inner.borrow_mut();
         if Rc::ptr_eq(&inner.measure_policy, &policy) {
@@ -909,6 +916,8 @@ impl SubcomposeLayoutNode {
         self.inner.borrow().density
     }
 
+    /// Replaces the modifier chain and invalidates the layout, draw, pointer input and semantics
+    /// work that the changed modifier nodes affect.
     pub fn set_modifier(&mut self, modifier: Modifier) {
         let prev_caps = self.modifier_capabilities();
         let (invalidations, modifier_changed) = {
@@ -937,14 +946,17 @@ impl SubcomposeLayoutNode {
         self.modifier_slices_dirty.set(true);
     }
 
+    /// Turns debug logging of the modifier chain on or off.
     pub fn set_debug_modifiers(&mut self, enabled: bool) {
         self.inner.borrow_mut().set_debug_modifiers(enabled);
     }
 
+    /// Returns the modifier that was last set on this node.
     pub fn modifier(&self) -> Modifier {
         self.handle().modifier()
     }
 
+    /// Returns the padding, layout properties and offset that the modifier chain resolved to.
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {
         self.inner.borrow().resolved_modifiers
     }
@@ -994,14 +1006,18 @@ impl SubcomposeLayoutNode {
         self.modifier_slices_snapshot.get()
     }
 
+    /// Borrows the subcomposition state that tracks the slots composed for this node.
     pub fn state(&self) -> Ref<'_, SubcomposeState> {
         Ref::map(self.inner.borrow(), |inner| &inner.state)
     }
 
+    /// Mutably borrows the subcomposition state that tracks the slots composed for this node.
     pub fn state_mut(&self) -> RefMut<'_, SubcomposeState> {
         RefMut::map(self.inner.borrow_mut(), |inner| &mut inner.state)
     }
 
+    /// Invalidates the recompose scopes of all slots and schedules a measure, so the measure policy
+    /// subcomposes again.
     pub fn invalidate_subcomposition(&self) {
         self.inner.borrow().state.invalidate_scopes();
         self.mark_needs_measure();
@@ -1010,6 +1026,8 @@ impl SubcomposeLayoutNode {
         }
     }
 
+    /// Schedules a measure for this node and its ancestors without invalidating the recompose
+    /// scopes of its slots.
     pub fn request_measure_recompose(&self) {
         self.mark_needs_measure();
         if let Some(id) = self.id.get() {
@@ -1087,6 +1105,7 @@ impl SubcomposeLayoutNode {
         self.needs_redraw.get()
     }
 
+    /// Clears the pending redraw flag once the node has been drawn.
     pub fn clear_needs_redraw(&self) {
         self.needs_redraw.set(false);
     }
@@ -1137,26 +1156,31 @@ impl SubcomposeLayoutNode {
         self.inner.borrow().modifier_capabilities
     }
 
+    /// Returns whether the modifier chain contains layout modifier nodes.
     pub fn has_layout_modifier_nodes(&self) -> bool {
         self.modifier_capabilities()
             .contains(NodeCapabilities::LAYOUT)
     }
 
+    /// Returns whether the modifier chain contains draw modifier nodes.
     pub fn has_draw_modifier_nodes(&self) -> bool {
         self.modifier_capabilities()
             .contains(NodeCapabilities::DRAW)
     }
 
+    /// Returns whether the modifier chain contains pointer input modifier nodes.
     pub fn has_pointer_input_modifier_nodes(&self) -> bool {
         self.modifier_capabilities()
             .contains(NodeCapabilities::POINTER_INPUT)
     }
 
+    /// Returns whether the modifier chain contains semantics modifier nodes.
     pub fn has_semantics_modifier_nodes(&self) -> bool {
         self.modifier_capabilities()
             .contains(NodeCapabilities::SEMANTICS)
     }
 
+    /// Returns whether the modifier chain contains focus modifier nodes.
     pub fn has_focus_modifier_nodes(&self) -> bool {
         self.modifier_capabilities()
             .contains(NodeCapabilities::FOCUS)

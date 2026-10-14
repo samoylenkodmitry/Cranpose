@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
 extern crate self as cranpose_ui;
@@ -30,6 +31,7 @@ pub use language_preferences::{
 };
 pub use ui_strings::UiString;
 
+/// Screen reader announcements for events that have no control on screen.
 pub mod announce;
 pub mod bring_into_view;
 pub mod clipboard_session;
@@ -41,14 +43,17 @@ mod draw;
 mod environment_locals;
 pub mod fling_animation;
 mod focus_dispatch;
+/// Moving focus between focus targets, as `LocalFocusManager` does in Compose.
 pub mod focus_manager;
 mod focus_navigation;
+/// The ordered list of focus targets that layout publishes for keyboard traversal.
 pub mod focus_order;
 mod focus_within;
 pub mod font_scale;
 mod interaction;
 mod key_event;
 mod keyboard_options;
+/// Layout tree, measurement and placement of nodes.
 pub mod layout;
 pub mod layout_direction;
 pub mod lazy_item;
@@ -76,6 +81,7 @@ pub mod selection_container;
 mod semantics_dispatch;
 mod semantics_layout_log;
 mod subcompose_layout;
+/// Text styling, measurement and layout.
 pub mod text;
 mod text_field_decorator_node;
 pub mod text_field_focus;
@@ -315,38 +321,50 @@ pub struct TestComposition {
 }
 
 impl TestComposition {
+    /// Returns the id of the root node, or `None` when the composition has no root node.
     pub fn root(&self) -> Option<NodeId> {
         self.app_context.enter(|| self.composition.root())
     }
 
+    /// Returns the runtime handle of the composition.
     pub fn runtime_handle(&self) -> RuntimeHandle {
         self.app_context.enter(|| self.composition.runtime_handle())
     }
 
+    /// Returns true when state changes or animation callbacks have work pending.
     pub fn should_render(&self) -> bool {
         self.app_context.enter(|| self.composition.should_render())
     }
 
+    /// Returns true once if a root render was requested since the last call, then resets the
+    /// request.
     pub fn take_root_render_request(&mut self) -> bool {
         let app_context = Rc::clone(&self.app_context);
         app_context.enter(|| self.composition.take_root_render_request())
     }
 
+    /// Applies the node updates that state changes queued.
     pub fn flush_pending_node_updates(&mut self) -> Result<(), NodeError> {
         let app_context = Rc::clone(&self.app_context);
         app_context.enter(|| self.composition.flush_pending_node_updates())
     }
 
+    /// Recomposes the scopes that state changes invalidated. Returns true when any scope
+    /// recomposed.
     pub fn process_invalid_scopes(&mut self) -> Result<bool, NodeError> {
         let app_context = Rc::clone(&self.app_context);
         app_context.enter(|| self.composition.process_invalid_scopes())
     }
 
+    /// Renders `content` as the root composition under `root_key`, then recomposes invalidated
+    /// scopes.
     pub fn render(&mut self, root_key: Key, content: impl FnMut()) -> Result<(), NodeError> {
         let app_context = Rc::clone(&self.app_context);
         app_context.enter(|| self.composition.render(root_key, content))
     }
 
+    /// Borrows the applier that holds the node tree. The guard keeps this composition's app context
+    /// active.
     pub fn applier_mut(&mut self) -> TestApplierGuard<'_> {
         let scope = self.app_context.enter_scope();
         let applier = self.composition.applier_mut();
@@ -356,11 +374,14 @@ impl TestComposition {
         }
     }
 
+    /// Runs `block` with this composition's app context active.
     pub fn with_app_context<R>(&self, block: impl FnOnce() -> R) -> R {
         self.app_context.enter(block)
     }
 }
 
+/// Mutable access to the applier of a [`TestComposition`], with the app context of that composition
+/// active while the guard lives.
 pub struct TestApplierGuard<'a> {
     _scope: render_state::AppContextScope,
     applier: ApplierGuard<'a, MemoryApplier>,

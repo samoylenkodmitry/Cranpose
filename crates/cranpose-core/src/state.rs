@@ -1566,14 +1566,20 @@ impl<T: Clone + 'static> StateArenaHandle<T> for State<T> {
 }
 
 impl<T: Clone + 'static> State<T> {
+    /// Returns `true` while the state exists. It ends when its owner releases it or its runtime is
+    /// dropped.
     pub fn is_alive(&self) -> bool {
         self.try_with_inner(|_| ()).is_some()
     }
 
+    /// Reads the value through `f` without subscribing the current scope. Returns `None` if the
+    /// state was released or has no readable value.
     pub fn try_with<R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
         self.try_with_inner(|inner| inner.state.try_with_value(f))?
     }
 
+    /// Returns a copy of the value without subscribing the current scope, or `None` if the state
+    /// was released or has no readable value.
     pub fn try_value(&self) -> Option<T> {
         self.try_with_inner(|inner| inner.state.try_get())?
     }
@@ -1594,10 +1600,13 @@ impl<T: Clone + 'static> State<T> {
         self.read_subscribed(|inner| inner.state.with_value(f))
     }
 
+    /// Returns a copy of the value and subscribes the current scope, which recomposes when the
+    /// value changes. Panics if the state was released.
     pub fn value(&self) -> T {
         self.read_subscribed(|inner| inner.state.get())
     }
 
+    /// Same as `value`.
     pub fn get(&self) -> T {
         self.value()
     }
@@ -1609,6 +1618,7 @@ impl<T: Clone + 'static> State<T> {
         self.with_inner(|inner| inner.state.get())
     }
 
+    /// Returns `true` if any scope or observer is subscribed to this state.
     pub fn has_subscribers(&self) -> bool {
         self.with_inner(MutableStateInner::has_subscribers)
     }
@@ -1664,6 +1674,8 @@ impl<T: Clone + 'static> StateArenaHandle<T> for MutableState<T> {
 }
 
 impl<T: Clone + 'static> MutableState<T> {
+    /// Creates a state holding `value` in `runtime`. Every write counts as a change, even of an
+    /// equal value. Unless a `remember` owns the state, the runtime keeps it for its own lifetime.
     pub fn with_runtime(value: T, runtime: RuntimeHandle) -> Self {
         runtime.alloc_persistent_state(value)
     }
@@ -1680,18 +1692,25 @@ impl<T: Clone + 'static> MutableState<T> {
         Self::from_parts(lease.id(), lease.runtime_id())
     }
 
+    /// Returns `true` while the state exists. It ends when its owner releases it or its runtime is
+    /// dropped.
     pub fn is_alive(&self) -> bool {
         self.try_with_inner(|_| ()).is_some()
     }
 
+    /// Reads the value through `f` without subscribing the current scope. Returns `None` if the
+    /// state was released or has no readable value.
     pub fn try_with<R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
         self.try_with_inner(|inner| inner.state.try_with_value(f))?
     }
 
+    /// Returns a copy of the value without subscribing the current scope, or `None` if the state
+    /// was released or has no readable value.
     pub fn try_value(&self) -> Option<T> {
         self.try_with_inner(|inner| inner.state.try_get())?
     }
 
+    /// Returns a read-only view of this state.
     pub fn as_state(&self) -> State<T> {
         State {
             id: self.id,
@@ -1700,6 +1719,8 @@ impl<T: Clone + 'static> MutableState<T> {
         }
     }
 
+    /// Returns an [`OwnedMutableState`] that keeps this state alive until its last clone is
+    /// dropped. Returns `None` if the state was already released.
     pub fn try_retain(&self) -> Option<OwnedMutableState<T>> {
         let lease = self
             .runtime_handle_opt()?
@@ -1711,6 +1732,8 @@ impl<T: Clone + 'static> MutableState<T> {
         })
     }
 
+    /// Returns an [`OwnedMutableState`] that keeps this state alive until its last clone is
+    /// dropped. Panics if the state was released.
     pub fn retain(&self) -> OwnedMutableState<T> {
         self.try_retain()
             .unwrap_or_else(|| panic!("state {:?} is no longer alive", self.state_id()))
@@ -1732,6 +1755,8 @@ impl<T: Clone + 'static> MutableState<T> {
         self.read_subscribed(|inner| inner.state.with_value(f))
     }
 
+    /// Runs `f` on a copy of the value and stores the copy, unless `f` wrote this state itself.
+    /// Scopes that read the state are notified if the value changed.
     pub fn update<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
         let runtime = self.runtime_handle();
         runtime.assert_ui_thread();
@@ -1749,6 +1774,8 @@ impl<T: Clone + 'static> MutableState<T> {
         })
     }
 
+    /// Stores `value` and notifies the scopes that read the state, if the state's equality policy
+    /// sees a change. Does nothing if the state was released.
     pub fn replace(&self, value: T) {
         let Some(runtime) = self.runtime_handle_opt() else {
             log::debug!(
@@ -1776,22 +1803,28 @@ impl<T: Clone + 'static> MutableState<T> {
         }
     }
 
+    /// Same as `replace`.
     pub fn set_value(&self, value: T) {
         self.replace(value);
     }
 
+    /// Same as `replace`.
     pub fn set(&self, value: T) {
         self.replace(value);
     }
 
+    /// Returns a copy of the value and subscribes the current scope, which recomposes when the
+    /// value changes. Panics if the state was released.
     pub fn value(&self) -> T {
         self.read_subscribed(|inner| inner.state.get())
     }
 
+    /// Same as `value`.
     pub fn get(&self) -> T {
         self.value()
     }
 
+    /// Returns a copy of the value without subscribing the current scope.
     pub fn get_non_reactive(&self) -> T {
         self.with_inner(|inner| inner.state.get())
     }
@@ -1832,6 +1865,8 @@ impl<T: Clone + 'static> MutableState<T> {
 }
 
 impl<T: Clone + 'static> OwnedMutableState<T> {
+    /// Creates a state holding `value` in `runtime`. The state is released when the last clone of
+    /// this handle is dropped. Every write counts as a change, even of an equal value.
     pub fn with_runtime(value: T, runtime: RuntimeHandle) -> Self {
         let lease = runtime.alloc_state(value);
         Self {
@@ -1841,6 +1876,8 @@ impl<T: Clone + 'static> OwnedMutableState<T> {
         }
     }
 
+    /// Creates a state holding `value` in `runtime`. Writing a value equal to the current one is
+    /// not a change.
     pub fn with_runtime_structural_eq(value: T, runtime: RuntimeHandle) -> Self
     where
         T: PartialEq,
@@ -1861,10 +1898,12 @@ impl<T: Clone + 'static> OwnedMutableState<T> {
         }
     }
 
+    /// Returns the copyable [`MutableState`] handle. It does not keep the state alive.
     pub fn handle(&self) -> MutableState<T> {
         self.state
     }
 
+    /// Returns a read-only view of the state.
     pub fn as_state(&self) -> State<T> {
         self.state.as_state()
     }
@@ -1907,12 +1946,15 @@ impl<T: fmt::Debug + Clone + 'static> fmt::Debug for MutableState<T> {
     }
 }
 
+/// A list whose reads subscribe the current scope and whose writes notify its readers, as Jetpack
+/// Compose's `SnapshotStateList`. Clones share the same list.
 #[derive(Clone)]
 pub struct SnapshotStateList<T: Clone + 'static> {
     state: OwnedMutableState<Vec<T>>,
 }
 
 impl<T: Clone + 'static> SnapshotStateList<T> {
+    /// Creates a list holding `values` in `runtime`.
     pub fn with_runtime<I>(values: I, runtime: RuntimeHandle) -> Self
     where
         I: IntoIterator<Item = T>,
@@ -1923,50 +1965,62 @@ impl<T: Clone + 'static> SnapshotStateList<T> {
         }
     }
 
+    /// Returns a read-only view of the state that holds the elements.
     pub fn as_state(&self) -> State<Vec<T>> {
         self.state.as_state()
     }
 
+    /// Returns the writable state that holds the elements.
     pub fn as_mutable_state(&self) -> MutableState<Vec<T>> {
         self.state.handle()
     }
 
+    /// Returns the number of elements.
     pub fn len(&self) -> usize {
         self.state.with(Vec::len)
     }
 
+    /// Returns `true` if the list has no elements.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// Returns a copy of the elements.
     pub fn to_vec(&self) -> Vec<T> {
         self.state.with(Clone::clone)
     }
 
+    /// Returns a copy of the elements for iteration. Later writes do not change that copy.
     pub fn iter(&self) -> Vec<T> {
         self.to_vec()
     }
 
+    /// Returns a copy of the element at `index`. Panics if `index` is out of range.
     pub fn get(&self, index: usize) -> T {
         self.state.with(|values| values[index].clone())
     }
 
+    /// Returns a copy of the element at `index`, or `None` if it is out of range.
     pub fn get_opt(&self, index: usize) -> Option<T> {
         self.state.with(|values| values.get(index).cloned())
     }
 
+    /// Returns a copy of the first element, or `None` if the list is empty.
     pub fn first(&self) -> Option<T> {
         self.get_opt(0)
     }
 
+    /// Returns a copy of the last element, or `None` if the list is empty.
     pub fn last(&self) -> Option<T> {
         self.state.with(|values| values.last().cloned())
     }
 
+    /// Appends `value` at the end.
     pub fn push(&self, value: T) {
         self.state.update(|values| values.push(value));
     }
 
+    /// Appends all elements of `iter` in one write.
     pub fn extend<I>(&self, iter: I)
     where
         I: IntoIterator<Item = T>,
@@ -1974,27 +2028,33 @@ impl<T: Clone + 'static> SnapshotStateList<T> {
         self.state.update(|values| values.extend(iter));
     }
 
+    /// Inserts `value` at `index`, moving later elements back. Panics if `index` is past the end.
     pub fn insert(&self, index: usize, value: T) {
         self.state.update(|values| values.insert(index, value));
     }
 
+    /// Replaces the element at `index` and returns the old one. Panics if `index` is out of range.
     pub fn set(&self, index: usize, value: T) -> T {
         self.state
             .update(|values| std::mem::replace(&mut values[index], value))
     }
 
+    /// Removes and returns the element at `index`. Panics if `index` is out of range.
     pub fn remove(&self, index: usize) -> T {
         self.state.update(|values| values.remove(index))
     }
 
+    /// Removes and returns the last element, or `None` if the list is empty.
     pub fn pop(&self) -> Option<T> {
         self.state.update(Vec::pop)
     }
 
+    /// Removes all elements.
     pub fn clear(&self) {
         self.state.replace(Vec::new());
     }
 
+    /// Keeps the elements for which `predicate` returns `true`.
     pub fn retain<F>(&self, mut predicate: F)
     where
         F: FnMut(&T) -> bool,
@@ -2003,6 +2063,7 @@ impl<T: Clone + 'static> SnapshotStateList<T> {
             .update(|values| values.retain(|value| predicate(value)));
     }
 
+    /// Replaces all elements with those of `iter` in one write.
     pub fn replace_with<I>(&self, iter: I)
     where
         I: IntoIterator<Item = T>,
@@ -2020,6 +2081,8 @@ impl<T: fmt::Debug + Clone + 'static> fmt::Debug for SnapshotStateList<T> {
     }
 }
 
+/// A hash map whose reads subscribe the current scope and whose writes notify its readers, as
+/// Jetpack Compose's `SnapshotStateMap`. Clones share the same map.
 #[derive(Clone)]
 pub struct SnapshotStateMap<K, V>
 where
@@ -2034,6 +2097,7 @@ where
     K: Clone + Eq + Hash + 'static,
     V: Clone + 'static,
 {
+    /// Creates a map holding `pairs` in `runtime`.
     pub fn with_runtime<I>(pairs: I, runtime: RuntimeHandle) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -2044,38 +2108,47 @@ where
         }
     }
 
+    /// Returns a read-only view of the state that holds the map.
     pub fn as_state(&self) -> State<HashMap<K, V>> {
         self.state.as_state()
     }
 
+    /// Returns the writable state that holds the map.
     pub fn as_mutable_state(&self) -> MutableState<HashMap<K, V>> {
         self.state.handle()
     }
 
+    /// Returns the number of entries.
     pub fn len(&self) -> usize {
         self.state.with(std::collections::HashMap::len)
     }
 
+    /// Returns `true` if the map has no entries.
     pub fn is_empty(&self) -> bool {
         self.state.with(std::collections::HashMap::is_empty)
     }
 
+    /// Returns `true` if the map has an entry for `key`.
     pub fn contains_key(&self, key: &K) -> bool {
         self.state.with(|map| map.contains_key(key))
     }
 
+    /// Returns a copy of the value under `key`, or `None` if there is none.
     pub fn get(&self, key: &K) -> Option<V> {
         self.state.with(|map| map.get(key).cloned())
     }
 
+    /// Returns a copy of the whole map.
     pub fn to_hash_map(&self) -> HashMap<K, V> {
         self.state.with(Clone::clone)
     }
 
+    /// Stores `value` under `key` and returns the value it replaced, if any.
     pub fn insert(&self, key: K, value: V) -> Option<V> {
         self.state.update(|map| map.insert(key, value))
     }
 
+    /// Inserts all pairs from `iter` in one write, replacing the values of keys already present.
     pub fn extend<I>(&self, iter: I)
     where
         I: IntoIterator<Item = (K, V)>,
@@ -2083,14 +2156,18 @@ where
         self.state.update(|map| map.extend(iter));
     }
 
+    /// Removes the entry under `key` and returns its value, or `None` if there was none.
     pub fn remove(&self, key: &K) -> Option<V> {
         self.state.update(|map| map.remove(key))
     }
 
+    /// Removes all entries.
     pub fn clear(&self) {
         self.state.replace(HashMap::default());
     }
 
+    /// Keeps the entries for which `predicate` returns `true`. The predicate may change the values
+    /// it keeps.
     pub fn retain<F>(&self, mut predicate: F)
     where
         F: FnMut(&K, &mut V) -> bool,

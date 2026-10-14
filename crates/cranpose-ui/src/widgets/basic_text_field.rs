@@ -296,6 +296,8 @@ pub struct BasicTextFieldDecorationScope {
 }
 
 impl BasicTextFieldDecorationScope {
+    /// Composes the editable text area and returns its node id. The decoration box must call this
+    /// exactly once.
     pub fn inner_text_field(&self) -> NodeId {
         (self.inner)()
     }

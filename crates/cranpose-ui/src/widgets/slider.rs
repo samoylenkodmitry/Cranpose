@@ -23,38 +23,55 @@ pub enum SliderOrientation {
 /// Input and geometry policy for a [`Slider`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SliderSpec {
+    /// Axis along which the value changes. Defaults to horizontal.
     pub orientation: SliderOrientation,
+    /// Whether the value runs against the natural direction of the orientation: from end to start
+    /// for a horizontal slider and from bottom to top for a vertical one.
     pub reverse_direction: bool,
+    /// Length of the thumb along the main axis, in logical pixels. The thumb center travels the
+    /// track length minus this length. Defaults to zero.
     pub thumb_extent: f32,
+    /// Whether the slider reacts to input. Defaults to `true`.
     pub enabled: bool,
+    /// Change in value for one rotary scroll step, as a fraction of the value range from 0.0 to
+    /// 1.0. Defaults to 0.05.
     pub rotary_step: f32,
 }
 
 impl SliderSpec {
+    /// Creates a spec with a horizontal slider, a zero-length thumb, input enabled and a rotary
+    /// step of 0.05.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Sets the axis along which the value changes.
     pub fn orientation(mut self, orientation: SliderOrientation) -> Self {
         self.orientation = orientation;
         self
     }
 
+    /// Sets whether the value runs against the natural direction of the orientation.
     pub fn reverse_direction(mut self, reverse_direction: bool) -> Self {
         self.reverse_direction = reverse_direction;
         self
     }
 
+    /// Sets the length of the thumb along the main axis, in logical pixels. Negative values count
+    /// as zero.
     pub fn thumb_extent(mut self, thumb_extent: f32) -> Self {
         self.thumb_extent = thumb_extent.max(0.0);
         self
     }
 
+    /// Sets whether the slider reacts to input.
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self
     }
 
+    /// Sets the change in value for one rotary scroll step, as a fraction of the value range from
+    /// 0.0 to 1.0. The sign is ignored.
     pub fn rotary_step(mut self, rotary_step: f32) -> Self {
         self.rotary_step = rotary_step.abs();
         self

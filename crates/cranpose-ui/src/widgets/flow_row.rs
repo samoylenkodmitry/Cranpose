@@ -17,15 +17,18 @@ pub struct FlowRowSpec {
 }
 
 impl FlowRowSpec {
+    /// Creates a spec with no gaps between children or between rows.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Sets the horizontal gap between adjacent children on one row, in logical pixels.
     pub fn main_axis_spacing(mut self, spacing: f32) -> Self {
         self.main_axis_spacing = spacing;
         self
     }
 
+    /// Sets the vertical gap between consecutive rows, in logical pixels.
     pub fn cross_axis_spacing(mut self, spacing: f32) -> Self {
         self.cross_axis_spacing = spacing;
         self

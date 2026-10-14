@@ -22,92 +22,173 @@ pub enum KeyEventType {
 /// the character they produce (which depends on keyboard layout).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyCode {
+    /// The A key.
     A,
+    /// The B key.
     B,
+    /// The C key.
     C,
+    /// The D key.
     D,
+    /// The E key.
     E,
+    /// The F key.
     F,
+    /// The G key.
     G,
+    /// The H key.
     H,
+    /// The I key.
     I,
+    /// The J key.
     J,
+    /// The K key.
     K,
+    /// The L key.
     L,
+    /// The M key.
     M,
+    /// The N key.
     N,
+    /// The O key.
     O,
+    /// The P key.
     P,
+    /// The Q key.
     Q,
+    /// The R key.
     R,
+    /// The S key.
     S,
+    /// The T key.
     T,
+    /// The U key.
     U,
+    /// The V key.
     V,
+    /// The W key.
     W,
+    /// The X key.
     X,
+    /// The Y key.
     Y,
+    /// The Z key.
     Z,
 
+    /// The 0 key on the main number row.
     Digit0,
+    /// The 1 key on the main number row.
     Digit1,
+    /// The 2 key on the main number row.
     Digit2,
+    /// The 3 key on the main number row.
     Digit3,
+    /// The 4 key on the main number row.
     Digit4,
+    /// The 5 key on the main number row.
     Digit5,
+    /// The 6 key on the main number row.
     Digit6,
+    /// The 7 key on the main number row.
     Digit7,
+    /// The 8 key on the main number row.
     Digit8,
+    /// The 9 key on the main number row.
     Digit9,
 
+    /// The F1 function key.
     F1,
+    /// The F2 function key.
     F2,
+    /// The F3 function key.
     F3,
+    /// The F4 function key.
     F4,
+    /// The F5 function key.
     F5,
+    /// The F6 function key.
     F6,
+    /// The F7 function key.
     F7,
+    /// The F8 function key.
     F8,
+    /// The F9 function key.
     F9,
+    /// The F10 function key.
     F10,
+    /// The F11 function key.
     F11,
+    /// The F12 function key.
     F12,
 
+    /// The up arrow key.
     ArrowUp,
+    /// The down arrow key.
     ArrowDown,
+    /// The left arrow key.
     ArrowLeft,
+    /// The right arrow key.
     ArrowRight,
+    /// The Home key.
     Home,
+    /// The End key.
     End,
+    /// The Page Up key.
     PageUp,
+    /// The Page Down key.
     PageDown,
 
+    /// The Backspace key, which deletes backward.
     Backspace,
+    /// The Delete key, which deletes forward.
     Delete,
+    /// The main Enter or Return key.
     Enter,
+    /// The Tab key.
     Tab,
+    /// The space bar.
     Space,
+    /// The Escape key.
     Escape,
 
+    /// The left Shift key.
     ShiftLeft,
+    /// The right Shift key.
     ShiftRight,
+    /// The left Control key.
     ControlLeft,
+    /// The right Control key.
     ControlRight,
+    /// The left Alt key, called Option on macOS.
     AltLeft,
+    /// The right Alt key, called Option on macOS.
     AltRight,
+    /// The left Meta key: Command on macOS, the Windows key elsewhere.
     MetaLeft,
+    /// The right Meta key: Command on macOS, the Windows key elsewhere.
     MetaRight,
 
+    /// The minus and underscore key on US layouts.
     Minus,
+    /// The equals and plus key on US layouts.
     Equal,
+    /// The left square bracket key on US layouts.
     BracketLeft,
+    /// The right square bracket key on US layouts.
     BracketRight,
+    /// The backslash key on US layouts.
     Backslash,
+    /// The semicolon and colon key on US layouts.
     Semicolon,
+    /// The apostrophe and quotation mark key on US layouts.
     Quote,
+    /// The comma key on US layouts.
     Comma,
+    /// The period key on US layouts.
     Period,
+    /// The forward slash key on US layouts.
     Slash,
+    /// The grave accent and tilde key on US layouts, left of the 1 key.
     Backquote,
 
     /// Key not recognized or not mapped.

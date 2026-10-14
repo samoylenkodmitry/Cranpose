@@ -1305,7 +1305,7 @@ fn snap_anchor_item_offset(info: &LazyListLayoutInfo, item: &LazyListItemInfo) -
 
 #[cfg(test)]
 #[path = "tests/lazy_list_state_test_helpers.rs"]
-pub mod test_helpers;
+pub(crate) mod test_helpers;
 
 #[cfg(test)]
 #[path = "tests/lazy_list_state_tests.rs"]

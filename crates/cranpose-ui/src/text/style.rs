@@ -18,23 +18,34 @@ use super::{
 };
 use crate::modifier::{Brush, Color};
 
+/// Vertical shift of text from its baseline as a fraction of the font size. Positive values
+/// move the text up. Compose's `BaselineShift`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BaselineShift(pub f32);
 
 impl BaselineShift {
+    /// Moves the text up by half the font size.
     pub const SUPERSCRIPT: Self = Self(0.5);
+    /// Moves the text down by half the font size.
     pub const SUBSCRIPT: Self = Self(-0.5);
+    /// No shift.
     pub const NONE: Self = Self(0.0);
+    /// No value is set and the shift is inherited. Holds `NaN`.
     pub const UNSPECIFIED: Self = Self(f32::NAN);
 
+    /// Returns false for [`BaselineShift::UNSPECIFIED`].
     pub fn is_specified(self) -> bool {
         !self.0.is_nan()
     }
 }
 
+/// Horizontal scaling and skew of glyphs. Compose's `TextGeometricTransform`. Text rendering
+/// does not apply it yet.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextGeometricTransform {
+    /// Horizontal scale factor of the glyphs. 1.0 leaves them unscaled.
     pub scale_x: f32,
+    /// Horizontal skew of the glyphs. 0.0 leaves them upright.
     pub skew_x: f32,
 }
 
@@ -47,18 +58,23 @@ impl Default for TextGeometricTransform {
     }
 }
 
+/// Ordered list of language tags, most preferred first. They select language-specific glyph
+/// forms and hyphenation rules. Compose's `LocaleList`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
 pub struct LocaleList {
     locales: std::sync::Arc<[String]>,
 }
 
 impl LocaleList {
+    /// Creates a list from `locales`, which are language tags such as `en-US`.
     pub fn new(locales: Vec<String>) -> Self {
         Self {
             locales: locales.into(),
         }
     }
 
+    /// Parses a comma-separated list of language tags such as `en-US, fr`. Blank entries are
+    /// skipped.
     pub fn from_language_tags(tags: &str) -> Self {
         let locales: Vec<_> = tags
             .split(',')
@@ -69,71 +85,113 @@ impl LocaleList {
         Self::new(locales)
     }
 
+    /// The language tags, most preferred first.
     pub fn locales(&self) -> &[String] {
         &self.locales
     }
 
+    /// Returns true when the list holds no tags.
     pub fn is_empty(&self) -> bool {
         self.locales.is_empty()
     }
 }
 
+/// Whether text is expected to move, scale or rotate. Compose's `TextMotion`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum TextMotion {
+    /// The text stays in place. Glyphs are placed on whole pixels for sharp edges.
     #[default]
     Static,
+    /// The text may move, scale or rotate. Glyphs keep sub-pixel positions so motion stays
+    /// smooth.
     Animated,
 }
 
+/// Platform-specific settings of a span. It holds no options yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct PlatformSpanStyle;
 
+/// How much work the text shaper does for a paragraph.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TextShaping {
+    /// Text is shaped only when it has non-ASCII characters. ASCII text uses plain glyph advances.
     Basic,
+    /// The full OpenType shaper always runs, including on ASCII text.
     Advanced,
 }
 
+/// Platform-specific settings of a paragraph. Compose's `PlatformParagraphStyle`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct PlatformParagraphStyle {
+    /// When `Some(true)`, the font's line gap is added to the line height, as with Android's
+    /// `includeFontPadding`. `None` and `Some(false)` add nothing.
     pub include_font_padding: Option<bool>,
+    /// Shaping mode. `None` acts like [`TextShaping::Basic`].
     pub shaping: Option<TextShaping>,
 }
 
+/// Platform-specific settings of a span and of a paragraph. Compose's `PlatformTextStyle`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct PlatformTextStyle {
+    /// Settings for spans.
     pub span_style: Option<PlatformSpanStyle>,
+    /// Settings for paragraphs.
     pub paragraph_style: Option<PlatformParagraphStyle>,
 }
 
+/// Whether glyphs are filled or only outlined.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum TextDrawStyle {
+    /// Glyphs are filled with the text color or brush.
     #[default]
     Fill,
+    /// Only the outlines of the glyphs are drawn.
     Stroke {
+        /// Outline width in logical pixels. Zero, negative and non-finite widths draw a fill.
         width: f32,
     },
 }
 
+/// Style of a span of characters: color, font, spacing and decoration. Compose's `SpanStyle`.
+/// A field left unset (`None` or `Unspecified`) keeps the inherited value when styles merge.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SpanStyle {
+    /// Text color.
     pub color: Option<Color>,
+    /// Brush that paints the glyphs, for example a gradient. Merging a style that sets `color`
+    /// clears an inherited `brush`, and the reverse.
     pub brush: Option<Brush>,
+    /// Opacity from 0.0 to 1.0, multiplied into the color or brush. `None` leaves it unchanged.
     pub alpha: Option<f32>,
+    /// Font size in `Sp` or as a multiple of the default size with `Em`.
     pub font_size: TextUnit,
+    /// Weight of the font.
     pub font_weight: Option<FontWeight>,
+    /// Upright or italic glyphs.
     pub font_style: Option<FontStyle>,
+    /// Which missing bold or italic faces may be faked. `None` allows both.
     pub font_synthesis: Option<FontSynthesis>,
+    /// Font family.
     pub font_family: Option<FontFamily>,
+    /// OpenType feature settings in CSS `font-feature-settings` syntax, such as `smcp, liga 0`.
     pub font_feature_settings: Option<std::sync::Arc<str>>,
+    /// Extra space added after each character, in `Sp` or as a multiple of the font size.
     pub letter_spacing: TextUnit,
+    /// Vertical shift of the glyphs from the baseline.
     pub baseline_shift: Option<BaselineShift>,
+    /// Horizontal scale and skew of the glyphs. Text rendering does not apply it yet.
     pub text_geometric_transform: Option<TextGeometricTransform>,
+    /// Languages of the text, which select language-specific glyph forms and hyphenation rules.
     pub locale_list: Option<LocaleList>,
+    /// Color drawn behind the glyphs.
     pub background: Option<Color>,
+    /// Underline and line through.
     pub text_decoration: Option<TextDecoration>,
+    /// Shadow drawn behind the glyphs.
     pub shadow: Option<Shadow>,
+    /// Platform-specific settings.
     pub platform_style: Option<PlatformSpanStyle>,
+    /// Fill or stroke. `None` fills the glyphs.
     pub draw_style: Option<TextDrawStyle>,
 }
 
@@ -163,6 +221,8 @@ impl Default for SpanStyle {
 }
 
 impl SpanStyle {
+    /// Returns a style where each field set in `other` replaces the one in `self`. Fields unset
+    /// in `other` keep the value of `self`.
     pub fn merge(&self, other: &SpanStyle) -> SpanStyle {
         let (merged_color, merged_brush) = merge_foreground_style(self, other);
         SpanStyle {
@@ -198,10 +258,14 @@ impl SpanStyle {
         }
     }
 
+    /// Same as [`SpanStyle::merge`]. Compose's `SpanStyle.plus`.
     pub fn plus(&self, other: &SpanStyle) -> SpanStyle {
         self.merge(other)
     }
 
+    /// Returns the font size in sp. An `Sp` size is used as is, an `Em` size multiplies
+    /// `default_size`, and an unspecified, non-positive or non-finite size gives `default_size`.
+    /// A `default_size` that is not positive and finite counts as 14.0.
     pub fn resolve_font_size(&self, default_size: f32) -> f32 {
         let fallback = if default_size.is_finite() && default_size > 0.0 {
             default_size
@@ -215,6 +279,8 @@ impl SpanStyle {
         }
     }
 
+    /// Returns `color`, else the color of a solid `brush`, else `default_color`, with `alpha`
+    /// multiplied into the result's alpha channel.
     pub fn resolve_foreground_color(&self, default_color: Color) -> Color {
         let mut color = self
             .color
@@ -226,6 +292,7 @@ impl SpanStyle {
         color
     }
 
+    /// Hash of every field that changes how the text looks, as renderers use it to key caches.
     pub fn render_hash(&self) -> u64 {
         let mut hasher = FxHasher::default();
         hash_span_style(self, &mut hasher);
@@ -233,16 +300,28 @@ impl SpanStyle {
     }
 }
 
+/// Style of a whole paragraph: alignment, direction, line height and line breaking.
+/// Compose's `ParagraphStyle`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParagraphStyle {
+    /// Horizontal alignment of the lines.
     pub text_align: TextAlign,
+    /// Base direction of the paragraph.
     pub text_direction: TextDirection,
+    /// Distance between baselines, in `Sp` or as a multiple of the font size. `Unspecified` uses
+    /// the natural line height of the font.
     pub line_height: TextUnit,
+    /// Indent of the first line and of the other lines. Text layout does not apply it yet.
     pub text_indent: Option<TextIndent>,
+    /// Platform-specific settings.
     pub platform_style: Option<PlatformParagraphStyle>,
+    /// How the line height is placed in each line and trimmed at the edges of the paragraph.
     pub line_height_style: Option<LineHeightStyle>,
+    /// Strategy that breaks the paragraph into lines.
     pub line_break: LineBreak,
+    /// Whether words may be split with a hyphen.
     pub hyphens: Hyphens,
+    /// Whether the text moves. `None` counts as [`TextMotion::Static`].
     pub text_motion: Option<TextMotion>,
 }
 
@@ -263,6 +342,8 @@ impl Default for ParagraphStyle {
 }
 
 impl ParagraphStyle {
+    /// Returns a style where each field set in `other` replaces the one in `self`. Fields unset
+    /// in `other` keep the value of `self`.
     pub fn merge(&self, other: &ParagraphStyle) -> ParagraphStyle {
         ParagraphStyle {
             text_align: merge_text_align(self.text_align, other.text_align),
@@ -277,10 +358,13 @@ impl ParagraphStyle {
         }
     }
 
+    /// Same as [`ParagraphStyle::merge`]. Compose's `ParagraphStyle.plus`.
     pub fn plus(&self, other: &ParagraphStyle) -> ParagraphStyle {
         self.merge(other)
     }
 
+    /// Hash of every field that changes how the paragraph looks, as renderers use it to key
+    /// caches.
     pub fn render_hash(&self) -> u64 {
         let mut hasher = FxHasher::default();
         hash_paragraph_style(self, &mut hasher);
@@ -288,13 +372,17 @@ impl ParagraphStyle {
     }
 }
 
+/// Complete style of a text: a [`SpanStyle`] and a [`ParagraphStyle`]. Compose's `TextStyle`.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct TextStyle {
+    /// Settings that apply to characters.
     pub span_style: SpanStyle,
+    /// Settings that apply to the whole paragraph.
     pub paragraph_style: ParagraphStyle,
 }
 
 impl TextStyle {
+    /// Creates a style from `span_style` and `paragraph_style`.
     pub fn new(span_style: SpanStyle, paragraph_style: ParagraphStyle) -> Self {
         Self {
             span_style,
@@ -302,14 +390,18 @@ impl TextStyle {
         }
     }
 
+    /// Creates a style with `span_style` and default paragraph settings.
     pub fn from_span_style(span_style: SpanStyle) -> Self {
         Self::new(span_style, ParagraphStyle::default())
     }
 
+    /// Creates a style with `paragraph_style` and default span settings.
     pub fn from_paragraph_style(paragraph_style: ParagraphStyle) -> Self {
         Self::new(SpanStyle::default(), paragraph_style)
     }
 
+    /// Returns a style that merges the span and paragraph styles of `other` over those of
+    /// `self`.
     pub fn merge(&self, other: &TextStyle) -> TextStyle {
         TextStyle {
             span_style: self.span_style.merge(&other.span_style),
@@ -317,18 +409,23 @@ impl TextStyle {
         }
     }
 
+    /// Same as [`TextStyle::merge`]. Compose's `TextStyle.plus`.
     pub fn plus(&self, other: &TextStyle) -> TextStyle {
         self.merge(other)
     }
 
+    /// Returns a copy of the span style.
     pub fn to_span_style(&self) -> SpanStyle {
         self.span_style.clone()
     }
 
+    /// Returns a copy of the paragraph style.
     pub fn to_paragraph_style(&self) -> ParagraphStyle {
         self.paragraph_style.clone()
     }
 
+    /// Returns the platform-specific settings of the span and the paragraph, or `None` when
+    /// neither has any.
     pub fn platform_style(&self) -> Option<PlatformTextStyle> {
         create_platform_text_style(
             None,
@@ -337,6 +434,8 @@ impl TextStyle {
         )
     }
 
+    /// Returns this style with the platform-specific settings of the span and the paragraph
+    /// replaced by those in `platform_style`.
     pub fn with_platform_style(mut self, platform_style: Option<PlatformTextStyle>) -> Self {
         self.span_style.platform_style = platform_style.and_then(|style| style.span_style);
         self.paragraph_style.platform_style =
@@ -344,10 +443,14 @@ impl TextStyle {
         self
     }
 
+    /// Returns the font size in sp. See [`SpanStyle::resolve_font_size`].
     pub fn resolve_font_size(&self, default_size: f32) -> f32 {
         self.span_style.resolve_font_size(default_size)
     }
 
+    /// Returns the line height in the unit of `default_size`. A positive `Sp` line height is used
+    /// as is and a positive `Em` one multiplies the font size. Otherwise the result is
+    /// `natural_line_height`, or the font size when that is not positive and finite.
     pub fn resolve_line_height(&self, default_size: f32, natural_line_height: f32) -> f32 {
         let fallback = if natural_line_height.is_finite() && natural_line_height > 0.0 {
             natural_line_height
@@ -363,6 +466,8 @@ impl TextStyle {
         }
     }
 
+    /// Returns the letter spacing in the unit of `default_size`. An `Em` value multiplies the
+    /// font size. An unspecified or non-finite spacing gives 0.0.
     pub fn resolve_letter_spacing(&self, default_size: f32) -> f32 {
         let font_size = self.resolve_font_size(default_size);
         match self.span_style.letter_spacing {
@@ -372,10 +477,13 @@ impl TextStyle {
         }
     }
 
+    /// Returns the text color. See [`SpanStyle::resolve_foreground_color`].
     pub fn resolve_text_color(&self, default_color: Color) -> Color {
         self.span_style.resolve_foreground_color(default_color)
     }
 
+    /// Hash of the settings that change how the text measures. Colors, decorations and shadows
+    /// are left out.
     pub fn measurement_hash(&self) -> u64 {
         let mut hasher = FxHasher::default();
         hash_span_measurement(&self.span_style, &mut hasher);
@@ -383,6 +491,7 @@ impl TextStyle {
         hasher.finish()
     }
 
+    /// Hash of every setting that changes how the text looks, as renderers use it to key caches.
     pub fn render_hash(&self) -> u64 {
         let mut hasher = FxHasher::default();
         hash_span_style(&self.span_style, &mut hasher);

@@ -40,7 +40,6 @@ impl super::Surface {
             render_layer: Mutex::new(layer),
             swapchain_format: RwLock::new(None),
             extent: RwLock::new(wgt::Extent3d::default()),
-            acquired_before_shown: core::sync::atomic::AtomicU32::new(0),
         }
     }
 
@@ -358,11 +357,6 @@ impl crate::Surface for super::Surface {
             // When the window is occluded on macOS, presented drawables get stuck waiting
             // for vsync. Check the window's occlusion state and skip acquisition if
             // the window is not visible - this avoids a 1-second hang in nextDrawable().
-            // Before the window was ever visible, the layer hands out all but one of
-            // its drawables at once: a window shown a moment ago draws its first frame
-            // without waiting for the window server to report it visible, and one
-            // drawable stays free, so nextDrawable() returns at once.
-            use core::sync::atomic::Ordering;
             use objc2::rc::Retained;
 
             // The CAMetalLayer is typically a sublayer; find the hosting window
@@ -370,15 +364,8 @@ impl crate::Surface for super::Surface {
             if let Some(window) = hosting_window(Retained::into_super(render_layer.clone())) {
                 const NS_WINDOW_OCCLUSION_STATE_VISIBLE: usize = 1 << 1;
                 let occlusion_state: usize = unsafe { objc2::msg_send![&*window, occlusionState] };
-                if occlusion_state & NS_WINDOW_OCCLUSION_STATE_VISIBLE != 0 {
-                    self.acquired_before_shown.store(u32::MAX, Ordering::Relaxed);
-                } else {
-                    let before = self.acquired_before_shown.load(Ordering::Relaxed);
-                    let spare = (render_layer.maximumDrawableCount() as u32).saturating_sub(1);
-                    if before >= spare {
-                        return Err(crate::SurfaceError::Occluded);
-                    }
-                    self.acquired_before_shown.store(before + 1, Ordering::Relaxed);
+                if occlusion_state & NS_WINDOW_OCCLUSION_STATE_VISIBLE == 0 {
+                    return Err(crate::SurfaceError::Occluded);
                 }
             }
         }

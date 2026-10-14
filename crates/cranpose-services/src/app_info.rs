@@ -37,6 +37,7 @@ pub trait AppInfo {
     fn build_version(&self) -> Option<String>;
 }
 
+/// Shared handle to an [`AppInfo`].
 pub type AppInfoRef = Rc<dyn AppInfo>;
 
 struct DefaultAppInfo;

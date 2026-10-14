@@ -8,7 +8,10 @@ use crate::{
     primitive_emit::resolve_clip,
 };
 
+/// Receives the hit targets that `collect_hits_from_graph` finds in a render graph.
 pub trait HitGraphSink {
+    /// Records an interactive node. `capture_path` lists the node first and then its pointer-input
+    /// ancestors from the nearest outward, and `geometry` is in window space.
     fn push_hit(
         &mut self,
         node_id: NodeId,
@@ -39,6 +42,10 @@ impl HitGraphSink for Scene {
     }
 }
 
+/// Walks `layer` and the layers beneath it in draw order and pushes to `sink` a hit target for
+/// each node that has a hit test, with its geometry in window space. `parent_transform` maps
+/// the parent layer's space to the window, and `parent_hit_clip` is the clip bounds that the
+/// layers above impose.
 pub fn collect_hits_from_graph<S: HitGraphSink>(
     layer: &LayerNode,
     parent_transform: ProjectiveTransform,

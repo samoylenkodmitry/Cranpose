@@ -37,12 +37,19 @@ use crate::{
 /// `SwitchButtonDefaults` plus `ToggleButton`'s layout constants.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SwitchButtonSpec {
+    /// Colors of the container, the labels and the switch.
     pub colors: WearColors,
+    /// Text style of the main label.
     pub label_style: WearTextStyle,
+    /// Text style of the secondary label.
     pub secondary_style: WearTextStyle,
+    /// Minimum height of the button, in dp.
     pub min_height: f32,
+    /// Corner radius of the container, in dp.
     pub corner_radius: f32,
+    /// Space between the container edge and the content on both horizontal sides, in dp.
     pub padding_horizontal: f32,
+    /// Space between the container edge and the content at the top and the bottom, in dp.
     pub padding_vertical: f32,
     /// `SWITCH_WIDTH`.
     pub switch_width: f32,
@@ -52,7 +59,9 @@ pub struct SwitchButtonSpec {
     pub switch_height: f32,
     /// `SWITCH_TRACK_WIDTH` — the unchecked state's border stroke.
     pub track_border_width: f32,
+    /// Radius of the thumb when the switch is off, in dp.
     pub thumb_radius_unchecked: f32,
+    /// Radius of the thumb when the switch is on, in dp.
     pub thumb_radius_checked: f32,
     /// `TOGGLE_CONTROL_SPACING`.
     pub control_spacing: f32,
@@ -91,6 +100,7 @@ impl Default for SwitchButtonSpec {
 }
 
 impl SwitchButtonSpec {
+    /// Sets the colors of the container, the labels and the switch.
     pub fn colors(mut self, colors: WearColors) -> Self {
         self.colors = colors;
         self
@@ -109,19 +119,27 @@ impl SwitchButtonSpec {
 /// the tick's scale; `slowEffectsSpec` moves every colour. Both are critically
 /// damped — a switch does not bounce.
 pub const SWITCH_THUMB_STIFFNESS: f32 = 1400.0;
+/// Stiffness of the spring that animates the switch colors.
 pub const SWITCH_COLOR_STIFFNESS: f32 = 260.0;
+/// Damping ratio of both switch springs. 1.0 is critically damped.
 pub const SWITCH_DAMPING_RATIO: f32 = 1.0;
 
 /// The colours one state of the switch draws with.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SwitchColors {
+    /// Fill of the button container.
     pub container: Color,
+    /// Color of the main label.
     pub label: Color,
+    /// Color of the secondary label.
     pub secondary_label: Color,
+    /// Fill of the switch track.
     pub track: Color,
     /// `Color::rgba(_, _, _, 0.0)` when the border is suppressed.
     pub track_border: Color,
+    /// Fill of the switch thumb.
     pub thumb: Color,
+    /// Color of the check mark.
     pub tick: Color,
 }
 

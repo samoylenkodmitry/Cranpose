@@ -15,6 +15,9 @@ pub struct NestedReadonlySnapshot {
 }
 
 impl NestedReadonlySnapshot {
+    /// Creates a nested read-only snapshot with the given id and invalid set. `read_observer` is
+    /// called for reads inside it. `parent` is the snapshot it was taken from, if that snapshot is
+    /// still alive.
     pub fn new(
         id: SnapshotId,
         invalid: SnapshotIdSet,
@@ -27,18 +30,23 @@ impl NestedReadonlySnapshot {
         })
     }
 
+    /// Returns the id of this snapshot. Ids grow with every snapshot taken.
     pub fn snapshot_id(&self) -> SnapshotId {
         self.state.id.get()
     }
 
+    /// Returns the ids of snapshots whose writes this snapshot does not see.
     pub fn invalid(&self) -> SnapshotIdSet {
         self.state.invalid.borrow().clone()
     }
 
+    /// Returns `true`: this snapshot rejects writes.
     pub fn read_only(&self) -> bool {
         true
     }
 
+    /// Returns the outermost parent that is still alive, or a copy of this snapshot when it has no
+    /// live parent.
     pub fn root_nested_readonly(&self) -> Rc<NestedReadonlySnapshot> {
         if let Some(parent) = self.parent.upgrade() {
             parent.root_nested_readonly()
@@ -52,10 +60,14 @@ impl NestedReadonlySnapshot {
         }
     }
 
+    /// Runs `f` with this snapshot as the current snapshot of the thread and returns its result.
+    /// The previous current snapshot is restored when `f` returns.
     pub fn enter<T>(self: &Rc<Self>, f: impl FnOnce() -> T) -> T {
         enter_snapshot_scope(AnySnapshot::NestedReadonly(self.clone()), f)
     }
 
+    /// Takes another read-only snapshot with the same view of state. Reads inside the new snapshot
+    /// call both `read_observer` and this snapshot's own read observer.
     pub fn take_nested_snapshot(
         &self,
         read_observer: Option<ReadObserver>,
@@ -71,28 +83,29 @@ impl NestedReadonlySnapshot {
         )
     }
 
+    /// Returns `false`: a read-only snapshot has no writes.
     pub fn has_pending_changes(&self) -> bool {
         false
     }
 
+    /// Releases the snapshot. Does nothing if it was already disposed.
     pub fn dispose(&self) {
         if !self.state.disposed.get() {
             self.state.dispose();
         }
     }
 
+    /// Calls the read observer, if any, with `state`.
     pub fn record_read(&self, state: &dyn StateObject) {
         self.state.record_read(state);
     }
 
+    /// Always panics: a read-only snapshot rejects writes.
     pub fn record_write(&self, _state: Rc<dyn StateObject>) {
         panic!("Cannot write to a read-only snapshot");
     }
 
-    pub fn close(&self) {
-        self.state.disposed.set(true);
-    }
-
+    /// Returns `true` once the snapshot was disposed.
     pub fn is_disposed(&self) -> bool {
         self.state.disposed.get()
     }
@@ -117,6 +130,8 @@ pub struct NestedMutableSnapshot {
 }
 
 impl NestedMutableSnapshot {
+    /// Creates a nested mutable snapshot with the given id and invalid set. `parent` receives the
+    /// writes on `apply`. `base_parent_id` is the id of the parent when this snapshot was taken.
     pub fn new(
         id: SnapshotId,
         invalid: SnapshotIdSet,
@@ -134,14 +149,17 @@ impl NestedMutableSnapshot {
         })
     }
 
+    /// Returns the id of this snapshot. Ids grow with every snapshot taken.
     pub fn snapshot_id(&self) -> SnapshotId {
         self.state.id.get()
     }
 
+    /// Returns the ids of snapshots whose writes this snapshot does not see.
     pub fn invalid(&self) -> SnapshotIdSet {
         self.state.invalid.borrow().clone()
     }
 
+    /// Returns `false`: this snapshot accepts writes.
     pub fn read_only(&self) -> bool {
         false
     }
@@ -153,6 +171,8 @@ impl NestedMutableSnapshot {
         self.state.set_on_dispose(f);
     }
 
+    /// Returns the root mutable snapshot above this one. If the root is gone, returns a new root
+    /// snapshot built from this snapshot's id, invalid set and observers.
     pub fn root_mutable(&self) -> Rc<MutableSnapshot> {
         if let Some(parent) = self.parent.upgrade() {
             parent.root_mutable()
@@ -167,10 +187,14 @@ impl NestedMutableSnapshot {
         }
     }
 
+    /// Runs `f` with this snapshot as the current snapshot of the thread and returns its result.
+    /// The previous current snapshot is restored when `f` returns.
     pub fn enter<T>(self: &Rc<Self>, f: impl FnOnce() -> T) -> T {
         enter_snapshot_scope(AnySnapshot::NestedMutable(self.clone()), f)
     }
 
+    /// Takes a read-only snapshot of this snapshot's view of state. Reads inside the new snapshot
+    /// call both `read_observer` and this snapshot's own read observer.
     pub fn take_nested_snapshot(
         &self,
         read_observer: Option<ReadObserver>,
@@ -185,28 +209,36 @@ impl NestedMutableSnapshot {
         )
     }
 
+    /// Returns `true` when this snapshot recorded writes that were not applied yet.
     pub fn has_pending_changes(&self) -> bool {
         !self.state.modified.borrow().is_empty()
     }
 
+    /// Returns the ids of nested mutable snapshots taken from this snapshot and not yet disposed.
     pub fn pending_children(&self) -> Vec<SnapshotId> {
         self.state.pending_children()
     }
 
+    /// Returns `true` when a nested mutable snapshot taken from this snapshot is still open.
     pub fn has_pending_children(&self) -> bool {
         self.state.has_pending_children()
     }
 
+    /// Discards the writes that were not applied and releases the snapshot. Does nothing while
+    /// nested snapshots taken from it are still open.
     pub fn dispose(&self) {
         if !self.state.disposed.get() && self.nested_count.get() == 0 {
             self.state.dispose();
         }
     }
 
+    /// Calls the read observer, if any, with `state`.
     pub fn record_read(&self, state: &dyn StateObject) {
         self.state.record_read(state);
     }
 
+    /// Records `state` as written in this snapshot. The write observer, if any, is called the first
+    /// time a state object is recorded. Panics if the snapshot was applied or disposed.
     pub fn record_write(&self, state: Rc<dyn StateObject>) {
         assert!(!self.applied.get(), "Cannot write to an applied snapshot");
         assert!(
@@ -216,14 +248,14 @@ impl NestedMutableSnapshot {
         self.state.record_write(state, self.state.id.get());
     }
 
-    pub fn close(&self) {
-        self.state.disposed.set(true);
-    }
-
+    /// Returns `true` once the snapshot was disposed.
     pub fn is_disposed(&self) -> bool {
         self.state.disposed.get()
     }
 
+    /// Moves the writes of this snapshot into its parent. Returns `Failure` if the snapshot was
+    /// already applied or disposed, if the parent is gone, or if the parent wrote one of the same
+    /// state objects.
     pub fn apply(&self) -> SnapshotApplyResult {
         if self.state.disposed.get() {
             return SnapshotApplyResult::Failure;
@@ -252,6 +284,8 @@ impl NestedMutableSnapshot {
         }
     }
 
+    /// Takes a mutable snapshot nested in this one. Its `apply` moves the writes into this
+    /// snapshot.
     pub fn take_nested_mutable_snapshot(
         self: &Rc<Self>,
         read_observer: Option<ReadObserver>,

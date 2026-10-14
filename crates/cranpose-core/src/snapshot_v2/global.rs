@@ -70,22 +70,29 @@ pub(crate) fn clear_global_snapshot_for_tests() {
 }
 
 impl GlobalSnapshot {
+    /// Returns the id of this snapshot. Ids grow with every snapshot taken.
     pub fn snapshot_id(&self) -> SnapshotId {
         self.state.id.get()
     }
 
+    /// Returns the ids of snapshots whose writes this snapshot does not see.
     pub fn invalid(&self) -> SnapshotIdSet {
         self.state.invalid.borrow().clone()
     }
 
+    /// Returns `false`: the global snapshot accepts writes.
     pub fn read_only(&self) -> bool {
         false
     }
 
+    /// Runs `f` with this snapshot as the current snapshot of the thread and returns its result.
+    /// The previous current snapshot is restored when `f` returns.
     pub fn enter<T>(&self, f: impl FnOnce() -> T) -> T {
         enter_snapshot_scope(AnySnapshot::Global(Self::get_or_create()), f)
     }
 
+    /// Takes a read-only snapshot of the current global state. Reads inside it call
+    /// `read_observer`.
     pub fn take_nested_snapshot(
         &self,
         read_observer: Option<ReadObserver>,
@@ -97,38 +104,47 @@ impl GlobalSnapshot {
         )
     }
 
+    /// Returns `true` when a write was recorded and the global snapshot has not advanced since.
     pub fn has_pending_changes(&self) -> bool {
         !self.state.modified.borrow().is_empty()
     }
 
+    /// Returns the ids of nested mutable snapshots taken from this snapshot and not yet disposed.
     pub fn pending_children(&self) -> Vec<SnapshotId> {
         self.state.pending_children()
     }
 
+    /// Returns `true` when a nested mutable snapshot taken from this snapshot is still open.
     pub fn has_pending_children(&self) -> bool {
         self.state.has_pending_children()
     }
 
+    /// Does nothing: the global snapshot is never disposed.
     pub fn dispose(&self) {}
 
+    /// Calls the read observer, if any, with `state`.
     pub fn record_read(&self, state: &dyn StateObject) {
         self.state.record_read(state);
     }
 
+    /// Records `state` as written in the global snapshot. The write observer, if any, is called the
+    /// first time a state object is recorded.
     pub fn record_write(&self, state: Rc<dyn StateObject>) {
         self.state.record_write(state, self.state.id.get());
     }
 
-    pub fn close(&self) {}
-
+    /// Returns `false`: the global snapshot is never disposed.
     pub fn is_disposed(&self) -> bool {
         false
     }
 
+    /// Does nothing and returns `Success`: the global snapshot has nothing to apply.
     pub fn apply(&self) -> SnapshotApplyResult {
         SnapshotApplyResult::Success
     }
 
+    /// Takes a mutable snapshot whose `apply` publishes its writes to the global state. The global
+    /// snapshot moves to a new id, so the writes of the new snapshot stay isolated until then.
     pub fn take_nested_mutable_snapshot(
         &self,
         read_observer: Option<ReadObserver>,

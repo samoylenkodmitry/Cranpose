@@ -20,10 +20,12 @@ pub struct FlexParentData {
 }
 
 impl FlexParentData {
+    /// A child's share of the room left over, and whether it fills it.
     pub fn new(weight: f32, fill: bool) -> Self {
         Self { weight, fill }
     }
 
+    /// Whether the child takes a share of the room left over.
     pub fn has_weight(&self) -> bool {
         self.weight > 0.0
     }
@@ -35,12 +37,17 @@ impl FlexParentData {
 /// corresponding parent layout's default alignment for this child only.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ParentData {
+    /// The child's share of a Row's or Column's room left over; 0 for none.
     pub weight: f32,
+    /// Whether a weighted child fills its share or may be smaller.
     pub fill: bool,
+    /// Where the child sits in a Box, over the Box's own alignment.
     pub box_alignment: Option<Alignment>,
+    /// Where the child sits across a Row, over the Row's own alignment.
     pub row_alignment: Option<VerticalAlignment>,
     /// Aligns this child's first baseline with other baseline-aligned Row children.
     pub row_baseline: bool,
+    /// Where the child sits across a Column, over the Column's own alignment.
     pub column_alignment: Option<HorizontalAlignment>,
 }
 
@@ -55,6 +62,7 @@ impl From<FlexParentData> for ParentData {
 }
 
 impl ParentData {
+    /// Whether the child takes a share of the room left over.
     pub fn has_weight(&self) -> bool {
         self.weight > 0.0
     }
@@ -308,9 +316,11 @@ impl From<Size> for Measurement {
 /// Result of a measurement operation.
 #[derive(Clone, Debug)]
 pub struct MeasureResult {
+    /// The size the layout takes.
     pub size: Size,
     /// Explicit baselines in this layout's coordinates; unspecified lines are inherited.
     pub alignment_lines: crate::AlignmentLines,
+    /// Where the children go.
     pub placements: Vec<Placement>,
 }
 
@@ -335,13 +345,18 @@ impl MeasureResult {
 /// Placement information for a measured child.
 #[derive(Clone, Copy, Debug)]
 pub struct Placement {
+    /// The child placed.
     pub node_id: NodeId,
+    /// Its left edge in the parent, in logical pixels.
     pub x: f32,
+    /// Its top edge in the parent, in logical pixels.
     pub y: f32,
+    /// Its draw order among its siblings: higher draws on top.
     pub z_index: i32,
 }
 
 impl Placement {
+    /// `node_id` at `(x, y)` in the parent, drawn in `z_index` order.
     pub fn new(node_id: NodeId, x: f32, y: f32, z_index: i32) -> Self {
         Self {
             node_id,
@@ -366,12 +381,14 @@ pub struct LayoutModifierMeasureResult {
     /// For example, PaddingNode returns (padding.left, padding.top) here
     /// to offset the child by the padding amount.
     pub placement_offset_x: f32,
+    /// The vertical offset of the wrapped content, as `placement_offset_x`.
     pub placement_offset_y: f32,
     /// Explicit alignment lines. Unspecified lines are inherited from wrapped content.
     pub alignment_lines: crate::AlignmentLines,
 }
 
 impl LayoutModifierMeasureResult {
+    /// A modifier of `size` that places its content at the offset.
     pub fn new(size: Size, placement_offset_x: f32, placement_offset_y: f32) -> Self {
         Self {
             size,

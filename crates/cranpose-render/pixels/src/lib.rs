@@ -1,11 +1,13 @@
+#![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
 mod damage;
 mod draw;
 mod pipeline;
+/// The retained scene and hit regions of the pixel renderer.
 pub mod scene;
 pub mod sprites;
-pub mod style;
+mod style;
 
 use cranpose_render_common::{
     RenderScene, Renderer, SceneUpdates,
@@ -61,11 +63,7 @@ fn valid_scale(scale: f32) -> f32 {
     }
 }
 
-#[derive(Debug)]
-pub enum PixelsRendererError {
-    Layout(String),
-}
-
+/// A renderer that draws the scene into a caller-owned RGBA pixel buffer on the CPU.
 pub struct PixelsRenderer {
     scene: Scene,
     text_resources: SoftwareTextResources,
@@ -80,6 +78,8 @@ impl Default for PixelsRenderer {
 }
 
 impl PixelsRenderer {
+    /// Creates a renderer that draws text in the embedded default font when the
+    /// `embedded-default-font` feature is on, and draws no text otherwise.
     pub fn new() -> Self {
         Self::with_fonts(&[])
     }
@@ -95,6 +95,8 @@ impl PixelsRenderer {
         }
     }
 
+    /// Draws the scene into `frame`, an RGBA8 buffer of `width` by `height` pixels, at one device
+    /// pixel per logical pixel.
     pub fn draw(&self, frame: &mut [u8], width: u32, height: u32) {
         draw::draw_scene_with_text_resources(
             frame,
@@ -226,7 +228,7 @@ impl PixelsRenderer {
 
 impl Renderer for PixelsRenderer {
     type Scene = Scene;
-    type Error = PixelsRendererError;
+    type Error = std::convert::Infallible;
 
     fn attach_app_context_services(&mut self, app_context: &cranpose_ui::AppContext) {
         app_context.set_text_measurer(CachedFontTextMeasurer::with_text_resources(

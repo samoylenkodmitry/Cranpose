@@ -11,13 +11,18 @@ use crate::layout::core::{
 /// MeasurePolicy for Box layout - overlays children according to alignment.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BoxMeasurePolicy {
+    /// Where children sit inside the box when they are smaller than it.
     pub content_alignment: Alignment,
+    /// Whether the box's minimum constraints pass on to its children. When `false`, children may
+    /// measure smaller than the box's minimum size.
     pub propagate_min_constraints: bool,
     /// Direction used to resolve start and end alignment.
     pub layout_direction: crate::LayoutDirection,
 }
 
 impl BoxMeasurePolicy {
+    /// Creates a policy that places children by `content_alignment` in a left-to-right layout
+    /// direction.
     pub fn new(content_alignment: Alignment, propagate_min_constraints: bool) -> Self {
         Self {
             content_alignment,
@@ -936,6 +941,8 @@ pub struct FlowRowMeasurePolicy {
 }
 
 impl FlowRowMeasurePolicy {
+    /// Creates a policy with the given gaps in logical pixels. Negative gaps count as zero. The
+    /// layout direction is left to right.
     pub fn new(main_axis_spacing: f32, cross_axis_spacing: f32) -> Self {
         Self {
             main_axis_spacing: main_axis_spacing.max(0.0),
@@ -1096,10 +1103,13 @@ impl MeasurePolicy for FlowRowMeasurePolicy {
 /// This policy respects the provided constraints but has a preferred intrinsic size.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LeafMeasurePolicy {
+    /// Preferred size in logical pixels. The measured size is this size limited by the incoming
+    /// constraints.
     pub intrinsic_size: crate::modifier::Size,
 }
 
 impl LeafMeasurePolicy {
+    /// Creates a policy whose preferred size is `intrinsic_size`.
     pub fn new(intrinsic_size: crate::modifier::Size) -> Self {
         Self { intrinsic_size }
     }
@@ -1157,6 +1167,7 @@ impl MeasurePolicy for LeafMeasurePolicy {
 pub struct EmptyMeasurePolicy;
 
 impl EmptyMeasurePolicy {
+    /// Creates the policy.
     pub fn new() -> Self {
         Self
     }

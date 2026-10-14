@@ -53,7 +53,9 @@ pub struct Stroke {
     /// Total stroke width in the caller's coordinate space (dp for
     /// [`crate::DrawScope`] callers).
     pub width: f32,
+    /// How the ends of an open stroked path are shaped.
     pub cap: StrokeCap,
+    /// How corners between stroked segments are shaped.
     pub join: StrokeJoin,
 }
 
@@ -67,16 +69,19 @@ impl Stroke {
         }
     }
 
+    /// Returns the stroke with its width replaced by `width`.
     pub const fn with_width(mut self, width: f32) -> Self {
         self.width = width;
         self
     }
 
+    /// Returns the stroke with its cap replaced by `cap`.
     pub const fn with_cap(mut self, cap: StrokeCap) -> Self {
         self.cap = cap;
         self
     }
 
+    /// Returns the stroke with its join replaced by `join`.
     pub const fn with_join(mut self, join: StrokeJoin) -> Self {
         self.join = join;
         self
@@ -134,13 +139,17 @@ pub const TAU: f32 = std::f32::consts::PI * 2.0;
 /// collapse to a degenerate geometry (see [`ArcGeometry::is_degenerate`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ArcGeometry {
+    /// Center of the circle the band lies on.
     pub center: Point,
+    /// Inner radius of the band. It is 0 for a pie wedge.
     pub inner_radius: f32,
+    /// Outer radius of the band, not less than `inner_radius`.
     pub outer_radius: f32,
     /// Normalized to `[0, TAU)`.
     pub start_angle: f32,
     /// Normalized to `[0, TAU]`.
     pub sweep_angle: f32,
+    /// How the two ends of the band are shaped.
     pub cap: StrokeCap,
 }
 
@@ -515,9 +524,13 @@ pub fn inflate_rect(rect: Rect, amount: f32) -> Rect {
 /// and the GPU and CPU renderers take their coverage from the same frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LineGeometry {
+    /// Start of the segment.
     pub start: Point,
+    /// End of the segment.
     pub end: Point,
+    /// Half the stroke width, in the units the line is drawn in.
     pub half_width: f32,
+    /// How the two ends of the segment are shaped.
     pub cap: StrokeCap,
 }
 
@@ -525,8 +538,11 @@ pub struct LineGeometry {
 /// direction from start to end, and half its length.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LineFrame {
+    /// Midpoint of the segment.
     pub center: Point,
+    /// Unit vector pointing from the start to the end.
     pub direction: Point,
+    /// Half the segment's length, in the units it is drawn in.
     pub half_length: f32,
 }
 

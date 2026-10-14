@@ -5,20 +5,25 @@ use crate::{BlendMode, Brush, Color, Density, Dp, Point};
 /// Density-independent offset for shadows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DpOffset {
+    /// Horizontal distance, positive to the right.
     pub x: Dp,
+    /// Vertical distance, positive downward.
     pub y: Dp,
 }
 
 impl DpOffset {
+    /// Creates an offset from a horizontal and a vertical distance.
     pub const fn new(x: Dp, y: Dp) -> Self {
         Self { x, y }
     }
 
+    /// An offset of zero in both directions.
     pub const ZERO: DpOffset = DpOffset {
         x: Dp(0.0),
         y: Dp(0.0),
     };
 
+    /// Converts both components to pixels at `density`.
     pub fn to_px(self, density: Density) -> Point {
         Point::new(self.x.to_px(density).0, self.y.to_px(density).0)
     }
@@ -36,12 +41,19 @@ impl Default for DpOffset {
 /// are provided in density-independent units and converted to pixels at draw time.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shadow {
+    /// Blur radius. Negative values count as 0.
     pub radius: Dp,
+    /// Growth of the shadow shape before blurring. Negative values shrink it.
     pub spread: Dp,
+    /// Shift of the shadow relative to the element.
     pub offset: DpOffset,
+    /// Shadow color, used when `brush` is `None`.
     pub color: Color,
+    /// Paint for the shadow, used instead of `color` when set.
     pub brush: Option<Brush>,
+    /// Opacity from 0.0 to 1.0. A value of 0.0 or less draws no shadow.
     pub alpha: f32,
+    /// How the shadow combines with what is already drawn.
     pub blend_mode: BlendMode,
     /// Knocks the unoffset, unspread shape out of the shadow silhouette
     /// before blurring, leaving shadow only OUTSIDE the element. Required
@@ -66,6 +78,7 @@ impl Default for Shadow {
 }
 
 impl Shadow {
+    /// Converts the lengths to pixels at `density`.
     pub fn to_scope(&self, density: Density) -> ShadowScope {
         ShadowScope {
             radius: self.radius.to_px(density).0,
@@ -83,12 +96,19 @@ impl Shadow {
 /// Pixel-space shadow scope used by block-based APIs.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShadowScope {
+    /// Blur radius, in pixels. Negative values count as 0.0.
     pub radius: f32,
+    /// Growth of the shadow shape before blurring, in pixels. Negative values shrink it.
     pub spread: f32,
+    /// Shift of the shadow relative to the element, in pixels.
     pub offset: Point,
+    /// Shadow color, used when `brush` is `None`.
     pub color: Color,
+    /// Paint for the shadow, used instead of `color` when set.
     pub brush: Option<Brush>,
+    /// Opacity from 0.0 to 1.0. A value of 0.0 or less draws no shadow.
     pub alpha: f32,
+    /// How the shadow combines with what is already drawn.
     pub blend_mode: BlendMode,
     /// See [`Shadow::cutout`]: knock the element's own shape out of the
     /// silhouette so the shadow exists only outside it.

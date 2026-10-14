@@ -19,6 +19,7 @@ pub mod layout;
 pub mod lazy_list;
 pub mod linked_text;
 pub mod loupe;
+/// Layout node types that the layout widgets emit.
 pub mod nodes;
 pub mod padding_values;
 pub mod pager;
