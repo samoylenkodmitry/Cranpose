@@ -2277,6 +2277,9 @@ fn card_modifiers() -> (Modifier, Modifier) {
 `outer_space` leaves space outside the background. `inner_space` includes the space in the background.
 
 Use `width_in` and `height_in` for size limits. Use `align` for a child in a `Box`.
+Siblings that overlap draw in composition order, the last on top. `z_index`
+changes that order: the sibling with the larger value draws on top and takes
+the tap, as Compose's `Modifier.zIndex` does.
 See the [modifier reference](MODIFIERS.md).
 
 ### Show a long collection
