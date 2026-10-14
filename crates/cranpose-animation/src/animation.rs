@@ -546,16 +546,21 @@ impl<T: Lerp + Clone + PartialEq + 'static> TransitionAnimationState<T> {
         self.value_state.as_state()
     }
 
-    fn update_values(&self, initial_value: T, target_value: T, spec: InfiniteRepeatableSpec<T>) {
-        let needs_update = {
-            let current_initial = self.initial_value.borrow();
-            let current_target = self.target_value.borrow();
-            *current_initial != initial_value
-                || *current_target != target_value
-                || *self.spec.borrow() != spec
-        };
+    /// Whether `initial_value`, `target_value` or `spec` differ from what the
+    /// animation runs with.
+    fn differs(
+        &self,
+        initial_value: &T,
+        target_value: &T,
+        spec: &InfiniteRepeatableSpec<T>,
+    ) -> bool {
+        *self.initial_value.borrow() != *initial_value
+            || *self.target_value.borrow() != *target_value
+            || *self.spec.borrow() != *spec
+    }
 
-        if needs_update {
+    fn update_values(&self, initial_value: T, target_value: T, spec: InfiniteRepeatableSpec<T>) {
+        if self.differs(&initial_value, &target_value, &spec) {
             *self.initial_value.borrow_mut() = initial_value.clone();
             *self.target_value.borrow_mut() = target_value;
             *self.spec.borrow_mut() = spec;
@@ -757,15 +762,18 @@ impl InfiniteTransition {
         })
         .with(Rc::clone);
 
-        let animation_state_for_effect = Rc::clone(&animation_state);
-        let spec_for_effect = animation_spec;
-        SideEffect(move || {
-            animation_state_for_effect.update_values(
-                initial_value.clone(),
-                target_value.clone(),
-                spec_for_effect,
-            );
-        });
+        // Most passes ask for the values the animation already runs with,
+        // and register no effect to apply them.
+        if animation_state.differs(&initial_value, &target_value, &animation_spec) {
+            let animation_state_for_effect = Rc::clone(&animation_state);
+            SideEffect(move || {
+                animation_state_for_effect.update_values(
+                    initial_value,
+                    target_value,
+                    animation_spec,
+                );
+            });
+        }
 
         let animation_any: Rc<dyn InfiniteTransitionAnimation> = animation_state.clone();
         let transition_inner = Rc::clone(&self.inner);

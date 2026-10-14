@@ -54,17 +54,13 @@ impl FrameClock {
         kind: FrameCallbackKind,
         callback: impl FnOnce(u64) + 'static,
     ) -> FrameCallbackRegistration {
-        let mut callback_opt = Some(callback);
-        let runtime = self.runtime.clone();
-        let register = move |callback| match kind {
-            FrameCallbackKind::Transient => runtime.register_frame_callback(callback),
-            FrameCallbackKind::Perpetual => runtime.register_perpetual_frame_callback(callback),
-        };
-        match register(Box::new(move |time| {
-            if let Some(callback) = callback_opt.take() {
-                callback(time);
+        let id = match kind {
+            FrameCallbackKind::Transient => self.runtime.register_frame_callback(callback),
+            FrameCallbackKind::Perpetual => {
+                self.runtime.register_perpetual_frame_callback(callback)
             }
-        })) {
+        };
+        match id {
             Some(id) => FrameCallbackRegistration::new(self.runtime.clone(), id),
             None => FrameCallbackRegistration::inactive(self.runtime.clone()),
         }

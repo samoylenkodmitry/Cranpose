@@ -151,6 +151,7 @@ pub(crate) struct RuntimeThreadState {
     pub(crate) deferred_state_releases: RefCell<Vec<DeferredStateRelease>>,
     pub(crate) current_composer: RefCell<Option<Rc<ComposerCore>>>,
     pub(crate) spare_commands: RefCell<Vec<CommandQueue>>,
+    pub(crate) spare_composer_stacks: Cell<Option<crate::composer::ComposerStacks>>,
     pub(crate) bridges: RefCell<FixedHashMap<u64, Rc<dyn Any>>>,
     #[cfg(any(test, debug_assertions))]
     pub(crate) location_keys: RefCell<FixedHashMap<Key, crate::LocationKeyDebugInfo>>,
@@ -182,6 +183,7 @@ impl RuntimeThreadState {
             deferred_state_releases: RefCell::new(Vec::new()),
             current_composer: RefCell::new(None),
             spare_commands: RefCell::new(Vec::new()),
+            spare_composer_stacks: Cell::new(None),
             bridges: RefCell::new(fixed_hash_map()),
             #[cfg(any(test, debug_assertions))]
             location_keys: RefCell::new(fixed_hash_map()),
@@ -214,6 +216,7 @@ impl RuntimeThreadState {
             deferred_state_releases,
             current_composer,
             spare_commands,
+            spare_composer_stacks,
             bridges,
             #[cfg(any(test, debug_assertions))]
             location_keys,
@@ -238,6 +241,7 @@ impl RuntimeThreadState {
         swap_values(deferred_state_releases, &other.deferred_state_releases);
         swap_values(current_composer, &other.current_composer);
         swap_values(spare_commands, &other.spare_commands);
+        spare_composer_stacks.swap(&other.spare_composer_stacks);
         swap_values(bridges, &other.bridges);
         #[cfg(any(test, debug_assertions))]
         swap_values(location_keys, &other.location_keys);

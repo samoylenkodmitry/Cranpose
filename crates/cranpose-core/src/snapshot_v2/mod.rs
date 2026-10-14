@@ -663,9 +663,12 @@ impl Drop for ObserverHandle {
 }
 
 pub(crate) fn notify_apply_observers(modified: &[Rc<dyn StateObject>], snapshot_id: SnapshotId) {
-    let observers: Vec<ApplyObserver> = crate::thread_state::snapshots(|state| {
-        state.apply_observers.borrow().values().cloned().collect()
-    });
+    // Called from a copy, since an observer may register or drop observers;
+    // there are few, so the copy stays inline.
+    let observers: smallvec::SmallVec<[ApplyObserver; 4]> =
+        crate::thread_state::snapshots(|state| {
+            state.apply_observers.borrow().values().cloned().collect()
+        });
     for observer in observers {
         observer(modified, snapshot_id);
     }

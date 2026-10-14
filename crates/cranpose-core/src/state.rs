@@ -1396,10 +1396,11 @@ impl<T: Clone + 'static> MutableStateInner<T> {
     }
 
     fn invalidate_watchers(&self) {
-        let (watchers, removed_count): (Vec<RecomposeScope>, usize) = {
+        // A state has few watchers: their copy stays inline.
+        let (watchers, removed_count): (smallvec::SmallVec<[RecomposeScope; 4]>, usize) = {
             let mut watchers = self.watchers.borrow_mut();
             let before = watchers.len();
-            let mut live = Vec::with_capacity(watchers.len());
+            let mut live = smallvec::SmallVec::new();
             watchers.retain(|_, scope| {
                 if let Some(inner) = scope.upgrade() {
                     live.push(RecomposeScope { inner });

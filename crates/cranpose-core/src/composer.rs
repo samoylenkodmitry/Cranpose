@@ -181,6 +181,44 @@ fn spare_commands() -> CommandQueue {
         .unwrap_or_default()
 }
 
+/// The stacks a composer grows while it composes, kept empty between passes
+/// so the next composer on this thread starts with their storage.
+#[derive(Default)]
+pub(crate) struct ComposerStacks {
+    slot_hosts: Vec<Rc<SlotsHost>>,
+    parent_stack: Vec<ParentFrame>,
+    scope_stack: Vec<RecomposeScope>,
+}
+
+/// The most entries a kept stack has room for; a larger one grew in a spike
+/// such as a deep first composition.
+const SPARE_STACK_CAPACITY: usize = 256;
+
+fn spare_composer_stacks() -> ComposerStacks {
+    crate::thread_state::try_runtimes(|state| state.spare_composer_stacks.take())
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// Keeps a dropped composer's emptied stacks for the next composer.
+fn recycle_composer_stacks(mut stacks: ComposerStacks) {
+    let ComposerStacks {
+        slot_hosts,
+        parent_stack,
+        scope_stack,
+    } = &mut stacks;
+    if slot_hosts.capacity() > SPARE_STACK_CAPACITY
+        || parent_stack.capacity() > SPARE_STACK_CAPACITY
+        || scope_stack.capacity() > SPARE_STACK_CAPACITY
+    {
+        return;
+    }
+    slot_hosts.clear();
+    parent_stack.clear();
+    scope_stack.clear();
+    crate::thread_state::try_runtimes(|state| state.spare_composer_stacks.set(Some(stacks)));
+}
+
 /// Keeps an applied, empty command queue for the next pass on this thread.
 pub(crate) fn recycle_commands(commands: CommandQueue) {
     if commands.capacity() > SPARE_COMMAND_CAPACITY {
@@ -720,6 +758,11 @@ impl Drop for ComposerCore {
         if commands.len() == 0 && commands.capacity() > 0 {
             recycle_commands(commands);
         }
+        recycle_composer_stacks(ComposerStacks {
+            slot_hosts: std::mem::take(self.slot_hosts.get_mut()),
+            parent_stack: std::mem::take(self.parent_stack.get_mut()),
+            scope_stack: std::mem::take(self.scope_stack.get_mut()),
+        });
     }
 }
 
@@ -732,32 +775,35 @@ impl ComposerCore {
         root: Option<NodeId>,
         initial_parent_frame: InitialParentFrame,
     ) -> Self {
-        let parent_stack = if let Some(root_id) = root {
-            vec![ParentFrame {
+        let ComposerStacks {
+            slot_hosts,
+            mut parent_stack,
+            scope_stack,
+        } = spare_composer_stacks();
+        if let Some(root_id) = root {
+            parent_stack.push(ParentFrame {
                 id: root_id,
                 previous: ChildList::new(),
                 new_children: ChildList::new(),
                 new_children_membership: None,
                 attach_mode: ParentAttachMode::DeferredSync,
                 synthetic_root: matches!(initial_parent_frame, InitialParentFrame::SyntheticRoot),
-            }]
-        } else {
-            Vec::new()
-        };
+            });
+        }
 
         let commands = spare_commands();
         Self {
             branch_folds: Rc::clone(&shared_state.branch_folds),
             shared_state,
             slots,
-            slot_hosts: RefCell::new(Vec::new()),
+            slot_hosts: RefCell::new(slot_hosts),
             applier,
             runtime,
             parent_stack: RefCell::new(parent_stack),
             subcompose_stack: RefCell::new(Vec::new()),
             root: Cell::new(root),
             commands: RefCell::new(commands),
-            scope_stack: RefCell::new(Vec::new()),
+            scope_stack: RefCell::new(scope_stack),
             subcomposition_owner_scope: RefCell::new(None),
             local_stack: RefCell::new(None),
             side_effects: RefCell::new(Vec::new()),
