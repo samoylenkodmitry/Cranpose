@@ -1,6 +1,8 @@
 use cranpose::prelude::*;
 use cranpose_coroflow::rememberHandle;
-use cranpose_navigation::{NavController, NavHost, NavOptions, rememberNavController};
+use cranpose_navigation::{
+    BindBrowserHistory, NavController, NavHost, NavOptions, rememberNavController,
+};
 use cranpose_ui::widgets::{PaddingValues, Scaffold};
 
 use super::{
@@ -33,6 +35,26 @@ const TABS: [(Screen, &str); 2] = [
     (Screen::Diagnostics, "Diagnostics"),
 ];
 
+/// The saved form of each screen, which the browser's address bar shows.
+fn routes() -> cranpose::Saver<Screen> {
+    cranpose::Saver::new(
+        |screen: &Screen| match screen {
+            Screen::Notes => "notes".to_owned(),
+            Screen::Note(NoteId(id)) => format!("note/{id}"),
+            Screen::Diagnostics => "diagnostics".to_owned(),
+        },
+        |saved| match saved {
+            "notes" => Some(Screen::Notes),
+            "diagnostics" => Some(Screen::Diagnostics),
+            _ => saved
+                .strip_prefix("note/")?
+                .parse()
+                .ok()
+                .map(|id| Screen::Note(NoteId(id))),
+        },
+    )
+}
+
 /// The window this demo opens.
 pub fn create_app() -> AppLauncher {
     AppLauncher::new().with_title(TITLE).with_size(760, 720)
@@ -45,6 +67,7 @@ pub fn CoroflowDemoApp() {
     let container =
         rememberHandle(|| AppContainer::new(AppDispatchers::standard(), AppConfig::interactive()));
     let nav = rememberNavController(Screen::Notes);
+    BindBrowserHistory(nav, routes());
 
     Scaffold(
         Modifier::empty()

@@ -10,6 +10,7 @@ pub mod app_update;
 pub mod async_io;
 pub mod audio;
 pub mod background;
+pub mod browser_history;
 pub mod bundled_assets;
 pub mod camera;
 mod composition_locals;
@@ -83,6 +84,10 @@ pub use background::{
     BackgroundActivity, BackgroundActivityRef, BackgroundWork, BackgroundWorkLease,
     acquire_background_work, background_active, background_activity,
     clear_platform_background_activity, set_platform_background_activity,
+};
+pub use browser_history::{
+    BrowserHistory, BrowserHistoryObserver, BrowserHistoryRef, browser_history,
+    clear_platform_browser_history, set_platform_browser_history,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use bundled_assets::{

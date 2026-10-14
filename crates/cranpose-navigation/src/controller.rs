@@ -206,6 +206,14 @@ impl<R: Clone + PartialEq + 'static> NavController<R> {
         )
     }
 
+    /// Pops the entries above the first `depth`.
+    pub(crate) fn pop_to_depth(&self, depth: usize) {
+        forget(self.stack.update(|stack| {
+            let keep = depth.min(stack.entries.len());
+            stack.entries.split_off(keep)
+        }));
+    }
+
     /// Pops the top entry when there is one beneath it, and returns whether it
     /// did — Android's `navigateUp()`.
     pub fn navigate_up(&self) -> bool {
