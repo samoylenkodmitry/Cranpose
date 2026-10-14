@@ -1249,10 +1249,12 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "web-time",
+ "windows",
  "windows-sys 0.61.2",
  "winit",
  "wry",
  "x11rb",
+ "zbus",
  "zune-core",
  "zune-jpeg",
 ]
