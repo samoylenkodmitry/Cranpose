@@ -1,0 +1,23 @@
+[package]
+name = "cranpose-platform-esp-idf"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/samoylenkodmitry/cranpose"
+readme = "README.md"
+description = "Runs Cranpose applications on ESP32-S3 displays through ESP-IDF"
+publish = false
+# Built, linted and formatted with the ESP-IDF demo, the workspace with the
+# ESP-IDF cargo configuration.
+workspace = "../../../apps/esp32-demo"
+
+[dependencies]
+cranpose = { path = "../../cranpose", features = ["framebuffer"] }
+esp-idf-svc = "0.53"
+log = "0.4"
+thiserror = "2.0.21"
+
+# The driver of QEMU's virtual RGB panel, which `Panel::qemu` opens.
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/esp_lcd_qemu_rgb", version = "1.0.2" }
+bindings_header = "src/bindings.h"

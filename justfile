@@ -50,6 +50,7 @@ toolchains:
 fmt:
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all --manifest-path apps/isolated-demo/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path apps/esp32-demo/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/perf-data/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/egui-app/Cargo.toml
@@ -64,6 +65,7 @@ fmt:
 fmt-check:
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all --check
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all --check --manifest-path apps/isolated-demo/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path apps/esp32-demo/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/perf-data/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/egui-app/Cargo.toml
@@ -111,6 +113,40 @@ test-watchos:
 # Native simulator and arm64 device builds, with a simulator launch on macOS.
 watchos:
     python3 crates/cranpose/watchos/check.py
+
+# Lint the framebuffer host for a CPU without 64-bit atomics, as the ESP32-S3
+# is, with the pinned stable toolchain. The ESP32 build itself needs the esp
+# toolchain and ESP-IDF, so it runs nightly; this catches on every push what it
+# would not compile.
+clippy-no-atomic64:
+    scripts/ci/rustup_locked.sh target add armv5te-unknown-linux-gnueabi
+    scripts/ci/with_host_lock.sh --shared \
+      cargo clippy --target armv5te-unknown-linux-gnueabi -p cranpose --no-default-features --features framebuffer,embedded-default-font -- -D warnings
+
+esp32_toolchain := "esp-1.98.1"
+esp32_demo := "apps/esp32-demo"
+esp32_elf := esp32_demo + "/target/xtensa-esp32s3-espidf/release/esp32-demo"
+
+# Installs the ESP32-S3 Rust toolchain, espflash, ldproxy and Espressif's QEMU.
+esp32-setup:
+    scripts/esp32/setup.sh
+
+# Builds the ESP32-S3 demo firmware. The first build downloads ESP-IDF.
+esp32-build: _disk-guard
+    . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && cargo build --release
+
+# Lints the ESP-IDF platform crate and the demo for the ESP32-S3.
+esp32-clippy: _disk-guard
+    . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && cargo clippy --workspace --release -- -D warnings
+
+# Boots the demo in QEMU until it presents its first frame and saves the
+# virtual panel to target/esp32/qemu.png.
+esp32-qemu-check: esp32-build
+    python3 scripts/esp32/qemu_run.py --elf {{esp32_elf}} --partitions {{esp32_demo}}/partitions.csv --until "first frame after" --timeout 120 --screenshot target/esp32/qemu.png
+
+# Shows the demo on QEMU's virtual panel in a window.
+esp32-qemu: esp32-build
+    python3 scripts/esp32/qemu_run.py --elf {{esp32_elf}} --partitions {{esp32_demo}}/partitions.csv --window
 
 # Lint the desktop-only backends that ship off by default: the macOS camera
 # capture path, the cpal audio output device, the in-process media backend
