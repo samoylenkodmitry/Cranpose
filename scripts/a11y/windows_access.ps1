@@ -22,7 +22,9 @@ if ($Operation -eq 'tree') {
         $role = $_.Current.ControlType.ProgrammaticName
         if ($role -eq 'ControlType.ProgressBar') { $role = 'progress' }
         if ($role -eq 'ControlType.Slider') { $role = 'slider' }
-        @{ name = $_.Current.Name; role = $role; value = $nodeValue; enabled = $_.Current.IsEnabled }
+        $box = $_.Current.BoundingRectangle
+        @{ name = $_.Current.Name; role = $role; value = $nodeValue; enabled = $_.Current.IsEnabled
+           bounds = @($box.X, $box.Y, $box.Width, $box.Height); offscreen = $_.Current.IsOffscreen }
     })
     ConvertTo-Json -InputObject $result -Depth 5 -Compress
     exit 0

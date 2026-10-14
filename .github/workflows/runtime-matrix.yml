@@ -130,6 +130,9 @@ jobs:
           scripts/ci/provision_toolchain.sh
           scripts/ci/rustup_locked.sh target add x86_64-linux-android
           command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
+          if [[ ! -f "$ANDROID_NDK_HOME/source.properties" ]]; then
+            sdkmanager --install "ndk;$(basename "$ANDROID_NDK_HOME")" < <(yes)
+          fi
       - name: Build the app and its instrumentation for x86_64
         env:
           ORG_GRADLE_PROJECT_cranposeReleaseAbis: x86_64
@@ -232,6 +235,12 @@ jobs:
         with:
           name: runtime-ios-app
           path: ${{ runner.temp }}
+      # The XCTest host needs Xcode 27's Swift; the image's default is older.
+      - name: Select the newest Xcode
+        run: |
+          ls -d /Applications/Xcode_*.app
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          xcodebuild -version
       - name: Accessibility robot
         run: |
           tar -C "$RUNNER_TEMP" -xf "$RUNNER_TEMP/ios-app.tar"
