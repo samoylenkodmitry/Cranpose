@@ -28,7 +28,7 @@ next header pushes it out. The header is placed last, so it draws over the
 items under it and takes their touches. Like Compose's, it covers the before
 content padding. A list whose items all fit leaves its headers in place.
 
-`LazyVerticalGrid` is a `LazyColumn` whose measure pass runs over lines
+`LazyVerticalGrid` and `LazyHorizontalGrid` are a `LazyColumn` and a `LazyRow` whose measure pass runs over lines
 instead of items. Each line composes and measures its cells as list items,
 with their own keys and reuse classes, so a cell keeps its state when an
 insertion moves it to another line. Cells take whole device pixels, the

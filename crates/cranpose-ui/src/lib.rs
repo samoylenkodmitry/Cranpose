@@ -282,8 +282,9 @@ pub use unhandled_keys::{UnhandledKeyEvents, dispatch_unhandled_key_event};
 pub use widgets::{
     clickable_text::ClickableText,
     lazy_list::{
-        GridCells, LazyColumn, LazyColumnSpec, LazyGridState, LazyRow, LazyRowSpec,
-        LazyVerticalGrid, LazyVerticalGridSpec, rememberLazyGridState,
+        GridCells, LazyColumn, LazyColumnSpec, LazyGridState, LazyHorizontalGrid,
+        LazyHorizontalGridSpec, LazyRow, LazyRowSpec, LazyVerticalGrid, LazyVerticalGridSpec,
+        rememberLazyGridState,
     },
     linked_text::LinkedText,
     padding_values::PaddingValues,
