@@ -2,7 +2,7 @@
 
 use std::{ptr, ptr::NonNull, slice};
 
-use cranpose::framebuffer::SurfaceError;
+use cranpose::framebuffer::{PixelRect, SurfaceError};
 use esp_idf_svc::sys::{self, EspError, esp, esp_lcd_panel_handle_t};
 
 /// The colour encoding a panel reads.
@@ -59,22 +59,21 @@ impl Panel {
         self.format
     }
 
-    pub(crate) fn draw_rows(
+    pub(crate) fn draw_rect(
         &mut self,
-        top: usize,
-        rows: usize,
+        area: PixelRect,
         pixels: &TransferBuffer,
     ) -> Result<(), EspError> {
-        if rows * self.width as usize > pixels.len {
+        if area.width as usize * area.height as usize > pixels.len {
             return Err(EspError::from_infallible::<{ sys::ESP_ERR_INVALID_SIZE }>());
         }
         esp!(unsafe {
             sys::esp_lcd_panel_draw_bitmap(
                 self.handle,
-                0,
-                top as i32,
-                self.width as i32,
-                (top + rows) as i32,
+                area.x as i32,
+                area.y as i32,
+                (area.x + area.width) as i32,
+                (area.y + area.height) as i32,
                 pixels.pixels.as_ptr().cast(),
             )
         })

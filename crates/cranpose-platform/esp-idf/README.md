@@ -2,10 +2,11 @@
 
 `cranpose-platform-esp-idf` runs a Cranpose application on an ESP32-S3 display
 under ESP-IDF. [`run`](src/lib.rs) composes the application into a
-`cranpose::framebuffer::Framebuffer`, draws each new picture on the CPU with
-the pixels renderer, converts it to RGB565 and sends the rows that changed to a
-`Panel`. Between frames the task sleeps until the next frame, the next timed
-event or work from another thread.
+`cranpose::framebuffer::Framebuffer`. For each new picture the pixels renderer
+draws only the areas that change, in strips of a few rows; each strip goes to
+the panel as RGB565 through a buffer of internal DMA memory. No whole frame is
+kept in memory. Between frames the task sleeps until the next frame, the next
+timed event or work from another thread.
 
 [Cranpose on an emulated ESP32-S3](https://samoylenkodmitry.github.io/cranpose-esp32/)
 runs firmware built on this crate in the browser, on Espressif's QEMU compiled
@@ -44,9 +45,10 @@ just esp32-qemu-check   # boots the demo in QEMU and saves the panel picture
 just esp32-qemu         # shows the demo on QEMU's virtual panel in a window
 ```
 
-The demo firmware takes about 3.8 MB of flash: 2.2 MB of code and 1.6 MB of
-read-only data, 1.3 MB of which is the fallback font. It fits a module with
-8 MB of flash.
+The demo firmware takes about 2.6 MB of flash: 2.2 MB of code and 0.35 MB of
+read-only data. It turns off `cranpose`'s default features and passes an 18 KB
+Latin subset of Noto Sans in `DisplayConfig::fonts`; the embedded default font
+would add 1.3 MB.
 
 The toolchain is `esp-1.98.1`. The `std` of esp 1.99.0.0 does not build for
 ESP-IDF: it calls `libc::fchmodat`, which its `libc` does not define there.
@@ -62,8 +64,9 @@ the esp toolchain links for it and then strips.
   run on the task that calls `run`.
 - `CONFIG_FREERTOS_HZ=1000`: timed waits round to the tick, so at 100 Hz a
   16.7 ms frame interval waits 20 ms.
-- PSRAM (`CONFIG_SPIRAM`) with `CONFIG_SPIRAM_USE_MALLOC`: a 320 by 240
-  display takes a 300 KB RGBA framebuffer and two 150 KB RGB565 frames.
+- Drawing takes a 30 KB RGBA strip and a 15 KB RGB565 strip in internal DMA
+  memory, or one display row of each when the display is wider than 320
+  pixels. The composition's own heap decides whether the app needs PSRAM.
 
 ## QEMU
 

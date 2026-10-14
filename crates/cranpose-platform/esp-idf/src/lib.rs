@@ -1,9 +1,10 @@
 //! Runs a Cranpose application on an ESP32-S3 display under ESP-IDF.
 //!
-//! [`run`] composes the application into a [`cranpose::framebuffer::Framebuffer`],
-//! draws each new picture on the CPU, and sends the rows that changed to a
-//! [`Panel`]. Between frames the task sleeps until the composition's next
-//! frame or timed event, or until another thread posts work to it.
+//! [`run`] composes the application into a [`cranpose::framebuffer::Framebuffer`].
+//! For each new picture it draws on the CPU only the areas the picture changes,
+//! in strips of a few rows, converts each strip to the panel's RGB565 and sends
+//! it to a [`Panel`]. Between frames the task sleeps until the composition's
+//! next frame or timed event, or until another thread posts work to it.
 
 #![deny(unsafe_code)]
 
@@ -43,6 +44,10 @@ pub struct DisplayConfig {
     pub theme: SystemTheme,
     /// The shortest time from one frame to the next.
     pub frame_interval: Duration,
+    /// The fonts text draws in. With none, text draws in the embedded default
+    /// font, which the `embedded-default-font` feature of `cranpose` adds:
+    /// 1.3 MB of flash.
+    pub fonts: &'static [&'static [u8]],
 }
 
 impl Default for DisplayConfig {
@@ -51,6 +56,7 @@ impl Default for DisplayConfig {
             density: 1.0,
             theme: SystemTheme::Light,
             frame_interval: Duration::from_micros(16_667),
+            fonts: &[],
         }
     }
 }
@@ -111,6 +117,7 @@ pub fn run(
         panel.height(),
         config.density,
         config.theme,
+        config.fonts,
         content,
     )?;
     let mut presenter = Presenter::new(&panel)?;
@@ -125,23 +132,19 @@ pub fn run(
         let elapsed = frame_start.duration_since(start).as_nanos();
         if framebuffer.tick(u64::try_from(elapsed).unwrap_or(u64::MAX)) {
             let updated = Instant::now();
-            let pixels = framebuffer.pixels();
-            let drawn = Instant::now();
-            presenter.present(&mut panel, pixels)?;
+            presenter.present(&mut framebuffer, &mut panel)?;
             let presented = Instant::now();
             let phases = FramePhases {
                 update: updated.duration_since(frame_start),
-                draw: drawn.duration_since(updated),
-                present: presented.duration_since(drawn),
+                present: presented.duration_since(updated),
             };
             match stats.as_mut() {
                 Some(stats) => stats.record(phases, presented),
                 None => {
                     log::info!(
-                        "first frame after {} ms: update {} ms, draw {} ms, present {} ms",
+                        "first frame after {} ms: update {} ms, draw and send {} ms",
                         presented.duration_since(start).as_millis(),
                         phases.update.as_millis(),
-                        phases.draw.as_millis(),
                         phases.present.as_millis(),
                     );
                     stats = Some(FrameStats::new(presented));
@@ -163,7 +166,6 @@ const STATS_WINDOW: Duration = Duration::from_secs(5);
 #[derive(Clone, Copy)]
 struct FramePhases {
     update: Duration,
-    draw: Duration,
     present: Duration,
 }
 
@@ -171,7 +173,6 @@ struct FrameStats {
     window_start: Instant,
     frames: u32,
     update: Duration,
-    draw: Duration,
     present: Duration,
     slowest: Duration,
 }
@@ -182,7 +183,6 @@ impl FrameStats {
             window_start,
             frames: 0,
             update: Duration::ZERO,
-            draw: Duration::ZERO,
             present: Duration::ZERO,
             slowest: Duration::ZERO,
         }
@@ -191,22 +191,18 @@ impl FrameStats {
     fn record(&mut self, phases: FramePhases, presented: Instant) {
         self.frames += 1;
         self.update += phases.update;
-        self.draw += phases.draw;
         self.present += phases.present;
-        self.slowest = self
-            .slowest
-            .max(phases.update + phases.draw + phases.present);
+        self.slowest = self.slowest.max(phases.update + phases.present);
         let window = presented.duration_since(self.window_start);
         if window < STATS_WINDOW {
             return;
         }
         let average = |total: Duration| total.as_secs_f32() * 1000.0 / self.frames as f32;
         log::info!(
-            "{} frames in {:.1} s: update {:.1} ms, draw {:.1} ms, present {:.1} ms, slowest {:.1} ms",
+            "{} frames in {:.1} s: update {:.1} ms, draw and send {:.1} ms, slowest {:.1} ms",
             self.frames,
             window.as_secs_f32(),
             average(self.update),
-            average(self.draw),
             average(self.present),
             self.slowest.as_secs_f32() * 1000.0,
         );
