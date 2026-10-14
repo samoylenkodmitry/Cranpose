@@ -97,8 +97,28 @@ impl Drop for Global {
     }
 }
 
+// Cranpose fork: the compiler proves an auto trait through every field, and
+// for `Global` that proof runs through the nested resource registries of
+// `Hub`, deeper than the default recursion limit, in every crate that needs a
+// wgpu object to be `Send` or `Sync` (nightly reports it as a future error).
+// These impls end the proof here. `_test_send_sync` checks each field, so
+// they hold exactly where the derived impls would.
+#[cfg(send_sync)]
+// SAFETY: every field is `Send`, which `_test_send_sync` checks.
+unsafe impl Send for Global {}
+#[cfg(send_sync)]
+// SAFETY: every field is `Sync`, which `_test_send_sync` checks.
+unsafe impl Sync for Global {}
+
 #[cfg(send_sync)]
 fn _test_send_sync(global: &Global) {
-    fn test_internal<T: Send + Sync>(_: T) {}
-    test_internal(global)
+    fn test_internal<T: Send + Sync>(_: &T) {}
+    let Global {
+        surfaces,
+        hub,
+        instance,
+    } = global;
+    test_internal(surfaces);
+    test_internal(hub);
+    test_internal(instance);
 }

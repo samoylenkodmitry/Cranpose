@@ -1052,7 +1052,7 @@ ci: fmt-check typos versions twin-matrix-check check-forks test clippy clippy-re
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
 # Every gate, including the platform builds and the robot suite.
-ci-full: ci clippy-ios clippy-android web-backends android watchos robot vulkan-sync
+ci-full: ci clippy-ios clippy-android web-backends android watchos robot vulkan-sync test-emscripten
 
 liquid-reference-traces output bundle="io.cranpose.liquid-reference" device="booted":
     python3 apps/liquid-reference/collect-traces.py '{{output}}' --bundle '{{bundle}}' --device '{{device}}'
