@@ -1,6 +1,6 @@
 //! A month calendar to pick a day in, as Compose's `DatePicker`.
 
-use cranpose_core::{MutableState, rememberMutableStateOf};
+use cranpose_core::{MutableState, mutableStateOf, remember};
 use cranpose_macros::composable;
 use cranpose_ui::{
     Alignment, Modifier, Point, Size, TextStyle, UiString, VerticalAlignment,
@@ -136,10 +136,11 @@ pub fn rememberLiquidDatePickerState(
     today: CalendarDate,
 ) -> LiquidDatePickerState {
     let shown = selected.unwrap_or(today);
-    LiquidDatePickerState {
-        selected: rememberMutableStateOf(move || selected),
-        month: rememberMutableStateOf(move || (shown.year, shown.month)),
-    }
+    remember(move || LiquidDatePickerState {
+        selected: mutableStateOf(selected),
+        month: mutableStateOf((shown.year, shown.month)),
+    })
+    .with(|state| *state)
 }
 
 /// The words a calendar shows, in the app's language when the
