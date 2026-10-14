@@ -282,9 +282,13 @@ pub fn band_pays(geometry: &ArcGeometry, rect: Rect) -> bool {
 /// The fragment program's shape kinds: a filled rect or round rect, a
 /// stroked one, an arc band, a line segment and a slice of a path fill.
 pub const FRAGMENT_KIND_FILL: u32 = 0;
+/// A stroked rect or round rect.
 pub const FRAGMENT_KIND_STROKE: u32 = 1;
+/// An arc band or annular sector.
 pub const FRAGMENT_KIND_ARC: u32 = 2;
+/// A stroked straight segment.
 pub const FRAGMENT_KIND_LINE: u32 = 3;
+/// A slice of a path fill.
 pub const FRAGMENT_KIND_TRAPEZOID: u32 = 4;
 
 const TWO_BITS: u32 = 0b11;
@@ -335,10 +339,12 @@ pub struct ShapeRecord {
 }
 
 impl ShapeRecord {
+    /// The shape kind, one of the `RECORD_KIND_*` constants.
     pub fn kind(&self) -> u32 {
         (self.flags >> KIND_SHIFT) & TWO_BITS
     }
 
+    /// Whether the shape is an outline of width `stroke_width` instead of a fill.
     pub fn is_stroked(&self) -> bool {
         self.flags & STROKED_BIT != 0
     }
@@ -348,6 +354,7 @@ impl ShapeRecord {
         record_fragment_kind(self.flags)
     }
 
+    /// The stroke width, cap and join, or `None` for a fill.
     pub fn stroke(&self) -> Option<Stroke> {
         self.is_stroked().then(|| Stroke {
             width: self.stroke_width,
@@ -356,6 +363,7 @@ impl ShapeRecord {
         })
     }
 
+    /// The blend mode the shape is composited with.
     pub fn blend_mode(&self) -> BlendMode {
         BlendMode::ALL[((self.flags >> BLEND_SHIFT) & BLEND_MASK) as usize]
     }
@@ -372,6 +380,8 @@ impl ShapeRecord {
         self.flags & ARC_DEGENERATE_BIT != 0
     }
 
+    /// Whether the brush is a gradient from the recording's brush table, instead of the solid
+    /// `color`.
     pub fn is_gradient(&self) -> bool {
         self.brush != 0
     }
@@ -618,6 +628,7 @@ pub struct BrushRecord {
     pub tile_mode: u32,
     /// The brush's stops in [`CommandRecording::stops`].
     pub stop_start: u32,
+    /// Number of stops the brush has.
     pub stop_count: u32,
     /// Linear: start x, start y, end x, end y. Radial: centre x, centre y,
     /// radius, 0. Sweep: centre x, centre y, 0, 0.
@@ -626,7 +637,9 @@ pub struct BrushRecord {
     /// [`RecordTables::explicit_stops`], when it gave any; `explicit_len`
     /// is `u32::MAX` when it gave none.
     pub explicit_start: u32,
+    /// Number of explicit stop positions, or `u32::MAX` when the app gave none.
     pub explicit_len: u32,
+    /// Keeps the record at a whole number of 16-byte rows.
     pub reserved: [u32; 2],
 }
 
@@ -653,6 +666,7 @@ impl BrushShading {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct GradientStopRecord {
+    /// The stop's color as red, green, blue and alpha, each from 0.0 to 1.0.
     pub color: [f32; 4],
     /// The position in `x`; the rest keeps the 16-byte row.
     pub position: [f32; 4],
@@ -675,10 +689,15 @@ pub enum RecordLane {
 /// primitives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RecordSegment {
+    /// The lane whose entries the segment covers.
     pub lane: RecordLane,
+    /// Index of the segment's first entry within its lane.
     pub start: u32,
+    /// Number of entries in the segment.
     pub count: u32,
+    /// The blend mode every entry of the segment draws with.
     pub blend: BlendMode,
+    /// Whether the segment's shapes paint with a gradient brush.
     pub gradient: bool,
     /// Whether the segment's records are gradients their vertices shade
     /// (see [`ShapeRecord::is_vertex_gradient`]), which are not `gradient`:
@@ -708,6 +727,7 @@ pub struct RecordSegment {
 }
 
 impl RecordSegment {
+    /// The entries of the segment, as a range of indices within its lane.
     pub fn range(&self) -> Range<usize> {
         self.start as usize..(self.start + self.count) as usize
     }
@@ -728,10 +748,15 @@ impl RecordSegment {
 /// renderer behind an `Arc` so a packet carries it without a copy.
 #[derive(Clone, Debug, Default)]
 pub struct RecordTables {
+    /// The shape records, stored in columns.
     pub shapes: ShapeRecords,
+    /// Gradient brushes, which shape records refer to by index.
     pub brushes: Vec<BrushRecord>,
+    /// Gradient stops of all brushes, which brush records refer to by index.
     pub stops: Vec<GradientStopRecord>,
+    /// Stop positions the app gave explicitly, which brush records refer to by index.
     pub explicit_stops: Vec<f32>,
+    /// Runs of consecutive entries that one draw can take, in recorded order.
     pub segments: Vec<RecordSegment>,
     fingerprint: OnceLock<u64>,
 }
@@ -974,6 +999,7 @@ impl ShapeRecorder {
         tables
     }
 
+    /// Whether no shape has been recorded.
     pub fn is_empty(&self) -> bool {
         self.tables.shapes.is_empty()
     }
@@ -1218,6 +1244,8 @@ impl ShapeRecorder {
         reach.unwrap_or(Rect::EMPTY)
     }
 
+    /// Records a rect with `brush`, as an outline when `stroke` is `Some`. Returns the rect the
+    /// shape covers, stroke included.
     #[inline]
     pub fn push_rect(
         &mut self,
@@ -1247,6 +1275,8 @@ impl ShapeRecorder {
         )
     }
 
+    /// Records a rounded rect with `brush`, as an outline when `stroke` is `Some`. Returns the rect
+    /// the shape covers, stroke included.
     pub fn push_round_rect(
         &mut self,
         rect: Rect,
@@ -1771,10 +1801,12 @@ impl CommandRecording {
         }
     }
 
+    /// Creates a completed recording from `primitives`, in the given order.
     pub fn from_primitives(primitives: impl IntoIterator<Item = DrawPrimitive>) -> Self {
         CommandRecorder::from_primitives(primitives).finish()
     }
 
+    /// Number of shape records the recording has room for before it allocates.
     pub fn shape_capacity(&self) -> usize {
         self.shapes.tables.shapes.capacity()
     }
@@ -1807,18 +1839,22 @@ impl CommandRecording {
         &self.shapes.tables.shapes
     }
 
+    /// The gradient brush table that shape records index into.
     pub fn brushes(&self) -> &[BrushRecord] {
         &self.shapes.tables.brushes
     }
 
+    /// The gradient stop table that brush records index into.
     pub fn stops(&self) -> &[GradientStopRecord] {
         &self.shapes.tables.stops
     }
 
+    /// The primitives that are not shapes, such as images, text and shadows, in recorded order.
     pub fn others(&self) -> &[DrawPrimitive] {
         &self.content.others
     }
 
+    /// The segments in recorded order.
     pub fn segments(&self) -> &[RecordSegment] {
         &self.shapes.tables.segments
     }
@@ -1845,10 +1881,12 @@ impl CommandRecording {
         }
     }
 
+    /// What the recording contains, answered while it was recorded.
     pub fn summary(&self) -> RecordingSummary {
         self.content.summary
     }
 
+    /// Number of `draw_content` markers recorded.
     pub fn content_markers(&self) -> u32 {
         self.content.content_markers
     }
@@ -1860,6 +1898,7 @@ impl CommandRecording {
             + self.content.content_markers as usize
     }
 
+    /// Whether the recording has no entries and no content markers.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -1887,6 +1926,7 @@ impl CommandRecording {
             .any(|segment| segment.lane != RecordLane::Content && segment.count > 0)
     }
 
+    /// Iterates over the segments in the index range `segments`.
     pub fn segments_in(&self, segments: &Range<u32>) -> std::slice::Iter<'_, RecordSegment> {
         self.shapes.tables.segments[segments.start as usize..segments.end as usize].iter()
     }
@@ -1965,6 +2005,8 @@ impl CommandRecording {
             .flat_map(|segment| self.segment_primitives(segment, true))
     }
 
+    /// Consumes the recording and returns every primitive in recorded order, content markers
+    /// included.
     pub fn into_primitives_with_markers(self) -> Vec<DrawPrimitive> {
         self.primitives_with_markers().collect()
     }
@@ -2341,13 +2383,24 @@ impl CommandRecorder {
 /// The arc as the app drew it, the arguments of
 /// [`CommandRecorder::push_arc`].
 pub struct ArcRecordArgs<'a> {
+    /// Paint for the arc.
     pub brush: &'a Brush,
+    /// Center of the circle the arc lies on, in scope coordinates.
     pub center: Point,
+    /// Radius of the stroked centerline, or the outer radius of a filled sector, in scope
+    /// coordinates.
     pub radius: f32,
+    /// Where the arc starts, in radians. `0` points along +X and angles increase clockwise on
+    /// screen.
     pub start_angle: f32,
+    /// Angle swept from `start_angle`, in radians. A negative value sweeps counter-clockwise.
     pub sweep_angle: f32,
+    /// `Some` strokes the arc; `None` fills the sector between `inner_radius` and `radius`.
     pub stroke: Option<Stroke>,
+    /// Inner radius of a filled annular sector, in scope coordinates. Ignored when `stroke` is
+    /// `Some`.
     pub inner_radius: f32,
+    /// How the arc combines with what is already drawn.
     pub blend_mode: BlendMode,
 }
 

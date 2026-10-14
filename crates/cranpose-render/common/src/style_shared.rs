@@ -40,6 +40,7 @@ fn apply_color_filter_to_color(color: Color, filter: Option<ColorFilter>) -> Col
     }
 }
 
+/// Combines two optional color filters into one. With only one present, that filter is returned.
 pub fn compose_color_filters(
     base: Option<ColorFilter>,
     overlay: Option<ColorFilter>,
@@ -51,6 +52,8 @@ pub fn compose_color_filters(
     }
 }
 
+/// Resolves `brush` against `layer`: its colors take the layer's alpha and color filter, and a
+/// gradient's geometry takes the layer's scale.
 pub fn apply_layer_to_brush(brush: Brush, layer: &GraphicsLayer) -> Brush {
     if layer.alpha == 1.0
         && layer.color_filter.is_none()
@@ -174,12 +177,14 @@ fn scale_brush_geometry(brush: Brush, layer: &GraphicsLayer) -> Brush {
 /// gradient still travels as a cloned [`Brush`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum ResolvedBrush {
+    /// A solid color, already layer-resolved.
     Solid(Color),
     /// A non-solid brush (gradients), already layer-resolved.
     Other(Brush),
 }
 
 impl ResolvedBrush {
+    /// Wraps `brush` as `Solid` when it is a solid color and as `Other` otherwise.
     pub fn from_brush(brush: Brush) -> Self {
         match brush {
             Brush::Solid(color) => Self::Solid(color),
@@ -218,6 +223,7 @@ pub fn resolve_layer_brush(brush: &Brush, layer: &GraphicsLayer) -> ResolvedBrus
     }
 }
 
+/// Multiplies every corner radius by `scale`.
 pub fn scale_corner_radii(radii: CornerRadii, scale: f32) -> CornerRadii {
     CornerRadii {
         top_left: radii.top_left * scale,
@@ -227,12 +233,17 @@ pub fn scale_corner_radii(radii: CornerRadii, scale: f32) -> CornerRadii {
     }
 }
 
+/// Which half of a draw command is drawn, relative to the content of the node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DrawPlacement {
+    /// Drawn behind the node's content.
     Behind,
+    /// Drawn over the node's content.
     Overlay,
 }
 
+/// Records `command` at `size` and returns the primitives that `placement` draws, or an empty
+/// list when the command has no part for that placement.
 pub fn primitives_for_placement(
     command: &DrawCommand,
     placement: DrawPlacement,

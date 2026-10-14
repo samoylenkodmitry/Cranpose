@@ -7,11 +7,14 @@ use crate::layout::{LayoutBox, LayoutTree};
 /// One focus target, with the bounds layout gave it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FocusEntry {
+    /// Id of the layout node that takes focus.
     pub node_id: NodeId,
+    /// Bounds of the node in root coordinates, in logical pixels.
     pub rect: Rect,
 }
 
 impl FocusEntry {
+    /// Returns the center point of [`Self::rect`] in root coordinates, in logical pixels.
     pub fn center(&self) -> (f32, f32) {
         (
             self.rect.x + self.rect.width * 0.5,

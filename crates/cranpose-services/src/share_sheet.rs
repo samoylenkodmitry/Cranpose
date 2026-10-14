@@ -13,10 +13,13 @@ use std::rc::Rc;
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOfWithPolicy};
 use cranpose_macros::composable;
 
+/// Why the share sheet could not be shown.
 #[derive(thiserror::Error, Debug)]
 pub enum ShareError {
+    /// The platform has no share sheet.
     #[error("sharing is not supported on this platform")]
     Unsupported,
+    /// The platform failed to present the share sheet. The text describes the cause.
     #[error("failed to present the share sheet: {0}")]
     Failed(String),
 }
@@ -68,6 +71,7 @@ pub trait ShareSheet {
     fn is_supported(&self) -> bool;
 }
 
+/// Shared handle to a [`ShareSheet`].
 pub type ShareSheetRef = Rc<dyn ShareSheet>;
 
 /// Installs a platform share sheet, replacing any previously installed one.
@@ -100,10 +104,14 @@ impl ShareSheet for PlatformShareSheet {
     }
 }
 
+/// Returns the share sheet that forwards to the installed platform share sheet. Without one,
+/// every share reports [`ShareError::Unsupported`].
 pub fn default_share_sheet() -> ShareSheetRef {
     Rc::new(PlatformShareSheet)
 }
 
+/// The share sheet a composable reads. It is the platform share sheet unless a composition
+/// local provider above it supplies another one.
 pub fn local_share_sheet() -> CompositionLocal<ShareSheetRef> {
     crate::composition_locals::cached_local(
         |locals| &locals.share_sheet,
@@ -111,6 +119,7 @@ pub fn local_share_sheet() -> CompositionLocal<ShareSheetRef> {
     )
 }
 
+/// Provides the platform share sheet to `content` through [`local_share_sheet`].
 #[composable]
 pub fn ProvideShareSheet(content: impl FnOnce()) {
     let share_sheet = cranpose_core::remember(default_share_sheet).with(|state| state.clone());

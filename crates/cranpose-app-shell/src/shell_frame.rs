@@ -302,6 +302,8 @@ where
     R: Renderer,
     R::Error: Debug,
 {
+    /// Turns semantics tracking on or off. Turning it on forces a layout pass and marks every
+    /// surface dirty. Turning it off drops the cached semantics trees.
     pub fn set_semantics_enabled(&mut self, enabled: bool) {
         if self.app.semantics_enabled == enabled {
             return;

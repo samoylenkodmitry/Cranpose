@@ -26,11 +26,14 @@ use crate::{
     },
 };
 
+/// Returns the velocity of the last fling that started in the current app context, in dp per
+/// second.
 #[cfg(feature = "test-helpers")]
 pub fn last_fling_velocity() -> f32 {
     crate::render_state::debug_last_fling_velocity()
 }
 
+/// Sets the value that [`last_fling_velocity`] returns to zero.
 #[cfg(feature = "test-helpers")]
 pub fn reset_last_fling_velocity() {
     crate::render_state::debug_reset_last_fling_velocity();

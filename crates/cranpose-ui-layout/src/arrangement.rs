@@ -30,7 +30,12 @@ pub enum LinearArrangement {
     /// Insert a fixed amount of space between children and place the block
     /// they make at `bias` of the space left over: -1 the start, 0 the
     /// middle, 1 the end.
-    SpacedByAligned { spacing: f32, bias: f32 },
+    SpacedByAligned {
+        /// Space between two children, in logical pixels.
+        spacing: f32,
+        /// Where the block sits in the space left over, -1 to 1.
+        bias: f32,
+    },
 }
 
 /// An alignment along one axis, which places a block at a bias of the space

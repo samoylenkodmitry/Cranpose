@@ -17,6 +17,7 @@ use crate::{
 /// A day of the Gregorian calendar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CalendarDate {
+    /// The Gregorian year, for example 2026.
     pub year: i32,
     /// 1 for January through 12 for December.
     pub month: u8,

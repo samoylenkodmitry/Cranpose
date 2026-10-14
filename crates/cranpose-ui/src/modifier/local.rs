@@ -67,6 +67,8 @@ pub struct ModifierLocalKey<T: 'static> {
 }
 
 impl<T: 'static> ModifierLocalKey<T> {
+    /// Creates a key. `factory` makes the value that consumers read when no provider of this key is
+    /// above them.
     pub fn new(factory: impl Fn() -> T + 'static) -> Self {
         Self {
             token: ModifierLocalToken::new(TypeId::of::<T>()),
@@ -467,6 +469,8 @@ impl<'a> ModifierLocalReadScope<'a> {
         }
     }
 
+    /// Returns the value of the nearest provider of `key`, or the key's default value when there is
+    /// none. The consumer runs again when a value it read changes.
     pub fn get<T: 'static>(&mut self, key: &ModifierLocalKey<T>) -> &T {
         let token = key.token();
         if let Some(record) = self.providers.get(&token.id()) {

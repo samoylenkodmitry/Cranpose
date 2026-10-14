@@ -110,6 +110,8 @@ impl NodeDisposalQueue {
 
 /// Owns an applier and completes node disposal when an outstanding borrow ends.
 pub trait ApplierHost {
+    /// Borrows the applier mutably as a trait object. Dropping the guard finishes any node disposal
+    /// queued while it was held.
     fn borrow_dyn(&self) -> ApplierGuard<'_, dyn Applier>;
 
     /// Disposes detached roots, deferring recursive cleanup to the current borrow's guard.
@@ -139,12 +141,14 @@ pub trait ApplierHost {
     fn compact(&self) {}
 }
 
+/// An [`ApplierHost`] that stores one applier of the concrete type `A`.
 pub struct ConcreteApplierHost<A: Applier + 'static> {
     inner: RefCell<A>,
     disposals: NodeDisposalQueue,
 }
 
 impl<A: Applier + 'static> ConcreteApplierHost<A> {
+    /// Creates a host that owns `applier`.
     pub fn new(applier: A) -> Self {
         Self {
             inner: RefCell::new(applier),
@@ -152,10 +156,13 @@ impl<A: Applier + 'static> ConcreteApplierHost<A> {
         }
     }
 
+    /// Borrows the applier mutably with its concrete type. Panics if it is already borrowed.
     pub fn borrow_typed(&self) -> ApplierGuard<'_, A> {
         self.guard(self.inner.borrow_mut())
     }
 
+    /// Borrows the applier mutably with its concrete type. Returns an error if it is already
+    /// borrowed.
     pub fn try_borrow_typed(&self) -> Result<ApplierGuard<'_, A>, BorrowMutError> {
         self.inner.try_borrow_mut().map(|inner| self.guard(inner))
     }

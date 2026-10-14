@@ -158,6 +158,8 @@ impl ComposeTestRule {
         self.composition.root()
     }
 
+    /// Runs `block` inside the rule's app context, as the shell runs event
+    /// handlers and frames.
     pub fn with_app_context<R>(&self, block: impl FnOnce() -> R) -> R {
         self.app_context.enter(block)
     }
@@ -167,16 +169,6 @@ impl ComposeTestRule {
         &mut self.composition
     }
 
-    /// Lay the installed content out on a `size` display and read back every
-    /// semantics node with the geometry it was placed and drawn at.
-    ///
-    /// This is the headless answer to "how big is that control, and where" —
-    /// see [`crate::placed_semantics`] for what the two boxes on a node mean
-    /// and why every walk behind this reads the retained tree.
-    ///
-    /// The runtime handle is installed for the duration and taken back off
-    /// afterwards: a subcomposing widget cannot be measured without one, and
-    /// leaving it on outlives the borrow the applier hands out.
     /// Fails the test with every issue [`crate::audit_accessibility`] finds on
     /// the content laid out at the given size.
     pub fn assert_accessible(&mut self, size: cranpose_ui::Size) -> Result<(), NodeError> {
@@ -187,6 +179,16 @@ impl ComposeTestRule {
         Ok(())
     }
 
+    /// Lay the installed content out on a `size` display and read back every
+    /// semantics node with the geometry it was placed and drawn at.
+    ///
+    /// This is the headless answer to "how big is that control, and where":
+    /// see [`crate::placed_semantics`] for what the two boxes on a node mean
+    /// and why every walk behind this reads the retained tree.
+    ///
+    /// The runtime handle is installed for the duration and taken back off
+    /// afterwards: a subcomposing widget cannot be measured without one, and
+    /// leaving it on outlives the borrow the applier hands out.
     pub fn placed_semantics(
         &mut self,
         size: cranpose_ui::Size,

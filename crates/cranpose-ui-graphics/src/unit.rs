@@ -57,6 +57,7 @@ impl Density {
         font_scale: 1.0,
     };
 
+    /// Creates a density from device pixels per `Dp` and the user's text-size multiplier.
     pub fn new(scale: f32, font_scale: f32) -> Self {
         Self { scale, font_scale }
     }
@@ -82,6 +83,7 @@ macro_rules! scalar_unit {
         pub struct $name(pub f32);
 
         impl $name {
+            /// A length of zero.
             pub const ZERO: Self = Self(0.0);
 
             /// The larger of two lengths in the same unit. Comparing across
@@ -202,6 +204,7 @@ impl Px {
 /// Reads `16.0.dp()` at a call site rather than `Dp(16.0)`, matching
 /// Kotlin's `Float.dp`/`Int.dp` extension properties.
 pub trait DpExt {
+    /// Wraps this number as a [`Dp`] length.
     fn dp(self) -> Dp;
 }
 
@@ -219,6 +222,7 @@ impl DpExt for i32 {
 
 /// Reads `16.0.sp()` at a call site rather than `Sp(16.0)`.
 pub trait SpExt {
+    /// Wraps this number as an [`Sp`] length.
     fn sp(self) -> Sp;
 }
 
@@ -236,6 +240,7 @@ impl SpExt for i32 {
 
 /// Reads `16.0.px()` at a call site rather than `Px(16.0)`.
 pub trait PxExt {
+    /// Wraps this number as a [`Px`] length.
     fn px(self) -> Px;
 }
 

@@ -1,6 +1,8 @@
 pub mod dispatcher;
+/// Recognizers that turn a stream of pointer events into gestures such as taps and drags.
 pub mod gestures;
 pub mod rotary;
+/// The types of pointer input: events, pointers, buttons and keyboard modifiers.
 pub mod types;
 
 pub use rotary::{
@@ -12,6 +14,7 @@ pub use types::{
     PointerPhase, PointerSource,
 };
 
+/// The input types and gesture recognizers that modifier nodes use most.
 pub mod prelude {
     pub use super::{
         gestures::{

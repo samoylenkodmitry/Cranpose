@@ -1,17 +1,22 @@
 //! Color representation and color space utilities
 
+/// An RGBA color in the sRGB space. The four fields are red, green, blue and alpha, each from 0.0
+/// to 1.0. Compose's `Color`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Color(pub f32, pub f32, pub f32, pub f32);
 
 impl Color {
+    /// Creates an opaque color from red, green and blue channels, each from 0.0 to 1.0.
     pub const fn rgb(r: f32, g: f32, b: f32) -> Self {
         Self(r, g, b, 1.0)
     }
 
+    /// Creates a color from red, green, blue and alpha channels, each from 0.0 to 1.0.
     pub const fn rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
         Self(r, g, b, a)
     }
 
+    /// Creates a color from red, green, blue and alpha channels of 0 to 255.
     pub const fn from_rgba_u8(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self(
             r as f32 / 255.0,
@@ -21,26 +26,33 @@ impl Color {
         )
     }
 
+    /// Creates an opaque color from red, green and blue channels of 0 to 255.
     pub const fn from_rgb_u8(r: u8, g: u8, b: u8) -> Self {
         Self::from_rgba_u8(r, g, b, 255)
     }
 
+    /// Red channel, from 0.0 to 1.0.
     pub fn r(&self) -> f32 {
         self.0
     }
 
+    /// Green channel, from 0.0 to 1.0.
     pub fn g(&self) -> f32 {
         self.1
     }
 
+    /// Blue channel, from 0.0 to 1.0.
     pub fn b(&self) -> f32 {
         self.2
     }
 
+    /// Alpha (opacity) channel, from 0.0 (transparent) to 1.0 (opaque).
     pub fn a(&self) -> f32 {
         self.3
     }
 
+    /// Returns this color with its alpha channel replaced by `alpha`, from 0.0 (transparent) to 1.0
+    /// (opaque).
     pub fn with_alpha(&self, alpha: f32) -> Self {
         Self(self.0, self.1, self.2, alpha)
     }
@@ -77,11 +89,17 @@ impl Color {
         )
     }
 
+    /// Opaque black.
     pub const BLACK: Color = Color(0.0, 0.0, 0.0, 1.0);
+    /// Opaque white.
     pub const WHITE: Color = Color(1.0, 1.0, 1.0, 1.0);
+    /// Opaque red.
     pub const RED: Color = Color(1.0, 0.0, 0.0, 1.0);
+    /// Opaque green.
     pub const GREEN: Color = Color(0.0, 1.0, 0.0, 1.0);
+    /// Opaque blue.
     pub const BLUE: Color = Color(0.0, 0.0, 1.0, 1.0);
+    /// Fully transparent black, with every channel 0.0.
     pub const TRANSPARENT: Color = Color(0.0, 0.0, 0.0, 0.0);
 }
 

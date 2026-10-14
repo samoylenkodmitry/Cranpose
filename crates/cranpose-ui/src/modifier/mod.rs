@@ -495,6 +495,7 @@ impl Default for Modifier {
 }
 
 impl Modifier {
+    /// Returns a modifier that changes nothing.
     pub fn empty() -> Self {
         Self::default()
     }
@@ -524,6 +525,8 @@ impl Modifier {
         self.then(modifier)
     }
 
+    /// Provides the value that `value` returns for `key` to later modifiers in this chain and to
+    /// nodes below. Compose's `Modifier.modifierLocalProvider`.
     pub fn modifier_local_provider<T, F>(self, key: ModifierLocalKey<T>, value: F) -> Self
     where
         T: 'static,
@@ -534,6 +537,8 @@ impl Modifier {
         self.then(modifier)
     }
 
+    /// Calls `consumer` to read modifier local values through a [`ModifierLocalReadScope`]. It runs
+    /// again when a value it read changes. Compose's `Modifier.modifierLocalConsumer`.
     pub fn modifier_local_consumer<F>(self, consumer: F) -> Self
     where
         F: for<'scope> Fn(&mut ModifierLocalReadScope<'scope>) + 'static,
@@ -1103,6 +1108,7 @@ impl Modifier {
         }
     }
 
+    /// Returns the largest of the four edge paddings, in logical pixels.
     pub fn total_padding(&self) -> f32 {
         let padding = self.padding_values();
         padding
@@ -1112,6 +1118,8 @@ impl Modifier {
             .max(padding.bottom)
     }
 
+    /// Returns the size when both width and height are fixed lengths in logical pixels, or `None`
+    /// otherwise.
     pub fn explicit_size(&self) -> Option<Size> {
         let props = self.layout_properties();
         match (props.width, props.height) {
@@ -1122,6 +1130,7 @@ impl Modifier {
         }
     }
 
+    /// Returns the padding on each edge that the chain adds, in logical pixels.
     pub fn padding_values(&self) -> EdgeInsets {
         self.resolved_modifiers().padding()
     }
@@ -1130,22 +1139,27 @@ impl Modifier {
         self.resolved_modifiers().layout_properties()
     }
 
+    /// Returns the alignment set by [`Self::align`] for a `Box` parent, or `None` when none is set.
     pub fn box_alignment(&self) -> Option<Alignment> {
         self.layout_properties().box_alignment()
     }
 
+    /// Returns the horizontal alignment set for a `Column` parent, or `None` when none is set.
     pub fn column_alignment(&self) -> Option<HorizontalAlignment> {
         self.layout_properties().column_alignment()
     }
 
+    /// Returns the vertical alignment set for a `Row` parent, or `None` when none is set.
     pub fn row_alignment(&self) -> Option<VerticalAlignment> {
         self.layout_properties().row_alignment()
     }
 
+    /// Returns the draw commands of the chain in the order they draw.
     pub fn draw_commands(&self) -> Vec<DrawCommand> {
         collect_slices_from_modifier(self).draw_commands().to_vec()
     }
 
+    /// Returns whether the chain clips content to the node's bounds.
     pub fn clips_to_bounds(&self) -> bool {
         collect_slices_from_modifier(self).clip_to_bounds()
     }
@@ -1158,6 +1172,7 @@ impl Modifier {
             .collect()
     }
 
+    /// Resolves the chain into its padding, layout properties and offset.
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {
         let mut handle = ModifierChainHandle::new();
         let _ = handle.update(self);
@@ -1358,6 +1373,7 @@ impl fmt::Debug for Modifier {
     }
 }
 
+/// A background fill: its color and, when the corners are rounded, their shape.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ResolvedBackground {
     color: Color,
@@ -1365,23 +1381,29 @@ pub struct ResolvedBackground {
 }
 
 impl ResolvedBackground {
+    /// Creates a background of `color` with the corner `shape`, or square corners when `shape` is
+    /// `None`.
     pub fn new(color: Color, shape: Option<RoundedCornerShape>) -> Self {
         Self { color, shape }
     }
 
+    /// Returns the fill color.
     pub fn color(&self) -> Color {
         self.color
     }
 
+    /// Returns the corner shape, or `None` for square corners.
     pub fn shape(&self) -> Option<RoundedCornerShape> {
         self.shape
     }
 
+    /// Replaces the corner shape. `None` gives square corners.
     pub fn set_shape(&mut self, shape: Option<RoundedCornerShape>) {
         self.shape = shape;
     }
 }
 
+/// The padding, layout properties and offset that a modifier chain resolves to.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct ResolvedModifiers {
     padding: EdgeInsets,
@@ -1390,14 +1412,17 @@ pub struct ResolvedModifiers {
 }
 
 impl ResolvedModifiers {
+    /// Returns the padding on each edge, in logical pixels.
     pub fn padding(&self) -> EdgeInsets {
         self.padding
     }
 
+    /// Returns the size, alignment and weight settings of the chain.
     pub fn layout_properties(&self) -> LayoutProperties {
         self.layout
     }
 
+    /// Returns the offset of the content, in logical pixels.
     pub fn offset(&self) -> Point {
         self.offset
     }

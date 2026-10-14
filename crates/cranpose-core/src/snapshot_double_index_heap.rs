@@ -2,12 +2,18 @@ use crate::snapshot_id_set::SnapshotId;
 
 const INITIAL_CAPACITY: usize = 16;
 
+/// Sizes of a snapshot id heap, for leak and memory checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SnapshotDoubleIndexHeapDebugStats {
+    /// Number of values in the heap.
     pub len: usize,
+    /// Capacity reserved for the values.
     pub values_cap: usize,
+    /// Capacity reserved for the index table.
     pub index_cap: usize,
+    /// Entries in the handle table, including handles free for reuse.
     pub handles_len: usize,
+    /// Capacity reserved for the handle table.
     pub handles_cap: usize,
 }
 
@@ -118,6 +124,7 @@ impl SnapshotDoubleIndexHeap {
         self.free_handle(handle);
     }
 
+    /// Returns the sizes of the heap's tables, for leak and memory checks.
     pub fn debug_stats(&self) -> SnapshotDoubleIndexHeapDebugStats {
         SnapshotDoubleIndexHeapDebugStats {
             len: self.size,

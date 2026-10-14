@@ -56,6 +56,7 @@ impl<K, V> BoundedLruCache<K, V>
 where
     K: Eq + Hash,
 {
+    /// Creates an empty cache that holds at most `cap` entries.
     pub fn new(cap: NonZeroUsize) -> Self {
         Self {
             index: HashTable::new(),
@@ -68,19 +69,23 @@ where
         }
     }
 
+    /// Creates an empty cache bounded to `cap` entries, or to one entry when `cap` is zero.
     pub fn with_capacity_at_least_one(cap: usize) -> Self {
         let cap = NonZeroUsize::new(cap).unwrap_or(NonZeroUsize::MIN);
         Self::new(cap)
     }
 
+    /// Returns the number of entries the cache holds.
     pub fn len(&self) -> usize {
         self.index.len()
     }
 
+    /// Returns `true` if the cache holds no entries.
     pub fn is_empty(&self) -> bool {
         self.index.is_empty()
     }
 
+    /// Returns the largest number of entries the cache holds.
     pub fn cap(&self) -> NonZeroUsize {
         self.cap
     }
@@ -108,6 +113,7 @@ where
         self.find(key).is_some()
     }
 
+    /// Returns the value under `key`, marking the entry most recently used.
     pub fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
@@ -118,6 +124,7 @@ where
         Some(&self.slot(slot).value)
     }
 
+    /// Returns the value under `key` without changing its recency.
     pub fn peek<Q>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
@@ -127,6 +134,7 @@ where
         Some(&self.slot(slot).value)
     }
 
+    /// Returns the value under `key` for change, marking the entry most recently used.
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
@@ -137,6 +145,8 @@ where
         Some(&mut self.slot_mut(slot).value)
     }
 
+    /// Stores `value` under `key` and marks it most recently used. Returns the entry it
+    /// replaced or, when the cache was full, the least recently used entry it pushed out.
     pub fn push(&mut self, key: K, value: V) -> Option<(K, V)> {
         if let Some(slot) = self.find(&key) {
             self.promote(slot);
@@ -160,6 +170,8 @@ where
         evicted
     }
 
+    /// Stores `value` under `key` and returns the value it replaced, or the value of the least
+    /// recently used entry it pushed out. Returns `None` when nothing was removed.
     pub fn put(&mut self, key: K, value: V) -> Option<V> {
         self.push(key, value).map(|(_, value)| value)
     }
@@ -170,6 +182,7 @@ where
         Some((&entry.key, &entry.value))
     }
 
+    /// Removes and returns the least recently used entry, or `None` if the cache is empty.
     pub fn pop_lru(&mut self) -> Option<(K, V)> {
         let slot = self.oldest?;
         let hash = self.hasher.hash_one(&self.slot(slot).key);
@@ -181,6 +194,7 @@ where
         Some((entry.key, entry.value))
     }
 
+    /// Removes the entry under `key` and returns its value, or `None` if there is none.
     pub fn pop(&mut self, key: &K) -> Option<V> {
         let hash = self.hasher.hash_one(key);
         let slots = &self.slots;

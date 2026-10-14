@@ -36,7 +36,9 @@ pub enum HeartRatePermission {
     /// The person has not been asked, or the answer is not known yet.
     #[default]
     NotAsked,
+    /// The person said yes.
     Granted,
+    /// The person said no.
     Denied,
 }
 
@@ -65,6 +67,7 @@ pub enum HeartRateStatus {
 /// The latest the sensor said.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct HeartRate {
+    /// What the sensor is doing. `bpm` is meaningful only when this is [`HeartRateStatus::Live`].
     pub status: HeartRateStatus,
     /// Beats per minute, while [`status`](Self::status) is
     /// [`HeartRateStatus::Live`].
@@ -84,8 +87,11 @@ impl HeartRate {
 /// Why the sensor could not start.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HeartRateError {
+    /// The device has no sensor, or the build did not declare the service.
     Unavailable,
+    /// The application may not read the sensor yet.
     NotPermitted,
+    /// The platform failed to start the sensor. The text describes the cause.
     Failed(String),
 }
 
@@ -100,9 +106,11 @@ pub trait HeartRateMonitor: Send + Sync {
     fn request_permission(&self);
     /// Starts reading. Readings arrive through [`publish_heart_rate`].
     fn start(&self) -> Result<(), HeartRateError>;
+    /// Stops reading. Readings stop arriving through [`publish_heart_rate`].
     fn stop(&self);
 }
 
+/// Shared handle to a [`HeartRateMonitor`].
 pub type HeartRateMonitorRef = Arc<dyn HeartRateMonitor>;
 
 static PLATFORM_HEART_RATE: ServiceRegistry<dyn HeartRateMonitor> = ServiceRegistry::new();

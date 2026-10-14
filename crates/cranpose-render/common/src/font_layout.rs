@@ -1,33 +1,45 @@
 use ab_glyph::{Font, Glyph, OutlinedGlyph, Point, PxScale, ScaleFont, point};
 
+/// Vertical metrics of a font at one pixel size.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FontVerticalMetrics {
+    /// Distance from the baseline to the top of the line in pixels.
     pub ascent: f32,
+    /// Distance from the baseline to the bottom of the line in pixels, negative below the baseline.
     pub descent: f32,
+    /// Ascent minus descent, rounded up to a whole pixel.
     pub natural_line_height: f32,
     /// `hhea.lineGap` at this size. Read only by a style that asks for
     /// Android's `includeFontPadding`; every other line box ignores it.
     pub line_gap: f32,
 }
 
+/// Integer pixel box that a rasterized glyph covers, relative to the glyph origin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GlyphPixelBounds {
+    /// Left edge of the box in pixels.
     pub min_x: i32,
+    /// Top edge of the box in pixels.
     pub min_y: i32,
+    /// Right edge of the box in pixels, exclusive.
     pub max_x: i32,
+    /// Bottom edge of the box in pixels, exclusive.
     pub max_y: i32,
 }
 
 impl GlyphPixelBounds {
+    /// Box width in pixels, zero when the box is empty.
     pub fn width(self) -> usize {
         self.max_x.saturating_sub(self.min_x) as usize
     }
 
+    /// Box height in pixels, zero when the box is empty.
     pub fn height(self) -> usize {
         self.max_y.saturating_sub(self.min_y) as usize
     }
 }
 
+/// Returns the vertical metrics of `font` at `font_size` pixels.
 pub fn vertical_metrics(font: &impl Font, font_size: f32) -> FontVerticalMetrics {
     let scaled_font = font.as_scaled(PxScale::from(font_size));
     let ascent = scaled_font.ascent();
@@ -40,6 +52,8 @@ pub fn vertical_metrics(font: &impl Font, font_size: f32) -> FontVerticalMetrics
     }
 }
 
+/// Lays out `text` as one line of glyphs, applying kerning. `font_size` is in pixels and
+/// `origin` is the position of the first glyph on the baseline.
 pub fn layout_line_glyphs(
     font: &impl Font,
     text: &str,
@@ -65,6 +79,7 @@ pub fn layout_line_glyphs(
     glyphs
 }
 
+/// Returns the advance width of `text` as one line at `font_size` pixels, including kerning.
 pub fn line_advance_width(font: &impl Font, text: &str, font_size: f32) -> f32 {
     let scale = PxScale::from(font_size);
     let scaled_font = font.as_scaled(scale);
@@ -83,6 +98,8 @@ pub fn line_advance_width(font: &impl Font, text: &str, font_size: f32) -> f32 {
     width.max(0.0)
 }
 
+/// Rounds the glyph position to whole pixels when `static_text_motion` is true. Otherwise the
+/// glyph is returned unchanged.
 pub fn align_glyph_to_pixel_grid(mut glyph: Glyph, static_text_motion: bool) -> Glyph {
     if static_text_motion {
         glyph.position.x = glyph.position.x.round();
@@ -91,6 +108,8 @@ pub fn align_glyph_to_pixel_grid(mut glyph: Glyph, static_text_motion: bool) -> 
     glyph
 }
 
+/// Returns the pixel box that `glyph` covers once outlined, or `None` when it has no outline
+/// (for example a space).
 pub fn glyph_pixel_bounds(font: &impl Font, glyph: &Glyph) -> Option<GlyphPixelBounds> {
     let outlined = font.outline_glyph(glyph.clone())?;
     Some(pixel_bounds_from_outlined(&outlined))

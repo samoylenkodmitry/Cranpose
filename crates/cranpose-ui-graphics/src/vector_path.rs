@@ -28,12 +28,27 @@ const SUBSAMPLES: usize = 4;
 /// Errors produced while parsing SVG path data.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SvgPathError {
+    /// A byte that no path command or number accepts.
     #[error("unexpected byte {byte:?} at offset {offset}")]
-    UnexpectedByte { byte: char, offset: usize },
+    UnexpectedByte {
+        /// The byte found.
+        byte: char,
+        /// Position of the byte in the path data, counted in bytes from the start.
+        offset: usize,
+    },
+    /// A number was expected.
     #[error("expected a number at offset {offset}")]
-    ExpectedNumber { offset: usize },
+    ExpectedNumber {
+        /// Position in the path data where a number was expected, counted in bytes from the start.
+        offset: usize,
+    },
+    /// An arc flag was expected, which must be the digit `0` or `1`.
     #[error("expected an arc flag (0 or 1) at offset {offset}")]
-    ExpectedFlag { offset: usize },
+    ExpectedFlag {
+        /// Position in the path data where a flag was expected, counted in bytes from the start.
+        offset: usize,
+    },
+    /// The data does not begin with a moveto command (`M` or `m`).
     #[error("path data must start with a moveto (M/m) command")]
     MissingMoveTo,
 }

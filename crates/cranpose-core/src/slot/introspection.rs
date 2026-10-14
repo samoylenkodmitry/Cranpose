@@ -12,6 +12,7 @@ impl SlotTable {
         self.groups.capacity() * mem::size_of::<GroupRecord>()
     }
 
+    /// Heap bytes reserved by the table for groups, payloads, nodes and anchors.
     pub fn heap_bytes(&self) -> usize {
         self.group_heap_bytes()
             + self.payloads.heap_bytes()
@@ -20,6 +21,7 @@ impl SlotTable {
             + self.payload_anchors.heap_bytes()
     }
 
+    /// Returns size and count figures for this table alone, without retained or pending-drop data.
     pub fn debug_stats(&self) -> SlotTableLocalDebugStats {
         SlotTableLocalDebugStats {
             group_count: self.groups.len(),
@@ -52,6 +54,7 @@ impl SlotTable {
         }
     }
 
+    /// Returns one `(group index, call site key, scope id, subtree length)` tuple per group.
     pub fn debug_dump_groups(&self) -> Vec<(usize, Key, Option<ScopeId>, usize)> {
         self.groups
             .iter()
@@ -67,6 +70,8 @@ impl SlotTable {
             .collect()
     }
 
+    /// Returns a copy of the groups, anchors and scopes of this table.
+    /// The retained subtree counts are zero here; the composer fills them in.
     pub fn debug_snapshot(&self) -> SlotDebugSnapshot {
         let active_groups = self
             .groups
@@ -126,6 +131,7 @@ impl SlotTable {
         }
     }
 
+    /// Returns one row per group, payload and node in the table, in that order.
     pub fn debug_dump_slot_entries(&self) -> Vec<SlotDebugEntry> {
         let mut rows = Vec::new();
         for (index, group) in self.groups.iter().enumerate() {

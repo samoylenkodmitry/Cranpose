@@ -3,9 +3,13 @@
 /// Constraints used during layout measurement.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Constraints {
+    /// The least width the child may take, in logical pixels.
     pub min_width: f32,
+    /// The most width the child may take; infinite when unbounded.
     pub max_width: f32,
+    /// The least height the child may take, in logical pixels.
     pub min_height: f32,
+    /// The most height the child may take; infinite when unbounded.
     pub max_height: f32,
 }
 
@@ -147,7 +151,9 @@ mod tests;
 /// included.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoundRange {
+    /// The lowest value.
     pub low: f32,
+    /// The highest value.
     pub high: f32,
 }
 
@@ -182,6 +188,7 @@ impl BoundRange {
         }
     }
 
+    /// Whether `value` lies in the range, both ends included.
     pub fn contains(self, value: f32) -> bool {
         self.low <= value && value <= self.high
     }
@@ -213,7 +220,9 @@ impl BoundRange {
 /// The incoming constraints of one axis a measurement holds for.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AxisHold {
+    /// The minimums the measurement holds for.
     pub min: BoundRange,
+    /// The maximums the measurement holds for.
     pub max: BoundRange,
 }
 
@@ -236,6 +245,7 @@ impl AxisHold {
         }
     }
 
+    /// Whether the measurement holds for an axis with `min` and `max`.
     pub fn contains(self, min: f32, max: f32) -> bool {
         self.min.contains(min) && self.max.contains(max)
     }
@@ -265,7 +275,9 @@ impl AxisHold {
 /// wrap.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ConstraintsHold {
+    /// The widths the measurement holds for.
     pub width: AxisHold,
+    /// The heights the measurement holds for.
     pub height: AxisHold,
 }
 
@@ -287,6 +299,7 @@ impl ConstraintsHold {
         }
     }
 
+    /// Whether the measurement holds for `constraints`.
     pub fn contains(&self, constraints: Constraints) -> bool {
         self.width
             .contains(constraints.min_width, constraints.max_width)
@@ -309,6 +322,8 @@ impl ConstraintsHold {
 /// had.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WrappedHold {
+    /// The size the wrapped content measured.
     pub size: cranpose_ui_graphics::Size,
+    /// The constraints that size holds for beyond the ones it had.
     pub hold: Option<ConstraintsHold>,
 }

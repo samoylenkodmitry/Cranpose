@@ -3,8 +3,8 @@ use crate::robot_launch;
 use std::time::Duration;
 
 use cranpose_testing::{
-    find_button_in_semantics, find_element_by_text_exact, find_in_subtree_by_text,
-    find_text_in_semantics, print_semantics_with_bounds,
+    find_button_in_semantics, find_element_by_text_exact, find_text_in_semantics,
+    print_semantics_with_bounds,
 };
 
 pub(crate) fn main() {
@@ -111,8 +111,8 @@ pub(crate) fn main() {
                 row_elem.bounds.height,
             );
 
-            let item_text = find_in_subtree_by_text(row_elem, "Item #0");
-            let height_text = find_in_subtree_by_text(row_elem, "h: 48px");
+            let item_text = find_element_by_text_exact(std::slice::from_ref(row_elem), "Item #0");
+            let height_text = find_element_by_text_exact(std::slice::from_ref(row_elem), "h: 48px");
             let hello_text = find_element_by_text_exact(elements, "Hello #0");
 
             let mut has_issues = false;

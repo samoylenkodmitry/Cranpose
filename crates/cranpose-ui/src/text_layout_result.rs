@@ -64,6 +64,8 @@ pub struct TextLayoutData {
     pub glyph_layouts: Vec<GlyphLayout>,
 }
 
+/// The measured layout of one piece of text. It maps byte offsets to x positions and back for
+/// cursor placement, selection highlights and hit testing.
 #[derive(Debug, Clone)]
 pub struct TextLayoutResult {
     /// Total width of laid out text

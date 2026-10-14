@@ -1,12 +1,19 @@
 use cranpose_ui_graphics::{BlendMode, CompositingStrategy, GraphicsLayer, RenderEffect};
 
+/// What a layer needs to be composited from its own offscreen buffer.
 #[derive(Clone)]
 pub struct LayerIsolation {
+    /// The render effect applied to the buffer, if any.
     pub effect: Option<RenderEffect>,
+    /// How the buffer blends onto its parent.
     pub blend_mode: BlendMode,
+    /// Alpha applied when the buffer is composited, from 0.0 to 1.0. It is 1.0 for a layer that
+    /// modulates alpha in its content instead.
     pub composite_alpha: f32,
 }
 
+/// Whether `layer` must be drawn into an offscreen buffer first, given its compositing strategy,
+/// effect, blend mode and alpha.
 pub fn layer_requires_isolation(layer: &GraphicsLayer) -> bool {
     let has_effect = layer.render_effect.is_some();
     let has_layer_blend = layer.blend_mode != BlendMode::SrcOver;
@@ -37,6 +44,8 @@ pub fn folded_layer_alpha(layer: &GraphicsLayer) -> f32 {
     }
 }
 
+/// Returns what `layer` needs to be composited from its own buffer, or `None` when it can be
+/// drawn directly.
 pub fn effective_layer_isolation(layer: &GraphicsLayer) -> Option<LayerIsolation> {
     layer_requires_isolation(layer).then(|| LayerIsolation {
         effect: layer.render_effect.clone(),
@@ -52,6 +61,8 @@ pub fn layer_composite_params(layer: &GraphicsLayer) -> Option<(f32, BlendMode)>
     layer_requires_isolation(layer).then(|| (isolation_composite_alpha(layer), layer.blend_mode))
 }
 
+/// Returns the layer to draw the content with inside the offscreen buffer: `layer` with its alpha
+/// reset to one when `isolation` moves the alpha to the composite step.
 pub fn layer_for_content(
     layer: &GraphicsLayer,
     isolation: Option<&LayerIsolation>,

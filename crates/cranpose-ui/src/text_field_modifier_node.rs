@@ -561,6 +561,8 @@ impl PartialEq for TextFieldRefs {
 
 use crate::text::TextStyle;
 
+/// The modifier node behind an editable text field. It measures and draws the text, the cursor and
+/// the selection, and handles pointer input.
 pub struct TextFieldModifierNode {
     state: TextFieldState,
     refs: TextFieldRefs,
@@ -897,6 +899,7 @@ impl TextFieldModifierNode {
         Rc::clone(&self.refs.presentation.get(self.state).shown)
     }
 
+    /// Returns the text style the field lays out and draws with.
     pub fn style(&self) -> &TextStyle {
         &self.style
     }

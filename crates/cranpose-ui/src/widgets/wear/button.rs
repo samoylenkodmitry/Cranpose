@@ -36,14 +36,19 @@ use crate::{
 /// `ButtonDefaults` plus `FilledButtonTokens`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WearButtonSpec {
+    /// Colors of the container and the labels.
     pub colors: WearColors,
+    /// Text style of the main label.
     pub label_style: WearTextStyle,
+    /// Text style of the secondary label.
     pub secondary_style: WearTextStyle,
     /// `FilledButtonTokens.ContainerHeight`.
     pub min_height: f32,
     /// `ShapeTokens.CornerLarge`.
     pub corner_radius: f32,
+    /// Space between the container edge and the content on both horizontal sides, in dp.
     pub padding_horizontal: f32,
+    /// Space between the container edge and the content at the top and the bottom, in dp.
     pub padding_vertical: f32,
     /// `Spacer(Modifier.size(1.dp))` between the two labels.
     pub label_spacing: f32,
@@ -68,6 +73,7 @@ impl Default for WearButtonSpec {
 }
 
 impl WearButtonSpec {
+    /// Sets the colors of the container and the labels.
     pub fn colors(mut self, colors: WearColors) -> Self {
         self.colors = colors;
         self

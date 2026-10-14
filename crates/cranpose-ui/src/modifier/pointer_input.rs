@@ -174,6 +174,8 @@ impl ModifierNodeElement for PointerInputElement {
     }
 }
 
+/// The scope passed to the handler of `Modifier::pointer_input`. It reports the node's size and
+/// opens a scope in which the handler awaits pointer events.
 #[derive(Clone)]
 pub struct PointerInputScope {
     state: Rc<PointerInputScopeState>,
@@ -196,6 +198,8 @@ impl PointerInputScope {
         self.state.size.get()
     }
 
+    /// Runs `block` with an `AwaitPointerEventScope` and returns its result. The future that
+    /// `block` returns awaits pointer events one at a time.
     pub async fn await_pointer_event_scope<R, F, Fut>(&self, block: F) -> R
     where
         F: FnOnce(AwaitPointerEventScope) -> Fut,

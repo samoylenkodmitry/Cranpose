@@ -139,16 +139,19 @@ pub struct WearItemTransform {
 }
 
 impl WearItemTransform {
+    /// Creates a channel that leaves the item unscaled and fully opaque.
     pub fn new() -> Self {
         Self {
             cell: Rc::new(Cell::new(ScaleAlpha::UNCHANGED)),
         }
     }
 
+    /// Returns the scale and alpha last set.
     pub fn get(&self) -> ScaleAlpha {
         self.cell.get()
     }
 
+    /// Sets the scale and alpha that the item draws with.
     pub fn set(&self, value: ScaleAlpha) {
         self.cell.set(value);
     }
@@ -178,7 +181,9 @@ impl PartialEq for WearItemTransform {
 /// a top-aligned content length puts it a fraction out at both ends.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct WearScalingLayoutInfo {
+    /// Number of items in the list.
     pub item_count: usize,
+    /// Height of the viewport, in logical pixels.
     pub viewport: f32,
     /// The first item's centre, in viewport coordinates.
     pub first_centre: f32,
@@ -199,15 +204,23 @@ pub struct WearScalingLayoutInfo {
 /// coordinate space after scaling and placement.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WearScalingItemInfo {
+    /// Index of the item in the list.
     pub index: usize,
+    /// Bounds of the item after scaling and placement, in the list's local coordinates.
     pub bounds: Rect,
+    /// Center of the item along the scroll axis, in the list's local coordinates.
     pub centre: f32,
+    /// Height of the item before scaling, in logical pixels.
     pub unscaled_height: f32,
+    /// Scale factor applied to the item. 1.0 means unscaled.
     pub scale: f32,
+    /// Opacity of the item, from 0.0 (transparent) to 1.0 (opaque).
     pub alpha: f32,
 }
 
 impl WearScalingItemInfo {
+    /// Returns whether `point`, in the list's local coordinates, lies inside the bounds of the
+    /// item.
     pub fn contains(self, point: Point) -> bool {
         point.x >= self.bounds.x
             && point.x < self.bounds.x + self.bounds.width
@@ -431,6 +444,8 @@ impl WearScalingListState {
         self.anchor.get()
     }
 
+    /// Sets the anchor, which item sits on the center line and how far it is offset from it. This
+    /// scrolls the list.
     pub fn set_anchor(&self, anchor: CentreAnchor) {
         self.anchor.set(anchor);
     }
@@ -485,6 +500,8 @@ impl WearScalingListState {
         applied
     }
 
+    /// Scrolls by `delta` layout points, as [`Self::scroll_by`] does, and returns the distance
+    /// actually scrolled.
     pub fn dispatch_raw_delta(&self, delta: f32) -> f32 {
         self.scroll_by(delta)
     }
@@ -800,26 +817,31 @@ impl WearScalingLazyColumnSpec {
         self
     }
 
+    /// Sets the space between items, in dp.
     pub fn item_spacing(mut self, spacing: f32) -> Self {
         self.item_spacing = spacing;
         self
     }
 
+    /// Sets the parameters of the shrink-and-fade ramp.
     pub fn scaling(mut self, scaling: ScalingParams) -> Self {
         self.scaling = scaling;
         self
     }
 
+    /// Sets whether a faded item is composited through its own surface.
     pub fn compositing_strategy(mut self, strategy: CompositingStrategy) -> Self {
         self.compositing_strategy = strategy;
         self
     }
 
+    /// Sets which item sits on the center line at rest. `None` places the content from the top.
     pub fn auto_centering(mut self, anchor: Option<CentreAnchor>) -> Self {
         self.auto_centering = anchor;
         self
     }
 
+    /// Sets how many items past each edge of the viewport are composed and measured but not placed.
     pub fn beyond_bounds_item_count(mut self, count: usize) -> Self {
         self.beyond_bounds_item_count = count;
         self

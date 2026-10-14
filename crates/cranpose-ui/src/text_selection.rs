@@ -228,7 +228,9 @@ pub fn find_paragraph_boundaries(text: &str, pos: usize) -> (usize, usize) {
 ///   and highlight geometry use this.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LineAffinity {
+    /// Anchors the offset to the end of the upper line.
     Upstream,
+    /// Anchors the offset to the start of the lower line.
     Downstream,
 }
 
@@ -301,10 +303,15 @@ pub struct HandleGrabOffset {
 }
 
 impl HandleGrabOffset {
+    /// Starts a drag from a handle whose tip is at `handle_tip_y` while the pointer is at
+    /// `finger_y`, both in the same vertical coordinates in logical pixels. The handle drifts into
+    /// view as the pointer moves down.
     pub fn begin(handle_tip_y: f32, finger_y: f32) -> Self {
         Self::begin_for(handle_tip_y, finger_y, true)
     }
 
+    /// Like [`Self::begin`], but with `drifts` set to false the handle keeps the starting offset
+    /// for the whole drag.
     pub fn begin_for(handle_tip_y: f32, finger_y: f32, drifts: bool) -> Self {
         let initial_bias = handle_tip_y - finger_y;
         Self {
@@ -317,6 +324,8 @@ impl HandleGrabOffset {
         }
     }
 
+    /// Takes the pointer's current `finger_y` and returns the updated offset from the pointer to
+    /// the handle tip.
     pub fn track(&mut self, finger_y: f32) -> f32 {
         if !self.drifts {
             self.bias = self.initial_bias;
@@ -331,10 +340,13 @@ impl HandleGrabOffset {
         self.bias
     }
 
+    /// Returns the current offset from the pointer to the handle tip, in logical pixels.
     pub fn bias(&self) -> f32 {
         self.bias
     }
 
+    /// Returns how far the offset has moved from its starting value to the fully visible one, from
+    /// 0.0 to 1.0.
     pub fn drift_progress(&self) -> f32 {
         self.drift_progress
     }

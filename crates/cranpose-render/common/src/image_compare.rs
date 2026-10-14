@@ -1,21 +1,33 @@
 use cranpose_ui_graphics::Rect;
 
+/// One pixel that differs between two RGBA images.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PixelDifference {
+    /// Column of the pixel, counted from the left.
     pub x: u32,
+    /// Row of the pixel, counted from the top.
     pub y: u32,
+    /// RGBA bytes of the pixel in the left image.
     pub lhs: [u8; 4],
+    /// RGBA bytes of the pixel in the right image.
     pub rhs: [u8; 4],
+    /// Sum of the absolute per-channel differences, from 0 to 1020.
     pub difference: u32,
 }
 
+/// Summary of how two RGBA images differ.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ImageDifferenceStats {
+    /// Number of pixels whose difference exceeds the tolerance.
     pub differing_pixels: u32,
+    /// Largest difference among the differing pixels.
     pub max_difference: u32,
+    /// The first differing pixel in row-major order, or `None` when the images match.
     pub first_difference: Option<PixelDifference>,
 }
 
+/// Reads the RGBA bytes of pixel (`x`, `y`) from a tightly packed RGBA8 buffer that is `width`
+/// pixels wide. Panics when the pixel lies outside the buffer.
 pub fn sample_pixel(pixels: &[u8], width: u32, x: u32, y: u32) -> [u8; 4] {
     let idx = ((y * width + x) * 4) as usize;
     [
@@ -26,6 +38,7 @@ pub fn sample_pixel(pixels: &[u8], width: u32, x: u32, y: u32) -> [u8; 4] {
     ]
 }
 
+/// Sums the absolute per-channel differences between two RGBA pixels, from 0 to 1020.
 pub fn pixel_difference(lhs: [u8; 4], rhs: [u8; 4]) -> u32 {
     lhs.into_iter()
         .zip(rhs)
@@ -33,6 +46,9 @@ pub fn pixel_difference(lhs: [u8; 4], rhs: [u8; 4]) -> u32 {
         .sum()
 }
 
+/// Resamples the `rect` region, in source pixels, of an RGBA8 image of `width` by `height`
+/// pixels to `output_width` by `output_height` pixels with bilinear sampling. Panics when an
+/// output dimension is zero.
 pub fn normalize_rgba_region(
     pixels: &[u8],
     width: u32,
@@ -60,6 +76,8 @@ pub fn normalize_rgba_region(
     out
 }
 
+/// Compares two RGBA8 buffers of `width` by `height` pixels and counts the pixels whose
+/// difference exceeds `tolerance`. Panics when the buffers differ in length.
 pub fn image_difference_stats(
     lhs: &[u8],
     rhs: &[u8],

@@ -80,13 +80,17 @@ impl MediaArtwork {
 /// the car head unit.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MediaMetadata {
+    /// Title of the item, or empty for none.
     pub title: String,
+    /// Artist or performer name, or empty for none.
     pub artist: String,
+    /// Album name, or empty for none.
     pub album: String,
     /// The item's length when it is known before playback starts — from a tag,
     /// or from a previous play. `None` means "ask the backend once it has
     /// opened the item", which is what [`PlaybackProgress::duration`] reports.
     pub duration: Option<Duration>,
+    /// Cover image of the item, or `None` for none.
     pub artwork: Option<MediaArtwork>,
 }
 
@@ -138,7 +142,9 @@ impl MediaMetadata {
 /// instead of being read into memory first.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MediaItem {
+    /// The source of the item, such as `file:`, `content:`, `blob:`, `http:` or `https:`.
     pub uri: String,
+    /// The title, artist and artwork that the platform media session shows for the item.
     pub metadata: MediaMetadata,
 }
 
@@ -302,6 +308,7 @@ impl EqualizerSettings {
     }
 }
 
+/// Why a media call failed.
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum MediaError {
     /// No media backend on this platform.
@@ -412,15 +419,19 @@ impl PlaybackProgress {
 /// notification, a headset, a car.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MediaCommand {
+    /// Starts or resumes playback.
     Play,
+    /// Pauses playback.
     Pause,
     /// The one button a headset has.
     TogglePlayPause,
+    /// Stops playback and closes the item.
     Stop,
     /// Needs a playlist, so it is reported and not carried out.
     Next,
     /// Needs a playlist, so it is reported and not carried out.
     Previous,
+    /// Moves playback to the given position from the start of the item.
     SeekTo(Duration),
 }
 

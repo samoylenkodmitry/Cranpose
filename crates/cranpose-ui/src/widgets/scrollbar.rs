@@ -78,6 +78,7 @@ pub struct ScrollbarSpec {
     pub min_thumb_extent: f32,
     /// Corner radius of the track and the thumb. Defaults to a full pill.
     pub corner_radius: Option<f32>,
+    /// Colors of the track and the thumb.
     pub colors: ScrollbarColors,
     /// Whether the bar disappears entirely when the content fits.
     ///
@@ -87,26 +88,32 @@ pub struct ScrollbarSpec {
 }
 
 impl ScrollbarSpec {
+    /// Sets the width across the short axis, in logical pixels. Negative values count as zero.
     pub fn thickness(mut self, thickness: f32) -> Self {
         self.thickness = thickness.max(0.0);
         self
     }
 
+    /// Sets the shortest the thumb may get, in logical pixels. Negative values count as zero.
     pub fn min_thumb_extent(mut self, extent: f32) -> Self {
         self.min_thumb_extent = extent.max(0.0);
         self
     }
 
+    /// Sets the corner radius of the track and the thumb, in logical pixels. Negative values count
+    /// as zero.
     pub fn corner_radius(mut self, radius: f32) -> Self {
         self.corner_radius = Some(radius.max(0.0));
         self
     }
 
+    /// Sets the colors of the track and the thumb.
     pub fn colors(mut self, colors: ScrollbarColors) -> Self {
         self.colors = colors;
         self
     }
 
+    /// Sets whether the bar disappears when the content fits.
     pub fn hide_when_content_fits(mut self, hide: bool) -> Self {
         self.hide_when_content_fits = hide;
         self

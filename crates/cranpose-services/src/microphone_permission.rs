@@ -29,6 +29,7 @@ use crate::registry::ServiceRegistry;
 pub enum MicrophonePermission {
     /// The person has not been asked.
     NotAsked,
+    /// The person said yes.
     Granted,
     /// The person said no; asking again shows the prompt again.
     Denied,

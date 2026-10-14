@@ -18,7 +18,9 @@ pub enum SchemeMode {
     /// Follow [`cranpose_services::isSystemInDarkTheme`] live.
     #[default]
     Auto,
+    /// Always use the light palette.
     Light,
+    /// Always use the dark palette.
     Dark,
 }
 
@@ -69,6 +71,7 @@ pub struct LiquidColors {
 }
 
 impl LiquidColors {
+    /// The light palette, with `accent` as the accent color.
     pub fn light(accent: Color) -> Self {
         Self {
             is_dark: false,
@@ -94,6 +97,7 @@ impl LiquidColors {
         }
     }
 
+    /// The dark palette, with `accent` as the accent color.
     pub fn dark(accent: Color) -> Self {
         Self {
             is_dark: true,
@@ -142,18 +146,31 @@ impl LiquidColors {
     }
 }
 
+/// The iOS text-style ramp. The defaults run from 34 sp for `large_title` down to 11 sp for
+/// `caption2`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiquidTypography {
+    /// The largest title. Default: 34 sp, bold.
     pub large_title: TextStyle,
+    /// The first-level title. Default: 28 sp, bold.
     pub title1: TextStyle,
+    /// The second-level title. Default: 22 sp, bold.
     pub title2: TextStyle,
+    /// The third-level title. Default: 20 sp, semi bold.
     pub title3: TextStyle,
+    /// The heading of a section or a row. Default: 17 sp, semi bold.
     pub headline: TextStyle,
+    /// The text of the main content. Default: 17 sp, regular.
     pub body: TextStyle,
+    /// Text a little smaller than the main content. Default: 16 sp, regular.
     pub callout: TextStyle,
+    /// A line under a headline. Default: 15 sp, regular.
     pub subheadline: TextStyle,
+    /// Notes under content. Default: 13 sp, regular.
     pub footnote: TextStyle,
+    /// A caption. Default: 12 sp, regular.
     pub caption1: TextStyle,
+    /// The smallest caption. Default: 11 sp, regular.
     pub caption2: TextStyle,
 }
 
@@ -273,9 +290,11 @@ impl LiquidSegmentedStyle {
 /// Theme configuration passed to [`LiquidTheme`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiquidThemeSpec {
+    /// Whether the theme follows the OS appearance or is pinned to light or dark.
     pub scheme: SchemeMode,
     /// Accent color (iOS system blue by default).
     pub accent: Color,
+    /// The text styles of the theme.
     pub typography: LiquidTypography,
     /// Tint amount used by the floating navigation surfaces.
     pub glass_tint_amount: GlassTintAmount,

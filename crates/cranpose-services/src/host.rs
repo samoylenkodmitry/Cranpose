@@ -18,11 +18,18 @@ pub use crate::durable_save::{
 /// Platform directory roots for application-owned files.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlatformDirectories {
+    /// Folder for the persistent data of the app.
     pub data: PathBuf,
+    /// Folder for settings files.
     pub config: PathBuf,
+    /// Folder for files that the app can recreate. The system may delete them.
     pub cache: PathBuf,
+    /// Folder for documents that the person can see. `None` where the platform has no such folder.
     pub documents: Option<PathBuf>,
+    /// Folder for short-lived files.
     pub temporary: PathBuf,
+    /// Folder that the person and other apps can reach, such as the external files folder on
+    /// Android. `None` where the platform has no such folder.
     pub shared: Option<PathBuf>,
 }
 
@@ -42,12 +49,16 @@ impl PlatformDirectories {
     }
 }
 
+/// Why the application directories could not be resolved.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum PlatformDirectoryError {
+    /// The application id is empty or has more than one path component.
     #[error("application id must be one non-empty path component")]
     InvalidApplicationId,
+    /// No host has registered an application id.
     #[error("no application id has been registered")]
     NoApplicationId,
+    /// The platform reports no directories.
     #[error("platform directories are unavailable")]
     Unavailable,
 }
@@ -55,18 +66,26 @@ pub enum PlatformDirectoryError {
 /// Android-style lifecycle state exposed to composition observers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LifecycleState {
+    /// The host exists and has not become visible yet.
     Created,
+    /// The host is visible.
     Started,
+    /// The host is in the foreground and receives input.
     Resumed,
+    /// The host lost the foreground and may still be visible.
     Paused,
+    /// The host is not visible.
     Stopped,
+    /// The host is being torn down.
     Destroyed,
 }
 
 /// A lifecycle transition delivered by the platform host.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LifecycleEvent {
+    /// The state before the transition.
     pub from: LifecycleState,
+    /// The state after the transition.
     pub to: LifecycleState,
 }
 
@@ -105,6 +124,7 @@ pub fn durable_save_deadline() -> std::time::Duration {
     })
 }
 
+/// Shared handle to a [`HostController`].
 pub type HostControllerRef = Arc<dyn HostController>;
 
 fn controller() -> &'static Mutex<Option<HostControllerRef>> {

@@ -64,6 +64,7 @@ use crate::AppShell;
 /// those already carry their own bounds).
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlacedSemanticsNode {
+    /// Id of the layout node this semantics node describes.
     pub node_id: NodeId,
     /// Where the node sits in the tree: layout, text, subcomposition …
     pub role: SemanticsRole,
@@ -71,6 +72,7 @@ pub struct PlacedSemanticsNode {
     pub widget_role: Option<SemanticsWidgetRole>,
     /// The name a reader speaks, including merged text and excluding password values.
     pub label: Option<String>,
+    /// Extra state a reader speaks after the name, such as "Expanded".
     pub state_description: Option<String>,
     /// Whether the node carries a click action, which is what separates a
     /// control from something merely described.
@@ -78,8 +80,11 @@ pub struct PlacedSemanticsNode {
     /// Whether the renderer carries any pointer-dispatch region for the node.
     /// This also includes gesture-only containers such as scrollable lists.
     pub interactive: bool,
+    /// Whether the control is on, off or partly on. `None` when it is not toggleable.
     pub toggled: Option<cranpose_ui::ToggleableState>,
+    /// Whether the control is selected. `None` when it has no selected state.
     pub selected: Option<bool>,
+    /// Whether the control accepts input. A reader announces a disabled control as such.
     pub enabled: bool,
     /// Whether a reader can type into the node.
     pub editable_text: bool,
@@ -102,6 +107,7 @@ pub struct PlacedSemanticsNode {
     /// The box the renderer draws and the hit test inverts, ancestor graphics
     /// layers included. `None` when the hit graph carries no region for it.
     pub touch_bounds: Option<Rect>,
+    /// The child nodes, in reading order.
     pub children: Vec<PlacedSemanticsNode>,
 }
 

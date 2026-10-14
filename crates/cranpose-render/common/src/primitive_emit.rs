@@ -21,20 +21,28 @@ use crate::{
     },
 };
 
+/// The space in which the clip rectangle of a primitive is given.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrimitiveClipSpace {
+    /// The clip is in the layer's own space and the layer transform does not apply to it.
     Local,
+    /// The clip is moved with the layer transform, like the primitive itself.
     LayerTransformed,
 }
 
+/// A shape ready for a renderer to draw, with the layer transform, paint and clip resolved.
 pub struct ShapeDrawParams {
+    /// Axis-aligned bounds of `quad`.
     pub rect: Rect,
+    /// The shape's rectangle after the layer's scale and translation, before any rotation.
     pub local_rect: Rect,
+    /// The shape's rectangle after the full layer transform, as four corners.
     pub quad: [[f32; 2]; 4],
     /// Layer-resolved at emit time. Solid — effectively every shape of a
     /// heavy animated frame — is an inline color; only gradients carry a
     /// cloned [`Brush`].
     pub brush: ResolvedBrush,
+    /// Rounded corners of the shape, or `None` for sharp corners.
     pub shape: Option<RoundedCornerShape>,
     /// `Some` means "stroke the outline of `local_rect`/`shape`" instead of
     /// filling it. The width is already in `local_rect` units (the layer scale
@@ -51,8 +59,12 @@ pub struct ShapeDrawParams {
     /// fill, in `local_rect` units; `local_rect` is the rect its brush
     /// resolves against.
     pub trapezoid: Option<Trapezoid>,
+    /// Clip rectangle that cuts the shape, or `None` when nothing clips it.
     pub clip: Option<Rect>,
+    /// How the shape blends onto what lies beneath it.
     pub blend_mode: BlendMode,
+    /// Whether the shape sits in an animated motion context, where a renderer must not snap it
+    /// to the pixel grid.
     pub motion_context_animated: bool,
 }
 
@@ -76,17 +88,30 @@ fn stroked_draw_rect(
     ))
 }
 
+/// An image ready for a renderer to draw, with the layer transform, opacity and clip resolved.
 pub struct ImageDrawParams {
+    /// Axis-aligned bounds of `quad`.
     pub rect: Rect,
+    /// The image's rectangle after the layer's scale and translation, before any rotation.
     pub local_rect: Rect,
+    /// The image's rectangle after the full layer transform, as four corners.
     pub quad: [[f32; 2]; 4],
+    /// The bitmap to draw.
     pub image: ImageBitmap,
+    /// Opacity of the image from 0.0 to 1.0.
     pub alpha: f32,
+    /// Color filter applied to the image, if any.
     pub color_filter: Option<ColorFilter>,
+    /// How the bitmap is sampled when it is scaled.
     pub sampling: ImageSampling,
+    /// Clip rectangle that cuts the image, or `None` when nothing clips it.
     pub clip: Option<Rect>,
+    /// Region of the bitmap to draw, in bitmap pixels, or `None` for the whole bitmap.
     pub src_rect: Option<Rect>,
+    /// How the image blends onto what lies beneath it.
     pub blend_mode: BlendMode,
+    /// Whether the image sits in an animated motion context, where a renderer must not snap it
+    /// to the pixel grid.
     pub motion_context_animated: bool,
 }
 
@@ -100,21 +125,30 @@ pub struct TextDrawParams {
     /// Layer-transformed block box. Glyphs are laid out from its top-left; the
     /// draw scope already resolved alignment into it.
     pub rect: Rect,
+    /// The text to draw.
     pub text: Rc<AnnotatedString>,
     /// `text` as a renderer's draws carry it across threads.
     pub render_text: std::sync::Arc<cranpose_ui::text::RenderString>,
+    /// Color that fills the glyphs.
     pub color: Color,
+    /// Style the text is drawn with.
     pub text_style: TextStyle,
+    /// Font size in logical pixels, before `scale` is applied.
     pub font_size: f32,
     /// Uniform layer scale — the factor glyphs are rasterized at.
     pub scale: f32,
+    /// Layout options the text is laid out with.
     pub layout_options: TextLayoutOptions,
+    /// Clip rectangle that cuts the text, or `None` when nothing clips it.
     pub clip: Option<Rect>,
 }
 
+/// Receives the draw calls that `emit_draw_primitive` produces from a draw primitive.
 pub trait DrawPrimitiveSink {
+    /// Draws a shape.
     fn push_shape(&mut self, params: ShapeDrawParams);
 
+    /// Draws an image.
     fn push_image(&mut self, params: ImageDrawParams);
 
     /// Emits a shadow without transferring ownership of its caster and cutout.
@@ -191,6 +225,9 @@ pub fn resolve_clip(parent_clip: Option<Rect>, requested_clip: Option<Rect>) -> 
     }
 }
 
+/// Returns the clip for a primitive: `local_clip` moved to `layer_bounds`, moved with the layer
+/// transform for `PrimitiveClipSpace::LayerTransformed`, and intersected with `parent_clip`.
+/// Returns `parent_clip` when the primitive has no clip of its own.
 pub fn resolve_primitive_clip(
     local_clip: Option<Rect>,
     layer_bounds: Rect,
@@ -436,6 +473,9 @@ pub fn trapezoid_shape_params(
     })
 }
 
+/// Lowers `primitive` to shape, image, shadow and text draw calls on `sink`, with the transform
+/// of `layer` applied at `layer_bounds`. `blend_mode` is the mode inherited from an enclosing
+/// blend primitive, and `motion_context_animated` is passed on to every call.
 pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
     primitive: &DrawPrimitive,
     layer_bounds: Rect,

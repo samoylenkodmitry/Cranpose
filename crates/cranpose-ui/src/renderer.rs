@@ -10,22 +10,33 @@ use crate::{
 /// Layer that a paint operation targets within the rendering pipeline.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PaintLayer {
+    /// Drawing recorded before the node's content.
     Behind,
+    /// The node's own content, between the behind and overlay layers.
     Content,
+    /// Drawing recorded after the node's content, painted over the node's children.
     Overlay,
 }
 
 /// A rendered operation emitted by the headless renderer.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RenderOp {
+    /// A draw primitive recorded for a node.
     Primitive {
+        /// Id of the node that recorded the primitive.
         node_id: NodeId,
+        /// The layer the primitive paints into.
         layer: PaintLayer,
+        /// The recorded primitive, translated to root coordinates.
         primitive: DrawPrimitive,
     },
+    /// The text a node shows.
     Text {
+        /// Id of the node that shows the text.
         node_id: NodeId,
+        /// Bounds of the node in root coordinates, in logical pixels.
         rect: Rect,
+        /// The plain text of the node.
         value: String,
     },
 }
@@ -37,6 +48,7 @@ pub struct RecordedRenderScene {
 }
 
 impl RecordedRenderScene {
+    /// Creates a scene from `operations`, which are in submission order.
     pub fn new(operations: Vec<RenderOp>) -> Self {
         Self { operations }
     }
@@ -64,10 +76,13 @@ impl RecordedRenderScene {
 pub struct HeadlessRenderer;
 
 impl HeadlessRenderer {
+    /// Creates a renderer.
     pub fn new() -> Self {
         Self
     }
 
+    /// Walks `tree` from the root and returns the operations in paint order: a node's behind
+    /// drawing, its text, its children, then its overlay drawing.
     pub fn render(&self, tree: &LayoutTree) -> RecordedRenderScene {
         let mut operations = Vec::new();
         self.render_box(tree.root(), &mut operations);

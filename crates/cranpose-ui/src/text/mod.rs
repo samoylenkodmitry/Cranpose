@@ -1,13 +1,21 @@
+/// Styled text: spans, links and string annotations.
 pub mod annotated_string;
+/// Text decorations (underline, line through) and text shadows.
 pub mod decoration;
 pub mod draw_scope_text;
+/// Font weight, style, family and synthesis settings.
 pub mod font;
+/// Options that limit lines, control wrapping and choose the overflow behavior.
 pub mod layout_options;
 pub mod line_box;
+/// Text measurement, line wrapping and cursor hit testing.
 pub mod measure;
+/// Paragraph settings: alignment, direction, line breaking, hyphenation and indent.
 pub mod paragraph;
 mod shared_text;
+/// Text styles: `SpanStyle`, `ParagraphStyle` and `TextStyle`.
 pub mod style;
+/// Text size units: scaled pixels and multiples of the font size.
 pub mod unit;
 mod word_breaks;
 

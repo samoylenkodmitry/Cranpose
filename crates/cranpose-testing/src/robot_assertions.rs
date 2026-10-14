@@ -178,9 +178,13 @@ pub fn assert_count<T>(items: &[T], expected: usize, msg: &str) {
 /// Bounds of a UI element (x, y, width, height)
 #[derive(Clone, Copy, Debug)]
 pub struct Bounds {
+    /// Left edge, in logical pixels.
     pub x: f32,
+    /// Top edge, in logical pixels.
     pub y: f32,
+    /// Width, in logical pixels.
     pub width: f32,
+    /// Height, in logical pixels.
     pub height: f32,
 }
 
@@ -194,10 +198,15 @@ impl Bounds {
 /// Generic semantic element trait for tree traversal
 /// This allows the helpers to work with both cranpose::SemanticElement and similar types
 pub trait SemanticElementLike {
+    /// The element's text or description, when it has one.
     fn text(&self) -> Option<&str>;
+    /// What the element is, as its tree names roles: "Button", "Text".
     fn role(&self) -> &str;
+    /// Whether a click activates the element.
     fn clickable(&self) -> bool;
+    /// Where the element is on screen.
     fn bounds(&self) -> Bounds;
+    /// The elements inside this one.
     fn children(&self) -> &[Self]
     where
         Self: Sized;

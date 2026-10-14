@@ -96,6 +96,7 @@ pub struct LiquidListRowSpec {
 }
 
 impl LiquidListRowSpec {
+    /// Returns the spec with the hairline separator under the row turned on or off.
     pub fn with_separator(mut self, separator: bool) -> Self {
         self.separator = separator;
         self
