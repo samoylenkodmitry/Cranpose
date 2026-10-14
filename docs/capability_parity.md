@@ -29,7 +29,7 @@ platform backend reports an observed value.
 | Launch arguments | iOS and desktop read process arguments; Android reads launch intent extras. Web starts with an empty `launch_args()` snapshot. |
 | Media playback | iOS uses AVFoundation and MediaPlayer; Android uses `cranpose-media` with Android audio focus and media sessions; desktop uses `cranpose-media`; web uses `<audio>`, Media Session, and Web Audio. Native and desktop `cranpose-media` decoders read HTTP(S) sources through byte-range requests. The iOS player accepts HTTP(S) URLs through AVPlayer. The web player passes URIs to the browser audio element. Android document URIs use the media source opener. |
 | Media capabilities | The active player reports seek, speed, loop, analysis, session, equalizer, and probe support through `MediaCapabilities`. Native iOS reports playback analysis and equalizer as unavailable; Android and software playback provide both. |
-| Power | iOS reports thermal state and battery status; Android reports thermal state, battery, and background restrictions. macOS reports thermal state; Linux reports battery status and thermal state, from the highest trip point its thermal zones reached; Windows reports battery status from `PowerManager`. Web reads battery status when `navigator.getBattery` exists. |
+| Power | iOS reports thermal state and battery status; Android reports thermal state, battery, and background restrictions. macOS reports thermal state and battery status, from IOKit's power sources; Linux reports battery status and thermal state, from the highest trip point its thermal zones reached; Windows reports battery status from `PowerManager`. Web reads battery status when `navigator.getBattery` exists. |
 | Bundled assets | iOS streams assets from `NSBundle`; Android streams assets through `AssetManager`; desktop reads beside the executable, from app resources, or from the working directory. Web assets use HTTP. |
 | Incoming content | Android accepts declared media shares and open-with intents at launch and through `onNewIntent`. Desktop and web accept file drops; desktop also reads file paths from `argv`; macOS takes the documents Finder opens with the app, and iOS the ones Files or another app opens with it. |
 | Opened links | Android publishes VIEW intents in the declared schemes at launch and through `onNewIntent`; iOS publishes the scene's open-URL contexts and the web pages of universal links; desktop publishes a URL in a scheme from `argv`, which Windows and Linux pass to a protocol handler. macOS publishes what the application delegate's `application:openURLs:` receives: links, and Finder documents as incoming content. Android, iOS and web publish the deep link of a tapped notification. |
@@ -50,9 +50,10 @@ platform backend reports an observed value.
   CompositionLocal accessors for future API work.
 - Web applications save files through browser downloads. Writable-folder
   selection covers iOS, Android, and desktop.
-- Desktop power support covers macOS thermal state, Linux battery status and
-  thermal state, and Windows battery status. macOS battery status and Windows
-  thermal state remain future platform work.
+- Desktop power support covers macOS thermal state and battery status, Linux
+  battery status and thermal state, and Windows battery status. Windows has no
+  thermal state: it offers applications no thermal signal short of
+  administrator-only WMI zones.
 - Incoming-content adapters cover Android launch intents, desktop/web file
   drops and macOS Finder document opens.
 

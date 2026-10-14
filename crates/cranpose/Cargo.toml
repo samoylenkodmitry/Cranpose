@@ -86,6 +86,8 @@ desktop-shell = [
     "cranpose-app-shell/clipboard-native",
     "dep:objc2",
     "dep:objc2-app-kit",
+    "dep:objc2-core-foundation",
+    "dep:objc2-io-kit",
     "dep:objc2-quartz-core",
     "dep:block2",
     "dep:dispatch2",
@@ -471,6 +473,18 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
     "NSURL",
     "NSUserDefaults",
     "NSValue",
+] }
+# The Mac's battery from IOKit's power sources (`macos_power`).
+objc2-io-kit = { version = "0.3", default-features = false, optional = true, features = [
+    "std",
+    "ps",
+] }
+objc2-core-foundation = { version = "0.3", default-features = false, optional = true, features = [
+    "std",
+    "CFArray",
+    "CFDictionary",
+    "CFNumber",
+    "CFString",
 ] }
 # Custom cursors that keep the size they were drawn at (`macos_cursor`), which
 # winit cannot build. The version winit already resolves.

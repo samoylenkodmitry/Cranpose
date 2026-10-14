@@ -44,7 +44,11 @@ impl PowerMonitor for DesktopPowerMonitor {
         {
             windows_power::battery_status()
         }
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        #[cfg(target_os = "macos")]
+        {
+            crate::macos_power::battery_status()
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
         {
             PowerReading::Unsupported
         }
