@@ -4,8 +4,8 @@
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::{
-    MutableState, RuntimeHandle, State, internal::FrameCallbackRegistration, remember,
-    rememberMutableStateOf, with_current_composer,
+    MutableState, RuntimeHandle, State, internal::FrameCallbackRegistration, mutableStateOf,
+    remember, rememberMutableStateOf, with_current_composer,
 };
 use cranpose_foundation::LiveRegionMode;
 use cranpose_macros::composable;
@@ -44,15 +44,18 @@ pub fn LiquidTooltipBox(
 ) {
     let tooltip = tooltip.into();
     let hover = rememberMutableInteractionSource();
+    // One slot for the states the tooltip keeps; `hovered` follows the
+    // interaction source on every pass.
+    let (focused, long_pressed) =
+        remember(|| (mutableStateOf(false), mutableStateOf(false))).with(|states| *states);
     let shown = Shown {
         hovered: hover.collectIsHoveredAsState(),
-        focused: rememberMutableStateOf(|| false),
-        long_pressed: rememberMutableStateOf(|| false),
+        focused,
+        long_pressed,
     };
     let anchor = rememberMutableStateOf(|| Rect::EMPTY);
     let timer = remember(|| Rc::new(RefCell::new(None))).with(Rc::clone);
     let runtime = with_current_composer(|composer| composer.runtime_handle());
-    let long_pressed = shown.long_pressed;
     let wrapper = modifier
         .report_window_rect_state(anchor)
         .hoverable(hover, true)
@@ -60,7 +63,6 @@ pub fn LiquidTooltipBox(
             long_pressed.set(true);
             hide_later(&timer, &runtime, long_pressed);
         });
-    let focused = shown.focused;
     let mut content = content;
     Box(wrapper, BoxSpec::default(), move || {
         FocusWithin(move |inside| focused.set(inside), &mut content);
