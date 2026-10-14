@@ -12,7 +12,7 @@ publish = false
 workspace = "../../../apps/esp32-demo"
 
 [dependencies]
-cranpose = { path = "../../cranpose", features = ["framebuffer"] }
+cranpose = { path = "../../cranpose", default-features = false, features = ["framebuffer"] }
 esp-idf-svc = "0.53"
 log = "0.4"
 thiserror = "2.0.21"
