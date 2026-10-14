@@ -177,9 +177,11 @@ def print_cpu_samples(path, elf, samples=20):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--elf", required=True, type=pathlib.Path)
+    parser.add_argument("--flash-image", type=pathlib.Path,
+                        help="a merged flash image to boot instead of building one from the ELF")
     parser.add_argument("--bootloader", type=pathlib.Path,
                         help="defaults to the bootloader.bin beside the ELF")
-    parser.add_argument("--partitions", required=True, type=pathlib.Path)
+    parser.add_argument("--partitions", type=pathlib.Path)
     parser.add_argument("--flash-size", default="8mb")
     parser.add_argument("--psram", default="8M")
     parser.add_argument("--qemu")
@@ -191,9 +193,13 @@ def main():
     args = parser.parse_args()
 
     workdir = pathlib.Path(tempfile.mkdtemp(prefix="esp32-qemu-"))
-    image = workdir / "flash.bin"
-    bootloader = args.bootloader or args.elf.parent / "bootloader.bin"
-    flash_image(args.elf, bootloader, args.partitions, args.flash_size, image)
+    image = args.flash_image
+    if image is None:
+        if args.partitions is None:
+            parser.error("--partitions is required to build the flash image")
+        image = workdir / "flash.bin"
+        bootloader = args.bootloader or args.elf.parent / "bootloader.bin"
+        flash_image(args.elf, bootloader, args.partitions, args.flash_size, image)
     efuse = workdir / "efuse.bin"
     efuse_image(efuse)
     monitor_path = workdir / "monitor.sock"
