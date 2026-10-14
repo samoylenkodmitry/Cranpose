@@ -665,10 +665,8 @@ struct App {
     last_redraw_empty: bool,
     primary_redraw_pending: bool,
     primary_surface_dirty: bool,
-    /// Whether the application menu waits for the primary window's first
-    /// presented frame.
     #[cfg(target_os = "macos")]
-    application_menu_owed: bool,
+    application_menu: ApplicationMenu,
     primary_initial_present_pending: bool,
     /// The primary window's GPU, opening while the platform starts.
     gpu_start: GpuStart,
@@ -752,7 +750,7 @@ impl App {
             primary_redraw_pending: false,
             primary_surface_dirty: false,
             #[cfg(target_os = "macos")]
-            application_menu_owed: true,
+            application_menu: ApplicationMenu::Owed,
             primary_initial_present_pending: false,
             gpu_start,
             vsync_interval: default_vsync_interval(),
@@ -6039,7 +6037,7 @@ impl ApplicationHandler for App {
                         after_acquire.duration_since(acquire_started_at),
                     ));
                     #[cfg(target_os = "macos")]
-                    install_owed_application_menu(&mut self.application_menu_owed);
+                    self.application_menu.frame_presented();
                     #[cfg(feature = "robot")]
                     {
                         self.presented_frame_generation =
@@ -6092,6 +6090,8 @@ impl ApplicationHandler for App {
             event_loop.exit();
             return;
         }
+        #[cfg(target_os = "macos")]
+        self.application_menu.install_when_due();
         self.serve_app_requests();
         let now = Instant::now();
         if self.poll_native_window_global_primary_press() {
@@ -7091,12 +7091,34 @@ fn request_primary_device(
     }))
 }
 
-/// Installs the application menu the launch left for after the primary
-/// window's first presented frame (`macos_menu`).
+/// The application menu the launch leaves for after the primary window's
+/// first presented frame (`macos_menu`).
 #[cfg(target_os = "macos")]
-fn install_owed_application_menu(owed: &mut bool) {
-    if std::mem::take(owed) {
-        crate::macos_menu::install_application_menu();
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ApplicationMenu {
+    /// The first frame is not presented yet.
+    Owed,
+    /// The first frame is presented. The menu waits for `about_to_wait`,
+    /// which winit calls after AppKit has committed the pass's window changes
+    /// to the window server: built in the pass that showed the window, it
+    /// held the window off the screen for 12 ms more on an Apple M5.
+    Due,
+    Installed,
+}
+
+#[cfg(target_os = "macos")]
+impl ApplicationMenu {
+    fn frame_presented(&mut self) {
+        if *self == Self::Owed {
+            *self = Self::Due;
+        }
+    }
+
+    fn install_when_due(&mut self) {
+        if *self == Self::Due {
+            crate::macos_menu::install_application_menu();
+            *self = Self::Installed;
+        }
     }
 }
 
