@@ -2475,7 +2475,10 @@ fn semantics_tree_carries_the_controls_a_canvas_published() -> Result<(), NodeEr
     assert_eq!(switch.key, 9);
     assert_eq!(switch.label, "Haptics");
     assert_eq!(switch.role, Some(SemanticsWidgetRole::Switch));
-    assert_eq!(switch.toggled, Some(false));
+    assert_eq!(
+        switch.toggled,
+        Some(cranpose_foundation::ToggleableState::Off)
+    );
     assert_eq!(switch.state_description.as_deref(), Some("Off"));
     assert!(switch.clickable);
     assert_eq!(switch.bounds.y, 8.0);

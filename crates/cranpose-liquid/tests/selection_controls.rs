@@ -8,7 +8,7 @@ use cranpose_testing::{
     MINIMUM_TARGET_SIZE, PlacedSemanticsNode, RobotTestRule, TestRenderer,
     create_headless_robot_test, placed_semantics_from_shell,
 };
-use cranpose_ui::{Column, ColumnSpec, Modifier, SemanticsWidgetRole};
+use cranpose_ui::{Column, ColumnSpec, Modifier, SemanticsWidgetRole, ToggleableState};
 
 fn placed(robot: &mut RobotTestRule<TestRenderer>) -> PlacedSemanticsNode {
     robot.shell_mut().set_semantics_enabled(true);
@@ -43,7 +43,7 @@ fn a_checkbox_toggles_on_a_tap_and_on_a_reader_activation() {
     let root = placed(&mut robot);
     let checkbox = tagged(&root, "remember");
     assert_eq!(checkbox.widget_role, Some(SemanticsWidgetRole::Checkbox));
-    assert_eq!(checkbox.toggled, Some(false));
+    assert_eq!(checkbox.toggled, Some(ToggleableState::Off));
     let target = checkbox.target_bounds();
     assert!(
         target.width >= MINIMUM_TARGET_SIZE && target.height >= MINIMUM_TARGET_SIZE,
@@ -58,7 +58,7 @@ fn a_checkbox_toggles_on_a_tap_and_on_a_reader_activation() {
     robot.wait_for_idle();
     assert!(state.get(), "a tap checks it");
     let root = placed(&mut robot);
-    assert_eq!(tagged(&root, "remember").toggled, Some(true));
+    assert_eq!(tagged(&root, "remember").toggled, Some(ToggleableState::On));
 
     let node = tagged(&root, "remember").node_id;
     assert!(robot.shell_mut().accessibility_activate(node, None));
@@ -110,4 +110,44 @@ fn a_radio_group_picks_one_option() {
     let root = placed(&mut robot);
     assert_eq!(tagged(&root, "Standard").selected, Some(false));
     assert_eq!(tagged(&root, "Express").selected, Some(true));
+}
+
+#[test]
+fn a_tri_state_checkbox_reads_its_partial_state_and_lets_the_app_pick_the_next() {
+    let shown: std::rc::Rc<std::cell::Cell<Option<MutableState<ToggleableState>>>> =
+        Default::default();
+    let installed = std::rc::Rc::clone(&shown);
+    let mut robot = create_headless_robot_test(300, 200, move || {
+        let state = rememberMutableStateOf(|| ToggleableState::Indeterminate);
+        installed.set(Some(state));
+        LiquidTheme(LiquidThemeSpec::default(), move || {
+            LiquidTriStateCheckbox(
+                Modifier::empty()
+                    .content_description("Select all")
+                    .test_tag("all"),
+                state.get(),
+                move || {
+                    state.set(match state.get() {
+                        ToggleableState::On => ToggleableState::Off,
+                        ToggleableState::Off | ToggleableState::Indeterminate => {
+                            ToggleableState::On
+                        }
+                    });
+                },
+            );
+        });
+    });
+    let state = shown.get().expect("the state is installed");
+    let root = placed(&mut robot);
+    assert_eq!(
+        tagged(&root, "all").toggled,
+        Some(ToggleableState::Indeterminate)
+    );
+    let target = tagged(&root, "all").target_bounds();
+    assert!(robot.click_at(
+        target.x + target.width / 2.0,
+        target.y + target.height / 2.0
+    ));
+    robot.wait_for_idle();
+    assert_eq!(state.get(), ToggleableState::On);
 }

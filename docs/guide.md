@@ -3590,6 +3590,23 @@ LiquidCheckbox(
 );
 ```
 
+`LiquidTriStateCheckbox` adds a partly checked state, for a box over a list
+whose items are partly checked; readers hear "mixed":
+
+```rust preview=tri_state_checkbox
+use cranpose::liquid::prelude::*;
+
+let all = rememberMutableStateOf(|| ToggleableState::Indeterminate);
+LiquidTriStateCheckbox(
+    Modifier::empty().content_description("Select all"),
+    all.get(),
+    move || all.set(match all.get() {
+        ToggleableState::On => ToggleableState::Off,
+        _ => ToggleableState::On,
+    }),
+);
+```
+
 #### LiquidRadioButton
 
 Show one option of a group. Put the group in a `selectable_group` container,

@@ -9,6 +9,7 @@ use cranpose_render_common::Renderer;
 use cranpose_ui::{
     Announcement, CollectionInfo, LiveRegionMode, ProgressBarRangeInfo, ScrollAxisRange,
     SemanticsAction, SemanticsDetails, SemanticsNode, SemanticsRole, SemanticsWidgetRole,
+    ToggleableState,
 };
 
 #[path = "accessibility_identity.rs"]
@@ -362,7 +363,7 @@ pub(crate) struct AccessibilityElement {
     pub(crate) role: AccessibilityRole,
     pub(crate) clickable: bool,
     pub(crate) selected: Option<bool>,
-    pub(crate) toggled: Option<bool>,
+    pub(crate) toggled: Option<ToggleableState>,
     pub(crate) enabled: bool,
     pub(crate) focusable: bool,
     pub(crate) tab_stop: bool,
@@ -886,9 +887,12 @@ fn is_container(node: &SemanticsNode) -> bool {
             .is_some_and(|role| AccessibilityRole::from_widget_role(role).is_named_container())
 }
 
-pub(crate) fn checked_state(element: &AccessibilityElement) -> Option<bool> {
+pub(crate) fn checked_state(element: &AccessibilityElement) -> Option<ToggleableState> {
     if element.role == AccessibilityRole::RadioButton {
-        element.selected.or(element.toggled)
+        element
+            .selected
+            .map(ToggleableState::from)
+            .or(element.toggled)
     } else {
         element.toggled
     }
@@ -2090,10 +2094,14 @@ pub(crate) fn spoken_line(element: &AccessibilityElement) -> String {
         .chain(details.magic_tap_label.as_deref())
         .collect();
     let mut parts: Vec<String> = vec![name, role_word.to_string()];
-    parts.extend(
-        checked_state(element)
-            .map(|on| if on { toggle_words.0 } else { toggle_words.1 }.to_string()),
-    );
+    parts.extend(checked_state(element).map(|state| {
+        match state {
+            ToggleableState::On => toggle_words.0,
+            ToggleableState::Off => toggle_words.1,
+            ToggleableState::Indeterminate => "partially checked",
+        }
+        .to_string()
+    }));
     parts.extend(
         element
             .selected
@@ -2230,10 +2238,11 @@ pub(crate) fn voiceover_value(element: &AccessibilityElement) -> Option<String> 
     {
         if let Some(checked) = checked_state(element) {
             let word = match (element.role, checked) {
-                (AccessibilityRole::Switch, true) => "on",
-                (AccessibilityRole::Switch, false) => "off",
-                (_, true) => "checked",
-                (_, false) => "not checked",
+                (_, ToggleableState::Indeterminate) => "partially checked",
+                (AccessibilityRole::Switch, ToggleableState::On) => "on",
+                (AccessibilityRole::Switch, ToggleableState::Off) => "off",
+                (_, ToggleableState::On) => "checked",
+                (_, ToggleableState::Off) => "not checked",
             };
             parts.push(word.to_owned());
         }

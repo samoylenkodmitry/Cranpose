@@ -78,7 +78,7 @@ pub struct PlacedSemanticsNode {
     /// Whether the renderer carries any pointer-dispatch region for the node.
     /// This also includes gesture-only containers such as scrollable lists.
     pub interactive: bool,
-    pub toggled: Option<bool>,
+    pub toggled: Option<cranpose_ui::ToggleableState>,
     pub selected: Option<bool>,
     pub enabled: bool,
     /// Whether a reader can type into the node.

@@ -37,7 +37,7 @@ pub use button::{
     GlassIconButtonGroupSpec,
 };
 pub use card::{Card, LiquidCard, LiquidListRow, LiquidListRowSpec, LiquidListSection, Surface};
-pub use checkbox::{LiquidCheckbox, LiquidRadioButton};
+pub use checkbox::{LiquidCheckbox, LiquidRadioButton, LiquidTriStateCheckbox};
 pub use chip::{LiquidActionChip, LiquidChip};
 pub use glass_surface::GlassSurface;
 #[cfg(feature = "localization")]

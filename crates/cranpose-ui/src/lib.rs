@@ -105,7 +105,7 @@ pub use cranpose_foundation::{
     SemanticsConfiguration, SemanticsCustomAction, SemanticsDismiss, SemanticsExpand,
     SemanticsLongClick, SemanticsMagicTap, SemanticsScrollBy, SemanticsScrollToIndex,
     SemanticsSetProgress, SemanticsSetSelection, SemanticsSetText, SemanticsSpec,
-    SemanticsWidgetRole,
+    SemanticsWidgetRole, ToggleableState,
     lazy::{
         LazyItems, LazyListItemInfo, LazyListLayoutInfo, LazyListScope, LazyListState,
         rememberLazyListState, rememberLazyListStateWithPosition,

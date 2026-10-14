@@ -1,7 +1,7 @@
 use cranpose_animation::{AnimationSpec, AnimationType, Easing, animateColorAsState};
 use cranpose_macros::composable;
 use cranpose_ui::{
-    Alignment, Modifier, Point, SemanticsWidgetRole, Size,
+    Alignment, Modifier, Point, SemanticsWidgetRole, Size, ToggleableState,
     widgets::{Box, BoxSpec},
 };
 use cranpose_ui_graphics::{Brush, Color, CornerRadii, Rect, Stroke, StrokeCap, StrokeJoin};
@@ -29,9 +29,25 @@ fn mark_motion() -> AnimationType {
 /// Compose's `Checkbox(checked, onCheckedChange)`.
 #[composable]
 pub fn LiquidCheckbox(modifier: Modifier, checked: bool, on_change: impl Fn(bool) + 'static) {
+    LiquidTriStateCheckbox(modifier, checked.into(), move || on_change(!checked));
+}
+
+/// A check box that is checked, unchecked or partly checked, such as the
+/// box over a list whose items are partly checked. `state` is owned by the
+/// caller; `on_click` decides the next state. A partly checked box shows a
+/// dash, and readers hear "mixed" or "partially checked".
+///
+/// Compose's `TriStateCheckbox(state, onClick)`.
+#[composable]
+pub fn LiquidTriStateCheckbox(
+    modifier: Modifier,
+    state: ToggleableState,
+    on_click: impl Fn() + 'static,
+) {
     let colors = liquid_colors();
+    let marked = state != ToggleableState::Off;
     let fill = animateColorAsState(
-        if checked {
+        if marked {
             colors.accent
         } else {
             Color::TRANSPARENT
@@ -40,18 +56,14 @@ pub fn LiquidCheckbox(modifier: Modifier, checked: bool, on_change: impl Fn(bool
         "checkbox-fill",
     )
     .value();
-    let outline = if checked {
+    let outline = if marked {
         colors.accent
     } else {
         colors.secondary_label
     };
-    let check = colors.on_accent;
-    let control = modifier.toggleable(
-        checked,
-        None,
-        Some(SemanticsWidgetRole::Checkbox),
-        on_change,
-    );
+    let mark = colors.on_accent;
+    let control =
+        modifier.tri_state_toggleable(state, None, Some(SemanticsWidgetRole::Checkbox), on_click);
     SelectionControl(control, move |scope| {
         let bounds = Rect::from_size(scope.size());
         let radii = CornerRadii::uniform(BOX_RADIUS);
@@ -69,8 +81,10 @@ pub fn LiquidCheckbox(modifier: Modifier, checked: bool, on_change: impl Fn(bool
             CornerRadii::uniform(BOX_RADIUS - half),
             Stroke::new(OUTLINE_WIDTH),
         );
-        if checked {
-            draw_check(scope, check);
+        match state {
+            ToggleableState::On => draw_check(scope, mark),
+            ToggleableState::Indeterminate => draw_dash(scope, mark),
+            ToggleableState::Off => {}
         }
     });
 }
@@ -127,6 +141,17 @@ fn SelectionControl(
         move || {
             Box(mark.clone(), BoxSpec::default(), || {});
         },
+    );
+}
+
+/// The partly checked mark: a dash across the middle.
+fn draw_dash(scope: &mut dyn cranpose_ui_graphics::DrawScope, color: Color) {
+    let stroke = Stroke::new(CHECK_WIDTH).with_cap(StrokeCap::Round);
+    scope.draw_line(
+        Brush::solid(color),
+        Point::new(MARK_SIZE * 0.3, MARK_SIZE * 0.5),
+        Point::new(MARK_SIZE * 0.7, MARK_SIZE * 0.5),
+        stroke,
     );
 }
 

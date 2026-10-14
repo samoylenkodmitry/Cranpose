@@ -354,7 +354,7 @@ fn records_carry_every_field_java_reads() {
             bounds: AccessibilityRect::new(1.25, 2.5, 30.0, 40.75),
             role: AccessibilityRole::Switch,
             clickable: true,
-            toggled: Some(true),
+            toggled: Some(ToggleableState::On),
             ..AccessibilityElement::default()
         },
         element_with(5, Some(1)),
@@ -437,7 +437,7 @@ fn every_encoded_record_carries_the_fields_java_parses() {
             bounds: AccessibilityRect::new(1.0, 2.0, 30.0, 40.0),
             role: AccessibilityRole::Switch,
             clickable: true,
-            toggled: Some(true),
+            toggled: Some(ToggleableState::On),
             ..AccessibilityElement::default()
         },
         element_with(5, Some(1)),
@@ -840,4 +840,20 @@ fn fields_are_written_little_endian_and_text_after_its_length() {
     assert_eq!(out, expected);
     assert_eq!(count(usize::MAX), i32::MAX);
     assert_eq!(count(12), 12);
+}
+
+#[test]
+fn a_partly_checked_box_encodes_its_state_as_two() {
+    let elements = vec![AccessibilityElement {
+        node_id: 5,
+        label: "Select all".into(),
+        bounds: AccessibilityRect::new(1.0, 2.0, 30.0, 40.0),
+        role: AccessibilityRole::Checkbox,
+        clickable: true,
+        toggled: Some(ToggleableState::Indeterminate),
+        ..AccessibilityElement::default()
+    }];
+    let payload = encode_elements(&elements, 1.0);
+    let fields: Vec<_> = payload.split('\t').collect();
+    assert_eq!(fields[14], "2", "partly checked");
 }
