@@ -53,7 +53,9 @@ pub(crate) fn install() -> Option<Retained<ApplicationDelegate>> {
 fn open(url: &NSURL) {
     if url.isFileURL() {
         if let Some(path) = url.path() {
-            crate::desktop_incoming::publish_file(Path::new(&path.to_string()));
+            cranpose_services::publish_incoming_content(
+                cranpose_services::IncomingContent::from_file(Path::new(&path.to_string())),
+            );
         }
     } else if let Some(link) = url.absoluteString() {
         cranpose_services::publish_opened_link(link.to_string());

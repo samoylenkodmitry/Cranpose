@@ -381,3 +381,36 @@ fn the_json_and_the_generated_rust_carry_the_link_schemes() {
     assert_eq!(declaration.capabilities.opens, &AUDIO);
     assert_eq!(declaration.capabilities.links, &SCHEMES);
 }
+
+#[test]
+fn the_apple_list_offers_the_application_for_the_types_it_opens() {
+    let opens = [
+        "audio/*",
+        "application/ogg",
+        "image/x-icon",
+        "image/png",
+        "application/pdf",
+        "audio/mpeg",
+    ];
+    let text = apple_usage(&Capabilities {
+        opens: &opens,
+        ..PLAYER
+    });
+    assert!(
+        text.contains(
+            "\t<key>CFBundleDocumentTypes</key>\n\t<array>\n\t\t<dict>\n\
+         \t\t\t<key>CFBundleTypeName</key>\n\t\t\t<string>Documents</string>\n\
+         \t\t\t<key>CFBundleTypeRole</key>\n\t\t\t<string>Viewer</string>\n\
+         \t\t\t<key>LSHandlerRank</key>\n\t\t\t<string>Alternate</string>\n\
+         \t\t\t<key>LSItemContentTypes</key>\n\t\t\t<array>\n\
+         \t\t\t\t<string>public.audio</string>\n\
+         \t\t\t\t<string>public.image</string>\n\
+         \t\t\t\t<string>public.png</string>\n\
+         \t\t\t\t<string>com.adobe.pdf</string>\n\
+         \t\t\t\t<string>public.mp3</string>\n\
+         \t\t\t</array>\n\t\t</dict>\n\t</array>\n"
+        ),
+        "an unknown application type is left out: {text}"
+    );
+    assert!(!apple_usage(&LINKED).contains("CFBundleDocumentTypes"));
+}

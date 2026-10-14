@@ -55,11 +55,20 @@ define_class!(
     unsafe impl UIWindowSceneDelegate for SceneDelegate {}
 );
 
-/// Publishes the URLs in one of the app's schemes that the scene was asked
-/// to open.
+/// Publishes what the scene was asked to open: a document from Files or
+/// another app as incoming content, and a URL in one of the app's schemes as
+/// an opened link.
 fn publish_url_contexts(contexts: &NSSet<UIOpenURLContext>) {
     for context in contexts {
-        publish_url(&context.URL());
+        let url = context.URL();
+        match url.path().filter(|_| url.isFileURL()) {
+            Some(path) => cranpose_services::publish_incoming_content(
+                cranpose_services::IncomingContent::from_file(std::path::Path::new(
+                    &path.to_string(),
+                )),
+            ),
+            None => publish_url(&url),
+        }
     }
 }
 
