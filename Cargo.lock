@@ -1689,7 +1689,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu"
-version = "30.0.19"
+version = "30.0.20"
 dependencies = [
  "arrayvec",
  "bitflags 2.13.2",
@@ -1717,7 +1717,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu-core"
-version = "30.0.16"
+version = "30.0.17"
 dependencies = [
  "arrayvec",
  "bit-set 0.10.0",
