@@ -32,6 +32,7 @@ mod pointer_input_integration_test;
 mod remember_keyed_test;
 mod render_invalidation_test;
 mod robot_input;
+mod scroll_in_progress_test;
 mod secure_text_field_test;
 mod seekable_crossfade_test;
 mod shared_element_test;

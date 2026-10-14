@@ -9,7 +9,7 @@
 //! extension methods are defined in `modifier/scroll.rs`.
 
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     hash::{Hash, Hasher},
     rc::{Rc, Weak},
 };
@@ -71,6 +71,7 @@ impl InvalidationCallbacks {
 #[derive(Clone, Copy)]
 pub struct ScrollState {
     value: MutableState<f32>,
+    in_progress: MutableState<bool>,
     inner: MutableState<Rc<ScrollStateInner>>,
 }
 
@@ -293,6 +294,7 @@ impl ScrollState {
             .expect("ScrollState::new requires an active runtime");
         Self {
             value: MutableState::with_runtime(initial, runtime.clone()),
+            in_progress: MutableState::with_runtime(false, runtime.clone()),
             inner: MutableState::with_runtime(
                 Rc::new(ScrollStateInner {
                     max_value: RefCell::new(0.0),
@@ -318,6 +320,19 @@ impl ScrollState {
     /// The currently installed settle policy, if any.
     pub fn settle_policy(&self) -> Option<ScrollSettlePolicy> {
         self.inner().settle_policy.borrow().clone()
+    }
+
+    /// Whether a drag, a fling or a settle moves the content now: Compose's
+    /// `isScrollInProgress`. A composable that reads it recomposes when a
+    /// scroll starts and when it ends.
+    pub fn is_scroll_in_progress(&self) -> bool {
+        self.in_progress.is_alive() && self.in_progress.get()
+    }
+
+    pub(crate) fn set_scroll_in_progress(&self, active: bool) {
+        if self.in_progress.is_alive() && self.in_progress.get_non_reactive() != active {
+            self.in_progress.set(active);
+        }
     }
 
     /// Get the unique ID of this ScrollState
@@ -480,6 +495,9 @@ pub(crate) enum ScrollMotionContextKey {
 
 struct ScrollMotionContextInner {
     active: Cell<bool>,
+    /// Told when `active` changes: the scrolled state's
+    /// `is_scroll_in_progress` follows it.
+    activity_observer: OnceCell<Box<dyn Fn(bool)>>,
     transient_active: Cell<bool>,
     generation: Cell<u64>,
     invalidate_callbacks: InvalidationCallbacks,
@@ -535,6 +553,7 @@ impl ScrollMotionContext {
         Self {
             inner: Rc::new(ScrollMotionContextInner {
                 active: Cell::new(false),
+                activity_observer: OnceCell::new(),
                 transient_active: Cell::new(false),
                 generation: Cell::new(0),
                 invalidate_callbacks: InvalidationCallbacks::new(),
@@ -560,9 +579,19 @@ impl ScrollMotionContext {
         self.inner.overscroll.clone()
     }
 
+    /// Installs the observer `make` builds unless one is installed: a context
+    /// belongs to one scroll state, so its first observer stays right.
+    pub(crate) fn observe_activity(&self, make: impl FnOnce() -> Box<dyn Fn(bool)>) {
+        self.inner.activity_observer.get_or_init(make);
+    }
+
     pub(crate) fn set_active(&self, active: bool) {
         let was_active = self.is_active();
-        self.inner.active.set(active);
+        if self.inner.active.replace(active) != active
+            && let Some(observer) = self.inner.activity_observer.get()
+        {
+            observer(active);
+        }
         if !active {
             self.inner.transient_active.set(false);
         }

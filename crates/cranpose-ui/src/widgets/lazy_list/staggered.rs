@@ -177,6 +177,12 @@ impl LazyStaggeredGridState {
         crate::AnimateScroll::animate_scroll_to_item(&self.list, index, offset);
     }
 
+    /// Whether a drag, a fling or an animation moves the grid now:
+    /// Compose's `isScrollInProgress`.
+    pub fn is_scroll_in_progress(&self) -> bool {
+        self.list.is_scroll_in_progress()
+    }
+
     /// The state of the column the lanes sit in, for a scroll indicator.
     pub fn lazy_list_state(&self) -> LazyListState {
         self.list

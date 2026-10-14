@@ -8,13 +8,39 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
 use cranpose_testing::{robot::TestRenderer, robot_assertions::find_semantics_node};
 use cranpose_ui::{
-    Box, BoxSpec, HorizontalPager, Modifier, PageSize, PagerSpec, PagerState, VerticalPager,
-    rememberPagerState,
+    Box, BoxSpec, HorizontalPager, Modifier, PaddingValues, PageSize, PagerSpec, PagerState,
+    VerticalPager, composable, rememberPagerState,
 };
+
+/// A composition counter that stays equal to itself while it counts, so it
+/// does not make its reader recompose.
+#[derive(Clone, Default)]
+struct Reads(Rc<Cell<usize>>);
+
+impl PartialEq for Reads {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+#[composable]
+fn SettledReader(pager: PagerState, reads: Reads) {
+    let _ = pager.settled_page();
+    reads.0.set(reads.0.get() + 1);
+}
 
 const WIDTH: f32 = 300.0;
 const HEIGHT: f32 = 200.0;
 const PAGES: usize = 5;
+
+/// The point at `main` along the pager's axis, in the middle of the other.
+fn point(horizontal: bool, main: f32) -> (f32, f32) {
+    if horizontal {
+        (main, HEIGHT / 2.0)
+    } else {
+        (WIDTH / 2.0, main)
+    }
+}
 
 struct Pager {
     shell: AppShell<TestRenderer>,
@@ -29,6 +55,12 @@ impl Pager {
     }
 
     fn with(horizontal: bool, spec: PagerSpec) -> Self {
+        Self::reading(horizontal, spec, Reads::default())
+    }
+
+    /// A pager beside a composable that reads its settled page and counts
+    /// its compositions in `settled_reads`.
+    fn reading(horizontal: bool, spec: PagerSpec, settled_reads: Reads) -> Self {
         let state = Rc::new(Cell::new(None));
         let captured = Rc::clone(&state);
         let mut shell = AppShell::new(
@@ -52,6 +84,7 @@ impl Pager {
                 } else {
                     VerticalPager(size, pager, spec, PAGES, page);
                 }
+                SettledReader(pager, settled_reads.clone());
             },
         );
         shell.set_viewport(WIDTH, HEIGHT);
@@ -81,28 +114,30 @@ impl Pager {
     /// Drags along the main axis from `from` to `to` in `millis`, lets go,
     /// and runs the frames the settle takes.
     fn drag(&mut self, horizontal: bool, from: f32, to: f32, millis: i64) {
-        let point = |main: f32| {
-            if horizontal {
-                (main, HEIGHT / 2.0)
-            } else {
-                (WIDTH / 2.0, main)
-            }
-        };
-        let (x, y) = point(from);
+        self.press_and_move(horizontal, from, to, millis);
+        self.release(horizontal, to);
+        self.frames(90);
+    }
+
+    /// Presses at `from` and moves to `to` in `millis` without letting go.
+    fn press_and_move(&mut self, horizontal: bool, from: f32, to: f32, millis: i64) {
+        let (x, y) = point(horizontal, from);
         self.shell.set_cursor_at_time(x, y, Some(self.now_ms));
         self.shell.pointer_pressed_at_time(Some(self.now_ms));
         let steps = 10;
         for step in 1..=steps {
             self.now_ms += millis / steps;
-            let (x, y) = point(from + (to - from) * step as f32 / steps as f32);
+            let (x, y) = point(horizontal, from + (to - from) * step as f32 / steps as f32);
             self.shell.set_cursor_at_time(x, y, Some(self.now_ms));
             self.frames(1);
         }
+    }
+
+    fn release(&mut self, horizontal: bool, at: f32) {
         self.now_ms += 8;
-        let (x, y) = point(to);
+        let (x, y) = point(horizontal, at);
         self.shell
             .pointer_released_at_position_time(x, y, Some(self.now_ms));
-        self.frames(90);
     }
 
     /// Where page `page` starts along the main axis, or `None` when it is
@@ -279,6 +314,7 @@ fn fixed_pages_with_spacing_show_the_next_page_and_turn_by_a_page_and_a_gap() {
     let spec = PagerSpec {
         page_size: PageSize::Fixed(200.0),
         page_spacing: 10.0,
+        ..PagerSpec::default()
     };
     let mut pager = Pager::with(true, spec);
     let start = |pager: &mut Pager, page| {
@@ -291,4 +327,74 @@ fn fixed_pages_with_spacing_show_the_next_page_and_turn_by_a_page_and_a_gap() {
     assert!(pager.rests_on(true, 1), "past half of 210 pixels turns it");
     assert_eq!(start(&mut pager, 2), Some(210.0));
     assert!(pager.state().current_page_offset_fraction().abs() < 0.001);
+}
+
+#[test]
+fn the_settled_page_stays_until_a_swipe_or_an_animation_comes_to_rest() {
+    let mut pager = Pager::new(true);
+    assert!(!pager.state().is_scroll_in_progress());
+    pager.press_and_move(true, 250.0, 80.0, 1_000);
+    let state = pager.state();
+    assert!(state.is_scroll_in_progress(), "a drag scrolls");
+    assert_eq!(state.current_page(), 1, "past half a page");
+    assert_eq!(state.settled_page(), 0, "the drag began on page 0");
+    pager.release(true, 80.0);
+    pager.frames(90);
+    assert!(!state.is_scroll_in_progress(), "the settle came to rest");
+    assert_eq!(state.settled_page(), 1);
+
+    state.animate_scroll_to_page(3);
+    pager.frames(4);
+    assert!(state.is_scroll_in_progress(), "an animation scrolls");
+    assert_eq!(state.settled_page(), 1, "the animation began on page 1");
+    pager.frames(120);
+    assert!(!state.is_scroll_in_progress());
+    assert_eq!(state.settled_page(), 3);
+}
+
+#[test]
+fn a_reader_of_the_settled_page_recomposes_when_a_swipe_starts_and_ends() {
+    let reads = Reads::default();
+    let mut pager = Pager::reading(true, PagerSpec::default(), reads.clone());
+    let before = reads.0.get();
+    pager.drag(true, 250.0, 80.0, 1_000);
+    assert!(pager.rests_on(true, 1));
+    let swipe = reads.0.get() - before;
+    assert!(
+        (1..=3).contains(&swipe),
+        "a swipe of 10 moves and 90 settle frames recomposed the reader {swipe} times"
+    );
+}
+
+#[test]
+fn content_padding_rests_a_page_after_the_start_padding_with_its_neighbours_beside() {
+    let spec = PagerSpec {
+        content_padding: PaddingValues::new(30.0, 0.0, 30.0, 0.0),
+        ..PagerSpec::default()
+    };
+    let mut pager = Pager::with(true, spec);
+    let start = |pager: &mut Pager, page| {
+        pager
+            .start(true, page)
+            .map(|start| (start * 100.0).round() / 100.0)
+    };
+    assert_eq!(start(&mut pager, 0), Some(30.0), "after the start padding");
+    assert_eq!(
+        start(&mut pager, 1),
+        Some(270.0),
+        "the next page in the end padding"
+    );
+    pager.drag(true, 250.0, 120.0, 1_000);
+    assert_eq!(pager.state().settled_page(), 1);
+    assert_eq!(
+        start(&mut pager, 1),
+        Some(30.0),
+        "page 1 rests after the padding"
+    );
+    assert_eq!(
+        start(&mut pager, 0),
+        Some(-210.0),
+        "page 0 shows in the start padding"
+    );
+    assert_eq!(start(&mut pager, 2), Some(270.0));
 }
