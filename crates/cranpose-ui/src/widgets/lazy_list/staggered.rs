@@ -8,16 +8,16 @@ use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::NodeId;
 use cranpose_foundation::lazy::{
-    LazyItemSource as _, LazyListIntervalContent, LazyListMeasureResult, LazyListMeasuredItem,
-    LazyListState, LazyStaggeredItemSource, StaggeredGridMeasureConfig, StaggeredLanes,
-    measure_lazy_staggered_grid, rememberLazyListStateWithPosition,
+    BeyondItem, LazyItemSource as _, LazyListIntervalContent, LazyListMeasureResult,
+    LazyListMeasuredItem, LazyListState, LazyStaggeredItemSource, StaggeredGridMeasureConfig,
+    StaggeredLanes, measure_lazy_staggered_grid, rememberLazyListStateWithPosition,
 };
 use cranpose_ui_layout::{LinearArrangement, MeasureScope as _};
 
 use super::{
     LazyColumnNode, LazyColumnSpec, LazyFrame, LazyListContentHandle, LazyListItemMeasureInputs,
     LazyListItems, LazyListMeasureContext, LazyRowNode, LazyRowSpec, PaddingValues,
-    SubcomposeMeasureScopeImpl, beyond_composition,
+    SubcomposeMeasureScopeImpl, beyond_composition, focused_lazy_item,
     grid::{CellLayout, CellSizes, GridCells, line_span_scope},
     lazy_list_child_constraints, request_beyond_items,
 };
@@ -177,6 +177,8 @@ impl PartialEq for StaggeredLayout {
 /// as wide as its lane, or as the whole line.
 struct StaggeredItems<'s, 'a, 'i> {
     items: LazyListItems<'s, 'a, 'i>,
+    /// The item that holds the focus.
+    focused: Option<usize>,
     lanes: usize,
     sizes: CellSizes,
     /// The width of the whole line.
@@ -209,14 +211,21 @@ impl LazyStaggeredItemSource for StaggeredItems<'_, '_, '_> {
         self.items.measure(index)
     }
 
-    fn keep_beyond(&mut self, index: usize, lane: Option<usize>, distance: f32) -> bool {
+    fn keep_beyond(&mut self, index: usize, lane: Option<usize>, distance: f32) -> BeyondItem {
         let composed = self.items.composed(index);
         if !self.items.admits(composed, distance) {
-            return false;
+            return BeyondItem::Declined;
         }
         self.items.inputs.cross_axis_size = self.width(lane);
+        if self.items.place_beyond {
+            return BeyondItem::Placed(self.items.measure(index));
+        }
         self.items.keep(index, composed);
-        true
+        BeyondItem::Kept
+    }
+
+    fn focused_item(&self) -> Option<usize> {
+        self.focused
     }
 }
 
@@ -251,6 +260,10 @@ pub(super) fn measure_staggered_viewport(
         state,
         measured_item_cache: context.measured_item_cache,
     };
+    // While the grid holds the focus, the focused item stays placed and so
+    // do the items beyond the viewport, where a focus search can move into
+    // them.
+    let focused = focused_lazy_item(scope, &inputs);
     let node_id = scope.root_id();
     let scroll_delta = state.peek_scroll_delta();
     let mut source = StaggeredItems {
@@ -260,9 +273,10 @@ pub(super) fn measure_staggered_viewport(
             near,
             scroll_delta,
             skipped_slots_recycled: false,
-            place_beyond: false,
+            place_beyond: focused.is_some(),
             beyond: None,
         },
+        focused,
         lanes,
         sizes,
         full: available,

@@ -9,11 +9,13 @@
 //! out longer or shorter than the average size they had. The lanes line up
 //! again from the first item once a scroll reaches it.
 
+use std::ops::Range;
+
 use smallvec::{SmallVec, smallvec};
 
 use super::{
     lazy_list_measure::{
-        LazyListMeasureConfig, MAX_UNBOUNDED_REALIZED_ITEMS, publish_without_items,
+        BeyondItem, LazyListMeasureConfig, MAX_UNBOUNDED_REALIZED_ITEMS, publish_without_items,
     },
     lazy_list_measured_item::{LazyListMeasureResult, LazyListMeasuredItem},
     lazy_list_state::{LazyListLayoutInfo, LazyListState},
@@ -71,9 +73,14 @@ pub trait LazyStaggeredItemSource {
     fn measure(&mut self, index: usize, lane: Option<usize>) -> LazyListMeasuredItem;
 
     /// Keeps the item at `index`, which starts `distance` past the
-    /// viewport, composed ahead of a scroll without placing it. `false`
-    /// keeps no further item on that side.
-    fn keep_beyond(&mut self, index: usize, lane: Option<usize>, distance: f32) -> bool;
+    /// viewport, composed ahead of a scroll, as a list does with
+    /// [`super::LazyItemSource::keep_beyond`], in `lane` or across the whole
+    /// line when `lane` is `None`.
+    fn keep_beyond(&mut self, index: usize, lane: Option<usize>, distance: f32) -> BeyondItem;
+
+    /// The item that holds the focus, which stays placed wherever the grid
+    /// scrolled it.
+    fn focused_item(&self) -> Option<usize>;
 }
 
 /// The lanes of a staggered grid's measure pass, by where each starts across
@@ -522,7 +529,7 @@ fn fill_viewport<S: LazyStaggeredItemSource>(
 /// layout to `state`.
 #[expect(clippy::too_many_arguments)]
 fn publish<S: LazyStaggeredItemSource>(
-    lanes: &StaggeredLanes,
+    lanes: &mut StaggeredLanes,
     pass: &Pass,
     config: &LazyListMeasureConfig,
     fill: Fill,
@@ -536,7 +543,8 @@ fn publish<S: LazyStaggeredItemSource>(
         item.offset += pass.before - scroll;
     }
     let first = visible.first().map_or(anchor, |item| item.index);
-    keep_beyond(lanes, first, &visible, pass.items_count, config, source);
+    let last = visible.last().map_or(first, |item| item.index);
+    let placed = place_beyond(lanes, pass, config, scroll, first..last + 1, source);
     let first_offset = scroll - lanes.slots[first].start;
     match visible.first() {
         Some(item) => state.update_scroll_position_with_key(first, first_offset, item.key),
@@ -569,12 +577,14 @@ fn publish<S: LazyStaggeredItemSource>(
         reverse_layout: config.reverse_layout,
     });
     state.update_scroll_bounds();
-    let last = visible.last().map_or(first, |item| item.index);
     let can_scroll_forward = !pass.unbounded
         && (last + 1 < pass.items_count
             || visible
                 .iter()
                 .any(|item| item.offset + item.main_axis_size > viewport - pass.after + 0.5));
+    // The items beyond the viewport are placed, but not in view.
+    visible.extend(placed);
+    visible.sort_unstable_by_key(|item| item.index);
     LazyListMeasureResult {
         visible_items: visible,
         first_visible_item_index: first,
@@ -586,30 +596,69 @@ fn publish<S: LazyStaggeredItemSource>(
     }
 }
 
-/// Keeps the items on either side of the visible ones composed, as many as
-/// the configuration asks for, nearest first.
-fn keep_beyond<S: LazyStaggeredItemSource>(
-    lanes: &StaggeredLanes,
-    first: usize,
-    visible: &[LazyListMeasuredItem],
-    items_count: usize,
+/// Keeps the items on either side of `shown`, the items in view, composed,
+/// as many as the configuration asks for, nearest first, and answers the
+/// ones the source places, with the focused item, at their offsets in the
+/// viewport.
+fn place_beyond<S: LazyStaggeredItemSource>(
+    lanes: &mut StaggeredLanes,
+    pass: &Pass,
     config: &LazyListMeasureConfig,
+    scroll: f32,
+    shown: Range<usize>,
     source: &mut S,
-) {
+) -> Vec<LazyListMeasuredItem> {
     let count = config.beyond_bounds_item_count;
-    let last = visible.last().map_or(first, |item| item.index);
+    let mut placed = Vec::new();
+    let after = (shown.end..pass.items_count).take(count);
+    keep_side(lanes, pass, scroll, after, source, &mut placed);
+    let before = (0..shown.start).rev().take(count);
+    keep_side(lanes, pass, scroll, before, source, &mut placed);
+    if let Some(focused) = source
+        .focused_item()
+        .filter(|index| *index < pass.items_count && !shown.contains(index))
+        .filter(|index| placed.iter().all(|item| item.index != *index))
+    {
+        lanes.reach(focused, pass.estimate, source);
+        let item = source.measure(focused, lanes.slots[focused].lane());
+        placed.push(place_at(lanes, pass, scroll, item));
+    }
+    placed
+}
+
+/// Keeps `indices`, nearest the viewport first, composed until the source
+/// declines one, and adds the ones it places to `placed`.
+fn keep_side<S: LazyStaggeredItemSource>(
+    lanes: &mut StaggeredLanes,
+    pass: &Pass,
+    scroll: f32,
+    indices: impl Iterator<Item = usize>,
+    source: &mut S,
+    placed: &mut Vec<LazyListMeasuredItem>,
+) {
     let mut distance = 0.0;
-    for index in (last + 1..items_count).take(count) {
-        if !source.keep_beyond(index, lanes.lane_of(index), distance) {
-            break;
+    for index in indices {
+        lanes.reach(index, pass.estimate, source);
+        match source.keep_beyond(index, lanes.slots[index].lane(), distance) {
+            BeyondItem::Declined => break,
+            BeyondItem::Kept => {}
+            BeyondItem::Placed(item) => placed.push(place_at(lanes, pass, scroll, item)),
         }
-        distance += lanes.slots.get(index).map_or(0.0, |slot| slot.size);
+        distance += lanes.slots[index].size;
     }
-    distance = 0.0;
-    for index in (0..first).rev().take(count) {
-        if !source.keep_beyond(index, lanes.lane_of(index), distance) {
-            break;
-        }
-        distance += lanes.slots.get(index).map_or(0.0, |slot| slot.size);
-    }
+}
+
+/// Puts `item`, measured outside the viewport, at its lane's place, sized as
+/// measured.
+fn place_at(
+    lanes: &mut StaggeredLanes,
+    pass: &Pass,
+    scroll: f32,
+    mut item: LazyListMeasuredItem,
+) -> LazyListMeasuredItem {
+    let slot = &mut lanes.slots[item.index];
+    slot.size = item.main_axis_size;
+    pass.window(scroll).show(&mut item, *slot);
+    item.offset += pass.before - scroll;
+    item
 }
