@@ -428,6 +428,7 @@ test-localization: check-localization
     cargo test --profile ci -p cranpose-ui --features localization
     cargo test --profile ci -p cranpose-liquid --features localization
     cargo test --profile ci -p cranpose-liquid --features localization-formatting --test integration date_picker
+    cargo test --profile ci -p cranpose-liquid --features localization-formatting --test integration time_picker
     cargo test --profile ci -p cranpose-render-common --features text-shaping
     cargo test --profile ci -p cranpose-fonts --all-features
 
