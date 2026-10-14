@@ -7,6 +7,13 @@ the pixels renderer, converts it to RGB565 and sends the rows that changed to a
 `Panel`. Between frames the task sleeps until the next frame, the next timed
 event or work from another thread.
 
+[Cranpose on an emulated ESP32-S3](https://samoylenkodmitry.github.io/cranpose-esp32/)
+runs firmware built on this crate in the browser, on Espressif's QEMU compiled
+to WebAssembly. Its source is
+[cranpose-esp32](https://github.com/samoylenkodmitry/cranpose-esp32), and the
+emulator's is
+[cranpose-esp32-qemu](https://github.com/samoylenkodmitry/cranpose-esp32-qemu).
+
 ```rust
 use cranpose_platform_esp_idf::{DisplayConfig, Panel, RunError, run};
 
