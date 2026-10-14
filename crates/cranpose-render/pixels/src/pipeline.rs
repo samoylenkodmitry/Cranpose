@@ -696,7 +696,6 @@ struct RasterLayerMapping {
     transformed_bounds: Rect,
     content_style: ContentStyle,
     raster_content_layer: GraphicsLayer,
-    shadow_layer: GraphicsLayer,
 }
 
 fn raster_layer_scale(transformed_bounds: Rect, local_bounds: Rect) -> (f32, f32) {
@@ -734,17 +733,6 @@ fn raster_layer_mapping(
         transform_origin: TransformOrigin::new(0.0, 0.0),
         ..GraphicsLayer::default()
     };
-    let shadow_layer = GraphicsLayer {
-        alpha: layer.graphics_layer.alpha,
-        scale_x,
-        scale_y,
-        transform_origin: TransformOrigin::new(0.0, 0.0),
-        shadow_elevation: layer.graphics_layer.shadow_elevation,
-        ambient_shadow_color: layer.graphics_layer.ambient_shadow_color,
-        spot_shadow_color: layer.graphics_layer.spot_shadow_color,
-        shape: layer.graphics_layer.shape,
-        ..GraphicsLayer::default()
-    };
 
     RasterLayerMapping {
         layer_bounds,
@@ -752,8 +740,47 @@ fn raster_layer_mapping(
         transformed_bounds,
         content_style,
         raster_content_layer,
-        shadow_layer,
     }
+}
+
+/// Queues `layer`'s elevation shadow, when it casts one, cut to its shadow
+/// clip within `parent_visual_clip`.
+fn push_layer_shadow_of(
+    scene: &mut RasterScene,
+    layer: &LayerNode,
+    mapping: &RasterLayerMapping,
+    transform: &ProjectiveTransform,
+    parent_visual_clip: Option<Rect>,
+    light: ShadowLight,
+) {
+    if layer.graphics_layer.shadow_elevation <= 0.0 {
+        return;
+    }
+    let shadow_clip = resolve_clip(
+        parent_visual_clip,
+        layer
+            .shadow_clip()
+            .map(|clip| transform.bounds_for_rect(clip)),
+    );
+    let shadow_layer = GraphicsLayer {
+        alpha: layer.graphics_layer.alpha,
+        scale_x: mapping.raster_content_layer.scale_x,
+        scale_y: mapping.raster_content_layer.scale_y,
+        transform_origin: TransformOrigin::new(0.0, 0.0),
+        shadow_elevation: layer.graphics_layer.shadow_elevation,
+        ambient_shadow_color: layer.graphics_layer.ambient_shadow_color,
+        spot_shadow_color: layer.graphics_layer.spot_shadow_color,
+        shape: layer.graphics_layer.shape,
+        ..GraphicsLayer::default()
+    };
+    push_layer_shadow(
+        scene,
+        &shadow_layer,
+        mapping.layer_bounds,
+        mapping.transformed_bounds,
+        shadow_clip,
+        light,
+    );
 }
 
 fn populate_draws_from_graph(
@@ -811,18 +838,12 @@ fn populate_draws_from_graph(
         return;
     }
 
-    let shadow_clip = resolve_clip(
-        context.parent_visual_clip,
-        layer
-            .shadow_clip()
-            .map(|clip| transform.bounds_for_rect(clip)),
-    );
-    push_layer_shadow(
+    push_layer_shadow_of(
         scene,
-        &mapping.shadow_layer,
-        mapping.layer_bounds,
-        mapping.transformed_bounds,
-        shadow_clip,
+        layer,
+        &mapping,
+        &transform,
+        context.parent_visual_clip,
         context.light,
     );
 

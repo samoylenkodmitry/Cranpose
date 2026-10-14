@@ -587,6 +587,33 @@ impl AppContext {
     pub(crate) fn lazy_prefetch(&self) -> &crate::lazy_prefetch::LazyPrefetchState {
         &self.lazy_prefetch
     }
+
+    /// Whether the next frame has work in this context: a render, pointer,
+    /// focus or layout invalidation, or a layout, measure or layer-property
+    /// repass. Reads the context directly, without looking up the current
+    /// one.
+    pub fn has_pending_frame_work(&self) -> bool {
+        let state = &self.state;
+        state.render_invalidated.get()
+            || state.pointer_invalidated.get()
+            || state.focus_invalidated.get()
+            || state.layout_invalidated.get()
+            || state.layout_repasses.borrow_mut().has_pending_repass()
+            || state.measure_repasses.borrow_mut().has_pending_repass()
+            || state
+                .layer_property_repasses
+                .borrow_mut()
+                .has_pending_repass()
+    }
+
+    /// [`Self::has_pending_frame_work`], or a pending draw or pointer repass
+    /// or focus invalidation.
+    pub fn has_stale_work(&self) -> bool {
+        self.has_pending_frame_work()
+            || self.state.draw_repasses.borrow_mut().has_pending_repass()
+            || self.pointer_dispatch.has_pending_repass()
+            || self.focus_dispatch.has_pending_invalidation()
+    }
 }
 
 pub(crate) fn with_scroll_motion_context_store<R>(

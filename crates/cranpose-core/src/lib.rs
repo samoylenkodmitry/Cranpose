@@ -509,6 +509,16 @@ pub const fn const_location_key(file: &str, line: u32, column: u32) -> Key {
     avalanche_location_key(source_location_hash(file, line, column))
 }
 
+/// [`location_key`] of the place it is written, worked out at build time
+/// instead of hashing the source path on every call.
+#[macro_export]
+macro_rules! location_key {
+    () => {{
+        const KEY: $crate::Key = $crate::const_location_key(file!(), line!(), column!());
+        $crate::noted_location_key(KEY, file!(), line!(), column!())
+    }};
+}
+
 /// Returns a constant key the `#[composable]` macro wrote, after recording
 /// where it came from for collision diagnostics in debug builds.
 #[doc(hidden)]

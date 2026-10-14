@@ -172,7 +172,7 @@ impl FocusInvalidationState {
         self.manager.borrow_mut().schedule_invalidation(node_id);
     }
 
-    fn has_pending_invalidation(&self) -> bool {
+    pub(crate) fn has_pending_invalidation(&self) -> bool {
         self.manager.borrow().has_pending_invalidation()
     }
 
