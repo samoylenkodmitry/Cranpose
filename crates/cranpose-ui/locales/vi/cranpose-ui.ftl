@@ -5,3 +5,7 @@ select-all = Chọn tất cả
 undo = Hoàn tác
 redo = Làm lại
 search = Tìm kiếm
+previous-month = Tháng trước
+next-month = Tháng sau
+hour = Giờ
+minute = Phút

@@ -29,6 +29,8 @@ extend-exclude = [
 ]
 
 [default.extend-words]
+# German month name the date picker's localized test reads.
+Oktober = "Oktober"
 # Chrome's first-run experience, in the ids of its views the benches tap.
 fre = "fre"
 trak = "trak"

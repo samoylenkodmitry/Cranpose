@@ -5,3 +5,7 @@ select-all = Pilih semua
 undo = Urungkan
 redo = Ulangi
 search = Cari
+previous-month = Bulan sebelumnya
+next-month = Bulan berikutnya
+hour = Jam
+minute = Menit

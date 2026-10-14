@@ -1,5 +1,6 @@
 mod accessibility_actions;
 mod bottom_sheet;
+mod date_picker;
 mod floating_button_interaction;
 mod glass_placeholder;
 #[cfg(feature = "localization")]

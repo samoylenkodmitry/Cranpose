@@ -85,3 +85,23 @@ fn invalid_dates_numbers_and_currency_codes_are_reported() {
         Err(FormatError::InvalidCurrency(_))
     ));
 }
+
+#[test]
+fn a_week_starts_on_the_locale_s_first_day() {
+    assert_eq!(formatters("en-US").first_weekday(), 7, "Sunday");
+    assert_eq!(formatters("de-DE").first_weekday(), 1, "Monday");
+}
+
+#[test]
+fn names_a_weekday_and_reads_a_date_in_full() {
+    let english = formatters("en-US");
+    assert_eq!(
+        english.format_weekday(2026, 10, 14).expect("formatting"),
+        "Wed"
+    );
+    assert_eq!(
+        english.format_long_date(2026, 10, 14).expect("formatting"),
+        "Wednesday, October 14, 2026"
+    );
+    assert!(english.format_weekday(2026, 2, 30).is_err());
+}

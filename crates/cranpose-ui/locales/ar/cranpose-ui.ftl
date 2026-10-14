@@ -5,3 +5,7 @@ select-all = تحديد الكل
 undo = تراجع
 redo = إعادة
 search = بحث
+previous-month = الشهر السابق
+next-month = الشهر التالي
+hour = الساعة
+minute = الدقيقة

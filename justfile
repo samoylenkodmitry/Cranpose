@@ -427,12 +427,13 @@ test-localization: check-localization
     cargo test --profile ci -p cranpose-localization --features tooling,formatting
     cargo test --profile ci -p cranpose-ui --features localization
     cargo test --profile ci -p cranpose-liquid --features localization
+    cargo test --profile ci -p cranpose-liquid --features localization-formatting --test integration date_picker
     cargo test --profile ci -p cranpose-render-common --features text-shaping
     cargo test --profile ci -p cranpose-fonts --all-features
 
 # Compile and lint both localization-enabled and ordinary consumers.
 check-localization:
-    cargo clippy -p cranpose-localization -p cranpose-ui -p cranpose-liquid -p cranpose-fonts --all-targets --features cranpose-localization/tooling,cranpose-ui/localization-formatting,cranpose-liquid/localization,cranpose-fonts/arabic,cranpose-fonts/devanagari,cranpose-fonts/cjk -- -D warnings
+    cargo clippy -p cranpose-localization -p cranpose-ui -p cranpose-liquid -p cranpose-fonts --all-targets --features cranpose-localization/tooling,cranpose-ui/localization-formatting,cranpose-liquid/localization-formatting,cranpose-fonts/arabic,cranpose-fonts/devanagari,cranpose-fonts/cjk -- -D warnings
     cargo clippy -p cranpose-render-common --all-targets --features text-shaping -- -D warnings
     cargo check -p cranpose-ui --no-default-features
     cargo check -p cranpose --example localization --features desktop,renderer-wgpu,localization
