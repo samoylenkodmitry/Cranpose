@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
 pub(crate) use cranpose_render_common::debug_toggles;
@@ -44,6 +45,8 @@ mod output_conversion;
 pub(crate) mod pass_timing;
 mod pipeline;
 mod pipeline_compiler;
+/// The file in which the driver's compiled pipelines, and a record of the pipelines the first
+/// screen drew with, are kept between launches.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pipeline_disk_cache;
 mod pipeline_recorder;
@@ -162,17 +165,22 @@ pub(crate) fn rect_to_quad(rect: Rect) -> [[f32; 2]; 4] {
     ]
 }
 
+/// Why a [`WgpuRenderer`] call failed.
 #[derive(Debug)]
 pub enum WgpuRendererError {
-    Layout(String),
+    /// The renderer could not draw, with the reason: no GPU was initialized for synchronous
+    /// rendering, there is no scene graph, or the GPU reported an error.
     Wgpu(String),
 }
 
 /// CPU-readable RGBA frame captured from the renderer output.
 #[derive(Debug, Clone)]
 pub struct CapturedFrame {
+    /// Width of the frame in device pixels.
     pub width: u32,
+    /// Height of the frame in device pixels.
     pub height: u32,
+    /// The pixels as 8-bit RGBA, row by row from the top left, `width * height * 4` bytes.
     pub pixels: Vec<u8>,
 }
 
@@ -219,10 +227,6 @@ impl TextSystemState {
             measurer: SoftwareTextMeasurer::from_font_set(fonts, 8192),
         }
     }
-
-    pub(crate) fn text_cache_len(&self) -> usize {
-        0
-    }
 }
 
 impl pipeline::TextLayoutResolver for TextSystemState {
@@ -239,12 +243,16 @@ impl pipeline::TextLayoutResolver for TextSystemState {
     }
 }
 
+/// The fonts a [`WgpuRenderer`] measures and draws text with.
 #[derive(Clone)]
 pub struct WgpuTextSystem {
     software_fonts: SoftwareTextFontSet,
 }
 
 impl WgpuTextSystem {
+    /// Parses `fonts`, font file bytes ordered by priority with the first highest, into a text
+    /// system. Files that do not parse are skipped. When none parses, the text system holds the
+    /// embedded default font if the build has it, and no font otherwise.
     pub fn from_fonts(fonts: &[&'static [u8]]) -> Self {
         Self {
             software_fonts: software_text_font_set_from_fonts_or_default(fonts),
@@ -334,6 +342,7 @@ impl WgpuRenderer {
         Self::with_text_system(WgpuTextSystem::from_font_set(fonts))
     }
 
+    /// Create a renderer that measures and draws text with `text_system`.
     pub fn with_text_system(text_system: WgpuTextSystem) -> Self {
         Self {
             frontend: RendererFrontend::new(
@@ -546,6 +555,8 @@ impl WgpuRenderer {
         self.frontend.transparent_background = transparent;
     }
 
+    /// The scale from logical to device pixels the renderer draws the root with, as last set
+    /// by `Renderer::set_root_scale`. It starts at `1.0`.
     pub fn root_scale(&self) -> f32 {
         self.frontend.root_scale
     }
@@ -634,7 +645,6 @@ impl WgpuRenderer {
         self.capture_frame_with_scale(width, height, self.frontend.root_scale)
     }
 
-    /// Render the current scene into an RGBA pixel buffer with an explicit scale.
     /// Builds every pipeline the pipeline cache file records on the
     /// background compiler, and returns whether they were all built before
     /// `timeout`, or before `stop` said to stop. An app runs it after an
@@ -663,6 +673,10 @@ impl WgpuRenderer {
         true
     }
 
+    /// Render the current scene into an RGBA pixel buffer with an explicit scale.
+    ///
+    /// `width` and `height` are in device pixels and `root_scale` is the scale from logical to
+    /// device pixels. Needs a renderer initialized for synchronous rendering.
     pub fn capture_frame_with_scale(
         &mut self,
         width: u32,
@@ -969,6 +983,7 @@ impl WgpuRenderer {
         }
     }
 
+    /// The counters of the most recent frame the renderer drew, or `None` before it drew one.
     pub fn last_frame_stats(&self) -> Option<RenderStatsSnapshot> {
         match &self.backend {
             PresentBackend::Sync(gpu_renderer) => gpu_renderer.last_frame_stats(),
@@ -1028,6 +1043,9 @@ impl WgpuRenderer {
             .unwrap_or_default()
     }
 
+    /// The sizes and capacities of the renderer's CPU-side scene data, scratch buffers and
+    /// caches, for memory diagnostics. The members of a renderer that does not draw on the
+    /// calling thread cover the scene only.
     pub fn debug_cpu_allocation_stats(&self) -> DebugCpuAllocationStats {
         let mut stats = self
             .sync_gpu_renderer()

@@ -51,6 +51,27 @@ pub(crate) struct CranposeThreadState {
     pub(crate) android_ime_density: std::cell::Cell<f32>,
     #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
     pub(crate) pacing_diag: RefCell<crate::desktop::PacingDiag>,
+    /// The tray and menu bar the composition asks for.
+    #[cfg(all(
+        feature = "desktop-menus",
+        feature = "renderer-wgpu",
+        any(
+            target_os = "macos",
+            target_os = "windows",
+            all(target_os = "linux", not(target_arch = "wasm32"))
+        )
+    ))]
+    pub(crate) native_menus: RefCell<crate::desktop_menus::MenuRequests>,
+    #[cfg(all(
+        feature = "desktop-menus",
+        feature = "renderer-wgpu",
+        any(
+            target_os = "macos",
+            target_os = "windows",
+            all(target_os = "linux", not(target_arch = "wasm32"))
+        )
+    ))]
+    pub(crate) native_menus_next_owner: std::cell::Cell<u64>,
     #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
     pub(crate) ios: IosThreadState,
     #[cfg(all(feature = "watchos", feature = "heart-rate", target_os = "watchos"))]
@@ -86,6 +107,26 @@ impl CranposeThreadState {
             android_ime_density: std::cell::Cell::new(1.0),
             #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
             pacing_diag: RefCell::new(crate::desktop::PacingDiag::default()),
+            #[cfg(all(
+                feature = "desktop-menus",
+                feature = "renderer-wgpu",
+                any(
+                    target_os = "macos",
+                    target_os = "windows",
+                    all(target_os = "linux", not(target_arch = "wasm32"))
+                )
+            ))]
+            native_menus: RefCell::new(crate::desktop_menus::MenuRequests::default()),
+            #[cfg(all(
+                feature = "desktop-menus",
+                feature = "renderer-wgpu",
+                any(
+                    target_os = "macos",
+                    target_os = "windows",
+                    all(target_os = "linux", not(target_arch = "wasm32"))
+                )
+            ))]
+            native_menus_next_owner: std::cell::Cell::new(0),
             #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
             ios: IosThreadState::new(),
             #[cfg(all(feature = "watchos", feature = "heart-rate", target_os = "watchos"))]

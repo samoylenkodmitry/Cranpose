@@ -14,7 +14,7 @@ mod support;
 
 use cranpose_coroflow::{SavedStateHandle, viewModel};
 use cranpose_navigation::{
-    NavController, NavHost, rememberNavController, rememberSaveableNavController,
+    NavController, NavHost, NavOptions, rememberNavController, rememberSaveableNavController,
 };
 use cranpose_services::{DurableSaveOutcome, PreferencesStore, Saver, run_durable_saves};
 use support::{Host, Screen, fresh_store, save, serial};
@@ -171,4 +171,60 @@ fn an_in_memory_back_stack_saves_no_saved_state() {
         DurableSaveOutcome::Nothing
     );
     assert!(store.keys().is_empty());
+}
+
+#[test]
+fn a_kept_tab_comes_back_after_a_restart() {
+    let _serial = serial();
+    fresh_store();
+    let tab = |nav: NavController<Screen>, tab: Screen| {
+        nav.navigate_with(
+            tab,
+            NavOptions::new()
+                .pop_up_to(Screen::Home, false)
+                .save_state()
+                .launch_single_top()
+                .restore_state(),
+        );
+    };
+    let mut app = App::new(true);
+    tab(app.nav(), Screen::Settings);
+    app.navigate(Screen::Detail(2));
+    app.drafts.set(Screen::Detail(2), 4);
+    tab(app.nav(), Screen::Home);
+    app.host.settle();
+    save();
+    drop(app);
+
+    let mut app = App::new(true);
+    assert_eq!(app.nav().back_stack(), [Screen::Home]);
+    tab(app.nav(), Screen::Settings);
+    app.host.settle();
+    assert_eq!(
+        app.nav().back_stack(),
+        [Screen::Home, Screen::Settings, Screen::Detail(2)]
+    );
+    assert_eq!(app.drafts.of(Screen::Detail(2)), Some(4));
+}
+
+#[test]
+fn a_back_stack_saved_by_an_older_build_restores() {
+    let _serial = serial();
+    let store = fresh_store();
+    let mut app = App::new(true);
+    app.navigate(Screen::Detail(3));
+    save();
+    drop(app);
+    let key = store
+        .keys()
+        .into_iter()
+        .find(|key| store.get(key).is_some_and(|value| value.starts_with("2 ")))
+        .expect("the saved back stack");
+    // The form builds before saved tab stacks wrote: no counts, no segments.
+    store
+        .set(&key, "1 2 0 4 home 1 8 detail 3")
+        .expect("an older save");
+
+    let app = App::new(true);
+    assert_eq!(app.nav().back_stack(), [Screen::Home, Screen::Detail(3)]);
 }

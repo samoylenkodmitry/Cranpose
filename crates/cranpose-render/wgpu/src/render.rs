@@ -157,8 +157,10 @@ pub(crate) fn should_log_wgpu_render_stage(start: Instant, end: Instant) -> Opti
     (total_ms >= threshold_ms).then_some(total_ms)
 }
 
-pub static PRESENTED_FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub(crate) static PRESENTED_FRAMES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
+/// How many frames this process has drawn and presented since it started.
 pub fn frames_presented() -> u64 {
     PRESENTED_FRAMES.load(std::sync::atomic::Ordering::Relaxed)
 }
@@ -1244,6 +1246,8 @@ pub(crate) fn mark_thread_off_frame() {
     crate::thread_state::with(|state| state.off_frame_builds.set(true));
 }
 
+/// The pipelines this process has built on a thread that draws, since it started. A count
+/// that grows during an interaction names a shader compile a frame waited for.
 pub fn pipelines_created() -> u64 {
     PIPELINES_CREATED.load(std::sync::atomic::Ordering::Relaxed)
 }
@@ -4827,7 +4831,6 @@ impl GpuRenderer {
         self.run_store.begin_frame(gpu_stats_enabled());
         self.begin_text_glyph_run_frame();
 
-        let text_cache_len = packet.text_cache_len;
         let reads_page = packet.root.contains_backdrop()
             || packet
                 .overlay
@@ -4890,7 +4893,6 @@ impl GpuRenderer {
         self.frame_stats
             .image_cache_size
             .set(self.image_texture_cache.len() as u32);
-        self.frame_stats.text_cache_size.set(text_cache_len as u32);
         self.effect_renderer
             .merge_and_reset_debug_counters(&self.frame_stats);
         self.frame_graph_executor.reset_upload_allocators();

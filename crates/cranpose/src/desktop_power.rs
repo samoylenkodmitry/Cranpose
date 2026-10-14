@@ -14,7 +14,7 @@ struct DesktopPowerMonitor;
 impl PowerMonitor for DesktopPowerMonitor {
     fn capabilities(&self) -> PowerCapabilities {
         PowerCapabilities {
-            thermal: cfg!(target_os = "macos"),
+            thermal: self.thermal_state().is_supported(),
             battery: cfg!(target_os = "linux"),
             background_restriction: false,
         }
@@ -25,7 +25,11 @@ impl PowerMonitor for DesktopPowerMonitor {
         {
             macos::thermal_state()
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        {
+            linux::thermal_state(std::path::Path::new(linux::THERMAL))
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             PowerReading::Unsupported
         }
@@ -56,9 +60,67 @@ mod macos {
 mod linux {
     use std::path::Path;
 
-    use super::{BatteryStatus, PowerReading};
+    use super::{BatteryStatus, PowerReading, ThermalState};
 
     const POWER_SUPPLY: &str = "/sys/class/power_supply";
+    pub(super) const THERMAL: &str = "/sys/class/thermal";
+
+    /// The highest pressure over the enabled thermal zones under `root`:
+    /// each zone is at the highest trip point its temperature reached.
+    /// `Unsupported` when no zone has a temperature and trip points.
+    pub(super) fn thermal_state(root: &Path) -> PowerReading<ThermalState> {
+        let Ok(entries) = std::fs::read_dir(root) else {
+            return PowerReading::Unsupported;
+        };
+        let state = entries
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("thermal_zone")
+            })
+            .filter_map(|entry| zone_state(&entry.path()))
+            .max();
+        state.map_or(PowerReading::Unsupported, PowerReading::Known)
+    }
+
+    fn zone_state(zone: &Path) -> Option<ThermalState> {
+        if read_trimmed(&zone.join("mode")).as_deref() == Some("disabled") {
+            return None;
+        }
+        let temperature: i64 = read_trimmed(&zone.join("temp"))?.parse().ok()?;
+        let mut state = None;
+        for index in 0.. {
+            let Some(kind) = read_trimmed(&zone.join(format!("trip_point_{index}_type"))) else {
+                break;
+            };
+            let Some(trip) = read_trimmed(&zone.join(format!("trip_point_{index}_temp")))
+                .and_then(|trip| trip.parse::<i64>().ok())
+            else {
+                continue;
+            };
+            let reached = if temperature >= trip {
+                trip_level(&kind)
+            } else {
+                ThermalState::Normal
+            };
+            state = Some(state.map_or(reached, |state: ThermalState| state.max(reached)));
+        }
+        state
+    }
+
+    /// The pressure a trip point of `kind` stands for: fans at an active
+    /// one, throttling at a passive one, shutdown close at hot and critical.
+    fn trip_level(kind: &str) -> ThermalState {
+        match kind {
+            "critical" => ThermalState::Critical,
+            "hot" => ThermalState::Severe,
+            "passive" => ThermalState::Moderate,
+            "active" => ThermalState::Light,
+            _ => ThermalState::Normal,
+        }
+    }
 
     pub(super) fn battery_status() -> PowerReading<BatteryStatus> {
         let Ok(entries) = std::fs::read_dir(POWER_SUPPLY) else {

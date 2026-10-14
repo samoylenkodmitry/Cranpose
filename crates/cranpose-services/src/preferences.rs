@@ -336,6 +336,76 @@ impl<T> Saver<T> {
     }
 }
 
+impl<T: 'static> Saver<T> {
+    /// A saver that stores a value as the list of strings `save` gives —
+    /// Compose's `listSaver`. Each string may hold any text, the stored form
+    /// of another [`Saver`] too. `restore` gets the strings back in order.
+    pub fn list(
+        save: impl Fn(&T) -> Vec<String> + 'static,
+        restore: impl Fn(&[String]) -> Option<T> + 'static,
+    ) -> Self {
+        Self::new(
+            move |value| encode_list(&save(value)),
+            move |stored| restore(&decode_list(stored)?),
+        )
+    }
+
+    /// A saver that stores a value as the named strings `save` gives —
+    /// Compose's `mapSaver`. `restore` gets them back by name; a name given
+    /// twice keeps its last string.
+    pub fn map(
+        save: impl Fn(&T) -> Vec<(String, String)> + 'static,
+        restore: impl Fn(&std::collections::HashMap<String, String>) -> Option<T> + 'static,
+    ) -> Self {
+        Self::new(
+            move |value| {
+                let pairs = save(value);
+                let mut items = Vec::with_capacity(pairs.len() * 2);
+                for (name, text) in pairs {
+                    items.push(name);
+                    items.push(text);
+                }
+                encode_list(&items)
+            },
+            move |stored| {
+                let items = decode_list(stored)?;
+                if items.len() % 2 != 0 {
+                    return None;
+                }
+                let mut map = std::collections::HashMap::with_capacity(items.len() / 2);
+                let mut items = items.into_iter();
+                while let (Some(name), Some(text)) = (items.next(), items.next()) {
+                    map.insert(name, text);
+                }
+                restore(&map)
+            },
+        )
+    }
+}
+
+/// `items` as one string: each item's byte length, a colon, then the item.
+fn encode_list(items: &[String]) -> String {
+    use std::fmt::Write;
+
+    let mut stored = String::with_capacity(items.iter().map(|item| item.len() + 4).sum());
+    for item in items {
+        let _ = write!(stored, "{}:{item}", item.len());
+    }
+    stored
+}
+
+/// The items [`encode_list`] stored, or `None` for a string it did not write.
+fn decode_list(mut stored: &str) -> Option<Vec<String>> {
+    let mut items = Vec::new();
+    while !stored.is_empty() {
+        let (length, rest) = stored.split_once(':')?;
+        let (item, rest) = rest.split_at_checked(length.parse().ok()?)?;
+        items.push(item.to_owned());
+        stored = rest;
+    }
+    Some(items)
+}
+
 impl<T> Saver<T>
 where
     T: std::fmt::Display + std::str::FromStr + 'static,

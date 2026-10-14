@@ -72,14 +72,7 @@ impl DesktopIntegrationContext<'_> {
     /// mutable snapshot, so it may write state, and the app draws the frame
     /// the change asks for. Fails when the snapshot does not apply.
     pub fn update<T>(&mut self, update: impl FnOnce() -> T) -> Result<T, &'static str> {
-        let _event_handler = cranpose_core::enter_event_handler_scope();
-        let result = self
-            .app
-            .app_context()
-            .enter(|| cranpose_core::run_in_mutable_snapshot(update));
-        self.app.mark_dirty();
-        self.proxy.wake_up();
-        result
+        run_as_event_handler(self.app, self.proxy, update)
     }
 
     /// A waker for the event loop, which may move to another thread.
@@ -88,6 +81,22 @@ impl DesktopIntegrationContext<'_> {
             proxy: self.proxy.clone(),
         }
     }
+}
+
+/// Runs `update` as an event handler runs: in the app's context and a mutable
+/// snapshot, then asks for the frame the change needs.
+pub(crate) fn run_as_event_handler<T>(
+    app: &mut AppShell<WgpuRenderer>,
+    proxy: &EventLoopProxy,
+    update: impl FnOnce() -> T,
+) -> Result<T, &'static str> {
+    let _event_handler = cranpose_core::enter_event_handler_scope();
+    let result = app
+        .app_context()
+        .enter(|| cranpose_core::run_in_mutable_snapshot(update));
+    app.mark_dirty();
+    proxy.wake_up();
+    result
 }
 
 /// Code a desktop app runs on the shell's main thread, given to

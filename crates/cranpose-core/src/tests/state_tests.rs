@@ -533,7 +533,7 @@ fn test_assign_value_reports_cleared_source() {
     let source = StateRecord::new(10, 42i32, None);
     let target = StateRecord::new(20, 0i32, None);
 
-    drop(source.clear_value());
+    source.clear_for_reuse();
 
     assert_eq!(
         target.assign_value(&source),

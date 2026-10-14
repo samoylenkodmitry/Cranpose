@@ -90,6 +90,8 @@ desktop-shell = [
     "dep:block2",
     "dep:dispatch2",
     "dep:windows-sys",
+    "dep:windows",
+    "dep:zbus",
     "cranpose-platform-desktop-winit",
     "dep:winit",
     "dep:accesskit",
@@ -243,6 +245,9 @@ preview = ["embed", "dep:inventory", "cranpose-ui/inspection"]
 # the default feature set are unaffected.
 hot-reload = ["cranpose-core/hot-reload", "cranpose-macros/hot-reload"]
 webview = ["dep:wry", "dep:gtk"]
+# A tray icon on macOS, Windows and Linux and a native menu bar on macOS
+# (`Tray`, `MenuBar`). Linux trays go over D-Bus, without GTK.
+desktop-menus = ["desktop-shell", "dep:tray-icon", "dep:muda"]
 
 [dependencies]
 cranpose-app-shell = { workspace = true }
@@ -410,6 +415,9 @@ wgpu = { workspace = true, optional = true, features = [
 
 [target.'cfg(all(target_os = "linux", not(target_arch = "wasm32")))'.dependencies]
 accesskit_unix = { version = "0.24.0", default-features = false, features = ["async-io"] }
+# NetworkManager's state over the system bus (`linux_network`). The version
+# AccessKit's AT-SPI adapter already resolves.
+zbus = { version = "5.19", optional = true, default-features = false, features = ["async-io", "blocking-api"] }
 x11rb = { version = "0.13.2", optional = true }
 # Desktop builds take wgpu from crates.io. The web, Android and iOS take
 # Cranpose's fork of it (`wgpu` in the workspace, forks/README.md).
@@ -424,6 +432,9 @@ accesskit_windows = "0.35.1"
 # The pointer size the person chose (`windows_cursor`), which custom cursors
 # are scaled to. The version winit already resolves.
 windows-sys = { version = "0.61", optional = true, features = ["Win32_System_Registry"] }
+# The internet connection profile and its changes (`windows_network`). The
+# version AccessKit and wgpu already resolve.
+windows = { version = "0.62", optional = true, features = ["Networking_Connectivity", "Foundation"] }
 wgpu = { version = "30.0.1", default-features = false, optional = true, features = [
     "std",
     "parking_lot",
@@ -755,8 +766,15 @@ wgpu = { version = "30.0.1", default-features = false, optional = true, features
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))'.dependencies]
 wry = { version = "0.57", default-features = false, features = ["os-webview", "x11"], optional = true }
 
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+tray-icon = { version = "0.26.1", default-features = false, optional = true }
+muda = { version = "0.21.2", default-features = false, optional = true }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = { version = "0.18.2", optional = true }
+# The tray as a StatusNotifierItem over D-Bus (`ksni`): no GTK main loop.
+tray-icon = { version = "0.26.1", default-features = false, features = ["ksni"], optional = true }
+muda = { version = "0.21.2", default-features = false, features = ["snapshot"], optional = true }
 
 [dev-dependencies]
 cranpose-animation.workspace = true

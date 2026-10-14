@@ -147,6 +147,11 @@ pub struct RobotTimelineStep {
 
 #[derive(Debug)]
 pub(crate) enum RobotCommand {
+    /// Chooses the menu item that `labels` name.
+    ChooseMenuItem {
+        tray: bool,
+        labels: Vec<String>,
+    },
     Click {
         x: f32,
         y: f32,
@@ -723,6 +728,32 @@ impl Robot {
             })
             .map_err(|e| format!("Failed to send send_key_with_modifiers command: {e}"))?;
         self.recv_ack()
+    }
+
+    /// Chooses the menu bar item that `labels` name: the menu's title, then
+    /// the labels down to the item, as `["File", "Open"]`. On macOS it goes
+    /// through the native menu bar, as a click there does. It needs the
+    /// `desktop-menus` feature.
+    pub fn choose_menu_item(&self, labels: &[&str]) -> Result<(), String> {
+        self.send_and_ack(
+            RobotCommand::ChooseMenuItem {
+                tray: false,
+                labels: labels.iter().map(|label| (*label).to_owned()).collect(),
+            },
+            "menu item choice",
+        )
+    }
+
+    /// Chooses the tray menu item that `labels` name, down from the tray
+    /// menu's own entries.
+    pub fn choose_tray_menu_item(&self, labels: &[&str]) -> Result<(), String> {
+        self.send_and_ack(
+            RobotCommand::ChooseMenuItem {
+                tray: true,
+                labels: labels.iter().map(|label| (*label).to_owned()).collect(),
+            },
+            "tray menu item choice",
+        )
     }
 
     /// Exit the application

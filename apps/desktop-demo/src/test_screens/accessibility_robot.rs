@@ -1,11 +1,13 @@
-use cranpose_core::{remember, rememberMutableStateOf};
+use cranpose_core::{remember, rememberMutableStateOf, MutableState};
 use cranpose_foundation::{
     text::TextFieldState, LiveRegionMode, ProgressBarRangeInfo, SemanticsSetProgress,
     SemanticsWidgetRole,
 };
 use cranpose_ui::{
-    composable, BasicTextField, Button, ButtonSpec, Color, Column, ColumnSpec, LinearArrangement,
-    Modifier, Row, RowSpec, Text, TextStyle,
+    composable,
+    widgets::{FlowRow, FlowRowSpec},
+    BasicTextField, Button, ButtonSpec, Color, Column, ColumnSpec, LinearArrangement, Modifier,
+    Row, RowSpec, Text, TextStyle,
 };
 
 #[composable]
@@ -22,71 +24,98 @@ pub fn AccessibilityRobotScreen() {
         ColumnSpec::default().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
         move || {
             Text("Accessibility robot", Modifier::empty(), robot_text_style());
-            RobotNavigationControls();
-            RobotOverlappingControls();
-            Row(
-                Modifier::empty().merge_descendants(),
-                RowSpec::default(),
+            // Two groups side by side in a desktop window, one above the other
+            // on a phone: a reader only reaches what the window shows.
+            FlowRow(
+                Modifier::empty().fill_max_width(),
+                FlowRowSpec::new()
+                    .main_axis_spacing(16.0)
+                    .cross_axis_spacing(8.0),
                 move || {
-                    Text("Account", Modifier::empty(), robot_text_style());
-                    Text("Account", Modifier::empty(), robot_text_style());
-                    RobotButton("Remove", true, move || count.set(count.get() + 1));
+                    Column(Modifier::empty(), robot_group(), move || {
+                        RobotActionControls(count);
+                    });
+                    Column(Modifier::empty(), robot_group(), move || {
+                        RobotValueControls(volume, notes, password);
+                    });
                 },
             );
-            Row(Modifier::empty(), RowSpec::default(), move || {
-                RobotButton("Increase", true, move || count.set(count.get() + 1));
-                RobotButton("Decrease", true, move || count.set(count.get() - 1));
-                RobotButton("Disabled action", false, move || {
-                    count.set(count.get() + 100);
-                });
-            });
-            Text(
-                format!("Action count: {}", count.get()),
-                Modifier::empty()
-                    .semantics(|config| config.live_region = Some(LiveRegionMode::Polite)),
-                robot_text_style(),
-            );
-            BasicTextField(notes, field_modifier("Notes"), robot_text_style());
-            Text(
-                format!("Edited: {}", notes.text()),
-                Modifier::empty(),
-                robot_text_style(),
-            );
-            BasicTextField(
-                password,
-                field_modifier("Passphrase").password(),
-                robot_text_style(),
-            );
-            Text(
-                "Loading",
-                Modifier::empty().height(48.0).semantics(|config| {
-                    config.role = Some(SemanticsWidgetRole::ProgressBar);
-                    config.progress = Some(ProgressBarRangeInfo::new(40.0, 0.0, 100.0, 0));
-                }),
-                robot_text_style(),
-            );
-            Text(
-                "Volume",
-                Modifier::empty().height(48.0).semantics(move |config| {
-                    config.progress = Some(ProgressBarRangeInfo::new(volume.get(), 0.0, 100.0, 0));
-                    config.set_progress = Some(SemanticsSetProgress::new(move |value| {
-                        volume.set(value);
-                        true
-                    }));
-                }),
-                robot_text_style(),
-            );
-            Text(
-                format!("Volume value: {}", volume.get()),
-                Modifier::empty(),
-                robot_text_style(),
-            );
-            Text(
-                "Decorative secret",
-                Modifier::empty().hide_from_accessibility(),
-                robot_text_style(),
-            );
         },
+    );
+}
+
+fn robot_group() -> ColumnSpec {
+    ColumnSpec::default().vertical_arrangement(LinearArrangement::SpacedBy(8.0))
+}
+
+#[composable]
+fn RobotActionControls(count: MutableState<i32>) {
+    RobotNavigationControls();
+    RobotOverlappingControls();
+    Row(
+        Modifier::empty().merge_descendants(),
+        RowSpec::default(),
+        move || {
+            Text("Account", Modifier::empty(), robot_text_style());
+            Text("Account", Modifier::empty(), robot_text_style());
+            RobotButton("Remove", true, move || count.set(count.get() + 1));
+        },
+    );
+    Row(Modifier::empty(), RowSpec::default(), move || {
+        RobotButton("Increase", true, move || count.set(count.get() + 1));
+        RobotButton("Decrease", true, move || count.set(count.get() - 1));
+        RobotButton("Disabled action", false, move || {
+            count.set(count.get() + 100);
+        });
+    });
+    Text(
+        format!("Action count: {}", count.get()),
+        Modifier::empty().semantics(|config| config.live_region = Some(LiveRegionMode::Polite)),
+        robot_text_style(),
+    );
+}
+
+#[composable]
+fn RobotValueControls(volume: MutableState<f32>, notes: TextFieldState, password: TextFieldState) {
+    BasicTextField(notes, field_modifier("Notes"), robot_text_style());
+    Text(
+        format!("Edited: {}", notes.text()),
+        Modifier::empty(),
+        robot_text_style(),
+    );
+    BasicTextField(
+        password,
+        field_modifier("Passphrase").password(),
+        robot_text_style(),
+    );
+    Text(
+        "Loading",
+        Modifier::empty().height(48.0).semantics(|config| {
+            config.role = Some(SemanticsWidgetRole::ProgressBar);
+            config.progress = Some(ProgressBarRangeInfo::new(40.0, 0.0, 100.0, 0));
+        }),
+        robot_text_style(),
+    );
+    Text(
+        "Volume",
+        Modifier::empty().height(48.0).semantics(move |config| {
+            config.progress = Some(ProgressBarRangeInfo::new(volume.get(), 0.0, 100.0, 0));
+            config.set_progress = Some(SemanticsSetProgress::new(move |value| {
+                volume.set(value);
+                true
+            }));
+        }),
+        robot_text_style(),
+    );
+    Text(
+        format!("Volume value: {}", volume.get()),
+        Modifier::empty(),
+        robot_text_style(),
+    );
+    Text(
+        "Decorative secret",
+        Modifier::empty().hide_from_accessibility(),
+        robot_text_style(),
     );
 }
 

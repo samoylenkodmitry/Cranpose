@@ -4899,13 +4899,20 @@ fn draw_mask_glyph_solid_u8(
                 continue;
             }
 
-            let coverage = correction.apply_unit(mask.alpha[y * mask.width + x]);
-            if coverage <= 0.0 {
+            let corrected = correction.apply(mask.alpha[y * mask.width + x]);
+            if corrected == 0 {
                 continue;
             }
 
+            let coverage = crate::text_mask_gamma::unit_coverage(corrected);
             let alpha = (coverage * alpha_scale).clamp(0.0, 1.0);
-            let alpha_u8 = (alpha * 255.0).round() as u8;
+            // At full alpha the byte is the corrected coverage itself: a
+            // byte over 255 multiplied back by 255 rounds to that byte.
+            let alpha_u8 = if alpha_scale == 1.0 {
+                corrected
+            } else {
+                (alpha * 255.0).round() as u8
+            };
             if alpha_u8 == 0 {
                 continue;
             }

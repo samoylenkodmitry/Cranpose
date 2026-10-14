@@ -196,7 +196,7 @@ pub fn update_graph_from_applier_report(
 }
 
 #[derive(Clone, Copy)]
-enum NodeUpdate {
+pub(crate) enum NodeUpdate {
     Content,
     Layer,
     /// The node moved in its parent and kept its size: its layer moves and
@@ -207,13 +207,12 @@ enum NodeUpdate {
     MovedLayer,
 }
 
-/// Each dirty node with the update it needs: content wins over the others,
-/// and a moved node whose layer properties changed too moves with them.
-fn dirty_node_updates(updates: SceneUpdates<'_>) -> HashMap<NodeId, NodeUpdate> {
-    let mut dirty = HashMap::with_capacity_and_hasher(
-        updates.moved.len() + updates.layers.len() + updates.content.len(),
-        Default::default(),
-    );
+/// Puts into `dirty` each dirty node with the update it needs: content wins
+/// over the others, and a moved node whose layer properties changed too
+/// moves with them.
+fn dirty_node_updates(updates: SceneUpdates<'_>, dirty: &mut HashMap<NodeId, NodeUpdate>) {
+    dirty.clear();
+    dirty.reserve(updates.moved.len() + updates.layers.len() + updates.content.len());
     dirty.extend(updates.moved.iter().map(|&id| (id, NodeUpdate::Moved)));
     for &id in updates.layers {
         let kind = match dirty.get(&id) {
@@ -223,7 +222,6 @@ fn dirty_node_updates(updates: SceneUpdates<'_>) -> HashMap<NodeId, NodeUpdate> 
         dirty.insert(id, kind);
     }
     dirty.extend(updates.content.iter().map(|&id| (id, NodeUpdate::Content)));
-    dirty
 }
 
 fn update_graph_from_applier_report_inner(
@@ -245,14 +243,31 @@ fn update_graph_from_applier_report_inner(
         eprintln!("[scene-update-diag] dirty={updates:?}");
     }
 
-    let mut remaining_dirty_nodes = dirty_node_updates(updates);
+    // The map of the frame before keeps its storage for this one.
+    let mut remaining_dirty_nodes =
+        crate::thread_state::with(|state| state.dirty_node_scratch.take()).unwrap_or_default();
+    dirty_node_updates(updates, &mut remaining_dirty_nodes);
+    let report = update_dirty_nodes(applier, graph, &mut remaining_dirty_nodes, update);
+    remaining_dirty_nodes.clear();
+    crate::thread_state::with(|state| state.dirty_node_scratch.set(Some(remaining_dirty_nodes)));
+    report
+}
+
+/// Updates `graph` for `remaining_dirty_nodes`, removing each node it
+/// updates from the map.
+fn update_dirty_nodes(
+    applier: &MemoryApplier,
+    graph: &mut RenderGraph,
+    remaining_dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
+    update: u64,
+) -> GraphUpdateReport {
     if let Some(root_id) = layer_identity(&graph.root)
         && let Some(kind) = remaining_dirty_nodes.remove(&root_id)
     {
         if let Some(hit_graph_dirty) = try_update_retained_layer(
             applier,
             &mut graph.root,
-            &mut remaining_dirty_nodes,
+            remaining_dirty_nodes,
             kind,
             true,
             TranslateAncestorContext {
@@ -269,10 +284,9 @@ fn update_graph_from_applier_report_inner(
                     hit_graph_dirty,
                 };
             }
-            let walked =
-                walk_dirty_layers(applier, &mut graph.root, &mut remaining_dirty_nodes, update);
+            let walked = walk_dirty_layers(applier, &mut graph.root, remaining_dirty_nodes, update);
             return GraphUpdateReport {
-                update: classify_walk(applier, walked.is_some(), &mut remaining_dirty_nodes),
+                update: classify_walk(applier, walked.is_some(), remaining_dirty_nodes),
                 hit_graph_dirty: hit_graph_dirty || walked.is_none_or(|r| r.hit_graph_dirty),
             };
         }
@@ -294,8 +308,7 @@ fn update_graph_from_applier_report_inner(
         };
     }
 
-    let Some(report) =
-        walk_dirty_layers(applier, &mut graph.root, &mut remaining_dirty_nodes, update)
+    let Some(report) = walk_dirty_layers(applier, &mut graph.root, remaining_dirty_nodes, update)
     else {
         return GraphUpdateReport {
             update: GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable),
@@ -303,7 +316,7 @@ fn update_graph_from_applier_report_inner(
         };
     };
 
-    match classify_walk(applier, true, &mut remaining_dirty_nodes) {
+    match classify_walk(applier, true, remaining_dirty_nodes) {
         GraphUpdate::Patched => GraphUpdateReport {
             update: GraphUpdate::Patched,
             hit_graph_dirty: report.hit_graph_dirty,

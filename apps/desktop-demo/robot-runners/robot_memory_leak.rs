@@ -151,14 +151,13 @@ fn log_render_stats(robot: &cranpose::Robot, phase: &str) {
     match robot.get_render_stats() {
         Ok(Some(stats)) => {
             eprintln!(
-                "[render-stats:{phase}] submits={} offscreen_total_mb={:.1} offscreen_pool_mb={:.1} layer_cache_entries={} layer_cache_mb={:.1} image_cache={} text_cache={}",
+                "[render-stats:{phase}] submits={} offscreen_total_mb={:.1} offscreen_pool_mb={:.1} layer_cache_entries={} layer_cache_mb={:.1} image_cache={}",
                 stats.submits,
                 stats.offscreen_total_bytes as f64 / (1024.0 * 1024.0),
                 stats.offscreen_pool_bytes as f64 / (1024.0 * 1024.0),
                 stats.layer_cache_size,
                 stats.layer_cache_bytes as f64 / (1024.0 * 1024.0),
                 stats.image_cache_size,
-                stats.text_cache_size,
             );
             for (index, layer) in stats.top_isolated_layers().take(4).enumerate() {
                 eprintln!(

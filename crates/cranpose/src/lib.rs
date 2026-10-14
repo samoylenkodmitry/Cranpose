@@ -458,6 +458,16 @@ pub mod prelude {
         WindowConfig, WindowModifierExt, WindowResizeDirection, WindowState, composition_api::*,
         rememberWindowState, rememberWindowStateAt,
     };
+    #[cfg(all(
+        feature = "desktop-menus",
+        feature = "renderer-wgpu",
+        any(
+            target_os = "macos",
+            target_os = "windows",
+            all(target_os = "linux", not(target_arch = "wasm32"))
+        )
+    ))]
+    pub use crate::{CheckItem, KeyShortcut, Menu, MenuBar, MenuEntry, MenuItem, Tray, TraySpec};
 }
 
 #[cfg(any(
@@ -529,9 +539,31 @@ pub mod desktop;
 mod desktop_accessibility;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod desktop_integration;
+#[cfg(all(
+    feature = "desktop-menus",
+    feature = "renderer-wgpu",
+    any(
+        target_os = "macos",
+        target_os = "windows",
+        all(target_os = "linux", not(target_arch = "wasm32"))
+    )
+))]
+mod desktop_menus;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 pub use desktop_integration::{
     DesktopIntegration, DesktopIntegrationContext, DesktopWaker, DesktopWindow, DesktopWindowId,
+};
+#[cfg(all(
+    feature = "desktop-menus",
+    feature = "renderer-wgpu",
+    any(
+        target_os = "macos",
+        target_os = "windows",
+        all(target_os = "linux", not(target_arch = "wasm32"))
+    )
+))]
+pub use desktop_menus::{
+    CheckItem, KeyShortcut, Menu, MenuBar, MenuEntry, MenuItem, Tray, TraySpec,
 };
 /// The raw window handle traits a [`DesktopWindow`] implements, at the
 /// version the shell uses.
@@ -692,6 +724,20 @@ mod ios_device_info;
     )
 ))]
 mod apple_network;
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    target_os = "linux"
+))]
+mod linux_network;
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    target_os = "windows"
+))]
+mod windows_network;
 
 #[cfg(any(
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),

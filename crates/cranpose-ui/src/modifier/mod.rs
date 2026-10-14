@@ -5,13 +5,9 @@
 //! together with inspector metadata while resolved state is computed directly
 //! from the modifier nodes.
 
-use std::{
-    fmt,
-    hash::{Hash, Hasher},
-    rc::Rc,
-};
+use std::{fmt, rc::Rc};
 
-use cranpose_core::{ProvidedValue, hash::default};
+use cranpose_core::ProvidedValue;
 use smallvec::SmallVec;
 
 mod alignment;
@@ -310,111 +306,6 @@ enum ModifierKind {
     },
 }
 
-const FINGERPRINT_KIND_EMPTY: u8 = 0;
-const FINGERPRINT_KIND_SINGLE: u8 = 1;
-
-const FINGERPRINT_EMPTY_STRICT_SEED: u64 = 0x243f_6a88_85a3_08d3;
-const FINGERPRINT_EMPTY_STRUCTURAL_SEED: u64 = 0x1319_8a2e_0370_7344;
-const FINGERPRINT_SINGLE_STRICT_SEED: u64 = 0xa409_3822_299f_31d0;
-const FINGERPRINT_SINGLE_STRUCTURAL_SEED: u64 = 0x082e_fa98_ec4e_6c89;
-const FINGERPRINT_SEQUENCE_MUL: u64 = 0x9e37_79b1_85eb_ca87;
-const FINGERPRINT_STRICT_UPDATE_TAG: u64 = 0xdbe6_d5d5_fe4c_ce2f;
-const FINGERPRINT_STRUCTURAL_DRAW_ONLY_TAG: u64 = 0x94d0_49bb_1331_11eb;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ModifierFingerprints {
-    strict: u64,
-    structural: u64,
-}
-
-#[inline]
-fn mix_fingerprint_bits(mut value: u64) -> u64 {
-    value ^= value >> 33;
-    value = value.wrapping_mul(0xff51_afd7_ed55_8ccd);
-    value ^= value >> 33;
-    value = value.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
-    value ^ (value >> 33)
-}
-
-#[inline]
-fn fold_fingerprint(state: u64, value: u64) -> u64 {
-    mix_fingerprint_bits(state ^ value.wrapping_add(FINGERPRINT_SEQUENCE_MUL))
-        .wrapping_mul(FINGERPRINT_SEQUENCE_MUL)
-}
-
-#[inline]
-fn empty_fingerprints() -> ModifierFingerprints {
-    ModifierFingerprints {
-        strict: fold_fingerprint(FINGERPRINT_EMPTY_STRICT_SEED, FINGERPRINT_KIND_EMPTY as u64),
-        structural: fold_fingerprint(
-            FINGERPRINT_EMPTY_STRUCTURAL_SEED,
-            FINGERPRINT_KIND_EMPTY as u64,
-        ),
-    }
-}
-
-#[inline]
-fn single_fingerprint_seed() -> ModifierFingerprints {
-    let strict = fold_fingerprint(
-        FINGERPRINT_SINGLE_STRICT_SEED,
-        FINGERPRINT_KIND_SINGLE as u64,
-    );
-    let structural = fold_fingerprint(
-        FINGERPRINT_SINGLE_STRUCTURAL_SEED,
-        FINGERPRINT_KIND_SINGLE as u64,
-    );
-    ModifierFingerprints { strict, structural }
-}
-
-#[inline]
-fn element_common_fingerprint(element: &DynModifierElement) -> u64 {
-    let mut hasher = default::new();
-    element.element_type().hash(&mut hasher);
-    element.capabilities().bits().hash(&mut hasher);
-    hasher.finish()
-}
-
-#[inline]
-fn element_fingerprints(element: &DynModifierElement) -> ModifierFingerprints {
-    let common = element_common_fingerprint(element);
-    let requires_update = element.requires_update();
-    let strict_payload = if requires_update {
-        let element_ptr = Rc::as_ptr(element) as *const () as usize as u64;
-        element_ptr ^ FINGERPRINT_STRICT_UPDATE_TAG
-    } else {
-        element.hash_code()
-    };
-    let strict = mix_fingerprint_bits(common ^ strict_payload);
-
-    let is_draw_only = element.capabilities() == NodeCapabilities::DRAW;
-    let structural_payload = if is_draw_only {
-        FINGERPRINT_STRUCTURAL_DRAW_ONLY_TAG
-    } else {
-        element.hash_code()
-    };
-    let structural = mix_fingerprint_bits(common ^ structural_payload);
-
-    ModifierFingerprints { strict, structural }
-}
-
-#[inline]
-fn append_fingerprints(
-    mut fingerprints: ModifierFingerprints,
-    elements: &[DynModifierElement],
-) -> ModifierFingerprints {
-    for element in elements {
-        let element_fingerprints = element_fingerprints(element);
-        fingerprints.strict = fold_fingerprint(fingerprints.strict, element_fingerprints.strict);
-        fingerprints.structural =
-            fold_fingerprint(fingerprints.structural, element_fingerprints.structural);
-    }
-    fingerprints
-}
-
-fn single_fingerprints(elements: &[DynModifierElement]) -> ModifierFingerprints {
-    append_fingerprints(single_fingerprint_seed(), elements)
-}
-
 pub struct ModifierElementIterator<'a> {
     inner: std::slice::Iter<'a, DynModifierElement>,
 }
@@ -475,19 +366,14 @@ impl ExactSizeIterator for ModifierInspectorIterator<'_> {}
 #[derive(Clone)]
 pub struct Modifier {
     kind: ModifierKind,
-    strict_fingerprint: u64,
-    structural_fingerprint: u64,
     element_count: usize,
     provides_composition_locals: bool,
 }
 
 impl Default for Modifier {
     fn default() -> Self {
-        let fingerprints = empty_fingerprints();
         Self {
             kind: ModifierKind::Empty,
-            strict_fingerprint: fingerprints.strict,
-            structural_fingerprint: fingerprints.structural,
             element_count: 0,
             provides_composition_locals: false,
         }
@@ -1004,8 +890,6 @@ impl Modifier {
     pub fn then(self, next: Modifier) -> Modifier {
         let Modifier {
             kind,
-            strict_fingerprint,
-            structural_fingerprint,
             element_count,
             provides_composition_locals,
         } = self;
@@ -1026,20 +910,11 @@ impl Modifier {
                     elements,
                     inspector,
                 },
-                strict_fingerprint,
-                structural_fingerprint,
                 element_count,
                 provides_composition_locals,
             };
         };
 
-        let fingerprints = append_fingerprints(
-            ModifierFingerprints {
-                strict: strict_fingerprint,
-                structural: structural_fingerprint,
-            },
-            next_elements,
-        );
         elements.extend_from(next_elements);
         let inspector = if next_inspector.is_none() {
             inspector
@@ -1051,8 +926,6 @@ impl Modifier {
                 elements,
                 inspector,
             },
-            strict_fingerprint: fingerprints.strict,
-            structural_fingerprint: fingerprints.structural,
             element_count: element_count + next.element_count,
             provides_composition_locals: provides_composition_locals
                 || next.provides_composition_locals,
@@ -1197,14 +1070,11 @@ impl Modifier {
             let provides_composition_locals = elements
                 .iter()
                 .any(|element| element.provides_composition_locals());
-            let fingerprints = single_fingerprints(elements);
             Self {
                 kind: ModifierKind::Single {
                     elements: Elements::from_slice(elements),
                     inspector: None,
                 },
-                strict_fingerprint: fingerprints.strict,
-                structural_fingerprint: fingerprints.structural,
                 element_count,
                 provides_composition_locals,
             }
@@ -1231,8 +1101,6 @@ impl Modifier {
                         elements,
                         inspector: Some(new_inspector),
                     },
-                    strict_fingerprint: self.strict_fingerprint,
-                    structural_fingerprint: self.structural_fingerprint,
                     element_count: self.element_count,
                     provides_composition_locals: self.provides_composition_locals,
                 }
@@ -1271,13 +1139,6 @@ impl Modifier {
 
     fn eq_internal(&self, other: &Self, consider_always_update: bool) -> bool {
         if self.element_count != other.element_count {
-            return false;
-        }
-        if consider_always_update {
-            if self.strict_fingerprint != other.strict_fingerprint {
-                return false;
-            }
-        } else if self.structural_fingerprint != other.structural_fingerprint {
             return false;
         }
 

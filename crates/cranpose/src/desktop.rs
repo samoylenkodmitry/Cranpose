@@ -198,8 +198,36 @@ fn robot_app_response(app: &mut AppShell<WgpuRenderer>, command: RobotCommand) -
             app.set_semantics_enabled(enabled);
             RobotResponse::Ok
         }
+        RobotCommand::ChooseMenuItem { tray, labels } => choose_menu_item(tray, &labels)
+            .map_or_else(RobotResponse::Error, |()| RobotResponse::Ok),
         _ => RobotResponse::Error("not an app query".into()),
     }
+}
+
+#[cfg(all(
+    feature = "robot",
+    feature = "desktop-menus",
+    any(
+        target_os = "macos",
+        target_os = "windows",
+        all(target_os = "linux", not(target_arch = "wasm32"))
+    )
+))]
+use crate::desktop_menus::choose as choose_menu_item;
+
+#[cfg(all(
+    feature = "robot",
+    not(all(
+        feature = "desktop-menus",
+        any(
+            target_os = "macos",
+            target_os = "windows",
+            all(target_os = "linux", not(target_arch = "wasm32"))
+        )
+    ))
+))]
+fn choose_menu_item(_tray: bool, _labels: &[String]) -> Result<(), String> {
+    Err("menus need the desktop-menus feature on macOS, Windows or Linux".to_owned())
 }
 
 #[cfg(feature = "robot")]
@@ -698,6 +726,16 @@ struct App {
     #[cfg(target_os = "macos")]
     application_menu: ApplicationMenu,
     integration: crate::desktop_integration::Integration,
+    /// The tray icon and menu bar built for the composition.
+    #[cfg(all(
+        feature = "desktop-menus",
+        any(
+            target_os = "macos",
+            target_os = "windows",
+            all(target_os = "linux", not(target_arch = "wasm32"))
+        )
+    ))]
+    native_menus: crate::desktop_menus::NativeMenus,
     device_loss: device_loss::DeviceLoss,
     primary_initial_present_pending: bool,
     /// The primary window's GPU, opening while the platform starts.
@@ -786,6 +824,15 @@ impl App {
             #[cfg(target_os = "macos")]
             application_menu: ApplicationMenu::Owed,
             integration,
+            #[cfg(all(
+                feature = "desktop-menus",
+                any(
+                    target_os = "macos",
+                    target_os = "windows",
+                    all(target_os = "linux", not(target_arch = "wasm32"))
+                )
+            ))]
+            native_menus: crate::desktop_menus::NativeMenus::default(),
             device_loss: device_loss::DeviceLoss::default(),
             primary_initial_present_pending: false,
             gpu_start,
@@ -1266,9 +1313,40 @@ impl App {
         #[cfg(target_os = "macos")]
         self.application_menu.install_when_due();
         self.recover_lost_device(event_loop);
+        // The menu bar follows the application menu, which waits for the
+        // first presented frame.
+        #[cfg(all(
+            feature = "desktop-menus",
+            any(
+                target_os = "macos",
+                target_os = "windows",
+                all(target_os = "linux", not(target_arch = "wasm32"))
+            )
+        ))]
+        let menu_bar_due = self.application_menu_installed();
         if let Some(app) = self.app.as_mut() {
             self.integration.about_to_wait(app, &self.event_proxy);
+            #[cfg(all(
+                feature = "desktop-menus",
+                any(
+                    target_os = "macos",
+                    target_os = "windows",
+                    all(target_os = "linux", not(target_arch = "wasm32"))
+                )
+            ))]
+            self.native_menus
+                .serve(app, &self.event_proxy, menu_bar_due);
         }
+    }
+
+    #[cfg(all(feature = "desktop-menus", target_os = "macos"))]
+    fn application_menu_installed(&self) -> bool {
+        self.application_menu == ApplicationMenu::Installed
+    }
+
+    #[cfg(all(feature = "desktop-menus", not(target_os = "macos")))]
+    fn application_menu_installed(&self) -> bool {
+        true
     }
 
     fn sync_native_windows(&mut self, event_loop: &dyn ActiveEventLoop) {
@@ -6557,7 +6635,8 @@ impl ApplicationHandler for App {
                     | RobotCommand::GetLiveUiTaskLabels
                     | RobotCommand::MeasureText { .. }
                     | RobotCommand::HasFocusedTextField
-                    | RobotCommand::SetSemanticsEnabled(_)) => {
+                    | RobotCommand::SetSemanticsEnabled(_)
+                    | RobotCommand::ChooseMenuItem { .. }) => {
                         let _ = controller.tx.send(robot_app_response(app, command));
                     }
                     RobotCommand::LoseGpuDevice => {
@@ -7255,6 +7334,10 @@ pub fn try_run(
 
     #[cfg(target_os = "macos")]
     crate::apple_network::register();
+    #[cfg(target_os = "linux")]
+    crate::linux_network::register();
+    #[cfg(target_os = "windows")]
+    crate::windows_network::register();
 
     crate::desktop_bundled_assets::register();
 

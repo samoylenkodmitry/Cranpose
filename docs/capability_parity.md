@@ -16,8 +16,8 @@ platform backend reports an observed value.
 | Share | iOS and web provide native share sheets. Android uses `ACTION_SEND` with `CranposeShareProvider`; desktop applications can use file-save services. |
 | Notifications | iOS, Android, desktop, and web provide notification services. Desktop dispatches through `notify-send`, `osascript`, or PowerShell. |
 | GPU device loss | Desktop opens another device on the adapter (or a new adapter), reconfigures every window's surface, hands the device to every renderer and gives the composition the new `GpuContext`; state and input stay. After three recoveries in a row without a presented frame, the next loss ends the app with `LaunchError::GpuDeviceLost`. Android, iOS and the web log the loss only. |
-| Tray icon and menu bar | No Cranpose API. Desktop apps attach crates such as `tray-icon` and `muda` through `AppLauncher::with_desktop_integration`, which runs on the shell's main thread with each window's raw handles. |
-| Network status | Android observes connectivity and metering through `ConnectivityManager`. Web observes connectivity through `navigator.onLine` and online/offline events; metering stays `Unknown` because browsers do not report it. iOS and macOS observe both through `NWPathMonitor`: a satisfied path is online, and an expensive path (cellular, a personal hotspot) or a constrained one (Low Data Mode) is metered. Linux and Windows have no monitor and report both as `Unknown`. A stopped monitor reports `Unknown` until it reconnects. |
+| Tray icon and menu bar | `Tray` and `MenuBar` with the `desktop-menus` feature: a tray icon on macOS, Windows and Linux (a StatusNotifierItem over D-Bus) and the macOS menu bar. Windows and Linux have no menu bar yet. Other integrations attach through `AppLauncher::with_desktop_integration`, which runs on the shell's main thread with each window's raw handles. |
+| Network status | Android observes connectivity and metering through `ConnectivityManager`. Web observes connectivity through `navigator.onLine` and online/offline events; metering stays `Unknown` because browsers do not report it. iOS and macOS observe both through `NWPathMonitor`: a satisfied path is online, and an expensive path (cellular, a personal hotspot) or a constrained one (Low Data Mode) is metered. Linux reads NetworkManager's `State` and `Metered` over the system D-Bus and follows its `PropertiesChanged` signals; without NetworkManager both stay `Unknown`. Windows reads the internet connection profile's connectivity level and cost, again on each `NetworkStatusChanged` event. A stopped monitor reports `Unknown` until it reconnects. |
 | Device information | iOS, Android, and desktop report process memory and CPU readings where available. Web reads `navigator.deviceMemory` when the browser exposes the value. Optional readings use `Option` to represent platform availability. |
 | Clipboard | iOS, Android, desktop, and web provide clipboard services. Web paste uses `request_paste` because browser reads complete asynchronously. |
 | Back requests | iOS and Android publish back requests. While a back gesture moves, Android's predictive back (API 34+) and the iOS edge swipe also publish its progress, which `PredictiveBackHandler` and `NavHost` follow. Desktop apps map keys through their own input policy. On the web, `BindBrowserHistory` maps the browser's Back and Forward, the address bar and reloads to a `NavHost` back stack. |
@@ -29,7 +29,7 @@ platform backend reports an observed value.
 | Launch arguments | iOS and desktop read process arguments; Android reads launch intent extras. Web starts with an empty `launch_args()` snapshot. |
 | Media playback | iOS uses AVFoundation and MediaPlayer; Android uses `cranpose-media` with Android audio focus and media sessions; desktop uses `cranpose-media`; web uses `<audio>`, Media Session, and Web Audio. Native and desktop `cranpose-media` decoders read HTTP(S) sources through byte-range requests. The iOS player accepts HTTP(S) URLs through AVPlayer. The web player passes URIs to the browser audio element. Android document URIs use the media source opener. |
 | Media capabilities | The active player reports seek, speed, loop, analysis, session, equalizer, and probe support through `MediaCapabilities`. Native iOS reports playback analysis and equalizer as unavailable; Android and software playback provide both. |
-| Power | iOS reports thermal state and battery status; Android reports thermal state, battery, and background restrictions. macOS reports thermal state; Linux reports battery status. Web reads battery status when `navigator.getBattery` exists. |
+| Power | iOS reports thermal state and battery status; Android reports thermal state, battery, and background restrictions. macOS reports thermal state; Linux reports battery status and thermal state, from the highest trip point its thermal zones reached. Web reads battery status when `navigator.getBattery` exists. |
 | Bundled assets | iOS streams assets from `NSBundle`; Android streams assets through `AssetManager`; desktop reads beside the executable, from app resources, or from the working directory. Web assets use HTTP. |
 | Incoming content | Android accepts declared media shares and open-with intents at launch and through `onNewIntent`. Desktop and web accept file drops; desktop also reads file paths from `argv`. |
 | App updates | iOS and desktop check for updates. Android checks and installs verified packages through `PackageInstaller`. Update checks require the application's `http-native` feature. |
@@ -38,8 +38,6 @@ platform backend reports an observed value.
 
 ## Current API gaps
 
-- Linux and Windows report network status as unknown. NetworkManager and
-  `INetworkListManager` backends remain future work.
 - The camera service covers native Apple and Android backends. Web applications
   can call browser camera APIs through application code.
 - iOS media playback reports `analysis: false` and `equalizer: false` through
@@ -51,9 +49,9 @@ platform backend reports an observed value.
   CompositionLocal accessors for future API work.
 - Web applications save files through browser downloads. Writable-folder
   selection covers iOS, Android, and desktop.
-- Desktop power support covers macOS thermal state and Linux battery status.
-  macOS battery status, Linux and Windows thermal state, and Windows battery
-  status remain future platform work.
+- Desktop power support covers macOS thermal state and Linux battery status
+  and thermal state. macOS battery status, Windows thermal state, and Windows
+  battery status remain future platform work.
 - Incoming-content adapters cover Android launch intents and desktop/web file
   drops. iOS open-URL events and macOS Finder document-open events remain future
   integration work.

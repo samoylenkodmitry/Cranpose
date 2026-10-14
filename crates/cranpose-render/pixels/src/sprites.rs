@@ -18,16 +18,13 @@ use std::{
     hash::{DefaultHasher, Hasher},
 };
 
-use cranpose_render_common::{
-    brush_sampling::color_to_rgba, graph_scene::RenderDiagnostics,
-    text_measure::SoftwareTextResources,
-};
+use cranpose_render_common::{brush_sampling::color_to_rgba, graph_scene::RenderDiagnostics};
 use cranpose_ui_graphics::{BlendMode, Brush, Color, Point, Rect, StrokeCap, StrokeJoin, TileMode};
 
 use crate::{
     draw::{
-        ClipBounds, RenderItem, ShapeCoverage, Target, clip_rect_to_window, draw_item, place_shape,
-        snap_delta_for_anchor,
+        ClipBounds, RenderItem, ShapeCoverage, Target, TextRaster, clip_rect_to_window, draw_item,
+        place_shape, snap_delta_for_anchor,
     },
     scene::{DrawShape, RasterScene},
 };
@@ -149,7 +146,7 @@ impl SpriteFrame {
         width: u32,
         height: u32,
         diagnostics: &RenderDiagnostics,
-        text_resources: &SoftwareTextResources,
+        text: &TextRaster,
     ) {
         self.sprites.clear();
         self.uploads.clear();
@@ -168,7 +165,7 @@ impl SpriteFrame {
                 self.sprites.extend_from_slice(&sprite);
                 continue;
             }
-            self.texture_sprite(scene, item, screen, diagnostics, text_resources);
+            self.texture_sprite(scene, item, screen, diagnostics, text);
         }
         let generation = self.generation;
         let releases = &mut self.releases;
@@ -189,7 +186,7 @@ impl SpriteFrame {
         item: RenderItem,
         screen: ClipBounds,
         diagnostics: &RenderDiagnostics,
-        text_resources: &SoftwareTextResources,
+        text: &TextRaster,
     ) {
         let Some((canonical, offset, clip)) = Canonical::of(scene, item) else {
             return;
@@ -202,8 +199,7 @@ impl SpriteFrame {
                 (texture.id, texture.placement)
             }
             None => {
-                let Some((placement, pixels)) = canonical.rasterize(diagnostics, text_resources)
-                else {
+                let Some((placement, pixels)) = canonical.rasterize(diagnostics, text) else {
                     return;
                 };
                 self.next_texture = self.next_texture.wrapping_add(1).max(1);
@@ -543,11 +539,11 @@ impl Canonical {
     fn rasterize(
         &self,
         diagnostics: &RenderDiagnostics,
-        text_resources: &SoftwareTextResources,
+        text: &TextRaster,
     ) -> Option<(Rect, Vec<u8>)> {
         let Self { scene, item } = self;
         if let RenderItem::Text(_) = item {
-            return rasterize_text(&scene.texts[0], text_resources);
+            return rasterize_text(&scene.texts[0], text);
         }
         let reach = scene.item_reach(*item)?;
         let window = clip_rect_to_window(
@@ -570,7 +566,7 @@ impl Canonical {
             width,
             height,
         };
-        draw_item(&mut target, scene, *item, diagnostics, text_resources);
+        draw_item(&mut target, scene, *item, diagnostics, text);
         Some((
             Rect {
                 x: window.min_x as f32,
@@ -584,11 +580,8 @@ impl Canonical {
 }
 
 /// Text drawn as the rasterizer draws it, into its own premultiplied image.
-fn rasterize_text(
-    draw: &crate::scene::TextDraw,
-    text_resources: &SoftwareTextResources,
-) -> Option<(Rect, Vec<u8>)> {
-    let (image, rect) = crate::draw::rasterize_text(draw, text_resources)?;
+fn rasterize_text(draw: &crate::scene::TextDraw, text: &TextRaster) -> Option<(Rect, Vec<u8>)> {
+    let (image, rect) = crate::draw::rasterize_text(draw, text)?;
     let mut pixels = image.rgba8_pixels().to_vec();
     for pixel in pixels.as_chunks_mut::<4>().0 {
         let alpha = u32::from(pixel[3]);

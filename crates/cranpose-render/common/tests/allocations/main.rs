@@ -123,6 +123,23 @@ fn rebuilding_the_graph_reuses_the_graph_it_replaces() {
     );
 }
 
+/// A scene update keeps the map of its dirty nodes from the update before:
+/// updating one cell allocates what the cell's rebuild allocates alone.
+fn updating_one_cell_reuses_the_dirty_node_map() {
+    let allocations = allocations_per_pass(10, |applier, _, graph| {
+        let dirty = cell_ids(&graph.root)[..1].to_vec();
+        assert!(
+            update_graph_from_applier(applier, graph, SceneUpdates::content(&dirty), 1.0),
+            "the cell rebuilds in place"
+        );
+    });
+    println!("allocations per one-cell update: {allocations}");
+    assert!(
+        allocations <= 2,
+        "{allocations} allocations per one-cell update"
+    );
+}
+
 const ROW_HEIGHT: f32 = 40.0;
 
 /// Allocations of each scene update that scrolls a lazy column of filled,
@@ -211,5 +228,6 @@ fn a_row_scrolling_in_reuses_the_row_that_scrolled_out() {
 fn scene_rebuilds_stay_within_their_allocation_budgets() {
     rebuilding_a_cell_reuses_the_cell_it_replaces();
     rebuilding_the_graph_reuses_the_graph_it_replaces();
+    updating_one_cell_reuses_the_dirty_node_map();
     a_row_scrolling_in_reuses_the_row_that_scrolled_out();
 }

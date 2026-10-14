@@ -74,8 +74,8 @@ fn alpha_masks_render_exactly_as_rgba_images() {
 
 fn draw_raster_scene_for_test(frame: &mut [u8], width: u32, height: u32, scene: &RasterScene) {
     let diagnostics = RenderDiagnostics::new();
-    let text_resources = SoftwareTextResources::default();
-    draw_raster_scene(frame, width, height, scene, &diagnostics, &text_resources);
+    let text = TextRaster::new(SoftwareTextResources::default());
+    draw_raster_scene(frame, width, height, scene, &diagnostics, &text);
 }
 
 #[test]
@@ -817,6 +817,31 @@ fn stroked_rounded_rects_cover_each_pixel_as_their_geometry_says() {
                     &frame,
                     |point| shape_sdf::stroked_rect_coverage(point, rect, radii, half_width, join),
                 );
+            }
+        }
+    }
+}
+
+#[test]
+fn byte_pixels_blend_to_the_bytes_float_blending_gives() {
+    let diagnostics = RenderDiagnostics::new();
+    for alpha in 0..=255u8 {
+        for source in 0..=255u8 {
+            for under in (0..=255u8).step_by(17) {
+                let src = [source, 255 - source, source / 2, alpha];
+                let dst = [under, 255 - under, under / 3, under];
+                let mut by_bytes = dst;
+                blend_byte_pixel(&mut by_bytes, src);
+                let mut by_floats = dst;
+                if alpha > 0 {
+                    blend_pixel(
+                        &mut by_floats,
+                        src.map(|channel| UNIT[usize::from(channel)]),
+                        BlendMode::SrcOver,
+                        &diagnostics,
+                    );
+                }
+                assert_eq!(by_bytes, by_floats, "{src:?} over {dst:?}");
             }
         }
     }

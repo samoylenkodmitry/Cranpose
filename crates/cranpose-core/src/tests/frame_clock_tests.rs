@@ -8,50 +8,44 @@ use super::*;
 use crate::{DefaultScheduler, Runtime};
 
 thread_local! {
-    static REENTRANT_NEXT_FRAME_STATE: RefCell<Option<Rc<RefCell<NextFrameState>>>> =
-        const { RefCell::new(None) };
+    static WAKE_CLOCK: std::cell::RefCell<Option<FrameClock>> = const { std::cell::RefCell::new(None) };
 }
 
-struct BorrowNextFrameStateOnWake;
+/// Registers a frame callback when woken, which borrows the runtime's frame
+/// callbacks.
+struct RegisterFrameCallbackOnWake;
 
-impl Wake for BorrowNextFrameStateOnWake {
+impl Wake for RegisterFrameCallbackOnWake {
     fn wake(self: Arc<Self>) {
-        REENTRANT_NEXT_FRAME_STATE.with(|slot| {
-            let state = slot.borrow();
-            let Some(state) = state.as_ref() else {
-                return;
-            };
-            let _time = state.borrow().time;
+        WAKE_CLOCK.with(|clock| {
+            if let Some(clock) = clock.borrow().as_ref() {
+                drop(clock.with_frame_nanos(|_| {}));
+            }
         });
     }
 }
 
 #[test]
-fn next_frame_wakes_after_releasing_state_borrow() {
+fn next_frame_wakes_after_releasing_the_frame_callbacks() {
     let runtime = Runtime::new(Arc::new(DefaultScheduler));
     let handle = runtime.handle();
     let clock = runtime.frame_clock();
     let mut next_frame = Box::pin(clock.next_frame());
 
-    REENTRANT_NEXT_FRAME_STATE.with(|slot| {
-        *slot.borrow_mut() = Some(Rc::clone(&next_frame.state));
-    });
-
-    let waker = Waker::from(Arc::new(BorrowNextFrameStateOnWake));
+    WAKE_CLOCK.with(|slot| *slot.borrow_mut() = Some(clock.clone()));
+    let waker = Waker::from(Arc::new(RegisterFrameCallbackOnWake));
     let mut context = Context::from_waker(&waker);
+    assert_eq!(next_frame.as_mut().poll(&mut context), Poll::Pending);
     assert_eq!(next_frame.as_mut().poll(&mut context), Poll::Pending);
 
     let result = catch_unwind(AssertUnwindSafe(|| {
         handle.drain_frame_callbacks(123);
     }));
-
-    REENTRANT_NEXT_FRAME_STATE.with(|slot| {
-        *slot.borrow_mut() = None;
-    });
+    WAKE_CLOCK.with(|slot| *slot.borrow_mut() = None);
 
     assert!(
         result.is_ok(),
-        "next_frame must release its state borrow before waking the task"
+        "the runtime must release its frame callbacks before waking a task"
     );
     assert_eq!(next_frame.as_mut().poll(&mut context), Poll::Ready(123));
 }

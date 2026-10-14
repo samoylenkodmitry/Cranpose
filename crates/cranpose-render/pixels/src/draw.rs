@@ -8,7 +8,7 @@ use cranpose_render_common::{
     graph_scene::RenderDiagnostics,
     layer_shadow::ShadowRRect,
     shape_sdf,
-    software_text_raster::rasterize_annotated_text_region,
+    software_text_raster::{SoftwareGlyphRasterCache, rasterize_annotated_text_region},
     text_measure::SoftwareTextResources,
 };
 use cranpose_ui::text::TextMotion;
@@ -22,6 +22,27 @@ use crate::{
     scene::{ImageDraw, RasterScene, Scene, TextDraw},
     style::point_in_resolved_rounded_rect,
 };
+
+/// Glyph masks a renderer keeps between frames.
+const GLYPH_MASKS: usize = 256;
+
+/// What drawing text needs: the fonts, and the masks of the glyphs drawn
+/// before, so a text that changes rasterizes only glyphs it did not show yet.
+pub(crate) struct TextRaster {
+    pub(crate) resources: SoftwareTextResources,
+    glyphs: std::cell::RefCell<SoftwareGlyphRasterCache>,
+}
+
+impl TextRaster {
+    pub(crate) fn new(resources: SoftwareTextResources) -> Self {
+        Self {
+            resources,
+            glyphs: std::cell::RefCell::new(SoftwareGlyphRasterCache::with_capacity_at_least_one(
+                GLYPH_MASKS,
+            )),
+        }
+    }
+}
 
 fn is_blend_mode_supported(mode: BlendMode) -> bool {
     matches!(mode, BlendMode::SrcOver | BlendMode::DstOut)
@@ -142,18 +163,8 @@ pub(crate) fn clip_rect_to_window(
 /// Draws `scene` into `frame`, an RGBA8 buffer of `width` by `height` pixels, at one device pixel
 /// per logical pixel and with the default font resources.
 pub fn draw_scene(frame: &mut [u8], width: u32, height: u32, scene: &Scene) {
-    let text_resources = SoftwareTextResources::default();
-    draw_scene_with_text_resources(frame, width, height, scene, &text_resources);
-}
-
-pub fn draw_scene_with_text_resources(
-    frame: &mut [u8],
-    width: u32,
-    height: u32,
-    scene: &Scene,
-    text_resources: &SoftwareTextResources,
-) {
-    draw_scene_scaled(frame, width, height, scene, text_resources, 1.0);
+    let text = TextRaster::new(SoftwareTextResources::default());
+    draw_scene_scaled(frame, width, height, scene, &text, 1.0);
 }
 
 pub(crate) fn draw_scene_scaled(
@@ -161,7 +172,7 @@ pub(crate) fn draw_scene_scaled(
     width: u32,
     height: u32,
     scene: &Scene,
-    text_resources: &SoftwareTextResources,
+    text: &TextRaster,
     scale: f32,
 ) {
     if let Some(graph) = scene.graph.as_ref() {
@@ -172,7 +183,7 @@ pub(crate) fn draw_scene_scaled(
             height,
             &raster_scene,
             scene.diagnostics(),
-            text_resources,
+            text,
         );
     } else {
         clear_frame(frame);
@@ -189,7 +200,7 @@ fn draw_raster_scene(
     height: u32,
     scene: &RasterScene,
     diagnostics: &RenderDiagnostics,
-    text_resources: &SoftwareTextResources,
+    text: &TextRaster,
 ) {
     let mut target = Target {
         pixels: frame,
@@ -198,20 +209,20 @@ fn draw_raster_scene(
         width,
         height,
     };
-    draw_raster_window(&mut target, scene, diagnostics, text_resources);
+    draw_raster_window(&mut target, scene, diagnostics, text);
 }
 
 pub(crate) fn draw_raster_window(
     target: &mut Target,
     scene: &RasterScene,
     diagnostics: &RenderDiagnostics,
-    text_resources: &SoftwareTextResources,
+    text: &TextRaster,
 ) {
     clear_frame(target.pixels);
     let window = target.window();
     for &item in &scene.order {
         if scene.item_bounds(item, window).is_some() {
-            draw_item(target, scene, item, diagnostics, text_resources);
+            draw_item(target, scene, item, diagnostics, text);
         }
     }
 }
@@ -222,14 +233,14 @@ pub(crate) fn draw_item(
     scene: &RasterScene,
     item: RenderItem,
     diagnostics: &RenderDiagnostics,
-    text_resources: &SoftwareTextResources,
+    text: &TextRaster,
 ) {
     match item {
         RenderItem::Shape(index) => draw_shape(target, &scene.shapes[index], diagnostics),
         RenderItem::Image(index) => draw_image(target, &scene.images[index], diagnostics),
         RenderItem::Shadow(index) => draw_shadow(target, &scene.shadows[index], diagnostics),
         RenderItem::Text(index) => {
-            draw_text(target, &scene.texts[index], diagnostics, text_resources);
+            draw_text(target, &scene.texts[index], diagnostics, text);
         }
     }
 }
@@ -852,9 +863,9 @@ fn draw_text(
     target: &mut Target,
     draw: &TextDraw,
     diagnostics: &RenderDiagnostics,
-    text_resources: &SoftwareTextResources,
+    text: &TextRaster,
 ) {
-    if let Some((image, rect)) = rasterize_text(draw, text_resources) {
+    if let Some((image, rect)) = rasterize_text(draw, text) {
         blit_rasterized_text_image(target, rect, draw.clip, &image, diagnostics);
     }
 }
@@ -863,9 +874,10 @@ fn draw_text(
 /// rect that image covers.
 pub(crate) fn rasterize_text(
     draw: &TextDraw,
-    text_resources: &SoftwareTextResources,
+    text: &TextRaster,
 ) -> Option<(cranpose_ui_graphics::ImageBitmap, Rect)> {
     let raster_rect = text_raster_rect(draw)?;
+    let mut glyphs = text.glyphs.try_borrow_mut().ok();
     let image = rasterize_annotated_text_region(
         draw.text.as_ref(),
         raster_rect,
@@ -874,8 +886,8 @@ pub(crate) fn rasterize_text(
         draw.color,
         draw.font_size,
         draw.scale,
-        text_resources.fonts(),
-        None,
+        text.resources.fonts(),
+        glyphs.as_deref_mut(),
     )?;
     let rect = Rect {
         x: raster_rect.x,
@@ -932,23 +944,54 @@ fn blit_rasterized_text_image(
     // image pixel under it; between pixels it takes the image moved by the
     // fraction, sampled linearly.
     let whole = rect.x.fract() == 0.0 && rect.y.fract() == 0.0;
+    let image_pixels = whole.then(|| image.rgba8_pixels());
     for py in clip_bounds.min_y..clip_bounds.max_y {
         let image_y = py as f32 - rect.y;
         let row = target.row(py, clip_bounds.min_x, clip_bounds.max_x);
+        if let Some(image_pixels) = image_pixels.as_deref() {
+            let first = image_y as usize * img_width as usize
+                + (clip_bounds.min_x as f32 - rect.x) as usize;
+            let source = image_pixels
+                .as_chunks::<4>()
+                .0
+                .get(first..first + row.len())
+                .unwrap_or_default();
+            for (dst, src) in row.iter_mut().zip(source) {
+                blend_byte_pixel(dst, *src);
+            }
+            continue;
+        }
         for (px, dst) in (clip_bounds.min_x..).zip(row) {
-            let image_x = px as f32 - rect.x;
-            let src = if whole {
-                let index = image_y as usize * img_width as usize + image_x as usize;
-                image
-                    .rgba8_pixel(index)
-                    .map(|channel| UNIT[usize::from(channel)])
-            } else {
-                sample_image_linear(image, image_x, image_y)
-            };
+            let src = sample_image_linear(image, px as f32 - rect.x, image_y);
             if src[3] <= 0.0 {
                 continue;
             }
             blend_pixel(dst, src, BlendMode::SrcOver, diagnostics);
+        }
+    }
+}
+
+/// Draws a straight-alpha byte pixel over `dst`, source over, with the bytes
+/// `blend_pixel` works out in floats. Each channel is the rational
+/// `(s * a + d * (255 - a)) / 255` rounded: its fraction is a multiple of
+/// 1/255, never one half, and the float error stays far below that gap, so
+/// whole numbers round it the same way.
+fn blend_byte_pixel(dst: &mut [u8; 4], src: [u8; 4]) {
+    let alpha = u32::from(src[3]);
+    match alpha {
+        0 => {}
+        255 => *dst = src,
+        _ => {
+            let keep = 255 - alpha;
+            let mix = |source: u8, under: u8| {
+                ((u32::from(source) * alpha + u32::from(under) * keep + 127) / 255) as u8
+            };
+            *dst = [
+                mix(src[0], dst[0]),
+                mix(src[1], dst[1]),
+                mix(src[2], dst[2]),
+                mix(255, dst[3]),
+            ];
         }
     }
 }
