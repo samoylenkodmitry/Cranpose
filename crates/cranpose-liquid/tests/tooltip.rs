@@ -7,10 +7,10 @@
 use std::{cell::Cell, rc::Rc};
 
 use cranpose_liquid::prelude::*;
-use cranpose_testing::{RobotTestRule, TestRenderer, create_headless_robot_test};
-use cranpose_ui::{
-    Box, BoxSpec, Column, ColumnSpec, FocusRequester, Modifier, Point, Rect, SemanticsNode, Size,
+use cranpose_testing::{
+    RobotTestRule, TestRenderer, create_headless_robot_test, robot_assertions::find_semantics_node,
 };
+use cranpose_ui::{Box, BoxSpec, Column, ColumnSpec, FocusRequester, Modifier, Point, Rect, Size};
 
 const WIDTH: f32 = 300.0;
 const CONTROL: f32 = 48.0;
@@ -143,28 +143,23 @@ fn a_tap_clicks_the_control() {
     assert_eq!(screen.clicks.get(), 1);
 }
 
-fn find_long_click(node: &SemanticsNode) -> Option<(String, cranpose_ui::SemanticsLongClick)> {
-    let details = node.details();
-    details
-        .on_long_click
-        .clone()
-        .zip(details.on_long_click_label.clone())
-        .map(|(action, label)| (label, action))
-        .or_else(|| node.children.iter().find_map(find_long_click))
-}
-
 #[test]
 fn a_screen_reader_asks_for_the_tooltip_by_name() {
     let mut screen = screen(BELOW_TOP);
     screen.robot.shell_mut().set_semantics_enabled(true);
     screen.robot.wait_for_idle();
-    let (label, action) = screen
+    let tree = screen
         .robot
         .shell_mut()
         .semantics_tree()
-        .and_then(|tree| find_long_click(tree.root()))
+        .expect("semantics");
+    let node = find_semantics_node(tree.root(), &|node| node.details().on_long_click.is_some())
         .expect("the control offers its tooltip");
-    assert_eq!(label, "Show tooltip");
+    assert_eq!(
+        node.details().on_long_click_label.as_deref(),
+        Some("Show tooltip")
+    );
+    let action = node.details().on_long_click.clone().expect("long press");
     assert!(action.invoke());
     screen.robot.wait_for_idle();
     assert!(screen.tooltip().is_some());

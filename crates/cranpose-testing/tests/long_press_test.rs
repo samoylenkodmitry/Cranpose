@@ -5,8 +5,10 @@
 
 use std::{cell::Cell, rc::Rc};
 
-use cranpose_testing::{RobotTestRule, TestRenderer, create_headless_robot_test};
-use cranpose_ui::{Box, BoxSpec, Modifier, SemanticsNode, Size};
+use cranpose_testing::{
+    RobotTestRule, TestRenderer, create_headless_robot_test, robot_assertions::find_semantics_node,
+};
+use cranpose_ui::{Box, BoxSpec, Modifier, Size};
 
 const LABEL: &str = "Show details";
 
@@ -87,28 +89,20 @@ fn a_press_that_moves_first_does_not_long_press() {
     assert_eq!(screen.long_presses.get(), 0);
 }
 
-fn find_long_click(node: &SemanticsNode) -> Option<(String, cranpose_ui::SemanticsLongClick)> {
-    let details = node.details();
-    details
-        .on_long_click
-        .clone()
-        .zip(details.on_long_click_label.clone())
-        .map(|(action, label)| (label, action))
-        .or_else(|| node.children.iter().find_map(find_long_click))
-}
-
 #[test]
 fn a_screen_reader_long_presses_by_name() {
     let mut screen = screen();
     screen.robot.shell_mut().set_semantics_enabled(true);
     screen.robot.wait_for_idle();
-    let (label, action) = screen
+    let tree = screen
         .robot
         .shell_mut()
         .semantics_tree()
-        .and_then(|tree| find_long_click(tree.root()))
+        .expect("semantics");
+    let node = find_semantics_node(tree.root(), &|node| node.details().on_long_click.is_some())
         .expect("the box offers its long press");
-    assert_eq!(label, LABEL);
+    assert_eq!(node.details().on_long_click_label.as_deref(), Some(LABEL));
+    let action = node.details().on_long_click.clone().expect("long press");
     assert!(action.invoke());
     assert_eq!(screen.long_presses.get(), 1);
 }

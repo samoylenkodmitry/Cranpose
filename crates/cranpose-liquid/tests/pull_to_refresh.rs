@@ -5,7 +5,9 @@
 use std::{cell::Cell, rc::Rc};
 
 use cranpose_liquid::prelude::*;
-use cranpose_testing::{RobotTestRule, TestRenderer, create_headless_robot_test};
+use cranpose_testing::{
+    RobotTestRule, TestRenderer, create_headless_robot_test, robot_assertions::find_semantics_node,
+};
 use cranpose_ui::{Box, BoxSpec, Column, ColumnSpec, Modifier, ScrollState, SemanticsNode, Size};
 
 struct Screen {
@@ -85,29 +87,25 @@ fn a_scrolled_list_scrolls_back_before_it_pulls() {
     assert!(screen.scroll.value() < scrolled);
 }
 
-fn find_action(node: &SemanticsNode, label: &str) -> Option<cranpose_ui::SemanticsCustomAction> {
-    node.details()
-        .custom_actions
-        .iter()
-        .find(|action| action.label == label)
-        .cloned()
-        .or_else(|| {
-            node.children
-                .iter()
-                .find_map(|child| find_action(child, label))
-        })
-}
-
 #[test]
 fn a_screen_reader_refreshes_through_the_named_action() {
     let mut screen = screen();
     screen.robot.shell_mut().set_semantics_enabled(true);
     screen.robot.wait_for_idle();
-    let action = screen
+    let refresh = |node: &SemanticsNode| {
+        node.details()
+            .custom_actions
+            .iter()
+            .find(|action| action.label == "Refresh")
+            .cloned()
+    };
+    let tree = screen
         .robot
         .shell_mut()
         .semantics_tree()
-        .and_then(|tree| find_action(tree.root(), "Refresh"))
+        .expect("semantics");
+    let action = find_semantics_node(tree.root(), &|node| refresh(node).is_some())
+        .and_then(refresh)
         .expect("the box offers a Refresh action");
     action.invoke();
     screen.robot.wait_for_idle();

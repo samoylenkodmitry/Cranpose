@@ -11,10 +11,12 @@ use std::{
 
 use cranpose_core::rememberMutableStateOf;
 use cranpose_liquid::prelude::*;
-use cranpose_testing::{RobotTestRule, TestRenderer, create_headless_robot_test};
+use cranpose_testing::{
+    RobotTestRule, TestRenderer, create_headless_robot_test, robot_assertions::find_semantics_node,
+};
 use cranpose_ui::{
-    Box, BoxSpec, Column, ColumnSpec, KeyCode, KeyEvent, Modifier, Point, ScrollState,
-    SemanticsNode, Size, Text, TextStyle,
+    Box, BoxSpec, Column, ColumnSpec, KeyCode, KeyEvent, Modifier, Point, ScrollState, Size, Text,
+    TextStyle,
 };
 
 const WIDTH: f32 = 300.0;
@@ -231,23 +233,18 @@ fn escape_and_the_back_gesture_slide_the_sheet_out() {
     }
 }
 
-fn find_dismiss(node: &SemanticsNode) -> Option<cranpose_ui::SemanticsDismiss> {
-    node.details()
-        .dismiss
-        .clone()
-        .or_else(|| node.children.iter().find_map(find_dismiss))
-}
-
 #[test]
 fn a_screen_reader_dismisses_the_sheet() {
     let mut screen = screen(false);
     screen.robot.shell_mut().set_semantics_enabled(true);
     screen.robot.wait_for_idle();
-    let dismiss = screen
+    let tree = screen
         .robot
         .shell_mut()
         .semantics_tree()
-        .and_then(|tree| find_dismiss(tree.root()))
+        .expect("semantics");
+    let dismiss = find_semantics_node(tree.root(), &|node| node.details().dismiss.is_some())
+        .and_then(|node| node.details().dismiss.clone())
         .expect("the sheet offers a dismiss action");
     assert!(dismiss.invoke());
     screen.robot.wait_for_motion();
