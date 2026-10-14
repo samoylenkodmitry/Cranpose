@@ -5,3 +5,7 @@ select-all = Alles auswählen
 undo = Rückgängig
 redo = Wiederholen
 search = Suchen
+previous-month = Vorheriger Monat
+next-month = Nächster Monat
+hour = Stunde
+minute = Minute

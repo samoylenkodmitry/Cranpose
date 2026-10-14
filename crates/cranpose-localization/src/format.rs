@@ -2,7 +2,11 @@
 
 use std::{collections::HashMap, sync::Mutex};
 
-use icu_calendar::Date;
+use icu_calendar::{
+    Date,
+    types::Weekday,
+    week::{WeekInformation, WeekPreferences},
+};
 use icu_datetime::{DateTimeFormatter, fieldsets};
 use icu_decimal::{
     DecimalFormatter,
@@ -58,6 +62,10 @@ pub struct LocaleFormatters {
     locale_tag: String,
     month_year: DateTimeFormatter<fieldsets::YM>,
     date: DateTimeFormatter<fieldsets::YMD>,
+    long_date: DateTimeFormatter<fieldsets::YMDE>,
+    weekday: DateTimeFormatter<fieldsets::E>,
+    /// The day a week starts on, 1 for Monday through 7 for Sunday.
+    first_weekday: u8,
     decimal: DecimalFormatter,
     percent: PercentFormatter<DecimalFormatter>,
     currency_preferences: CurrencyFormatterPreferences,
@@ -79,6 +87,14 @@ impl LocaleFormatters {
                 .map_err(|error| data_error(&locale_tag, error))?;
         let date = DateTimeFormatter::try_new(icu_locale.clone().into(), fieldsets::YMD::medium())
             .map_err(|error| data_error(&locale_tag, error))?;
+        let long_date =
+            DateTimeFormatter::try_new(icu_locale.clone().into(), fieldsets::YMDE::long())
+                .map_err(|error| data_error(&locale_tag, error))?;
+        let weekday = DateTimeFormatter::try_new(icu_locale.clone().into(), fieldsets::E::short())
+            .map_err(|error| data_error(&locale_tag, error))?;
+        let first_weekday = WeekInformation::try_new(WeekPreferences::from(&icu_locale))
+            .map_err(|error| data_error(&locale_tag, error))?
+            .first_weekday;
         let decimal = DecimalFormatter::try_new(icu_locale.clone().into(), Default::default())
             .map_err(|error| data_error(&locale_tag, error))?;
         let percent = PercentFormatter::try_new(icu_locale.clone().into(), Default::default())
@@ -89,6 +105,9 @@ impl LocaleFormatters {
             locale_tag,
             month_year,
             date,
+            long_date,
+            weekday,
+            first_weekday: weekday_number(first_weekday),
             decimal,
             percent,
             currency_preferences,
@@ -106,6 +125,25 @@ impl LocaleFormatters {
     pub fn format_date(&self, year: i32, month: u8, day: u8) -> Result<String, FormatError> {
         let date = self.date_input(year, month, day)?;
         Ok(self.date.format(&date).to_string())
+    }
+
+    /// Formats a Gregorian date in full, with its weekday, as a screen reader
+    /// reads a day out: "Wednesday, October 14, 2026".
+    pub fn format_long_date(&self, year: i32, month: u8, day: u8) -> Result<String, FormatError> {
+        let date = self.date_input(year, month, day)?;
+        Ok(self.long_date.format(&date).to_string())
+    }
+
+    /// The short name of the weekday a Gregorian date falls on: "Wed", "ср".
+    pub fn format_weekday(&self, year: i32, month: u8, day: u8) -> Result<String, FormatError> {
+        let date = self.date_input(year, month, day)?;
+        Ok(self.weekday.format(&date).to_string())
+    }
+
+    /// The day the locale's week starts on, 1 for Monday through 7 for
+    /// Sunday.
+    pub fn first_weekday(&self) -> u8 {
+        self.first_weekday
     }
 
     /// Formats a decimal with locale-specific digits and separators at fixed precision.
@@ -167,6 +205,18 @@ impl LocaleFormatters {
             month,
             day,
         })
+    }
+}
+
+fn weekday_number(weekday: Weekday) -> u8 {
+    match weekday {
+        Weekday::Monday => 1,
+        Weekday::Tuesday => 2,
+        Weekday::Wednesday => 3,
+        Weekday::Thursday => 4,
+        Weekday::Friday => 5,
+        Weekday::Saturday => 6,
+        Weekday::Sunday => 7,
     }
 }
 

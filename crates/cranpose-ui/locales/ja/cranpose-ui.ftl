@@ -5,3 +5,7 @@ select-all = すべて選択
 undo = 元に戻す
 redo = やり直す
 search = 検索
+previous-month = 前の月
+next-month = 次の月
+hour = 時
+minute = 分

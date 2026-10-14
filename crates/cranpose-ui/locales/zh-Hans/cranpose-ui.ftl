@@ -5,3 +5,7 @@ select-all = 全选
 undo = 撤销
 redo = 重做
 search = 搜索
+previous-month = 上个月
+next-month = 下个月
+hour = 小时
+minute = 分钟
