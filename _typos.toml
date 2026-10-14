@@ -33,6 +33,8 @@ extend-exclude = [
 fre = "fre"
 trak = "trak"
 wdth = "wdth"
+# The OpenType table of glyph offsets.
+loca = "loca"
 # Mipmap level of detail, as in "explicit-LOD sampling".
 LOD = "LOD"
 # The Paeth predictor, one of the PNG row filters the icon renderer chooses.

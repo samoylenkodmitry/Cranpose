@@ -315,3 +315,122 @@ fn the_embedded_face_measures_and_draws_on_its_own() {
     let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
     assert!(!collect(&fonts, rect, "Fallback", &style, &mut cache).is_empty());
 }
+
+/// One glyph of [`full_glyph_count_font`]: a square of 800 units.
+const SQUARE: char = '\u{4E00}';
+
+#[test]
+fn a_font_with_the_most_glyphs_a_font_can_hold_draws_from_a_file() {
+    let dir = font_dir("full-glyph-count");
+    let family = FontFamily::file_backed(vec![FontFile::new(write_font(
+        &dir,
+        "Full.ttf",
+        &full_glyph_count_font(),
+    ))])
+    .expect("a family needs at least one file");
+    let fonts = font_set(&family);
+    let style = style_for(&family, FontWeight::NORMAL);
+
+    assert_draws_the_square(&fonts, &style);
+}
+
+#[test]
+fn a_font_with_the_most_glyphs_a_font_can_hold_draws_from_bytes() {
+    let bytes: &'static [u8] = Box::leak(full_glyph_count_font().into_boxed_slice());
+    let fonts = SoftwareTextFontRegistry::new().into_font_set(&[bytes]);
+    let style = TextStyle {
+        span_style: SpanStyle {
+            font_size: TextUnit::Sp(FONT_SIZE),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    assert_draws_the_square(&fonts, &style);
+}
+
+fn assert_draws_the_square(fonts: &SoftwareTextFontSet, style: &TextStyle) {
+    let text = SQUARE.to_string();
+    let rect = measured_block(fonts, &text, style);
+    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let run = collect(fonts, rect, &text, style, &mut cache);
+    // 800 units of an em of 1000 at 20 px.
+    assert!(
+        run.iter().any(|glyph| {
+            let placement = glyph.placement();
+            placement.width >= 15 && placement.height >= 15
+        }),
+        "the square must draw: {:?}",
+        run.iter()
+            .map(|glyph| (glyph.placement().width, glyph.placement().height))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// A TrueType font with 65,535 glyphs, the most its `maxp` table can count:
+/// glyph 1 is a square that [`SQUARE`] maps to, the others are empty.
+fn full_glyph_count_font() -> Vec<u8> {
+    const GLYPHS: u16 = u16::MAX;
+    fn be16(out: &mut Vec<u8>, values: &[i32]) {
+        for value in values {
+            out.extend_from_slice(&(*value as u16).to_be_bytes());
+        }
+    }
+    let mut square = Vec::new();
+    // One contour, its bounds, the last point's index, no instructions.
+    be16(&mut square, &[1, 100, 0, 900, 800, 3, 0]);
+    square.extend_from_slice(&[1, 1, 1, 1]);
+    be16(&mut square, &[100, 800, 0, -800, 0, 0, 800, 0]);
+
+    let mut loca = Vec::new();
+    for glyph in 0..=u32::from(GLYPHS) {
+        let start = if glyph < 2 { 0 } else { square.len() as u32 };
+        loca.extend_from_slice(&start.to_be_bytes());
+    }
+    let mut hmtx = Vec::new();
+    be16(&mut hmtx, &[1000, 0]);
+    hmtx.resize(hmtx.len() + 2 * (usize::from(GLYPHS) - 1), 0);
+
+    let mut head = Vec::new();
+    be16(&mut head, &[1, 0, 1, 0, 0, 0, 0x5F0F, 0x3CF5, 0, 1000]);
+    head.resize(head.len() + 16, 0);
+    be16(&mut head, &[0, -200, 1000, 800, 0, 8, 2, 1, 0]);
+    let mut hhea = Vec::new();
+    be16(&mut hhea, &[1, 0, 800, -200, 0, 1000, 0, 0, 1000, 1, 0, 0]);
+    be16(&mut hhea, &[0, 0, 0, 0, 0, 1]);
+    let mut maxp = Vec::new();
+    be16(&mut maxp, &[0, 0x5000, i32::from(GLYPHS)]);
+    let mut cmap = Vec::new();
+    let code = SQUARE as i32;
+    be16(&mut cmap, &[0, 1, 3, 1, 0, 12]);
+    be16(
+        &mut cmap,
+        &[4, 32, 0, 4, 4, 1, 0, code, 0xFFFF, 0, code, 0xFFFF],
+    );
+    be16(&mut cmap, &[1 - code, 1, 0, 0]);
+
+    let tables: [(&[u8; 4], Vec<u8>); 7] = [
+        (b"cmap", cmap),
+        (b"glyf", square),
+        (b"head", head),
+        (b"hhea", hhea),
+        (b"hmtx", hmtx),
+        (b"loca", loca),
+        (b"maxp", maxp),
+    ];
+    let mut font = Vec::new();
+    be16(&mut font, &[1, 0, tables.len() as i32, 0, 0, 0]);
+    let mut offset = 12 + 16 * tables.len();
+    for (tag, table) in &tables {
+        font.extend_from_slice(*tag);
+        font.extend_from_slice(&[0; 4]);
+        font.extend_from_slice(&(offset as u32).to_be_bytes());
+        font.extend_from_slice(&(table.len() as u32).to_be_bytes());
+        offset += table.len().next_multiple_of(4);
+    }
+    for (_, table) in &tables {
+        font.extend_from_slice(table);
+        font.resize(font.len().next_multiple_of(4), 0);
+    }
+    font
+}
