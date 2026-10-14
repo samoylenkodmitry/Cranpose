@@ -89,6 +89,32 @@ jobs:
           path: ${{ runner.temp }}/safari
           if-no-files-found: ignore
 
+  # The desktop demo under AT-SPI on a private session bus: activation, ranges,
+  # text and modals through the Linux accessibility API.
+  linux-desktop:
+    name: desktop demo accessibility (linux)
+    runs-on: [self-hosted, Linux, cranpose-heavy]
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Provision toolchain
+        run: scripts/ci/provision_toolchain.sh
+      - name: Build the desktop demo
+        run: just build-accessibility-desktop
+      - name: AT-SPI robot
+        # The recipe takes the host lock's exclusive side itself.
+        shell: bash --noprofile --norc -eo pipefail {0}
+        run: just robot-accessibility-linux target/ci/desktop-app "$RUNNER_TEMP/linux-desktop"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: runtime-linux-desktop
+          path: ${{ runner.temp }}/linux-desktop
+          if-no-files-found: ignore
+
   # A native Windows desktop session: UI Automation reads the demo's
   # accessibility tree, and the floating inspector robot runs on Windows.
   windows:
@@ -233,12 +259,6 @@ jobs:
         with:
           name: runtime-ios-app
           path: ${{ runner.temp }}
-      # The XCTest host needs Xcode 27's Swift; the image's default is older.
-      - name: Select the newest Xcode
-        run: |
-          ls -d /Applications/Xcode_*.app
-          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
-          xcodebuild -version
       - name: Accessibility robot
         run: |
           tar -C "$RUNNER_TEMP" -xf "$RUNNER_TEMP/ios-app.tar"
