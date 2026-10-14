@@ -46,42 +46,33 @@ pub fn LiquidCheckbox(modifier: Modifier, checked: bool, on_change: impl Fn(bool
         colors.secondary_label
     };
     let check = colors.on_accent;
-    let mark = Modifier::empty()
-        .size(Size::new(MARK_SIZE, MARK_SIZE))
-        .draw_behind(move |scope| {
-            let bounds = Rect::from_size(scope.size());
-            let radii = CornerRadii::uniform(BOX_RADIUS);
-            scope.draw_round_rect_at(bounds, Brush::solid(fill), radii);
-            let half = OUTLINE_WIDTH * 0.5;
-            let outline_rect = Rect {
-                x: half,
-                y: half,
-                width: bounds.width - OUTLINE_WIDTH,
-                height: bounds.height - OUTLINE_WIDTH,
-            };
-            scope.draw_round_rect_at_stroked(
-                outline_rect,
-                Brush::solid(outline),
-                CornerRadii::uniform(BOX_RADIUS - half),
-                Stroke::new(OUTLINE_WIDTH),
-            );
-            if checked {
-                draw_check(scope, check);
-            }
-        });
-    let control = modifier.minimum_interactive_component_size().toggleable(
+    let control = modifier.toggleable(
         checked,
         None,
         Some(SemanticsWidgetRole::Checkbox),
         on_change,
     );
-    Box(
-        control,
-        BoxSpec::default().content_alignment(Alignment::CENTER),
-        move || {
-            Box(mark.clone(), BoxSpec::default(), || {});
-        },
-    );
+    SelectionControl(control, move |scope| {
+        let bounds = Rect::from_size(scope.size());
+        let radii = CornerRadii::uniform(BOX_RADIUS);
+        scope.draw_round_rect_at(bounds, Brush::solid(fill), radii);
+        let half = OUTLINE_WIDTH * 0.5;
+        let outline_rect = Rect {
+            x: half,
+            y: half,
+            width: bounds.width - OUTLINE_WIDTH,
+            height: bounds.height - OUTLINE_WIDTH,
+        };
+        scope.draw_round_rect_at_stroked(
+            outline_rect,
+            Brush::solid(outline),
+            CornerRadii::uniform(BOX_RADIUS - half),
+            Stroke::new(OUTLINE_WIDTH),
+        );
+        if checked {
+            draw_check(scope, check);
+        }
+    });
 }
 
 /// One option of a group of which one is picked. `selected` is owned by the
@@ -104,28 +95,34 @@ pub fn LiquidRadioButton(modifier: Modifier, selected: bool, on_click: impl Fn()
     )
     .value();
     let dot = colors.accent;
+    let control = modifier.selectable(selected, Some(SemanticsWidgetRole::RadioButton), on_click);
+    SelectionControl(control, move |scope| {
+        let size = scope.size();
+        let center = Point::new(size.width * 0.5, size.height * 0.5);
+        scope.draw_circle_stroked(
+            Brush::solid(outline),
+            center,
+            (MARK_SIZE - OUTLINE_WIDTH) * 0.5,
+            Stroke::new(OUTLINE_WIDTH),
+        );
+        if selected {
+            scope.draw_circle(Brush::solid(dot), center, DOT_RADIUS);
+        }
+    });
+}
+
+/// The drawn mark, `draw`, centered in a touch target of the minimum
+/// interactive size, which `control` makes the control.
+#[composable]
+fn SelectionControl(
+    control: Modifier,
+    draw: impl Fn(&mut dyn cranpose_ui_graphics::DrawScope) + 'static,
+) {
     let mark = Modifier::empty()
         .size(Size::new(MARK_SIZE, MARK_SIZE))
-        .draw_behind(move |scope| {
-            let size = scope.size();
-            let center = Point::new(size.width * 0.5, size.height * 0.5);
-            scope.draw_circle_stroked(
-                Brush::solid(outline),
-                center,
-                (MARK_SIZE - OUTLINE_WIDTH) * 0.5,
-                Stroke::new(OUTLINE_WIDTH),
-            );
-            if selected {
-                scope.draw_circle(Brush::solid(dot), center, DOT_RADIUS);
-            }
-        });
-    let control = modifier.minimum_interactive_component_size().selectable(
-        selected,
-        Some(SemanticsWidgetRole::RadioButton),
-        on_click,
-    );
+        .draw_behind(draw);
     Box(
-        control,
+        control.minimum_interactive_component_size(),
         BoxSpec::default().content_alignment(Alignment::CENTER),
         move || {
             Box(mark.clone(), BoxSpec::default(), || {});

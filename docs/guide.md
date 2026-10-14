@@ -3614,6 +3614,38 @@ Column(
 );
 ```
 
+#### LiquidSnackbarHost
+
+Show brief messages at the bottom of the screen, one at a time from a queue.
+`show` resolves with how the snackbar ended. A snackbar times out after its
+duration; while a screen reader is on, one with an action stays until it is
+used, and readers hear the message as it appears.
+
+```rust preview=snackbar
+use cranpose::liquid::prelude::*;
+
+let snackbars = rememberLiquidSnackbarHostState();
+let scope = rememberCoroutineScope();
+let shows = snackbars.clone();
+GlassButton(
+    Modifier::empty(),
+    GlassButtonSpec::default(),
+    move || {
+        let shows = shows.clone();
+        scope.launch(async move {
+            let ended = shows
+                .show(SnackbarVisuals::new("Message deleted").action("Undo"))
+                .await;
+            if ended == SnackbarResult::ActionPerformed {
+                // Restore the message.
+            }
+        });
+    },
+    || GlassButtonLabel("Delete".into(), GlassButtonSpec::default()),
+);
+LiquidSnackbarHost(snackbars, Modifier::empty().fill_max_width());
+```
+
 #### LiquidSlider
 
 Show a styled slider with a value in `0.0..=1.0`.

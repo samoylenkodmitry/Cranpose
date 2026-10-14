@@ -23,6 +23,7 @@ mod selection;
 mod slider;
 mod slider_gesture;
 mod slider_motion;
+mod snackbar;
 mod tab_bar;
 mod tab_lighting;
 mod toggle;
@@ -51,6 +52,10 @@ pub use pull_to_refresh::LiquidPullToRefreshBox;
 pub use search_field::{LiquidSearchField, LiquidSearchFieldSpec, SearchBar, SearchField};
 pub use segmented::{LiquidSegmentedControl, LiquidSegmentedControlScope};
 pub use slider::LiquidSlider;
+pub use snackbar::{
+    LiquidSnackbarHost, LiquidSnackbarHostState, SnackbarDuration, SnackbarResult, SnackbarShown,
+    SnackbarVisuals, rememberLiquidSnackbarHostState,
+};
 pub use tab_bar::{
     LiquidTab, LiquidTabBar, LiquidTabBarScope, LiquidTabBarSearchAccessory, LiquidTabBarSpec,
     LiquidTabBarWithAccessory, LiquidTabIcon, LiquidTabIconStyle, tab_lens_rest_width,
