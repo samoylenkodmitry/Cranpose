@@ -398,3 +398,31 @@ fn content_padding_rests_a_page_after_the_start_padding_with_its_neighbours_besi
     );
     assert_eq!(start(&mut pager, 2), Some(270.0));
 }
+
+#[test]
+fn the_target_page_is_where_an_animation_or_a_released_flick_goes() {
+    let mut pager = Pager::new(true);
+    let state = pager.state();
+    state.animate_scroll_to_page(3);
+    pager.frames(4);
+    assert!(state.current_page() < 3, "the spring takes frames");
+    assert_eq!(state.target_page(), 3, "the animation goes to page 3");
+    pager.frames(120);
+    assert_eq!((state.current_page(), state.target_page()), (3, 3));
+
+    pager.press_and_move(true, 80.0, 110.0, 30);
+    assert!(state.is_scroll_in_progress());
+    assert!(state.lazy_list_state().is_dragged());
+    assert_eq!(
+        state.target_page(),
+        state.current_page(),
+        "while dragged it is the current page"
+    );
+    pager.release(true, 110.0);
+    pager.frames(1);
+    assert!(!state.lazy_list_state().is_dragged(), "the finger is up");
+    assert_eq!(state.current_page(), 3, "the page has not turned yet");
+    assert_eq!(state.target_page(), 2, "the flick back goes to page 2");
+    pager.frames(90);
+    assert_eq!((state.current_page(), state.target_page()), (2, 2));
+}

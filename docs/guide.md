@@ -2573,7 +2573,7 @@ fn Onboarding() {
 ```
 
 `pager.animate_scroll_to_page(page)` turns the pages with a spring. `PageSize::Fixed` shows the next page beside the current one.
-`pager.settled_page()` is the page the pager rests on. It changes when a swipe or an animation comes to rest, so a page indicator that reads it recomposes then, not on every frame of the swipe. `is_scroll_in_progress()` says whether a drag, a fling or an animation moves the pager; lazy lists, grids and `ScrollState` have it too. `PagerSpec::content_padding` shows the neighbouring pages in the padding at both ends, and `beyond_viewport_page_count` sets how many pages outside the view stay composed.
+`pager.settled_page()` is the page the pager rests on. It changes when a swipe or an animation comes to rest, so a page indicator that reads it recomposes then, not on every frame of the swipe. `target_page()` is the page the pager is on its way to, for a page indicator that moves ahead of the swipe. `is_scroll_in_progress()` says whether a drag, a fling or an animation moves the pager, and `lazy_list_state().is_dragged()` whether a finger drags it; lazy lists, grids and `ScrollState` have it too. `PagerSpec::content_padding` shows the neighbouring pages in the padding at both ends, and `beyond_viewport_page_count` sets how many pages outside the view stay composed.
 
 ### Adapt to screen size
 

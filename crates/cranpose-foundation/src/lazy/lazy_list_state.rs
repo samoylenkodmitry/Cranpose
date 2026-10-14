@@ -233,6 +233,7 @@ pub struct LazyListState {
     can_scroll_backward_state: MutableState<bool>,
     stats_state: MutableState<LazyLayoutStats>,
     scroll_in_progress_state: MutableState<bool>,
+    dragged_state: MutableState<bool>,
     inner: MutableState<Rc<RefCell<LazyListStateInner>>>,
 }
 
@@ -366,6 +367,7 @@ impl LazyListState {
             can_scroll_backward_state: cranpose_core::mutableStateOf(false),
             stats_state: cranpose_core::mutableStateOf(LazyLayoutStats::default()),
             scroll_in_progress_state: cranpose_core::mutableStateOf(false),
+            dragged_state: cranpose_core::mutableStateOf(false),
             inner: cranpose_core::mutableStateOfNeverEqual(Rc::new(RefCell::new(
                 LazyListStateInner {
                     scroll_to_be_consumed: 0.0,
@@ -627,6 +629,21 @@ impl LazyListState {
     /// recomposes when a scroll starts and when it ends.
     pub fn is_scroll_in_progress(&self) -> bool {
         self.scroll_in_progress_state.is_alive() && self.scroll_in_progress_state.get()
+    }
+
+    /// Whether a finger or a pointer drags the list now: Compose's
+    /// `interactionSource.collectIsDraggedAsState()`. A composable that reads
+    /// it recomposes when a drag starts and when it ends.
+    pub fn is_dragged(&self) -> bool {
+        self.dragged_state.is_alive() && self.dragged_state.get()
+    }
+
+    /// Marks whether the scroll modifier's drag moves the list, for
+    /// [`Self::is_dragged`]. The scroll modifier calls it.
+    pub fn set_dragged(&self, dragged: bool) {
+        if self.dragged_state.is_alive() && self.dragged_state.get_non_reactive() != dragged {
+            self.dragged_state.set(dragged);
+        }
     }
 
     /// Marks whether a drag, a fling or a settle of the scroll modifier moves

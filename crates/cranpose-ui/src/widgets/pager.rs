@@ -5,9 +5,9 @@
 
 use std::rc::Rc;
 
+use cranpose_core::{MutableState, mutableStateOf, remember};
 use cranpose_foundation::lazy::{
     LazyItems, LazyListIntervalContent, LazyListScope, LazyListState, LazySettlePolicy,
-    rememberLazyListStateWithPosition,
 };
 use cranpose_ui_layout::LinearArrangement;
 
@@ -67,14 +67,14 @@ impl Default for PagerSpec {
 #[derive(Clone, Copy, PartialEq)]
 pub struct PagerState {
     list: LazyListState,
+    /// The page the running animation or settle goes to.
+    target: MutableState<Option<usize>>,
 }
 
 /// A [`PagerState`] that starts on `initial_page`.
 #[composable]
 pub fn rememberPagerState(initial_page: usize) -> PagerState {
-    PagerState {
-        list: rememberLazyListStateWithPosition(initial_page, 0.0),
-    }
+    remember(|| PagerState::new(initial_page)).with(|state| *state)
 }
 
 impl PagerState {
@@ -83,6 +83,7 @@ impl PagerState {
     pub fn new(initial_page: usize) -> Self {
         Self {
             list: LazyListState::new(initial_page, 0.0),
+            target: mutableStateOf(None),
         }
     }
 
@@ -124,6 +125,20 @@ impl PagerState {
         self.list.is_scroll_in_progress()
     }
 
+    /// The page the pager is on its way to: Compose's `targetPage`. While an
+    /// animation or the settle after a release moves the pager, it is the
+    /// page that motion ends on; during a drag and at rest it is
+    /// [`Self::current_page`].
+    pub fn target_page(&self) -> usize {
+        if self.list.is_scroll_in_progress()
+            && !self.list.is_dragged()
+            && let Some(page) = self.target.get()
+        {
+            return page;
+        }
+        self.current_page()
+    }
+
     /// How far the pager stands from [`Self::current_page`], as a fraction of
     /// a page from -0.5 to 0.5 — Compose's `currentPageOffsetFraction`.
     pub fn current_page_offset_fraction(&self) -> f32 {
@@ -147,6 +162,7 @@ impl PagerState {
     /// Scrolls to `page` with a spring — Compose's `animateScrollToPage`. A
     /// press on the pager stops it, and letting go settles on a page.
     pub fn animate_scroll_to_page(&self, page: usize) {
+        self.target.set(Some(page));
         self.list.animate_scroll_to_item(page, 0.0);
     }
 
@@ -194,6 +210,8 @@ fn page_settle(state: PagerState) -> LazySettlePolicy {
         } else {
             proposed > page / 2.0
         };
+        let first = state.list.first_visible_item_index_non_reactive();
+        state.target.set(Some(first + usize::from(forward)));
         if forward { page } else { 0.0 }
     })
 }
