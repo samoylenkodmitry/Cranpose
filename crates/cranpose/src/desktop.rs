@@ -7304,8 +7304,9 @@ pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
 const ROBOT_PIPELINE_WAIT: Duration = Duration::from_secs(30);
 
 /// Captures the scene at `scale`, again until the capture draws no
-/// placeholder: a robot screenshot is the final picture, drawn once the
-/// pipelines its effects wait for have landed.
+/// placeholder and no shape through a stand-in: a robot screenshot is the
+/// final picture, drawn once the pipelines its effects and shapes wait for
+/// have landed.
 #[cfg(feature = "robot")]
 fn capture_final_frame(
     app: &mut AppShell<WgpuRenderer>,
@@ -7319,11 +7320,10 @@ fn capture_final_frame(
             .renderer()
             .capture_frame_with_scale(width, height, scale)
             .map_err(|err| format!("Failed to capture GPU screenshot: {err:?}"))?;
-        let drew_placeholders = app
-            .renderer()
-            .last_frame_stats()
-            .is_some_and(|stats| stats.placeholder_draws > 0);
-        if !drew_placeholders || Instant::now() >= deadline {
+        let drew_stand_ins = app.renderer().last_frame_stats().is_some_and(|stats| {
+            stats.placeholder_draws > 0 || stats.shape_pipeline_fallback_draws > 0
+        });
+        if !drew_stand_ins || Instant::now() >= deadline {
             return Ok(captured);
         }
         while app.renderer().awaits_pipelines() && Instant::now() < deadline {
