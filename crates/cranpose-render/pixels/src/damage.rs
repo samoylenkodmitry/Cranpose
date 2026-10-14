@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 use cranpose_ui_graphics::{Brush, CornerRadii, Rect};
 
@@ -20,7 +20,6 @@ fn same_shape(old: &DrawShape, new: &DrawShape) -> bool {
         arc,
         line,
         trapezoid,
-        z_index: _,
         clip,
         blend_mode,
     } = old;
@@ -60,7 +59,6 @@ fn moved_fill(old: &DrawShape, new: &DrawShape) -> Option<(Rect, Rect, CornerRad
         arc: _,
         line: _,
         trapezoid: _,
-        z_index: _,
         clip,
         blend_mode,
     } = old;
@@ -147,14 +145,13 @@ fn same_text(old: &TextDraw, new: &TextDraw) -> bool {
         text_style,
         font_size,
         scale,
-        z_index: _,
         clip,
     } = old;
     *rect == new.rect
         && *snap_anchor == new.snap_anchor
         && (Rc::ptr_eq(text, &new.text) || **text == *new.text)
+        && (Arc::ptr_eq(text_style, &new.text_style) || **text_style == *new.text_style)
         && *color == new.color
-        && *text_style == new.text_style
         && *font_size == new.font_size
         && *scale == new.scale
         && *clip == new.clip
@@ -168,7 +165,6 @@ fn same_image(old: &ImageDraw, new: &ImageDraw) -> bool {
         alpha,
         color_filter,
         sampling,
-        z_index: _,
         clip,
         blend_mode,
         src_rect,
@@ -189,7 +185,6 @@ fn same_shadow(old: &ShadowDraw, new: &ShadowDraw) -> bool {
         shadow,
         snap_anchor,
         color,
-        z_index: _,
         clip,
     } = old;
     *shadow == new.shadow
@@ -242,11 +237,11 @@ pub(crate) fn changed_areas(
     areas: &mut Vec<ClipBounds>,
 ) {
     areas.clear();
-    let old_items = old.ordered_items();
-    let new_items = new.ordered_items();
+    let old_items = &old.order;
+    let new_items = &new.order;
     let common_start = old_items
         .iter()
-        .zip(&new_items)
+        .zip(new_items)
         .take_while(|(a, b)| same_item(old, **a, new, **b))
         .count();
     let common_end = old_items[common_start..]

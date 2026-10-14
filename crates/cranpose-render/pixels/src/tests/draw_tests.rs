@@ -37,7 +37,6 @@ fn alpha_masks_render_exactly_as_rgba_images() {
                         alpha: 0.7,
                         color_filter,
                         sampling,
-                        z_index: 0,
                         clip: Some(Rect {
                             x: 3.0,
                             y: 4.0,
@@ -121,7 +120,6 @@ fn shape_snap_does_not_move_its_fixed_ancestor_clip() {
         arc: None,
         line: None,
         trapezoid: None,
-        z_index: 0,
         clip: Some(Rect {
             x: 2.0,
             y: 2.0,
@@ -164,7 +162,7 @@ fn render_single_text_frame(
         },
         Rc::new(cranpose_ui::text::AnnotatedString::from("MMMMMMMM")),
         color,
-        style,
+        std::sync::Arc::new(style),
         64.0,
         1.0,
         None,
@@ -290,7 +288,7 @@ fn multiline_text_renders_second_line_pixels() {
             "Dynamic\nModifiers",
         )),
         Color::WHITE,
-        cranpose_ui::TextStyle::default(),
+        std::sync::Arc::new(cranpose_ui::TextStyle::default()),
         14.0,
         1.0,
         None,
@@ -373,7 +371,7 @@ fn text_clip_bounds_prevent_drawing_outside_scroll_window() {
         },
         Rc::new(cranpose_ui::text::AnnotatedString::from("Clipped Text")),
         Color::WHITE,
-        cranpose_ui::TextStyle::default(),
+        std::sync::Arc::new(cranpose_ui::TextStyle::default()),
         14.0,
         1.0,
         Some(Rect {
@@ -527,7 +525,7 @@ fn is_inked(frame: &[u8], x: u32, y: u32) -> bool {
 
 fn render_shape(shape: crate::scene::DrawShape) -> Vec<u8> {
     let mut scene = RasterScene::new();
-    scene.shapes.push(shape);
+    scene.push_draw_shape(shape);
     let mut frame = blank_frame();
     draw_raster_scene_for_test(&mut frame, CANVAS, CANVAS, &scene);
     frame
@@ -544,7 +542,6 @@ fn shape_template(rect: Rect) -> crate::scene::DrawShape {
         arc: None,
         line: None,
         trapezoid: None,
-        z_index: 0,
         clip: None,
         blend_mode: BlendMode::SrcOver,
     }

@@ -148,7 +148,7 @@ impl SpriteFrame {
             max_x: width as i32,
             max_y: height as i32,
         };
-        for item in scene.ordered_items() {
+        for &item in &scene.order {
             if let RenderItem::Shape(index) = item
                 && let Some(sprite) = shape_sprite(&scene.shapes[index], screen)
             {

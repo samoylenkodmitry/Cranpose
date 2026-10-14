@@ -207,7 +207,7 @@ pub(crate) fn draw_raster_window(
 ) {
     clear_frame(target.pixels);
     let window = target.window();
-    for item in scene.ordered_items() {
+    for &item in &scene.order {
         if scene.item_bounds(item, window).is_some() {
             draw_item(target, scene, item, diagnostics, text_resources);
         }
@@ -290,39 +290,6 @@ impl RasterScene {
                 clip_rect_to_window(reach, draw.clip, window)
             }
         }
-    }
-
-    /// Every item, in the order they are drawn.
-    pub(crate) fn ordered_items(&self) -> Vec<RenderItem> {
-        let mut ordered = Vec::with_capacity(
-            self.shapes.len() + self.images.len() + self.texts.len() + self.shadows.len(),
-        );
-        ordered.extend(
-            self.shapes
-                .iter()
-                .enumerate()
-                .map(|(index, shape)| (shape.z_index, RenderItem::Shape(index))),
-        );
-        ordered.extend(
-            self.images
-                .iter()
-                .enumerate()
-                .map(|(index, image)| (image.z_index, RenderItem::Image(index))),
-        );
-        ordered.extend(
-            self.texts
-                .iter()
-                .enumerate()
-                .map(|(index, text)| (text.z_index, RenderItem::Text(index))),
-        );
-        ordered.extend(
-            self.shadows
-                .iter()
-                .enumerate()
-                .map(|(index, shadow)| (shadow.z_index, RenderItem::Shadow(index))),
-        );
-        ordered.sort_unstable_by_key(|(z, _)| *z);
-        ordered.into_iter().map(|(_, item)| item).collect()
     }
 }
 
