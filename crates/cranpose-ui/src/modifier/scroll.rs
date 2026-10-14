@@ -1704,6 +1704,8 @@ fn scroll_impl(
         is_vertical,
         reverse_scrolling,
     });
+    motion_context
+        .observe_activity(|| Box::new(move |active| state.set_scroll_in_progress(active)));
 
     let pointer_input = nested_drag_gesture_input(
         (state.id(), is_vertical),
@@ -1849,6 +1851,8 @@ fn lazy_scroll_impl(
     let list_state = state;
     let state_id = state.inner_ptr() as usize;
     let key = (state_id, is_vertical, reverse_scrolling);
+    motion_context
+        .observe_activity(|| Box::new(move |active| state.set_gesture_scroll_active(active)));
     let overscroll = motion_context.overscroll();
     let translated_content_modifier = Modifier::with_element(TranslatedContentContextElement::new(
         state_id,
