@@ -1641,6 +1641,7 @@ dependencies = [
  "cranpose-ui",
  "cranpose-ui-graphics",
  "cranpose-ui-layout",
+ "image",
 ]
 
 [[package]]

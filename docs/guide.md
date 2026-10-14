@@ -2181,38 +2181,36 @@ cargo add cranpose-services --features http-native --target 'cfg(not(target_arch
 cargo add cranpose-services --features web-http --target 'cfg(target_arch = "wasm32")'
 ```
 
-`rememberAsyncImage` loads an image while the composable stays on screen.
-Request the size the image is drawn at, in device pixels: a large photo then
-holds a thumbnail's memory.
+`AsyncImage` loads an image while it stays on screen, shows `placeholder`
+until the image is decoded and `error` when it fails, and decodes the image no
+larger than its box in device pixels: a large photo in a thumbnail then holds a
+thumbnail's memory.
 
 ```rust
 use cranpose::prelude::*;
 
 #[composable]
 fn Avatar(url: String) {
-    let side = (48.0 * density().density()).round() as u32;
-    let state = rememberAsyncImage(ImageRequest::new(url).max_size(side, side));
-    match state.value() {
-        ImageLoadState::Ready(bitmap) => {
-            Image(
-                BitmapPainter(bitmap),
-                Some("Profile photo".into()),
-                Modifier::empty().size(Size::new(48.0, 48.0)),
-                Alignment::CENTER,
-                ContentScale::Crop,
-                1.0,
-                None,
-            );
-        }
-        ImageLoadState::Loading | ImageLoadState::Failed(_) => {
-            let placeholder = Modifier::empty()
-                .size(Size::new(48.0, 48.0))
+    AsyncImage(
+        ImageRequest::new(url),
+        Some("Profile photo".into()),
+        Modifier::empty().size(Size::new(48.0, 48.0)),
+        ContentScale::Crop,
+        || {
+            let gray = Modifier::empty()
+                .fill_max_size()
                 .background(Color::from_rgb_u8(230, 230, 230));
-            Box(placeholder, BoxSpec::default(), || {});
-        }
-    }
+            Box(gray, BoxSpec::default(), || {});
+        },
+        |_| {
+            Text("No photo", Modifier::empty(), TextStyle::default());
+        },
+    );
 }
 ```
+
+`rememberAsyncImage(request)` returns the load state itself, for a screen that
+draws the image another way. `ImageRequest::max_size` sets the decode size.
 
 The image decodes on a worker thread. All images share one memory cache,
 bounded by the bytes of decoded pixels, and a disk cache in the application's
