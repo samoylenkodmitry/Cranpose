@@ -2,52 +2,11 @@ use std::ops::Range;
 
 use cranpose_ui::{Brush, DrawCommand, DrawCommandFn};
 use cranpose_ui_graphics::{
-    BlendMode, Color, ColorFilter, CommandRecording, CompositingStrategy, CornerRadii,
-    DrawPrimitive, GraphicsLayer, Size,
+    Color, ColorFilter, CommandRecording, CornerRadii, DrawPrimitive, GraphicsLayer, Size,
 };
 
-use crate::layer_transform::{layer_scale_x, layer_scale_y, layer_uniform_scale};
-
-pub fn combine_layers(
-    current: GraphicsLayer,
-    modifier_layer: Option<GraphicsLayer>,
-) -> GraphicsLayer {
-    if let Some(layer) = modifier_layer {
-        GraphicsLayer {
-            alpha: (current.alpha * layer.alpha).clamp(0.0, 1.0),
-            scale: current.scale * layer.scale,
-            scale_x: current.scale_x * layer.scale_x,
-            scale_y: current.scale_y * layer.scale_y,
-            rotation_x: current.rotation_x + layer.rotation_x,
-            rotation_y: current.rotation_y + layer.rotation_y,
-            rotation_z: current.rotation_z + layer.rotation_z,
-            camera_distance: layer.camera_distance,
-            transform_origin: layer.transform_origin,
-            translation_x: current.translation_x + layer.translation_x,
-            translation_y: current.translation_y + layer.translation_y,
-            shadow_elevation: layer.shadow_elevation,
-            ambient_shadow_color: layer.ambient_shadow_color,
-            spot_shadow_color: layer.spot_shadow_color,
-            shape: layer.shape,
-            clip: current.clip || layer.clip,
-            color_filter: compose_color_filters(current.color_filter, layer.color_filter),
-            compositing_strategy: layer.compositing_strategy,
-            blend_mode: layer.blend_mode,
-            render_effect: layer.render_effect,
-            backdrop_effect: layer.backdrop_effect,
-        }
-    } else {
-        GraphicsLayer {
-            compositing_strategy: CompositingStrategy::Auto,
-            blend_mode: BlendMode::SrcOver,
-            render_effect: None,
-            backdrop_effect: None,
-            ..current
-        }
-    }
-}
-
 pub use crate::graph::quad_bounds;
+use crate::layer_transform::{layer_scale_x, layer_scale_y, layer_uniform_scale};
 
 /// The colour a primitive is actually painted in, once this layer has had its
 /// say.

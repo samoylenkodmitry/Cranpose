@@ -25,7 +25,9 @@ fn isolation_composite_alpha(layer: &GraphicsLayer) -> f32 {
     }
 }
 
-fn folded_layer_alpha(layer: &GraphicsLayer) -> f32 {
+/// The alpha `layer`'s content draws with when the layer is drawn in place:
+/// its own, or the 8-bit alpha of the isolated composite it needs.
+pub fn folded_layer_alpha(layer: &GraphicsLayer) -> f32 {
     if layer.compositing_strategy != CompositingStrategy::ModulateAlpha
         && layer_requires_isolation(layer)
     {
@@ -61,19 +63,12 @@ pub fn layer_for_content(
     content
 }
 
-pub fn local_content_layer(layer: &GraphicsLayer) -> GraphicsLayer {
-    GraphicsLayer {
-        alpha: folded_layer_alpha(layer),
-        color_filter: layer.color_filter,
-        ..GraphicsLayer::default()
-    }
-}
-
-/// `local_content_layer(&layer_for_content(layer, isolation))` without building
-/// either intermediate. The content layer differs from `layer` only in the
-/// alpha the isolation moves to the composite step, and the local layer keeps
-/// just that alpha and the colour filter, so the two clones the composed form
-/// performs — one `GraphicsLayer`, one `RenderEffect` — are pure waste.
+/// The alpha and colour filter of `layer_for_content(layer, isolation)`
+/// folded in place, without building it. The content layer differs from
+/// `layer` only in the alpha the isolation moves to the composite step, and
+/// only that alpha and the colour filter pass to the content, so the two
+/// clones the composed form performs — one `GraphicsLayer`, one
+/// `RenderEffect` — are pure waste.
 pub fn local_content_layer_for(layer: &GraphicsLayer) -> GraphicsLayer {
     let alpha = if layer.compositing_strategy != CompositingStrategy::ModulateAlpha
         && layer_requires_isolation(layer)
