@@ -944,23 +944,54 @@ fn blit_rasterized_text_image(
     // image pixel under it; between pixels it takes the image moved by the
     // fraction, sampled linearly.
     let whole = rect.x.fract() == 0.0 && rect.y.fract() == 0.0;
+    let image_pixels = whole.then(|| image.rgba8_pixels());
     for py in clip_bounds.min_y..clip_bounds.max_y {
         let image_y = py as f32 - rect.y;
         let row = target.row(py, clip_bounds.min_x, clip_bounds.max_x);
+        if let Some(image_pixels) = image_pixels.as_deref() {
+            let first = image_y as usize * img_width as usize
+                + (clip_bounds.min_x as f32 - rect.x) as usize;
+            let source = image_pixels
+                .as_chunks::<4>()
+                .0
+                .get(first..first + row.len())
+                .unwrap_or_default();
+            for (dst, src) in row.iter_mut().zip(source) {
+                blend_byte_pixel(dst, *src);
+            }
+            continue;
+        }
         for (px, dst) in (clip_bounds.min_x..).zip(row) {
-            let image_x = px as f32 - rect.x;
-            let src = if whole {
-                let index = image_y as usize * img_width as usize + image_x as usize;
-                image
-                    .rgba8_pixel(index)
-                    .map(|channel| UNIT[usize::from(channel)])
-            } else {
-                sample_image_linear(image, image_x, image_y)
-            };
+            let src = sample_image_linear(image, px as f32 - rect.x, image_y);
             if src[3] <= 0.0 {
                 continue;
             }
             blend_pixel(dst, src, BlendMode::SrcOver, diagnostics);
+        }
+    }
+}
+
+/// Draws a straight-alpha byte pixel over `dst`, source over, with the bytes
+/// `blend_pixel` works out in floats. Each channel is the rational
+/// `(s * a + d * (255 - a)) / 255` rounded: its fraction is a multiple of
+/// 1/255, never one half, and the float error stays far below that gap, so
+/// whole numbers round it the same way.
+fn blend_byte_pixel(dst: &mut [u8; 4], src: [u8; 4]) {
+    let alpha = u32::from(src[3]);
+    match alpha {
+        0 => {}
+        255 => *dst = src,
+        _ => {
+            let keep = 255 - alpha;
+            let mix = |source: u8, under: u8| {
+                ((u32::from(source) * alpha + u32::from(under) * keep + 127) / 255) as u8
+            };
+            *dst = [
+                mix(src[0], dst[0]),
+                mix(src[1], dst[1]),
+                mix(src[2], dst[2]),
+                mix(255, dst[3]),
+            ];
         }
     }
 }

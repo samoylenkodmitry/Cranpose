@@ -63,9 +63,26 @@ impl MaskGammaCorrection {
 
     /// [`Self::apply`] as a unit coverage.
     pub fn apply_unit(self, coverage: f32) -> f32 {
-        f32::from(self.apply(coverage)) / 255.0
+        unit_coverage(self.apply(coverage))
     }
 }
+
+/// `value` over 255 as a float.
+pub(crate) fn unit_coverage(value: u8) -> f32 {
+    UNIT_COVERAGE[usize::from(value)]
+}
+
+/// `UNIT_COVERAGE[c]` is `c as f32 / 255.0`, divided at build time: a pixel
+/// on a target without a float divider looks it up instead.
+static UNIT_COVERAGE: [f32; 256] = {
+    let mut table = [0.0; 256];
+    let mut value = 0;
+    while value < 256 {
+        table[value] = value as f32 / 255.0;
+        value += 1;
+    }
+    table
+};
 
 fn unit_to_u8(value: f32) -> u8 {
     (value.clamp(0.0, 1.0) * 255.0).round() as u8
