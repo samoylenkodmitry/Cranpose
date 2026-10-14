@@ -90,6 +90,8 @@ desktop-shell = [
     "dep:block2",
     "dep:dispatch2",
     "dep:windows-sys",
+    "dep:windows",
+    "dep:zbus",
     "cranpose-platform-desktop-winit",
     "dep:winit",
     "dep:accesskit",
@@ -406,6 +408,9 @@ wgpu = { workspace = true, optional = true, features = [
 
 [target.'cfg(all(target_os = "linux", not(target_arch = "wasm32")))'.dependencies]
 accesskit_unix = { version = "0.24.0", default-features = false, features = ["async-io"] }
+# NetworkManager's state over the system bus (`linux_network`). The version
+# AccessKit's AT-SPI adapter already resolves.
+zbus = { version = "5.19", optional = true, default-features = false, features = ["async-io", "blocking-api"] }
 x11rb = { version = "0.13.2", optional = true }
 wgpu = { workspace = true, optional = true, features = [
     "std",
@@ -418,6 +423,9 @@ accesskit_windows = "0.35.1"
 # The pointer size the person chose (`windows_cursor`), which custom cursors
 # are scaled to. The version winit already resolves.
 windows-sys = { version = "0.61", optional = true, features = ["Win32_System_Registry"] }
+# The internet connection profile and its changes (`windows_network`). The
+# version AccessKit and wgpu already resolve.
+windows = { version = "0.62", optional = true, features = ["Networking_Connectivity", "Foundation"] }
 wgpu = { workspace = true, optional = true, features = [
     "std",
     "parking_lot",
