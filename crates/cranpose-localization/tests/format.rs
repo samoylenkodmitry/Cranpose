@@ -105,3 +105,20 @@ fn names_a_weekday_and_reads_a_date_in_full() {
     );
     assert!(english.format_weekday(2026, 2, 30).is_err());
 }
+
+#[test]
+fn reads_a_time_on_the_locale_s_clock() {
+    let english = formatters("en-US");
+    assert!(!english.uses_24_hour_clock());
+    assert_eq!(
+        english.format_time(21, 5).expect("formatting"),
+        "9:05\u{202f}PM"
+    );
+    assert_eq!(english.day_periods().expect("formatting"), ["AM", "PM"]);
+    let german = formatters("de-DE");
+    assert!(german.uses_24_hour_clock());
+    assert_eq!(german.format_time(21, 5).expect("formatting"), "21:05");
+    let korean = formatters("ko-KR");
+    assert_eq!(korean.day_periods().expect("formatting"), ["오전", "오후"]);
+    assert!(english.format_time(24, 0).is_err());
+}
