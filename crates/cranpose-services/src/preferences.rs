@@ -435,6 +435,18 @@ impl SaveableScope {
         }
     }
 
+    /// The prefix of the keys this scope saves under; `None` for the root
+    /// scope, whose keys stand as they are.
+    pub fn namespace(&self) -> Option<&str> {
+        self.namespace.as_deref()
+    }
+
+    /// Whether this scope saves its values in [`preferences`], rather than
+    /// keeping them in memory.
+    pub fn is_durable(&self) -> bool {
+        self.durable
+    }
+
     /// The value last saved under `key` in this scope.
     pub fn restore(&self, key: &str) -> Option<String> {
         crate::durable_save::saved(self.store().as_ref(), &self.key(key))

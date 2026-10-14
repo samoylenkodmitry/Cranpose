@@ -78,6 +78,22 @@ fn register(work: SaveWork) -> DurableSaveRegistration {
     DurableSaveRegistration { id }
 }
 
+/// Stops the shared saves of `store` keys that `keys` forgets, such as a
+/// popped back-stack entry's saved state that a view model still holds.
+fn stop_preference_saves(store: &PreferencesRef, keys: &local_saves::Forget) {
+    let stopped: Vec<_> = saves()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .extract_if(.., |_, work| match &**work {
+            SaveWork::Preference {
+                store: saved, key, ..
+            } => Arc::ptr_eq(saved, store) && keys.matches(key),
+            SaveWork::Callback(_) => false,
+        })
+        .collect();
+    drop(stopped);
+}
+
 /// Registers fallible work for the next save boundary. Callbacks run serially;
 /// timed-out runs are allowed to finish before another run can start.
 pub fn register_durable_save(

@@ -146,6 +146,9 @@ pub(crate) fn saved(store: Option<&PreferencesRef>, key: &str) -> Option<String>
 /// stored ones are removed from `store` at the next save boundary.
 pub(crate) fn forget(store: Option<PreferencesRef>, prefix: String, keep: Vec<String>) {
     let keys = Arc::new(Forget { prefix, keep });
+    if let Some(store) = &store {
+        super::stop_preference_saves(store, &keys);
+    }
     let stopped: Vec<_> = crate::thread_state::with(|state| {
         let mut saves = state.local_saves.borrow_mut();
         saves.retired.retain(|key, _| !keys.matches(key));
