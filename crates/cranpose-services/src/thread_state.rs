@@ -8,6 +8,7 @@ use std::{
 use crate::{
     accessibility_state::AccessibilityState,
     app_info::AppInfoRef,
+    browser_history::BrowserHistoryRef,
     composition_locals::ServiceLocals,
     content::ContentResolverRef,
     device_info::DeviceInfoRef,
@@ -25,6 +26,7 @@ pub(crate) struct ServiceThreadState {
     pub(crate) content_resolver: RefCell<Option<ContentResolverRef>>,
     pub(crate) file_picker: RefCell<Option<FilePickerRef>>,
     pub(crate) share_sheet: RefCell<Option<ShareSheetRef>>,
+    pub(crate) browser_history: RefCell<Option<BrowserHistoryRef>>,
     pub(crate) uri_handler: RefCell<Option<UriHandlerRef>>,
     pub(crate) accessibility_state: Cell<AccessibilityState>,
     pub(crate) platform_system_theme: Cell<Option<SystemTheme>>,
@@ -52,6 +54,7 @@ impl ServiceThreadState {
             content_resolver: RefCell::new(None),
             file_picker: RefCell::new(None),
             share_sheet: RefCell::new(None),
+            browser_history: RefCell::new(None),
             uri_handler: RefCell::new(None),
             accessibility_state: Cell::new(AccessibilityState {
                 screen_reader_on: false,

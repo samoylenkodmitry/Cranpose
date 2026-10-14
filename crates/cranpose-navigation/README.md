@@ -93,6 +93,16 @@ Restoring keeps the entries beneath the first route the saver cannot read. When
 it cannot read the bottom entry, or nothing was saved, the back stack starts at
 the start route.
 
+## Browser history
+
+On the web, `BindBrowserHistory(controller, saver)` keeps the browser's history
+in step with the back stack, as Compose Multiplatform's `bindToNavigation`
+does. Each navigation adds an entry whose URL fragment is `#/` and the route's
+saved form. The browser's Back pops and its Forward navigates again, and a
+pop in the app goes back in the history. A page opened or reloaded at a
+route's fragment shows that route over the start. Elsewhere the call does
+nothing, so an app can make it unconditionally.
+
 ## Android API map
 
 | Android API | Cranpose API |
@@ -106,6 +116,7 @@ the start route.
 | View model scoped to a back-stack entry | `cranpose_coroflow::viewModel` inside a screen |
 | `rememberSaveable` in a destination | `rememberSaveable` inside a screen |
 | Back stack restored after process death | `rememberSaveableNavController` with a route `Saver` |
+| Compose Multiplatform `window.bindToNavigation` | `BindBrowserHistory` |
 | Predictive back in `NavHost` | `NavHost` follows the gesture; `cranpose_services::PredictiveBackHandler` for custom screens |
 
 - [API reference on docs.rs](https://docs.rs/cranpose-navigation/latest/cranpose_navigation/)

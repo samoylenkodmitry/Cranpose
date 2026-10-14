@@ -15,6 +15,7 @@ use cranpose_services::{
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 
 pub(crate) fn register() {
+    crate::web_history::register();
     set_platform_share_sheet(Rc::new(WebShareSheet));
     set_platform_notifier(Arc::new(WebNotifier));
     set_platform_haptics(Arc::new(WebHaptics));

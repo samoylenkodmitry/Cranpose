@@ -29,6 +29,15 @@ through a `SeekableCrossfade` at the gesture's progress. A cancelled gesture
 fades back from there; a completed one pops, and the crossfade finishes from
 where the gesture left it, keeping the composition of the entry beneath.
 
+`BindBrowserHistory` keeps the browser's session history in step with a back
+stack: each entry it adds keeps the back stack's depth in its state and shows
+the top route's saved form in the URL fragment. A push adds an entry, pops go
+back with `history.go`, and any other change replaces the current entry.
+`popstate` brings the user's moves back: a smaller depth pops to it, and a
+larger one, or an entry with no depth such as a typed fragment, navigates to
+the fragment's route. The web host implements `cranpose_services::BrowserHistory`
+over `window.history`.
+
 `ViewModelStoreOwner` scopes stores to a composition subtree. `viewModel(key,
 factory)` resolves an instance from the nearest store, or from the composition
 position outside a provided store. `ProvideViewModelStore` lets a host, preview
