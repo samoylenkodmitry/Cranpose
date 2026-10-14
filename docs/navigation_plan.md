@@ -24,6 +24,11 @@ by ` <id> <length> <route>` per entry, with each route in the app's `Saver`
 form. On restore it keeps the entries beneath the first unreadable route and
 forgets the saved state of entries that are not on the restored stack.
 
+While an interactive back gesture moves, `NavHost` shows the entry beneath
+through a `SeekableCrossfade` at the gesture's progress. A cancelled gesture
+fades back from there; a completed one pops, and the crossfade finishes from
+where the gesture left it, keeping the composition of the entry beneath.
+
 `ViewModelStoreOwner` scopes stores to a composition subtree. `viewModel(key,
 factory)` resolves an instance from the nearest store, or from the composition
 position outside a provided store. `ProvideViewModelStore` lets a host, preview

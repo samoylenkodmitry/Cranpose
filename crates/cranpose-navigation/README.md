@@ -106,6 +106,7 @@ the start route.
 | View model scoped to a back-stack entry | `cranpose_coroflow::viewModel` inside a screen |
 | `rememberSaveable` in a destination | `rememberSaveable` inside a screen |
 | Back stack restored after process death | `rememberSaveableNavController` with a route `Saver` |
+| Predictive back in `NavHost` | `NavHost` follows the gesture; `cranpose_services::PredictiveBackHandler` for custom screens |
 
 - [API reference on docs.rs](https://docs.rs/cranpose-navigation/latest/cranpose_navigation/)
 - [Source on GitHub](https://github.com/samoylenkodmitry/cranpose/tree/main/crates/cranpose-navigation)

@@ -221,11 +221,11 @@ pub use primitives::{
     BasicTextFieldDecorationScope, BasicTextFieldOptions, BasicTextFieldWithOptions,
     BasicTextWithOptions, BitmapPainter, BitmapRegionPainter, Box, BoxScope, BoxSpec,
     BoxWithConstraints, BoxWithConstraintsScope, BoxWithConstraintsScopeImpl, Button, ButtonSpec,
-    Canvas, Column, ColumnSpec, ContentScale, Crossfade, DEFAULT_ALPHA, EnterTransition,
-    ExitTransition, ForEach, Image, Layout, LayoutNode, Painter, Row, RowSpec,
-    SecureTextFieldOptions, Spacer, SubcomposeLayout, SvgPainter, SvgPainterError, Text,
-    TextObfuscationMode, TextWithOptions, fade_in, fade_out, rememberSvg, slide_in_vertically,
-    slide_out_vertically,
+    Canvas, Column, ColumnSpec, ContentScale, Crossfade, CrossfadeSeek, DEFAULT_ALPHA,
+    EnterTransition, ExitTransition, ForEach, Image, Layout, LayoutNode, Painter, Row, RowSpec,
+    SecureTextFieldOptions, SeekableCrossfade, Spacer, SubcomposeLayout, SvgPainter,
+    SvgPainterError, Text, TextObfuscationMode, TextWithOptions, fade_in, fade_out, rememberSvg,
+    slide_in_vertically, slide_out_vertically,
 };
 #[cfg(any(test, feature = "test-helpers"))]
 #[doc(hidden)]
