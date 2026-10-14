@@ -34,6 +34,31 @@ pub enum PageSize {
     Fixed(f32),
 }
 
+/// Where in the pager a page comes to rest — Compose's `SnapPosition`. It
+/// matters for a page shorter than the space between the content paddings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SnapPosition {
+    /// At the start, after the start padding.
+    #[default]
+    Start,
+    /// In the middle of the space between the paddings, with room for the
+    /// neighbouring pages on both sides.
+    Center,
+    /// At the end, before the end padding.
+    End,
+}
+
+impl SnapPosition {
+    /// How much of the room beside a resting page lies before it.
+    fn fraction(self) -> f32 {
+        match self {
+            Self::Start => 0.0,
+            Self::Center => 0.5,
+            Self::End => 1.0,
+        }
+    }
+}
+
 /// How a pager comes to rest after the user lets go — the options of
 /// Compose's `PagerDefaults.flingBehavior`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -74,6 +99,9 @@ pub struct PagerSpec {
     pub beyond_viewport_page_count: usize,
     /// How a release comes to rest: Compose's `flingBehavior`.
     pub fling: PagerFling,
+    /// Where a page comes to rest, the first and the last page too:
+    /// Compose's `snapPosition`.
+    pub snap_position: SnapPosition,
 }
 
 impl Default for PagerSpec {
@@ -84,6 +112,7 @@ impl Default for PagerSpec {
             content_padding: PaddingValues::default(),
             beyond_viewport_page_count: 2,
             fling: PagerFling::default(),
+            snap_position: SnapPosition::Start,
         }
     }
 }
@@ -168,28 +197,49 @@ impl PagerState {
     /// How far the pager stands from [`Self::current_page`], as a fraction of
     /// a page from -0.5 to 0.5 — Compose's `currentPageOffsetFraction`.
     pub fn current_page_offset_fraction(&self) -> f32 {
-        let page = self.page_extent();
-        if page <= 0.0 {
-            return 0.0;
-        }
-        let fraction = self.list.first_visible_item_scroll_offset() / page;
-        if fraction > 0.5 {
-            fraction - 1.0
-        } else {
-            fraction
-        }
+        let pages = self.pages_at(
+            self.list.first_visible_item_index(),
+            self.list.first_visible_item_scroll_offset(),
+        );
+        pages - pages.round()
     }
 
     /// Shows `page` at once.
     pub fn scroll_to_page(&self, page: usize) {
-        self.list.scroll_to_item(page, 0.0);
+        self.list.scroll_to_item(page, self.rest_offset(page));
     }
 
     /// Scrolls to `page` with a spring — Compose's `animateScrollToPage`. A
     /// press on the pager stops it, and letting go settles on a page.
     pub fn animate_scroll_to_page(&self, page: usize) {
         self.target.set(Some(page));
-        self.list.animate_scroll_to_item(page, 0.0);
+        self.list
+            .animate_scroll_to_item(page, self.rest_offset(page));
+    }
+
+    /// The scroll offset within `page` at which it rests: a page after the
+    /// first rests after the start padding, which the list counts as the
+    /// first page's.
+    fn rest_offset(&self, page: usize) -> f32 {
+        match self.geometry() {
+            Some(geometry) if page > 0 => -geometry.before,
+            _ => 0.0,
+        }
+    }
+
+    /// Places the pager's first page, which it was created on, after the
+    /// `before` padding of its first layout, as a later page rests.
+    fn place_initial_page(&self, before: f32) {
+        let untouched = self
+            .list
+            .with_layout_info(|info| info.total_items_count == 0)
+            .unwrap_or(false);
+        let Some((page, offset)) = self.list.try_position() else {
+            return;
+        };
+        if untouched && page > 0 && offset == 0.0 && before > 0.0 {
+            self.list.scroll_to_item(page, -before);
+        }
     }
 
     /// The state of the lazy row or column the pages sit in, for a scroll
@@ -198,27 +248,58 @@ impl PagerState {
         self.list
     }
 
-    /// The page that fills most of the pager when page `first` is the first
-    /// in view, scrolled by `offset`.
+    /// The page nearest to where it rests when page `first` is the first in
+    /// view, scrolled by `offset`.
     fn page_at(&self, first: usize, offset: f32) -> usize {
-        if offset > self.page_extent() / 2.0 {
-            first + 1
-        } else {
-            first
-        }
+        self.pages_at(first, offset).round().max(0.0) as usize
     }
 
-    /// How far the start of a page lies from the start of the next one.
-    fn page_extent(&self) -> f32 {
+    /// Where the pager stands in pages: page `p` rests at `p`, and 2.25 is
+    /// a quarter of the way from page 2 to page 3.
+    fn pages_at(&self, first: usize, offset: f32) -> f32 {
+        self.geometry()
+            .map_or(first as f32, |geometry| geometry.pages_at(first, offset))
+    }
+
+    /// The pages' geometry from the pager's last layout.
+    fn geometry(&self) -> Option<PageGeometry> {
         self.list
             .with_layout_info(|info| {
-                info.visible_items_info
-                    .first()
-                    .map_or(info.viewport_size, |page| {
-                        page.size + info.main_axis_item_spacing
-                    })
+                let page = info.visible_items_info.first()?;
+                let extent = page.size + info.main_axis_item_spacing;
+                (extent > 0.0).then_some(PageGeometry {
+                    extent,
+                    before: info.before_content_padding,
+                })
             })
-            .unwrap_or_default()
+            .flatten()
+    }
+}
+
+/// Where a pager's pages lie along its axis.
+#[derive(Clone, Copy)]
+struct PageGeometry {
+    /// How far the start of a page lies from the start of the next one.
+    extent: f32,
+    /// The padding before the first page, which the list counts as part of
+    /// the first page.
+    before: f32,
+}
+
+impl PageGeometry {
+    /// How far the list has scrolled when page `first` is the first in view
+    /// at `offset`. Page `p` rests at `p` extents.
+    fn scrolled(self, first: usize, offset: f32) -> f32 {
+        let start = if first == 0 {
+            0.0
+        } else {
+            self.before + first as f32 * self.extent
+        };
+        start + offset
+    }
+
+    fn pages_at(self, first: usize, offset: f32) -> f32 {
+        self.scrolled(first, offset) / self.extent
     }
 }
 
@@ -228,15 +309,17 @@ impl PagerState {
 /// the next one past `fling.positional_threshold` of it.
 fn page_settle(state: PagerState, fling: PagerFling) -> LazySettlePolicy {
     Rc::new(move |proposed, velocity| {
-        let page = state.page_extent();
-        if page <= 0.0 {
+        let Some(geometry) = state.geometry() else {
             return proposed;
-        }
-        // In pages from the start of the first page in view: where the
-        // pager stands and where the release would stop.
-        let now = state.list.first_visible_item_scroll_offset_non_reactive() / page;
-        let rest = proposed / page;
-        let turn = if velocity.abs() >= PAGE_FLING_VELOCITY {
+        };
+        // In pages: where the pager stands and where the release would stop.
+        let first = state.list.first_visible_item_index_non_reactive();
+        let now = geometry.pages_at(
+            first,
+            state.list.first_visible_item_scroll_offset_non_reactive(),
+        );
+        let rest = geometry.pages_at(first, proposed);
+        let target = if velocity.abs() >= PAGE_FLING_VELOCITY {
             let most = fling.max_pages.max(1) as f32;
             if velocity > 0.0 {
                 rest.ceil().clamp(now.floor() + 1.0, now.floor() + most)
@@ -251,14 +334,13 @@ fn page_settle(state: PagerState, fling: PagerFling) -> LazySettlePolicy {
                 whole
             }
         };
-        let first = state.list.first_visible_item_index_non_reactive() as f32;
         let last = state
             .list
             .with_layout_info(|info| info.total_items_count.saturating_sub(1))
             .unwrap_or_default() as f32;
-        let target = (first + turn).clamp(0.0, last);
+        let target = target.clamp(0.0, last);
         state.target.set(Some(target as usize));
-        (target - first) * page
+        target * geometry.extent - geometry.scrolled(first, 0.0)
     })
 }
 
@@ -323,14 +405,37 @@ fn Pager(
     });
     BoxWithConstraints(modifier, move |scope| {
         let constraints = scope.constraints();
-        let padding = spec.content_padding;
+        let mut padding = spec.content_padding;
         let width = constraints.max_width - padding.start - padding.end;
         let height = constraints.max_height - padding.top - padding.bottom;
-        let (width, height) = match (spec.page_size, horizontal) {
+        let (page_width, page_height) = match (spec.page_size, horizontal) {
             (PageSize::Fill, _) => (width, height),
             (PageSize::Fixed(length), true) => (length, height),
             (PageSize::Fixed(length), false) => (width, length),
         };
+        // A resting page sits at the scroll offset of its index, as at the
+        // start; padding moves where that is along the axis.
+        let room = if horizontal {
+            width - page_width
+        } else {
+            height - page_height
+        }
+        .max(0.0);
+        let before = room * spec.snap_position.fraction();
+        if horizontal {
+            padding.start += before;
+            padding.end += room - before;
+        } else {
+            padding.top += before;
+            padding.bottom += room - before;
+        }
+        let leading = if horizontal {
+            padding.start
+        } else {
+            padding.top
+        };
+        remember(|| state.place_initial_page(leading));
+        let (width, height) = (page_width, page_height);
         let content = Rc::clone(&page_content);
         let pages = move |pages: &mut LazyListIntervalContent| {
             pages.items(

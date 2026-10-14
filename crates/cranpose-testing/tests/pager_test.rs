@@ -10,7 +10,7 @@ use cranpose_core::location_key;
 use cranpose_testing::{robot::TestRenderer, robot_assertions::find_semantics_node};
 use cranpose_ui::{
     Box, BoxSpec, HorizontalPager, Modifier, PaddingValues, PageSize, PagerFling, PagerSpec,
-    PagerState, VerticalPager, composable, rememberPagerState,
+    PagerState, SnapPosition, VerticalPager, composable, rememberPagerState,
 };
 
 /// A composition counter that stays equal to itself while it counts, so it
@@ -62,13 +62,22 @@ impl Pager {
     /// A pager beside a composable that reads its settled page and counts
     /// its compositions in `settled_reads`.
     fn reading(horizontal: bool, spec: PagerSpec, settled_reads: Reads) -> Self {
+        Self::starting_on(0, horizontal, spec, settled_reads)
+    }
+
+    fn starting_on(
+        initial: usize,
+        horizontal: bool,
+        spec: PagerSpec,
+        settled_reads: Reads,
+    ) -> Self {
         let state = Rc::new(Cell::new(None));
         let captured = Rc::clone(&state);
         let mut shell = AppShell::new(
             TestRenderer::default(),
             location_key(file!(), line!(), column!()),
             move || {
-                let pager = rememberPagerState(0);
+                let pager = rememberPagerState(initial);
                 captured.set(Some(pager));
                 let size = Modifier::empty().size_points(WIDTH, HEIGHT);
                 let page = |page: usize| {
@@ -466,4 +475,86 @@ fn the_target_page_is_where_an_animation_or_a_released_flick_goes() {
     assert_eq!(state.target_page(), 2, "the flick back goes to page 2");
     pager.frames(90);
     assert_eq!((state.current_page(), state.target_page()), (2, 2));
+}
+
+/// A pager of 200-pixel pages in 300 pixels that rest at `snap_position`.
+fn snapping(snap_position: SnapPosition) -> Pager {
+    Pager::with(
+        true,
+        PagerSpec {
+            page_size: PageSize::Fixed(200.0),
+            snap_position,
+            ..PagerSpec::default()
+        },
+    )
+}
+
+fn starts(pager: &mut Pager, pages: [usize; 2]) -> [Option<f32>; 2] {
+    pages.map(|page| {
+        pager
+            .start(true, page)
+            .map(|start| (start * 100.0).round() / 100.0)
+    })
+}
+
+#[test]
+fn a_centred_page_rests_in_the_middle_with_room_for_its_neighbours() {
+    let mut pager = snapping(SnapPosition::Center);
+    assert_eq!(
+        starts(&mut pager, [0, 1]),
+        [Some(50.0), Some(250.0)],
+        "the first page rests in the middle too"
+    );
+    pager.drag(true, 250.0, 120.0, 1_000);
+    assert_eq!(pager.state().current_page(), 1);
+    assert_eq!(starts(&mut pager, [1, 0]), [Some(50.0), Some(-150.0)]);
+    assert!(pager.state().current_page_offset_fraction().abs() < 0.001);
+    pager.state().scroll_to_page(4);
+    pager.frames(2);
+    assert_eq!(
+        starts(&mut pager, [4, 3]),
+        [Some(50.0), Some(-150.0)],
+        "and the last page"
+    );
+}
+
+#[test]
+fn a_page_snapped_to_the_end_rests_before_the_end() {
+    let mut pager = snapping(SnapPosition::End);
+    assert_eq!(
+        starts(&mut pager, [0, 1]),
+        [Some(100.0), None],
+        "the next page starts at the end, out of view"
+    );
+    pager.drag(true, 250.0, 120.0, 1_000);
+    assert_eq!(starts(&mut pager, [1, 0]), [Some(100.0), Some(-100.0)]);
+}
+
+#[test]
+fn scroll_to_page_rests_the_page_after_the_start_padding() {
+    let spec = PagerSpec {
+        content_padding: PaddingValues::new(30.0, 0.0, 30.0, 0.0),
+        ..PagerSpec::default()
+    };
+    let mut pager = Pager::with(true, spec);
+    pager.state().scroll_to_page(2);
+    pager.frames(2);
+    assert_eq!(starts(&mut pager, [2, 1]), [Some(30.0), Some(-210.0)]);
+    assert_eq!(pager.state().current_page(), 2);
+    pager.state().animate_scroll_to_page(4);
+    pager.frames(120);
+    assert_eq!(starts(&mut pager, [4, 3]), [Some(30.0), Some(-210.0)]);
+    assert_eq!(pager.state().settled_page(), 4);
+}
+
+#[test]
+fn a_pager_created_on_a_later_page_shows_it_where_pages_rest() {
+    let spec = PagerSpec {
+        page_size: PageSize::Fixed(200.0),
+        snap_position: SnapPosition::Center,
+        ..PagerSpec::default()
+    };
+    let mut pager = Pager::starting_on(2, true, spec, Reads::default());
+    assert_eq!(starts(&mut pager, [2, 1]), [Some(50.0), Some(-150.0)]);
+    assert_eq!(pager.state().current_page(), 2);
 }
