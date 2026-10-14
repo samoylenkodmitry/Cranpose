@@ -237,10 +237,10 @@ pub use primitives::{
     DEFAULT_ALPHA, EnterTransition, ExitTransition, ForEach, HorizontalPager, Image, Layout,
     LayoutNode, PageSize, PagerSpec, PagerState, Painter, Row, RowSpec, SecureTextFieldOptions,
     SeekableAnimatedContent, SeekableCrossfade, SharedElement, SharedTransitionLayout,
-    SizeTransform, Spacer, SubcomposeLayout, SvgPainter, SvgPainterError, Text,
+    SizeTransform, SlideDirection, Spacer, SubcomposeLayout, SvgPainter, SvgPainterError, Text,
     TextObfuscationMode, TextWithOptions, VerticalPager, fade_in, fade_out, rememberPagerState,
     rememberSvg, scale_in, scale_out, slide_in_horizontally, slide_in_vertically,
-    slide_out_horizontally, slide_out_vertically,
+    slide_into_container, slide_out_horizontally, slide_out_of_container, slide_out_vertically,
 };
 #[cfg(any(test, feature = "test-helpers"))]
 #[doc(hidden)]

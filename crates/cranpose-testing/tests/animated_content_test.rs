@@ -9,8 +9,9 @@ use std::{cell::Cell, rc::Rc};
 use cranpose_core::{MutableState, remember};
 use cranpose_testing::ComposeTestRule;
 use cranpose_ui::{
-    AnimatedContent, Box, BoxSpec, ContentTransform, LayoutBox, LayoutEngine, Modifier, Size,
-    SizeTransform, slide_in_horizontally, slide_out_horizontally,
+    AnimatedContent, Box, BoxSpec, ContentTransform, LayoutBox, LayoutDirection, LayoutEngine,
+    Modifier, ProvideLayoutDirection, Size, SizeTransform, SlideDirection, slide_in_horizontally,
+    slide_into_container, slide_out_horizontally, slide_out_of_container,
 };
 
 const FRAME: u64 = 16_666_667;
@@ -53,6 +54,14 @@ fn slide(sized: bool) -> ContentTransform {
 
 impl Screen {
     fn new(sized: bool) -> Self {
+        Self::with(move || slide(sized), LayoutDirection::Ltr)
+    }
+
+    fn with(
+        transform: impl Fn() -> ContentTransform + 'static,
+        direction: LayoutDirection,
+    ) -> Self {
+        let transform = Rc::new(transform);
         let mut rule = ComposeTestRule::new();
         let target = MutableState::with_runtime(Page::A, rule.runtime_handle());
         let runs = Rc::new(Cell::new(0));
@@ -61,22 +70,25 @@ impl Screen {
         rule.set_content(move || {
             let ran = Rc::clone(&ran);
             let created = Rc::clone(&created);
-            AnimatedContent(
-                target.get(),
-                move |_, _| slide(sized),
-                move |page: Page| {
-                    ran.set(ran.get() + 1);
-                    if page == Page::A {
-                        let created = Rc::clone(&created);
-                        remember(move || created.set(created.get() + 1));
-                    }
-                    Box(
-                        Modifier::empty().size(page.size()),
-                        BoxSpec::default(),
-                        || {},
-                    );
-                },
-            );
+            let transform = Rc::clone(&transform);
+            ProvideLayoutDirection(direction, move || {
+                AnimatedContent(
+                    target.get(),
+                    move |_, _| transform(),
+                    move |page: Page| {
+                        ran.set(ran.get() + 1);
+                        if page == Page::A {
+                            let created = Rc::clone(&created);
+                            remember(move || created.set(created.get() + 1));
+                        }
+                        Box(
+                            Modifier::empty().size(page.size()),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    },
+                );
+            });
         })
         .expect("compose");
         Self {
@@ -259,4 +271,47 @@ fn a_target_with_the_shown_key_changes_the_content_in_place() {
         [1, 2],
         "another key: the old content leaves as the new comes"
     );
+}
+
+/// From the wide `B` to the narrow `A`, with slides across the container's
+/// edge `towards` a direction.
+fn across_the_edge(towards: SlideDirection, direction: LayoutDirection) -> Screen {
+    let mut screen = Screen::with(
+        move || slide_into_container(towards).together_with(slide_out_of_container(towards)),
+        direction,
+    );
+    screen.target.set(Page::B);
+    screen.frames(40);
+    screen.target.set(Page::A);
+    screen.frames(1);
+    screen
+}
+
+#[test]
+fn content_slides_into_the_container_from_past_its_far_edge() {
+    let mut screen = across_the_edge(SlideDirection::Left, LayoutDirection::Ltr);
+    let a = screen.shift(Page::A).expect("A comes in");
+    screen.frames(5);
+    let b = screen.shift(Page::B).expect("B goes out");
+    assert!(
+        a > Page::A.size().width && a <= 30.0,
+        "A comes from past the 30-wide container's right edge, beyond its own width: {a}"
+    );
+    assert!(b < 0.0 && b > -30.0, "B heads past the left edge: {b}");
+    screen.frames(40);
+    assert_eq!(screen.shift(Page::A), Some(0.0));
+    assert_eq!(screen.shift(Page::B), None);
+}
+
+#[test]
+fn toward_the_start_in_a_right_to_left_layout_is_toward_the_right() {
+    let mut screen = across_the_edge(SlideDirection::Start, LayoutDirection::Rtl);
+    let a = screen.shift(Page::A).expect("A comes in");
+    screen.frames(5);
+    let b = screen.shift(Page::B).expect("B goes out");
+    assert!(
+        a < 0.0 && a >= -Page::A.size().width,
+        "A comes from just past the left edge: {a}"
+    );
+    assert!(b > 0.0 && b < 30.0, "B heads past the right edge: {b}");
 }
