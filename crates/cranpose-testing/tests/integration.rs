@@ -34,4 +34,5 @@ mod text_field_input_transformation_test;
 mod text_field_output_transformation_test;
 mod text_field_window_bounds_test;
 mod text_modifier_updates_test;
+mod whole_pixel_layout_test;
 mod window_coordinates_test;
