@@ -132,12 +132,15 @@ impl FontBytes {
         }
     }
 
-    /// The bytes with a `loca` table the parsers read, see [`crate::loca_fit`].
+    /// The bytes with per-glyph tables the parsers read, see
+    /// [`crate::full_glyph_count`].
     fn fitted(self) -> Self {
         match self {
-            Self::Static(bytes) => Self::Static(crate::loca_fit::fit_static_loca(bytes)),
+            Self::Static(bytes) => {
+                Self::Static(crate::full_glyph_count::fit_static_glyph_tables(bytes))
+            }
             Self::Owned(mut bytes) => {
-                crate::loca_fit::fit_loca(&mut bytes);
+                crate::full_glyph_count::fit_glyph_tables(&mut bytes);
                 Self::Owned(bytes)
             }
         }
