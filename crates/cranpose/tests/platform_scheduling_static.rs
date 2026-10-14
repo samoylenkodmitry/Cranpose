@@ -2196,6 +2196,7 @@ fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
         "macos_open.rs",
         "macos_window.rs",
         "windows_cursor.rs",
+        "windows_menu.rs",
     ];
     let mut offenders = Vec::new();
 
@@ -2411,6 +2412,7 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose/src/macos_open.rs",
         "crates/cranpose/src/macos_window.rs",
         "crates/cranpose/src/windows_cursor.rs",
+        "crates/cranpose/src/windows_menu.rs",
         "crates/cranpose-storekit/src/apple.rs",
         "crates/cranpose-storekit/src/tests/apple_tests.rs",
         "crates/cranpose-audio/src/ring.rs",

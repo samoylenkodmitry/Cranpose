@@ -1348,7 +1348,7 @@ impl App {
                 )
             ))]
             self.native_menus
-                .serve(app, &self.event_proxy, menu_bar_due);
+                .serve(app, &self.event_proxy, menu_bar_due, self.window.as_deref());
         }
     }
 
@@ -7290,7 +7290,17 @@ fn build_event_loop() -> Result<EventLoop, winit::error::EventLoopError> {
         use winit::platform::macos::EventLoopBuilderExtMacOS;
         EventLoop::builder().with_default_menu(false).build()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(target_os = "windows", feature = "desktop-menus"))]
+    {
+        use winit::platform::windows::EventLoopBuilderExtWindows;
+        EventLoop::builder()
+            .with_msg_hook(crate::windows_menu::translate_shortcut)
+            .build()
+    }
+    #[cfg(not(any(
+        target_os = "macos",
+        all(target_os = "windows", feature = "desktop-menus")
+    )))]
     EventLoop::builder().build()
 }
 

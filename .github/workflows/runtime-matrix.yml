@@ -137,6 +137,9 @@ jobs:
         run: cargo install just --locked
       - name: Native Windows accessibility and inspector robots
         run: just test-windows-accessibility
+      - name: Menu bar items chosen through the native Windows menu
+        if: ${{ !cancelled() }}
+        run: target/ci/examples/robot.exe robot_desktop_menus
       - name: Network status from the internet connection profile
         if: ${{ !cancelled() }}
         run: cargo test --locked --profile ci -p cranpose --lib --features desktop,renderer-wgpu windows_network
