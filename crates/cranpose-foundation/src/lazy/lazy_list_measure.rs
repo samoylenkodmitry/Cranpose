@@ -422,15 +422,18 @@ where
             measurement_viewport_filled
         );
     }
-    state.update_layout_info(LazyListLayoutInfo {
-        visible_items_info: visible_items
+    let mut visible_items_info = state.spare_items_info();
+    visible_items_info.extend(
+        visible_items
             .iter()
             .filter(|item| {
                 let item_end = item_end_with_spacing(item);
                 item_end > viewport_start && item.offset < viewport_end
             })
-            .map(super::lazy_list_measured_item::LazyListMeasuredItem::to_item_info)
-            .collect(),
+            .map(super::lazy_list_measured_item::LazyListMeasuredItem::to_item_info),
+    );
+    state.update_layout_info(LazyListLayoutInfo {
+        visible_items_info,
         total_items_count: items_count,
         raw_viewport_size,
         is_infinite_viewport,
@@ -509,11 +512,14 @@ where
     let content_extent = offset + config.after_content_padding;
 
     state.update_scroll_position(0, 0.0);
-    state.update_layout_info(LazyListLayoutInfo {
-        visible_items_info: visible_items
+    let mut visible_items_info = state.spare_items_info();
+    visible_items_info.extend(
+        visible_items
             .iter()
-            .map(super::lazy_list_measured_item::LazyListMeasuredItem::to_item_info)
-            .collect(),
+            .map(super::lazy_list_measured_item::LazyListMeasuredItem::to_item_info),
+    );
+    state.update_layout_info(LazyListLayoutInfo {
+        visible_items_info,
         total_items_count: items_count,
         raw_viewport_size,
         is_infinite_viewport: true,
