@@ -1522,11 +1522,8 @@ struct DisposableEffectState {
 }
 
 impl DisposableEffectState {
-    fn should_run(&self, key: &effect_key::EffectKey) -> bool {
-        match &self.key {
-            Some(current) => key.differs_from(current),
-            None => true,
-        }
+    fn should_run<K: PartialEq + 'static>(&self, keys: &K) -> bool {
+        self.key.as_ref().is_none_or(|current| !current.holds(keys))
     }
 
     fn set_key(&mut self, key: effect_key::EffectKey) {
@@ -1588,9 +1585,9 @@ where
 {
     with_current_composer(|composer| {
         composer.with_group(group_key, |composer| {
-            let key = effect_key::EffectKey::new(keys);
             let state = composer.remember_effect::<DisposableEffectState>();
-            if state.with(|state| state.should_run(&key)) {
+            if state.with(|state| state.should_run(&keys)) {
+                let key = effect_key::EffectKey::new(keys);
                 state.update(|state| {
                     state.run_cleanup();
                     state.set_key(key);
