@@ -15,6 +15,7 @@ mod launcher_integration;
 mod lifecycle_steps;
 mod media_integration;
 mod persistence_regressions;
+mod saver_forms;
 mod theme_integration;
 mod uri_handler_integration;
 mod windowless_command;
