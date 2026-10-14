@@ -20,11 +20,12 @@ pub(crate) fn ns_window(window: &dyn Window) -> Option<Retained<NSWindow>> {
 
 /// Shows `window` without the animation AppKit plays as a window opens, then
 /// hands the window its own animation back for the times it is shown later.
-/// The window goes to the window server at once.
+/// A window whose first frame `builds_pipelines` goes to the window server at
+/// once, before that frame.
 ///
 /// Starting that animation held the main thread 14 ms on an Apple M5, with
 /// the launch's first frame waiting behind it (median of six launches).
-pub(crate) fn show_without_open_animation(window: &dyn Window) {
+pub(crate) fn show_without_open_animation(window: &dyn Window, builds_pipelines: bool) {
     let Some(ns_window) = ns_window(window) else {
         window.set_visible(true);
         return;
@@ -37,7 +38,10 @@ pub(crate) fn show_without_open_animation(window: &dyn Window) {
     // pass ends, and draws its view inside that commit: a first frame that
     // compiles its shaders kept the window off the screen for as long. On an
     // Apple M5 with no shader cached, the gauntlet's window came up at
-    // ~200 ms after exec with the flush and ~450-600 without; with shaders
-    // cached, at 165 ms against 180.
-    CATransaction::flush();
+    // ~200 ms after exec with the flush and ~450-600 without. A first frame
+    // drawn from built pipelines comes ~10 ms later, and the window comes up
+    // with it, not with one frame of the clear color before it.
+    if builds_pipelines {
+        CATransaction::flush();
+    }
 }

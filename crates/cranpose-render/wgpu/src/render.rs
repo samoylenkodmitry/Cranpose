@@ -3398,6 +3398,10 @@ pub struct GpuRenderer {
     /// [`Self::discover_frame_pipelines`].
     #[cfg(not(target_arch = "wasm32"))]
     discovers_next_frame: bool,
+    /// Whether the pipeline cache file holds the last launch's first screen,
+    /// which builds ahead of this renderer's first frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    first_screen_recorded: bool,
     /// Whether the frame drawing learns its pipelines and draws nothing.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) discovering: bool,
@@ -3581,10 +3585,12 @@ impl GpuRenderer {
         static FIRST_FRAME_DISCOVERY: DebugToggle =
             DebugToggle::new("CRANPOSE_FIRST_FRAME_DISCOVERY");
         #[cfg(not(target_arch = "wasm32"))]
+        let first_screen_recorded = records.shapes.iter().any(|shape| shape.first_screen);
+        #[cfg(not(target_arch = "wasm32"))]
         let discovers_first_frame = !FIRST_FRAME_DISCOVERY.equals("0")
             && adapter_backend == wgpu::Backend::Metal
             && pipeline_compiler.is_active()
-            && !records.shapes.iter().any(|shape| shape.first_screen);
+            && !first_screen_recorded;
         let depth_gate = crate::depth_gate::DepthGate::new(
             crate::draw_pass::lays_interiors_first(adapter_backend),
             pipeline_compiler.is_active(),
@@ -3800,6 +3806,8 @@ impl GpuRenderer {
             #[cfg(not(target_arch = "wasm32"))]
             discovers_next_frame: discovers_first_frame,
             #[cfg(not(target_arch = "wasm32"))]
+            first_screen_recorded,
+            #[cfg(not(target_arch = "wasm32"))]
             discovering: false,
             shader_warm_ups_queued: 0,
         };
@@ -3936,6 +3944,12 @@ impl GpuRenderer {
                 pipeline.build_ahead(&self.recorder, self.adapter_backend, job());
             }
         });
+    }
+
+    /// See [`crate::WgpuRenderer::first_screen_recorded`].
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn first_screen_recorded(&self) -> bool {
+        self.first_screen_recorded
     }
 
     /// See [`crate::WgpuRenderer::first_screen_pipelines`].

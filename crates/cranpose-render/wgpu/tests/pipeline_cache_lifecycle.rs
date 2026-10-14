@@ -282,6 +282,10 @@ fn a_relaunch_prepares_the_first_screen_even_when_startup_was_slow() {
 
     let mut first_launch =
         support::LockedRenderer::compiling_in_background_beside_locked().expect("GPU required");
+    assert!(
+        !first_launch.first_screen_recorded(),
+        "a first launch holds no record of its first screen"
+    );
     std::thread::sleep(Duration::from_millis(2100));
     let first_launch_builds = first_frame_builds(&mut first_launch);
     drop(first_launch);
@@ -289,6 +293,10 @@ fn a_relaunch_prepares_the_first_screen_even_when_startup_was_slow() {
 
     let mut relaunch =
         support::LockedRenderer::compiling_in_background_beside_locked().expect("GPU required");
+    assert!(
+        relaunch.first_screen_recorded(),
+        "a relaunch holds the first launch's first screen"
+    );
     wait_for_warm_ups();
     let relaunch_builds = first_frame_builds(&mut relaunch);
     assert!(
