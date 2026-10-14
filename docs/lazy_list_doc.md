@@ -33,15 +33,20 @@ instead of items. Each line composes and measures its cells as list items,
 with their own keys and reuse classes, so a cell keeps its state when an
 insertion moves it to another line. Cells take whole device pixels, the
 leftover pixels going one each to the first cells, as Compose's grid gives
-them; a sticky header takes a whole line. `LazyGridState` scrolls by items
-and maps them to lines with the lines of the last pass.
+them; a sticky header takes a whole line. `LazyItems::span` gives an item
+more columns of its line, and an item that takes more than its line has left
+starts the next one. The lines are built once for a content and a column
+count, and `LazyGridState` maps items to them.
 
 `HorizontalPager` and `VerticalPager` lay their pages out as a `LazyRow` or
-`LazyColumn` whose items each take the pager's size. They install a settle
-policy on the list state (`LazyListState::set_settle_policy`), which the
-scroll gesture consults when the user lets go: a fling of 400 logical pixels
-per second or more turns one page its way, and a slower release goes to the
-nearer page boundary.
+`LazyColumn` whose items each take the pager's size, or the fixed length and
+the spacing a `PagerSpec` gives. They install a settle policy on the list
+state (`LazyListState::set_settle_policy`), which the scroll gesture consults
+when the user lets go: a fling of 400 logical pixels per second or more turns
+one page its way, and a slower release goes to the nearer page boundary. A
+screen reader's scroll of a list with a settle policy rests where the policy
+puts it, so it turns whole pages. The pages beyond the view are the list's
+own window; a pager has no exact `beyondViewportPageCount`.
 
 `AnimateScroll` springs a list through a distance or to an item, which it
 lands on exactly with `scroll_to_item` when the spring ends; pagers and grids

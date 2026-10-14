@@ -8,7 +8,8 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
 use cranpose_testing::{robot::TestRenderer, robot_assertions::find_semantics_node};
 use cranpose_ui::{
-    Box, BoxSpec, HorizontalPager, Modifier, PagerState, VerticalPager, rememberPagerState,
+    Box, BoxSpec, HorizontalPager, Modifier, PageSize, PagerSpec, PagerState, VerticalPager,
+    rememberPagerState,
 };
 
 const WIDTH: f32 = 300.0;
@@ -24,6 +25,10 @@ struct Pager {
 
 impl Pager {
     fn new(horizontal: bool) -> Self {
+        Self::with(horizontal, PagerSpec::default())
+    }
+
+    fn with(horizontal: bool, spec: PagerSpec) -> Self {
         let state = Rc::new(Cell::new(None));
         let captured = Rc::clone(&state);
         let mut shell = AppShell::new(
@@ -43,9 +48,9 @@ impl Pager {
                     );
                 };
                 if horizontal {
-                    HorizontalPager(size, pager, PAGES, page);
+                    HorizontalPager(size, pager, spec, PAGES, page);
                 } else {
-                    VerticalPager(size, pager, PAGES, page);
+                    VerticalPager(size, pager, spec, PAGES, page);
                 }
             },
         );
@@ -267,4 +272,23 @@ fn a_screen_reader_page_turns_whole_pages() {
         );
         assert!(pager.rests_on(horizontal, 0));
     }
+}
+
+#[test]
+fn fixed_pages_with_spacing_show_the_next_page_and_turn_by_a_page_and_a_gap() {
+    let spec = PagerSpec {
+        page_size: PageSize::Fixed(200.0),
+        page_spacing: 10.0,
+    };
+    let mut pager = Pager::with(true, spec);
+    let start = |pager: &mut Pager, page| {
+        pager
+            .start(true, page)
+            .map(|start| (start * 100.0).round() / 100.0)
+    };
+    assert_eq!(start(&mut pager, 1), Some(210.0), "the next page beside");
+    pager.drag(true, 250.0, 130.0, 1_000);
+    assert!(pager.rests_on(true, 1), "past half of 210 pixels turns it");
+    assert_eq!(start(&mut pager, 2), Some(210.0));
+    assert!(pager.state().current_page_offset_fraction().abs() < 0.001);
 }

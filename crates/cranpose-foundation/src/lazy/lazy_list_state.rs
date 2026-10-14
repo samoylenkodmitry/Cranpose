@@ -1157,6 +1157,9 @@ pub struct LazyListLayoutInfo {
     /// Content padding after the last item.
     pub after_content_padding: f32,
 
+    /// The space between two items — Compose's `mainAxisItemSpacing`.
+    pub main_axis_item_spacing: f32,
+
     /// Continuous main-axis visual offset used to snap translated lazy-list content.
     pub snap_anchor_offset: f32,
 
