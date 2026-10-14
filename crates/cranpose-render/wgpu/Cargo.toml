@@ -54,8 +54,11 @@ smallvec = "1.16.2"
 # not express soundly).
 rayon = "1.12"
 
-[target.'cfg(all(target_os = "linux", not(target_arch = "wasm32")))'.dependencies]
-wgpu = { workspace = true, features = [
+# Desktop builds take wgpu from crates.io. The web, Android and iOS take
+# Cranpose's fork of it (`wgpu` in the workspace, forks/README.md), whose
+# library is also `wgpu`.
+[target.'cfg(target_os = "linux")'.dependencies]
+wgpu = { version = "30.0.1", default-features = false, features = [
     "std",
     "parking_lot",
     "vulkan",
@@ -71,7 +74,7 @@ wgpu = { workspace = true, features = [
 rustix = { version = "1.1", features = ["thread"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-wgpu = { workspace = true, features = [
+wgpu = { version = "30.0.1", default-features = false, features = [
     "std",
     "parking_lot",
     "dx12",
@@ -83,7 +86,7 @@ wgpu = { workspace = true, features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-wgpu = { workspace = true, features = [
+wgpu = { version = "30.0.1", default-features = false, features = [
     "std",
     "parking_lot",
     "metal",
@@ -93,8 +96,8 @@ wgpu = { workspace = true, features = [
     "naga-ir",
 ] }
 
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "linux"), not(target_os = "windows"), not(target_os = "macos")))'.dependencies]
-wgpu = { workspace = true, features = [
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios", target_os = "linux", target_os = "windows", target_os = "macos")))'.dependencies]
+wgpu = { version = "30.0.1", default-features = false, features = [
     "std",
     "parking_lot",
     "vulkan",
@@ -109,6 +112,17 @@ wgpu = { workspace = true, features = [
     "std",
     "parking_lot",
     "vulkan",
+    "wgsl",
+    # Pipelines take their stages specialized and folded as naga modules
+    # (`shader_fold`).
+    "naga-ir",
+] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+wgpu = { workspace = true, features = [
+    "std",
+    "parking_lot",
+    "metal",
     "wgsl",
     # Pipelines take their stages specialized and folded as naga modules
     # (`shader_fold`).
@@ -148,6 +162,9 @@ naga = { version = "30.0.1", features = ["wgsl-in", "glsl-out"] }
 png = "0.18.1"
 pollster = "0.4.0"
 stats_alloc = "0.1.10"
+# The GL lowering of the fork the web and Android draw with, which the
+# `gles_lowering` tests run on every host.
+wgpu-hal = { package = "cranpose-wgpu-hal", path = "../../../forks/wgpu/wgpu-hal" }
 
 [[test]]
 name = "integration"
