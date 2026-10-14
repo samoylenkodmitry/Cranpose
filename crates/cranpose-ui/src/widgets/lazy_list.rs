@@ -169,15 +169,20 @@ impl LazyRowSpec {
 struct LazyListLayoutConfig {
     measure: LazyListMeasureConfig,
     cross_padding: (f32, f32),
-    /// Lines of cells instead of single items, for a grid.
-    grid: Option<grid::GridLayout>,
+    /// Lines of cells or lanes instead of single items, for a grid.
+    grid: Option<grid::CellLayout>,
 }
 
 mod grid;
+mod staggered;
 
 pub use grid::{
     GridCells, LazyGridState, LazyHorizontalGrid, LazyHorizontalGridSpec, LazyVerticalGrid,
     LazyVerticalGridSpec, rememberLazyGridState,
+};
+pub use staggered::{
+    LazyHorizontalStaggeredGrid, LazyHorizontalStaggeredGridSpec, LazyStaggeredGridState,
+    LazyVerticalStaggeredGrid, LazyVerticalStaggeredGridSpec, rememberLazyStaggeredGridState,
 };
 
 /// A list's content padding along its axes, in layout pixels rounded to the
@@ -583,7 +588,12 @@ fn measure_lazy_list_internal(
     let retained_reusable_slots = EXPENSIVE_RETAINED_REUSABLE_SLOTS;
     scope.set_reusable_pool_limits(retained_reusable_slots, retained_reusable_slots);
     let (result, count) = match &context.config.grid {
-        Some(grid) => grid::measure_grid_viewport(scope, content, &context, &frame, grid),
+        Some(grid::CellLayout::Grid(grid)) => {
+            grid::measure_grid_viewport(scope, content, &context, &frame, grid)
+        }
+        Some(grid::CellLayout::Staggered(layout)) => {
+            staggered::measure_staggered_viewport(scope, content, &context, &frame, layout)
+        }
         None => (
             measure_list_viewport(scope, content, &context, &frame),
             content.item_count(),
@@ -1091,12 +1101,15 @@ fn bind_layout_invalidation_callback(
 struct LazyListContentHandle(Rc<LazyListIntervalContent>);
 
 impl LazyListContentHandle {
-    fn new(content: LazyListIntervalContent) -> Self {
+    /// The content that `add` adds its items to.
+    fn build(add: impl FnOnce(&mut LazyListIntervalContent)) -> Self {
+        let mut content = LazyListIntervalContent::new();
+        add(&mut content);
         Self(Rc::new(content))
     }
 
     fn empty() -> Self {
-        Self::new(LazyListIntervalContent::new())
+        Self::build(|_| {})
     }
 
     fn content(&self) -> &Rc<LazyListIntervalContent> {
@@ -1462,7 +1475,7 @@ fn LazyColumnImpl(
     modifier: Modifier,
     state: LazyListState,
     spec: LazyColumnSpec,
-    grid: Option<grid::GridLayout>,
+    grid: Option<grid::CellLayout>,
     content: LazyListContentHandle,
 ) -> NodeId {
     use std::cell::RefCell;
@@ -1605,7 +1618,7 @@ fn LazyRowImpl(
     modifier: Modifier,
     state: LazyListState,
     spec: LazyRowSpec,
-    grid: Option<grid::GridLayout>,
+    grid: Option<grid::CellLayout>,
     content: LazyListContentHandle,
 ) -> NodeId {
     use std::cell::RefCell;
@@ -1750,7 +1763,7 @@ fn LazyColumnNode(
     modifier: Modifier,
     state: LazyListState,
     spec: LazyColumnSpec,
-    grid: Option<grid::GridLayout>,
+    grid: Option<grid::CellLayout>,
     content: LazyListContentHandle,
 ) -> NodeId {
     cranpose_core::debug_label_current_scope("LazyColumnNode");
@@ -1797,7 +1810,7 @@ fn LazyRowNode(
     modifier: Modifier,
     state: LazyListState,
     spec: LazyRowSpec,
-    grid: Option<grid::GridLayout>,
+    grid: Option<grid::CellLayout>,
     content: LazyListContentHandle,
 ) -> NodeId {
     cranpose_core::debug_label_current_scope("LazyRowNode");
@@ -1842,14 +1855,12 @@ pub fn LazyColumn<F>(
 where
     F: FnOnce(&mut LazyListIntervalContent),
 {
-    let mut interval_content = LazyListIntervalContent::new();
-    content(&mut interval_content);
     LazyColumnNode(
         modifier,
         state,
         spec,
         None,
-        LazyListContentHandle::new(interval_content),
+        LazyListContentHandle::build(content),
     )
 }
 
@@ -1879,14 +1890,12 @@ pub fn LazyRow<F>(modifier: Modifier, state: LazyListState, spec: LazyRowSpec, c
 where
     F: FnOnce(&mut LazyListIntervalContent),
 {
-    let mut interval_content = LazyListIntervalContent::new();
-    content(&mut interval_content);
     LazyRowNode(
         modifier,
         state,
         spec,
         None,
-        LazyListContentHandle::new(interval_content),
+        LazyListContentHandle::build(content),
     )
 }
 

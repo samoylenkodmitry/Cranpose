@@ -38,6 +38,17 @@ more columns of its line, and an item that takes more than its line has left
 starts the next one. The lines are built once for a content and a column
 count, and `LazyGridState` maps items to them.
 
+`LazyVerticalStaggeredGrid` and `LazyHorizontalStaggeredGrid` put each item,
+in index order, into the lane that ends first, and an item whose span is the
+whole line across all lanes. An item keeps its lane while the grid scrolls.
+The scroll position names the first item in view. A pass measures from that
+item: the items after it follow the items before them in their lanes, and
+the items before it end where the next item of their lane starts, so the
+items in view stay put while a backward scroll measures the ones above at
+sizes other than the average they had. Once a scroll reaches the first item,
+the lanes line up from it again. A jump far ahead gives the items it passes
+lanes at the average size without composing them.
+
 `HorizontalPager` and `VerticalPager` lay their pages out as a `LazyRow` or
 `LazyColumn` whose items each take the pager's size, or the fixed length and
 the spacing a `PagerSpec` gives. They install a settle policy on the list

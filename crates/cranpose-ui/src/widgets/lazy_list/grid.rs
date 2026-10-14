@@ -36,7 +36,7 @@ pub enum GridCells {
 
 impl GridCells {
     /// The number of columns in `available` width with `spacing` between them.
-    fn columns(self, available: f32, spacing: f32) -> usize {
+    pub(super) fn columns(self, available: f32, spacing: f32) -> usize {
         match self {
             Self::Fixed(columns) => columns.max(1),
             Self::Adaptive(minimum) if minimum + spacing > 0.0 => {
@@ -181,6 +181,15 @@ impl LazyGridState {
     pub fn lazy_list_state(&self) -> LazyListState {
         self.list
     }
+}
+
+/// What a lazy column or row lays its items out as, beside a list.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum CellLayout {
+    /// Lines of cells.
+    Grid(GridLayout),
+    /// Lanes that items of their own lengths fill.
+    Staggered(super::staggered::StaggeredLayout),
 }
 
 /// What a grid measures with beside a list's configuration.
@@ -401,7 +410,7 @@ impl GridLines {
     }
 }
 
-fn line_span_scope(columns: usize, left: usize) -> LazyGridItemSpanScope {
+pub(super) fn line_span_scope(columns: usize, left: usize) -> LazyGridItemSpanScope {
     LazyGridItemSpanScope {
         max_line_span: columns,
         max_current_line_span: left,
@@ -492,7 +501,7 @@ impl LineBuilder<'_> {
 /// The widths of a line's cells in whole device pixels, as Compose's grid
 /// gives them: the pixels left over go one each to the first columns.
 #[derive(Clone, Copy, Debug)]
-struct CellSizes {
+pub(super) struct CellSizes {
     /// The device pixels of the narrower columns.
     base: f32,
     /// How many columns, from the first, are one device pixel wider.
@@ -503,7 +512,7 @@ struct CellSizes {
 }
 
 impl CellSizes {
-    fn new(available: f32, columns: usize, spacing: f32, density: f32) -> Self {
+    pub(super) fn new(available: f32, columns: usize, spacing: f32, density: f32) -> Self {
         let density = density.max(f32::EPSILON);
         let spacing = (spacing * density).round();
         let cells = ((available * density).floor() - spacing * (columns - 1) as f32).max(0.0);
@@ -517,13 +526,13 @@ impl CellSizes {
     }
 
     /// Where `column` starts, in logical pixels.
-    fn offset(&self, column: usize) -> f32 {
+    pub(super) fn offset(&self, column: usize) -> f32 {
         (column as f32 * (self.base + self.spacing) + column.min(self.wide) as f32) / self.density
     }
 
     /// The width of a cell that takes `span` columns from `column`, with
     /// the spacing between them, in logical pixels.
-    fn width(&self, column: usize, span: usize) -> f32 {
+    pub(super) fn width(&self, column: usize, span: usize) -> f32 {
         let wide = (column + span).min(self.wide) - column.min(self.wide);
         (span as f32 * self.base + (span - 1) as f32 * self.spacing + wide as f32) / self.density
     }
@@ -749,10 +758,10 @@ fn register_grid_measurements(
 /// list's scroll semantics report one column.
 pub(super) fn grid_semantics(
     modifier: Modifier,
-    grid: Option<&GridLayout>,
+    grid: Option<&CellLayout>,
     vertical: bool,
 ) -> Modifier {
-    let Some(grid) = grid else {
+    let Some(CellLayout::Grid(grid)) = grid else {
         return modifier;
     };
     let lines = Rc::clone(&grid.lines);
@@ -767,24 +776,15 @@ pub(super) fn grid_semantics(
     })
 }
 
-/// The content and the grid layout a grid's lazy column or row gets.
-fn grid_parts<F>(
-    state: &LazyGridState,
-    cells: GridCells,
-    spacing: f32,
-    content: F,
-) -> (Option<GridLayout>, LazyListContentHandle)
-where
-    F: FnOnce(&mut LazyListIntervalContent),
-{
-    let mut interval_content = LazyListIntervalContent::new();
-    content(&mut interval_content);
-    let grid = GridLayout {
-        cells,
-        spacing,
-        lines: Rc::clone(&state.lines),
-    };
-    (Some(grid), LazyListContentHandle::new(interval_content))
+impl LazyGridState {
+    /// The layout a grid of `cells` with `spacing` between them measures with.
+    fn layout(&self, cells: GridCells, spacing: f32) -> Option<CellLayout> {
+        Some(CellLayout::Grid(GridLayout {
+            cells,
+            spacing,
+            lines: Rc::clone(&self.lines),
+        }))
+    }
 }
 
 /// Composes and measures the items needed for a vertical grid's viewport,
@@ -808,8 +808,14 @@ where
         beyond_bounds_item_count: spec.beyond_bounds_item_count,
         reverse_layout: spec.reverse_layout,
     };
-    let (grid, content) = grid_parts(&state, spec.columns, spec.horizontal_spacing, content);
-    LazyColumnNode(modifier, state.list, column, grid, content)
+    let grid = state.layout(spec.columns, spec.horizontal_spacing);
+    LazyColumnNode(
+        modifier,
+        state.list,
+        column,
+        grid,
+        LazyListContentHandle::build(content),
+    )
 }
 
 /// Composes and measures the items needed for a horizontal grid's
@@ -831,6 +837,12 @@ where
         beyond_bounds_item_count: spec.beyond_bounds_item_count,
         reverse_layout: spec.reverse_layout,
     };
-    let (grid, content) = grid_parts(&state, spec.rows, spec.vertical_spacing, content);
-    LazyRowNode(modifier, state.list, row, grid, content)
+    let grid = state.layout(spec.rows, spec.vertical_spacing);
+    LazyRowNode(
+        modifier,
+        state.list,
+        row,
+        grid,
+        LazyListContentHandle::build(content),
+    )
 }
