@@ -34,6 +34,7 @@ mod render_invalidation_test;
 mod robot_input;
 mod secure_text_field_test;
 mod seekable_crossfade_test;
+mod shared_element_test;
 mod support_text_field;
 mod teardown_survivor_state_test;
 mod test_tag_test;

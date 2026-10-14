@@ -1550,6 +1550,35 @@ fn Step(page: u32) {
 `SeekableAnimatedContent` takes a `ContentSeek` that a gesture holds part of
 the way toward another state, as predictive back does.
 
+#### SharedTransitionLayout
+
+Move an element that two contents of an `AnimatedContent` both show, as
+Compose's `SharedTransitionLayout` and `Modifier.sharedElement` do. While the
+change runs, the element moves and resizes from the box the going content gives
+it to the box the coming content gives it, drawn above both; a seek holds it
+where the gesture is.
+
+```rust
+#[composable]
+fn Gallery(open: bool) {
+    SharedTransitionLayout(Modifier::empty().fill_max_size(), move || {
+        AnimatedContent(
+            open,
+            |_, _| fade_in().together_with(fade_out()),
+            |open| {
+                let size = if open { Size::new(320.0, 240.0) } else { Size::new(64.0, 48.0) };
+                SharedElement("photo", Modifier::empty().size(size), || {
+                    Text("Photo", Modifier::empty(), TextStyle::default());
+                });
+            },
+        );
+    });
+}
+```
+
+The copy in flight is the coming content's element composed once more, so
+state it remembers starts afresh during the flight.
+
 ## Accessibility
 
 ### Name controls and expose state
