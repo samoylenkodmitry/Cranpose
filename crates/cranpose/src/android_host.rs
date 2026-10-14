@@ -258,6 +258,39 @@ pub(crate) fn install_activity(app: android_activity::AndroidApp) {
     crate::pipeline_cache_file::publish();
 }
 
+/// A step of a predictive back gesture (API 34+), for the app while it
+/// intercepts back; otherwise the platform's own back takes it.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnBackGesture(
+    _env: EnvUnowned<'_>,
+    _class: jni::objects::JClass<'_>,
+    kind: jni::sys::jint,
+    progress: jni::sys::jfloat,
+    edge: jni::sys::jint,
+) {
+    use cranpose_services::{BackEdge, BackEvent, BackGesture};
+    const STARTED: jni::sys::jint = 0;
+    const PROGRESSED: jni::sys::jint = 1;
+    // `BackEvent.EDGE_RIGHT`.
+    const EDGE_RIGHT: jni::sys::jint = 1;
+    if !cranpose_services::back_interception_enabled() {
+        return;
+    }
+    let event = BackEvent {
+        progress,
+        edge: if edge == EDGE_RIGHT {
+            BackEdge::Right
+        } else {
+            BackEdge::Left
+        },
+    };
+    cranpose_services::push_back_gesture(match kind {
+        STARTED => BackGesture::Started(event),
+        PROGRESSED => BackGesture::Progressed(event),
+        _ => BackGesture::Cancelled,
+    });
+}
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnBackInvoked(
     _env: EnvUnowned<'_>,

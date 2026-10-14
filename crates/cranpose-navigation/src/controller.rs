@@ -82,6 +82,12 @@ impl<R: Clone + PartialEq> BackStack<R> {
         self.entries.last().cloned()
     }
 
+    /// The entry a pop would show.
+    pub(crate) fn beneath_top(&self) -> Option<Entry<R>> {
+        let index = self.entries.len().checked_sub(2)?;
+        self.entries.get(index).cloned()
+    }
+
     pub(crate) fn can_pop(&self) -> bool {
         self.entries.len() > 1
     }

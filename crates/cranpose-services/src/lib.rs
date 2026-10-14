@@ -223,9 +223,9 @@ pub use microphone_standby::{
     microphone_standby_available, set_platform_microphone_standby,
 };
 pub use navigation::{
-    BackHandler, BackRequestObserver, back_interception_enabled, exit_requested,
-    observe_back_requests, push_back_request, request_exit, set_back_interception,
-    take_back_requests, take_exit_request,
+    BackEdge, BackEvent, BackGesture, BackHandler, BackRequestObserver, PredictiveBackHandler,
+    back_interception_enabled, exit_requested, observe_back_requests, push_back_gesture,
+    push_back_request, request_exit, set_back_interception, take_back_requests, take_exit_request,
 };
 pub use network_status::{
     Connectivity, Metering, NetworkMonitor, NetworkMonitorRef, NetworkStatus,

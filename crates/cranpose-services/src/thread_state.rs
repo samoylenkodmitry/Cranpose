@@ -38,7 +38,7 @@ pub(crate) struct ServiceThreadState {
     #[cfg(target_arch = "wasm32")]
     pub(crate) app_update_observers: Listeners<dyn Fn(crate::app_update::AppUpdateStatus)>,
     #[cfg(target_arch = "wasm32")]
-    pub(crate) back_listeners: Listeners<dyn Fn()>,
+    pub(crate) back_listeners: Listeners<dyn Fn(crate::navigation::BackSignal)>,
     #[cfg(target_arch = "wasm32")]
     pub(crate) store_listeners: Listeners<dyn Fn()>,
 }

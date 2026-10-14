@@ -1,5 +1,6 @@
 package dev.cranpose.android;
 
+import android.annotation.TargetApi;
 import android.app.NativeActivity;
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -24,6 +25,8 @@ import android.util.SparseIntArray;
 import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.view.WindowManager;
+import android.window.BackEvent;
+import android.window.OnBackAnimationCallback;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
 import android.view.accessibility.AccessibilityEvent;
@@ -78,6 +81,13 @@ import java.util.Locale;
  */
 public class CranposeActivity extends NativeActivity {
     private static native boolean nativeOnBackInvoked();
+
+    private static final int BACK_GESTURE_STARTED = 0;
+    private static final int BACK_GESTURE_PROGRESSED = 1;
+    private static final int BACK_GESTURE_CANCELLED = 2;
+
+    /** A step of a predictive back gesture; {@code edge} is a {@link BackEvent} edge. */
+    private static native void nativeOnBackGesture(int kind, float progress, int edge);
     private static native void nativeOnIncomingContent(String name, String mimeType, String uri);
     private static native void nativeOnTrimMemory(int level);
     private static native void nativeOnCameraFrame(byte[] nv12, int width, int height,
@@ -2593,13 +2603,43 @@ public class CranposeActivity extends NativeActivity {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             return;
         }
-        OnBackInvokedCallback callback = () -> {
-            if (!nativeOnBackInvoked()) {
-                finish();
-            }
-        };
+        OnBackInvokedCallback callback =
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+                        ? new PredictiveBack()
+                        : this::onPlatformBack;
         getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
                 OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback);
+    }
+
+    private void onPlatformBack() {
+        if (!nativeOnBackInvoked()) {
+            finish();
+        }
+    }
+
+    /** Hands the steps of a predictive back gesture to the app as it moves. */
+    @TargetApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    private final class PredictiveBack implements OnBackAnimationCallback {
+        @Override
+        public void onBackStarted(BackEvent event) {
+            nativeOnBackGesture(BACK_GESTURE_STARTED, event.getProgress(), event.getSwipeEdge());
+        }
+
+        @Override
+        public void onBackProgressed(BackEvent event) {
+            nativeOnBackGesture(
+                    BACK_GESTURE_PROGRESSED, event.getProgress(), event.getSwipeEdge());
+        }
+
+        @Override
+        public void onBackCancelled() {
+            nativeOnBackGesture(BACK_GESTURE_CANCELLED, 0f, 0);
+        }
+
+        @Override
+        public void onBackInvoked() {
+            onPlatformBack();
+        }
     }
 
     @Override

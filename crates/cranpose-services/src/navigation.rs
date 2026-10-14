@@ -13,7 +13,12 @@
 //!   the system, so the default behavior (leaving the activity) keeps working.
 //!   Apps enable it exactly while they have somewhere to navigate back to.
 //! - **iOS**: the left-edge swipe is a framework-drawn gesture with no system
-//!   fallback, so it always pushes a request regardless of interception.
+//!   fallback, so it always pushes a request regardless of interception. It
+//!   goes back when let go past 30% of the width or on a flick.
+//!
+//! While a gesture moves, Android's predictive back (API 34+) and the iOS
+//! edge swipe also report its steps through [`push_back_gesture`], which a
+//! [`PredictiveBackHandler`] follows.
 //! - **Desktop/web**: no OS back control; apps may map keys themselves and
 //!   call [`push_back_request`] directly.
 //!
@@ -25,9 +30,43 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 #[cfg(not(target_arch = "wasm32"))]
-type BackListener = Arc<dyn Fn() + Send + Sync + 'static>;
+type BackListener = Arc<dyn Fn(BackSignal) + Send + Sync + 'static>;
 #[cfg(target_arch = "wasm32")]
-type BackListener = std::rc::Rc<dyn Fn() + 'static>;
+type BackListener = std::rc::Rc<dyn Fn(BackSignal) + 'static>;
+
+/// The edge an interactive back gesture starts from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BackEdge {
+    Left,
+    Right,
+}
+
+/// Where an interactive back gesture is: Compose's `BackEventCompat`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BackEvent {
+    /// How far the gesture went, from 0 to 1.
+    pub progress: f32,
+    /// The edge it started from.
+    pub edge: BackEdge,
+}
+
+/// A step of an interactive back gesture: Android's predictive back, the
+/// iOS edge swipe. When the user lets go past the point of going back, the
+/// gesture ends with a back request instead of a step.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BackGesture {
+    Started(BackEvent),
+    Progressed(BackEvent),
+    /// The user let go without going back.
+    Cancelled,
+}
+
+/// What reaches the innermost back observer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum BackSignal {
+    Request,
+    Gesture(BackGesture),
+}
 
 static BACK_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 static BACK_INTERCEPTION: AtomicBool = AtomicBool::new(false);
@@ -39,7 +78,16 @@ static EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 pub fn push_back_request() {
     BACK_REQUESTS.fetch_add(1, Ordering::SeqCst);
     if let Some(listener) = latest_back_listener() {
-        listener();
+        listener(BackSignal::Request);
+    }
+}
+
+/// Record a step of an interactive back gesture (called by the platform
+/// backend). The innermost [`PredictiveBackHandler`] receives it; a
+/// [`BackHandler`] there ignores it.
+pub fn push_back_gesture(gesture: BackGesture) {
+    if let Some(listener) = latest_back_listener() {
+        listener(BackSignal::Gesture(gesture));
     }
 }
 
@@ -62,6 +110,26 @@ pub fn push_back_request() {
 /// observer beneath it.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn observe_back_requests(listener: impl Fn() + Send + Sync + 'static) -> BackRequestObserver {
+    observe_back_signals(move |signal| {
+        if signal == BackSignal::Request {
+            listener();
+        }
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn observe_back_requests(listener: impl Fn() + 'static) -> BackRequestObserver {
+    observe_back_signals(move |signal| {
+        if signal == BackSignal::Request {
+            listener();
+        }
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn observe_back_signals(
+    listener: impl Fn(BackSignal) + Send + Sync + 'static,
+) -> BackRequestObserver {
     let id = NEXT_LISTENER_ID.fetch_add(1, Ordering::Relaxed);
     if let Ok(mut listeners) = back_listeners().lock() {
         listeners.push((id, Arc::new(listener)));
@@ -70,7 +138,7 @@ pub fn observe_back_requests(listener: impl Fn() + Send + Sync + 'static) -> Bac
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn observe_back_requests(listener: impl Fn() + 'static) -> BackRequestObserver {
+fn observe_back_signals(listener: impl Fn(BackSignal) + 'static) -> BackRequestObserver {
     let id = NEXT_LISTENER_ID.fetch_add(1, Ordering::Relaxed);
     crate::thread_state::with(|state| state.back_listeners.add(id, std::rc::Rc::new(listener)));
     BackRequestObserver { id }
@@ -138,31 +206,62 @@ static ACTIVE_BACK_HANDLERS: AtomicUsize = AtomicUsize::new(0);
 /// the request and dropping it restores the handler beneath it.
 #[expect(non_snake_case)]
 #[track_caller]
-pub fn BackHandler(enabled: bool, mut on_back: impl FnMut() + 'static) {
-    let requests = cranpose_core::rememberEventStream(enabled, move |sender| {
+pub fn BackHandler(enabled: bool, on_back: impl FnMut() + 'static) {
+    PredictiveBackHandler(enabled, |_| {}, on_back);
+}
+
+/// [`BackHandler`] that also follows an interactive back gesture while it
+/// moves: Compose's `PredictiveBackHandler`. `on_gesture` receives each step;
+/// a gesture that goes back ends in `on_back`, one that does not ends in
+/// [`BackGesture::Cancelled`].
+#[expect(non_snake_case)]
+#[track_caller]
+pub fn PredictiveBackHandler(
+    enabled: bool,
+    mut on_gesture: impl FnMut(BackGesture) + 'static,
+    mut on_back: impl FnMut() + 'static,
+) {
+    let events = cranpose_core::rememberEventStream(enabled, move |sender| {
         if !enabled {
             return None;
         }
         if ACTIVE_BACK_HANDLERS.fetch_add(1, Ordering::AcqRel) == 0 {
             set_back_interception(true);
         }
-        let registration = observe_back_requests(move || {
-            let count = take_back_requests();
-            if count > 0 {
-                sender.send(count);
+        let registration = observe_back_signals(move |signal| match signal {
+            BackSignal::Request => {
+                let count = take_back_requests();
+                if count > 0 {
+                    sender.send(BackDelivery::Requests(count));
+                }
             }
+            BackSignal::Gesture(gesture) => sender.send(BackDelivery::Gesture(gesture)),
         });
         Some(BackInterception {
             _registration: registration,
         })
     });
     if enabled {
-        cranpose_core::CollectEvents(requests, enabled, move |count: usize| {
-            for _ in 0..count {
-                on_back();
-            }
-        });
+        cranpose_core::CollectEvents(
+            events,
+            enabled,
+            move |delivery: BackDelivery| match delivery {
+                BackDelivery::Requests(count) => {
+                    for _ in 0..count {
+                        on_back();
+                    }
+                }
+                BackDelivery::Gesture(gesture) => on_gesture(gesture),
+            },
+        );
     }
+}
+
+/// What a back handler's event stream carries to the UI thread.
+#[derive(Clone, Copy)]
+enum BackDelivery {
+    Requests(usize),
+    Gesture(BackGesture),
 }
 
 struct BackInterception {
@@ -214,7 +313,7 @@ impl Drop for BackInterception {
 pub fn request_exit() {
     EXIT_REQUESTED.store(true, Ordering::SeqCst);
     if let Some(listener) = latest_back_listener() {
-        listener();
+        listener(BackSignal::Request);
     }
 }
 

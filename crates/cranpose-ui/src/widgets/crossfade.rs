@@ -8,8 +8,8 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_animation::AnimationType;
-use cranpose_core::{State, remember};
+use cranpose_animation::{Animatable, AnimationType};
+use cranpose_core::{State, remember, with_current_composer};
 
 use crate::{
     composable,
@@ -47,6 +47,43 @@ struct CrossfadeStateInner<T> {
     content: RefCell<Option<CrossfadeContentFn<T>>>,
 }
 
+/// The alpha of one crossfade content: `seeked` while a gesture holds it,
+/// else animated toward `target` from wherever it stands, which a content
+/// shown for the first time takes as `initial`.
+fn content_alpha(
+    initial: f32,
+    target: f32,
+    seeked: Option<f32>,
+    animation: AnimationType,
+) -> State<f32> {
+    let runtime = with_current_composer(cranpose_core::Composer::runtime_handle);
+    let alpha = remember(|| Animatable::new_with_animation(initial, animation, runtime));
+    alpha.update(|alpha| match seeked {
+        Some(seeked) => {
+            if alpha.is_running() || (alpha.target() - seeked).abs() > f32::EPSILON {
+                alpha.snapTo(seeked);
+            }
+        }
+        None => {
+            if (alpha.target() - target).abs() > f32::EPSILON || alpha.animation_type() != animation
+            {
+                alpha.animateTo(target, animation);
+            }
+        }
+    });
+    alpha.with(Animatable::state)
+}
+
+/// How far a gesture moved a [`SeekableCrossfade`] from its target state
+/// toward another state.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CrossfadeSeek<T> {
+    /// The state the gesture moves toward.
+    pub toward: T,
+    /// From 0, the target state shown alone, to 1, `toward` shown alone.
+    pub fraction: f32,
+}
+
 /// Shared, cheaply cloneable holder for the in-flight crossfade contents.
 struct CrossfadeStateHandle<T> {
     inner: Rc<CrossfadeStateInner<T>>,
@@ -67,6 +104,55 @@ impl<T> CrossfadeStateHandle<T> {
         let id = self.inner.next_id.get();
         self.inner.next_id.set(id.wrapping_add(1));
         id
+    }
+}
+
+impl<T: PartialEq + Clone> CrossfadeStateHandle<T> {
+    fn new_entry(&self, value: T, fade_in: bool) -> CrossfadeEntry<T> {
+        CrossfadeEntry {
+            id: self.allocate_id(),
+            value,
+            alpha: None,
+            fade_in,
+        }
+    }
+
+    /// Adds an entry for the target and for the state a seek moves toward,
+    /// beneath the others, and drops the entries that finished fading out.
+    fn sync_entries(&self, target: &T, seek: Option<&CrossfadeSeek<T>>) {
+        let mut entries = self.inner.entries.borrow_mut();
+        if !entries.iter().any(|entry| entry.value == *target) {
+            let fade_in = !entries.is_empty();
+            entries.push(self.new_entry(target.clone(), fade_in));
+        }
+        if let Some(seek) = seek
+            && !entries.iter().any(|entry| entry.value == seek.toward)
+        {
+            entries.insert(0, self.new_entry(seek.toward.clone(), true));
+        }
+        entries.retain(|entry| {
+            entry.value == *target
+                || seek.is_some_and(|seek| seek.toward == entry.value)
+                || entry
+                    .alpha
+                    .is_none_or(|alpha| alpha.value() > CROSSFADE_ALPHA_EPSILON)
+        });
+    }
+}
+
+/// The alpha a seek holds the content of `value` at: the rest of the fraction
+/// for the target, the fraction for the state it moves toward.
+fn seeked_alpha<T: PartialEq>(
+    seek: Option<&CrossfadeSeek<T>>,
+    value: &T,
+    is_target: bool,
+) -> Option<f32> {
+    let seek = seek?;
+    let fraction = seek.fraction.clamp(0.0, 1.0);
+    if is_target {
+        Some(1.0 - fraction)
+    } else {
+        (seek.toward == *value).then_some(fraction)
     }
 }
 
@@ -106,9 +192,29 @@ where
     T: Clone + PartialEq + 'static,
     F: FnMut(T) + 'static,
 {
+    SeekableCrossfade(target_state, None, animation, content);
+}
+
+/// [`Crossfade`] that a gesture can move part of the way, as Compose's
+/// `SeekableTransitionState` moves a transition. While `seek` is set, the
+/// content for `seek.toward` shows beneath the target's at
+/// `seek.fraction`, and the target's at the rest. When the gesture ends, the
+/// target either becomes `seek.toward` or stays, and both contents animate
+/// on from where the gesture left them, with `animation`.
+#[composable(no_skip)]
+pub fn SeekableCrossfade<T, F>(
+    target_state: T,
+    seek: Option<CrossfadeSeek<T>>,
+    animation: AnimationType,
+    content: F,
+) where
+    T: Clone + PartialEq + 'static,
+    F: FnMut(T) + 'static,
+{
     let handle = remember(|| CrossfadeStateHandle::<T>::new()).with(CrossfadeStateHandle::clone);
     *handle.inner.content.borrow_mut() = Some(std::boxed::Box::new(content));
-    CrossfadeContents(handle, target_state, animation);
+    let seek = seek.filter(|seek| seek.toward != target_state);
+    CrossfadeContents(handle, target_state, seek, animation);
 }
 
 /// Reactive part of [`Crossfade`]: reads the per-entry alpha states so each
@@ -116,37 +222,15 @@ where
 /// It cannot skip: the content it runs is the closure [`Crossfade`] just put
 /// in the handle, which none of these three parameters describes.
 #[composable(no_skip)]
-fn CrossfadeContents<T>(state: CrossfadeStateHandle<T>, target_state: T, animation: AnimationType)
-where
+fn CrossfadeContents<T>(
+    state: CrossfadeStateHandle<T>,
+    target_state: T,
+    seek: Option<CrossfadeSeek<T>>,
+    animation: AnimationType,
+) where
     T: Clone + PartialEq + 'static,
 {
-    {
-        let mut entries = state.inner.entries.borrow_mut();
-        if entries.is_empty() {
-            let id = state.allocate_id();
-            entries.push(CrossfadeEntry {
-                id,
-                value: target_state.clone(),
-                alpha: None,
-                fade_in: false,
-            });
-        } else if !entries.iter().any(|entry| entry.value == target_state) {
-            let id = state.allocate_id();
-            entries.push(CrossfadeEntry {
-                id,
-                value: target_state.clone(),
-                alpha: None,
-                fade_in: true,
-            });
-        }
-
-        entries.retain(|entry| {
-            entry.value == target_state
-                || entry
-                    .alpha
-                    .is_none_or(|alpha| alpha.value() > CROSSFADE_ALPHA_EPSILON)
-        });
-    }
+    state.sync_entries(&target_state, seek.as_ref());
 
     Box(Modifier::empty(), BoxSpec::new(), move || {
         let items: Vec<(u64, T, bool)> = state
@@ -158,11 +242,12 @@ where
             .collect();
         for (id, value, fade_in) in items {
             let is_target = value == target_state;
+            let seeked = seeked_alpha(seek.as_ref(), &value, is_target);
             let state_for_item = state.clone();
             cranpose_core::with_key(&id, || {
                 let alpha_target = if is_target { 1.0 } else { 0.0 };
                 let initial_alpha = if fade_in { 0.0 } else { alpha_target };
-                let alpha = animate_float_with_initial(initial_alpha, alpha_target, animation);
+                let alpha = content_alpha(initial_alpha, alpha_target, seeked, animation);
                 if let Some(entry) = state_for_item
                     .inner
                     .entries

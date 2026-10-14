@@ -1,7 +1,7 @@
 use cranpose_animation::{AnimationType, Easing, tween};
 use cranpose_coroflow::ProvideViewModelStore;
-use cranpose_services::{BackHandler, ProvideSaveableScope};
-use cranpose_ui::{Crossfade, composable};
+use cranpose_services::{BackGesture, PredictiveBackHandler, ProvideSaveableScope};
+use cranpose_ui::{CrossfadeSeek, SeekableCrossfade, composable};
 
 use crate::controller::{Entry, NavController};
 
@@ -38,7 +38,10 @@ const DEFAULT_TRANSITION_MILLIS: u64 = 700;
 /// ```
 ///
 /// Screens crossfade the way Compose's do. The platform back gesture pops the
-/// back stack while there is a screen beneath the top one. Every entry has
+/// back stack while there is a screen beneath the top one. While an
+/// interactive back gesture moves (Android's predictive back, the iOS edge
+/// swipe), the screen beneath shows through as far as the gesture went; when
+/// the user lets go, the fade finishes or goes back from there. Every entry has
 /// its own view model store: `viewModel` in a screen finds the screen's view
 /// models, which are kept while other screens cover it and dropped once it is
 /// popped and has faded out. Every entry also has its own
@@ -66,13 +69,33 @@ where
     R: Clone + PartialEq + 'static,
     F: FnMut(R) + 'static,
 {
-    let (top, can_pop) = controller
+    let (top, beneath, can_pop) = controller
         .stack
-        .read(|stack| (stack.top(), stack.can_pop()));
-    BackHandler(can_pop, move || {
-        controller.navigate_up();
-    });
-    Crossfade(top, transition, move |entry| {
+        .read(|stack| (stack.top(), stack.beneath_top(), stack.can_pop()));
+    let gesture = cranpose_core::rememberMutableStateOf(|| None::<f32>);
+    PredictiveBackHandler(
+        can_pop,
+        move |step| {
+            gesture.set(match step {
+                BackGesture::Started(event) | BackGesture::Progressed(event) => {
+                    Some(event.progress)
+                }
+                BackGesture::Cancelled => None,
+            });
+        },
+        move || {
+            gesture.set(None);
+            controller.navigate_up();
+        },
+    );
+    let seek = gesture
+        .get()
+        .zip(beneath)
+        .map(|(fraction, beneath)| CrossfadeSeek {
+            toward: Some(beneath),
+            fraction,
+        });
+    SeekableCrossfade(top, seek, transition, move |entry| {
         if let Some(Entry {
             route,
             store,
