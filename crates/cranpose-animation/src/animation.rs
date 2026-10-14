@@ -666,7 +666,6 @@ impl InfiniteTransition {
     #[track_caller]
     fn run(&self) {
         let run_key = self.inner.run_token.get();
-        cranpose_core::label_next_ui_task(format!("loop {}", self.inner.label));
         let weak: Weak<InfiniteTransitionInner> = Rc::downgrade(&self.inner);
         cranpose_core::__launched_effect_async_impl(
             cranpose_core::caller_location_key()
@@ -820,8 +819,12 @@ impl InfiniteTransitionInner {
     }
 
     fn on_frame(&self, play_time_nanos: u64) {
-        let animations = self.animations.borrow().clone();
-        for animation in animations {
+        // Each animation is borrowed alone, so its frame can reach the
+        // transition without a copy of the whole list.
+        for index in 0.. {
+            let Some(animation) = self.animations.borrow().get(index).cloned() else {
+                break;
+            };
             animation.on_frame(play_time_nanos);
         }
     }
