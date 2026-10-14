@@ -62,6 +62,10 @@ impl ThreadCells {
 
 pub(crate) struct UiThreadState {
     pub(crate) environment: EnvironmentLocals,
+    /// While a focus move runs, the focus observers it left with no focused
+    /// target; `None` outside a move.
+    pub(crate) left_in_focus_move:
+        RefCell<Option<Vec<std::rc::Rc<crate::focus_within::FocusWithinObserver>>>>,
     pub(crate) app_context_stack: RefCell<Vec<Weak<AppContext>>>,
     pub(crate) app_contexts: RefCell<FixedHashMap<AppContextId, Weak<AppContext>>>,
     pub(crate) active_selection: RefCell<Weak<RegistrarInner>>,
@@ -82,6 +86,7 @@ impl UiThreadState {
     const fn new() -> Self {
         Self {
             environment: EnvironmentLocals::new(),
+            left_in_focus_move: RefCell::new(None),
             app_context_stack: RefCell::new(Vec::new()),
             app_contexts: RefCell::new(fixed_hash_map()),
             active_selection: RefCell::new(Weak::new()),

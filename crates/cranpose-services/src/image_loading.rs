@@ -293,10 +293,13 @@ pub fn image_loader() -> ImageLoader {
 /// The browser has no disk cache for it; its own HTTP cache stands in.
 #[cfg(target_arch = "wasm32")]
 pub fn image_loader() -> ImageLoader {
-    thread_local! {
-        static LOADER: ImageLoader = default_loader();
-    }
-    LOADER.with(ImageLoader::clone)
+    crate::thread_state::with(|state| {
+        state
+            .image_loader
+            .borrow_mut()
+            .get_or_insert_with(default_loader)
+            .clone()
+    })
 }
 
 fn default_loader() -> ImageLoader {

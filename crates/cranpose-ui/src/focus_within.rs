@@ -17,16 +17,13 @@ use std::{
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf, remember};
 use cranpose_macros::composable;
 
-struct FocusWithinObserver {
+pub(crate) struct FocusWithinObserver {
     focused: Cell<u32>,
     on_change: RefCell<Rc<dyn Fn(bool)>>,
 }
 
-thread_local! {
-    /// While a focus move runs, the observers it left with no focused
-    /// target; `None` outside a move.
-    static LEFT_IN_MOVE: RefCell<Option<Vec<Rc<FocusWithinObserver>>>> =
-        const { RefCell::new(None) };
+fn with_left_in_move<R>(f: impl FnOnce(&mut Option<Vec<Rc<FocusWithinObserver>>>) -> R) -> R {
+    crate::thread_state::with(|state| f(&mut state.left_in_focus_move.borrow_mut()))
 }
 
 impl FocusWithinObserver {
@@ -41,7 +38,7 @@ impl FocusWithinObserver {
         if focused != 1 {
             return;
         }
-        let came_back = LEFT_IN_MOVE.with_borrow_mut(|left| {
+        let came_back = with_left_in_move(|left| {
             left.as_mut()
                 .and_then(|left| {
                     let index = left.iter().position(|other| Rc::ptr_eq(other, observer))?;
@@ -62,7 +59,7 @@ impl FocusWithinObserver {
         if focused != 0 {
             return;
         }
-        let deferred = LEFT_IN_MOVE.with_borrow_mut(|left| {
+        let deferred = with_left_in_move(|left| {
             left.as_mut()
                 .map(|left| left.push(Rc::clone(observer)))
                 .is_some()
@@ -78,9 +75,7 @@ struct FocusMove;
 
 impl Drop for FocusMove {
     fn drop(&mut self) {
-        let left = LEFT_IN_MOVE
-            .with_borrow_mut(Option::take)
-            .unwrap_or_default();
+        let left = with_left_in_move(Option::take).unwrap_or_default();
         for observer in left {
             if observer.focused.get() == 0 {
                 observer.tell(false);
@@ -93,7 +88,7 @@ impl Drop for FocusMove {
 /// to another: an observer that focus leaves and enters again within it
 /// hears nothing.
 pub(crate) fn moving_focus(block: impl FnOnce()) {
-    let starts_move = LEFT_IN_MOVE.with_borrow_mut(|left| {
+    let starts_move = with_left_in_move(|left| {
         if left.is_some() {
             return false;
         }
