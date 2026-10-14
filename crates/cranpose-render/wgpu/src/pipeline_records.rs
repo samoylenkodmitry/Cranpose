@@ -60,20 +60,24 @@ const SECTION: &[u8; 4] = b"RSP3";
 
 /// Opens a first screen's pipelines, written by one launch for another to
 /// build before its first frame: the layout of the shape keys they name,
-/// the backend that drew them, which picks the keys, then a records section
-/// of the first screen's entries.
-const FIRST_SCREEN: &[u8; 4] = b"CPFS";
+/// the backend that drew them, which picks the keys, the width and height
+/// of the target the first frame drew to, then a records section of the
+/// first screen's entries.
+const FIRST_SCREEN: &[u8; 4] = b"CPF2";
 
-/// The first screen's entries of `drawn`, drawn on `backend`, as
-/// [`decode_first_screens`] reads them; `None` when one does not fit the
-/// layout.
+/// The first screen's entries of `drawn`, drawn on `backend` to a target of
+/// `viewport` pixels, as [`decode_first_screen`] reads them; `None` when one
+/// does not fit the layout.
 pub(crate) fn encode_first_screen(
     drawn: &RecordedPipelines<&'static str>,
     backend: wgpu::Backend,
+    viewport: (u32, u32),
 ) -> Option<Vec<u8>> {
     let mut bytes = FIRST_SCREEN.to_vec();
     bytes.extend_from_slice(&crate::render::ShapePipelineKey::DISK_LAYOUT);
     bytes.push(backend as u8);
+    bytes.extend_from_slice(&viewport.0.to_le_bytes());
+    bytes.extend_from_slice(&viewport.1.to_le_bytes());
     encode(
         drawn
             .shapes
@@ -95,12 +99,18 @@ pub(crate) fn encode_first_screen(
     Some(bytes)
 }
 
-/// Every pipeline the first screens drawn on `backend` in `bytes` name,
-/// sets [`encode_first_screen`] wrote one after another, in their order. A
-/// set another backend drew, or whose shape keys this build lays out
-/// otherwise, names none, and reading stops at bytes that open no set.
-pub(crate) fn decode_first_screens(mut bytes: &[u8], backend: wgpu::Backend) -> PipelineRecords {
-    let mut records = PipelineRecords::default();
+/// The pipelines of the first screen in `bytes` drawn on `backend` to the
+/// target nearest `viewport` pixels in size, of the sets
+/// [`encode_first_screen`] wrote one after another; the first such set of
+/// two as near. A set another backend drew, or whose shape keys this build
+/// lays out otherwise, is passed over, and reading stops at bytes that open
+/// no set.
+pub(crate) fn decode_first_screen(
+    mut bytes: &[u8],
+    backend: wgpu::Backend,
+    viewport: (u32, u32),
+) -> PipelineRecords {
+    let mut nearest: Option<(f64, PipelineRecords)> = None;
     while let Some((layout, section)) = bytes
         .strip_prefix(FIRST_SCREEN.as_slice())
         .and_then(<[u8]>::split_first_chunk::<8>)
@@ -108,17 +118,34 @@ pub(crate) fn decode_first_screens(mut bytes: &[u8], backend: wgpu::Backend) -> 
         let Some((&drawn_on, section)) = section.split_first() else {
             break;
         };
+        let Some((width, section)) = section.split_first_chunk::<4>() else {
+            break;
+        };
+        let Some((height, section)) = section.split_first_chunk::<4>() else {
+            break;
+        };
         let Some((set, rest)) = decode(section) else {
             break;
         };
         if *layout == crate::render::ShapePipelineKey::DISK_LAYOUT && drawn_on == backend as u8 {
-            records.shapes.extend(set.shapes);
-            records.shaders.extend(set.shaders);
-            records.fixed.extend(set.fixed);
+            let distance = size_distance(
+                (u32::from_le_bytes(*width), u32::from_le_bytes(*height)),
+                viewport,
+            );
+            if nearest.as_ref().is_none_or(|(best, _)| distance < *best) {
+                nearest = Some((distance, set));
+            }
         }
         bytes = rest;
     }
-    records
+    nearest.map(|(_, set)| set).unwrap_or_default()
+}
+
+/// How far apart two target sizes are: by how many times wider and how many
+/// times taller one is than the other.
+fn size_distance(drawn: (u32, u32), viewport: (u32, u32)) -> f64 {
+    let times = |a: u32, b: u32| (f64::from(a.max(1)) / f64::from(b.max(1))).ln().abs();
+    times(drawn.0, viewport.0) + times(drawn.1, viewport.1)
 }
 
 /// Appends a section holding the records to `bytes`, or `None` when one of

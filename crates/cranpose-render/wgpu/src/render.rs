@@ -3919,8 +3919,9 @@ impl GpuRenderer {
     /// Builds here, ahead of the first frame, the pipelines named by the
     /// first screens in `records` that this renderer's backend drew (see
     /// [`crate::WgpuRenderer::build_first_screen_pipelines`]).
-    pub(crate) fn build_first_screen(&mut self, records: &[u8]) {
-        let records = crate::pipeline_records::decode_first_screens(records, self.adapter_backend);
+    pub(crate) fn build_first_screen(&mut self, records: &[u8], viewport: (u32, u32)) {
+        let records =
+            crate::pipeline_records::decode_first_screen(records, self.adapter_backend, viewport);
         for shape in &records.shapes {
             if let Some(key) = ShapePipelineKey::from_bits(shape.entry) {
                 self.shape_pipelines.build_ahead(key);
@@ -4573,7 +4574,7 @@ impl GpuRenderer {
         let builds_before = thread_builds();
         self.warm_requested_shaders();
         self.shape_pipelines.begin_frame();
-        self.recorder.begin_frame();
+        self.recorder.begin_frame((width, height));
         self.begin_placeholder_frame();
         self.viewport_uniforms.begin_frame();
         self.run_store.begin_frame(gpu_stats_enabled());

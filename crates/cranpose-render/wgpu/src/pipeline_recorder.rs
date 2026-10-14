@@ -37,6 +37,8 @@ struct RecorderState {
 #[derive(Default)]
 struct FirstScreen {
     started: Option<Instant>,
+    /// The size of the target the first frame drew to.
+    viewport: (u32, u32),
     over: bool,
 }
 
@@ -62,9 +64,14 @@ impl PipelineRecorder {
         value
     }
 
-    /// Starts the first screen with the renderer's first frame.
-    pub(crate) fn begin_frame(&self) {
-        self.first_screen().started.get_or_insert_with(Instant::now);
+    /// Starts the first screen with the renderer's first frame, which draws
+    /// to a target of `viewport` pixels.
+    pub(crate) fn begin_frame(&self, viewport: (u32, u32)) {
+        let mut first_screen = self.first_screen();
+        if first_screen.started.is_none() {
+            first_screen.started = Some(Instant::now());
+            first_screen.viewport = viewport;
+        }
     }
 
     /// Keeps the first screen open past a frame that drew a placeholder: the
@@ -88,7 +95,8 @@ impl PipelineRecorder {
         if self.in_first_screen() {
             return None;
         }
-        crate::pipeline_records::encode_first_screen(&self.drawn(), backend)
+        let viewport = self.first_screen().viewport;
+        crate::pipeline_records::encode_first_screen(&self.drawn(), backend, viewport)
     }
 
     /// Moves the first screen's end later by `waited`, the time a draw spent

@@ -2,7 +2,8 @@
 //! before its own first frame, which then builds none and draws what the
 //! earlier launch drew. A web page does this with the records its build
 //! embeds; records another backend or another layout of pipeline keys wrote
-//! build nothing.
+//! build nothing, and of sets drawn at several sizes the one nearest the
+//! launch's own builds.
 
 use std::time::Duration;
 
@@ -65,12 +66,27 @@ fn screen() -> RenderGraph {
     support::page_graph(WIDTH, HEIGHT, children)
 }
 
+/// A screen of one gradient bar, which draws with none of [`screen`]'s
+/// pipelines but the plain page's.
+fn gradient_screen(width: u32, height: u32) -> RenderGraph {
+    let bar = support::brush_rect(
+        rect(0.0, 0.0, width as f32, 12.0),
+        Brush::linear_gradient(vec![Color::WHITE, Color(0.2, 0.5, 0.9, 1.0)]),
+    );
+    support::page_graph(width, height, vec![bar])
+}
+
 /// The pipelines a fresh renderer, given `records` before its first frame,
 /// builds while it draws the screen, and what it draws. An empty page drawn
 /// first builds what every capture draws with.
 fn first_frame_after(records: &[u8]) -> (u64, Vec<u8>) {
+    first_frame_after_at(records, (WIDTH, HEIGHT))
+}
+
+/// [`first_frame_after`] for a launch whose target is `viewport` pixels.
+fn first_frame_after_at(records: &[u8], viewport: (u32, u32)) -> (u64, Vec<u8>) {
     let mut renderer = support::LockedRenderer::beside_locked().expect("a later renderer");
-    renderer.build_first_screen_pipelines(records);
+    renderer.build_first_screen_pipelines(records, viewport);
     support::capture_graph(
         &mut renderer,
         support::page_graph(WIDTH, HEIGHT, Vec::new()),
@@ -132,7 +148,41 @@ fn bytes_that_open_no_first_screen_build_nothing() {
         return;
     };
     let built = pipelines_created();
-    renderer.build_first_screen_pipelines(b"no first screen");
-    renderer.build_first_screen_pipelines(b"CPFS");
+    renderer.build_first_screen_pipelines(b"no first screen", (WIDTH, HEIGHT));
+    renderer.build_first_screen_pipelines(b"CPF2", (WIDTH, HEIGHT));
     assert_eq!(pipelines_created(), built);
+}
+
+#[test]
+fn a_launch_builds_the_first_screen_recorded_nearest_its_size() {
+    let Ok(mut small) = support::headless_renderer() else {
+        return;
+    };
+    let mut large = support::LockedRenderer::beside_locked().expect("a second renderer");
+    support::capture_graph(&mut small, screen(), WIDTH, HEIGHT);
+    support::capture_graph(
+        &mut large,
+        gradient_screen(WIDTH * 4, HEIGHT * 4),
+        WIDTH * 4,
+        HEIGHT * 4,
+    );
+    std::thread::sleep(FIRST_SCREEN_ENDED);
+    let mut records = large
+        .first_screen_pipelines()
+        .expect("the large first screen ended");
+    records.extend(
+        small
+            .first_screen_pipelines()
+            .expect("the small first screen ended"),
+    );
+
+    assert_eq!(
+        first_frame_after_at(&records, (WIDTH, HEIGHT)).0,
+        0,
+        "a launch at the small size builds the small screen's set"
+    );
+    assert!(
+        first_frame_after_at(&records, (WIDTH * 3, HEIGHT * 3)).0 > 0,
+        "a launch nearer the large size builds the gradient's set instead"
+    );
 }
