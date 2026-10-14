@@ -187,6 +187,7 @@ where
             viewport_end_offset: viewport_size,
             before_content_padding: config.before_content_padding,
             after_content_padding: config.after_content_padding,
+            main_axis_item_spacing: config.spacing,
             snap_anchor_offset: 0.0,
             reverse_layout: config.reverse_layout,
         });
@@ -205,6 +206,7 @@ where
             viewport_end_offset: viewport_size.max(0.0),
             before_content_padding: config.before_content_padding,
             after_content_padding: config.after_content_padding,
+            main_axis_item_spacing: config.spacing,
             snap_anchor_offset: 0.0,
             reverse_layout: config.reverse_layout,
         });
@@ -437,6 +439,7 @@ where
         viewport_end_offset: viewport_end,
         before_content_padding: config.before_content_padding,
         after_content_padding: config.after_content_padding,
+        main_axis_item_spacing: config.spacing,
         snap_anchor_offset: 0.0,
         reverse_layout: config.reverse_layout,
     });
@@ -519,6 +522,7 @@ where
         viewport_end_offset: content_extent,
         before_content_padding: config.before_content_padding,
         after_content_padding: config.after_content_padding,
+        main_axis_item_spacing: config.spacing,
         snap_anchor_offset: 0.0,
         reverse_layout: config.reverse_layout,
     });

@@ -1,6 +1,7 @@
-//! Pagers: Compose's `HorizontalPager` and `VerticalPager`. Each page fills
-//! the pager, the pages compose lazily as a lazy row or column does, and a
-//! drag or a fling the user lets go of comes to rest on a page.
+//! Pagers: Compose's `HorizontalPager` and `VerticalPager`. The pages fill
+//! the pager or take a fixed length, compose lazily as a lazy row or
+//! column's items do, and a drag or a fling the user lets go of comes to
+//! rest at the start of a page.
 
 use std::rc::Rc;
 
@@ -8,6 +9,8 @@ use cranpose_foundation::lazy::{
     LazyItems, LazyListIntervalContent, LazyListScope, LazyListState, LazySettlePolicy,
     rememberLazyListStateWithPosition,
 };
+
+use cranpose_ui_layout::LinearArrangement;
 
 use crate::{
     AnimateScroll, composable,
@@ -21,6 +24,34 @@ use crate::{
 /// A release faster than this, in logical pixels per second, turns the page
 /// toward the fling however little the drag moved it.
 const PAGE_FLING_VELOCITY: f32 = 400.0;
+
+/// How long a pager's pages are along its axis — Compose's `PageSize`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PageSize {
+    /// Each page is as long as the pager.
+    Fill,
+    /// Each page is this many logical pixels long, so a shorter page shows
+    /// the next one beside it.
+    Fixed(f32),
+}
+
+/// Options for a pager, Compose's pager arguments beside its state and its
+/// page count.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PagerSpec {
+    pub page_size: PageSize,
+    /// Logical pixels between two pages.
+    pub page_spacing: f32,
+}
+
+impl Default for PagerSpec {
+    fn default() -> Self {
+        Self {
+            page_size: PageSize::Fill,
+            page_spacing: 0.0,
+        }
+    }
+}
 
 /// Where a pager is — Compose's `PagerState`. It is `Copy`, so it moves into
 /// any number of closures.
@@ -43,7 +74,7 @@ impl PagerState {
     pub fn current_page(&self) -> usize {
         let first = self.list.first_visible_item_index();
         let offset = self.list.first_visible_item_scroll_offset();
-        if offset > self.page_size() / 2.0 {
+        if offset > self.page_extent() / 2.0 {
             first + 1
         } else {
             first
@@ -53,7 +84,7 @@ impl PagerState {
     /// How far the pager stands from [`Self::current_page`], as a fraction of
     /// a page from -0.5 to 0.5 — Compose's `currentPageOffsetFraction`.
     pub fn current_page_offset_fraction(&self) -> f32 {
-        let page = self.page_size();
+        let page = self.page_extent();
         if page <= 0.0 {
             return 0.0;
         }
@@ -82,9 +113,16 @@ impl PagerState {
         self.list
     }
 
-    fn page_size(&self) -> f32 {
+    /// How far the start of a page lies from the start of the next one.
+    fn page_extent(&self) -> f32 {
         self.list
-            .with_layout_info(|info| info.viewport_size)
+            .with_layout_info(|info| {
+                info.visible_items_info
+                    .first()
+                    .map_or(info.viewport_size, |page| {
+                        page.size + info.main_axis_item_spacing
+                    })
+            })
             .unwrap_or_default()
     }
 }
@@ -94,7 +132,7 @@ impl PagerState {
 /// fling, else the one closer to where it would stop.
 fn page_settle(state: PagerState) -> LazySettlePolicy {
     Rc::new(move |proposed, velocity| {
-        let page = state.page_size();
+        let page = state.page_extent();
         if page <= 0.0 {
             return proposed;
         }
@@ -107,29 +145,55 @@ fn page_settle(state: PagerState) -> LazySettlePolicy {
     })
 }
 
-/// Pages side by side, `page_count` of them, each as wide and high as the
-/// pager — Compose's `HorizontalPager`. The pager needs a bounded size.
+/// Pages side by side, `page_count` of them, each as high as the pager
+/// and as wide as `spec` says — Compose's `HorizontalPager`. The pager
+/// needs a bounded size.
 #[composable(no_skip)]
-pub fn HorizontalPager<F>(modifier: Modifier, state: PagerState, page_count: usize, page_content: F)
-where
+pub fn HorizontalPager<F>(
+    modifier: Modifier,
+    state: PagerState,
+    spec: PagerSpec,
+    page_count: usize,
+    page_content: F,
+) where
     F: Fn(usize) + 'static,
 {
-    Pager(modifier, state, page_count, true, Rc::new(page_content));
+    Pager(
+        modifier,
+        state,
+        spec,
+        page_count,
+        true,
+        Rc::new(page_content),
+    );
 }
 
 /// Pages stacked from top to bottom — Compose's `VerticalPager`.
 #[composable(no_skip)]
-pub fn VerticalPager<F>(modifier: Modifier, state: PagerState, page_count: usize, page_content: F)
-where
+pub fn VerticalPager<F>(
+    modifier: Modifier,
+    state: PagerState,
+    spec: PagerSpec,
+    page_count: usize,
+    page_content: F,
+) where
     F: Fn(usize) + 'static,
 {
-    Pager(modifier, state, page_count, false, Rc::new(page_content));
+    Pager(
+        modifier,
+        state,
+        spec,
+        page_count,
+        false,
+        Rc::new(page_content),
+    );
 }
 
 #[composable(no_skip)]
 fn Pager(
     modifier: Modifier,
     state: PagerState,
+    spec: PagerSpec,
     page_count: usize,
     horizontal: bool,
     page_content: Rc<dyn Fn(usize)>,
@@ -140,7 +204,11 @@ fn Pager(
     });
     BoxWithConstraints(modifier, move |scope| {
         let constraints = scope.constraints();
-        let (width, height) = (constraints.max_width, constraints.max_height);
+        let (width, height) = match (spec.page_size, horizontal) {
+            (PageSize::Fill, _) => (constraints.max_width, constraints.max_height),
+            (PageSize::Fixed(length), true) => (length, constraints.max_height),
+            (PageSize::Fixed(length), false) => (constraints.max_width, length),
+        };
         let content = Rc::clone(&page_content);
         let pages = move |pages: &mut LazyListIntervalContent| {
             pages.items(
@@ -156,10 +224,19 @@ fn Pager(
             );
         };
         let fill = Modifier::empty().fill_max_size();
+        let spacing = LinearArrangement::SpacedBy(spec.page_spacing);
         if horizontal {
-            LazyRow(fill, state.list, LazyRowSpec::default(), pages);
+            let row = LazyRowSpec {
+                horizontal_arrangement: spacing,
+                ..LazyRowSpec::default()
+            };
+            LazyRow(fill, state.list, row, pages);
         } else {
-            LazyColumn(fill, state.list, LazyColumnSpec::default(), pages);
+            let column = LazyColumnSpec {
+                vertical_arrangement: spacing,
+                ..LazyColumnSpec::default()
+            };
+            LazyColumn(fill, state.list, column, pages);
         }
     });
 }
