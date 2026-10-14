@@ -25,8 +25,8 @@ only on failure, the GLSL templates, the GL link reads, the WebGL extensions,
 the GL varying minimum and the first Metal drawables of a window not shown
 yet below, and `cranpose-wgpu-core` is at 30.0.15 to require it, to make
 template modules and to configure a surface while another thread submits.
-`cranpose-wgpu` is at 30.0.17 for the WebGPU pipeline discovery and the
-background compiles below and to require them.
+`cranpose-wgpu` is at 30.0.18 for the WebGPU pipeline discovery, the
+background compiles and the pipeline readiness below and to require them.
 
 | fork | upstream |
 | --- | --- |
@@ -342,6 +342,12 @@ it, as a pipeline discovery leaves them out, and from then on it draws.
 created since the last call, which a renderer awaits to drop what it drew
 without them and draw again. Cranpose's web shell turns it on after the
 first frame, whose pipelines discovery compiles.
+
+`RenderPipeline::is_ready` tells whether a pipeline's draws draw: `false`
+while the browser compiles it in the background and for one pipeline
+discovery created, `true` on every other backend. Cranpose's renderer draws
+with a general pipeline that already compiled until a specialized one is
+ready.
 
 ### A surface configures while another thread submits
 

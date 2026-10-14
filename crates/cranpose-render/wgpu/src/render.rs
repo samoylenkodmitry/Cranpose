@@ -1408,6 +1408,16 @@ impl ShapeVariant {
         .clipped_by(self.clip)
     }
 
+    /// The general variant with every kind, lines and path slices too.
+    fn universal(self) -> Self {
+        Self {
+            kinds: ALL_SHAPE_KINDS,
+            ablation: self.ablation,
+            ..Self::GENERAL
+        }
+        .clipped_by(self.clip)
+    }
+
     /// The variant, keeping the rounded clip `clip` names: the general
     /// variant tests every rect clip, but no fallback may drop a rounding.
     fn clipped_by(self, clip: SegmentClip) -> Self {
@@ -1787,6 +1797,18 @@ impl ShapePipelineKey {
         Self {
             tier: RunTier::Either,
             variant: self.variant.general(),
+            ..self
+        }
+    }
+
+    /// The one pipeline that draws every key with this one's blend, depth
+    /// and clip rounding: every kind, records turned or not, from either
+    /// tier.
+    pub(crate) fn universal(self) -> Self {
+        Self {
+            tier: RunTier::Either,
+            variant: self.variant.universal(),
+            turns: ShapeTurns::Mixed,
             ..self
         }
     }
@@ -4760,6 +4782,12 @@ impl GpuRenderer {
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn background_pipelines_landed(&mut self) {
         self.drop_kept_drawing();
+    }
+
+    /// See [`crate::WgpuRenderer::compile_pipelines_in_background`].
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn compile_pipelines_in_background(&mut self) {
+        self.shape_pipelines.build_in_background();
     }
 
     /// Drops the layers and the blurred shadows earlier frames drew and kept.

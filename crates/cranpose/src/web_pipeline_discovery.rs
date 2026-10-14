@@ -165,6 +165,8 @@ impl PipelineDiscovery {
         };
         if matches!(*stage, Stage::Discovering | Stage::Redrawing { .. }) {
             renderer.begin_discovery_frame();
+        } else if matches!(*stage, Stage::Done) {
+            renderer.compile_pipelines_in_background();
         }
         if self.landed.take() {
             renderer.background_pipelines_landed();
