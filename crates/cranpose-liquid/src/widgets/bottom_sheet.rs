@@ -8,9 +8,10 @@ use std::{
 
 use cranpose_animation::{Animatable, AnimationSpec, AnimationType, Easing};
 use cranpose_core::{
-    DisposableEffect, RuntimeHandle, internal::FrameCallbackRegistration, remember,
+    DisposableEffect, MutableState, RuntimeHandle, internal::FrameCallbackRegistration, remember,
     with_current_composer,
 };
+use cranpose_foundation::SemanticsExpand;
 use cranpose_macros::composable;
 use cranpose_ui::{
     Alignment, GraphicsLayer, HorizontalAlignment, Modifier, NestedScroll, NestedScrollConnection,
@@ -31,6 +32,8 @@ const MOTION_MS: u64 = 300;
 /// A release faster than this, in dp per second, opens or closes the sheet
 /// wherever it is.
 const FLING_VELOCITY: f32 = 800.0;
+/// How close to a rest the sheet counts as there.
+const GONE: f32 = 0.01;
 /// The space a tall sheet leaves above it.
 const TOP_GAP: f32 = 48.0;
 const MAX_WIDTH: f32 = 640.0;
@@ -63,42 +66,78 @@ impl LiquidSheetState {
     pub fn hide(&self) {
         self.0.hide();
     }
+
+    /// Opens the sheet to its full height.
+    pub fn expand(&self) {
+        self.0.settle_to(1.0);
+    }
+
+    /// Lowers the sheet to half the window, when its content is taller than
+    /// that and the state does not skip the partly open sheet. Answers
+    /// whether it could.
+    pub fn partial_expand(&self) -> bool {
+        self.0
+            .partial()
+            .map(|partial| self.0.settle_to(partial))
+            .is_some()
+    }
+
+    /// Whether the sheet is at, or on its way to, its full height. A
+    /// composable that reads it recomposes when that changes.
+    pub fn is_expanded(&self) -> bool {
+        self.0.expanded.get()
+    }
 }
 
-/// Remembers the state of one sheet.
+/// Remembers the state of one sheet. A sheet whose content is taller than
+/// half the window opens to half the window, and a drag opens it fully,
+/// unless `skip_partially_expanded` is set. Compose's
+/// `rememberModalBottomSheetState(skipPartiallyExpanded)`.
 #[composable]
-pub fn rememberLiquidSheetState() -> LiquidSheetState {
+pub fn rememberLiquidSheetState(skip_partially_expanded: bool) -> LiquidSheetState {
     with_current_composer(|composer| {
         let runtime = composer.runtime_handle();
         composer
-            .remember(move || LiquidSheetState(Rc::new(Sheet::new(runtime))))
+            .remember(move || {
+                LiquidSheetState(Rc::new(Sheet::new(runtime, skip_partially_expanded)))
+            })
             .with(Clone::clone)
     })
 }
 
 struct Sheet {
     runtime: RuntimeHandle,
-    /// How far the sheet is in the window: `0.0` below it, `1.0` at rest.
+    /// How far the sheet is in the window: `0.0` below it, `1.0` at its full
+    /// height.
     shown: RefCell<Animatable<f32>>,
     /// The sheet's bounds from its last layout.
     bounds: Rc<Cell<Rect>>,
+    /// The window's height from the last composition.
+    window_height: Cell<f32>,
+    skip_partial: bool,
+    /// Whether the sheet rests, or goes, at its full height.
+    expanded: MutableState<bool>,
     /// The current drag moved the sheet.
     dragged: Cell<bool>,
     hiding: Cell<bool>,
     on_dismiss: RefCell<Rc<dyn Fn()>>,
-    hidden_watcher: RefCell<Option<FrameCallbackRegistration>>,
+    /// Waits for the first layout, or for the end of the slide out.
+    watcher: RefCell<Option<FrameCallbackRegistration>>,
 }
 
 impl Sheet {
-    fn new(runtime: RuntimeHandle) -> Self {
+    fn new(runtime: RuntimeHandle, skip_partial: bool) -> Self {
         Self {
             shown: RefCell::new(Animatable::new(0.0, runtime.clone())),
+            expanded: MutableState::with_runtime(false, runtime.clone()),
             runtime,
             bounds: Rc::new(Cell::new(Rect::EMPTY)),
+            window_height: Cell::new(0.0),
+            skip_partial,
             dragged: Cell::new(false),
             hiding: Cell::new(false),
             on_dismiss: RefCell::new(Rc::new(|| {})),
-            hidden_watcher: RefCell::new(None),
+            watcher: RefCell::new(None),
         }
     }
 
@@ -106,16 +145,45 @@ impl Sheet {
         self.shown.borrow().state().value()
     }
 
-    fn open(&self) {
+    /// Where the partly open sheet rests: half the window, when the sheet is
+    /// taller than that.
+    fn partial(&self) -> Option<f32> {
+        let height = self.bounds.get().height;
+        let half = self.window_height.get() * 0.5;
+        (!self.skip_partial && height > half && half > 0.0).then(|| half / height)
+    }
+
+    /// Slides the sheet to `shown` of its height.
+    fn settle_to(&self, shown: f32) {
         self.hiding.set(false);
-        self.shown.borrow_mut().animateTo(1.0, sheet_motion());
+        self.expanded.set(shown >= 1.0);
+        self.shown.borrow_mut().animateTo(shown, sheet_motion());
+    }
+
+    /// Opens the sheet partly, or fully when it is short, once its first
+    /// layout gives its height.
+    fn open(self: &Rc<Self>) {
+        self.hiding.set(false);
+        if self.bounds.get().height > 0.0 {
+            self.settle_to(self.partial().unwrap_or(1.0));
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        let registration = self.runtime.frame_clock().with_frame_nanos(move |_| {
+            if let Some(sheet) = weak.upgrade() {
+                sheet.watcher.borrow_mut().take();
+                sheet.open();
+            }
+        });
+        *self.watcher.borrow_mut() = Some(registration);
     }
 
     /// Puts the sheet back below the window, for the next time it opens.
     fn reset(&self) {
-        self.hidden_watcher.borrow_mut().take();
+        self.watcher.borrow_mut().take();
         self.hiding.set(false);
         self.dragged.set(false);
+        self.expanded.set(false);
         self.shown.borrow_mut().snapTo(0.0);
     }
 
@@ -137,18 +205,30 @@ impl Sheet {
         moved
     }
 
-    /// Closes a sheet released fast downward or below its middle, and opens
-    /// it again otherwise. Returns whether the drag moved the sheet.
+    /// Brings a released sheet to rest: a fast release goes to the next
+    /// rest the way it went, a slow one to the nearest, and a rest below the
+    /// lowest open one closes the sheet. Returns whether the drag moved the
+    /// sheet.
     fn release(self: &Rc<Self>, velocity: f32) -> bool {
         if !self.dragged.replace(false) {
             return false;
         }
-        let closes =
-            velocity > FLING_VELOCITY || (velocity > -FLING_VELOCITY && self.shown() < 0.5);
-        if closes {
-            self.hide();
+        let shown = self.shown();
+        let partial = self.partial();
+        let rest = if velocity > FLING_VELOCITY {
+            partial.filter(|partial| shown > partial + GONE)
+        } else if velocity < -FLING_VELOCITY {
+            Some(1.0)
         } else {
-            self.open();
+            [Some(0.0), partial, Some(1.0)]
+                .into_iter()
+                .flatten()
+                .min_by(|a, b| (a - shown).abs().total_cmp(&(b - shown).abs()))
+                .filter(|rest| *rest > 0.0)
+        };
+        match rest {
+            Some(rest) => self.settle_to(rest),
+            None => self.hide(),
         }
         true
     }
@@ -157,6 +237,7 @@ impl Sheet {
         if self.hiding.replace(true) {
             return;
         }
+        self.expanded.set(false);
         self.shown.borrow_mut().animateTo(0.0, sheet_motion());
         watch_hidden(self);
     }
@@ -169,7 +250,7 @@ fn watch_hidden(sheet: &Rc<Sheet>) {
         let Some(sheet) = weak.upgrade() else {
             return;
         };
-        sheet.hidden_watcher.borrow_mut().take();
+        sheet.watcher.borrow_mut().take();
         if !sheet.hiding.get() {
             return;
         }
@@ -180,7 +261,7 @@ fn watch_hidden(sheet: &Rc<Sheet>) {
         let on_dismiss = Rc::clone(&sheet.on_dismiss.borrow());
         on_dismiss();
     });
-    *sheet.hidden_watcher.borrow_mut() = Some(registration);
+    *sheet.watcher.borrow_mut() = Some(registration);
 }
 
 /// A list in the sheet scrolls as long as it can; what it leaves of a
@@ -218,13 +299,41 @@ impl NestedScrollConnection for SheetConnection {
     }
 }
 
+/// A reader opens a partly open sheet and lowers an open one.
+fn sheet_actions(
+    sheet: Rc<Sheet>,
+    expanded: bool,
+    can_lower: bool,
+) -> impl Fn(&mut cranpose_ui::SemanticsConfiguration) {
+    move |config| {
+        let (opens, lowers) = (Rc::clone(&sheet), Rc::clone(&sheet));
+        config.expand = (!expanded).then(|| {
+            SemanticsExpand::new(move || {
+                opens.settle_to(1.0);
+                true
+            })
+        });
+        config.collapse = can_lower.then(|| {
+            SemanticsExpand::new(move || {
+                lowers
+                    .partial()
+                    .map(|partial| lowers.settle_to(partial))
+                    .is_some()
+            })
+        });
+    }
+}
+
 /// A modal sheet holding `content` at the bottom of the window.
 ///
 /// Show it while the app's flag is set, and clear the flag in `on_dismiss`.
-/// The sheet slides up when it is composed; a drag down, a tap on the scrim
-/// around it, the back gesture and `state.hide()` slide it out and then call
-/// `on_dismiss`. A scrolling list in the sheet hands the sheet the drag it
-/// leaves at its top.
+/// The sheet slides up when it is composed, to half the window when its
+/// content is taller than that (see [`rememberLiquidSheetState`]); a drag
+/// moves it between that and its full height, and readers get expand and
+/// collapse actions. A drag down, a tap on the scrim around it, the back
+/// gesture and `state.hide()` slide it out and then call `on_dismiss`. A
+/// scrolling list in the sheet hands the sheet the drag it leaves at its
+/// top.
 ///
 /// Compose's `ModalBottomSheet(onDismissRequest, sheetState)`.
 #[composable]
@@ -250,6 +359,9 @@ pub fn LiquidModalBottomSheet(
     // The sheet's own surface moves it through the connection, as a list does.
     let surface_drag = remember(|| ScrollableState::new(|_| 0.0)).with(Clone::clone);
     let viewport = local_popup_viewport().current().get();
+    sheet.window_height.set(viewport.height);
+    let expanded = sheet.expanded.get();
+    let can_lower = expanded && !sheet.skip_partial;
     let insets = window_insets().combined();
     let max_height = (viewport.height - insets.top - TOP_GAP).max(0.0);
     let surface = liquid_colors().surface;
@@ -289,6 +401,7 @@ pub fn LiquidModalBottomSheet(
                         }
                     })
                     .scrollable(Axis::Vertical, surface_drag)
+                    .semantics(sheet_actions(Rc::clone(&sheet), expanded, can_lower))
                     .draw_behind(move |scope| {
                         scope.draw_round_rect(
                             Brush::solid(surface),

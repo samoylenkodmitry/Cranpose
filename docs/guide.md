@@ -3546,15 +3546,17 @@ lazy lists take part.
 
 Show a sheet over the screen from its bottom edge, as Compose's
 `ModalBottomSheet` does. Compose it while the app's flag is set and clear the
-flag in `on_dismiss`. A drag down, a tap on the scrim, the back gesture and
-`state.hide()` slide the sheet out first. A list in the sheet scrolls first
-and hands the sheet the drag it leaves at its top.
+flag in `on_dismiss`. A sheet taller than half the window opens to half the
+window, and a drag opens it fully; `rememberLiquidSheetState(true)` skips the
+half. A drag down, a tap on the scrim, the back gesture and `state.hide()`
+slide the sheet out first. A list in the sheet scrolls first and hands the
+sheet the drag it leaves at its top.
 
 ```rust preview=bottom_sheet
 use cranpose::liquid::prelude::*;
 
 let open = rememberMutableStateOf(|| false);
-let sheet = rememberLiquidSheetState();
+let sheet = rememberLiquidSheetState(false);
 LiquidActionChip(Modifier::empty(), true, move || open.set(true), "Share".into());
 if open.get() {
     let done = sheet.clone();
