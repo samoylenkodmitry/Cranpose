@@ -1,0 +1,110 @@
+name: Runtime matrix
+
+# The supported platforms run here, not only compile (docs/platform_support.md).
+# Each job starts the real app on that platform and drives it through its
+# input, focus and accessibility paths. Nightly calls this workflow, so a
+# failure here is a red nightly; dispatch it to check one tree by hand.
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [claude/runtime-matrix]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  # The release web demo in Chromium and Firefox on Linux. The Chromium
+  # checks cover focus, the accessibility mirror and native composition;
+  # Firefox runs the shared WebDriver keyboard checks. Chrome's WebGPU and
+  # WebGL2 page checks already run on every push (rust.yml).
+  web:
+    name: web demo in Chromium and Firefox (linux)
+    runs-on: [self-hosted, Linux, cranpose-heavy]
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Provision toolchain
+        id: provision
+        run: |
+          scripts/ci/provision_toolchain.sh
+          scripts/ci/rustup_locked.sh target add wasm32-unknown-unknown
+          command -v wasm-pack >/dev/null || cargo install wasm-pack --version 0.15.0 --locked
+
+      - name: Build and package the web demo
+        run: |
+          just web
+          apps/desktop-demo/package-web.sh "$RUNNER_TEMP/site"
+
+      - name: Keep the packaged site for the Safari job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-web-site
+          path: ${{ runner.temp }}/site
+          retention-days: 1
+
+      - name: Chromium focus, accessibility and composition
+        run: just robot-accessibility-web "$RUNNER_TEMP/site" "$RUNNER_TEMP/web-results/chromium"
+
+      - name: Firefox keyboard checks
+        if: ${{ !cancelled() }}
+        run: xvfb-run -a just test-web-ime firefox "$RUNNER_TEMP/site" "$RUNNER_TEMP/web-results/firefox"
+
+      - name: Keep the browser reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-web-results
+          path: ${{ runner.temp }}/web-results
+          if-no-files-found: ignore
+
+  safari:
+    name: web demo in Safari (macOS)
+    needs: web
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: runtime-web-site
+          path: ${{ runner.temp }}/site
+      - name: Safari keyboard checks
+        run: |
+          sudo safaridriver --enable
+          bash scripts/a11y/run_webdriver.sh safari "$RUNNER_TEMP/site" "$RUNNER_TEMP/safari"
+      - name: Keep the Safari report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-safari
+          path: ${{ runner.temp }}/safari
+          if-no-files-found: ignore
+
+  # A native Windows desktop session: UI Automation reads the demo's
+  # accessibility tree, and the floating inspector robot runs on Windows.
+  windows:
+    name: desktop demo and inspector (Windows)
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Provision just
+        run: cargo install just --locked
+      - name: Native Windows accessibility and inspector robots
+        run: just test-windows-accessibility
+      - name: Keep Windows robot evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-windows
+          path: target/windows-accessibility
+          if-no-files-found: error

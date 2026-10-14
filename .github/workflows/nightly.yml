@@ -201,3 +201,11 @@ jobs:
           name: esp32-qemu-panel
           path: target/esp32/qemu.png
           if-no-files-found: ignore
+
+  # The supported platforms running the app, not only building it: browsers,
+  # Windows and the phones (docs/platform_support.md).
+  runtime-matrix:
+    name: runtime matrix
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
+    uses: ./.github/workflows/runtime-matrix.yml

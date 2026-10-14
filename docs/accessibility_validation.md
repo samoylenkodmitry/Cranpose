@@ -54,10 +54,10 @@ Robot drivers default to disabled to preserve application pictures and input.
 `AppLauncher::with_developer_inspector(bool)` overrides these defaults in either
 builder order.
 
-The **build one** workflow accepts target **windows-accessibility**.
-It runs `just test-windows-accessibility` on a hosted Windows desktop, checks native
-UI Automation actions, and exercises the floating inspector through the robot.
-The `windows-accessibility` artifact retains native reports and inspector pictures.
+The [runtime matrix](../.github/workflows/runtime-matrix.yml) runs
+`just test-windows-accessibility` on a hosted Windows desktop every night, checks
+native UI Automation actions, and exercises the floating inspector through the robot.
+The `runtime-windows` artifact retains native reports and inspector pictures.
 
 Run the inspector end-to-end robot with:
 
