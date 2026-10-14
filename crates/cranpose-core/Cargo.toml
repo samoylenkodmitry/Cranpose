@@ -1,6 +1,7 @@
 [package]
 name = "cranpose-core"
 version.workspace = true
+rust-version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -51,7 +52,7 @@ stats_alloc = "0.1.10"
 # at the default quality of service wakes milliseconds late on macOS.
 dispatch2 = "0.3"
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 # `delay` hands its deadline to the browser's own timer rather than spinning a

@@ -824,6 +824,15 @@ impl Modifier {
         self.stable_semantics(move |config| config.content_description = Some(description.clone()))
     }
 
+    /// Names this component for tests, which find it by the name instead of
+    /// its text or position. Screen readers never receive the name.
+    ///
+    /// This is Compose's `Modifier.testTag(tag)`.
+    pub fn test_tag(self, tag: impl Into<String>) -> Self {
+        let tag = tag.into();
+        self.stable_semantics(move |config| config.test_tag = Some(tag.clone()))
+    }
+
     /// Makes this component focusable.
     ///
     /// This adds a focus target node that can receive focus and participate

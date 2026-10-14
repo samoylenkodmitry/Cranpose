@@ -15,7 +15,7 @@ fn test_renderer() -> (std::sync::MutexGuard<'static, ()>, GpuRenderer) {
         adapter_downlevel: wgpu::DownlevelFlags::empty(),
         text_fonts: SoftwareTextFontSet::empty(),
         renderer_epoch: 0,
-        pipeline_compilation: PipelineCompilation::Background,
+        pipeline_compilation: PipelineCompilation::Inline,
         on_device_lost: None,
     });
     (lock, renderer)

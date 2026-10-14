@@ -1666,6 +1666,19 @@ hit area. Run the test by file name:
 cargo test --test composition
 ```
 
+### Find a node by a test tag
+
+Text changes with copy edits and translations. `Modifier::test_tag` gives a node
+a name for tests, as Compose's `testTag` does; screen readers never receive it.
+
+```rust
+Text("Pay now", Modifier::empty().test_tag("checkout"), TextStyle::default());
+```
+
+`PlacedSemanticsNode::find_by_tag("checkout")` finds the node in
+`placed_semantics`, the headless robot's `find_by_tag("checkout")` clicks or
+measures it, and the desktop robot's `click_by_tag("checkout")` taps it.
+
 ### Check a state update
 
 Add this test to `tests/composition.rs`. `with_runtime` binds the state handle to
@@ -4371,3 +4384,9 @@ These are the APIs the engine crates build on:
   composition the newest frame. Neither side waits for the other.
 - `GuestView` draws a composition into a texture on someone else's device,
   for a HUD over your renderer's frame.
+
+A guest view also builds for `wasm32-unknown-emscripten`, the target of an
+engine's web export such as Godot's. There Cranpose uses no wasm-bindgen and
+draws with wgpu's GL backend on the WebGL2 context the engine made current.
+The target needs a nightly toolchain with `rust-src`; `just check-emscripten`
+type-checks it and `just test-emscripten` runs its own paths in Node.

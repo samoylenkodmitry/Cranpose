@@ -948,19 +948,33 @@ pub fn capture_graph(
 }
 
 /// The statistics of the frame drawing `graph`, and what it waited for:
-/// pipelines built on the frame thread, and effects drawn as placeholders
-/// while theirs compiled. No waits means all it drew was built before it.
+/// pipelines built on the frame thread, effects drawn as placeholders and
+/// shapes drawn with a stand-in while theirs compiled. No waits means all it
+/// drew was built before it.
 pub fn capture_waits(
     renderer: &mut LockedRenderer,
     graph: RenderGraph,
     width: u32,
     height: u32,
 ) -> (RenderStatsSnapshot, u64) {
+    let (_, stats, waits) = capture_with_waits(renderer, graph, width, height);
+    (stats, waits)
+}
+
+/// [`capture_waits`] with the frame.
+pub fn capture_with_waits(
+    renderer: &mut LockedRenderer,
+    graph: RenderGraph,
+    width: u32,
+    height: u32,
+) -> (CapturedFrame, RenderStatsSnapshot, u64) {
     let before = cranpose_render_wgpu::pipelines_created();
-    capture_graph(renderer, graph, width, height);
+    let frame = capture_graph(renderer, graph, width, height);
     let stats = renderer.last_frame_stats().expect("frame statistics");
     let built = cranpose_render_wgpu::pipelines_created() - before;
-    (stats, built + u64::from(stats.placeholder_draws))
+    let waits =
+        built + u64::from(stats.placeholder_draws) + u64::from(stats.shape_pipeline_fallback_draws);
+    (frame, stats, waits)
 }
 
 /// The first frame of `graph` that draws no placeholder: every effect in it

@@ -2,6 +2,7 @@
 name = "coroflow"
 description = "Kotlin-style coroutines and Flow for Rust, independent of any async runtime"
 version.workspace = true
+rust-version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -18,7 +19,7 @@ log = "0.4"
 thiserror = "2"
 web-time = { workspace = true }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["Window"] }

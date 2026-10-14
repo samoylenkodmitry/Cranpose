@@ -2,6 +2,7 @@
 name = "cranpose-coroflow"
 description = "Runs coroflow coroutines, flows and view models inside Cranpose compositions"
 version.workspace = true
+rust-version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

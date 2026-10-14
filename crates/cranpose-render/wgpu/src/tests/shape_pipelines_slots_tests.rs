@@ -5,11 +5,11 @@ use std::sync::{
 };
 
 use cranpose_ui_graphics::BlendMode;
-use web_time::{Duration, Instant};
+use web_time::Duration;
 
 use super::{KeyedBuild, Slots};
 use crate::{
-    pipeline_compiler::PipelineCompiler,
+    pipeline_compiler::{CompileLane, PipelineCompiler},
     render::{RunTier, ShapePipelineKey},
 };
 
@@ -103,79 +103,14 @@ fn an_inactive_compiler_warms_nothing_and_draws_build_where_they_ask() {
 }
 
 #[test]
-fn a_draw_can_start_its_pipeline_ahead_of_unrelated_warm_ups() {
-    let (builder, gate) = gated();
-    let mut slots = Slots::new(&PipelineCompiler::spawn(wgpu::Backend::Vulkan), builder);
-    let background = key(BlendMode::DstOut);
-    let drawn = key(BlendMode::SrcOver);
-    slots.warm(background);
-    assert_eq!(
-        gate.started.recv_timeout(Duration::from_secs(2)),
-        Ok(background)
-    );
-    slots.warm(drawn);
-    slots.want(drawn, 4);
-    slots.request_wanted();
-    assert_eq!(
-        gate.started.recv_timeout(Duration::from_secs(2)),
-        Ok(drawn),
-        "a draw must not wait behind an unrelated warm-up"
-    );
-    for _ in 0..2 {
-        assert!(gate.release.send(()).is_ok());
-    }
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while slots.get(background).is_none() || slots.get(drawn).is_none() {
-        assert!(Instant::now() < deadline, "pipelines did not finish");
-        std::thread::yield_now();
-    }
-    assert_eq!(gate.builds.load(Ordering::SeqCst), 2, "each compiled once");
-}
-
-#[test]
-fn a_frame_queues_two_of_its_wants_and_the_rest_wait_for_the_next_frame() {
-    let (builder, gate) = gated();
-    let mut slots = Slots::new(&PipelineCompiler::spawn(wgpu::Backend::Vulkan), builder);
-    let first = key(BlendMode::SrcOver);
-    let second = key(BlendMode::DstOut);
-    let third = key(BlendMode::Plus);
-    slots.want(first, 300);
-    slots.want(second, 40);
-    slots.want(third, 4);
-    slots.request_wanted();
-    for (built, why) in [
-        (first, "the heaviest want builds first"),
-        (second, "a second build waits behind the first"),
-    ] {
-        assert_eq!(
-            gate.started.recv_timeout(Duration::from_secs(2)),
-            Ok(built),
-            "{why}"
-        );
-        assert!(gate.release.send(()).is_ok());
-    }
-    assert!(
-        gate.started
-            .recv_timeout(Duration::from_millis(200))
-            .is_err(),
-        "a third waits for the next frame"
-    );
-    slots.begin_frame();
-    slots.want(third, 4);
-    slots.request_wanted();
-    assert_eq!(gate.started.recv_timeout(Duration::from_secs(2)), Ok(third));
-    assert!(gate.release.send(()).is_ok());
-}
-
-#[test]
 fn dropping_the_slots_cancels_the_queued_build() {
     let (builder, gate) = gated();
     let shared = PipelineCompiler::spawn(wgpu::Backend::Vulkan);
     let mut slots = Slots::new(&shared, builder);
     let first = key(BlendMode::SrcOver);
-    slots.want(first, 300);
-    slots.want(key(BlendMode::DstOut), 40);
-    slots.request_wanted();
+    // One thread takes the demanded lane, so the second waits for the first.
+    slots.warm_on(first, CompileLane::Demanded);
+    slots.warm_on(key(BlendMode::DstOut), CompileLane::Demanded);
     assert_eq!(gate.started.recv_timeout(Duration::from_secs(2)), Ok(first));
     drop(slots);
     assert!(gate.release.send(()).is_ok());
@@ -186,114 +121,4 @@ fn dropping_the_slots_cancels_the_queued_build() {
         "nothing more starts once the slots are gone"
     );
     assert_eq!(gate.builds.load(Ordering::SeqCst), 1);
-}
-
-#[test]
-fn a_frames_heaviest_wanted_pipeline_builds_first() {
-    let (builder, gate) = gated();
-    let mut slots = Slots::new(&PipelineCompiler::spawn(wgpu::Backend::Vulkan), builder);
-    let light = key(BlendMode::DstOut);
-    let heavy = key(BlendMode::SrcIn);
-    let middle = key(BlendMode::Dst);
-    slots.want(light, 40);
-    slots.want(heavy, 30_000);
-    slots.want(middle, 300);
-    slots.want(heavy, 30_000);
-    slots.request_wanted();
-    assert_eq!(
-        gate.started.recv_timeout(Duration::from_secs(2)),
-        Ok(heavy),
-        "the draws with the most vertices are built first"
-    );
-    assert!(
-        gate.started
-            .recv_timeout(Duration::from_millis(200))
-            .is_err(),
-        "one build at a time"
-    );
-    let _ = gate.release.send(());
-    assert_eq!(
-        gate.started.recv_timeout(Duration::from_secs(2)),
-        Ok(middle),
-        "the next build takes the heavier of what is still wanted"
-    );
-    let _ = gate.release.send(());
-}
-
-#[test]
-fn a_heavier_pipeline_wanted_while_another_builds_goes_before_lighter_earlier_ones() {
-    let (builder, gate) = gated();
-    let mut slots = Slots::new(&PipelineCompiler::spawn(wgpu::Backend::Vulkan), builder);
-    let first = key(BlendMode::DstOut);
-    let earlier = key(BlendMode::Dst);
-    let heavier = key(BlendMode::SrcIn);
-    slots.want(first, 40);
-    slots.request_wanted();
-    assert_eq!(gate.started.recv_timeout(Duration::from_secs(2)), Ok(first));
-    for frame in [
-        &[(first, 40), (earlier, 40)][..],
-        &[(first, 40), (earlier, 40), (heavier, 30_000)],
-    ] {
-        slots.begin_frame();
-        for &(wanted, vertices) in frame {
-            slots.want(wanted, vertices);
-        }
-        slots.request_wanted();
-    }
-    let _ = gate.release.send(());
-    assert_eq!(
-        gate.started.recv_timeout(Duration::from_secs(2)),
-        Ok(heavier),
-        "a key wanted earlier but lighter waits for the heavier one"
-    );
-    let _ = gate.release.send(());
-}
-
-#[test]
-fn a_frame_that_ended_before_queuing_its_wants_leaves_none_for_the_next() {
-    let (builder, gate) = gated();
-    let mut slots = Slots::new(&PipelineCompiler::spawn(wgpu::Backend::Vulkan), builder);
-    let stale = key(BlendMode::DstOut);
-    let current = key(BlendMode::SrcIn);
-    slots.want(stale, 1_000_000);
-    slots.begin_frame();
-    slots.want(current, 40);
-    slots.request_wanted();
-    assert_eq!(
-        gate.started.recv_timeout(Duration::from_secs(2)),
-        Ok(current),
-        "the current frame's want is built"
-    );
-    let _ = gate.release.send(());
-    assert!(
-        gate.started
-            .recv_timeout(Duration::from_millis(200))
-            .is_err(),
-        "the unqueued want of the frame that ended is not built"
-    );
-}
-
-#[test]
-fn a_key_the_latest_frame_no_longer_wants_is_not_built() {
-    let (builder, gate) = gated();
-    let mut slots = Slots::new(&PipelineCompiler::spawn(wgpu::Backend::Vulkan), builder);
-    let building = key(BlendMode::SrcIn);
-    let dropped = key(BlendMode::DstOut);
-    slots.want(building, 300);
-    slots.want(dropped, 40);
-    slots.request_wanted();
-    assert_eq!(
-        gate.started.recv_timeout(Duration::from_secs(2)),
-        Ok(building)
-    );
-    slots.begin_frame();
-    slots.request_wanted();
-    let _ = gate.release.send(());
-    assert!(
-        gate.started
-            .recv_timeout(Duration::from_millis(200))
-            .is_err(),
-        "the key no frame wants any more stays unbuilt"
-    );
-    assert_eq!(slots.get(dropped), None);
 }

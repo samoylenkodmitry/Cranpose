@@ -6,7 +6,7 @@ use cranpose_render_common::{graph::DrawCommandId, style_shared::apply_layer_to_
 use cranpose_ui_graphics::{
     ARC_BUCKETS, BrushRecord, Color, FRAGMENT_KIND_ARC, GradientStopRecord, GraphicsLayer,
     RecordLane, RecordSegment, RecordTables, Rect, ShapeRecordBody, ShapeRecordCurve,
-    band_class_segments, strip_index_pattern, strip_indices, strip_vertices,
+    band_class_segments, strip_index_pattern, strip_indices,
 };
 
 use crate::{
@@ -167,6 +167,24 @@ pub(crate) fn placement_device_rect(
 }
 
 impl PlacementData {
+    /// How the fallback triangles of a record under this placement land
+    /// and paint (see [`crate::mesh_fallback`]).
+    pub(crate) fn mesh(&self) -> crate::mesh_fallback::MeshPlacement {
+        let flagged = |flag: u32| self.flags & flag != 0;
+        crate::mesh_fallback::MeshPlacement {
+            offset: self.offset,
+            scale: self.root_scale,
+            canonicalize: flagged(PLACEMENT_CANONICALIZE),
+            clip: flagged(PLACEMENT_CLIPPED).then_some(self.clip),
+            turn: flagged(PLACEMENT_TURNED).then_some((self.transform, self.translation)),
+            paint: flagged(PLACEMENT_PAINTED).then(|| crate::mesh_fallback::MeshPaint {
+                alpha: self.alpha,
+                filter: flagged(PLACEMENT_FILTERED)
+                    .then_some((self.color_matrix, self.color_offset)),
+            }),
+        }
+    }
+
     /// The placement data of `placement` at `root_scale`, drawn in place
     /// under `turn`: the identity except for a layer that turns.
     pub(crate) fn of(placement: &Placement, root_scale: f32, turn: SegmentTransform) -> Self {
@@ -1363,10 +1381,6 @@ impl ArenaTables {
     }
 }
 
-pub(crate) fn draw_vertices(records: u32, band_class: u8) -> u64 {
-    u64::from(records) * u64::from(strip_vertices(band_class_segments(band_class)))
-}
-
 /// The GPU home of every run: retained tables per command, and the
 /// per-pass arena chunks small runs are copied into.
 pub(crate) struct RunStore {
@@ -1849,13 +1863,30 @@ impl RunStore {
                 taken += 1;
             }
             if taken > segment_start {
-                pipelines.add(key, draw_vertices(taken - segment_start, band_class));
+                pipelines.add(key);
             }
             if stopped {
                 break;
             }
         }
         taken
+    }
+
+    /// The open, or last closed, arena chunk's tables and placements, which
+    /// its draws' records index into.
+    pub(crate) fn arena_mesh_records(
+        &self,
+    ) -> (crate::mesh_fallback::MeshRecords<'_>, &[PlacementData]) {
+        let staging = &self.arena.staging;
+        (
+            crate::mesh_fallback::MeshRecords {
+                bodies: &staging.bodies,
+                curves: &staging.curves,
+                brushes: &staging.brushes,
+                stops: &staging.stops,
+            },
+            &staging.placements,
+        )
     }
 
     /// Moves the draws the open chunk recorded since it opened or was last

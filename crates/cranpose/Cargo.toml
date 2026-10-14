@@ -1,6 +1,7 @@
 [package]
 name = "cranpose"
 version.workspace = true
+rust-version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -345,7 +346,7 @@ inventory = { version = "0.3.24", optional = true }
 cranpose-macros = { workspace = true }
 sys-locale = { version = "0.3.2", features = ["js"], optional = true }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 console_error_panic_hook = "0.1"
 # Turns the liquid glass material folds on in mobile browsers (`web`).
 cranpose-ui-graphics = { workspace = true }
@@ -359,6 +360,17 @@ wgpu = { workspace = true, optional = true, features = [
     "std",
     "webgpu",
     "webgl",
+    "wgsl",
+    "fragile-send-sync-non-atomic-wasm",
+] }
+
+# Emscripten builds, such as a Godot web export's extension, run on one thread
+# without wasm atomics, like the page, and draw with the GL backend on the
+# WebGL2 context the host made current.
+[target.'cfg(target_os = "emscripten")'.dependencies]
+wgpu = { workspace = true, optional = true, features = [
+    "std",
+    "gles",
     "wgsl",
     "fragile-send-sync-non-atomic-wasm",
 ] }

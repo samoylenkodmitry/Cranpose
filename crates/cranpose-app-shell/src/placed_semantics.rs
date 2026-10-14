@@ -91,6 +91,8 @@ pub struct PlacedSemanticsNode {
     pub pane_title: Option<String>,
     /// Where the app moved the node in the reading order; 0 leaves it be.
     pub traversal_index: f32,
+    /// The name tests find the node by (`Modifier::test_tag`).
+    pub test_tag: Option<String>,
     /// The place of a row among the rows of its list, counted from 1, when
     /// the parent says it is a collection. A reader speaks it, so two rows
     /// with one name are told apart.
@@ -130,6 +132,17 @@ impl PlacedSemanticsNode {
         for child in &self.children {
             child.collect(out);
         }
+    }
+
+    /// The first node in the subtree, self first, that carries `tag`
+    /// (`Modifier::test_tag`).
+    pub fn find_by_tag(&self, tag: &str) -> Option<&PlacedSemanticsNode> {
+        if self.test_tag.as_deref() == Some(tag) {
+            return Some(self);
+        }
+        self.children
+            .iter()
+            .find_map(|child| child.find_by_tag(tag))
     }
 
     /// Every node a tap would do something to.
@@ -272,6 +285,7 @@ fn join(
         hidden: node.hidden,
         pane_title: details.pane_title.clone(),
         traversal_index: node.traversal_index,
+        test_tag: details.test_tag.clone(),
         list_position: None,
         layout_bounds: bounds,
         touch_bounds: touch_bounds.get(&node.node_id).copied(),

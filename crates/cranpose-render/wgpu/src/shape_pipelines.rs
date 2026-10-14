@@ -1,6 +1,6 @@
 use std::sync::{
-    Arc, Mutex, OnceLock, PoisonError,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc, OnceLock,
+    atomic::{AtomicBool, Ordering},
 };
 
 use cranpose_core::collections::map::HashMap;
@@ -57,29 +57,18 @@ impl KeyedBuild for ShapePipelineFactory {
 
 pub(crate) struct ShapePipelines<B: KeyedBuild = ShapePipelineFactory> {
     slots: Slots<B>,
-    /// Whether a draw takes the general pipeline while its specialized one
-    /// builds on the background compiler.
-    asynchronous: bool,
-    /// How many specialized pipelines draws built themselves, by the
-    /// general pipeline that would have stood in for them.
-    exact_builds: HashMap<ShapePipelineKey, u8>,
-    /// Whether draws take the general pipeline until their specialized one
+    /// Whether draws take the universal pipeline until their specialized one
     /// compiled in the background, which they build only once
     /// [`Self::build_in_background`] says the browser compiles there: see
     /// [`Self::ensure`].
     stands_in: bool,
     /// Whether pipelines built now compile in the browser's background.
     background_builds: bool,
+    /// Whether the compiler's threads build every missing pipeline while
+    /// its draws take fallback triangles, instead of the frame building it.
+    draws_when_ready: bool,
     recorder: crate::pipeline_recorder::PipelineRecorder,
 }
-
-/// How many specialized pipelines draws build themselves under one general
-/// pipeline before they build the general to stand in for the rest. A
-/// general compiles about as long as two specialized ones (Mali-G76: 110 to
-/// 131 ms against 32 to 72), so building it first only pays when a third
-/// draws; until then a draw that builds the general waits longer and its own
-/// pipeline still compiles afterwards.
-const EXACT_BUILDS_BEFORE_GENERAL: u8 = 2;
 
 impl<B: KeyedBuild> ShapePipelines<B> {
     /// Pipelines from `factory`. Those `first_screen` names, the ones the
@@ -92,21 +81,15 @@ impl<B: KeyedBuild> ShapePipelines<B> {
         first_screen: impl IntoIterator<Item = ShapePipelineKey>,
         recorder: crate::pipeline_recorder::PipelineRecorder,
     ) -> Self {
-        static ASYNC_SHAPE_PIPELINES: crate::debug_toggles::DebugToggle =
-            crate::debug_toggles::DebugToggle::new("CRANPOSE_ASYNC_SHAPE_PIPELINES");
-        let asynchronous = compiler.is_active()
-            && backend == wgpu::Backend::Vulkan
-            && !ASYNC_SHAPE_PIPELINES.equals("0");
         let mut slots = Slots::new(compiler, factory);
         for key in first_screen {
             slots.warm(key);
         }
         Self {
             slots,
-            asynchronous,
-            exact_builds: HashMap::default(),
             stands_in: backend == wgpu::Backend::BrowserWebGpu,
             background_builds: false,
+            draws_when_ready: compiler.is_active(),
             recorder,
         }
     }
@@ -145,29 +128,11 @@ impl<B: KeyedBuild> ShapePipelines<B> {
         }
     }
 
-    pub(crate) fn request_wanted(&mut self) {
-        if !self.stands_in {
-            self.slots.request_wanted();
-        } else if self.background_builds {
+    /// Builds the specialized pipelines the frame's draws stood in for, once
+    /// the browser compiles them in the background.
+    pub(crate) fn build_wanted(&mut self) {
+        if self.background_builds {
             self.slots.build_wanted();
-        }
-    }
-
-    /// Queues on the warm-up lane the build of every pipeline `demand` names
-    /// that is missing, with the opaque interiors a depth pass lays down
-    /// first. Unless `all`, the first missing one is left out: the pass builds
-    /// that one itself while the compiler's threads build the others, and
-    /// then waits for those instead of building each in turn. A pass that
-    /// draws nothing, to learn its pipelines, queues them all.
-    pub(crate) fn prefetch(&mut self, demand: &PipelineDemand, all: bool) {
-        let mut first_missing = !all;
-        for key in demand
-            .keys()
-            .flat_map(|key| std::iter::once(key).chain(key.interior()))
-        {
-            if self.slots.get(key).is_none() && !std::mem::take(&mut first_missing) {
-                self.slots.warm(key);
-            }
         }
     }
 
@@ -178,7 +143,10 @@ impl<B: KeyedBuild> ShapePipelines<B> {
         self.slots.build(key);
     }
 
-    pub(crate) fn ensure(&mut self, key: ShapePipelineKey, vertices: u64) {
+    /// Readies `key`'s pipeline for a draw. Where the compiler's threads
+    /// run, a missing one is queued and its draws take fallback triangles
+    /// until it lands; elsewhere the frame builds it here.
+    pub(crate) fn ensure(&mut self, key: ShapePipelineKey) {
         let need = self.slots.need(key);
         if need.first {
             self.recorder
@@ -187,8 +155,13 @@ impl<B: KeyedBuild> ShapePipelines<B> {
         if need.ready && (!self.stands_in || self.slots.get(key).is_some_and(B::landed)) {
             return;
         }
+        if self.draws_when_ready {
+            // Behind the frame's image, glyph, shadow and composite
+            // pipelines, which have no fallback.
+            self.slots.warm(key);
+            return;
+        }
         self.recorder.during_demand(|| {
-            let general = key.general();
             // In the browser every specialized pipeline the first screen
             // draws with compiles beside the others before it shows: on an
             // Apple M5 with no Metal shader cached, the gauntlet's five
@@ -198,25 +171,10 @@ impl<B: KeyedBuild> ShapePipelines<B> {
             // in the background.
             if self.stands_in && key != key.universal() {
                 self.slots.build(key.universal());
-                self.slots.want(key, vertices);
+                self.slots.want(key);
                 return;
             }
-            if !self.asynchronous || key == general {
-                self.slots.build(key);
-                return;
-            }
-            let exact_builds = self.exact_builds.entry(general).or_default();
-            // A queued key's own build is under way or next: waiting for it
-            // beats building a general beside it.
-            let stand_in = self.slots.get(general).is_some()
-                || (!need.queued && *exact_builds >= EXACT_BUILDS_BEFORE_GENERAL);
-            if stand_in {
-                self.slots.build(general);
-                self.slots.want(key, vertices);
-            } else {
-                *exact_builds = exact_builds.saturating_add(1);
-                self.slots.build(key);
-            }
+            self.slots.build(key);
         });
     }
 
@@ -235,35 +193,27 @@ impl<B: KeyedBuild> ShapePipelines<B> {
     }
 }
 
-/// The shape pipelines a stretch of draws needs, each with the vertices
-/// its draws run through: a pass gathers them as it batches its runs and
-/// prepares each once before it records its draws, instead of looking every
-/// run's keys up as it goes.
+/// The shape pipelines a stretch of draws needs: a pass gathers them as it
+/// batches its runs and prepares each once before it records its draws,
+/// instead of looking every run's keys up as it goes.
 #[derive(Default)]
-pub(crate) struct PipelineDemand(SmallVec<[(ShapePipelineKey, u64); 8]>);
+pub(crate) struct PipelineDemand(SmallVec<[ShapePipelineKey; 8]>);
 
 impl PipelineDemand {
-    /// Adds `vertices` drawn with `key`.
-    pub(crate) fn add(&mut self, key: ShapePipelineKey, vertices: u64) {
-        match self.0.iter_mut().find(|(wanted, _)| *wanted == key) {
-            Some((_, total)) => *total += vertices,
-            None => self.0.push((key, vertices)),
+    /// Adds `key` unless it is already there.
+    pub(crate) fn add(&mut self, key: ShapePipelineKey) {
+        if !self.0.contains(&key) {
+            self.0.push(key);
         }
     }
 
     /// Each key, in the order it was added.
     pub(crate) fn keys(&self) -> impl Iterator<Item = ShapePipelineKey> + '_ {
-        self.0.iter().map(|(key, _)| *key)
+        self.0.iter().copied()
     }
 
-    /// Forgets every key.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn clear(&mut self) {
-        self.0.clear();
-    }
-
-    /// Each key with its vertices, leaving the demand empty.
-    pub(crate) fn drain(&mut self) -> impl Iterator<Item = (ShapePipelineKey, u64)> + '_ {
+    /// Each key, leaving the demand empty.
+    pub(crate) fn drain(&mut self) -> impl Iterator<Item = ShapePipelineKey> + '_ {
         self.0.drain(..)
     }
 }
@@ -274,7 +224,6 @@ pub(crate) struct Need {
     pub(crate) ready: bool,
     /// No draw needed the key before.
     pub(crate) first: bool,
-    pub(crate) queued: bool,
 }
 
 struct Entry<T> {
@@ -292,44 +241,7 @@ pub(crate) struct Slots<B: KeyedBuild> {
     builder: Arc<B>,
     compiler: PipelineCompiler,
     wanted: PipelineDemand,
-    demand: Arc<Demand<B::Output>>,
-    published: bool,
     stopped: Arc<AtomicBool>,
-}
-
-const DEMANDED_JOBS: usize = 2;
-
-struct Demand<T> {
-    wanted: Mutex<SmallVec<[Wanted<T>; 4]>>,
-    jobs: AtomicUsize,
-}
-
-struct Wanted<T> {
-    key: ShapePipelineKey,
-    vertices: u64,
-    value: Arc<OnceLock<T>>,
-}
-
-impl<T> Demand<T> {
-    fn take_heaviest(&self) -> Option<(ShapePipelineKey, Arc<OnceLock<T>>)> {
-        let mut wanted = self.wanted.lock().unwrap_or_else(PoisonError::into_inner);
-        let heaviest = wanted
-            .iter()
-            .enumerate()
-            .filter(|(_, wanted)| wanted.value.get().is_none())
-            .max_by_key(|(_, wanted)| wanted.vertices)
-            .map(|(index, _)| index)?;
-        let taken = wanted.swap_remove(heaviest);
-        Some((taken.key, taken.value))
-    }
-}
-
-struct DemandedJob<T>(Arc<Demand<T>>);
-
-impl<T> Drop for DemandedJob<T> {
-    fn drop(&mut self) {
-        self.0.jobs.fetch_sub(1, Ordering::AcqRel);
-    }
 }
 
 impl<B: KeyedBuild> Slots<B> {
@@ -339,11 +251,6 @@ impl<B: KeyedBuild> Slots<B> {
             builder: Arc::new(builder),
             compiler: compiler.clone(),
             wanted: PipelineDemand::default(),
-            demand: Arc::new(Demand {
-                wanted: Mutex::new(SmallVec::new()),
-                jobs: AtomicUsize::new(0),
-            }),
-            published: false,
             stopped: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -367,7 +274,6 @@ impl<B: KeyedBuild> Slots<B> {
         Need {
             ready: entry.value.get().is_some(),
             first,
-            queued: entry.queued,
         }
     }
 
@@ -417,13 +323,13 @@ impl<B: KeyedBuild> Slots<B> {
         self.entries.get(&key)?.value.get()
     }
 
-    pub(crate) fn want(&mut self, key: ShapePipelineKey, vertices: u64) {
-        self.wanted.add(key, vertices);
+    pub(crate) fn want(&mut self, key: ShapePipelineKey) {
+        self.wanted.add(key);
     }
 
     /// Builds here every pipeline draws wanted.
     pub(crate) fn build_wanted(&mut self) {
-        for (key, _) in self.wanted.drain() {
+        for key in self.wanted.drain() {
             Self::entry(&mut self.entries, key)
                 .value
                 .get_or_init(|| self.builder.build(key));
@@ -433,51 +339,6 @@ impl<B: KeyedBuild> Slots<B> {
     /// Forgets the wants of a frame that ended before queuing them.
     pub(crate) fn begin_frame(&mut self) {
         self.wanted.0.clear();
-    }
-
-    pub(crate) fn request_wanted(&mut self) {
-        if self.wanted.0.is_empty() && !self.published {
-            return;
-        }
-        let entries = &mut self.entries;
-        let mut published = self
-            .demand
-            .wanted
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        published.clear();
-        for (key, vertices) in self.wanted.drain() {
-            let value = &Self::entry(entries, key).value;
-            if value.get().is_none() {
-                published.push(Wanted {
-                    key,
-                    vertices,
-                    value: Arc::clone(value),
-                });
-            }
-        }
-        let count = published.len();
-        drop(published);
-        self.published = count > 0;
-        let queued = self.demand.jobs.load(Ordering::Acquire);
-        for _ in queued..count.min(DEMANDED_JOBS) {
-            self.queue_demanded();
-        }
-    }
-
-    fn queue_demanded(&self) {
-        self.demand.jobs.fetch_add(1, Ordering::AcqRel);
-        let job = DemandedJob(Arc::clone(&self.demand));
-        let builder = Arc::clone(&self.builder);
-        let stopped = Arc::clone(&self.stopped);
-        self.compiler.enqueue(CompileLane::Demanded, move || {
-            if stopped.load(Ordering::Acquire) {
-                return;
-            }
-            if let Some((key, value)) = job.0.take_heaviest() {
-                value.get_or_init(|| builder.build(key));
-            }
-        });
     }
 }
 

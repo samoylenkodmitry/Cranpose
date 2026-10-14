@@ -345,7 +345,7 @@ impl ShapeRecord {
 
     /// Which coverage program the fragment stage runs for this record.
     pub fn fragment_kind(&self) -> u32 {
-        fragment_kind(self.flags)
+        record_fragment_kind(self.flags)
     }
 
     pub fn stroke(&self) -> Option<Stroke> {
@@ -527,7 +527,7 @@ fn inset_area(width: f32, height: f32, less_width: f32, less_height: f32) -> f32
 /// its rect: a gradient batch tests them per fragment (see
 /// [`band_interior_area`]), and a solid one tests no interior.
 fn interior_repays(body: &ShapeRecordBody, curve: &ShapeRecordCurve) -> bool {
-    if fragment_kind(body.flags) != FRAGMENT_KIND_FILL {
+    if record_fragment_kind(body.flags) != FRAGMENT_KIND_FILL {
         return false;
     }
     let [top_left, top_right, bottom_right, bottom_left] = curve.radii;
@@ -545,14 +545,31 @@ pub const OCCLUDER_MIN_AREA: f32 = 1024.0;
 /// Whether `body` is a solid, opaque fill whose interior, where its
 /// coverage is 1, spans at least [`OCCLUDER_MIN_AREA`].
 pub(crate) fn interior_occludes(body: &ShapeRecordBody, curve: &ShapeRecordCurve) -> bool {
-    if fragment_kind(body.flags) != FRAGMENT_KIND_FILL || body.brush != 0 || body.color[3] < 1.0 {
+    if record_fragment_kind(body.flags) != FRAGMENT_KIND_FILL
+        || body.brush != 0
+        || body.color[3] < 1.0
+    {
         return false;
     }
     let [_, _, width, height] = body.rect;
     fill_interior_area(width, height, curve.radii) >= OCCLUDER_MIN_AREA
 }
 
-fn fragment_kind(flags: u32) -> u32 {
+/// Whether a record whose packed flags are `flags` is an arc that draws
+/// nothing; see [`ShapeRecord::is_degenerate_arc`].
+pub fn record_is_degenerate_arc(flags: u32) -> bool {
+    flags & ARC_DEGENERATE_BIT != 0
+}
+
+/// The cap bits of a line record's packed `flags`: its [`StrokeCap`] by
+/// declaration index, or [`TRAPEZOID_CAP`] for a slice of a path fill.
+pub fn record_cap_bits(flags: u32) -> u32 {
+    (flags >> CAP_SHIFT) & TWO_BITS
+}
+
+/// The fragment kind, one of the `FRAGMENT_KIND_*` constants, of a record
+/// whose packed flags are `flags` ([`ShapeRecordBody::flags`]).
+pub fn record_fragment_kind(flags: u32) -> u32 {
     let kind = (flags >> KIND_SHIFT) & TWO_BITS;
     if kind == RECORD_KIND_ARC {
         FRAGMENT_KIND_ARC
@@ -1399,7 +1416,7 @@ impl ShapeRecorder {
                 0 => 0,
                 index => self.tables.brushes[index as usize - 1].kind,
             };
-        let kind_bit = 1u8 << fragment_kind(body.flags);
+        let kind_bit = 1u8 << record_fragment_kind(body.flags);
         let band_class = band_bucket.unwrap_or(0) as u8;
         body.flags |= u32::from(band_class) << BAND_CLASS_SHIFT;
         let extend =

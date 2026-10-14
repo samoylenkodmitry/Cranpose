@@ -68,10 +68,6 @@ const PROPERTY_BACKED_ENV_VARS: &[(&str, &str)] = &[
         "CRANPOSE_NO_GLASS_SPLIT_SCISSORS",
     ),
     (
-        "debug.cranpose.async_shape_pipelines",
-        "CRANPOSE_ASYNC_SHAPE_PIPELINES",
-    ),
-    (
         "debug.cranpose.update_stage_ms",
         "CRANPOSE_UPDATE_STAGE_TELEMETRY_MS",
     ),

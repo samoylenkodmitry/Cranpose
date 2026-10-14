@@ -10,8 +10,8 @@ use std::{
 
 use cranpose_core::{
     CollectEvents, Composition, EventChannel, MemoryApplier, composer_context::current_composer,
-    derivedStateOf, launchBlocking, location_key, mutableStateOf, remember, rememberCoroutineScope,
-    rememberEventStream,
+    delay, derivedStateOf, launchBlocking, location_key, mutableStateOf, remember,
+    rememberCoroutineScope, rememberEventStream,
 };
 
 fn composition() -> Composition<MemoryApplier> {
@@ -80,6 +80,31 @@ fn a_coroutine_scope_launches_work_onto_the_runtime_and_survives_recomposition()
         pump_until(&mut composition, || ran.get() == 2),
         "the scope delivered {} of two launches",
         ran.get()
+    );
+}
+
+// Under Emscripten no timer thread or browser timer wakes a delay; the host
+// that drains the runtime does.
+#[test]
+fn a_delay_resolves_while_the_host_drains_the_runtime() {
+    let mut composition = composition();
+    let key = location_key(file!(), line!(), column!());
+    let woke = Rc::new(Cell::new(false));
+    let flag = Rc::clone(&woke);
+    composition
+        .render(key, move || {
+            let scope = rememberCoroutineScope();
+            let flag = Rc::clone(&flag);
+            scope.launch(async move {
+                delay(Duration::from_millis(20)).await;
+                flag.set(true);
+            });
+        })
+        .expect("render succeeds");
+
+    assert!(
+        pump_until(&mut composition, || woke.get()),
+        "the delay never resolved"
     );
 }
 

@@ -1,6 +1,7 @@
 [package]
 name = "cranpose-runtime-std"
 version.workspace = true
+rust-version.workspace = true
 edition.workspace = true
 homepage.workspace = true
 authors.workspace = true

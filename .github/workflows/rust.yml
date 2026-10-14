@@ -290,6 +290,12 @@ jobs:
         # that, and only for the exact package/feature set the web demo ships.
         run: just clippy-wasm
 
+      - name: Check and test the Emscripten build
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
+        # Engines' web exports, such as Godot's, load Cranpose as an
+        # Emscripten module, where no wasm-bindgen import may appear.
+        run: just test-emscripten
+
       - name: Build web demo
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
         run: just web

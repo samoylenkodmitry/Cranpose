@@ -1,6 +1,7 @@
 [package]
 name = "cranpose-testing"
 version.workspace = true
+rust-version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -21,10 +22,10 @@ workspace = true
 
 [features]
 default = []
-# Renderer-agnostic robot harness. The consuming application selects the
-# desktop shell and renderer (renderer-wgpu); this
-# only pulls in the shared robot API + assertions.
-desktop-robot = ["cranpose/robot"]
+# The robot harness of the desktop shell. Cranpose's robot needs the desktop
+# shell and the wgpu renderer, so the feature turns them on: without them the
+# crate does not build on its own, as a published crate must.
+desktop-robot = ["cranpose/robot", "cranpose/desktop-shell", "cranpose/renderer-wgpu"]
 
 [dependencies]
 cranpose-core = { workspace = true }

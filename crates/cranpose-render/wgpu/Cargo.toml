@@ -1,6 +1,7 @@
 [package]
 name = "cranpose-render-wgpu"
 version.workspace = true
+rust-version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -114,7 +115,7 @@ wgpu = { workspace = true, features = [
     "naga-ir",
 ] }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 wgpu = { workspace = true, features = [
     "std",
     "webgpu",
@@ -123,6 +124,12 @@ wgpu = { workspace = true, features = [
 ] }
 # The WebGL fallback is always compiled on web, so runtime-shader GL
 # portability validation needs naga's GLSL writer there unconditionally.
+naga = { version = "30.0.1", features = ["wgsl-in", "glsl-out"] }
+
+# Emscripten builds, such as a Godot web export's extension, draw with the GL
+# backend on the WebGL2 context the host made current.
+[target.'cfg(target_os = "emscripten")'.dependencies]
+wgpu = { workspace = true, features = ["std", "gles", "wgsl"] }
 naga = { version = "30.0.1", features = ["wgsl-in", "glsl-out"] }
 
 [build-dependencies]

@@ -1446,6 +1446,9 @@ pub struct SemanticsConfiguration {
     /// smaller number comes first, and nodes left at zero keep the order the
     /// app laid them out in. Compose's `traversalIndex`.
     pub traversal_index: f32,
+    /// A name tests find this node by. Screen readers never receive it.
+    /// Compose's `testTag`.
+    pub test_tag: Option<String>,
     /// Compose's `liveRegion`. When set, a screen reader reads this node again
     /// whenever its text changes, without the user moving to it.
     pub live_region: Option<LiveRegionMode>,
@@ -1520,6 +1523,7 @@ impl Default for SemanticsConfiguration {
             error: None,
             password: false,
             traversal_index: 0.0,
+            test_tag: None,
             live_region: None,
             progress: None,
             set_progress: None,
@@ -1558,6 +1562,13 @@ impl SemanticsConfiguration {
     /// `contentDescription`.
     pub fn content_description(mut self, name: impl Into<String>) -> Self {
         self.content_description = Some(name.into());
+        self
+    }
+
+    /// A name tests find this node by. Screen readers never receive it.
+    /// Compose's `testTag`.
+    pub fn test_tag(mut self, tag: impl Into<String>) -> Self {
+        self.test_tag = Some(tag.into());
         self
     }
 
@@ -1759,6 +1770,9 @@ impl SemanticsConfiguration {
         }
         if let Some(error) = &other.error {
             self.error = Some(error.clone());
+        }
+        if let Some(tag) = &other.test_tag {
+            self.test_tag = Some(tag.clone());
         }
     }
 

@@ -27,15 +27,11 @@ use crate::support::{
 
 const CACHE_FILE: &str = "CRANPOSE_PIPELINE_CACHE_FILE";
 const CACHE_ENABLED: &str = "CRANPOSE_PIPELINE_DISK_CACHE";
-/// These launches count the pipelines their first frame builds itself; a
-/// first frame that learns its pipelines first builds them off the frame.
-const DISCOVERY: &str = "CRANPOSE_FIRST_FRAME_DISCOVERY";
 
 struct CacheFiles {
     root: PathBuf,
     previous_file: Option<OsString>,
     previous_enabled: Option<OsString>,
-    previous_discovery: Option<OsString>,
 }
 
 impl CacheFiles {
@@ -55,10 +51,8 @@ impl CacheFiles {
             root,
             previous_file: debug_toggle_os(CACHE_FILE),
             previous_enabled: debug_toggle_os(CACHE_ENABLED),
-            previous_discovery: debug_toggle_os(DISCOVERY),
         };
         set_debug_toggle_os(CACHE_ENABLED, Some(std::ffi::OsStr::new("1")));
-        set_debug_toggle_os(DISCOVERY, Some(std::ffi::OsStr::new("0")));
         files
     }
 
@@ -73,7 +67,6 @@ impl Drop for CacheFiles {
     fn drop(&mut self) {
         set_debug_toggle_os(CACHE_FILE, self.previous_file.as_deref());
         set_debug_toggle_os(CACHE_ENABLED, self.previous_enabled.as_deref());
-        set_debug_toggle_os(DISCOVERY, self.previous_discovery.as_deref());
         let _ = fs::remove_dir_all(&self.root);
     }
 }
@@ -99,7 +92,6 @@ fn cache_process(test: &str, cache: &Path, environment: &[(&str, &OsStr)]) -> st
         .args(["--exact", test, "--nocapture"])
         .env(CACHE_FILE, cache)
         .env(CACHE_ENABLED, "1")
-        .env(DISCOVERY, "0")
         .envs(environment.iter().copied())
         .output()
         .expect("launch cache lifecycle process");
@@ -247,14 +239,14 @@ fn squares() -> RenderGraph {
     ))
 }
 
-/// Pipelines built on the frame thread while `renderer` draws its first
-/// frame.
-fn first_frame_builds(renderer: &mut support::LockedRenderer) -> u64 {
-    renderer.scene_mut().graph = Some(squares());
-    let before = pipelines_created();
-    let frame = renderer.capture_frame(16, 16).expect("first frame");
-    assert!(frame.pixels.as_chunks::<4>().0.contains(&[255; 4]));
-    pipelines_created() - before
+/// What `renderer`'s first frame waited for (see [`support::capture_waits`]);
+/// a frame that waited for nothing shows its squares.
+fn first_frame_waits(renderer: &mut support::LockedRenderer) -> u64 {
+    let (frame, _, waits) = support::capture_with_waits(renderer, squares(), 16, 16);
+    if waits == 0 {
+        assert!(frame.pixels.as_chunks::<4>().0.contains(&[255; 4]));
+    }
+    waits
 }
 
 /// Waits for the background compiler to fall quiet: no pipeline built off
@@ -287,7 +279,7 @@ fn a_relaunch_prepares_the_first_screen_even_when_startup_was_slow() {
         "a first launch holds no record of its first screen"
     );
     std::thread::sleep(Duration::from_millis(2100));
-    let first_launch_builds = first_frame_builds(&mut first_launch);
+    let first_launch_waits = first_frame_waits(&mut first_launch);
     drop(first_launch);
     wait_for_cache(&cache);
 
@@ -298,11 +290,11 @@ fn a_relaunch_prepares_the_first_screen_even_when_startup_was_slow() {
         "a relaunch holds the first launch's first screen"
     );
     wait_for_warm_ups();
-    let relaunch_builds = first_frame_builds(&mut relaunch);
+    let relaunch_waits = first_frame_waits(&mut relaunch);
     assert!(
-        relaunch_builds < first_launch_builds,
-        "the relaunch built {relaunch_builds} pipelines in its first frame, \
-         the first launch {first_launch_builds}"
+        relaunch_waits < first_launch_waits,
+        "the relaunch's first frame waited for {relaunch_waits} pipelines, \
+         the first launch's for {first_launch_waits}"
     );
 }
 
@@ -313,7 +305,7 @@ fn relaunch_after_cache_change(
     relaunch_after_drawing(
         |previous| {
             assert!(
-                first_frame_builds(previous) > 0,
+                first_frame_waits(previous) > 0,
                 "a fresh first screen must compile pipelines"
             );
         },
@@ -354,7 +346,7 @@ fn an_updated_build_prepares_the_previous_first_screen_with_fresh_pipelines() {
         |renderer| {
             wait_for_warm_ups();
             assert_eq!(
-                first_frame_builds(renderer),
+                first_frame_waits(renderer),
                 0,
                 "an update must retain which pipelines to prepare before the first screen"
             );
@@ -376,27 +368,9 @@ fn a_cache_file_without_pipeline_records_keeps_its_first_screen_shapes() {
         |renderer| {
             wait_for_warm_ups();
             assert_eq!(
-                first_frame_builds(renderer),
+                first_frame_waits(renderer),
                 0,
                 "a file without pipeline records must keep its shape warm-ups"
-            );
-        },
-    );
-}
-
-#[test]
-fn a_first_frame_uses_its_requested_warm_up_instead_of_compiling_a_stand_in() {
-    relaunch_after_cache_change(
-        |bytes| bytes[0] ^= 0xff,
-        |renderer| {
-            first_frame_builds(renderer);
-            assert_eq!(
-                renderer
-                    .last_frame_stats()
-                    .expect("first-frame statistics")
-                    .shape_pipeline_fallback_draws,
-                0,
-                "the first frame must use the pipelines already scheduled for it"
             );
         },
     );
@@ -524,7 +498,7 @@ fn relaunch_after_a_later_screen(
 ) {
     relaunch_after_drawing(
         |previous| {
-            first_frame_builds(previous);
+            first_frame_waits(previous);
             std::thread::sleep(Duration::from_millis(2100));
             draw_settled(previous, frosted_page());
         },
@@ -541,7 +515,7 @@ fn an_updated_build_prepares_the_later_screens_of_its_last_launch_after_its_firs
     relaunch_after_a_later_screen(
         |bytes| bytes[0] ^= 0xff,
         |updated| {
-            first_frame_builds(updated);
+            first_frame_waits(updated);
             wait_for_warm_ups();
             assert_eq!(
                 frosted_frame_waits(updated),
@@ -559,7 +533,7 @@ fn a_relaunch_of_the_same_build_leaves_later_screens_to_their_first_draw() {
     relaunch_after_a_later_screen(
         |_| {},
         |relaunch| {
-            first_frame_builds(relaunch);
+            first_frame_waits(relaunch);
             wait_for_warm_ups();
             assert!(
                 frosted_frame_waits(relaunch) > 0,
@@ -586,7 +560,7 @@ fn a_relaunch_of_the_same_build_draws_what_it_recorded_from_the_driver_cache() {
                 eprintln!("the driver cache needs PIPELINE_CACHE support");
                 return;
             }
-            first_frame_builds(relaunch);
+            first_frame_waits(relaunch);
             wait_for_warm_ups();
             frosted_frame_waits(relaunch);
             let stats = relaunch
@@ -902,7 +876,7 @@ fn an_incompatible_first_screen_key_layout_is_ignored() {
         |renderer| {
             wait_for_warm_ups();
             assert!(
-                first_frame_builds(renderer) > 0,
+                first_frame_waits(renderer) > 0,
                 "unknown key layouts must not queue pipelines"
             );
         },
@@ -919,7 +893,7 @@ fn warm_up_lists_follow_presented_frames_across_process_restarts() {
         let cache = PathBuf::from(std::env::var_os(CACHE_FILE).expect("cache file"));
         match phase.as_str() {
             "first" => {
-                first_frame_builds(&mut renderer);
+                first_frame_waits(&mut renderer);
                 wait_for_cache(&cache);
             }
             "closed" => {
@@ -928,7 +902,7 @@ fn warm_up_lists_follow_presented_frames_across_process_restarts() {
             "reopened" => {
                 wait_for_warm_ups();
                 assert_eq!(
-                    first_frame_builds(&mut renderer),
+                    first_frame_waits(&mut renderer),
                     0,
                     "warm-up completion must not replace the known first screen with an empty list"
                 );
@@ -946,7 +920,7 @@ fn warm_up_lists_follow_presented_frames_across_process_restarts() {
             "changed-screen" => {
                 wait_for_warm_ups();
                 assert!(
-                    first_frame_builds(&mut renderer) > 0,
+                    first_frame_waits(&mut renderer) > 0,
                     "an empty screen must retire the earlier screen's warm-up list"
                 );
             }

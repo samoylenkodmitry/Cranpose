@@ -47,6 +47,38 @@ impl FixedPipeline {
         self.resource.for_draw(recorder, backend, create)
     }
 
+    /// The pipeline for a draw, or `None` while it compiles: a missing one
+    /// is queued on the demand lane, and the draw is left out until it
+    /// lands. It is built here when the loaded driver cache holds it or
+    /// nothing else can build it. The first draw is noted with `recorder`.
+    pub(crate) fn when_ready<J>(
+        &self,
+        recorder: &PipelineRecorder,
+        compiler: &PipelineCompiler,
+        backend: wgpu::Backend,
+        job: impl FnOnce() -> J,
+    ) -> Option<&wgpu::RenderPipeline>
+    where
+        J: FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static,
+    {
+        if !self.drawn.replace(true) {
+            recorder.note_fixed(self.resource.label(), recorder.in_first_screen());
+        }
+        if let Some(pipeline) = self.resource.get() {
+            return Some(pipeline);
+        }
+        if self.cached.get() || !compiler.is_active() {
+            return Some(self.resource.for_draw(recorder, backend, || job()()));
+        }
+        self.queue(compiler, CompileLane::Demanded, backend, job());
+        None
+    }
+
+    /// The pipeline when it is built.
+    pub(crate) fn built(&self) -> Option<&wgpu::RenderPipeline> {
+        self.resource.get()
+    }
+
     /// Queues the build on `lane` unless it is already built or queued.
     pub(crate) fn queue(
         &self,
