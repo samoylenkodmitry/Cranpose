@@ -54,9 +54,15 @@ pub struct StateRecord {
 pub(crate) trait RecordValue: Any {
     fn clone_boxed(&self) -> Box<dyn RecordValue>;
     fn assign_into(&self, target: &mut Option<Box<dyn RecordValue>>);
+    /// Whether dropping the value releases anything beyond its box.
+    fn holds_resources(&self) -> bool;
 }
 
 impl<T: Any + Clone> RecordValue for T {
+    fn holds_resources(&self) -> bool {
+        std::mem::needs_drop::<T>()
+    }
+
     fn clone_boxed(&self) -> Box<dyn RecordValue> {
         Box::new(self.clone())
     }
@@ -156,11 +162,22 @@ impl StateRecord {
         self.tombstone.set(tombstone);
     }
 
-    /// Takes the value out, for the caller to drop once the operation that
-    /// cleared it is done: its destructor may read or write state.
+    /// Takes the value out of a record that no read reaches any more, for
+    /// the caller to drop once the operation that cleared it is done: its
+    /// destructor may read or write state. A value without drop glue holds
+    /// nothing to release and stays, so the record's next write stores over
+    /// it in place instead of boxing a new value.
     #[must_use = "drop the cleared value once the record chain is consistent"]
     pub(crate) fn clear_value(&self) -> Option<Box<dyn RecordValue>> {
-        self.value.borrow_mut().take()
+        let mut value = self.value.borrow_mut();
+        if value
+            .as_ref()
+            .is_some_and(|value| (**value).holds_resources())
+        {
+            value.take()
+        } else {
+            None
+        }
     }
 
     /// Marks the record dead and retires its value, for an operation that
@@ -227,7 +244,7 @@ impl StateRecord {
 
     #[cfg(test)]
     pub(crate) fn clear_for_reuse(&self) {
-        drop(self.clear_value());
+        drop(self.value.borrow_mut().take());
     }
 
     pub(crate) fn assign_value(&self, source: &StateRecord) -> Result<(), StateRecordValueError> {

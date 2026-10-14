@@ -48,6 +48,12 @@ impl SlotWriteSessionState {
         }
     }
 
+    /// Binds the composer's branch guards for the next pass, which
+    /// [`Self::reset_for_pass`] then starts.
+    pub(crate) fn set_folds(&mut self, folds: Rc<BranchFolds>) {
+        self.folds = folds;
+    }
+
     pub(in crate::slot) const COMPACT_PAYLOAD_THRESHOLD: usize = 16 * 1024;
     const COMPACT_NODE_THRESHOLD: usize = 16 * 1024;
     const COMPACT_GROUP_THRESHOLD: usize = 32 * 1024;
