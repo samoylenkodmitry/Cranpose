@@ -152,6 +152,9 @@ pub(crate) enum RobotCommand {
         tray: bool,
         labels: Vec<String>,
     },
+    /// Hands URLs to the application as the system does when the user opens
+    /// them.
+    OpenUrls(Vec<String>),
     Click {
         x: f32,
         y: f32,
@@ -741,6 +744,17 @@ impl Robot {
                 labels: labels.iter().map(|label| (*label).to_owned()).collect(),
             },
             "menu item choice",
+        )
+    }
+
+    /// Hands `urls` to the application as the system does when the user
+    /// opens them: a `file:` URL as a document, any other as a link. On macOS
+    /// they go through the application delegate, as from Finder or another
+    /// application; elsewhere it fails.
+    pub fn open_urls(&self, urls: &[&str]) -> Result<(), String> {
+        self.send_and_ack(
+            RobotCommand::OpenUrls(urls.iter().map(|url| (*url).to_owned()).collect()),
+            "URL opening",
         )
     }
 

@@ -31,8 +31,8 @@ platform backend reports an observed value.
 | Media capabilities | The active player reports seek, speed, loop, analysis, session, equalizer, and probe support through `MediaCapabilities`. Native iOS reports playback analysis and equalizer as unavailable; Android and software playback provide both. |
 | Power | iOS reports thermal state and battery status; Android reports thermal state, battery, and background restrictions. macOS reports thermal state; Linux reports battery status and thermal state, from the highest trip point its thermal zones reached; Windows reports battery status from `PowerManager`. Web reads battery status when `navigator.getBattery` exists. |
 | Bundled assets | iOS streams assets from `NSBundle`; Android streams assets through `AssetManager`; desktop reads beside the executable, from app resources, or from the working directory. Web assets use HTTP. |
-| Incoming content | Android accepts declared media shares and open-with intents at launch and through `onNewIntent`. Desktop and web accept file drops; desktop also reads file paths from `argv`. |
-| Opened links | Android publishes VIEW intents in the declared schemes at launch and through `onNewIntent`; iOS publishes the scene's open-URL contexts and the web pages of universal links; desktop publishes a URL in a scheme from `argv`, which Windows and Linux pass to a protocol handler. Android, iOS and web publish the deep link of a tapped notification. macOS publishes none yet. |
+| Incoming content | Android accepts declared media shares and open-with intents at launch and through `onNewIntent`. Desktop and web accept file drops; desktop also reads file paths from `argv`, and macOS takes the documents Finder opens with the app. |
+| Opened links | Android publishes VIEW intents in the declared schemes at launch and through `onNewIntent`; iOS publishes the scene's open-URL contexts and the web pages of universal links; desktop publishes a URL in a scheme from `argv`, which Windows and Linux pass to a protocol handler. macOS publishes what the application delegate's `application:openURLs:` receives: links, and Finder documents as incoming content. Android, iOS and web publish the deep link of a tapped notification. |
 | App updates | iOS and desktop check for updates. Android checks and installs verified packages through `PackageInstaller`. Update checks require the application's `http-native` feature. |
 | Host surface | iOS, Android, and web report window or canvas size. Desktop reports observable size and accepts resize requests. |
 | In-app purchases | iOS uses StoreKit 2; Android uses Play Billing. Builds with either store backend expose purchase state; other builds report `StorePhase::Unavailable`. |
@@ -53,9 +53,8 @@ platform backend reports an observed value.
 - Desktop power support covers macOS thermal state, Linux battery status and
   thermal state, and Windows battery status. macOS battery status and Windows
   thermal state remain future platform work.
-- Incoming-content adapters cover Android launch intents and desktop/web file
-  drops. macOS Finder document-open events and macOS open-URL events remain
-  future integration work.
+- Incoming-content adapters cover Android launch intents, desktop/web file
+  drops and macOS Finder document opens.
 
 ## Service contract
 
