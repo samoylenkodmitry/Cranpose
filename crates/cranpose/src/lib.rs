@@ -693,6 +693,20 @@ mod ios_device_info;
 ))]
 mod apple_network;
 
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    target_os = "linux"
+))]
+mod linux_network;
+
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    target_os = "windows"
+))]
+mod windows_network;
+
 #[cfg(any(
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
     all(
