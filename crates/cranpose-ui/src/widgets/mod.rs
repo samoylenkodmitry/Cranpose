@@ -1,6 +1,7 @@
 //! UI Widget components
 
 pub mod animate_scroll;
+pub mod animated_content;
 pub mod animated_visibility;
 pub mod basic_text_field;
 pub mod box_widget;
@@ -38,6 +39,9 @@ pub mod text_selection_menu;
 pub mod wear;
 
 pub use animate_scroll::AnimateScroll;
+pub use animated_content::{
+    AnimatedContent, ContentSeek, ContentTransform, SeekableAnimatedContent, SizeTransform,
+};
 pub use animated_visibility::*;
 pub use basic_text_field::*;
 pub use box_widget::*;
