@@ -9,8 +9,8 @@ A page builds no accessibility mirror until a screen reader presses its "Enable 
 
 - `just robot-accessibility-web <site> <output>` runs Chromium focus, accessibility and native composition checks. The selection regression defers the selection notification across rendering to verify that an unchanged application caret does not overwrite a newer browser selection.
 - `just web-webgpu-smoke <site> <output>` opens the default page, every tab and every shader section with `?backend=webgpu` and fails on a GPU validation error, a panic or a page that drew one flat color. It refuses to run without a WebGPU adapter: Metal on macOS, the GPU through Vulkan or SwiftShader on Linux. `report.json` keeps each page's console and `page-NN.png` its screenshot.
-- `just test-web-ime-firefox <site> <output> <driver-port> <http-port>` starts geckodriver and a local server, then runs the shared keyboard checks. On a Linux host without a display, run the recipe under `xvfb-run -a`.
-- `just test-web-ime-webdriver <endpoint> safari <url> <output>` connects to a running `safaridriver --port <port>`. Enable Safari's **Allow remote automation**.
+- `just test-web-ime <firefox|safari> <site> <output>` starts geckodriver or safaridriver and a local server on free ports, then runs the shared keyboard checks. On a Linux host without a display, run the recipe under `xvfb-run -a`. Safari needs **Allow remote automation** (`safaridriver --enable`).
+- `just test-web-ime-webdriver <endpoint> safari <url> <output>` connects to a running `safaridriver --port <port>`.
 - Add `--ios-device <UDID>` to the WebDriver recipe for a USB-connected, trusted and unlocked iPhone. Enable both **Web Inspector** and **Remote Automation** under Settings → Apps → Safari → Advanced. The URL must be reachable from the phone. iOS WebDriver suppresses the software keyboard, so this verifies native editing through WebDriver, not the phone's software IME.
 
 For physical Android, forward a port to `localabstract:chrome_devtools_remote`, open the test URL in Chrome, and run:

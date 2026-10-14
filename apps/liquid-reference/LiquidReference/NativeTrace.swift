@@ -666,7 +666,8 @@ final class NativeTrace: NSObject {
         func visit(_ layer: CALayer, path: String) {
             if var filters = layer.filters {
                 for index in filters.indices {
-                    if let (_, key) = isolatedInputs[probe]?.first(where: { String(describing: filters[index]) == $0.0 }),
+                    let name = String(describing: filters[index])
+                    if let (_, key) = isolatedInputs[probe]?.first(where: { name == $0.0 }),
                        let original = filters[index] as? NSCopying,
                        let filter = original.copy(with: nil) as? NSObject {
                         let amount = String(describing: filter.value(forKey: key))
