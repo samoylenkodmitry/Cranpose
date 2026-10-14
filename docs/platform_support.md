@@ -17,7 +17,7 @@ hand, with dated evidence in the linked documents.
 
 | Platform | Minimum | Renderer | Tier | Runtime check |
 | --- | --- | --- | --- | --- |
-| Linux desktop, X11 | Vulkan or OpenGL driver | wgpu | 1 | The robot suite on every push and every night ([heavy](../.github/workflows/heavy-selfhosted.yml), [nightly](../.github/workflows/nightly.yml)). |
+| Linux desktop, X11 | Vulkan or OpenGL driver | wgpu | 1 | The robot suite on every push and every night ([heavy](../.github/workflows/heavy-selfhosted.yml), [nightly](../.github/workflows/nightly.yml)); AT-SPI activation, ranges, text and modals every night. |
 | Windows desktop | Windows 10, DirectX 12 or Vulkan | wgpu | 1 | UI Automation and the inspector robot every night ([runtime matrix](../.github/workflows/runtime-matrix.yml)). |
 | macOS desktop | macOS 12, Metal | wgpu | 1 | Workspace tests on every push ([Rust](../.github/workflows/rust.yml)). |
 | Chrome | WebGPU, or WebGL2 without it | wgpu | 1 | Every page on WebGPU and WebGL2 on every push; focus, accessibility and composition every night. |

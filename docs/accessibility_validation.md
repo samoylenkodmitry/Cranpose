@@ -110,7 +110,10 @@ log, and executable SHA-256. macOS requires Accessibility permission for the
 terminal or runner; the recipe installs its pinned PyObjC dependency in a local
 virtual environment. Linux requires Python GObject introspection, the AT-SPI 2
 typelib, `busctl`, `dbus-run-session`, and `xvfb-run`. It enables accessibility on
-a private session bus and takes the host lock. Windows requires Python,
+a private session bus, starts an AT-SPI bus and registry of its own there
+([`linux_a11y_bus.sh`](../scripts/a11y/linux_a11y_bus.sh): at-spi's own launcher
+needs a systemd user manager when the system uses dbus-broker), and takes the
+host lock. Windows requires Python,
 PowerShell, and an interactive desktop. The runner scopes UIA to the process it
 launched and uses Invoke, Value, and RangeValue patterns.
 

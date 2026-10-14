@@ -226,10 +226,11 @@ jobs:
           path: ${{ runner.temp }}/android
           if-no-files-found: ignore
 
-  # The simulator app bundle, built on the self-hosted Mac where sccache keeps
-  # it warm. An artifact drops file modes, so the bundle travels as a tar.
-  ios-app:
-    name: iOS simulator app (self-hosted)
+  # The simulator app bundle and the macOS desktop demo, built on the
+  # self-hosted Mac where sccache keeps them warm. An artifact drops file
+  # modes, so both travel as tars.
+  apple-apps:
+    name: iOS simulator and macOS apps (self-hosted)
     runs-on: [self-hosted, macOS, ARM64, recent-repo]
     timeout-minutes: 30
     defaults:
@@ -245,25 +246,56 @@ jobs:
         run: |
           app="$(just ios-sim)"
           tar -C "$(dirname "$app")" -cf "$RUNNER_TEMP/ios-app.tar" "$(basename "$app")"
+      - name: Build and pack the desktop demo
+        run: |
+          just build-accessibility-desktop
+          tar -C target/ci -cf "$RUNNER_TEMP/macos-app.tar" desktop-app
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: runtime-ios-app
-          path: ${{ runner.temp }}/ios-app.tar
+          name: runtime-apple-apps
+          path: |
+            ${{ runner.temp }}/ios-app.tar
+            ${{ runner.temp }}/macos-app.tar
           retention-days: 1
           if-no-files-found: error
+
+  # The desktop demo under the macOS accessibility API on a hosted Mac, whose
+  # runner may drive other apps' accessibility.
+  macos-desktop:
+    name: desktop demo accessibility (macOS)
+    needs: apple-apps
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: runtime-apple-apps
+          path: ${{ runner.temp }}
+      - name: Accessibility robot
+        run: |
+          brew install just
+          tar -C "$RUNNER_TEMP" -xf "$RUNNER_TEMP/macos-app.tar"
+          just robot-accessibility-macos "$RUNNER_TEMP/desktop-app" "$RUNNER_TEMP/macos-desktop"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: runtime-macos-desktop
+          path: ${{ runner.temp }}/macos-desktop
+          if-no-files-found: ignore
 
   # XCTest drives the demo's accessibility tree in an iPhone simulator on a
   # hosted Mac, so the self-hosted Mac keeps its simulators free.
   ios-simulator:
     name: demo accessibility in the iOS simulator
-    needs: ios-app
+    needs: apple-apps
     runs-on: macos-26
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: runtime-ios-app
+          name: runtime-apple-apps
           path: ${{ runner.temp }}
       - name: Accessibility robot
         run: |
