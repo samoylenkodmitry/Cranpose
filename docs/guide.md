@@ -3687,6 +3687,21 @@ let picker = rememberLiquidDatePickerState(None, today);
 LiquidDatePicker(picker, today, Modifier::empty().width(320.0));
 ```
 
+#### LiquidTimePicker
+
+Pick a time of day on wheels: hours, minutes and, on a 12-hour clock, the half
+of the day. A wheel rests on whole rows after a drag or a fling, and a screen
+reader adjusts each wheel by name. `rememberLiquidTimePickerState(hour, minute,
+None)` takes the clock of the app's language with the `localization-formatting`
+feature; `Some(true)` asks for 24 hours.
+
+```rust preview=time_picker
+use cranpose::liquid::prelude::*;
+
+let picker = rememberLiquidTimePickerState(9, 41, None);
+LiquidTimePicker(picker, Modifier::empty());
+```
+
 #### LiquidSlider
 
 Show a styled slider with a value in `0.0..=1.0`.

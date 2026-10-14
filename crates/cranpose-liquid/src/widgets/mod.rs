@@ -27,6 +27,7 @@ mod slider_motion;
 mod snackbar;
 mod tab_bar;
 mod tab_lighting;
+mod time_picker;
 mod toggle;
 mod tooltip;
 mod vibrancy;
@@ -66,6 +67,7 @@ pub use tab_bar::{
     LiquidTabBarWithAccessory, LiquidTabIcon, LiquidTabIconStyle, tab_lens_rest_width,
     tab_lens_resting_left,
 };
+pub use time_picker::{LiquidTimePicker, LiquidTimePickerState, rememberLiquidTimePickerState};
 pub use toggle::LiquidToggle;
 pub use tooltip::LiquidTooltipBox;
 
