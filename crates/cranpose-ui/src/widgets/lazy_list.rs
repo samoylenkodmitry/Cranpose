@@ -1486,6 +1486,7 @@ fn LazyColumnImpl(
         direction,
         composed_density.density(),
     );
+    let semantics_grid = grid.clone();
     let config = LazyListLayoutConfig {
         measure: LazyListMeasureConfig {
             is_vertical: true,
@@ -1553,11 +1554,15 @@ fn LazyColumnImpl(
     .with(|p| p.clone());
     let list_state_id = lazy_list_state_identity(&state);
 
-    let scroll_modifier = modifier.clip_to_bounds().lazy_vertical_scroll_with_context(
-        state,
-        spec.reverse_layout,
-        padding.main,
-        motion_context,
+    let scroll_modifier = grid::grid_semantics(
+        modifier.clip_to_bounds().lazy_vertical_scroll_with_context(
+            state,
+            spec.reverse_layout,
+            padding.main,
+            motion_context,
+        ),
+        semantics_grid.as_ref(),
+        true,
     );
 
     let node_id = cranpose_core::with_current_composer(|composer| {
@@ -1626,6 +1631,7 @@ fn LazyRowImpl(
         direction,
         composed_density.density(),
     );
+    let semantics_grid = grid.clone();
     let config = LazyListLayoutConfig {
         measure: LazyListMeasureConfig {
             is_vertical: false,
@@ -1693,14 +1699,18 @@ fn LazyRowImpl(
     .with(|p| p.clone());
     let list_state_id = lazy_list_state_identity(&state);
 
-    let scroll_modifier = modifier
-        .clip_to_bounds()
-        .lazy_horizontal_scroll_with_context(
-            state,
-            reverse_scrolling,
-            padding.main,
-            motion_context,
-        );
+    let scroll_modifier = grid::grid_semantics(
+        modifier
+            .clip_to_bounds()
+            .lazy_horizontal_scroll_with_context(
+                state,
+                reverse_scrolling,
+                padding.main,
+                motion_context,
+            ),
+        semantics_grid.as_ref(),
+        false,
+    );
 
     let node_id = cranpose_core::with_current_composer(|composer| {
         composer.with_key(&(list_state_id, "LazyRowNode"), |composer| {
