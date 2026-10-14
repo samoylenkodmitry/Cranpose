@@ -210,6 +210,20 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
         });
     }
 
+    /// Gives the entry that shows the content of `value` that state, and
+    /// answers whether there is one: a state with the key of a content shown
+    /// changes it in place.
+    fn show(&self, value: &T, same: &dyn Fn(&T, &T) -> bool) -> bool {
+        let mut entries = self.entries.borrow_mut();
+        let Some(entry) = entries.iter_mut().find(|entry| same(&entry.value, value)) else {
+            return false;
+        };
+        if entry.value != *value {
+            entry.value = value.clone();
+        }
+        true
+    }
+
     /// Brings the entries to `target`: it comes in with the transition from
     /// the previous target, everything else leaves, and a seek holds both
     /// ends where the gesture is.
@@ -218,33 +232,25 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
         target: &T,
         seek: Option<&ContentSeek<T>>,
         transition: &dyn Fn(&T, &T) -> ContentTransform,
+        same: &dyn Fn(&T, &T) -> bool,
     ) {
         let previous = self.last_target.replace(Some(target.clone()));
         let change = previous
-            .filter(|previous| previous != target)
+            .filter(|previous| !same(previous, target))
             .map(|previous| transition(&previous, target));
         if let Some(change) = change {
             self.size_transform.set(change.size_transform);
         }
         let first = self.entries.borrow().is_empty();
-        if !self
-            .entries
-            .borrow()
-            .iter()
-            .any(|entry| entry.value == *target)
-        {
+        if !self.show(target, same) {
             let enter = change.map_or_else(EnterTransition::none, |change| change.enter);
             let progress = if first { 1.0 } else { 0.0 };
             self.push(target.clone(), progress, enter.effects(), enter.animation());
         }
-        let seek = seek.filter(|seek| seek.toward != *target);
+        let seek = seek.filter(|seek| !same(&seek.toward, target));
         let seeking = seek.map(|seek| (seek, transition(target, &seek.toward)));
         if let Some((seek, _)) = seeking
-            && !self
-                .entries
-                .borrow()
-                .iter()
-                .any(|entry| entry.value == seek.toward)
+            && !self.show(&seek.toward, same)
         {
             self.push(
                 seek.toward.clone(),
@@ -256,7 +262,7 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
         let mut entries = self.entries.borrow_mut();
         for entry in entries.iter_mut() {
             let motion = &entry.motion;
-            if entry.value == *target {
+            if same(&entry.value, target) {
                 // New content took its enter transition when it was added;
                 // content that turns back runs its own transition backward.
                 // A gesture that seeks away from it makes it the content that
@@ -270,7 +276,7 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
                     None => motion.animate_to(1.0),
                 }
             } else if let Some((seek, seek_change)) =
-                seeking.filter(|(seek, _)| seek.toward == entry.value)
+                seeking.filter(|(seek, _)| same(&seek.toward, &entry.value))
             {
                 entry.motion.leaving.set(false);
                 motion.effects.set(seek_change.enter.effects());
@@ -287,7 +293,7 @@ impl<T: Clone + PartialEq + 'static> ContentState<T> {
             }
         }
         // The current content draws on top.
-        if let Some(index) = entries.iter().position(|entry| entry.value == *target) {
+        if let Some(index) = entries.iter().position(|entry| same(&entry.value, target)) {
             let current = entries.remove(index);
             entries.push(current);
         }
@@ -384,6 +390,29 @@ pub fn AnimatedContent<T, F>(
     SeekableAnimatedContent(target_state, None, transition_spec, content);
 }
 
+/// [`AnimatedContent`] where `content_key` tells contents apart: a target
+/// whose key is the key of the content shown changes that content in place,
+/// with the new state and without a transition — Compose's `contentKey`.
+#[composable(no_skip)]
+pub fn AnimatedContentWithKey<T, K, F>(
+    target_state: T,
+    content_key: impl Fn(&T) -> K + 'static,
+    transition_spec: impl Fn(&T, &T) -> ContentTransform + 'static,
+    content: F,
+) where
+    T: Clone + PartialEq + 'static,
+    K: PartialEq,
+    F: FnMut(T) + 'static,
+{
+    animated_content(
+        target_state,
+        None,
+        &transition_spec,
+        &|a, b| content_key(a) == content_key(b),
+        content,
+    );
+}
+
 /// [`AnimatedContent`] that a gesture can hold part of the way toward
 /// another state, as predictive back does: while `seek` is set, its
 /// `toward` content shows at its fraction. When the gesture ends the change
@@ -399,11 +428,34 @@ pub fn SeekableAnimatedContent<T, F>(
     T: Clone + PartialEq + 'static,
     F: FnMut(T) + 'static,
 {
-    let runtime = with_current_composer(|composer| composer.runtime_handle());
+    animated_content(
+        target_state,
+        seek,
+        &transition_spec,
+        &|a, b| a == b,
+        content,
+    );
+}
+
+/// The body of the animated content composables; `same` says whether two
+/// states show the same content.
+fn animated_content<T, F>(
+    target_state: T,
+    seek: Option<ContentSeek<T>>,
+    transition_spec: &dyn Fn(&T, &T) -> ContentTransform,
+    same: &dyn Fn(&T, &T) -> bool,
+    content: F,
+) where
+    T: Clone + PartialEq + 'static,
+    F: FnMut(T) + 'static,
+{
+    let runtime = with_current_composer(cranpose_core::Composer::runtime_handle);
     let state =
         remember(|| StateHandle(Rc::new(ContentState::<T>::new(runtime)))).with(StateHandle::clone);
     *state.0.content.borrow_mut() = Some(std::boxed::Box::new(content));
-    state.0.sync(&target_state, seek.as_ref(), &transition_spec);
+    state
+        .0
+        .sync(&target_state, seek.as_ref(), transition_spec, same);
     watch(&state.0);
     // Subscribes this scope to removals of content that left.
     state.0.removed.get();
