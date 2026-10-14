@@ -14,7 +14,7 @@ use cranpose_services::{
     IncomingContent, LaunchArgs, MemoryPressure, Metering, NetworkMonitor, NetworkStatus, Notifier,
     NotifyRequest, PowerCapabilities, PowerMonitor, PowerReading, ShareContent, ShareError,
     ShareSheet, StreamingAssetReader, ThermalState, publish_incoming_content,
-    publish_memory_pressure, push_notification_deeplink, set_platform_background_activity,
+    publish_memory_pressure, publish_opened_link, set_platform_background_activity,
     set_platform_bundled_assets, set_platform_haptics, set_platform_launch_args,
     set_platform_network_monitor, set_platform_notifier, set_platform_power_monitor,
     set_platform_share_sheet,
@@ -897,18 +897,16 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnInsets
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeNotificationAction<
-    'local,
->(
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnOpenedLink<'local>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
-    deeplink: JString<'local>,
+    link: JString<'local>,
 ) {
-    let Some(deeplink) = crate::android_jni::decode_jni_string(&mut env, deeplink) else {
+    let Some(link) = crate::android_jni::decode_jni_string(&mut env, link) else {
         return;
     };
-    if !deeplink.is_empty() {
-        push_notification_deeplink(deeplink);
+    if !link.is_empty() {
+        publish_opened_link(link);
         wake_native_loop();
     }
 }

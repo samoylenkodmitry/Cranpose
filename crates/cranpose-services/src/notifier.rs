@@ -11,7 +11,6 @@ use std::sync::{Arc, OnceLock};
 
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOfWithPolicy};
 use cranpose_macros::composable;
-use parking_lot::Mutex;
 
 use crate::registry::ServiceRegistry;
 
@@ -28,7 +27,8 @@ pub struct NotifyRequest {
     /// Whether this is an ongoing/progress notification (best-effort; platforms
     /// without ongoing notifications post a normal one).
     pub ongoing: bool,
-    /// Optional deep-link payload delivered to the app when the user taps it.
+    /// The link the app is opened with when the user taps the notification;
+    /// it arrives through [`crate::rememberOpenedLinks`].
     pub deeplink: Option<String>,
 }
 
@@ -71,24 +71,6 @@ pub trait Notifier: Send + Sync {
 
 /// Shared handle to a [`Notifier`].
 pub type NotifierRef = Arc<dyn Notifier>;
-
-fn pending_deeplink_slot() -> &'static Mutex<Option<String>> {
-    static SLOT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-    SLOT.get_or_init(|| Mutex::new(None))
-}
-
-/// Record the deep-link payload of a notification the user just tapped. Called
-/// by the platform backend's notification delegate; the app drains it via
-/// [`take_notification_deeplink`].
-pub fn push_notification_deeplink(link: String) {
-    *pending_deeplink_slot().lock() = Some(link);
-}
-
-/// Take (and clear) the deep-link payload of the most recently tapped
-/// notification, if any. Polled by the app's deep-link handling.
-pub fn take_notification_deeplink() -> Option<String> {
-    pending_deeplink_slot().lock().take()
-}
 
 #[cfg(not(all(
     feature = "notifier-native",

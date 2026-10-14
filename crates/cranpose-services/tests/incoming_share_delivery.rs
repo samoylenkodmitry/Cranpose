@@ -5,7 +5,7 @@ use cranpose_services::{
     IncomingContent, clear_incoming_content, publish_incoming_content, rememberIncomingContent,
 };
 
-use crate::composition_support::{pump_until, serial};
+use crate::composition_support::{self, pump_until, serial};
 
 fn item(name: &str) -> IncomingContent {
     IncomingContent::from_bytes(vec![1, 2, 3]).with_name(name)
@@ -16,16 +16,13 @@ fn render_collector(
     key: cranpose_core::Key,
     seen: &Rc<RefCell<Vec<String>>>,
 ) {
-    let sink = Rc::clone(seen);
-    composition
-        .render(key, move || {
-            let shared = rememberIncomingContent();
-            let sink = Rc::clone(&sink);
-            CollectEvents(shared, (), move |item: IncomingContent| {
-                sink.borrow_mut().push(item.display_name());
-            });
-        })
-        .expect("render succeeds");
+    composition_support::render_collector(
+        composition,
+        key,
+        rememberIncomingContent,
+        IncomingContent::display_name,
+        seen,
+    );
 }
 
 #[test]

@@ -206,6 +206,45 @@ The type of a result is its key. Results live in memory and go with a popped
 entry; a screen that shows a result for longer takes it into its own saved
 state.
 
+## Deep links
+
+`BindDeepLinks(controller, parse)` shows the route that `parse` reads from each
+link the app is opened with, Android's `navDeepLink`. The back stack becomes its
+start entry with the link's route above it, so back returns to the start. The
+app names its link schemes in its `cranpose-capabilities` declaration with
+`linking(&["myapp"])`, which registers them on Android and Apple platforms. A
+tapped notification's deep link arrives the same way:
+
+```rust
+use cranpose_navigation::{BindDeepLinks, NavHost, rememberNavController};
+use cranpose_ui::composable;
+
+#[derive(Clone, PartialEq)]
+enum Screen {
+    Home,
+    Detail { id: u32 },
+}
+
+fn route_of(link: &str) -> Option<Screen> {
+    let id = link.strip_prefix("myapp://detail/")?.parse().ok()?;
+    Some(Screen::Detail { id })
+}
+
+#[composable]
+fn App() {
+    let nav = rememberNavController(Screen::Home);
+    BindDeepLinks(nav, route_of);
+    NavHost(nav, move |screen| match screen {
+        Screen::Home => {}
+        Screen::Detail { id: _ } => {}
+    });
+}
+```
+
+The link that launched the app waits until the binding is composed. A nested
+graph takes its part of the link through its route: `parse` gives the outer
+route, and the screen starts its inner host at the step the route carries.
+
 ## Browser history
 
 On the web, `BindBrowserHistory(controller, saver)` keeps the browser's history
@@ -232,6 +271,7 @@ nothing, so an app can make it unconditionally.
 | `rememberSaveable` in a destination | `rememberSaveable` inside a screen |
 | Back stack restored after process death | `rememberSaveableNavController` with a route `Saver` |
 | Compose Multiplatform `window.bindToNavigation` | `BindBrowserHistory` |
+| `navDeepLink`, `handleDeepLink` | `BindDeepLinks` with a `parse` function |
 | Predictive back in `NavHost` | `NavHost` follows the gesture; `cranpose_services::PredictiveBackHandler` for custom screens |
 
 - [API reference on docs.rs](https://docs.rs/cranpose-navigation/latest/cranpose_navigation/)

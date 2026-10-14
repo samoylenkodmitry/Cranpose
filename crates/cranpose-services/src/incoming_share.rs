@@ -6,15 +6,12 @@
 //! before any screen is listening waits in the framework's own backlog and is
 //! handed to the first collector.
 
-use std::{
-    collections::VecDeque,
-    sync::{Arc, Mutex, OnceLock, atomic::Ordering},
-};
-
 use cranpose_core::{EventStream, rememberEventStream};
-use portable_atomic::AtomicU64;
 
-use crate::content::{BytesContent, ContentHandle, ContentMetadata, resolve_content};
+use crate::{
+    content::{BytesContent, ContentHandle, ContentMetadata, resolve_content},
+    inbox::{Inbox, InboxObserver},
+};
 
 /// Where the bytes of an incoming item live.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -104,67 +101,7 @@ impl IncomingContent {
     }
 }
 
-type Observer = Arc<dyn Fn(IncomingContent) + Send + Sync>;
-
-struct Inbox {
-    observers: Vec<(u64, Observer)>,
-    backlog: VecDeque<IncomingContent>,
-}
-
-impl Inbox {
-    fn new() -> Self {
-        Self {
-            observers: Vec::new(),
-            backlog: VecDeque::new(),
-        }
-    }
-
-    fn observe(&mut self, id: u64, observer: Observer) -> Vec<IncomingContent> {
-        self.observers.push((id, observer));
-        self.backlog.drain(..).collect()
-    }
-
-    fn publish(&mut self, content: IncomingContent) -> Option<Vec<Observer>> {
-        if self.observers.is_empty() {
-            self.backlog.push_back(content);
-            return None;
-        }
-        Some(
-            self.observers
-                .iter()
-                .map(|(_, observer)| Arc::clone(observer))
-                .collect(),
-        )
-    }
-
-    fn remove_observer(&mut self, id: u64) {
-        self.observers.retain(|(existing, _)| *existing != id);
-    }
-
-    fn clear(&mut self) {
-        self.backlog.clear();
-    }
-}
-
-fn inbox() -> &'static Mutex<Inbox> {
-    static INBOX: OnceLock<Mutex<Inbox>> = OnceLock::new();
-    INBOX.get_or_init(|| Mutex::new(Inbox::new()))
-}
-
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-
-/// Keeps an observer registered until it is dropped.
-pub struct IncomingContentObserver {
-    id: u64,
-}
-
-impl Drop for IncomingContentObserver {
-    fn drop(&mut self) {
-        if let Ok(mut inbox) = inbox().lock() {
-            inbox.remove_observer(self.id);
-        }
-    }
-}
+static INBOX: Inbox<IncomingContent> = Inbox::new("incoming share");
 
 /// Registers `observer` for incoming content, replaying anything that arrived
 /// before there was anywhere to put it.
@@ -173,55 +110,20 @@ impl Drop for IncomingContentObserver {
 /// [`rememberIncomingContent`] instead of calling this.
 pub fn observe_incoming_content(
     observer: impl Fn(IncomingContent) + Send + Sync + 'static,
-) -> IncomingContentObserver {
-    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    let observer: Observer = Arc::new(observer);
-    let replay = {
-        let Ok(mut inbox) = inbox().lock() else {
-            return IncomingContentObserver { id };
-        };
-        inbox.observe(id, Arc::clone(&observer))
-    };
-    log::info!(
-        "incoming share: observer {id} registered, replays {} item(s)",
-        replay.len()
-    );
-    for item in replay {
-        observer(item);
-    }
-    IncomingContentObserver { id }
+) -> InboxObserver {
+    INBOX.observe(observer)
 }
 
 /// Publishes content shared into the application. Callable from any thread; the
 /// framework moves each item onto the UI thread before a composition sees it.
 pub fn publish_incoming_content(content: IncomingContent) {
-    let Some(observers) = ({
-        let Ok(mut inbox) = inbox().lock() else {
-            return;
-        };
-        inbox.publish(content.clone())
-    }) else {
-        log::info!(
-            "incoming share: no observer yet, item {} waits in the backlog",
-            content.display_name()
-        );
-        return;
-    };
-    log::info!(
-        "incoming share: item {} goes to {} observer(s)",
-        content.display_name(),
-        observers.len()
-    );
-    for observer in observers {
-        observer(content.clone());
-    }
+    log::info!("incoming share: item {}", content.display_name());
+    INBOX.publish(content);
 }
 
 /// Discards anything waiting for a collector. Used by tests and host teardown.
 pub fn clear_incoming_content() {
-    if let Ok(mut inbox) = inbox().lock() {
-        inbox.clear();
-    }
+    INBOX.clear();
 }
 
 /// Collects content shared into the application for as long as this call stays

@@ -1,6 +1,12 @@
-use std::{io, path::Path, sync::Arc};
+use std::{
+    io,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
-use cranpose_services::{IncomingContent, media::uri_for_path, publish_incoming_content};
+use cranpose_services::{
+    IncomingContent, media::uri_for_path, publish_incoming_content, publish_opened_link,
+};
 use winit::{
     data_transfer::{DataTransferId, TypeHint, TypedData},
     event::WindowEvent,
@@ -64,22 +70,53 @@ pub(crate) fn publish_file(path: &Path) {
     publish_incoming_content(content);
 }
 
-pub(crate) fn publish_launch_documents() {
-    for path in launch_documents(std::env::args().skip(1)) {
-        publish_file(&path);
+/// Publishes the documents and the link that the command line names: what
+/// Windows and Linux pass to an application that opens a file or a URL in one
+/// of its schemes.
+pub(crate) fn publish_launch_arguments() {
+    for item in launch_items(std::env::args().skip(1)) {
+        match item {
+            LaunchItem::Document(path) => publish_file(&path),
+            LaunchItem::Link(link) => publish_opened_link(link),
+        }
     }
 }
 
-fn launch_documents<I>(arguments: I) -> Vec<std::path::PathBuf>
+#[derive(Debug, PartialEq)]
+enum LaunchItem {
+    Document(PathBuf),
+    Link(String),
+}
+
+fn launch_items<I>(arguments: I) -> Vec<LaunchItem>
 where
     I: IntoIterator<Item = String>,
 {
     arguments
         .into_iter()
         .filter(|argument| !argument.starts_with('-'))
-        .map(std::path::PathBuf::from)
-        .filter(|path| path.is_file())
+        .filter_map(|argument| {
+            let path = PathBuf::from(&argument);
+            if path.is_file() {
+                Some(LaunchItem::Document(path))
+            } else {
+                is_link(&argument).then_some(LaunchItem::Link(argument))
+            }
+        })
         .collect()
+}
+
+/// Whether `argument` is a URL in a scheme, `myapp://item/7` or `myapp:item`.
+/// A scheme takes two characters at least, so `C:\file` is no link.
+fn is_link(argument: &str) -> bool {
+    let Some((scheme, _)) = argument.split_once(':') else {
+        return false;
+    };
+    scheme.len() >= 2
+        && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c))
 }
 
 #[cfg(test)]

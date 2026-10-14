@@ -4,6 +4,7 @@
 
 mod browser;
 mod controller;
+mod deep_links;
 mod host;
 mod saved_scroll;
 
@@ -12,6 +13,7 @@ pub use controller::{
     NavBackStackEntry, NavController, NavOptions, rememberNavController,
     rememberSaveableNavController,
 };
+pub use deep_links::BindDeepLinks;
 pub use host::{NavHost, NavHostWith, NavHostWithDialogs};
 pub use saved_scroll::{
     rememberSaveableLazyGridState, rememberSaveableLazyListState,

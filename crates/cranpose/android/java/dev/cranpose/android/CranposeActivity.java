@@ -2500,8 +2500,11 @@ public class CranposeActivity extends NativeActivity {
     /** System-bar/cutout insets changed (physical px). */
     private static native void nativeOnInsetsChanged(int left, int top, int right, int bottom);
 
-    /** The user tapped a notification carrying a deep-link. */
-    private static native void nativeNotificationAction(String deeplink);
+    /**
+     * A link the application was opened with: the deep link of a tapped notification, or
+     * the URL of a VIEW intent in one of the application's schemes.
+     */
+    private static native void nativeOnOpenedLink(String link);
 
     /** A new launching intent replaced the old one; carries re-encoded extras. */
     private static native void nativeOnLaunchArguments(String payload);
@@ -2599,8 +2602,12 @@ public class CranposeActivity extends NativeActivity {
         trackAccessibilityState();
         reportAccessibilityOptions();
         registerNetworkCallback();
-        dispatchDeeplink(getIntent());
-        dispatchIncomingShares(getIntent());
+        // A recreated activity keeps the intent it was launched with, which the
+        // application already took.
+        if (savedInstanceState == null) {
+            dispatchDeeplink(getIntent());
+            dispatchIncomingShares(getIntent());
+        }
         registerBackCallback();
     }
 
@@ -2689,7 +2696,14 @@ public class CranposeActivity extends NativeActivity {
                 uris.addAll(shared);
             }
         } else if (intent.getData() != null) {
-            uris.add(intent.getData());
+            Uri data = intent.getData();
+            String scheme = data.getScheme();
+            if (!"content".equalsIgnoreCase(scheme) && !"file".equalsIgnoreCase(scheme)) {
+                // A link in one of the application's schemes, not a file to open.
+                nativeOnOpenedLink(data.toString());
+                return;
+            }
+            uris.add(data);
         }
         String declaredType = intent.getType() == null ? "" : intent.getType();
         android.util.Log.i("cranpose", "incoming share: " + uris.size()
@@ -2863,7 +2877,7 @@ public class CranposeActivity extends NativeActivity {
         String deeplink = intent.getStringExtra(EXTRA_DEEPLINK);
         if (deeplink != null && !deeplink.isEmpty()) {
             intent.removeExtra(EXTRA_DEEPLINK);
-            nativeNotificationAction(deeplink);
+            nativeOnOpenedLink(deeplink);
         }
     }
 

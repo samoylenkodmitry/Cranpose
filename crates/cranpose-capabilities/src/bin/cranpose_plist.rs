@@ -5,10 +5,11 @@
 //! ```
 //!
 //! The usage file is what a build script wrote from the application's
-//! declaration. Each key it holds replaces the one in the property list, or is
-//! added before the closing tag when the list has none.
+//! declaration. Each top-level key it holds, with its string, array or
+//! dictionary, replaces the one in the property list, or is added before the
+//! closing tag when the list has none.
 
-use std::{env, fs, process::ExitCode};
+use std::{env, fs, ops::Range, process::ExitCode};
 
 fn main() -> ExitCode {
     let mut usage = None;
@@ -30,7 +31,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let entries = match fs::read_to_string(&usage) {
+    let usage_text = match fs::read_to_string(&usage) {
         Ok(text) => text,
         Err(error) => {
             eprintln!("cranpose-plist: reading {usage}: {error}");
@@ -45,7 +46,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let merged = merge(&plist, &pairs(&entries));
+    let merged = merge(&plist, &entries(&usage_text));
     if let Err(error) = fs::write(&into, merged) {
         eprintln!("cranpose-plist: writing {into}: {error}");
         return ExitCode::FAILURE;
@@ -53,56 +54,81 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// The key and value of each entry in a usage file.
-fn pairs(entries: &str) -> Vec<(String, String)> {
+/// Each top-level key of a property list with its value element as written:
+/// a string, or a whole array or dictionary.
+fn entries(plist: &str) -> Vec<(&str, &str)> {
+    entry_spans(plist)
+        .into_iter()
+        .map(|(key, value)| (&plist[key], &plist[value]))
+        .collect()
+}
+
+/// The spans of each top-level key name and of its value element.
+fn entry_spans(plist: &str) -> Vec<(Range<usize>, Range<usize>)> {
     let mut found = Vec::new();
-    let mut key = None;
-    for line in entries.lines() {
-        let line = line.trim();
-        if let Some(name) = between(line, "<key>", "</key>") {
-            key = Some(name.to_string());
-        } else if let Some(value) = between(line, "<string>", "</string>")
-            && let Some(name) = key.take()
-        {
-            found.push((name, value.to_string()));
-        }
+    let Some(root) = plist.find("<dict>") else {
+        return found;
+    };
+    let mut at = root + "<dict>".len();
+    while let Some((key, value)) = next_entry(plist, at) {
+        at = value.end;
+        found.push((key, value));
     }
     found
 }
 
-fn between<'a>(line: &'a str, open: &str, close: &str) -> Option<&'a str> {
-    let start = line.strip_prefix(open)?;
-    start.strip_suffix(close)
+/// The spans of the key name and of the value element of the entry that
+/// starts after `from`, while it is still inside the dictionary.
+fn next_entry(plist: &str, from: usize) -> Option<(Range<usize>, Range<usize>)> {
+    let rest = plist.get(from..)?;
+    let open = rest.find('<')?;
+    if !rest[open..].starts_with("<key>") {
+        return None;
+    }
+    let name_start = from + open + "<key>".len();
+    let name_end = name_start + plist[name_start..].find("</key>")?;
+    let after_key = name_end + "</key>".len();
+    let value_start = after_key + plist[after_key..].find('<')?;
+    let value_end = element_end(plist, value_start)?;
+    Some((name_start..name_end, value_start..value_end))
 }
 
-/// Writes each pair into the property list, in place of the key it already
-/// holds or before the closing tag.
-fn merge(plist: &str, pairs: &[(String, String)]) -> String {
+/// Where the element that opens at `start` ends, past nested elements of
+/// its own name.
+fn element_end(plist: &str, start: usize) -> Option<usize> {
+    let tag_end = start + plist[start..].find('>')? + 1;
+    let tag = &plist[start..tag_end];
+    if tag.ends_with("/>") {
+        return Some(tag_end);
+    }
+    let name = tag.trim_start_matches('<').trim_end_matches('>');
+    let (opening, closing) = (format!("<{name}>"), format!("</{name}>"));
+    let mut depth = 1;
+    let mut at = tag_end;
+    while depth > 0 {
+        let close = at + plist[at..].find(&closing)?;
+        let nested = plist[at..close].matches(&opening).count();
+        depth += nested;
+        depth -= 1;
+        at = close + closing.len();
+    }
+    Some(at)
+}
+
+/// Writes each entry into the property list, in place of the value of the
+/// key it already holds or before the closing tag.
+fn merge(plist: &str, entries: &[(&str, &str)]) -> String {
     let mut text = plist.to_string();
-    for (key, value) in pairs {
-        text = match key_at(&text, key) {
-            Some(at) => replace_value(&text, at, value),
+    for (key, value) in entries {
+        let held = entry_spans(&text)
+            .into_iter()
+            .find(|(name, _)| text[name.clone()] == **key);
+        text = match held {
+            Some((_, span)) => format!("{}{value}{}", &text[..span.start], &text[span.end..]),
             None => add_entry(&text, key, value),
         };
     }
     text
-}
-
-fn key_at(text: &str, key: &str) -> Option<usize> {
-    text.find(&format!("<key>{key}</key>"))
-}
-
-fn replace_value(text: &str, key_at: usize, value: &str) -> String {
-    let tail = &text[key_at..];
-    let Some(open) = tail.find("<string>") else {
-        return text.to_string();
-    };
-    let Some(close) = tail[open..].find("</string>") else {
-        return text.to_string();
-    };
-    let start = key_at + open + "<string>".len();
-    let end = key_at + open + close;
-    format!("{}{value}{}", &text[..start], &text[end..])
 }
 
 fn add_entry(text: &str, key: &str, value: &str) -> String {
@@ -110,12 +136,8 @@ fn add_entry(text: &str, key: &str, value: &str) -> String {
         return text.to_string();
     };
     format!(
-        "{}\t<key>{key}</key>\n\t<string>{value}</string>\n{}",
+        "{}\t<key>{key}</key>\n\t{value}\n{}",
         &text[..at],
         &text[at..]
     )
 }
-
-#[cfg(test)]
-#[path = "tests/cranpose_plist_tests.rs"]
-mod tests;

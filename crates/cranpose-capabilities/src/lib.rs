@@ -374,6 +374,10 @@ pub struct Capabilities<'a> {
     /// those files, in a share sheet and in "Open with", and hands what the
     /// person picks to `cranpose_services::incoming_share`.
     pub opens: &'a [&'a str],
+    /// The URL schemes of the links that open the application, such as
+    /// `"myapp"` for `myapp://item/7`: the platform opens the application for
+    /// them and hands each link to `cranpose_services::rememberOpenedLinks`.
+    pub links: &'a [&'a str],
 }
 
 impl Capabilities<'_> {
@@ -382,6 +386,7 @@ impl Capabilities<'_> {
         uses: &[],
         demands: &[],
         opens: &[],
+        links: &[],
     };
 
     /// Whether the application declared this service.
@@ -412,6 +417,7 @@ pub const fn declare(uses: &[Use]) -> Declaration<'_> {
             uses,
             demands: &[],
             opens: &[],
+            links: &[],
         },
     }
 }
@@ -433,6 +439,17 @@ impl<'a> Declaration<'a> {
         Declaration {
             capabilities: Capabilities {
                 opens,
+                ..self.capabilities
+            },
+        }
+    }
+
+    /// Adds the URL schemes of the links that open the application, such as
+    /// `"myapp"`, so the platform opens it for them.
+    pub const fn linking(self, links: &'a [&'a str]) -> Declaration<'a> {
+        Declaration {
+            capabilities: Capabilities {
+                links,
                 ..self.capabilities
             },
         }
@@ -566,9 +583,11 @@ fn rust_source(capabilities: &Capabilities<'_>) -> String {
             "            cranpose_capabilities::Demand::{demand:?},"
         );
     }
-    text.push_str("        ],\n        opens: &[\n");
-    for media_type in capabilities.opens {
-        let _ = writeln!(text, "            \"{}\",", escape(media_type));
+    for (field, items) in [("opens", capabilities.opens), ("links", capabilities.links)] {
+        let _ = writeln!(text, "        ],\n        {field}: &[");
+        for item in items {
+            let _ = writeln!(text, "            \"{}\",", escape(item));
+        }
     }
     text.push_str("        ],\n    };\n");
     text
@@ -622,23 +641,21 @@ pub fn json(capabilities: &Capabilities<'_>) -> String {
             "    {{ \"name\": \"{permission}\", \"maxSdk\": {level} }}{comma}"
         );
     }
-    text.push_str("  ],\n  \"demands\": [\n");
-    for (at, demand) in capabilities.demands.iter().enumerate() {
-        let comma = if at + 1 == capabilities.demands.len() {
-            ""
-        } else {
-            ","
-        };
-        let _ = writeln!(text, "    \"{}\"{comma}", demand.android_feature());
-    }
-    text.push_str("  ],\n  \"opens\": [\n");
-    for (at, media_type) in capabilities.opens.iter().enumerate() {
-        let comma = if at + 1 == capabilities.opens.len() {
-            ""
-        } else {
-            ","
-        };
-        let _ = writeln!(text, "    \"{}\"{comma}", escape_json(media_type));
+    let demands: Vec<&str> = capabilities
+        .demands
+        .iter()
+        .map(|demand| demand.android_feature())
+        .collect();
+    for (field, items) in [
+        ("demands", &demands[..]),
+        ("opens", capabilities.opens),
+        ("links", capabilities.links),
+    ] {
+        let _ = writeln!(text, "  ],\n  \"{field}\": [");
+        for (at, item) in items.iter().enumerate() {
+            let comma = if at + 1 == items.len() { "" } else { "," };
+            let _ = writeln!(text, "    \"{}\"{comma}", escape_json(item));
+        }
     }
     text.push_str("  ]\n}\n");
     text
@@ -701,20 +718,27 @@ pub fn android_manifest(capabilities: &Capabilities<'_>) -> String {
             demand.android_feature()
         );
     }
-    if !capabilities.opens.is_empty() {
-        text.push_str(&android_opening_activity(capabilities.opens));
+    if !capabilities.opens.is_empty() || !capabilities.links.is_empty() {
+        text.push_str(
+            "    <application>\n        \
+             <activity android:name=\"dev.cranpose.android.CranposeActivity\">\n",
+        );
+        if !capabilities.opens.is_empty() {
+            text.push_str(&android_opening_filters(capabilities.opens));
+        }
+        if !capabilities.links.is_empty() {
+            text.push_str(&android_link_filter(capabilities.links));
+        }
+        text.push_str("        </activity>\n    </application>\n");
     }
     text.push_str("</manifest>\n");
     text
 }
 
-/// The activity entry that offers the application for `opens`: sending a file
+/// The intent filters that offer the application for `opens`: sending a file
 /// to it and opening one with it.
-fn android_opening_activity(opens: &[&str]) -> String {
-    let mut text = String::from(
-        "    <application>\n        \
-         <activity android:name=\"dev.cranpose.android.CranposeActivity\">\n",
-    );
+fn android_opening_filters(opens: &[&str]) -> String {
+    let mut text = String::new();
     for actions in [
         &[
             "android.intent.action.SEND",
@@ -738,13 +762,32 @@ fn android_opening_activity(opens: &[&str]) -> String {
         }
         text.push_str("            </intent-filter>\n");
     }
-    text.push_str("        </activity>\n    </application>\n");
+    text
+}
+
+/// The intent filter that opens the application for links in its `schemes`,
+/// from a browser too.
+fn android_link_filter(schemes: &[&str]) -> String {
+    let mut text = String::from(
+        "            <intent-filter>\n                \
+         <action android:name=\"android.intent.action.VIEW\" />\n                \
+         <category android:name=\"android.intent.category.DEFAULT\" />\n                \
+         <category android:name=\"android.intent.category.BROWSABLE\" />\n",
+    );
+    for scheme in schemes {
+        let _ = writeln!(
+            text,
+            "                <data android:scheme=\"{}\" />",
+            escape_xml(scheme)
+        );
+    }
+    text.push_str("            </intent-filter>\n");
     text
 }
 
 /// The Apple usage descriptions the declaration becomes, with the watch
-/// background modes its services run under, as a property list to merge
-/// into an `Info.plist`.
+/// background modes its services run under and the URL schemes it opens, as
+/// a property list to merge into an `Info.plist`.
 ///
 /// It is a property list of its own, so an Apple build merges it with one
 /// line and no tool beyond the ones macOS ships:
@@ -776,6 +819,16 @@ pub fn apple_usage(capabilities: &Capabilities<'_>) -> String {
             let _ = writeln!(text, "\t\t<string>{mode}</string>");
         }
         text.push_str("\t</array>\n");
+    }
+    if !capabilities.links.is_empty() {
+        text.push_str(
+            "\t<key>CFBundleURLTypes</key>\n\t<array>\n\t\t<dict>\n\
+             \t\t\t<key>CFBundleURLSchemes</key>\n\t\t\t<array>\n",
+        );
+        for scheme in capabilities.links {
+            let _ = writeln!(text, "\t\t\t\t<string>{}</string>", escape_xml(scheme));
+        }
+        text.push_str("\t\t\t</array>\n\t\t</dict>\n\t</array>\n");
     }
     text.push_str("</dict>\n</plist>\n");
     text

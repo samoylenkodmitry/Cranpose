@@ -33,6 +33,7 @@ pub mod http;
 #[cfg(feature = "image-loading")]
 pub mod image_loading;
 pub mod image_picker;
+mod inbox;
 pub mod incoming_share;
 pub mod launch_args;
 pub mod launcher;
@@ -43,6 +44,7 @@ pub mod microphone_standby;
 pub mod navigation;
 pub mod network_status;
 pub mod notifier;
+pub mod opened_links;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod peer;
 pub mod power;
@@ -190,9 +192,10 @@ pub use image_picker::{
     ProvideImagePicker, clear_platform_image_picker, default_image_picker, local_image_picker,
     set_platform_image_picker,
 };
+pub use inbox::InboxObserver;
 pub use incoming_share::{
-    IncomingContent, IncomingContentObserver, IncomingSource, clear_incoming_content,
-    observe_incoming_content, publish_incoming_content, rememberIncomingContent,
+    IncomingContent, IncomingSource, clear_incoming_content, observe_incoming_content,
+    publish_incoming_content, rememberIncomingContent,
 };
 pub use launch_args::{
     LaunchArgValue, LaunchArgs, LaunchArgsRef, ProvideLaunchArgs, clear_platform_launch_args,
@@ -249,8 +252,10 @@ pub use network_status::{
 };
 pub use notifier::{
     Notifier, NotifierRef, NotifyRequest, ProvideNotifier, clear_platform_notifier,
-    default_notifier, local_notifier, push_notification_deeplink, set_platform_notifier,
-    take_notification_deeplink,
+    default_notifier, local_notifier, set_platform_notifier,
+};
+pub use opened_links::{
+    clear_opened_links, observe_opened_links, publish_opened_link, rememberOpenedLinks,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use peer::{

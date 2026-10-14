@@ -4,10 +4,10 @@ use objc2::{
     ClassType, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, rc::Retained,
     runtime::AnyClass,
 };
-use objc2_foundation::{NSObject, NSObjectProtocol};
+use objc2_foundation::{NSObject, NSObjectProtocol, NSSet, NSURL, NSUserActivity};
 use objc2_ui_kit::{
-    UIScene, UISceneConnectionOptions, UISceneDelegate, UISceneSession, UIView, UIWindowScene,
-    UIWindowSceneDelegate,
+    UIOpenURLContext, UIScene, UISceneConnectionOptions, UISceneDelegate, UISceneSession, UIView,
+    UIWindowScene, UIWindowSceneDelegate,
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
@@ -27,7 +27,7 @@ define_class!(
             &self,
             scene: &UIScene,
             _session: &UISceneSession,
-            _options: &UISceneConnectionOptions,
+            options: &UISceneConnectionOptions,
         ) {
             if let Some(window_scene) = scene.downcast_ref::<UIWindowScene>() {
                 crate::thread_state::with(|state| {
@@ -35,11 +35,46 @@ define_class!(
                 });
                 link();
             }
+            publish_url_contexts(&options.URLContexts());
+            for activity in &options.userActivities() {
+                publish_web_link(&activity);
+            }
+        }
+
+        #[unsafe(method(scene:openURLContexts:))]
+        fn scene_open_url_contexts(&self, _scene: &UIScene, contexts: &NSSet<UIOpenURLContext>) {
+            publish_url_contexts(contexts);
+        }
+
+        #[unsafe(method(scene:continueUserActivity:))]
+        fn scene_continue_user_activity(&self, _scene: &UIScene, activity: &NSUserActivity) {
+            publish_web_link(activity);
         }
     }
 
     unsafe impl UIWindowSceneDelegate for SceneDelegate {}
 );
+
+/// Publishes the URLs in one of the app's schemes that the scene was asked
+/// to open.
+fn publish_url_contexts(contexts: &NSSet<UIOpenURLContext>) {
+    for context in contexts {
+        publish_url(&context.URL());
+    }
+}
+
+/// Publishes the web page of a universal link the scene continues.
+fn publish_web_link(activity: &NSUserActivity) {
+    if let Some(url) = activity.webpageURL() {
+        publish_url(&url);
+    }
+}
+
+fn publish_url(url: &NSURL) {
+    if let Some(text) = url.absoluteString() {
+        cranpose_services::publish_opened_link(text.to_string());
+    }
+}
 
 impl SceneDelegate {
     fn new(mtm: MainThreadMarker) -> Retained<Self> {

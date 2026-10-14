@@ -350,6 +350,19 @@ impl<R: Clone + PartialEq + 'static> NavController<R> {
         }));
     }
 
+    /// Leaves the bottom entry with `route` above it, the back stack Android
+    /// builds for a deep link; a `route` equal to the bottom one leaves the
+    /// bottom alone.
+    pub(crate) fn open_deep_link(&self, route: R) {
+        self.forget(self.stack.update(|stack| {
+            let popped = stack.entries.split_off(stack.entries.len().min(1));
+            if stack.top_route() != Some(&route) {
+                stack.push(route);
+            }
+            popped
+        }));
+    }
+
     /// Pops the top entry when there is one beneath it, and returns whether it
     /// did — Android's `navigateUp()`.
     pub fn navigate_up(&self) -> bool {
