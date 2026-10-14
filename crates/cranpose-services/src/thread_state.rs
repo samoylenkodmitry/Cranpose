@@ -35,6 +35,9 @@ pub(crate) struct ServiceThreadState {
     pub(crate) recovered_picks: RefCell<HashMap<String, RecoveredPick>>,
     pub(crate) in_flight_request: RefCell<Option<String>>,
     pub(crate) registered_request_keys: RefCell<HashMap<String, usize>>,
+    /// The browser's shared image loader, made on first use.
+    #[cfg(all(target_arch = "wasm32", feature = "image-loading"))]
+    pub(crate) image_loader: RefCell<Option<crate::image_loading::ImageLoader>>,
     #[cfg(target_arch = "wasm32")]
     pub(crate) lifecycle_observers: Listeners<dyn Fn(crate::host::LifecycleEvent)>,
     #[cfg(target_arch = "wasm32")]
@@ -65,6 +68,8 @@ impl ServiceThreadState {
             recovered_picks: RefCell::new(HashMap::new()),
             in_flight_request: RefCell::new(None),
             registered_request_keys: RefCell::new(HashMap::new()),
+            #[cfg(all(target_arch = "wasm32", feature = "image-loading"))]
+            image_loader: RefCell::new(None),
             #[cfg(target_arch = "wasm32")]
             lifecycle_observers: Listeners::new(),
             #[cfg(target_arch = "wasm32")]

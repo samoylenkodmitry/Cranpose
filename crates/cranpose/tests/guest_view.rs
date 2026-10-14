@@ -5,7 +5,7 @@ use std::{
 
 use cranpose::{AppLauncher, GpuContext, gpu_context, prelude::*};
 
-use crate::gpu_support::{fill, pixel};
+use crate::gpu_support::{draw_settled, fill, pixel};
 
 const SIZE: u32 = 8;
 
@@ -71,14 +71,14 @@ fn an_external_texture_shows_each_frame_its_owner_draws() {
         })
         .expect("GPU embedded component");
     let mut pixels = Vec::new();
-    assert!(view.draw(&mut pixels).expect("first frame"));
+    assert!(draw_settled(&mut view, &mut pixels));
     assert_eq!(pixel(&pixels, 64, 32, 24), &[255, 0, 0, 255]);
     assert_ne!(pixel(&pixels, 64, 2, 2), &[255, 0, 0, 255]);
 
     let engine = engine.get().expect("composed");
     fill(&engine.gpu, &engine.texture, wgpu::Color::BLUE);
     engine.frame.set(2);
-    assert!(view.draw(&mut pixels).expect("second engine frame"));
+    assert!(draw_settled(&mut view, &mut pixels));
     assert_eq!(pixel(&pixels, 64, 32, 24), &[0, 0, 255, 255]);
 }
 

@@ -13,7 +13,7 @@
 
 use std::rc::Rc;
 
-use cranpose_ui_graphics::{Color, Point, Rect, Size};
+use cranpose_ui_graphics::{Brush, Color, Point, Rect, Size};
 use cranpose_ui_layout::Alignment;
 
 use super::{
@@ -41,6 +41,9 @@ pub struct DialogSpec {
     /// Whether the dialog keeps clear of the system bars and the on-screen
     /// keyboard. A dialog that draws its own full-bleed surface turns this off.
     pub apply_window_insets: bool,
+    /// Where the dialog's surface sits in the window: the centre, or the
+    /// bottom edge for a sheet.
+    pub alignment: Alignment,
 }
 
 impl Default for DialogSpec {
@@ -49,6 +52,7 @@ impl Default for DialogSpec {
             dismiss_on_outside_tap: true,
             dismiss_on_back: true,
             apply_window_insets: true,
+            alignment: Alignment::CENTER,
         }
     }
 }
@@ -61,6 +65,7 @@ impl DialogSpec {
             dismiss_on_outside_tap: false,
             dismiss_on_back: false,
             apply_window_insets: true,
+            alignment: Alignment::CENTER,
         }
     }
 
@@ -79,6 +84,12 @@ impl DialogSpec {
     /// Sets whether the dialog keeps clear of system insets.
     pub const fn with_window_insets(mut self, apply: bool) -> Self {
         self.apply_window_insets = apply;
+        self
+    }
+
+    /// Sets where the dialog's surface sits in the window.
+    pub const fn with_alignment(mut self, alignment: Alignment) -> Self {
+        self.alignment = alignment;
         self
     }
 }
@@ -142,6 +153,22 @@ pub fn DialogWithScrim<C>(
 ) where
     C: Fn() + 'static,
 {
+    DialogWithFadingScrim(spec, scrim, || 1.0, on_dismiss, content);
+}
+
+/// A modal dialog whose scrim shows `scrim` at `scrim_alpha()` of its
+/// alpha. `scrim_alpha` is read while the scrim draws, so a scrim that fades
+/// with an animation, as a sheet's does, redraws without recomposing.
+#[composable]
+pub fn DialogWithFadingScrim<C>(
+    spec: DialogSpec,
+    scrim: Color,
+    scrim_alpha: impl Fn() -> f32 + 'static,
+    on_dismiss: impl Fn(DismissReason) + 'static,
+    content: C,
+) where
+    C: Fn() + 'static,
+{
     let own_modal_depth =
         cranpose_core::remember(|| crate::modal::current_modal_depth() + 1).with(|depth| *depth);
 
@@ -180,26 +207,47 @@ pub fn DialogWithScrim<C>(
         scope.on_dispose(move || drop(registration))
     });
 
+    let scrim_alpha = Rc::new(scrim_alpha);
     PopupDismissable(bounds, Point { x: 0.0, y: 0.0 }, scrim_dismiss, move || {
         let content = Rc::clone(&content);
+        let scrim_alpha = Rc::clone(&scrim_alpha);
         Box(
             Modifier::empty()
                 .size(Size {
                     width: bounds.width,
                     height: bounds.height,
                 })
-                .background(scrim)
+                .draw_behind(move |scope| {
+                    let alpha = scrim.3 * scrim_alpha().clamp(0.0, 1.0);
+                    scope.draw_rect(Brush::solid(Color(scrim.0, scrim.1, scrim.2, alpha)));
+                })
                 .focus_target()
                 .stable_semantics(move |config| {
                     config.role = Some(SemanticsWidgetRole::Dialog);
                     config.is_modal = true;
+                    // A reader stays inside the dialog, so the dialog itself
+                    // offers the way out that the back gesture takes.
+                    config.dismiss = dismiss_on_back.then(|| {
+                        cranpose_foundation::SemanticsDismiss::new(move || {
+                            (back.value())();
+                            true
+                        })
+                    });
                 }),
-            BoxSpec::default().content_alignment(Alignment::CENTER),
+            BoxSpec::default().content_alignment(spec.alignment),
             move || {
                 let content = Rc::clone(&content);
-                cranpose_core::CompositionLocalProvider(
-                    [crate::modal::local_modal_depth().provides(own_modal_depth)],
-                    move || content(),
+                // Taps on the dialog's own surface stay off the scrim below.
+                Box(
+                    Modifier::empty().pointer_opaque(),
+                    BoxSpec::default(),
+                    move || {
+                        let content = Rc::clone(&content);
+                        cranpose_core::CompositionLocalProvider(
+                            [crate::modal::local_modal_depth().provides(own_modal_depth)],
+                            move || content(),
+                        );
+                    },
                 );
             },
         );

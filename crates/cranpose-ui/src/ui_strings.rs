@@ -15,6 +15,14 @@ pub enum UiString {
     Redo,
     /// Default search-field hint and search-button accessibility label.
     Search,
+    /// Shows the month before in a date picker.
+    PreviousMonth,
+    /// Shows the month after in a date picker.
+    NextMonth,
+    /// Names the hour wheel of a time picker.
+    Hour,
+    /// Names the minute wheel of a time picker.
+    Minute,
 }
 
 impl UiString {
@@ -35,6 +43,10 @@ impl UiString {
                 "Undo",
                 "Redo",
                 "Search",
+                "Previous month",
+                "Next month",
+                "Hour",
+                "Minute",
             ][self as usize]
                 .to_owned()
         }
@@ -46,7 +58,7 @@ static SOURCE: crate::localization::SourceCatalog =
     crate::localization::SourceCatalog::new("en", include_str!("../locales/en/cranpose-ui.ftl"));
 
 #[cfg(feature = "localization")]
-static MESSAGES: [crate::localization::Message; 7] = {
+static MESSAGES: [crate::localization::Message; 11] = {
     use crate::localization::Message;
     [
         Message::new("cranpose-ui", "copy", &SOURCE),
@@ -56,6 +68,10 @@ static MESSAGES: [crate::localization::Message; 7] = {
         Message::new("cranpose-ui", "undo", &SOURCE),
         Message::new("cranpose-ui", "redo", &SOURCE),
         Message::new("cranpose-ui", "search", &SOURCE),
+        Message::new("cranpose-ui", "previous-month", &SOURCE),
+        Message::new("cranpose-ui", "next-month", &SOURCE),
+        Message::new("cranpose-ui", "hour", &SOURCE),
+        Message::new("cranpose-ui", "minute", &SOURCE),
     ]
 };
 

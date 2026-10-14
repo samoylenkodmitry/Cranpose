@@ -54,22 +54,9 @@ fn click_control_unsettled(robot: &mut RobotTestRule<TestRenderer>, label: &str)
     )
 }
 
-fn settle_motion(robot: &mut RobotTestRule<TestRenderer>) {
-    for _ in 0..120 {
-        robot.advance_time(16_666_667);
-        if !robot.shell_mut().has_active_animations()
-            && !robot.shell_mut().has_transient_frame_callbacks()
-        {
-            robot.wait_for_idle();
-            return;
-        }
-    }
-    panic!("documentation motion must settle");
-}
-
 fn click_control(robot: &mut RobotTestRule<TestRenderer>, label: &str) -> bool {
     let clicked = click_control_unsettled(robot, label);
-    settle_motion(robot);
+    robot.wait_for_motion();
     clicked
 }
 
@@ -239,7 +226,7 @@ fn manual_reader_scroll_interrupts_a_chapter_animation() {
     }
     robot.shell_mut().set_cursor(1040.0, 650.0);
     robot.shell_mut().pointer_scrolled(0.0, 9000.0);
-    settle_motion(&mut robot);
+    robot.wait_for_motion();
     assert!(robot
         .find_by_text("Build apps with Compose in Rust.")
         .exists());
@@ -798,7 +785,7 @@ fn compact_reader_can_scroll_the_final_paragraph_above_the_pinned_repository_lin
     for _ in 0..80 {
         robot.move_to(10.0, 400.0);
         robot.shell_mut().pointer_scrolled(0.0, -600.0);
-        settle_motion(&mut robot);
+        robot.wait_for_motion();
         let rects = robot.get_all_rects();
         visible_labels = rects
             .iter()

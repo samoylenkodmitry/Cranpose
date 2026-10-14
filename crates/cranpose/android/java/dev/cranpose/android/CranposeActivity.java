@@ -1241,7 +1241,12 @@ public class CranposeActivity extends NativeActivity {
             }
             if (element.isCheckable()) {
                 info.setCheckable(true);
-                info.setChecked(element.toggled == 1);
+                // 2 is partly checked, which Android 16 can say itself.
+                if (element.toggled == 2 && Build.VERSION.SDK_INT >= 36) {
+                    info.setChecked(AccessibilityNodeInfo.CHECKED_STATE_PARTIAL);
+                } else {
+                    info.setChecked(element.toggled == 1);
+                }
             }
             if (element.selected >= 0 && element.role != 6) info.setSelected(element.selected == 1);
             info.setBoundsInParent(element.bounds);

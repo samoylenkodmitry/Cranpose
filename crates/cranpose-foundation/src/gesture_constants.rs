@@ -26,6 +26,10 @@
 /// - Matches common platform conventions (Android uses 8dp for ViewConfiguration.TOUCH_SLOP)
 pub const DRAG_THRESHOLD: f32 = 8.0;
 
+/// How long a press rests before it is a long press, in nanoseconds: 400 ms,
+/// Android's `ViewConfiguration.getLongPressTimeout()`.
+pub const LONG_PRESS_TIMEOUT_NANOS: u64 = 400_000_000;
+
 /// Maximum fling velocity in logical pixels per second.
 ///
 /// Matches Android's default maximum fling velocity (ViewConfiguration) at

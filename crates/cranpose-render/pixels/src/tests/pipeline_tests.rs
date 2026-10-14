@@ -6,7 +6,7 @@ use cranpose_ui::TextLayoutOptions;
 use cranpose_ui_graphics::{CornerRadii, ImageBitmap, ImageSampling};
 
 use super::*;
-use crate::scene::RasterScene;
+use crate::{draw::RenderItem, scene::RasterScene};
 
 fn with_test_app_context<R>(block: impl FnOnce() -> R) -> R {
     let app_context = cranpose_ui::AppContext::new();
@@ -25,7 +25,8 @@ fn push_text_style_draws_for_test(
     text_style: &TextStyle,
     clip: Option<Rect>,
 ) {
-    let text = cranpose_ui::text::AnnotatedString::from(text);
+    let text = Rc::new(cranpose_ui::text::AnnotatedString::from(text));
+    let text_style = std::sync::Arc::new(text_style.clone());
     with_test_app_context(|| {
         push_text_style_draws(
             scene,
@@ -33,7 +34,7 @@ fn push_text_style_draws_for_test(
             rect,
             &GraphicsLayer::default(),
             &text,
-            text_style,
+            &text_style,
             14.0,
             clip,
         );
@@ -526,11 +527,13 @@ fn push_text_style_draws_emits_decoration_shapes() {
         scene.shapes.iter().all(|shape| shape.snap_to_pixel_grid),
         "text decoration shapes should snap after inherited translated-content anchors"
     );
-    assert!(
-        scene
-            .shapes
-            .iter()
-            .all(|shape| shape.z_index > scene.texts[0].z_index),
+    assert_eq!(
+        scene.order,
+        [
+            RenderItem::Text(0),
+            RenderItem::Shape(0),
+            RenderItem::Shape(1)
+        ],
         "text decoration shapes should render over foreground glyph ink"
     );
 }

@@ -13,7 +13,7 @@ fresh generation.
 - [Lazy lists](../crates/cranpose-ui/src/widgets/lazy_list.rs) expose
   `LazyColumn` and `LazyRow` as well as lower-level node functions.
 - [Robot helpers](../crates/cranpose-testing/src/robot_helpers.rs) find controls
-  in semantic trees. A dedicated testTag/onNodeWithTag surface is a separate gap.
+  in semantic trees, and `Modifier::test_tag` names a node for them to find.
 - [Physical-iPhone VoiceOver](accessibility_voiceover_validation.md) and
   [native text-input flows](accessibility_screen_identity_validation.md) have
   dated device evidence. API presence and reader usability are separate claims.
@@ -464,11 +464,11 @@ Sampled against Compose's `androidx.compose.ui`/`foundation-layout`:
 | `semantics { collectionInfo = CollectionInfo(rowCount, columnCount) }` | `config.collection` | Implemented | `LazyColumn` and `LazyRow` declare the count on their own. TalkBack reads "list, N items" as its cursor enters; accesskit gives the container the list role. |
 | `View.announceForAccessibility(text)` (what Compose on Android reaches for; no multiplatform API) | `local_announcer()`, `Announcer::announce`, `announce_assertive` | Implemented | One call on all four platforms: `UIAccessibilityAnnouncementNotification`, `announceForAccessibility`, an `aria-live` region, and an accesskit live node. |
 | `Icon(imageVector, contentDescription)`, `Image(painter, contentDescription)` -- the name is a required argument, `null` means decoration | `Icon(path, content_description, size, color)` in `cranpose-ui` and in `cranpose-liquid`; `Image(painter, content_description, ..)` | Implemented | `Image` already asked. `Icon` had a short form that answered `None` for the writer, and the liquid `Icon` could not carry a name at all; both now ask, and `None` says the icon is decoration. Compose asks at these two widgets and no others, and neither does Cranpose. |
-| `Modifier.testTag("x")` | -- | Absent | See Findings -- `cranpose-testing` finds elements by text/geometry instead. |
+| Coil's `AsyncImage(model = url)` / `rememberAsyncImagePainter` | `AsyncImage(ImageRequest::new(url), ..)`, which decodes at the size of its box, and `rememberAsyncImage(request)` returning `State<ImageLoadState>`, with `ImageLoader` (`image-loading` feature) | Implemented | Not Compose itself: Coil, which Compose apps use. Decodes off the UI thread at the requested size; memory cache by decoded bytes, disk cache with a size limit; one download per image; a request nobody waits for stops. PNG, JPEG, WebP and GIF (first frame). |
+| `Modifier.testTag("x")` | `Modifier::test_tag("x")` | Implemented | `PlacedSemanticsNode::find_by_tag`, the headless robot's `find_by_tag` and the desktop robot's `find_by_tag` / `click_by_tag` find the node. Screen readers never receive the tag. |
 | `Modifier.rotate()`, `.scale()` | `Modifier::rotate()`, `Modifier::scale()`, `Modifier::scale_xy()` | Done | Thin wrappers over `graphics_layer_value`; they retain `TransformOrigin::CENTER`, and positive degrees rotate clockwise in Cranpose's y-down space. Rust names the two-axis overload `scale_xy`. |
-| `Modifier.zIndex()` | -- | Absent | Not a `graphicsLayer` wrapper: draw order is a layout concern. `Placement::z_index` exists but is hardcoded per widget and never exposed through `ParentData`, so a real modifier needs a parent-data field, a node populating it, and every `Placement::new(.., 0)` site reading it instead. |
+| `Modifier.zIndex()` | `Modifier::z_index(z)` | Implemented | Orders siblings for drawing and taps; equal ones keep the composition order, and several on one node add up. `Placement::z_index` from a custom `MeasurePolicy` is not read yet. |
 | `FocusRequester`, `Modifier.focusRequester()` | `FocusRequester`, `Modifier::focus_requester()` | Implemented | `request_focus()` returns `Result`, with `NotAttached` (never attached, or the node left composition) and `NoFocusTarget` distinguished -- no panic and no lying `Ok`. Reentrancy is safe by construction: a `request_focus()` from inside `on_focus_changed` enqueues and returns, and the outer dispatch loop drains it, with the manager's `RefCell` never held across a callback. |
-| `Modifier.testTag` | -- | Absent | A dedicated tag finder is absent; semantic-tree robot helpers are available. |
 | `Constraints`, `Density`, `Alignment`, `Arrangement`, `Measurable`, `Placeable`, `MeasureResult`, `MeasurePolicy` | `cranpose-ui-layout::{Constraints, ..., MeasurePolicy}`, `cranpose-ui::Density` | Implemented | Full layout-contract vocabulary present under the same names. |
 | `Dp`, `Sp`, `Px` (typed units, used everywhere in Compose's own modifier signatures) | `cranpose-ui-graphics::unit::{Dp, Sp, Px}` (types exist) | **Partial** | The types exist, but the widget/modifier surface itself (`padding`, `size`, `weight`, `offset`, ...) takes raw `f32`, not `Dp` -- Compose's type-safety guarantee against mixing raw pixels and density-independent units is not carried through to the call sites that would benefit from it. |
 
@@ -522,7 +522,7 @@ by symbol, per the Scope decision above.
 | Compose (`androidx.compose.ui.test`) | Cranpose (`cranpose-testing`) | Verdict |
 |---|---|---|
 | `ComposeTestRule`, `SemanticsNodeInteraction`-style finder/assertion chain | `ComposeTestRule`, `ElementFinder`, `FinderQuery`, `assert_*` fns | Implemented, different finder model |
-| `Modifier.testTag` + `onNodeWithTag` | -- (finds by `TextMatcher`/geometry instead) | **Different approach**, see Findings |
+| `Modifier.testTag` + `onNodeWithTag` | `Modifier::test_tag` + `find_by_tag` | Implemented, see Findings |
 | (screenshot testing is a separate library, e.g. Roborazzi/Paparazzi -- not part of `ui-test`) | `capture_screenshot`, `changed_pixel_count`, `ScreenshotPixelDifference`, `expected_screenshot_pixel_bytes` | Cranpose-only extension, not a Compose analog |
 
 ## Findings
@@ -544,8 +544,8 @@ the shape didn't change). `remember` in 1.12.0 still returns `T` directly
 (and its `vararg keys` overload, now visible in the refreshed data, is
 built into `remember` itself as an overload family Kotlin can express and
 Rust cannot -- confirming, not weakening, why `rememberKeyed` had to be a
-separate name). `Modifier.testTag` is unchanged and Cranpose still has
-nothing matching it under any spelling. The `remember`/`LaunchedEffect`
+separate name). `Modifier.testTag` is unchanged; Cranpose has matched it
+since `Modifier::test_tag`. The `remember`/`LaunchedEffect`
 mechanism split is entirely internal to Cranpose and does not depend on
 Compose's version at all. None of the four needed a rewrite.
 
@@ -591,16 +591,14 @@ different-shape is exactly the kind of thing this doc exists to catch, and
 `remember` is the single most common Compose function, so its wrapper
 widens on every call site that uses it.
 
-### A dedicated `testTag` finder is absent
+### A dedicated `testTag` finder -- resolved
 
 Compose's `Modifier.testTag("x")` + `onNodeWithTag("x")` is the standard,
 locale-independent way to address a specific UI element in a test.
-`cranpose-testing`'s finders (`TextMatcher`, `FinderQuery`,
-`find_bounds_by_text`) work by matched text and geometry instead. This
-can make text-addressed tests sensitive to localization. However,
-`find_in_semantics`, `find_button_exact_in_semantics`, accessibility audits
-and native reader-action robots already use semantic trees. Missing a dedicated
-tag API does not mean semantic testing is unavailable.
+`Modifier::test_tag("x")` names a node, and `PlacedSemanticsNode::find_by_tag`,
+the headless robot's `find_by_tag` and the desktop robot's `find_by_tag` /
+`click_by_tag` find it. Screen readers never receive the tag. The text and
+geometry finders stay for tests that read what a user reads.
 
 ### `LaunchedEffect`/`DisposableEffect` were macros -- resolved, and the macro was wrong
 

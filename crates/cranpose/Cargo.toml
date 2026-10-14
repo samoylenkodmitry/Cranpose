@@ -153,6 +153,10 @@ web = [
 # not carry a mixer or an output device. On Android this is the AAudio backend,
 # which needs no Java glue, and on watchOS AVAudioEngine.
 audio = ["dep:cranpose-audio", "cranpose-audio/aaudio", "cranpose-audio/avaudio"]
+# `rememberAsyncImage`: images from URLs, files and bytes, decoded off the UI
+# thread and cached in memory and on disk. Network images also need an HTTP
+# backend (`cranpose-services` with `http-native` or `web-http`).
+image-loading = ["cranpose-services/image-loading"]
 # Adds the desktop output device (cpal) so sound works while developing on
 # macOS, Windows or Linux. Linux builds need the ALSA development headers.
 audio-desktop = ["audio", "cranpose-audio/cpal-backend"]

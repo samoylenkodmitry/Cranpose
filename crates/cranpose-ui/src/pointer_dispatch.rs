@@ -60,7 +60,7 @@ impl PointerDispatchState {
         self.manager.borrow_mut().schedule_repass(node_id);
     }
 
-    fn has_pending_repass(&self) -> bool {
+    pub(crate) fn has_pending_repass(&self) -> bool {
         self.manager.borrow().has_pending_repass()
     }
 

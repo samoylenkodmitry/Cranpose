@@ -23,9 +23,12 @@ workspace = true
 [features]
 default = []
 localization = ["cranpose-ui/localization"]
+# Month and weekday names, the first day of the week and date read-outs of
+# the date picker in the app's language.
+localization-formatting = ["localization", "cranpose-ui/localization-formatting"]
 
 [dependencies]
-cranpose-core = { workspace = true }
+cranpose-core = { workspace = true, features = ["internal"] }
 cranpose-macros = { workspace = true }
 cranpose-ui = { workspace = true }
 cranpose-ui-graphics = { workspace = true }

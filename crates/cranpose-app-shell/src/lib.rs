@@ -40,11 +40,9 @@ use cranpose_ui::{
     SubcomposeLayoutNode, WindowRootEntry, clear_transient_scroll_motion_contexts,
     format_layout_tree, format_render_scene, format_screen_summary,
     has_pending_focus_invalidations, has_pending_pointer_repasses,
-    has_pending_semantics_invalidations, peek_focus_invalidation, peek_layout_invalidation,
-    peek_pointer_invalidation, peek_render_invalidation, process_focus_invalidations,
-    process_pointer_repasses, process_semantics_invalidations, request_render_invalidation,
-    take_focus_invalidation, take_layout_invalidation, take_pointer_invalidation,
-    take_render_invalidation,
+    has_pending_semantics_invalidations, process_focus_invalidations, process_pointer_repasses,
+    process_semantics_invalidations, request_render_invalidation, take_focus_invalidation,
+    take_layout_invalidation, take_pointer_invalidation, take_render_invalidation,
 };
 pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType};
 use cranpose_ui_graphics::{Point, PointerIcon, Rect, Size};
@@ -528,28 +526,12 @@ impl ShellApp {
     }
 
     pub(crate) fn has_stale_work_in_context(&self) -> bool {
-        self.layout_requested
-            || peek_render_invalidation()
-            || peek_pointer_invalidation()
-            || peek_focus_invalidation()
-            || peek_layout_invalidation()
-            || cranpose_ui::has_pending_layout_repasses()
-            || cranpose_ui::has_pending_measure_repasses()
-            || cranpose_ui::has_pending_draw_repasses()
-            || cranpose_ui::has_pending_layer_property_repasses()
-            || has_pending_pointer_repasses()
-            || has_pending_focus_invalidations()
+        self.layout_requested || self.app_context.has_stale_work()
     }
 
     pub(crate) fn wants_frame_in_context(&self) -> bool {
         self.layout_requested
-            || peek_render_invalidation()
-            || peek_pointer_invalidation()
-            || peek_focus_invalidation()
-            || peek_layout_invalidation()
-            || cranpose_ui::has_pending_layout_repasses()
-            || cranpose_ui::has_pending_measure_repasses()
-            || cranpose_ui::has_pending_layer_property_repasses()
+            || self.app_context.has_pending_frame_work()
             || self.composition.should_render()
     }
 
@@ -1342,6 +1324,7 @@ where
                 self.app
                     .runtime
                     .drain_frame_callbacks(self.app.last_frame_time_nanos);
+                self.apply_pointer_claim();
                 runtime_handle.drain_ui();
                 self.dispatch_requested_mouse_moves(self.app.last_frame_time_nanos);
             });
@@ -1370,6 +1353,7 @@ where
                 if let Some(frame_time) = frame_time {
                     self.app.last_frame_time_nanos = frame_time.max(self.app.last_frame_time_nanos);
                     self.app.runtime.drain_frame_callbacks(self.app.last_frame_time_nanos);
+                    self.apply_pointer_claim();
                 }
                 let after_frame_callbacks = Instant::now();
                 runtime_handle.drain_ui();
@@ -1405,6 +1389,17 @@ where
                 result
             })
         })
+    }
+
+    /// Gives a held press that a node claimed during the frame, as a long
+    /// press does, to that node alone.
+    fn apply_pointer_claim(&mut self) {
+        let Some(node) = self.app.app_context.take_pointer_claim() else {
+            return;
+        };
+        for index in 0..self.surfaces.len() {
+            SurfaceMut::new(self, index).give_press_to(node);
+        }
     }
 
     fn dispatch_requested_mouse_moves(&mut self, frame_time: u64) {

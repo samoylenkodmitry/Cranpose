@@ -5,3 +5,7 @@ select-all = 모두 선택
 undo = 실행 취소
 redo = 다시 실행
 search = 검색
+previous-month = 이전 달
+next-month = 다음 달
+hour = 시
+minute = 분

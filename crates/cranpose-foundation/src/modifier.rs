@@ -683,6 +683,22 @@ impl SemanticsReach {
 
 /// Focus state of a focus target node.
 ///
+/// Whether a check box or switch is on, off or partly on: Compose's
+/// `ToggleableState`. A check box over a list whose items are partly checked
+/// is `Indeterminate`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ToggleableState {
+    On,
+    Off,
+    Indeterminate,
+}
+
+impl From<bool> for ToggleableState {
+    fn from(on: bool) -> Self {
+        if on { Self::On } else { Self::Off }
+    }
+}
+
 /// This mirrors Jetpack Compose's FocusState enum which tracks whether
 /// a node is focused, has a focused child, or is inactive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -1282,7 +1298,7 @@ pub struct CanvasSemanticsNode {
     /// Compose's `selected`, for `Role.RadioButton`/`Role.Tab`.
     pub selected: Option<bool>,
     /// Compose's `toggleableState`, for `Role.Switch`/`Role.Checkbox`.
-    pub toggled: Option<bool>,
+    pub toggled: Option<ToggleableState>,
     pub enabled: bool,
     pub custom_actions: Vec<SemanticsCustomAction>,
 }
@@ -1353,8 +1369,8 @@ impl CanvasSemanticsNode {
         self
     }
 
-    pub fn with_toggled(mut self, toggled: bool) -> Self {
-        self.toggled = Some(toggled);
+    pub fn with_toggled(mut self, toggled: impl Into<ToggleableState>) -> Self {
+        self.toggled = Some(toggled.into());
         self
     }
 
@@ -1404,7 +1420,9 @@ pub struct SemanticsConfiguration {
     /// Compose's `Role`.
     pub role: Option<SemanticsWidgetRole>,
     pub selected: Option<bool>,
-    pub toggled: Option<bool>,
+    /// Whether the control is on, off or partly on. Compose's
+    /// `toggleableState`.
+    pub toggled: Option<ToggleableState>,
     pub enabled: bool,
     pub is_clickable: bool,
     pub is_editable_text: bool,
@@ -1632,9 +1650,10 @@ impl SemanticsConfiguration {
         self
     }
 
-    /// Whether the control is on or off. Compose's `toggleableState`.
-    pub fn toggled(mut self, toggled: bool) -> Self {
-        self.toggled = Some(toggled);
+    /// Whether the control is on, off or partly on. Compose's
+    /// `toggleableState`; a `bool` is on or off.
+    pub fn toggled(mut self, toggled: impl Into<ToggleableState>) -> Self {
+        self.toggled = Some(toggled.into());
         self
     }
 

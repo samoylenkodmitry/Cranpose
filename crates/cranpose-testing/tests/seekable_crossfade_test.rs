@@ -7,7 +7,7 @@ use std::{cell::Cell, rc::Rc};
 use cranpose_core::{MutableState, remember};
 use cranpose_testing::ComposeTestRule;
 use cranpose_ui::{
-    Box, BoxSpec, CrossfadeSeek, LayoutBox, LayoutEngine, Modifier, SeekableCrossfade, Size,
+    Box, BoxSpec, ContentSeek, LayoutBox, LayoutEngine, Modifier, SeekableCrossfade, Size,
 };
 
 const FRAME: u64 = 16_666_667;
@@ -42,8 +42,7 @@ impl Fade {
             let toward = if current == Page::A { Page::B } else { Page::A };
             SeekableCrossfade(
                 current,
-                seek.get()
-                    .map(|fraction| CrossfadeSeek { toward, fraction }),
+                seek.get().map(|fraction| ContentSeek { toward, fraction }),
                 // The default tween: 300 ms.
                 Default::default(),
                 {

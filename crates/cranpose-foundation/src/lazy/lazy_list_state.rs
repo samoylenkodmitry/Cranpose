@@ -390,6 +390,16 @@ impl LazyListState {
         }
     }
 
+    /// The first visible item and how far it is scrolled, or `None` once the
+    /// slot that held this state was released. A saver reads it when the
+    /// list leaves the composition.
+    pub fn try_position(&self) -> Option<(usize, f32)> {
+        self.scroll_position.inner.try_with(|inner| {
+            let inner = inner.borrow();
+            (inner.current_index, inner.current_scroll_offset)
+        })
+    }
+
     /// Returns a stable identity pointer for the live inner state allocation.
     ///
     /// The pointer comes from the `Rc` stored inside `inner`, so it remains stable for the

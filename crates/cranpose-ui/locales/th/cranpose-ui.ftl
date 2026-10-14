@@ -5,3 +5,7 @@ select-all = เลือกทั้งหมด
 undo = เลิกทำ
 redo = ทำซ้ำ
 search = ค้นหา
+previous-month = เดือนก่อนหน้า
+next-month = เดือนถัดไป
+hour = ชั่วโมง
+minute = นาที

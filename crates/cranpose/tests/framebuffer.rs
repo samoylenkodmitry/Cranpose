@@ -8,7 +8,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cranpose::{framebuffer::Framebuffer, prelude::*};
+use cranpose::{
+    framebuffer::{Framebuffer, PixelRect},
+    prelude::*,
+};
 use cranpose_animation::{
     AnimationSpec, RepeatMode, StartOffset, infiniteRepeatable, rememberInfiniteTransition,
 };
@@ -17,10 +20,15 @@ const RED: Color = Color(1.0, 0.0, 0.0, 1.0);
 const GREEN: Color = Color(0.0, 1.0, 0.0, 1.0);
 
 fn center(framebuffer: &mut Framebuffer) -> [u8; 4] {
-    let (width, height) = (framebuffer.width() as usize, framebuffer.height() as usize);
-    let offset = 4 * (height / 2 * width + width / 2);
+    framebuffer.changed_areas(&mut Vec::new());
+    let area = PixelRect {
+        x: framebuffer.width() / 2,
+        y: framebuffer.height() / 2,
+        width: 1,
+        height: 1,
+    };
     let mut pixel = [0; 4];
-    pixel.copy_from_slice(&framebuffer.pixels()[offset..offset + 4]);
+    framebuffer.draw_area(area, &mut pixel);
     pixel
 }
 
@@ -29,7 +37,7 @@ fn the_host_theme_reaches_content() {
     for (theme, dark) in [(SystemTheme::Dark, true), (SystemTheme::Light, false)] {
         let seen = Rc::new(Cell::new(None));
         let sink = Rc::clone(&seen);
-        let mut framebuffer = Framebuffer::new(40, 30, 1.0, theme, move || {
+        let mut framebuffer = Framebuffer::new(40, 30, 1.0, theme, &[], move || {
             sink.set(Some(isSystemInDarkTheme()));
         })
         .expect("valid surface");
@@ -41,7 +49,7 @@ fn the_host_theme_reaches_content() {
 
 #[test]
 fn a_still_picture_lets_the_host_sleep() {
-    let mut framebuffer = Framebuffer::new(40, 30, 1.0, SystemTheme::Light, || {
+    let mut framebuffer = Framebuffer::new(40, 30, 1.0, SystemTheme::Light, &[], || {
         Spacer(Modifier::empty().fill_max_size().background(RED));
     })
     .expect("valid surface");
@@ -53,11 +61,17 @@ fn a_still_picture_lets_the_host_sleep() {
     assert!(!schedule.needs_frame);
     assert_eq!(schedule.next_deadline, None);
     assert!(!framebuffer.tick(16_000_001));
+    let mut areas = Vec::new();
+    framebuffer.changed_areas(&mut areas);
+    assert!(
+        areas.is_empty(),
+        "a still picture changes nothing: {areas:?}"
+    );
 }
 
 #[test]
 fn an_animation_asks_for_the_next_frame() {
-    let mut framebuffer = Framebuffer::new(40, 30, 1.0, SystemTheme::Light, || {
+    let mut framebuffer = Framebuffer::new(40, 30, 1.0, SystemTheme::Light, &[], || {
         let transition = rememberInfiniteTransition("sweep");
         let spec = infiniteRepeatable(
             AnimationSpec::linear(100),
@@ -82,7 +96,7 @@ fn an_animation_asks_for_the_next_frame() {
 
 #[test]
 fn a_delay_wakes_a_sleeping_host_and_its_change_presents() {
-    let mut framebuffer = Framebuffer::new(40, 30, 1.0, SystemTheme::Light, || {
+    let mut framebuffer = Framebuffer::new(40, 30, 1.0, SystemTheme::Light, &[], || {
         let done = cranpose_core::rememberMutableStateOf(|| false);
         cranpose_core::LaunchedEffectAsync((), move |_| {
             std::boxed::Box::pin(async move {

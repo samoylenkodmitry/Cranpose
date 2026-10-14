@@ -261,15 +261,15 @@ fn update_graph_from_applier_report_inner(
             };
         }
 
-        let previous = HitGraphState::of(&graph.root);
-        release_for_rebuild(&mut graph.root);
-        if !lower_root_into(applier, root_id, &mut graph.root) {
+        let Some(hit_graph_dirty) = rebuild_tracking_hits(&mut graph.root, |root| {
+            release_for_rebuild(root);
+            lower_root_into(applier, root_id, root)
+        }) else {
             return GraphUpdateReport {
                 update: GraphUpdate::NeedsRebuild(GraphRebuildReason::RootLayerUnavailable),
                 hit_graph_dirty: true,
             };
-        }
-        let hit_graph_dirty = previous.dirty_against(&HitGraphState::of(&graph.root));
+        };
         graph.root.note_content_change(update);
 
         return GraphUpdateReport {
@@ -487,22 +487,23 @@ fn replace_dirty_layers_from_applier(
             }
             let node_id = layer_identity(child_layer).expect("dirty layer must have a node id");
 
-            let previous = HitGraphState::of(child_layer);
             // Nodes that leave this subtree are gone from the scene: nothing
             // remains to update for them, and a dirty one would otherwise go
             // unmatched and rebuild the whole scene.
             remove_dirty_descendants(child_layer, dirty.nodes);
-            release_for_rebuild(child_layer);
             let context = LowerContext {
                 inherited_motion_context_animated: parent.motion_context_animated,
                 inherited_translated_content_context: child_inherited_translated_content_context,
                 parent_abs: Some(parent_children),
                 parent_content_offset: parent.content_offset,
             };
-            read_placed_node_data(applier, node_id, false, |data| {
-                write_node_layer(applier, node_id, data, context, child_layer);
+            report.hit_graph_dirty |= rebuild_tracking_hits(child_layer, |layer| {
+                release_for_rebuild(layer);
+                read_placed_node_data(applier, node_id, false, |data| {
+                    write_node_layer(applier, node_id, data, context, layer);
+                })
+                .is_some()
             })?;
-            report.hit_graph_dirty |= previous.dirty_against(&HitGraphState::of(child_layer));
             remove_dirty_descendants(child_layer, dirty.nodes);
 
             child_layer.note_content_change(update);
@@ -1271,8 +1272,54 @@ fn translate_retained_child(
     layer.origin_in_parent = state.position();
 }
 
+/// Rebuilds `layer` with `rebuild`, which reports whether it succeeded, and
+/// returns whether the hit geometry of the layer or of a layer under it
+/// changed; `None` when the rebuild failed. A rebuild takes in the moves and
+/// layer changes of the nodes under the layer, which its own state does not
+/// show: a sheet that slides inside a container that redraws keeps the
+/// container's state.
+fn rebuild_tracking_hits(
+    layer: &mut LayerNode,
+    rebuild: impl FnOnce(&mut LayerNode) -> bool,
+) -> Option<bool> {
+    let previous = HitGraphState::of(layer);
+    let mut descendants = crate::thread_state::with(|state| state.hit_geometry_scratch.take());
+    descendants.clear();
+    visit_hit_layers(layer, &mut |child| {
+        descendants.push(HitGraphState::of(child));
+        true
+    });
+    let dirty = rebuild(layer).then(|| {
+        let mut expected = descendants.iter();
+        previous.dirty_against(&HitGraphState::of(layer))
+            || !visit_hit_layers(layer, &mut |child| {
+                expected.next() == Some(&HitGraphState::of(child))
+            })
+            || expected.next().is_some()
+    });
+    crate::thread_state::with(|state| state.hit_geometry_scratch.set(descendants));
+    dirty
+}
+
+/// Visits the layers under `layer` that are hit targets or hold one, in draw
+/// order, while `visit` returns true; returns whether every visit did.
+fn visit_hit_layers(layer: &LayerNode, visit: &mut impl FnMut(&LayerNode) -> bool) -> bool {
+    for child in &layer.children {
+        let RenderNode::Layer(child) = child else {
+            continue;
+        };
+        if child.hit_test.is_none() && !child.has_hit_targets {
+            continue;
+        }
+        if !visit(child) || !visit_hit_layers(child, visit) {
+            return false;
+        }
+    }
+    true
+}
+
 #[derive(PartialEq)]
-struct HitGraphState {
+pub(crate) struct HitGraphState {
     hit_test: bool,
     has_hit_targets: bool,
     local_bounds: Rect,
@@ -1724,10 +1771,11 @@ fn read_node_data<R>(
 ) -> Option<R> {
     let node: &dyn Any = applier.get_ref(node_id).ok()?;
     if let Some(node) = node.downcast_ref::<LayoutNode>() {
+        let z_order = z_ordered_children(applier, &node.children);
         return Some(read(SnapshotNodeData {
             layout_state: node.layout_state(),
             modifier_slices: node.modifier_slices_snapshot(),
-            children: &node.children,
+            children: z_order.as_deref().unwrap_or(&node.children),
             window_root: node.is_window_root(),
         }));
     }
@@ -1735,13 +1783,53 @@ fn read_node_data<R>(
     let layout_state = node.layout_state();
     let modifier_slices = node.modifier_slices_snapshot();
     Some(node.with_active_children(|children| {
+        let z_order = z_ordered_children(applier, children);
         read(SnapshotNodeData {
             layout_state,
             modifier_slices,
-            children,
+            children: z_order.as_deref().unwrap_or(children),
             window_root: false,
         })
     }))
+}
+
+/// `children` in the order they draw and take taps, when a `z_index`
+/// modifier moves one of them: by z index, and in composition order among
+/// equal ones, as Compose's `zSortedChildren`. `None` while the composition
+/// order already is that order, which it always is while no `z_index`
+/// modifier exists.
+fn z_ordered_children(applier: &MemoryApplier, children: &[NodeId]) -> Option<Vec<NodeId>> {
+    if children.len() < 2 || !cranpose_ui::z_index_in_use() {
+        return None;
+    }
+    let mut previous = f32::NEG_INFINITY;
+    let in_order = children.iter().all(|&child| {
+        let z_index = node_z_index(applier, child);
+        let ordered = z_index >= previous;
+        previous = z_index;
+        ordered
+    });
+    if in_order {
+        return None;
+    }
+    let mut ordered: Vec<(f32, NodeId)> = children
+        .iter()
+        .map(|&child| (node_z_index(applier, child), child))
+        .collect();
+    ordered.sort_by(|a, b| a.0.total_cmp(&b.0));
+    Some(ordered.into_iter().map(|(_, child)| child).collect())
+}
+
+fn node_z_index(applier: &MemoryApplier, node_id: NodeId) -> f32 {
+    let Ok(node) = applier.get_ref(node_id) else {
+        return 0.0;
+    };
+    let node: &dyn Any = node;
+    if let Some(node) = node.downcast_ref::<LayoutNode>() {
+        return node.modifier_slices_snapshot().z_index();
+    }
+    node.downcast_ref::<SubcomposeLayoutNode>()
+        .map_or(0.0, |node| node.modifier_slices_snapshot().z_index())
 }
 
 fn hit_test_from_slices(slices: &Rc<ModifierNodeSlices>) -> Option<HitTestNode> {
@@ -2282,6 +2370,10 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
     let mut children = Vec::with_capacity(node.children.len());
     for child in &node.children {
         children.push(layout_box_to_snapshot(child, Some(node)));
+    }
+    if cranpose_ui::z_index_in_use() {
+        // Stable: equal z indices keep the composition order.
+        children.sort_by(|a, b| a.slices.z_index().total_cmp(&b.slices.z_index()));
     }
     let base_graphics_layer = node.node_data.modifier_slices.graphics_layer();
     let has_graphics_layer = base_graphics_layer.is_some();

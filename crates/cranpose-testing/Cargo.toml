@@ -26,6 +26,8 @@ default = []
 # shell and the wgpu renderer, so the feature turns them on: without them the
 # crate does not build on its own, as a published crate must.
 desktop-robot = ["cranpose/robot", "cranpose/desktop-shell", "cranpose/renderer-wgpu"]
+# The tests of `AsyncImage`, which loads through cranpose-services.
+image-loading = ["cranpose/image-loading"]
 
 [dependencies]
 cranpose-core = { workspace = true }
@@ -39,6 +41,7 @@ cranpose-ui-graphics = { workspace = true }
 cranpose = { workspace = true, default-features = false }
 
 [dev-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 # Path-only dev-deps: stripped from the published manifest (publish order ignores dev edges).
 cranpose-macros = { path = "../cranpose-macros" }
 cranpose-ui-layout = { path = "../cranpose-ui-layout" }

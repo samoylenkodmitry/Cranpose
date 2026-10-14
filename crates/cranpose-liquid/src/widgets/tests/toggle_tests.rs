@@ -16,7 +16,7 @@ fn switch_semantics_exposes_the_committed_value() {
     for checked in [false, true] {
         let mut config = cranpose_ui::SemanticsConfiguration::default();
         switch_semantics(checked)(&mut config);
-        assert_eq!(config.toggled, Some(checked));
+        assert_eq!(config.toggled, Some(checked.into()));
         assert_eq!(config.role, Some(cranpose_ui::SemanticsWidgetRole::Switch));
         assert!(config.is_clickable);
     }

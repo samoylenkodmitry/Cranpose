@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use cranpose_foundation::SemanticsWidgetRole;
+use cranpose_foundation::{SemanticsWidgetRole, ToggleableState};
 
 use super::{Modifier, SemanticsConfiguration, inspector_metadata};
 
@@ -38,18 +38,36 @@ impl Modifier {
         role: Option<SemanticsWidgetRole>,
         on_value_change: impl Fn(bool) + 'static,
     ) -> Self {
-        let on_value_change = Rc::new(on_value_change);
-        let toggled = value;
+        self.tri_state_toggleable(value.into(), description, role, move || {
+            on_value_change(!value);
+        })
+    }
+
+    /// Makes the component a control that is on, off or partly on, such as
+    /// a check box over a list whose items are partly checked. A click calls
+    /// `on_click`, which decides the next state.
+    ///
+    /// This is Compose's `Modifier.triStateToggleable(state, enabled, role,
+    /// onClick)`. Readers hear the state: a partly checked box reads as
+    /// "mixed" or "partially checked".
+    pub fn tri_state_toggleable(
+        self,
+        state: ToggleableState,
+        description: Option<String>,
+        role: Option<SemanticsWidgetRole>,
+        on_click: impl Fn() + 'static,
+    ) -> Self {
+        let on_click = Rc::new(on_click);
         let modifier = Modifier::empty()
-            .clickable(move |_point| on_value_change(!toggled))
+            .clickable(move |_point| on_click())
             .with_inspector_metadata(inspector_metadata("toggleable", move |info| {
-                info.add_property("value", if toggled { "true" } else { "false" });
-                info.add_property("onValueChange", "provided");
+                info.add_property("state", format!("{state:?}"));
+                info.add_property("onClick", "provided");
             }))
             .then(Modifier::empty().stable_semantics(
                 move |config: &mut SemanticsConfiguration| {
                     config.is_clickable = true;
-                    config.toggled = Some(toggled);
+                    config.toggled = Some(state);
                     if let Some(description) = &description {
                         config.content_description = Some(description.clone());
                     }

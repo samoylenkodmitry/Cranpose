@@ -172,7 +172,7 @@ impl FocusInvalidationState {
         self.manager.borrow_mut().schedule_invalidation(node_id);
     }
 
-    fn has_pending_invalidation(&self) -> bool {
+    pub(crate) fn has_pending_invalidation(&self) -> bool {
         self.manager.borrow().has_pending_invalidation()
     }
 
@@ -259,17 +259,19 @@ impl FocusInvalidationState {
     fn apply_focus_change(&self, node_id: NodeId) {
         let previous = self.manager.borrow_mut().swap_active_focus_target(node_id);
 
-        if let Some(previous) = previous {
-            let losing_handles = self.manager.borrow().focus_target_handles(previous);
-            for handle in losing_handles {
-                handle.set_focus_state(FocusState::Inactive);
+        crate::focus_within::moving_focus(|| {
+            if let Some(previous) = previous {
+                let losing_handles = self.manager.borrow().focus_target_handles(previous);
+                for handle in losing_handles {
+                    handle.set_focus_state(FocusState::Inactive);
+                }
             }
-        }
 
-        let gaining_handles = self.manager.borrow().focus_target_handles(node_id);
-        for handle in gaining_handles {
-            handle.set_focus_state(FocusState::Active);
-        }
+            let gaining_handles = self.manager.borrow().focus_target_handles(node_id);
+            for handle in gaining_handles {
+                handle.set_focus_state(FocusState::Active);
+            }
+        });
     }
 
     fn process_invalidations<F>(&self, processor: F)

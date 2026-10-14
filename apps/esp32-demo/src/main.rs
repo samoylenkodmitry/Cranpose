@@ -10,6 +10,7 @@ use cranpose_platform_esp_idf::{DisplayConfig, Panel, RunError, run};
 
 const WIDTH: u32 = 320;
 const HEIGHT: u32 = 240;
+static FONTS: &[&[u8]] = &[include_bytes!("../assets/NotoSans-Latin.ttf")];
 
 fn text_style(color: Color, size: f32) -> TextStyle {
     TextStyle {
@@ -102,6 +103,12 @@ fn main() {
     esp_idf_svc::log::EspLogger::initialize_default();
     let Err(error) = Panel::qemu(WIDTH, HEIGHT)
         .map_err(RunError::from)
-        .and_then(|panel| run(panel, DisplayConfig::default(), Screen));
+        .and_then(|panel| {
+            let config = DisplayConfig {
+                fonts: FONTS,
+                ..DisplayConfig::default()
+            };
+            run(panel, config, Screen)
+        });
     log::error!("esp32-demo stopped: {error}");
 }

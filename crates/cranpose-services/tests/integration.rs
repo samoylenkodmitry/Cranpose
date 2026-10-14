@@ -7,6 +7,8 @@ mod file_preferences_regressions;
 mod hook_caller_identity;
 mod host_messages_delivery;
 mod http_client_integration;
+#[cfg(all(feature = "image-loading", feature = "http-native"))]
+mod image_loading_integration;
 mod incoming_share_delivery;
 mod launch_args_integration;
 mod launcher_integration;

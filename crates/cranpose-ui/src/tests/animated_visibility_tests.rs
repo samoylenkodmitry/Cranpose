@@ -185,27 +185,19 @@ fn hidden_then_shown_content_enters_the_composition() {
 #[test]
 fn enter_and_exit_transitions_combine_with_plus() {
     let enter = fade_in() + slide_in_vertically(-0.5);
-    assert!(enter.has_fade());
-    assert_eq!(enter.slide_vertical_fraction(), Some(-0.5));
-    assert_eq!(enter.animation(), AnimationType::default());
-
-    let enter = enter.with_animation(transition_spec());
-    assert_eq!(enter.animation(), transition_spec());
-
+    assert_eq!(enter, slide_in_vertically(-0.5) + fade_in());
+    assert_eq!(EnterTransition::none() + enter, enter);
     let exit = slide_out_vertically(0.25) + fade_out();
-    assert!(exit.has_fade());
-    assert_eq!(exit.slide_vertical_fraction(), Some(0.25));
+    assert_eq!(exit, fade_out() + slide_out_vertically(0.25));
+    assert_eq!(ExitTransition::none() + exit, exit);
 
     let spec_a = tween(100, Easing::LinearEasing);
     let spec_b = tween(200, Easing::EaseIn);
     let combined =
         fade_in().with_animation(spec_a) + slide_in_vertically(-1.0).with_animation(spec_b);
-    assert_eq!(combined.animation(), spec_a);
-
-    let none = EnterTransition::none();
-    assert!(!none.has_fade());
-    assert_eq!(none.slide_vertical_fraction(), None);
-    let none = ExitTransition::none();
-    assert!(!none.has_fade());
-    assert_eq!(none.slide_vertical_fraction(), None);
+    assert_eq!(
+        combined,
+        (fade_in() + slide_in_vertically(-1.0)).with_animation(spec_a),
+        "the first transition's spec wins"
+    );
 }

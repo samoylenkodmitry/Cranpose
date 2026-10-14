@@ -68,6 +68,7 @@ struct RareSlices {
     viewport_window_rect: Option<Rc<dyn crate::modifier_nodes::WindowRectSink>>,
     graphics_layer_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
     chain_guard: Option<Rc<ChainGuard>>,
+    z_index: f32,
 }
 
 impl RareSlices {
@@ -83,6 +84,7 @@ impl RareSlices {
         self.viewport_window_rect = None;
         self.graphics_layer_resolver = None;
         self.chain_guard = None;
+        self.z_index = 0.0;
     }
 }
 
@@ -340,6 +342,12 @@ impl ModifierNodeSlices {
         if let Some(rare) = self.rare() {
             publish_pointer_input_size(rare, size);
         }
+    }
+
+    /// Where the node draws among its siblings: the sum of its `z_index`
+    /// modifiers.
+    pub fn z_index(&self) -> f32 {
+        self.rare().map_or(0.0, |rare| rare.z_index)
     }
 
     /// The pointer's appearance over this node, when a `pointer_icon`
@@ -938,6 +946,10 @@ fn collect_draw_node(
 
     if let Some(shape_node) = any.downcast_ref::<CornerShapeNode>() {
         backgrounds.shape(shape_node.shape());
+    }
+
+    if let Some(z_index_node) = any.downcast_ref::<super::z_index::ZIndexNode>() {
+        slices.rare_mut().z_index += z_index_node.z_index();
     }
 
     if let Some(commands) = any.downcast_ref::<DrawCommandNode>() {

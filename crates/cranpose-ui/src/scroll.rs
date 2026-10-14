@@ -343,6 +343,12 @@ impl ScrollState {
         self.value.get_non_reactive()
     }
 
+    /// The scroll position, or `None` once the slot that held this state was
+    /// released. A saver reads it when the scroller leaves the composition.
+    pub fn try_value(&self) -> Option<f32> {
+        self.value.try_value()
+    }
+
     /// Gets the maximum scroll value.
     pub fn max_value(&self) -> f32 {
         *self.inner().max_value.borrow()
