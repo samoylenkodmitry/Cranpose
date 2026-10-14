@@ -529,3 +529,37 @@ fn a_focused_cell_keeps_the_focus_when_a_scroll_moves_it_just_above_the_viewport
     assert_eq!(grid.state().first_visible_item_index(), 9);
     assert_eq!(focused(&mut grid).as_deref(), Some("item 4"));
 }
+
+#[test]
+fn a_grid_tells_a_screen_reader_its_lines_and_columns() {
+    let collection = |grid: &mut Grid| {
+        let tree = grid.shell.semantics_tree().expect("semantics");
+        find_semantics_node(tree.root(), &|node| node.details().collection.is_some())
+            .and_then(|node| node.details().collection)
+    };
+    let mut vertical = Grid::new(
+        LazyVerticalGridSpec::new(GridCells::Fixed(3)),
+        &[Part::Header("header"), Part::Items(10)],
+        LayoutDirection::Ltr,
+    );
+    assert_eq!(
+        collection(&mut vertical),
+        Some(cranpose_ui::CollectionInfo {
+            rows: 5,
+            columns: 3
+        }),
+        "a header line and four lines of cells"
+    );
+    let mut horizontal = Grid::horizontal(
+        LazyHorizontalGridSpec::new(GridCells::Fixed(2)),
+        &[Part::Items(5)],
+        LayoutDirection::Ltr,
+    );
+    assert_eq!(
+        collection(&mut horizontal),
+        Some(cranpose_ui::CollectionInfo {
+            rows: 2,
+            columns: 3
+        })
+    );
+}

@@ -117,6 +117,26 @@ impl Pager {
         })
     }
 
+    /// Runs a screen reader's page action, which scrolls most of a page,
+    /// and the frames that follow; answers whether the pager took it.
+    fn reader_page(&mut self, horizontal: bool, forward: bool) -> bool {
+        let tree = self.shell.semantics_tree().expect("semantics");
+        let scroll_by =
+            find_semantics_node(tree.root(), &|node| node.details().scroll_by.is_some())
+                .and_then(|node| node.details().scroll_by.clone())
+                .expect("the pager scrolls for a reader");
+        let main = if horizontal { WIDTH } else { HEIGHT };
+        let step = if forward { 0.9 * main } else { -0.9 * main };
+        let (dx, dy) = if horizontal { (step, 0.0) } else { (0.0, step) };
+        let taken = self
+            .shell
+            .app_context()
+            .enter(|| cranpose_core::run_in_mutable_snapshot(|| scroll_by.invoke(dx, dy)))
+            .expect("reader action");
+        self.frames(90);
+        taken
+    }
+
     fn rests_on(&mut self, horizontal: bool, page: usize) -> bool {
         self.state().current_page() == page
             && self
@@ -227,4 +247,24 @@ fn animate_scroll_to_page_springs_there_and_a_press_stops_it_where_it_is() {
         rested > 0 && pager.rests_on(true, rested),
         "it settles where it stopped, on {rested}"
     );
+}
+
+#[test]
+fn a_screen_reader_page_turns_whole_pages() {
+    for horizontal in [true, false] {
+        let mut pager = Pager::new(horizontal);
+        assert!(pager.reader_page(horizontal, true));
+        assert!(pager.rests_on(horizontal, 1), "forward to the next page");
+        assert!(pager.reader_page(horizontal, true));
+        assert!(pager.rests_on(horizontal, 2));
+        assert!(pager.reader_page(horizontal, false));
+        assert!(pager.rests_on(horizontal, 1), "back to the page before");
+        assert!(pager.reader_page(horizontal, false));
+        assert!(pager.rests_on(horizontal, 0));
+        assert!(
+            !pager.reader_page(horizontal, false),
+            "nothing before the first page"
+        );
+        assert!(pager.rests_on(horizontal, 0));
+    }
 }

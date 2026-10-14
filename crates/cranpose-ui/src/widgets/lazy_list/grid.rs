@@ -745,6 +745,28 @@ fn register_grid_measurements(
     }
 }
 
+/// Tells a screen reader a grid's lines and the cells across them, where a
+/// list's scroll semantics report one column.
+pub(super) fn grid_semantics(
+    modifier: Modifier,
+    grid: Option<&GridLayout>,
+    vertical: bool,
+) -> Modifier {
+    let Some(grid) = grid else {
+        return modifier;
+    };
+    let lines = Rc::clone(&grid.lines);
+    modifier.semantics(move |config| {
+        let lines = lines.borrow();
+        let (rows, columns) = if vertical {
+            (lines.line_count, lines.columns)
+        } else {
+            (lines.columns, lines.line_count)
+        };
+        config.collection = Some(cranpose_foundation::CollectionInfo { rows, columns });
+    })
+}
+
 /// The content and the grid layout a grid's lazy column or row gets.
 fn grid_parts<F>(
     state: &LazyGridState,
