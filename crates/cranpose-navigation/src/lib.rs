@@ -9,7 +9,8 @@ mod saved_scroll;
 
 pub use browser::BindBrowserHistory;
 pub use controller::{
-    NavController, NavOptions, rememberNavController, rememberSaveableNavController,
+    NavBackStackEntry, NavController, NavOptions, rememberNavController,
+    rememberSaveableNavController,
 };
 pub use host::{NavHost, NavHostWith, NavHostWithDialogs};
 pub use saved_scroll::{

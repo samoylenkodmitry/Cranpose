@@ -1,4 +1,4 @@
-use std::panic::Location;
+use std::{any::Any, panic::Location, rc::Rc};
 
 use cranpose_core::{MutableState, OwnedMutableState, ownedMutableStateOfNeverEqual};
 use cranpose_coroflow::{ViewModelStore, viewModel};
@@ -6,7 +6,7 @@ use cranpose_services::{SaveableRegistration, SaveableScope, Saver};
 
 mod saved_stack;
 
-/// One screen on the back stack — Android's `NavBackStackEntry`.
+/// One screen on the back stack, as the host keeps it.
 ///
 /// Two entries are equal when they are the same visit, so navigating to the
 /// same route twice gives two entries with their own view models and saved
@@ -34,6 +34,17 @@ impl<R> Entry<R> {
     /// Tells this visit apart from every other entry of its back stack.
     pub(crate) fn id(&self) -> u64 {
         self.id
+    }
+
+    /// Whether `scope` is this entry's saved state scope or one inside it,
+    /// such as the scope of a host nested in the entry's screen.
+    fn encloses(&self, scope: &SaveableScope) -> bool {
+        let (Some(own), Some(inner)) = (self.saveables.namespace(), scope.namespace()) else {
+            return false;
+        };
+        inner
+            .strip_prefix(own)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
     }
 }
 
@@ -119,6 +130,15 @@ impl<R: Clone + PartialEq> BackStack<R> {
         self.entries.last().map(|entry| &entry.route)
     }
 
+    /// The entry `id`, on the back stack or kept by a
+    /// [`NavOptions::save_state`] pop.
+    fn find(&self, id: u64) -> Option<&Entry<R>> {
+        self.entries
+            .iter()
+            .chain(self.saved.iter().flatten())
+            .find(|entry| entry.id == id)
+    }
+
     pub(crate) fn can_pop(&self) -> bool {
         self.entries.len() > 1
     }
@@ -163,15 +183,22 @@ pub(crate) struct HostView<R, S> {
     pub(crate) dialogs: Vec<(usize, Entry<R>, S)>,
 }
 
-/// Forgets the saved state of `popped` entries, and returns whether there
-/// was one. Their view models drop once the host has faded them out.
-fn forget<R>(popped: impl IntoIterator<Item = Entry<R>>) -> bool {
-    let mut any = false;
-    for entry in popped {
-        entry.saveables.forget();
-        any = true;
+/// The values that screens left for the entries of one back stack, each
+/// with the id of its entry. An entry holds one value of each type.
+#[derive(Clone, Default)]
+pub(crate) struct EntryResults(Vec<(u64, Rc<dyn Any>)>);
+
+impl EntryResults {
+    /// Where the value of type `T` for `entry` is.
+    fn position<T: 'static>(&self, entry: u64) -> Option<usize> {
+        self.0
+            .iter()
+            .position(|(id, value)| *id == entry && value.is::<T>())
     }
-    any
+
+    fn holds_any(&self, entry: u64) -> bool {
+        self.0.iter().any(|(id, _)| *id == entry)
+    }
 }
 
 /// How [`NavController::navigate_with`] changes the back stack — Android's
@@ -247,6 +274,9 @@ impl<R> NavOptions<R> {
 /// usually an enum whose variants carry the screen's arguments.
 pub struct NavController<R: Clone + 'static> {
     pub(crate) stack: MutableState<BackStack<R>>,
+    /// Apart from the back stack, so that only the readers of results
+    /// recompose when a result changes.
+    results: MutableState<EntryResults>,
 }
 
 impl<R: Clone + 'static> Clone for NavController<R> {
@@ -293,20 +323,20 @@ impl<R: Clone + PartialEq + 'static> NavController<R> {
             }
             forgotten
         });
-        forget(forgotten);
+        self.forget(forgotten);
     }
 
     /// Pops the top entry and returns whether there was one — Android's
     /// `popBackStack()`. Popping the last entry leaves the host empty.
     pub fn pop_back_stack(&self) -> bool {
-        forget(self.stack.update(|stack| stack.entries.pop()))
+        self.forget(self.stack.update(|stack| stack.entries.pop()))
     }
 
     /// Pops the entries above the topmost `route`, and that entry too when
     /// `inclusive`, and returns whether anything was popped — Android's
     /// `popBackStack(route, inclusive)`.
     pub fn pop_back_stack_to(&self, route: &R, inclusive: bool) -> bool {
-        forget(
+        self.forget(
             self.stack
                 .update(|stack| stack.split_above(route, inclusive)),
         )
@@ -314,7 +344,7 @@ impl<R: Clone + PartialEq + 'static> NavController<R> {
 
     /// Pops the entries above the first `depth`.
     pub(crate) fn pop_to_depth(&self, depth: usize) {
-        forget(self.stack.update(|stack| {
+        self.forget(self.stack.update(|stack| {
             let keep = depth.min(stack.entries.len());
             stack.entries.split_off(keep)
         }));
@@ -323,7 +353,7 @@ impl<R: Clone + PartialEq + 'static> NavController<R> {
     /// Pops the top entry when there is one beneath it, and returns whether it
     /// did — Android's `navigateUp()`.
     pub fn navigate_up(&self) -> bool {
-        forget(
+        self.forget(
             self.stack
                 .update(|stack| stack.can_pop().then(|| stack.entries.pop()).flatten()),
         )
@@ -348,6 +378,179 @@ impl<R: Clone + PartialEq + 'static> NavController<R> {
                 .collect()
         })
     }
+
+    /// The entry whose screen or dialog composes the caller, when this
+    /// controller's host shows it — the `NavBackStackEntry` that Android's
+    /// `NavHost` gives each destination. Call it while composing. It does not
+    /// subscribe the caller, and it is `None` once the entry is popped.
+    pub fn composing_entry(&self) -> Option<NavBackStackEntry<R>> {
+        let scope = SaveableScope::current();
+        self.entry_where(|entries| entries.iter().find(|entry| entry.encloses(&scope)))
+    }
+
+    /// The entry beneath the top one, which a pop shows — Android's
+    /// `previousBackStackEntry`. It does not subscribe the caller.
+    pub fn previous_back_stack_entry(&self) -> Option<NavBackStackEntry<R>> {
+        self.entry_where(|entries| entries.iter().nth_back(1))
+    }
+
+    /// The topmost entry of `route` — Android's `getBackStackEntry(route)`.
+    /// It does not subscribe the caller.
+    pub fn back_stack_entry(&self, route: &R) -> Option<NavBackStackEntry<R>> {
+        self.entry_where(|entries| entries.iter().rfind(|entry| entry.route == *route))
+    }
+
+    /// The handle of the entry that `find` picks from the back stack, read
+    /// without subscribing the caller.
+    fn entry_where(
+        &self,
+        find: impl FnOnce(&[Entry<R>]) -> Option<&Entry<R>>,
+    ) -> Option<NavBackStackEntry<R>> {
+        let id = self
+            .stack
+            .try_with(|stack| find(&stack.entries).map(Entry::id))
+            .flatten()?;
+        Some(NavBackStackEntry {
+            controller: *self,
+            id,
+        })
+    }
+
+    /// Forgets the saved state and the results of `popped` entries, and
+    /// returns whether there was one. Their view models drop once the host
+    /// has faded them out.
+    fn forget(&self, popped: impl IntoIterator<Item = Entry<R>>) -> bool {
+        let mut any = false;
+        for entry in popped {
+            entry.saveables.forget();
+            if self
+                .results
+                .try_with(|results| results.holds_any(entry.id))
+                .unwrap_or(false)
+            {
+                self.results
+                    .update(|results| results.0.retain(|(id, _)| *id != entry.id));
+            }
+            any = true;
+        }
+        any
+    }
+}
+
+/// One visit on a [`NavController`]'s back stack — Android's
+/// `NavBackStackEntry`.
+///
+/// Its route carries the screen's arguments. Other screens leave it values
+/// with [`Self::set_result`], as Android's `savedStateHandle` does, and its
+/// screen reads them with [`Self::result`]. A screen returns a result to the
+/// one beneath it this way:
+///
+/// ```
+/// use cranpose_navigation::NavController;
+///
+/// #[derive(Clone, PartialEq)]
+/// enum Screen {
+///     Home,
+///     PickColor,
+/// }
+///
+/// #[derive(Clone)]
+/// struct Picked(u32);
+///
+/// fn pick(nav: NavController<Screen>, color: u32) {
+///     if let Some(home) = nav.previous_back_stack_entry() {
+///         home.set_result(Picked(color));
+///     }
+///     nav.pop_back_stack();
+/// }
+///
+/// // In the home screen, while composing:
+/// fn picked(nav: NavController<Screen>) -> Option<u32> {
+///     let Picked(color) = nav.composing_entry()?.result::<Picked>()?;
+///     Some(color)
+/// }
+/// ```
+///
+/// The type of a value is its key, so an entry holds one value of each type;
+/// a newtype per result keeps two results of one type apart. Results live in
+/// memory: a popped entry drops them, and a restored back stack starts
+/// without them. A screen that shows a result for longer takes it into its
+/// own saved state, such as `rememberSaveable`.
+pub struct NavBackStackEntry<R: Clone + 'static> {
+    controller: NavController<R>,
+    id: u64,
+}
+
+impl<R: Clone + 'static> Clone for NavBackStackEntry<R> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<R: Clone + 'static> Copy for NavBackStackEntry<R> {}
+
+impl<R: Clone + 'static> PartialEq for NavBackStackEntry<R> {
+    fn eq(&self, other: &Self) -> bool {
+        self.controller == other.controller && self.id == other.id
+    }
+}
+
+impl<R: Clone + PartialEq + 'static> NavBackStackEntry<R> {
+    /// The entry's route, with the screen's arguments; `None` once it is
+    /// popped. It does not subscribe the caller: an entry keeps its route.
+    pub fn route(&self) -> Option<R> {
+        self.controller
+            .stack
+            .try_with(|stack| stack.find(self.id).map(|entry| entry.route.clone()))
+            .flatten()
+    }
+
+    /// The value of type `T` that a screen left for this entry. Reading it in
+    /// a composable recomposes that composable when the value changes —
+    /// Android's `savedStateHandle.getStateFlow(key)`.
+    pub fn result<T: Clone + 'static>(&self) -> Option<T> {
+        self.controller.results.read(|results| {
+            let index = results.position::<T>(self.id)?;
+            results.0[index].1.downcast_ref::<T>().cloned()
+        })
+    }
+
+    /// Leaves `value` for this entry, in place of its earlier value of type
+    /// `T` — Android's `savedStateHandle[key] = value`. Does nothing once the
+    /// entry is popped.
+    pub fn set_result<T: 'static>(&self, value: T) {
+        let live = self
+            .controller
+            .stack
+            .try_with(|stack| stack.find(self.id).is_some())
+            .unwrap_or(false);
+        if !live {
+            return;
+        }
+        let (id, value) = (self.id, Rc::new(value));
+        self.controller
+            .results
+            .update(|results| match results.position::<T>(id) {
+                Some(index) => results.0[index].1 = value,
+                None => results.0.push((id, value)),
+            });
+    }
+
+    /// Removes the value of type `T` and returns it — Android's
+    /// `savedStateHandle.remove(key)`. A screen calls it once it has acted on
+    /// a result, from an effect or a callback.
+    pub fn take_result<T: Clone + 'static>(&self) -> Option<T> {
+        let id = self.id;
+        self.controller
+            .results
+            .try_with(|results| results.position::<T>(id))
+            .flatten()?;
+        let value = self.controller.results.update(|results| {
+            let index = results.position::<T>(id)?;
+            Some(results.0.swap_remove(index).1)
+        })?;
+        Rc::downcast::<T>(value).ok().map(Rc::unwrap_or_clone)
+    }
 }
 
 struct NavControllerState<R: Clone + 'static> {
@@ -355,12 +558,22 @@ struct NavControllerState<R: Clone + 'static> {
     /// last time.
     _saved: Option<SaveableRegistration>,
     stack: OwnedMutableState<BackStack<R>>,
+    results: OwnedMutableState<EntryResults>,
 }
 
 impl<R: Clone + 'static> NavControllerState<R> {
+    fn new(stack: OwnedMutableState<BackStack<R>>, saved: Option<SaveableRegistration>) -> Self {
+        Self {
+            _saved: saved,
+            stack,
+            results: ownedMutableStateOfNeverEqual(EntryResults::default()),
+        }
+    }
+
     fn controller(&self) -> NavController<R> {
         NavController {
             stack: self.stack.handle(),
+            results: self.results.handle(),
         }
     }
 }
@@ -380,10 +593,10 @@ pub fn rememberNavController<R: Clone + PartialEq + 'static>(start: R) -> NavCon
     let state = viewModel(location, |_| {
         let saveables = SaveableScope::current().child(location).in_memory();
         saveables.forget();
-        NavControllerState {
-            _saved: None,
-            stack: ownedMutableStateOfNeverEqual(BackStack::new(start, saveables)),
-        }
+        NavControllerState::new(
+            ownedMutableStateOfNeverEqual(BackStack::new(start, saveables)),
+            None,
+        )
     });
     state.get().controller()
 }
@@ -431,10 +644,7 @@ pub fn rememberSaveableNavController<R: Clone + PartialEq + 'static>(
         let saved = scope.register(key, move || {
             handle.try_with(|stack| saved_stack::encode(stack, &saver))
         });
-        NavControllerState {
-            _saved: Some(saved),
-            stack,
-        }
+        NavControllerState::new(stack, Some(saved))
     });
     state.get().controller()
 }

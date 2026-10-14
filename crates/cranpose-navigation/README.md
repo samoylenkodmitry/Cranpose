@@ -93,6 +93,58 @@ Restoring keeps the entries beneath the first route the saver cannot read. When
 it cannot read the bottom entry, or nothing was saved, the back stack starts at
 the start route.
 
+## Results
+
+A screen returns a value to the screen beneath it through that screen's
+back-stack entry, as Android's `savedStateHandle` does.
+`previous_back_stack_entry` gives the entry beneath the top, and `set_result`
+leaves the value there. In the screen beneath, `composing_entry` gives the
+screen's own entry, and `result` reads the value and recomposes the reader when
+it changes. `take_result` removes the value once the screen has acted on it:
+
+```rust
+use cranpose_navigation::{NavHost, rememberNavController};
+use cranpose_ui::composable;
+
+#[derive(Clone, PartialEq)]
+enum Screen {
+    Home,
+    PickColor,
+}
+
+#[derive(Clone)]
+struct Picked(u32);
+
+#[composable]
+fn App() {
+    let nav = rememberNavController(Screen::Home);
+    NavHost(nav, move |screen| match screen {
+        Screen::Home => {
+            let picked = nav.composing_entry().and_then(|entry| entry.result::<Picked>());
+            HomeScreen(picked.map(|Picked(color)| color), move || {
+                nav.navigate(Screen::PickColor)
+            });
+        }
+        Screen::PickColor => PickColorScreen(move |color| {
+            if let Some(home) = nav.previous_back_stack_entry() {
+                home.set_result(Picked(color));
+            }
+            nav.pop_back_stack();
+        }),
+    });
+}
+
+#[composable]
+fn HomeScreen(_picked: Option<u32>, _pick: impl Fn() + 'static) {}
+
+#[composable]
+fn PickColorScreen(_done: impl Fn(u32) + 'static) {}
+```
+
+The type of a result is its key. Results live in memory and go with a popped
+entry; a screen that shows a result for longer takes it into its own saved
+state.
+
 ## Browser history
 
 On the web, `BindBrowserHistory(controller, saver)` keeps the browser's history
@@ -113,6 +165,8 @@ nothing, so an app can make it unconditionally.
 | `navigate`, `popBackStack`, `navigateUp` | `navigate`, `pop_back_stack`, `navigate_up` |
 | `popUpTo`, inclusive pop, single top | `navigate_with`, `NavOptions` |
 | Current back-stack entry | `current_route`, `back_stack` |
+| `NavBackStackEntry`, `previousBackStackEntry`, `getBackStackEntry` | `NavBackStackEntry`, `composing_entry`, `previous_back_stack_entry`, `back_stack_entry` |
+| Results through `savedStateHandle` | `NavBackStackEntry::set_result`, `result`, `take_result` |
 | View model scoped to a back-stack entry | `cranpose_coroflow::viewModel` inside a screen |
 | `rememberSaveable` in a destination | `rememberSaveable` inside a screen |
 | Back stack restored after process death | `rememberSaveableNavController` with a route `Saver` |
