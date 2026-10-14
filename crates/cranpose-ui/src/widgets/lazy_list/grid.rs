@@ -32,6 +32,10 @@ pub enum GridCells {
     /// As many columns as fit at least this many logical pixels wide, which
     /// share the width left over.
     Adaptive(f32),
+    /// As many columns as fit exactly this many logical pixels wide; the
+    /// width left over stays empty at the end. When not even one fits, one
+    /// column takes the whole width.
+    FixedSize(f32),
 }
 
 impl GridCells {
@@ -39,10 +43,26 @@ impl GridCells {
     pub(super) fn columns(self, available: f32, spacing: f32) -> usize {
         match self {
             Self::Fixed(columns) => columns.max(1),
-            Self::Adaptive(minimum) if minimum + spacing > 0.0 => {
-                (((available + spacing) / (minimum + spacing)).floor() as usize).max(1)
+            Self::Adaptive(size) | Self::FixedSize(size) if size + spacing > 0.0 => {
+                (((available + spacing) / (size + spacing)).floor() as usize).max(1)
             }
-            Self::Adaptive(_) => 1,
+            Self::Adaptive(_) | Self::FixedSize(_) => 1,
+        }
+    }
+
+    /// The widths of `columns` cells in `available` width with `spacing`
+    /// between them.
+    pub(super) fn sizes(
+        self,
+        available: f32,
+        columns: usize,
+        spacing: f32,
+        density: f32,
+    ) -> CellSizes {
+        let sizes = CellSizes::new(available, columns, spacing, density);
+        match self {
+            Self::FixedSize(size) => sizes.at_most(size),
+            Self::Fixed(_) | Self::Adaptive(_) => sizes,
         }
     }
 }
@@ -572,6 +592,20 @@ impl CellSizes {
         }
     }
 
+    /// The sizes with every column `size` logical pixels wide, when they
+    /// would be wider: the width left over stays empty at the end.
+    fn at_most(self, size: f32) -> Self {
+        let size = (size * self.density).round();
+        if size >= self.base {
+            return self;
+        }
+        Self {
+            base: size,
+            wide: 0,
+            ..self
+        }
+    }
+
     /// Where `column` starts, in logical pixels.
     pub(super) fn offset(&self, column: usize) -> f32 {
         (column as f32 * (self.base + self.spacing) + column.min(self.wide) as f32) / self.density
@@ -696,7 +730,9 @@ pub(super) fn measure_grid_viewport(
     if let Some((item, offset)) = lines.pending.take() {
         state.scroll_to_item(lines.line_of(item), offset);
     }
-    let sizes = CellSizes::new(available, columns, grid.spacing, scope.density());
+    let sizes = grid
+        .cells
+        .sizes(available, columns, grid.spacing, scope.density());
     let line_count = lines.line_count;
     context
         .measured_item_cache

@@ -2478,7 +2478,7 @@ See the [lazy-list guide](lazy_list_doc.md).
 
 ### Show a grid or pages
 
-`LazyVerticalGrid` lays items out in lines of cells. `GridCells::Adaptive` fits as many columns as its minimum width allows. A span gives an item more columns; a span of the whole line suits a section title:
+`LazyVerticalGrid` lays items out in lines of cells. `GridCells::Adaptive` fits as many columns as its minimum width allows, and `GridCells::FixedSize` as many as fit at exactly its width. A span gives an item more columns; a span of the whole line suits a section title:
 
 ```rust
 use cranpose::prelude::*;

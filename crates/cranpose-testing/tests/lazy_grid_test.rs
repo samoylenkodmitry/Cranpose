@@ -184,6 +184,35 @@ fn adaptive_columns_fit_as_many_as_their_minimum_allows() {
 }
 
 #[test]
+fn fixed_size_columns_keep_their_size_and_leave_the_rest_empty() {
+    let mut grid = Grid::new(
+        LazyVerticalGridSpec::new(GridCells::FixedSize(90.0)).spacing(10.0),
+        &[Part::Items(6)],
+        LayoutDirection::Ltr,
+    );
+    assert_eq!(width(&mut grid, "item 0"), Some(90.0));
+    assert_eq!(width(&mut grid, "item 2"), Some(90.0));
+    assert_eq!(
+        grid.origin("item 2"),
+        Some((200.0, 0.0)),
+        "three columns of 90 and 10 between them fit in 300"
+    );
+    assert_eq!(grid.origin("item 3"), Some((0.0, 50.0)));
+
+    let mut grid = Grid::new(
+        LazyVerticalGridSpec::new(GridCells::FixedSize(400.0)),
+        &[Part::Items(2)],
+        LayoutDirection::Ltr,
+    );
+    assert_eq!(
+        width(&mut grid, "item 0"),
+        Some(WIDTH),
+        "a size wider than the grid gives one column of the whole width"
+    );
+    assert_eq!(grid.origin("item 1"), Some((0.0, CELL_HEIGHT)));
+}
+
+#[test]
 fn a_header_takes_a_whole_line_and_holds_the_top() {
     let mut grid = Grid::new(
         LazyVerticalGridSpec::new(GridCells::Fixed(3)),
