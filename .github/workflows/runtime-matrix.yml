@@ -7,8 +7,6 @@ name: Runtime matrix
 on:
   workflow_call:
   workflow_dispatch:
-  push:
-    branches: [claude/runtime-matrix, claude/network-linux-windows]
 
 permissions:
   contents: read
