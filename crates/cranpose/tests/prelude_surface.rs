@@ -101,3 +101,53 @@ fn blocking_work_requires_a_runtime_without_running_on_the_caller() {
     assert!(matches!(launch, Err(BlockingError::NoRuntime)));
     assert!(!result.get());
 }
+
+#[test]
+fn tiled_brushes_and_edge_blurs_draw_from_the_prelude_alone() {
+    let stripes = Brush::vertical_gradient_tiled(
+        vec![Color::BLACK, Color::WHITE],
+        0.0,
+        2.0,
+        TileMode::Repeated,
+    );
+    let rings = Brush::radial_gradient_tiled(
+        vec![Color::BLACK, Color::WHITE],
+        Point::new(20.0, 20.0),
+        8.0,
+        TileMode::Mirror,
+    );
+    let blur = RenderEffect::blur_with_edge_treatment(4.0, TileMode::Decal);
+    assert!(!blur.contains_runtime_shader());
+    run_test_composition(move || {
+        let (stripes, rings) = (stripes.clone(), rings.clone());
+        Box(
+            Modifier::empty()
+                .size_points(40.0, 40.0)
+                .draw_behind(move |scope| {
+                    scope.draw_rect(stripes.clone());
+                    scope.draw_rect(rings.clone());
+                }),
+            BoxSpec::default(),
+            || {},
+        );
+    });
+}
+
+#[test]
+fn runtime_shader_settings_are_named_from_the_prelude_alone() {
+    let mut shader =
+        RuntimeShader::new("@fragment fn main() -> @location(0) vec4<f32> { return vec4(1.0); }");
+    let refused: Result<(), RuntimeShaderUniformError> = shader.try_set_float(usize::MAX, 1.0);
+    assert!(refused.is_err());
+    let substrates: &[SubstrateSpec] = shader.substrates();
+    assert!(substrates.is_empty());
+    let placeholder: Option<ShaderPlaceholder> = shader.placeholder();
+    let shape: Option<PlaceholderShape> = placeholder.and_then(|placeholder| placeholder.shape);
+    assert!(shape.is_none());
+    let specialization: DrawSpecialization<'_> = shader.draw_specialization(0);
+    assert!(specialization.overrides().is_empty());
+    assert!(matches!(
+        BlurredEdgeTreatment::UNBOUNDED.tile_mode(),
+        TileMode::Decal
+    ));
+}
