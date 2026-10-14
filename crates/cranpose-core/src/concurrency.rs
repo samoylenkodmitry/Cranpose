@@ -549,7 +549,7 @@ impl<T: Send + 'static> EventSender<T> {
     }
 }
 
-static NEXT_BRIDGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+static NEXT_BRIDGE: portable_atomic::AtomicU64 = portable_atomic::AtomicU64::new(1);
 
 fn deliver_bridged<T: Send + 'static>(bridge: u64, event: T) {
     let channel =

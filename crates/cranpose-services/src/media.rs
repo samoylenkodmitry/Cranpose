@@ -35,13 +35,14 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
 
 use cranpose_core::{EventStream, State, rememberEventStream};
 use parking_lot::Mutex;
+use portable_atomic::AtomicU64;
 
 use crate::{
     background::{BackgroundWorkLease, acquire_background_work},

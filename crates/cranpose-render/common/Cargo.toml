@@ -35,6 +35,7 @@ unicode-segmentation = { workspace = true }
 rustybuzz = { version = "0.20.1", optional = true }
 unicode-bidi = { version = "0.3.18", optional = true }
 unicode-script = { version = "0.5.8", optional = true }
+portable-atomic.workspace = true
 
 [dev-dependencies]
 stats_alloc = "0.1.10"

@@ -28,6 +28,7 @@ log = "0.4"
 pollster = "0.4.0"
 web-time = { workspace = true }
 thiserror = "2.0.21"
+portable-atomic.workspace = true
 
 [features]
 default = []

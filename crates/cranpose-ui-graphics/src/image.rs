@@ -5,12 +5,10 @@ use std::{
     borrow::Cow,
     hash::{BuildHasher, Hash, Hasher},
     panic::AssertUnwindSafe,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, atomic::Ordering},
 };
 
+use portable_atomic::AtomicU64;
 use thiserror::Error;
 
 use crate::{BlendMode, Color, Size};

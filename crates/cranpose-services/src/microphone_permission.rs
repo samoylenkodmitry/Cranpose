@@ -17,12 +17,10 @@
 //! the first time an application records), the permission reads
 //! [`MicrophonePermission::Granted`].
 
-use std::sync::{
-    Arc, Mutex, OnceLock,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::{Arc, Mutex, OnceLock, atomic::Ordering};
 
 use cranpose_core::{State, rememberEventStream};
+use portable_atomic::AtomicU64;
 
 use crate::registry::ServiceRegistry;
 

@@ -61,6 +61,9 @@ categories = ["gui"]
 
 
 [workspace.dependencies]
+# 64-bit atomics on every target: the CPU's own where it has them, and a
+# lock-based fallback on 32-bit microcontrollers such as the ESP32-S3.
+portable-atomic = { version = "1.15", features = ["fallback"] }
 cranpose-localization = { path = "crates/cranpose-localization", version = "0.9.43" }
 # Cranpose's patched wgpu (forks/README.md). Its library is still `wgpu`.
 wgpu = { package = "cranpose-wgpu", path = "forks/wgpu/wgpu", version = "30.0.18", default-features = false }

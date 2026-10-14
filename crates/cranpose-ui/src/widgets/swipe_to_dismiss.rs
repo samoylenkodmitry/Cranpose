@@ -22,7 +22,7 @@
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::Ordering,
 };
 
 use cranpose_animation::{Animatable, AnimationType, Spring, spring};
@@ -32,6 +32,7 @@ use cranpose_core::{
 };
 use cranpose_foundation::DRAG_THRESHOLD;
 use cranpose_ui_layout::{Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement};
+use portable_atomic::AtomicU64;
 
 use crate::{
     composable,

@@ -12,13 +12,11 @@
 
 use std::{
     collections::HashMap,
-    sync::{
-        Arc, Mutex, MutexGuard, OnceLock, PoisonError,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, atomic::Ordering},
 };
 
 use cranpose_core::{EventStream, rememberEventStream};
+use portable_atomic::AtomicU64;
 
 /// One message on the line between the application and its host.
 #[derive(Clone, Debug, PartialEq, Eq)]

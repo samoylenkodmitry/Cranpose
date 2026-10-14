@@ -25,9 +25,11 @@
 //! [`request_exit`] is the other direction: the app, rather than the platform,
 //! deciding that it is time to leave.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Mutex, OnceLock};
+
+use portable_atomic::AtomicU64;
 
 #[cfg(not(target_arch = "wasm32"))]
 type BackListener = Arc<dyn Fn(BackSignal) + Send + Sync + 'static>;

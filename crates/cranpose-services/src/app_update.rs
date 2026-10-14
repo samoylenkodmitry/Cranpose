@@ -6,11 +6,9 @@
 //! platform's installer: a digest computed four different ways is four chances
 //! to compute it wrongly, and one of them will be the one nobody tested.
 
-use std::sync::{
-    Arc, Mutex, OnceLock,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::{Arc, Mutex, OnceLock, atomic::Ordering};
 
+use portable_atomic::AtomicU64;
 use sha2::{Digest, Sha256};
 
 use crate::registry::ServiceRegistry;

@@ -38,11 +38,10 @@
 use std::sync::Mutex;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::{
-        Arc, OnceLock,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, OnceLock, atomic::Ordering},
 };
+
+use portable_atomic::AtomicU64;
 
 use crate::registry::{RecoveryGate, ServiceRegistry};
 

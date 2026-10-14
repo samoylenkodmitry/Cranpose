@@ -1,12 +1,11 @@
 use std::{
     collections::BTreeMap,
     panic::{AssertUnwindSafe, catch_unwind},
-    sync::{
-        Arc, Mutex, OnceLock, PoisonError,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex, OnceLock, PoisonError, atomic::Ordering},
     time::Duration,
 };
+
+use portable_atomic::AtomicU64;
 
 use crate::preferences::{PreferencesError, PreferencesRef};
 

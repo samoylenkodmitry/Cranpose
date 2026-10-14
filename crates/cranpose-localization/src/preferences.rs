@@ -1,7 +1,6 @@
-use std::sync::{
-    Arc, Mutex, Weak,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::{Arc, Mutex, Weak, atomic::Ordering};
+
+use portable_atomic::AtomicU64;
 
 use crate::{Catalog, DeferredMessage, Language, Locale, LocalizationError, Translator};
 

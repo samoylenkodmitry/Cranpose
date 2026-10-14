@@ -22,10 +22,11 @@
 
 use std::sync::{
     Arc, Mutex, OnceLock,
-    atomic::{AtomicU64, AtomicUsize, Ordering},
+    atomic::{AtomicUsize, Ordering},
 };
 
 use cranpose_core::{State, rememberEventStream};
+use portable_atomic::AtomicU64;
 
 use crate::registry::ServiceRegistry;
 

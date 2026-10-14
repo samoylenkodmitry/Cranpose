@@ -21,12 +21,10 @@
 //! frames costs memory to hold and produces answers about a scene that has
 //! already moved.
 
-use std::sync::{
-    Arc, Mutex, OnceLock,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::{Arc, Mutex, OnceLock, atomic::Ordering};
 
 use cranpose_core::{EventStream, State, rememberEventStream};
+use portable_atomic::AtomicU64;
 
 use crate::registry::ServiceRegistry;
 
