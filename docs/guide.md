@@ -2077,16 +2077,52 @@ Use `.window_drag_area(on_start, on_end)` for a custom title bar and
 `.window_resize_area(direction)` for an edge. `with_visible`, `with_resizable`,
 `with_always_on_top` and `with_transparent` configure the host window.
 
-### Attach a tray icon or a native menu
+### Show a tray icon and a menu bar
 
-Cranpose has no tray or menu bar API. `AppLauncher::with_desktop_integration`
-runs a `DesktopIntegration` on the desktop shell's main thread, where crates
-such as `tray-icon` and `muda` need to run:
+With the `desktop-menus` feature of `cranpose`, `Tray` and `MenuBar` describe
+a tray icon and a menu bar from the composition, as Compose Desktop's `Tray`
+and `MenuBar` do. An item's callback runs as an event handler runs, so it may
+write state.
+
+```rust
+use cranpose::prelude::*;
+
+#[composable]
+fn Menus(icon: ImageBitmap) {
+    let dark = remember(|| mutableStateOf(false)).with(|state| *state);
+    let refresh = || log::info!("refresh");
+    let command = Modifiers { ctrl: true, ..Modifiers::NONE };
+    MenuBar(vec![
+        Menu::new("View")
+            .item(MenuItem::new("Refresh", refresh).shortcut(KeyShortcut::new(KeyCode::R, command)))
+            .separator()
+            .check(CheckItem::new("Dark", dark.get(), move |checked| dark.set(checked))),
+    ]);
+    Tray(
+        TraySpec::new(icon, "My app")
+            .menu(vec![MenuEntry::Item(MenuItem::new("Refresh", refresh))]),
+    );
+}
+```
+
+- The tray icon shows on macOS, Windows and Linux. On Linux it is a
+  StatusNotifierItem over D-Bus; GNOME shows it with the AppIndicator
+  extension. `TraySpec::on_action` runs on a left click, and the menu then
+  opens on a right click.
+- The menu bar is the macOS menu bar, after the application menu with About,
+  Hide and Quit. On Windows and Linux `MenuBar` shows nothing yet.
+- `KeyShortcut`'s `ctrl` is Command on macOS. A check item's mark shows the
+  state the app keeps, whatever a click asked for.
+- A robot test chooses an item with `robot.choose_menu_item(&["View", "Refresh"])`
+  or `robot.choose_tray_menu_item(&["Refresh"])`.
+
+For anything else on the shell's main thread, `AppLauncher::with_desktop_integration`
+runs a `DesktopIntegration` there:
 
 - `window_opened` gets each window's raw handles (`HasWindowHandle`,
   `HasDisplayHandle` from `cranpose::raw_window_handle`), the primary window first.
-- `about_to_wait` runs before the event loop waits. Take the tray's or menu's
-  events there.
+- `about_to_wait` runs before the event loop waits. Take the events of the
+  integration's own sources there.
 - `context.update(|| ...)` writes state as an event handler does, and the app
   draws the frame the change asks for. `context.waker()` wakes the event loop
   from another thread, for a source that does not wake it.
