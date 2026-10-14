@@ -16,10 +16,11 @@
 use std::ffi::c_uchar;
 
 use objc2::{AllocAnyThread, rc::Retained};
-use objc2_app_kit::{NSBitmapImageRep, NSCursor, NSDeviceRGBColorSpace, NSImage, NSView, NSWindow};
+use objc2_app_kit::{NSBitmapImageRep, NSCursor, NSDeviceRGBColorSpace, NSImage};
 use objc2_foundation::{NSPoint, NSSize, NSUserDefaults, ns_string};
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
+
+use crate::macos_window::ns_window;
 
 /// How much macOS enlarges every cursor: the accessibility pointer size, from
 /// 1 to 4, and 1 when it was never set.
@@ -88,17 +89,6 @@ pub(crate) fn as_drawn(
         &image,
         hotspot,
     )))
-}
-
-fn ns_window(window: &dyn Window) -> Option<Retained<NSWindow>> {
-    let RawWindowHandle::AppKit(handle) = window.window_handle().ok()?.as_raw() else {
-        return None;
-    };
-    // SAFETY: winit hands out the content view of a window that is still open,
-    // and the event loop this is called from runs on the main thread AppKit
-    // views belong to.
-    let view: &NSView = unsafe { handle.ns_view.cast().as_ref() };
-    view.window()
 }
 
 /// Shows `cursor` over `window`, holding the window's cursor rectangles off
