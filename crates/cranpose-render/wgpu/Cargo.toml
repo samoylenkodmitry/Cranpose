@@ -57,7 +57,7 @@ rayon = "1.12"
 # Desktop builds take wgpu from crates.io. The web, Android and iOS take
 # Cranpose's fork of it (`wgpu` in the workspace, forks/README.md), whose
 # library is also `wgpu`.
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(all(target_os = "linux", not(target_arch = "wasm32")))'.dependencies]
 wgpu = { version = "30.0.1", default-features = false, features = [
     "std",
     "parking_lot",
