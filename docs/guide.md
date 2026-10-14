@@ -3391,6 +3391,44 @@ LiquidToggle(
 );
 ```
 
+#### LiquidPullToRefreshBox
+
+Refresh a list by pulling it down from its top. A release past the threshold
+calls `on_refresh`; the app sets `refreshing` while it loads. Screen readers
+cannot pull, so the box offers them an action named by the app.
+
+```rust preview=pull_to_refresh
+use cranpose::liquid::prelude::*;
+
+let refreshing = rememberMutableStateOf(|| false);
+let scroll = rememberScrollState!(0.0);
+LiquidPullToRefreshBox(
+    Modifier::empty().fill_max_width().height(240.0),
+    refreshing.get(),
+    "Refresh",
+    move || refreshing.set(true),
+    move || {
+        Column(
+            Modifier::empty()
+                .fill_max_size()
+                .vertical_scroll(scroll, false),
+            ColumnSpec::default(),
+            || {
+                for row in 0..20 {
+                    Text(format!("Message {row}"), Modifier::empty(), TextStyle::default());
+                }
+            },
+        );
+    },
+);
+```
+
+The box builds on `NestedScroll`: a container gives the scrollers inside it a
+`NestedScrollConnection`, which takes part of each scroll before the scroller
+moves, what the scroller leaves after it moved, and the release velocity
+before it flings. `vertical_scroll`, `horizontal_scroll`, `scrollable` and the
+lazy lists take part.
+
 #### LiquidSlider
 
 Show a styled slider with a value in `0.0..=1.0`.
