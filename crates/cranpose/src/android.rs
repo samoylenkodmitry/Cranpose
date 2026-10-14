@@ -19,7 +19,7 @@ use cranpose_app_shell::{
     AppShell, KeyEvent, PlatformFrameDriver, PointerSource, default_root_key,
 };
 use cranpose_platform_android::AndroidPlatform;
-use cranpose_render_wgpu::{PresentOutcome, PublishOutcome, WgpuRenderer};
+use cranpose_render_wgpu::{DeviceLostHandler, PresentOutcome, PublishOutcome, WgpuRenderer};
 use cranpose_ui::{Point, Size};
 use ndk::native_window::NativeWindow;
 
@@ -1356,6 +1356,71 @@ fn init_gpu_threaded_for_android(
         .map_err(|error| AndroidSurfaceError::PresentRuntime(format!("{error:?}")))
 }
 
+/// Opens a new device when the one in use was lost, on the window the old
+/// one drew to, and hands it to the renderer: the composition, its state and
+/// its input stay. When devices keep getting lost without a frame, the
+/// activity finishes.
+#[expect(clippy::too_many_arguments)]
+fn recover_lost_device<F>(
+    app: &android_activity::AndroidApp,
+    device_loss: &mut crate::gpu_loss::LossSignal,
+    wgpu_context: &mut AndroidWgpuContext,
+    (gpu_resources, app_shell): (
+        &mut Option<GpuResources>,
+        &mut Option<AppShell<WgpuRenderer>>,
+    ),
+    content: &Rc<RefCell<F>>,
+    settings: &AppSettings,
+    frame_driver: &AndroidFrameDriver,
+    host_window_registry: &android_host_window::AndroidHostWindowRegistry,
+    present_thread: bool,
+) where
+    F: FnMut() + 'static,
+{
+    if !device_loss.take_loss() {
+        return;
+    }
+    if !device_loss.begin_recovery() {
+        log::error!("[gpu-device] the device keeps getting lost without a frame; finishing");
+        crate::android_finish::finish_activity(app);
+        return;
+    }
+    // Without a window the next one opens a device of its own.
+    let Some(lost) = gpu_resources.as_mut() else {
+        return;
+    };
+    let (window, owner) = (lost.native_window_ptr, lost._native_window.take());
+    let (width, height) = (lost.config.width, lost.config.height);
+    drop_android_surface(gpu_resources, app_shell, present_thread);
+    *gpu_resources = None;
+    let Some(window) = window else {
+        return;
+    };
+    let density = get_display_density(app);
+    match initialize_android_rendering_with_backend_fallback(
+        wgpu_context,
+        None,
+        app_shell,
+        content,
+        settings,
+        frame_driver,
+        host_window_registry,
+        window,
+        owner,
+        width,
+        height,
+        density,
+        present_thread,
+        &device_loss.handler(crate::android_services::wake_native_loop),
+    ) {
+        Ok((resources, _)) => {
+            log::warn!("[gpu-device] opened a new device after the last one was lost");
+            *gpu_resources = Some(resources);
+        }
+        Err(error) => log::error!("[gpu-device] no new device after a loss: {error}"),
+    }
+}
+
 fn drop_android_surface(
     gpu_resources: &mut Option<GpuResources>,
     app_shell: &mut Option<AppShell<WgpuRenderer>>,
@@ -1409,6 +1474,7 @@ fn initialize_android_rendering<F>(
     height: u32,
     density: f32,
     present_thread: bool,
+    device_lost: &DeviceLostHandler,
 ) -> Result<(GpuResources, Option<Size>), AndroidSurfaceError>
 where
     F: FnMut() + 'static,
@@ -1426,6 +1492,7 @@ where
     if app_shell.is_none() {
         let fonts = settings.resolve_font_set();
         let mut renderer = WgpuRenderer::with_font_set(fonts);
+        renderer.set_device_lost_handler(Arc::clone(device_lost));
         if present_thread {
             init_gpu_threaded_for_android(&mut renderer, &setup.resources, frame_driver)?;
             // The present thread sets the surface up while the first frame
@@ -1472,6 +1539,9 @@ where
         log::info!("App shell created");
     } else if setup.renderer_needs_init {
         if let Some(shell) = app_shell {
+            shell
+                .renderer()
+                .set_device_lost_handler(Arc::clone(device_lost));
             if present_thread {
                 init_gpu_threaded_for_android(shell.renderer(), &setup.resources, frame_driver)?;
             } else {
@@ -1550,6 +1620,7 @@ fn initialize_android_rendering_with_backend_fallback<F>(
     height: u32,
     density: f32,
     present_thread: bool,
+    device_lost: &DeviceLostHandler,
 ) -> Result<(GpuResources, Option<Size>), AndroidSurfaceError>
 where
     F: FnMut() + 'static,
@@ -1569,6 +1640,7 @@ where
             height,
             density,
             present_thread,
+            device_lost,
         );
     }
 
@@ -1586,6 +1658,7 @@ where
         height,
         density,
         present_thread,
+        device_lost,
     ) {
         Err(AndroidSurfaceError::RequestAdapter(error)) => {
             log::warn!("No compatible Vulkan adapter ({error}); retrying with a fresh GL instance");
@@ -1604,6 +1677,7 @@ where
                 height,
                 density,
                 present_thread,
+                device_lost,
             )
         }
         result => result,
@@ -2108,6 +2182,8 @@ pub fn run(
 
     let mut android_platform = AndroidPlatform::new();
     let mut current_host_window_size = Size::ZERO;
+    let mut device_loss = crate::gpu_loss::LossSignal::default();
+    let mut device_loss_drill = crate::gpu_loss::LossDrill::from_launch_args();
     let mut initial_host_window_size = settings.initial_size_explicit.then(|| {
         Size::new(
             settings.initial_width as f32,
@@ -2158,6 +2234,17 @@ pub fn run(
             None => None,
         };
         android_frame_driver.pace_displayed_frames(&mut frame_pacer, &mut frame_telemetry);
+        recover_lost_device(
+            &app,
+            &mut device_loss,
+            &mut wgpu_context,
+            (&mut gpu_resources, &mut app_shell),
+            &content,
+            &settings,
+            &android_frame_driver,
+            &host_window_registry,
+            present_thread,
+        );
 
         let pending_confirmation_timeout = pending_host_window_confirmation.map(|pending| {
             android_host_window::HOST_WINDOW_CONFIRMATION_TIMEOUT
@@ -2291,7 +2378,7 @@ pub fn run(
                                     width,
                                     height,
                                     density,
-                                    present_thread,
+                                    present_thread,                                    &device_loss.handler(crate::android_services::wake_native_loop),
                                 ) {
                                     Ok((resources, actual_size)) => {
                                         if let Some(actual_size) = actual_size {
@@ -2514,6 +2601,7 @@ pub fn run(
                                 height,
                                 density,
                                 present_thread,
+                                &device_loss.handler(crate::android_services::wake_native_loop),
                             ) {
                                 Ok((resources, actual_size)) => {
                                     apply_initialized_android_rendering(
@@ -2560,6 +2648,7 @@ pub fn run(
                             height,
                             density,
                             present_thread,
+                            &device_loss.handler(crate::android_services::wake_native_loop),
                         ) {
                             Ok((resources, actual_size)) => {
                                 apply_initialized_android_rendering(
@@ -2858,6 +2947,8 @@ pub fn run(
             drained_presented
         };
         if let Some(frame) = presented {
+            device_loss.presented();
+            device_loss_drill.presented(&device_loss);
             if let Some(work_ns) = frame.work_ns {
                 let present_thread = app_shell
                     .as_mut()

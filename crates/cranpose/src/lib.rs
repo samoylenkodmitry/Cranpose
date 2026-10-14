@@ -25,6 +25,15 @@ pub use external_frames::{ExternalFrames, FrameTexture, FrameWriter};
 mod gpu_context;
 #[cfg(feature = "renderer-wgpu")]
 pub use gpu_context::{GpuContext, GpuRequirements, gpu_context};
+#[cfg(all(
+    feature = "renderer-wgpu",
+    any(
+        feature = "desktop-shell",
+        all(feature = "android", target_os = "android"),
+        all(feature = "ios", target_os = "ios")
+    )
+))]
+mod gpu_loss;
 #[cfg(feature = "renderer-wgpu")]
 mod guest_view;
 #[cfg(feature = "renderer-wgpu")]
