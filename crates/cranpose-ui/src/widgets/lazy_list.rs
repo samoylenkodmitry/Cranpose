@@ -645,7 +645,12 @@ fn measure_list_viewport(
         node_id,
     );
     if let Some(item) = focused_item {
-        place_focused_lazy_item(&mut result, item, &item_measure_inputs, config.spacing);
+        let cache = measured_item_cache.borrow();
+        let known = cache.entries.iter().filter_map(|(&index, cached)| {
+            (cached.item.key == content.get_key(index).to_slot_id())
+                .then_some((index, cached.item.main_axis_size))
+        });
+        place_focused_lazy_item(&mut result, item, known, config.spacing);
     }
     pin_sticky_header(&mut result, content.header_indices(), |index| {
         measure_lazy_list_item(scope, index, &item_measure_inputs)
@@ -758,6 +763,22 @@ impl LazyListItems<'_, '_, '_> {
         self.scope
             .slot_is_active(SlotId(self.inputs.content.get_key(index).to_slot_id()))
     }
+
+    /// Whether the pass keeps an item `distance` past the viewport.
+    fn admits(&mut self, composed: bool, distance: f32) -> bool {
+        self.beyond
+            .as_mut()
+            .is_none_or(|beyond| beyond.admits(composed, distance))
+    }
+
+    /// Keeps the item at `index` composed without placing it.
+    fn keep(&mut self, index: usize, composed: bool) {
+        if composed {
+            keep_lazy_list_item(self.scope, index, &self.inputs);
+        } else {
+            self.measure(index);
+        }
+    }
 }
 
 impl LazyItemSource for LazyListItems<'_, '_, '_> {
@@ -786,19 +807,13 @@ impl LazyItemSource for LazyListItems<'_, '_, '_> {
 
     fn keep_beyond(&mut self, index: usize, distance: f32) -> BeyondItem {
         let composed = self.composed(index);
-        if let Some(beyond) = self.beyond.as_mut()
-            && !beyond.admits(composed, distance)
-        {
+        if !self.admits(composed, distance) {
             return BeyondItem::Declined;
         }
         if self.place_beyond {
             return BeyondItem::Placed(self.measure(index));
         }
-        if composed {
-            keep_lazy_list_item(self.scope, index, &self.inputs);
-        } else {
-            self.measure(index);
-        }
+        self.keep(index, composed);
         BeyondItem::Kept
     }
 }
@@ -906,6 +921,16 @@ fn measure_focused_lazy_item(
     scope: &mut SubcomposeMeasureScopeImpl<'_>,
     inputs: &LazyListItemMeasureInputs<'_>,
 ) -> Option<LazyListMeasuredItem> {
+    let index = focused_lazy_item(scope, inputs)?;
+    Some(measure_lazy_list_item(scope, index, inputs))
+}
+
+/// The index of the item that holds the focus. Focus in an item the
+/// content no longer has is cleared.
+fn focused_lazy_item(
+    scope: &SubcomposeMeasureScopeImpl<'_>,
+    inputs: &LazyListItemMeasureInputs<'_>,
+) -> Option<usize> {
     let slot = scope.focused_slot()?.raw();
     let content = inputs.content;
     let last_measured = inputs.measured_item_cache.borrow().focused_index(slot);
@@ -923,13 +948,16 @@ fn measure_focused_lazy_item(
         .measured_item_cache
         .borrow_mut()
         .remember_focused(slot, index);
-    Some(measure_lazy_list_item(scope, index, inputs))
+    Some(index)
 }
 
+/// Places the focused `item` where the pass left it out, as far from the
+/// first visible item as the items between take: `known` sizes, the first
+/// visible item's size for the others.
 fn place_focused_lazy_item(
     result: &mut LazyListMeasureResult,
     mut item: LazyListMeasuredItem,
-    inputs: &LazyListItemMeasureInputs<'_>,
+    known: impl IntoIterator<Item = (usize, f32)>,
     spacing: f32,
 ) {
     let Err(position) = result
@@ -945,11 +973,9 @@ fn place_focused_lazy_item(
     let end = item.index.max(anchor.index);
     let estimate = anchor.main_axis_size;
     let mut distance = (end - start) as f32 * (estimate + spacing);
-    for (&index, cached) in &inputs.measured_item_cache.borrow().entries {
-        if (start..end).contains(&index)
-            && cached.item.key == inputs.content.get_key(index).to_slot_id()
-        {
-            distance += cached.item.main_axis_size - estimate;
+    for (index, size) in known {
+        if (start..end).contains(&index) {
+            distance += size - estimate;
         }
     }
     item.offset = anchor.offset

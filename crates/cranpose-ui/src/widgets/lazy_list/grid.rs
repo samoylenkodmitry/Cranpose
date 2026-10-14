@@ -19,8 +19,8 @@ use cranpose_ui_layout::{LinearArrangement, MeasureScope as _};
 use super::{
     LazyColumnNode, LazyColumnSpec, LazyFrame, LazyListContentHandle, LazyListItemMeasureInputs,
     LazyListItems, LazyListMeasureContext, LazyRowNode, LazyRowSpec, PaddingValues,
-    SubcomposeMeasureScopeImpl, beyond_composition, lazy_list_child_constraints, pin_sticky_header,
-    request_beyond_items,
+    SubcomposeMeasureScopeImpl, beyond_composition, focused_lazy_item, lazy_list_child_constraints,
+    pin_sticky_header, place_focused_lazy_item, request_beyond_items,
 };
 use crate::{composable, modifier::Modifier};
 
@@ -598,13 +598,22 @@ impl LazyItemSource for LazyGridLines<'_, '_, '_> {
     fn keep_beyond(&mut self, index: usize, distance: f32) -> BeyondItem {
         let (lines, content) = (self.lines, self.items.inputs.content);
         let line = lines.line(index);
+        let place = self.items.place_beyond;
         for cell in lines.cells(line, content) {
-            self.items.inputs.cross_axis_size = self.cell_width(line, cell);
-            if let BeyondItem::Declined = self.items.keep_beyond(cell.item, distance) {
+            let composed = self.items.composed(cell.item);
+            if !self.items.admits(composed, distance) {
                 return BeyondItem::Declined;
             }
+            if !place {
+                self.items.inputs.cross_axis_size = self.cell_width(line, cell);
+                self.items.keep(cell.item, composed);
+            }
         }
-        BeyondItem::Kept
+        if place {
+            BeyondItem::Placed(self.measure(index))
+        } else {
+            BeyondItem::Kept
+        }
     }
 }
 
@@ -649,6 +658,10 @@ pub(super) fn measure_grid_viewport(
         state,
         measured_item_cache: context.measured_item_cache,
     };
+    // While the grid holds the focus, the focused cell's line stays placed
+    // and so do the lines beyond the viewport, where a focus search can move
+    // into them.
+    let focused = focused_lazy_item(scope, &inputs).map(|item| lines.line_of(item));
     let node_id = scope.root_id();
     let scroll_delta = state.peek_scroll_delta();
     let mut source = LazyGridLines {
@@ -658,7 +671,7 @@ pub(super) fn measure_grid_viewport(
             near,
             scroll_delta,
             skipped_slots_recycled: false,
-            place_beyond: false,
+            place_beyond: focused.is_some(),
             beyond: None,
         },
         lines: &lines,
@@ -675,6 +688,17 @@ pub(super) fn measure_grid_viewport(
         &mut source,
     );
     request_beyond_items(source.items.beyond, node_id);
+    if let Some(line) = focused {
+        // Measured after the pass, which recycles the slots a forward scroll
+        // skips from its first measured line.
+        let line = source.measure(line);
+        place_focused_lazy_item(
+            &mut result,
+            line,
+            std::iter::empty(),
+            context.config.measure.spacing,
+        );
+    }
     if !lines.headers.is_empty() {
         pin_sticky_header(&mut result, &lines.headers, |line| source.measure(line));
     }

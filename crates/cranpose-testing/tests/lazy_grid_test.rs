@@ -451,3 +451,81 @@ fn a_one_pixel_wider_grid_gives_the_spare_pixel_to_the_next_column() {
     assert_eq!(width(&mut grid, "item 1"), Some(94.0));
     assert_eq!(width(&mut grid, "item 2"), Some(93.0));
 }
+
+/// A grid of three columns of focus targets, the one of `focused` holding
+/// `requester`.
+fn focus_grid(requester: cranpose_ui::FocusRequester, focused: usize) -> Grid {
+    Grid::composed(LayoutDirection::Ltr, move |grid| {
+        let requester = requester.clone();
+        LazyVerticalGrid(
+            Modifier::empty().size_points(WIDTH, HEIGHT),
+            grid,
+            LazyVerticalGridSpec::new(GridCells::Fixed(3)),
+            move |scope| {
+                let requester = requester.clone();
+                scope.items(300, move |index| {
+                    let cell = Modifier::empty()
+                        .fill_max_width()
+                        .height(CELL_HEIGHT)
+                        .content_description(format!("item {index}"));
+                    let cell = if index == focused {
+                        cell.focus_requester(&requester)
+                    } else {
+                        cell
+                    };
+                    Box(cell.focus_target(), BoxSpec::default(), || {});
+                });
+            },
+        );
+    })
+}
+
+fn focused(grid: &mut Grid) -> Option<String> {
+    let tree = grid.shell.semantics_tree().expect("semantics");
+    find_semantics_node(tree.root(), &|node| node.focused).and_then(|node| node.description.clone())
+}
+
+#[test]
+fn tab_moves_the_focus_into_the_line_below_the_viewport_and_reveals_it() {
+    let requester = cranpose_ui::FocusRequester::new();
+    let mut grid = focus_grid(requester.clone(), 14);
+    requester
+        .request_focus()
+        .expect("focus the last cell in view");
+    grid.shell.update();
+    assert_eq!(focused(&mut grid).as_deref(), Some("item 14"));
+    assert!(grid.shell.on_key_event(&cranpose_ui::KeyEvent::key_down(
+        cranpose_ui::KeyCode::Tab,
+        "\t"
+    )));
+    grid.shell.update();
+    assert_eq!(focused(&mut grid).as_deref(), Some("item 15"));
+    let bounds = grid.bounds("item 15").expect("placed cell");
+    assert!(bounds.y + bounds.height <= HEIGHT, "revealed: {bounds:?}");
+}
+
+#[test]
+fn a_focused_cell_keeps_the_focus_when_the_grid_scrolls_it_far_out_of_view() {
+    let requester = cranpose_ui::FocusRequester::new();
+    let mut grid = focus_grid(requester.clone(), 4);
+    requester.request_focus().expect("focus a cell");
+    grid.shell.update();
+    grid.state().scroll_to_item(240, 0.0);
+    grid.shell.update();
+    assert_eq!(grid.state().first_visible_item_index(), 240);
+    assert_eq!(focused(&mut grid).as_deref(), Some("item 4"));
+}
+
+#[test]
+fn a_focused_cell_keeps_the_focus_when_a_scroll_moves_it_just_above_the_viewport() {
+    let requester = cranpose_ui::FocusRequester::new();
+    let mut grid = focus_grid(requester.clone(), 4);
+    requester.request_focus().expect("focus a cell");
+    grid.shell.update();
+    for _ in 0..4 {
+        grid.state().lazy_list_state().dispatch_scroll_delta(-30.0);
+        grid.shell.update();
+    }
+    assert_eq!(grid.state().first_visible_item_index(), 9);
+    assert_eq!(focused(&mut grid).as_deref(), Some("item 4"));
+}
