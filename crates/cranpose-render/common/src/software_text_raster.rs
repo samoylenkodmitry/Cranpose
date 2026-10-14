@@ -132,6 +132,17 @@ impl FontBytes {
         }
     }
 
+    /// The bytes with a `loca` table the parsers read, see [`crate::loca_fit`].
+    fn fitted(self) -> Self {
+        match self {
+            Self::Static(bytes) => Self::Static(crate::loca_fit::fit_static_loca(bytes)),
+            Self::Owned(mut bytes) => {
+                crate::loca_fit::fit_loca(&mut bytes);
+                Self::Owned(bytes)
+            }
+        }
+    }
+
     fn into_font(self) -> Result<FontArc, InvalidFont> {
         match self {
             Self::Static(bytes) => FontArc::try_from_slice(bytes),
@@ -167,7 +178,7 @@ struct InstancedFace {
 
 impl SoftwareTextFont {
     pub fn from_bytes(bytes: impl Into<FontBytes>) -> Result<Self, SoftwareTextFontError> {
-        let bytes = bytes.into();
+        let bytes = bytes.into().fitted();
         let mut hasher = default_hash::new();
         bytes.as_slice().hash(&mut hasher);
         let content_hash = hasher.finish();
@@ -216,7 +227,7 @@ impl SoftwareTextFont {
         bytes: impl Into<FontBytes>,
         variations: &[([u8; 4], f32)],
     ) -> Result<Self, SoftwareTextFontError> {
-        let bytes = bytes.into();
+        let bytes = bytes.into().fitted();
         let mut hasher = default_hash::new();
         bytes.as_slice().hash(&mut hasher);
         let mut metadata = software_text_font_metadata(bytes.as_slice());

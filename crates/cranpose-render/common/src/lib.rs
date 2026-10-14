@@ -28,6 +28,7 @@ pub mod layer_composition;
 mod layer_recycling;
 pub mod layer_shadow;
 pub mod layer_transform;
+mod loca_fit;
 pub mod primitive_emit;
 pub mod raster_cache;
 pub mod render_contract;
