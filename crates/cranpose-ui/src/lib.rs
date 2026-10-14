@@ -44,6 +44,7 @@ mod focus_dispatch;
 pub mod focus_manager;
 mod focus_navigation;
 pub mod focus_order;
+mod focus_within;
 pub mod font_scale;
 mod interaction;
 mod key_event;
@@ -148,6 +149,7 @@ pub use focus_order::{
     FocusEntry, collect_focus_order, collect_focus_order_under, focus_order_len,
     selectable_group_of, set_focus_order, take_requested_focus_move,
 };
+pub use focus_within::FocusWithin;
 pub use font_scale::{FontScaleCurve, MAX_FONT_SCALE_KNOTS};
 pub use interaction::{
     HoverInteraction, HoverInteractionEnter, HoverInteractionExit, Interaction,
