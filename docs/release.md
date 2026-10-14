@@ -11,10 +11,7 @@ consumers against the candidate.
 ## Versioning
 
 Every crate in `publish-order.txt` takes the workspace version, so one release
-moves all of them. Apps depend on `cranpose`, and some also on `cranpose-ui`,
-`cranpose-foundation`, `cranpose-core`, `cranpose-services`,
-`cranpose-navigation`, `cranpose-coroflow` and `cranpose-liquid`; tests use
-`cranpose-testing`. The crates depend on each other with caret requirements, so
+moves all of them. The crates depend on each other with caret requirements, so
 the rule below holds for every published crate.
 
 - A patch release (0.9.43 to 0.9.44) keeps the API of the release before it. An
@@ -38,6 +35,40 @@ values in step, and the nightly `just msrv-check` builds the whole workspace
 with that version. When the minimum rises, an edition 2024 app on an older
 toolchain resolves to the last release whose `rust-version` that toolchain
 meets.
+
+### Crates apps depend on
+
+| Crates | Use |
+| --- | --- |
+| `cranpose` | The facade: app launcher, platform shells, renderers and the prelude. |
+| `cranpose-core`, `cranpose-ui`, `cranpose-ui-graphics`, `cranpose-ui-layout`, `cranpose-foundation`, `cranpose-animation` | Composition, widgets, modifiers, graphics types, custom layouts, input and animation. |
+| `cranpose-services`, `cranpose-capabilities`, `cranpose-navigation`, `cranpose-liquid`, `cranpose-fonts` | Platform services, permissions, navigation, the Liquid design system and fonts. |
+| `cranpose-coroflow`, `coroflow` | Coroutines and flows. |
+| `cranpose-audio`, `cranpose-media` | Audio and media playback. |
+| `cranpose-native` | Cranpose inside Android and UIKit apps, and native views inside Cranpose. |
+| `cranpose-testing` | Tests: the robot, assertions and the accessibility audit. |
+
+The `cranpose` features an app chooses:
+
+- Platforms: `desktop` (`desktop-x11`, `desktop-wayland`), `android`, `ios`,
+  `web`, `watchos`, `framebuffer` and `embed`.
+- Renderers: `renderer-wgpu`, `renderer-wgpu-gles` and `renderer-pixels`.
+- Text: `embedded-default-font` (default), `installed-fonts`, `text-shaping`,
+  `localization`, `localization-formatting`, `localized-arabic`,
+  `localized-devanagari`, `localized-cjk` and `southeast-asian-line-breaks`.
+- Services: `audio`, `audio-desktop`, `camera-desktop`, `media`, `media-wav`,
+  `webview`, `storekit`, `playbilling`, `heart-rate` and `wearable`.
+- Tools: `robot`, `preview`, `hot-reload` and `release-log-info`.
+
+The other crates are internal: `cranpose-macros` (reached through `cranpose`),
+`cranpose-assets`, `cranpose-runtime-std`, `cranpose-app-shell`,
+`cranpose-localization`, `cranpose-storekit`, `cranpose-gl-templates`, the
+`cranpose-render-*` and `cranpose-platform-*` crates and the font data crates.
+So are the features that other features turn on (`desktop-shell`,
+`native-windows`, `media-backend`) and `cranpose-core`'s `internal`,
+`inspection` and `test-helpers`. Their API follows the rule above as well,
+because the public crates depend on them. An app that needs one of them is
+missing a public API; report that as a bug.
 
 ## Workflow
 
