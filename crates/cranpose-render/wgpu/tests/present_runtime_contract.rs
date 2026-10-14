@@ -462,16 +462,17 @@ fn needs_frame_warmup_reads_present_thread_atomic() {
         "the producer trait read must be exactly the atomic"
     );
 
-    for _ in 0..6 {
-        if !renderer.needs_frame_warmup() {
-            break;
-        }
+    // Frames ask for the next one until the pipelines they drew stand-ins
+    // for have landed and the shadow cache stops missing.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while renderer.needs_frame_warmup() && Instant::now() < deadline {
         assert_eq!(
             renderer.publish_frame(WIDTH, HEIGHT),
             PublishOutcome::Published
         );
         runtime.pump();
         assert_eq!(renderer.drain_present_returns(), 1);
+        std::thread::sleep(Duration::from_millis(5));
     }
     let (atomic_warmup, _, _) = renderer
         .present_status_snapshot_for_tests()
