@@ -223,3 +223,90 @@ fn reading_the_current_route_recomposes_on_navigation() {
         "the reader recomposed"
     );
 }
+
+/// Navigates the way a tab bar does: each tab keeps its own back stack.
+fn tab(nav: NavController<Screen>, tab: Screen) {
+    nav.navigate_with(
+        tab,
+        NavOptions::new()
+            .pop_up_to(Screen::Home, false)
+            .save_state()
+            .launch_single_top()
+            .restore_state(),
+    );
+}
+
+#[test]
+fn a_tab_gets_its_back_stack_and_view_models_back() {
+    let probe = Probe::default();
+    let (mut host, nav) = screens(&probe);
+    let nav = controller(&nav);
+    tab(nav, Screen::Settings);
+    nav.navigate(Screen::Detail(1));
+    host.settle();
+    assert_eq!(
+        nav.back_stack(),
+        [Screen::Home, Screen::Settings, Screen::Detail(1)]
+    );
+    let built = probe.built().len();
+
+    tab(nav, Screen::Home);
+    host.settle();
+    assert_eq!(
+        nav.back_stack(),
+        [Screen::Home],
+        "the tab's stack is kept aside"
+    );
+    assert_eq!(probe.live(), [Screen::Home]);
+    assert_eq!(probe.dropped(), 0, "its view models stay");
+
+    tab(nav, Screen::Settings);
+    host.settle();
+    assert_eq!(
+        nav.back_stack(),
+        [Screen::Home, Screen::Settings, Screen::Detail(1)],
+        "the tab comes back as it was left"
+    );
+    assert_eq!(probe.live(), [Screen::Detail(1)]);
+    assert_eq!(probe.built().len(), built, "with the view models it had");
+}
+
+#[test]
+fn keeping_a_tab_again_replaces_what_it_kept() {
+    let probe = Probe::default();
+    let (mut host, nav) = screens(&probe);
+    let nav = controller(&nav);
+    tab(nav, Screen::Settings);
+    host.settle();
+    nav.navigate(Screen::Detail(1));
+    host.settle();
+    tab(nav, Screen::Home);
+    host.settle();
+    assert_eq!(probe.dropped(), 0);
+    nav.navigate(Screen::Settings);
+    host.settle();
+    assert_eq!(
+        nav.back_stack(),
+        [Screen::Home, Screen::Settings],
+        "a plain navigation pushes a new entry"
+    );
+    tab(nav, Screen::Home);
+    host.settle();
+    assert_eq!(
+        probe.dropped(),
+        2,
+        "the stack kept first, Settings and Detail(1), is dropped"
+    );
+    tab(nav, Screen::Settings);
+    host.settle();
+    assert_eq!(nav.back_stack(), [Screen::Home, Screen::Settings]);
+}
+
+#[test]
+fn restore_state_without_a_kept_stack_pushes_the_route() {
+    let (mut host, nav) = screens(&Probe::default());
+    let nav = controller(&nav);
+    nav.navigate_with(Screen::Detail(4), NavOptions::new().restore_state());
+    host.settle();
+    assert_eq!(nav.back_stack(), [Screen::Home, Screen::Detail(4)]);
+}

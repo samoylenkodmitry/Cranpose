@@ -1369,6 +1369,11 @@ fn App() {
 Use `navigate_with` and `NavOptions` to replace part of the stack.
 Use `NavHostWith` to set the transition.
 
+For a tab bar, switch tabs with
+`navigate_with(tab, NavOptions::new().pop_up_to(start, false).save_state().launch_single_top().restore_state())`:
+the tab you leave keeps its entries, with their view models and saved state,
+and the tab you return to comes back as you left it.
+
 A screen leaves the composition while another covers it, and its scroll state
 with it. Give a scroller a saved state so it comes back where the user left it:
 `rememberSaveableLazyListState("inbox")` for a `LazyColumn` or `LazyRow`, and
