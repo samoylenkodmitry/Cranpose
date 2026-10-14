@@ -1,5 +1,5 @@
-//! The forked wgpu's Vulkan barriers, checked by the Khronos validation
-//! layer's synchronization validation.
+//! The wgpu fork's Vulkan barriers, which Android draws with, checked by
+//! the Khronos validation layer's synchronization validation.
 //!
 //! A command buffer begun before a bind group layout lets a vertex shader
 //! read a texture waits for texture writes only in fragment and compute.
@@ -9,7 +9,9 @@
 //! accesses and sets `CRANPOSE_REQUIRE_SYNC_VALIDATION`. Without it, a
 //! machine with no Vulkan adapter or no validation layer checks nothing,
 //! and so does a process where another test installed the logger first:
-//! nextest gives each test its own process.
+//! nextest gives each test its own process. Other hosts build no Vulkan
+//! backend here.
+#![cfg(target_os = "linux")]
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 

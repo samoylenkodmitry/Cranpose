@@ -526,10 +526,16 @@ const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     },
 ];
 
-const ALL_FEATURES_EXTRA_DUPLICATE_DEBT: &[DuplicateDebt] = &[DuplicateDebt {
-    family: "env_filter",
-    reason: "android_logger 0.15.1 (latest) pins env_filter ^0.1 while env_logger 0.11 is past 1.0",
-}];
+const ALL_FEATURES_EXTRA_DUPLICATE_DEBT: &[DuplicateDebt] = &[
+    DuplicateDebt {
+        family: "env_filter",
+        reason: "android_logger 0.15.1 (latest) pins env_filter ^0.1 while env_logger 0.11 is past 1.0",
+    },
+    DuplicateDebt {
+        family: "glow",
+        reason: "wgpu-hal 30.0.1 (latest), the desktop GL fallback, holds glow ^0.17 while the wgpu fork on the web and Android is on 0.18 for Emscripten builds without wasm-bindgen, as upstream's trunk is",
+    },
+];
 
 /// Upstream wgpu and Cranpose's fork of it (forks/README.md) alike.
 const RENDERER_PIXELS_FORBIDDEN_PACKAGES: &[&str] = &[
@@ -1195,18 +1201,28 @@ fn add_workspace_cranpose_patches(command: &mut Command, workspace: &Path) -> Re
         .and_then(|workspace| workspace.get("dependencies"))
         .and_then(toml::Value::as_table)
         .ok_or_else(|| "workspace manifest has no [workspace.dependencies] table".to_owned())?;
-
-    for (dependency, spec) in dependencies {
-        let Some(spec) = spec.as_table() else {
-            continue;
-        };
-        let Some(relative_path) = spec.get("path").and_then(toml::Value::as_str) else {
-            continue;
-        };
+    // A renamed dependency (`wgpu = { package = "cranpose-wgpu", ... }`)
+    // patches its package. The workspace's own patches, such as the wgpu
+    // fork's, carry over as they are.
+    let path_dependencies = dependencies.iter().map(|(dependency, spec)| {
         let package = spec
             .get("package")
             .and_then(toml::Value::as_str)
             .unwrap_or(dependency);
+        (package, spec)
+    });
+    let workspace_patches = manifest
+        .get("patch")
+        .and_then(|patch| patch.get("crates-io"))
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flatten()
+        .map(|(package, spec)| (package.as_str(), spec));
+
+    for (package, spec) in path_dependencies.chain(workspace_patches) {
+        let Some(relative_path) = spec.get("path").and_then(toml::Value::as_str) else {
+            continue;
+        };
         let package_path = workspace.join(relative_path);
         command.arg("--config").arg(format!(
             "patch.crates-io.{package}.path=\"{}\"",

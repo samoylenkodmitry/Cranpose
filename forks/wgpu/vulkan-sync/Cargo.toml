@@ -1,0 +1,23 @@
+# The wgpu fork's Vulkan barriers under the Khronos layer's synchronization
+# validation (`just vulkan-sync`). Desktop builds of Cranpose take upstream
+# wgpu, so these tests build the fork on its own, as Android does.
+[package]
+name = "cranpose-wgpu-vulkan-sync"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[[test]]
+name = "vulkan_sync"
+path = "tests/vulkan_sync.rs"
+
+[dev-dependencies]
+log = "0.4"
+pollster = "0.4.0"
+wgpu = { package = "cranpose-wgpu", path = "../wgpu", default-features = false, features = [
+    "std",
+    "vulkan",
+    "wgsl",
+] }
+
+[workspace]
