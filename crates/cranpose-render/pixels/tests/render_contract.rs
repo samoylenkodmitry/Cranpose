@@ -31,9 +31,10 @@ fn pixels_text_font_state_is_renderer_owned() {
         "pixels renderer text font state must not be a process-global cache"
     );
     assert!(
-        draw_source.contains("SoftwareTextResources")
-            && draw_source.contains("draw_scene_with_text_resources"),
-        "pixels text resources should be explicit renderer-owned draw inputs"
+        draw_source.contains("resources: SoftwareTextResources")
+            && draw_source.contains("glyphs: std::cell::RefCell<SoftwareGlyphRasterCache>")
+            && draw_source.contains("text: &TextRaster"),
+        "pixels text resources and glyph masks should be explicit renderer-owned draw inputs"
     );
 }
 
