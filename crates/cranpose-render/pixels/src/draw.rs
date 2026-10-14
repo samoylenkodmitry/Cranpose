@@ -6,6 +6,7 @@ use cranpose_render_common::text_measure::{
 use cranpose_render_common::{
     brush_sampling::{color_to_rgba, sample_brush_rgba},
     graph_scene::RenderDiagnostics,
+    layer_shadow::ShadowRRect,
     shape_sdf,
     software_text_raster::rasterize_annotated_text_region,
     text_measure::SoftwareTextResources,
@@ -47,6 +48,15 @@ pub(crate) struct Target<'a> {
 }
 
 impl Target<'_> {
+    pub(crate) fn window(&self) -> ClipBounds {
+        ClipBounds {
+            min_x: self.left,
+            min_y: self.top,
+            max_x: self.left + self.width as i32,
+            max_y: self.top + self.height as i32,
+        }
+    }
+
     fn index(&self, x: i32, y: i32) -> usize {
         (((y - self.top) as u32 * self.width + (x - self.left) as u32) * 4) as usize
     }
@@ -67,16 +77,7 @@ pub(crate) struct ClipBounds {
 
 /// The whole pixels of `rect` cut to `clip` and to the target's window.
 fn clip_rect_to_bounds(rect: Rect, clip: Option<Rect>, target: &Target) -> Option<ClipBounds> {
-    clip_rect_to_window(
-        rect,
-        clip,
-        ClipBounds {
-            min_x: target.left,
-            min_y: target.top,
-            max_x: target.left + target.width as i32,
-            max_y: target.top + target.height as i32,
-        },
-    )
+    clip_rect_to_window(rect, clip, target.window())
 }
 
 /// The whole pixels of `rect` cut to `clip` and to `window`.
@@ -175,7 +176,6 @@ fn draw_raster_scene(
     diagnostics: &RenderDiagnostics,
     text_resources: &SoftwareTextResources,
 ) {
-    clear_frame(frame);
     let mut target = Target {
         pixels: frame,
         left: 0,
@@ -183,8 +183,21 @@ fn draw_raster_scene(
         width,
         height,
     };
+    draw_raster_window(&mut target, scene, diagnostics, text_resources);
+}
+
+pub(crate) fn draw_raster_window(
+    target: &mut Target,
+    scene: &RasterScene,
+    diagnostics: &RenderDiagnostics,
+    text_resources: &SoftwareTextResources,
+) {
+    clear_frame(target.pixels);
+    let window = target.window();
     for item in scene.ordered_items() {
-        draw_item(&mut target, scene, item, diagnostics, text_resources);
+        if scene.item_bounds(item, window).is_some() {
+            draw_item(target, scene, item, diagnostics, text_resources);
+        }
     }
 }
 
@@ -232,6 +245,37 @@ impl RasterScene {
                 Some(draw.shadow.bounds.translate(snap.x, snap.y))
             }
             RenderItem::Text(_) => None,
+        }
+    }
+
+    pub(crate) fn item_bounds(&self, item: RenderItem, window: ClipBounds) -> Option<ClipBounds> {
+        match item {
+            RenderItem::Shape(index) => {
+                let draw = &self.shapes[index];
+                let placed = place_shape(draw)?;
+                clip_rect_to_window(placed.coverage.reach(placed.rect), draw.clip, window)
+            }
+            RenderItem::Image(index) => {
+                let draw = &self.images[index];
+                if draw.alpha <= 0.0 {
+                    return None;
+                }
+                clip_rect_to_window(image_rect(draw), draw.clip, window)
+            }
+            RenderItem::Shadow(index) => {
+                let (shadow, clip) = placed_shadow(&self.shadows[index]);
+                clip_rect_to_window(shadow.bounds, clip, window)
+            }
+            RenderItem::Text(index) => {
+                let draw = &self.texts[index];
+                let raster_rect = text_raster_rect(draw)?;
+                let reach = Rect {
+                    width: raster_rect.width.ceil().max(1.0),
+                    height: raster_rect.height.ceil().max(1.0),
+                    ..raster_rect
+                };
+                clip_rect_to_window(reach, draw.clip, window)
+            }
         }
     }
 
@@ -284,14 +328,7 @@ fn draw_shadow(
     draw: &crate::scene::ShadowDraw,
     diagnostics: &RenderDiagnostics,
 ) {
-    let snap_delta = draw
-        .snap_anchor
-        .map(snap_delta_for_anchor)
-        .unwrap_or_default();
-    let shadow = draw.shadow.translated(snap_delta.x, snap_delta.y);
-    let clip = draw
-        .clip
-        .map(|clip| clip.translate(snap_delta.x, snap_delta.y));
+    let (shadow, clip) = placed_shadow(draw);
     let Some(bounds) = clip_rect_to_bounds(shadow.bounds, clip, target) else {
         return;
     };
@@ -678,12 +715,28 @@ impl ShapeCoverage {
     }
 }
 
-fn draw_image(target: &mut Target, draw: &ImageDraw, diagnostics: &RenderDiagnostics) {
+fn placed_shadow(draw: &crate::scene::ShadowDraw) -> (ShadowRRect, Option<Rect>) {
     let snap_delta = draw
         .snap_anchor
         .map(snap_delta_for_anchor)
         .unwrap_or_default();
-    let rect = draw.rect.translate(snap_delta.x, snap_delta.y);
+    (
+        draw.shadow.translated(snap_delta.x, snap_delta.y),
+        draw.clip
+            .map(|clip| clip.translate(snap_delta.x, snap_delta.y)),
+    )
+}
+
+fn image_rect(draw: &ImageDraw) -> Rect {
+    let snap_delta = draw
+        .snap_anchor
+        .map(snap_delta_for_anchor)
+        .unwrap_or_default();
+    draw.rect.translate(snap_delta.x, snap_delta.y)
+}
+
+fn draw_image(target: &mut Target, draw: &ImageDraw, diagnostics: &RenderDiagnostics) {
+    let rect = image_rect(draw);
     let clip = draw.clip;
 
     if draw.alpha <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
@@ -795,8 +848,29 @@ pub(crate) fn rasterize_text(
     draw: &TextDraw,
     text_resources: &SoftwareTextResources,
 ) -> Option<(cranpose_ui_graphics::ImageBitmap, Rect)> {
-    let text_scale = draw.scale.max(0.0);
-    if text_scale == 0.0 {
+    let raster_rect = text_raster_rect(draw)?;
+    let image = rasterize_annotated_text_region(
+        draw.text.as_ref(),
+        raster_rect,
+        Point::new(raster_rect.x, raster_rect.y),
+        &draw.text_style,
+        draw.color,
+        draw.font_size,
+        draw.scale,
+        text_resources.fonts(),
+        None,
+    )?;
+    let rect = Rect {
+        x: raster_rect.x,
+        y: raster_rect.y,
+        width: image.width() as f32,
+        height: image.height() as f32,
+    };
+    Some((image, rect))
+}
+
+fn text_raster_rect(draw: &TextDraw) -> Option<Rect> {
+    if draw.scale.max(0.0) == 0.0 {
         return None;
     }
     let static_text_motion = draw
@@ -805,42 +879,16 @@ pub(crate) fn rasterize_text(
         .text_motion
         .unwrap_or(TextMotion::Static)
         == TextMotion::Static;
-    let snap_delta = if static_text_motion {
-        draw.snap_anchor
-            .map(snap_delta_for_anchor)
-            .unwrap_or_default()
-    } else {
-        Point::default()
-    };
-    let rect = draw.rect.translate(snap_delta.x, snap_delta.y);
-    let raster_rect = if static_text_motion {
-        on_pixel_grid(rect)
-    } else {
-        rect
-    };
-    let image = rasterize_annotated_text_region(
-        draw.text.as_ref(),
-        raster_rect,
-        Point::new(raster_rect.x, raster_rect.y),
-        &draw.text_style,
-        draw.color,
-        draw.font_size,
-        text_scale,
-        text_resources.fonts(),
-        None,
-    )?;
-    let origin = if static_text_motion {
-        Point::new(raster_rect.x, raster_rect.y)
-    } else {
-        Point::new(rect.x, rect.y)
-    };
-    let rect = Rect {
-        x: origin.x,
-        y: origin.y,
-        width: image.width() as f32,
-        height: image.height() as f32,
-    };
-    Some((image, rect))
+    if !static_text_motion {
+        return Some(draw.rect);
+    }
+    let snap_delta = draw
+        .snap_anchor
+        .map(snap_delta_for_anchor)
+        .unwrap_or_default();
+    Some(on_pixel_grid(
+        draw.rect.translate(snap_delta.x, snap_delta.y),
+    ))
 }
 
 fn blit_rasterized_text_image(

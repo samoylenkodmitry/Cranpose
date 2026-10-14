@@ -31,8 +31,15 @@ pub struct SoftwareTextResources {
 
 impl SoftwareTextResources {
     pub fn default_font() -> Self {
+        Self::from_fonts(&[])
+    }
+
+    /// Resources that draw text in `fonts`. With none that parses, they use
+    /// the embedded default font when the `embedded-default-font` feature is
+    /// on, and draw no text otherwise.
+    pub fn from_fonts(fonts: &[&'static [u8]]) -> Self {
         Self {
-            fonts: SoftwareTextFontSet::from_fonts_or_default(&[]),
+            fonts: SoftwareTextFontSet::from_fonts_or_default(fonts),
         }
     }
 

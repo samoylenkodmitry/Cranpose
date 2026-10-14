@@ -1,5 +1,6 @@
 #![doc = include_str!("../README.md")]
 
+mod damage;
 mod draw;
 mod pipeline;
 pub mod scene;
@@ -14,6 +15,49 @@ use cranpose_ui::LayoutTree;
 use cranpose_ui_graphics::Size;
 pub use draw::draw_scene;
 pub use scene::{HitRegion, Scene};
+
+/// A rectangle of device pixels: columns `x..x + width` of rows
+/// `y..y + height`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PixelRect {
+    /// The first column.
+    pub x: u32,
+    /// The first row.
+    pub y: u32,
+    /// The number of columns.
+    pub width: u32,
+    /// The number of rows.
+    pub height: u32,
+}
+
+fn pixel_rect(bounds: draw::ClipBounds) -> PixelRect {
+    PixelRect {
+        x: bounds.min_x.max(0) as u32,
+        y: bounds.min_y.max(0) as u32,
+        width: (bounds.max_x - bounds.min_x).max(0) as u32,
+        height: (bounds.max_y - bounds.min_y).max(0) as u32,
+    }
+}
+
+/// The picture a host drew last. [`PixelsRenderer::update_picture`] moves it
+/// to the current scene and finds the pixels that change, and
+/// [`PixelsRenderer::draw_picture_area`] draws any part of it.
+#[derive(Default)]
+pub struct Picture {
+    raster: Option<scene::RasterScene>,
+    width: u32,
+    height: u32,
+    scale: f32,
+    changed: Vec<draw::ClipBounds>,
+}
+
+fn valid_scale(scale: f32) -> f32 {
+    if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    }
+}
 
 #[derive(Debug)]
 pub enum PixelsRendererError {
@@ -35,9 +79,16 @@ impl Default for PixelsRenderer {
 
 impl PixelsRenderer {
     pub fn new() -> Self {
+        Self::with_fonts(&[])
+    }
+
+    /// A renderer that draws text in `fonts`. With none that parses, it uses
+    /// the embedded default font when the `embedded-default-font` feature is
+    /// on, and draws no text otherwise.
+    pub fn with_fonts(fonts: &[&'static [u8]]) -> Self {
         Self {
             scene: Scene::new(),
-            text_resources: SoftwareTextResources::default(),
+            text_resources: SoftwareTextResources::from_fonts(fonts),
             app_context: None,
         }
     }
@@ -55,18 +106,88 @@ impl PixelsRenderer {
     /// Rasterizes logical scene coordinates at `scale` device pixels per point.
     /// Hit regions stay in logical coordinates. Invalid scales use 1.0.
     pub fn draw_scaled(&self, frame: &mut [u8], width: u32, height: u32, scale: f32) {
-        let scale = if scale.is_finite() && scale > 0.0 {
-            scale
-        } else {
-            1.0
-        };
         draw::draw_scene_scaled(
             frame,
             width,
             height,
             &self.scene,
             &self.text_resources,
-            scale,
+            valid_scale(scale),
+        );
+    }
+
+    fn raster_scene(&self, scale: f32) -> scene::RasterScene {
+        match self.scene.graph.as_ref() {
+            Some(graph) => pipeline::build_raster_scene(graph, self.scene.diagnostics(), scale),
+            None => scene::RasterScene::new(),
+        }
+    }
+
+    /// Moves `picture` to the current scene, drawn `width` by `height` device
+    /// pixels at `scale` device pixels per point, and puts into `changed` the
+    /// areas whose pixels differ from the picture it held: the whole frame the
+    /// first time and after a change of size or scale. Invalid scales use 1.0.
+    pub fn update_picture(
+        &self,
+        picture: &mut Picture,
+        width: u32,
+        height: u32,
+        scale: f32,
+        changed: &mut Vec<PixelRect>,
+    ) {
+        let scale = valid_scale(scale);
+        let raster = self.raster_scene(scale);
+        changed.clear();
+        match picture.raster.as_ref() {
+            Some(old)
+                if (picture.width, picture.height, picture.scale) == (width, height, scale) =>
+            {
+                let window = draw::ClipBounds {
+                    min_x: 0,
+                    min_y: 0,
+                    max_x: i32::try_from(width).unwrap_or(i32::MAX),
+                    max_y: i32::try_from(height).unwrap_or(i32::MAX),
+                };
+                damage::changed_areas(old, &raster, window, &mut picture.changed);
+                changed.extend(picture.changed.iter().copied().map(pixel_rect));
+            }
+            _ if width > 0 && height > 0 => changed.push(PixelRect {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            }),
+            _ => {}
+        }
+        picture.raster = Some(raster);
+        picture.width = width;
+        picture.height = height;
+        picture.scale = scale;
+    }
+
+    /// Draws `area` of `picture` into `pixels` as straight-alpha RGBA8 rows of
+    /// `area.width` pixels, `area.height` of them. Draws nothing before the
+    /// first [`Self::update_picture`] or when `pixels` is shorter than the area.
+    pub fn draw_picture_area(&self, picture: &Picture, area: PixelRect, pixels: &mut [u8]) {
+        let Some(raster) = picture.raster.as_ref() else {
+            return;
+        };
+        let len = area.width as usize * area.height as usize * 4;
+        let Some(pixels) = pixels.get_mut(..len) else {
+            return;
+        };
+        let mut target = draw::Target {
+            pixels,
+            left: i32::try_from(area.x).unwrap_or(i32::MAX),
+            top: i32::try_from(area.y).unwrap_or(i32::MAX),
+            width: area.width,
+            height: area.height,
+        };
+        draw::draw_raster_window(
+            &mut target,
+            raster,
+            self.scene.diagnostics(),
+            &self.text_resources,
         );
     }
 }
@@ -82,15 +203,7 @@ impl PixelsRenderer {
         height: u32,
         scale: f32,
     ) {
-        let scale = if scale.is_finite() && scale > 0.0 {
-            scale
-        } else {
-            1.0
-        };
-        let scene = match self.scene.graph.as_ref() {
-            Some(graph) => pipeline::build_raster_scene(graph, self.scene.diagnostics(), scale),
-            None => scene::RasterScene::new(),
-        };
+        let scene = self.raster_scene(valid_scale(scale));
         frame.compose(
             &scene,
             width,
