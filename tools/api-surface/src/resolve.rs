@@ -165,10 +165,10 @@ fn resolve_mod_file(
     name: &str,
     attrs: &[Attribute],
     declaring_file: &Path,
+    path_base: &Path,
 ) -> Result<PathBuf> {
     if let Some(p) = path_attr(attrs) {
-        let base = declaring_file.parent().unwrap_or_else(|| Path::new("."));
-        return Ok(base.join(p));
+        return Ok(path_base.join(p));
     }
     let as_leaf = dir_for_children.join(format!("{name}.rs"));
     let as_dir = dir_for_children.join(name).join("mod.rs");
@@ -371,6 +371,7 @@ impl Loader {
         let src =
             fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))?;
         let ast = syn::parse_file(&src).with_context(|| format!("parsing {}", file.display()))?;
+        let path_base = file.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
         self.process_items(
             path,
             file,
@@ -378,9 +379,14 @@ impl Loader {
             is_pub,
             excluded,
             forced_dir_for_children,
+            &path_base,
         )
     }
 
+    /// `path_base` is the directory a `#[path]` on a module in `items`
+    /// resolves from: the file's own directory at the top of a file, and the
+    /// inline module's directory inside `mod name { .. }`, as rustc does.
+    #[expect(clippy::too_many_arguments)]
     fn process_items(
         &mut self,
         path: ModPath,
@@ -389,6 +395,7 @@ impl Loader {
         is_pub: bool,
         excluded: bool,
         forced_dir_for_children: Option<PathBuf>,
+        path_base: &Path,
     ) -> Result<()> {
         let mut node = ModuleNode {
             is_pub,
@@ -410,17 +417,24 @@ impl Loader {
                     let mut child_path = path.clone();
                     child_path.push(name.clone());
                     if let Some((_, inner_items)) = &m.content {
+                        let inline_dir = dir_for_children.join(&name);
                         self.process_items(
                             child_path,
                             file.clone(),
                             inner_items,
                             child_is_pub,
                             child_excluded,
-                            Some(dir_for_children.join(&name)),
+                            Some(inline_dir.clone()),
+                            &inline_dir,
                         )?;
                     } else {
-                        let child_file =
-                            resolve_mod_file(&dir_for_children, &name, &m.attrs, &file)?;
+                        let child_file = resolve_mod_file(
+                            &dir_for_children,
+                            &name,
+                            &m.attrs,
+                            &file,
+                            path_base,
+                        )?;
                         let child_forced_dir = path_attr(&m.attrs).map(|_| {
                             child_file
                                 .parent()
@@ -1088,6 +1102,22 @@ mod tests {
         let mut loader = Loader::new();
         loader.load_crate(&root).unwrap();
         assert_eq!(loader.tree.named_items.len(), 1);
+    }
+
+    #[test]
+    fn path_attr_in_an_inline_mod_resolves_under_the_inline_mod() {
+        let dir = tmp_crate("path_attr_inline");
+        let root = write_file(
+            &dir,
+            "lib.rs",
+            "mod outer {\n#[path = \"tests/t.rs\"]\npub mod t;\n}\nmod a;\n",
+        );
+        write_file(&dir, "outer/tests/t.rs", "pub fn t() {}\n");
+        write_file(&dir, "a.rs", "mod b {\n#[path = \"x/y.rs\"]\nmod c;\n}\n");
+        write_file(&dir, "a/b/x/y.rs", "pub fn y() {}\n");
+        let mut loader = Loader::new();
+        loader.load_crate(&root).unwrap();
+        assert_eq!(loader.tree.named_items.len(), 2);
     }
 
     #[test]
