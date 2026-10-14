@@ -10,10 +10,10 @@ pub(crate) fn main() {
     use cranpose_testing::{find_in_semantics, find_text_exact};
     use cranpose_ui::{Modifier, Text, TextStyle};
 
-    use crate::{robot_exit, robot_launch, text_input_robot_helpers};
+    use crate::{output_paths, robot_exit, robot_launch, text_input_robot_helpers};
 
     env_logger::init();
-    let document = std::env::temp_dir().join("cranpose-open-urls.txt");
+    let document = output_paths::diagnostic_path("cranpose-open-urls.txt");
     if let Err(error) = std::fs::write(&document, b"opened") {
         robot_exit::fail_without_shutdown(&format!("writing {}: {error}", document.display()));
     }
