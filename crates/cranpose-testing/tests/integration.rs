@@ -9,6 +9,7 @@ mod keyboard_actions_test;
 mod keyboard_focus_test;
 mod keyboard_routing_test;
 mod lazy_grid_test;
+mod lazy_staggered_grid_test;
 mod lazy_sticky_header_test;
 mod modifier_offset_test;
 mod modifier_reuse_test;

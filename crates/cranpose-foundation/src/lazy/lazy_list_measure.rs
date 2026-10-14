@@ -173,45 +173,8 @@ where
     S: LazyItemSource,
 {
     let raw_viewport_size = viewport_size;
-    let is_infinite_viewport = raw_viewport_size.is_infinite();
-
-    if items_count == 0 {
-        state.update_scroll_position(0, 0.0);
-        state.update_layout_info(LazyListLayoutInfo {
-            visible_items_info: Vec::new(),
-            total_items_count: 0,
-            raw_viewport_size,
-            is_infinite_viewport,
-            viewport_size,
-            viewport_start_offset: 0.0,
-            viewport_end_offset: viewport_size,
-            before_content_padding: config.before_content_padding,
-            after_content_padding: config.after_content_padding,
-            main_axis_item_spacing: config.spacing,
-            snap_anchor_offset: 0.0,
-            reverse_layout: config.reverse_layout,
-        });
-        state.update_scroll_bounds();
-        return LazyListMeasureResult::default();
-    }
-
-    if viewport_size <= 0.0 {
-        state.update_layout_info(LazyListLayoutInfo {
-            visible_items_info: Vec::new(),
-            total_items_count: items_count,
-            raw_viewport_size,
-            is_infinite_viewport,
-            viewport_size,
-            viewport_start_offset: 0.0,
-            viewport_end_offset: viewport_size.max(0.0),
-            before_content_padding: config.before_content_padding,
-            after_content_padding: config.after_content_padding,
-            main_axis_item_spacing: config.spacing,
-            snap_anchor_offset: 0.0,
-            reverse_layout: config.reverse_layout,
-        });
-        state.update_scroll_bounds();
-        return LazyListMeasureResult::default();
+    if items_count == 0 || viewport_size <= 0.0 {
+        return publish_without_items(state, items_count, viewport_size, config);
     }
 
     let measure_state = state.begin_measure_pass();
@@ -467,9 +430,38 @@ where
     }
 }
 
+/// Publishes a pass that places no item, of a list with none or of a
+/// viewport with no room. A list with no items rests at its start.
+pub(super) fn publish_without_items(
+    state: &LazyListState,
+    items_count: usize,
+    viewport_size: f32,
+    config: &LazyListMeasureConfig,
+) -> LazyListMeasureResult {
+    if items_count == 0 {
+        state.update_scroll_position(0, 0.0);
+    }
+    state.update_layout_info(LazyListLayoutInfo {
+        visible_items_info: Vec::new(),
+        total_items_count: items_count,
+        raw_viewport_size: viewport_size,
+        is_infinite_viewport: viewport_size.is_infinite(),
+        viewport_size,
+        viewport_start_offset: 0.0,
+        viewport_end_offset: viewport_size.max(0.0),
+        before_content_padding: config.before_content_padding,
+        after_content_padding: config.after_content_padding,
+        main_axis_item_spacing: config.spacing,
+        snap_anchor_offset: 0.0,
+        reverse_layout: config.reverse_layout,
+    });
+    state.update_scroll_bounds();
+    LazyListMeasureResult::default()
+}
+
 /// Safety cap for the number of items realized when the viewport is
 /// unbounded. Mirrors `MAX_VISIBLE_ITEMS_SAFETY` in the item measurer.
-const MAX_UNBOUNDED_REALIZED_ITEMS: usize = 10_000;
+pub(super) const MAX_UNBOUNDED_REALIZED_ITEMS: usize = 10_000;
 
 /// Measures a lazy list whose main-axis viewport is unbounded/infinite.
 ///

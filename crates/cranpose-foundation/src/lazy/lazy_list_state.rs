@@ -1038,9 +1038,15 @@ impl LazyListState {
             let inner = rc.borrow();
             let info = &inner.layout_info;
             let viewport_end = info.viewport_size - info.after_content_padding;
+            // A staggered grid's last item by index need not be the one
+            // that reaches furthest.
             if let Some(last_visible) = info.visible_items_info.last() {
                 last_visible.index < info.total_items_count.saturating_sub(1)
-                    || (last_visible.offset + last_visible.size) > viewport_end
+                    || info
+                        .visible_items_info
+                        .iter()
+                        .rev()
+                        .any(|item| item.offset + item.size > viewport_end)
             } else {
                 false
             }

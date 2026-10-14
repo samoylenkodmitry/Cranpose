@@ -284,8 +284,10 @@ pub use widgets::{
     clickable_text::ClickableText,
     lazy_list::{
         GridCells, LazyColumn, LazyColumnSpec, LazyGridState, LazyHorizontalGrid,
-        LazyHorizontalGridSpec, LazyRow, LazyRowSpec, LazyVerticalGrid, LazyVerticalGridSpec,
-        rememberLazyGridState,
+        LazyHorizontalGridSpec, LazyHorizontalStaggeredGrid, LazyHorizontalStaggeredGridSpec,
+        LazyRow, LazyRowSpec, LazyStaggeredGridState, LazyVerticalGrid, LazyVerticalGridSpec,
+        LazyVerticalStaggeredGrid, LazyVerticalStaggeredGridSpec, rememberLazyGridState,
+        rememberLazyStaggeredGridState,
     },
     linked_text::LinkedText,
     padding_values::PaddingValues,
