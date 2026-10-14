@@ -36,18 +36,20 @@ impl AnimateScroll for LazyListState {
 /// it: measured when the list shows it, estimated from the average item size
 /// when not. The animation lands on the item exactly either way.
 fn distance_to_item(state: &LazyListState, index: usize) -> f32 {
-    let info = state.layout_info();
-    if let Some(item) = info
-        .visible_items_info
-        .iter()
-        .find(|item| item.index == index)
-    {
+    let shown = state.with_layout_info(|info| {
+        let item = info
+            .visible_items_info
+            .iter()
+            .find(|item| item.index == index)?;
         let leading = if index == 0 {
             info.before_content_padding
         } else {
             0.0
         };
-        return item.offset - leading;
+        Some(item.offset - leading)
+    });
+    if let Some(distance) = shown.flatten() {
+        return distance;
     }
     let first = state.first_visible_item_index_non_reactive();
     let scrolled = state.first_visible_item_scroll_offset_non_reactive();

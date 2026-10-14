@@ -448,9 +448,15 @@ impl LazyListState {
 
     /// Returns the layout info from the last measure pass.
     pub fn layout_info(&self) -> LazyListLayoutInfo {
-        self.inner
-            .try_with(|rc| rc.borrow().layout_info.clone())
+        self.with_layout_info(LazyListLayoutInfo::clone)
             .unwrap_or_default()
+    }
+
+    /// Reads the layout info from the last measure pass in place, without
+    /// the copy of the visible items that [`Self::layout_info`] makes.
+    /// `None` once the state is gone.
+    pub fn with_layout_info<R>(&self, read: impl FnOnce(&LazyListLayoutInfo) -> R) -> Option<R> {
+        self.inner.try_with(|rc| read(&rc.borrow().layout_info))
     }
 
     /// Returns the current item lifecycle statistics.

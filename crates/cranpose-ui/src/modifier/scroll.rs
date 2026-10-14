@@ -227,13 +227,13 @@ impl ScrollTarget for LazyListState {
     }
 
     fn can_scroll(&self) -> bool {
-        self.layout_info().total_items_count == 0
+        self.total_items_count() == 0
             || self.can_scroll_forward_non_reactive()
             || self.can_scroll_backward_non_reactive()
     }
 
     fn can_consume(&self, gesture_delta: f32) -> bool {
-        if self.layout_info().total_items_count == 0 {
+        if self.total_items_count() == 0 {
             return true;
         }
         if gesture_delta < 0.0 {
@@ -1348,12 +1348,16 @@ fn lazy_list_content_offset_reader(
     overscroll: crate::scroll::OverscrollEffect,
 ) -> impl Fn() -> Point {
     move || {
-        let info = state.layout_info();
-        if info.visible_items_info.is_empty() {
+        let Some((viewport, main_offset)) = state
+            .with_layout_info(|info| {
+                (!info.visible_items_info.is_empty())
+                    .then_some((info.viewport_size, info.snap_anchor_offset))
+            })
+            .flatten()
+        else {
             return Point::default();
         };
-        overscroll.set_dimension(info.viewport_size);
-        let main_offset = info.snap_anchor_offset;
+        overscroll.set_dimension(viewport);
         let bounce = overscroll.offset();
         if is_vertical {
             Point::new(0.0, main_offset + bounce)
