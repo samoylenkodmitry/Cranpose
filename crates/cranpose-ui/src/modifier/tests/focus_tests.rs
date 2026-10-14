@@ -28,9 +28,10 @@ fn focus_target_callback_invoked() {
     let states = Rc::new(RefCell::new(Vec::new()));
     let states_clone = states.clone();
 
-    let node = FocusTargetNode::with_callback(move |state| {
+    let node = FocusTargetElement::with_callback(move |state| {
         states_clone.borrow_mut().push(state);
-    });
+    })
+    .create();
 
     node.set_focus_state(FocusState::Active);
     node.set_focus_state(FocusState::ActiveParent);

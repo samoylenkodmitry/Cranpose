@@ -5,9 +5,11 @@
 
 use std::{cell::Cell, rc::Rc};
 
-use cranpose_testing::{RobotTestRule, TestRenderer, create_headless_robot_test};
+use cranpose_testing::{
+    RobotTestRule, TestRenderer, create_headless_robot_test, robot_assertions::find_semantics_node,
+};
 use cranpose_ui::{
-    Box, BoxSpec, Color, Modifier, SemanticsDismiss, SemanticsNode, Size, Text, TextStyle,
+    Box, BoxSpec, Color, Modifier, SemanticsDismiss, Size, Text, TextStyle,
     widgets::{Dialog, DialogSpec, DismissReason},
 };
 
@@ -62,20 +64,13 @@ fn a_tap_on_the_scrim_dismisses_the_dialog() {
     assert_eq!(dismissed.get(), Some(DismissReason::OutsideTap));
 }
 
-fn find_dismiss(node: &SemanticsNode) -> Option<SemanticsDismiss> {
-    node.details()
-        .dismiss
-        .clone()
-        .or_else(|| node.children.iter().find_map(find_dismiss))
-}
-
 fn reader_dismiss(robot: &mut RobotTestRule<TestRenderer>) -> Option<SemanticsDismiss> {
     robot.shell_mut().set_semantics_enabled(true);
     robot.wait_for_idle();
-    robot
-        .shell_mut()
-        .semantics_tree()
-        .and_then(|tree| find_dismiss(tree.root()))
+    robot.shell_mut().semantics_tree().and_then(|tree| {
+        find_semantics_node(tree.root(), &|node| node.details().dismiss.is_some())
+            .and_then(|node| node.details().dismiss.clone())
+    })
 }
 
 #[test]

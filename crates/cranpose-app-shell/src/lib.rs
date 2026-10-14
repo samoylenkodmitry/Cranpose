@@ -1342,6 +1342,7 @@ where
                 self.app
                     .runtime
                     .drain_frame_callbacks(self.app.last_frame_time_nanos);
+                self.apply_pointer_claim();
                 runtime_handle.drain_ui();
                 self.dispatch_requested_mouse_moves(self.app.last_frame_time_nanos);
             });
@@ -1370,6 +1371,7 @@ where
                 if let Some(frame_time) = frame_time {
                     self.app.last_frame_time_nanos = frame_time.max(self.app.last_frame_time_nanos);
                     self.app.runtime.drain_frame_callbacks(self.app.last_frame_time_nanos);
+                    self.apply_pointer_claim();
                 }
                 let after_frame_callbacks = Instant::now();
                 runtime_handle.drain_ui();
@@ -1405,6 +1407,17 @@ where
                 result
             })
         })
+    }
+
+    /// Gives a held press that a node claimed during the frame, as a long
+    /// press does, to that node alone.
+    fn apply_pointer_claim(&mut self) {
+        let Some(node) = self.app.app_context.take_pointer_claim() else {
+            return;
+        };
+        for index in 0..self.surfaces.len() {
+            SurfaceMut::new(self, index).give_press_to(node);
+        }
     }
 
     fn dispatch_requested_mouse_moves(&mut self, frame_time: u64) {
