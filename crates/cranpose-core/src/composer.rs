@@ -902,6 +902,8 @@ impl Drop for ComposableGroup<'_> {
         if self.completed {
             self.scope.mark_composed_once();
         }
+        self.scope
+            .end_reads(self.completed & self.runs_body & !self.skipped.get());
         if self.skipped.get() {
             self.composer
                 .close_skipped_group_in_active_pass(&self.host, &self.scope);
@@ -1661,6 +1663,7 @@ impl Composer {
             (self.active_slots_host(), Some(pass))
         };
         let (scope, runs_body) = self.open_group_in_active_pass(&host, key);
+        scope.begin_reads();
         ComposableGroup {
             composer: self,
             host,
@@ -2115,14 +2118,21 @@ impl Composer {
         self.core.scope_stack.borrow().last().cloned()
     }
 
-    pub(crate) fn current_state_invalidation_scope(&self) -> Option<RecomposeScope> {
+    /// Notes a read of `state_id` in the scope that the read recomposes: the
+    /// nearest one with a recompose callback. Returns that scope unless the
+    /// read repeats the last body's, which the state already watches.
+    pub(crate) fn note_state_read(
+        &self,
+        state_id: Option<crate::StateId>,
+    ) -> Option<(RecomposeScope, crate::ScopeRead)> {
         let stack = self.core.scope_stack.borrow();
-        stack
+        let scope = stack
             .iter()
             .rev()
             .find(|scope| scope.has_recompose_callback())
-            .cloned()
-            .or_else(|| stack.last().cloned())
+            .or_else(|| stack.last())?;
+        let read = state_id.map_or(crate::ScopeRead::NotReading, |id| scope.note_read(id));
+        (!matches!(read, crate::ScopeRead::Watched)).then(|| (scope.clone(), read))
     }
 
     /// Returns the phase of the frame in which this composer is used.
