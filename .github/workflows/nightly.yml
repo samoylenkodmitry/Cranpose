@@ -219,3 +219,11 @@ jobs:
         run: scripts/ci/provision_toolchain.sh
       - name: Check the workspace with the declared minimum Rust
         run: just msrv-check
+
+  # The supported platforms running the app, not only building it: browsers,
+  # Windows and the phones (docs/platform_support.md).
+  runtime-matrix:
+    name: runtime matrix
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
+    uses: ./.github/workflows/runtime-matrix.yml
