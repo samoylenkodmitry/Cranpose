@@ -238,6 +238,7 @@ fn resolve_content_padding(
     }
 }
 
+#[derive(Clone, Copy)]
 struct LazyListItemMeasureInputs<'a> {
     is_vertical: bool,
     cross_axis_size: f32,
@@ -269,7 +270,7 @@ fn measure_lazy_list_item(
 
     let candidate_cache = inputs.measured_item_cache.borrow();
     let cached_candidate = candidate_cache
-        .candidate(index, key_slot_id, content_type)
+        .candidate(&item_context)
         .map(|cached| cached.item.clone());
     let stale_candidate = cached_candidate.is_none() && candidate_cache.contains_index(index);
     drop(candidate_cache);
@@ -279,7 +280,7 @@ fn measure_lazy_list_item(
         {
             Some(RetainedSlotChildren::Clean) => {
                 let cache = inputs.measured_item_cache.borrow();
-                let current_candidate = cache.candidate(index, key_slot_id, content_type);
+                let current_candidate = cache.candidate(&item_context);
                 if let Some(cached) =
                     current_candidate.filter(|cached| cached.item.node_ids == cached_item.node_ids)
                 {
@@ -344,16 +345,14 @@ fn measure_lazy_list_item(
         .collect();
 
     let cache = inputs.measured_item_cache.borrow();
-    let has_cached_item = cache
-        .get(index, key_slot_id, content_type, &root_node_ids)
-        .is_some();
+    let has_cached_item = cache.get(&item_context, &root_node_ids).is_some();
     let mut remove_cache_entry = !has_cached_item && cache.contains_index(index);
     drop(cache);
 
     if has_cached_item {
         if !scope.children_need_relayout(&root_children) {
             let cache = inputs.measured_item_cache.borrow();
-            if let Some(cached) = cache.get(index, key_slot_id, content_type, &root_node_ids) {
+            if let Some(cached) = cache.get(&item_context, &root_node_ids) {
                 scope.register_retained_measurements(&cached.retained_children);
                 let item = cached.item.clone();
                 drop(cache);
@@ -497,9 +496,11 @@ fn measure_lazy_list_children(
     item.child_offsets = child_offsets;
     item.child_cross_axis_sizes = child_cross_axis_sizes;
 
-    measured_item_cache
-        .borrow_mut()
-        .insert(item.clone(), retained_children);
+    measured_item_cache.borrow_mut().insert(
+        item.clone(),
+        retained_children,
+        context.cross_axis_size,
+    );
     let elapsed = context.measure_start.elapsed();
     if cranpose_core::env_flag!("CRANPOSE_LAZY_ITEM_TELEMETRY") {
         log::warn!(
@@ -575,7 +576,7 @@ fn measure_lazy_list_internal(
     scope: &mut SubcomposeMeasureScopeImpl<'_>,
     constraints: Constraints,
     is_vertical: bool,
-    content: &LazyListIntervalContent,
+    content: &Rc<LazyListIntervalContent>,
     context: LazyListMeasureContext<'_>,
 ) -> MeasureResult {
     let frame = LazyFrame::new(constraints, is_vertical, context.config);
@@ -632,7 +633,7 @@ fn measure_list_viewport(
     let mut result = measure_lazy_viewport(
         LazyListItems {
             scope: &mut *scope,
-            inputs: &item_measure_inputs,
+            inputs: item_measure_inputs,
             near,
             scroll_delta: scroll_delta_for_direction,
             skipped_slots_recycled: false,
@@ -744,7 +745,7 @@ fn place_lazy_list(
 
 struct LazyListItems<'s, 'a, 'i> {
     scope: &'s mut SubcomposeMeasureScopeImpl<'a>,
-    inputs: &'i LazyListItemMeasureInputs<'i>,
+    inputs: LazyListItemMeasureInputs<'i>,
     near: std::ops::Range<usize>,
     scroll_delta: f32,
     skipped_slots_recycled: bool,
@@ -776,7 +777,7 @@ impl LazyItemSource for LazyListItems<'_, '_, '_> {
         // before the frame it enters the screen in.
         let fresh =
             self.beyond.as_ref().is_some_and(|beyond| beyond.idle_pass) && !self.composed(index);
-        let item = measure_lazy_list_item(self.scope, index, self.inputs);
+        let item = measure_lazy_list_item(self.scope, index, &self.inputs);
         if fresh {
             crate::lazy_prefetch::note_prefetched_item(&item.node_ids);
         }
@@ -794,7 +795,7 @@ impl LazyItemSource for LazyListItems<'_, '_, '_> {
             return BeyondItem::Placed(self.measure(index));
         }
         if composed {
-            keep_lazy_list_item(self.scope, index, self.inputs);
+            keep_lazy_list_item(self.scope, index, &self.inputs);
         } else {
             self.measure(index);
         }
@@ -1072,8 +1073,8 @@ impl LazyListContentHandle {
         Self::new(LazyListIntervalContent::new())
     }
 
-    fn content(&self) -> &LazyListIntervalContent {
-        self.0.as_ref()
+    fn content(&self) -> &Rc<LazyListIntervalContent> {
+        &self.0
     }
 }
 
@@ -1095,6 +1096,9 @@ struct LazyMeasuredItemCache {
 struct CachedLazyMeasuredItem {
     item: LazyListMeasuredItem,
     retained_children: SmallVec<[Rc<MeasuredNode>; 4]>,
+    /// The cross size the item was measured at. A grid cell's changes with
+    /// its span, its column and the grid's width.
+    cross_axis_bits: u32,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -1174,35 +1178,22 @@ impl LazyMeasuredItemCache {
 
     fn get(
         &self,
-        index: usize,
-        key: u64,
-        content_type: Option<u64>,
+        item: &LazyItemMeasureContext,
         node_ids: &SmallNodeVec,
     ) -> Option<&CachedLazyMeasuredItem> {
-        let cached = self.entries.get(&index)?;
-        if cached.item.key != key
-            || cached.item.content_type != content_type
-            || cached.item.node_ids != *node_ids
-            || cached.retained_children.len() != cached.item.node_ids.len()
-        {
-            return None;
-        }
-        Some(cached)
+        self.candidate(item)
+            .filter(|cached| cached.item.node_ids == *node_ids)
     }
 
     fn contains_index(&self, index: usize) -> bool {
         self.entries.contains_key(&index)
     }
 
-    fn candidate(
-        &self,
-        index: usize,
-        key: u64,
-        content_type: Option<u64>,
-    ) -> Option<&CachedLazyMeasuredItem> {
-        let cached = self.entries.get(&index)?;
-        if cached.item.key != key
-            || cached.item.content_type != content_type
+    fn candidate(&self, item: &LazyItemMeasureContext) -> Option<&CachedLazyMeasuredItem> {
+        let cached = self.entries.get(&item.index)?;
+        if cached.item.key != item.key_slot_id
+            || cached.item.content_type != item.content_type
+            || cached.cross_axis_bits != normalized_axis_bits(item.cross_axis_size)
             || cached.retained_children.len() != cached.item.node_ids.len()
         {
             return None;
@@ -1218,11 +1209,13 @@ impl LazyMeasuredItemCache {
         &mut self,
         item: LazyListMeasuredItem,
         retained_children: SmallVec<[Rc<MeasuredNode>; 4]>,
+        cross_axis_size: f32,
     ) {
         let index = item.index;
         let cached = CachedLazyMeasuredItem {
             item,
             retained_children,
+            cross_axis_bits: normalized_axis_bits(cross_axis_size),
         };
         self.entries.insert(index, cached);
     }
@@ -1514,7 +1507,7 @@ fn LazyColumnImpl(
         let policy: Rc<MeasurePolicy> = Rc::new(
             move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
                 let content = content_ref.borrow();
-                let config = config_ref.borrow().clone();
+                let config = config_ref.borrow();
                 measure_lazy_list_internal(
                     scope,
                     constraints,
@@ -1654,7 +1647,7 @@ fn LazyRowImpl(
         let policy: Rc<MeasurePolicy> = Rc::new(
             move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
                 let content = content_ref.borrow();
-                let config = config_ref.borrow().clone();
+                let config = config_ref.borrow();
                 measure_lazy_list_internal(
                     scope,
                     constraints,

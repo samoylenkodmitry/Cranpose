@@ -1,15 +1,18 @@
 //! Lazy grids: a [`LazyColumn`](super::LazyColumn) whose lines hold a row of
 //! cells each. The list's measure pass runs over lines; each cell composes
-//! and measures as a list item does, at the cell's width, and a sticky header
-//! takes a whole line.
+//! and measures as a list item does, at the width of the columns it spans,
+//! and a sticky header takes a whole line.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::RefCell,
+    rc::{Rc, Weak},
+};
 
 use cranpose_core::NodeId;
 use cranpose_foundation::lazy::{
-    BeyondItem, LazyItemSource, LazyListIntervalContent, LazyListMeasureResult,
-    LazyListMeasuredItem, LazyListState, measure_lazy_list_with_beyond_bounds_policy,
-    rememberLazyListStateWithPosition,
+    BeyondItem, LazyGridItemSpanScope, LazyItemSource, LazyListIntervalContent,
+    LazyListMeasureResult, LazyListMeasuredItem, LazyListState,
+    measure_lazy_list_with_beyond_bounds_policy, rememberLazyListStateWithPosition,
 };
 use cranpose_ui_layout::{LinearArrangement, MeasureScope as _};
 
@@ -197,13 +200,26 @@ impl PartialEq for GridLayout {
     }
 }
 
-/// A run of items: the cells of whole lines, or one sticky header line.
+/// A run of lines.
 #[derive(Clone, Copy, Debug)]
 struct Run {
     first_line: usize,
+    lines: usize,
     first_item: usize,
     items: usize,
-    header: bool,
+    kind: RunKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum RunKind {
+    /// Whole lines of one-cell items.
+    Cells,
+    /// A sticky header's line.
+    Header,
+    /// Lines whose first items are listed from `GridLines::starts[from]`:
+    /// the lines with spans, and a line a run of one-cell items leaves part
+    /// full.
+    Listed { from: usize },
 }
 
 /// The items of one line.
@@ -214,12 +230,28 @@ struct Line {
     header: bool,
 }
 
-/// How the items of a grid fall into lines.
-#[derive(Clone, Debug)]
+/// An item of a line, the column it starts in and the columns it takes.
+#[derive(Clone, Copy, Debug)]
+struct Cell {
+    item: usize,
+    column: usize,
+    span: usize,
+}
+
+/// How the items of a grid fall into lines. They are built once for a
+/// content and a column count, and kept while the grid scrolls.
+#[derive(Debug)]
 pub(super) struct GridLines {
     columns: usize,
     runs: Vec<Run>,
+    /// The first item of each line of the listed runs.
+    starts: Vec<usize>,
+    /// The lines of the sticky headers.
+    headers: Vec<usize>,
     line_count: usize,
+    /// The content the lines were built from. A weak pointer keeps its
+    /// address from being reused by a later content.
+    content: Weak<LazyListIntervalContent>,
 }
 
 impl Default for GridLines {
@@ -227,69 +259,97 @@ impl Default for GridLines {
         Self {
             columns: 1,
             runs: Vec::new(),
+            starts: Vec::new(),
+            headers: Vec::new(),
             line_count: 0,
+            content: Weak::new(),
         }
     }
 }
 
 impl GridLines {
-    fn new(content: &LazyListIntervalContent, columns: usize) -> Self {
+    fn new(content: &Rc<LazyListIntervalContent>, columns: usize) -> Self {
         let mut lines = Self {
             columns,
-            runs: Vec::with_capacity(content.header_indices().len() * 2 + 1),
-            line_count: 0,
+            content: Rc::downgrade(content),
+            ..Self::default()
         };
-        let mut next = 0;
-        for &header in content.header_indices() {
-            lines.push_cells(next, header);
-            lines.runs.push(Run {
-                first_line: lines.line_count,
-                first_item: header,
-                items: 1,
-                header: true,
-            });
-            lines.line_count += 1;
-            next = header + 1;
+        let mut builder = LineBuilder {
+            lines: &mut lines,
+            used: 0,
+        };
+        let mut headers = content.header_indices().iter().peekable();
+        for interval in content.intervals() {
+            if headers.next_if_eq(&&interval.start_index).is_some() {
+                builder.header(interval.start_index);
+            } else if let Some(span) = &interval.span {
+                for local in 0..interval.count {
+                    builder.spanned(interval.start_index + local, |left| {
+                        span(line_span_scope(columns, left), local)
+                    });
+                }
+            } else {
+                builder.cells(interval.start_index, interval.count);
+            }
         }
-        lines.push_cells(next, content.item_count());
         lines
     }
 
-    fn push_cells(&mut self, first: usize, end: usize) {
-        if end <= first {
-            return;
-        }
+    /// Whether these are the lines of `content` in `columns`.
+    fn built_for(&self, content: &Rc<LazyListIntervalContent>, columns: usize) -> bool {
+        self.columns == columns && std::ptr::eq(self.content.as_ptr(), Rc::as_ptr(content))
+    }
+
+    fn push_run(&mut self, kind: RunKind, first_item: usize, items: usize, lines: usize) {
         self.runs.push(Run {
             first_line: self.line_count,
-            first_item: first,
-            items: end - first,
-            header: false,
+            lines,
+            first_item,
+            items,
+            kind,
         });
-        self.line_count += (end - first).div_ceil(self.columns);
+        self.line_count += lines;
     }
 
     /// The items of `line`; past the end, an empty line.
     fn line(&self, line: usize) -> Line {
         let at = self.runs.partition_point(|run| run.first_line <= line);
-        let Some(run) = at.checked_sub(1).and_then(|at| self.runs.get(at)) else {
+        let Some(run) = at
+            .checked_sub(1)
+            .and_then(|at| self.runs.get(at))
+            .filter(|run| line < run.first_line + run.lines)
+        else {
             return Line {
-                first: line,
+                first: self.runs.last().map_or(0, |run| run.first_item + run.items),
                 count: 0,
                 header: false,
             };
         };
-        if run.header {
-            return Line {
+        let in_run = line - run.first_line;
+        match run.kind {
+            RunKind::Header => Line {
                 first: run.first_item,
                 count: 1,
                 header: true,
-            };
-        }
-        let skipped = (line - run.first_line) * self.columns;
-        Line {
-            first: run.first_item + skipped,
-            count: self.columns.min(run.items.saturating_sub(skipped)),
-            header: false,
+            },
+            RunKind::Cells => Line {
+                first: run.first_item + in_run * self.columns,
+                count: self.columns,
+                header: false,
+            },
+            RunKind::Listed { from } => {
+                let first = self.starts[from + in_run];
+                let end = if in_run + 1 < run.lines {
+                    self.starts[from + in_run + 1]
+                } else {
+                    run.first_item + run.items
+                };
+                Line {
+                    first,
+                    count: end - first,
+                    header: false,
+                }
+            }
         }
     }
 
@@ -298,61 +358,174 @@ impl GridLines {
         let at = self.runs.partition_point(|run| run.first_item <= item);
         at.checked_sub(1)
             .and_then(|at| self.runs.get(at))
-            .map_or(item, |run| {
-                if run.header {
+            .map_or(item, |run| match run.kind {
+                RunKind::Header => run.first_line,
+                RunKind::Cells => run.first_line + (item - run.first_item) / self.columns,
+                RunKind::Listed { from } => {
+                    let starts = &self.starts[from..from + run.lines];
                     run.first_line
-                } else {
-                    run.first_line + (item - run.first_item) / self.columns
+                        + starts
+                            .partition_point(|&start| start <= item)
+                            .saturating_sub(1)
                 }
             })
     }
 
-    fn header_lines(&self) -> Vec<usize> {
-        self.runs
-            .iter()
-            .filter(|run| run.header)
-            .map(|run| run.first_line)
-            .collect()
+    /// The cells of `line`, whose spans `content` gives.
+    fn cells<'c>(
+        &self,
+        line: Line,
+        content: &'c LazyListIntervalContent,
+    ) -> impl Iterator<Item = Cell> + use<'c> {
+        let columns = self.columns;
+        let mut column = 0;
+        (line.first..line.first + line.count).map(move |item| {
+            let left = columns.saturating_sub(column).max(1);
+            let span = if line.header {
+                columns
+            } else {
+                content
+                    .with_interval(item, |local, interval| {
+                        interval
+                            .span
+                            .as_ref()
+                            .map(|span| span(line_span_scope(columns, left), local))
+                    })
+                    .flatten()
+                    .map_or(1, |span| span.clamp(1, left))
+            };
+            let cell = Cell { item, column, span };
+            column += span;
+            cell
+        })
     }
 }
 
+fn line_span_scope(columns: usize, left: usize) -> LazyGridItemSpanScope {
+    LazyGridItemSpanScope {
+        max_line_span: columns,
+        max_current_line_span: left,
+    }
+}
+
+/// Fills the lines of a grid item by item, as Compose's grid does: an item
+/// that takes more cells than its line has left starts the next line.
+struct LineBuilder<'l> {
+    lines: &'l mut GridLines,
+    /// The cells taken in the open line; none when no line is open.
+    used: usize,
+}
+
+impl LineBuilder<'_> {
+    fn header(&mut self, item: usize) {
+        self.used = 0;
+        let lines = &mut *self.lines;
+        lines.headers.push(lines.line_count);
+        lines.push_run(RunKind::Header, item, 1, 1);
+    }
+
+    fn cells(&mut self, mut first: usize, mut count: usize) {
+        let columns = self.lines.columns;
+        if self.used > 0 {
+            let joined = count.min(columns - self.used);
+            self.join(joined, joined);
+            first += joined;
+            count -= joined;
+        }
+        let whole = count / columns;
+        if whole > 0 {
+            self.lines
+                .push_run(RunKind::Cells, first, whole * columns, whole);
+            first += whole * columns;
+            count -= whole * columns;
+        }
+        if count > 0 {
+            self.open(first);
+            self.join(count, count);
+        }
+    }
+
+    /// Adds `item`, whose span `span_of` gives from the cells left in its
+    /// line.
+    fn spanned(&mut self, item: usize, span_of: impl Fn(usize) -> usize) {
+        let columns = self.lines.columns;
+        let mut span = span_of(columns - self.used).clamp(1, columns);
+        if span > columns - self.used {
+            self.used = 0;
+            span = span_of(columns).clamp(1, columns);
+        }
+        if self.used == 0 {
+            self.open(item);
+        }
+        self.join(1, span);
+    }
+
+    /// Starts a listed line at `item`.
+    fn open(&mut self, item: usize) {
+        let lines = &mut *self.lines;
+        let listed = lines
+            .runs
+            .last()
+            .is_some_and(|run| matches!(run.kind, RunKind::Listed { .. }));
+        if !listed {
+            let from = lines.starts.len();
+            lines.push_run(RunKind::Listed { from }, item, 0, 0);
+        }
+        lines.starts.push(item);
+        lines.line_count += 1;
+        if let Some(run) = lines.runs.last_mut() {
+            run.lines += 1;
+        }
+    }
+
+    /// Adds `items` that take `cells` to the open line.
+    fn join(&mut self, items: usize, cells: usize) {
+        if let Some(run) = self.lines.runs.last_mut() {
+            run.items += items;
+        }
+        self.used += cells;
+        if self.used == self.lines.columns {
+            self.used = 0;
+        }
+    }
+}
 /// The widths of a line's cells in whole device pixels, as Compose's grid
-/// gives them: the pixels left over go one each to the first cells.
+/// gives them: the pixels left over go one each to the first columns.
 #[derive(Clone, Copy, Debug)]
 struct CellSizes {
-    /// The width of the narrower cells, in logical pixels.
+    /// The device pixels of the narrower columns.
     base: f32,
-    /// How many cells, from the first, are one device pixel wider.
+    /// How many columns, from the first, are one device pixel wider.
     wide: usize,
-    /// One device pixel, in logical pixels.
-    pixel: f32,
+    /// The device pixels between two columns.
     spacing: f32,
+    density: f32,
 }
 
 impl CellSizes {
     fn new(available: f32, columns: usize, spacing: f32, density: f32) -> Self {
         let density = density.max(f32::EPSILON);
-        let spacing_px = (spacing * density).round();
-        let cells_px = ((available * density).floor() - spacing_px * (columns - 1) as f32).max(0.0);
-        let base_px = (cells_px / columns as f32).floor();
+        let spacing = (spacing * density).round();
+        let cells = ((available * density).floor() - spacing * (columns - 1) as f32).max(0.0);
+        let base = (cells / columns as f32).floor();
         Self {
-            base: base_px / density,
-            wide: (cells_px - base_px * columns as f32) as usize,
-            pixel: 1.0 / density,
-            spacing: spacing_px / density,
+            base,
+            wide: (cells - base * columns as f32) as usize,
+            spacing,
+            density,
         }
     }
 
-    fn width(&self, column: usize) -> f32 {
-        if column < self.wide {
-            self.base + self.pixel
-        } else {
-            self.base
-        }
-    }
-
+    /// Where `column` starts, in logical pixels.
     fn offset(&self, column: usize) -> f32 {
-        column as f32 * (self.base + self.spacing) + column.min(self.wide) as f32 * self.pixel
+        (column as f32 * (self.base + self.spacing) + column.min(self.wide) as f32) / self.density
+    }
+
+    /// The width of a cell that takes `span` columns from `column`, with
+    /// the spacing between them, in logical pixels.
+    fn width(&self, column: usize, span: usize) -> f32 {
+        let wide = (column + span).min(self.wide) - column.min(self.wide);
+        (span as f32 * self.base + (span - 1) as f32 * self.spacing + wide as f32) / self.density
     }
 }
 
@@ -361,81 +534,60 @@ impl CellSizes {
 /// full width.
 struct LazyGridLines<'s, 'a, 'i> {
     items: LazyListItems<'s, 'a, 'i>,
-    /// The inputs of the wider and of the narrower cells.
-    cells: [&'i LazyListItemMeasureInputs<'i>; 2],
-    headers: &'i LazyListItemMeasureInputs<'i>,
     lines: &'i GridLines,
     sizes: CellSizes,
+    /// The width of a header's line.
+    full: f32,
 }
 
-impl<'i> LazyGridLines<'_, '_, 'i> {
-    /// Measures `item` with the `inputs` of a header, a wide or a narrow cell.
-    fn measure_with(&mut self, inputs: usize, item: usize) -> LazyListMeasuredItem {
-        let inputs = self.inputs(inputs);
-        let held = std::mem::replace(&mut self.items.inputs, inputs);
-        let measured = self.items.measure(item);
-        self.items.inputs = held;
-        measured
+impl LazyGridLines<'_, '_, '_> {
+    /// Measures `item` at `width`.
+    fn measure_at(&mut self, width: f32, item: usize) -> LazyListMeasuredItem {
+        self.items.inputs.cross_axis_size = width;
+        self.items.measure(item)
     }
 
-    fn keep_with(&mut self, inputs: usize, item: usize, distance: f32) -> BeyondItem {
-        let inputs = self.inputs(inputs);
-        let held = std::mem::replace(&mut self.items.inputs, inputs);
-        let kept = self.items.keep_beyond(item, distance);
-        self.items.inputs = held;
-        kept
-    }
-
-    /// The inputs of `HEADER`, of a wide cell or of a narrow one.
-    fn inputs(&self, inputs: usize) -> &'i LazyListItemMeasureInputs<'i> {
-        if inputs == HEADER {
-            self.headers
+    fn cell_width(&self, line: Line, cell: Cell) -> f32 {
+        if line.header {
+            self.full
         } else {
-            self.cells[inputs]
+            self.sizes.width(cell.column, cell.span)
         }
     }
-
-    fn cell_inputs(&self, column: usize) -> usize {
-        usize::from(column >= self.sizes.wide)
-    }
 }
-
-/// Which inputs measure a header line.
-const HEADER: usize = 2;
 
 impl LazyItemSource for LazyGridLines<'_, '_, '_> {
     fn measure(&mut self, index: usize) -> LazyListMeasuredItem {
-        let line = self.lines.line(index);
+        let (lines, content) = (self.lines, self.items.inputs.content);
+        let line = lines.line(index);
         if line.header {
-            let mut header = self.measure_with(HEADER, line.first);
+            let mut header = self.measure_at(self.full, line.first);
             header.index = index;
             return header;
         }
-        let key = self.items.inputs.content.get_key(line.first).to_slot_id();
+        let key = content.get_key(line.first).to_slot_id();
         let mut measured = LazyListMeasuredItem::new(index, key, None, 0.0, 0.0);
-        for column in 0..line.count {
-            let cell = self.measure_with(self.cell_inputs(column), line.first + column);
-            let cross = self.sizes.offset(column);
-            measured.main_axis_size = measured.main_axis_size.max(cell.main_axis_size);
-            measured.cross_axis_size = cross + cell.cross_axis_size;
-            for (root, &node_id) in cell.node_ids.iter().enumerate() {
-                measured.node_ids.push(node_id);
-                measured
-                    .child_offsets
-                    .push(cell.child_offsets.get(root).copied().unwrap_or(0.0));
-                measured.child_cross_axis_sizes.push(
-                    cell.child_cross_axis_sizes
-                        .get(root)
-                        .copied()
-                        .unwrap_or(cell.cross_axis_size),
-                );
-                measured.child_cross_offsets.push(cross);
-                let start = cell.child_offsets.get(root).copied().unwrap_or(0.0);
-                let end = cell
+        for cell in lines.cells(line, content) {
+            let cross = self.sizes.offset(cell.column);
+            let item = self.measure_at(self.cell_width(line, cell), cell.item);
+            measured.main_axis_size = measured.main_axis_size.max(item.main_axis_size);
+            measured.cross_axis_size = cross + item.cross_axis_size;
+            for (root, &node_id) in item.node_ids.iter().enumerate() {
+                let start = item.child_offsets.get(root).copied().unwrap_or(0.0);
+                let end = item
                     .child_offsets
                     .get(root + 1)
                     .copied()
-                    .unwrap_or(cell.main_axis_size);
+                    .unwrap_or(item.main_axis_size);
+                measured.node_ids.push(node_id);
+                measured.child_offsets.push(start);
+                measured.child_cross_axis_sizes.push(
+                    item.child_cross_axis_sizes
+                        .get(root)
+                        .copied()
+                        .unwrap_or(item.cross_axis_size),
+                );
+                measured.child_cross_offsets.push(cross);
                 measured.child_main_sizes.push(end - start);
             }
         }
@@ -444,14 +596,11 @@ impl LazyItemSource for LazyGridLines<'_, '_, '_> {
     }
 
     fn keep_beyond(&mut self, index: usize, distance: f32) -> BeyondItem {
-        let line = self.lines.line(index);
-        for column in 0..line.count {
-            let inputs = if line.header {
-                HEADER
-            } else {
-                self.cell_inputs(column)
-            };
-            if let BeyondItem::Declined = self.keep_with(inputs, line.first + column, distance) {
+        let (lines, content) = (self.lines, self.items.inputs.content);
+        let line = lines.line(index);
+        for cell in lines.cells(line, content) {
+            self.items.inputs.cross_axis_size = self.cell_width(line, cell);
+            if let BeyondItem::Declined = self.items.keep_beyond(cell.item, distance) {
                 return BeyondItem::Declined;
             }
         }
@@ -463,7 +612,7 @@ impl LazyItemSource for LazyGridLines<'_, '_, '_> {
 /// returns them with the number of lines.
 pub(super) fn measure_grid_viewport(
     scope: &mut SubcomposeMeasureScopeImpl<'_>,
-    content: &LazyListIntervalContent,
+    content: &Rc<LazyListIntervalContent>,
     context: &LazyListMeasureContext<'_>,
     frame: &LazyFrame,
     grid: &GridLayout,
@@ -471,19 +620,21 @@ pub(super) fn measure_grid_viewport(
     let state = context.state;
     let available = frame.item_cross_axis_size;
     let columns = grid.cells.columns(available, grid.spacing);
+    if !grid.lines.borrow().built_for(content, columns) {
+        *grid.lines.borrow_mut() = GridLines::new(content, columns);
+    }
+    // A cell composed in this pass may read the grid's state, which reads
+    // the lines.
+    let lines = grid.lines.borrow();
     let sizes = CellSizes::new(available, columns, grid.spacing, scope.density());
-    let lines = GridLines::new(content, columns);
     let line_count = lines.line_count;
     context
         .measured_item_cache
         .borrow_mut()
-        .begin_pass(scope, frame.is_vertical, sizes.base);
+        .begin_pass(scope, frame.is_vertical, available);
     let near_lines = state.nearest_range();
-    let near = lines.line(near_lines.start).first
-        ..lines
-            .line(near_lines.end.saturating_sub(1))
-            .first
-            .saturating_add(columns);
+    let last = lines.line(near_lines.end.saturating_sub(1));
+    let near = lines.line(near_lines.start).first..last.first + last.count;
     if line_count > 0 {
         state.update_scroll_position_if_item_moved(line_count, |slot_id| {
             content
@@ -491,37 +642,28 @@ pub(super) fn measure_grid_viewport(
                 .map(|item| lines.line_of(item))
         });
     }
-    let narrow = LazyListItemMeasureInputs {
+    let inputs = LazyListItemMeasureInputs {
         is_vertical: frame.is_vertical,
-        cross_axis_size: sizes.base,
+        cross_axis_size: available,
         content,
         state,
         measured_item_cache: context.measured_item_cache,
-    };
-    let wide = LazyListItemMeasureInputs {
-        cross_axis_size: sizes.width(0),
-        ..narrow
-    };
-    let headers = LazyListItemMeasureInputs {
-        cross_axis_size: available,
-        ..narrow
     };
     let node_id = scope.root_id();
     let scroll_delta = state.peek_scroll_delta();
     let mut source = LazyGridLines {
         items: LazyListItems {
             scope: &mut *scope,
-            inputs: &narrow,
+            inputs,
             near,
             scroll_delta,
             skipped_slots_recycled: false,
             place_beyond: false,
             beyond: None,
         },
-        cells: [&wide, &narrow],
-        headers: &headers,
         lines: &lines,
         sizes,
+        full: available,
     };
     source.items.beyond = beyond_composition(&source.items);
     let mut result = measure_lazy_list_with_beyond_bounds_policy(
@@ -533,13 +675,10 @@ pub(super) fn measure_grid_viewport(
         &mut source,
     );
     request_beyond_items(source.items.beyond, node_id);
-    if !content.header_indices().is_empty() {
-        pin_sticky_header(&mut result, &lines.header_lines(), |line| {
-            source.measure(line)
-        });
+    if !lines.headers.is_empty() {
+        pin_sticky_header(&mut result, &lines.headers, |line| source.measure(line));
     }
-    register_grid_measurements(scope, &result, &lines, frame, sizes);
-    *grid.lines.borrow_mut() = lines;
+    register_grid_measurements(scope, &result, &lines, content, frame, sizes);
     (result, line_count)
 }
 
@@ -549,34 +688,36 @@ fn register_grid_measurements(
     scope: &mut SubcomposeMeasureScopeImpl<'_>,
     result: &LazyListMeasureResult,
     lines: &GridLines,
+    content: &LazyListIntervalContent,
     frame: &LazyFrame,
     sizes: CellSizes,
 ) {
-    let first_narrow = sizes.offset(sizes.wide);
-    let registrations = [
-        (false, true, sizes.width(0)),
-        (false, false, sizes.base),
-        (true, false, frame.item_cross_axis_size),
-    ];
-    for (header, wide, width) in registrations {
-        scope.ensure_cached_measurement_node_ids(
-            result
-                .visible_items
+    fn node_ids(ids: &[u64]) -> impl Iterator<Item = NodeId> + '_ {
+        ids.iter()
+            .filter_map(|&node_id| NodeId::try_from(node_id).ok())
+    }
+    for measured in &result.visible_items {
+        let line = lines.line(measured.index);
+        if line.header {
+            scope.ensure_cached_measurement_node_ids(
+                node_ids(&measured.node_ids),
+                lazy_list_child_constraints(frame.is_vertical, frame.item_cross_axis_size),
+            );
+            continue;
+        }
+        let mut root = 0;
+        for cell in lines.cells(line, content) {
+            let cross = sizes.offset(cell.column);
+            let roots = measured.child_cross_offsets[root..]
                 .iter()
-                .filter(|line| lines.line(line.index).header == header)
-                .flat_map(|line| {
-                    line.node_ids
-                        .iter()
-                        .enumerate()
-                        .filter_map(move |(root, &node_id)| {
-                            let offset = line.child_cross_offsets.get(root).copied();
-                            (header || offset.is_some_and(|offset| (offset < first_narrow) == wide))
-                                .then_some(node_id)
-                        })
-                })
-                .filter_map(|node_id| NodeId::try_from(node_id).ok()),
-            lazy_list_child_constraints(frame.is_vertical, width),
-        );
+                .take_while(|&&offset| offset == cross)
+                .count();
+            scope.ensure_cached_measurement_node_ids(
+                node_ids(&measured.node_ids[root..root + roots]),
+                lazy_list_child_constraints(frame.is_vertical, sizes.width(cell.column, cell.span)),
+            );
+            root += roots;
+        }
     }
 }
 
@@ -602,8 +743,10 @@ where
 
 /// Composes and measures the items needed for a vertical grid's viewport,
 /// in lines of cells — Compose's `LazyVerticalGrid`. `content` adds the
-/// items as a [`LazyColumn`](super::LazyColumn)'s does; a sticky header takes
-/// a whole line and holds the top while the lines under it scroll.
+/// items as a [`LazyColumn`](super::LazyColumn)'s does, and
+/// [`LazyItems::span`](cranpose_foundation::lazy::LazyItems::span) gives an
+/// item more columns of its line. A sticky header takes a whole line and
+/// holds the top while the lines under it scroll.
 pub fn LazyVerticalGrid<F>(
     modifier: Modifier,
     state: LazyGridState,
@@ -625,8 +768,8 @@ where
 
 /// Composes and measures the items needed for a horizontal grid's
 /// viewport, in columns of cells from top to bottom — Compose's
-/// `LazyHorizontalGrid`. A sticky header takes a whole column and holds the
-/// start edge.
+/// `LazyHorizontalGrid`. A span gives an item more rows of its column, and
+/// a sticky header takes a whole column and holds the start edge.
 pub fn LazyHorizontalGrid<F>(
     modifier: Modifier,
     state: LazyGridState,
