@@ -1,4 +1,4 @@
-use std::{any::Any, cell::Cell, rc::Rc};
+use std::{any::Any, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId, NodeMarks, collections::map::HashMap};
 use cranpose_ui::{
@@ -1272,12 +1272,6 @@ fn translate_retained_child(
     layer.origin_in_parent = state.position();
 }
 
-thread_local! {
-    /// The hit geometry a subtree had before its rebuild, kept from one
-    /// rebuild to the next so no frame allocates it.
-    static PREVIOUS_HIT_GEOMETRY: Cell<Vec<HitGraphState>> = const { Cell::new(Vec::new()) };
-}
-
 /// Rebuilds `layer` with `rebuild`, which reports whether it succeeded, and
 /// returns whether the hit geometry of the layer or of a layer under it
 /// changed; `None` when the rebuild failed. A rebuild takes in the moves and
@@ -1289,7 +1283,7 @@ fn rebuild_tracking_hits(
     rebuild: impl FnOnce(&mut LayerNode) -> bool,
 ) -> Option<bool> {
     let previous = HitGraphState::of(layer);
-    let mut descendants = PREVIOUS_HIT_GEOMETRY.take();
+    let mut descendants = crate::thread_state::with(|state| state.hit_geometry_scratch.take());
     descendants.clear();
     visit_hit_layers(layer, &mut |child| {
         descendants.push(HitGraphState::of(child));
@@ -1303,7 +1297,7 @@ fn rebuild_tracking_hits(
             })
             || expected.next().is_some()
     });
-    PREVIOUS_HIT_GEOMETRY.set(descendants);
+    crate::thread_state::with(|state| state.hit_geometry_scratch.set(descendants));
     dirty
 }
 
@@ -1325,7 +1319,7 @@ fn visit_hit_layers(layer: &LayerNode, visit: &mut impl FnMut(&LayerNode) -> boo
 }
 
 #[derive(PartialEq)]
-struct HitGraphState {
+pub(crate) struct HitGraphState {
     hit_test: bool,
     has_hit_targets: bool,
     local_bounds: Rect,
