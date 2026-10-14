@@ -243,6 +243,7 @@ pub(crate) enum RobotCommand {
     },
     HasFocusedTextField,
     SetSemanticsEnabled(bool),
+    LoseGpuDevice,
     InvokeAppHook {
         name: String,
         argument: String,
@@ -1128,6 +1129,15 @@ impl Robot {
         self.tx
             .send(RobotCommand::SetSemanticsEnabled(enabled))
             .map_err(|e| format!("Failed to send semantics toggle command: {e}"))?;
+        self.recv_ack()
+    }
+
+    /// Destroys the app's GPU device, as a driver reset or a removed GPU
+    /// would lose it, so a test can check that the app opens another.
+    pub fn lose_gpu_device(&self) -> Result<(), String> {
+        self.tx
+            .send(RobotCommand::LoseGpuDevice)
+            .map_err(|e| format!("Failed to send device loss command: {e}"))?;
         self.recv_ack()
     }
 

@@ -66,18 +66,29 @@ fn local_gpu_context() -> StaticCompositionLocal<Option<GpuContext>> {
 }
 
 /// The GPU context of the window this composition draws into. `None` on
-/// platforms that do not share their device yet.
+/// platforms that do not share their device yet. On desktop a lost device is
+/// replaced and this returns the new one, so code that made GPU resources
+/// on the old device keys them on the context and makes them again.
 pub fn gpu_context() -> Option<GpuContext> {
     local_gpu_context().current()
 }
 
 pub(crate) fn provide_gpu_context(
     context: GpuContext,
+    content: impl FnMut() + 'static,
+) -> impl FnMut() + 'static {
+    provide_current_gpu_context(move || context.clone(), content)
+}
+
+/// Gives `content` the GPU context `context` returns at each composition of
+/// it, so a host that replaces its device hands content the new one.
+pub(crate) fn provide_current_gpu_context(
+    context: impl Fn() -> GpuContext + 'static,
     mut content: impl FnMut() + 'static,
 ) -> impl FnMut() + 'static {
     move || {
         CompositionLocalProvider(
-            [local_gpu_context().provides(Some(context.clone()))],
+            [local_gpu_context().provides(Some(context()))],
             &mut content,
         );
     }

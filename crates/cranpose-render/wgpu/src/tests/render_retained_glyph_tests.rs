@@ -16,6 +16,7 @@ fn test_renderer() -> (std::sync::MutexGuard<'static, ()>, GpuRenderer) {
         text_fonts: SoftwareTextFontSet::empty(),
         renderer_epoch: 0,
         pipeline_compilation: PipelineCompilation::Background,
+        on_device_lost: None,
     });
     (lock, renderer)
 }
@@ -553,6 +554,7 @@ fn fonted_renderer() -> (std::sync::MutexGuard<'static, ()>, GpuRenderer) {
         text_fonts: SoftwareTextFontSet::from_font(font),
         renderer_epoch: 0,
         pipeline_compilation: PipelineCompilation::Inline,
+        on_device_lost: None,
     });
     (lock, renderer)
 }

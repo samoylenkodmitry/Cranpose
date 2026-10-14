@@ -421,6 +421,10 @@ pub enum LaunchError {
     /// The desktop renderer context was not initialized before a surface needed it.
     #[error("desktop GPU context is not initialized")]
     GpuContextUnavailable,
+    /// The GPU device was lost, and the devices opened in its place were
+    /// lost before they presented a frame.
+    #[error("the GPU device was lost and could not be replaced")]
+    GpuDeviceLost,
     /// The application content closure was already consumed before the primary shell was created.
     #[error("desktop application content is unavailable during launch")]
     ContentUnavailable,
