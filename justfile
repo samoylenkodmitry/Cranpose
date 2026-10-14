@@ -660,8 +660,9 @@ web-backends: web
 test-web-ime-webdriver endpoint browser url output *args:
     python3 scripts/a11y/web_ime_robot.py --endpoint {{quote(endpoint)}} --browser {{quote(browser)}} --url {{quote(url)}} --output {{quote(output)}} {{args}}
 
-test-web-ime-firefox site output driver_port server_port:
-    bash scripts/a11y/run_webdriver.sh {{quote(site)}} {{quote(output)}} {{quote(driver_port)}} {{quote(server_port)}}
+# Serve a packaged web demo and run the keyboard checks in Firefox or Safari.
+test-web-ime browser site output:
+    bash scripts/a11y/run_webdriver.sh {{quote(browser)}} {{quote(site)}} {{quote(output)}}
 
 test-web-ime-android serial endpoint url output keyboard_layout:
     node scripts/a11y/android-ime.mjs {{quote(serial)}} {{quote(endpoint)}} {{quote(url)}} {{quote(output)}} {{quote(keyboard_layout)}}
@@ -678,7 +679,7 @@ robot-accessibility-macos binary output:
     target/a11y-python/bin/python scripts/a11y/desktop_robot.py --binary {{quote(binary)}} --output {{quote(output)}}
 
 robot-accessibility-linux binary output:
-    scripts/ci/with_host_lock.sh --exclusive dbus-run-session -- xvfb-run -a python3 scripts/a11y/desktop_robot.py --binary {{quote(binary)}} --output {{quote(output)}}
+    scripts/ci/with_host_lock.sh --exclusive dbus-run-session -- scripts/a11y/linux_a11y_bus.sh xvfb-run -a python3 scripts/a11y/desktop_robot.py --binary {{quote(binary)}} --output {{quote(output)}}
 
 robot-accessibility-windows binary output:
     python scripts/a11y/desktop_robot.py --binary {{quote(binary)}} --output {{quote(output)}}

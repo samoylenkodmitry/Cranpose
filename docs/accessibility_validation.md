@@ -54,10 +54,10 @@ Robot drivers default to disabled to preserve application pictures and input.
 `AppLauncher::with_developer_inspector(bool)` overrides these defaults in either
 builder order.
 
-The **build one** workflow accepts target **windows-accessibility**.
-It runs `just test-windows-accessibility` on a hosted Windows desktop, checks native
-UI Automation actions, and exercises the floating inspector through the robot.
-The `windows-accessibility` artifact retains native reports and inspector pictures.
+The [runtime matrix](../.github/workflows/runtime-matrix.yml) runs
+`just test-windows-accessibility` on a hosted Windows desktop every night, checks
+native UI Automation actions, and exercises the floating inspector through the robot.
+The `runtime-windows` artifact retains native reports and inspector pictures.
 
 Run the inspector end-to-end robot with:
 
@@ -110,7 +110,10 @@ log, and executable SHA-256. macOS requires Accessibility permission for the
 terminal or runner; the recipe installs its pinned PyObjC dependency in a local
 virtual environment. Linux requires Python GObject introspection, the AT-SPI 2
 typelib, `busctl`, `dbus-run-session`, and `xvfb-run`. It enables accessibility on
-a private session bus and takes the host lock. Windows requires Python,
+a private session bus, starts an AT-SPI bus and registry of its own there
+([`linux_a11y_bus.sh`](../scripts/a11y/linux_a11y_bus.sh): at-spi's own launcher
+needs a systemd user manager when the system uses dbus-broker), and takes the
+host lock. Windows requires Python,
 PowerShell, and an interactive desktop. The runner scopes UIA to the process it
 launched and uses Invoke, Value, and RangeValue patterns.
 
