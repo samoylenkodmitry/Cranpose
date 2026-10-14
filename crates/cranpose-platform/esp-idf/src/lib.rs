@@ -13,7 +13,10 @@ mod present;
 
 use std::{
     convert::Infallible,
-    sync::{Arc, Condvar, Mutex, PoisonError},
+    sync::{
+        Arc, Condvar, Mutex, PoisonError,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -61,41 +64,58 @@ impl Default for DisplayConfig {
     }
 }
 
+/// Wakes the run loop from any thread. Most notices come from the loop's own
+/// thread during a tick, when it does not sleep: they set `pending` and
+/// take no lock.
 #[derive(Default)]
 struct Wake {
-    pending: Mutex<bool>,
+    pending: AtomicBool,
+    sleeping: AtomicBool,
+    lock: Mutex<()>,
     signal: Condvar,
 }
 
 impl Wake {
     fn notify(&self) {
-        *self.pending.lock().unwrap_or_else(PoisonError::into_inner) = true;
-        self.signal.notify_one();
+        // Sequentially consistent on both sides: either the sleeper sees
+        // `pending` before it waits, or this sees `sleeping` and signals
+        // once the sleeper waits, since the lock is held until then.
+        self.pending.store(true, Ordering::SeqCst);
+        if self.sleeping.load(Ordering::SeqCst) {
+            let _guard = self.lock.lock().unwrap_or_else(PoisonError::into_inner);
+            self.signal.notify_one();
+        }
     }
 
     fn wait_until(&self, deadline: Option<Instant>) {
-        let mut pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
-        while !*pending {
+        if self.pending.swap(false, Ordering::SeqCst) {
+            return;
+        }
+        let mut guard = self.lock.lock().unwrap_or_else(PoisonError::into_inner);
+        self.sleeping.store(true, Ordering::SeqCst);
+        while !self.pending.load(Ordering::SeqCst) {
             match deadline {
                 None => {
-                    pending = self
+                    guard = self
                         .signal
-                        .wait(pending)
+                        .wait(guard)
                         .unwrap_or_else(PoisonError::into_inner);
                 }
                 Some(deadline) => {
                     let Some(timeout) = deadline.checked_duration_since(Instant::now()) else {
                         break;
                     };
-                    pending = self
+                    guard = self
                         .signal
-                        .wait_timeout(pending, timeout)
+                        .wait_timeout(guard, timeout)
                         .unwrap_or_else(PoisonError::into_inner)
                         .0;
                 }
             }
         }
-        *pending = false;
+        self.sleeping.store(false, Ordering::SeqCst);
+        self.pending.store(false, Ordering::SeqCst);
+        drop(guard);
     }
 }
 
