@@ -1,5 +1,8 @@
 use std::alloc::System;
 
+use cranpose_animation::{
+    AnimationSpec, RepeatMode, StartOffset, infiniteRepeatable, rememberInfiniteTransition,
+};
 use cranpose_ui::{
     MeasureLayoutOptions, Modifier, measure_layout, measure_layout_with_options,
     run_test_composition,
@@ -104,6 +107,43 @@ fn a_layout_pass_lends_its_applier_without_rebuilding_it() {
     applier.clear_runtime_handle();
     println!("allocations of a shell layout pass over four nodes: {allocations}");
     assert!(allocations <= 6, "{allocations} allocations a pass");
+}
+
+/// An animation frame wakes the animation's task, which stores the new value
+/// over the old one, and recomposes the scope that reads it. Waiting for the
+/// frame and writing the value allocate nothing.
+fn an_animation_frame_allocates_only_its_recomposition() {
+    let mut composition = run_test_composition(|| {
+        let transition = rememberInfiniteTransition("read");
+        let progress = transition.animateFloat(
+            0.0,
+            1.0,
+            infiniteRepeatable(
+                AnimationSpec::linear(1_000),
+                RepeatMode::Reverse,
+                StartOffset::default(),
+            ),
+            "read",
+        );
+        let _ = progress.value();
+    });
+    let handle = composition.runtime_handle();
+    let mut frame = |index: u64| {
+        handle.drain_frame_callbacks(index * 16_666_667);
+        handle.drain_ui();
+        composition
+            .process_invalid_scopes()
+            .expect("the frame recomposes")
+    };
+    for index in 1..5 {
+        frame(index);
+    }
+    let region = Region::new(GLOBAL);
+    let recomposed = (5..5 + PASSES as u64).filter(|&index| frame(index)).count();
+    let allocations = region.change().allocations / PASSES;
+    assert_eq!(recomposed, PASSES, "every frame recomposes the reader");
+    println!("allocations of an animation frame: {allocations}");
+    assert!(allocations <= 6, "{allocations} allocations a frame");
 }
 
 /// A modifier chain built link by link keeps its elements in one shared
@@ -212,6 +252,7 @@ fn a_thread_that_held_a_composition_frees_its_memory_at_exit() {
 fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     remeasuring_a_row_allocates_only_its_measurement();
     a_layout_pass_lends_its_applier_without_rebuilding_it();
+    an_animation_frame_allocates_only_its_recomposition();
     if !cfg!(feature = "inspection") {
         a_modifier_chain_allocates_its_elements_and_one_shared_box();
     }

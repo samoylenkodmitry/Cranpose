@@ -562,6 +562,7 @@ impl<A: Applier + 'static> Composition<A> {
                 }
                 host_group_index += 1;
             }
+            recycle_scope_groups(&runtime_handle, scope_groups);
             if self.root_render_requested {
                 break;
             }
@@ -604,6 +605,17 @@ impl<A: Applier + 'static> Composition<A> {
 /// moved, and then its readers run in a pass of their own.
 fn recomposes_content(scopes: &[RecomposeScope]) -> bool {
     scopes.iter().any(|scope| !scope.is_derivation())
+}
+
+/// Gives a pass's scope lists back to the runtime, for the next pass to
+/// reuse their storage.
+fn recycle_scope_groups(
+    runtime: &RuntimeHandle,
+    scope_groups: SmallVec<[(Rc<SlotsHost>, Vec<RecomposeScope>); 1]>,
+) {
+    for (_, scopes) in scope_groups {
+        runtime.recycle_scopes(scopes);
+    }
 }
 
 impl<A: Applier + 'static> Composition<A> {

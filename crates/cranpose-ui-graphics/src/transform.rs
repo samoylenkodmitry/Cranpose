@@ -185,30 +185,38 @@ impl ProjectiveTransform {
 
     /// Maps a rectangle's top-left, top-right, bottom-left and bottom-right corners.
     pub fn map_rect(&self, rect: Rect) -> [[f32; 2]; 4] {
+        let right = rect.x + rect.width;
+        let bottom = rect.y + rect.height;
+        let corner = |x, y| {
+            let point = self.map_point(Point { x, y });
+            [point.x, point.y]
+        };
         [
-            self.map_point(Point {
-                x: rect.x,
-                y: rect.y,
-            }),
-            self.map_point(Point {
-                x: rect.x + rect.width,
-                y: rect.y,
-            }),
-            self.map_point(Point {
-                x: rect.x,
-                y: rect.y + rect.height,
-            }),
-            self.map_point(Point {
-                x: rect.x + rect.width,
-                y: rect.y + rect.height,
-            }),
+            corner(rect.x, rect.y),
+            corner(right, rect.y),
+            corner(rect.x, bottom),
+            corner(right, bottom),
         ]
-        .map(|point| [point.x, point.y])
     }
 
     /// Returns the axis-aligned bounds of the transformed rectangle.
     pub fn bounds_for_rect(&self, rect: Rect) -> Rect {
-        quad_bounds(self.map_rect(rect))
+        let [[sx, kx, tx], [ky, sy, ty], [px, py, w]] = self.matrix;
+        if kx != 0.0 || ky != 0.0 || px != 0.0 || py != 0.0 || w != 1.0 {
+            return quad_bounds(self.map_rect(rect));
+        }
+        // Scale and translation alone keep a rectangle a rectangle: two
+        // corners bound it.
+        let x0 = sx * rect.x + tx;
+        let x1 = sx * (rect.x + rect.width) + tx;
+        let y0 = sy * rect.y + ty;
+        let y1 = sy * (rect.y + rect.height) + ty;
+        Rect {
+            x: x0.min(x1),
+            y: y0.min(y1),
+            width: (x1 - x0).abs(),
+            height: (y1 - y0).abs(),
+        }
     }
 }
 
@@ -261,14 +269,16 @@ pub fn quad_bounds(quad: [[f32; 2]; 4]) -> Rect {
 }
 
 fn multiply_matrices(lhs: [[f32; 3]; 3], rhs: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
-    let mut out = [[0.0; 3]; 3];
-    for row in 0..3 {
-        for col in 0..3 {
-            out[row][col] =
-                lhs[row][0] * rhs[0][col] + lhs[row][1] * rhs[1][col] + lhs[row][2] * rhs[2][col];
-        }
-    }
-    out
+    // Built in place: a zeroed matrix filled by loops costs a fill and a
+    // copy where the compiler optimizes for size.
+    let cell = |row: usize, col: usize| {
+        lhs[row][0] * rhs[0][col] + lhs[row][1] * rhs[1][col] + lhs[row][2] * rhs[2][col]
+    };
+    [
+        [cell(0, 0), cell(0, 1), cell(0, 2)],
+        [cell(1, 0), cell(1, 1), cell(1, 2)],
+        [cell(2, 0), cell(2, 1), cell(2, 2)],
+    ]
 }
 
 fn solve_homography(source: [[f32; 2]; 4], target: [[f32; 2]; 4]) -> Option<[f32; 8]> {

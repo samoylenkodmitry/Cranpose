@@ -447,6 +447,8 @@ struct RuntimeInner {
     node_updates: RefCell<Vec<Command>>,
     invalid_scope_count: Cell<usize>,
     scope_queue: RefCell<Vec<Weak<RecomposeScopeInner>>>,
+    /// The storage of the last pass's scope list, for the next pass.
+    spare_scopes: RefCell<Vec<RecomposeScope>>,
     frame_callbacks: RefCell<VecDeque<FrameCallbackEntry>>,
     next_frame_callback_id: Cell<u64>,
     last_frame_time_nanos: Cell<Option<u64>>,
@@ -494,6 +496,7 @@ impl RuntimeInner {
             node_updates: RefCell::new(Vec::new()),
             invalid_scope_count: Cell::new(0),
             scope_queue: RefCell::new(Vec::new()),
+            spare_scopes: RefCell::new(Vec::new()),
             frame_callbacks: RefCell::new(VecDeque::new()),
             next_frame_callback_id: Cell::new(1),
             last_frame_time_nanos: Cell::new(None),
@@ -563,18 +566,33 @@ impl RuntimeInner {
             }
             std::mem::take(&mut *queue)
         };
-        let scopes: Vec<RecomposeScope> = pending
-            .iter()
-            .filter_map(RecomposeScope::upgrade)
-            .filter(RecomposeScope::is_enqueued)
-            .collect();
+        let mut scopes = std::mem::take(&mut *self.spare_scopes.borrow_mut());
+        scopes.extend(
+            pending
+                .iter()
+                .filter_map(RecomposeScope::upgrade)
+                .filter(RecomposeScope::is_enqueued),
+        );
         pending.clear();
         let mut queue = self.scope_queue.borrow_mut();
         if queue.is_empty() {
             std::mem::swap(&mut *queue, &mut pending);
         }
         drop(queue);
-        (!scopes.is_empty()).then_some(scopes)
+        if scopes.is_empty() {
+            self.recycle_scopes(scopes);
+            return None;
+        }
+        Some(scopes)
+    }
+
+    fn recycle_scopes(&self, mut scopes: Vec<RecomposeScope>) {
+        // Cleared before the borrow: dropping a scope may run any code.
+        scopes.clear();
+        let mut spare = self.spare_scopes.borrow_mut();
+        if spare.capacity() < scopes.capacity() {
+            *spare = scopes;
+        }
     }
 
     fn has_invalid_scopes(&self) -> bool {
@@ -837,19 +855,32 @@ impl RuntimeInner {
     fn register_frame_callback(
         &self,
         kind: FrameCallbackKind,
-        callback: Box<dyn FnOnce(u64) + 'static>,
+        callback: FrameCallback,
     ) -> FrameCallbackId {
         let id = self.next_frame_callback_id.get();
         self.next_frame_callback_id.set(id + 1);
         self.frame_callbacks
             .borrow_mut()
-            .push_back(FrameCallbackEntry {
-                id,
-                kind,
-                callback: Some(callback),
-            });
+            .push_back(FrameCallbackEntry { id, kind, callback });
         self.schedule();
         id
+    }
+
+    /// The frame time once the frame callback `id` has run. A waiting
+    /// task's entry takes `waker` when the one it holds would wake another
+    /// task.
+    #[cfg(any(feature = "internal", test))]
+    fn frame_waker_time(&self, id: FrameCallbackId, waker: &Waker) -> Option<u64> {
+        let mut callbacks = self.frame_callbacks.borrow_mut();
+        let Some(entry) = callbacks.iter_mut().find(|entry| entry.id == id) else {
+            return self.last_frame_time_nanos.get();
+        };
+        if let FrameCallback::Wake(held) = &mut entry.callback
+            && !held.will_wake(waker)
+        {
+            held.clone_from(waker);
+        }
+        None
     }
 
     fn cancel_frame_callback(&self, id: FrameCallbackId) {
@@ -884,28 +915,40 @@ impl RuntimeInner {
         }
         self.last_frame_time_nanos.set(Some(frame_time_nanos));
         let next_frame_id = self.next_frame_callback_id.get();
-        if self.has_frame_callbacks() {
-            let _ = crate::run_in_mutable_snapshot(|| {
-                loop {
-                    let entry = {
-                        let mut callbacks = self.frame_callbacks.borrow_mut();
-                        if callbacks
-                            .front()
-                            .is_some_and(|entry| entry.id < next_frame_id)
-                        {
-                            callbacks.pop_front()
-                        } else {
-                            None
-                        }
-                    };
-                    let Some(mut entry) = entry else {
-                        break;
-                    };
-                    if let Some(callback) = entry.callback.take() {
-                        callback(frame_time_nanos);
+        let drain = || {
+            loop {
+                let entry = {
+                    let mut callbacks = self.frame_callbacks.borrow_mut();
+                    if callbacks
+                        .front()
+                        .is_some_and(|entry| entry.id < next_frame_id)
+                    {
+                        callbacks.pop_front()
+                    } else {
+                        None
                     }
+                };
+                let Some(entry) = entry else {
+                    break;
+                };
+                match entry.callback {
+                    FrameCallback::Run(callback) => callback(frame_time_nanos),
+                    #[cfg(any(feature = "internal", test))]
+                    FrameCallback::Wake(waker) => waker.wake(),
                 }
-            });
+            }
+        };
+        // Callbacks write state in one snapshot. Waking a task writes none:
+        // a frame of only waiting tasks opens no snapshot.
+        let runs_callbacks = self
+            .frame_callbacks
+            .borrow()
+            .iter()
+            .any(|entry| matches!(entry.callback, FrameCallback::Run(_)));
+        if runs_callbacks {
+            let _ = crate::run_in_mutable_snapshot(drain);
+        } else {
+            drain();
         }
 
         self.clear_needs_frame_if_idle();
@@ -1405,7 +1448,10 @@ impl RuntimeHandle {
         callback: impl FnOnce(u64) + 'static,
     ) -> Option<FrameCallbackId> {
         self.inner.upgrade().map(|inner| {
-            inner.register_frame_callback(FrameCallbackKind::Transient, Box::new(callback))
+            inner.register_frame_callback(
+                FrameCallbackKind::Transient,
+                FrameCallback::Run(Box::new(callback)),
+            )
         })
     }
 
@@ -1416,8 +1462,33 @@ impl RuntimeHandle {
         callback: impl FnOnce(u64) + 'static,
     ) -> Option<FrameCallbackId> {
         self.inner.upgrade().map(|inner| {
-            inner.register_frame_callback(FrameCallbackKind::Perpetual, Box::new(callback))
+            inner.register_frame_callback(
+                FrameCallbackKind::Perpetual,
+                FrameCallback::Run(Box::new(callback)),
+            )
         })
+    }
+
+    /// Wakes the task of `waker` at the next frame, whose time it then reads
+    /// with [`Self::frame_waker_time`].
+    #[cfg(any(feature = "internal", test))]
+    pub(crate) fn register_frame_waker(
+        &self,
+        kind: FrameCallbackKind,
+        waker: Waker,
+    ) -> Option<FrameCallbackId> {
+        self.inner
+            .upgrade()
+            .map(|inner| inner.register_frame_callback(kind, FrameCallback::Wake(waker)))
+    }
+
+    /// The frame time once the frame waker `id` has run; until then its
+    /// entry wakes `waker`.
+    #[cfg(any(feature = "internal", test))]
+    pub(crate) fn frame_waker_time(&self, id: FrameCallbackId, waker: &Waker) -> Option<u64> {
+        self.inner
+            .upgrade()
+            .and_then(|inner| inner.frame_waker_time(id, waker))
     }
 
     /// Cancels the frame callback `id` if it has not run.
@@ -1486,6 +1557,14 @@ impl RuntimeHandle {
         self.inner
             .upgrade()
             .and_then(|inner| inner.take_invalidated_scopes())
+    }
+
+    /// Gives back a scope list from [`Self::take_invalidated_scopes`], for
+    /// the next pass to reuse its storage.
+    pub(crate) fn recycle_scopes(&self, scopes: Vec<RecomposeScope>) {
+        if let Some(inner) = self.inner.upgrade() {
+            inner.recycle_scopes(scopes);
+        }
     }
 
     /// Releases the retained state of the movable content with identity
@@ -1592,7 +1671,15 @@ impl TaskHandle {
 pub(crate) struct FrameCallbackEntry {
     id: FrameCallbackId,
     kind: FrameCallbackKind,
-    callback: Option<Box<dyn FnOnce(u64) + 'static>>,
+    callback: FrameCallback,
+}
+
+enum FrameCallback {
+    /// Runs with the frame time.
+    Run(Box<dyn FnOnce(u64) + 'static>),
+    /// Wakes a task awaiting the frame.
+    #[cfg(any(feature = "internal", test))]
+    Wake(Waker),
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -1,9 +1,7 @@
 use std::{
-    cell::RefCell,
     future::Future,
     pin::Pin,
-    rc::Rc,
-    task::{Context, Poll, Waker},
+    task::{Context, Poll},
 };
 
 use crate::{
@@ -97,26 +95,12 @@ pub struct FrameCallbackRegistration {
     id: Option<FrameCallbackId>,
 }
 
-struct NextFrameState {
-    registration: Option<FrameCallbackRegistration>,
-    time: Option<u64>,
-    waker: Option<Waker>,
-}
-
-impl NextFrameState {
-    fn new() -> Self {
-        Self {
-            registration: None,
-            time: None,
-            waker: None,
-        }
-    }
-}
-
+/// The time of the next frame. Its task's waker waits in the runtime's frame
+/// callbacks, so awaiting a frame boxes nothing.
 pub struct NextFrame {
     clock: FrameClock,
     kind: FrameCallbackKind,
-    state: Rc<RefCell<NextFrameState>>,
+    registration: Option<FrameCallbackRegistration>,
 }
 
 impl NextFrame {
@@ -124,7 +108,7 @@ impl NextFrame {
         Self {
             clock,
             kind,
-            state: Rc::new(RefCell::new(NextFrameState::new())),
+            registration: None,
         }
     }
 }
@@ -133,50 +117,27 @@ impl Future for NextFrame {
     type Output = u64;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if let Some(time) = self.state.borrow().time {
-            return Poll::Ready(time);
-        }
-
-        {
-            let mut state = self.state.borrow_mut();
-            state.waker = Some(cx.waker().clone());
-            if state.registration.is_none() {
-                drop(state);
-                let state = Rc::downgrade(&self.state);
-                let callback = move |time| {
-                    let Some(state) = state.upgrade() else {
-                        return;
-                    };
-                    let (registration, waker) = {
-                        let mut state = state.borrow_mut();
-                        state.time = Some(time);
-                        (state.registration.take(), state.waker.take())
-                    };
-                    drop(registration);
-                    if let Some(waker) = waker {
-                        waker.wake();
-                    }
-                };
-                let registration = match self.kind {
-                    FrameCallbackKind::Transient => self.clock.with_frame_nanos(callback),
-                    FrameCallbackKind::Perpetual => self.clock.with_perpetual_frame_nanos(callback),
-                };
-                self.state.borrow_mut().registration = Some(registration);
+        let this = self.get_mut();
+        let runtime = &this.clock.runtime;
+        let Some(registration) = &mut this.registration else {
+            this.registration = Some(
+                match runtime.register_frame_waker(this.kind, cx.waker().clone()) {
+                    Some(id) => FrameCallbackRegistration::new(runtime.clone(), id),
+                    None => FrameCallbackRegistration::inactive(runtime.clone()),
+                },
+            );
+            return Poll::Pending;
+        };
+        let Some(id) = registration.id else {
+            return Poll::Pending;
+        };
+        match runtime.frame_waker_time(id, cx.waker()) {
+            Some(time) => {
+                // The frame removed the entry: nothing is left to cancel.
+                registration.id = None;
+                Poll::Ready(time)
             }
-        }
-
-        if let Some(time) = self.state.borrow().time {
-            Poll::Ready(time)
-        } else {
-            Poll::Pending
-        }
-    }
-}
-
-impl Drop for NextFrame {
-    fn drop(&mut self) {
-        if let Some(registration) = self.state.borrow_mut().registration.take() {
-            drop(registration);
+            None => Poll::Pending,
         }
     }
 }

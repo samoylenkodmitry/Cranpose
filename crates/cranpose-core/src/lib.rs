@@ -4788,6 +4788,9 @@ struct SlotsHostInner {
     lifecycle: slot::SlotLifecycleCoordinator,
     runtime_state: Option<Rc<crate::composer::ComposerRuntimeState>>,
     active_pass: Option<ActivePassState>,
+    /// The last finished pass's writer state, whose storage the next pass
+    /// reuses.
+    spare_pass_state: Option<slot::SlotWriteSessionState>,
 }
 
 impl Drop for SlotsHost {
@@ -4834,6 +4837,7 @@ impl SlotsHost {
                 lifecycle: slot::SlotLifecycleCoordinator::default(),
                 runtime_state: None,
                 active_pass: None,
+                spare_pass_state: None,
             }),
         }
     }
@@ -5085,7 +5089,13 @@ impl SlotsHost {
             log::error!("slot pass already active for host");
             return;
         }
-        let mut state = slot::SlotWriteSessionState::new(Rc::clone(folds));
+        let mut state = match inner.spare_pass_state.take() {
+            Some(mut state) => {
+                state.set_folds(Rc::clone(folds));
+                state
+            }
+            None => slot::SlotWriteSessionState::new(Rc::clone(folds)),
+        };
         state.reset_for_pass(mode);
         let storage_capacity = inner.table.storage_capacity();
         inner.active_pass = Some(ActivePassState {
@@ -5140,6 +5150,7 @@ impl SlotsHost {
             table,
             lifecycle,
             active_pass: active_pass_slot,
+            spare_pass_state,
             ..
         } = &mut *inner;
         let Some(mut active_pass) = active_pass_slot.take() else {
@@ -5162,16 +5173,16 @@ impl SlotsHost {
             session.finalize_pass(applier)?
         };
 
+        let outcome = SlotPassOutcome {
+            compacted: active_pass.state.request_compaction,
+            compact_anchor_registry_storage: active_pass.state.request_anchor_storage_compaction,
+            compact_payload_storage: active_pass.state.request_payload_storage_compaction,
+            trim_growth_slack: active_pass.state.removed_nothing()
+                && table.storage_capacity() > active_pass.storage_capacity,
+        };
+        *spare_pass_state = Some(active_pass.state);
         Ok(FinishedSlotPass {
-            outcome: SlotPassOutcome {
-                compacted: active_pass.state.request_compaction,
-                compact_anchor_registry_storage: active_pass
-                    .state
-                    .request_anchor_storage_compaction,
-                compact_payload_storage: active_pass.state.request_payload_storage_compaction,
-                trim_growth_slack: active_pass.state.removed_nothing()
-                    && table.storage_capacity() > active_pass.storage_capacity,
-            },
+            outcome,
             detached_root_children,
         })
     }
