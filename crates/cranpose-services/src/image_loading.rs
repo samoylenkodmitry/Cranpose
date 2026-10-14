@@ -102,6 +102,17 @@ impl ImageRequest {
         self.max_height = height.max(1);
         self
     }
+
+    /// [`max_size`](Self::max_size), unless the request already has one: a
+    /// composable that knows the size it draws at fills it in, and an app
+    /// that asked for a size keeps it.
+    pub fn or_max_size(self, width: u32, height: u32) -> Self {
+        if self.max_width == u32::MAX && self.max_height == u32::MAX {
+            self.max_size(width, height)
+        } else {
+            self
+        }
+    }
 }
 
 /// Where a request is.

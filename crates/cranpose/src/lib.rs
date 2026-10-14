@@ -3,6 +3,8 @@
 
 extern crate self as cranpose;
 
+#[cfg(feature = "image-loading")]
+mod async_image;
 #[cfg(feature = "localization")]
 mod system_languages;
 #[cfg(feature = "localization")]
@@ -289,6 +291,8 @@ mod composition_api {
         rememberMutableStateOfNeverEqual, rememberUpdatedState, withBlocking,
     };
 }
+#[cfg(feature = "image-loading")]
+pub use async_image::AsyncImage;
 pub use composition_api::*;
 /// Glass controls, themes and motion for Cranpose apps.
 /// Import common components with `use cranpose::liquid::prelude::*;`.
@@ -445,6 +449,8 @@ pub mod prelude {
     pub use cranpose_services::*;
     pub use cranpose_ui::*;
 
+    #[cfg(feature = "image-loading")]
+    pub use crate::async_image::AsyncImage;
     #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
     pub use crate::{
         AndroidHostWindowPositionError, AndroidHostWindowSizeError, AndroidHostWindowSizeStatus,
