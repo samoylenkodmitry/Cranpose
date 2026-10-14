@@ -19,16 +19,21 @@ pub fn clear_platform_system_theme() {
     crate::thread_state::with(|state| state.platform_system_theme.set(None));
 }
 
-pub fn default_system_theme() -> SystemTheme {
+/// The system theme the platform reported or a detection found, without
+/// detecting it: detecting runs a system command on macOS (`defaults`).
+pub fn known_system_theme() -> Option<SystemTheme> {
     crate::thread_state::with(|state| {
-        if let Some(theme) = state.platform_system_theme.get() {
-            return theme;
-        }
-        if let Some(theme) = state.detected_system_theme.get() {
-            return theme;
-        }
+        state
+            .platform_system_theme
+            .get()
+            .or_else(|| state.detected_system_theme.get())
+    })
+}
+
+pub fn default_system_theme() -> SystemTheme {
+    known_system_theme().unwrap_or_else(|| {
         let theme = detect_system_theme_uncached();
-        state.detected_system_theme.set(Some(theme));
+        crate::thread_state::with(|state| state.detected_system_theme.set(Some(theme)));
         theme
     })
 }
