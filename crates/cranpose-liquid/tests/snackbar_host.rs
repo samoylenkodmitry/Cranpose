@@ -53,7 +53,8 @@ impl Host {
         self.scope.launch(async move {
             ended.set(Some(state.show(visuals).await));
         });
-        self.robot.wait_for_idle();
+        // Slid in, where a tap finds it.
+        self.robot.wait_for_motion();
         result
     }
 
