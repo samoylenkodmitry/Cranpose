@@ -13,6 +13,14 @@ pub(crate) struct EnvironmentLocals {
     pub(crate) modal_depth: OnceCell<CompositionLocal<usize>>,
     pub(crate) lazy_item_key: OnceCell<CompositionLocal<Option<u64>>>,
     pub(crate) bring_into_view: OnceCell<CompositionLocal<Option<crate::BringIntoViewResponder>>>,
+    pub(crate) nested_scroll:
+        OnceCell<CompositionLocal<Option<crate::nested_scroll::NestedScrollParent>>>,
+    pub(crate) focus_within:
+        OnceCell<CompositionLocal<Option<crate::focus_within::FocusWithinChain>>>,
+    pub(crate) shared_transition:
+        OnceCell<CompositionLocal<Option<crate::widgets::shared_transition::RegistryHandle>>>,
+    pub(crate) shared_entry:
+        OnceCell<CompositionLocal<Option<crate::widgets::shared_transition::SharedEntry>>>,
     pub(crate) selection_registrar:
         OnceCell<CompositionLocal<Option<crate::selection_container::SelectionRegistrar>>>,
     pub(crate) on_light_surface: OnceCell<CompositionLocal<bool>>,
@@ -41,6 +49,10 @@ impl EnvironmentLocals {
             modal_depth: OnceCell::new(),
             lazy_item_key: OnceCell::new(),
             bring_into_view: OnceCell::new(),
+            nested_scroll: OnceCell::new(),
+            focus_within: OnceCell::new(),
+            shared_transition: OnceCell::new(),
+            shared_entry: OnceCell::new(),
             selection_registrar: OnceCell::new(),
             on_light_surface: OnceCell::new(),
             popup_registry: OnceCell::new(),

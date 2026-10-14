@@ -44,6 +44,7 @@ mod focus_dispatch;
 pub mod focus_manager;
 mod focus_navigation;
 pub mod focus_order;
+mod focus_within;
 pub mod font_scale;
 mod interaction;
 mod key_event;
@@ -59,6 +60,7 @@ mod modal_nodes;
 mod modifier;
 mod modifier_nodes;
 pub mod mouse_input;
+mod nested_scroll;
 pub mod nine_patch;
 mod pointer_dispatch;
 pub mod pointer_icon_session;
@@ -103,7 +105,7 @@ pub use cranpose_foundation::{
     SemanticsConfiguration, SemanticsCustomAction, SemanticsDismiss, SemanticsExpand,
     SemanticsLongClick, SemanticsMagicTap, SemanticsScrollBy, SemanticsScrollToIndex,
     SemanticsSetProgress, SemanticsSetSelection, SemanticsSetText, SemanticsSpec,
-    SemanticsWidgetRole,
+    SemanticsWidgetRole, ToggleableState,
     lazy::{
         LazyItems, LazyListItemInfo, LazyListLayoutInfo, LazyListScope, LazyListState,
         rememberLazyListState, rememberLazyListStateWithPosition,
@@ -115,7 +117,7 @@ pub use cranpose_ui_graphics::{
     DrawScope, DrawSpecialization, DrawStyle, ExternalTexture, ImageBitmap, ImageBitmapError,
     ImagePixelFormat, ImageSampling, Path, PlaceholderShape, PointerIcon, PointerIconError,
     RuntimeShaderUniformError, ShaderPlaceholder, Stroke, StrokeCap, StrokeJoin, SubstrateSpec,
-    TileMode, WindowCoordinates,
+    TileMode, WindowCoordinates, glass_material_folds_enabled, set_glass_material_folds,
 };
 pub use cranpose_ui_layout::{AlignmentLines, IntrinsicSize, Measurement};
 pub use cursor_animation::{
@@ -147,6 +149,7 @@ pub use focus_order::{
     FocusEntry, collect_focus_order, collect_focus_order_under, focus_order_len,
     selectable_group_of, set_focus_order, take_requested_focus_move,
 };
+pub use focus_within::FocusWithin;
 pub use font_scale::{FontScaleCurve, MAX_FONT_SCALE_KNOTS};
 pub use interaction::{
     HoverInteraction, HoverInteractionEnter, HoverInteractionExit, Interaction,
@@ -199,7 +202,7 @@ pub use modifier::{
     WindowRootRegistry, WindowRootRoutingScratch, collect_modifier_slices,
     collect_semantics_from_modifier, collect_slices_from_modifier, is_window_root,
     nearest_window_root, nearest_window_roots, nearest_window_roots_into, window_roots,
-    window_roots_revision,
+    window_roots_revision, z_index_in_use,
 };
 #[cfg(feature = "test-helpers")]
 pub use modifier::{last_fling_velocity, reset_last_fling_velocity};
@@ -209,6 +212,7 @@ pub use modifier_nodes::{
     FractionalOffsetElement, FractionalOffsetNode, OffsetElement, OffsetNode, PaddingElement,
     PaddingNode, SizeElement, SizeNode,
 };
+pub use nested_scroll::{NestedScroll, NestedScrollConnection, NestedScrollSource, ScrollAxis};
 pub use nine_patch::{
     NinePatchInsets, PatchFill, PatchQuad, nine_patch_quads, tile_count, tile_quads,
 };
@@ -218,16 +222,18 @@ pub use pointer_dispatch::{
     schedule_pointer_repass,
 };
 pub use primitives::{
-    AnimateScroll, AnimatedVisibility, BasicSecureTextField, BasicText, BasicTextField,
-    BasicTextFieldDecorated, BasicTextFieldDecorationScope, BasicTextFieldOptions,
+    AnimateScroll, AnimatedContent, AnimatedVisibility, BasicSecureTextField, BasicText,
+    BasicTextField, BasicTextFieldDecorated, BasicTextFieldDecorationScope, BasicTextFieldOptions,
     BasicTextFieldWithOptions, BasicTextWithOptions, BitmapPainter, BitmapRegionPainter, Box,
     BoxScope, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, BoxWithConstraintsScopeImpl,
-    Button, ButtonSpec, Canvas, Column, ColumnSpec, ContentScale, Crossfade, CrossfadeSeek,
-    DEFAULT_ALPHA, EnterTransition, ExitTransition, ForEach, HorizontalPager, Image, Layout,
-    LayoutNode, PageSize, PagerSpec, PagerState, Painter, Row, RowSpec, SecureTextFieldOptions,
-    SeekableCrossfade, Spacer, SubcomposeLayout, SvgPainter, SvgPainterError, Text,
-    TextObfuscationMode, TextWithOptions, VerticalPager, fade_in, fade_out, rememberPagerState,
-    rememberSvg, slide_in_vertically, slide_out_vertically,
+    Button, ButtonSpec, Canvas, Column, ColumnSpec, ContentScale, ContentSeek, ContentTransform,
+    Crossfade, DEFAULT_ALPHA, EnterTransition, ExitTransition, ForEach, HorizontalPager, Image,
+    Layout, LayoutNode, PageSize, PagerSpec, PagerState, Painter, Row, RowSpec,
+    SecureTextFieldOptions, SeekableAnimatedContent, SeekableCrossfade, SharedElement,
+    SharedTransitionLayout, SizeTransform, Spacer, SubcomposeLayout, SvgPainter, SvgPainterError,
+    Text, TextObfuscationMode, TextWithOptions, VerticalPager, fade_in, fade_out,
+    rememberPagerState, rememberSvg, scale_in, scale_out, slide_in_horizontally,
+    slide_in_vertically, slide_out_horizontally, slide_out_vertically,
 };
 #[cfg(any(test, feature = "test-helpers"))]
 #[doc(hidden)]
@@ -239,19 +245,19 @@ pub use render_state::{
 };
 #[doc(hidden)]
 pub use render_state::{
-    GeometrySceneNodes, clear_transient_scroll_motion_contexts, debug_last_fling_velocity,
-    debug_reset_last_fling_velocity, has_current_app_context, has_pending_draw_repasses,
-    has_pending_layer_property_repasses, has_pending_layout_repasses, has_pending_measure_repasses,
-    peek_focus_invalidation, peek_layout_invalidation, peek_pointer_invalidation,
-    peek_render_invalidation, pending_layout_repass_nodes_snapshot,
+    GeometrySceneNodes, append_z_order_changes, clear_transient_scroll_motion_contexts,
+    debug_last_fling_velocity, debug_reset_last_fling_velocity, has_current_app_context,
+    has_pending_draw_repasses, has_pending_layer_property_repasses, has_pending_layout_repasses,
+    has_pending_measure_repasses, peek_focus_invalidation, peek_layout_invalidation,
+    peek_pointer_invalidation, peek_render_invalidation, pending_layout_repass_nodes_snapshot,
     pending_measure_repass_nodes_snapshot, prune_draw_observations_to_nodes,
     request_current_draw_redraw, request_focus_invalidation, request_layout_invalidation,
     request_pointer_invalidation, request_render_invalidation, schedule_draw_repass,
-    schedule_layout_repass, schedule_measure_repass, take_draw_repass_nodes,
-    take_draw_repass_nodes_into, take_focus_invalidation, take_geometry_scene_nodes,
-    take_geometry_scene_nodes_into, take_layer_property_repass_nodes_into,
-    take_layout_invalidation, take_layout_repass_nodes, take_measure_repass_nodes,
-    take_pointer_invalidation, take_render_invalidation,
+    schedule_layout_repass, schedule_measure_repass, schedule_z_order_change,
+    take_draw_repass_nodes, take_draw_repass_nodes_into, take_focus_invalidation,
+    take_geometry_scene_nodes, take_geometry_scene_nodes_into,
+    take_layer_property_repass_nodes_into, take_layout_invalidation, take_layout_repass_nodes,
+    take_measure_repass_nodes, take_pointer_invalidation, take_render_invalidation,
 };
 pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
 pub use safe_area::{WindowInsets, local_ime_insets, local_safe_area_insets, window_insets};

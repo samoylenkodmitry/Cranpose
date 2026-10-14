@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 use cranpose_render_common::{
     Brush,
@@ -8,7 +8,7 @@ use cranpose_render_common::{
     },
     graph_scene::RenderDiagnostics,
     hit_graph::collect_hits_from_graph,
-    layer_composition::local_content_layer,
+    layer_composition::folded_layer_alpha,
     layer_shadow::{ShadowLight, layer_shadow_geometry},
     layer_transform::{apply_layer_affine_to_rect, apply_layer_to_rect, layer_uniform_scale},
     primitive_emit::{
@@ -21,13 +21,15 @@ use cranpose_ui::{
     text::{TextDecoration, TextStyle},
 };
 use cranpose_ui_graphics::{
-    BlendMode, Color, CompositingStrategy, DrawPrimitive, GraphicsLayer, LayerShape, Point, Rect,
-    RenderEffect, RoundedCornerShape, TransformOrigin,
+    BlendMode, Color, ColorFilter, CompositingStrategy, DrawPrimitive, GraphicsLayer, LayerShape,
+    Point, Rect, RenderEffect, RoundedCornerShape, TransformOrigin,
 };
 
 use crate::{
     scene::{RasterScene, Scene},
-    style::{apply_layer_to_brush, apply_layer_to_color, combine_layers, scale_corner_radii},
+    style::{
+        apply_layer_to_brush, apply_layer_to_color, compose_color_filters, scale_corner_radii,
+    },
 };
 
 fn graphics_layer_supports_rigid_snap(layer: &GraphicsLayer) -> bool {
@@ -97,9 +99,33 @@ struct PrimitiveRenderContext<'a> {
     layer_snap_anchor: Option<Point>,
 }
 
+/// The alpha and colour filter content draws with: a layer's own folded
+/// alpha and filter combined with those of every layer above it. No other
+/// property of a layer passes to the content beneath it.
+#[derive(Clone, Copy)]
+struct ContentStyle {
+    alpha: f32,
+    color_filter: Option<ColorFilter>,
+}
+
+impl ContentStyle {
+    const PLAIN: Self = Self {
+        alpha: 1.0,
+        color_filter: None,
+    };
+
+    /// The style of `layer`'s content beneath content drawn in `self`.
+    fn under(self, layer: &GraphicsLayer) -> Self {
+        Self {
+            alpha: (self.alpha * folded_layer_alpha(layer)).clamp(0.0, 1.0),
+            color_filter: compose_color_filters(self.color_filter, layer.color_filter),
+        }
+    }
+}
+
 struct RasterTraversalContext<'a> {
     parent_transform: ProjectiveTransform,
-    parent_content_style: GraphicsLayer,
+    parent_content_style: ContentStyle,
     parent_visual_clip: Option<Rect>,
     inherited_translated_snap_anchor: Option<Point>,
     inherited_translated_content_context: bool,
@@ -367,8 +393,8 @@ fn push_text_style_draws(
     rect: Rect,
     text_rect: Rect,
     node_layer: &GraphicsLayer,
-    text: &cranpose_ui::text::AnnotatedString,
-    text_style: &TextStyle,
+    text: &Rc<cranpose_ui::text::AnnotatedString>,
+    text_style: &Arc<TextStyle>,
     font_size: f32,
     text_clip: Option<Rect>,
 ) {
@@ -399,13 +425,21 @@ fn push_text_style_draws(
     let text_color =
         resolve_text_color_without_gradient_fallback(text_style, Color(1.0, 1.0, 1.0, 1.0));
     let transformed_text_color = apply_layer_to_color(text_color, node_layer);
-    let mut transformed_text_style = text_style.clone();
-    transformed_text_style.span_style.shadow = None;
-    transformed_text_style.span_style.brush = text_style
-        .span_style
-        .brush
-        .clone()
-        .map(|brush| apply_layer_to_brush(brush, node_layer));
+    // The glyphs draw without the shadow and with the brush the layer
+    // tints; a style with neither is shared as it is.
+    let transformed_text_style =
+        if text_style.span_style.shadow.is_none() && text_style.span_style.brush.is_none() {
+            Arc::clone(text_style)
+        } else {
+            let mut style = TextStyle::clone(text_style);
+            style.span_style.shadow = None;
+            style.span_style.brush = text_style
+                .span_style
+                .brush
+                .clone()
+                .map(|brush| apply_layer_to_brush(brush, node_layer));
+            Arc::new(style)
+        };
     let text_brush = transformed_text_style
         .span_style
         .brush
@@ -421,7 +455,7 @@ fn push_text_style_draws(
         };
         let transformed_shadow_rect = apply_layer_to_rect(shadow_rect, rect, node_layer);
         let transformed_shadow_color = apply_layer_to_color(shadow.color, node_layer);
-        let mut shadow_text_style = transformed_text_style.clone();
+        let mut shadow_text_style = TextStyle::clone(&transformed_text_style);
         shadow_text_style.span_style.brush = None;
         shadow_text_style.span_style.shadow = Some(cranpose_ui::text::Shadow {
             color: transformed_shadow_color,
@@ -430,9 +464,9 @@ fn push_text_style_draws(
         });
         scene.push_text(
             transformed_shadow_rect,
-            Rc::new(text.clone()),
+            Rc::clone(text),
             Color::TRANSPARENT,
-            shadow_text_style,
+            Arc::new(shadow_text_style),
             font_size,
             layer_uniform_scale(node_layer),
             text_clip,
@@ -441,7 +475,7 @@ fn push_text_style_draws(
 
     scene.push_text(
         transformed_shifted_text_rect,
-        Rc::new(text.clone()),
+        Rc::clone(text),
         transformed_text_color,
         transformed_text_style,
         font_size,
@@ -472,7 +506,20 @@ fn push_text_decorations(
     text_brush: &Brush,
     text_clip: Option<Rect>,
 ) {
-    if annotated_text.is_empty() {
+    // A span draws a line only when its style or a span over it has one;
+    // without any, measuring the spans finds nothing to draw.
+    let decorated = |style: &cranpose_ui::text::SpanStyle| {
+        style
+            .text_decoration
+            .is_some_and(|decoration| decoration != TextDecoration::NONE)
+    };
+    if annotated_text.is_empty()
+        || !(decorated(&global_style.span_style)
+            || annotated_text
+                .span_styles
+                .iter()
+                .any(|span| decorated(&span.item)))
+    {
         return;
     }
 
@@ -582,12 +629,25 @@ pub(crate) fn build_raster_scene(
     scale: f32,
 ) -> RasterScene {
     let mut scene = RasterScene::new();
+    fill_raster_scene(&mut scene, graph, diagnostics, scale);
+    scene
+}
+
+/// Replaces what `scene` holds with `graph` drawn at `scale`, keeping the
+/// scene's storage.
+pub(crate) fn fill_raster_scene(
+    scene: &mut RasterScene,
+    graph: &RenderGraph,
+    diagnostics: &RenderDiagnostics,
+    scale: f32,
+) {
+    scene.clear();
     populate_draws_from_graph(
         &graph.root,
-        &mut scene,
+        scene,
         RasterTraversalContext {
             parent_transform: ProjectiveTransform::uniform_scale(scale),
-            parent_content_style: GraphicsLayer::default(),
+            parent_content_style: ContentStyle::PLAIN,
             parent_visual_clip: None,
             inherited_translated_snap_anchor: None,
             inherited_translated_content_context: false,
@@ -600,7 +660,6 @@ pub(crate) fn build_raster_scene(
             ),
         },
     );
-    scene
 }
 
 #[derive(Clone, Copy)]
@@ -635,9 +694,8 @@ struct RasterLayerMapping {
     /// from it.
     content_bounds: RasterLayerBounds,
     transformed_bounds: Rect,
-    content_style: GraphicsLayer,
+    content_style: ContentStyle,
     raster_content_layer: GraphicsLayer,
-    shadow_layer: GraphicsLayer,
 }
 
 fn raster_layer_scale(transformed_bounds: Rect, local_bounds: Rect) -> (f32, f32) {
@@ -657,14 +715,11 @@ fn raster_layer_scale(transformed_bounds: Rect, local_bounds: Rect) -> (f32, f32
 fn raster_layer_mapping(
     layer: &LayerNode,
     transform: ProjectiveTransform,
-    parent_content_style: GraphicsLayer,
+    parent_content_style: ContentStyle,
 ) -> RasterLayerMapping {
     let transformed_bounds = transform.bounds_for_rect(layer.local_bounds);
     let (scale_x, scale_y) = raster_layer_scale(transformed_bounds, layer.local_bounds);
-    let content_style = combine_layers(
-        parent_content_style,
-        Some(local_content_layer(&layer.graphics_layer)),
-    );
+    let content_style = parent_content_style.under(&layer.graphics_layer);
     let layer_bounds =
         RasterLayerBounds::from_transformed_bounds(transformed_bounds, layer.local_bounds);
     let node_rect = layer.node_rect();
@@ -678,17 +733,6 @@ fn raster_layer_mapping(
         transform_origin: TransformOrigin::new(0.0, 0.0),
         ..GraphicsLayer::default()
     };
-    let shadow_layer = GraphicsLayer {
-        alpha: layer.graphics_layer.alpha,
-        scale_x,
-        scale_y,
-        transform_origin: TransformOrigin::new(0.0, 0.0),
-        shadow_elevation: layer.graphics_layer.shadow_elevation,
-        ambient_shadow_color: layer.graphics_layer.ambient_shadow_color,
-        spot_shadow_color: layer.graphics_layer.spot_shadow_color,
-        shape: layer.graphics_layer.shape,
-        ..GraphicsLayer::default()
-    };
 
     RasterLayerMapping {
         layer_bounds,
@@ -696,8 +740,47 @@ fn raster_layer_mapping(
         transformed_bounds,
         content_style,
         raster_content_layer,
-        shadow_layer,
     }
+}
+
+/// Queues `layer`'s elevation shadow, when it casts one, cut to its shadow
+/// clip within `parent_visual_clip`.
+fn push_layer_shadow_of(
+    scene: &mut RasterScene,
+    layer: &LayerNode,
+    mapping: &RasterLayerMapping,
+    transform: &ProjectiveTransform,
+    parent_visual_clip: Option<Rect>,
+    light: ShadowLight,
+) {
+    if layer.graphics_layer.shadow_elevation <= 0.0 {
+        return;
+    }
+    let shadow_clip = resolve_clip(
+        parent_visual_clip,
+        layer
+            .shadow_clip()
+            .map(|clip| transform.bounds_for_rect(clip)),
+    );
+    let shadow_layer = GraphicsLayer {
+        alpha: layer.graphics_layer.alpha,
+        scale_x: mapping.raster_content_layer.scale_x,
+        scale_y: mapping.raster_content_layer.scale_y,
+        transform_origin: TransformOrigin::new(0.0, 0.0),
+        shadow_elevation: layer.graphics_layer.shadow_elevation,
+        ambient_shadow_color: layer.graphics_layer.ambient_shadow_color,
+        spot_shadow_color: layer.graphics_layer.spot_shadow_color,
+        shape: layer.graphics_layer.shape,
+        ..GraphicsLayer::default()
+    };
+    push_layer_shadow(
+        scene,
+        &shadow_layer,
+        mapping.layer_bounds,
+        mapping.transformed_bounds,
+        shadow_clip,
+        light,
+    );
 }
 
 fn populate_draws_from_graph(
@@ -755,18 +838,12 @@ fn populate_draws_from_graph(
         return;
     }
 
-    let shadow_clip = resolve_clip(
-        context.parent_visual_clip,
-        layer
-            .shadow_clip()
-            .map(|clip| transform.bounds_for_rect(clip)),
-    );
-    push_layer_shadow(
+    push_layer_shadow_of(
         scene,
-        &mapping.shadow_layer,
-        mapping.layer_bounds,
-        mapping.transformed_bounds,
-        shadow_clip,
+        layer,
+        &mapping,
+        &transform,
+        context.parent_visual_clip,
         context.light,
     );
 
@@ -811,7 +888,7 @@ fn populate_draws_from_graph(
                     scene,
                     RasterTraversalContext {
                         parent_transform: transform,
-                        parent_content_style: mapping.content_style.clone(),
+                        parent_content_style: mapping.content_style,
                         parent_visual_clip: visual_clip,
                         inherited_translated_snap_anchor: translated_snap_anchor,
                         inherited_translated_content_context: effective_translated_content_context,
@@ -992,7 +1069,7 @@ pub(crate) fn push_draw_primitive(
                 params.rect,
                 params.text,
                 params.color,
-                params.text_style,
+                Arc::new(params.text_style),
                 params.font_size,
                 params.scale,
                 params.clip,
@@ -1027,7 +1104,7 @@ fn push_shadow_primitive(
     ) -> Option<(crate::scene::DrawShape, BlendMode)> {
         let params = draw_shape_params_for_primitive(prim, layer_bounds, layer, None, blend_mode)?;
         let blend_mode = params.blend_mode;
-        Some((crate::scene::DrawShape::of_params(params, 0), blend_mode))
+        Some((crate::scene::DrawShape::of_params(params), blend_mode))
     }
 
     match shadow_prim {

@@ -2256,7 +2256,7 @@ impl Composer {
             core: composer.clone_core(),
             leaked: false,
         };
-        let root_group_key = crate::location_key(file!(), line!(), column!());
+        let root_group_key = crate::location_key!();
         let (result, commands, side_effects, compact_applier) = composer.install(|composer| {
             let (output, outcome) = composer.try_with_slot_host_pass(
                 Rc::clone(slots),

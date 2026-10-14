@@ -126,7 +126,7 @@ fn voiceover_values_include_control_state_without_repeating_the_label() {
         role: AccessibilityRole::Switch,
         label: "Notifications".into(),
         value: Some("Notifications".into()),
-        toggled: Some(true),
+        toggled: Some(ToggleableState::On),
         details: Some(Box::new(AccessibilityDetails {
             error: Some("Network unavailable".into()),
             ..Default::default()
@@ -137,7 +137,7 @@ fn voiceover_values_include_control_state_without_repeating_the_label() {
         voiceover_value(&element).as_deref(),
         Some("on, invalid, Network unavailable")
     );
-    element.toggled = Some(false);
+    element.toggled = Some(ToggleableState::Off);
     assert_eq!(
         voiceover_value(&element).as_deref(),
         Some("off, invalid, Network unavailable")
@@ -603,7 +603,7 @@ fn drawn_controls_become_elements_positioned_inside_their_canvas() {
 
     assert_eq!(projected[1].label, "Haptics");
     assert_eq!(projected[1].role, AccessibilityRole::Switch);
-    assert_eq!(projected[1].toggled, Some(true));
+    assert_eq!(projected[1].toggled, Some(ToggleableState::On));
     assert_eq!(
         projected[1].details().state_description.as_deref(),
         Some("On")
@@ -1136,9 +1136,9 @@ fn spoken(before: &[AccessibilityElement], after: &[AccessibilityElement]) -> Ve
 #[test]
 fn a_toggle_that_flipped_is_a_spoken_change() {
     let mut before = live_text(1, "Dark theme");
-    before.toggled = Some(false);
+    before.toggled = Some(ToggleableState::Off);
     let mut after = before.clone();
-    after.toggled = Some(true);
+    after.toggled = Some(ToggleableState::On);
     assert_eq!(spoken(&[before], &[after]), vec![true]);
 }
 
@@ -1937,7 +1937,7 @@ fn a_spoken_line_says_the_name_the_role_the_state_and_the_actions() {
     let mut flash = element_with(1, None);
     flash.label = "Flash".to_string();
     flash.role = AccessibilityRole::Switch;
-    flash.toggled = Some(true);
+    flash.toggled = Some(ToggleableState::On);
     flash.update_details(|details| details.custom_actions = vec!["Reset".to_string()]);
     assert_eq!(spoken_line(&flash), "Flash, switch, on, actions: Reset");
 

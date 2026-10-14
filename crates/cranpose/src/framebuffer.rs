@@ -3,15 +3,18 @@
 //! `cranpose-platform-esp-idf`.
 //!
 //! The host owns the display. It feeds the frame clock, touches and lifecycle
-//! changes into a [`Framebuffer`], and presents [`Framebuffer::pixels`] when
-//! [`Framebuffer::tick`] reports a new picture.
+//! changes into a [`Framebuffer`]. When [`Framebuffer::tick`] reports a new
+//! picture, [`Framebuffer::changed_areas`] lists the parts of the display it
+//! changes and [`Framebuffer::draw_area`] draws each of them, so the CPU draws
+//! and the host sends only the pixels that change.
 
 use std::rc::Rc;
 
 pub use cranpose_app_shell::FrameSchedule;
 use cranpose_app_shell::{AppShell, default_root_key};
 use cranpose_foundation::PointerSource;
-use cranpose_render_pixels::PixelsRenderer;
+pub use cranpose_render_pixels::PixelRect;
+use cranpose_render_pixels::{Picture, PixelsRenderer};
 use cranpose_services::{
     SystemTheme,
     host::{LifecycleState, dispatch_lifecycle_state},
@@ -40,13 +43,13 @@ pub enum TouchPhase {
     Cancel,
 }
 
-/// One composition drawn into a retained, row-major, straight-alpha RGBA8
-/// framebuffer.
+/// One composition that the CPU draws, area by area, for a display the host
+/// owns.
 ///
 /// Create and use it on one thread, which becomes the UI thread.
 pub struct Framebuffer {
     shell: AppShell<PixelsRenderer>,
-    pixels: Vec<u8>,
+    drawing: Picture,
     width: u32,
     height: u32,
     density: f32,
@@ -57,7 +60,7 @@ pub struct Framebuffer {
     environment: Rc<PlatformEnvironment>,
 }
 
-fn buffer_length(width: u32, height: u32, density: f32) -> Result<usize, SurfaceError> {
+pub(crate) fn frame_bytes(width: u32, height: u32, density: f32) -> Result<usize, SurfaceError> {
     if width == 0 || height == 0 || !density.is_finite() || density <= 0.0 {
         return Err(SurfaceError);
     }
@@ -76,7 +79,8 @@ fn buffer_length(width: u32, height: u32, density: f32) -> Result<usize, Surface
 impl Framebuffer {
     /// Composes `content` for a display of `width` by `height` physical
     /// pixels. `density` is physical pixels per point, and `theme` is the
-    /// system theme content reads.
+    /// system theme content reads. Text draws in `fonts`; with none, in the
+    /// embedded default font of the `embedded-default-font` feature.
     ///
     /// Frames start once the host calls [`Self::set_active`].
     pub fn new(
@@ -84,17 +88,15 @@ impl Framebuffer {
         height: u32,
         density: f32,
         theme: SystemTheme,
+        fonts: &[&'static [u8]],
         mut content: impl FnMut() + 'static,
     ) -> Result<Self, SurfaceError> {
-        let len = buffer_length(width, height, density)?;
-        let mut pixels = Vec::new();
-        pixels.try_reserve_exact(len).map_err(|_| SurfaceError)?;
-        pixels.resize(len, 0);
+        frame_bytes(width, height, density)?;
         let environment = PlatformEnvironment::new();
         environment.set_system_theme(theme);
         let root_environment = Rc::clone(&environment);
         let mut shell = AppShell::new_with_size_and_density(
-            PixelsRenderer::new(),
+            PixelsRenderer::with_fonts(fonts),
             default_root_key(),
             move || root_environment.compose_root(&mut content),
             (width, height),
@@ -105,7 +107,7 @@ impl Framebuffer {
         shell.set_cursor(width as f32 / density / 2.0, height as f32 / density / 2.0);
         Ok(Self {
             shell,
-            pixels,
+            drawing: Picture::default(),
             width,
             height,
             density,
@@ -128,16 +130,10 @@ impl Framebuffer {
 
     /// Applies a new physical display size without replacing the composition.
     pub fn resize(&mut self, width: u32, height: u32, density: f32) -> Result<(), SurfaceError> {
-        let len = buffer_length(width, height, density)?;
+        frame_bytes(width, height, density)?;
         if (width, height, density) == (self.width, self.height, self.density) {
             return Ok(());
         }
-        if len > self.pixels.len() {
-            self.pixels
-                .try_reserve_exact(len - self.pixels.len())
-                .map_err(|_| SurfaceError)?;
-        }
-        self.pixels.resize(len, 0);
         self.width = width;
         self.height = height;
         self.density = density;
@@ -185,16 +181,31 @@ impl Framebuffer {
         self.shell.run_pending_tasks();
     }
 
-    /// The current picture as a row-major, straight-alpha RGBA8 image,
-    /// rasterized when it changed.
-    pub fn pixels(&mut self) -> &[u8] {
-        if self.drawn_picture != Some(self.picture) {
-            self.shell.primary().with_renderer(|renderer| {
-                renderer.draw_scaled(&mut self.pixels, self.width, self.height, self.density);
-            });
-            self.drawn_picture = Some(self.picture);
+    /// Takes the current picture and puts into `areas` the parts of the
+    /// display whose pixels differ from the picture taken before: the whole
+    /// display the first time and after a resize, none while the picture stays
+    /// the same. The host draws them with [`Self::draw_area`].
+    pub fn changed_areas(&mut self, areas: &mut Vec<PixelRect>) {
+        if self.drawn_picture == Some(self.picture) {
+            areas.clear();
+            return;
         }
-        &self.pixels
+        let (width, height, density) = (self.width, self.height, self.density);
+        let drawing = &mut self.drawing;
+        self.shell.primary().with_renderer(|renderer| {
+            renderer.update_picture(drawing, width, height, density, areas);
+        });
+        self.drawn_picture = Some(self.picture);
+    }
+
+    /// Draws `area` of the picture [`Self::changed_areas`] took last into
+    /// `pixels`, as row-major, straight-alpha RGBA8 rows of `area.width`
+    /// pixels, `area.height` of them.
+    pub fn draw_area(&mut self, area: PixelRect, pixels: &mut [u8]) {
+        let drawing = &self.drawing;
+        self.shell.primary().with_renderer(|renderer| {
+            renderer.draw_picture_area(drawing, area, pixels);
+        });
     }
 
     /// Returns the physical image width.

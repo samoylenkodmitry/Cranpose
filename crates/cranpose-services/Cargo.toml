@@ -31,11 +31,17 @@ portable-atomic.workspace = true
 sha2 = "0.11.0"
 thiserror = "2.0.21"
 web-time.workspace = true
+futures-util = { version = "0.3.34", optional = true }
+# The version the demo apps already decode with.
+image = { version = "0.25.10", optional = true, default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 
 [features]
 localization = []
 default = []
 http-native = ["dep:reqwest", "dep:webpki-root-certs"]
+# `rememberAsyncImage`: images from URLs, files and bytes, decoded off the UI
+# thread and cached in memory and on disk (`image_loading`).
+image-loading = ["dep:image", "dep:futures-util"]
 web-http = [
     "dep:futures-util",
     "dep:js-sys",
@@ -78,7 +84,6 @@ open = { version = "5.4.4", optional = true }
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"], optional = true }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
-futures-util = { version = "0.3.34", optional = true }
 js-sys = { version = "0.3.106", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4.79", optional = true }

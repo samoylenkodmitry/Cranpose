@@ -19,7 +19,7 @@ use cranpose_services::SystemTheme;
 use cranpose_ui::EdgeInsets;
 
 pub use crate::framebuffer::SurfaceError;
-use crate::framebuffer::{Framebuffer, TouchPhase};
+use crate::framebuffer::{Framebuffer, PixelRect, TouchPhase, frame_bytes};
 
 /// One watch UI composition, drawn as sprites or into a retained RGBA
 /// framebuffer on request.
@@ -27,6 +27,8 @@ use crate::framebuffer::{Framebuffer, TouchPhase};
 /// Create and use this object on the native host's main thread.
 pub struct Application {
     framebuffer: Framebuffer,
+    pixels: Vec<u8>,
+    areas: Vec<PixelRect>,
     sprites: SpriteFrame,
     sprites_picture: Option<u64>,
 }
@@ -41,12 +43,20 @@ impl Application {
         density: f32,
         content: impl FnMut() + 'static,
     ) -> Result<Self, SurfaceError> {
+        let mut pixels = Vec::new();
+        pixels
+            .try_reserve_exact(frame_bytes(width, height, density)?)
+            .map_err(|_| SurfaceError)?;
         #[cfg(target_os = "watchos")]
         crate::watchos_services::register();
         // A watch shows its apps on black.
-        let framebuffer = Framebuffer::new(width, height, density, SystemTheme::Dark, content)?;
+        let framebuffer =
+            Framebuffer::new(width, height, density, SystemTheme::Dark, &[], content)?;
+        pixels.resize(pixels.capacity(), 0);
         Ok(Self {
             framebuffer,
+            pixels,
+            areas: Vec::new(),
             sprites: SpriteFrame::default(),
             sprites_picture: None,
         })
@@ -73,7 +83,15 @@ impl Application {
 
     /// Applies a new physical surface size without replacing the composition.
     pub fn resize(&mut self, width: u32, height: u32, density: f32) -> Result<(), SurfaceError> {
-        self.framebuffer.resize(width, height, density)
+        let len = frame_bytes(width, height, density)?;
+        if len > self.pixels.len() {
+            self.pixels
+                .try_reserve_exact(len - self.pixels.len())
+                .map_err(|_| SurfaceError)?;
+        }
+        self.framebuffer.resize(width, height, density)?;
+        self.pixels.resize(len, 0);
+        Ok(())
     }
 
     /// Advances the shared frame clock. Returns whether the picture changed,
@@ -85,7 +103,34 @@ impl Application {
     /// The current picture as a row-major, straight-alpha RGBA8 image,
     /// rasterized on the CPU when it changed.
     pub fn pixels(&mut self) -> &[u8] {
-        self.framebuffer.pixels()
+        self.framebuffer.changed_areas(&mut self.areas);
+        self.areas.sort_unstable_by_key(|area| area.y);
+        let width = self.framebuffer.width();
+        let row_bytes = width as usize * 4;
+        let mut spans = self.areas.iter().map(|area| (area.y, area.y + area.height));
+        let mut current = spans.next();
+        while let Some((top, bottom)) = current {
+            let mut bottom = bottom;
+            current = None;
+            for (next_top, next_bottom) in spans.by_ref() {
+                if next_top > bottom {
+                    current = Some((next_top, next_bottom));
+                    break;
+                }
+                bottom = bottom.max(next_bottom);
+            }
+            let rows = top as usize * row_bytes..bottom as usize * row_bytes;
+            self.framebuffer.draw_area(
+                PixelRect {
+                    x: 0,
+                    y: top,
+                    width,
+                    height: bottom - top,
+                },
+                &mut self.pixels[rows],
+            );
+        }
+        &self.pixels
     }
 
     /// The sprites [`Self::sprites`] composed last, without composing.

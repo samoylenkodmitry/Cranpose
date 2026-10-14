@@ -1,12 +1,10 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
-// An `ExternalTexture` needs `wgpu::Texture: Send`, which on the wgpu-core
-// backends, such as GL under Emscripten, the compiler proves through wgpu-core's
-// nested resource registries, deeper than the default limit of 128.
-#![recursion_limit = "256"]
 
 extern crate self as cranpose;
 
+#[cfg(feature = "image-loading")]
+mod async_image;
 #[cfg(feature = "localization")]
 mod system_languages;
 #[cfg(feature = "localization")]
@@ -293,6 +291,8 @@ mod composition_api {
         rememberMutableStateOfNeverEqual, rememberUpdatedState, withBlocking,
     };
 }
+#[cfg(feature = "image-loading")]
+pub use async_image::AsyncImage;
 pub use composition_api::*;
 /// Glass controls, themes and motion for Cranpose apps.
 /// Import common components with `use cranpose::liquid::prelude::*;`.
@@ -313,8 +313,7 @@ static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =
 #[track_caller]
 pub fn KeepScreenOn(enabled: bool) {
     cranpose_core::__disposable_effect_impl(
-        cranpose_core::caller_location_key()
-            ^ cranpose_core::location_key(file!(), line!(), column!()),
+        cranpose_core::caller_location_key() ^ cranpose_core::location_key!(),
         enabled,
         move |scope| {
             if !enabled {
@@ -345,8 +344,7 @@ pub fn BundledAssetInstallEffect<K: PartialEq + 'static>(
     ) + 'static,
 ) {
     cranpose_core::__launched_effect_impl(
-        cranpose_core::caller_location_key()
-            ^ cranpose_core::location_key(file!(), line!(), column!()),
+        cranpose_core::caller_location_key() ^ cranpose_core::location_key!(),
         keys,
         move |scope| {
             scope.launch_background(
@@ -400,8 +398,7 @@ pub fn FrameEffect<K: PartialEq + 'static>(
         std::rc::Rc::new(std::cell::RefCell::new(on_frame));
     let on_frame = cranpose_core::rememberUpdatedState(on_frame);
     cranpose_core::__launched_effect_async_impl(
-        cranpose_core::caller_location_key()
-            ^ cranpose_core::location_key(file!(), line!(), column!()),
+        cranpose_core::caller_location_key() ^ cranpose_core::location_key!(),
         std::panic::Location::caller().into(),
         (keys, running),
         move |scope| {
@@ -449,6 +446,8 @@ pub mod prelude {
     pub use cranpose_services::*;
     pub use cranpose_ui::*;
 
+    #[cfg(feature = "image-loading")]
+    pub use crate::async_image::AsyncImage;
     #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
     pub use crate::{
         AndroidHostWindowPositionError, AndroidHostWindowSizeError, AndroidHostWindowSizeStatus,

@@ -5,3 +5,7 @@ select-all = Изабери све
 undo = Опозови
 redo = Понови
 search = Претражи
+previous-month = Претходни месец
+next-month = Следећи месец
+hour = Сат
+minute = Минут

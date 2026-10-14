@@ -1,9 +1,5 @@
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
-# Timed waits round to the tick: at the default 100 Hz a 16.7 ms frame
-# interval would wait 20 ms.
-CONFIG_FREERTOS_HZ=1000
-
 # Composition, layout and drawing run on the main task.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=49152
 CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096

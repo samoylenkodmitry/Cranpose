@@ -126,6 +126,24 @@ fn tick(host: &mut EmbeddedHost) -> (Vec<SurfaceCommand>, Vec<Captured>) {
     (commands, frames)
 }
 
+/// The primary surface's picture once it asks for no more frames, from
+/// `frame`, the first it sent: a first frame drawn while pipelines compiled
+/// is followed by frames that draw what it left out.
+fn settled(host: &mut EmbeddedHost, mut frame: Captured) -> Captured {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while host.frame_schedule().needs_frame {
+        assert!(
+            Instant::now() < deadline,
+            "the surface kept asking for frames"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+        if let Some(next) = frame_of(tick(host).1, PRIMARY_SURFACE) {
+            frame = next;
+        }
+    }
+    frame
+}
+
 fn frame_of(frames: Vec<Captured>, id: SurfaceId) -> Option<Captured> {
     frames.into_iter().find(|frame| frame.surface == id)
 }
@@ -352,6 +370,7 @@ fn frames_carry_only_what_changed() {
     let frame = frame_of(tick(&mut host).1, PRIMARY_SURFACE).expect("the first frame is sent");
     assert_eq!(frame.rect, PixelRect::full(64, 48));
     assert_eq!(frame.buffer, (64, 48));
+    let frame = settled(&mut host, frame);
     assert_eq!(frame.pixel(50, 40), BGRA_RED);
     assert_eq!(frame.pixel(15, 15), BGRA_WHITE);
 

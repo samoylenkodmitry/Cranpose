@@ -212,50 +212,61 @@ fn log_node_measure_telemetry(
     );
 }
 
+/// The host a layout pass lends its applier to. Between passes it holds an
+/// empty applier and the app context keeps it, so a pass builds neither.
+pub(crate) struct LayoutHost {
+    host: Rc<ConcreteApplierHost<MemoryApplier>>,
+}
+
+impl Default for LayoutHost {
+    fn default() -> Self {
+        Self {
+            host: Rc::new(ConcreteApplierHost::new(MemoryApplier::new())),
+        }
+    }
+}
+
+/// Lends `target` to a [`LayoutHost`] for one pass and gives it back when
+/// dropped, also after a panic.
 struct ApplierSlotGuard<'a> {
     target: &'a mut MemoryApplier,
-    host: Rc<ConcreteApplierHost<MemoryApplier>>,
+    lent: LayoutHost,
     slots: Rc<RefCell<SlotTable>>,
 }
 
 impl<'a> ApplierSlotGuard<'a> {
     fn new(target: &'a mut MemoryApplier) -> Self {
-        let original_applier = std::mem::replace(target, MemoryApplier::new());
-        let host = Rc::new(ConcreteApplierHost::new(original_applier));
-
+        let lent = crate::render_state::take_layout_host();
         let slots = {
-            let mut applier_ref = host.borrow_typed();
-            std::mem::take(applier_ref.slots())
+            let mut applier_ref = lent.host.borrow_typed();
+            std::mem::swap(target, &mut *applier_ref);
+            applier_ref.slots_handle()
         };
-        let slots = Rc::new(RefCell::new(slots));
-
         Self {
             target,
-            host,
+            lent,
             slots,
         }
     }
 
-    fn host(&self) -> Rc<ConcreteApplierHost<MemoryApplier>> {
-        Rc::clone(&self.host)
+    fn host(&self) -> &Rc<ConcreteApplierHost<MemoryApplier>> {
+        &self.lent.host
     }
 
-    fn slots_handle(&self) -> Rc<RefCell<SlotTable>> {
-        Rc::clone(&self.slots)
+    fn slots_handle(&self) -> &Rc<RefCell<SlotTable>> {
+        &self.slots
     }
 }
 
 impl Drop for ApplierSlotGuard<'_> {
     fn drop(&mut self) {
-        {
-            let mut applier_ref = self.host.borrow_typed();
-            *applier_ref.slots() = std::mem::take(&mut *self.slots.borrow_mut());
-        }
-
-        {
-            let mut applier_ref = self.host.borrow_typed();
-            let original_applier = std::mem::take(&mut *applier_ref);
-            let _ = std::mem::replace(self.target, original_applier);
+        let host = &self.lent.host;
+        std::mem::swap(self.target, &mut *host.borrow_typed());
+        // A host still shared past the pass stays with whoever holds it.
+        if Rc::strong_count(host) == 1 {
+            crate::render_state::replace_layout_host(LayoutHost {
+                host: Rc::clone(host),
+            });
         }
     }
 }
@@ -419,7 +430,7 @@ pub struct SemanticsNode {
     /// Direct activation callback for keyboard and assistive technology.
     pub on_click: Option<SemanticsCustomAction>,
     pub selected: Option<bool>,
-    pub toggled: Option<bool>,
+    pub toggled: Option<cranpose_foundation::ToggleableState>,
     pub enabled: bool,
     /// Whether a screen reader skips this node and everything under it.
     pub hidden: bool,
@@ -1328,9 +1339,9 @@ pub fn measure_layout_with_options(
 
     let frame_arena = crate::render_state::take_layout_frame_arena();
     let builder = LayoutBuilder::new_with_epoch(
-        Rc::clone(&applier_host),
+        Rc::clone(applier_host),
         epoch,
-        Rc::clone(&slots_handle),
+        Rc::clone(slots_handle),
         frame_arena,
     );
     let after_builder = Instant::now();

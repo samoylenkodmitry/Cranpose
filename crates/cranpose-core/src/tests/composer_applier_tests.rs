@@ -340,7 +340,7 @@ fn memory_applier_dump_tree_reports_stale_physical_mapping() {
     impl Node for Counted {}
 
     let mut applier = MemoryApplier::new();
-    applier.stable_index.set_slot(42, 4_096);
+    applier.state.stable_index.set_slot(42, 4_096);
 
     let tree = applier.dump_tree(Some(42));
 
@@ -363,7 +363,7 @@ fn memory_applier_visits_every_live_dense_and_high_id_node() {
     let mut applier = MemoryApplier::new();
     let first = applier.create(Box::new(Counted));
     let removed = applier.create(Box::new(Counted));
-    applier.next_stable_id = MemoryApplier::HIGH_ID_THRESHOLD;
+    applier.state.next_stable_id = MemoryApplier::HIGH_ID_THRESHOLD;
     let high = applier.create(Box::new(Counted));
     applier.remove(removed).expect("remove");
 
@@ -382,12 +382,12 @@ fn memory_applier_create_routes_generated_high_ids_to_sparse_storage() {
     impl Node for HighIdNode {}
 
     let mut applier = MemoryApplier::new();
-    applier.next_stable_id = MemoryApplier::HIGH_ID_THRESHOLD;
+    applier.state.next_stable_id = MemoryApplier::HIGH_ID_THRESHOLD;
 
     let node_id = applier.create(Box::new(HighIdNode));
 
     assert_eq!(node_id, MemoryApplier::HIGH_ID_THRESHOLD);
-    assert!(applier.high_id_nodes.contains_key(&node_id));
+    assert!(applier.state.high_id_nodes.contains_key(&node_id));
     assert_eq!(applier.node_generation(node_id), 0);
     assert_eq!(applier.debug_stats().high_id_nodes_len, 1);
     assert_eq!(applier.debug_stats().nodes_len, 0);
@@ -400,7 +400,7 @@ fn memory_applier_borrows_dense_and_high_id_nodes_together() {
 
     let mut applier = MemoryApplier::new();
     let dense = applier.create(Box::new(Value(7)));
-    applier.next_stable_id = MemoryApplier::HIGH_ID_THRESHOLD;
+    applier.state.next_stable_id = MemoryApplier::HIGH_ID_THRESHOLD;
     let high = applier.create(Box::new(Value(11)));
 
     let first: &dyn std::any::Any = applier.get_ref(dense).expect("dense node");
@@ -422,7 +422,7 @@ fn memory_applier_shared_read_rejects_missing_and_removed_nodes() {
 
     let mut applier = MemoryApplier::new();
     let dense = applier.create(Box::new(Value));
-    applier.next_stable_id = MemoryApplier::HIGH_ID_THRESHOLD;
+    applier.state.next_stable_id = MemoryApplier::HIGH_ID_THRESHOLD;
     let high = applier.create(Box::new(Value));
     for id in [dense, high] {
         applier.remove(id).expect("remove node");
@@ -434,7 +434,7 @@ fn memory_applier_shared_read_rejects_missing_and_removed_nodes() {
         applier.get_ref(NodeId::MAX),
         Err(NodeError::Missing { id: NodeId::MAX })
     ));
-    applier.stable_index.set_slot(42, 4_096);
+    applier.state.stable_index.set_slot(42, 4_096);
     assert!(matches!(
         applier.get_ref(42),
         Err(NodeError::Missing { id: 42 })
@@ -1102,6 +1102,7 @@ fn recyclable_emit_discards_mismatched_recycled_shell() {
     let mut applier = test_applier();
     let key = std::any::TypeId::of::<DesiredNode>();
     applier
+        .state
         .recycled_nodes
         .entry(key)
         .or_default()
@@ -1164,6 +1165,7 @@ fn recyclable_emit_creates_fresh_id_when_recycled_stable_id_is_live() {
     let live_id = applier.create(Box::new(ExistingNode));
     let key = std::any::TypeId::of::<DesiredNode>();
     applier
+        .state
         .recycled_nodes
         .entry(key)
         .or_default()

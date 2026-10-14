@@ -31,7 +31,7 @@ impl NodeMarks {
     /// Unmarks every node, with room for every node `applier` holds now.
     pub fn reset(&mut self, applier: &MemoryApplier) {
         self.dense.clear();
-        self.dense.resize(applier.nodes.len(), 0);
+        self.dense.resize(applier.state.nodes.len(), 0);
         self.elsewhere.clear();
     }
 

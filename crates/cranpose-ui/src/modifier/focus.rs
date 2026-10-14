@@ -10,7 +10,11 @@ use cranpose_foundation::{
     NodeCapabilities, NodeState, impl_focus_node,
 };
 
-use crate::{focus_dispatch, render_state::AppContextId};
+use crate::{
+    focus_dispatch,
+    focus_within::{FocusWithinChain, current_focus_within},
+    render_state::AppContextId,
+};
 
 /// Focus direction for navigation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -38,6 +42,8 @@ type FocusChangedCallback = Rc<dyn Fn(FocusState)>;
 struct FocusTargetShared {
     focus_state: Cell<FocusState>,
     on_focus_changed: RefCell<Option<FocusChangedCallback>>,
+    /// The focus observers composed around this target.
+    observers: RefCell<Option<FocusWithinChain>>,
 }
 
 impl FocusTargetShared {
@@ -45,6 +51,7 @@ impl FocusTargetShared {
         Self {
             focus_state: Cell::new(FocusState::Inactive),
             on_focus_changed: RefCell::new(on_focus_changed),
+            observers: RefCell::new(None),
         }
     }
 
@@ -52,10 +59,33 @@ impl FocusTargetShared {
         let old_state = self.focus_state.get();
         if old_state != state {
             self.focus_state.set(state);
+            if old_state.is_focused() != state.is_focused()
+                && let Some(observers) = self.observers.borrow().clone()
+            {
+                if state.is_focused() {
+                    observers.enter();
+                } else {
+                    observers.leave();
+                }
+            }
             let callback = self.on_focus_changed.borrow().clone();
             if let Some(callback) = callback {
                 callback(state);
             }
+        }
+    }
+
+    /// Moves a focused target's focus from the old observers to the new.
+    fn set_observers(&self, observers: Option<FocusWithinChain>) {
+        let previous = self.observers.replace(observers.clone());
+        if previous == observers || !self.focus_state.get().is_focused() {
+            return;
+        }
+        if let Some(previous) = previous {
+            previous.leave();
+        }
+        if let Some(observers) = observers {
+            observers.enter();
         }
     }
 }
@@ -76,13 +106,6 @@ pub struct FocusTargetNode {
 impl FocusTargetNode {
     pub fn new() -> Self {
         Self::from_callback(None)
-    }
-
-    pub fn with_callback<F>(callback: F) -> Self
-    where
-        F: Fn(FocusState) + 'static,
-    {
-        Self::from_callback(Some(Rc::new(callback) as FocusChangedCallback))
     }
 
     fn from_callback(on_focus_changed: Option<FocusChangedCallback>) -> Self {
@@ -154,12 +177,14 @@ impl FocusNode for FocusTargetNode {
 #[derive(Clone)]
 pub struct FocusTargetElement {
     on_focus_changed: Option<FocusChangedCallback>,
+    observers: Option<FocusWithinChain>,
 }
 
 impl FocusTargetElement {
     pub fn new() -> Self {
         Self {
             on_focus_changed: None,
+            observers: current_focus_within(),
         }
     }
 
@@ -169,6 +194,7 @@ impl FocusTargetElement {
     {
         Self {
             on_focus_changed: Some(Rc::new(callback)),
+            observers: current_focus_within(),
         }
     }
 }
@@ -190,6 +216,7 @@ impl std::fmt::Debug for FocusTargetElement {
 impl PartialEq for FocusTargetElement {
     fn eq(&self, other: &Self) -> bool {
         self.on_focus_changed.is_some() == other.on_focus_changed.is_some()
+            && self.observers == other.observers
     }
 }
 
@@ -204,18 +231,14 @@ impl ModifierNodeElement for FocusTargetElement {
     type Node = FocusTargetNode;
 
     fn create(&self) -> Self::Node {
-        if let Some(callback) = &self.on_focus_changed {
-            FocusTargetNode::with_callback({
-                let callback = callback.clone();
-                move |state| callback(state)
-            })
-        } else {
-            FocusTargetNode::new()
-        }
+        let node = FocusTargetNode::from_callback(self.on_focus_changed.clone());
+        node.shared.set_observers(self.observers.clone());
+        node
     }
 
     fn update(&self, node: &mut Self::Node) {
         node.set_callback(self.on_focus_changed.clone());
+        node.shared.set_observers(self.observers.clone());
     }
 
     fn inspector_name(&self) -> &'static str {

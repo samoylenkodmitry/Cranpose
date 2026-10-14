@@ -31,6 +31,8 @@ pub(crate) struct ThreadCells {
     pub(crate) last_modifier_revision: Cell<u64>,
     pub(crate) armed_semantics_layout_logs: Cell<usize>,
     pub(crate) modal_counting_contexts: Cell<usize>,
+    /// How many `z_index` modifier nodes are attached on this thread.
+    pub(crate) z_index_nodes: Cell<usize>,
     pub(crate) placement_pass: PlacementPass,
     pub(crate) last_unhandled_key_handler_id: Cell<u64>,
     /// Whether the shell on this thread runs idle prefetch passes
@@ -50,6 +52,7 @@ impl ThreadCells {
             last_modifier_revision: Cell::new(0),
             armed_semantics_layout_logs: Cell::new(0),
             modal_counting_contexts: Cell::new(0),
+            z_index_nodes: Cell::new(0),
             placement_pass: PlacementPass::new(),
             last_unhandled_key_handler_id: Cell::new(0),
             idle_prefetch_passes: Cell::new(false),
@@ -59,6 +62,10 @@ impl ThreadCells {
 
 pub(crate) struct UiThreadState {
     pub(crate) environment: EnvironmentLocals,
+    /// While a focus move runs, the focus observers it left with no focused
+    /// target; `None` outside a move.
+    pub(crate) left_in_focus_move:
+        RefCell<Option<Vec<std::rc::Rc<crate::focus_within::FocusWithinObserver>>>>,
     pub(crate) app_context_stack: RefCell<Vec<Weak<AppContext>>>,
     pub(crate) app_contexts: RefCell<FixedHashMap<AppContextId, Weak<AppContext>>>,
     pub(crate) active_selection: RefCell<Weak<RegistrarInner>>,
@@ -79,6 +86,7 @@ impl UiThreadState {
     const fn new() -> Self {
         Self {
             environment: EnvironmentLocals::new(),
+            left_in_focus_move: RefCell::new(None),
             app_context_stack: RefCell::new(Vec::new()),
             app_contexts: RefCell::new(fixed_hash_map()),
             active_selection: RefCell::new(Weak::new()),

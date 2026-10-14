@@ -33,6 +33,9 @@ use cranpose_ui::{LayoutTree, TextMeasurer};
 use cranpose_ui_graphics::{Point, Rect, Size};
 
 const HEADLESS_IDLE_UPDATE_LIMIT: u32 = 100;
+/// Two seconds of 60 Hz frames: longer than any finite animation a screen runs.
+const HEADLESS_MOTION_FRAME_LIMIT: u32 = 120;
+const FRAME_NANOS: u64 = 16_666_667;
 
 /// Main robot testing rule that provides programmatic control over a real app.
 ///
@@ -107,7 +110,7 @@ where
     /// assertion read it next, which is the harder bug to find.
     pub fn wait_for_idle(&mut self) {
         for _ in 0..HEADLESS_IDLE_UPDATE_LIMIT {
-            self.advance_time(16_666_667);
+            self.advance_time(FRAME_NANOS);
             if !self.shell.needs_redraw() {
                 return;
             }
@@ -119,6 +122,26 @@ where
             self.shell.has_active_animations(),
             self.shell.has_transient_frame_callbacks(),
         );
+    }
+
+    /// Pump the shell until its animations and frame callbacks have finished,
+    /// then until it stops asking to be redrawn: the screen once its motion
+    /// has settled. [`wait_for_idle`](Self::wait_for_idle) returns while an
+    /// animation that only moves pixels still runs.
+    ///
+    /// # Panics
+    ///
+    /// Panics if motion still runs after two seconds of frames, as an
+    /// infinite animation does.
+    pub fn wait_for_motion(&mut self) {
+        for _ in 0..HEADLESS_MOTION_FRAME_LIMIT {
+            if !self.shell.has_active_animations() && !self.shell.has_transient_frame_callbacks() {
+                self.wait_for_idle();
+                return;
+            }
+            self.advance_time(FRAME_NANOS);
+        }
+        panic!("wait_for_motion: animations still run after {HEADLESS_MOTION_FRAME_LIMIT} frames");
     }
 
     /// Perform a click at the given coordinates.

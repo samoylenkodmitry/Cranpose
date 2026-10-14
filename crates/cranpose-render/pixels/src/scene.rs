@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_render_common::{layer_shadow::ShadowRRect, primitive_emit::ShapeDrawParams};
@@ -7,6 +7,8 @@ use cranpose_ui_graphics::{
     ArcGeometry, BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, LineGeometry,
     Point, Rect, RoundedCornerShape, Stroke, Trapezoid,
 };
+
+use crate::draw::RenderItem;
 
 #[derive(Clone, Debug)]
 pub(crate) struct DrawShape {
@@ -19,7 +21,6 @@ pub(crate) struct DrawShape {
     pub arc: Option<ArcGeometry>,
     pub line: Option<LineGeometry>,
     pub trapezoid: Option<Trapezoid>,
-    pub z_index: usize,
     pub clip: Option<Rect>,
     pub blend_mode: BlendMode,
 }
@@ -48,8 +49,8 @@ impl DrawShape {
         }
     }
 
-    /// The shape `params` resolved, drawn `z_index`-th.
-    pub(crate) fn of_params(params: ShapeDrawParams, z_index: usize) -> Self {
+    /// The shape `params` resolved.
+    pub(crate) fn of_params(params: ShapeDrawParams) -> Self {
         Self {
             rect: params.rect,
             snap_anchor: None,
@@ -60,7 +61,6 @@ impl DrawShape {
             arc: params.arc,
             line: params.line,
             trapezoid: params.trapezoid,
-            z_index,
             clip: params.clip,
             blend_mode: params.blend_mode,
         }
@@ -73,10 +73,9 @@ pub(crate) struct TextDraw {
     pub snap_anchor: Option<Point>,
     pub text: Rc<cranpose_ui::text::AnnotatedString>,
     pub color: Color,
-    pub text_style: TextStyle,
+    pub text_style: Arc<TextStyle>,
     pub font_size: f32,
     pub scale: f32,
-    pub z_index: usize,
     pub clip: Option<Rect>,
 }
 
@@ -88,7 +87,6 @@ pub(crate) struct ImageDraw {
     pub alpha: f32,
     pub color_filter: Option<ColorFilter>,
     pub sampling: ImageSampling,
-    pub z_index: usize,
     pub clip: Option<Rect>,
     pub blend_mode: BlendMode,
     pub src_rect: Option<Rect>,
@@ -101,7 +99,6 @@ pub(crate) struct ShadowDraw {
     pub shadow: ShadowRRect,
     pub snap_anchor: Option<Point>,
     pub color: Color,
-    pub z_index: usize,
     pub clip: Option<Rect>,
 }
 
@@ -146,7 +143,8 @@ pub(crate) struct RasterScene {
     pub images: Vec<ImageDraw>,
     pub texts: Vec<TextDraw>,
     pub shadows: Vec<ShadowDraw>,
-    pub next_z: usize,
+    /// Every item in the order it was pushed, which is the order it draws in.
+    pub order: Vec<RenderItem>,
 }
 
 impl RasterScene {
@@ -156,8 +154,23 @@ impl RasterScene {
             images: Vec::new(),
             texts: Vec::new(),
             shadows: Vec::new(),
-            next_z: 0,
+            order: Vec::new(),
         }
+    }
+
+    /// Empties the scene and keeps its storage.
+    pub(crate) fn clear(&mut self) {
+        self.shapes.clear();
+        self.images.clear();
+        self.texts.clear();
+        self.shadows.clear();
+        self.order.clear();
+    }
+
+    /// Queues `shape` to draw over everything queued before.
+    pub(crate) fn push_draw_shape(&mut self, shape: DrawShape) {
+        self.order.push(RenderItem::Shape(self.shapes.len()));
+        self.shapes.push(shape);
     }
 
     pub fn push_shape(
@@ -168,9 +181,7 @@ impl RasterScene {
         clip: Option<Rect>,
         blend_mode: BlendMode,
     ) {
-        let z_index = self.next_z;
-        self.next_z += 1;
-        self.shapes.push(DrawShape {
+        self.push_draw_shape(DrawShape {
             rect,
             snap_anchor: None,
             snap_to_pixel_grid: false,
@@ -180,20 +191,17 @@ impl RasterScene {
             arc: None,
             line: None,
             trapezoid: None,
-            z_index,
             clip,
             blend_mode,
         });
     }
 
     pub fn push_shadow(&mut self, shadow: ShadowRRect, color: Color, clip: Option<Rect>) {
-        let z_index = self.next_z;
-        self.next_z += 1;
+        self.order.push(RenderItem::Shadow(self.shadows.len()));
         self.shadows.push(ShadowDraw {
             shadow,
             snap_anchor: None,
             color,
-            z_index,
             clip,
         });
     }
@@ -206,9 +214,7 @@ impl RasterScene {
         clip: Option<Rect>,
         blend_mode: BlendMode,
     ) {
-        let z_index = self.next_z;
-        self.next_z += 1;
-        self.shapes.push(DrawShape {
+        self.push_draw_shape(DrawShape {
             rect,
             snap_anchor: None,
             snap_to_pixel_grid: true,
@@ -218,7 +224,6 @@ impl RasterScene {
             arc: None,
             line: None,
             trapezoid: None,
-            z_index,
             clip,
             blend_mode,
         });
@@ -227,9 +232,7 @@ impl RasterScene {
     /// Queues a shape an emitted primitive resolved: a rect, rounded rect,
     /// stroke, arc band, line segment or slice of a path fill.
     pub fn push_shape_params(&mut self, params: ShapeDrawParams) {
-        let z_index = self.next_z;
-        self.next_z += 1;
-        self.shapes.push(DrawShape::of_params(params, z_index));
+        self.push_draw_shape(DrawShape::of_params(params));
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -246,8 +249,7 @@ impl RasterScene {
         src_rect: Option<Rect>,
         blend_mode: BlendMode,
     ) {
-        let z_index = self.next_z;
-        self.next_z += 1;
+        self.order.push(RenderItem::Image(self.images.len()));
         self.images.push(ImageDraw {
             rect,
             snap_anchor: None,
@@ -255,7 +257,6 @@ impl RasterScene {
             alpha: alpha.clamp(0.0, 1.0),
             color_filter,
             sampling,
-            z_index,
             clip,
             blend_mode,
             src_rect,
@@ -268,13 +269,12 @@ impl RasterScene {
         rect: Rect,
         text: Rc<cranpose_ui::text::AnnotatedString>,
         color: Color,
-        text_style: TextStyle,
+        text_style: Arc<TextStyle>,
         font_size: f32,
         scale: f32,
         clip: Option<Rect>,
     ) {
-        let z_index = self.next_z;
-        self.next_z += 1;
+        self.order.push(RenderItem::Text(self.texts.len()));
         self.texts.push(TextDraw {
             rect,
             snap_anchor: None,
@@ -283,7 +283,6 @@ impl RasterScene {
             text_style,
             font_size,
             scale,
-            z_index,
             clip,
         });
     }

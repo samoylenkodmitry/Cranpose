@@ -5,3 +5,7 @@ select-all = Tümünü seç
 undo = Geri al
 redo = Yinele
 search = Ara
+previous-month = Önceki ay
+next-month = Sonraki ay
+hour = Saat
+minute = Dakika

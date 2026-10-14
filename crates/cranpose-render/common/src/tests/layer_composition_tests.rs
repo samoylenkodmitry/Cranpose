@@ -22,17 +22,17 @@ fn a_backend_without_an_offscreen_folds_the_composites_byte_not_the_float() {
         compositing_strategy: CompositingStrategy::Auto,
         ..Default::default()
     };
-    let folded = local_content_layer(&layer);
+    let folded = folded_layer_alpha(&layer);
     let (composite_alpha, _) = layer_composite_params(&layer).expect("expected isolation");
-    assert!((folded.alpha - composite_alpha).abs() < 1e-6);
-    assert!((folded.alpha - 224.0 / 255.0).abs() < 1e-6);
+    assert!((folded - composite_alpha).abs() < 1e-6);
+    assert!((folded - 224.0 / 255.0).abs() < 1e-6);
 
     let modulated = GraphicsLayer {
         alpha: 0.88,
         compositing_strategy: CompositingStrategy::ModulateAlpha,
         ..Default::default()
     };
-    assert_eq!(local_content_layer(&modulated).alpha, 0.88);
+    assert_eq!(folded_layer_alpha(&modulated), 0.88);
 }
 
 #[test]
@@ -86,7 +86,7 @@ fn render_effect_forces_isolation_even_with_modulate_alpha() {
 }
 
 #[test]
-fn local_content_layer_keeps_only_local_alpha_and_color_filter() {
+fn an_isolated_layer_folds_its_composites_alpha_into_its_content() {
     let layer = GraphicsLayer {
         alpha: 0.25,
         color_filter: Some(cranpose_ui_graphics::ColorFilter::Tint(
@@ -98,12 +98,7 @@ fn local_content_layer_keeps_only_local_alpha_and_color_filter() {
         ..Default::default()
     };
 
-    let local = local_content_layer(&layer);
-    assert!((local.alpha - 63.0 / 255.0).abs() < 1e-6);
-    assert_eq!(local.color_filter, layer.color_filter);
-    assert_eq!(local.shadow_elevation, 0.0);
-    assert_eq!(local.translation_x, 0.0);
-    assert!(!local.clip);
+    assert!((folded_layer_alpha(&layer) - 63.0 / 255.0).abs() < 1e-6);
 }
 
 #[test]
@@ -139,9 +134,9 @@ fn local_content_layer_for_matches_the_composed_form() {
 
     for layer in cases {
         let isolation = effective_layer_isolation(&layer);
-        let composed = local_content_layer(&layer_for_content(&layer, isolation.as_ref()));
+        let composed = layer_for_content(&layer, isolation.as_ref());
         let direct = local_content_layer_for(&layer);
-        assert!((composed.alpha - direct.alpha).abs() < 1e-6);
+        assert!((folded_layer_alpha(&composed) - direct.alpha).abs() < 1e-6);
         assert_eq!(composed.color_filter, direct.color_filter);
     }
 }

@@ -1,4 +1,5 @@
 use cranpose_core::collections::map::HashMap;
+use cranpose_ui::ToggleableState;
 
 use crate::accessibility::{
     AccessibilityElement, AccessibilityIdentityError, AccessibilityRect, AccessibilitySnapshot,
@@ -167,7 +168,7 @@ fn encode_record(
     record.text(details.state_description.as_deref().unwrap_or(""));
     record.text(details.click_label.as_deref().unwrap_or(""));
     record.number(tristate(element.selected));
-    record.number(tristate(checked_state(element)));
+    record.number(checked_number(checked_state(element)));
     record.number(i32::from(element.enabled));
     record.actions(&details.custom_actions);
     record.number(i32::from(element.focusable));
@@ -304,6 +305,16 @@ fn tristate(value: Option<bool>) -> i32 {
         None => -1,
         Some(false) => 0,
         Some(true) => 1,
+    }
+}
+
+/// -1 for no state, 0 off, 1 on, 2 partly on.
+fn checked_number(value: Option<ToggleableState>) -> i32 {
+    match value {
+        None => -1,
+        Some(ToggleableState::Off) => 0,
+        Some(ToggleableState::On) => 1,
+        Some(ToggleableState::Indeterminate) => 2,
     }
 }
 

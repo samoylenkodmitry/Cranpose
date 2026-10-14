@@ -666,11 +666,9 @@ impl InfiniteTransition {
     #[track_caller]
     fn run(&self) {
         let run_key = self.inner.run_token.get();
-        cranpose_core::label_next_ui_task(format!("loop {}", self.inner.label));
         let weak: Weak<InfiniteTransitionInner> = Rc::downgrade(&self.inner);
         cranpose_core::__launched_effect_async_impl(
-            cranpose_core::caller_location_key()
-                ^ cranpose_core::location_key(file!(), line!(), column!()),
+            cranpose_core::caller_location_key() ^ cranpose_core::location_key!(),
             std::panic::Location::caller().into(),
             run_key,
             move |scope| {
@@ -759,7 +757,7 @@ impl InfiniteTransition {
         });
         let animation_id = Rc::as_ptr(&animation_state) as usize;
         cranpose_core::__disposable_effect_impl(
-            caller ^ cranpose_core::location_key(file!(), line!(), column!()),
+            caller ^ cranpose_core::location_key!(),
             animation_id,
             move |_scope| {
                 transition_inner.add_animation(animation_any.clone());
@@ -820,8 +818,12 @@ impl InfiniteTransitionInner {
     }
 
     fn on_frame(&self, play_time_nanos: u64) {
-        let animations = self.animations.borrow().clone();
-        for animation in animations {
+        // Each animation is borrowed alone, so its frame can reach the
+        // transition without a copy of the whole list.
+        for index in 0.. {
+            let Some(animation) = self.animations.borrow().get(index).cloned() else {
+                break;
+            };
             animation.on_frame(play_time_nanos);
         }
     }

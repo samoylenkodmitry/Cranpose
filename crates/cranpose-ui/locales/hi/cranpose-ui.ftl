@@ -5,3 +5,7 @@ select-all = सभी चुनें
 undo = पहले जैसा करें
 redo = फिर से करें
 search = खोजें
+previous-month = पिछला महीना
+next-month = अगला महीना
+hour = घंटा
+minute = मिनट

@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use smallvec::SmallVec;
 use web_time::Instant;
 
 use crate::{
@@ -367,12 +368,41 @@ impl<A: Applier + 'static> Composition<A> {
 
     /// The scopes grouped by the slot host each recomposes in, in the order
     /// each host first appears.
+    /// The slots host `scope` recomposes in.
+    fn host_for_scope(&self, scope: &RecomposeScope, root_host: &Rc<SlotsHost>) -> Rc<SlotsHost> {
+        scope
+            .slots_runtime_state()
+            .and_then(|state| {
+                scope
+                    .slots_storage_key()
+                    .and_then(|storage_key| state.host_for_storage_key(storage_key))
+            })
+            .or_else(|| {
+                scope
+                    .slots_storage_key()
+                    .and_then(|storage_key| self.composer_state.host_for_storage_key(storage_key))
+            })
+            .unwrap_or_else(|| Rc::clone(root_host))
+    }
+
+    /// The slots host of each scope, with its scopes in order.
     fn group_scopes_by_host(
         &self,
         scopes: Vec<RecomposeScope>,
-    ) -> Vec<(Rc<SlotsHost>, Vec<RecomposeScope>)> {
+    ) -> SmallVec<[(Rc<SlotsHost>, Vec<RecomposeScope>); 1]> {
         let root_host = self.slots_host();
-        let mut scope_groups: Vec<(Rc<SlotsHost>, Vec<RecomposeScope>)> = Vec::new();
+        // Scopes of one slots identity share a host: the usual frame keeps
+        // its scope list as the one group.
+        let first_identity = scopes.first().map(RecomposeScope::slots_host_identity);
+        if let Some(first) = scopes.first()
+            && scopes
+                .iter()
+                .all(|scope| Some(scope.slots_host_identity()) == first_identity)
+        {
+            let host = self.host_for_scope(first, &root_host);
+            return smallvec::smallvec![(host, scopes)];
+        }
+        let mut scope_groups: SmallVec<[(Rc<SlotsHost>, Vec<RecomposeScope>); 1]> = SmallVec::new();
         let mut scope_group_index: HashMap<usize, usize> = HashMap::default();
         let mut previous_host: Option<(_, usize)> = None;
         for scope in scopes {
@@ -383,19 +413,7 @@ impl<A: Applier + 'static> Composition<A> {
                 scope_groups[index].1.push(scope);
                 continue;
             }
-            let host = scope
-                .slots_runtime_state()
-                .and_then(|state| {
-                    scope
-                        .slots_storage_key()
-                        .and_then(|storage_key| state.host_for_storage_key(storage_key))
-                })
-                .or_else(|| {
-                    scope.slots_storage_key().and_then(|storage_key| {
-                        self.composer_state.host_for_storage_key(storage_key)
-                    })
-                })
-                .unwrap_or_else(|| Rc::clone(&root_host));
+            let host = self.host_for_scope(&scope, &root_host);
             let host_key = host.storage_key();
             let index = if let Some(index) = scope_group_index.get(&host_key).copied() {
                 scope_groups[index].1.push(scope);

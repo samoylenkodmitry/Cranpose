@@ -509,6 +509,16 @@ pub const fn const_location_key(file: &str, line: u32, column: u32) -> Key {
     avalanche_location_key(source_location_hash(file, line, column))
 }
 
+/// [`location_key`] of the place it is written, worked out at build time
+/// instead of hashing the source path on every call.
+#[macro_export]
+macro_rules! location_key {
+    () => {{
+        const KEY: $crate::Key = $crate::const_location_key(file!(), line!(), column!());
+        $crate::noted_location_key(KEY, file!(), line!(), column!())
+    }};
+}
+
 /// Returns a constant key the `#[composable]` macro wrote, after recording
 /// where it came from for collision diagnostics in debug builds.
 #[doc(hidden)]
@@ -3395,6 +3405,13 @@ fn reconcile_children(
 
 #[derive(Default)]
 pub struct MemoryApplier {
+    /// Behind one allocation, so lending the applier to a layout pass moves a
+    /// pointer.
+    state: Box<MemoryApplierState>,
+}
+
+#[derive(Default)]
+struct MemoryApplierState {
     nodes: Vec<Option<Box<dyn Node>>>,
     physical_stable_ids: Vec<u32>,
     physical_warm_recycled_origins: Vec<bool>,
@@ -3405,7 +3422,7 @@ pub struct MemoryApplier {
     high_id_generations: HashMap<NodeId, u32>,
     next_stable_id: NodeId,
     layout_runtime: Option<RuntimeHandle>,
-    slots: SlotTable,
+    slots: Rc<RefCell<SlotTable>>,
     recycled_nodes: HashMap<TypeId, Vec<RecycledNode>>,
     returning_recycled_nodes: HashMap<TypeId, Vec<RecycledNode>>,
     cold_recycled_nodes: HashMap<TypeId, Vec<RecycledNode>>,
@@ -3493,60 +3510,44 @@ impl MemoryApplier {
 
     fn ensure_dense_node_storage_capacity(&mut self) {
         let len = self
+            .state
             .nodes
             .len()
-            .max(self.physical_stable_ids.len())
-            .max(self.physical_warm_recycled_origins.len());
-        if len < self.nodes.capacity()
-            && len < self.physical_stable_ids.capacity()
-            && len < self.physical_warm_recycled_origins.capacity()
+            .max(self.state.physical_stable_ids.len())
+            .max(self.state.physical_warm_recycled_origins.len());
+        if len < self.state.nodes.capacity()
+            && len < self.state.physical_stable_ids.capacity()
+            && len < self.state.physical_warm_recycled_origins.capacity()
         {
             return;
         }
 
         let target = Self::next_dense_node_target_len(len);
-        if self.nodes.capacity() < target {
-            self.nodes
-                .reserve_exact(target.saturating_sub(self.nodes.len()));
+        if self.state.nodes.capacity() < target {
+            self.state
+                .nodes
+                .reserve_exact(target.saturating_sub(self.state.nodes.len()));
         }
-        if self.physical_stable_ids.capacity() < target {
-            self.physical_stable_ids
-                .reserve_exact(target.saturating_sub(self.physical_stable_ids.len()));
+        if self.state.physical_stable_ids.capacity() < target {
+            self.state
+                .physical_stable_ids
+                .reserve_exact(target.saturating_sub(self.state.physical_stable_ids.len()));
         }
-        if self.physical_warm_recycled_origins.capacity() < target {
-            self.physical_warm_recycled_origins
-                .reserve_exact(target.saturating_sub(self.physical_warm_recycled_origins.len()));
+        if self.state.physical_warm_recycled_origins.capacity() < target {
+            self.state.physical_warm_recycled_origins.reserve_exact(
+                target.saturating_sub(self.state.physical_warm_recycled_origins.len()),
+            );
         }
     }
 
     pub fn new() -> Self {
-        Self {
-            nodes: Vec::new(),
-            physical_stable_ids: Vec::new(),
-            physical_warm_recycled_origins: Vec::new(),
-            stable_index: stable_index::StableIndex::default(),
-            free_ids: BinaryHeap::new(),
-            high_id_nodes: HashMap::default(),
-            high_id_warm_recycled_origins: HashMap::default(),
-            high_id_generations: HashMap::default(),
-            next_stable_id: 0,
-            layout_runtime: None,
-            slots: SlotTable::default(),
-            recycled_nodes: HashMap::default(),
-            returning_recycled_nodes: HashMap::default(),
-            cold_recycled_nodes: HashMap::default(),
-            recycled_node_limits: HashMap::default(),
-            warm_recycled_node_targets: HashMap::default(),
-            fresh_recyclable_creations: HashMap::default(),
-            recycled_node_prototypes: HashMap::default(),
-            structural_change_parents: Vec::new(),
-            virtual_node_ids: HashSet::default(),
-            bubble_passes: bubble_passes::BubblePasses::default(),
-        }
+        Self::default()
     }
 
-    pub fn slots(&mut self) -> &mut SlotTable {
-        &mut self.slots
+    /// The slot table that composition during layout writes to, shared with
+    /// the layout pass that lends this applier.
+    pub fn slots_handle(&self) -> Rc<RefCell<SlotTable>> {
+        Rc::clone(&self.state.slots)
     }
 
     /// Drains the parents recorded via [`Applier::record_structural_change`],
@@ -3674,16 +3675,16 @@ impl MemoryApplier {
     /// ```
     pub fn take_structural_change_parents_into(&mut self, output: &mut Vec<NodeId>) {
         output.clear();
-        std::mem::swap(&mut self.structural_change_parents, output);
+        std::mem::swap(&mut self.state.structural_change_parents, output);
     }
 
     fn first_non_virtual_ancestor(&mut self, node_id: NodeId) -> Option<NodeId> {
-        if self.virtual_node_ids.is_empty() {
+        if self.state.virtual_node_ids.is_empty() {
             return Some(node_id);
         }
         let mut current = node_id;
         for _ in 0..100_000 {
-            if !self.virtual_node_ids.contains(&current) {
+            if !self.state.virtual_node_ids.contains(&current) {
                 return Some(current);
             }
             match self.get_mut(current) {
@@ -3728,19 +3729,19 @@ impl MemoryApplier {
     }
 
     pub fn len(&self) -> usize {
-        self.nodes.iter().filter(|n| n.is_some()).count()
+        self.state.nodes.iter().filter(|n| n.is_some()).count()
     }
 
     pub fn capacity(&self) -> usize {
-        self.nodes.len()
+        self.state.nodes.len()
     }
 
     pub fn tombstone_count(&self) -> usize {
-        self.nodes.iter().filter(|n| n.is_none()).count()
+        self.state.nodes.iter().filter(|n| n.is_none()).count()
     }
 
     pub fn freelist_len(&self) -> usize {
-        self.free_ids.len()
+        self.state.free_ids.len()
     }
 
     pub fn debug_recycled_node_count(&self) -> usize {
@@ -3749,37 +3750,41 @@ impl MemoryApplier {
 
     pub fn debug_recycled_node_count_for<N: Node + 'static>(&self) -> usize {
         let key = TypeId::of::<N>();
-        self.recycled_nodes.get(&key).map_or(0, Vec::len)
-            + self.returning_recycled_nodes.get(&key).map_or(0, Vec::len)
-            + self.cold_recycled_nodes.get(&key).map_or(0, Vec::len)
+        self.state.recycled_nodes.get(&key).map_or(0, Vec::len)
+            + self
+                .state
+                .returning_recycled_nodes
+                .get(&key)
+                .map_or(0, Vec::len)
+            + self.state.cold_recycled_nodes.get(&key).map_or(0, Vec::len)
     }
 
     pub fn debug_stats(&self) -> MemoryApplierDebugStats {
         let mut recycled_keys: HashSet<TypeId> = HashSet::default();
-        recycled_keys.extend(self.recycled_nodes.keys().copied());
-        recycled_keys.extend(self.returning_recycled_nodes.keys().copied());
-        recycled_keys.extend(self.cold_recycled_nodes.keys().copied());
+        recycled_keys.extend(self.state.recycled_nodes.keys().copied());
+        recycled_keys.extend(self.state.returning_recycled_nodes.keys().copied());
+        recycled_keys.extend(self.state.cold_recycled_nodes.keys().copied());
 
         MemoryApplierDebugStats {
-            next_stable_id: self.next_stable_id,
+            next_stable_id: self.state.next_stable_id,
             nodes_len: self.len(),
-            nodes_cap: self.nodes.len(),
-            physical_stable_ids_len: self.physical_stable_ids.len(),
-            physical_stable_ids_cap: self.physical_stable_ids.capacity(),
-            stable_to_physical_len: self.stable_index.live(),
-            stable_to_physical_cap: self.stable_index.capacity(),
-            stable_generations_len: self.stable_index.occupied(),
-            stable_generations_cap: self.stable_index.capacity(),
-            free_ids_len: self.free_ids.len(),
-            free_ids_cap: self.free_ids.capacity(),
-            high_id_nodes_len: self.high_id_nodes.len(),
-            high_id_nodes_cap: self.high_id_nodes.capacity(),
-            high_id_generations_len: self.high_id_generations.len(),
-            high_id_generations_cap: self.high_id_generations.capacity(),
+            nodes_cap: self.state.nodes.len(),
+            physical_stable_ids_len: self.state.physical_stable_ids.len(),
+            physical_stable_ids_cap: self.state.physical_stable_ids.capacity(),
+            stable_to_physical_len: self.state.stable_index.live(),
+            stable_to_physical_cap: self.state.stable_index.capacity(),
+            stable_generations_len: self.state.stable_index.occupied(),
+            stable_generations_cap: self.state.stable_index.capacity(),
+            free_ids_len: self.state.free_ids.len(),
+            free_ids_cap: self.state.free_ids.capacity(),
+            high_id_nodes_len: self.state.high_id_nodes.len(),
+            high_id_nodes_cap: self.state.high_id_nodes.capacity(),
+            high_id_generations_len: self.state.high_id_generations.len(),
+            high_id_generations_cap: self.state.high_id_generations.capacity(),
             recycled_type_count: recycled_keys.len(),
-            recycled_type_cap: self.recycled_nodes.capacity()
-                + self.returning_recycled_nodes.capacity()
-                + self.cold_recycled_nodes.capacity(),
+            recycled_type_cap: self.state.recycled_nodes.capacity()
+                + self.state.returning_recycled_nodes.capacity()
+                + self.state.cold_recycled_nodes.capacity(),
             recycled_node_count: self.total_recycled_node_count(),
             recycled_node_capacity: self.total_recycled_node_capacity(),
             warm_recycled_node_id_count: self.total_warm_recycled_node_id_count(),
@@ -3793,22 +3798,24 @@ impl MemoryApplier {
 
     /// Calls `visit` with every live node, dense and high-id alike.
     pub fn for_each_node_mut(&mut self, mut visit: impl FnMut(&mut dyn Node)) {
-        for node in self.nodes.iter_mut().flatten() {
+        for node in self.state.nodes.iter_mut().flatten() {
             visit(node.as_mut());
         }
-        for node in self.high_id_nodes.values_mut() {
+        for node in self.state.high_id_nodes.values_mut() {
             visit(node.as_mut());
         }
     }
 
     pub fn debug_live_node_heap_bytes(&self) -> usize {
         let dense_nodes = self
+            .state
             .nodes
             .iter()
             .flatten()
             .map(|node| std::mem::size_of_val(&**node) + node.debug_heap_bytes())
             .sum::<usize>();
         let high_id_nodes = self
+            .state
             .high_id_nodes
             .values()
             .map(|node| std::mem::size_of_val(&**node) + node.debug_heap_bytes())
@@ -3825,21 +3832,21 @@ impl MemoryApplier {
                 .sum::<usize>()
         };
 
-        pool_bytes(&self.recycled_nodes)
-            + pool_bytes(&self.returning_recycled_nodes)
-            + pool_bytes(&self.cold_recycled_nodes)
+        pool_bytes(&self.state.recycled_nodes)
+            + pool_bytes(&self.state.returning_recycled_nodes)
+            + pool_bytes(&self.state.cold_recycled_nodes)
     }
 
     pub fn set_runtime_handle(&mut self, handle: RuntimeHandle) {
-        self.layout_runtime = Some(handle);
+        self.state.layout_runtime = Some(handle);
     }
 
     pub fn clear_runtime_handle(&mut self) {
-        self.layout_runtime = None;
+        self.state.layout_runtime = None;
     }
 
     pub fn runtime_handle(&self) -> Option<RuntimeHandle> {
-        self.layout_runtime.clone()
+        self.state.layout_runtime.clone()
     }
 
     fn pool_node_count(pools: &HashMap<TypeId, Vec<RecycledNode>>) -> usize {
@@ -3851,47 +3858,48 @@ impl MemoryApplier {
     }
 
     fn total_recycled_node_count(&self) -> usize {
-        Self::pool_node_count(&self.recycled_nodes)
-            + Self::pool_node_count(&self.returning_recycled_nodes)
-            + Self::pool_node_count(&self.cold_recycled_nodes)
+        Self::pool_node_count(&self.state.recycled_nodes)
+            + Self::pool_node_count(&self.state.returning_recycled_nodes)
+            + Self::pool_node_count(&self.state.cold_recycled_nodes)
     }
 
     fn total_recycled_node_capacity(&self) -> usize {
-        Self::pool_node_capacity(&self.recycled_nodes)
-            + Self::pool_node_capacity(&self.returning_recycled_nodes)
-            + Self::pool_node_capacity(&self.cold_recycled_nodes)
+        Self::pool_node_capacity(&self.state.recycled_nodes)
+            + Self::pool_node_capacity(&self.state.returning_recycled_nodes)
+            + Self::pool_node_capacity(&self.state.cold_recycled_nodes)
     }
 
     fn total_warm_recycled_node_id_count(&self) -> usize {
         self.live_warm_recycled_origin_count()
-            + Self::pool_node_count(&self.recycled_nodes)
-            + Self::pool_node_count(&self.returning_recycled_nodes)
+            + Self::pool_node_count(&self.state.recycled_nodes)
+            + Self::pool_node_count(&self.state.returning_recycled_nodes)
     }
 
     fn total_warm_recycled_node_id_capacity(&self) -> usize {
         self.live_warm_recycled_origin_capacity()
-            + Self::pool_node_capacity(&self.recycled_nodes)
-            + Self::pool_node_capacity(&self.returning_recycled_nodes)
+            + Self::pool_node_capacity(&self.state.recycled_nodes)
+            + Self::pool_node_capacity(&self.state.returning_recycled_nodes)
     }
 
     fn remember_recycle_pool_limit(&mut self, key: TypeId, recycle_pool_limit: Option<usize>) {
         if let Some(limit) = recycle_pool_limit {
-            self.recycled_node_limits.insert(key, limit);
+            self.state.recycled_node_limits.insert(key, limit);
         } else {
-            self.recycled_node_limits.remove(&key);
+            self.state.recycled_node_limits.remove(&key);
         }
     }
 
     fn recycle_pool_limit_for(&self, key: TypeId) -> Option<usize> {
-        self.recycled_node_limits.get(&key).copied()
+        self.state.recycled_node_limits.get(&key).copied()
     }
 
     fn warm_recycled_pool_len(&self, key: TypeId) -> usize {
-        self.recycled_nodes.get(&key).map_or(0, Vec::len)
+        self.state.recycled_nodes.get(&key).map_or(0, Vec::len)
     }
 
     fn warm_recycled_node_target(&self, key: TypeId) -> usize {
-        self.warm_recycled_node_targets
+        self.state
+            .warm_recycled_node_targets
             .get(&key)
             .copied()
             .unwrap_or(0)
@@ -3916,26 +3924,28 @@ impl MemoryApplier {
             Some(_) => observed_demand.min(target_limit),
             None => observed_demand,
         };
-        self.warm_recycled_node_targets.insert(key, target);
+        self.state.warm_recycled_node_targets.insert(key, target);
         target
     }
 
     fn remember_recycled_node_prototype(&mut self, key: TypeId, shell: &dyn Node) {
-        if self.recycled_node_prototypes.contains_key(&key) {
+        if self.state.recycled_node_prototypes.contains_key(&key) {
             return;
         }
         if let Some(prototype) = shell.rehouse_for_recycle() {
-            self.recycled_node_prototypes.insert(key, prototype);
+            self.state.recycled_node_prototypes.insert(key, prototype);
         }
     }
 
     fn live_warm_recycled_origin_count(&self) -> usize {
-        self.physical_warm_recycled_origins
+        self.state
+            .physical_warm_recycled_origins
             .iter()
-            .zip(self.nodes.iter())
+            .zip(self.state.nodes.iter())
             .filter(|(warm_origin, node)| **warm_origin && node.is_some())
             .count()
             + self
+                .state
                 .high_id_warm_recycled_origins
                 .values()
                 .filter(|warm_origin| **warm_origin)
@@ -3943,8 +3953,8 @@ impl MemoryApplier {
     }
 
     fn live_warm_recycled_origin_capacity(&self) -> usize {
-        self.physical_warm_recycled_origins.capacity()
-            + self.high_id_warm_recycled_origins.capacity()
+        self.state.physical_warm_recycled_origins.capacity()
+            + self.state.high_id_warm_recycled_origins.capacity()
     }
 
     fn push_recycled_node(
@@ -3958,9 +3968,9 @@ impl MemoryApplier {
 
         let warm_origin = recycled.warm_origin();
         let pool = if warm_origin {
-            self.returning_recycled_nodes.entry(key).or_default()
+            self.state.returning_recycled_nodes.entry(key).or_default()
         } else {
-            self.cold_recycled_nodes.entry(key).or_default()
+            self.state.cold_recycled_nodes.entry(key).or_default()
         };
         pool.push(recycled);
         if let Some(limit) = recycle_pool_limit
@@ -3984,7 +3994,7 @@ impl MemoryApplier {
         let mut dropped = Vec::new();
         let mut remove_pool_entry = false;
         {
-            let pool = self.recycled_nodes.entry(key).or_default();
+            let pool = self.state.recycled_nodes.entry(key).or_default();
             pool.push(recycled);
             if let Some(limit) = recycle_pool_limit
                 && pool.len() > limit
@@ -3995,7 +4005,7 @@ impl MemoryApplier {
             }
         }
         if remove_pool_entry {
-            self.recycled_nodes.remove(&key);
+            self.state.recycled_nodes.remove(&key);
         }
         drop(dropped);
     }
@@ -4012,8 +4022,8 @@ impl MemoryApplier {
         }
 
         self.remember_recycled_node_prototype(key, shell.as_ref());
-        let stable_id = self.next_stable_id;
-        self.next_stable_id = self.next_stable_id.saturating_add(1);
+        let stable_id = self.state.next_stable_id;
+        self.state.next_stable_id = self.state.next_stable_id.saturating_add(1);
         self.push_warm_recycled_node(
             key,
             recycle_pool_limit,
@@ -4034,7 +4044,7 @@ impl MemoryApplier {
     }
 
     fn compact_idle_warm_pool(&mut self, key: TypeId) {
-        let Some(pool) = self.recycled_nodes.get_mut(&key) else {
+        let Some(pool) = self.state.recycled_nodes.get_mut(&key) else {
             return;
         };
         if pool.capacity() <= pool.len().saturating_mul(4).max(64) {
@@ -4049,7 +4059,7 @@ impl MemoryApplier {
         let _ = pool;
 
         if remove_pool_entry {
-            self.recycled_nodes.remove(&key);
+            self.state.recycled_nodes.remove(&key);
         }
     }
 
@@ -4059,7 +4069,7 @@ impl MemoryApplier {
             return;
         }
 
-        let Some(pool) = self.recycled_nodes.get_mut(&key) else {
+        let Some(pool) = self.state.recycled_nodes.get_mut(&key) else {
             return;
         };
         let removable = (pool_len - target).min(pool.len());
@@ -4068,7 +4078,7 @@ impl MemoryApplier {
         let _ = pool;
 
         if remove_pool_entry {
-            self.recycled_nodes.remove(&key);
+            self.state.recycled_nodes.remove(&key);
         }
         drop(dropped);
     }
@@ -4081,7 +4091,7 @@ impl MemoryApplier {
 
         let recycle_pool_limit = self.recycle_pool_limit_for(key);
         let mut shells = Vec::with_capacity(missing);
-        if let Some(prototype) = self.recycled_node_prototypes.get(&key) {
+        if let Some(prototype) = self.state.recycled_node_prototypes.get(&key) {
             for _ in 0..missing {
                 let Some(shell) = prototype.rehouse_for_recycle() else {
                     break;
@@ -4096,20 +4106,21 @@ impl MemoryApplier {
     }
 
     fn prune_stable_generations(&mut self) {
-        let retained_len = self.stable_index.live() + self.total_recycled_node_count();
-        if retained_len == self.stable_index.occupied() {
+        let retained_len = self.state.stable_index.live() + self.total_recycled_node_count();
+        if retained_len == self.state.stable_index.occupied() {
             return;
         }
 
         let recycled: HashSet<NodeId> = [
-            &self.recycled_nodes,
-            &self.returning_recycled_nodes,
-            &self.cold_recycled_nodes,
+            &self.state.recycled_nodes,
+            &self.state.returning_recycled_nodes,
+            &self.state.cold_recycled_nodes,
         ]
         .into_iter()
         .flat_map(|pools| pools.values().flatten().map(RecycledNode::stable_id))
         .collect();
-        self.stable_index
+        self.state
+            .stable_index
             .retain_retired(|stable_id| recycled.contains(&stable_id));
     }
 
@@ -4146,18 +4157,19 @@ impl MemoryApplier {
     }
 
     fn resolve_node_index(&self, id: NodeId) -> Option<usize> {
-        self.stable_index.slot(id)
+        self.state.stable_index.slot(id)
     }
 
     fn contains_node_id(&self, id: NodeId) -> bool {
-        self.resolve_node_index(id).is_some() || self.high_id_nodes.contains_key(&id)
+        self.resolve_node_index(id).is_some() || self.state.high_id_nodes.contains_key(&id)
     }
 
     fn insert_high_id_node(&mut self, stable_id: NodeId, node: Box<dyn Node>, warm_origin: bool) {
-        self.high_id_nodes.insert(stable_id, node);
-        self.high_id_warm_recycled_origins
+        self.state.high_id_nodes.insert(stable_id, node);
+        self.state
+            .high_id_warm_recycled_origins
             .insert(stable_id, warm_origin);
-        self.high_id_generations.entry(stable_id).or_insert(0);
+        self.state.high_id_generations.entry(stable_id).or_insert(0);
     }
 
     fn insert_available_with_id(&mut self, stable_id: NodeId, node: Box<dyn Node>) {
@@ -4166,24 +4178,25 @@ impl MemoryApplier {
             return;
         }
 
-        let physical_id = if let Some(Reverse(free_physical_id)) = self.free_ids.pop() {
-            self.nodes[free_physical_id] = Some(node);
-            self.physical_stable_ids[free_physical_id] = Self::pack_stable_id(stable_id);
-            self.physical_warm_recycled_origins[free_physical_id] = false;
+        let physical_id = if let Some(Reverse(free_physical_id)) = self.state.free_ids.pop() {
+            self.state.nodes[free_physical_id] = Some(node);
+            self.state.physical_stable_ids[free_physical_id] = Self::pack_stable_id(stable_id);
+            self.state.physical_warm_recycled_origins[free_physical_id] = false;
             free_physical_id
         } else {
             self.ensure_dense_node_storage_capacity();
-            let physical_id = self.nodes.len();
-            self.nodes.push(Some(node));
-            self.physical_stable_ids
+            let physical_id = self.state.nodes.len();
+            self.state.nodes.push(Some(node));
+            self.state
+                .physical_stable_ids
                 .push(Self::pack_stable_id(stable_id));
-            self.physical_warm_recycled_origins.push(false);
+            self.state.physical_warm_recycled_origins.push(false);
             physical_id
         };
 
-        self.next_stable_id = self.next_stable_id.max(stable_id.saturating_add(1));
-        self.physical_stable_ids[physical_id] = Self::pack_stable_id(stable_id);
-        self.stable_index.set_slot(stable_id, physical_id);
+        self.state.next_stable_id = self.state.next_stable_id.max(stable_id.saturating_add(1));
+        self.state.physical_stable_ids[physical_id] = Self::pack_stable_id(stable_id);
+        self.state.stable_index.set_slot(stable_id, physical_id);
     }
 
     /// Borrows a live node without requiring exclusive access to the tree.
@@ -4191,6 +4204,7 @@ impl MemoryApplier {
     pub fn get_ref(&self, id: NodeId) -> Result<&dyn Node, NodeError> {
         if let Some(physical_id) = self.resolve_node_index(id) {
             let slot = self
+                .state
                 .nodes
                 .get(physical_id)
                 .ok_or(NodeError::Missing { id })?
@@ -4199,7 +4213,8 @@ impl MemoryApplier {
             return Ok(slot);
         }
 
-        self.high_id_nodes
+        self.state
+            .high_id_nodes
             .get(&id)
             .map(AsRef::as_ref)
             .ok_or(NodeError::Missing { id })
@@ -4223,13 +4238,14 @@ impl MemoryApplier {
     }
 
     fn remove_node_storage(&mut self, node_id: NodeId) -> Result<(), NodeError> {
-        self.virtual_node_ids.remove(&node_id);
-        if self.high_id_nodes.contains_key(&node_id) {
-            if let Some(node) = self.high_id_nodes.remove(&node_id)
+        self.state.virtual_node_ids.remove(&node_id);
+        if self.state.high_id_nodes.contains_key(&node_id) {
+            if let Some(node) = self.state.high_id_nodes.remove(&node_id)
                 && let Some(key) = node.recycle_key()
             {
                 let recycle_pool_limit = node.recycle_pool_limit();
                 let warm_origin = self
+                    .state
                     .high_id_warm_recycled_origins
                     .remove(&node_id)
                     .unwrap_or(false);
@@ -4239,7 +4255,7 @@ impl MemoryApplier {
                     RecycledNode::new(node_id, node, warm_origin),
                 );
             }
-            let generation = self.high_id_generations.entry(node_id).or_insert(0);
+            let generation = self.state.high_id_generations.entry(node_id).or_insert(0);
             *generation = generation.wrapping_add(1);
             return Ok(());
         }
@@ -4247,11 +4263,12 @@ impl MemoryApplier {
         let physical_id = self
             .resolve_node_index(node_id)
             .ok_or(NodeError::Missing { id: node_id })?;
-        if let Some(node) = self.nodes[physical_id].take()
+        if let Some(node) = self.state.nodes[physical_id].take()
             && let Some(key) = node.recycle_key()
         {
             let recycle_pool_limit = node.recycle_pool_limit();
             let warm_origin = self
+                .state
                 .physical_warm_recycled_origins
                 .get_mut(physical_id)
                 .is_some_and(std::mem::take);
@@ -4261,9 +4278,9 @@ impl MemoryApplier {
                 RecycledNode::new(node_id, node, warm_origin),
             );
         }
-        self.physical_stable_ids[physical_id] = Self::INVALID_STABLE_ID;
-        self.stable_index.release(node_id);
-        self.free_ids.push(Reverse(physical_id));
+        self.state.physical_stable_ids[physical_id] = Self::INVALID_STABLE_ID;
+        self.state.stable_index.release(node_id);
+        self.state.free_ids.push(Reverse(physical_id));
         Ok(())
     }
 
@@ -4318,48 +4335,58 @@ impl MemoryApplier {
 
 impl Applier for MemoryApplier {
     fn record_structural_change(&mut self, parent_id: NodeId) {
-        if self.structural_change_parents.last() != Some(&parent_id) {
-            self.structural_change_parents.push(parent_id);
+        if self.state.structural_change_parents.last() != Some(&parent_id) {
+            self.state.structural_change_parents.push(parent_id);
         }
     }
 
     fn create(&mut self, node: Box<dyn Node>) -> NodeId {
-        let stable_id = self.next_stable_id;
-        self.next_stable_id = self.next_stable_id.saturating_add(1);
+        let stable_id = self.state.next_stable_id;
+        self.state.next_stable_id = self.state.next_stable_id.saturating_add(1);
         if stable_id >= Self::HIGH_ID_THRESHOLD {
             self.insert_high_id_node(stable_id, node, false);
             return stable_id;
         }
 
-        let physical_id = if let Some(Reverse(id)) = self.free_ids.pop() {
-            debug_assert!(self.nodes[id].is_none(), "freelist entry {id} is not None");
-            self.nodes[id] = Some(node);
-            self.physical_stable_ids[id] = Self::pack_stable_id(stable_id);
-            self.physical_warm_recycled_origins[id] = false;
+        let physical_id = if let Some(Reverse(id)) = self.state.free_ids.pop() {
+            debug_assert!(
+                self.state.nodes[id].is_none(),
+                "freelist entry {id} is not None"
+            );
+            self.state.nodes[id] = Some(node);
+            self.state.physical_stable_ids[id] = Self::pack_stable_id(stable_id);
+            self.state.physical_warm_recycled_origins[id] = false;
             id
         } else {
             self.ensure_dense_node_storage_capacity();
-            let id = self.nodes.len();
-            self.nodes.push(Some(node));
-            self.physical_stable_ids
+            let id = self.state.nodes.len();
+            self.state.nodes.push(Some(node));
+            self.state
+                .physical_stable_ids
                 .push(Self::pack_stable_id(stable_id));
-            self.physical_warm_recycled_origins.push(false);
+            self.state.physical_warm_recycled_origins.push(false);
             id
         };
-        self.stable_index.insert_fresh(stable_id, physical_id);
+        self.state.stable_index.insert_fresh(stable_id, physical_id);
         stable_id
     }
 
     fn node_generation(&self, id: NodeId) -> u32 {
         if id >= Self::HIGH_ID_THRESHOLD {
-            return self.high_id_generations.get(&id).copied().unwrap_or(0);
+            return self
+                .state
+                .high_id_generations
+                .get(&id)
+                .copied()
+                .unwrap_or(0);
         }
-        self.stable_index.generation(id)
+        self.state.stable_index.generation(id)
     }
 
     fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError> {
         if let Some(physical_id) = self.resolve_node_index(id) {
             let slot = self
+                .state
                 .nodes
                 .get_mut(physical_id)
                 .ok_or(NodeError::Missing { id })?
@@ -4367,32 +4394,33 @@ impl Applier for MemoryApplier {
                 .ok_or(NodeError::Missing { id })?;
             return Ok(slot);
         }
-        self.high_id_nodes
+        self.state
+            .high_id_nodes
             .get_mut(&id)
             .map(std::convert::AsMut::as_mut)
             .ok_or(NodeError::Missing { id })
     }
 
     fn remove(&mut self, id: NodeId) -> Result<(), NodeError> {
-        self.bubble_passes.forget();
+        self.state.bubble_passes.forget();
         self.remove_subtree_postorder(id).map(|_| ())
     }
 
     fn begin_bubble_batch(&mut self) {
-        self.bubble_passes.begin_batch();
+        self.state.bubble_passes.begin_batch();
     }
 
     fn end_bubble_batch(&mut self) {
-        self.bubble_passes.end_batch();
+        self.state.bubble_passes.end_batch();
     }
 
     fn forget_bubble_passes(&mut self) {
-        self.bubble_passes.forget();
+        self.state.bubble_passes.forget();
     }
 
     fn note_bubble_pass(&mut self, id: NodeId, flags: u8) -> bool {
         self.resolve_node_index(id)
-            .is_some_and(|index| self.bubble_passes.note(index, flags))
+            .is_some_and(|index| self.state.bubble_passes.note(index, flags))
     }
 
     fn insert_with_id(&mut self, id: NodeId, node: Box<dyn Node>) -> Result<(), NodeError> {
@@ -4400,7 +4428,7 @@ impl Applier for MemoryApplier {
             return Err(NodeError::AlreadyExists { id });
         }
         self.insert_available_with_id(id, node);
-        self.virtual_node_ids.insert(id);
+        self.state.virtual_node_ids.insert(id);
         Ok(())
     }
 
@@ -4422,12 +4450,17 @@ impl Applier for MemoryApplier {
     }
 
     fn compact(&mut self) {
-        let live_count = self.nodes.iter().filter(|slot| slot.is_some()).count();
-        let tombstone_count = self.nodes.len().saturating_sub(live_count);
+        let live_count = self
+            .state
+            .nodes
+            .iter()
+            .filter(|slot| slot.is_some())
+            .count();
+        let tombstone_count = self.state.nodes.len().saturating_sub(live_count);
         if tombstone_count == 0 {
             return;
         }
-        if self.nodes.len() > Self::EAGER_COMPACT_NODE_LEN && tombstone_count < live_count {
+        if self.state.nodes.len() > Self::EAGER_COMPACT_NODE_LEN && tombstone_count < live_count {
             return;
         }
         let rehouse_live_nodes = tombstone_count >= live_count;
@@ -4435,15 +4468,15 @@ impl Applier for MemoryApplier {
         let mut packed_physical_stable_ids = Vec::with_capacity(live_count);
         let mut packed_warm_recycled_origins = Vec::with_capacity(live_count);
 
-        for physical_id in 0..self.nodes.len() {
-            let Some(mut node) = self.nodes[physical_id].take() else {
+        for physical_id in 0..self.state.nodes.len() {
+            let Some(mut node) = self.state.nodes[physical_id].take() else {
                 continue;
             };
             if rehouse_live_nodes && let Some(rehoused) = node.rehouse_for_live_compaction() {
                 node = rehoused;
             }
             let stable_id = std::mem::replace(
-                &mut self.physical_stable_ids[physical_id],
+                &mut self.state.physical_stable_ids[physical_id],
                 Self::INVALID_STABLE_ID,
             );
             debug_assert_ne!(
@@ -4454,17 +4487,19 @@ impl Applier for MemoryApplier {
             let stable_id = Self::unpack_stable_id(stable_id);
             packed_nodes.push(Some(node));
             packed_physical_stable_ids.push(Self::pack_stable_id(stable_id));
-            packed_warm_recycled_origins.push(self.physical_warm_recycled_origins[physical_id]);
-            self.stable_index
+            packed_warm_recycled_origins
+                .push(self.state.physical_warm_recycled_origins[physical_id]);
+            self.state
+                .stable_index
                 .set_slot(stable_id, packed_nodes.len() - 1);
         }
 
-        self.nodes = packed_nodes;
-        self.physical_stable_ids = packed_physical_stable_ids;
-        self.physical_warm_recycled_origins = packed_warm_recycled_origins;
-        self.free_ids = BinaryHeap::new();
+        self.state.nodes = packed_nodes;
+        self.state.physical_stable_ids = packed_physical_stable_ids;
+        self.state.physical_warm_recycled_origins = packed_warm_recycled_origins;
+        self.state.free_ids = BinaryHeap::new();
         debug_assert_eq!(
-            self.stable_index.live(),
+            self.state.stable_index.live(),
             live_count,
             "every live node keeps one indexed slot through compaction",
         );
@@ -4472,15 +4507,17 @@ impl Applier for MemoryApplier {
     }
 
     fn take_recycled_node(&mut self, key: TypeId) -> Option<RecycledNode> {
-        Self::take_recycled_node_from_pool(&mut self.returning_recycled_nodes, key)
-            .or_else(|| Self::take_recycled_node_from_pool(&mut self.recycled_nodes, key))
+        Self::take_recycled_node_from_pool(&mut self.state.returning_recycled_nodes, key)
+            .or_else(|| Self::take_recycled_node_from_pool(&mut self.state.recycled_nodes, key))
     }
 
     fn set_recycled_node_origin(&mut self, id: NodeId, warm_origin: bool) {
         if let Some(physical_id) = self.resolve_node_index(id) {
-            self.physical_warm_recycled_origins[physical_id] = warm_origin;
-        } else if self.high_id_nodes.contains_key(&id) {
-            self.high_id_warm_recycled_origins.insert(id, warm_origin);
+            self.state.physical_warm_recycled_origins[physical_id] = warm_origin;
+        } else if self.state.high_id_nodes.contains_key(&id) {
+            self.state
+                .high_id_warm_recycled_origins
+                .insert(id, warm_origin);
         }
     }
 
@@ -4494,18 +4531,22 @@ impl Applier for MemoryApplier {
     }
 
     fn record_fresh_recyclable_creation(&mut self, key: TypeId) {
-        *self.fresh_recyclable_creations.entry(key).or_insert(0) += 1;
+        *self
+            .state
+            .fresh_recyclable_creations
+            .entry(key)
+            .or_insert(0) += 1;
     }
 
     fn clear_recycled_nodes(&mut self) {
-        let returning = std::mem::take(&mut self.returning_recycled_nodes);
+        let returning = std::mem::take(&mut self.state.returning_recycled_nodes);
         for (key, mut nodes) in returning {
-            let pool = self.recycled_nodes.entry(key).or_default();
+            let pool = self.state.recycled_nodes.entry(key).or_default();
             pool.append(&mut nodes);
         }
 
-        let fresh_recyclable_creations = std::mem::take(&mut self.fresh_recyclable_creations);
-        let cold = std::mem::take(&mut self.cold_recycled_nodes);
+        let fresh_recyclable_creations = std::mem::take(&mut self.state.fresh_recyclable_creations);
+        let cold = std::mem::take(&mut self.state.cold_recycled_nodes);
         for (key, mut nodes) in cold {
             let needed = fresh_recyclable_creations.get(&key).copied().unwrap_or(0);
             if needed > 0 {
@@ -4518,16 +4559,20 @@ impl Applier for MemoryApplier {
                 let promoted = nodes.split_off(split_at);
                 for mut recycled in promoted {
                     recycled.set_warm_origin(true);
-                    self.recycled_nodes.entry(key).or_default().push(recycled);
+                    self.state
+                        .recycled_nodes
+                        .entry(key)
+                        .or_default()
+                        .push(recycled);
                 }
             }
         }
 
         let mut keys: HashSet<TypeId> = HashSet::default();
-        keys.extend(self.recycled_nodes.keys().copied());
-        keys.extend(self.recycled_node_limits.keys().copied());
-        keys.extend(self.warm_recycled_node_targets.keys().copied());
-        keys.extend(self.recycled_node_prototypes.keys().copied());
+        keys.extend(self.state.recycled_nodes.keys().copied());
+        keys.extend(self.state.recycled_node_limits.keys().copied());
+        keys.extend(self.state.warm_recycled_node_targets.keys().copied());
+        keys.extend(self.state.recycled_node_prototypes.keys().copied());
         for key in keys {
             let observed_demand = fresh_recyclable_creations.get(&key).copied().unwrap_or(0);
             let target = self.update_warm_recycled_node_target(key, observed_demand);

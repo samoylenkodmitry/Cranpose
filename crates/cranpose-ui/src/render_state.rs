@@ -21,6 +21,8 @@ struct RenderState {
     modifier_slice_repasses: RefCell<DirtyNodeSet>,
     geometry_scene_nodes: RefCell<DirtyNodeSet>,
     moved_scene_nodes: RefCell<DirtyNodeSet>,
+    /// Nodes whose z index changed: their parents' layers hold the order.
+    z_order_changes: RefCell<DirtyNodeSet>,
     render_invalidated: Cell<bool>,
     pointer_invalidated: Cell<bool>,
     focus_invalidated: Cell<bool>,
@@ -42,6 +44,9 @@ pub struct AppContext {
     draw_observer: SnapshotStateObserver,
     text: crate::text::measure::TextService,
     layout_frame_arena: RefCell<crate::layout::FrameLayoutArena>,
+    /// The host the next layout pass lends its applier to; `None` while a
+    /// pass has it.
+    layout_host: RefCell<Option<crate::layout::LayoutHost>>,
     layout_cache_epoch: Cell<u64>,
     layout_cache_floor: Cell<u64>,
     last_fling_velocity_bits: Cell<u32>,
@@ -50,6 +55,7 @@ pub struct AppContext {
     layout_node_registry: crate::widgets::nodes::layout_node::LayoutNodeRegistryState,
     pointer_dispatch: crate::pointer_dispatch::PointerDispatchState,
     mouse_input: crate::mouse_input::MouseInputQueue,
+    pointer_claim: Cell<Option<cranpose_core::NodeId>>,
     focus_dispatch: crate::focus_dispatch::FocusInvalidationState,
     modal: crate::modal::ModalState,
     modal_nodes: crate::modal_nodes::ModalNodes,
@@ -194,6 +200,7 @@ impl RenderState {
             modifier_slice_repasses: RefCell::new(DirtyNodeSet::new()),
             geometry_scene_nodes: RefCell::new(DirtyNodeSet::new()),
             moved_scene_nodes: RefCell::new(DirtyNodeSet::new()),
+            z_order_changes: RefCell::new(DirtyNodeSet::new()),
             render_invalidated: Cell::new(false),
             pointer_invalidated: Cell::new(false),
             focus_invalidated: Cell::new(false),
@@ -241,6 +248,7 @@ impl AppContext {
             draw_observer: new_draw_observer(),
             text: crate::text::measure::TextService::new(),
             layout_frame_arena: RefCell::new(crate::layout::FrameLayoutArena::default()),
+            layout_host: RefCell::new(None),
             layout_cache_epoch: Cell::new(1),
             layout_cache_floor: Cell::new(0),
             last_fling_velocity_bits: Cell::new(0.0f32.to_bits()),
@@ -250,6 +258,7 @@ impl AppContext {
             ),
             pointer_dispatch: crate::pointer_dispatch::PointerDispatchState::new(),
             mouse_input: crate::mouse_input::MouseInputQueue::default(),
+            pointer_claim: Cell::new(None),
             focus_dispatch: crate::focus_dispatch::FocusInvalidationState::new(),
             modal: crate::modal::ModalState::new(),
             modal_nodes: crate::modal_nodes::ModalNodes::default(),
@@ -299,6 +308,18 @@ impl AppContext {
     #[doc(hidden)]
     pub fn take_mouse_move(&self) -> Option<crate::mouse_input::MouseMoveRequest> {
         self.mouse_input.take()
+    }
+
+    /// Asks the shell to give the rest of the held press to `node` alone: the
+    /// other targets under the press see it cancelled.
+    pub(crate) fn claim_pointer(&self, node: cranpose_core::NodeId) {
+        self.pointer_claim.set(Some(node));
+    }
+
+    /// Takes the node that claimed the held press since the last call.
+    #[doc(hidden)]
+    pub fn take_pointer_claim(&self) -> Option<cranpose_core::NodeId> {
+        self.pointer_claim.take()
     }
 
     /// The window roots attached in this context.
@@ -505,6 +526,19 @@ pub(crate) fn take_layout_frame_arena() -> crate::layout::FrameLayoutArena {
     std::mem::take(&mut *context.layout_frame_arena.borrow_mut())
 }
 
+/// The host for a layout pass: the one the last pass gave back, or a new one
+/// when a pass is still running or none ran yet.
+pub(crate) fn take_layout_host() -> crate::layout::LayoutHost {
+    let context = require_current_app_context("layout host access");
+    context.layout_host.borrow_mut().take().unwrap_or_default()
+}
+
+pub(crate) fn replace_layout_host(host: crate::layout::LayoutHost) {
+    if let Some(context) = current_app_context() {
+        *context.layout_host.borrow_mut() = Some(host);
+    }
+}
+
 pub(crate) fn replace_layout_frame_arena(arena: crate::layout::FrameLayoutArena) {
     let context = require_current_app_context("layout frame arena access");
     *context.layout_frame_arena.borrow_mut() = arena;
@@ -552,6 +586,33 @@ pub fn debug_reset_last_fling_velocity() {
 impl AppContext {
     pub(crate) fn lazy_prefetch(&self) -> &crate::lazy_prefetch::LazyPrefetchState {
         &self.lazy_prefetch
+    }
+
+    /// Whether the next frame has work in this context: a render, pointer,
+    /// focus or layout invalidation, or a layout, measure or layer-property
+    /// repass. Reads the context directly, without looking up the current
+    /// one.
+    pub fn has_pending_frame_work(&self) -> bool {
+        let state = &self.state;
+        state.render_invalidated.get()
+            || state.pointer_invalidated.get()
+            || state.focus_invalidated.get()
+            || state.layout_invalidated.get()
+            || state.layout_repasses.borrow_mut().has_pending_repass()
+            || state.measure_repasses.borrow_mut().has_pending_repass()
+            || state
+                .layer_property_repasses
+                .borrow_mut()
+                .has_pending_repass()
+    }
+
+    /// [`Self::has_pending_frame_work`], or a pending draw or pointer repass
+    /// or focus invalidation.
+    pub fn has_stale_work(&self) -> bool {
+        self.has_pending_frame_work()
+            || self.state.draw_repasses.borrow_mut().has_pending_repass()
+            || self.pointer_dispatch.has_pending_repass()
+            || self.focus_dispatch.has_pending_invalidation()
     }
 }
 
@@ -910,6 +971,24 @@ pub fn take_draw_repass_nodes_into(output: &mut Vec<NodeId>) {
     });
 }
 
+/// Records that `node_id`'s z index changed. The frame rebuilds the layer of
+/// its parent, which holds the order the parent's children draw and take
+/// taps in.
+pub fn schedule_z_order_change(node_id: NodeId) {
+    with_render_state(|state| {
+        state.z_order_changes.borrow_mut().schedule_repass(node_id);
+        state.render_invalidated.set(true);
+    });
+}
+
+/// Appends the nodes whose z index changed since the last call to `output`,
+/// after what it already holds.
+pub fn append_z_order_changes(output: &mut Vec<NodeId>) {
+    with_render_state(|state| {
+        output.extend(state.z_order_changes.borrow_mut().dirty_nodes.drain());
+    });
+}
+
 /// Returns true if graphics-layer property updates are pending.
 #[doc(hidden)]
 pub fn has_pending_layer_property_repasses() -> bool {
@@ -1262,6 +1341,7 @@ pub fn reset_render_state_for_tests() {
     take_layer_property_repass_nodes_into(&mut layer_nodes);
     let _ = take_layout_repass_nodes();
     let _ = take_modifier_slice_repass_nodes();
+    append_z_order_changes(&mut layer_nodes);
     let _ = take_render_invalidation();
     let _ = take_pointer_invalidation();
     let _ = take_focus_invalidation();

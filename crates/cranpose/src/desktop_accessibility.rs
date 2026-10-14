@@ -16,7 +16,7 @@ use accesskit::{
 };
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
-use cranpose_ui::{Announcement, LiveRegionMode};
+use cranpose_ui::{Announcement, LiveRegionMode, ToggleableState};
 use winit::{event::WindowEvent, event_loop::EventLoopProxy, window::Window};
 
 use crate::{
@@ -743,10 +743,10 @@ fn apply_state(node: &mut Node, element: &AccessibilityElement) {
         node.set_selected(selected);
     }
     if let Some(toggled) = toggled_state(element) {
-        node.set_toggled(if toggled {
-            Toggled::True
-        } else {
-            Toggled::False
+        node.set_toggled(match toggled {
+            ToggleableState::Indeterminate => Toggled::Mixed,
+            ToggleableState::On => Toggled::True,
+            ToggleableState::Off => Toggled::False,
         });
     }
     if !element.enabled {
@@ -789,9 +789,11 @@ fn selected_state(element: &AccessibilityElement) -> Option<bool> {
     })
 }
 
-fn toggled_state(element: &AccessibilityElement) -> Option<bool> {
+fn toggled_state(element: &AccessibilityElement) -> Option<ToggleableState> {
     if reads_selection_as_pressed(element.role) {
-        element.toggled.or(element.selected)
+        element
+            .toggled
+            .or_else(|| element.selected.map(ToggleableState::from))
     } else {
         accessibility::checked_state(element)
     }

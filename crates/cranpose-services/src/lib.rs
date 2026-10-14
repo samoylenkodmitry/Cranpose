@@ -28,6 +28,8 @@ pub mod host;
 pub mod host_messages;
 pub mod host_surface;
 pub mod http;
+#[cfg(feature = "image-loading")]
+pub mod image_loading;
 pub mod image_picker;
 pub mod incoming_share;
 pub mod launch_args;
@@ -174,6 +176,11 @@ pub use http::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use http::{PlatformDownloader, downloaded_length, set_platform_downloader};
+#[cfg(feature = "image-loading")]
+pub use image_loading::{
+    ImageCacheLimits, ImageLoadError, ImageLoadState, ImageLoader, ImageRequest, image_loader,
+    rememberAsyncImage,
+};
 pub use image_picker::{
     IMAGE_EXTENSIONS, ImagePicker, ImagePickerError, ImagePickerRef, ImageSource,
     ProvideImagePicker, clear_platform_image_picker, default_image_picker, local_image_picker,

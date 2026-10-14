@@ -1,33 +1,66 @@
-//! AnimatedVisibility composable
+//! Enter and exit transitions, and `AnimatedVisibility`.
 //!
-//! Mirrors Jetpack Compose's `AnimatedVisibility` from
-//! `androidx.compose.animation.AnimatedVisibility`, with a minimal set of
-//! enter/exit transitions: `fade_in`/`fade_out` and
-//! `slide_in_vertically`/`slide_out_vertically`.
+//! Mirrors Jetpack Compose's `EnterTransition`/`ExitTransition` from
+//! `androidx.compose.animation`: fades, slides along either axis by a
+//! fraction of the content's own size, and scales, combined with `+`.
 
 use cranpose_animation::AnimationType;
+use cranpose_ui_graphics::Size;
 
 use crate::{
     composable,
-    modifier::{GraphicsLayer, Modifier},
-    widgets::{
-        box_widget::{Box, BoxSpec},
-        crossfade::animate_float_with_initial,
-    },
+    modifier::GraphicsLayer,
+    widgets::animated_content::{ContentTransform, SeekableAnimatedContent},
 };
 
-/// Progress below which exiting content is considered fully hidden and can
-/// leave the composition.
-const VISIBILITY_PROGRESS_EPSILON: f32 = 0.001;
+/// What a transition does to its content at full strength; progress `1.0`
+/// shows the content at rest.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct TransitionEffects {
+    fade: bool,
+    /// Offsets as fractions of the content's width and height.
+    slide_x: Option<f32>,
+    slide_y: Option<f32>,
+    scale: Option<f32>,
+}
 
-/// Defines how an [`AnimatedVisibility`] content appears.
+impl TransitionEffects {
+    fn merged(self, other: Self) -> Self {
+        Self {
+            fade: self.fade || other.fade,
+            slide_x: self.slide_x.or(other.slide_x),
+            slide_y: self.slide_y.or(other.slide_y),
+            scale: self.scale.or(other.scale),
+        }
+    }
+
+    /// The layer that shows content of `size` at `progress` of the way to
+    /// rest.
+    pub(crate) fn layer(self, progress: f32, size: Size) -> GraphicsLayer {
+        let away = 1.0 - progress;
+        GraphicsLayer {
+            alpha: if self.fade {
+                progress.clamp(0.0, 1.0)
+            } else {
+                1.0
+            },
+            translation_x: self.slide_x.map_or(0.0, |x| x * size.width * away),
+            translation_y: self.slide_y.map_or(0.0, |y| y * size.height * away),
+            scale: self
+                .scale
+                .map_or(1.0, |scale| scale + (1.0 - scale) * progress),
+            ..GraphicsLayer::default()
+        }
+    }
+}
+
+/// Defines how content appears.
 ///
 /// Mirrors Jetpack Compose's `EnterTransition`. Transitions are combined
 /// with `+`, like Compose's `fadeIn() + slideInVertically()`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EnterTransition {
-    fade: bool,
-    slide_vertical_fraction: Option<f32>,
+    effects: TransitionEffects,
     animation: Option<AnimationType>,
 }
 
@@ -37,8 +70,7 @@ impl EnterTransition {
     /// Mirrors Jetpack Compose: `EnterTransition.None`.
     pub fn none() -> Self {
         Self {
-            fade: false,
-            slide_vertical_fraction: None,
+            effects: TransitionEffects::default(),
             animation: None,
         }
     }
@@ -52,12 +84,19 @@ impl EnterTransition {
         self
     }
 
-    pub(crate) fn has_fade(&self) -> bool {
-        self.fade
+    /// This transition for the content that comes in, and `exit` for the
+    /// content that goes, as an [`AnimatedContent`](crate::AnimatedContent)
+    /// change. Compose's `enter togetherWith exit`.
+    pub fn together_with(self, exit: ExitTransition) -> ContentTransform {
+        ContentTransform {
+            enter: self,
+            exit,
+            size_transform: None,
+        }
     }
 
-    pub(crate) fn slide_vertical_fraction(&self) -> Option<f32> {
-        self.slide_vertical_fraction
+    pub(crate) fn effects(&self) -> TransitionEffects {
+        self.effects
     }
 
     pub(crate) fn animation(&self) -> AnimationType {
@@ -70,23 +109,19 @@ impl std::ops::Add for EnterTransition {
 
     fn add(self, other: Self) -> Self {
         Self {
-            fade: self.fade || other.fade,
-            slide_vertical_fraction: self
-                .slide_vertical_fraction
-                .or(other.slide_vertical_fraction),
+            effects: self.effects.merged(other.effects),
             animation: self.animation.or(other.animation),
         }
     }
 }
 
-/// Defines how an [`AnimatedVisibility`] content disappears.
+/// Defines how content disappears.
 ///
 /// Mirrors Jetpack Compose's `ExitTransition`. Transitions are combined
 /// with `+`, like Compose's `fadeOut() + slideOutVertically()`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ExitTransition {
-    fade: bool,
-    slide_vertical_fraction: Option<f32>,
+    effects: TransitionEffects,
     animation: Option<AnimationType>,
 }
 
@@ -96,8 +131,7 @@ impl ExitTransition {
     /// Mirrors Jetpack Compose: `ExitTransition.None`.
     pub fn none() -> Self {
         Self {
-            fade: false,
-            slide_vertical_fraction: None,
+            effects: TransitionEffects::default(),
             animation: None,
         }
     }
@@ -109,12 +143,8 @@ impl ExitTransition {
         self
     }
 
-    pub(crate) fn has_fade(&self) -> bool {
-        self.fade
-    }
-
-    pub(crate) fn slide_vertical_fraction(&self) -> Option<f32> {
-        self.slide_vertical_fraction
+    pub(crate) fn effects(&self) -> TransitionEffects {
+        self.effects
     }
 
     pub(crate) fn animation(&self) -> AnimationType {
@@ -127,10 +157,7 @@ impl std::ops::Add for ExitTransition {
 
     fn add(self, other: Self) -> Self {
         Self {
-            fade: self.fade || other.fade,
-            slide_vertical_fraction: self
-                .slide_vertical_fraction
-                .or(other.slide_vertical_fraction),
+            effects: self.effects.merged(other.effects),
             animation: self.animation.or(other.animation),
         }
     }
@@ -141,10 +168,10 @@ impl std::ops::Add for ExitTransition {
 ///
 /// Mirrors Jetpack Compose: `fadeIn()`.
 pub fn fade_in() -> EnterTransition {
-    EnterTransition {
+    enter(TransitionEffects {
         fade: true,
-        ..EnterTransition::none()
-    }
+        ..TransitionEffects::default()
+    })
 }
 
 /// Fades out the content of an [`AnimatedVisibility`], from fully opaque to
@@ -152,10 +179,10 @@ pub fn fade_in() -> EnterTransition {
 ///
 /// Mirrors Jetpack Compose: `fadeOut()`.
 pub fn fade_out() -> ExitTransition {
-    ExitTransition {
+    exit(TransitionEffects {
         fade: true,
-        ..ExitTransition::none()
-    }
+        ..TransitionEffects::default()
+    })
 }
 
 /// Slides in the content vertically from `initial_offset_fraction` of its
@@ -166,10 +193,10 @@ pub fn fade_out() -> ExitTransition {
 /// the offset expressed as a fraction of the content height instead of a
 /// lambda over the measured height.
 pub fn slide_in_vertically(initial_offset_fraction: f32) -> EnterTransition {
-    EnterTransition {
-        slide_vertical_fraction: Some(initial_offset_fraction),
-        ..EnterTransition::none()
-    }
+    enter(TransitionEffects {
+        slide_y: Some(initial_offset_fraction),
+        ..TransitionEffects::default()
+    })
 }
 
 /// Slides out the content vertically towards `target_offset_fraction` of
@@ -179,9 +206,67 @@ pub fn slide_in_vertically(initial_offset_fraction: f32) -> EnterTransition {
 /// the offset expressed as a fraction of the content height instead of a
 /// lambda over the measured height.
 pub fn slide_out_vertically(target_offset_fraction: f32) -> ExitTransition {
+    exit(TransitionEffects {
+        slide_y: Some(target_offset_fraction),
+        ..TransitionEffects::default()
+    })
+}
+
+/// Slides in the content horizontally from `initial_offset_fraction` of its
+/// own width: `1.0` starts one width to the right, `-1.0` one to the left.
+///
+/// Mirrors Jetpack Compose: `slideInHorizontally { fullWidth -> ... }`.
+pub fn slide_in_horizontally(initial_offset_fraction: f32) -> EnterTransition {
+    enter(TransitionEffects {
+        slide_x: Some(initial_offset_fraction),
+        ..TransitionEffects::default()
+    })
+}
+
+/// Slides out the content horizontally towards `target_offset_fraction` of
+/// its own width.
+///
+/// Mirrors Jetpack Compose: `slideOutHorizontally { fullWidth -> ... }`.
+pub fn slide_out_horizontally(target_offset_fraction: f32) -> ExitTransition {
+    exit(TransitionEffects {
+        slide_x: Some(target_offset_fraction),
+        ..TransitionEffects::default()
+    })
+}
+
+/// Scales in the content from `initial_scale` of its size, about its
+/// centre.
+///
+/// Mirrors Jetpack Compose: `scaleIn(initialScale)`.
+pub fn scale_in(initial_scale: f32) -> EnterTransition {
+    enter(TransitionEffects {
+        scale: Some(initial_scale),
+        ..TransitionEffects::default()
+    })
+}
+
+/// Scales out the content towards `target_scale` of its size, about its
+/// centre.
+///
+/// Mirrors Jetpack Compose: `scaleOut(targetScale)`.
+pub fn scale_out(target_scale: f32) -> ExitTransition {
+    exit(TransitionEffects {
+        scale: Some(target_scale),
+        ..TransitionEffects::default()
+    })
+}
+
+fn enter(effects: TransitionEffects) -> EnterTransition {
+    EnterTransition {
+        effects,
+        animation: None,
+    }
+}
+
+fn exit(effects: TransitionEffects) -> ExitTransition {
     ExitTransition {
-        slide_vertical_fraction: Some(target_offset_fraction),
-        ..ExitTransition::none()
+        effects,
+        animation: None,
     }
 }
 
@@ -194,54 +279,39 @@ pub fn slide_out_vertically(target_offset_fraction: f32) -> ExitTransition {
 /// Compose semantics: content that is visible on first composition appears
 /// without an animation; when `visible` turns `false` the content stays
 /// composed for the whole exit transition and leaves the composition once it
-/// completes; toggling `visible` mid-transition retargets the running
-/// animation from its current value.
+/// completes, keeping its size until then; toggling `visible`
+/// mid-transition retargets the running animation from its current value.
+/// The animation moves the content's layer only: nothing recomposes while it
+/// runs.
 ///
 /// Divergence from Compose: enter and exit each drive a single shared
 /// progress (instead of one `Transition` animation per effect), so all
-/// effects of a combined transition share one animation spec. Exiting with
-/// `ExitTransition::none()` still holds the content for the duration of the
-/// exit spec before removal.
+/// effects of a combined transition share one animation spec.
 #[composable]
 pub fn AnimatedVisibility<F>(
     visible: bool,
     enter: EnterTransition,
     exit: ExitTransition,
-    content: F,
+    mut content: F,
 ) where
     F: FnMut() + 'static,
 {
-    let target = if visible { 1.0 } else { 0.0 };
-    let animation = if visible {
-        enter.animation()
-    } else {
-        exit.animation()
-    };
-    let progress_state = animate_float_with_initial(target, target, animation);
-    let progress = progress_state.value();
-
-    let composed = visible || progress > VISIBILITY_PROGRESS_EPSILON;
-    if composed {
-        let fade = if visible {
-            enter.has_fade()
-        } else {
-            exit.has_fade()
-        };
-        let slide_fraction = if visible {
-            enter.slide_vertical_fraction()
-        } else {
-            exit.slide_vertical_fraction()
-        };
-
-        let alpha = if fade { progress.clamp(0.0, 1.0) } else { 1.0 };
-        let mut modifier = Modifier::empty().graphics_layer_value(GraphicsLayer {
-            alpha,
-            ..Default::default()
-        });
-        if let Some(fraction) = slide_fraction {
-            modifier = modifier.offset_fraction(0.0, fraction * (1.0 - progress));
-        }
-
-        Box(modifier, BoxSpec::new(), content);
-    }
+    SeekableAnimatedContent(
+        visible,
+        None,
+        move |_, &shown| {
+            if shown {
+                enter.together_with(ExitTransition::none().with_animation(enter.animation()))
+            } else {
+                EnterTransition::none()
+                    .with_animation(exit.animation())
+                    .together_with(exit)
+            }
+        },
+        move |shown| {
+            if shown {
+                content();
+            }
+        },
+    );
 }

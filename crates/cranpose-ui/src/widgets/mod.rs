@@ -1,6 +1,7 @@
 //! UI Widget components
 
 pub mod animate_scroll;
+pub mod animated_content;
 pub mod animated_visibility;
 pub mod basic_text_field;
 pub mod box_widget;
@@ -30,6 +31,7 @@ pub mod scrollbar;
 pub mod secure_text_field;
 pub mod selection_container;
 pub mod selection_handle;
+pub mod shared_transition;
 pub mod slider;
 pub mod spacer;
 pub mod swipe_to_dismiss;
@@ -38,6 +40,9 @@ pub mod text_selection_menu;
 pub mod wear;
 
 pub use animate_scroll::AnimateScroll;
+pub use animated_content::{
+    AnimatedContent, ContentSeek, ContentTransform, SeekableAnimatedContent, SizeTransform,
+};
 pub use animated_visibility::*;
 pub use basic_text_field::*;
 pub use box_widget::*;
@@ -67,6 +72,7 @@ pub use scrollbar::*;
 pub use secure_text_field::*;
 pub use selection_container::*;
 pub use selection_handle::*;
+pub use shared_transition::{SharedElement, SharedTransitionLayout};
 pub use slider::*;
 pub use spacer::*;
 pub use swipe_to_dismiss::*;

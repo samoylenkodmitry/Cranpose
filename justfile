@@ -416,6 +416,10 @@ test-features: test-watchos test-localization
     cargo clippy -p cranpose --no-default-features --features webview -- -D warnings
     cargo test --profile ci -p cranpose --no-default-features --features embed
     cargo test --profile ci -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling
+    cargo test --profile ci -p cranpose-services --features image-loading,http-native --test integration image_loading
+    cargo test --profile ci -p cranpose-testing --features image-loading --test integration async_image
+    cargo clippy -p cranpose-services --all-targets --features image-loading,http-native -- -D warnings
+    cargo clippy -p cranpose-services --target wasm32-unknown-unknown --features image-loading,web-http -- -D warnings
 
 # Localization contracts, embedded catalogs, optional feature, and public UI integration.
 test-localization: check-localization
@@ -423,12 +427,14 @@ test-localization: check-localization
     cargo test --profile ci -p cranpose-localization --features tooling,formatting
     cargo test --profile ci -p cranpose-ui --features localization
     cargo test --profile ci -p cranpose-liquid --features localization
+    cargo test --profile ci -p cranpose-liquid --features localization-formatting --test integration date_picker
+    cargo test --profile ci -p cranpose-liquid --features localization-formatting --test integration time_picker
     cargo test --profile ci -p cranpose-render-common --features text-shaping
     cargo test --profile ci -p cranpose-fonts --all-features
 
 # Compile and lint both localization-enabled and ordinary consumers.
 check-localization:
-    cargo clippy -p cranpose-localization -p cranpose-ui -p cranpose-liquid -p cranpose-fonts --all-targets --features cranpose-localization/tooling,cranpose-ui/localization-formatting,cranpose-liquid/localization,cranpose-fonts/arabic,cranpose-fonts/devanagari,cranpose-fonts/cjk -- -D warnings
+    cargo clippy -p cranpose-localization -p cranpose-ui -p cranpose-liquid -p cranpose-fonts --all-targets --features cranpose-localization/tooling,cranpose-ui/localization-formatting,cranpose-liquid/localization-formatting,cranpose-fonts/arabic,cranpose-fonts/devanagari,cranpose-fonts/cjk -- -D warnings
     cargo clippy -p cranpose-render-common --all-targets --features text-shaping -- -D warnings
     cargo check -p cranpose-ui --no-default-features
     cargo check -p cranpose --example localization --features desktop,renderer-wgpu,localization
@@ -1053,7 +1059,7 @@ ci: fmt-check typos versions twin-matrix-check check-forks test clippy clippy-re
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
 # Every gate, including the platform builds and the robot suite.
-ci-full: ci clippy-ios clippy-android web-backends android watchos robot vulkan-sync
+ci-full: ci clippy-ios clippy-android web-backends android watchos robot vulkan-sync test-emscripten
 
 liquid-reference-traces output bundle="io.cranpose.liquid-reference" device="booted":
     python3 apps/liquid-reference/collect-traces.py '{{output}}' --bundle '{{bundle}}' --device '{{device}}'

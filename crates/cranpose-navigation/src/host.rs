@@ -1,7 +1,7 @@
 use cranpose_animation::{AnimationType, Easing, tween};
 use cranpose_coroflow::ProvideViewModelStore;
 use cranpose_services::{BackGesture, PredictiveBackHandler, ProvideSaveableScope};
-use cranpose_ui::{CrossfadeSeek, SeekableCrossfade, composable};
+use cranpose_ui::{ContentSeek, SeekableCrossfade, composable};
 
 use crate::controller::{Entry, NavController};
 
@@ -91,7 +91,7 @@ where
     let seek = gesture
         .get()
         .zip(beneath)
-        .map(|(fraction, beneath)| CrossfadeSeek {
+        .map(|(fraction, beneath)| ContentSeek {
             toward: Some(beneath),
             fraction,
         });

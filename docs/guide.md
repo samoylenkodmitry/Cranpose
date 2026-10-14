@@ -1369,6 +1369,15 @@ fn App() {
 Use `navigate_with` and `NavOptions` to replace part of the stack.
 Use `NavHostWith` to set the transition.
 
+A screen leaves the composition while another covers it, and its scroll state
+with it. Give a scroller a saved state so it comes back where the user left it:
+`rememberSaveableLazyListState("inbox")` for a `LazyColumn` or `LazyRow`, and
+`rememberSaveableLazyGridState`, `rememberSaveableLazyStaggeredGridState`,
+`rememberSaveablePagerState` and `rememberSaveableScrollState` for the other
+scrollers. Each saves under its key in the entry's saveable scope, also across
+a restart. A grid comes back to its first visible item with another column
+count.
+
 ## Animation and graphics
 
 ### Animate a value
@@ -1404,7 +1413,7 @@ fn FadingLabel(visible: bool) {
 ```
 
 The layer reads `alpha` each frame. The label keeps its layout space.
-Use `AnimatedVisibility` for content entry and exit. Use `Crossfade` to switch content.
+Use `AnimatedVisibility` for content entry and exit. Use `AnimatedContent` to switch content with a transition, and `Crossfade` to fade between contents.
 Use `spring(...)` for spring motion.
 
 ### Draw custom content
@@ -1512,6 +1521,64 @@ fn SaveStatus(saved: bool) {
 }
 ```
 
+#### AnimatedContent
+
+Switch content with enter and exit transitions. `transition_spec` receives the
+state that goes and the state that comes. `.using(SizeTransform::default())`
+animates the container's size between them. A running transition moves layers
+only, so nothing recomposes while it runs.
+
+```rust
+#[composable]
+fn Step(page: u32) {
+    AnimatedContent(
+        page,
+        |from, to| {
+            let forward = to > from;
+            let side = if forward { 1.0 } else { -1.0 };
+            (slide_in_horizontally(side) + fade_in())
+                .together_with(slide_out_horizontally(-side) + fade_out())
+                .using(SizeTransform::default())
+        },
+        |page| {
+            Text(format!("Step {page}"), Modifier::empty(), TextStyle::default());
+        },
+    );
+}
+```
+
+`SeekableAnimatedContent` takes a `ContentSeek` that a gesture holds part of
+the way toward another state, as predictive back does.
+
+#### SharedTransitionLayout
+
+Move an element that two contents of an `AnimatedContent` both show, as
+Compose's `SharedTransitionLayout` and `Modifier.sharedElement` do. While the
+change runs, the element moves and resizes from the box the going content gives
+it to the box the coming content gives it, drawn above both; a seek holds it
+where the gesture is.
+
+```rust
+#[composable]
+fn Gallery(open: bool) {
+    SharedTransitionLayout(Modifier::empty().fill_max_size(), move || {
+        AnimatedContent(
+            open,
+            |_, _| fade_in().together_with(fade_out()),
+            |open| {
+                let size = if open { Size::new(320.0, 240.0) } else { Size::new(64.0, 48.0) };
+                SharedElement("photo", Modifier::empty().size(size), || {
+                    Text("Photo", Modifier::empty(), TextStyle::default());
+                });
+            },
+        );
+    });
+}
+```
+
+The copy in flight is the coming content's element composed once more, so
+state it remembers starts afresh during the flight.
+
 ## Accessibility
 
 ### Name controls and expose state
@@ -1599,6 +1666,29 @@ fn DoneButton() {
         || {
             Text("Done", Modifier::empty(), TextStyle::default());
         },
+    );
+}
+```
+
+`Modifier::on_long_press(label, action)` calls `action` when a press rests on
+a control for 400 ms without moving, and offers a screen reader the same
+action under `label`. The press then belongs to the long press, so the control
+does not click when it ends. `FocusWithin(on_change, content)` tells
+`on_change` whether keyboard focus is on a control composed in `content`; Tab
+does not stop on it.
+
+```rust
+use cranpose::prelude::*;
+
+#[composable]
+fn PhotoTile(selected: MutableState<bool>, on_open: impl Fn() + 'static) {
+    Box(
+        Modifier::empty()
+            .size(Size::new(96.0, 96.0))
+            .clickable(move |_| on_open())
+            .on_long_press("Select photo", move || selected.set(true)),
+        BoxSpec::default(),
+        || {},
     );
 }
 ```
@@ -2110,6 +2200,55 @@ An app that plays only WAV files of PCM samples, such as its own recordings, ena
 For game sounds, enable `audio`; use `audio-desktop` on desktop.
 See [Cranamp](https://github.com/samoylenkodmitry/cranamp) for a player app.
 
+### Show an image from the network
+
+Enable image loading, and an HTTP backend for network images:
+
+```sh
+cargo add cranpose --features image-loading
+cargo add cranpose-services --features http-native --target 'cfg(not(target_arch = "wasm32"))'
+cargo add cranpose-services --features web-http --target 'cfg(target_arch = "wasm32")'
+```
+
+`AsyncImage` loads an image while it stays on screen, shows `placeholder`
+until the image is decoded and `error` when it fails, and decodes the image no
+larger than its box in device pixels: a large photo in a thumbnail then holds a
+thumbnail's memory.
+
+```rust
+use cranpose::prelude::*;
+
+#[composable]
+fn Avatar(url: String) {
+    AsyncImage(
+        ImageRequest::new(url),
+        Some("Profile photo".into()),
+        Modifier::empty().size(Size::new(48.0, 48.0)),
+        ContentScale::Crop,
+        || {
+            let gray = Modifier::empty()
+                .fill_max_size()
+                .background(Color::from_rgb_u8(230, 230, 230));
+            Box(gray, BoxSpec::default(), || {});
+        },
+        |_| {
+            Text("No photo", Modifier::empty(), TextStyle::default());
+        },
+    );
+}
+```
+
+`rememberAsyncImage(request)` returns the load state itself, for a screen that
+draws the image another way. `ImageRequest::max_size` sets the decode size.
+
+The image decodes on a worker thread. All images share one memory cache,
+bounded by the bytes of decoded pixels, and a disk cache in the application's
+cache folder with a size limit; `ImageLoader::new` makes a loader with other
+limits. Requests of one image share one download, and a request whose
+composables all left stops its download. `ImageRequest::new` also takes
+`file://` URLs and file paths, and `ImageRequest::bytes` decodes bytes the app
+holds, such as a picked file.
+
 ### Use the camera
 
 Android and iOS supply camera backends. macOS needs `cranpose/camera-desktop` and a signed app bundle.
@@ -2277,6 +2416,9 @@ fn card_modifiers() -> (Modifier, Modifier) {
 `outer_space` leaves space outside the background. `inner_space` includes the space in the background.
 
 Use `width_in` and `height_in` for size limits. Use `align` for a child in a `Box`.
+Siblings that overlap draw in composition order, the last on top. `z_index`
+changes that order: the sibling with the larger value draws on top and takes
+the tap, as Compose's `Modifier.zIndex` does.
 See the [modifier reference](MODIFIERS.md).
 
 ### Show a long collection
@@ -3054,7 +3196,7 @@ PopupHost(move || {
 });
 ```
 
-`DialogWithScrim` adds an explicit scrim color. Put dialog state in the parent and clear the state in the dismissal callback.
+`DialogWithScrim` adds an explicit scrim color, and `DialogWithFadingScrim` fades it by a value read while the scrim draws. `DialogSpec::with_alignment` places the dialog's surface, at the bottom edge for a sheet. A tap on the dialog's own surface keeps it open. Put dialog state in the parent and clear the state in the dismissal callback.
 
 ### Progress composables
 
@@ -3389,6 +3531,206 @@ LiquidToggle(
     enabled.get(),
     move |value| enabled.set(value),
 );
+```
+
+#### LiquidPullToRefreshBox
+
+Refresh a list by pulling it down from its top. A release past the threshold
+calls `on_refresh`; the app sets `refreshing` while it loads. Screen readers
+cannot pull, so the box offers them an action named by the app.
+
+```rust preview=pull_to_refresh
+use cranpose::liquid::prelude::*;
+
+let refreshing = rememberMutableStateOf(|| false);
+let scroll = rememberScrollState!(0.0);
+LiquidPullToRefreshBox(
+    Modifier::empty().fill_max_width().height(240.0),
+    refreshing.get(),
+    "Refresh",
+    move || refreshing.set(true),
+    move || {
+        Column(
+            Modifier::empty()
+                .fill_max_size()
+                .vertical_scroll(scroll, false),
+            ColumnSpec::default(),
+            || {
+                for row in 0..20 {
+                    Text(format!("Message {row}"), Modifier::empty(), TextStyle::default());
+                }
+            },
+        );
+    },
+);
+```
+
+The box builds on `NestedScroll`: a container gives the scrollers inside it a
+`NestedScrollConnection`, which takes part of each scroll before the scroller
+moves, what the scroller leaves after it moved, and the release velocity
+before it flings. `vertical_scroll`, `horizontal_scroll`, `scrollable` and the
+lazy lists take part.
+
+#### LiquidModalBottomSheet
+
+Show a sheet over the screen from its bottom edge, as Compose's
+`ModalBottomSheet` does. Compose it while the app's flag is set and clear the
+flag in `on_dismiss`. A sheet taller than half the window opens to half the
+window, and a drag opens it fully; `rememberLiquidSheetState(true)` skips the
+half. A drag down, a tap on the scrim, the back gesture and `state.hide()`
+slide the sheet out first. A list in the sheet scrolls first and hands the
+sheet the drag it leaves at its top.
+
+```rust preview=bottom_sheet
+use cranpose::liquid::prelude::*;
+
+let open = rememberMutableStateOf(|| false);
+let sheet = rememberLiquidSheetState(false);
+LiquidActionChip(Modifier::empty(), true, move || open.set(true), "Share".into());
+if open.get() {
+    let done = sheet.clone();
+    LiquidModalBottomSheet(sheet, move || open.set(false), move || {
+        Text("Share to", Modifier::empty().padding(16.0), TextStyle::default());
+        let done = done.clone();
+        LiquidActionChip(Modifier::empty().padding(16.0), false, move || done.hide(), "Done".into());
+    });
+}
+```
+
+#### LiquidTooltipBox
+
+Show a short label above a control while the pointer rests on it, while the
+control has keyboard focus, and for a moment after a long press. A screen
+reader asks for it with the long press action the app names.
+
+```rust preview=tooltip
+use cranpose::liquid::prelude::*;
+
+let count = rememberMutableStateOf(|| 0);
+LiquidTooltipBox("Add an item", "Show tooltip", Modifier::empty(), move || {
+    LiquidActionChip(Modifier::empty(), true, move || count.update(|value| *value += 1), "Add".into());
+});
+```
+
+#### LiquidCheckbox
+
+Show a check box with caller-owned checked state. A tap, Space or Enter and a
+screen reader's activation toggle it.
+
+```rust preview=checkbox
+use cranpose::liquid::prelude::*;
+
+let accepted = rememberMutableStateOf(|| false);
+LiquidCheckbox(
+    Modifier::empty().content_description("Accept the terms"),
+    accepted.get(),
+    move |value| accepted.set(value),
+);
+```
+
+`LiquidTriStateCheckbox` adds a partly checked state, for a box over a list
+whose items are partly checked; readers hear "mixed":
+
+```rust preview=tri_state_checkbox
+use cranpose::liquid::prelude::*;
+
+let all = rememberMutableStateOf(|| ToggleableState::Indeterminate);
+LiquidTriStateCheckbox(
+    Modifier::empty().content_description("Select all"),
+    all.get(),
+    move || all.set(match all.get() {
+        ToggleableState::On => ToggleableState::Off,
+        _ => ToggleableState::On,
+    }),
+);
+```
+
+#### LiquidRadioButton
+
+Show one option of a group. Put the group in a `selectable_group` container,
+so a screen reader says which of how many each option is.
+
+```rust preview=radio_button
+use cranpose::liquid::prelude::*;
+
+let speed = rememberMutableStateOf(|| 0usize);
+Column(
+    Modifier::empty().selectable_group(),
+    ColumnSpec::default(),
+    move || {
+        for (index, name) in ["Standard", "Express"].into_iter().enumerate() {
+            LiquidRadioButton(
+                Modifier::empty().content_description(name),
+                speed.get() == index,
+                move || speed.set(index),
+            );
+        }
+    },
+);
+```
+
+#### LiquidSnackbarHost
+
+Show brief messages at the bottom of the screen, one at a time from a queue.
+`show` resolves with how the snackbar ended. A snackbar times out after its
+duration; while a screen reader is on, one with an action stays until it is
+used, and readers hear the message as it appears.
+
+```rust preview=snackbar
+use cranpose::liquid::prelude::*;
+
+let snackbars = rememberLiquidSnackbarHostState();
+let scope = rememberCoroutineScope();
+let shows = snackbars.clone();
+GlassButton(
+    Modifier::empty(),
+    GlassButtonSpec::default(),
+    move || {
+        let shows = shows.clone();
+        scope.launch(async move {
+            let ended = shows
+                .show(SnackbarVisuals::new("Message deleted").action("Undo"))
+                .await;
+            if ended == SnackbarResult::ActionPerformed {
+                // Restore the message.
+            }
+        });
+    },
+    || GlassButtonLabel("Delete".into(), GlassButtonSpec::default()),
+);
+LiquidSnackbarHost(snackbars, Modifier::empty().fill_max_width());
+```
+
+#### LiquidDatePicker
+
+Pick a day in a month calendar, as Compose's `DatePicker`. The buttons beside
+the month turn it; the picked day is filled and `today` is ringed. The app
+passes today from its clock in its time zone, for example through
+`CalendarDate::from_unix_days`. With the `localization-formatting` feature of
+`cranpose-liquid`, the month, the weekdays, the first day of the week and what a
+screen reader hears for each day follow the app's language.
+
+```rust preview=date_picker
+use cranpose::liquid::prelude::*;
+
+let today = CalendarDate { year: 2026, month: 10, day: 14 };
+let picker = rememberLiquidDatePickerState(None, today);
+LiquidDatePicker(picker, today, Modifier::empty().width(320.0));
+```
+
+#### LiquidTimePicker
+
+Pick a time of day on wheels: hours, minutes and, on a 12-hour clock, the half
+of the day. A wheel rests on whole rows after a drag or a fling, and a screen
+reader adjusts each wheel by name. `rememberLiquidTimePickerState(hour, minute,
+None)` takes the clock of the app's language with the `localization-formatting`
+feature; `Some(true)` asks for 24 hours.
+
+```rust preview=time_picker
+use cranpose::liquid::prelude::*;
+
+let picker = rememberLiquidTimePickerState(9, 41, None);
+LiquidTimePicker(picker, Modifier::empty());
 ```
 
 #### LiquidSlider

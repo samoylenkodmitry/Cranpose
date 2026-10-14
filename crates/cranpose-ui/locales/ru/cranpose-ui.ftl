@@ -5,3 +5,7 @@ select-all = Выбрать всё
 undo = Отменить
 redo = Повторить
 search = Поиск
+previous-month = Предыдущий месяц
+next-month = Следующий месяц
+hour = Часы
+minute = Минуты

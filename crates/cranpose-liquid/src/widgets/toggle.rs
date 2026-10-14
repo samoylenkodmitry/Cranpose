@@ -223,7 +223,7 @@ fn switch_semantics(checked: bool) -> impl Fn(&mut cranpose_ui::SemanticsConfigu
     move |config| {
         config.role = Some(cranpose_ui::SemanticsWidgetRole::Switch);
         config.is_clickable = true;
-        config.toggled = Some(checked);
+        config.toggled = Some(checked.into());
     }
 }
 

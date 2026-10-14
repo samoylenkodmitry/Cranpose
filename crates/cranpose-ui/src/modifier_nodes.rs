@@ -1278,15 +1278,23 @@ impl ModifierNodeElement for SizeElement {
     }
 }
 
-use std::cell::RefCell;
-
 use cranpose_foundation::DRAG_THRESHOLD;
+
+/// Where a clickable's press stands.
+#[derive(Clone, Copy, Debug)]
+enum ClickPress {
+    Idle,
+    Pressed(Point),
+    /// The press was cancelled, by a long press that took it among others:
+    /// its release does not click.
+    Cancelled,
+}
 
 pub struct ClickableNode {
     on_press: Option<Rc<dyn Fn(Point)>>,
     on_click: Rc<dyn Fn(Point)>,
     state: NodeState,
-    press_position: Rc<RefCell<Option<Point>>>,
+    press_position: Rc<Cell<ClickPress>>,
     cached_handler: Rc<dyn Fn(PointerEvent)>,
 }
 
@@ -1306,7 +1314,7 @@ impl ClickableNode {
     }
 
     pub fn with_handlers(on_press: Option<Rc<dyn Fn(Point)>>, on_click: Rc<dyn Fn(Point)>) -> Self {
-        let press_position = Rc::new(RefCell::new(None));
+        let press_position = Rc::new(Cell::new(ClickPress::Idle));
         let cached_handler =
             Self::create_handler(on_press.clone(), on_click.clone(), press_position.clone());
         Self {
@@ -1321,7 +1329,7 @@ impl ClickableNode {
     fn create_handler(
         on_press: Option<Rc<dyn Fn(Point)>>,
         on_click: Rc<dyn Fn(Point)>,
-        press_position: Rc<RefCell<Option<Point>>>,
+        press_position: Rc<Cell<ClickPress>>,
     ) -> Rc<dyn Fn(PointerEvent)> {
         Rc::new(move |event: PointerEvent| {
             if event.id != 0 {
@@ -1329,32 +1337,30 @@ impl ClickableNode {
             }
 
             if event.is_consumed() {
-                *press_position.borrow_mut() = None;
+                press_position.set(ClickPress::Idle);
                 return;
             }
 
             match event.kind {
                 PointerEventKind::Down => {
-                    *press_position.borrow_mut() = Some(event.travelled_to());
+                    press_position.set(ClickPress::Pressed(event.travelled_to()));
                     if let Some(on_press) = on_press.as_ref() {
                         on_press(event.position);
                     }
                 }
                 PointerEventKind::Move => {}
                 PointerEventKind::Up => {
-                    let press_pos_value = *press_position.borrow();
-
-                    let should_click = if let Some(press_pos) = press_pos_value {
-                        let travelled_to = event.travelled_to();
-                        let dx = travelled_to.x - press_pos.x;
-                        let dy = travelled_to.y - press_pos.y;
-                        let distance = (dx * dx + dy * dy).sqrt();
-                        distance <= DRAG_THRESHOLD
-                    } else {
-                        true
+                    let should_click = match press_position.replace(ClickPress::Idle) {
+                        ClickPress::Pressed(press_pos) => {
+                            let travelled_to = event.travelled_to();
+                            let dx = travelled_to.x - press_pos.x;
+                            let dy = travelled_to.y - press_pos.y;
+                            let distance = (dx * dx + dy * dy).sqrt();
+                            distance <= DRAG_THRESHOLD
+                        }
+                        ClickPress::Idle => true,
+                        ClickPress::Cancelled => false,
                     };
-
-                    *press_position.borrow_mut() = None;
 
                     if should_click {
                         on_click(Point {
@@ -1365,7 +1371,7 @@ impl ClickableNode {
                     }
                 }
                 PointerEventKind::Cancel => {
-                    *press_position.borrow_mut() = None;
+                    press_position.set(ClickPress::Cancelled);
                 }
                 PointerEventKind::Scroll
                 | PointerEventKind::Zoom

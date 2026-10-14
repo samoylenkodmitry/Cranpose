@@ -521,10 +521,14 @@ impl RuntimeInner {
     }
 
     fn take_invalidated_scopes(&self) -> Option<Vec<RecomposeScope>> {
-        let mut pending = std::mem::take(&mut *self.scope_queue.borrow_mut());
-        if pending.is_empty() {
-            return None;
-        }
+        // An empty queue keeps its storage for the next invalidation.
+        let mut pending = {
+            let mut queue = self.scope_queue.borrow_mut();
+            if queue.is_empty() {
+                return None;
+            }
+            std::mem::take(&mut *queue)
+        };
         let scopes: Vec<RecomposeScope> = pending
             .iter()
             .filter_map(RecomposeScope::upgrade)
@@ -621,10 +625,13 @@ impl RuntimeInner {
     }
 
     fn poll_async_tasks(&self) -> bool {
-        let order = std::mem::take(&mut *self.task_order.borrow_mut());
-        let mut pending = Vec::with_capacity(order.len());
+        // The tasks still pending move to the front of `order`, which goes
+        // back as the task order, after any task spawned while polling.
+        let mut order = std::mem::take(&mut *self.task_order.borrow_mut());
+        let mut pending = 0;
         let mut made_progress = false;
-        for id in order {
+        for index in 0..order.len() {
+            let id = order[index];
             let task = {
                 let mut tasks = self.tasks.borrow_mut();
                 let Some(entry) = tasks.get_mut(&id) else {
@@ -640,7 +647,8 @@ impl RuntimeInner {
                 }
             };
             let Some((mut future, waker)) = task else {
-                pending.push(id);
+                order[pending] = id;
+                pending += 1;
                 continue;
             };
             let mut cx = Context::from_waker(&waker);
@@ -653,7 +661,8 @@ impl RuntimeInner {
                     let mut tasks = self.tasks.borrow_mut();
                     if let Some(entry) = tasks.get_mut(&id) {
                         entry.future = Some(future);
-                        pending.push(id);
+                        order[pending] = id;
+                        pending += 1;
                     } else {
                         drop(tasks);
                         drop(future);
@@ -661,9 +670,13 @@ impl RuntimeInner {
                 }
             }
         }
-        if !pending.is_empty() {
-            pending.retain(|id| self.has_task(*id));
-            self.task_order.borrow_mut().extend(pending);
+        order.truncate(pending);
+        order.retain(|id| self.has_task(*id));
+        let mut task_order = self.task_order.borrow_mut();
+        if task_order.is_empty() {
+            *task_order = order;
+        } else {
+            task_order.extend(order);
         }
         made_progress
     }

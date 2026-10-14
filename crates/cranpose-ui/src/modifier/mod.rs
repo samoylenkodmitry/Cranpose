@@ -29,11 +29,13 @@ mod focus_ring;
 mod graphics_layer;
 mod key_input;
 mod local;
+mod long_press;
 mod minimum_interactive;
 mod offset;
 mod padding;
 mod pointer_icon;
 pub(crate) mod pointer_input;
+mod pointer_opaque;
 mod rotary_input;
 mod scroll;
 mod selectable;
@@ -45,6 +47,7 @@ mod toggleable;
 mod weight;
 mod window_root;
 mod wrap_content;
+mod z_index;
 
 pub use chain::{ModifierChainHandle, ModifierChainInspectorNode, ModifierLocalsHandle};
 pub(crate) use coordinator_geometry::{CoordinatorGeometry, CoordinatorRect};
@@ -97,6 +100,7 @@ pub use window_root::{
     WindowRootRoutingScratch, is_window_root, nearest_window_root, nearest_window_roots,
     nearest_window_roots_into, window_roots, window_roots_revision,
 };
+pub use z_index::z_index_in_use;
 
 pub use crate::draw::{DrawCacheBuilder, DrawCommand};
 use crate::modifier_nodes::ClipToBoundsElement;
