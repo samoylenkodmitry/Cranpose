@@ -14,6 +14,7 @@ mod language_picker;
 mod lens_motion;
 mod menu;
 mod nav_bar;
+mod pull_to_refresh;
 mod search_field;
 mod segmented;
 mod selection;
@@ -41,6 +42,7 @@ pub use menu::{
     LiquidMenuScope, LiquidMenuSpec, liquid_menu_trigger_input, rememberLiquidMenuGesture,
 };
 pub use nav_bar::{LiquidNavBar, LiquidNavBarSpec, liquid_nav_bar_expanded_height};
+pub use pull_to_refresh::LiquidPullToRefreshBox;
 pub use search_field::{LiquidSearchField, LiquidSearchFieldSpec, SearchBar, SearchField};
 pub use segmented::{LiquidSegmentedControl, LiquidSegmentedControlScope};
 pub use slider::LiquidSlider;

@@ -14,6 +14,7 @@ mod lazy_sticky_header_test;
 mod modifier_offset_test;
 mod modifier_reuse_test;
 mod modifier_size_position_test;
+mod nested_scroll_test;
 mod offset_updates_test;
 mod pager_test;
 mod placed_semantics_test;

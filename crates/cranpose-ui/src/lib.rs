@@ -59,6 +59,7 @@ mod modal_nodes;
 mod modifier;
 mod modifier_nodes;
 pub mod mouse_input;
+mod nested_scroll;
 pub mod nine_patch;
 mod pointer_dispatch;
 pub mod pointer_icon_session;
@@ -209,6 +210,7 @@ pub use modifier_nodes::{
     FractionalOffsetElement, FractionalOffsetNode, OffsetElement, OffsetNode, PaddingElement,
     PaddingNode, SizeElement, SizeNode,
 };
+pub use nested_scroll::{NestedScroll, NestedScrollConnection, NestedScrollSource, ScrollAxis};
 pub use nine_patch::{
     NinePatchInsets, PatchFill, PatchQuad, nine_patch_quads, tile_count, tile_quads,
 };

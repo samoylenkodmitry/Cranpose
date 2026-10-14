@@ -18,6 +18,7 @@ use crate::{
     fling_animation::{
         FlingAnimation, MIN_FLING_VELOCITY, SettleAnimation, SpringParams, fling_rest_position,
     },
+    nested_scroll::{NestedScrollSource, ScrollAxis},
     render_state::schedule_modifier_slices_repass,
     scroll::{
         ScrollElement, ScrollMotionContext, ScrollMotionContextKey, ScrollSettlePolicy,
@@ -109,6 +110,28 @@ impl ScrollGestureState {
                 .as_ref()
                 .is_some_and(|watcher| watcher.is_running.get())
     }
+
+    /// The velocity a gesture ends with, zero when the finger rested before
+    /// it lifted.
+    fn release_velocity(&mut self, release_time_ms: Option<i64>) -> f32 {
+        let Some(start) = self.gesture_start_time else {
+            return 0.0;
+        };
+        let release_sample_ms = release_time_ms
+            .zip(self.gesture_start_event_time_ms)
+            .map_or_else(
+                || start.elapsed().as_millis() as i64,
+                |(release_ms, start_ms)| release_ms - start_ms,
+            );
+        let rested_before_release = self
+            .last_velocity_sample_ms
+            .is_some_and(|last_sample_ms| release_sample_ms - last_sample_ms > ASSUME_STOPPED_MS);
+        if rested_before_release {
+            return 0.0;
+        }
+        self.velocity_tracker
+            .calculate_velocity_with_max(MAX_FLING_VELOCITY)
+    }
 }
 
 #[inline]
@@ -167,6 +190,83 @@ trait ScrollTarget: Clone {
     /// and returns whether one ran.
     fn stop_animation(&self) -> bool {
         false
+    }
+
+    /// The part of a release's `velocity`, in content units per second, the
+    /// containers around the scroller take before it flings.
+    fn pre_fling(&self, velocity: f32) -> f32 {
+        let _ = velocity;
+        0.0
+    }
+}
+
+/// A scroller inside [`crate::NestedScroll`] containers: every move goes
+/// through them, before and after the scroller takes its part.
+#[derive(Clone)]
+struct NestedTarget<S> {
+    target: S,
+    parent: crate::nested_scroll::NestedScrollParent,
+    axis: ScrollAxis,
+}
+
+impl<S: ScrollTarget> ScrollTarget for NestedTarget<S> {
+    fn apply_delta(&self, delta: f32) -> f32 {
+        self.parent
+            .dispatch(self.axis, delta, NestedScrollSource::Drag, |left| {
+                self.target.apply_delta(left)
+            })
+    }
+
+    fn apply_wheel_delta(&self, delta: f32) -> f32 {
+        self.parent
+            .dispatch(self.axis, delta, NestedScrollSource::Wheel, |left| {
+                self.target.apply_wheel_delta(left)
+            })
+    }
+
+    /// A fling moves the scroll value, the opposite way to the content.
+    fn apply_fling_delta(&self, delta: f32) -> f32 {
+        -self
+            .parent
+            .dispatch(self.axis, -delta, NestedScrollSource::Fling, |left| {
+                -self.target.apply_fling_delta(-left)
+            })
+    }
+
+    fn invalidate(&self) {
+        self.target.invalidate();
+    }
+
+    fn current_offset(&self) -> f32 {
+        self.target.current_offset()
+    }
+
+    fn can_scroll(&self) -> bool {
+        self.target.can_scroll()
+    }
+
+    fn can_consume(&self, gesture_delta: f32) -> bool {
+        self.target.can_consume(gesture_delta)
+    }
+
+    fn settle_policy(&self) -> Option<ScrollSettlePolicy> {
+        self.target.settle_policy()
+    }
+
+    fn allows_fling(&self) -> bool {
+        self.target.allows_fling()
+    }
+
+    fn set_dragging(&self, dragging: bool) {
+        self.target.set_dragging(dragging);
+    }
+
+    fn stop_animation(&self) -> bool {
+        self.target.stop_animation()
+    }
+
+    fn pre_fling(&self, velocity: f32) -> f32 {
+        self.parent.pre_fling(self.axis, velocity)
     }
 }
 
@@ -288,6 +388,45 @@ impl Drop for ScrollGestureLifetime {
             self.motion_context.set_active(false);
         }
     }
+}
+
+/// The drag gesture of a scroller, inside the [`crate::NestedScroll`]
+/// containers of the composition it is built in.
+fn nested_drag_gesture_input<K, S>(key: K, gesture: DragGesture<S>) -> Modifier
+where
+    K: std::hash::Hash + 'static,
+    S: ScrollTarget + 'static,
+{
+    let Some(parent) = crate::nested_scroll::current_nested_scroll_parent() else {
+        return drag_gesture_input(key, gesture);
+    };
+    let DragGesture {
+        target,
+        is_vertical,
+        reverse_input,
+        motion_context,
+        guard,
+    } = gesture;
+    let identity = parent.identity();
+    let axis = if is_vertical {
+        ScrollAxis::Vertical
+    } else {
+        ScrollAxis::Horizontal
+    };
+    drag_gesture_input(
+        (key, identity),
+        DragGesture {
+            target: NestedTarget {
+                target,
+                parent,
+                axis,
+            },
+            is_vertical,
+            reverse_input,
+            motion_context,
+            guard,
+        },
+    )
 }
 
 fn drag_gesture_input<K, S>(key: K, gesture: DragGesture<S>) -> Modifier
@@ -682,39 +821,22 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
     }
 
     fn finish_gesture(&self, allow_fling: bool, release_time_ms: Option<i64>) -> bool {
-        let (was_dragging, interrupted, gesture_owned, velocity, start_fling, existing_fling) = {
+        let (was_dragging, interrupted, gesture_owned, velocity, start_fling) = {
             let mut gs = self.gesture_state.borrow_mut();
             let was_dragging = gs.is_dragging;
             let interrupted = std::mem::take(&mut gs.interrupted_animation);
             let gesture_owned = was_dragging || gs.is_overscrolling;
-            let mut velocity = 0.0;
-
-            if allow_fling && gesture_owned && gs.gesture_start_time.is_some() {
-                let release_sample_ms = release_time_ms
-                    .zip(gs.gesture_start_event_time_ms)
-                    .map(|(release_ms, start_ms)| release_ms - start_ms)
-                    .or_else(|| {
-                        gs.gesture_start_time
-                            .map(|start| start.elapsed().as_millis() as i64)
-                    });
-                let rested_before_release = release_sample_ms
-                    .zip(gs.last_velocity_sample_ms)
-                    .is_some_and(|(release_ms, last_sample_ms)| {
-                        release_ms - last_sample_ms > ASSUME_STOPPED_MS
-                    });
-                if !rested_before_release {
-                    velocity = gs
-                        .velocity_tracker
-                        .calculate_velocity_with_max(MAX_FLING_VELOCITY);
-                }
-            }
+            let velocity = if allow_fling && gesture_owned {
+                gs.release_velocity(release_time_ms)
+            } else {
+                0.0
+            };
 
             let start_fling = allow_fling && was_dragging && velocity.abs() > MIN_FLING_VELOCITY;
-            let existing_fling = if start_fling {
-                gs.fling_animation.take()
-            } else {
-                None
-            };
+            // Whatever the release starts replaces a fling still running.
+            if start_fling && let Some(fling) = gs.fling_animation.take() {
+                fling.cancel();
+            }
 
             if was_dragging {
                 self.scroll_target.set_dragging(false);
@@ -734,7 +856,6 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
                 gesture_owned,
                 velocity,
                 start_fling,
-                existing_fling,
             )
         };
 
@@ -751,6 +872,14 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         } else {
             velocity
         };
+        // The containers around the scroller take their part first; a fling
+        // with too little left does not start.
+        let adjusted_velocity = if gesture_owned {
+            adjusted_velocity - self.scroll_target.pre_fling(adjusted_velocity)
+        } else {
+            adjusted_velocity
+        };
+        let start_fling = start_fling && adjusted_velocity.abs() > MIN_FLING_VELOCITY;
         let fling_velocity = -adjusted_velocity;
         let has_overscroll = self.overscroll.offset().abs() > 0.001;
 
@@ -759,19 +888,10 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             .flatten();
 
         if has_overscroll {
-            if let Some(old_fling) = existing_fling {
-                old_fling.cancel();
-            }
             self.start_overscroll_settle(-fling_velocity);
         } else if let Some(target) = settle_target {
-            if let Some(old_fling) = existing_fling {
-                old_fling.cancel();
-            }
             self.start_settle_animation(target, fling_velocity);
         } else if start_fling {
-            if let Some(old_fling) = existing_fling {
-                old_fling.cancel();
-            }
             self.start_fling_animation(fling_velocity);
         } else {
             self.motion_context.set_active(false);
@@ -1585,7 +1705,7 @@ fn scroll_impl(
         reverse_scrolling,
     });
 
-    let pointer_input = drag_gesture_input(
+    let pointer_input = nested_drag_gesture_input(
         (state.id(), is_vertical),
         DragGesture {
             target: state,
@@ -1742,7 +1862,7 @@ fn lazy_scroll_impl(
 
     Modifier::with_element(MotionContextAnimatedElement::new(motion_context.clone()))
         .then(translated_content_modifier)
-        .then(drag_gesture_input(
+        .then(nested_drag_gesture_input(
             key,
             DragGesture {
                 target: list_state,
@@ -1877,7 +1997,7 @@ impl Modifier {
         self.then(Modifier::with_element(MotionContextAnimatedElement::new(
             motion_context.clone(),
         )))
-        .then(drag_gesture_input(
+        .then(nested_drag_gesture_input(
             (identity, is_vertical),
             DragGesture {
                 target: state,
