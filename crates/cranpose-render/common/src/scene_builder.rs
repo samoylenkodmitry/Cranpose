@@ -1,4 +1,4 @@
-use std::{any::Any, rc::Rc};
+use std::{any::Any, cell::Cell, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId, NodeMarks, collections::map::HashMap};
 use cranpose_ui::{
@@ -261,15 +261,15 @@ fn update_graph_from_applier_report_inner(
             };
         }
 
-        let previous = HitGraphState::of(&graph.root);
-        release_for_rebuild(&mut graph.root);
-        if !lower_root_into(applier, root_id, &mut graph.root) {
+        let Some(hit_graph_dirty) = rebuild_tracking_hits(&mut graph.root, |root| {
+            release_for_rebuild(root);
+            lower_root_into(applier, root_id, root)
+        }) else {
             return GraphUpdateReport {
                 update: GraphUpdate::NeedsRebuild(GraphRebuildReason::RootLayerUnavailable),
                 hit_graph_dirty: true,
             };
-        }
-        let hit_graph_dirty = previous.dirty_against(&HitGraphState::of(&graph.root));
+        };
         graph.root.note_content_change(update);
 
         return GraphUpdateReport {
@@ -487,22 +487,23 @@ fn replace_dirty_layers_from_applier(
             }
             let node_id = layer_identity(child_layer).expect("dirty layer must have a node id");
 
-            let previous = HitGraphState::of(child_layer);
             // Nodes that leave this subtree are gone from the scene: nothing
             // remains to update for them, and a dirty one would otherwise go
             // unmatched and rebuild the whole scene.
             remove_dirty_descendants(child_layer, dirty.nodes);
-            release_for_rebuild(child_layer);
             let context = LowerContext {
                 inherited_motion_context_animated: parent.motion_context_animated,
                 inherited_translated_content_context: child_inherited_translated_content_context,
                 parent_abs: Some(parent_children),
                 parent_content_offset: parent.content_offset,
             };
-            read_placed_node_data(applier, node_id, false, |data| {
-                write_node_layer(applier, node_id, data, context, child_layer);
+            report.hit_graph_dirty |= rebuild_tracking_hits(child_layer, |layer| {
+                release_for_rebuild(layer);
+                read_placed_node_data(applier, node_id, false, |data| {
+                    write_node_layer(applier, node_id, data, context, layer);
+                })
+                .is_some()
             })?;
-            report.hit_graph_dirty |= previous.dirty_against(&HitGraphState::of(child_layer));
             remove_dirty_descendants(child_layer, dirty.nodes);
 
             child_layer.note_content_change(update);
@@ -1269,6 +1270,58 @@ fn translate_retained_child(
         content_offset,
     );
     layer.origin_in_parent = state.position();
+}
+
+thread_local! {
+    /// The hit geometry a subtree had before its rebuild, kept from one
+    /// rebuild to the next so no frame allocates it.
+    static PREVIOUS_HIT_GEOMETRY: Cell<Vec<HitGraphState>> = const { Cell::new(Vec::new()) };
+}
+
+/// Rebuilds `layer` with `rebuild`, which reports whether it succeeded, and
+/// returns whether the hit geometry of the layer or of a layer under it
+/// changed; `None` when the rebuild failed. A rebuild takes in the moves and
+/// layer changes of the nodes under the layer, which its own state does not
+/// show: a sheet that slides inside a container that redraws keeps the
+/// container's state.
+fn rebuild_tracking_hits(
+    layer: &mut LayerNode,
+    rebuild: impl FnOnce(&mut LayerNode) -> bool,
+) -> Option<bool> {
+    let previous = HitGraphState::of(layer);
+    let mut descendants = PREVIOUS_HIT_GEOMETRY.take();
+    descendants.clear();
+    visit_hit_layers(layer, &mut |child| {
+        descendants.push(HitGraphState::of(child));
+        true
+    });
+    let dirty = rebuild(layer).then(|| {
+        let mut expected = descendants.iter();
+        previous.dirty_against(&HitGraphState::of(layer))
+            || !visit_hit_layers(layer, &mut |child| {
+                expected.next() == Some(&HitGraphState::of(child))
+            })
+            || expected.next().is_some()
+    });
+    PREVIOUS_HIT_GEOMETRY.set(descendants);
+    dirty
+}
+
+/// Visits the layers under `layer` that are hit targets or hold one, in draw
+/// order, while `visit` returns true; returns whether every visit did.
+fn visit_hit_layers(layer: &LayerNode, visit: &mut impl FnMut(&LayerNode) -> bool) -> bool {
+    for child in &layer.children {
+        let RenderNode::Layer(child) = child else {
+            continue;
+        };
+        if child.hit_test.is_none() && !child.has_hit_targets {
+            continue;
+        }
+        if !visit(child) || !visit_hit_layers(child, visit) {
+            return false;
+        }
+    }
+    true
 }
 
 #[derive(PartialEq)]
