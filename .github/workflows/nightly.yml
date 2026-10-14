@@ -201,3 +201,21 @@ jobs:
           name: esp32-qemu-panel
           path: target/esp32/qemu.png
           if-no-files-found: ignore
+
+  # The whole workspace on the oldest toolchain the crates declare
+  # (`rust-version`, the ESP32 firmware's), so the declared minimum stays true.
+  msrv:
+    name: workspace on the declared minimum Rust (linux)
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
+    runs-on: [self-hosted, Linux, cranpose-heavy]
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Provision toolchain
+        run: scripts/ci/provision_toolchain.sh
+      - name: Check the workspace with the declared minimum Rust
+        run: just msrv-check
