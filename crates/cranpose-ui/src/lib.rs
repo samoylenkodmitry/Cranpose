@@ -115,7 +115,7 @@ pub use cranpose_ui_graphics::{
     DrawScope, DrawSpecialization, DrawStyle, ExternalTexture, ImageBitmap, ImageBitmapError,
     ImagePixelFormat, ImageSampling, Path, PlaceholderShape, PointerIcon, PointerIconError,
     RuntimeShaderUniformError, ShaderPlaceholder, Stroke, StrokeCap, StrokeJoin, SubstrateSpec,
-    TileMode, WindowCoordinates,
+    TileMode, WindowCoordinates, glass_material_folds_enabled, set_glass_material_folds,
 };
 pub use cranpose_ui_layout::{AlignmentLines, IntrinsicSize, Measurement};
 pub use cursor_animation::{
