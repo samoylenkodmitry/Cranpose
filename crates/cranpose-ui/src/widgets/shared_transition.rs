@@ -53,9 +53,20 @@ impl PartialEq for SharedEntry {
     }
 }
 
+/// What a flight between two copies carries.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sharing {
+    /// The coming content, in a box that moves between the two.
+    Element,
+    /// Both contents in that box: the going one fades out and the coming one
+    /// fades in.
+    Bounds,
+}
+
 /// One shared element in the composition.
 struct Instance {
     key: Rc<str>,
+    sharing: Sharing,
     entry: SharedEntry,
     element: Rc<Cell<WindowCoordinates>>,
     content: RefCell<Rc<dyn Fn()>>,
@@ -247,18 +258,44 @@ fn Flights(registry: RegistryHandle) {
         let Some(flight) = registry.0.flight(&key) else {
             continue;
         };
-        let content = Rc::clone(&flight.to.content.borrow());
+        let coming = Rc::clone(&flight.to.content.borrow());
+        let going = (flight.to.sharing == Sharing::Bounds)
+            .then(|| Rc::clone(&flight.from.content.borrow()));
+        let motion = Rc::clone(&flight.to.entry.motion);
         let policy = FlightPolicy {
             registry: registry.clone(),
             key: Rc::clone(&key),
         };
         let nodes = Rc::clone(&registry.0);
         with_key(&key, move || {
-            let node = Layout(Modifier::empty(), policy, move || content());
+            let node = Layout(Modifier::empty(), policy, move || match &going {
+                None => coming(),
+                Some(going) => {
+                    Crossfaded(Rc::clone(&motion), false, Rc::clone(going));
+                    Crossfaded(Rc::clone(&motion), true, Rc::clone(&coming));
+                }
+            });
             nodes.flying_nodes.borrow_mut().push(node);
         });
     }
     watch(&registry.0);
+}
+
+/// One content of a [`SharedBounds`] flight, faded in when it is `coming`
+/// and out when it goes, as far as the change has run.
+#[composable(no_skip)]
+fn Crossfaded(motion: Rc<EntryMotion>, coming: bool, content: Rc<dyn Fn()>) {
+    Box(
+        Modifier::empty().graphics_layer(move || {
+            let progress = motion.progress().clamp(0.0, 1.0);
+            GraphicsLayer {
+                alpha: if coming { progress } else { 1.0 - progress },
+                ..GraphicsLayer::default()
+            }
+        }),
+        BoxSpec::new(),
+        move || content(),
+    );
 }
 
 /// Places the flying copy at its box between the two resting boxes.
@@ -327,18 +364,40 @@ impl MeasurePolicy for FlightPolicy {
 /// so state it remembers starts afresh in flight.
 #[composable]
 pub fn SharedElement(key: impl Into<String>, modifier: Modifier, content: impl Fn() + 'static) {
-    let content: Rc<dyn Fn()> = Rc::new(content);
+    shared(key.into(), Sharing::Element, modifier, Rc::new(content));
+}
+
+/// Bounds that two contents of an `AnimatedContent` in a
+/// [`SharedTransitionLayout`] share by `key` while their contents differ, a
+/// card and the screen it opens: while the change between them runs, a box
+/// moves and resizes from the going content's bounds to the coming
+/// content's, drawn above both, and in it the going `content` fades out as
+/// the coming one fades in, each laid out to the box. Outside a change, or
+/// outside a `SharedTransitionLayout`, it is `content` in a box with
+/// `modifier`.
+///
+/// Compose's `Modifier.sharedBounds(rememberSharedContentState(key), ..)`
+/// with its default fades and `RemeasureToBounds`. Both copies in flight
+/// are their contents composed once more.
+#[composable]
+pub fn SharedBounds(key: impl Into<String>, modifier: Modifier, content: impl Fn() + 'static) {
+    shared(key.into(), Sharing::Bounds, modifier, Rc::new(content));
+}
+
+/// The body of [`SharedElement`] and [`SharedBounds`].
+fn shared(key: String, sharing: Sharing, modifier: Modifier, content: Rc<dyn Fn()>) {
     let (Some(registry), Some(entry)) = (local_registry().current(), local_entry().current())
     else {
         Box(modifier, BoxSpec::new(), move || content());
         return;
     };
-    let key: Rc<str> = key.into().into();
+    let key: Rc<str> = key.into();
     let instance = remember({
         let key = Rc::clone(&key);
         move || {
             Rc::new(Instance {
                 key,
+                sharing,
                 entry,
                 element: Rc::default(),
                 content: RefCell::new(Rc::new(|| {})),

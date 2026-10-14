@@ -2,15 +2,16 @@
 //! while `AnimatedContent` changes between two pages that share an element,
 //! a copy of it moves between the two boxes the pages give it and the
 //! copies in place hide; after the change the element is in place alone; a
-//! seek holds the copy where the gesture is.
+//! seek holds the copy where the gesture is. `SharedBounds` flies both
+//! pages' contents in that box.
 
 use std::{cell::Cell, rc::Rc};
 
 use cranpose_core::{MutableState, rememberMutableStateOf};
 use cranpose_testing::{RobotTestRule, TestRenderer, create_headless_robot_test};
 use cranpose_ui::{
-    Box, BoxSpec, ContentSeek, Modifier, Rect, SeekableAnimatedContent, SharedElement,
-    SharedTransitionLayout, Size, Text, TextStyle, fade_in, fade_out,
+    Box, BoxSpec, ContentSeek, Modifier, Rect, SeekableAnimatedContent, SharedBounds,
+    SharedElement, SharedTransitionLayout, Size, Text, TextStyle, fade_in, fade_out,
 };
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -36,6 +37,12 @@ const LARGE: Rect = Rect {
 type Controls = (MutableState<Page>, MutableState<Option<f32>>);
 
 fn screen() -> (RobotTestRule<TestRenderer>, Rc<Cell<Option<Controls>>>) {
+    screen_sharing(false)
+}
+
+/// The two pages, sharing the photo as an element, or as bounds whose
+/// content each page words its own way.
+fn screen_sharing(bounds: bool) -> (RobotTestRule<TestRenderer>, Rc<Cell<Option<Controls>>>) {
     let controls: Rc<Cell<Option<Controls>>> = Rc::default();
     let installed = Rc::clone(&controls);
     let mut robot = create_headless_robot_test(400, 400, move || {
@@ -52,7 +59,7 @@ fn screen() -> (RobotTestRule<TestRenderer>, Rc<Cell<Option<Controls>>>) {
                 page.get(),
                 seek.get().map(|fraction| ContentSeek { toward, fraction }),
                 |_, _| fade_in().together_with(fade_out()),
-                |page| {
+                move |page| {
                     let place = if page == Page::List { SMALL } else { LARGE };
                     Box(
                         Modifier::empty()
@@ -60,13 +67,21 @@ fn screen() -> (RobotTestRule<TestRenderer>, Rc<Cell<Option<Controls>>>) {
                             .padding_each(place.x, place.y, 0.0, 0.0),
                         BoxSpec::default(),
                         move || {
-                            SharedElement(
-                                "photo",
-                                Modifier::empty().size(Size::new(place.width, place.height)),
-                                || {
+                            let size = Modifier::empty().size(Size::new(place.width, place.height));
+                            if !bounds {
+                                SharedElement("photo", size, || {
                                     Text("Photo", Modifier::empty(), TextStyle::default());
-                                },
-                            );
+                                });
+                                return;
+                            }
+                            let label = if page == Page::List {
+                                "Card"
+                            } else {
+                                "Details"
+                            };
+                            SharedBounds("photo", size, move || {
+                                Text(label, Modifier::empty(), TextStyle::default());
+                            });
                         },
                     );
                 },
@@ -79,10 +94,14 @@ fn screen() -> (RobotTestRule<TestRenderer>, Rc<Cell<Option<Controls>>>) {
 
 /// The boxes of the photo's text: the copies in place and any in flight.
 fn photos(robot: &mut RobotTestRule<TestRenderer>) -> Vec<Rect> {
+    texts(robot, "Photo")
+}
+
+fn texts(robot: &mut RobotTestRule<TestRenderer>, label: &str) -> Vec<Rect> {
     robot
         .get_all_rects()
         .into_iter()
-        .filter(|(_, text)| text.as_deref() == Some("Photo"))
+        .filter(|(_, text)| text.as_deref() == Some(label))
         .map(|(rect, _)| rect)
         .collect()
 }
@@ -132,4 +151,34 @@ fn a_seek_holds_the_flying_copy_where_the_gesture_is() {
             && (flying.y - midway(SMALL.y, LARGE.y)).abs() < 2.0,
         "half way: {flying:?}"
     );
+}
+
+#[test]
+fn shared_bounds_fly_both_contents_in_one_box() {
+    let (mut robot, controls) = screen_sharing(true);
+    let (page, _) = controls.get().expect("composed");
+    page.set(Page::Detail);
+    frames(&mut robot, 8);
+    // One snapshot: each read waits for the robot to be idle.
+    let rects = robot.get_all_rects();
+    let flying = |label: &str| {
+        rects
+            .iter()
+            .find(|(rect, text)| text.as_deref() == Some(label) && between(rect))
+            .map(|(rect, _)| (rect.x, rect.y))
+    };
+    let (card, details) = (flying("Card"), flying("Details"));
+    assert!(
+        card.is_some() && card == details,
+        "both contents fly between the pages in one box: {rects:?}"
+    );
+    robot.wait_for_motion();
+    assert!(texts(&mut robot, "Card").is_empty(), "the card went");
+    let landed = texts(&mut robot, "Details");
+    assert_eq!(
+        landed.len(),
+        1,
+        "the details are in place alone: {landed:?}"
+    );
+    assert!((landed[0].x - LARGE.x).abs() < 1.0 && (landed[0].y - LARGE.y).abs() < 1.0);
 }

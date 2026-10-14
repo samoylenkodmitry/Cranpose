@@ -74,7 +74,7 @@ pub use scrollbar::*;
 pub use secure_text_field::*;
 pub use selection_container::*;
 pub use selection_handle::*;
-pub use shared_transition::{SharedElement, SharedTransitionLayout};
+pub use shared_transition::{SharedBounds, SharedElement, SharedTransitionLayout};
 pub use slider::*;
 pub use spacer::*;
 pub use swipe_to_dismiss::*;
