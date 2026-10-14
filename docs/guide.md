@@ -1369,6 +1369,11 @@ fn App() {
 Use `navigate_with` and `NavOptions` to replace part of the stack.
 Use `NavHostWith` to set the transition.
 
+For a destination that shows as a dialog, like Compose's `dialog(route)`, use
+`NavHostWithDialogs(nav, transition, |route| matches!(route, Route::Confirm).then(DialogSpec::default), content)`:
+the dialog shows over the screen beneath it, and the back gesture or a tap
+outside pops it.
+
 For a tab bar, switch tabs with
 `navigate_with(tab, NavOptions::new().pop_up_to(start, false).save_state().launch_single_top().restore_state())`:
 the tab you leave keeps its entries, with their view models and saved state,

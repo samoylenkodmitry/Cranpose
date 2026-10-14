@@ -310,3 +310,49 @@ fn restore_state_without_a_kept_stack_pushes_the_route() {
     host.settle();
     assert_eq!(nav.back_stack(), [Screen::Home, Screen::Detail(4)]);
 }
+
+#[test]
+fn a_dialog_route_shows_over_the_screen_beneath_it() {
+    let probe = Probe::default();
+    let (mut robot, nav) = support::with_settings_dialog(&probe);
+    let nav = controller(&nav);
+    let live = |probe: &Probe| {
+        let mut live = probe.live();
+        live.sort_by_key(|screen| format!("{screen:?}"));
+        live
+    };
+    nav.navigate(Screen::Settings);
+    support::settle_robot(&mut robot);
+    assert_eq!(nav.back_stack(), [Screen::Home, Screen::Settings]);
+    assert_eq!(
+        live(&probe),
+        [Screen::Home, Screen::Settings],
+        "the screen beneath stays while the dialog shows"
+    );
+
+    nav.navigate(Screen::Detail(1));
+    support::settle_robot(&mut robot);
+    assert_eq!(
+        probe.live(),
+        [Screen::Detail(1)],
+        "a screen on top covers the dialog and what is beneath it"
+    );
+    assert_eq!(probe.dropped(), 0);
+
+    assert!(nav.pop_back_stack());
+    support::settle_robot(&mut robot);
+    assert_eq!(
+        live(&probe),
+        [Screen::Home, Screen::Settings],
+        "the dialog is back"
+    );
+    assert_eq!(
+        probe
+            .built()
+            .iter()
+            .filter(|screen| **screen == Screen::Settings)
+            .count(),
+        1,
+        "with the view model it had"
+    );
+}
