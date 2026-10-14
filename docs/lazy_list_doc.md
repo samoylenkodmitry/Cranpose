@@ -28,6 +28,13 @@ next header pushes it out. The header is placed last, so it draws over the
 items under it and takes their touches. Like Compose's, it covers the before
 content padding. A list whose items all fit leaves its headers in place.
 
+`HorizontalPager` and `VerticalPager` lay their pages out as a `LazyRow` or
+`LazyColumn` whose items each take the pager's size. They install a settle
+policy on the list state (`LazyListState::set_settle_policy`), which the
+scroll gesture consults when the user lets go: a fling of 400 logical pixels
+per second or more turns one page its way, and a slower release goes to the
+nearer page boundary.
+
 Layout submits prefetch requests, and the app shell services them during
 eligible idle time through the ordinary list measurement path. The app shell
 schedules frames. See [`lazy_prefetch.rs`](../crates/cranpose-ui/src/lazy_prefetch.rs)

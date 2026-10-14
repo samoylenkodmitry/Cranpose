@@ -1,0 +1,182 @@
+//! A pager comes to rest on a page when the user lets go: the next page past
+//! half a page or after a flick, the same page short of that, and one page
+//! at a time however fast the fling, through the shell's pointer input.
+
+use std::{cell::Cell, rc::Rc};
+
+use cranpose_app_shell::AppShell;
+use cranpose_core::location_key;
+use cranpose_testing::{robot::TestRenderer, robot_assertions::find_semantics_node};
+use cranpose_ui::{
+    Box, BoxSpec, HorizontalPager, Modifier, PagerState, VerticalPager, rememberPagerState,
+};
+
+const WIDTH: f32 = 300.0;
+const HEIGHT: f32 = 200.0;
+const PAGES: usize = 5;
+
+struct Pager {
+    shell: AppShell<TestRenderer>,
+    state: Rc<Cell<Option<PagerState>>>,
+    now_ms: i64,
+    frame_ns: u64,
+}
+
+impl Pager {
+    fn new(horizontal: bool) -> Self {
+        let state = Rc::new(Cell::new(None));
+        let captured = Rc::clone(&state);
+        let mut shell = AppShell::new(
+            TestRenderer::default(),
+            location_key(file!(), line!(), column!()),
+            move || {
+                let pager = rememberPagerState(0);
+                captured.set(Some(pager));
+                let size = Modifier::empty().size_points(WIDTH, HEIGHT);
+                let page = |page: usize| {
+                    Box(
+                        Modifier::empty()
+                            .fill_max_size()
+                            .content_description(format!("page {page}")),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                };
+                if horizontal {
+                    HorizontalPager(size, pager, PAGES, page);
+                } else {
+                    VerticalPager(size, pager, PAGES, page);
+                }
+            },
+        );
+        shell.set_viewport(WIDTH, HEIGHT);
+        shell.set_buffer_size(WIDTH as u32, HEIGHT as u32);
+        shell.set_semantics_enabled(true);
+        let mut pager = Self {
+            shell,
+            state,
+            now_ms: 1_000_000,
+            frame_ns: 16_000_000,
+        };
+        pager.frames(2);
+        pager
+    }
+
+    fn state(&self) -> PagerState {
+        self.state.get().expect("composed pager")
+    }
+
+    fn frames(&mut self, count: usize) {
+        for _ in 0..count {
+            self.frame_ns += 16_000_000;
+            self.shell.update_at_frame_time_nanos(self.frame_ns);
+        }
+    }
+
+    /// Drags along the main axis from `from` to `to` in `millis`, lets go,
+    /// and runs the frames the settle takes.
+    fn drag(&mut self, horizontal: bool, from: f32, to: f32, millis: i64) {
+        let point = |main: f32| {
+            if horizontal {
+                (main, HEIGHT / 2.0)
+            } else {
+                (WIDTH / 2.0, main)
+            }
+        };
+        let (x, y) = point(from);
+        self.shell.set_cursor_at_time(x, y, Some(self.now_ms));
+        self.shell.pointer_pressed_at_time(Some(self.now_ms));
+        let steps = 10;
+        for step in 1..=steps {
+            self.now_ms += millis / steps;
+            let (x, y) = point(from + (to - from) * step as f32 / steps as f32);
+            self.shell.set_cursor_at_time(x, y, Some(self.now_ms));
+            self.frames(1);
+        }
+        self.now_ms += 8;
+        let (x, y) = point(to);
+        self.shell
+            .pointer_released_at_position_time(x, y, Some(self.now_ms));
+        self.frames(90);
+    }
+
+    /// Where page `page` starts along the main axis, or `None` when it is
+    /// not placed.
+    fn start(&mut self, horizontal: bool, page: usize) -> Option<f32> {
+        let tree = self.shell.semantics_tree().expect("semantics");
+        let name = format!("page {page}");
+        find_semantics_node(tree.root(), &|node| {
+            node.description.as_deref() == Some(name.as_str())
+        })
+        .map(|node| {
+            if horizontal {
+                node.bounds.x
+            } else {
+                node.bounds.y
+            }
+        })
+    }
+
+    fn rests_on(&mut self, horizontal: bool, page: usize) -> bool {
+        self.state().current_page() == page
+            && self
+                .start(horizontal, page)
+                .is_some_and(|start| start.abs() < 0.5)
+    }
+}
+
+#[test]
+fn a_slow_drag_past_half_a_page_turns_it_and_one_short_of_half_goes_back() {
+    let mut pager = Pager::new(true);
+    pager.drag(true, 250.0, 200.0, 1_000);
+    assert!(pager.rests_on(true, 0), "a short slow drag goes back");
+    pager.drag(true, 250.0, 80.0, 1_000);
+    assert!(pager.rests_on(true, 1), "past half a page turns it");
+}
+
+#[test]
+fn a_quick_flick_turns_the_page_however_short() {
+    let mut pager = Pager::new(true);
+    pager.drag(true, 250.0, 220.0, 30);
+    assert!(pager.rests_on(true, 1), "a flick toward the next page");
+    pager.drag(true, 80.0, 110.0, 30);
+    assert!(pager.rests_on(true, 0), "a flick back");
+}
+
+#[test]
+fn a_long_fast_fling_turns_one_page() {
+    let mut pager = Pager::new(true);
+    pager.drag(true, 290.0, 10.0, 40);
+    assert!(pager.rests_on(true, 1));
+}
+
+#[test]
+fn scroll_to_page_shows_the_page_and_a_mid_drag_reports_its_fraction() {
+    let mut pager = Pager::new(true);
+    pager.state().scroll_to_page(3);
+    pager.frames(2);
+    assert!(pager.rests_on(true, 3));
+    pager
+        .shell
+        .set_cursor_at_time(250.0, 100.0, Some(pager.now_ms));
+    pager.shell.pointer_pressed_at_time(Some(pager.now_ms));
+    for x in [240.0, 220.0, 190.0] {
+        pager.now_ms += 100;
+        pager.shell.set_cursor_at_time(x, 100.0, Some(pager.now_ms));
+        pager.frames(1);
+    }
+    let state = pager.state();
+    assert_eq!(state.current_page(), 3);
+    assert!(
+        (state.current_page_offset_fraction() - 0.2).abs() < 0.05,
+        "60 of 300 pixels is a fifth of a page, read {}",
+        state.current_page_offset_fraction()
+    );
+}
+
+#[test]
+fn a_vertical_pager_turns_its_pages_up() {
+    let mut pager = Pager::new(false);
+    pager.drag(false, 180.0, 60.0, 1_000);
+    assert!(pager.rests_on(false, 1));
+}
