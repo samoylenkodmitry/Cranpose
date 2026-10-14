@@ -42,6 +42,8 @@ use crate::{
 
 struct GpuResources {
     surface: wgpu::Surface<'static>,
+    /// Where a lost device's successor opens.
+    adapter: wgpu::Adapter,
     device: Arc<wgpu::Device>,
     config: wgpu::SurfaceConfiguration,
     surface_dirty: bool,
@@ -65,6 +67,8 @@ struct IosApp<F: FnMut() + 'static> {
     launch_error: Rc<RefCell<Option<LaunchError>>>,
     touch_router: TouchPointerRouter,
     next_off_screen_render: Option<Instant>,
+    device_loss: crate::gpu_loss::LossSignal,
+    device_loss_drill: crate::gpu_loss::LossDrill,
 }
 
 const OFF_SCREEN_RENDER_PERIOD: Duration = Duration::from_millis(16);
@@ -94,6 +98,8 @@ impl<F: FnMut() + 'static> IosApp<F> {
             launch_error,
             touch_router: TouchPointerRouter::default(),
             next_off_screen_render: None,
+            device_loss: crate::gpu_loss::LossSignal::default(),
+            device_loss_drill: crate::gpu_loss::LossDrill::from_launch_args(),
         }
     }
 
@@ -145,6 +151,49 @@ impl<F: FnMut() + 'static> IosApp<F> {
                 &self.webviews,
             );
         }
+    }
+
+    /// Opens a new device when the one in use was lost and hands it to the
+    /// renderer, keeping the composition, its state and its input; ends the
+    /// app when devices keep getting lost without a frame.
+    fn recover_lost_device(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if !self.device_loss.take_loss() {
+            return;
+        }
+        if !self.device_loss.begin_recovery() {
+            self.abort(event_loop, LaunchError::GpuDeviceLost);
+            return;
+        }
+        let Some(adapter) = self.gpu.as_ref().map(|gpu| &gpu.adapter) else {
+            return;
+        };
+        let (device, queue) =
+            match pollster::block_on(adapter.request_device(&ios_device_descriptor(adapter))) {
+                Ok(pair) => pair,
+                Err(error) => {
+                    self.abort(event_loop, LaunchError::DeviceCreate(error));
+                    return;
+                }
+            };
+        let (Some(gpu), Some(shell)) = (self.gpu.as_mut(), self.shell.as_mut()) else {
+            return;
+        };
+        let device = Arc::new(device);
+        gpu.surface.configure(&device, &gpu.config);
+        let loss_proxy = self.event_proxy.clone();
+        let renderer = shell.renderer();
+        renderer.set_device_lost_handler(self.device_loss.handler(move || loss_proxy.wake_up()));
+        renderer.init_gpu(
+            Arc::clone(&device),
+            Arc::new(queue),
+            crate::surface_format::display_surface_view_format(gpu.config.format),
+            gpu.adapter.get_info().backend,
+            gpu.adapter.get_downlevel_capabilities().flags,
+        );
+        gpu.device = device;
+        gpu.surface_dirty = true;
+        shell.mark_dirty();
+        log::warn!("[gpu-device] opened a new device after the last one was lost");
     }
 
     fn abort(&self, event_loop: &dyn ActiveEventLoop, error: LaunchError) {
@@ -305,6 +354,8 @@ impl<F: FnMut() + 'static> IosApp<F> {
                 }
                 shell.renderer().present(frame);
                 gpu.surface_dirty = false;
+                self.device_loss.presented();
+                self.device_loss_drill.presented(&self.device_loss);
             }
             SurfaceFrame::Reconfigure => {
                 gpu.surface.configure(&gpu.device, &gpu.config);
@@ -328,6 +379,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
     }
 
     fn proxy_wake_up(&mut self, _event_loop: &dyn ActiveEventLoop) {
+        self.recover_lost_device(_event_loop);
         if let Some(shell) = self.shell.as_mut() {
             shell.run_pending_tasks();
         }
@@ -368,14 +420,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         let backend = adapter.get_info().backend;
 
         let (device, queue) =
-            match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("Cranpose iOS Device"),
-                required_features: cranpose_render_wgpu::optional_device_features(&adapter),
-                required_limits: crate::gpu_limits::mobile_device_limits(adapter.limits()),
-                experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                memory_hints: crate::gpu_limits::mobile_memory_hints(),
-                trace: wgpu::Trace::Off,
-            })) {
+            match pollster::block_on(adapter.request_device(&ios_device_descriptor(&adapter))) {
                 Ok(pair) => pair,
                 Err(error) => {
                     self.abort(event_loop, LaunchError::DeviceCreate(error));
@@ -412,6 +457,8 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
 
         let fonts = self.settings.resolve_font_set();
         let mut renderer = WgpuRenderer::with_font_set(fonts);
+        let loss_proxy = self.event_proxy.clone();
+        renderer.set_device_lost_handler(self.device_loss.handler(move || loss_proxy.wake_up()));
         renderer.init_gpu(
             Arc::clone(&device),
             Arc::clone(&queue),
@@ -462,6 +509,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
 
         self.gpu = Some(GpuResources {
             surface,
+            adapter,
             device,
             config,
             surface_dirty: true,
@@ -615,6 +663,18 @@ fn safe_area_insets(window: &Arc<dyn Window>) -> EdgeInsets {
         (insets.right as f64 / scale) as f32,
         (insets.bottom as f64 / scale) as f32,
     )
+}
+
+/// The device the iOS app opens on `adapter`, at launch and after a loss.
+fn ios_device_descriptor(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'static> {
+    wgpu::DeviceDescriptor {
+        label: Some("Cranpose iOS Device"),
+        required_features: cranpose_render_wgpu::optional_device_features(adapter),
+        required_limits: crate::gpu_limits::mobile_device_limits(adapter.limits()),
+        experimental_features: wgpu::ExperimentalFeatures::disabled(),
+        memory_hints: crate::gpu_limits::mobile_memory_hints(),
+        trace: wgpu::Trace::Off,
+    }
 }
 
 fn ios_surface_config(
