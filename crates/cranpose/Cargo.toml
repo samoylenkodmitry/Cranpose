@@ -423,6 +423,7 @@ accesskit_macos = "0.27.1"
 objc2-foundation = { version = "0.3", default-features = false, features = [
     "std",
     "NSArray",
+    "NSBundle",
     "NSDictionary",
     "NSEnumerator",
     "NSError",
@@ -437,11 +438,15 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
 # winit cannot build. The version winit already resolves.
 objc2-app-kit = { version = "0.3", default-features = false, optional = true, features = [
     "std",
+    "NSApplication",
     "NSBitmapImageRep",
     "NSCursor",
+    "NSEvent",
     "NSGraphics",
     "NSImage",
     "NSImageRep",
+    "NSMenu",
+    "NSMenuItem",
     "NSResponder",
     "NSView",
     "NSWindow",

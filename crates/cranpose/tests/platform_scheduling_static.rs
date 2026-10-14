@@ -2165,6 +2165,7 @@ fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
         "watchos_heart_rate.rs",
         "desktop_accessibility.rs",
         "macos_cursor.rs",
+        "macos_menu.rs",
         "windows_cursor.rs",
     ];
     let mut offenders = Vec::new();
@@ -2376,6 +2377,7 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose/src/watchos_heart_rate.rs",
         "crates/cranpose/src/desktop_accessibility.rs",
         "crates/cranpose/src/macos_cursor.rs",
+        "crates/cranpose/src/macos_menu.rs",
         "crates/cranpose/src/windows_cursor.rs",
         "crates/cranpose-storekit/src/apple.rs",
         "crates/cranpose-storekit/src/tests/apple_tests.rs",
