@@ -269,7 +269,7 @@ pub use share_sheet::{
 pub use storage::{StorageSpace, StorageSpaceRef, available_storage, set_platform_storage_space};
 pub use theme::{
     ProvideSystemTheme, SystemTheme, clear_platform_system_theme, default_system_theme,
-    isSystemInDarkTheme, local_system_theme, set_platform_system_theme,
+    isSystemInDarkTheme, known_system_theme, local_system_theme, set_platform_system_theme,
 };
 pub use uri_handler::{
     ProvideUriHandler, UriHandler, UriHandlerError, UriHandlerRef, clear_platform_uri_handler,

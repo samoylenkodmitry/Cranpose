@@ -51,7 +51,9 @@ impl PlatformEnvironment {
     }
 
     pub(crate) fn set_system_theme(&self, theme: SystemTheme) -> bool {
-        let changed = cranpose_services::default_system_theme() != theme;
+        // Compared with the theme already known: detecting one here would
+        // run the detection a theme reported at launch exists to skip.
+        let changed = cranpose_services::known_system_theme() != Some(theme);
         set_platform_system_theme(theme);
         changed
     }
