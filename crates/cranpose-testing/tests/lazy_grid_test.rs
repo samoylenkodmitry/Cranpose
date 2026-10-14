@@ -325,3 +325,129 @@ fn a_horizontal_grid_fills_columns_top_to_bottom_and_mirrors_right_to_left() {
         Some((WIDTH - 2.0 * COLUMN_WIDTH, 100.0))
     );
 }
+
+/// A grid of three columns with 10 pixels between them, whose first items
+/// take the cells `spans` gives, `REST` taking what their line has left.
+fn spanned_grid(spans: &'static [usize], after: usize) -> Grid {
+    Grid::composed(LayoutDirection::Ltr, move |grid| {
+        LazyVerticalGrid(
+            Modifier::empty().size_points(WIDTH, HEIGHT),
+            grid,
+            LazyVerticalGridSpec {
+                horizontal_spacing: 10.0,
+                ..LazyVerticalGridSpec::new(GridCells::Fixed(3))
+            },
+            move |scope| {
+                scope.items(
+                    LazyItems::new(spans.len()).span(|line, index| match spans[index] {
+                        REST => line.max_current_line_span,
+                        span => span,
+                    }),
+                    |index| row_cell(format!("item {index}")),
+                );
+                let first = spans.len();
+                scope.items(after, move |index| {
+                    row_cell(format!("item {}", first + index));
+                });
+            },
+        );
+    })
+}
+
+const REST: usize = 0;
+
+#[test]
+fn spanned_items_take_their_cells_and_one_too_wide_for_its_line_starts_the_next() {
+    let mut grid = spanned_grid(&[usize::MAX, 2, 1, 2, 2, REST], 30);
+    let at = |grid: &mut Grid, name: &str| {
+        grid.bounds(name)
+            .map(|bounds| (bounds.x.round(), bounds.y.round(), bounds.width))
+    };
+    // 280 pixels of cells: 94, 93 and 93, at 0, 104 and 207.
+    assert_eq!(
+        at(&mut grid, "item 0"),
+        Some((0.0, 0.0, WIDTH)),
+        "a whole line"
+    );
+    assert_eq!(at(&mut grid, "item 1"), Some((0.0, 40.0, 197.0)));
+    assert_eq!(at(&mut grid, "item 2"), Some((207.0, 40.0, 93.0)));
+    assert_eq!(at(&mut grid, "item 3"), Some((0.0, 80.0, 197.0)));
+    assert_eq!(
+        at(&mut grid, "item 4"),
+        Some((0.0, 120.0, 197.0)),
+        "two cells do not fit beside item 3"
+    );
+    assert_eq!(
+        at(&mut grid, "item 5"),
+        Some((207.0, 120.0, 93.0)),
+        "the cell its line has left"
+    );
+    assert_eq!(at(&mut grid, "item 6"), Some((0.0, 160.0, 94.0)));
+    assert_eq!(
+        at(&mut grid, "item 7"),
+        Some((104.0, 160.0, 93.0)),
+        "one-cell items fill lines after spanned ones"
+    );
+    grid.state().scroll_to_item(5, 0.0);
+    grid.shell.update();
+    assert_eq!(grid.state().first_visible_item_index(), 4);
+    assert_eq!(at(&mut grid, "item 4"), Some((0.0, 0.0, 197.0)));
+    assert_eq!(at(&mut grid, "item 6"), Some((0.0, 40.0, 94.0)));
+    assert_eq!(at(&mut grid, "item 9"), Some((0.0, 80.0, 94.0)));
+}
+
+#[test]
+fn one_cell_items_fill_the_rest_of_a_spanned_line() {
+    let mut grid = spanned_grid(&[2], 4);
+    assert_eq!(grid.origin("item 1"), Some((207.0, 0.0)));
+    assert_eq!(grid.origin("item 2"), Some((0.0, CELL_HEIGHT)));
+    assert_eq!(grid.origin("item 4"), Some((207.0, CELL_HEIGHT)));
+}
+
+#[test]
+fn a_cell_that_a_span_change_moves_to_a_narrower_column_takes_its_width() {
+    use cranpose_core::{MutableState, mutableStateOf, remember};
+
+    let span: Rc<RefCell<Option<MutableState<usize>>>> = Rc::new(RefCell::new(None));
+    let captured = Rc::clone(&span);
+    let mut grid = Grid::composed(LayoutDirection::Ltr, move |grid| {
+        let state = remember(|| mutableStateOf(1usize)).with(|state| *state);
+        captured.replace(Some(state));
+        let first = state.get();
+        LazyVerticalGrid(
+            Modifier::empty().size_points(WIDTH, HEIGHT),
+            grid,
+            LazyVerticalGridSpec::new(GridCells::Fixed(3)).spacing(10.0),
+            move |scope| {
+                scope.items(
+                    LazyItems::new(4).span(move |_, index| if index == 0 { first } else { 1 }),
+                    |index| row_cell(format!("item {index}")),
+                );
+            },
+        );
+    });
+    assert_eq!(width(&mut grid, "item 3"), Some(94.0), "the first column");
+    span.borrow().expect("composed grid").set(2);
+    grid.shell.update();
+    assert_eq!(width(&mut grid, "item 0"), Some(197.0));
+    assert_eq!(grid.origin("item 3"), Some((104.0, 50.0)));
+    assert_eq!(width(&mut grid, "item 3"), Some(93.0), "the second column");
+}
+
+#[test]
+fn a_one_pixel_wider_grid_gives_the_spare_pixel_to_the_next_column() {
+    let mut grid = Grid::composed(LayoutDirection::Ltr, |grid| {
+        LazyVerticalGrid(
+            Modifier::empty().fill_max_width().height(HEIGHT),
+            grid,
+            LazyVerticalGridSpec::new(GridCells::Fixed(3)).spacing(10.0),
+            |scope| scope.items(6, |index| row_cell(format!("item {index}"))),
+        );
+    });
+    assert_eq!(width(&mut grid, "item 1"), Some(93.0));
+    // 281 pixels of cells: the cells are as wide, and two get a pixel more.
+    grid.shell.set_viewport(WIDTH + 1.0, 400.0);
+    grid.shell.update();
+    assert_eq!(width(&mut grid, "item 1"), Some(94.0));
+    assert_eq!(width(&mut grid, "item 2"), Some(93.0));
+}

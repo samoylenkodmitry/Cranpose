@@ -109,6 +109,22 @@ pub struct LazyItems {
     count: usize,
     key: Option<Rc<dyn Fn(usize) -> u64>>,
     content_type: Option<Rc<dyn Fn(usize) -> u64>>,
+    span: Option<GridItemSpanFn>,
+}
+
+/// How many cells of its line a grid item takes, from the item's index in
+/// its run.
+pub type GridItemSpanFn = Rc<dyn Fn(LazyGridItemSpanScope, usize) -> usize>;
+
+/// The cells a grid item's span can take — Compose's
+/// `LazyGridItemSpanScope`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LazyGridItemSpanScope {
+    /// The cells of a whole line.
+    pub max_line_span: usize,
+    /// The cells left in the line the item would join. An item that takes
+    /// more starts the next line.
+    pub max_current_line_span: usize,
 }
 
 impl LazyItems {
@@ -118,6 +134,7 @@ impl LazyItems {
             count,
             key: None,
             content_type: None,
+            span: None,
         }
     }
 
@@ -132,6 +149,13 @@ impl LazyItems {
     /// into another row of the same shape rather than rebuilding it.
     pub fn content_type(mut self, content_type: impl Fn(usize) -> u64 + 'static) -> Self {
         self.content_type = Some(Rc::new(content_type));
+        self
+    }
+
+    /// Gives each item the number of cells it takes in a grid's line —
+    /// Compose's `span`. A list ignores it, and a grid clamps it to a line.
+    pub fn span(mut self, span: impl Fn(LazyGridItemSpanScope, usize) -> usize + 'static) -> Self {
+        self.span = Some(Rc::new(span));
         self
     }
 
@@ -238,6 +262,9 @@ pub struct LazyListInterval {
     /// Content type generator for items in this interval.
     /// Based on JC's `Interval.type: ((index: Int) -> Any?)`
     pub content_type: Option<Rc<dyn Fn(usize) -> u64>>,
+
+    /// The cells each item takes in a grid's line; one when absent.
+    pub span: Option<GridItemSpanFn>,
 
     /// Content generator for items in this interval.
     /// Takes the local index within the interval.
@@ -454,6 +481,7 @@ impl LazyListScope for LazyListIntervalContent {
             count: 1,
             key: key.map(|k| Rc::new(move |_| k) as Rc<dyn Fn(usize) -> u64>),
             content_type: content_type.map(|t| Rc::new(move |_| t) as Rc<dyn Fn(usize) -> u64>),
+            span: None,
             content: Rc::new(move |_| content()),
         });
         self.total_count += 1;
@@ -475,8 +503,9 @@ impl LazyListScope for LazyListIntervalContent {
         self.intervals.push(LazyListInterval {
             start_index,
             count,
-            key: items.key_fn(),
-            content_type: items.content_type_fn(),
+            key: items.key,
+            content_type: items.content_type,
+            span: items.span,
             content: Rc::new(item_content),
         });
         self.total_count += count;

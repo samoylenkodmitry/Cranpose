@@ -157,6 +157,7 @@ fn measured_item_cache_keeps_only_items_whose_slots_are_retained() {
         cache.insert(
             LazyListMeasuredItem::new(key as usize, key, None, 10.0, 10.0),
             SmallVec::new(),
+            10.0,
         );
     }
 
