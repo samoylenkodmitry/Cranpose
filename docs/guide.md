@@ -1666,6 +1666,19 @@ hit area. Run the test by file name:
 cargo test --test composition
 ```
 
+### Find a node by a test tag
+
+Text changes with copy edits and translations. `Modifier::test_tag` gives a node
+a name for tests, as Compose's `testTag` does; screen readers never receive it.
+
+```rust
+Text("Pay now", Modifier::empty().test_tag("checkout"), TextStyle::default());
+```
+
+`PlacedSemanticsNode::find_by_tag("checkout")` finds the node in
+`placed_semantics`, the headless robot's `find_by_tag("checkout")` clicks or
+measures it, and the desktop robot's `click_by_tag("checkout")` taps it.
+
 ### Check a state update
 
 Add this test to `tests/composition.rs`. `with_runtime` binds the state handle to

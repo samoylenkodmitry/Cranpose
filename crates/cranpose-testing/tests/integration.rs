@@ -28,6 +28,7 @@ mod secure_text_field_test;
 mod seekable_crossfade_test;
 mod support_text_field;
 mod teardown_survivor_state_test;
+mod test_tag_test;
 mod text_field_caret_moves_test;
 mod text_field_graphemes_test;
 mod text_field_input_transformation_test;

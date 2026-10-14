@@ -80,6 +80,8 @@ pub struct SemanticsDetails {
     pub scroll_to_index: Option<SemanticsScrollToIndex>,
     /// How many rows and columns this list holds, when it is a list.
     pub collection: Option<CollectionInfo>,
+    /// The name tests find this node by; never published to screen readers.
+    pub test_tag: Option<String>,
 }
 
 impl SemanticsDetails {
@@ -116,6 +118,7 @@ impl SemanticsDetails {
         scroll_by: None,
         scroll_to_index: None,
         collection: None,
+        test_tag: None,
     };
 
     pub(super) fn from_configuration(
@@ -155,6 +158,7 @@ impl SemanticsDetails {
             scroll_by: config.scroll_by,
             scroll_to_index: config.scroll_to_index,
             collection: config.collection,
+            test_tag: config.test_tag,
         }
     }
 }

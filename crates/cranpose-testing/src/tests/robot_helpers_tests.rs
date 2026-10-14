@@ -16,6 +16,7 @@ fn semantic_element(
         clickable,
         editable_text: false,
         text_selection: None,
+        test_tag: None,
         bounds: SemanticRect {
             x: bounds.0,
             y: bounds.1,
@@ -470,4 +471,29 @@ fn screenshot_difference_stats_rejects_truncated_storage() {
         changed_pixel_count_in_region(&before, &after, (0.0, 0.0, 2.0, 1.0), 3),
         usize::MAX
     );
+}
+
+#[test]
+fn a_robot_finds_an_element_by_its_tag_below_untagged_parents() {
+    let mut pay = semantic_element(
+        "Button",
+        Some("Pay"),
+        true,
+        (10.0, 20.0, 80.0, 40.0),
+        vec![],
+    );
+    pay.test_tag = Some("checkout".into());
+    let tree = vec![semantic_element(
+        "Layout",
+        None,
+        false,
+        (0.0, 0.0, 300.0, 300.0),
+        vec![
+            semantic_element("Text", Some("Total"), false, (0.0, 0.0, 50.0, 20.0), vec![]),
+            pay,
+        ],
+    )];
+    let found = cranpose::Robot::find_by_tag(&tree, "checkout").expect("the tagged button");
+    assert_eq!(found.text.as_deref(), Some("Pay"));
+    assert!(cranpose::Robot::find_by_tag(&tree, "missing").is_none());
 }

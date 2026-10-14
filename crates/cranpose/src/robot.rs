@@ -61,6 +61,8 @@ pub struct SemanticElement {
     pub editable_text: bool,
     /// Text selection range as UTF-8 byte offsets.
     pub text_selection: Option<(usize, usize)>,
+    /// The name tests find the element by (`Modifier::test_tag`).
+    pub test_tag: Option<String>,
     /// Child semantic elements
     pub children: Vec<SemanticElement>,
 }
@@ -1173,6 +1175,34 @@ impl Robot {
         None
     }
 
+    /// Find the first element, depth first, that carries `tag`
+    /// (`Modifier::test_tag`).
+    pub fn find_by_tag<'a>(
+        elements: &'a [SemanticElement],
+        tag: &str,
+    ) -> Option<&'a SemanticElement> {
+        elements.iter().find_map(|elem| {
+            if elem.test_tag.as_deref() == Some(tag) {
+                Some(elem)
+            } else {
+                Self::find_by_tag(&elem.children, tag)
+            }
+        })
+    }
+
+    /// Click the center of the element that carries `tag`
+    /// (`Modifier::test_tag`).
+    pub fn click_by_tag(&self, tag: &str) -> Result<(), String> {
+        let semantics = self.get_semantics()?;
+        let bounds = Self::find_by_tag(&semantics, tag)
+            .ok_or_else(|| format!("No element tagged '{tag}' in the semantic tree"))?
+            .bounds;
+        self.click(
+            bounds.x + bounds.width / 2.0,
+            bounds.y + bounds.height / 2.0,
+        )
+    }
+
     /// Find clickable element by text content (recursive search)
     ///
     /// In Compose, buttons are often Layout elements with clickable actions
@@ -1506,6 +1536,7 @@ where
         clickable,
         editable_text: details.editable_text,
         text_selection: details.text_selection.map(|range| (range.start, range.end)),
+        test_tag: details.test_tag.clone(),
         children,
     }
 }
@@ -1536,6 +1567,7 @@ fn semantic_element_from_canvas_node(
         clickable: node.clickable,
         editable_text: false,
         text_selection: None,
+        test_tag: None,
         children: Vec::new(),
     }
 }
