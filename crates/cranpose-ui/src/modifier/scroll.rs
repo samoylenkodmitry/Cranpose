@@ -350,6 +350,10 @@ impl ScrollTarget for LazyListState {
         LazyListState::settle_policy(self)
     }
 
+    fn set_dragging(&self, dragging: bool) {
+        self.set_dragged(dragging);
+    }
+
     fn stop_animation(&self) -> bool {
         self.stop_scroll_animation()
     }
