@@ -39,7 +39,7 @@ fn screen(with_list: bool) -> Screen {
         let installed = Rc::clone(&installed);
         LiquidTheme(LiquidThemeSpec::default(), move || {
             let open = rememberMutableStateOf(|| true);
-            let sheet = rememberLiquidSheetState();
+            let sheet = rememberLiquidSheetState(false);
             let list_scroll = cranpose_ui::rememberScrollState!(0.0);
             *installed.borrow_mut() = Some(list_scroll);
             if !open.get() {
@@ -249,4 +249,118 @@ fn a_screen_reader_dismisses_the_sheet() {
     assert!(dismiss.invoke());
     screen.robot.wait_for_motion();
     assert_eq!(screen.dismissed.get(), 1);
+}
+
+/// A sheet taller than half the window, and its state.
+fn tall_screen(skip_partially_expanded: bool) -> (Screen, Rc<RefCell<Option<LiquidSheetState>>>) {
+    let dismissed = Rc::new(Cell::new(0));
+    let counted = Rc::clone(&dismissed);
+    let captured: Rc<RefCell<Option<LiquidSheetState>>> = Rc::default();
+    let installed = Rc::clone(&captured);
+    let robot = create_headless_robot_test(WIDTH as u32, HEIGHT as u32, move || {
+        let counted = Rc::clone(&counted);
+        let installed = Rc::clone(&installed);
+        LiquidTheme(LiquidThemeSpec::default(), move || {
+            let open = rememberMutableStateOf(|| true);
+            let sheet = rememberLiquidSheetState(skip_partially_expanded);
+            *installed.borrow_mut() = Some(sheet.clone());
+            if !open.get() {
+                return;
+            }
+            let counted = Rc::clone(&counted);
+            LiquidModalBottomSheet(
+                sheet,
+                move || {
+                    counted.set(counted.get() + 1);
+                    open.set(false);
+                },
+                || {
+                    Text("Tall content", Modifier::empty(), TextStyle::default());
+                    Box(
+                        Modifier::empty().size(Size::new(WIDTH, 1000.0)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+        });
+    });
+    let mut screen = Screen {
+        robot,
+        dismissed,
+        scroll: Rc::default(),
+    };
+    screen.robot.wait_for_motion();
+    (screen, captured)
+}
+
+fn state(captured: &Rc<RefCell<Option<LiquidSheetState>>>) -> LiquidSheetState {
+    captured.borrow().clone().expect("composed")
+}
+
+#[test]
+fn a_tall_sheet_opens_to_half_the_window_and_a_drag_up_opens_it_fully() {
+    let (mut screen, captured) = tall_screen(false);
+    assert!(!state(&captured).is_expanded());
+    let below_half = HEIGHT / 2.0 + 20.0;
+    screen
+        .robot
+        .drag(WIDTH / 2.0, below_half, WIDTH / 2.0, 40.0);
+    screen.robot.wait_for_motion();
+    assert!(state(&captured).is_expanded());
+    // The sheet now reaches above the half of the window.
+    screen.robot.click_at(WIDTH / 2.0, HEIGHT / 4.0);
+    screen.robot.wait_for_motion();
+    assert_eq!(screen.dismissed.get(), 0);
+}
+
+#[test]
+fn a_drag_down_from_half_the_window_closes_the_sheet() {
+    let (mut screen, _) = tall_screen(false);
+    screen
+        .robot
+        .drag(WIDTH / 2.0, HEIGHT / 2.0 + 20.0, WIDTH / 2.0, HEIGHT - 1.0);
+    screen.robot.wait_for_motion();
+    assert_eq!(screen.dismissed.get(), 1);
+}
+
+#[test]
+fn a_sheet_that_skips_half_opens_fully() {
+    let (_screen, captured) = tall_screen(true);
+    assert!(state(&captured).is_expanded());
+}
+
+#[test]
+fn a_reader_opens_and_lowers_a_tall_sheet() {
+    let (mut screen, captured) = tall_screen(false);
+    screen.robot.shell_mut().set_semantics_enabled(true);
+    screen.robot.wait_for_idle();
+    let action = |screen: &mut Screen, expand: bool| {
+        let tree = screen
+            .robot
+            .shell_mut()
+            .semantics_tree()
+            .expect("semantics");
+        let found = find_semantics_node(tree.root(), &|node| {
+            if expand {
+                node.details().expand.is_some()
+            } else {
+                node.details().collapse.is_some()
+            }
+        })
+        .expect("the sheet offers the action");
+        let details = found.details();
+        if expand {
+            details.expand.clone()
+        } else {
+            details.collapse.clone()
+        }
+        .expect("action")
+    };
+    assert!(action(&mut screen, true).invoke());
+    screen.robot.wait_for_motion();
+    assert!(state(&captured).is_expanded());
+    assert!(action(&mut screen, false).invoke());
+    screen.robot.wait_for_motion();
+    assert!(!state(&captured).is_expanded());
 }
