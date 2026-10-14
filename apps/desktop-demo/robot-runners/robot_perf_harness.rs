@@ -1604,7 +1604,6 @@ mod tests {
             layer_cache_size: 0,
             layer_cache_bytes: 0,
             image_cache_size: 0,
-            text_cache_size: 0,
             ..RenderStatsSnapshot::default()
         });
         stats.record(RenderStatsSnapshot {

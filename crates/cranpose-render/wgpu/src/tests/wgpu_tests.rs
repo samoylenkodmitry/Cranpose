@@ -149,11 +149,6 @@ fn renderer_measurement_uses_software_text_service_without_render_cache_side_eff
         metrics.width > 0.0,
         "software text service should measure text"
     );
-    assert_eq!(
-        renderer.frontend.text_state.text_cache_len(),
-        0,
-        "WGPU must not keep a renderer-side shaping cache for measurement"
-    );
 }
 
 #[test]

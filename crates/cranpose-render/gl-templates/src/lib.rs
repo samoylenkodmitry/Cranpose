@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 //! Writes GLSL templates of WGSL shaders for WebGL2, in a build script.
 //!
 //! On WebGL every pipeline's shaders reach the browser as GLSL. Cranpose's

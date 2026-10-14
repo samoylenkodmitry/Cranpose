@@ -169,7 +169,6 @@ impl RendererFrontend {
             root_scale,
             root,
             overlay,
-            text_cache_len: self.text_state.text_cache_len(),
             clear: frame_clear_color(self.transparent_background),
         };
         let after_build = Instant::now();
