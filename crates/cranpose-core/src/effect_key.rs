@@ -1,32 +1,18 @@
 use std::any::Any;
 
-trait ErasedKeyValue: Any {
-    fn as_any(&self) -> &dyn Any;
-    fn eq_erased(&self, other: &dyn Any) -> bool;
-}
-
-impl<K: PartialEq + 'static> ErasedKeyValue for K {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn eq_erased(&self, other: &dyn Any) -> bool {
-        match other.downcast_ref::<K>() {
-            Some(other) => self == other,
-            None => false,
-        }
-    }
-}
-
-pub(crate) struct EffectKey(Box<dyn ErasedKeyValue>);
+/// The keys an effect last ran with, of any type.
+pub(crate) struct EffectKey(Box<dyn Any>);
 
 impl EffectKey {
     pub(crate) fn new<K: PartialEq + 'static>(key: K) -> Self {
         EffectKey(Box::new(key))
     }
 
-    pub(crate) fn differs_from(&self, previous: &EffectKey) -> bool {
-        !self.0.eq_erased(previous.0.as_any())
+    /// Whether this holds keys of `key`'s type equal to it. A recomposition
+    /// compares its keys here before it boxes them, which it does only when
+    /// they changed.
+    pub(crate) fn holds<K: PartialEq + 'static>(&self, key: &K) -> bool {
+        self.0.downcast_ref::<K>().is_some_and(|held| held == key)
     }
 }
 
