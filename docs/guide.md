@@ -1369,6 +1369,15 @@ fn App() {
 Use `navigate_with` and `NavOptions` to replace part of the stack.
 Use `NavHostWith` to set the transition.
 
+A screen leaves the composition while another covers it, and its scroll state
+with it. Give a scroller a saved state so it comes back where the user left it:
+`rememberSaveableLazyListState("inbox")` for a `LazyColumn` or `LazyRow`, and
+`rememberSaveableLazyGridState`, `rememberSaveableLazyStaggeredGridState`,
+`rememberSaveablePagerState` and `rememberSaveableScrollState` for the other
+scrollers. Each saves under its key in the entry's saveable scope, also across
+a restart. A grid comes back to its first visible item with another column
+count.
+
 ## Animation and graphics
 
 ### Animate a value

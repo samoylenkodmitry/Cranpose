@@ -145,6 +145,22 @@ impl LazyStaggeredGridState {
         self.list.scroll_to_item(index, offset);
     }
 
+    /// The first visible item and how far the viewport starts past it, or
+    /// `None` once the slot that held this state was released.
+    pub fn try_position(&self) -> Option<(usize, f32)> {
+        self.list.try_position()
+    }
+
+    /// A staggered grid's state with `index` first in view, `offset` past
+    /// its start, for code that remembers the state itself. Call it inside a
+    /// `remember`, as [`LazyListState::new`].
+    pub fn new(index: usize, offset: f32) -> Self {
+        Self {
+            list: LazyListState::new(index, offset),
+            lanes: Rc::new(RefCell::new(StaggeredLanes::default())),
+        }
+    }
+
     /// [`Self::scroll_to_item`] with a spring, which a press on the grid
     /// stops.
     pub fn animate_scroll_to_item(&self, index: usize, offset: f32) {

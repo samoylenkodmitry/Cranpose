@@ -4,9 +4,15 @@
 mod browser;
 mod controller;
 mod host;
+mod saved_scroll;
 
 pub use browser::BindBrowserHistory;
 pub use controller::{
     NavController, NavOptions, rememberNavController, rememberSaveableNavController,
 };
 pub use host::{NavHost, NavHostWith};
+pub use saved_scroll::{
+    rememberSaveableLazyGridState, rememberSaveableLazyListState,
+    rememberSaveableLazyStaggeredGridState, rememberSaveablePagerState,
+    rememberSaveableScrollState,
+};
