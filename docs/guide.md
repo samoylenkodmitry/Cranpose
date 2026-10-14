@@ -965,7 +965,9 @@ Removal of the owner releases the model; the model's scope cancels its tasks.
 Use `viewModel(item_id, factory)` for one model per list item. A row can leave the
 viewport and return to the same model. `ProvideViewModelStore` accepts a store
 with test models. `SavedStateHandle` stores small restorable values; a database
-or file owns persistent documents.
+or file owns persistent documents. `SavedStateHandle::current()` in a model's
+factory gives the back-stack entry's handle: its values come back with a restored
+back stack and go when the entry is popped.
 
 The showcase separates [presentation models](https://github.com/samoylenkodmitry/cranpose-showcase/tree/main/src/presentation)
 from [screens](https://github.com/samoylenkodmitry/cranpose-showcase/tree/main/src/screens).

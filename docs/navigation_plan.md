@@ -47,8 +47,10 @@ or test supply a store. Lifecycle start and resume effects follow host state.
 
 - `rememberNavController` keeps the back stack and its screens' saveable state
   in memory. `rememberSaveableNavController` restores both after process death.
-  View models live in memory; they save data through `SavedStateHandle`, whose
-  namespaces the app names.
+  View models live in memory; they save data through `SavedStateHandle`.
+  `SavedStateHandle::current()` gives each entry its own handle, which a
+  restored stack brings back and a pop removes; `SavedStateHandle::new` opens a
+  namespace the app names, shared by every entry.
 - A covered screen keeps its view models; screen-local `remember` state follows
   composition lifetime.
 - `launch_single_top` compares complete route values. Distinct arguments create
