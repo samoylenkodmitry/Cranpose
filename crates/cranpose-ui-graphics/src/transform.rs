@@ -161,7 +161,7 @@ impl ProjectiveTransform {
     }
 
     /// Maps a position into destination coordinates.
-    pub fn map_point(self, point: Point) -> Point {
+    pub fn map_point(&self, point: Point) -> Point {
         let x = point.x;
         let y = point.y;
         let w = self.matrix[2][0] * x + self.matrix[2][1] * y + self.matrix[2][2];
@@ -184,7 +184,7 @@ impl ProjectiveTransform {
     }
 
     /// Maps a rectangle's top-left, top-right, bottom-left and bottom-right corners.
-    pub fn map_rect(self, rect: Rect) -> [[f32; 2]; 4] {
+    pub fn map_rect(&self, rect: Rect) -> [[f32; 2]; 4] {
         [
             self.map_point(Point {
                 x: rect.x,
@@ -207,7 +207,7 @@ impl ProjectiveTransform {
     }
 
     /// Returns the axis-aligned bounds of the transformed rectangle.
-    pub fn bounds_for_rect(self, rect: Rect) -> Rect {
+    pub fn bounds_for_rect(&self, rect: Rect) -> Rect {
         quad_bounds(self.map_rect(rect))
     }
 }
@@ -244,17 +244,13 @@ impl Default for ProjectiveTransform {
 
 /// Returns the axis-aligned bounds containing all four points.
 pub fn quad_bounds(quad: [[f32; 2]; 4]) -> Rect {
-    let mut min_x = f32::INFINITY;
-    let mut min_y = f32::INFINITY;
-    let mut max_x = f32::NEG_INFINITY;
-    let mut max_y = f32::NEG_INFINITY;
-
-    for [x, y] in quad {
-        min_x = min_x.min(x);
-        min_y = min_y.min(y);
-        max_x = max_x.max(x);
-        max_y = max_y.max(y);
-    }
+    // Unrolled: iterating the array by value copies it and steps an
+    // iterator where the compiler optimizes for size.
+    let [[x0, y0], [x1, y1], [x2, y2], [x3, y3]] = quad;
+    let min_x = f32::INFINITY.min(x0).min(x1).min(x2).min(x3);
+    let min_y = f32::INFINITY.min(y0).min(y1).min(y2).min(y3);
+    let max_x = f32::NEG_INFINITY.max(x0).max(x1).max(x2).max(x3);
+    let max_y = f32::NEG_INFINITY.max(y0).max(y1).max(y2).max(y3);
 
     Rect {
         x: min_x,
