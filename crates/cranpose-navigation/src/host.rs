@@ -1,9 +1,14 @@
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_animation::{AnimationType, Easing, tween};
 use cranpose_coroflow::ProvideViewModelStore;
 use cranpose_services::{BackGesture, PredictiveBackHandler, ProvideSaveableScope};
-use cranpose_ui::{ContentSeek, SeekableCrossfade, composable};
+use cranpose_ui::{
+    ContentSeek, SeekableCrossfade, composable,
+    widgets::{Dialog, DialogSpec},
+};
 
-use crate::controller::{Entry, NavController};
+use crate::controller::{Entry, HostView, NavController};
 
 /// How long Compose's `NavHost` fades between destinations.
 const DEFAULT_TRANSITION_MILLIS: u64 = 700;
@@ -64,17 +69,44 @@ where
 /// [`NavHost`] with its own `transition` between screens — Compose's
 /// `NavHost(enterTransition, exitTransition)` for a fade.
 #[composable(no_skip)]
-pub fn NavHostWith<R, F>(controller: NavController<R>, transition: AnimationType, mut content: F)
+pub fn NavHostWith<R, F>(controller: NavController<R>, transition: AnimationType, content: F)
 where
     R: Clone + PartialEq + 'static,
     F: FnMut(R) + 'static,
 {
-    let (top, beneath, can_pop) = controller
+    NavHostWithDialogs(controller, transition, |_| None, content);
+}
+
+/// [`NavHostWith`] where `dialog` gives the routes that show as dialogs
+/// their [`DialogSpec`] — Compose's `dialog(route)` destinations.
+///
+/// A dialog entry shows in a [`Dialog`] over the screen beneath it, which
+/// stays composed; dialogs above one another stack. Dismissing a dialog, by
+/// the back gesture or a tap outside when its spec allows, pops it and the
+/// entries above it. A dialog entry has its own view model store and saved
+/// state, as a screen has.
+#[composable(no_skip)]
+pub fn NavHostWithDialogs<R, D, F>(
+    controller: NavController<R>,
+    transition: AnimationType,
+    dialog: D,
+    content: F,
+) where
+    R: Clone + PartialEq + 'static,
+    D: Fn(&R) -> Option<DialogSpec> + 'static,
+    F: FnMut(R) + 'static,
+{
+    let HostView {
+        screen,
+        toward,
+        dialogs,
+    } = controller
         .stack
-        .read(|stack| (stack.top(), stack.beneath_top(), stack.can_pop()));
+        .read(|stack| stack.screens_and_dialogs(&dialog));
     let gesture = cranpose_core::rememberMutableStateOf(|| None::<f32>);
+    // A dialog on top takes the back gesture itself.
     PredictiveBackHandler(
-        can_pop,
+        dialogs.is_empty() && toward.is_some(),
         move |step| {
             gesture.set(match step {
                 BackGesture::Started(event) | BackGesture::Progressed(event) => {
@@ -90,22 +122,40 @@ where
     );
     let seek = gesture
         .get()
-        .zip(beneath)
-        .map(|(fraction, beneath)| ContentSeek {
-            toward: Some(beneath),
+        .zip(toward)
+        .map(|(fraction, toward)| ContentSeek {
+            toward: Some(toward),
             fraction,
         });
-    SeekableCrossfade(top, seek, transition, move |entry| {
-        if let Some(Entry {
-            route,
-            store,
-            saveables,
-            ..
-        }) = entry
-        {
-            ProvideSaveableScope(saveables, || {
-                ProvideViewModelStore(store, || content(route));
-            });
+    let content = Rc::new(RefCell::new(content));
+    let shown = Rc::clone(&content);
+    SeekableCrossfade(screen, seek, transition, move |entry| {
+        if let Some(entry) = entry {
+            compose_entry(entry, &shown);
         }
+    });
+    for (depth, entry, spec) in dialogs {
+        let content = Rc::clone(&content);
+        cranpose_core::key(entry.id(), move || {
+            Dialog(
+                spec,
+                move |_| controller.pop_to_depth(depth),
+                move || compose_entry(entry.clone(), &content),
+            );
+        });
+    }
+}
+
+/// Composes `entry`'s route with `content`, in the entry's saved state and
+/// view model store.
+fn compose_entry<R, F: FnMut(R)>(entry: Entry<R>, content: &RefCell<F>) {
+    let Entry {
+        route,
+        store,
+        saveables,
+        ..
+    } = entry;
+    ProvideSaveableScope(saveables, || {
+        ProvideViewModelStore(store, || (content.borrow_mut())(route));
     });
 }

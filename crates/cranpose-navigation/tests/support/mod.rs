@@ -38,10 +38,12 @@ pub fn save() {
     );
 }
 
+use cranpose_animation::{Easing, tween};
 use cranpose_core::DisposableEffect;
 use cranpose_coroflow::viewModel;
-use cranpose_navigation::{NavController, NavHost, rememberNavController};
-use cranpose_testing::ComposeTestRule;
+use cranpose_navigation::{NavController, NavHost, NavHostWithDialogs, rememberNavController};
+use cranpose_testing::{ComposeTestRule, RobotTestRule, TestRenderer, create_headless_robot_test};
+use cranpose_ui::widgets::DialogSpec;
 
 /// Long enough for Compose's 700 ms fade to finish.
 const SETTLE_FRAMES: u64 = 60;
@@ -156,4 +158,36 @@ pub fn screens(probe: &Probe) -> (Host, Rc<Cell<Option<NavController<Screen>>>>)
         NavHost(controller, move |screen| probe.screen(screen));
     });
     (host, nav)
+}
+
+/// The controller a test host composed, once it composed it.
+pub type SharedNav = Rc<Cell<Option<NavController<Screen>>>>;
+
+/// A whole app shell, so dialogs compose, whose `NavHost` starts at
+/// [`Screen::Home`], shows [`Screen::Settings`] as a dialog and every screen
+/// through `probe`.
+pub fn with_settings_dialog(probe: &Probe) -> (RobotTestRule<TestRenderer>, SharedNav) {
+    let nav = Rc::new(Cell::new(None));
+    let (captured, probe) = (Rc::clone(&nav), probe.clone());
+    let mut robot = create_headless_robot_test(300, 400, move || {
+        let controller = rememberNavController(Screen::Home);
+        captured.set(Some(controller));
+        let probe = probe.clone();
+        NavHostWithDialogs(
+            controller,
+            tween(700, Easing::FastOutSlowInEasing),
+            |screen| (*screen == Screen::Settings).then(DialogSpec::default),
+            move |screen| probe.screen(screen),
+        );
+    });
+    settle_robot(&mut robot);
+    (robot, nav)
+}
+
+/// Runs the robot's frames until every transition has finished.
+pub fn settle_robot(robot: &mut RobotTestRule<TestRenderer>) {
+    for _ in 0..SETTLE_FRAMES {
+        robot.advance_time(FRAME_NANOS);
+        robot.wait_for_idle();
+    }
 }

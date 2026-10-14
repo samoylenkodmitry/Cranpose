@@ -11,7 +11,7 @@ pub use browser::BindBrowserHistory;
 pub use controller::{
     NavController, NavOptions, rememberNavController, rememberSaveableNavController,
 };
-pub use host::{NavHost, NavHostWith};
+pub use host::{NavHost, NavHostWith, NavHostWithDialogs};
 pub use saved_scroll::{
     rememberSaveableLazyGridState, rememberSaveableLazyListState,
     rememberSaveableLazyStaggeredGridState, rememberSaveablePagerState,

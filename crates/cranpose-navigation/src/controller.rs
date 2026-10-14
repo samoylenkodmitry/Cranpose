@@ -30,6 +30,13 @@ impl<R> Entry<R> {
     }
 }
 
+impl<R> Entry<R> {
+    /// Tells this visit apart from every other entry of its back stack.
+    pub(crate) fn id(&self) -> u64 {
+        self.id
+    }
+}
+
 impl<R> PartialEq for Entry<R> {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
@@ -112,19 +119,48 @@ impl<R: Clone + PartialEq> BackStack<R> {
         self.entries.last().map(|entry| &entry.route)
     }
 
-    pub(crate) fn top(&self) -> Option<Entry<R>> {
-        self.entries.last().cloned()
-    }
-
-    /// The entry a pop would show.
-    pub(crate) fn beneath_top(&self) -> Option<Entry<R>> {
-        let index = self.entries.len().checked_sub(2)?;
-        self.entries.get(index).cloned()
-    }
-
     pub(crate) fn can_pop(&self) -> bool {
         self.entries.len() > 1
     }
+
+    /// What a host shows when `dialog` gives the routes that show as
+    /// dialogs their spec: the topmost entry that is no dialog, the screen a
+    /// pop of it shows, and the dialog entries above it with their depth in
+    /// the back stack.
+    pub(crate) fn screens_and_dialogs<S>(
+        &self,
+        dialog: impl Fn(&R) -> Option<S>,
+    ) -> HostView<R, S> {
+        let is_screen = |entry: &Entry<R>| dialog(&entry.route).is_none();
+        let at = self.entries.iter().rposition(is_screen);
+        let toward = at
+            .and_then(|at| self.entries[..at].iter().rposition(is_screen))
+            .map(|index| self.entries[index].clone());
+        let from = at.map_or(0, |at| at + 1);
+        let dialogs = self.entries[from..]
+            .iter()
+            .enumerate()
+            .filter_map(|(offset, entry)| {
+                dialog(&entry.route).map(|spec| (from + offset, entry.clone(), spec))
+            })
+            .collect();
+        HostView {
+            screen: at.map(|at| self.entries[at].clone()),
+            toward,
+            dialogs,
+        }
+    }
+}
+
+/// What a [`NavHost`](crate::NavHost) shows of a back stack.
+pub(crate) struct HostView<R, S> {
+    /// The topmost entry that is no dialog.
+    pub(crate) screen: Option<Entry<R>>,
+    /// The screen beneath it, which a pop shows.
+    pub(crate) toward: Option<Entry<R>>,
+    /// The dialog entries above the screen, bottom first, each with its
+    /// depth in the back stack and its spec.
+    pub(crate) dialogs: Vec<(usize, Entry<R>, S)>,
 }
 
 /// Forgets the saved state of `popped` entries, and returns whether there
