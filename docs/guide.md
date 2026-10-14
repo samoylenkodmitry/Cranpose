@@ -3108,7 +3108,7 @@ PopupHost(move || {
 });
 ```
 
-`DialogWithScrim` adds an explicit scrim color. Put dialog state in the parent and clear the state in the dismissal callback.
+`DialogWithScrim` adds an explicit scrim color, and `DialogWithFadingScrim` fades it by a value read while the scrim draws. `DialogSpec::with_alignment` places the dialog's surface, at the bottom edge for a sheet. A tap on the dialog's own surface keeps it open. Put dialog state in the parent and clear the state in the dismissal callback.
 
 ### Progress composables
 
@@ -3482,6 +3482,30 @@ The box builds on `NestedScroll`: a container gives the scrollers inside it a
 moves, what the scroller leaves after it moved, and the release velocity
 before it flings. `vertical_scroll`, `horizontal_scroll`, `scrollable` and the
 lazy lists take part.
+
+#### LiquidModalBottomSheet
+
+Show a sheet over the screen from its bottom edge, as Compose's
+`ModalBottomSheet` does. Compose it while the app's flag is set and clear the
+flag in `on_dismiss`. A drag down, a tap on the scrim, the back gesture and
+`state.hide()` slide the sheet out first. A list in the sheet scrolls first
+and hands the sheet the drag it leaves at its top.
+
+```rust preview=bottom_sheet
+use cranpose::liquid::prelude::*;
+
+let open = rememberMutableStateOf(|| false);
+let sheet = rememberLiquidSheetState();
+LiquidActionChip(Modifier::empty(), true, move || open.set(true), "Share".into());
+if open.get() {
+    let done = sheet.clone();
+    LiquidModalBottomSheet(sheet, move || open.set(false), move || {
+        Text("Share to", Modifier::empty().padding(16.0), TextStyle::default());
+        let done = done.clone();
+        LiquidActionChip(Modifier::empty().padding(16.0), false, move || done.hide(), "Done".into());
+    });
+}
+```
 
 #### LiquidSlider
 

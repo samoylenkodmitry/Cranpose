@@ -34,6 +34,7 @@ mod offset;
 mod padding;
 mod pointer_icon;
 pub(crate) mod pointer_input;
+mod pointer_opaque;
 mod rotary_input;
 mod scroll;
 mod selectable;

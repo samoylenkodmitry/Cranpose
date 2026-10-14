@@ -25,7 +25,7 @@ default = []
 localization = ["cranpose-ui/localization"]
 
 [dependencies]
-cranpose-core = { workspace = true }
+cranpose-core = { workspace = true, features = ["internal"] }
 cranpose-macros = { workspace = true }
 cranpose-ui = { workspace = true }
 cranpose-ui-graphics = { workspace = true }
