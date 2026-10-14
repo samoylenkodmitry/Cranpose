@@ -670,6 +670,16 @@ mod ios_device_info;
         target_os = "macos"
     )
 ))]
+mod apple_network;
+
+#[cfg(any(
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(
+        feature = "desktop-shell",
+        feature = "renderer-wgpu",
+        target_os = "macos"
+    )
+))]
 mod apple_thermal;
 
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]

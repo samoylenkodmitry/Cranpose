@@ -4,8 +4,10 @@
 //! Each part is an observation or [`Unknown`](Connectivity::Unknown): with no
 //! platform monitor installed via [`set_platform_network_monitor`], or one
 //! that stopped, both parts are unknown. Android observes both through
-//! `ConnectivityManager`; web observes connectivity through `navigator.onLine`
-//! and cannot tell metering. An app that defers large transfers on metered
+//! `ConnectivityManager`, iOS and macOS through Network.framework's path
+//! monitor, where Low Data Mode also counts as metered; web observes
+//! connectivity through `navigator.onLine` and cannot tell metering. Linux
+//! and Windows install no monitor. An app that defers large transfers on metered
 //! links starts one on its own only when the status says
 //! [`Unmetered`](Metering::Unmetered).
 

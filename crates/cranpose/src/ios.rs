@@ -661,6 +661,7 @@ pub fn try_run(settings: AppSettings, content: impl FnMut() + 'static) -> Result
     crate::apple_wearable::register();
     crate::ios_app_info::register();
     crate::ios_device_info::register();
+    crate::apple_network::register();
     crate::process_info::install();
     crate::ios_background::register();
     crate::ios_downloads::register();
