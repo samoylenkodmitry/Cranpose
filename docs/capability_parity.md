@@ -17,7 +17,7 @@ platform backend reports an observed value.
 | Notifications | iOS, Android, desktop, and web provide notification services. Desktop dispatches through `notify-send`, `osascript`, or PowerShell. |
 | GPU device loss | Desktop opens another device on the adapter (or a new adapter), reconfigures every window's surface, hands the device to every renderer and gives the composition the new `GpuContext`; state and input stay. After three recoveries in a row without a presented frame, the next loss ends the app with `LaunchError::GpuDeviceLost`. Android, iOS and the web log the loss only. |
 | Tray icon and menu bar | No Cranpose API. Desktop apps attach crates such as `tray-icon` and `muda` through `AppLauncher::with_desktop_integration`, which runs on the shell's main thread with each window's raw handles. |
-| Network status | Android observes connectivity and metering through `ConnectivityManager`. Web observes connectivity through `navigator.onLine` and online/offline events; metering stays `Unknown` because browsers do not report it. iOS and macOS observe both through `NWPathMonitor`: a satisfied path is online, and an expensive path (cellular, a personal hotspot) or a constrained one (Low Data Mode) is metered. Linux and Windows have no monitor and report both as `Unknown`. A stopped monitor reports `Unknown` until it reconnects. |
+| Network status | Android observes connectivity and metering through `ConnectivityManager`. Web observes connectivity through `navigator.onLine` and online/offline events; metering stays `Unknown` because browsers do not report it. iOS and macOS observe both through `NWPathMonitor`: a satisfied path is online, and an expensive path (cellular, a personal hotspot) or a constrained one (Low Data Mode) is metered. Linux reads NetworkManager's `State` and `Metered` over the system D-Bus and follows its `PropertiesChanged` signals; without NetworkManager both stay `Unknown`. Windows reads the internet connection profile's connectivity level and cost, again on each `NetworkStatusChanged` event. A stopped monitor reports `Unknown` until it reconnects. |
 | Device information | iOS, Android, and desktop report process memory and CPU readings where available. Web reads `navigator.deviceMemory` when the browser exposes the value. Optional readings use `Option` to represent platform availability. |
 | Clipboard | iOS, Android, desktop, and web provide clipboard services. Web paste uses `request_paste` because browser reads complete asynchronously. |
 | Back requests | iOS and Android publish back requests. While a back gesture moves, Android's predictive back (API 34+) and the iOS edge swipe also publish its progress, which `PredictiveBackHandler` and `NavHost` follow. Desktop apps map keys through their own input policy. On the web, `BindBrowserHistory` maps the browser's Back and Forward, the address bar and reloads to a `NavHost` back stack. |
@@ -38,8 +38,6 @@ platform backend reports an observed value.
 
 ## Current API gaps
 
-- Linux and Windows report network status as unknown. NetworkManager and
-  `INetworkListManager` backends remain future work.
 - The camera service covers native Apple and Android backends. Web applications
   can call browser camera APIs through application code.
 - iOS media playback reports `analysis: false` and `equalizer: false` through
