@@ -6,6 +6,7 @@ mod glass_placeholder;
 mod localization;
 mod pull_to_refresh;
 mod segmented_style;
+mod selection_controls;
 mod tab_label_extents;
 mod tooltip;
 mod widget_composition;

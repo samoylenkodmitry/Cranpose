@@ -3,6 +3,7 @@
 mod bottom_sheet;
 mod button;
 mod card;
+mod checkbox;
 mod chip;
 mod content_scope;
 mod control_lens;
@@ -35,6 +36,7 @@ pub use button::{
     GlassIconButtonGroupSpec,
 };
 pub use card::{Card, LiquidCard, LiquidListRow, LiquidListRowSpec, LiquidListSection, Surface};
+pub use checkbox::{LiquidCheckbox, LiquidRadioButton};
 pub use chip::{LiquidActionChip, LiquidChip};
 pub use glass_surface::GlassSurface;
 #[cfg(feature = "localization")]

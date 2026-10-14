@@ -3574,6 +3574,46 @@ LiquidTooltipBox("Add an item", "Show tooltip", Modifier::empty(), move || {
 });
 ```
 
+#### LiquidCheckbox
+
+Show a check box with caller-owned checked state. A tap, Space or Enter and a
+screen reader's activation toggle it.
+
+```rust preview=checkbox
+use cranpose::liquid::prelude::*;
+
+let accepted = rememberMutableStateOf(|| false);
+LiquidCheckbox(
+    Modifier::empty().content_description("Accept the terms"),
+    accepted.get(),
+    move |value| accepted.set(value),
+);
+```
+
+#### LiquidRadioButton
+
+Show one option of a group. Put the group in a `selectable_group` container,
+so a screen reader says which of how many each option is.
+
+```rust preview=radio_button
+use cranpose::liquid::prelude::*;
+
+let speed = rememberMutableStateOf(|| 0usize);
+Column(
+    Modifier::empty().selectable_group(),
+    ColumnSpec::default(),
+    move || {
+        for (index, name) in ["Standard", "Express"].into_iter().enumerate() {
+            LiquidRadioButton(
+                Modifier::empty().content_description(name),
+                speed.get() == index,
+                move || speed.set(index),
+            );
+        }
+    },
+);
+```
+
 #### LiquidSlider
 
 Show a styled slider with a value in `0.0..=1.0`.
