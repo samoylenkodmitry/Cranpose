@@ -1,7 +1,8 @@
 use std::alloc::System;
 
 use cranpose_ui::{
-    Modifier, measure_layout, run_test_composition,
+    MeasureLayoutOptions, Modifier, measure_layout, measure_layout_with_options,
+    run_test_composition,
     widgets::{
         box_widget::{Box, BoxSpec},
         column::{Column, ColumnSpec},
@@ -62,6 +63,47 @@ fn remeasuring_a_row_allocates_only_its_measurement() {
     let per_row = (many - few) as f64 / 100.0;
     println!("allocations per remeasured row: {per_row}");
     assert!(per_row <= 1.0, "{per_row} allocations per remeasured row");
+}
+
+/// A layout pass as an app shell runs it, with no layout or semantics tree,
+/// lends its applier to the host the pass before gave back: remeasuring a
+/// column of three rows allocates the builder and each node's measurement.
+fn a_layout_pass_lends_its_applier_without_rebuilding_it() {
+    let mut composition = run_test_composition(|| {
+        Column(
+            Modifier::empty().fill_max_width(),
+            ColumnSpec::default(),
+            || {
+                for _ in 0..3 {
+                    Box(
+                        Modifier::empty().fill_max_width().height(10.0),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                }
+            },
+        );
+    });
+    let root = composition.root().expect("a composed root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    let options = MeasureLayoutOptions {
+        collect_semantics: false,
+        build_layout_tree: false,
+    };
+    let mut measure = |width: f32| {
+        measure_layout_with_options(&mut applier, root, Size::new(width, 4000.0), options)
+            .expect("the column measures");
+    };
+    measure(100.0);
+    measure(101.0);
+    let region = Region::new(GLOBAL);
+    measure(102.0);
+    let allocations = region.change().allocations;
+    applier.clear_runtime_handle();
+    println!("allocations of a shell layout pass over four nodes: {allocations}");
+    assert!(allocations <= 6, "{allocations} allocations a pass");
 }
 
 /// A modifier chain built link by link keeps its elements in one shared
@@ -169,6 +211,7 @@ fn a_thread_that_held_a_composition_frees_its_memory_at_exit() {
 #[test]
 fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     remeasuring_a_row_allocates_only_its_measurement();
+    a_layout_pass_lends_its_applier_without_rebuilding_it();
     if !cfg!(feature = "inspection") {
         a_modifier_chain_allocates_its_elements_and_one_shared_box();
     }

@@ -521,10 +521,14 @@ impl RuntimeInner {
     }
 
     fn take_invalidated_scopes(&self) -> Option<Vec<RecomposeScope>> {
-        let mut pending = std::mem::take(&mut *self.scope_queue.borrow_mut());
-        if pending.is_empty() {
-            return None;
-        }
+        // An empty queue keeps its storage for the next invalidation.
+        let mut pending = {
+            let mut queue = self.scope_queue.borrow_mut();
+            if queue.is_empty() {
+                return None;
+            }
+            std::mem::take(&mut *queue)
+        };
         let scopes: Vec<RecomposeScope> = pending
             .iter()
             .filter_map(RecomposeScope::upgrade)

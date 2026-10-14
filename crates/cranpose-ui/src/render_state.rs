@@ -44,6 +44,9 @@ pub struct AppContext {
     draw_observer: SnapshotStateObserver,
     text: crate::text::measure::TextService,
     layout_frame_arena: RefCell<crate::layout::FrameLayoutArena>,
+    /// The host the next layout pass lends its applier to; `None` while a
+    /// pass has it.
+    layout_host: RefCell<Option<crate::layout::LayoutHost>>,
     layout_cache_epoch: Cell<u64>,
     layout_cache_floor: Cell<u64>,
     last_fling_velocity_bits: Cell<u32>,
@@ -245,6 +248,7 @@ impl AppContext {
             draw_observer: new_draw_observer(),
             text: crate::text::measure::TextService::new(),
             layout_frame_arena: RefCell::new(crate::layout::FrameLayoutArena::default()),
+            layout_host: RefCell::new(None),
             layout_cache_epoch: Cell::new(1),
             layout_cache_floor: Cell::new(0),
             last_fling_velocity_bits: Cell::new(0.0f32.to_bits()),
@@ -520,6 +524,19 @@ pub(crate) fn take_layout_frame_arena() -> crate::layout::FrameLayoutArena {
     let context = require_current_app_context("layout frame arena access");
 
     std::mem::take(&mut *context.layout_frame_arena.borrow_mut())
+}
+
+/// The host for a layout pass: the one the last pass gave back, or a new one
+/// when a pass is still running or none ran yet.
+pub(crate) fn take_layout_host() -> crate::layout::LayoutHost {
+    let context = require_current_app_context("layout host access");
+    context.layout_host.borrow_mut().take().unwrap_or_default()
+}
+
+pub(crate) fn replace_layout_host(host: crate::layout::LayoutHost) {
+    if let Some(context) = current_app_context() {
+        *context.layout_host.borrow_mut() = Some(host);
+    }
 }
 
 pub(crate) fn replace_layout_frame_arena(arena: crate::layout::FrameLayoutArena) {

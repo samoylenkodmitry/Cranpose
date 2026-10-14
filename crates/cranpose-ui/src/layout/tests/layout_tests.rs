@@ -1445,9 +1445,9 @@ fn nested_measurement_returns_multiple_scratch_vecs_to_pool() -> Result<(), Node
     let applier_host = guard.host();
     let slots_handle = guard.slots_handle();
     let builder = LayoutBuilder::new_with_epoch(
-        Rc::clone(&applier_host),
+        Rc::clone(applier_host),
         1,
-        Rc::clone(&slots_handle),
+        Rc::clone(slots_handle),
         FrameLayoutArena::default(),
     );
 
