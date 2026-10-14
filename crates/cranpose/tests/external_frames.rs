@@ -5,7 +5,7 @@ use cranpose::{
     prelude::*,
 };
 
-use crate::gpu_support::{fill, pixel};
+use crate::gpu_support::{draw_settled, fill, pixel};
 
 const WIDTH: u32 = 64;
 const HEIGHT: u32 = 48;
@@ -66,7 +66,7 @@ impl Harness {
             })
             .expect("GPU embedded component");
         let mut pixels = Vec::new();
-        view.draw(&mut pixels).expect("first frame");
+        draw_settled(&mut view, &mut pixels);
         Self {
             view,
             scene,
@@ -102,7 +102,7 @@ impl Harness {
         if let Some(frame) = scene.frames.next_frame() {
             scene.shown.set(Some(frame));
         }
-        self.view.draw(&mut self.pixels).expect("frame");
+        draw_settled(&mut self.view, &mut self.pixels);
         let middle = pixel(&self.pixels, WIDTH, WIDTH / 2, HEIGHT / 2);
         [middle[0], middle[1], middle[2], middle[3]]
     }
