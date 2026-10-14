@@ -371,8 +371,8 @@ pub struct Capabilities<'a> {
     pub demands: &'a [Demand],
     /// The media types of the files the application opens, such as
     /// `"audio/*"` or `"application/pdf"`: the platform then offers it for
-    /// those files, in a share sheet and in "Open with", and hands what the
-    /// person picks to `cranpose_services::incoming_share`.
+    /// those files, in a share sheet, in "Open with" and in Finder or Files,
+    /// and hands what the person picks to `cranpose_services::incoming_share`.
     pub opens: &'a [&'a str],
     /// The URL schemes of the links that open the application, such as
     /// `"myapp"` for `myapp://item/7`: the platform opens the application for
@@ -786,8 +786,9 @@ fn android_link_filter(schemes: &[&str]) -> String {
 }
 
 /// The Apple usage descriptions the declaration becomes, with the watch
-/// background modes its services run under and the URL schemes it opens, as
-/// a property list to merge into an `Info.plist`.
+/// background modes its services run under, the document types it opens and
+/// the URL schemes of its links, as a property list to merge into an
+/// `Info.plist`.
 ///
 /// It is a property list of its own, so an Apple build merges it with one
 /// line and no tool beyond the ones macOS ships:
@@ -820,6 +821,20 @@ pub fn apple_usage(capabilities: &Capabilities<'_>) -> String {
         }
         text.push_str("\t</array>\n");
     }
+    let content_types = apple_content_types(capabilities.opens);
+    if !content_types.is_empty() {
+        text.push_str(
+            "\t<key>CFBundleDocumentTypes</key>\n\t<array>\n\t\t<dict>\n\
+             \t\t\t<key>CFBundleTypeName</key>\n\t\t\t<string>Documents</string>\n\
+             \t\t\t<key>CFBundleTypeRole</key>\n\t\t\t<string>Viewer</string>\n\
+             \t\t\t<key>LSHandlerRank</key>\n\t\t\t<string>Alternate</string>\n\
+             \t\t\t<key>LSItemContentTypes</key>\n\t\t\t<array>\n",
+        );
+        for content_type in content_types {
+            let _ = writeln!(text, "\t\t\t\t<string>{content_type}</string>");
+        }
+        text.push_str("\t\t\t</array>\n\t\t</dict>\n\t</array>\n");
+    }
     if !capabilities.links.is_empty() {
         text.push_str(
             "\t<key>CFBundleURLTypes</key>\n\t<array>\n\t\t<dict>\n\
@@ -832,6 +847,54 @@ pub fn apple_usage(capabilities: &Capabilities<'_>) -> String {
     }
     text.push_str("</dict>\n</plist>\n");
     text
+}
+
+/// The Apple content types of the media types an application opens, in
+/// order and without repeats. A type Apple names no content type for counts
+/// as its whole class, `image/x-icon` as every image; an unknown
+/// `application/` type is left out rather than offering the application for
+/// every file.
+fn apple_content_types(opens: &[&str]) -> Vec<&'static str> {
+    const NAMED: [(&str, &str); 14] = [
+        ("*/*", "public.data"),
+        ("application/json", "public.json"),
+        ("application/pdf", "com.adobe.pdf"),
+        ("application/zip", "public.zip-archive"),
+        ("audio/mpeg", "public.mp3"),
+        ("audio/wav", "com.microsoft.waveform-audio"),
+        ("image/gif", "com.compuserve.gif"),
+        ("image/jpeg", "public.jpeg"),
+        ("image/png", "public.png"),
+        ("text/csv", "public.comma-separated-values-text"),
+        ("text/html", "public.html"),
+        ("text/plain", "public.plain-text"),
+        ("video/mp4", "public.mpeg-4"),
+        ("video/quicktime", "com.apple.quicktime-movie"),
+    ];
+    const CLASSES: [(&str, &str); 4] = [
+        ("audio/", "public.audio"),
+        ("image/", "public.image"),
+        ("text/", "public.text"),
+        ("video/", "public.movie"),
+    ];
+    let mut found: Vec<&'static str> = Vec::new();
+    for media_type in opens {
+        let named = NAMED
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(media_type))
+            .or_else(|| {
+                CLASSES
+                    .iter()
+                    .find(|(class, _)| media_type.starts_with(class))
+            })
+            .map(|(_, content_type)| *content_type);
+        if let Some(content_type) = named
+            && !found.contains(&content_type)
+        {
+            found.push(content_type);
+        }
+    }
+    found
 }
 
 fn escape_xml(text: &str) -> String {

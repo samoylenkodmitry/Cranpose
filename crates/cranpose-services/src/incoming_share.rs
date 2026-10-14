@@ -57,6 +57,15 @@ impl IncomingContent {
         }
     }
 
+    /// A file the platform handed over by its path, named after the file.
+    pub fn from_file(path: &std::path::Path) -> Self {
+        let content = Self::from_uri(crate::media::uri_for_path(path));
+        match path.file_name().and_then(|name| name.to_str()) {
+            Some(name) => content.with_name(name),
+            None => content,
+        }
+    }
+
     /// Sets the display name.
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());

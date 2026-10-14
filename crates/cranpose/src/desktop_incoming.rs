@@ -1,12 +1,6 @@
-use std::{
-    io,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{io, path::PathBuf, sync::Arc};
 
-use cranpose_services::{
-    IncomingContent, media::uri_for_path, publish_incoming_content, publish_opened_link,
-};
+use cranpose_services::{IncomingContent, publish_incoming_content, publish_opened_link};
 use winit::{
     data_transfer::{DataTransferId, TypeHint, TypedData},
     event::WindowEvent,
@@ -50,7 +44,9 @@ impl FileDrops {
         self.waiting.push(value);
         self.waiting.retain(|data| match data.try_as_file_paths() {
             Ok(paths) => {
-                paths.iter().for_each(|path| publish_file(path));
+                paths.iter().for_each(|path| {
+                    publish_incoming_content(IncomingContent::from_file(path));
+                });
                 false
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => true,
@@ -62,21 +58,15 @@ impl FileDrops {
     }
 }
 
-pub(crate) fn publish_file(path: &Path) {
-    let mut content = IncomingContent::from_uri(uri_for_path(path));
-    if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
-        content = content.with_name(name);
-    }
-    publish_incoming_content(content);
-}
-
 /// Publishes the documents and the link that the command line names: what
 /// Windows and Linux pass to an application that opens a file or a URL in one
 /// of its schemes.
 pub(crate) fn publish_launch_arguments() {
     for item in launch_items(std::env::args().skip(1)) {
         match item {
-            LaunchItem::Document(path) => publish_file(&path),
+            LaunchItem::Document(path) => {
+                publish_incoming_content(IncomingContent::from_file(&path));
+            }
             LaunchItem::Link(link) => publish_opened_link(link),
         }
     }
