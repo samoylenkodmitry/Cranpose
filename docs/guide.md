@@ -3670,6 +3670,23 @@ GlassButton(
 LiquidSnackbarHost(snackbars, Modifier::empty().fill_max_width());
 ```
 
+#### LiquidDatePicker
+
+Pick a day in a month calendar, as Compose's `DatePicker`. The buttons beside
+the month turn it; the picked day is filled and `today` is ringed. The app
+passes today from its clock in its time zone, for example through
+`CalendarDate::from_unix_days`. With the `localization-formatting` feature of
+`cranpose-liquid`, the month, the weekdays, the first day of the week and what a
+screen reader hears for each day follow the app's language.
+
+```rust preview=date_picker
+use cranpose::liquid::prelude::*;
+
+let today = CalendarDate { year: 2026, month: 10, day: 14 };
+let picker = rememberLiquidDatePickerState(None, today);
+LiquidDatePicker(picker, today, Modifier::empty().width(320.0));
+```
+
 #### LiquidSlider
 
 Show a styled slider with a value in `0.0..=1.0`.

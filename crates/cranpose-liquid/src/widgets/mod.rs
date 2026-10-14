@@ -9,6 +9,7 @@ mod content_scope;
 mod control_lens;
 mod control_material;
 mod control_motion;
+mod date_picker;
 mod floating_button;
 mod glass_surface;
 #[cfg(feature = "localization")]
@@ -39,6 +40,10 @@ pub use button::{
 pub use card::{Card, LiquidCard, LiquidListRow, LiquidListRowSpec, LiquidListSection, Surface};
 pub use checkbox::{LiquidCheckbox, LiquidRadioButton, LiquidTriStateCheckbox};
 pub use chip::{LiquidActionChip, LiquidChip};
+pub use date_picker::{
+    CalendarDate, LiquidDatePicker, LiquidDatePickerState, days_in_month,
+    rememberLiquidDatePickerState,
+};
 pub use glass_surface::GlassSurface;
 #[cfg(feature = "localization")]
 pub use language_picker::LiquidLanguagePicker;
