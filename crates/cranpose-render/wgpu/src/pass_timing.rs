@@ -31,8 +31,11 @@ pub(crate) fn pass_timing_requested() -> bool {
 /// One label's aggregate inside the current print window.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GpuPassTimingEntry {
+    /// The label the passes were recorded under.
     pub label: String,
+    /// GPU time the label's passes took in the window, in milliseconds.
     pub total_ms: f64,
+    /// How many passes carried the label in the window.
     pub passes: u64,
 }
 

@@ -36,7 +36,6 @@ struct CycleSample {
     layer_cache_bytes: u64,
     offscreen_pool_size: u32,
     offscreen_pool_bytes: u64,
-    text_cache_size: u32,
     nodes_len: usize,
     live_node_heap_bytes: usize,
     slot_table_heap_bytes: usize,
@@ -73,15 +72,15 @@ pub(crate) fn main() {
             }
 
             println!(
-                "\n{:>3} {:>8} {:>8} {:>8} {:>8} {:>5} {:>6} {:>6} {:>6} {:>11} {:>5} {:>11} {:>6} {:>7} {:>11} {:>11} {:>8} {:>7} {:>6} {:>6} {:>6} {:>7} {:>7}",
+                "\n{:>3} {:>8} {:>8} {:>8} {:>8} {:>5} {:>6} {:>6} {:>6} {:>11} {:>5} {:>11} {:>7} {:>11} {:>11} {:>8} {:>7} {:>6} {:>6} {:>6} {:>7} {:>7}",
                 "cyc", "drag_avg", "drag_p95", "work_avg", "work_p95", "pass", "effect",
-                "isolay", "lcache", "lcache_B", "pool", "pool_B", "tcache", "nodes",
+                "isolay", "lcache", "lcache_B", "pool", "pool_B", "nodes",
                 "node_heap", "slot_heap", "groups", "rscopes",
                 "frcb", "ltask", "task", "uicont", "cells"
             );
             for (i, s) in samples.iter().enumerate() {
                 println!(
-                    "{:>3} {:>8.2} {:>8.2} {:>8.2} {:>8.2} {:>5} {:>6} {:>6} {:>6} {:>11} {:>5} {:>11} {:>6} {:>7} {:>11} {:>11} {:>8} {:>7} {:>6} {:>6} {:>6} {:>7} {:>7}",
+                    "{:>3} {:>8.2} {:>8.2} {:>8.2} {:>8.2} {:>5} {:>6} {:>6} {:>6} {:>11} {:>5} {:>11} {:>7} {:>11} {:>11} {:>8} {:>7} {:>6} {:>6} {:>6} {:>7} {:>7}",
                     i,
                     s.drag_work_avg_ms,
                     s.drag_work_p95_ms,
@@ -94,7 +93,6 @@ pub(crate) fn main() {
                     s.layer_cache_bytes,
                     s.offscreen_pool_size,
                     s.offscreen_pool_bytes,
-                    s.text_cache_size,
                     s.nodes_len,
                     s.live_node_heap_bytes,
                     s.slot_table_heap_bytes,
@@ -311,7 +309,6 @@ fn sample(robot: &Robot, drag: (f32, f32), cycle: usize) -> CycleSample {
         layer_cache_bytes: render.layer_cache_bytes,
         offscreen_pool_size: render.offscreen_pool_size,
         offscreen_pool_bytes: render.offscreen_pool_bytes,
-        text_cache_size: render.text_cache_size,
         nodes_len: leak.applier_stats.nodes_len,
         live_node_heap_bytes: leak.live_node_heap_bytes,
         slot_table_heap_bytes: leak.slot_table_heap_bytes,

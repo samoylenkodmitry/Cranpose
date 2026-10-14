@@ -37,17 +37,24 @@ const FUNCTION_GUARD: &str = "#function ";
 /// `wgpu_hal::GlslMacroKind`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MacroKind {
+    /// A `bool` constant, written as `0` or `1`.
     Bool,
+    /// An `i32` constant.
     Sint,
+    /// A `u32` constant.
     Uint,
+    /// An `f32` constant.
     Float,
 }
 
 /// The template of one entry point.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Template {
+    /// The entry point's name in the WGSL.
     pub entry_point: String,
+    /// The pipeline stage the entry point runs in.
     pub stage: naga::ShaderStage,
+    /// The GLSL of the entry point and what a backend needs to bind it.
     pub generated: Generated,
 }
 
@@ -78,8 +85,11 @@ pub fn module_templates(source: &str) -> Result<Vec<Template>, String> {
 /// A uniform or storage block, by the name the template gives it.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BlockBinding {
+    /// The block's name in the GLSL.
     pub name: String,
+    /// Whether the block is a storage block instead of a uniform block.
     pub storage: bool,
+    /// The WGSL group and binding of the block.
     pub binding: naga::ResourceBinding,
 }
 
@@ -87,20 +97,33 @@ pub struct BlockBinding {
 /// combines it with.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TextureBinding {
+    /// The texture's name in the GLSL.
     pub name: String,
+    /// Whether the texture is a storage texture instead of a sampled one.
     pub storage: bool,
+    /// The WGSL group and binding of the texture.
     pub binding: naga::ResourceBinding,
+    /// The WGSL group and binding of the sampler combined with the texture, or `None`
+    /// when no sampler is.
     pub sampler: Option<naga::ResourceBinding>,
 }
 
 /// A template as the build script writes it into the renderer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Generated {
+    /// The GLSL ES 3.00 text, starting with its `#version` line, with the pipeline
+    /// constants as macros and the branches they can rule out under `#if`.
     pub glsl: String,
+    /// The pipeline constants a pipeline sets, each by its WGSL name, with how its
+    /// value is written as a macro.
     pub macros: Vec<(String, MacroKind)>,
+    /// The uniform and storage blocks the GLSL names, sorted.
     pub blocks: Vec<BlockBinding>,
+    /// The textures the GLSL names, sorted.
     pub textures: Vec<TextureBinding>,
+    /// Each vertex input or fragment output by name, with its location, sorted by name.
     pub varyings: Vec<(String, u32)>,
+    /// How many clip distances the vertex stage writes; zero when it writes none.
     pub clip_distance_count: u32,
 }
 
