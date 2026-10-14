@@ -549,6 +549,12 @@ mod desktop_integration;
     )
 ))]
 mod desktop_menus;
+#[cfg(all(
+    feature = "desktop-menus",
+    feature = "renderer-wgpu",
+    target_os = "windows"
+))]
+mod windows_menu;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 pub use desktop_integration::{
     DesktopIntegration, DesktopIntegrationContext, DesktopWaker, DesktopWindow, DesktopWindowId,

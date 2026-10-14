@@ -6,7 +6,8 @@
 //! The tray icon shows on macOS, Windows and Linux; on Linux it is a
 //! StatusNotifierItem over D-Bus, which GNOME shows with the AppIndicator
 //! extension. The menu bar is the macOS application menu bar, after the
-//! application menu; on Windows and Linux [`MenuBar`] shows nothing yet.
+//! application menu, and on Windows the window's own menu bar; on Linux
+//! [`MenuBar`] shows nothing yet.
 
 use std::{
     rc::Rc,
@@ -223,7 +224,8 @@ pub fn Tray(spec: TraySpec) {
 
 /// Shows `menus` in the menu bar while this composable is in the
 /// composition: on macOS after the application menu, which keeps About,
-/// Hide and Quit. The last `MenuBar` composed wins while two are.
+/// Hide and Quit, and on Windows in the main window, where the items'
+/// shortcuts run them too. The last `MenuBar` composed wins while two are.
 #[composable(no_skip)]
 pub fn MenuBar(menus: Vec<Menu>) {
     let owner = remember(next_owner).with(|owner| *owner);
@@ -421,6 +423,9 @@ pub(crate) struct NativeMenus {
     tray: Option<tray_icon::TrayIcon>,
     #[cfg(target_os = "macos")]
     menu_bar: Option<muda::Menu>,
+    /// The menu bar and the window it shows in.
+    #[cfg(target_os = "windows")]
+    menu_bar: Option<(muda::Menu, isize)>,
 }
 
 impl NativeMenus {
@@ -432,6 +437,7 @@ impl NativeMenus {
         app: &mut AppShell<WgpuRenderer>,
         proxy: &EventLoopProxy,
         menu_bar_due: bool,
+        window: Option<&dyn winit::window::Window>,
     ) {
         *WAKER.lock().unwrap_or_else(PoisonError::into_inner) = Some(proxy.clone());
         HANDLERS.call_once(|| {
@@ -451,7 +457,7 @@ impl NativeMenus {
         });
         let revision = with_requests(|requests| requests.revision);
         if (revision != self.built_revision || self.stale) && menu_bar_due {
-            self.build();
+            self.build(window);
             self.built_revision = revision;
             self.stale = false;
         }
@@ -492,7 +498,7 @@ impl NativeMenus {
         }
     }
 
-    fn build(&mut self) {
+    fn build(&mut self, window: Option<&dyn winit::window::Window>) {
         let (tray, menu_bar) = with_requests(|requests| {
             (
                 requests.tray.as_ref().map(|(_, spec)| spec.clone()),
@@ -500,7 +506,7 @@ impl NativeMenus {
             )
         });
         self.build_tray(tray);
-        self.build_menu_bar(menu_bar);
+        self.build_menu_bar(menu_bar, window);
     }
 
     fn build_tray(&mut self, spec: Option<TraySpec>) {
@@ -551,7 +557,11 @@ impl NativeMenus {
     }
 
     #[cfg(target_os = "macos")]
-    fn build_menu_bar(&mut self, menus: Option<Vec<Menu>>) {
+    fn build_menu_bar(
+        &mut self,
+        menus: Option<Vec<Menu>>,
+        _window: Option<&dyn winit::window::Window>,
+    ) {
         let Some(menus) = menus else {
             if let Some(menu_bar) = self.menu_bar.take() {
                 menu_bar.remove_for_nsapp();
@@ -592,8 +602,41 @@ impl NativeMenus {
         self.menu_bar = Some(menu_bar);
     }
 
-    #[cfg(not(target_os = "macos"))]
-    fn build_menu_bar(&mut self, _menus: Option<Vec<Menu>>) {}
+    #[cfg(target_os = "windows")]
+    fn build_menu_bar(
+        &mut self,
+        menus: Option<Vec<Menu>>,
+        window: Option<&dyn winit::window::Window>,
+    ) {
+        if let Some((menu_bar, hwnd)) = self.menu_bar.take() {
+            crate::windows_menu::detach(&menu_bar, hwnd);
+        }
+        let (Some(menus), Some(window)) = (menus, window) else {
+            return;
+        };
+        let menu_bar = muda::Menu::new();
+        let items: Vec<Box<dyn IsMenuItem>> = menus
+            .iter()
+            .enumerate()
+            .filter_map(|(index, menu)| build_submenu(menu, &format!("bar/{index}")))
+            .map(|submenu| Box::new(submenu) as Box<dyn IsMenuItem>)
+            .collect();
+        if let Err(error) = menu_bar.append_items(&item_refs(&items)) {
+            log::warn!("cranpose: the menu bar could not be built: {error}");
+        }
+        if let Some(hwnd) = crate::windows_menu::attach(&menu_bar, window) {
+            self.menu_bar = Some((menu_bar, hwnd));
+        }
+    }
+
+    /// Linux has no menu bar without GTK, which the shell does not take.
+    #[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+    fn build_menu_bar(
+        &mut self,
+        _menus: Option<Vec<Menu>>,
+        _window: Option<&dyn winit::window::Window>,
+    ) {
+    }
 }
 
 /// The native items of `entries`, each with its path under `path` as its id.
@@ -751,13 +794,17 @@ fn key_code(key: KeyCode) -> Option<Code> {
 }
 
 /// Chooses the item that `labels` name, as a click on it does: through the
-/// native menu bar on macOS once it shows the menu, else through the event a
-/// click queues.
+/// native menu bar on macOS once it shows the menu and on Windows, else
+/// through the event a click queues.
 #[cfg(feature = "robot")]
 pub(crate) fn choose(tray: bool, labels: &[String]) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     if !tray && menu_bar_shows(labels) {
         return choose_in_menu_bar(labels);
+    }
+    #[cfg(target_os = "windows")]
+    if !tray {
+        return crate::windows_menu::choose(labels);
     }
     let id = with_requests(|requests| requests.id_of(tray, labels))
         .ok_or_else(|| format!("no menu item {labels:?}"))?;
