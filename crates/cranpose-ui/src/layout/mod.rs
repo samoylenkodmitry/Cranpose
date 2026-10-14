@@ -54,7 +54,6 @@ use crate::{
 pub(crate) struct LayoutNodeContext {
     invalidations: Vec<InvalidationKind>,
     update_requested: bool,
-    active_capabilities: Vec<NodeCapabilities>,
     density: f32,
 }
 
@@ -80,14 +79,6 @@ impl ModifierNodeContext for LayoutNodeContext {
 
     fn request_update(&mut self) {
         self.update_requested = true;
-    }
-
-    fn push_active_capabilities(&mut self, capabilities: NodeCapabilities) {
-        self.active_capabilities.push(capabilities);
-    }
-
-    fn pop_active_capabilities(&mut self) {
-        self.active_capabilities.pop();
     }
 
     fn density(&self) -> f32 {

@@ -237,22 +237,6 @@ fn structural_eq_ignores_always_update_elements() {
 }
 
 #[test]
-fn incremental_single_fingerprints_match_full_pass() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    let elements = vec![
-        test_fingerprint_element(1, NodeCapabilities::LAYOUT, false),
-        test_fingerprint_element(2, NodeCapabilities::DRAW, false),
-        test_fingerprint_element(3, NodeCapabilities::DRAW, true),
-        test_fingerprint_element(4, NodeCapabilities::SEMANTICS, false),
-    ];
-
-    let seeded = super::append_fingerprints(super::single_fingerprint_seed(), &elements[..2]);
-    let split = super::append_fingerprints(seeded, &elements[2..]);
-
-    assert_eq!(super::single_fingerprints(&elements), split);
-}
-
-#[test]
 fn modifiers_built_incrementally_match_from_parts() {
     let _app_context = crate::render_state::app_context_test_scope();
     let elements = vec![

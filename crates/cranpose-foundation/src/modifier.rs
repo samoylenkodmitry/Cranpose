@@ -78,7 +78,9 @@ pub trait ModifierNodeContext {
 pub struct BasicModifierNodeContext {
     invalidations: ModifierInvalidations,
     update_requested: bool,
-    active_capabilities: Vec<NodeCapabilities>,
+    /// The capabilities of the nodes interacting with the context, the
+    /// innermost last; nesting stays shallow, so the stack lives inline.
+    active_capabilities: smallvec::SmallVec<[NodeCapabilities; 4]>,
     node_id: Option<cranpose_core::NodeId>,
 }
 
