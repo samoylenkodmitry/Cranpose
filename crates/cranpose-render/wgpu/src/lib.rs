@@ -1074,6 +1074,18 @@ impl WgpuRenderer {
         }
     }
 
+    /// Tells the renderer that the browser compiles the pipelines it creates
+    /// from now on in the background (`wgpu::Device::compile_pipelines_in_background`).
+    /// On WebGPU the first screen draws its shapes with a general pipeline,
+    /// whose one compile stands in for the specialized ones; those it builds
+    /// once this is called, and draws switch to each as it lands.
+    #[cfg(target_arch = "wasm32")]
+    pub fn compile_pipelines_in_background(&mut self) {
+        if let PresentBackend::Sync(gpu_renderer) = &mut self.backend {
+            gpu_renderer.compile_pipelines_in_background();
+        }
+    }
+
     /// Return the WGPU device when GPU resources are initialized.
     /// Sync backend only (desktop/web reconfigure paths); the threaded
     /// runtime owns its device on the present thread.

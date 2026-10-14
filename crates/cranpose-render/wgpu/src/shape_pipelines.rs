@@ -28,10 +28,20 @@ pub(crate) trait KeyedBuild: CompilerSend + CompilerSync + 'static {
     type Output: CompilerSend + CompilerSync + 'static;
 
     fn build(&self, key: ShapePipelineKey) -> Self::Output;
+
+    /// Whether `output` draws: a pipeline the browser still compiles in the
+    /// background does not yet.
+    fn landed(_output: &Self::Output) -> bool {
+        true
+    }
 }
 
 impl KeyedBuild for ShapePipelineFactory {
     type Output = wgpu::RenderPipeline;
+
+    fn landed(pipeline: &wgpu::RenderPipeline) -> bool {
+        pipeline.is_ready()
+    }
 
     fn build(&self, key: ShapePipelineKey) -> wgpu::RenderPipeline {
         create_shape_pipeline(
@@ -53,6 +63,13 @@ pub(crate) struct ShapePipelines<B: KeyedBuild = ShapePipelineFactory> {
     /// How many specialized pipelines draws built themselves, by the
     /// general pipeline that would have stood in for them.
     exact_builds: HashMap<ShapePipelineKey, u8>,
+    /// Whether draws take the general pipeline until their specialized one
+    /// compiled in the background, which they build only once
+    /// [`Self::build_in_background`] says the browser compiles there: see
+    /// [`Self::ensure`].
+    stands_in: bool,
+    /// Whether pipelines built now compile in the browser's background.
+    background_builds: bool,
     recorder: crate::pipeline_recorder::PipelineRecorder,
 }
 
@@ -88,8 +105,18 @@ impl<B: KeyedBuild> ShapePipelines<B> {
             slots,
             asynchronous,
             exact_builds: HashMap::default(),
+            stands_in: backend == wgpu::Backend::BrowserWebGpu,
+            background_builds: false,
             recorder,
         }
+    }
+
+    /// Builds the specialized pipelines draws want from now on: the browser
+    /// compiles what the device creates in the background
+    /// (`wgpu::Device::compile_pipelines_in_background`).
+    #[cfg_attr(not(any(test, target_arch = "wasm32")), expect(dead_code))]
+    pub(crate) fn build_in_background(&mut self) {
+        self.background_builds = true;
     }
 
     pub(crate) fn begin_frame(&mut self) {
@@ -119,7 +146,11 @@ impl<B: KeyedBuild> ShapePipelines<B> {
     }
 
     pub(crate) fn request_wanted(&mut self) {
-        self.slots.request_wanted();
+        if !self.stands_in {
+            self.slots.request_wanted();
+        } else if self.background_builds {
+            self.slots.build_wanted();
+        }
     }
 
     /// Queues on the warm-up lane the build of every pipeline `demand` names
@@ -140,8 +171,10 @@ impl<B: KeyedBuild> ShapePipelines<B> {
         }
     }
 
-    /// Builds `key`'s pipeline here unless it is built, ahead of any draw.
+    /// Builds `key`'s pipeline here unless it is built, ahead of any draw;
+    /// where draws stand in, the general pipeline that stands in for it.
     pub(crate) fn build_ahead(&mut self, key: ShapePipelineKey) {
+        let key = if self.stands_in { key.universal() } else { key };
         self.slots.build(key);
     }
 
@@ -151,11 +184,23 @@ impl<B: KeyedBuild> ShapePipelines<B> {
             self.recorder
                 .note_shape(key.to_bits(), self.recorder.in_first_screen());
         }
-        if need.ready {
+        if need.ready && (!self.stands_in || self.slots.get(key).is_some_and(B::landed)) {
             return;
         }
         self.recorder.during_demand(|| {
             let general = key.general();
+            // In the browser every specialized pipeline the first screen
+            // draws with compiles beside the others before it shows: on an
+            // Apple M5 with no Metal shader cached, the gauntlet's five
+            // shape pipelines and seven others ended their compiles 332 ms
+            // after they began; one universal pipeline in place of the five
+            // ended them after 227. Draws take it until their own compiled
+            // in the background.
+            if self.stands_in && key != key.universal() {
+                self.slots.build(key.universal());
+                self.slots.want(key, vertices);
+                return;
+            }
             if !self.asynchronous || key == general {
                 self.slots.build(key);
                 return;
@@ -176,14 +221,17 @@ impl<B: KeyedBuild> ShapePipelines<B> {
     }
 
     pub(crate) fn get(&self, key: ShapePipelineKey) -> Option<(&B::Output, bool)> {
-        self.slots
-            .get(key)
-            .map(|pipeline| (pipeline, false))
-            .or_else(|| {
-                self.slots
-                    .get(key.general())
-                    .map(|pipeline| (pipeline, true))
-            })
+        let stand_in = if self.stands_in {
+            key.universal()
+        } else {
+            key.general()
+        };
+        let general = || self.slots.get(stand_in).map(|pipeline| (pipeline, true));
+        match self.slots.get(key) {
+            Some(pipeline) if !self.stands_in || B::landed(pipeline) => Some((pipeline, false)),
+            Some(pipeline) => general().or(Some((pipeline, false))),
+            None => general(),
+        }
     }
 }
 
@@ -371,6 +419,15 @@ impl<B: KeyedBuild> Slots<B> {
 
     pub(crate) fn want(&mut self, key: ShapePipelineKey, vertices: u64) {
         self.wanted.add(key, vertices);
+    }
+
+    /// Builds here every pipeline draws wanted.
+    pub(crate) fn build_wanted(&mut self) {
+        for (key, _) in self.wanted.drain() {
+            Self::entry(&mut self.entries, key)
+                .value
+                .get_or_init(|| self.builder.build(key));
+        }
     }
 
     /// Forgets the wants of a frame that ended before queuing them.

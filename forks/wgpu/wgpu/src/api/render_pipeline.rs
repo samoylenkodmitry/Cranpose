@@ -29,6 +29,18 @@ impl RenderPipeline {
         BindGroupLayout { inner: layout }
     }
 
+    /// Whether draws with this pipeline draw: `false` while the browser
+    /// still compiles it in the background
+    /// ([`Device::compile_pipelines_in_background`]) and for one pipeline
+    /// discovery created, which never draws; `true` on every other backend.
+    pub fn is_ready(&self) -> bool {
+        #[cfg(webgpu)]
+        if let Some(pipeline) = self.inner.as_webgpu_opt() {
+            return pipeline.inner.get().is_some();
+        }
+        true
+    }
+
     #[cfg(custom)]
     /// Returns custom implementation of RenderPipeline (if custom backend and is internally T)
     pub fn as_custom<T: custom::RenderPipelineInterface>(&self) -> Option<&T> {
