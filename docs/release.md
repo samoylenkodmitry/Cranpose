@@ -57,7 +57,8 @@ The `cranpose` features an app chooses:
   `localization`, `localization-formatting`, `localized-arabic`,
   `localized-devanagari`, `localized-cjk` and `southeast-asian-line-breaks`.
 - Services: `audio`, `audio-desktop`, `camera-desktop`, `media`, `media-wav`,
-  `webview`, `storekit`, `playbilling`, `heart-rate` and `wearable`.
+  `image-loading`, `webview`, `storekit`, `playbilling`, `heart-rate` and
+  `wearable`.
 - Tools: `robot`, `preview`, `hot-reload` and `release-log-info`.
 
 The other crates are internal: `cranpose-macros` (reached through `cranpose`),

@@ -416,6 +416,9 @@ test-features: test-watchos test-localization
     cargo clippy -p cranpose --no-default-features --features webview -- -D warnings
     cargo test --profile ci -p cranpose --no-default-features --features embed
     cargo test --profile ci -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling
+    cargo test --profile ci -p cranpose-services --features image-loading,http-native --test integration image_loading
+    cargo clippy -p cranpose-services --all-targets --features image-loading,http-native -- -D warnings
+    cargo clippy -p cranpose-services --target wasm32-unknown-unknown --features image-loading,web-http -- -D warnings
 
 # Localization contracts, embedded catalogs, optional feature, and public UI integration.
 test-localization: check-localization

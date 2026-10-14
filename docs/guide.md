@@ -2110,6 +2110,57 @@ An app that plays only WAV files of PCM samples, such as its own recordings, ena
 For game sounds, enable `audio`; use `audio-desktop` on desktop.
 See [Cranamp](https://github.com/samoylenkodmitry/cranamp) for a player app.
 
+### Show an image from the network
+
+Enable image loading, and an HTTP backend for network images:
+
+```sh
+cargo add cranpose --features image-loading
+cargo add cranpose-services --features http-native --target 'cfg(not(target_arch = "wasm32"))'
+cargo add cranpose-services --features web-http --target 'cfg(target_arch = "wasm32")'
+```
+
+`rememberAsyncImage` loads an image while the composable stays on screen.
+Request the size the image is drawn at, in device pixels: a large photo then
+holds a thumbnail's memory.
+
+```rust
+use cranpose::prelude::*;
+
+#[composable]
+fn Avatar(url: String) {
+    let side = (48.0 * density().density()).round() as u32;
+    let state = rememberAsyncImage(ImageRequest::new(url).max_size(side, side));
+    match state.value() {
+        ImageLoadState::Ready(bitmap) => {
+            Image(
+                BitmapPainter(bitmap),
+                Some("Profile photo".into()),
+                Modifier::empty().size(Size::new(48.0, 48.0)),
+                Alignment::CENTER,
+                ContentScale::Crop,
+                1.0,
+                None,
+            );
+        }
+        ImageLoadState::Loading | ImageLoadState::Failed(_) => {
+            let placeholder = Modifier::empty()
+                .size(Size::new(48.0, 48.0))
+                .background(Color::from_rgb_u8(230, 230, 230));
+            Box(placeholder, BoxSpec::default(), || {});
+        }
+    }
+}
+```
+
+The image decodes on a worker thread. All images share one memory cache,
+bounded by the bytes of decoded pixels, and a disk cache in the application's
+cache folder with a size limit; `ImageLoader::new` makes a loader with other
+limits. Requests of one image share one download, and a request whose
+composables all left stops its download. `ImageRequest::new` also takes
+`file://` URLs and file paths, and `ImageRequest::bytes` decodes bytes the app
+holds, such as a picked file.
+
 ### Use the camera
 
 Android and iOS supply camera backends. macOS needs `cranpose/camera-desktop` and a signed app bundle.

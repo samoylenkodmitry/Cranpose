@@ -1599,6 +1599,7 @@ dependencies = [
  "cranpose-ui-graphics",
  "directories",
  "futures-util",
+ "image",
  "js-sys",
  "log",
  "open",
