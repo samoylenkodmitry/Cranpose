@@ -955,6 +955,36 @@ where
         self.route_drag_and_drop();
     }
 
+    /// Gives the held press to `node` alone, as a long press does once it
+    /// fires: every handler under the press sees it cancelled, the other
+    /// handlers on `node` too, so a button does not click when the press
+    /// ends, and the rest of the press reaches `node` alone. Does nothing on
+    /// a surface whose press does not reach `node`.
+    pub(crate) fn give_press_to(&mut self, node: NodeId) {
+        let holds = self
+            .surface()
+            .hit_path_tracker
+            .get_path(PointerId::PRIMARY)
+            .is_some_and(|paths| paths.iter().any(|path| path.contains(&node)));
+        if !holds {
+            return;
+        }
+        let event_time = self.shell.app.realtime_pointer_event_time(None);
+        let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
+        self.surface_mut()
+            .hit_path_tracker
+            .add_hit_path(PointerId::PRIMARY, vec![vec![node]]);
+        let cursor = Point {
+            x: self.surface().cursor.0,
+            y: self.surface().cursor.1,
+        };
+        let event = self
+            .pointer_event(PointerEventKind::Cancel, cursor, cursor, event_time)
+            .with_source(self.surface().pointer_source);
+        let _event_handler = enter_event_handler_scope();
+        let _ = run_in_mutable_snapshot(|| self.dispatch_targets(targets, event, false));
+    }
+
     fn route_drag_and_drop(&mut self) {
         let app_context = Rc::clone(&self.shell.app.app_context);
         let source = self.index;

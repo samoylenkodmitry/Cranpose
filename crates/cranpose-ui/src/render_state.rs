@@ -50,6 +50,7 @@ pub struct AppContext {
     layout_node_registry: crate::widgets::nodes::layout_node::LayoutNodeRegistryState,
     pointer_dispatch: crate::pointer_dispatch::PointerDispatchState,
     mouse_input: crate::mouse_input::MouseInputQueue,
+    pointer_claim: Cell<Option<cranpose_core::NodeId>>,
     focus_dispatch: crate::focus_dispatch::FocusInvalidationState,
     modal: crate::modal::ModalState,
     modal_nodes: crate::modal_nodes::ModalNodes,
@@ -250,6 +251,7 @@ impl AppContext {
             ),
             pointer_dispatch: crate::pointer_dispatch::PointerDispatchState::new(),
             mouse_input: crate::mouse_input::MouseInputQueue::default(),
+            pointer_claim: Cell::new(None),
             focus_dispatch: crate::focus_dispatch::FocusInvalidationState::new(),
             modal: crate::modal::ModalState::new(),
             modal_nodes: crate::modal_nodes::ModalNodes::default(),
@@ -299,6 +301,18 @@ impl AppContext {
     #[doc(hidden)]
     pub fn take_mouse_move(&self) -> Option<crate::mouse_input::MouseMoveRequest> {
         self.mouse_input.take()
+    }
+
+    /// Asks the shell to give the rest of the held press to `node` alone: the
+    /// other targets under the press see it cancelled.
+    pub(crate) fn claim_pointer(&self, node: cranpose_core::NodeId) {
+        self.pointer_claim.set(Some(node));
+    }
+
+    /// Takes the node that claimed the held press since the last call.
+    #[doc(hidden)]
+    pub fn take_pointer_claim(&self) -> Option<cranpose_core::NodeId> {
+        self.pointer_claim.take()
     }
 
     /// The window roots attached in this context.
