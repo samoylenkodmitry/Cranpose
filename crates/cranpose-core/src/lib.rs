@@ -763,12 +763,37 @@ pub(crate) struct RecomposeScopeInner {
     recompositions: std::cell::OnceCell<source_trace::RecompositionCounter>,
     slots_storage_key: Cell<usize>,
     slots_runtime_state: Cell<Option<std::rc::Weak<crate::composer::ComposerRuntimeState>>>,
-    state_subscriptions: Cell<StateIds>,
+    /// The states the scope is subscribed to: what its last body read, in
+    /// read order.
+    state_subscriptions: RefCell<StateIds>,
+    /// What the body running now read so far, once it left the order of
+    /// `state_subscriptions`.
+    run_reads: RefCell<StateIds>,
+    /// How many subscriptions the body running now read in order, or
+    /// [`DIVERGED`] or [`NOT_READING`].
+    read_cursor: Cell<u32>,
     invalidation_sources: Cell<StateIds>,
     unknown_invalidation_source: Cell<bool>,
 }
 
 type StateIds = SmallVec<[StateId; 2]>;
+
+/// What [`RecomposeScope::note_read`] made of a read.
+pub(crate) enum ScopeRead {
+    /// The read repeats the last body's, so the state watches the scope.
+    Watched,
+    /// The read went into the running body's reads; the state may not watch
+    /// the scope yet.
+    Collected,
+    /// No body of the scope is running.
+    NotReading,
+}
+
+/// A scope's `read_cursor` while no body of it runs.
+const NOT_READING: u32 = u32::MAX;
+/// A scope's `read_cursor` once the running body left the order of the reads
+/// before it.
+const DIVERGED: u32 = u32::MAX - 1;
 
 enum ScopeOwner {
     Root,
@@ -835,7 +860,9 @@ impl RecomposeScopeInner {
             recompositions: std::cell::OnceCell::new(),
             slots_storage_key: Cell::new(0),
             slots_runtime_state: Cell::new(None),
-            state_subscriptions: Cell::new(StateIds::new()),
+            state_subscriptions: RefCell::new(StateIds::new()),
+            run_reads: RefCell::new(StateIds::new()),
+            read_cursor: Cell::new(NOT_READING),
             invalidation_sources: Cell::new(StateIds::new()),
             unknown_invalidation_source: Cell::new(false),
         }
@@ -858,7 +885,8 @@ impl Drop for RecomposeScopeInner {
         let id = self.id();
         self.runtime.decrement_live_recompose_scope_count();
         let subscriptions = std::mem::take(self.state_subscriptions.get_mut());
-        for state_id in subscriptions {
+        let run_reads = std::mem::take(self.run_reads.get_mut());
+        for state_id in subscriptions.into_iter().chain(run_reads) {
             self.runtime.unregister_state_scope(state_id, id);
         }
         #[cfg(debug_assertions)]
@@ -970,9 +998,86 @@ impl RecomposeScope {
     }
 
     fn record_state_subscription(&self, state_id: StateId) {
-        update_cell(&self.inner.state_subscriptions, |ids| {
-            push_unique_state_id(ids, state_id);
-        });
+        push_unique_state_id(&mut self.inner.state_subscriptions.borrow_mut(), state_id);
+    }
+
+    /// Starts collecting the states a body of the scope reads.
+    pub(crate) fn begin_reads(&self) {
+        self.inner.read_cursor.set(0);
+    }
+
+    /// Notes that the body running now read `state_id`. While the body reads
+    /// what the last one read, in the same order, a read only moves the
+    /// cursor along the subscriptions, and the state is known to watch the
+    /// scope already; the first read off that order copies the reads so far
+    /// into `run_reads`.
+    #[inline]
+    fn note_read(&self, state_id: StateId) -> ScopeRead {
+        let cursor = self.inner.read_cursor.get();
+        if cursor == NOT_READING {
+            return ScopeRead::NotReading;
+        }
+        if cursor == DIVERGED {
+            let mut reads = self.inner.run_reads.borrow_mut();
+            if reads.last() != Some(&state_id) {
+                reads.push(state_id);
+            }
+            return ScopeRead::Collected;
+        }
+        let at = cursor as usize;
+        let subscribed = self.inner.state_subscriptions.borrow();
+        if subscribed.get(at) == Some(&state_id) {
+            self.inner.read_cursor.set(cursor + 1);
+            return ScopeRead::Watched;
+        }
+        if at > 0 && subscribed[at - 1] == state_id {
+            return ScopeRead::Watched;
+        }
+        let mut reads = self.inner.run_reads.borrow_mut();
+        reads.clear();
+        reads.extend_from_slice(&subscribed[..at]);
+        reads.push(state_id);
+        self.inner.read_cursor.set(DIVERGED);
+        ScopeRead::Collected
+    }
+
+    /// Ends collecting reads. A body that ran makes its reads the scope's
+    /// subscriptions and drops the states it did not read again, as Compose
+    /// does; a skipped or unfinished one keeps the subscriptions it had.
+    pub(crate) fn end_reads(&self, ran: bool) {
+        let cursor = self.inner.read_cursor.replace(NOT_READING);
+        if cursor == NOT_READING {
+            return;
+        }
+        let id = self.id();
+        let mut subscribed = self.inner.state_subscriptions.borrow_mut();
+        if cursor != DIVERGED {
+            // The body read a prefix of the subscriptions, in order.
+            let read = cursor as usize;
+            if ran && read < subscribed.len() {
+                for &state_id in &subscribed[read..] {
+                    if !subscribed[..read].contains(&state_id) {
+                        self.inner.runtime.forget_state_scope(state_id, id);
+                    }
+                }
+                subscribed.truncate(read);
+            }
+            return;
+        }
+        let mut reads = self.inner.run_reads.borrow_mut();
+        if ran {
+            for &state_id in subscribed.iter() {
+                if !reads.contains(&state_id) {
+                    self.inner.runtime.forget_state_scope(state_id, id);
+                }
+            }
+            std::mem::swap(&mut *reads, &mut *subscribed);
+            reads.clear();
+        } else {
+            for state_id in reads.drain(..) {
+                push_unique_state_id(&mut subscribed, state_id);
+            }
+        }
     }
 
     fn record_unknown_invalidation_source(&self) {
@@ -1057,7 +1162,9 @@ impl RecomposeScope {
         let Some(mut callback) = self.inner.recompose.take() else {
             return false;
         };
+        self.begin_reads();
         (callback.body)(composer);
+        self.end_reads(true);
         // The body may have stored a new callback for the scope while it ran.
         update_cell(&self.inner.recompose, |slot| {
             if slot.is_none() {

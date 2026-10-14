@@ -1375,6 +1375,18 @@ impl<T: Clone + 'static> MutableStateInner<T> {
         self.state.has_subscribers()
     }
 
+    /// Removes the live scope `scope_id` from the watchers: its last body did
+    /// not read the state.
+    pub(crate) fn forget_scope(&self, scope_id: ScopeId) {
+        let mut watchers = self.watchers.borrow_mut();
+        let removed = watchers.remove(&scope_id).is_some();
+        if removed {
+            shrink_watchers_if_sparse(&mut watchers);
+        }
+        drop(watchers);
+        self.state.remove_scope_observers(usize::from(removed));
+    }
+
     pub(crate) fn unregister_scope(&self, scope_id: ScopeId) {
         let mut watchers = self.watchers.borrow_mut();
         let removed = if watchers
@@ -1438,19 +1450,18 @@ impl<T: Clone + 'static> Drop for MutableStateInner<T> {
 }
 
 fn register_current_state_scope<T: Clone + 'static>(inner: &MutableStateInner<T>) {
-    let Some(Some(scope)) =
-        with_current_composer_opt(super::composer::Composer::current_state_invalidation_scope)
+    let state_id = inner.state_id();
+    let Some(Some((scope, read))) =
+        with_current_composer_opt(|composer| composer.note_state_read(state_id))
     else {
         return;
     };
     let (registered, became_subscribed) = inner.register_scope(&scope);
-    if registered {
-        if let Some(state_id) = inner.state_id() {
-            scope.record_state_subscription(state_id);
-        }
-        if became_subscribed {
-            inner.state.notify_subscribers();
-        }
+    if let (crate::ScopeRead::NotReading, true, Some(state_id)) = (read, registered, state_id) {
+        scope.record_state_subscription(state_id);
+    }
+    if became_subscribed {
+        inner.state.notify_subscribers();
     }
 }
 

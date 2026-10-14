@@ -45,11 +45,16 @@ struct TypedStateCell<T: Clone + 'static> {
 
 trait ScopeWatchCell {
     fn unregister_scope(&self, scope_id: ScopeId);
+    fn forget_scope(&self, scope_id: ScopeId);
 }
 
 impl<T: Clone + 'static> ScopeWatchCell for TypedStateCell<T> {
     fn unregister_scope(&self, scope_id: ScopeId) {
         self.inner.unregister_scope(scope_id);
+    }
+
+    fn forget_scope(&self, scope_id: ScopeId) {
+        self.inner.forget_scope(scope_id);
     }
 }
 
@@ -261,18 +266,26 @@ impl StateArena {
     }
 
     pub(crate) fn unregister_scope(&self, id: StateId, scope_id: ScopeId) {
-        let watcher_cell = {
-            let inner = self.inner.borrow();
-            inner
-                .cells
-                .get(id.slot_index())
-                .filter(|slot| slot.generation == id.generation())
-                .and_then(|slot| slot.watcher_cell.as_ref())
-                .cloned()
-        };
-        if let Some(watcher_cell) = watcher_cell {
+        if let Some(watcher_cell) = self.watcher_cell(id) {
             watcher_cell.unregister_scope(scope_id);
         }
+    }
+
+    /// Stops the state `id` from recomposing the live scope `scope_id`.
+    pub(crate) fn forget_scope(&self, id: StateId, scope_id: ScopeId) {
+        if let Some(watcher_cell) = self.watcher_cell(id) {
+            watcher_cell.forget_scope(scope_id);
+        }
+    }
+
+    fn watcher_cell(&self, id: StateId) -> Option<Rc<dyn ScopeWatchCell>> {
+        let inner = self.inner.borrow();
+        inner
+            .cells
+            .get(id.slot_index())
+            .filter(|slot| slot.generation == id.generation())
+            .and_then(|slot| slot.watcher_cell.as_ref())
+            .cloned()
     }
 
     pub(crate) fn register_lease(&self, id: StateId, lease: &Rc<StateHandleLease>) {
@@ -1103,6 +1116,12 @@ impl ScopeRuntime {
     pub(crate) fn unregister_state_scope(&self, id: StateId, scope_id: ScopeId) {
         if let Some(inner) = self.0.upgrade() {
             inner.state_arena.unregister_scope(id, scope_id);
+        }
+    }
+
+    pub(crate) fn forget_state_scope(&self, id: StateId, scope_id: ScopeId) {
+        if let Some(inner) = self.0.upgrade() {
+            inner.state_arena.forget_scope(id, scope_id);
         }
     }
 
