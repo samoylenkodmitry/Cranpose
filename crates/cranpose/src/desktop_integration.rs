@@ -15,7 +15,8 @@ use winit::event_loop::EventLoopProxy;
 pub enum DesktopWindowId {
     /// The app's primary window.
     Primary,
-    /// A [`NativeWindow`](crate::NativeWindow), by the raw value of its key.
+    /// A window that a [`window`](crate::WindowModifierExt::window) modifier
+    /// opened, by the raw value of its key.
     Native(u64),
 }
 
@@ -94,7 +95,7 @@ impl DesktopIntegrationContext<'_> {
 /// Every call does nothing by default.
 pub trait DesktopIntegration: 'static {
     /// `window` opened: the primary window first, then each
-    /// [`NativeWindow`](crate::NativeWindow) as it opens.
+    /// window a [`window`](crate::WindowModifierExt::window) modifier opens.
     fn window_opened(
         &mut self,
         window: &DesktopWindow<'_>,
