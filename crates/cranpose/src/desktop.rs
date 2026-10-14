@@ -4767,7 +4767,7 @@ fn show_primary_when_it_has_content(
         shown.store(show, std::sync::atomic::Ordering::Relaxed);
         trace_native_window!("primary window {}", if show { "shown" } else { "hidden" });
         if show {
-            show_primary_window(window);
+            show_primary_window(window, !app.renderer().first_screen_recorded());
         } else {
             window.set_visible(false);
         }
@@ -4775,10 +4775,12 @@ fn show_primary_when_it_has_content(
 }
 
 /// Shows the primary window as its content arrives: at once, without the
-/// animation macOS plays as a window opens (`macos_window`).
-fn show_primary_window(window: &dyn Window) {
+/// animation macOS plays as a window opens (`macos_window`). A window whose
+/// first frame `builds_pipelines` goes to the window server before it.
+#[cfg_attr(not(target_os = "macos"), expect(unused_variables))]
+fn show_primary_window(window: &dyn Window, builds_pipelines: bool) {
     #[cfg(target_os = "macos")]
-    crate::macos_window::show_without_open_animation(window);
+    crate::macos_window::show_without_open_animation(window, builds_pipelines);
     #[cfg(not(target_os = "macos"))]
     window.set_visible(true);
 }

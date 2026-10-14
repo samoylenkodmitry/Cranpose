@@ -968,6 +968,17 @@ impl WgpuRenderer {
         }
     }
 
+    /// Whether the pipeline cache file held an earlier launch's first screen,
+    /// whose pipelines build ahead of this renderer's first frame; `false`
+    /// for a first launch or emptied caches, whose first frame builds its
+    /// pipelines, and for a renderer that does not draw on the calling
+    /// thread.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn first_screen_recorded(&self) -> bool {
+        self.sync_gpu_renderer()
+            .is_some_and(GpuRenderer::first_screen_recorded)
+    }
+
     /// The pipelines this renderer's first screen drew with, encoded for
     /// [`Self::build_first_screen_pipelines`] in a later launch. `None`
     /// until the first screen ends, two seconds after the first frame and
