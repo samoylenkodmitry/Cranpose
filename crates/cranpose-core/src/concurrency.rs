@@ -23,7 +23,7 @@ use std::{
     time::Duration,
 };
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use wasm_bindgen::JsCast;
 use web_time::Instant;
 
@@ -176,8 +176,11 @@ pub async fn interval(period: Duration, mut tick: impl FnMut()) {
     }
 }
 
-#[cfg(not(any(target_arch = "wasm32", target_vendor = "apple")))]
-struct Alarm {
+#[cfg(not(any(
+    all(target_arch = "wasm32", target_os = "unknown"),
+    target_vendor = "apple"
+)))]
+pub(crate) struct Alarm {
     deadline: Instant,
     waker: Waker,
     fired: Arc<AtomicBool>,
@@ -301,7 +304,7 @@ impl Timer {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 impl Timer {
     fn new() -> Self {
         Self {}
@@ -329,6 +332,50 @@ impl Timer {
         if scheduled.is_none() {
             log::warn!("cranpose: no window timer is available; the delay resolves immediately");
         }
+    }
+}
+
+// Under Emscripten there is no browser timer to call back and no thread to
+// wait, so alarms wait in the thread's runtime state, which the runtime
+// checks each time it drains its UI work. The host that embeds Cranpose,
+// such as a game engine, drives those drains with its frames.
+#[cfg(target_os = "emscripten")]
+impl Timer {
+    fn new() -> Self {
+        Self {}
+    }
+
+    fn start(&'static self) {}
+
+    fn arm(&self, deadline: Instant, waker: Waker, fired: Arc<AtomicBool>) {
+        crate::thread_state::runtimes(|state| {
+            state.alarms.borrow_mut().push(Alarm {
+                deadline,
+                waker,
+                fired,
+            })
+        });
+    }
+}
+
+/// Wakes the delays whose deadline passed.
+#[cfg(target_os = "emscripten")]
+pub(crate) fn fire_due_alarms() {
+    let now = Instant::now();
+    let due: Vec<Alarm> = crate::thread_state::runtimes(|state| {
+        let mut alarms = state.alarms.borrow_mut();
+        if alarms.iter().all(|alarm| alarm.deadline > now) {
+            return Vec::new();
+        }
+        let (due, waiting) = std::mem::take(&mut *alarms)
+            .into_iter()
+            .partition(|alarm| alarm.deadline <= now);
+        *alarms = waiting;
+        due
+    });
+    for alarm in due {
+        alarm.fired.store(true, Ordering::Release);
+        alarm.waker.wake();
     }
 }
 

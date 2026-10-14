@@ -163,6 +163,10 @@ pub(crate) struct RuntimeThreadState {
     pub(crate) recomposition_counters: RefCell<Vec<std::rc::Weak<crate::RecomposeScopeInner>>>,
     #[cfg(feature = "inspection")]
     pub(crate) source_stack: RefCell<Vec<crate::source_trace::SourceLocation>>,
+    // Under Emscripten the delays wait here for the runtime's UI drains,
+    // since no browser timer or thread wakes them.
+    #[cfg(target_os = "emscripten")]
+    pub(crate) alarms: RefCell<Vec<crate::concurrency::Alarm>>,
 }
 
 impl RuntimeThreadState {
@@ -189,6 +193,8 @@ impl RuntimeThreadState {
             recomposition_counters: RefCell::new(Vec::new()),
             #[cfg(feature = "inspection")]
             source_stack: RefCell::new(Vec::new()),
+            #[cfg(target_os = "emscripten")]
+            alarms: RefCell::new(Vec::new()),
         }
     }
 
@@ -219,6 +225,8 @@ impl RuntimeThreadState {
             recomposition_counters,
             #[cfg(feature = "inspection")]
             source_stack,
+            #[cfg(target_os = "emscripten")]
+            alarms,
         } = self;
         next_runtime_id.swap(&other.next_runtime_id);
         swap_values(active_runtimes, &other.active_runtimes);
@@ -244,6 +252,8 @@ impl RuntimeThreadState {
         swap_values(recomposition_counters, &other.recomposition_counters);
         #[cfg(feature = "inspection")]
         swap_values(source_stack, &other.source_stack);
+        #[cfg(target_os = "emscripten")]
+        swap_values(alarms, &other.alarms);
     }
 
     fn release(&self) -> Self {

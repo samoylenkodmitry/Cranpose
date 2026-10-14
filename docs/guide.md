@@ -4371,3 +4371,9 @@ These are the APIs the engine crates build on:
   composition the newest frame. Neither side waits for the other.
 - `GuestView` draws a composition into a texture on someone else's device,
   for a HUD over your renderer's frame.
+
+A guest view also builds for `wasm32-unknown-emscripten`, the target of an
+engine's web export such as Godot's. There Cranpose uses no wasm-bindgen and
+draws with wgpu's GL backend on the WebGL2 context the engine made current.
+The target needs a nightly toolchain with `rust-src`; `just check-emscripten`
+type-checks it and `just test-emscripten` runs its own paths in Node.

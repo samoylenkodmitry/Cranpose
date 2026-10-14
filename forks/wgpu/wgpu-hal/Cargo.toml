@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.87"
 name = "cranpose-wgpu-hal"
-version = "30.0.14"
+version = "30.0.15"
 authors = ["gfx-rs developers"]
 build = "build.rs"
 autolib = false
@@ -100,7 +100,6 @@ gles = [
     "dep:web-sys",
     "dep:windows-result",
     "naga/glsl-out",
-    "wgpu-types/web",
     "windows-result/std",
     "windows/Win32_Graphics_Gdi",
     "windows/Win32_Graphics_OpenGL",
@@ -196,7 +195,7 @@ optional = true
 version = "1"
 
 [dependencies.glow]
-version = "0.17"
+version = "0.18"
 optional = true
 
 [dependencies.hashbrown]
@@ -268,6 +267,12 @@ features = ["android-native-activity"]
 
 [build-dependencies.cfg_aliases]
 version = "0.2.2"
+
+# The browser's GL backend reads web image sources; Emscripten's has none.
+[target.'cfg(all(target_arch = "wasm32", not(target_os = "emscripten")))'.dependencies.wgpu-types]
+version = "30.0.0"
+features = ["web"]
+default-features = false
 
 [target.'cfg(all(target_arch = "wasm32", not(target_os = "emscripten")))'.dependencies.js-sys]
 version = "0.3.104"

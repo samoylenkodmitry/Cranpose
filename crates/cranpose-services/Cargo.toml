@@ -76,7 +76,7 @@ open = { version = "5.4.4", optional = true }
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "ios")))'.dependencies]
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"], optional = true }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 futures-util = { version = "0.3.34", optional = true }
 js-sys = { version = "0.3.106", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
