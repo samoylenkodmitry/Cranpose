@@ -256,7 +256,7 @@ use std::{
 };
 
 #[cfg(test)]
-pub use runtime::{TestRuntime, TestScheduler};
+pub(crate) use runtime::{TestRuntime, TestScheduler};
 use smallvec::SmallVec;
 
 use crate::collections::map::{HashMap, HashSet};

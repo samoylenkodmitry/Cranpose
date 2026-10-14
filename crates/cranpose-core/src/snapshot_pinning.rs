@@ -144,7 +144,7 @@ pub fn debug_snapshot_pinning_stats() -> SnapshotPinningDebugStats {
 }
 
 #[cfg(test)]
-pub fn reset_pinning_table() {
+pub(crate) fn reset_pinning_table() {
     crate::thread_state::snapshots(|state| {
         state.pinning.borrow_mut().heap = SnapshotDoubleIndexHeap::new();
     });

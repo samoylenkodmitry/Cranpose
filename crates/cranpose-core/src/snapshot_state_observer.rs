@@ -120,7 +120,7 @@ impl SnapshotStateObserver {
     }
 
     #[cfg(test)]
-    pub fn notify_changes(&self, modified: &[Rc<dyn StateObject>]) {
+    pub(crate) fn notify_changes(&self, modified: &[Rc<dyn StateObject>]) {
         self.inner.handle_apply(modified);
     }
 }

@@ -1040,7 +1040,7 @@ impl RuntimeScheduler for DefaultScheduler {
 
 #[cfg(test)]
 #[derive(Default)]
-pub struct TestScheduler;
+pub(crate) struct TestScheduler;
 
 #[cfg(test)]
 impl RuntimeScheduler for TestScheduler {
@@ -1048,7 +1048,7 @@ impl RuntimeScheduler for TestScheduler {
 }
 
 #[cfg(test)]
-pub struct TestRuntime {
+pub(crate) struct TestRuntime {
     runtime: Runtime,
 }
 
@@ -1061,13 +1061,13 @@ impl Default for TestRuntime {
 
 #[cfg(test)]
 impl TestRuntime {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             runtime: Runtime::new(Arc::new(TestScheduler)),
         }
     }
 
-    pub fn handle(&self) -> RuntimeHandle {
+    pub(crate) fn handle(&self) -> RuntimeHandle {
         self.runtime.handle()
     }
 }
