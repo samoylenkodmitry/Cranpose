@@ -1,3 +1,4 @@
+mod animate_scroll_test;
 mod button_clickable_test;
 mod composition_switching_test;
 mod conditional_rendering_test;

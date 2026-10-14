@@ -48,6 +48,10 @@ struct ScrollGestureState {
 
     is_dragging: bool,
 
+    /// Whether the press stopped a scroll animation the app started, so
+    /// letting go settles even without a drag.
+    interrupted_animation: bool,
+
     axis_locked_out: bool,
 
     velocity_tracker: VelocityTracker1D,
@@ -74,6 +78,7 @@ impl Default for ScrollGestureState {
             drag_down_position: None,
             last_position: None,
             is_dragging: false,
+            interrupted_animation: false,
             axis_locked_out: false,
             velocity_tracker: VelocityTracker1D::new(),
             gesture_start_time: None,
@@ -157,6 +162,12 @@ trait ScrollTarget: Clone {
     fn set_dragging(&self, dragging: bool) {
         let _ = dragging;
     }
+
+    /// Stops a scroll animation the app started, which a press takes over,
+    /// and returns whether one ran.
+    fn stop_animation(&self) -> bool {
+        false
+    }
 }
 
 impl ScrollTarget for ScrollState {
@@ -234,6 +245,10 @@ impl ScrollTarget for LazyListState {
 
     fn settle_policy(&self) -> Option<ScrollSettlePolicy> {
         LazyListState::settle_policy(self)
+    }
+
+    fn stop_animation(&self) -> bool {
+        self.stop_scroll_animation()
     }
 }
 
@@ -469,7 +484,9 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
     }
 
     fn on_down(&self, position: Point, time_ms: Option<i64>) -> bool {
+        let interrupted = self.scroll_target.stop_animation();
         let mut gs = self.gesture_state.borrow_mut();
+        gs.interrupted_animation = interrupted;
 
         if let Some(fling) = gs.fling_animation.take() {
             fling.cancel();
@@ -665,9 +682,10 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
     }
 
     fn finish_gesture(&self, allow_fling: bool, release_time_ms: Option<i64>) -> bool {
-        let (was_dragging, gesture_owned, velocity, start_fling, existing_fling) = {
+        let (was_dragging, interrupted, gesture_owned, velocity, start_fling, existing_fling) = {
             let mut gs = self.gesture_state.borrow_mut();
             let was_dragging = gs.is_dragging;
+            let interrupted = std::mem::take(&mut gs.interrupted_animation);
             let gesture_owned = was_dragging || gs.is_overscrolling;
             let mut velocity = 0.0;
 
@@ -712,6 +730,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
 
             (
                 was_dragging,
+                interrupted,
                 gesture_owned,
                 velocity,
                 start_fling,
@@ -735,20 +754,9 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         let fling_velocity = -adjusted_velocity;
         let has_overscroll = self.overscroll.offset().abs() > 0.001;
 
-        let settle_target = if was_dragging {
-            self.scroll_target.settle_policy().and_then(|policy| {
-                let current = self.scroll_target.current_offset();
-                let proposed = if start_fling {
-                    fling_rest_position(current, fling_velocity)
-                } else {
-                    current
-                };
-                let target = policy(proposed, fling_velocity);
-                ((target - proposed).abs() > 0.5).then_some(target)
-            })
-        } else {
-            None
-        };
+        let settle_target = (was_dragging || interrupted)
+            .then(|| self.settle_target(start_fling, fling_velocity))
+            .flatten();
 
         if has_overscroll {
             if let Some(old_fling) = existing_fling {
@@ -770,6 +778,20 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         }
 
         gesture_owned
+    }
+
+    /// Where the target's settle policy moves the rest of a release, if it
+    /// moves it at all.
+    fn settle_target(&self, start_fling: bool, fling_velocity: f32) -> Option<f32> {
+        let policy = self.scroll_target.settle_policy()?;
+        let current = self.scroll_target.current_offset();
+        let proposed = if start_fling {
+            fling_rest_position(current, fling_velocity)
+        } else {
+            current
+        };
+        let target = policy(proposed, fling_velocity);
+        ((target - proposed).abs() > 0.5).then_some(target)
     }
 
     fn start_fling_animation(&self, fling_velocity: f32) {

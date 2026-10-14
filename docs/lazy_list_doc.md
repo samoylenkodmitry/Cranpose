@@ -43,6 +43,12 @@ scroll gesture consults when the user lets go: a fling of 400 logical pixels
 per second or more turns one page its way, and a slower release goes to the
 nearer page boundary.
 
+`AnimateScroll` springs a list through a distance or to an item, which it
+lands on exactly with `scroll_to_item` when the spring ends; pagers and grids
+animate through it. The list state holds the running animation's stopper: a
+new animation stops the old one, and a press on the list stops it where it is
+and then settles as a drag would.
+
 Layout submits prefetch requests, and the app shell services them during
 eligible idle time through the ordinary list measurement path. The app shell
 schedules frames. See [`lazy_prefetch.rs`](../crates/cranpose-ui/src/lazy_prefetch.rs)
