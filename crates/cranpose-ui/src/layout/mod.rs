@@ -419,7 +419,7 @@ pub struct SemanticsNode {
     /// Direct activation callback for keyboard and assistive technology.
     pub on_click: Option<SemanticsCustomAction>,
     pub selected: Option<bool>,
-    pub toggled: Option<bool>,
+    pub toggled: Option<cranpose_foundation::ToggleableState>,
     pub enabled: bool,
     /// Whether a screen reader skips this node and everything under it.
     pub hidden: bool,

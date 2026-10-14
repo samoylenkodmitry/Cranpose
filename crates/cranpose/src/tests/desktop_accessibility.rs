@@ -595,7 +595,7 @@ fn drawn_controls_sharing_a_layout_node_become_separate_accesskit_nodes() {
             bounds: AccessibilityRect::new(0.0, 0.0, 100.0, 50.0),
             role: AccessibilityRole::Switch,
             clickable: true,
-            toggled: Some(true),
+            toggled: Some(ToggleableState::On),
             ..AccessibilityElement::default()
         },
         AccessibilityElement {
@@ -605,7 +605,7 @@ fn drawn_controls_sharing_a_layout_node_become_separate_accesskit_nodes() {
             bounds: AccessibilityRect::new(0.0, 60.0, 100.0, 50.0),
             role: AccessibilityRole::Switch,
             clickable: true,
-            toggled: Some(false),
+            toggled: Some(ToggleableState::Off),
             enabled: false,
             ..AccessibilityElement::default()
         },
@@ -875,4 +875,19 @@ fn a_root_publish_sends_the_root_and_the_announcement_only() {
         update.nodes[0].1.children(),
         [published_id(&snapshot, 0), ANNOUNCEMENT_ID]
     );
+}
+
+#[test]
+fn a_partly_checked_box_reads_as_mixed() {
+    let elements = vec![AccessibilityElement {
+        node_id: 4,
+        label: "Select all".into(),
+        bounds: AccessibilityRect::new(0.0, 0.0, 48.0, 48.0),
+        role: AccessibilityRole::Checkbox,
+        clickable: true,
+        toggled: Some(ToggleableState::Indeterminate),
+        ..AccessibilityElement::default()
+    }];
+    let update = tree_update(&elements, None, false);
+    assert_eq!(update.nodes[1].1.toggled(), Some(Toggled::Mixed));
 }

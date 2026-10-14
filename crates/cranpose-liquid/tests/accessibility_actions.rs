@@ -387,7 +387,7 @@ fn reader_changes_a_switch_in_both_directions() {
             .into_iter()
             .find(|node| node.label.as_deref() == Some("Use cellular data"))
             .expect("named switch");
-        assert_eq!(switch.toggled, Some(expected));
+        assert_eq!(switch.toggled, Some(expected.into()));
     }
 }
 

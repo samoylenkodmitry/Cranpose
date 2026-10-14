@@ -3574,6 +3574,95 @@ LiquidTooltipBox("Add an item", "Show tooltip", Modifier::empty(), move || {
 });
 ```
 
+#### LiquidCheckbox
+
+Show a check box with caller-owned checked state. A tap, Space or Enter and a
+screen reader's activation toggle it.
+
+```rust preview=checkbox
+use cranpose::liquid::prelude::*;
+
+let accepted = rememberMutableStateOf(|| false);
+LiquidCheckbox(
+    Modifier::empty().content_description("Accept the terms"),
+    accepted.get(),
+    move |value| accepted.set(value),
+);
+```
+
+`LiquidTriStateCheckbox` adds a partly checked state, for a box over a list
+whose items are partly checked; readers hear "mixed":
+
+```rust preview=tri_state_checkbox
+use cranpose::liquid::prelude::*;
+
+let all = rememberMutableStateOf(|| ToggleableState::Indeterminate);
+LiquidTriStateCheckbox(
+    Modifier::empty().content_description("Select all"),
+    all.get(),
+    move || all.set(match all.get() {
+        ToggleableState::On => ToggleableState::Off,
+        _ => ToggleableState::On,
+    }),
+);
+```
+
+#### LiquidRadioButton
+
+Show one option of a group. Put the group in a `selectable_group` container,
+so a screen reader says which of how many each option is.
+
+```rust preview=radio_button
+use cranpose::liquid::prelude::*;
+
+let speed = rememberMutableStateOf(|| 0usize);
+Column(
+    Modifier::empty().selectable_group(),
+    ColumnSpec::default(),
+    move || {
+        for (index, name) in ["Standard", "Express"].into_iter().enumerate() {
+            LiquidRadioButton(
+                Modifier::empty().content_description(name),
+                speed.get() == index,
+                move || speed.set(index),
+            );
+        }
+    },
+);
+```
+
+#### LiquidSnackbarHost
+
+Show brief messages at the bottom of the screen, one at a time from a queue.
+`show` resolves with how the snackbar ended. A snackbar times out after its
+duration; while a screen reader is on, one with an action stays until it is
+used, and readers hear the message as it appears.
+
+```rust preview=snackbar
+use cranpose::liquid::prelude::*;
+
+let snackbars = rememberLiquidSnackbarHostState();
+let scope = rememberCoroutineScope();
+let shows = snackbars.clone();
+GlassButton(
+    Modifier::empty(),
+    GlassButtonSpec::default(),
+    move || {
+        let shows = shows.clone();
+        scope.launch(async move {
+            let ended = shows
+                .show(SnackbarVisuals::new("Message deleted").action("Undo"))
+                .await;
+            if ended == SnackbarResult::ActionPerformed {
+                // Restore the message.
+            }
+        });
+    },
+    || GlassButtonLabel("Delete".into(), GlassButtonSpec::default()),
+);
+LiquidSnackbarHost(snackbars, Modifier::empty().fill_max_width());
+```
+
 #### LiquidSlider
 
 Show a styled slider with a value in `0.0..=1.0`.

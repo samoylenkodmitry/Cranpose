@@ -4,6 +4,8 @@
 
 use std::fmt::{Display, Write};
 
+use cranpose_ui::ToggleableState;
+
 use crate::accessibility::{self, AccessibilityElement, AccessibilityRole, edits_text};
 
 /// The scroll container an element sits in: its virtual id, the move one page
@@ -168,7 +170,14 @@ impl MirrorAttributes {
             } else {
                 "aria-checked"
             };
-            self.set_flag(flag, toggled);
+            self.set(
+                flag,
+                match toggled {
+                    ToggleableState::On => "true",
+                    ToggleableState::Off => "false",
+                    ToggleableState::Indeterminate => "mixed",
+                },
+            );
         }
         if let Some(selected) = element.selected {
             let flag = match element.role {

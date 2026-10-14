@@ -48,3 +48,23 @@ fn attributes_a_control_loses_are_removed_and_listener_attributes_stay() {
         );
     }
 }
+
+#[test]
+fn a_partly_checked_box_is_aria_checked_mixed() {
+    let element = AccessibilityElement {
+        node_id: 3,
+        label: "Select all".into(),
+        role: AccessibilityRole::Checkbox,
+        clickable: true,
+        toggled: Some(ToggleableState::Indeterminate),
+        ..Default::default()
+    };
+    let mut attributes = MirrorAttributes::default();
+    attributes.describe(5, &element, None);
+    assert!(
+        attributes
+            .iter()
+            .any(|(name, value)| name == "aria-checked" && value == "mixed"),
+        "no aria-checked=mixed"
+    );
+}

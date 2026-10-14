@@ -918,7 +918,7 @@ fn ShowcaseToggles(streaming: MutableState<bool>) {
             modifier.semantics(move |config| {
                 config.content_description = Some(label.to_string());
                 config.enabled = false;
-                config.toggled = Some(on);
+                config.toggled = Some(on.into());
                 config.role = Some(SemanticsWidgetRole::Switch);
             })
         };
