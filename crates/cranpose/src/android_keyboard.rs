@@ -14,8 +14,8 @@ use cranpose_app_shell::{
 };
 
 use crate::android_text_input::{
-    AndroidImeEventQueue, hide_android_text_input, show_android_text_input,
-    update_android_text_input_state,
+    AndroidImeEventQueue, hide_android_text_input, place_android_text_input,
+    show_android_text_input, update_android_text_input_state,
 };
 
 const ANDROID_KEY_ACTION_DOWN: i32 = 0;
@@ -27,6 +27,9 @@ pub(crate) struct AndroidImeSession {
     active: Cell<bool>,
     bridge_failed: Cell<bool>,
     last_synced: RefCell<Option<ImeEditorState>>,
+    /// The field bounds last sent to the editor view; `None` after the
+    /// editor shows, so it is placed again.
+    last_placed: Cell<Option<[i32; 4]>>,
 }
 
 impl AndroidImeSession {
@@ -37,6 +40,7 @@ impl AndroidImeSession {
             active: Cell::new(false),
             bridge_failed: Cell::new(false),
             last_synced: RefCell::new(None),
+            last_placed: Cell::new(None),
         })
     }
 
@@ -60,6 +64,7 @@ impl AndroidImeSession {
             last.keyboard_options != state.keyboard_options || last.single_line != state.single_line
         });
         let synced = if keyboard_changed {
+            self.last_placed.set(None);
             show_android_text_input(&self.app, &self.queue, &state)
         } else {
             update_android_text_input_state(&self.app, &state)
@@ -74,11 +79,27 @@ impl AndroidImeSession {
         }
     }
 
+    /// Moves the editor view over the focused field when its physical
+    /// `bounds` changed.
+    pub(crate) fn sync_field_bounds(&self, bounds: Option<[i32; 4]>) {
+        let Some(bounds) = bounds.filter(|_| self.is_active()) else {
+            return;
+        };
+        if self.last_placed.get() == Some(bounds) {
+            return;
+        }
+        match place_android_text_input(&self.app, bounds) {
+            Ok(()) => self.last_placed.set(Some(bounds)),
+            Err(error) => log::warn!("Android IME editor placement failed: {error}"),
+        }
+    }
+
     fn show(&self) {
         if self.bridge_failed.get() {
             self.show_soft_input_only();
             return;
         }
+        self.last_placed.set(None);
 
         let state = cranpose_ui::text_field_focus::focused_editor_state().unwrap_or_else(|| {
             ImeEditorState {

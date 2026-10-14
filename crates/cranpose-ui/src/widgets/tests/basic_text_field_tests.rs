@@ -377,12 +377,7 @@ fn field_window_origin_follows_vertical_scroll() {
     };
 
     fn find_field_rect(node: &LayoutBox) -> Option<cranpose_ui_graphics::Rect> {
-        if node
-            .node_data
-            .modifier_slices()
-            .text_window_transform()
-            .is_some()
-        {
+        if node.node_data.modifier_slices().text_window().is_some() {
             return Some(node.rect);
         }
         node.children.iter().find_map(find_field_rect)

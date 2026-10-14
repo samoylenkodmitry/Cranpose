@@ -2316,7 +2316,7 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
 }
 
 fn modifier_slices_have_origin_sinks(slices: &ModifierNodeSlices) -> bool {
-    slices.text_window_transform().is_some() || slices.viewport_window_rect().is_some()
+    slices.text_window().is_some() || slices.viewport_window_rect().is_some()
 }
 
 fn graphics_layer_with_shaped_clip(

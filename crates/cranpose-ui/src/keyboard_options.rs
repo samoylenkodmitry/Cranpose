@@ -84,8 +84,8 @@ impl ImeAction {
 }
 
 /// What a text field holds, so autofill and password managers can offer to
-/// fill it: Compose's `ContentType`. Web and iOS pass it to the platform;
-/// Android does not fill text fields yet.
+/// fill it: Compose's `ContentType`. Android, iOS and web pass it to the
+/// platform.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ContentType {
     Username,

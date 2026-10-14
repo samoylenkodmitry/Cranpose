@@ -14,7 +14,7 @@ use std::{
 };
 
 use cranpose_core::MutableState;
-use cranpose_ui_graphics::{Point, ProjectiveTransform, Rect, Size};
+use cranpose_ui_graphics::{Point, ProjectiveTransform, Rect, Size, WindowCoordinates};
 
 use crate::{
     text::{
@@ -58,14 +58,14 @@ pub struct TextSelection {
 /// size its content draws in.
 #[derive(Default)]
 pub(crate) struct SelectableGeometry {
-    local_to_window: Rc<Cell<ProjectiveTransform>>,
+    window: Rc<Cell<WindowCoordinates>>,
     content_origin: RefCell<crate::modifier::CoordinatorRect>,
     content_size: Cell<Size>,
 }
 
 impl SelectableGeometry {
-    pub(crate) fn window_transform_sink(&self) -> Rc<Cell<ProjectiveTransform>> {
-        Rc::clone(&self.local_to_window)
+    pub(crate) fn window_sink(&self) -> Rc<Cell<WindowCoordinates>> {
+        Rc::clone(&self.window)
     }
 
     pub(crate) fn set_content_origin(&self, origin: crate::modifier::CoordinatorRect) {
@@ -79,14 +79,15 @@ impl SelectableGeometry {
     fn rect(&self) -> Rect {
         let offset = self.content_origin.borrow().origin();
         let size = self.content_size.get();
-        self.local_to_window
+        self.window
             .get()
+            .local_to_window
             .bounds_for_rect(Rect::from_origin_size(offset, size))
     }
 
     fn content_to_window(&self) -> ProjectiveTransform {
         let offset = self.content_origin.borrow().origin();
-        ProjectiveTransform::translation(offset.x, offset.y).then(self.local_to_window.get())
+        ProjectiveTransform::translation(offset.x, offset.y).then(self.window.get().local_to_window)
     }
 }
 

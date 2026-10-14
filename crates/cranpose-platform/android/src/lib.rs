@@ -1,6 +1,6 @@
 #![doc = include_str!("../README.md")]
 
-use cranpose_ui_graphics::Point;
+use cranpose_ui_graphics::{Point, Rect};
 
 /// Platform abstraction for Android.
 ///
@@ -73,6 +73,25 @@ impl AndroidPlatform {
     /// Returns the current scale factor (density).
     pub fn scale_factor(&self) -> f32 {
         self.scale_factor as f32
+    }
+
+    /// Converts a logical rectangle into the content-relative physical pixels
+    /// Android views use, as `[left, top, width, height]`: the inverse of
+    /// [`Self::pointer_position`], widened to whole pixels.
+    pub fn physical_rect(&self, rect: Rect) -> [i32; 4] {
+        let scale = self.scale_factor;
+        let left = (f64::from(rect.x) * scale - self.input_surface_offset_x_px).floor();
+        let top = (f64::from(rect.y) * scale - self.input_surface_offset_y_px).floor();
+        let right =
+            (f64::from(rect.x + rect.width) * scale - self.input_surface_offset_x_px).ceil();
+        let bottom =
+            (f64::from(rect.y + rect.height) * scale - self.input_surface_offset_y_px).ceil();
+        [
+            left as i32,
+            top as i32,
+            (right - left) as i32,
+            (bottom - top) as i32,
+        ]
     }
 }
 

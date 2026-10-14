@@ -1,8 +1,10 @@
 package dev.cranpose.android;
 
+import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.Context;
 import android.graphics.Rect;
+import android.os.Build;
 import android.text.Editable;
 import android.text.Selection;
 import android.text.SpannableStringBuilder;
@@ -11,6 +13,8 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
+import android.view.autofill.AutofillManager;
+import android.view.autofill.AutofillValue;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
@@ -29,6 +33,10 @@ import java.nio.charset.StandardCharsets;
  * cranpose text field gains focus; its {@link InputConnection} forwards
  * editing operations (commit, compose, delete-surrounding, key events,
  * editor actions) through JNI into the native text pipeline.
+ *
+ * <p>A field with an autofill hint makes the view autofillable: {@link #place}
+ * moves it over the field, so the autofill service anchors its suggestions
+ * there, and a fill reaches the native side as an edit of the whole text.
  *
  * <p>The Java side keeps an {@link Editable} mirror of the field so the IME's
  * synchronous text queries ({@code getTextBeforeCursor} and friends, served
@@ -58,7 +66,8 @@ public final class CranposeTextInput {
      *
      * <p>{@code queueHandle} transfers ownership of one native queue
      * reference to this class; it is released when the session is hidden (or
-     * immediately when a session already owns a handle).
+     * immediately when a session already owns a handle). {@code autofillHint}
+     * is the field's {@code View.AUTOFILL_HINT_*} value, or null.
      */
     public static int show(
             Activity activity,
@@ -67,7 +76,8 @@ public final class CranposeTextInput {
             int selStart,
             int selEnd,
             int inputType,
-            int imeOptions
+            int imeOptions,
+            String autofillHint
     ) {
         try {
             activity.runOnUiThread(() -> {
@@ -77,6 +87,7 @@ public final class CranposeTextInput {
                     state.editable = new SpannableStringBuilder(text);
                     state.inputType = inputType;
                     state.imeOptions = imeOptions;
+                    state.autofillHint = autofillHint;
                     EditorView view = new EditorView(activity, state);
                     state.view = view;
                     setSelectionClamped(state.editable, selStart, selEnd);
@@ -93,8 +104,11 @@ public final class CranposeTextInput {
                 } else {
                     // The session already owns a queue handle; drop the new one.
                     nativeImeReleaseQueue(queueHandle);
+                    // The same view now stands for another field.
+                    exitAutofill(activity, state);
                     state.inputType = inputType;
                     state.imeOptions = imeOptions;
+                    state.autofillHint = autofillHint;
                     state.editable.replace(0, state.editable.length(), text);
                     BaseInputConnection.removeComposingSpans(state.editable);
                     setSelectionClamped(state.editable, selStart, selEnd);
@@ -133,6 +147,7 @@ public final class CranposeTextInput {
                     return;
                 }
                 current = null;
+                exitAutofill(activity, state);
                 detachKeyboardListener(state);
                 InputMethodManager imm = inputMethodManager(activity);
                 if (imm != null && state.view != null) {
@@ -145,6 +160,70 @@ public final class CranposeTextInput {
             });
         } catch (RuntimeException error) {
             Log.w(TAG, "Failed to hide cranpose text input", error);
+        }
+    }
+
+    /**
+     * Moves the editor view over the focused field, in content-relative
+     * physical pixels. The first placement after {@link #show} makes the view
+     * autofillable when its field has a hint.
+     */
+    public static void place(Activity activity, int left, int top, int width, int height) {
+        try {
+            activity.runOnUiThread(() -> {
+                SessionState state = current;
+                if (state == null || state.disposed || state.view == null) {
+                    return;
+                }
+                View view = state.view;
+                ViewGroup.LayoutParams params = view.getLayoutParams();
+                params.width = Math.max(1, width);
+                params.height = Math.max(1, height);
+                if (params instanceof ViewGroup.MarginLayoutParams) {
+                    ((ViewGroup.MarginLayoutParams) params).leftMargin = left;
+                    ((ViewGroup.MarginLayoutParams) params).topMargin = top;
+                }
+                view.setLayoutParams(params);
+                // Lay the view out now, so autofill reads the new bounds.
+                view.layout(left, top, left + params.width, top + params.height);
+                enterAutofill(activity, state);
+            });
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Failed to place cranpose text input", error);
+        }
+    }
+
+    private static AutofillManager autofillManager(Context context) {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                ? context.getSystemService(AutofillManager.class)
+                : null;
+    }
+
+    private static void enterAutofill(Context context, SessionState state) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O
+                || state.autofillEntered || state.autofillHint == null) {
+            return;
+        }
+        AutofillManager autofill = autofillManager(context);
+        if (autofill == null) {
+            return;
+        }
+        state.view.setAutofillHints(state.autofillHint);
+        state.view.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_YES);
+        autofill.notifyViewEntered(state.view);
+        state.autofillEntered = true;
+    }
+
+    private static void exitAutofill(Context context, SessionState state) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O
+                || !state.autofillEntered || state.view == null) {
+            return;
+        }
+        state.autofillEntered = false;
+        AutofillManager autofill = autofillManager(context);
+        if (autofill != null) {
+            autofill.notifyViewExited(state.view);
+            state.view.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
         }
     }
 
@@ -176,6 +255,12 @@ public final class CranposeTextInput {
                 if (textChanged) {
                     state.editable.replace(0, state.editable.length(), text);
                     BaseInputConnection.removeComposingSpans(state.editable);
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && state.autofillEntered) {
+                        AutofillManager autofill = autofillManager(activity);
+                        if (autofill != null) {
+                            autofill.notifyValueChanged(state.view);
+                        }
+                    }
                 }
                 setSelectionClamped(state.editable, selStart, selEnd);
                 InputMethodManager imm = inputMethodManager(activity);
@@ -240,6 +325,10 @@ public final class CranposeTextInput {
          * keyboard options. */
         volatile int inputType;
         volatile int imeOptions;
+        /** The field's autofill hint, or null when autofill leaves it alone. */
+        volatile String autofillHint;
+        /** Whether autofill was told the view stands for the field. */
+        boolean autofillEntered;
         Editable editable;
         /** Content view the keyboard-height listener is attached to. */
         View insetsView;
@@ -314,6 +403,44 @@ public final class CranposeTextInput {
             this.state = state;
             setFocusable(true);
             setFocusableInTouchMode(true);
+            // Autofillable only once placed over its field (see place).
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                setImportantForAutofill(IMPORTANT_FOR_AUTOFILL_NO);
+            }
+            // The field's own node in the semantics tree describes it.
+            setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
+        }
+
+        @TargetApi(Build.VERSION_CODES.O)
+        @Override
+        public int getAutofillType() {
+            return state.autofillHint != null ? AUTOFILL_TYPE_TEXT : AUTOFILL_TYPE_NONE;
+        }
+
+        @TargetApi(Build.VERSION_CODES.O)
+        @Override
+        public AutofillValue getAutofillValue() {
+            return state.autofillHint != null
+                    ? AutofillValue.forText(state.editable.toString())
+                    : null;
+        }
+
+        /** Replaces the field's text through the same queue as the IME. */
+        @TargetApi(Build.VERSION_CODES.O)
+        @Override
+        public void autofill(AutofillValue value) {
+            if (state.disposed || state.autofillHint == null || value == null
+                    || !value.isText()) {
+                return;
+            }
+            Connection connection = new Connection(this, state);
+            connection.finishComposingText();
+            connection.setSelection(0, state.editable.length());
+            connection.commitText(value.getTextValue(), 1);
+            InputMethodManager imm = inputMethodManager(getContext());
+            if (imm != null) {
+                imm.restartInput(this);
+            }
         }
 
         @Override

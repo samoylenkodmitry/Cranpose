@@ -6,7 +6,7 @@ use std::{
 use cranpose_foundation::text::{
     InputTransformation, TextFieldBuffer, TextFieldLineLimits, TextFieldState,
 };
-use cranpose_ui_graphics::ProjectiveTransform;
+use cranpose_ui_graphics::{Rect, WindowCoordinates};
 
 use crate::{
     text::{AnnotatedString, TextStyle, measure_text},
@@ -26,7 +26,7 @@ pub(crate) struct InputRefs {
 
 #[derive(Clone)]
 pub(crate) struct CaretGeometryRefs {
-    pub local_to_window: Rc<Cell<ProjectiveTransform>>,
+    pub window: Rc<Cell<WindowCoordinates>>,
     pub content_origin: Rc<RefCell<crate::modifier::CoordinatorRect>>,
     pub scroll_offset: Rc<Cell<f32>>,
     pub wrap_width: Rc<Cell<Option<f32>>>,
@@ -298,8 +298,13 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
             caret_xs,
             top,
             line_height,
-            local_to_window: g.local_to_window.get(),
+            local_to_window: g.window.get().local_to_window,
         })
+    }
+
+    fn window_bounds(&self) -> Option<Rect> {
+        let window = self.geometry.window.get();
+        (window.size.width > 0.0 && window.size.height > 0.0).then(|| window.bounds())
     }
 }
 

@@ -921,6 +921,24 @@ fn get_display_density(app: &android_activity::AndroidApp) -> f32 {
     density_dpi.map_or(2.0, |dpi| dpi as f32 / 160.0)
 }
 
+/// Hands the focused field's text and window bounds to the native editor
+/// while the soft keyboard session is open.
+fn sync_ime_session(
+    ime_session: &crate::android_keyboard::AndroidImeSession,
+    shell: Option<&mut AppShell<WgpuRenderer>>,
+    android_platform: &AndroidPlatform,
+) {
+    let Some(shell) = shell.filter(|_| ime_session.is_active()) else {
+        return;
+    };
+    ime_session.sync_editor_state(shell.ime_editor_state());
+    ime_session.sync_field_bounds(
+        shell
+            .ime_field_bounds()
+            .map(|bounds| android_platform.physical_rect(bounds)),
+    );
+}
+
 fn surface_inset_px(app: &android_activity::AndroidApp) -> (f64, f64) {
     let Some(window) = app.native_window() else {
         return (0.0, 0.0);
@@ -2691,11 +2709,7 @@ pub fn run(
             }
         }
 
-        if ime_session.is_active()
-            && let Some(shell) = &mut app_shell
-        {
-            ime_session.sync_editor_state(shell.ime_editor_state());
-        }
+        sync_ime_session(&ime_session, app_shell.as_mut(), &android_platform);
 
         android_frame_driver.take_frame_request();
 

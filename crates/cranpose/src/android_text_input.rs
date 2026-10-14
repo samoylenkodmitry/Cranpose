@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use android_activity::AndroidAppWaker;
 use cranpose_app_shell::ImeEditorState;
-use cranpose_ui::{ImeAction, KeyboardCapitalization, KeyboardOptions, KeyboardType};
+use cranpose_ui::{ContentType, ImeAction, KeyboardCapitalization, KeyboardOptions, KeyboardType};
 use jni::{
     EnvUnowned, Outcome, jni_sig, jni_str,
     objects::{JClass, JObject, JString, JValue},
@@ -241,6 +241,24 @@ fn android_capitalization(capitalization: KeyboardCapitalization) -> i32 {
     }
 }
 
+/// The autofill hint of a content type: a `View.AUTOFILL_HINT_*` value, or
+/// one of androidx `HintConstants` where the platform names none.
+fn android_autofill_hint(content_type: ContentType) -> &'static str {
+    match content_type {
+        ContentType::Username => "username",
+        ContentType::Password => "password",
+        ContentType::NewUsername => "newUsername",
+        ContentType::NewPassword => "newPassword",
+        ContentType::EmailAddress => "emailAddress",
+        ContentType::PhoneNumber => "phone",
+        ContentType::PersonFullName => "name",
+        ContentType::PostalAddress => "postalAddress",
+        ContentType::PostalCode => "postalCode",
+        ContentType::CreditCardNumber => "creditCardNumber",
+        ContentType::SmsOtpCode => "smsOTPCode",
+    }
+}
+
 pub(crate) fn show_android_text_input(
     app: &android_activity::AndroidApp,
     queue: &Arc<AndroidImeEventQueue>,
@@ -258,10 +276,20 @@ pub(crate) fn show_android_text_input(
             format!("failed to create Android IME text string: {error}")
         })?;
         let text = JObject::from(text);
+        let autofill_hint = match state.keyboard_options.content_type {
+            Some(content_type) => JObject::from(
+                env.new_string(android_autofill_hint(content_type))
+                    .map_err(|error| {
+                        clear_pending_android_jni_exception(env);
+                        format!("failed to create Android autofill hint string: {error}")
+                    })?,
+            ),
+            None => JObject::null(),
+        };
         env.call_static_method(
             class,
             jni_str!("show"),
-            jni_sig!("(Landroid/app/Activity;JLjava/lang/String;IIII)I"),
+            jni_sig!("(Landroid/app/Activity;JLjava/lang/String;IIIILjava/lang/String;)I"),
             &[
                 JValue::Object(&activity),
                 JValue::Long(handle.raw()),
@@ -270,6 +298,7 @@ pub(crate) fn show_android_text_input(
                 JValue::Int(sel_end),
                 JValue::Int(input_type),
                 JValue::Int(ime_options),
+                JValue::Object(&autofill_hint),
             ],
         )
         .and_then(jni::JValueOwned::i)
@@ -304,6 +333,35 @@ pub(crate) fn hide_android_text_input(app: &android_activity::AndroidApp) -> Res
         .map_err(|error| {
             clear_pending_android_jni_exception(env);
             format!("failed to hide Android text input: {error}")
+        })?;
+        Ok(())
+    })
+}
+
+/// Moves the editor view over the focused field, at `[left, top, width,
+/// height]` in content-relative physical pixels, so autofill anchors its
+/// suggestions to the field.
+pub(crate) fn place_android_text_input(
+    app: &android_activity::AndroidApp,
+    [left, top, width, height]: [i32; 4],
+) -> Result<(), String> {
+    with_android_activity_env(app, |env, activity| {
+        let class = load_cranpose_java_class(env, &activity, TEXT_INPUT_CLASS)?;
+        env.call_static_method(
+            class,
+            jni_str!("place"),
+            jni_sig!("(Landroid/app/Activity;IIII)V"),
+            &[
+                JValue::Object(&activity),
+                JValue::Int(left),
+                JValue::Int(top),
+                JValue::Int(width),
+                JValue::Int(height),
+            ],
+        )
+        .map_err(|error| {
+            clear_pending_android_jni_exception(env);
+            format!("failed to place Android text input: {error}")
         })?;
         Ok(())
     })

@@ -1573,6 +1573,18 @@ where
         })
     }
 
+    /// Window bounds of the focused field in logical pixels, for platforms
+    /// that place a native editor over it, or `None` when this surface has
+    /// no focused text field that has been laid out.
+    pub fn ime_field_bounds(&mut self) -> Option<cranpose_ui_graphics::Rect> {
+        let app_context = Rc::clone(&self.shell.app.app_context);
+        app_context.enter(|| {
+            self.receives_focused_input()
+                .then(cranpose_ui::text_field_focus::focused_field_bounds)
+                .flatten()
+        })
+    }
+
     /// Whether the focused text field holds a secret, as
     /// `Modifier::password()` marks one. Only the semantics of the field's
     /// own node are read, so no semantics tree is built, and the answer holds
@@ -2051,6 +2063,11 @@ where
         &mut self,
     ) -> Option<cranpose_ui::text_field_focus::ImeCaretGeometry> {
         self.primary().ime_caret_geometry()
+    }
+
+    /// Primary-surface form of [`SurfaceMut::ime_field_bounds`].
+    pub fn ime_field_bounds(&mut self) -> Option<cranpose_ui_graphics::Rect> {
+        self.primary().ime_field_bounds()
     }
 
     /// Primary-surface form of [`SurfaceMut::ime_field_is_password`].

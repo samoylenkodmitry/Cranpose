@@ -64,7 +64,7 @@ struct RareSlices {
     translated_content_context: bool,
     translated_content_context_identity: Option<usize>,
     translated_content_offset_reader: Option<Rc<dyn Fn() -> Point>>,
-    text_window_transform: Option<Rc<std::cell::Cell<cranpose_ui_graphics::ProjectiveTransform>>>,
+    text_window: Option<Rc<std::cell::Cell<cranpose_ui_graphics::WindowCoordinates>>>,
     viewport_window_rect: Option<Rc<dyn crate::modifier_nodes::WindowRectSink>>,
     graphics_layer_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
     chain_guard: Option<Rc<ChainGuard>>,
@@ -79,7 +79,7 @@ impl RareSlices {
         self.translated_content_context = false;
         self.translated_content_context_identity = None;
         self.translated_content_offset_reader = None;
-        self.text_window_transform = None;
+        self.text_window = None;
         self.viewport_window_rect = None;
         self.graphics_layer_resolver = None;
         self.chain_guard = None;
@@ -376,18 +376,19 @@ impl ModifierNodeSlices {
         let Some(rare) = self.rare() else {
             return;
         };
-        if rare.text_window_transform.is_some() || rare.viewport_window_rect.is_some() {
-            let local_to_window =
-                cranpose_ui_graphics::ProjectiveTransform::translation(origin.x, origin.y)
-                    .then(transform);
-            if let Some(sink) = &rare.text_window_transform {
-                sink.set(local_to_window);
+        if rare.text_window.is_some() || rare.viewport_window_rect.is_some() {
+            let window = cranpose_ui_graphics::WindowCoordinates {
+                size,
+                local_to_window: cranpose_ui_graphics::ProjectiveTransform::translation(
+                    origin.x, origin.y,
+                )
+                .then(transform),
+            };
+            if let Some(sink) = &rare.text_window {
+                sink.set(window);
             }
             if let Some(sink) = &rare.viewport_window_rect {
-                sink.set(cranpose_ui_graphics::WindowCoordinates {
-                    size,
-                    local_to_window,
-                });
+                sink.set(window);
             }
         }
         publish_pointer_input_size(rare, size);
@@ -471,12 +472,13 @@ impl ModifierNodeSlices {
         }
     }
 
-    /// The write target for a text node's local-to-window transform, used by
-    /// editable and selectable text for caret, selection and pointer geometry.
-    pub fn text_window_transform(
+    /// The write target for a text node's size and local-to-window
+    /// transform, used by editable and selectable text for caret, selection
+    /// and pointer geometry and a focused field's window bounds.
+    pub fn text_window(
         &self,
-    ) -> Option<&Rc<std::cell::Cell<cranpose_ui_graphics::ProjectiveTransform>>> {
-        self.rare()?.text_window_transform.as_ref()
+    ) -> Option<&Rc<std::cell::Cell<cranpose_ui_graphics::WindowCoordinates>>> {
+        self.rare()?.text_window.as_ref()
     }
 
     /// The write target for a scroll container's composited window rect, if this
@@ -801,8 +803,7 @@ fn collect_modifier_slices_into(
                         layout: text_field_node.layout_handle(),
                         pan: text_field_node.text_pan_resolver(),
                     })));
-                    slices.rare_mut().text_window_transform =
-                        Some(text_field_node.window_transform_sink());
+                    slices.rare_mut().text_window = Some(text_field_node.window_sink());
 
                     let coordinator = CoordinatorRect::new(geometry, layout_ordinal, padding);
                     text_field_node.set_content_origin(coordinator.clone());
@@ -918,8 +919,7 @@ fn collect_window_geometry_sink(
         slices.rare_mut().viewport_window_rect = Some(reporter.window_rect_sink());
     }
     if let Some(selectable) = any.downcast_ref::<SelectableTextNode>() {
-        slices.rare_mut().text_window_transform =
-            Some(selectable.geometry().window_transform_sink());
+        slices.rare_mut().text_window = Some(selectable.geometry().window_sink());
         selectable.geometry().set_content_origin(text);
     }
 }

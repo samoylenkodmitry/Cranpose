@@ -12,7 +12,7 @@ use cranpose_foundation::{
     SemanticsConfiguration, SemanticsNode, Size,
     text::{OutputTransformation, TextFieldLineLimits, TextFieldState, TextRange},
 };
-use cranpose_ui_graphics::{Brush, Color, Point, ProjectiveTransform};
+use cranpose_ui_graphics::{Brush, Color, Point, ProjectiveTransform, WindowCoordinates};
 use cranpose_ui_layout::ceil_to_px;
 
 use crate::text_field_presentation::{FieldPresentation, PresentationCache};
@@ -390,7 +390,7 @@ fn build_focus_handler(
             secure: refs.is_secure(),
         },
         crate::text_field_handler::CaretGeometryRefs {
-            local_to_window: refs.local_to_window.clone(),
+            window: refs.window.clone(),
             content_origin: refs.content_origin.clone(),
             scroll_offset: refs.scroll_offset.clone(),
             wrap_width: refs.wrap_width.clone(),
@@ -488,7 +488,8 @@ pub(crate) struct TextFieldRefs {
     pub focus_node: Rc<Cell<Option<cranpose_core::NodeId>>>,
     pub scroll_offset: Rc<Cell<f32>>,
     pub direct_manipulation: Rc<Cell<bool>>,
-    pub local_to_window: Rc<Cell<ProjectiveTransform>>,
+    /// The field's size and window transform, written by layout.
+    pub window: Rc<Cell<WindowCoordinates>>,
     pub line_height: Rc<Cell<f32>>,
     pub wrap_width: Rc<Cell<Option<f32>>>,
     pub press_track: MutableState<Option<PointerPressTrack>>,
@@ -523,7 +524,7 @@ impl TextFieldRefs {
             focus_node: Rc::new(Cell::new(None::<cranpose_core::NodeId>)),
             scroll_offset: Rc::new(Cell::new(0.0_f32)),
             direct_manipulation: Rc::new(Cell::new(false)),
-            local_to_window: Rc::new(Cell::new(ProjectiveTransform::identity())),
+            window: Rc::new(Cell::new(WindowCoordinates::default())),
             line_height: Rc::new(Cell::new(DEFAULT_LINE_HEIGHT)),
             wrap_width: Rc::new(Cell::new(None::<f32>)),
             press_track: mutableStateOf(None::<PointerPressTrack>),
@@ -873,8 +874,8 @@ impl TextFieldModifierNode {
         *self.refs.is_focused.borrow()
     }
 
-    pub(crate) fn window_transform_sink(&self) -> Rc<Cell<ProjectiveTransform>> {
-        self.refs.local_to_window.clone()
+    pub(crate) fn window_sink(&self) -> Rc<Cell<WindowCoordinates>> {
+        self.refs.window.clone()
     }
 
     pub(crate) fn layout_handle(&self) -> TextFieldLayoutHandle {
@@ -1162,7 +1163,7 @@ impl DrawModifierNode for TextFieldModifierNode {
         let node_id = self.refs.node_id.clone();
         let pan_resolver = self.cached_pan_resolver.clone();
         let handle_controller = self.handle_controller.clone();
-        let local_to_window = self.refs.local_to_window.clone();
+        let window = self.refs.window.clone();
         let direct_manipulation = self.refs.direct_manipulation.clone();
         let press_track = self.refs.press_track;
         let gesture_claimed = self.refs.gesture_claimed.clone();
@@ -1175,7 +1176,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                     controller.publish(TextFieldHandleMetrics {
                         focused: false,
                         direct_manipulation: false,
-                        local_to_window: local_to_window.get(),
+                        local_to_window: window.get().local_to_window,
                         padding_left: 0.0,
                         padding_top: 0.0,
                         scroll_offset: 0.0,
@@ -1203,7 +1204,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                 controller.publish(TextFieldHandleMetrics {
                     focused: true,
                     direct_manipulation: direct_manipulation.get(),
-                    local_to_window: local_to_window.get(),
+                    local_to_window: window.get().local_to_window,
                     padding_left: content_origin.borrow().origin().x,
                     padding_top: content_origin.borrow().origin().y,
                     scroll_offset: pan,
