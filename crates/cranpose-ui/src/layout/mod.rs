@@ -212,50 +212,64 @@ fn log_node_measure_telemetry(
     );
 }
 
-struct ApplierSlotGuard<'a> {
-    target: &'a mut MemoryApplier,
+/// The host a layout pass lends its applier to, and the cell that holds the
+/// applier's slot table meanwhile. Between passes they hold an empty applier
+/// and table, and the app context keeps them, so a pass builds neither.
+pub(crate) struct LayoutHost {
     host: Rc<ConcreteApplierHost<MemoryApplier>>,
     slots: Rc<RefCell<SlotTable>>,
 }
 
-impl<'a> ApplierSlotGuard<'a> {
-    fn new(target: &'a mut MemoryApplier) -> Self {
-        let original_applier = std::mem::replace(target, MemoryApplier::new());
-        let host = Rc::new(ConcreteApplierHost::new(original_applier));
-
-        let slots = {
-            let mut applier_ref = host.borrow_typed();
-            std::mem::take(applier_ref.slots())
-        };
-        let slots = Rc::new(RefCell::new(slots));
-
+impl Default for LayoutHost {
+    fn default() -> Self {
         Self {
-            target,
-            host,
-            slots,
+            host: Rc::new(ConcreteApplierHost::new(MemoryApplier::new())),
+            slots: Rc::new(RefCell::new(SlotTable::default())),
         }
     }
+}
 
-    fn host(&self) -> Rc<ConcreteApplierHost<MemoryApplier>> {
-        Rc::clone(&self.host)
+/// Lends `target` and its slot table to a [`LayoutHost`] for one pass and
+/// gives them back when dropped, also after a panic.
+struct ApplierSlotGuard<'a> {
+    target: &'a mut MemoryApplier,
+    lent: LayoutHost,
+}
+
+impl<'a> ApplierSlotGuard<'a> {
+    fn new(target: &'a mut MemoryApplier) -> Self {
+        let lent = crate::render_state::take_layout_host();
+        {
+            let mut applier_ref = lent.host.borrow_typed();
+            std::mem::swap(target, &mut *applier_ref);
+            std::mem::swap(applier_ref.slots(), &mut *lent.slots.borrow_mut());
+        }
+        Self { target, lent }
     }
 
-    fn slots_handle(&self) -> Rc<RefCell<SlotTable>> {
-        Rc::clone(&self.slots)
+    fn host(&self) -> &Rc<ConcreteApplierHost<MemoryApplier>> {
+        &self.lent.host
+    }
+
+    fn slots_handle(&self) -> &Rc<RefCell<SlotTable>> {
+        &self.lent.slots
     }
 }
 
 impl Drop for ApplierSlotGuard<'_> {
     fn drop(&mut self) {
+        let LayoutHost { host, slots } = &self.lent;
         {
-            let mut applier_ref = self.host.borrow_typed();
-            *applier_ref.slots() = std::mem::take(&mut *self.slots.borrow_mut());
+            let mut applier_ref = host.borrow_typed();
+            std::mem::swap(applier_ref.slots(), &mut *slots.borrow_mut());
+            std::mem::swap(self.target, &mut *applier_ref);
         }
-
-        {
-            let mut applier_ref = self.host.borrow_typed();
-            let original_applier = std::mem::take(&mut *applier_ref);
-            let _ = std::mem::replace(self.target, original_applier);
+        // A host still shared past the pass stays with whoever holds it.
+        if Rc::strong_count(host) == 1 && Rc::strong_count(slots) == 1 {
+            crate::render_state::replace_layout_host(LayoutHost {
+                host: Rc::clone(host),
+                slots: Rc::clone(slots),
+            });
         }
     }
 }
@@ -1328,9 +1342,9 @@ pub fn measure_layout_with_options(
 
     let frame_arena = crate::render_state::take_layout_frame_arena();
     let builder = LayoutBuilder::new_with_epoch(
-        Rc::clone(&applier_host),
+        Rc::clone(applier_host),
         epoch,
-        Rc::clone(&slots_handle),
+        Rc::clone(slots_handle),
         frame_arena,
     );
     let after_builder = Instant::now();
