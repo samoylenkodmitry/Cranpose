@@ -3,10 +3,17 @@ name: Runtime matrix
 # The supported platforms run here, not only compile (docs/platform_support.md).
 # Each job starts the real app on that platform and drives it through its
 # input, focus and accessibility paths. Nightly calls this workflow, so a
-# failure here is a red nightly; dispatch it to check one tree by hand.
+# failure here is a red nightly; dispatch it to check one tree by hand, on
+# every platform or on the one `platform` names.
 on:
   workflow_call:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: "Run only this platform's jobs, to check one tree on it"
+        type: choice
+        default: all
+        options: [all, web, linux, windows, android, apple]
 
 permissions:
   contents: read
@@ -22,6 +29,7 @@ jobs:
   # WebGL2 page checks already run on every push (rust.yml).
   web:
     name: web demo in Chromium and Firefox (linux)
+    if: ${{ !inputs.platform || inputs.platform == 'all' || inputs.platform == 'web' }}
     runs-on: [self-hosted, Linux, cranpose-heavy]
     timeout-minutes: 60
     defaults:
@@ -91,6 +99,7 @@ jobs:
   # text and modals through the Linux accessibility API.
   linux-desktop:
     name: desktop demo accessibility (linux)
+    if: ${{ !inputs.platform || inputs.platform == 'all' || inputs.platform == 'linux' }}
     runs-on: [self-hosted, Linux, cranpose-heavy]
     timeout-minutes: 40
     defaults:
@@ -119,6 +128,7 @@ jobs:
   # accessibility tree, and the floating inspector robot runs on Windows.
   windows:
     name: desktop demo and inspector (Windows)
+    if: ${{ !inputs.platform || inputs.platform == 'all' || inputs.platform == 'windows' }}
     runs-on: windows-2025
     timeout-minutes: 60
     steps:
@@ -130,6 +140,9 @@ jobs:
       - name: Network status from the internet connection profile
         if: ${{ !cancelled() }}
         run: cargo test --locked --profile ci -p cranpose --lib --features desktop,renderer-wgpu windows_network
+      - name: Power readings from PowerManager
+        if: ${{ !cancelled() }}
+        run: cargo test --locked --profile ci -p cranpose --lib --features desktop,renderer-wgpu desktop_power
       - name: Keep Windows robot evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -142,6 +155,7 @@ jobs:
   # runner, which carries the NDK every Android build uses.
   android-apks:
     name: Android robot APKs for the emulator (self-hosted)
+    if: ${{ !inputs.platform || inputs.platform == 'all' || inputs.platform == 'android' }}
     runs-on: [self-hosted, macOS, ARM64, recent-repo]
     timeout-minutes: 60
     defaults:
@@ -234,6 +248,7 @@ jobs:
   # modes, so both travel as tars.
   apple-apps:
     name: iOS simulator and macOS apps (self-hosted)
+    if: ${{ !inputs.platform || inputs.platform == 'all' || inputs.platform == 'apple' }}
     runs-on: [self-hosted, macOS, ARM64, recent-repo]
     timeout-minutes: 30
     defaults:

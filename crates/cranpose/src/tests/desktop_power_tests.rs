@@ -8,6 +8,11 @@ fn capabilities_match_what_this_build_can_actually_read() {
         DesktopPowerMonitor.thermal_state().is_supported(),
         "a backend that claims thermal support must not answer Unsupported"
     );
+    assert_eq!(
+        capabilities.battery,
+        DesktopPowerMonitor.battery_status().is_supported(),
+        "a backend that claims a battery must not answer Unsupported"
+    );
     assert!(!capabilities.background_restriction);
 }
 

@@ -434,7 +434,7 @@ accesskit_windows = "0.35.1"
 windows-sys = { version = "0.61", optional = true, features = ["Win32_System_Registry"] }
 # The internet connection profile and its changes (`windows_network`). The
 # version AccessKit and wgpu already resolve.
-windows = { version = "0.62", optional = true, features = ["Networking_Connectivity", "Foundation"] }
+windows = { version = "0.62", optional = true, features = ["Networking_Connectivity", "Foundation", "System_Power"] }
 wgpu = { version = "30.0.1", default-features = false, optional = true, features = [
     "std",
     "parking_lot",
