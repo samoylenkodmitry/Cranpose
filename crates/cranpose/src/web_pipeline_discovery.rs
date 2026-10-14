@@ -16,7 +16,12 @@
 //! page draws again when they landed.
 //!
 //! The first screen's pipelines an earlier run of the app recorded (see
-//! [`FIRST_SCREEN_PIPELINES`]) build as the renderer starts. On WebGL
+//! [`FIRST_SCREEN_PIPELINES`]) build as the renderer starts: of the sets
+//! recorded on this backend, the one drawn at the canvas size nearest this
+//! one's. The first frame waits for every pipeline that starts, so a set
+//! another first screen drew holds it back: the gauntlet's set recorded at
+//! its default load, opened at a higher one, put its first frame in Chrome
+//! on an Apple M3 Pro at 1.34 s against 0.81 s with no set. On WebGL
 //! Chrome's GPU process links each program one at a time, about 40 ms on a
 //! Mate 20 X, and would otherwise sit idle while the page composes, then
 //! link all thirteen of the gauntlet's while its first frame waits: that
@@ -54,6 +59,8 @@ pub(crate) struct GpuTarget {
     pub(crate) surface_format: wgpu::TextureFormat,
     pub(crate) backend: wgpu::Backend,
     pub(crate) downlevel: wgpu::DownlevelFlags,
+    /// The size of the canvas's drawing buffer, in pixels.
+    pub(crate) surface_size: (u32, u32),
 }
 
 enum Stage {
@@ -102,13 +109,13 @@ impl PipelineDiscovery {
     pub(crate) async fn start(&self, renderer: &mut WgpuRenderer) {
         self.install(renderer);
         if self.target.backend == wgpu::Backend::Gl {
-            renderer.build_first_screen_pipelines(FIRST_SCREEN_PIPELINES);
+            renderer.build_first_screen_pipelines(FIRST_SCREEN_PIPELINES, self.target.surface_size);
         } else if !FIRST_SCREEN_PIPELINES.is_empty()
             && self.target.device.begin_pipeline_discovery()
         {
             *self.stage.borrow_mut() = Stage::Discovering;
             renderer.begin_discovery_frame();
-            renderer.build_first_screen_pipelines(FIRST_SCREEN_PIPELINES);
+            renderer.build_first_screen_pipelines(FIRST_SCREEN_PIPELINES, self.target.surface_size);
             // Chrome sends WebGPU calls to its GPU process at a microtask
             // checkpoint: yielding once lets it compile them while the page
             // composes its first screen.

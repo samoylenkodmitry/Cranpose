@@ -110,14 +110,16 @@ wasm_page() {
 # Cranpose's page, built as every Cranpose web app's release is: built once,
 # opened in headless Chrome to record the pipelines its first screen draws
 # with, and built again embedding them, so the page builds them as it starts
-# (scripts/web/record_first_screen.mjs). A recording that fails leaves the
-# first build.
+# (scripts/web/record_first_screen.mjs). It records each viewport at the load
+# the gauntlet opens there: tier 8 on a phone (frameworks.py) and 16 in a
+# desktop window (the nightly's desktop.py --browser). A recording that fails
+# leaves the first build.
 cranpose_page() {
     wasm_page cranpose cranpose-app "$@"
     local records=$here/cranpose-app/target/first_screen_pipelines.bin
     local node
     node=$(command -v node || echo /opt/homebrew/bin/node)
-    if "$node" "$here/../../scripts/web/record_first_screen.mjs" "$here/browser-dist" cranpose/index.html "$records"; then
+    if "$node" "$here/../../scripts/web/record_first_screen.mjs" "$here/browser-dist" cranpose/index.html "$records" tier=8 tier=16; then
         CRANPOSE_FIRST_SCREEN_PIPELINES=$records wasm_page cranpose cranpose-app "$@"
     else
         echo "cranpose-web: recording its first screen failed; the page builds its pipelines in its first frame" >&2

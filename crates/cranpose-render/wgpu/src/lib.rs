@@ -978,16 +978,19 @@ impl WgpuRenderer {
             .and_then(GpuRenderer::first_screen_pipelines)
     }
 
-    /// Builds now the pipelines `records` names: sets
-    /// [`Self::first_screen_pipelines`] wrote, one after another. A web page
-    /// calls this as its renderer starts, so the browser compiles them while
-    /// the page composes its first screen. Only sets drawn on this
-    /// renderer's backend by a build with the same layout of pipeline keys
-    /// build, and a renderer that does not draw on the calling thread builds
-    /// nothing.
-    pub fn build_first_screen_pipelines(&mut self, records: &[u8]) {
+    /// Builds now the pipelines one set in `records` names: sets
+    /// [`Self::first_screen_pipelines`] wrote, one after another, each at the
+    /// size its first frame drew. A web page calls this as its renderer
+    /// starts, so the browser compiles them while the page composes its
+    /// first screen. Of the sets drawn on this renderer's backend by a build
+    /// with the same layout of pipeline keys, the one drawn nearest to
+    /// `viewport` pixels builds: a phone's screen and a desktop window's
+    /// draw with different pipelines, and a frame that waits for pipelines
+    /// it does not draw with comes later. A renderer that does not draw on
+    /// the calling thread builds nothing.
+    pub fn build_first_screen_pipelines(&mut self, records: &[u8], viewport: (u32, u32)) {
         if let PresentBackend::Sync(gpu_renderer) = &mut self.backend {
-            gpu_renderer.build_first_screen(records);
+            gpu_renderer.build_first_screen(records, viewport);
         }
     }
 

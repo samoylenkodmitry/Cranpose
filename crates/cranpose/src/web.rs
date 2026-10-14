@@ -436,6 +436,7 @@ pub async fn run(
         surface_format: crate::surface_format::display_surface_view_format(surface_format),
         backend: adapter_info.backend,
         downlevel: adapter.get_downlevel_capabilities().flags,
+        surface_size: (actual_width, actual_height),
     });
     discovery.start(&mut renderer).await;
 

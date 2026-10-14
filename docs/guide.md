@@ -499,8 +499,8 @@ It builds the module with wasm-pack, opens the page in headless Chrome at a
 phone's and a desktop's viewport, on WebGL and on WebGPU where Chrome has it,
 to record the pipelines its first screen draws with, and builds the module
 again with them embedded. The page then builds those pipelines as it starts,
-and the browser compiles them while the page composes its first screen instead
-of during the first frame. On a Mate 20 X on WebGL this showed the first screen
+the set recorded at the size nearest its canvas, and the browser compiles them
+while the page composes its first screen instead of during the first frame. On a Mate 20 X on WebGL this showed the first screen
 of a heavy page about 0.3 s sooner, and on an Apple M5 on WebGPU with no shader
 cached about 0.15 s sooner. The page
 directory, with the HTML page, `pkg/` and the assets, is the `application`
