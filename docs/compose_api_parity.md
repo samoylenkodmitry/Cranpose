@@ -2,7 +2,7 @@
 
 ## Current source audit: 2026-10-14
 
-The audit uses the [Cranpose source revision](https://github.com/samoylenkodmitry/Cranpose/tree/b88e45678fd06a91a08d64adc9ba22f351e874d9). Generated comparison counts describe the
+The audit uses the [Cranpose source revision](https://github.com/samoylenkodmitry/Cranpose/tree/d165444c2e57d6398f3e1aeda33965afce030ff9). Generated comparison counts describe the
 **2026-08-29 historical snapshot**. A current coverage percentage requires a
 fresh generation.
 
@@ -21,6 +21,54 @@ fresh generation.
 Use the [application guide](guide.md) for current usage and the
 [release ledger](release_readiness.md) for 1.0 acceptance. The historical
 comparison below is not a claim of complete behavioral parity.
+
+## Cranpose surface, 2026-10-14
+
+Generated with `tools/api-surface/dump-cranpose-api` from the source this
+audit links: 34 publishable library crates, 7,718 reachable public
+items, and 11,986 rows once each item's members (fields, variants,
+methods, trait items) count as their own rows. The 2026-08-29 snapshot below
+had 23 crates, 5,341 items and 8,464 rows. The candidate-match counts under
+**Coverage** still describe that snapshot: matching needs the Compose
+listing of the same day, and the Compose side has not been fetched again
+(see **Sources**).
+
+| Crate | Reachable items | With members | `#[composable]` fns |
+|---|---:|---:|---:|
+| `cranpose-ui` | 2,110 | 3,087 | 78 |
+| `cranpose-services` | 925 | 1,566 | 21 |
+| `cranpose-ui-graphics` | 817 | 1,314 | 0 |
+| `cranpose-core` | 789 | 1,134 | 0 |
+| `cranpose-foundation` | 578 | 927 | 2 |
+| `cranpose` | 397 | 668 | 8 |
+| `cranpose-render-common` | 331 | 630 | 0 |
+| `cranpose-liquid` | 317 | 553 | 50 |
+| `coroflow` | 309 | 423 | 0 |
+| `cranpose-app-shell` | 280 | 394 | 0 |
+| `cranpose-testing` | 183 | 218 | 0 |
+| `cranpose-ui-layout` | 115 | 191 | 0 |
+| `cranpose-localization` | 105 | 158 | 0 |
+| `cranpose-animation` | 89 | 135 | 0 |
+| `cranpose-render-wgpu` | 79 | 182 | 0 |
+| `cranpose-coroflow` | 46 | 53 | 0 |
+| `cranpose-capabilities` | 44 | 71 | 0 |
+| `cranpose-render-pixels` | 31 | 44 | 0 |
+| `cranpose-audio` | 30 | 38 | 0 |
+| `cranpose-navigation` | 28 | 28 | 7 |
+| `cranpose-runtime-std` | 25 | 25 | 0 |
+| `cranpose-native` | 23 | 46 | 0 |
+| `cranpose-assets` | 10 | 24 | 0 |
+| `cranpose-gl-templates` | 9 | 29 | 0 |
+| `cranpose-fonts` | 8 | 8 | 0 |
+| `cranpose-media` | 8 | 8 | 0 |
+| `cranpose-platform-android` | 8 | 8 | 0 |
+| `cranpose-macros` | 6 | 6 | 0 |
+| `cranpose-platform-desktop-winit` | 6 | 6 | 0 |
+| `cranpose-platform-web` | 5 | 5 | 0 |
+| `cranpose-storekit` | 4 | 4 | 0 |
+| `cranpose-fonts-cjk-data-1` | 1 | 1 | 0 |
+| `cranpose-fonts-cjk-data-2` | 1 | 1 | 0 |
+| `cranpose-fonts-cjk-data-3` | 1 | 1 | 0 |
 
 ## Historical generated comparison (2026-08-29)
 
