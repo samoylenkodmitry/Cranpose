@@ -19,6 +19,7 @@ fn node(label: Option<&str>, rect: Rect) -> PlacedSemanticsNode {
         hidden: false,
         pane_title: None,
         traversal_index: 0.0,
+        test_tag: None,
         list_position: None,
         layout_bounds: rect,
         touch_bounds: None,

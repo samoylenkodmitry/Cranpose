@@ -2126,3 +2126,39 @@ fn a_mirror_keeps_a_control_as_written_only_while_just_its_place_changes() {
         "typed text and its caret are written"
     );
 }
+
+#[test]
+fn a_test_tag_reaches_no_screen_reader() {
+    let mut pay = node(
+        2,
+        SemanticsRole::Button,
+        Vec::new(),
+        Some("Pay"),
+        Vec::new(),
+    );
+    pay.update_details(|details| details.test_tag = Some("pay-button".into()));
+    let mut tag_only = node(3, SemanticsRole::Layout, Vec::new(), None, Vec::new());
+    tag_only.update_details(|details| details.test_tag = Some("spacer-tag".into()));
+    let root = node(
+        1,
+        SemanticsRole::Layout,
+        Vec::new(),
+        None,
+        vec![pay, tag_only],
+    );
+
+    let elements = project_test_tree(&root);
+    let published = format!("{elements:?}");
+    assert_eq!(
+        elements
+            .iter()
+            .map(|element| element.label.as_str())
+            .collect::<Vec<_>>(),
+        ["Pay"],
+        "a node with only a tag publishes nothing"
+    );
+    assert!(
+        !published.contains("pay-button") && !published.contains("spacer-tag"),
+        "a tag reached the accessibility tree: {published}"
+    );
+}

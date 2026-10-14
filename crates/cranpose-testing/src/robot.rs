@@ -191,6 +191,17 @@ where
         }
     }
 
+    /// Find the element that carries `tag` (`Modifier::test_tag`), which keeps
+    /// finding it when its text changes.
+    pub fn find_by_tag(&mut self, tag: &str) -> ElementFinder<'_, R> {
+        self.shell.set_semantics_enabled(true);
+        self.wait_for_idle();
+        ElementFinder {
+            robot: self,
+            query: FinderQuery::Tag(tag.to_string()),
+        }
+    }
+
     /// Find an element at the given position.
     ///
     /// Returns a finder for the topmost element at that position.
@@ -253,12 +264,21 @@ where
     fn get_scene(&self) -> &R::Scene {
         self.shell.scene()
     }
+
+    /// The box a tap on the element tagged `tag` has to hit.
+    fn tagged_bounds(&mut self, tag: &str) -> Option<Rect> {
+        let placed = crate::placed_semantics::placed_semantics_from_shell(&mut self.shell)?;
+        placed
+            .find_by_tag(tag)
+            .map(crate::placed_semantics::PlacedSemanticsNode::target_bounds)
+    }
 }
 
 /// A query for finding UI elements.
 #[derive(Clone, Debug)]
 enum FinderQuery {
     Text(String),
+    Tag(String),
     Position(f32, f32),
 }
 
@@ -286,6 +306,7 @@ where
                 let all_text = self.robot.get_all_text();
                 all_text.iter().any(|t| t.contains(text))
             }
+            FinderQuery::Tag(tag) => self.robot.tagged_bounds(tag).is_some(),
             FinderQuery::Position(x, y) => !self.robot.get_scene().hit_test(*x, *y).is_empty(),
         }
     }
@@ -302,6 +323,7 @@ where
                     .find(|(_, txt)| txt.as_ref().is_some_and(|t| t.contains(text)))
                     .map(|(rect, _)| rect)
             }
+            FinderQuery::Tag(tag) => self.robot.tagged_bounds(tag),
             FinderQuery::Position(x, y) => {
                 let (x, y) = (*x, *y);
                 self.robot
