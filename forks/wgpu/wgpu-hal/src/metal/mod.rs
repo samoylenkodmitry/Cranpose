@@ -644,9 +644,6 @@ pub struct Surface {
     render_layer: Mutex<Retained<CAMetalLayer>>,
     swapchain_format: RwLock<Option<wgt::TextureFormat>>,
     extent: RwLock<wgt::Extent3d>,
-    /// Drawables acquired while the window was not visible yet, before it
-    /// ever was; `u32::MAX` once an acquisition found it visible.
-    acquired_before_shown: atomic::AtomicU32,
 }
 
 unsafe impl Send for Surface {}

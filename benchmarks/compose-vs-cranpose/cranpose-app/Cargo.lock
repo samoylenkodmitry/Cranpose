@@ -605,7 +605,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose"
-version = "0.9.25"
+version = "0.11.0"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -614,6 +614,7 @@ dependencies = [
  "android-activity",
  "android_logger",
  "ash",
+ "block2 0.6.2",
  "console_error_panic_hook",
  "cranpose-app-shell",
  "cranpose-capabilities",
@@ -631,16 +632,19 @@ dependencies = [
  "cranpose-ui-graphics",
  "cranpose-ui-layout",
  "cranpose-wgpu",
+ "dispatch2",
  "jni",
  "js-sys",
  "libc",
  "log",
  "mach2",
  "ndk",
+ "ndk-context",
  "ndk-sys",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
+ "objc2-quartz-core 0.3.2",
  "pollster",
  "raw-window-handle",
  "thiserror 2.0.21",
@@ -648,6 +652,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "web-time",
+ "wgpu",
  "windows-sys 0.61.2",
  "winit",
  "x11rb",
@@ -657,7 +662,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-animation"
-version = "0.9.25"
+version = "0.11.0"
 dependencies = [
  "cranpose-core",
  "cranpose-ui-graphics",
@@ -665,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-app-shell"
-version = "0.9.25"
+version = "0.11.0"
 dependencies = [
  "arboard",
  "cranpose-core",
@@ -680,11 +685,11 @@ dependencies = [
 
 [[package]]
 name = "cranpose-capabilities"
-version = "0.9.25"
+version = "0.11.0"
 
 [[package]]
 name = "cranpose-core"
-version = "0.9.25"
+version = "0.11.0"
 dependencies = [
  "dispatch2",
  "event-listener",
@@ -693,6 +698,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "log",
  "pollster",
+ "portable-atomic",
  "smallvec",
  "thiserror 2.0.21",
  "wasm-bindgen",
@@ -703,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-foundation"
-version = "0.9.25"
+version = "0.11.0"
 dependencies = [
  "cranpose-core",
  "cranpose-macros",
@@ -711,19 +717,20 @@ dependencies = [
  "cranpose-ui-layout",
  "log",
  "smallvec",
+ "unicode-segmentation",
  "web-time",
 ]
 
 [[package]]
 name = "cranpose-gl-templates"
-version = "0.9.25"
+version = "0.11.0"
 dependencies = [
  "naga",
 ]
 
 [[package]]
 name = "cranpose-liquid"
-version = "0.9.25"
+version = "0.11.0"
 dependencies = [
  "cranpose-animation",
  "cranpose-core",
@@ -739,7 +746,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-macros"
-version = "0.9.25"
+version = "0.11.0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -749,14 +756,14 @@ dependencies = [
 
 [[package]]
 name = "cranpose-platform-android"
-version = "0.9.25"
+version = "0.11.0"
 dependencies = [
  "cranpose-ui-graphics",
 ]
 
 [[package]]
 name = "cranpose-platform-desktop-winit"
-version = "0.9.25"
+version = "0.11.0"
 dependencies = [
  "cranpose-foundation",
  "cranpose-ui-graphics",
@@ -765,7 +772,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-platform-web"
-version = "0.9.25"
+version = "0.11.0"
 dependencies = [
  "cranpose-foundation",
  "cranpose-ui-graphics",
@@ -773,7 +780,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-render-common"
-version = "0.9.25"
+version = "0.11.0"
 dependencies = [
  "ab_glyph",
  "cranpose-core",
@@ -781,6 +788,7 @@ dependencies = [
  "cranpose-ui",
  "cranpose-ui-graphics",
  "log",
+ "portable-atomic",
  "smallvec",
  "thiserror 2.0.21",
  "tiny-skia",
@@ -790,7 +798,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-render-pixels"
-version = "0.9.25"
+version = "0.11.0"
 dependencies = [
  "cranpose-core",
  "cranpose-foundation",
@@ -803,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-render-wgpu"
-version = "0.9.25"
+version = "0.11.0"
 dependencies = [
  "bytemuck",
  "cranpose-core",
@@ -819,11 +827,12 @@ dependencies = [
  "rustix",
  "smallvec",
  "web-time",
+ "wgpu",
 ]
 
 [[package]]
 name = "cranpose-runtime-std"
-version = "0.9.25"
+version = "0.11.0"
 dependencies = [
  "cranpose-core",
  "web-time",
@@ -831,7 +840,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-services"
-version = "0.9.25"
+version = "0.11.0"
 dependencies = [
  "cranpose-core",
  "cranpose-macros",
@@ -842,6 +851,7 @@ dependencies = [
  "open",
  "parking_lot",
  "pollster",
+ "portable-atomic",
  "rfd",
  "rustix",
  "serde_json",
@@ -857,7 +867,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-testing"
-version = "0.9.25"
+version = "0.11.0"
 dependencies = [
  "cranpose",
  "cranpose-app-shell",
@@ -870,7 +880,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-ui"
-version = "0.9.25"
+version = "0.11.0"
 dependencies = [
  "cranpose-animation",
  "cranpose-core",
@@ -881,25 +891,28 @@ dependencies = [
  "futures-task",
  "icu_properties",
  "log",
+ "portable-atomic",
  "smallvec",
  "thiserror 2.0.21",
+ "unicode-segmentation",
  "web-time",
 ]
 
 [[package]]
 name = "cranpose-ui-graphics"
-version = "0.9.25"
+version = "0.11.0"
 dependencies = [
  "arrayvec",
  "bytemuck",
  "cursor-icon",
  "foldhash",
+ "portable-atomic",
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "cranpose-ui-layout"
-version = "0.9.25"
+version = "0.11.0"
 dependencies = [
  "cranpose-core",
  "cranpose-ui-graphics",
@@ -907,7 +920,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu"
-version = "30.0.12"
+version = "30.0.20"
 dependencies = [
  "arrayvec",
  "bitflags",
@@ -935,7 +948,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu-core"
-version = "30.0.11"
+version = "30.0.17"
 dependencies = [
  "arrayvec",
  "bit-set",
@@ -996,18 +1009,17 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu-hal"
-version = "30.0.11"
+version = "30.0.15"
 dependencies = [
  "android_system_properties",
  "arrayvec",
  "ash",
- "bit-set",
  "bitflags",
  "block2 0.6.2",
  "bytemuck",
  "cfg-if",
  "cfg_aliases",
- "glow",
+ "glow 0.18.0",
  "glutin_wgl_sys",
  "gpu-allocator",
  "hashbrown 0.17.1",
@@ -1016,7 +1028,6 @@ dependencies = [
  "libc",
  "libloading",
  "log",
- "mach-dxcompiler-rs",
  "naga",
  "naga-types",
  "ndk-sys",
@@ -1026,13 +1037,11 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "objc2-metal 0.3.2",
  "objc2-quartz-core 0.3.2",
- "once_cell",
  "ordered-float",
  "parking_lot",
  "portable-atomic",
  "portable-atomic-util",
  "profiling",
- "range-alloc",
  "raw-window-handle",
  "raw-window-metal",
  "renderdoc-sys",
@@ -1045,7 +1054,6 @@ dependencies = [
  "wgpu-naga-bridge",
  "wgpu-types",
  "windows",
- "windows-core",
  "windows-result",
 ]
 
@@ -1124,7 +1132,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1236,7 +1244,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1384,6 +1392,18 @@ name = "glow"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29038e1c483364cc6bb3cf78feee1816002e127c331a1eec55a4d202b9e1adb5"
+dependencies = [
+ "js-sys",
+ "slotmap",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "glow"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "263218b0ba2b0715c3370fb04674f5f8aa331594b521c94ff0a8e4a8472d1386"
 dependencies = [
  "js-sys",
  "slotmap",
@@ -2621,7 +2641,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2899,7 +2919,7 @@ dependencies = [
  "getrandom",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3077,7 +3097,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3382,6 +3402,154 @@ dependencies = [
 ]
 
 [[package]]
+name = "wgpu"
+version = "30.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "527ccdf43dd5b2e8676eed9984ce00e2bbb0a1b85b70c1969dcb6cd2eb55ab9e"
+dependencies = [
+ "arrayvec",
+ "bitflags",
+ "bytemuck",
+ "cfg-if",
+ "cfg_aliases",
+ "document-features",
+ "hashbrown 0.17.1",
+ "js-sys",
+ "log",
+ "naga",
+ "parking_lot",
+ "portable-atomic",
+ "profiling",
+ "raw-window-handle",
+ "smallvec",
+ "static_assertions",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu-core",
+ "wgpu-hal",
+ "wgpu-types",
+]
+
+[[package]]
+name = "wgpu-core"
+version = "30.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "14c018fce9b6270aa203c2fdd56f3cce996713534bd757e4ea58c8560b121f14"
+dependencies = [
+ "arrayvec",
+ "bit-set",
+ "bit-vec",
+ "bitflags",
+ "bytemuck",
+ "cfg_aliases",
+ "document-features",
+ "hashbrown 0.17.1",
+ "indexmap",
+ "log",
+ "naga",
+ "naga-types",
+ "once_cell",
+ "parking_lot",
+ "portable-atomic",
+ "profiling",
+ "raw-window-handle",
+ "rustc-hash",
+ "smallvec",
+ "thiserror 2.0.21",
+ "wgpu-core-deps-apple",
+ "wgpu-core-deps-emscripten",
+ "wgpu-core-deps-windows-linux-android",
+ "wgpu-hal",
+ "wgpu-naga-bridge",
+ "wgpu-types",
+]
+
+[[package]]
+name = "wgpu-core-deps-apple"
+version = "30.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "061f3d319a40d39d00b1ecc2c33b89fe21d4e6fe01859df3500a3a8ecccd6b68"
+dependencies = [
+ "wgpu-hal",
+]
+
+[[package]]
+name = "wgpu-core-deps-emscripten"
+version = "30.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d98b86cf4abf524a902dd35f18ca6a3f08fc2ae9847c8f10b48e30491b1f0b86"
+dependencies = [
+ "wgpu-hal",
+]
+
+[[package]]
+name = "wgpu-core-deps-windows-linux-android"
+version = "30.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7586165fd5f6d881cb9ce4bb71f40d6caab2c0f1837e3fc1d9788a197fb6004f"
+dependencies = [
+ "wgpu-hal",
+]
+
+[[package]]
+name = "wgpu-hal"
+version = "30.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6b7fb58561a792bc237628ba0792e332de418fefe145f13b5ed8201e6d52f58"
+dependencies = [
+ "android_system_properties",
+ "arrayvec",
+ "ash",
+ "bit-set",
+ "bitflags",
+ "block2 0.6.2",
+ "bytemuck",
+ "cfg-if",
+ "cfg_aliases",
+ "glow 0.17.0",
+ "glutin_wgl_sys",
+ "gpu-allocator",
+ "hashbrown 0.17.1",
+ "js-sys",
+ "khronos-egl",
+ "libc",
+ "libloading",
+ "log",
+ "mach-dxcompiler-rs",
+ "naga",
+ "naga-types",
+ "ndk-sys",
+ "objc2 0.6.4",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
+ "objc2-metal 0.3.2",
+ "objc2-quartz-core 0.3.2",
+ "once_cell",
+ "ordered-float",
+ "parking_lot",
+ "portable-atomic",
+ "portable-atomic-util",
+ "profiling",
+ "range-alloc",
+ "raw-window-handle",
+ "raw-window-metal",
+ "renderdoc-sys",
+ "smallvec",
+ "static_assertions",
+ "thiserror 2.0.21",
+ "wasm-bindgen",
+ "wayland-sys",
+ "web-sys",
+ "wgpu-naga-bridge",
+ "wgpu-types",
+ "windows",
+ "windows-core",
+ "windows-result",
+]
+
+[[package]]
 name = "wgpu-naga-bridge"
 version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3413,7 +3581,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

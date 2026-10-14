@@ -1749,6 +1749,24 @@ fn wgpu_backend_features_are_target_specific() {
                 && !macos.contains("\"vulkan\""),
             "{manifest} macOS WGPU backend set should be Metal only"
         );
+
+        for (os, section) in [("Linux", linux), ("Windows", windows), ("macOS", macos)] {
+            assert!(
+                !wgpu_dependency(section).contains("workspace = true"),
+                "{manifest} {os} must take wgpu from crates.io, which a desktop engine such as Bevy shares without a patch"
+            );
+        }
+        let ios = manifest_section(&source, "[target.'cfg(target_os = \"ios\")'.dependencies]");
+        let web = manifest_section(
+            &source,
+            "[target.'cfg(all(target_arch = \"wasm32\", target_os = \"unknown\"))'.dependencies]",
+        );
+        for (os, section) in [("Android", android), ("iOS", ios), ("web", web)] {
+            assert!(
+                wgpu_dependency(section).contains("workspace = true"),
+                "{manifest} {os} must take the workspace's wgpu fork"
+            );
+        }
     }
 
     let render_wgpu = workspace_source("crates/cranpose-render/wgpu/Cargo.toml");
@@ -1810,6 +1828,13 @@ fn manifest_section<'a>(source: &'a str, header: &str) -> &'a str {
     let tail = &source[start + header.len()..];
     let end = tail.find("\n[").unwrap_or(tail.len());
     &tail[..end]
+}
+
+fn wgpu_dependency(section: &str) -> &str {
+    section
+        .lines()
+        .find(|line| line.starts_with("wgpu = "))
+        .unwrap_or_else(|| panic!("manifest section has no wgpu dependency:\n{section}"))
 }
 
 #[test]

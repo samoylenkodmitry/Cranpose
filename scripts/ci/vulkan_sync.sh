@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs the renderer's Vulkan synchronization tests under the Khronos
+# Runs the wgpu fork's Vulkan synchronization tests under the Khronos
 # validation layer, taken from Arch Linux's package and pinned by checksum.
 set -euo pipefail
 
@@ -32,4 +32,4 @@ VK_LAYER_PATH="$layer/usr/share/vulkan/explicit_layer.d" \
     LD_LIBRARY_PATH="$layer/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
     VK_KHRONOS_VALIDATION_SYNCVAL_SHADER_ACCESSES_HEURISTIC=true \
     CRANPOSE_REQUIRE_SYNC_VALIDATION=1 \
-    cargo nextest run --cargo-profile ci -p cranpose-render-wgpu --test integration vulkan_sync::
+    cargo nextest run --manifest-path forks/wgpu/vulkan-sync/Cargo.toml --target-dir target/forks

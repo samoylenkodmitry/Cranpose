@@ -3,30 +3,36 @@
 Crates Cranpose ships patched, under its own names, until the fix is in a
 released upstream version. Each is the crates.io source of the upstream
 version, renamed, with Cranpose's patch on top as its own commit. The forks
-start at the upstream version, build as path dependencies outside the
-workspace, and are published by `.github/workflows/publish.yml` ahead of the
-Cranpose crates. Publishing skips a version crates.io already has, so a change
-to a fork takes that crate's next patch version. Every fork above it that
-names it directly then requires that version and takes its own next patch
-version, up to the workspace's `wgpu` requirement, so a build that updates
-Cranpose cannot keep the old crate in its lockfile. The repository's
+start at the upstream version and are published by
+`.github/workflows/publish.yml` ahead of the Cranpose crates. Cranpose's
+crates name them by version; the workspace's `[patch.crates-io]` builds them
+from this directory. Publishing skips a version crates.io already has, so a
+change to a fork takes that crate's next patch version. Every fork above it
+that names it directly then requires that version and takes its own next
+patch version, up to the workspace's `wgpu` requirement, so a build that
+updates Cranpose cannot keep the old crate in its lockfile. The repository's
 formatting, spelling and diff gates skip the forks.
+
+The web, Android and iOS build with the wgpu fork. macOS, Windows and Linux
+take wgpu from crates.io, so a desktop game engine on upstream wgpu, such as
+Bevy, shares one wgpu with Cranpose without a patch. A change that only
+those desktop targets would compile does not belong here.
 
 ## wgpu 30.0.1
 
 Upstream: <https://github.com/gfx-rs/wgpu>, commit
 `40f4a34ebaf56f9a046231f54125ad046239d3f3` (`wgpu-hal` 30.0.1).
-`cranpose-wgpu-hal` is at 30.0.14 for the catch-up barrier, the Metal
+`cranpose-wgpu-hal` is at 30.0.16 for the catch-up barrier, the Metal
 pipeline switch, the dedicated Vulkan allocations, the GL point size, the
 GL state tracker, the web surface usages, the boxed GL copy commands, the
 Vulkan command pools that give a burst's memory back, the GL shaders
 without the branches their constants decide, the GL program status read
-only on failure, the GLSL templates, the GL link reads, the WebGL extensions,
-the GL varying minimum and the first Metal drawables of a window not shown
-yet below, and `cranpose-wgpu-core` is at 30.0.15 to require it, to make
-template modules and to configure a surface while another thread submits.
-`cranpose-wgpu` is at 30.0.18 for the WebGPU pipeline discovery, the
-background compiles and the pipeline readiness below and to require them.
+only on failure, the GLSL templates, the GL link reads, the WebGL
+extensions and the GL varying minimum below. `cranpose-wgpu-core` is at
+30.0.17 to require those, to make template modules and to configure a
+surface while another thread submits. `cranpose-wgpu` is at 30.0.20 for
+the WebGPU pipeline discovery, the background compiles and the pipeline
+readiness below and to require them.
 
 | fork | upstream |
 | --- | --- |
@@ -387,25 +393,6 @@ pipeline, failed validation on a GPU that runs it. Cranpose's HUD over a Bevy
 game drew nothing in Brave on a Mate 20 X on github.io, while the same page on
 localhost, where the noise left 60, drew it. The GL adapter now takes at least
 60 components.
-
-### A window not shown yet gets its Metal layer's first drawables
-
-On macOS, `wgpu-hal` refuses a drawable while the window's occlusion state
-is not visible: a drawable presented to a window off screen waits for a
-display refresh that does not come, and with the layer's timeout off
-`nextDrawable` then blocks (gfx-rs/wgpu#8309). The rule also refused the
-drawables of a window just shown, though the layer had presented nothing
-yet: the window server reports a window visible 75 to 85 ms after
-`setIsVisible` on an Apple M5, so a launch's first frame waited for that,
-about 40 ms past its first redraw.
-
-Before an acquisition first finds the window visible, the fork hands out
-all but one of the layer's drawables whatever the window's state (two of
-three at a frame latency of two: the launch's placeholder and its first
-frame); one stays free, so `nextDrawable` returns at once. From the first
-acquisition that finds the window visible on, upstream's rule holds. The
-gauntlet's first frame on that M5 came 190 to 202 ms after the process
-started, against 218 to 239 ms.
 
 ### Update the fork
 

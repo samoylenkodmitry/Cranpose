@@ -74,7 +74,7 @@ name = "Metadata App"
         self.assertEqual(commands.call_args.args[0], ['cargo', 'update', '--workspace'])
         self.assertIn('=0.9.1', (self.destination / 'runner/Cargo.toml').read_text())
 
-    def test_framework_source_patches_each_path_dependency_by_package_name(self):
+    def test_framework_source_patches_path_dependencies_and_workspace_patches(self):
         framework = self.root / 'framework'
         framework.mkdir()
         (framework / 'Cargo.toml').write_text('''[workspace.package]
@@ -82,8 +82,11 @@ version = "0.9.4"
 
 [workspace.dependencies]
 cranpose-core = { path = "crates/cranpose-core", version = "0.9.4" }
-wgpu = { package = "cranpose-wgpu", path = "forks/wgpu/wgpu", version = "30.0.1" }
+wgpu = { package = "cranpose-wgpu", version = "30.0.20" }
 log = "0.4"
+
+[patch.crates-io]
+cranpose-wgpu = { path = "forks/wgpu/wgpu" }
 ''')
         offset = self.args.index('--cranpose-version')
         self.args[offset:offset + 2] = ['--framework-source', str(framework)]

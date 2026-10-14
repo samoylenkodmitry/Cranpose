@@ -766,6 +766,46 @@ fn workspace_builds_need_no_staging() {
 }
 
 #[test]
+fn patched_builds_take_the_workspace_crates_and_its_own_patches() {
+    let workspace = unique_temp_dir();
+    fs::write(
+        workspace.join("Cargo.toml"),
+        r#"[workspace.dependencies]
+cranpose-core = { path = "crates/cranpose-core", version = "0.11.0" }
+wgpu = { package = "cranpose-wgpu", version = "30.0.20" }
+log = "0.4"
+
+[patch.crates-io]
+cranpose-wgpu = { path = "forks/wgpu/wgpu" }
+"#,
+    )
+    .expect("write workspace manifest");
+    let mut command = Command::new("cargo");
+
+    add_workspace_cranpose_patches(&mut command, &workspace).expect("add patches");
+
+    let patch = |package: &str, path: &str| {
+        format!(
+            "patch.crates-io.{package}.path=\"{}\"",
+            workspace.join(path).display()
+        )
+    };
+    let args: Vec<String> = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        args,
+        [
+            "--config".to_owned(),
+            patch("cranpose-core", "crates/cranpose-core"),
+            "--config".to_owned(),
+            patch("cranpose-wgpu", "forks/wgpu/wgpu"),
+        ]
+    );
+}
+
+#[test]
 fn target_source_roots_dedupe_the_directories_cargo_reports() {
     let metadata = r#"{"packages":[{"targets":[
         {"name":"isolated_demo","src_path":"/w/apps/isolated-demo/src/lib.rs"},
