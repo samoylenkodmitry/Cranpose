@@ -75,6 +75,8 @@ internal data class RustDeclaration(
     val permissions: List<String>,
     val demands: List<String>,
     val opens: List<String>,
+    /** The URL schemes of the links that open the application. */
+    val links: List<String> = emptyList(),
     /**
      * Permissions a newer Android release replaced, each with the last API
      * level that still needs it: written with `android:maxSdkVersion`, so a
@@ -100,6 +102,7 @@ internal fun readRustDeclaration(declaration: ConfigurableFileCollection): RustD
         permissions = declarations.flatMap { names(it["permissions"]) }.distinct(),
         demands = declarations.flatMap { names(it["demands"]) }.distinct(),
         opens = declarations.flatMap { names(it["opens"]) }.distinct(),
+        links = declarations.flatMap { names(it["links"]) }.distinct(),
         permissionsUpTo = declarations.flatMap { parsed ->
             (parsed["permissionsUpTo"] as? List<*>).orEmpty().mapNotNull { entry ->
                 val fields = entry as? Map<*, *> ?: return@mapNotNull null
@@ -278,14 +281,7 @@ abstract class CranposeManifestCheck : DefaultTask() {
         if (opens.isEmpty()) {
             return
         }
-        val activity = document.getElementsByTagName("activity")
-            .let { nodes -> (0 until nodes.length).mapNotNull { at -> nodes.item(at) as? Element } }
-            .firstOrNull { element ->
-                element.getAttributeNS(ANDROID_NAMESPACE, "name") == CRANPOSE_ACTIVITY
-            }
-            ?: throw GradleException(
-                "the merged manifest has no $CRANPOSE_ACTIVITY to offer for ${opens.joinToString()}"
-            )
+        val activity = cranposeActivity(document, opens)
         val filters = listOf(
             listOf("android.intent.action.SEND", "android.intent.action.SEND_MULTIPLE"),
             listOf("android.intent.action.VIEW"),
@@ -311,6 +307,45 @@ abstract class CranposeManifestCheck : DefaultTask() {
             "cranpose: offered for ${opens.joinToString(", ")} from this application's own declaration"
         )
     }
+
+    /**
+     * Opens the application for links in its URL schemes, from a browser too:
+     * one VIEW filter naming every declared scheme.
+     */
+    private fun offerLinks(document: org.w3c.dom.Document, links: List<String>) {
+        if (links.isEmpty()) {
+            return
+        }
+        val filter = document.createElement("intent-filter")
+        filter.appendChild(document.createElement("action").apply {
+            setAttributeNS(ANDROID_NAMESPACE, "android:name", "android.intent.action.VIEW")
+        })
+        for (category in listOf("DEFAULT", "BROWSABLE")) {
+            filter.appendChild(document.createElement("category").apply {
+                setAttributeNS(ANDROID_NAMESPACE, "android:name", "android.intent.category.$category")
+            })
+        }
+        for (scheme in links) {
+            filter.appendChild(document.createElement("data").apply {
+                setAttributeNS(ANDROID_NAMESPACE, "android:scheme", scheme)
+            })
+        }
+        cranposeActivity(document, links).appendChild(filter)
+        logger.lifecycle(
+            "cranpose: opened for links in ${links.joinToString(", ")} from this application's own declaration"
+        )
+    }
+
+    /** The activity of the merged manifest that the `offered` filters go to. */
+    private fun cranposeActivity(document: org.w3c.dom.Document, offered: List<String>): Element =
+        document.getElementsByTagName("activity")
+            .let { nodes -> (0 until nodes.length).mapNotNull { at -> nodes.item(at) as? Element } }
+            .firstOrNull { element ->
+                element.getAttributeNS(ANDROID_NAMESPACE, "name") == CRANPOSE_ACTIVITY
+            }
+            ?: throw GradleException(
+                "the merged manifest has no $CRANPOSE_ACTIVITY to offer for ${offered.joinToString()}"
+            )
 
     private fun declareReceivers(document: org.w3c.dom.Document, services: List<String>) {
         val receivers = services.flatMap { service ->
@@ -452,6 +487,7 @@ abstract class CranposeManifestCheck : DefaultTask() {
         }
 
         offerOpening(document, rust.opens)
+        offerLinks(document, rust.links)
         declareReceivers(document, rust.services)
         declareServices(document, rust.services)
 

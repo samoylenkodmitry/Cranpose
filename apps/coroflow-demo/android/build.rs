@@ -1,5 +1,5 @@
 use cranpose_capabilities::declare;
 
 fn main() {
-    declare(&[]).emit();
+    declare(&[]).linking(&["coroflow-notes"]).emit();
 }

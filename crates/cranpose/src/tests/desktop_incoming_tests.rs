@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use cranpose_services::{IncomingContentObserver, observe_incoming_content};
+use cranpose_services::{InboxObserver, observe_incoming_content};
 use winit::data_transfer::TransferType;
 
 use super::*;
@@ -85,9 +85,7 @@ impl TypedData for PlainText {
     }
 }
 
-fn published_names_matching(
-    prefix: &'static str,
-) -> (Arc<Mutex<Vec<String>>>, IncomingContentObserver) {
+fn published_names_matching(prefix: &'static str) -> (Arc<Mutex<Vec<String>>>, InboxObserver) {
     let names = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&names);
     let observer = observe_incoming_content(move |item| {
@@ -145,13 +143,16 @@ fn data_that_is_not_a_file_list_is_discarded() {
 #[test]
 fn an_option_is_not_a_document() {
     let arguments = ["--headless".to_owned(), "-v".to_owned()];
-    assert!(launch_documents(arguments).is_empty());
+    assert!(launch_items(arguments).is_empty());
 }
 
 #[test]
 fn a_path_to_nothing_is_not_a_document() {
-    let arguments = ["/cranpose/no/such/file.txt".to_owned()];
-    assert!(launch_documents(arguments).is_empty());
+    let arguments = [
+        "/cranpose/no/such/file.txt".to_owned(),
+        "C:\\no\\such\\file.txt".to_owned(),
+    ];
+    assert!(launch_items(arguments).is_empty());
 }
 
 #[test]
@@ -159,16 +160,31 @@ fn an_existing_file_named_on_the_command_line_is_a_document() {
     let directory = crate::test_scratch_dir("launch-document");
     let path = directory.join("cranpose-launch-document.txt");
     std::fs::write(&path, b"opened").expect("write");
-    let found = launch_documents([path.to_string_lossy().into_owned()]);
+    let found = launch_items([path.to_string_lossy().into_owned()]);
     let _ = std::fs::remove_dir_all(&directory);
-    assert_eq!(found, vec![path]);
+    assert_eq!(found, vec![LaunchItem::Document(path)]);
 }
 
 #[test]
 fn a_directory_is_not_a_document() {
     let directory = crate::test_scratch_dir("launch-directory");
     let arguments = [directory.to_string_lossy().into_owned()];
-    let found = launch_documents(arguments);
+    let found = launch_items(arguments);
     let _ = std::fs::remove_dir_all(&directory);
     assert!(found.is_empty());
+}
+
+#[test]
+fn a_url_in_a_scheme_is_a_link() {
+    let arguments = [
+        "cranpose-demo://detail/7".to_owned(),
+        "myapp:item".to_owned(),
+    ];
+    assert_eq!(
+        launch_items(arguments),
+        [
+            LaunchItem::Link("cranpose-demo://detail/7".to_owned()),
+            LaunchItem::Link("myapp:item".to_owned()),
+        ]
+    );
 }

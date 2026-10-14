@@ -2406,6 +2406,7 @@ This pattern plays two pulses with a 40-millisecond pause.
 - **Documents:** `rememberOpenFileLauncher`, `rememberSaveDocumentLauncher`, `rememberExportFileLauncher`, `ContentHandle`.
 - **Share:** `local_share_sheet`, `ShareContent`.
 - **Receive shared content:** `rememberIncomingContent`.
+- **Links that open the app:** `rememberOpenedLinks`, and `BindDeepLinks` in `cranpose-navigation`.
 - **Preferences and directories:** `preferences`, `application_directories`.
 - **Notifications:** `local_notifier`.
 - **Camera:** `rememberCameraState`, `rememberCameraFrames`, `capture_camera_still`.

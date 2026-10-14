@@ -6,6 +6,7 @@ const SCANNER: Capabilities<'static> = Capabilities {
     uses: &[Use::camera(READS), Use::notifications(), Use::billing()],
     demands: &[],
     opens: &[],
+    links: &[],
 };
 
 #[test]
@@ -28,6 +29,7 @@ fn android_permissions_come_from_the_services_without_repeats() {
         uses: &BOTH_SERVICES,
         demands: &[],
         opens: &[],
+        links: &[],
     };
     assert_eq!(
         android_permissions(&both),
@@ -45,6 +47,7 @@ fn the_manifest_names_the_permissions_and_the_demanded_hardware() {
         uses: &ONE_HAPTIC,
         demands: &WATCH,
         opens: &[],
+        links: &[],
     };
     let text = android_manifest(&watch);
     assert!(text.contains("<uses-permission android:name=\"android.permission.VIBRATE\" />"));
@@ -87,6 +90,7 @@ fn the_json_lists_services_permissions_and_demands() {
         uses: &ONE_CAMERA,
         demands: &CAMERA_HARDWARE,
         opens: &[],
+        links: &[],
     });
     assert!(text.contains("\"name\": \"camera\""));
     assert!(text.contains("\"android.permission.CAMERA\""));
@@ -199,6 +203,7 @@ const PLAYER: Capabilities<'static> = Capabilities {
     uses: &[],
     demands: &[],
     opens: &AUDIO,
+    links: &[],
 };
 
 #[test]
@@ -260,6 +265,7 @@ fn heart_rate_asks_for_the_health_permission_and_body_sensors_only_up_to_api_35(
         uses: &PULSE,
         demands: &[],
         opens: &[],
+        links: &[],
     };
     assert_eq!(
         android_permissions(&pulse),
@@ -307,4 +313,71 @@ fn an_application_that_does_not_declare_heart_rate_names_no_body_sensor() {
     let usage = apple_usage(&SCANNER);
     assert!(!usage.contains("NSHealth"), "{usage}");
     assert!(!usage.contains("WKBackgroundModes"), "{usage}");
+}
+
+const SCHEMES: [&str; 2] = ["cranpose-demo", "demo.example"];
+
+const LINKED: Capabilities<'static> = Capabilities {
+    uses: &[],
+    demands: &[],
+    opens: &[],
+    links: &SCHEMES,
+};
+
+#[test]
+fn an_application_that_takes_links_is_opened_for_its_schemes_from_a_browser_too() {
+    let text = android_manifest(&LINKED);
+    assert_eq!(
+        text.matches("<activity android:name=\"dev.cranpose.android.CranposeActivity\">")
+            .count(),
+        1
+    );
+    let filter = &text[text.find("<intent-filter>").expect("a link filter")..];
+    for line in [
+        "<action android:name=\"android.intent.action.VIEW\" />",
+        "<category android:name=\"android.intent.category.BROWSABLE\" />",
+        "<data android:scheme=\"cranpose-demo\" />",
+        "<data android:scheme=\"demo.example\" />",
+    ] {
+        assert!(filter.contains(line), "{line}: {text}");
+    }
+}
+
+#[test]
+fn files_and_links_share_one_activity_entry() {
+    let both = Capabilities {
+        opens: &AUDIO,
+        ..LINKED
+    };
+    let text = android_manifest(&both);
+    assert_eq!(text.matches("<activity ").count(), 1, "{text}");
+    assert_eq!(text.matches("<intent-filter>").count(), 3, "{text}");
+}
+
+#[test]
+fn the_apple_list_names_the_link_schemes() {
+    let text = apple_usage(&LINKED);
+    assert!(
+        text.contains(
+            "\t<key>CFBundleURLTypes</key>\n\t<array>\n\t\t<dict>\n\
+         \t\t\t<key>CFBundleURLSchemes</key>\n\t\t\t<array>\n\
+         \t\t\t\t<string>cranpose-demo</string>\n\t\t\t\t<string>demo.example</string>\n\
+         \t\t\t</array>\n\t\t</dict>\n\t</array>\n"
+        ),
+        "{text}"
+    );
+    assert!(!apple_usage(&PLAYER).contains("CFBundleURLTypes"));
+}
+
+#[test]
+fn the_json_and_the_generated_rust_carry_the_link_schemes() {
+    assert!(
+        json(&LINKED).contains("\"links\": [\n    \"cranpose-demo\",\n    \"demo.example\"\n  ]")
+    );
+    assert!(rust_source(&LINKED).contains(
+        "links: &[\n            \"cranpose-demo\",\n            \"demo.example\",\n        ],"
+    ));
+    let declaration = declare(&ONE_HAPTIC).opening(&AUDIO).linking(&SCHEMES);
+    assert_eq!(declaration.capabilities.opens, &AUDIO);
+    assert_eq!(declaration.capabilities.links, &SCHEMES);
 }

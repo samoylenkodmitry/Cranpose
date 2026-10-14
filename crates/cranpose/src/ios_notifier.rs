@@ -6,9 +6,7 @@ use std::{
 };
 
 use block2::RcBlock;
-use cranpose_services::{
-    Notifier, NotifyRequest, push_notification_deeplink, set_platform_notifier,
-};
+use cranpose_services::{Notifier, NotifyRequest, publish_opened_link, set_platform_notifier};
 use objc2::{
     MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
@@ -111,7 +109,7 @@ define_class!(
             completion: &block2::DynBlock<dyn Fn()>,
         ) {
             if let Some(link) = deeplink_of(response) {
-                push_notification_deeplink(link);
+                publish_opened_link(link);
             }
             completion.call(());
         }

@@ -15,6 +15,7 @@ fn main() {
         Use::notifications(),
     ])
     .opening(&["image/*", "application/pdf"])
+    .linking(&["myapp"])
     .emit();
 }
 ```
@@ -29,7 +30,9 @@ fn launcher() -> cranpose::AppLauncher {
 }
 ```
 
-The build also writes package permission XML and Apple usage plist data under `<workspace>/target/cranpose`. Set `CRANPOSE_CAPABILITIES_DIR` when a platform build reads declarations from a separate output directory. The `cranpose-plist` binary prints Apple property-list entries from a capability declaration.
+The build also writes package permission XML and Apple usage plist data under `<workspace>/target/cranpose`. Set `CRANPOSE_CAPABILITIES_DIR` when a platform build reads declarations from a separate output directory. The `cranpose-plist` binary merges the usage plist into an app's `Info.plist`: each top-level key, with its string, array or dictionary, replaces the key the list holds or is added.
+
+`opening` names the file types the app opens. `linking` names the URL schemes of the links that open the app, such as `myapp://item/7`: Android gets a browsable VIEW intent filter and Apple gets `CFBundleURLTypes`. The links arrive through `cranpose_services::rememberOpenedLinks`.
 
 `Use` lists services such as camera, location, microphone, notifications, media, billing, overlay, and network. Apple camera, photo library, microphone, and location entries take a reason for the person. `Demand` marks hardware the app requires; other services stay optional for runtime checks.
 

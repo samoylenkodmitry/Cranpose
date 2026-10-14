@@ -36,6 +36,15 @@
     </array>
     <key>UILaunchScreen</key>
     <dict/>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>coroflow-notes</string>
+            </array>
+        </dict>
+    </array>
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key>

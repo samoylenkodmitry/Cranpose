@@ -116,7 +116,7 @@ impl Notifier for WebNotifier {
         let deeplink = request.deeplink.clone();
         let on_click = Closure::wrap(Box::new(move || {
             if let Some(link) = &deeplink {
-                cranpose_services::push_notification_deeplink(link.clone());
+                cranpose_services::publish_opened_link(link.clone());
             }
             if let Some(window) = web_sys::window() {
                 let _ = window.focus();

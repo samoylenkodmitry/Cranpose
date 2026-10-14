@@ -594,6 +594,7 @@ objc2-ui-kit = { version = "0.3", default-features = false, optional = true, fea
     "UIImpactFeedbackGenerator",
     "UINavigationController",
     "UINotificationFeedbackGenerator",
+    "UIOpenURLContext",
     "NSText",
     "UIPasteboard",
     "UIPopoverPresentationController",

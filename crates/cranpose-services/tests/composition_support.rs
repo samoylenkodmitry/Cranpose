@@ -1,9 +1,11 @@
 use std::{
+    cell::RefCell,
+    rc::Rc,
     sync::{Mutex, MutexGuard, OnceLock, PoisonError},
     time::{Duration, Instant},
 };
 
-use cranpose_core::{Composition, MemoryApplier};
+use cranpose_core::{CollectEvents, Composition, EventStream, Key, MemoryApplier};
 
 pub(crate) fn serial() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -26,4 +28,25 @@ pub(crate) fn pump_until(
         std::thread::yield_now();
     }
     done()
+}
+
+/// Renders content that collects `stream()` into `seen`, each item as
+/// `describe` names it.
+pub(crate) fn render_collector<T: 'static>(
+    composition: &mut Composition<MemoryApplier>,
+    key: Key,
+    stream: fn() -> EventStream<T>,
+    describe: fn(&T) -> String,
+    seen: &Rc<RefCell<Vec<String>>>,
+) {
+    let sink = Rc::clone(seen);
+    composition
+        .render(key, move || {
+            let events = stream();
+            let sink = Rc::clone(&sink);
+            CollectEvents(events, (), move |item: T| {
+                sink.borrow_mut().push(describe(&item));
+            });
+        })
+        .expect("render succeeds");
 }

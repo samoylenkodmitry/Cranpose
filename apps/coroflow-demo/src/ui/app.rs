@@ -1,7 +1,7 @@
 use cranpose::prelude::*;
 use cranpose_coroflow::rememberHandle;
 use cranpose_navigation::{
-    BindBrowserHistory, NavController, NavHost, NavOptions, rememberNavController,
+    BindBrowserHistory, BindDeepLinks, NavController, NavHost, NavOptions, rememberNavController,
 };
 use cranpose_ui::widgets::{PaddingValues, Scaffold};
 
@@ -34,6 +34,10 @@ const TABS: [(Screen, &str); 2] = [
     (Screen::Notes, "Notes"),
     (Screen::Diagnostics, "Diagnostics"),
 ];
+
+/// The scheme of the links that open a screen, `coroflow-notes://note/3`;
+/// the path is the screen's saved form.
+const LINK_SCHEME: &str = "coroflow-notes://";
 
 /// The saved form of each screen, which the browser's address bar shows.
 fn routes() -> cranpose::Saver<Screen> {
@@ -68,6 +72,10 @@ pub fn CoroflowDemoApp() {
         rememberHandle(|| AppContainer::new(AppDispatchers::standard(), AppConfig::interactive()));
     let nav = rememberNavController(Screen::Notes);
     BindBrowserHistory(nav, routes());
+    let links = routes();
+    BindDeepLinks(nav, move |link| {
+        links.restore(link.strip_prefix(LINK_SCHEME)?)
+    });
 
     Scaffold(
         Modifier::empty()

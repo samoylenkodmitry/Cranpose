@@ -7345,7 +7345,7 @@ pub fn try_run(
         cranpose_services::GitHubAppUpdater::new(),
     ));
 
-    crate::desktop_incoming::publish_launch_documents();
+    crate::desktop_incoming::publish_launch_arguments();
 
     #[cfg(unix)]
     crate::process_info::install();
