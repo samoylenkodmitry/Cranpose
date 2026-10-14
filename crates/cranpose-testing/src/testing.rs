@@ -12,7 +12,9 @@ use cranpose_core::{
 use cranpose_core::{
     MutableState, Node, pop_parent, push_parent, with_current_composer, with_node_mut,
 };
-use cranpose_ui::{AppContext, request_render_invalidation, reset_render_state_for_tests};
+use cranpose_ui::{
+    AppContext, request_render_invalidation, reset_render_state_for_tests, set_density,
+};
 
 /// Headless harness for exercising compositions in tests.
 ///
@@ -31,8 +33,17 @@ pub struct ComposeTestRule {
 impl ComposeTestRule {
     /// Create a new test rule backed by the default in-memory applier.
     pub fn new() -> Self {
-        let app_context = AppContext::new();
-        app_context.enter(reset_render_state_for_tests);
+        Self::with_density(1.0)
+    }
+
+    /// Create a test rule whose layout runs at `density` device pixels per dp,
+    /// as on a screen of that density.
+    pub fn with_density(density: f32) -> Self {
+        let app_context = AppContext::new_with_density(density);
+        app_context.enter(|| {
+            reset_render_state_for_tests();
+            set_density(density);
+        });
         let scope = app_context.enter_scope();
         Self {
             _scope: scope,
