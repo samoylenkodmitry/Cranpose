@@ -17,12 +17,14 @@ use crate::{
     graph::{ProjectiveTransform, RenderGraph},
 };
 
+/// Counters and once-only warnings that a scene collects while it dispatches pointer events.
 pub struct RenderDiagnostics {
     reported_warnings: RefCell<HashSet<&'static str>>,
     live_modifier_slice_lookup_miss_count: Cell<usize>,
 }
 
 impl RenderDiagnostics {
+    /// Creates diagnostics with no warnings reported and no lookup misses counted.
     pub fn new() -> Self {
         Self {
             reported_warnings: RefCell::new(HashSet::default()),
@@ -30,10 +32,13 @@ impl RenderDiagnostics {
         }
     }
 
+    /// Returns true the first time it is called with `key`, so that a warning is reported once.
     pub fn claim_warning_once(&self, key: &'static str) -> bool {
         self.reported_warnings.borrow_mut().insert(key)
     }
 
+    /// Counts one pointer dispatch that fell back to the captured modifier slices because the live
+    /// node could not be found.
     pub fn record_live_modifier_slice_lookup_miss(&self) {
         self.live_modifier_slice_lookup_miss_count.set(
             self.live_modifier_slice_lookup_miss_count
@@ -42,6 +47,8 @@ impl RenderDiagnostics {
         );
     }
 
+    /// Number of pointer dispatches that did not find the live node and used the modifier slices
+    /// captured at build time instead.
     pub fn live_modifier_slice_lookup_miss_count(&self) -> usize {
         self.live_modifier_slice_lookup_miss_count.get()
     }
@@ -53,20 +60,29 @@ impl Default for RenderDiagnostics {
     }
 }
 
+/// A clip that cuts a hit target, kept as a transformed rectangle.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HitClip {
+    /// The clip rectangle after the layer transforms, as four corners in window space.
     pub quad: [[f32; 2]; 4],
+    /// Axis-aligned bounds of `quad` in window coordinates.
     pub bounds: Rect,
 }
 
 /// Geometry for a hit target, borrowing the clip chain until the sink records it.
 #[derive(Clone, Copy)]
 pub struct HitGeometry<'a> {
+    /// Axis-aligned bounds of `quad` in window coordinates.
     pub rect: Rect,
+    /// The node's rectangle after the layer transforms, as four corners in window space.
     pub quad: [[f32; 2]; 4],
+    /// The node's own rectangle in its local space.
     pub local_bounds: Rect,
+    /// Maps window coordinates into the node's local space.
     pub world_to_local: ProjectiveTransform,
+    /// Axis-aligned bounds of the ancestors' clips in window space, or `None` when none clips.
     pub hit_clip_bounds: Option<Rect>,
+    /// Clips of the ancestors that cut the target, as transformed quads in window space.
     pub hit_clips: &'a [HitClip],
 }
 
@@ -81,20 +97,32 @@ pub struct HitTargetSpec<'a> {
     pub handlers: &'a Rc<ModifierNodeSlices>,
 }
 
+/// A hit target in window space: the node's geometry, clips and pointer handlers.
 #[derive(Clone)]
 pub struct HitRegion {
+    /// The layout node that owns the target.
     pub node_id: NodeId,
+    /// Nodes that keep receiving the move, up and cancel events of a gesture that starts here: this
+    /// node first, then its pointer-input ancestors from the nearest outward.
     pub capture_path: Vec<NodeId>,
+    /// Axis-aligned bounds of `quad` in window coordinates.
     pub rect: Rect,
+    /// The node's rectangle after the layer transforms, as four corners in window space.
     pub quad: [[f32; 2]; 4],
+    /// The node's own rectangle in its local space.
     pub local_bounds: Rect,
+    /// Maps window coordinates into the node's local space.
     pub world_to_local: ProjectiveTransform,
+    /// Rounded shape that narrows the target's rectangle, or `None` for a plain rectangle.
     pub shape: Option<RoundedCornerShape>,
     /// The node's modifier slices, shared with the render graph: its pointer
     /// handlers and pointer icon.
     pub handlers: Rc<ModifierNodeSlices>,
+    /// Draw order of the target. A larger value is drawn later and is hit first.
     pub z_index: usize,
+    /// Axis-aligned bounds of the ancestors' clips in window space, or `None` when none clips.
     pub hit_clip_bounds: Option<Rect>,
+    /// Clips of the ancestors that cut this target, as transformed quads in window space.
     pub hit_clips: Vec<HitClip>,
     diagnostics: Rc<RenderDiagnostics>,
 }
@@ -314,16 +342,22 @@ struct HitBuffers {
     capture_path: Vec<NodeId>,
 }
 
+/// The retained render graph of a window together with the hit targets built from it.
 pub struct Scene {
+    /// The retained render graph, or `None` before the first build.
     pub graph: Option<RenderGraph>,
+    /// Hit targets in draw order, the last drawn at the end.
     pub hits: Vec<HitRegion>,
     hit_buffers: Vec<HitBuffers>,
+    /// Draw order index that the next pushed hit target receives.
     pub next_hit_z: usize,
+    /// Position in `hits` of the target of each node, for finding a target by node id.
     pub node_index: HashMap<NodeId, usize>,
     diagnostics: Rc<RenderDiagnostics>,
 }
 
 impl Scene {
+    /// Creates an empty scene with no graph and no hit targets.
     pub fn new() -> Self {
         Self {
             graph: None,
@@ -335,6 +369,7 @@ impl Scene {
         }
     }
 
+    /// The diagnostics shared by the scene and its hit targets.
     pub fn diagnostics(&self) -> &RenderDiagnostics {
         self.diagnostics.as_ref()
     }
@@ -441,6 +476,7 @@ impl Scene {
         self.next_hit_z = 0;
     }
 
+    /// Replaces the retained render graph and leaves the hit targets as they are.
     pub fn replace_graph(&mut self, graph: RenderGraph) {
         self.graph = Some(graph);
     }

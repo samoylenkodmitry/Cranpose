@@ -70,8 +70,11 @@ impl FrameFormat {
 /// One frame from the viewfinder.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CameraFrame {
+    /// Width of the frame in pixels, before the rotation in `rotation_degrees`.
     pub width: u32,
+    /// Height of the frame in pixels, before the rotation in `rotation_degrees`.
     pub height: u32,
+    /// How the pixels in `bytes` are laid out.
     pub format: FrameFormat,
     /// How far the frame must be rotated clockwise to be the right way up,
     /// which is the sensor's mounting plus the device's rotation.
@@ -208,8 +211,11 @@ impl CameraFrame {
 /// them relative to the frame that produced this.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UprightRgba {
+    /// Width of the image in pixels, after the turn.
     pub width: u32,
+    /// Height of the image in pixels, after the turn.
     pub height: u32,
+    /// Tightly packed RGBA8 pixels, row-major, with `width * height * 4` bytes.
     pub rgba: Vec<u8>,
 }
 
@@ -271,6 +277,7 @@ fn clamp_byte(value: i32) -> u8 {
 /// orientation-aware decoder.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CameraStill {
+    /// The bytes of the encoded JPEG image.
     pub jpeg: Vec<u8>,
 }
 
@@ -282,7 +289,9 @@ pub struct CameraStill {
 /// wide", "Wide", "Tele".
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CameraLens {
+    /// The platform's handle for the device. Pass it to [`Camera::use_lens`].
     pub id: String,
+    /// Short text for a lens button, such as `Ultra wide`, `Wide` or `Tele`.
     pub name: String,
     /// Which way the device points, so an application can offer back lenses
     /// and the front lens as different controls.
@@ -324,12 +333,16 @@ pub struct CameraLenses {
 /// hides the control.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum FlashMode {
+    /// The light stays off.
     #[default]
     Off,
+    /// The device's exposure metering decides whether the light fires.
     Auto,
+    /// The light fires for every still.
     On,
 }
 
+/// Why a camera call failed.
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum CameraError {
     /// No live camera backend on this platform.

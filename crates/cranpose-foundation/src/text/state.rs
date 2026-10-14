@@ -216,6 +216,7 @@ impl TextFieldState {
         self.inner.get_non_reactive()
     }
 
+    /// Identifies this state. Clones of the state report the same id.
     pub fn id(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.inner.runtime_state_id().hash(&mut hasher);

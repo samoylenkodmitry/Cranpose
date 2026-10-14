@@ -39,12 +39,18 @@ pub struct SnapshotStateObserver {
     inner: Rc<SnapshotStateObserverInner>,
 }
 
+/// Sizes of a state observer's tables, for leak and memory checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SnapshotStateObserverDebugStats {
+    /// Number of scopes with recorded observations.
     pub scopes_len: usize,
+    /// Capacity reserved for the scope tables.
     pub scopes_cap: usize,
+    /// Number of scopes that recorded no state reads.
     pub stateless_scope_count: usize,
+    /// Number of observed states, counted once for each scope that read them.
     pub observed_state_count: usize,
+    /// Capacity reserved for the observed states of all scopes.
     pub observed_state_capacity: usize,
 }
 
@@ -108,6 +114,7 @@ impl SnapshotStateObserver {
         self.inner.stop();
     }
 
+    /// Returns the sizes of the observer's tables, for leak and memory checks.
     pub fn debug_stats(&self) -> SnapshotStateObserverDebugStats {
         self.inner.debug_stats()
     }

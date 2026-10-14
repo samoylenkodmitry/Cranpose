@@ -46,11 +46,13 @@ pub struct WearColors {
     pub on_primary_container: Color,
     /// An unchecked `SwitchButton`'s container and track.
     pub surface_container: Color,
+    /// An unchecked `SwitchButton`'s label.
     pub on_surface: Color,
     /// A secondary label on an unchecked row.
     pub on_surface_variant: Color,
     /// An unchecked switch's track border and thumb.
     pub outline: Color,
+    /// The screen's background.
     pub background: Color,
     /// A `ListHeader`'s label.
     pub on_background: Color,
@@ -138,9 +140,13 @@ pub fn wear_line_height_style() -> LineHeightStyle {
 /// describes the text.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WearTextStyle {
+    /// Font size, in sp.
     pub size_sp: f32,
+    /// Line height, in sp.
     pub line_height_sp: f32,
+    /// Font weight. It sets both the font weight and the `wght` variation axis.
     pub weight: u16,
+    /// Letter spacing, in sp.
     pub tracking_sp: f32,
     /// `TextAlign::Unspecified` on every scale entry, as in the tokens.
     pub align: TextAlign,

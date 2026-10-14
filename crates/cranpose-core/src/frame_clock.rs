@@ -11,20 +11,27 @@ use crate::{
     runtime::{FrameCallbackKind, RuntimeHandle},
 };
 
+/// Delivers display frames of one runtime to callbacks and futures, as Jetpack Compose's
+/// `MonotonicFrameClock`.
 #[derive(Clone)]
 pub struct FrameClock {
     runtime: RuntimeHandle,
 }
 
 impl FrameClock {
+    /// Creates a clock that delivers the frames of `runtime`.
     pub fn new(runtime: RuntimeHandle) -> Self {
         Self { runtime }
     }
 
+    /// Returns a handle to the runtime of this clock.
     pub fn runtime_handle(&self) -> RuntimeHandle {
         self.runtime.clone()
     }
 
+    /// Runs `callback` once on the next frame. It receives the frame time in nanoseconds on the
+    /// runtime's monotonic animation clock. Dropping or cancelling the returned registration before
+    /// the frame cancels the callback. Compose's `withFrameNanos`.
     pub fn with_frame_nanos(
         &self,
         callback: impl FnOnce(u64) + 'static,
@@ -32,6 +39,9 @@ impl FrameClock {
         self.with_frame_nanos_kind(FrameCallbackKind::Transient, callback)
     }
 
+    /// Runs `callback` once on the next frame with the frame time in nanoseconds, for a long-lived
+    /// loop that registers again after every frame. The callback does not count as animation work
+    /// for `RuntimeHandle::has_transient_frame_callbacks`.
     pub fn with_perpetual_frame_nanos(
         &self,
         callback: impl FnOnce(u64) + 'static,
@@ -60,6 +70,7 @@ impl FrameClock {
         }
     }
 
+    /// Runs `callback` once on the next frame with the frame time in milliseconds.
     pub fn with_frame_millis(
         &self,
         callback: impl FnOnce(u64) + 'static,
@@ -70,15 +81,21 @@ impl FrameClock {
         })
     }
 
+    /// Returns a future that completes on the next frame with the frame time in nanoseconds. It
+    /// registers its callback when first polled and cancels it when dropped.
     pub fn next_frame(&self) -> NextFrame {
         NextFrame::new(self.clone(), FrameCallbackKind::Transient)
     }
 
+    /// Returns a future that completes on the next frame with the frame time in nanoseconds. Its
+    /// pending frame request does not count as animation work for
+    /// `RuntimeHandle::has_transient_frame_callbacks`.
     pub fn next_perpetual_frame(&self) -> NextFrame {
         NextFrame::new(self.clone(), FrameCallbackKind::Perpetual)
     }
 }
 
+/// The handle of a registered frame callback. Dropping it cancels the callback if it has not run.
 pub struct FrameCallbackRegistration {
     runtime: RuntimeHandle,
     id: Option<FrameCallbackId>,
@@ -180,6 +197,7 @@ impl FrameCallbackRegistration {
         Self { runtime, id: None }
     }
 
+    /// Cancels the callback if it has not run yet.
     pub fn cancel(mut self) {
         if let Some(id) = self.id.take() {
             self.runtime.cancel_frame_callback(id);

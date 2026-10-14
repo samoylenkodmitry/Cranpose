@@ -21,6 +21,8 @@ pub struct InputTransformation(Rc<Transform>);
 type Transform = dyn Fn(&TextFieldValue, &mut TextFieldBuffer);
 
 impl InputTransformation {
+    /// Creates a transformation from `transform`, which receives the value before the edit and the
+    /// buffer after it, and changes the buffer.
     pub fn new(transform: impl Fn(&TextFieldValue, &mut TextFieldBuffer) + 'static) -> Self {
         Self(Rc::new(transform))
     }

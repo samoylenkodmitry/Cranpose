@@ -29,6 +29,7 @@ use crate::{
 /// How a [`ScreenScaffold`] is laid out.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct ScreenScaffoldSpec {
+    /// How the scroll indicator is drawn.
     pub indicator: ScrollIndicatorSpec,
     /// Whether the indicator is drawn at all.
     ///
@@ -41,6 +42,7 @@ pub struct ScreenScaffoldSpec {
 }
 
 impl ScreenScaffoldSpec {
+    /// Sets how the scroll indicator is drawn and turns the indicator on.
     pub fn indicator(mut self, indicator: ScrollIndicatorSpec) -> Self {
         self.indicator = indicator;
         self.show_indicator = true;
@@ -51,7 +53,9 @@ impl ScreenScaffoldSpec {
 /// The `IDLE_DELAY` after which Wear's own scaffold fades its indicator, in
 /// milliseconds, and the spring it fades on.
 pub const INDICATOR_IDLE_DELAY_MS: u64 = 2000;
+/// Stiffness of the spring that fades the scroll indicator.
 pub const INDICATOR_FADE_STIFFNESS: f32 = 400.0;
+/// Damping ratio of the spring that fades the scroll indicator. 1.0 is critically damped.
 pub const INDICATOR_FADE_DAMPING_RATIO: f32 = 1.0;
 
 /// A full-screen Wear scaffold.

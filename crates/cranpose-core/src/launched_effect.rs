@@ -51,7 +51,9 @@ struct LaunchedEffectCancellation {
 /// fields so carrying it costs nothing until a task is actually spawned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TaskSite {
+    /// The path of the source file, as `file!()` gives it.
     pub file: &'static str,
+    /// The line number in `file`, counted from 1.
     pub line: u32,
 }
 
@@ -220,6 +222,8 @@ impl Drop for LaunchedEffectAsyncState {
     }
 }
 
+/// The scope a [`LaunchedEffect`] receives. It reports whether the effect is still active and
+/// queues follow-up work on the UI thread.
 #[derive(Clone)]
 pub struct LaunchedEffectScope {
     active: Arc<AtomicBool>,
@@ -242,10 +246,13 @@ impl LaunchedEffectScope {
         }
     }
 
+    /// Returns `true` until the effect is cancelled, which happens when its keys change or its call
+    /// site leaves the composition.
     pub fn is_active(&self) -> bool {
         self.active.load(Ordering::SeqCst)
     }
 
+    /// Returns a handle to the runtime that runs the effect.
     pub fn runtime(&self) -> RuntimeHandle {
         self.runtime.clone()
     }
@@ -397,6 +404,9 @@ impl CancelToken {
     }
 }
 
+/// Implements [`LaunchedEffect`] for a call site that has already computed its group key. Call
+/// `LaunchedEffect` instead.
+#[doc(hidden)]
 pub fn __launched_effect_impl<K, F>(group_key: Key, keys: K, effect: F)
 where
     K: PartialEq + 'static,

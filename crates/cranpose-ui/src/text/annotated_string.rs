@@ -32,7 +32,12 @@ pub enum LinkAnnotation {
     /// Calls an arbitrary handler when clicked.
     ///
     /// JC parity: `LinkAnnotation.Clickable(tag, linkInteractionListener)`
-    Clickable { tag: String, handler: Rc<dyn Fn()> },
+    Clickable {
+        /// Name that identifies the link.
+        tag: String,
+        /// Called when the user clicks the link.
+        handler: Rc<dyn Fn()>,
+    },
 }
 
 impl std::fmt::Debug for LinkAnnotation {
@@ -69,7 +74,10 @@ impl PartialEq for LinkAnnotation {
 /// JC ref: `androidx.compose.ui.text.AnnotatedString.Range`
 #[derive(Debug, Clone, PartialEq)]
 pub struct StringAnnotation {
+    /// Name that groups annotations. Look annotations up by it with
+    /// `AnnotatedString::get_string_annotations`.
     pub tag: String,
+    /// The value stored for the tag.
     pub annotation: String,
 }
 
@@ -146,14 +154,17 @@ impl RenderString {
         &self.text
     }
 
+    /// Character styles with the byte ranges they cover.
     pub fn span_styles(&self) -> &[RangeStyle<SpanStyle>] {
         &self.span_styles
     }
 
+    /// Paragraph styles with the byte ranges they cover.
     pub fn paragraph_styles(&self) -> &[RangeStyle<ParagraphStyle>] {
         &self.paragraph_styles
     }
 
+    /// Tag and value annotations with the byte ranges they cover.
     pub fn string_annotations(&self) -> &[RangeStyle<StringAnnotation>] {
         &self.string_annotations
     }
@@ -164,10 +175,12 @@ impl RenderString {
         &self.links
     }
 
+    /// Length of the text in bytes.
     pub fn len(&self) -> usize {
         self.text.len()
     }
 
+    /// Returns true when the text is empty.
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
     }
@@ -270,8 +283,11 @@ fn render_hash_impl(
 /// To construct an `AnnotatedString` you can use `AnnotatedString::builder()`.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AnnotatedString {
+    /// The characters.
     pub text: String,
+    /// Character styles with the byte ranges they cover.
     pub span_styles: Vec<RangeStyle<SpanStyle>>,
+    /// Paragraph styles with the byte ranges they cover.
     pub paragraph_styles: Vec<RangeStyle<ParagraphStyle>>,
     /// Arbitrary tag+value annotations. Used for e.g. clickable link URLs.
     /// Mirrors JC `AnnotatedString.getStringAnnotations(tag, start, end)`.
@@ -284,7 +300,9 @@ pub struct AnnotatedString {
 /// A style applied to a range of an `AnnotatedString`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RangeStyle<T> {
+    /// The style or annotation that applies to the range.
     pub item: T,
+    /// Byte range of the text the item covers. Both ends lie on character boundaries.
     pub range: Range<usize>,
 }
 
@@ -348,6 +366,7 @@ fn with_shared_plain_text<R>(text: &str, read: impl FnOnce(&SharedPlainText) -> 
 }
 
 impl AnnotatedString {
+    /// Creates a string holding `text` with no styles and no annotations.
     pub fn new(text: String) -> Self {
         Self {
             text,
@@ -358,14 +377,17 @@ impl AnnotatedString {
         }
     }
 
+    /// Starts a [`Builder`] for a string with styles and annotations.
     pub fn builder() -> Builder {
         Builder::new()
     }
 
+    /// Length of the text in bytes.
     pub fn len(&self) -> usize {
         self.text.len()
     }
 
+    /// Returns true when the text is empty.
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
     }
@@ -413,6 +435,7 @@ impl AnnotatedString {
         hasher.finish()
     }
 
+    /// Hash of the text and of the span and paragraph styles, as renderers use it to key caches.
     pub fn render_hash(&self) -> u64 {
         render_hash_impl(&self.text, &self.span_styles, &self.paragraph_styles)
     }
@@ -616,6 +639,7 @@ fn append_clipped_ranges<T: Clone>(
 }
 
 impl Builder {
+    /// Creates a builder with no text.
     pub fn new() -> Self {
         Self::default()
     }
@@ -626,10 +650,13 @@ impl Builder {
         self
     }
 
+    /// Appends the text of `annotated` together with its styles and annotations.
     pub fn append_annotated(self, annotated: &AnnotatedString) -> Self {
         self.append_annotated_subsequence(annotated, 0..annotated.text.len())
     }
 
+    /// Appends the bytes of `annotated` in `range` with the styles and annotations that overlap
+    /// them. The range is clamped to the text and both ends must lie on character boundaries.
     pub fn append_annotated_subsequence(
         mut self,
         annotated: &AnnotatedString,

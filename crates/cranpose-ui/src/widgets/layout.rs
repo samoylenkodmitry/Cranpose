@@ -31,6 +31,8 @@ struct RetainedMeasurePolicy<P> {
     policy: Rc<dyn MeasurePolicy>,
 }
 
+/// Emits a layout node whose children `measure_policy` measures and places. `content` composes the
+/// children. Compose's `Layout`.
 #[composable]
 pub fn Layout<F, P>(modifier: Modifier, measure_policy: P, content: F) -> NodeId
 where
@@ -147,6 +149,8 @@ fn compose_under_locals(provided: Vec<cranpose_core::ProvidedValue>, content: &m
     cranpose_core::CompositionLocalProvider(provided, content);
 }
 
+/// Emits a layout node whose `measure_policy` composes its children during measurement, so the
+/// children can depend on the incoming constraints. Compose's `SubcomposeLayout`.
 #[composable]
 pub fn SubcomposeLayout(
     modifier: Modifier,
@@ -208,6 +212,8 @@ fn empty_subcompose_measure_result(constraints: Constraints) -> MeasureResult {
     MeasureResult::new(Size { width, height }, Vec::new())
 }
 
+/// Composes `content` with a scope that exposes the incoming constraints. All children are placed
+/// at the top start corner. Compose's `BoxWithConstraints`.
 #[composable(no_skip)]
 pub fn BoxWithConstraints<F>(modifier: Modifier, content: F) -> NodeId
 where

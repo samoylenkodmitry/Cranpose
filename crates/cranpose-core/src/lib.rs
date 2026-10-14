@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 #![deny(unsafe_code)]
 
@@ -8,6 +9,8 @@ mod blocking;
 mod bubble_passes;
 mod callbacks;
 mod composer;
+/// The composer that is current on this thread, which composable code reaches without passing it as
+/// a parameter.
 pub mod composer_context;
 mod composition;
 mod composition_locals;
@@ -21,15 +24,22 @@ mod frame_clock;
 mod hooks;
 mod launched_effect;
 mod node_marks;
+/// `Owned`, the handle to a value that a composition remembers.
 pub mod owned;
 pub mod platform;
 mod recompose;
 mod retention;
+/// The runtime in which a composition runs: state cells, UI tasks, frame callbacks and the queue of
+/// invalidated scopes.
 pub mod runtime;
 mod slot;
+/// A min-heap of snapshot ids that supports removal by handle.
 pub mod snapshot_double_index_heap;
+/// A compact set of snapshot ids.
 pub mod snapshot_id_set;
+/// Tracks the pinned snapshots, which bound the state records that may be reclaimed.
 pub mod snapshot_pinning;
+/// Records which state objects a scope reads and calls back when one of them changes.
 pub mod snapshot_state_observer;
 pub mod snapshot_v2;
 mod snapshot_weak_set;
@@ -180,20 +190,33 @@ pub fn dispatch_ui_event<T>(block: impl FnOnce() -> T) -> Option<T> {
     run_in_mutable_snapshot(block).ok()
 }
 
+/// The largest sizes that the command queues and the side effect list reached during one
+/// composition pass, for debugging memory use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CompositionPassDebugStats {
+    /// Most node commands queued at once.
     pub commands_len: usize,
+    /// Largest capacity reserved for node commands.
     pub commands_cap: usize,
+    /// Most bytes of command arguments queued at once.
     pub command_payload_len_bytes: usize,
+    /// Largest capacity reserved for command arguments, in bytes.
     pub command_payload_cap_bytes: usize,
+    /// Most child list updates queued at once.
     pub sync_children_len: usize,
+    /// Largest capacity reserved for child list updates.
     pub sync_children_cap: usize,
+    /// Most child ids stored for child list updates.
     pub sync_child_ids_len: usize,
+    /// Largest capacity reserved for those child ids.
     pub sync_child_ids_cap: usize,
+    /// Most side effects queued at once.
     pub side_effects_len: usize,
+    /// Largest capacity reserved for the side effects.
     pub side_effects_cap: usize,
 }
 
+/// Ends the event handler scope when dropped, restoring the setting that held before it.
 #[must_use]
 pub struct EventHandlerScopeGuard {
     previous: bool,
@@ -205,6 +228,8 @@ impl Drop for EventHandlerScopeGuard {
     }
 }
 
+/// Marks the thread as inside an event handler until the returned guard is dropped. In debug
+/// builds, a state write there that is not inside a snapshot logs a warning.
 pub fn enter_event_handler_scope() -> EventHandlerScopeGuard {
     let previous = thread_state::cells(|cells| cells.in_event_handler.replace(true));
     EventHandlerScopeGuard { previous }
@@ -236,7 +261,10 @@ use smallvec::SmallVec;
 
 use crate::collections::map::{HashMap, HashSet};
 
+/// Identifies a composition group: the hash of its call site, or of an explicit key together with
+/// its call site.
 pub type Key = u64;
+/// Identifies a node in an applier.
 pub type NodeId = usize;
 
 #[cfg(any(test, debug_assertions))]
@@ -539,6 +567,8 @@ pub fn cached_composable_definition_key(
     *cell.get_or_init(|| composable_definition_key(file, line, column, marker))
 }
 
+/// Returns the key of a source location: a hash of the file path together with the line and column.
+/// The same location always gives the same key.
 pub fn location_key(file: &str, line: u32, column: u32) -> Key {
     registered_location_key(file_location_hash(file), file, line, column)
 }
@@ -844,12 +874,17 @@ impl Drop for RecomposeScopeInner {
     }
 }
 
+/// Size of the registry of live recompose scopes, for leak checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RecomposeScopeRegistryDebugStats {
+    /// Scopes registered.
     pub len: usize,
+    /// Capacity reserved for the registry.
     pub capacity: usize,
 }
 
+/// The unit of recomposition. State read inside a scope invalidates it, and a recomposition runs
+/// only the content of the invalid scopes. Clones refer to the same scope.
 #[derive(Clone)]
 pub struct RecomposeScope {
     inner: Rc<RecomposeScopeInner>,
@@ -895,10 +930,12 @@ impl RecomposeScope {
         weak.upgrade().map(|inner| Self { inner })
     }
 
+    /// Returns an id that is unique among the live scopes.
     pub fn id(&self) -> ScopeId {
         self.inner.id()
     }
 
+    /// Returns `true` if state that the scope read has changed since it last recomposed.
     pub fn is_invalid(&self) -> bool {
         self.inner.invalid.get()
     }
@@ -907,6 +944,7 @@ impl RecomposeScope {
         self.inner.enqueued.get()
     }
 
+    /// Returns `false` between `deactivate` and `reactivate`.
     pub fn is_active(&self) -> bool {
         self.inner.active.get()
     }
@@ -1134,6 +1172,8 @@ impl RecomposeScope {
         })
     }
 
+    /// Marks the scope inactive, as when its content is retained or held for reuse. An inactive
+    /// scope is not queued for recomposition until it is reactivated.
     pub fn deactivate(&self) {
         if !self.inner.active.replace(false) {
             return;
@@ -1153,6 +1193,8 @@ impl RecomposeScope {
         }
     }
 
+    /// Marks the scope active again and queues it for recomposition if it was invalidated while
+    /// inactive.
     pub fn reactivate(&self) {
         self.inner.active.set(true);
         if self.inner.invalid.get()
@@ -1163,6 +1205,8 @@ impl RecomposeScope {
         }
     }
 
+    /// Makes the next `should_recompose` return `false` even if the scope is invalid. Cancels a
+    /// pending `force_recompose`.
     pub fn force_reuse(&self) {
         self.inner.force_reuse.set(true);
         self.inner.force_recompose.set(false);
@@ -1173,6 +1217,8 @@ impl RecomposeScope {
         self.inner.pending_recompose.set(true);
     }
 
+    /// Makes the next `should_recompose` return `true` even if the scope is not invalid. Cancels a
+    /// pending `force_reuse`.
     pub fn force_recompose(&self) {
         self.inner.force_recompose.set(true);
         self.inner.force_reuse.set(false);
@@ -1187,6 +1233,9 @@ impl RecomposeScope {
         self.inner.retention_mode.get()
     }
 
+    /// Returns whether the scope's content has to run now: `true` after `force_recompose` or when
+    /// the scope is invalid, and `false` after `force_reuse`. A forced answer is used up by the
+    /// call.
     pub fn should_recompose(&self) -> bool {
         if self.inner.force_recompose.replace(false) {
             self.inner.force_reuse.set(false);
@@ -1198,6 +1247,7 @@ impl RecomposeScope {
         self.is_invalid()
     }
 
+    /// Returns `true` once the scope has composed its content at least once.
     pub fn has_composed_once(&self) -> bool {
         self.inner.composed_once.get()
     }
@@ -1231,38 +1281,61 @@ impl RecomposeScope {
     }
 }
 
+/// Options that a composable group passes to its recompose scope.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RecomposeOptions {
+    /// Skips the scope's body on the next composition even if it is invalid.
     pub force_reuse: bool,
+    /// Runs the scope's body on the next composition even if it is not invalid.
     pub force_recompose: bool,
+    /// What happens to the scope's content when it leaves the composition.
     pub retention: RetentionMode,
 }
 
+/// An error from an applier or from applying composition commands to nodes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeError {
+    /// No node has this id.
     Missing {
+        /// The id that was looked up.
         id: NodeId,
     },
+    /// The node's type differs from the type that the caller requested.
     TypeMismatch {
+        /// The id of the node.
         id: NodeId,
+        /// The name of the type that the caller requested.
         expected: &'static str,
     },
+    /// The node lacks the context that an operation needs.
     MissingContext {
+        /// The id of the node.
         id: NodeId,
+        /// What the node lacks.
         reason: &'static str,
     },
+    /// A node with this id exists already.
     AlreadyExists {
+        /// The id that is already in use.
         id: NodeId,
     },
+    /// A queued command has no payload or the wrong one.
     MalformedCommandPayload {
+        /// The label of the command whose payload is wrong.
         tag: &'static str,
     },
+    /// A slot host could not be used for `operation`.
     SlotHostUnavailable {
+        /// The operation that needed the host.
         operation: &'static str,
+        /// Why the host was unavailable.
         reason: &'static str,
     },
+    /// Reconciling a composition did not settle within `limit` iterations.
     RecompositionLimitExceeded {
+        /// The loop that reached the limit.
         operation: &'static str,
+        /// The most iterations allowed.
         limit: usize,
     },
 }
@@ -1302,10 +1375,14 @@ pub use subcompose::{
     ContentTypeReusePolicy, DefaultSlotReusePolicy, SlotId, SlotReusePolicy, SubcomposeState,
 };
 
+/// The stage of a frame in which a composer is used.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Phase {
+    /// Composable functions run.
     Compose,
+    /// Nodes are measured. Subcomposition is allowed.
     Measure,
+    /// Nodes are placed. Subcomposition is allowed.
     Layout,
 }
 
@@ -1313,6 +1390,8 @@ pub use composer_context::{
     __current_composer, note_nested_slots_host, with_composer as with_current_composer,
 };
 
+/// Runs `f` with the composer that is current on this thread. Panics if there is none. Same as
+/// `with_current_composer`.
 #[expect(non_snake_case)]
 pub fn withCurrentComposer<R>(f: impl FnOnce(&Composer) -> R) -> R {
     composer_context::with_composer(f)
@@ -1355,6 +1434,8 @@ fn key_scoped<K: Hash, R>(
     with_current_composer(|composer| composer.with_group_seed(seed, |_| content()))
 }
 
+/// Runs `content` in a group identified by `key`, so state and nodes follow the key when siblings
+/// move. Like `key` for a single key and no return value.
 #[track_caller]
 pub fn with_key<K: Hash>(key: &K, content: impl FnOnce()) {
     key_scoped(key, std::panic::Location::caller(), content);
@@ -1550,21 +1631,28 @@ impl Drop for DisposableEffectState {
     }
 }
 
+/// The value a [`DisposableEffect`] body receives. Its `on_dispose` method makes the result that
+/// the body returns.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DisposableEffectScope;
 
+/// What a [`DisposableEffect`] body returns: the cleanup to run when the effect is disposed. Make
+/// it with `DisposableEffectScope::on_dispose`.
 #[derive(Default)]
 pub struct DisposableEffectResult {
     cleanup: Option<Box<dyn FnOnce()>>,
 }
 
 impl DisposableEffectScope {
+    /// Returns a result that runs `cleanup` when the effect leaves the composition or its keys
+    /// change.
     pub fn on_dispose(&self, cleanup: impl FnOnce() + 'static) -> DisposableEffectResult {
         DisposableEffectResult::new(cleanup)
     }
 }
 
 impl DisposableEffectResult {
+    /// Creates a result that runs `cleanup` when the effect is disposed.
     pub fn new(cleanup: impl FnOnce() + 'static) -> Self {
         Self {
             cleanup: Some(Box::new(cleanup)),
@@ -1576,11 +1664,16 @@ impl DisposableEffectResult {
     }
 }
 
+/// Queues `effect` to run each time this call site is composed, after the node changes of the pass
+/// are applied. Compose's `SideEffect`.
 #[expect(non_snake_case)]
 pub fn SideEffect(effect: impl FnOnce() + 'static) {
     with_current_composer(|composer| composer.register_side_effect(effect));
 }
 
+/// Implements [`DisposableEffect`] for a call site that has already computed its group key. Call
+/// `DisposableEffect` instead.
+#[doc(hidden)]
 pub fn __disposable_effect_impl<K, F>(group_key: Key, keys: K, effect: F)
 where
     K: PartialEq + 'static,
@@ -1624,6 +1717,10 @@ where
     __disposable_effect_impl(crate::caller_location_key(), keys, effect);
 }
 
+/// Clones values into new bindings and evaluates a body with those bindings in scope, which saves
+/// writing out the clones before a `move` closure. Each alias before the semicolon is either a
+/// name, which clones the variable of that name, or `name = expression`, which clones the value of
+/// the expression. The body follows the semicolon.
 #[macro_export]
 macro_rules! clone_captures {
     ($($alias:ident $(= $value:expr)?),+ $(,)?; $body:expr) => {{
@@ -1638,6 +1735,8 @@ macro_rules! clone_captures {
     };
 }
 
+/// Runs `f` on the node `id` as an `N`, using the current composer. Returns an error if the node
+/// does not exist or is not an `N`. Must be called during composition.
 pub fn with_node_mut<N: Node + 'static, R>(
     id: NodeId,
     f: impl FnOnce(&mut N) -> R,
@@ -1645,16 +1744,24 @@ pub fn with_node_mut<N: Node + 'static, R>(
     with_current_composer(|composer| composer.with_node_mut(id, f))
 }
 
+/// Makes the node `id` the parent of the nodes emitted next, using the current composer. Needs a
+/// matching `pop_parent`. Must be called during composition.
 pub fn push_parent(id: NodeId) {
     with_current_composer(|composer| composer.push_parent(id));
 }
 
+/// Closes the parent that the matching `push_parent` opened, using the current composer. Must be
+/// called during composition.
 pub fn pop_parent() {
     with_current_composer(composer::Composer::pop_parent);
 }
 
+/// A node of the tree that a composition builds. An applier stores the nodes by id. Every method
+/// has a default, so a simple node implements none of them.
 pub trait Node: Any {
+    /// Called once the node has its id, when the composition applies the node's creation.
     fn mount(&mut self) {}
+    /// Called just before the node is removed from the applier.
     fn unmount(&mut self) {}
     /// Adds `child` to this node's child list, returning whether the list
     /// actually changed. A node that already holds the child returns `false`:
@@ -1671,7 +1778,9 @@ pub trait Node: Any {
     fn remove_child(&mut self, _child: NodeId) -> bool {
         false
     }
+    /// Moves the child at the first index to the second index in the child list.
     fn move_child(&mut self, _from: usize, _to: usize) {}
+    /// Replaces the child list with `children`, in order.
     fn update_children(&mut self, _children: &[NodeId]) {}
     /// Copies child IDs into the provided scratch buffer without allocating a
     /// fresh container for every traversal. A node without children leaves
@@ -1679,6 +1788,9 @@ pub trait Node: Any {
     fn collect_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
         out.clear();
     }
+    /// Copies the ids of the children this node owns, in order, into `out`. A node whose
+    /// `collect_children_into` leaves some children out overrides this to list them all. The
+    /// default calls `collect_children_into`.
     fn collect_owned_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
         self.collect_children_into(out);
     }
@@ -1970,11 +2082,14 @@ fn bubble_semantics_dirty_composer<N: Node + 'static>(mut node_id: NodeId) {
 }
 
 impl dyn Node {
+    /// Returns the node as `Any`, for downcasting to its concrete type.
     pub fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 }
 
+/// A removed node kept in a pool with its old id, so that a later node of the same type can reuse
+/// it.
 pub struct RecycledNode {
     stable_id: NodeId,
     node: Box<dyn Node>,
@@ -2005,6 +2120,7 @@ impl RecycledNode {
         }
     }
 
+    /// Returns the id the node had before it was recycled.
     pub fn stable_id(&self) -> NodeId {
         self.stable_id
     }
@@ -2017,19 +2133,26 @@ impl RecycledNode {
         self.warm_origin = warm_origin;
     }
 
+    /// Returns the pooled node, so that it can be reset before reuse.
     pub fn node_mut(&mut self) -> &mut dyn Node {
         self.node.as_mut()
     }
 
+    /// Splits the shell into its stable id and its node, with a flag that tells whether it came
+    /// from the warm recycle path.
     pub fn into_parts(self) -> (NodeId, Box<dyn Node>, bool) {
         (self.stable_id, self.node, self.warm_origin)
     }
 }
 
+/// The result of putting a recycled node back into an applier.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecycledNodeInsertion {
+    /// The id the node has now.
     pub id: NodeId,
+    /// Whether the node got its old stable id back.
     pub stable_id_reused: bool,
+    /// The error that forced a new id, or `None` if the old id was reused.
     pub fallback_error: Option<NodeError>,
 }
 
@@ -2051,9 +2174,14 @@ impl RecycledNodeInsertion {
     }
 }
 
+/// Stores the nodes that a composition builds and applies changes to them. The UI layer supplies an
+/// applier; [`MemoryApplier`] is the stock one.
 pub trait Applier: Any {
+    /// Stores `node` and returns its new id.
     fn create(&mut self, node: Box<dyn Node>) -> NodeId;
+    /// Returns the node `id` for change, or an error if there is none.
     fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError>;
+    /// Removes the node `id` and the nodes below it.
     fn remove(&mut self, id: NodeId) -> Result<(), NodeError>;
 
     /// Opens a batch of commands, in which no layout pass runs: within it a
@@ -2108,6 +2236,7 @@ pub trait Applier: Any {
         RecycledNodeInsertion::fresh(id, Some(NodeError::AlreadyExists { id: stable_id }))
     }
 
+    /// Returns the applier as `Any`, for downcasting to its concrete type.
     fn as_any(&self) -> &dyn Any
     where
         Self: Sized,
@@ -2115,6 +2244,7 @@ pub trait Applier: Any {
         self
     }
 
+    /// Returns the applier as `Any`, for downcasting to its concrete type.
     fn as_any_mut(&mut self) -> &mut dyn Any
     where
         Self: Sized,
@@ -3403,6 +3533,8 @@ fn reconcile_children(
     Ok(())
 }
 
+/// The stock [`Applier`]: it keeps nodes in memory under ids that stay stable for the life of the
+/// node.
 #[derive(Default)]
 pub struct MemoryApplier {
     /// Behind one allocation, so lending the applier to a layout pass moves a
@@ -3454,28 +3586,51 @@ struct RemovalFrame {
     next_child: usize,
 }
 
+/// Sizes of a [`MemoryApplier`]'s tables, for leak and memory checks. A `_len` field counts entries
+/// and a `_cap` field the capacity reserved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MemoryApplierDebugStats {
+    /// The id that the next created node gets.
     pub next_stable_id: NodeId,
+    /// Live nodes.
     pub nodes_len: usize,
+    /// Slots in the dense node table, both live and free.
     pub nodes_cap: usize,
+    /// Entries in the table that gives each slot its stable id.
     pub physical_stable_ids_len: usize,
+    /// Capacity reserved for the stable ids of table slots.
     pub physical_stable_ids_cap: usize,
+    /// Live entries in the index from stable ids to table slots.
     pub stable_to_physical_len: usize,
+    /// Capacity reserved for the index from stable ids to table slots.
     pub stable_to_physical_cap: usize,
+    /// Stable ids that carry a generation counter.
     pub stable_generations_len: usize,
+    /// Capacity reserved for the generation counters of stable ids.
     pub stable_generations_cap: usize,
+    /// Dense table slots free for reuse.
     pub free_ids_len: usize,
+    /// Capacity reserved for the free slot ids.
     pub free_ids_cap: usize,
+    /// Nodes stored under ids too high for the dense table.
     pub high_id_nodes_len: usize,
+    /// Capacity reserved for the high-id nodes.
     pub high_id_nodes_cap: usize,
+    /// Generation counters kept for high-id nodes.
     pub high_id_generations_len: usize,
+    /// Capacity reserved for the generations of high-id nodes.
     pub high_id_generations_cap: usize,
+    /// Node types that have recycled nodes pooled.
     pub recycled_type_count: usize,
+    /// Capacity reserved for the pools of recycled nodes.
     pub recycled_type_cap: usize,
+    /// Pooled recycled nodes of all types.
     pub recycled_node_count: usize,
+    /// Capacity reserved for the pooled recycled nodes.
     pub recycled_node_capacity: usize,
+    /// Nodes recycled through the warm path, both live and pooled.
     pub warm_recycled_node_id_count: usize,
+    /// Capacity reserved for the warm recycled nodes.
     pub warm_recycled_node_id_capacity: usize,
 }
 
@@ -3540,6 +3695,7 @@ impl MemoryApplier {
         }
     }
 
+    /// Creates an applier with no nodes.
     pub fn new() -> Self {
         Self::default()
     }
@@ -3550,13 +3706,6 @@ impl MemoryApplier {
         Rc::clone(&self.state.slots)
     }
 
-    /// Drains the parents recorded via [`Applier::record_structural_change`],
-    /// keeping only nodes still attached to `root` (a parent that was itself
-    /// removed is covered by its own surviving ancestor's record). A virtual
-    /// parent — a subcompose slot wrapper the render graph never contains —
-    /// is reported as its nearest non-virtual ancestor: that is the node
-    /// whose graph child set the change altered, and an id the graph cannot
-    /// resolve would force the scoped scene update to give up and rebuild.
     /// Resolves a scene-scope candidate the way structural records are
     /// resolved: to its nearest non-virtual ancestor, and only while still
     /// attached to `root`. A node detached after recording must not reach the
@@ -3647,6 +3796,13 @@ impl MemoryApplier {
         }
     }
 
+    /// Drains the parents recorded via [`Applier::record_structural_change`],
+    /// keeping only nodes still attached to `root` (a parent that was itself
+    /// removed is covered by its own surviving ancestor's record). A virtual
+    /// parent — a subcompose slot wrapper the render graph never contains —
+    /// is reported as its nearest non-virtual ancestor: that is the node
+    /// whose graph child set the change altered, and an id the graph cannot
+    /// resolve would force the scoped scene update to give up and rebuild.
     pub fn take_structural_change_parents_attached_to(&mut self, root: NodeId) -> Vec<NodeId> {
         let mut candidates = Vec::new();
         self.take_structural_change_parents_into(&mut candidates);
@@ -3712,6 +3868,8 @@ impl MemoryApplier {
         false
     }
 
+    /// Runs `f` on the node `id` as an `N`. Returns an error if the node does not exist or is not
+    /// an `N`.
     pub fn with_node<N: Node + 'static, R>(
         &mut self,
         id: NodeId,
@@ -3728,26 +3886,32 @@ impl MemoryApplier {
         Ok(f(typed))
     }
 
+    /// Returns the number of live nodes.
     pub fn len(&self) -> usize {
         self.state.nodes.iter().filter(|n| n.is_some()).count()
     }
 
+    /// Returns the number of slots in the dense node table, both live and free.
     pub fn capacity(&self) -> usize {
         self.state.nodes.len()
     }
 
+    /// Returns the number of free slots in the dense node table.
     pub fn tombstone_count(&self) -> usize {
         self.state.nodes.iter().filter(|n| n.is_none()).count()
     }
 
+    /// Returns the number of freed table slots that new nodes can reuse.
     pub fn freelist_len(&self) -> usize {
         self.state.free_ids.len()
     }
 
+    /// Returns the number of pooled recycled nodes of all types.
     pub fn debug_recycled_node_count(&self) -> usize {
         self.total_recycled_node_count()
     }
 
+    /// Returns the number of pooled recycled nodes of type `N`.
     pub fn debug_recycled_node_count_for<N: Node + 'static>(&self) -> usize {
         let key = TypeId::of::<N>();
         self.state.recycled_nodes.get(&key).map_or(0, Vec::len)
@@ -3759,6 +3923,7 @@ impl MemoryApplier {
             + self.state.cold_recycled_nodes.get(&key).map_or(0, Vec::len)
     }
 
+    /// Returns the sizes of the applier's tables, for leak and memory checks.
     pub fn debug_stats(&self) -> MemoryApplierDebugStats {
         let mut recycled_keys: HashSet<TypeId> = HashSet::default();
         recycled_keys.extend(self.state.recycled_nodes.keys().copied());
@@ -3792,6 +3957,7 @@ impl MemoryApplier {
         }
     }
 
+    /// Returns `true` if the applier holds no live nodes.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -3806,6 +3972,7 @@ impl MemoryApplier {
         }
     }
 
+    /// Returns the heap bytes that the live nodes take, including what they own.
     pub fn debug_live_node_heap_bytes(&self) -> usize {
         let dense_nodes = self
             .state
@@ -3823,6 +3990,7 @@ impl MemoryApplier {
         dense_nodes + high_id_nodes
     }
 
+    /// Returns the heap bytes that the pooled recycled nodes take, including what they own.
     pub fn debug_recycled_node_heap_bytes(&self) -> usize {
         let pool_bytes = |pools: &HashMap<TypeId, Vec<RecycledNode>>| {
             pools
@@ -3837,14 +4005,18 @@ impl MemoryApplier {
             + pool_bytes(&self.state.cold_recycled_nodes)
     }
 
+    /// Gives the applier the runtime of its composition, so code that runs during layout with only
+    /// the applier in hand can reach the runtime.
     pub fn set_runtime_handle(&mut self, handle: RuntimeHandle) {
         self.state.layout_runtime = Some(handle);
     }
 
+    /// Removes the runtime handle.
     pub fn clear_runtime_handle(&mut self) {
         self.state.layout_runtime = None;
     }
 
+    /// Returns the runtime handle set with `set_runtime_handle`, if any.
     pub fn runtime_handle(&self) -> Option<RuntimeHandle> {
         self.state.layout_runtime.clone()
     }
@@ -4124,6 +4296,8 @@ impl MemoryApplier {
             .retain_retired(|stable_id| recycled.contains(&stable_id));
     }
 
+    /// Returns an indented text outline of the tree below `root` for debugging, or a `(no root)`
+    /// line when `root` is `None`.
     pub fn dump_tree(&self, root: Option<NodeId>) -> String {
         let mut output = String::new();
         if let Some(root_id) = root {
@@ -4585,6 +4759,8 @@ impl Applier for MemoryApplier {
     }
 }
 
+/// Holds a slot table into which a composition writes: the main composition has one, and each
+/// subcomposition has its own.
 pub struct SlotsHost {
     storage_key: Cell<usize>,
     inner: RefCell<SlotsHostInner>,
@@ -4644,10 +4820,13 @@ impl Drop for SlotsHost {
 }
 
 impl SlotsHost {
+    /// Returns a key that identifies the slot table the host holds. It changes when the table is
+    /// replaced or taken out.
     pub fn storage_key(&self) -> usize {
         self.storage_key.get()
     }
 
+    /// Creates a host around the slot table `storage`.
     pub fn new(storage: SlotTable) -> Self {
         let storage_key = storage.storage_id();
         Self {
@@ -4662,6 +4841,8 @@ impl SlotsHost {
         }
     }
 
+    /// Records `nested` as a host composed inside this one, so that forgetting effects here reaches
+    /// it too. Does nothing while this host is in use.
     pub fn note_nested_host(&self, nested: &Rc<SlotsHost>) {
         let Ok(mut inner) = self.inner.try_borrow_mut() else {
             return;
@@ -4783,6 +4964,8 @@ impl SlotsHost {
         RefMut::map(self.inner.borrow_mut(), |inner| &mut inner.table)
     }
 
+    /// Takes the slot table out of the host after disposing what it retained. Fails if other
+    /// references to the host exist or a slot pass is active.
     pub fn into_table(self: Rc<Self>) -> Result<SlotTable, NodeError> {
         if Rc::strong_count(&self) != 1 {
             return Err(NodeError::SlotHostUnavailable {
@@ -4823,6 +5006,8 @@ impl SlotsHost {
         Ok(taken)
     }
 
+    /// Disposes the content of the slot table and replaces it with an empty one. Fails while a slot
+    /// pass is active.
     pub fn reset(&self) -> Result<(), NodeError> {
         let inner = self.inner.borrow();
         if inner.active_pass.is_some() {
@@ -5122,6 +5307,7 @@ mod tests;
 mod recursive_decrease_increase_test;
 
 pub mod collections;
+/// The hasher type and constructor that the framework uses by default.
 pub mod hash;
 
 /// Where a test writes real files. Behind `test-helpers` so only a test build

@@ -18,13 +18,19 @@ use crate::{PathFillRule, Point, Rect};
 /// its pixels take the share of them it covers.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Trapezoid {
+    /// Left side of the slice, as an x coordinate.
     pub left: f32,
+    /// Right side of the slice, as an x coordinate.
     pub right: f32,
     /// The top edge's y at `left` and at `right`.
     pub top: [f32; 2],
     /// The bottom edge's y at `left` and at `right`.
     pub bottom: [f32; 2],
+    /// Whether the left side is part of the fill's outline and anti-aliased, rather than shared
+    /// with the previous slice.
     pub open_left: bool,
+    /// Whether the right side is part of the fill's outline and anti-aliased, rather than shared
+    /// with the next slice.
     pub open_right: bool,
 }
 

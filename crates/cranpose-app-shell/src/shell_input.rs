@@ -110,6 +110,8 @@ where
         self.surface().pointer_source
     }
 
+    /// Moves the pointer to `(x, y)` in logical pixels and sends the enter, exit, move or drag
+    /// events that follow. Returns `true` when a control or overlay handled the move.
     pub fn set_cursor(&mut self, x: f32, y: f32) -> bool {
         self.set_cursor_at_time(x, y, None)
     }
@@ -284,6 +286,8 @@ where
         true
     }
 
+    /// Presses the primary pointer button at the position set by `set_cursor`. Returns `true` when
+    /// a control or overlay handled the press.
     pub fn pointer_pressed(&mut self) -> bool {
         self.pointer_pressed_at_time(None)
     }
@@ -396,6 +400,8 @@ where
         }
     }
 
+    /// Releases the primary pointer button at the position set by `set_cursor`. Returns `true` when
+    /// a control or overlay handled the release.
     pub fn pointer_released(&mut self) -> bool {
         self.pointer_released_at_time(None)
     }
@@ -1209,6 +1215,8 @@ where
         moved
     }
 
+    /// Sends a key event to the focused control, the key handlers above it and the focus traversal.
+    /// Returns `true` when the event was handled and the platform should not process it further.
     pub fn on_key_event(&mut self, event: &KeyEvent) -> bool {
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.shell.app.app_context);
@@ -1755,6 +1763,7 @@ where
         app_context.enter(cranpose_ui::text_input_session::notify_app_resumed)
     }
 
+    /// Copies `text` to the Linux PRIMARY selection, which a middle click pastes.
     #[cfg(all(
         feature = "clipboard-native",
         target_os = "linux",
@@ -1773,6 +1782,8 @@ where
         }
     }
 
+    /// Copies `text` to the Linux PRIMARY selection, which a middle click pastes. Does nothing
+    /// here, because this build has no PRIMARY selection.
     #[cfg(not(all(
         feature = "clipboard-native",
         target_os = "linux",
@@ -1780,6 +1791,7 @@ where
     )))]
     pub fn set_primary_selection(&mut self, _text: &str) {}
 
+    /// Returns the text in the Linux PRIMARY selection, or `None` when it is empty or unavailable.
     #[cfg(all(
         feature = "clipboard-native",
         target_os = "linux",
@@ -1798,6 +1810,7 @@ where
         }
     }
 
+    /// Returns `None` always, because this build has no PRIMARY selection.
     #[cfg(not(all(
         feature = "clipboard-native",
         target_os = "linux",

@@ -32,9 +32,13 @@ const FALLOFF_FLOOR: f32 = 0.018;
 /// shadow is collected in.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShadowLight {
+    /// Horizontal position of the light, measured from the left of the window.
     pub x: f32,
+    /// Vertical position of the light, measured from the top of the window.
     pub y: f32,
+    /// Height of the light above the window.
     pub z: f32,
+    /// Radius of the light source; a larger radius gives a wider penumbra.
     pub radius: f32,
     /// Device pixels per unit: Skia scales the ambient penumbra by the
     /// caster's height in pixels.
@@ -98,7 +102,9 @@ pub struct ShadowRRect {
 /// shadow inset by `inset`, its corners rounded at `radius`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShadowHole {
+    /// Distance in from the shadow's `bounds` to the hole's edge.
     pub inset: f32,
+    /// Corner radius of the hole.
     pub radius: f32,
 }
 
@@ -265,9 +271,12 @@ pub fn shadow_falloff(x: f32) -> f32 {
     ((-4.0 * distance * distance).exp() - FALLOFF_FLOOR).max(0.0)
 }
 
+/// The shadow passes that one layer casts.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct LayerShadowGeometry {
+    /// The ambient shadow and the color it draws with, or `None` when the layer casts none.
     pub ambient: Option<(ShadowRRect, Color)>,
+    /// The spot shadow and the color it draws with, or `None` when the layer casts none.
     pub spot: Option<(ShadowRRect, Color)>,
 }
 

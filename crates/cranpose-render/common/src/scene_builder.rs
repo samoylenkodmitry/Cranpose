@@ -68,23 +68,32 @@ pub enum GraphRebuildReason {
     UnmatchedDirtyNodes(usize),
 }
 
+/// The outcome of a scoped scene update.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraphUpdate {
+    /// The dirty nodes were updated in place.
     Patched,
+    /// The update could not be applied and the graph must be built again, for the given reason.
     NeedsRebuild(GraphRebuildReason),
 }
 
+/// The outcome of a scoped update together with its effect on hit testing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GraphUpdateReport {
+    /// Whether the graph was patched or must be rebuilt.
     pub update: GraphUpdate,
+    /// Whether the update changed hit geometry or handlers, so the hit targets must be collected
+    /// again.
     pub hit_graph_dirty: bool,
 }
 
 impl GraphUpdateReport {
+    /// Whether the graph was patched in place.
     pub fn applied(self) -> bool {
         matches!(self.update, GraphUpdate::Patched)
     }
 
+    /// Why the graph must be rebuilt, or `None` when it was patched.
     pub fn rebuild_reason(self) -> Option<GraphRebuildReason> {
         match self.update {
             GraphUpdate::Patched => None,
@@ -111,6 +120,7 @@ fn lowered_layer_count() -> usize {
     crate::thread_state::with(|state| state.lowered_layer_count.get())
 }
 
+/// Builds the render graph of the layout box tree rooted at `root`.
 pub fn build_graph_from_layout_tree(root: &LayoutBox, _scale: f32) -> RenderGraph {
     bump_recording_generation();
     let root_snapshot = layout_box_to_snapshot(root, None);
@@ -119,6 +129,8 @@ pub fn build_graph_from_layout_tree(root: &LayoutBox, _scale: f32) -> RenderGrap
     graph
 }
 
+/// Builds the render graph of the layout tree below `root` by reading nodes from `applier`.
+/// Returns `None` when `root` cannot be lowered to a layer.
 pub fn build_graph_from_applier(
     applier: &MemoryApplier,
     root: NodeId,
@@ -151,6 +163,8 @@ pub fn rebuild_graph_from_applier(
     graph
 }
 
+/// Applies `updates` to `graph` in place. Returns `false` when the update could not be applied
+/// and the graph must be built again.
 pub fn update_graph_from_applier(
     applier: &MemoryApplier,
     graph: &mut RenderGraph,
@@ -160,6 +174,8 @@ pub fn update_graph_from_applier(
     update_graph_from_applier_report(applier, graph, updates, scale).applied()
 }
 
+/// Like `update_graph_from_applier`, and also reports whether the hit targets must be collected
+/// again or why the graph must be rebuilt.
 pub fn update_graph_from_applier_report(
     applier: &MemoryApplier,
     graph: &mut RenderGraph,
@@ -2478,6 +2494,9 @@ fn pad_clip_rect(rect: Rect) -> Rect {
     }
 }
 
+/// Grows `text_bounds` in the direction of the style's baseline shift, by the shift in pixels at
+/// `font_size`, so a clip does not cut the shifted glyphs. Returns the bounds unchanged when
+/// there is no baseline shift.
 pub fn expand_text_bounds_for_baseline_shift(
     text_bounds: Rect,
     text_style: &TextStyle,

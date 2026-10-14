@@ -87,6 +87,8 @@ pub trait LazyStaggeredItemSource {
 /// the grid.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StaggeredGridMeasureConfig {
+    /// The start of each lane across the grid, in layout pixels. The number of entries is the
+    /// number of lanes.
     pub lane_offsets: SmallVec<[f32; 8]>,
 }
 

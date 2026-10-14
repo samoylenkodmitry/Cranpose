@@ -14,13 +14,18 @@ use crate::{
 /// `start` is the left edge, in a right-to-left layout it is the right one.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PaddingValues {
+    /// Padding on the reading-order start edge, in logical pixels.
     pub start: f32,
+    /// Padding on the top edge, in logical pixels.
     pub top: f32,
+    /// Padding on the reading-order end edge, in logical pixels.
     pub end: f32,
+    /// Padding on the bottom edge, in logical pixels.
     pub bottom: f32,
 }
 
 impl PaddingValues {
+    /// Creates padding values from the four edges, in logical pixels and reading order.
     pub const fn new(start: f32, top: f32, end: f32, bottom: f32) -> Self {
         Self {
             start,

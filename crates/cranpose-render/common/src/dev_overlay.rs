@@ -12,12 +12,16 @@ use crate::graph::{
 /// overlay free when the text is stable.
 #[derive(Clone, PartialEq, Eq)]
 pub struct DevOverlayKey {
+    /// The overlay text, for example the fps line.
     pub text: String,
+    /// Bit pattern of the viewport width in logical pixels, so the key can be compared exactly.
     pub viewport_width_bits: u32,
+    /// Bit pattern of the viewport height in logical pixels, so the key can be compared exactly.
     pub viewport_height_bits: u32,
 }
 
 impl DevOverlayKey {
+    /// Builds the key for `text` drawn in a viewport of the given size in logical pixels.
     pub fn new(text: &str, viewport: Size) -> Self {
         Self {
             text: text.to_string(),

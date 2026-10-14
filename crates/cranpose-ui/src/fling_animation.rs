@@ -195,6 +195,7 @@ impl FlingAnimation {
         );
     }
 
+    /// Stops a running fling at once and drops its frame callback. `on_end` does not run.
     pub fn cancel(&self) {
         if let Some(state) = self.state.borrow_mut().take() {
             state.is_running.set(false);
@@ -238,7 +239,10 @@ pub fn fling_rest_position(initial_value: f32, velocity: f32) -> f32 {
 /// this crate share one scheduler and differ only in these two numbers.
 #[derive(Debug, Clone, Copy)]
 pub struct SpringParams {
+    /// Spring stiffness with a mass of 1. A higher value pulls toward the target faster.
     pub stiffness: f32,
+    /// Damping ratio. Below 1 the spring overshoots the target, at 1 it settles without overshoot,
+    /// above 1 it settles more slowly.
     pub damping_ratio: f32,
 }
 
@@ -297,6 +301,8 @@ pub struct SettleAnimation {
 }
 
 impl SettleAnimation {
+    /// Creates a settle animation that runs on the frame clock of `runtime` with the spring
+    /// `params`.
     pub fn new(runtime: RuntimeHandle, params: SpringParams) -> Self {
         Self {
             state: Rc::new(RefCell::new(None)),
@@ -333,6 +339,7 @@ impl SettleAnimation {
         );
     }
 
+    /// Stops a running settle at once and drops its frame callback. The end callback does not run.
     pub fn cancel(&self) {
         if let Some(state) = self.state.borrow_mut().take() {
             state.is_running.set(false);
@@ -340,6 +347,7 @@ impl SettleAnimation {
         }
     }
 
+    /// Returns true while a settle animation is running.
     pub fn is_running(&self) -> bool {
         self.state
             .borrow()

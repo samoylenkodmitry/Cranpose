@@ -59,6 +59,7 @@ pub trait DeviceInfo {
     }
 }
 
+/// Shared handle to a [`DeviceInfo`].
 pub type DeviceInfoRef = Rc<dyn DeviceInfo>;
 
 struct DefaultDeviceInfo;

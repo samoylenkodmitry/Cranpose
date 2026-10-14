@@ -313,6 +313,8 @@ pub struct FocusRequester {
 }
 
 impl FocusRequester {
+    /// Creates a requester that no node uses yet. [`Self::request_focus`] fails with
+    /// `FocusRequestError::NotAttached` until a `focus_requester` modifier attaches it.
     pub fn new() -> Self {
         Self::default()
     }

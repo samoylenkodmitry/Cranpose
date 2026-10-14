@@ -8,7 +8,9 @@ use crate::Modifier;
 /// Insets needed to keep content clear of system UI and the on-screen keyboard.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct WindowInsets {
+    /// Insets of the system bars, display cutouts and rounded corners, in logical pixels.
     pub safe_area: EdgeInsets,
+    /// Insets of the on-screen keyboard, in logical pixels.
     pub ime: EdgeInsets,
 }
 

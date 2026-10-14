@@ -21,7 +21,9 @@ pub struct NotifyRequest {
     /// Stable identifier: re-posting with the same id replaces the previous
     /// notification (used for progress updates).
     pub id: String,
+    /// The first line of the notification.
     pub title: String,
+    /// The text below the title.
     pub body: String,
     /// Whether this is an ongoing/progress notification (best-effort; platforms
     /// without ongoing notifications post a normal one).
@@ -31,6 +33,7 @@ pub struct NotifyRequest {
 }
 
 impl NotifyRequest {
+    /// Creates a request that posts a normal notification with the given `id`, `title` and `body`.
     pub fn new(id: impl Into<String>, title: impl Into<String>, body: impl Into<String>) -> Self {
         Self {
             id: id.into(),
@@ -41,11 +44,13 @@ impl NotifyRequest {
         }
     }
 
+    /// Sets whether the notification is an ongoing or progress notification.
     pub fn ongoing(mut self, ongoing: bool) -> Self {
         self.ongoing = ongoing;
         self
     }
 
+    /// Sets the payload that the app receives when the person taps the notification.
     pub fn with_deeplink(mut self, deeplink: impl Into<String>) -> Self {
         self.deeplink = Some(deeplink.into());
         self
@@ -64,6 +69,7 @@ pub trait Notifier: Send + Sync {
     fn cancel(&self, id: &str);
 }
 
+/// Shared handle to a [`Notifier`].
 pub type NotifierRef = Arc<dyn Notifier>;
 
 fn pending_deeplink_slot() -> &'static Mutex<Option<String>> {
@@ -148,14 +154,18 @@ impl Notifier for PlatformNotifier {
     }
 }
 
+/// Installs a platform notifier, replacing any previous one.
 pub fn set_platform_notifier(notifier: NotifierRef) {
     PLATFORM_NOTIFIER.set(notifier);
 }
 
+/// Removes any registered platform notifier (tests and teardown).
 pub fn clear_platform_notifier() {
     PLATFORM_NOTIFIER.clear();
 }
 
+/// Returns the notifier that forwards to the installed platform notifier. Without one, it uses
+/// the desktop notifier when the `notifier-native` feature is on, and otherwise does nothing.
 pub fn default_notifier() -> NotifierRef {
     DEFAULT_NOTIFIER
         .get_or_init(|| Arc::new(PlatformNotifier))
@@ -260,6 +270,8 @@ mod desktop {
     }
 }
 
+/// The notifier a composable reads. It is the platform notifier unless a composition local
+/// provider above it supplies another one.
 pub fn local_notifier() -> CompositionLocal<NotifierRef> {
     crate::composition_locals::cached_local(
         |locals| &locals.notifier,
@@ -267,6 +279,7 @@ pub fn local_notifier() -> CompositionLocal<NotifierRef> {
     )
 }
 
+/// Provides the platform notifier to `content` through [`local_notifier`].
 #[composable]
 pub fn ProvideNotifier(content: impl FnOnce()) {
     let notifier = cranpose_core::remember(default_notifier).with(|state| state.clone());

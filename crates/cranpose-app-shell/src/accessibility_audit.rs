@@ -56,6 +56,7 @@ impl AccessibilityIssueKind {
 /// One thing a reader user trips over on a screen.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AccessibilityIssue {
+    /// Which check the screen failed.
     pub kind: AccessibilityIssueKind,
     /// The control the issue is about: its role and its spoken name.
     pub control: String,

@@ -1,9 +1,11 @@
+#![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
 pub mod gesture_constants;
 pub mod lazy;
 pub mod modifier;
 pub mod modifier_helpers;
+/// Modifier nodes that handle input.
 pub mod nodes;
 pub mod text;
 pub mod velocity_tracker;
@@ -19,6 +21,7 @@ pub use nodes::input::{
 };
 pub use velocity_tracker::VelocityTracker1D;
 
+/// The traits, macros and types needed to implement a modifier node.
 pub mod prelude {
     #[expect(unused_imports)]
     pub use crate::modifier_helpers::*;

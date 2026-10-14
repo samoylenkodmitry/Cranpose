@@ -66,31 +66,55 @@ struct StateArenaInner {
     free: Vec<u32>,
 }
 
+/// Sizes of a runtime's state arena, for leak and memory checks. A `_len` field counts entries and
+/// a `_cap` field the capacity reserved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct StateArenaDebugStats {
+    /// State cells, both in use and free.
     pub cells_len: usize,
+    /// Capacity reserved for the state cells.
     pub cells_cap: usize,
+    /// State cells free for reuse.
     pub free_len: usize,
+    /// Capacity reserved for the free list.
     pub free_cap: usize,
 }
 
+/// Sizes of a runtime's queues and tables, for leak and memory checks. A `_len` field counts
+/// entries and a `_cap` field the capacity reserved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RuntimeDebugStats {
+    /// Node updates queued and not yet applied.
     pub node_updates_len: usize,
+    /// Capacity reserved for the node updates.
     pub node_updates_cap: usize,
+    /// Recompose scopes that were invalidated and not yet recomposed.
     pub invalid_scopes_len: usize,
+    /// Entries in the queue of invalidated scopes.
     pub scope_queue_len: usize,
+    /// Capacity reserved for the invalid scope queue.
     pub scope_queue_cap: usize,
+    /// Frame callbacks waiting for the next frame.
     pub frame_callbacks_len: usize,
+    /// Capacity reserved for the frame callbacks.
     pub frame_callbacks_cap: usize,
+    /// UI-thread closures queued by `enqueue_ui_task` and not yet run.
     pub local_tasks_len: usize,
+    /// Capacity reserved for the local tasks.
     pub local_tasks_cap: usize,
+    /// UI continuations registered and waiting for a value.
     pub ui_conts_len: usize,
+    /// Capacity reserved for the UI continuations.
     pub ui_conts_cap: usize,
+    /// Futures from `spawn_ui` that have not finished.
     pub tasks_len: usize,
+    /// Capacity reserved for the spawned tasks.
     pub tasks_cap: usize,
+    /// States kept alive on behalf of the runtime itself, not of a Rust owner.
     pub external_state_owners_len: usize,
+    /// Capacity reserved for the external state owners.
     pub external_state_owners_cap: usize,
+    /// Messages posted from other threads that the UI thread has not run yet.
     pub ui_dispatcher_pending: usize,
 }
 
@@ -272,6 +296,7 @@ impl StateArena {
     }
 }
 
+/// Names one state cell of a runtime. A generation count makes the id of a freed cell stale.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct StateId {
     slot: u32,
@@ -296,6 +321,7 @@ impl StateId {
     }
 }
 
+/// Identifies a runtime within its thread.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RuntimeId(u32);
 
@@ -383,6 +409,7 @@ impl Drop for PendingGuard<'_> {
     }
 }
 
+/// Posts work from any thread to the UI thread of a runtime.
 #[derive(Clone)]
 pub struct UiDispatcher {
     inner: UiDispatcherRef,
@@ -393,10 +420,14 @@ impl UiDispatcher {
         Self { inner }
     }
 
+    /// Queues `task` to run on the UI thread the next time the runtime drains UI work. May be
+    /// called from any thread.
     pub fn post(&self, task: impl FnOnce() + Send + 'static) {
         self.inner.post(task);
     }
 
+    /// Queues a call of the continuation registered under `id` with `value`, to run on the UI
+    /// thread. May be called from any thread.
     pub fn post_invoke<T>(&self, id: u64, value: T)
     where
         T: Send + 'static,
@@ -404,6 +435,7 @@ impl UiDispatcher {
         self.inner.post_invoke(id, Box::new(value));
     }
 
+    /// Returns `true` if a posted message has not run yet.
     pub fn has_pending(&self) -> bool {
         self.inner.has_pending()
     }
@@ -444,6 +476,8 @@ struct TaskEntry {
     waker: Waker,
 }
 
+/// Names the next task that `spawn_ui` creates on this thread, for `live_ui_task_labels` and leak
+/// reports. A task with no label is called `unnamed`.
 pub fn label_next_ui_task(label: impl Into<String>) {
     thread_state::watch_thread_exit();
     let label = label.into();
@@ -907,12 +941,16 @@ impl RuntimeInner {
     }
 }
 
+/// Owns the state cells, UI tasks, frame callbacks and invalidated scopes of one composition.
+/// Clones share the same runtime.
 #[derive(Clone)]
 pub struct Runtime {
     inner: Rc<RuntimeInner>,
 }
 
 impl Runtime {
+    /// Creates a runtime whose UI thread is the current thread. `scheduler` is asked for a frame
+    /// whenever the runtime has work.
     pub fn new(scheduler: SchedulerRef) -> Self {
         thread_state::watch_thread_exit();
         let inner = Rc::new(RuntimeInner::new(scheduler));
@@ -935,6 +973,7 @@ impl Runtime {
         }
     }
 
+    /// Returns a handle that reaches this runtime without keeping it alive.
     pub fn handle(&self) -> RuntimeHandle {
         RuntimeHandle {
             inner: Rc::downgrade(&self.inner),
@@ -944,14 +983,17 @@ impl Runtime {
         }
     }
 
+    /// Returns `true` if node updates are queued or any recompose scope is invalid.
     pub fn has_updates(&self) -> bool {
         self.inner.has_updates()
     }
 
+    /// Returns `true` if the runtime has asked for a frame or has a task ready to run.
     pub fn needs_frame(&self) -> bool {
         *self.inner.needs_frame.borrow() || self.inner.has_runnable_tasks()
     }
 
+    /// Sets or clears the request for a frame.
     pub fn set_needs_frame(&self, value: bool) {
         *self.inner.needs_frame.borrow_mut() = value;
     }
@@ -964,6 +1006,7 @@ impl Runtime {
         self.inner.last_frame_time_nanos.get()
     }
 
+    /// Returns a clock for the frames of this runtime.
     #[cfg(any(feature = "internal", test))]
     pub fn frame_clock(&self) -> FrameClock {
         FrameClock::new(self.handle())
@@ -987,6 +1030,7 @@ impl Drop for Runtime {
     }
 }
 
+/// A scheduler that ignores frame requests, for compositions that the caller drives itself.
 #[derive(Default)]
 pub struct DefaultScheduler;
 
@@ -1028,6 +1072,8 @@ impl TestRuntime {
     }
 }
 
+/// A cheap handle to a [`Runtime`]. It does not keep the runtime alive, and its calls do nothing
+/// once the runtime is dropped.
 #[derive(Clone)]
 pub struct RuntimeHandle {
     inner: Weak<RuntimeInner>,
@@ -1073,6 +1119,7 @@ impl ScopeRuntime {
     }
 }
 
+/// Controls a future spawned with `RuntimeHandle::spawn_ui`.
 pub struct TaskHandle {
     id: u64,
     runtime: RuntimeHandle,
@@ -1156,6 +1203,7 @@ fn hand_to_current_owner(lease: &Rc<StateHandleLease>) -> bool {
 }
 
 impl RuntimeHandle {
+    /// Returns the id of the runtime.
     pub fn id(&self) -> RuntimeId {
         self.id
     }
@@ -1225,16 +1273,19 @@ impl RuntimeHandle {
         self.inner.upgrade().map(|inner| f(&inner.state_arena))
     }
 
+    /// Returns the number of state cells and, of those, the number free for reuse.
     pub fn state_arena_stats(&self) -> (usize, usize) {
         self.try_with_state_arena(StateArena::stats)
             .unwrap_or_default()
     }
 
+    /// Returns the sizes of the runtime's state arena, for leak and memory checks.
     pub fn state_arena_debug_stats(&self) -> StateArenaDebugStats {
         self.try_with_state_arena(StateArena::debug_stats)
             .unwrap_or_default()
     }
 
+    /// Returns the sizes of the runtime's queues and tables, for leak and memory checks.
     pub fn debug_stats(&self) -> RuntimeDebugStats {
         self.inner
             .upgrade()
@@ -1242,6 +1293,7 @@ impl RuntimeHandle {
             .unwrap_or_default()
     }
 
+    /// Returns the id and label of every spawned UI task that has not finished.
     pub fn live_ui_task_labels(&self) -> Vec<(u64, String)> {
         self.inner
             .upgrade()
@@ -1256,6 +1308,7 @@ impl RuntimeHandle {
             .unwrap_or_default()
     }
 
+    /// Marks the runtime as needing a frame and asks its scheduler for one.
     pub fn schedule(&self) {
         if let Some(inner) = self.inner.upgrade() {
             inner.schedule();
@@ -1282,6 +1335,8 @@ impl RuntimeHandle {
         }
     }
 
+    /// Spawns `fut` on the UI thread, where `drain_ui` polls it whenever it is woken. Returns
+    /// `None` if the runtime is gone.
     pub fn spawn_ui<F>(&self, fut: F) -> Option<TaskHandle>
     where
         F: Future<Output = ()> + 'static,
@@ -1295,6 +1350,7 @@ impl RuntimeHandle {
         })
     }
 
+    /// Cancels the spawned UI task `id` and drops its future.
     pub fn cancel_task(&self, id: u64) {
         if let Some(inner) = self.inner.upgrade() {
             inner.cancel_task(id);
@@ -1314,22 +1370,27 @@ impl RuntimeHandle {
         self.dispatcher.post(task);
     }
 
+    /// Registers `f` to run once on the UI thread when `UiDispatcher::post_invoke` sends a `T` for
+    /// the returned id. Returns `None` if the runtime is gone.
     pub fn register_ui_cont<T: 'static>(&self, f: impl FnOnce(T) + 'static) -> Option<u64> {
         self.inner.upgrade().map(|inner| inner.register_ui_cont(f))
     }
 
+    /// Removes the continuation `id` without running it.
     pub fn cancel_ui_cont(&self, id: u64) {
         if let Some(inner) = self.inner.upgrade() {
             inner.cancel_ui_cont(id);
         }
     }
 
+    /// Runs the work posted to the UI thread, including woken tasks, until none is left.
     pub fn drain_ui(&self) {
         if let Some(inner) = self.inner.upgrade() {
             inner.drain_ui();
         }
     }
 
+    /// Returns `true` if posted UI work has not run yet.
     pub fn has_pending_ui(&self) -> bool {
         self.inner.upgrade().map_or_else(
             || self.dispatcher.has_pending(),
@@ -1337,6 +1398,8 @@ impl RuntimeHandle {
         )
     }
 
+    /// Registers `callback` to run once on the next frame with the frame time in nanoseconds.
+    /// Returns `None` if the runtime is gone.
     pub fn register_frame_callback(
         &self,
         callback: impl FnOnce(u64) + 'static,
@@ -1346,6 +1409,8 @@ impl RuntimeHandle {
         })
     }
 
+    /// Registers `callback` to run once on the next frame, for a long-lived loop that registers
+    /// again after every frame. It does not count in `has_transient_frame_callbacks`.
     pub fn register_perpetual_frame_callback(
         &self,
         callback: impl FnOnce(u64) + 'static,
@@ -1355,6 +1420,7 @@ impl RuntimeHandle {
         })
     }
 
+    /// Cancels the frame callback `id` if it has not run.
     pub fn cancel_frame_callback(&self, id: FrameCallbackId) {
         if let Some(inner) = self.inner.upgrade() {
             inner.cancel_frame_callback(id);
@@ -1378,11 +1444,13 @@ impl RuntimeHandle {
             .and_then(|inner| inner.last_frame_time_nanos.get())
     }
 
+    /// Returns a clock for the frames of this runtime.
     #[cfg(any(feature = "internal", test))]
     pub fn frame_clock(&self) -> FrameClock {
         FrameClock::new(self.clone())
     }
 
+    /// Sets or clears the request for a frame.
     pub fn set_needs_frame(&self, value: bool) {
         if let Some(inner) = self.inner.upgrade() {
             *inner.needs_frame.borrow_mut() = value;
@@ -1396,6 +1464,7 @@ impl RuntimeHandle {
             .unwrap_or_default()
     }
 
+    /// Returns `true` if node updates are queued or any recompose scope is invalid.
     pub fn has_updates(&self) -> bool {
         self.inner
             .upgrade()
@@ -1450,6 +1519,7 @@ impl RuntimeHandle {
         id
     }
 
+    /// Returns `true` if a recompose scope has been invalidated and not yet recomposed.
     pub fn has_invalid_scopes(&self) -> bool {
         self.inner
             .upgrade()
@@ -1471,18 +1541,22 @@ impl RuntimeHandle {
             .unwrap_or_default()
     }
 
+    /// Returns `true` if any frame callback, transient or perpetual, is waiting.
     pub fn has_frame_callbacks(&self) -> bool {
         self.inner
             .upgrade()
             .is_some_and(|inner| inner.has_frame_callbacks())
     }
 
+    /// Returns `true` if a callback from `register_frame_callback` is waiting. Perpetual callbacks
+    /// do not count.
     pub fn has_transient_frame_callbacks(&self) -> bool {
         self.inner
             .upgrade()
             .is_some_and(|inner| inner.has_transient_frame_callbacks())
     }
 
+    /// Panics in debug builds when called off the runtime's UI thread.
     pub fn assert_ui_thread(&self) {
         debug_assert_eq!(
             std::thread::current().id(),
@@ -1491,6 +1565,7 @@ impl RuntimeHandle {
         );
     }
 
+    /// Returns a dispatcher that posts work to the UI thread from any thread.
     pub fn dispatcher(&self) -> UiDispatcher {
         self.dispatcher.clone()
     }
@@ -1503,6 +1578,7 @@ impl RuntimeHandle {
 }
 
 impl TaskHandle {
+    /// Cancels the task if it has not finished.
     pub fn cancel(&self) {
         self.runtime.cancel_task(self.id);
     }
@@ -1571,13 +1647,21 @@ impl futures_task::ArcWake for RuntimeTaskWaker {
     }
 }
 
+/// Sizes of the runtime registries of one thread, for leak and memory checks. A `_len` field counts
+/// entries and a `_cap` field the capacity reserved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RuntimeThreadLocalDebugStats {
+    /// Runtimes currently installed as active on this thread.
     pub active_runtimes_len: usize,
+    /// Capacity reserved for the active runtimes.
     pub active_runtimes_cap: usize,
+    /// Runtimes registered on this thread.
     pub registered_runtimes_len: usize,
+    /// Capacity reserved for the registered runtimes.
     pub registered_runtimes_cap: usize,
+    /// State releases waiting for the end of a teardown scope.
     pub deferred_state_releases_len: usize,
+    /// Capacity reserved for the deferred state releases.
     pub deferred_state_releases_cap: usize,
 }
 
@@ -1643,6 +1727,7 @@ pub(crate) fn live_recompose_scope_count() -> usize {
     })
 }
 
+/// Returns the sizes of the runtime registries of the current thread, for leak and memory checks.
 pub fn debug_runtime_thread_local_stats() -> RuntimeThreadLocalDebugStats {
     thread_state::runtimes(|state| {
         let active = state.active_runtimes.borrow();

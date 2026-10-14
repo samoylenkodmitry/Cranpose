@@ -16,6 +16,8 @@ pub fn blur_scratch_block(radius_px: f32) -> u32 {
     }
 }
 
+/// Returns `lhs` grown to cover `rhs`. A `rhs` with no area leaves `lhs` unchanged, and a
+/// `None` `lhs` becomes `rhs`.
 pub fn union_rect(lhs: Option<Rect>, rhs: Rect) -> Option<Rect> {
     if rhs.width <= 0.0 || rhs.height <= 0.0 {
         return lhs;
@@ -75,6 +77,9 @@ pub fn blur_reach_for_minimum_scale(blur_radius: f32, minimum_scale: f32) -> f32
     }
 }
 
+/// Grows `rect` on every side by the reach of a blur of `blur_radius` logical pixels drawn at
+/// `scale` device pixels per logical pixel, then intersects it with `clip` when one is given.
+/// Returns `None` when the grown rectangle does not meet `clip`.
 pub fn expand_blurred_rect(
     mut rect: Rect,
     blur_radius: f32,
@@ -107,9 +112,13 @@ pub const BLUR_TAP_PAIRS: usize = (BLUR_MAX_TAPS / 2) as usize;
 /// tap alone.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct BlurTapPair {
+    /// Gaussian weight of the inner tap, the nearer to the pixel.
     pub inner: f32,
+    /// Gaussian weight of the outer tap, zero when the kernel has an odd tap count.
     pub outer: f32,
+    /// Distance in taps from the pixel at which the single bilinear fetch samples.
     pub offset: f32,
+    /// Combined weight of the two taps, the sum of `inner` and `outer`.
     pub weight: f32,
 }
 
@@ -118,8 +127,11 @@ pub struct BlurTapPair {
 /// kernel's sum with the centre tap's one, computed once per draw.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BlurKernel {
+    /// Tap pairs for one side of the pixel, ordered from the pixel outward.
     pub pairs: [BlurTapPair; BLUR_TAP_PAIRS],
+    /// Number of entries of `pairs` in use; the rest are zero.
     pub pair_count: u32,
+    /// Sum of every tap weight on both sides plus the centre tap, which is one.
     pub total_weight: f32,
 }
 

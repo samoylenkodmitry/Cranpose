@@ -44,17 +44,23 @@ pub enum Metering {
 /// A snapshot of the current network state. The default knows nothing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct NetworkStatus {
+    /// Whether the device has a network path.
     pub connectivity: Connectivity,
+    /// Whether the network charges for or limits data.
     pub metering: Metering,
 }
 
 /// Reports the current network status.
 pub trait NetworkMonitor: Send + Sync {
+    /// The current connectivity and metering.
     fn status(&self) -> NetworkStatus;
+    /// Whether the monitor still observes the network. A stopped monitor knows nothing.
     fn is_alive(&self) -> bool;
+    /// Restarts a monitor that stopped, so that [`status`](Self::status) reports again.
     fn reconnect(&self);
 }
 
+/// Shared handle to a [`NetworkMonitor`].
 pub type NetworkMonitorRef = Arc<dyn NetworkMonitor>;
 
 struct DefaultNetworkMonitor;

@@ -99,10 +99,6 @@ pub(crate) fn placement_pass_with_unplaced_nodes() -> Option<u64> {
     })
 }
 
-/// Retained layout state for a LayoutNode.
-/// This mirrors Jetpack Compose's approach where each node stores its own
-/// measured size and placed position, eliminating the need for per-frame
-/// LayoutTree reconstruction.
 /// What a node below a node needs: layout, and measure when `measure` is set.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct DescendantDirt {
@@ -119,6 +115,7 @@ impl DescendantDirt {
     }
 }
 
+/// The measured size and placed position that a layout node kept from its latest layout pass.
 #[derive(Clone, Debug, Default)]
 pub struct LayoutState {
     size: Size,
@@ -132,10 +129,12 @@ pub struct LayoutState {
 }
 
 impl LayoutState {
+    /// Returns the measured size, in logical pixels.
     pub fn size(&self) -> Size {
         self.size
     }
 
+    /// Returns the placed position relative to the parent, in logical pixels.
     pub fn position(&self) -> Point {
         self.position
     }
@@ -163,6 +162,7 @@ impl LayoutState {
         self
     }
 
+    /// Returns whether layout has placed the node.
     pub fn is_placed(&self) -> bool {
         self.is_placed
     }
@@ -253,11 +253,16 @@ struct MeasurementCacheEntry {
     hold: Option<cranpose_ui_layout::ConstraintsHold>,
 }
 
+/// Selects which intrinsic size of a node to query, together with the size on the other axis.
 #[derive(Clone, Copy, Debug)]
 pub enum IntrinsicKind {
+    /// Minimum intrinsic width for the given height, in logical pixels.
     MinWidth(f32),
+    /// Maximum intrinsic width for the given height, in logical pixels.
     MaxWidth(f32),
+    /// Minimum intrinsic height for the given width, in logical pixels.
     MinHeight(f32),
+    /// Maximum intrinsic height for the given width, in logical pixels.
     MaxHeight(f32),
 }
 
@@ -503,6 +508,8 @@ pub struct LayoutNode {
     /// A node below this one needs layout or measure.
     descendant_dirt: Cell<DescendantDirt>,
 
+    /// Policy that measures and places the children of this node. Change it through
+    /// `set_measure_policy` so that a measure is scheduled.
     pub measure_policy: Rc<dyn MeasurePolicy>,
     /// Where the chain's layout modifiers put their content, written by
     /// layout and read by the draws and text the slices collect.
@@ -531,6 +538,8 @@ pub struct LayoutNode {
     semantics_reach: Cell<Option<cranpose_foundation::SemanticsReach>>,
     owner_context_id: Cell<Option<crate::render_state::AppContextId>>,
     modifier_chain: ModifierChainHandle,
+    /// The modifier of this node. Change it through `set_modifier` so that the modifier chain
+    /// updates.
     pub modifier: Modifier,
     /// Composable definitions responsible for this node, captured only for inspection builds.
     #[cfg(feature = "inspection")]
@@ -550,6 +559,7 @@ pub(crate) fn empty_measure_policy() -> Rc<dyn MeasurePolicy> {
 }
 
 impl LayoutNode {
+    /// Creates a node with `modifier` whose children `measure_policy` measures and places.
     pub fn new(modifier: Modifier, measure_policy: Rc<dyn MeasurePolicy>) -> Self {
         Self::new_with_virtual(modifier, measure_policy, false)
     }
@@ -622,6 +632,8 @@ impl LayoutNode {
         node
     }
 
+    /// Replaces the node's modifier and updates its modifier chain, invalidating the work that the
+    /// change affects.
     pub fn set_modifier(&mut self, modifier: Modifier) {
         #[cfg(feature = "inspection")]
         {
@@ -835,6 +847,8 @@ impl LayoutNode {
         }
     }
 
+    /// Replaces the measure policy and schedules a measure. Does nothing if `policy` is the same
+    /// `Rc` as the current one.
     pub fn set_measure_policy(&mut self, policy: Rc<dyn MeasurePolicy>) {
         if !Rc::ptr_eq(&self.measure_policy, &policy) {
             self.measure_policy = policy;
@@ -904,6 +918,7 @@ impl LayoutNode {
         self.needs_redraw.get()
     }
 
+    /// Clears the pending redraw flag once the node has been drawn.
     pub fn clear_needs_redraw(&self) {
         self.needs_redraw.set(false);
     }
@@ -1020,6 +1035,7 @@ impl LayoutNode {
         &self.cache
     }
 
+    /// Returns the padding, layout properties and offset that the modifier chain resolved to.
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {
         self.modifier_chain.resolved_modifiers()
     }
@@ -1037,6 +1053,7 @@ impl LayoutNode {
         ));
     }
 
+    /// Returns the union of the capabilities of all nodes in the modifier chain.
     pub fn modifier_capabilities(&self) -> NodeCapabilities {
         self.modifier_chain.capabilities()
     }
@@ -1049,15 +1066,19 @@ impl LayoutNode {
             .contains(NodeCapabilities::WINDOW_ROOT)
     }
 
+    /// Returns the capabilities of the chain's nodes counted from the head of the chain. Compose's
+    /// `aggregateChildKindSet`.
     pub fn modifier_child_capabilities(&self) -> NodeCapabilities {
         self.modifier_chain.aggregate_child_capabilities()
     }
 
+    /// Turns debug logging of the modifier chain on or off.
     pub fn set_debug_modifiers(&mut self, enabled: bool) {
         self.debug_modifiers.set(enabled);
         self.modifier_chain.set_debug_logging(enabled);
     }
 
+    /// Returns whether debug logging of the modifier chain is on.
     pub fn debug_modifiers_enabled(&self) -> bool {
         self.debug_modifiers.get()
     }
@@ -1068,26 +1089,31 @@ impl LayoutNode {
         self.modifier_chain.modifier_locals_handle()
     }
 
+    /// Returns whether the modifier chain contains layout modifier nodes.
     pub fn has_layout_modifier_nodes(&self) -> bool {
         self.modifier_capabilities()
             .contains(NodeCapabilities::LAYOUT)
     }
 
+    /// Returns whether the modifier chain contains draw modifier nodes.
     pub fn has_draw_modifier_nodes(&self) -> bool {
         self.modifier_capabilities()
             .contains(NodeCapabilities::DRAW)
     }
 
+    /// Returns whether the modifier chain contains pointer input modifier nodes.
     pub fn has_pointer_input_modifier_nodes(&self) -> bool {
         self.modifier_capabilities()
             .contains(NodeCapabilities::POINTER_INPUT)
     }
 
+    /// Returns whether the modifier chain contains semantics modifier nodes.
     pub fn has_semantics_modifier_nodes(&self) -> bool {
         self.modifier_capabilities()
             .contains(NodeCapabilities::SEMANTICS)
     }
 
+    /// Returns whether the modifier chain contains focus modifier nodes.
     pub fn has_focus_modifier_nodes(&self) -> bool {
         self.modifier_capabilities()
             .contains(NodeCapabilities::FOCUS)
@@ -1107,6 +1133,8 @@ impl LayoutNode {
         }
     }
 
+    /// Returns the draw commands, pointer input handlers, text and graphics layer data collected
+    /// from the modifier nodes. The snapshot is rebuilt after the chain changed.
     pub fn modifier_slices_snapshot(&self) -> Rc<ModifierNodeSlices> {
         if self.modifier_slices_dirty.get() {
             self.update_modifier_slices_cache();
@@ -1163,6 +1191,7 @@ impl LayoutNode {
         }
     }
 
+    /// Returns the semantics that the modifier chain reports, or `None` if it reports none.
     pub fn semantics_configuration(&self) -> Option<SemanticsConfiguration> {
         crate::modifier::collect_semantics_from_chain(self.modifier_chain.chain())
     }

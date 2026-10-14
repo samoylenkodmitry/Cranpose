@@ -70,10 +70,15 @@ pub mod field {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum SpriteKind {
+    /// A texture that the rasterizer drew for the item.
     Texture = 0,
+    /// A filled rounded rectangle.
     Fill = 1,
+    /// A stroked rounded rectangle.
     Stroke = 2,
+    /// A circular arc band.
     Arc = 3,
+    /// A stroked line segment.
     Line = 4,
 }
 
@@ -81,9 +86,14 @@ pub enum SpriteKind {
 /// row from the top.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextureUpload {
+    /// Handle of the texture. Sprites name it, and `releases` lists it once it is dropped.
     pub id: u32,
+    /// Texture width in pixels.
     pub width: u32,
+    /// Texture height in pixels.
     pub height: u32,
+    /// Premultiplied RGBA8 pixels, row by row from the top: `width` times `height` times four
+    /// bytes.
     pub pixels: Vec<u8>,
 }
 
@@ -118,6 +128,7 @@ impl SpriteFrame {
         &self.sprites
     }
 
+    /// Number of sprites in the frame.
     pub fn sprite_count(&self) -> usize {
         self.sprites.len() / SPRITE_FLOATS
     }

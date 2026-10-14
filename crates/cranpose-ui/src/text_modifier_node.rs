@@ -293,18 +293,22 @@ impl TextModifierNode {
         }
     }
 
+    /// Returns the plain text of the node.
     pub fn text(&self) -> Ref<'_, str> {
         Ref::map(self.layout.annotated_text(), |text| text.text.as_str())
     }
 
+    /// Returns the node's text with its span styles and annotations.
     pub fn annotated_text(&self) -> Rc<AnnotatedString> {
         Rc::clone(&self.layout.annotated_text())
     }
 
+    /// Returns the style the text lays out with.
     pub fn style(&self) -> Ref<'_, TextStyle> {
         self.layout.style()
     }
 
+    /// Returns the layout options: overflow, soft wrap, and minimum and maximum lines.
     pub fn options(&self) -> TextLayoutOptions {
         self.layout.options()
     }

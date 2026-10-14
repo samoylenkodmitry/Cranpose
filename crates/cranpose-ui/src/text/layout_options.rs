@@ -5,18 +5,30 @@ const MIN_SCALE_DOWN_FONT_SIZE_SP: f32 = 1.0;
 /// How overflowing text should be handled.
 #[derive(Clone, Copy, Debug, Default)]
 pub enum TextOverflow {
+    /// Text that does not fit is cut off at the bounds of the text.
     #[default]
     Clip,
+    /// The end of the last visible line is replaced with an ellipsis.
     Ellipsis,
+    /// Text is laid out in full and drawn beyond its bounds.
     Visible,
+    /// The start of the line is replaced with an ellipsis. Takes effect only when `max_lines`
+    /// is 1; otherwise no ellipsis is added.
     StartEllipsis,
+    /// The middle of the line is replaced with an ellipsis. Takes effect only when `max_lines`
+    /// is 1; otherwise no ellipsis is added.
     MiddleEllipsis,
+    /// The font size shrinks until the text fits, down to `min_font_size_sp`. Text that
+    /// still overflows at that size is clipped.
     ScaleDown {
+        /// Smallest font size to shrink to, in sp. Values below 1.0 and non-finite values count
+        /// as 1.0.
         min_font_size_sp: f32,
     },
 }
 
 impl TextOverflow {
+    /// Returns the overflow with the `ScaleDown` minimum size raised to at least 1.0 sp.
     pub fn normalized(self) -> Self {
         match self {
             Self::ScaleDown { min_font_size_sp } => Self::ScaleDown {
@@ -26,6 +38,8 @@ impl TextOverflow {
         }
     }
 
+    /// Returns the minimum font size of `ScaleDown` in sp after normalizing, and `None` for
+    /// the other kinds.
     pub fn scale_down_min_font_size_sp(self) -> Option<f32> {
         match self.normalized() {
             Self::ScaleDown { min_font_size_sp } => Some(min_font_size_sp),
@@ -83,9 +97,14 @@ impl Hash for TextOverflow {
 /// Text layout behavior options matching Compose `BasicText` controls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TextLayoutOptions {
+    /// How text that does not fit is handled.
     pub overflow: TextOverflow,
+    /// Whether lines wrap at the available width. When false, only explicit newlines break
+    /// lines.
     pub soft_wrap: bool,
+    /// Largest number of lines to lay out. `usize::MAX` means no limit.
     pub max_lines: usize,
+    /// Number of lines the text's height covers at least, even when it has fewer lines.
     pub min_lines: usize,
 }
 
@@ -136,9 +155,14 @@ fn normalize_scale_down_min_font_size_sp(value: f32) -> f32 {
 /// `None` for `max_lines` means no explicit line limit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TextOptions {
+    /// How text that does not fit is handled.
     pub overflow: TextOverflow,
+    /// Whether lines wrap at the available width. When false, only explicit newlines break
+    /// lines.
     pub soft_wrap: bool,
+    /// Largest number of lines to lay out. `None` means no limit.
     pub max_lines: Option<usize>,
+    /// Number of lines the text's height covers at least, even when it has fewer lines.
     pub min_lines: usize,
 }
 

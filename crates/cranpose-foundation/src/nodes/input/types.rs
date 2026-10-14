@@ -7,6 +7,7 @@ use cranpose_ui_graphics::Point;
 
 use super::rotary::RotaryScrollEvent;
 
+/// Identifies one pointer of a gesture, such as one finger. `0` is the primary pointer.
 pub type PointerId = u64;
 
 type PostDispatchAction = Box<dyn FnOnce() -> bool>;
@@ -25,20 +26,31 @@ impl std::fmt::Debug for DeferredPostDispatch {
     }
 }
 
+/// The phase of a pointer gesture that an event belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PointerPhase {
+    /// The pointer went down.
     Start,
+    /// The pointer moved, scrolled or hovered.
     Move,
+    /// The pointer went up.
     End,
+    /// The system canceled the gesture.
     Cancel,
 }
 
+/// What a pointer event reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PointerEventKind {
+    /// A pointer went down: a mouse button, a finger or a pen touched.
     Down,
+    /// A pointer moved.
     Move,
+    /// A pointer went up.
     Up,
+    /// The system canceled the gesture of the pointer.
     Cancel,
+    /// A wheel or trackpad scroll. The delta is in [`PointerEvent::scroll_delta`].
     Scroll,
     /// Discrete zoom step (desktop ctrl+wheel, browser pinch-trackpad).
     /// The multiplicative factor is carried in [`PointerEvent::zoom_delta`].
@@ -56,7 +68,9 @@ pub enum PointerEventKind {
     /// Rotary scroll during the **bubble** pass, which runs focused-to-root.
     /// Mirrors Compose's `onRotaryScrollEvent`.
     RotaryScroll,
+    /// A pointer began to hover over the receiving node.
     Enter,
+    /// A pointer stopped hovering over the receiving node.
     Exit,
 }
 
@@ -94,39 +108,52 @@ impl PointerSource {
     }
 }
 
+/// A button of a mouse or of a similar pointing device.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PointerButton {
+    /// The main button, usually the left mouse button.
     Primary = 0,
+    /// The secondary button, usually the right mouse button.
     Secondary = 1,
+    /// The middle button, usually a press on the wheel.
     Middle = 2,
+    /// The back button of a mouse.
     Back = 3,
+    /// The forward button of a mouse.
     Forward = 4,
 }
 
+/// A set of pointer buttons that are pressed together.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PointerButtons(u8);
 
 impl PointerButtons {
+    /// The set with no button pressed.
     pub const NONE: Self = Self(0);
 
+    /// Creates a set with no button pressed.
     pub fn new() -> Self {
         Self::NONE
     }
 
+    /// Returns the set with `button` added.
     pub fn with(mut self, button: PointerButton) -> Self {
         self.insert(button);
         self
     }
 
+    /// Adds `button` to the set.
     pub fn insert(&mut self, button: PointerButton) {
         self.0 |= 1 << (button as u8);
     }
 
+    /// Removes `button` from the set.
     pub fn remove(&mut self, button: PointerButton) {
         self.0 &= !(1 << (button as u8));
     }
 
+    /// Whether `button` is in the set.
     pub fn contains(&self, button: PointerButton) -> bool {
         (self.0 & (1 << (button as u8))) != 0
     }
@@ -192,10 +219,16 @@ impl Modifiers {
 /// matching Jetpack Compose's event consumption pattern.
 #[derive(Clone, Debug)]
 pub struct PointerEvent {
+    /// The pointer this event belongs to. `0` is the primary pointer.
     pub id: PointerId,
+    /// What happened to the pointer.
     pub kind: PointerEventKind,
+    /// The phase of the gesture that the event belongs to, which follows from `kind`.
     pub phase: PointerPhase,
+    /// Where the pointer is, in logical pixels, in the coordinates of the node that receives the
+    /// event.
     pub position: Point,
+    /// Where the pointer is, in logical pixels, in the coordinates of the composition root.
     pub global_position: Point,
     /// Where the pointer is on the screen, in logical pixels, when the
     /// platform told the shell where the window drawing this event's root
@@ -210,6 +243,7 @@ pub struct PointerEvent {
     /// This is non-zero for [`PointerEventKind::Scroll`] events and zero for
     /// button/move events.
     pub scroll_delta: Point,
+    /// The buttons that are pressed at the time of this event.
     pub buttons: PointerButtons,
     /// Platform timestamp of the input sample in milliseconds, when available.
     ///
@@ -246,6 +280,9 @@ pub struct PointerEvent {
 }
 
 impl PointerEvent {
+    /// Creates an event of `kind` at `position`, in the coordinates of the receiving node, and at
+    /// `global_position`, in the coordinates of the composition root. The pointer id is `0` and the
+    /// other fields have neutral values.
     pub fn new(kind: PointerEventKind, position: Point, global_position: Point) -> Self {
         Self {
             id: 0,
@@ -399,6 +436,9 @@ impl PointerEvent {
         self.consumed.get()
     }
 
+    /// Stores `action` to run once after every handler saw the event. It runs only when no handler
+    /// consumed the event, and when it returns `true` the event becomes consumed. A later call
+    /// replaces the stored action.
     pub fn defer_post_dispatch_action<F>(&self, action: F)
     where
         F: FnOnce() -> bool + 'static,
@@ -406,6 +446,9 @@ impl PointerEvent {
         *self.deferred_post_dispatch.action.borrow_mut() = Some(Box::new(action));
     }
 
+    /// Runs the action stored by `defer_post_dispatch_action`, unless a handler consumed the event;
+    /// then the action is dropped. The shell calls this after it dispatched the event to all
+    /// targets.
     pub fn finish_post_dispatch(&self) {
         if self.is_consumed() {
             self.deferred_post_dispatch.action.borrow_mut().take();

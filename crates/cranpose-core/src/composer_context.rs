@@ -111,6 +111,9 @@ pub fn current_composer() -> Option<Composer> {
     .flatten()
 }
 
+/// Registers `host`, the slot table of a subcomposition, as nested in the active slot table of the
+/// current composer, so that forgetting effects in the outer table reaches `host` too. Does nothing
+/// without a current composer.
 pub fn note_nested_slots_host(host: &std::rc::Rc<crate::SlotsHost>) {
     let Some(composer) = current_composer() else {
         return;

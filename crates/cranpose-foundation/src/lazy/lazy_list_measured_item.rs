@@ -10,6 +10,8 @@ use super::lazy_list_state::LazyListItemInfo;
 /// Most lazy list items have 1-2 root nodes, so 4 avoids heap allocation
 /// in the common case while keeping stack size reasonable.
 pub type SmallNodeVec = SmallVec<[u64; 4]>;
+/// Inline list of layout-pixel values, one per root node of an item, with the capacity of
+/// [`SmallNodeVec`].
 pub type SmallOffsetVec = SmallVec<[f32; 4]>;
 
 /// A measured item in a lazy list.

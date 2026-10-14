@@ -15,6 +15,8 @@ use crate::{
     collections::map::{HashMap, HashSet},
 };
 
+/// One group of a slot table, for debugging: the group index, its call site key, its scope id and
+/// the length of its subtree.
 pub type DebugSlotGroup = (usize, crate::Key, Option<usize>, usize);
 
 /// Identifier for a subcomposed slot.
@@ -25,11 +27,13 @@ pub type DebugSlotGroup = (usize, crate::Key, Option<usize>, usize);
 pub struct SlotId(pub u64);
 
 impl SlotId {
+    /// Creates a slot id from `raw`.
     #[inline]
     pub fn new(raw: u64) -> Self {
         Self(raw)
     }
 
+    /// Returns the identifier as a number.
     #[inline]
     pub fn raw(self) -> u64 {
         self.0
@@ -411,6 +415,8 @@ impl SubcomposeState {
         self.policy = policy;
     }
 
+    /// Sets how many composed nodes the reusable pool keeps: `per_type` for each content type and
+    /// `untyped` for nodes without one. Nodes over a limit are disposed.
     pub fn set_reusable_pool_limits(&mut self, per_type: usize, untyped: usize) {
         self.max_reusable_per_type = per_type;
         self.max_reusable_untyped = untyped;
@@ -484,10 +490,14 @@ impl SubcomposeState {
         self.recycle_active_slot_internal(slot_id, false)
     }
 
+    /// Like `recycle_active_slot`, for a slot that was composed ahead of need. The slot can be
+    /// reactivated as it was when its id is asked for again, unless its effects were forgotten.
     pub fn recycle_prefetched_active_slot(&mut self, slot_id: SlotId) -> SubcomposeDisposal {
         self.recycle_active_slot_internal(slot_id, true)
     }
 
+    /// Recycles every active slot that `predicate` accepts and that the current pass has not used.
+    /// Returns the nodes and slot hosts that were disposed.
     pub fn recycle_active_slots_where(
         &mut self,
         mut predicate: impl FnMut(SlotId) -> bool,

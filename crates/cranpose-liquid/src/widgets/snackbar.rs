@@ -33,6 +33,7 @@ pub enum SnackbarDuration {
     Long,
     /// Until its action or dismiss action is used, or the app dismisses it.
     Indefinite,
+    /// The given time. It lasts at least ten seconds while a screen reader is on.
     Exactly(Duration),
 }
 
@@ -70,10 +71,13 @@ pub enum SnackbarResult {
 /// What a snackbar shows.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SnackbarVisuals {
+    /// The text of the snackbar.
     pub message: String,
+    /// The label of the action button, such as "Undo". `None` shows no action.
     pub action_label: Option<String>,
     /// The label of a dismiss button, in the app's language: "Dismiss".
     pub dismiss_label: Option<String>,
+    /// How long the snackbar stays before it dismisses itself.
     pub duration: SnackbarDuration,
 }
 
@@ -102,6 +106,7 @@ impl SnackbarVisuals {
         self
     }
 
+    /// Sets how long the snackbar stays.
     pub fn duration(mut self, duration: SnackbarDuration) -> Self {
         self.duration = duration;
         self

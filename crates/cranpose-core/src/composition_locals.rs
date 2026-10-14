@@ -9,6 +9,8 @@ fn provider_entry_source(key: &LocalKey, caller: crate::Key) -> crate::Key {
     (key.entry_source() ^ caller).wrapping_mul(0x0000_0100_0000_01b3)
 }
 
+/// A composition local paired with the value to provide, made by `provides` and passed to
+/// `CompositionLocalProvider`.
 pub struct ProvidedValue {
     key: LocalKey,
     #[expect(clippy::type_complexity)]
@@ -33,6 +35,8 @@ impl ProvidedValue {
     }
 }
 
+/// Makes `values` available to `content` and everything it composes. Where two values are for the
+/// same local, the last wins. Compose's `CompositionLocalProvider`.
 #[expect(non_snake_case)]
 #[track_caller]
 pub fn CompositionLocalProvider(
@@ -107,6 +111,9 @@ impl<T: Clone + 'static> StaticLocalEntry<T> {
     }
 }
 
+/// A value that composables read from their surroundings without passing it as a parameter, as
+/// Jetpack Compose's `compositionLocalOf`. A scope that reads `current` recomposes when the
+/// provided value changes.
 #[derive(Clone)]
 pub struct CompositionLocal<T: Clone + 'static> {
     pub(crate) key: LocalKey,
@@ -123,6 +130,8 @@ impl<T: Clone + 'static> PartialEq for CompositionLocal<T> {
 impl<T: Clone + 'static> Eq for CompositionLocal<T> {}
 
 impl<T: Clone + 'static> CompositionLocal<T> {
+    /// Pairs this local with `value` for use in `CompositionLocalProvider`. When a later
+    /// composition provides a different value, the scopes that read the local recompose.
     #[track_caller]
     pub fn provides(&self, value: T) -> ProvidedValue {
         let key = self.key.clone();
@@ -146,10 +155,14 @@ impl<T: Clone + 'static> CompositionLocal<T> {
         }
     }
 
+    /// Returns the value from the innermost enclosing provider, or the default value when none is
+    /// in scope. Must be called during composition. The reading scope recomposes when the provided
+    /// value changes.
     pub fn current(&self) -> T {
         composer_context::with_composer(|composer| composer.read_composition_local(self))
     }
 
+    /// Returns the value that `current` gives where no provider is in scope.
     pub fn default_value(&self) -> T {
         (self.default)()
     }
@@ -171,6 +184,8 @@ pub(crate) fn malformed_composition_local_for_test<T: Clone + 'static>(
     malformed_provided_value_for_test(local.key.clone(), entry)
 }
 
+/// Creates a [`CompositionLocal`] whose default is made by `default`. A provided value replaces the
+/// previous one when it differs by `==`. Compose's `compositionLocalOf`.
 #[expect(non_snake_case)]
 pub fn compositionLocalOf<T: Clone + PartialEq + 'static>(
     default: impl Fn() -> T + 'static,
@@ -178,6 +193,8 @@ pub fn compositionLocalOf<T: Clone + PartialEq + 'static>(
     compositionLocalOfWithPolicy(default, |current, next| current == next)
 }
 
+/// Creates a [`CompositionLocal`] whose default is made by `default`. A provided value replaces the
+/// previous one only when `equivalent` returns `false` for the two.
 #[expect(non_snake_case)]
 pub fn compositionLocalOfWithPolicy<T: Clone + 'static>(
     default: impl Fn() -> T + 'static,
@@ -212,6 +229,8 @@ impl<T: Clone + 'static> PartialEq for StaticCompositionLocal<T> {
 impl<T: Clone + 'static> Eq for StaticCompositionLocal<T> {}
 
 impl<T: Clone + 'static> StaticCompositionLocal<T> {
+    /// Pairs this local with `value` for use in `CompositionLocalProvider`. When a later
+    /// composition provides a different value, everything under the provider recomposes.
     #[track_caller]
     pub fn provides(&self, value: T) -> ProvidedValue {
         let key = self.key.clone();
@@ -229,10 +248,13 @@ impl<T: Clone + 'static> StaticCompositionLocal<T> {
         }
     }
 
+    /// Returns the value from the innermost enclosing provider, or the default value when none is
+    /// in scope. Must be called during composition. A read subscribes nothing.
     pub fn current(&self) -> T {
         composer_context::with_composer(|composer| composer.read_static_composition_local(self))
     }
 
+    /// Returns the value that `current` gives where no provider is in scope.
     pub fn default_value(&self) -> T {
         (self.default)()
     }

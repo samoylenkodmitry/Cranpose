@@ -11,10 +11,15 @@ use crate::{modifier::Size, text::AppContextTextMeasurer};
 /// being reallocated, moved, and dropped on every execution.
 pub type DrawCommandFn = Rc<dyn Fn(&mut DrawScopeDefault)>;
 
+/// A draw command and the phase of the node's drawing in which it runs.
 #[derive(Clone)]
 pub enum DrawCommand {
+    /// Records drawing that appears behind the node's content.
     Behind(DrawCommandFn),
+    /// Records drawing around the node's content. A `draw_content` call in it marks where
+    /// the content draws, as in Compose's `drawWithContent`.
     WithContent(DrawCommandFn),
+    /// Records drawing that appears in front of the node's content.
     Overlay(DrawCommandFn),
 }
 
@@ -31,6 +36,7 @@ pub fn command_draw_scope_reusing(size: Size, storage: CommandRecording) -> Draw
     DrawScopeDefault::with_text_measurer_reusing(size, AppContextTextMeasurer::shared(), storage)
 }
 
+/// Collects the draw commands that a `Modifier::draw_with_cache` block records.
 #[derive(Default, Clone)]
 pub struct DrawCacheBuilder {
     behind: Vec<DrawCommandFn>,
@@ -39,11 +45,13 @@ pub struct DrawCacheBuilder {
 }
 
 impl DrawCacheBuilder {
+    /// Records drawing that appears behind the node's content.
     pub fn on_draw_behind(&mut self, f: impl Fn(&mut dyn DrawScope) + 'static) {
         self.behind
             .push(Rc::new(move |scope: &mut DrawScopeDefault| f(scope)));
     }
 
+    /// Returns the recorded commands in the order behind, with-content, overlay.
     pub fn finish(self) -> Vec<DrawCommand> {
         let mut commands = Vec::new();
         commands.extend(self.behind.into_iter().map(DrawCommand::Behind));
@@ -53,6 +61,7 @@ impl DrawCacheBuilder {
     }
 }
 
+/// Runs every command at `size` and returns the primitives they record, in command order.
 pub fn execute_draw_commands(commands: &[DrawCommand], size: Size) -> Vec<DrawPrimitive> {
     let mut primitives = Vec::new();
     for command in commands {

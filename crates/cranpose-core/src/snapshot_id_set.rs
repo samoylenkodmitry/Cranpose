@@ -1,10 +1,13 @@
 use std::fmt;
 
+/// The identifier of a snapshot. Ids grow in the order that snapshots are created.
 pub type SnapshotId = usize;
 
 const BITS_PER_SET: usize = 64;
 const SNAPSHOT_ID_SIZE: usize = 64;
 
+/// A compact set of snapshot ids, as Jetpack Compose's `SnapshotIdSet`. Ids close to the set's
+/// lower bound take one bit each.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SnapshotIdSet {
     upper_set: u64,

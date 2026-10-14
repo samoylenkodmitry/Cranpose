@@ -38,6 +38,7 @@ pub struct SecureTextFieldOptions {
     /// The field's options. Their output transformation is replaced by the
     /// obfuscation.
     pub field: BasicTextFieldOptions,
+    /// How the field hides its text.
     pub obfuscation_mode: TextObfuscationMode,
     /// The character every hidden character shows as.
     pub obfuscation_character: char,

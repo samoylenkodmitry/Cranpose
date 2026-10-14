@@ -74,9 +74,12 @@ pub enum SwipeDismissSide {
 /// Directions accepted by a swipe-dismiss container.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SwipeDismissDirection {
+    /// The row can be swiped to either side.
     #[default]
     Both,
+    /// The row can be swiped only to the right, from the start edge toward the end edge.
     StartToEnd,
+    /// The row can be swiped only to the left, from the end edge toward the start edge.
     EndToStart,
 }
 
@@ -110,8 +113,12 @@ pub struct SwipeToDismissSpec {
     /// return a row to rest from elsewhere on the screen. Left unset, the row
     /// owns its own state.
     pub state: Option<SwipeDismissState>,
+    /// Directions in which the row can be swiped. Defaults to `Both`.
     pub direction: SwipeDismissDirection,
+    /// Width, in logical pixels, of the strip along the edges where a swipe may begin. `None` lets
+    /// a swipe begin anywhere in the row.
     pub edge_width: Option<f32>,
+    /// Whether the row's height collapses to zero after it is dismissed. Defaults to `true`.
     pub collapse_after_dismiss: bool,
     /// Whether the content returns to rest once `on_dismiss` has fired
     /// (default `false`).
@@ -127,10 +134,13 @@ pub struct SwipeToDismissSpec {
     /// blank, taps land on nothing, and further back gestures neither redraw
     /// nor leave.
     pub reset_after_dismiss: bool,
+    /// Whether the row responds to swipes. Defaults to `true`.
     pub enabled: bool,
 }
 
 impl SwipeToDismissSpec {
+    /// Creates a spec with a threshold of one half, swipes in both directions, collapse after
+    /// dismissal and no background.
     pub fn new() -> Self {
         Self {
             threshold_fraction: 0.5,
@@ -176,26 +186,32 @@ impl SwipeToDismissSpec {
         self
     }
 
+    /// Sets the directions in which the row can be swiped.
     pub fn with_direction(mut self, direction: SwipeDismissDirection) -> Self {
         self.direction = direction;
         self
     }
 
+    /// Limits the start of a swipe to the strip of `width` logical pixels along the row's edges.
+    /// Negative values count as zero.
     pub fn from_edge(mut self, width: f32) -> Self {
         self.edge_width = Some(width.max(0.0));
         self
     }
 
+    /// Sets whether the content returns to rest after `on_dismiss` has fired.
     pub fn with_reset_after_dismiss(mut self, reset: bool) -> Self {
         self.reset_after_dismiss = reset;
         self
     }
 
+    /// Sets whether the row's height collapses to zero after it is dismissed.
     pub fn with_collapse_after_dismiss(mut self, collapse: bool) -> Self {
         self.collapse_after_dismiss = collapse;
         self
     }
 
+    /// Sets whether the row responds to swipes.
     pub fn with_enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self

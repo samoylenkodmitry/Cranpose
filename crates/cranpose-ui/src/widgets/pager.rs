@@ -38,6 +38,7 @@ pub enum PageSize {
 /// page count.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PagerSpec {
+    /// How long each page is along the pager's axis.
     pub page_size: PageSize,
     /// Logical pixels between two pages.
     pub page_spacing: f32,

@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 #![no_std]
 
 /// Contiguous bytes from the pinned Noto Sans CJK SC variable font.

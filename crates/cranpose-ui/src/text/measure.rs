@@ -36,9 +36,12 @@ fn text_layout_telemetry_enabled() -> bool {
     cranpose_core::env_flag!(TEXT_LAYOUT_TELEMETRY_ENV)
 }
 
+/// Size of a laid-out text. Distances are in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextMetrics {
+    /// Width of the widest line.
     pub width: f32,
+    /// Height of all lines together.
     pub height: f32,
     /// Height of a single line of text
     pub line_height: f32,
@@ -46,6 +49,8 @@ pub struct TextMetrics {
     pub line_count: usize,
 }
 
+/// A text laid out for a width: the display text with its wrapping and overflow applied,
+/// and the size it measures.
 #[derive(Clone, Debug)]
 pub struct PreparedTextLayout {
     /// Shared display text after wrapping and overflow have been resolved.
@@ -53,9 +58,12 @@ pub struct PreparedTextLayout {
     /// The style the text draws in, shared with every render node drawn
     /// from this layout.
     pub visual_style: std::sync::Arc<TextStyle>,
+    /// Size and line count of `text`.
     pub metrics: TextMetrics,
     /// The first and last drawn baselines, excluding blank height added by `min_lines`.
     pub alignment_lines: cranpose_ui_layout::AlignmentLines,
+    /// True when the text did not fit: it had more lines than the line limit, or a line wider
+    /// than the width limit.
     pub did_overflow: bool,
     /// `text` as a renderer draws it, and its
     /// [`RenderString::render_hash`](crate::text::RenderString::render_hash),
@@ -162,6 +170,8 @@ impl PartialEq for PreparedTextLayout {
     }
 }
 
+/// The width of every prefix of one line of text. It answers how wide any range of
+/// characters is without measuring again.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextLinePrefixWidths {
     prefix_widths: Vec<f32>,
@@ -170,6 +180,12 @@ pub struct TextLinePrefixWidths {
 }
 
 impl TextLinePrefixWidths {
+    /// Builds the table. `prefix_widths` holds the width of the first 0, 1, 2 and so on
+    /// characters, so one more value than the line has characters. `separator_before` holds one
+    /// value for each character: the part of the width before it that is dropped when a range
+    /// starts at that character. A range of at least one character also gains
+    /// `non_empty_overhang`, and a negative overhang counts as 0.0. Returns `None` when the
+    /// lengths do not match or a value is not finite.
     pub fn from_parts(
         prefix_widths: Vec<f32>,
         separator_before: Vec<f32>,
@@ -196,6 +212,9 @@ impl TextLinePrefixWidths {
         })
     }
 
+    /// Builds a table for `char_count` characters of width `char_width` that each add
+    /// `letter_spacing`. Negative values count as 0.0. Returns `None` when a value is not
+    /// finite.
     pub fn monospaced(char_count: usize, char_width: f32, letter_spacing: f32) -> Option<Self> {
         if !char_width.is_finite() || !letter_spacing.is_finite() {
             return None;
@@ -214,10 +233,14 @@ impl TextLinePrefixWidths {
         Self::from_parts(prefix_widths, separator_before, 0.0)
     }
 
+    /// Number of characters the table covers.
     pub fn char_count(&self) -> usize {
         self.separator_before.len()
     }
 
+    /// Width of the characters from index `start` up to but not including `end`. Indices count
+    /// characters, not bytes. Returns `None` when the range is reversed or ends past the line.
+    /// An empty range has width 0.0.
     pub fn width_for_char_range(&self, start: usize, end: usize) -> Option<f32> {
         if start > end || end > self.char_count() {
             return None;
@@ -233,7 +256,14 @@ impl TextLinePrefixWidths {
     }
 }
 
+/// Measures and lays out text for the layout system. A renderer installs an implementation
+/// with [`set_text_measurer`]. Distances are in logical pixels.
+///
+/// `measure`, `get_offset_for_position`, `get_cursor_x_for_offset` and `layout` must be
+/// implemented. The other methods have defaults built on them, which an implementation
+/// overrides when it can answer faster or more exactly.
 pub trait TextMeasurer: 'static {
+    /// Measures `text` in `style` with line breaks only at `\n`.
     fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics;
 
     /// Called as each layout pass starts. A measurer that caches
@@ -241,6 +271,8 @@ pub trait TextMeasurer: 'static {
     /// did not use.
     fn begin_layout_pass(&self) {}
 
+    /// Like [`TextMeasurer::measure`] for the text of node `node_id`, so that an implementation
+    /// can keep a cache for each node. The default ignores the node.
     fn measure_for_node(
         &self,
         node_id: Option<NodeId>,
@@ -251,6 +283,7 @@ pub trait TextMeasurer: 'static {
         self.measure(text, style)
     }
 
+    /// Measures the bytes of `text` in `range`. The default measures a copy of that slice.
     fn measure_subsequence(
         &self,
         text: &crate::text::AnnotatedString,
@@ -260,6 +293,8 @@ pub trait TextMeasurer: 'static {
         self.measure(&text.subsequence(range), style)
     }
 
+    /// Like [`TextMeasurer::measure_subsequence`] for the text of node `node_id`. The default
+    /// ignores the node.
     fn measure_subsequence_for_node(
         &self,
         node_id: Option<NodeId>,
@@ -284,6 +319,8 @@ pub trait TextMeasurer: 'static {
         None
     }
 
+    /// Width of the bytes of `text` in `line_range` laid out as one line, or `None` when the
+    /// measurer cannot tell. The default returns `None`.
     fn measure_line_width(
         &self,
         text: &crate::text::AnnotatedString,
@@ -296,6 +333,7 @@ pub trait TextMeasurer: 'static {
         None
     }
 
+    /// Height of one line of `text` in `style`. The default reads it from `measure`.
     fn line_height(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> f32 {
         self.measure(text, style).line_height
     }
@@ -354,6 +392,8 @@ pub trait TextMeasurer: 'static {
         Some(())
     }
 
+    /// Like [`TextMeasurer::line_height`] for the text of node `node_id`. The default ignores
+    /// the node.
     fn line_height_for_node(
         &self,
         node_id: Option<NodeId>,
@@ -379,6 +419,8 @@ pub trait TextMeasurer: 'static {
         )
     }
 
+    /// Returns the byte offset of the character boundary nearest to the point (`x`, `y`) of
+    /// `text` drawn in `style`. Coordinates are in logical pixels from the top left of the text.
     fn get_offset_for_position(
         &self,
         text: &crate::text::AnnotatedString,
@@ -387,6 +429,8 @@ pub trait TextMeasurer: 'static {
         y: f32,
     ) -> usize;
 
+    /// Returns the x position, in logical pixels, of the cursor at byte `offset` of `text`
+    /// drawn in `style`.
     fn get_cursor_x_for_offset(
         &self,
         text: &crate::text::AnnotatedString,
@@ -394,6 +438,7 @@ pub trait TextMeasurer: 'static {
         offset: usize,
     ) -> f32;
 
+    /// Lays `text` out in `style` and returns the glyph and line positions.
     fn layout(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextLayoutResult;
 
     /// Returns an alternate break boundary for `Hyphens::Auto` when a greedy break
@@ -411,6 +456,8 @@ pub trait TextMeasurer: 'static {
         None
     }
 
+    /// Measures `text` wrapped to `max_width` under `options`. `None` means no width limit.
+    /// The default reads the metrics from `prepare_with_options`.
     fn measure_with_options(
         &self,
         text: &crate::text::AnnotatedString,
@@ -422,6 +469,7 @@ pub trait TextMeasurer: 'static {
             .metrics
     }
 
+    /// Like [`TextMeasurer::measure_with_options`] for the text of node `node_id`.
     fn measure_with_options_for_node(
         &self,
         node_id: Option<NodeId>,
@@ -434,6 +482,8 @@ pub trait TextMeasurer: 'static {
             .metrics
     }
 
+    /// Lays `text` out wrapped to `max_width` under `options` and returns the display text with
+    /// its metrics. `None` means no width limit.
     fn prepare_with_options(
         &self,
         text: &crate::text::AnnotatedString,
@@ -463,6 +513,9 @@ pub trait TextMeasurer: 'static {
         )
     }
 
+    /// The layout built from the measuring methods of this trait, which is also the default of
+    /// `prepare_with_options`. An implementation that overrides `prepare_with_options` can call
+    /// it for the cases it does not handle.
     fn prepare_with_options_fallback(
         &self,
         text: &crate::text::AnnotatedString,
@@ -844,10 +897,14 @@ fn text_options_cache_key(
     })
 }
 
+/// Installs `measurer` in the active app context. The measuring functions of this module use
+/// it. Panics when no app context is active.
 pub fn set_text_measurer<M: TextMeasurer>(measurer: M) {
     crate::render_state::set_current_text_measurer(Rc::new(measurer));
 }
 
+/// Measures `text` in `style` with line breaks only at `\n`. Uses the installed measurer
+/// and the system font scale.
 pub fn measure_text(text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
     with_system_font_scale(text, style, |text, style| {
         crate::render_state::with_text_service(|service| service.measure(None, text, style))
@@ -903,6 +960,8 @@ pub fn first_baseline(style: &TextStyle) -> Option<f32> {
     })
 }
 
+/// Like [`measure_text`] for the text of node `node_id`, so that the measurer can keep a
+/// cache for the node.
 pub fn measure_text_for_node(
     node_id: Option<NodeId>,
     text: &crate::text::AnnotatedString,
@@ -913,6 +972,8 @@ pub fn measure_text_for_node(
     })
 }
 
+/// Measures `text` wrapped to `max_width` under `options`. `None` and widths that are not
+/// positive and finite mean no width limit.
 pub fn measure_text_with_options(
     text: &crate::text::AnnotatedString,
     style: &TextStyle,
@@ -926,6 +987,8 @@ pub fn measure_text_with_options(
     })
 }
 
+/// Like [`measure_text_with_options`] for the text of node `node_id`, so that the measurer
+/// can keep a cache for the node.
 pub fn measure_text_with_options_for_node(
     node_id: Option<NodeId>,
     text: &crate::text::AnnotatedString,
@@ -940,6 +1003,8 @@ pub fn measure_text_with_options_for_node(
     })
 }
 
+/// Lays `text` out in `style` wrapped to `max_width` under `options`. Returns the display
+/// text, which has the wrapping and overflow applied, with its metrics.
 pub fn prepare_text_layout(
     text: &crate::text::AnnotatedString,
     style: &TextStyle,
@@ -1003,6 +1068,9 @@ fn with_font_scaled<R>(
     )
 }
 
+/// Returns the byte offset of the character boundary nearest to the point (`x`, `y`) of
+/// `text` drawn in `style`, in logical pixels from the top left of the text. Lines are
+/// the ones that `\n` makes; see [`offset_for_position_wrapped`] for wrapped text.
 pub fn get_offset_for_position(
     text: &crate::text::AnnotatedString,
     style: &TextStyle,
@@ -1062,6 +1130,8 @@ pub fn offset_for_position_wrapped(
     range.start + within.min(line.len())
 }
 
+/// Returns the x position, in logical pixels, of the cursor at byte `offset` of `text`
+/// drawn in `style`.
 pub fn get_cursor_x_for_offset(
     text: &crate::text::AnnotatedString,
     style: &TextStyle,
@@ -1072,6 +1142,7 @@ pub fn get_cursor_x_for_offset(
     })
 }
 
+/// Lays `text` out in `style` and returns the glyph and line positions.
 pub fn layout_text(text: &crate::text::AnnotatedString, style: &TextStyle) -> TextLayoutResult {
     with_system_font_scale(text, style, |text, style| {
         crate::render_state::with_text_service(|service| service.layout(text, style))
@@ -1152,6 +1223,8 @@ fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
     prepare_text_layout_with_measurer_for_node(measurer, None, text, style, options, max_width)
 }
 
+/// Like [`prepare_text_layout`] with an explicit `measurer` in place of the installed one.
+/// The system font scale is not applied.
 pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
     measurer: &M,
     node_id: Option<NodeId>,

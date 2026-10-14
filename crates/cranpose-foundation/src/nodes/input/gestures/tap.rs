@@ -5,14 +5,22 @@ use crate::{
     nodes::input::{PointerEvent, PointerEventKind, PointerId},
 };
 
+/// What a `TapGesture` reports for one pointer event.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TapGestureEvent {
+    /// The event does not change the tap.
     None,
+    /// The pointer went down at this position.
     Pressed(Point),
+    /// The pointer lifted without a drag and without another handler consuming the event, at this
+    /// position.
     Tapped(Point),
+    /// The tap will not happen: the pointer moved past the drag threshold, another handler consumed
+    /// the event, or the system canceled it.
     Canceled,
 }
 
+/// Recognizes a tap by one pointer. A press that moves further than `DRAG_THRESHOLD` is no tap.
 #[derive(Default, Debug, Clone, Copy, PartialEq)]
 pub struct TapGesture {
     pointer_id: Option<PointerId>,
@@ -21,10 +29,12 @@ pub struct TapGesture {
 }
 
 impl TapGesture {
+    /// Creates a gesture that tracks no pointer.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Feeds one pointer event and returns the tap step it causes.
     pub fn handle_event(&mut self, event: &PointerEvent) -> TapGestureEvent {
         match event.kind {
             PointerEventKind::Down if !event.is_consumed() => {
@@ -61,6 +71,7 @@ impl TapGesture {
         }
     }
 
+    /// Forgets the tracked pointer.
     pub fn reset(&mut self) {
         self.pointer_id = None;
         self.down_position = Point { x: 0.0, y: 0.0 };

@@ -2,49 +2,86 @@ use icu_properties::{CodePointMapData, props::BidiClass};
 
 use crate::text::unit::TextUnit;
 
+/// Horizontal alignment of the lines of a paragraph within its width.
+/// Compose's `TextAlign`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum TextAlign {
+    /// No alignment is set. The value comes from an enclosing style and acts like `Start`
+    /// when no style sets it.
     #[default]
     Unspecified,
+    /// Aligns lines to the left edge in both text directions.
     Left,
+    /// Aligns lines to the right edge in both text directions.
     Right,
+    /// Centers each line within the paragraph width.
     Center,
+    /// Justified alignment. Lines are not stretched yet; they align like `Start`.
     Justify,
+    /// Aligns lines to the start edge: left for left-to-right text, right otherwise.
     Start,
+    /// Aligns lines to the end edge: right for left-to-right text, left otherwise.
     End,
 }
 
+/// Base direction of a paragraph. Compose's `TextDirection`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum TextDirection {
+    /// No direction is set. The value comes from an enclosing style and acts like `Content`
+    /// when no style sets it.
     #[default]
     Unspecified,
+    /// Left-to-right.
     Ltr,
+    /// Right-to-left.
     Rtl,
+    /// Taken from the first strong directional character of the text, left-to-right if the
+    /// text has none.
     Content,
+    /// Like `Content`, with left-to-right as the fallback.
     ContentOrLtr,
+    /// Like `Content`, with right-to-left as the fallback.
     ContentOrRtl,
 }
 
+/// How a paragraph is broken into lines. Compose's `LineBreak`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum LineBreak {
+    /// No strategy is set. The value comes from an enclosing style and acts like `Simple`
+    /// when no style sets it.
     #[default]
     Unspecified,
+    /// Fills each line with as many words as fit. Fast, and the wrap changes little while
+    /// the user edits text.
     Simple,
+    /// Spreads the words over the lines to even out their lengths, leaving the last line
+    /// free to stay short. Costs more than `Simple`.
     Paragraph,
+    /// Spreads the words over all lines, the last one included, for short text such as
+    /// titles. Costs more than `Simple`.
     Heading,
 }
 
+/// Whether words may be split with a hyphen at the end of a line. Compose's `Hyphens`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum Hyphens {
+    /// No setting. The value comes from an enclosing style and acts like `None` when no
+    /// style sets it.
     #[default]
     Unspecified,
+    /// Words are never split with a hyphen.
     None,
+    /// Words are split at hyphenation points of the text's locale when it makes a line fit.
     Auto,
 }
 
+/// Indentation of the lines of a paragraph. Compose's `TextIndent`. Not yet applied by
+/// text layout.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextIndent {
+    /// Indent of the first line, as a `TextUnit`.
     pub first_line: TextUnit,
+    /// Indent of every line after the first, as a `TextUnit`.
     pub rest_line: TextUnit,
 }
 
@@ -57,10 +94,13 @@ impl Default for TextIndent {
     }
 }
 
+/// A text direction with the content-based choices resolved, as used for layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum ResolvedTextDirection {
+    /// Left-to-right.
     #[default]
     Ltr,
+    /// Right-to-left.
     Rtl,
 }
 
@@ -86,10 +126,12 @@ impl TextDirection {
 }
 
 impl LineBreak {
+    /// Returns true unless the value is `Unspecified`.
     pub fn is_specified(self) -> bool {
         !matches!(self, Self::Unspecified)
     }
 
+    /// Returns `self` when it is specified, otherwise the value returned by `fallback`.
     pub fn take_or_else(self, fallback: impl FnOnce() -> LineBreak) -> LineBreak {
         if self.is_specified() {
             self
@@ -100,10 +142,12 @@ impl LineBreak {
 }
 
 impl Hyphens {
+    /// Returns true unless the value is `Unspecified`.
     pub fn is_specified(self) -> bool {
         !matches!(self, Self::Unspecified)
     }
 
+    /// Returns `self` when it is specified, otherwise the value returned by `fallback`.
     pub fn take_or_else(self, fallback: impl FnOnce() -> Hyphens) -> Hyphens {
         if self.is_specified() {
             self

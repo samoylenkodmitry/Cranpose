@@ -156,13 +156,18 @@ fn finite_nonnegative(reach_dp: f32) -> f32 {
 /// shadow primitive.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlassShadow {
+    /// The color of the shadow. Its alpha sets the opacity.
     pub color: Color,
+    /// The blur radius of the shadow, in dp.
     pub radius: f32,
+    /// The vertical offset of the shadow, in dp. A positive value moves it down.
     pub offset_y: f32,
+    /// How far the shadow shape grows past the surface outline, in dp.
     pub spread: f32,
 }
 
 impl GlassShadow {
+    /// Creates a shadow. A negative `radius` becomes zero.
     pub fn new(color: Color, radius: f32, offset_y: f32, spread: f32) -> Self {
         Self {
             color,
@@ -342,6 +347,8 @@ pub struct GlassMorph {
     /// render scale (live window density, robot captures at 1.0, fractional
     /// desktop scales). The authoring widget always knows its node size.
     pub node_size: (f32, f32),
+    /// The primary glass shape as `(center_x, center_y, width, height, corner_radius)`, node-local,
+    /// in dp. A corner radius of `-1` means a capsule.
     pub primary: (f32, f32, f32, f32, f32),
     /// Nearby glass shapes participating in the field.
     pub shapes: Vec<(f32, f32, f32, f32, f32)>,
@@ -349,11 +356,14 @@ pub struct GlassMorph {
     pub glue: f32,
     /// Wobble amplitude (dp) and phase (radians).
     pub wobble_amplitude: f32,
+    /// The phase of the wobble, in radians.
     pub wobble_phase: f32,
     /// Viscous leading-edge bulge: while the shape travels or inflates, its
     /// side facing `bulge_direction` (radians, math convention) swells like a
     /// pulled droplet. Amplitude in dp, usually driven by morph velocity.
     pub bulge_amplitude: f32,
+    /// The direction of the bulge, in radians in the math convention. It points toward the swelling
+    /// side.
     pub bulge_direction: f32,
     /// Blends the primary rounded-rectangle field toward an ellipse. This is
     /// used by expanding droplets whose broad phase has continuous curvature
@@ -386,6 +396,9 @@ pub struct GlassDeformation {
 }
 
 impl GlassDeformation {
+    /// Creates a deformation that scales by `along` along `axis` and by the reciprocal of `along`
+    /// across it, so the area stays the same. `axis` is normalized, and a zero axis becomes the x
+    /// axis.
     pub fn incompressible(axis: (f32, f32), along: f32) -> Self {
         let length = (axis.0 * axis.0 + axis.1 * axis.1).sqrt();
         let axis = if length > f32::EPSILON {
@@ -399,14 +412,17 @@ impl GlassDeformation {
         }
     }
 
+    /// The unit direction of the stretch.
     pub fn axis(self) -> (f32, f32) {
         self.axis
     }
 
+    /// The scale along the axis.
     pub fn along(self) -> f32 {
         self.along
     }
 
+    /// The scale across the axis, the reciprocal of `along`.
     pub fn across(self) -> f32 {
         1.0 / self.along
     }
@@ -659,7 +675,9 @@ impl GlassFaceTone {
 pub struct Glass {
     /// Optional fixed face transfer, replacing adaptive tone, saturation, contrast and lift.
     pub face_tone: Option<GlassFaceTone>,
+    /// The material of the glass: frosted, clear or lens.
     pub variant: GlassVariant,
+    /// The outline of the glass, also used for its clip and its shadow.
     pub shape: LiquidShape,
     /// Tint over the refracted backdrop; defaults to the theme's glass tint.
     pub tint: Option<Color>,
@@ -798,6 +816,8 @@ impl Glass {
         }
     }
 
+    /// A transparent surface with minimal blur, for media-rich backdrops. See
+    /// `GlassVariant::Clear`.
     pub fn clear() -> Self {
         Self {
             variant: GlassVariant::Clear,
@@ -855,11 +875,13 @@ impl Glass {
         self
     }
 
+    /// Sets the outline of the glass.
     pub fn shape(mut self, shape: LiquidShape) -> Self {
         self.shape = shape;
         self
     }
 
+    /// Sets the tint over the refracted backdrop, replacing the glass tint of the theme.
     pub fn tint(mut self, tint: Color) -> Self {
         self.tint = Some(tint);
         self
@@ -874,16 +896,20 @@ impl Glass {
         self
     }
 
+    /// Sets the backdrop blur radius, in dp, replacing the default of the variant.
     pub fn blur_radius(mut self, radius_dp: f32) -> Self {
         self.blur_radius = Some(radius_dp);
         self
     }
 
+    /// Sets the saturation boost, replacing the default of the variant.
     pub fn saturation(mut self, saturation: f32) -> Self {
         self.saturation = Some(saturation);
         self
     }
 
+    /// Sets the refraction depth as a fraction of the shape inradius, between 0 and 2. This clears
+    /// a depth set by `refraction_depth_dp`.
     pub fn refraction_depth(mut self, fraction: f32) -> Self {
         self.refraction_depth = fraction.clamp(0.0, 2.0);
         self.refraction_depth_dp = None;
@@ -925,21 +951,26 @@ impl Glass {
         self
     }
 
+    /// Sets the ray-return exponent of the refraction, between 0.05 and 1.
     pub fn refraction_curve(mut self, curve: f32) -> Self {
         self.refraction_curve = curve.clamp(0.05, 1.0);
         self
     }
 
+    /// Sets the strength of the spectral ray separation, between 0 and 1.
     pub fn dispersion(mut self, strength: f32) -> Self {
         self.dispersion = strength.clamp(0.0, 1.0);
         self
     }
 
+    /// Sets the fraction of the refraction displacement that moves the transmitted backdrop,
+    /// between 0 and 1.
     pub fn transmission_refraction(mut self, strength: f32) -> Self {
         self.transmission_refraction = strength.clamp(0.0, 1.0);
         self
     }
 
+    /// Sets the energy that the meniscus removes from the transmitted ray, between 0 and 1.
     pub fn meniscus_absorption(mut self, strength: f32) -> Self {
         self.meniscus_absorption = strength.clamp(0.0, 1.0);
         self
@@ -970,6 +1001,7 @@ impl Glass {
         self
     }
 
+    /// Sets the intensity of the specular rim.
     pub fn highlight(mut self, highlight: f32) -> Self {
         self.highlight = highlight;
         self
@@ -989,6 +1021,8 @@ impl Glass {
         self
     }
 
+    /// Sets the foreground color whose contrast the frost protects and how strongly the frost
+    /// adapts to it, between 0 and 1.
     pub fn adaptive_frost(mut self, foreground: Color, strength: f32) -> Self {
         self.foreground = Some(foreground);
         self.adaptive_frost = strength.clamp(0.0, 1.0);
@@ -1017,11 +1051,13 @@ impl Glass {
         self
     }
 
+    /// Turns the drop shadow below the glass on or off.
     pub fn shadow(mut self, shadow: bool) -> Self {
         self.shadow = shadow;
         self
     }
 
+    /// Sets the style of the shadow, replacing the default drop shadow.
     pub fn shadow_style(mut self, shadow: GlassShadow) -> Self {
         self.shadow_style = Some(shadow);
         self

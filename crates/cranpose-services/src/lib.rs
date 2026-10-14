@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
 #[cfg(test)]
@@ -27,6 +28,7 @@ mod helper_process;
 pub mod host;
 pub mod host_messages;
 pub mod host_surface;
+/// HTTP requests, downloads and the client that sends them.
 pub mod http;
 #[cfg(feature = "image-loading")]
 pub mod image_loading;
@@ -49,8 +51,10 @@ pub mod purchases;
 mod registry;
 pub mod share_sheet;
 pub mod storage;
+/// The light or dark appearance of the operating system.
 pub mod theme;
 mod thread_state;
+/// Opening a URI, such as a web link, in the application the platform picks for it.
 pub mod uri_handler;
 pub mod wearable;
 pub mod wearable_framed;

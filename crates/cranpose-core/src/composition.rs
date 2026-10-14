@@ -11,6 +11,8 @@ use crate::{
     scheduler_ref,
 };
 
+/// A running composition that turns root content into nodes. `A` is the applier type that creates
+/// and edits those nodes.
 pub struct Composition<A: Applier + 'static> {
     pub(crate) composer_state: Rc<crate::composer::ComposerRuntimeState>,
     pub(crate) slots: Rc<SlotsHost>,
@@ -41,10 +43,14 @@ pub struct Composition<A: Applier + 'static> {
 pub const ROOT_RENDER_REPLAY_LIMIT: usize = 100;
 
 impl<A: Applier + 'static> Composition<A> {
+    /// Creates a composition that builds its nodes through `applier` and uses a new runtime with
+    /// the default scheduler.
     pub fn new(applier: A) -> Self {
         Self::with_runtime(applier, Runtime::new(scheduler_ref(DefaultScheduler)))
     }
 
+    /// Creates a composition that builds its nodes through `applier` and uses `runtime` for state
+    /// invalidation and scheduling.
     pub fn with_runtime(applier: A, runtime: Runtime) -> Self {
         let composer_state = Rc::new(crate::composer::ComposerRuntimeState::default());
         let slots = Rc::new(SlotsHost::new(SlotTable::new()));
@@ -68,6 +74,8 @@ impl<A: Applier + 'static> Composition<A> {
         self.root_key
     }
 
+    /// Sets the budget and the eviction order for groups retained when they leave the composition.
+    /// See `RetentionMode`.
     pub fn set_retention_policy(&self, policy: RetentionPolicy) {
         self.composer_state.set_retention_policy(policy);
     }
@@ -94,10 +102,12 @@ impl<A: Applier + 'static> Composition<A> {
         );
     }
 
+    /// Returns whether a root render was requested and clears the request.
     pub fn take_root_render_request(&mut self) -> bool {
         std::mem::take(&mut self.root_render_requested)
     }
 
+    /// Requests another render of the root content and schedules a frame for it.
     pub fn request_root_render(&mut self) {
         self.root_render_requested = true;
         self.runtime.handle().schedule();
@@ -269,6 +279,8 @@ impl<A: Applier + 'static> Composition<A> {
         }
     }
 
+    /// Composes `content` as the root group identified by `key`, then recomposes the scopes that
+    /// became invalid during the pass.
     pub fn render(&mut self, key: Key, mut content: impl FnMut()) -> Result<(), NodeError> {
         self.reset_last_pass_stats();
         self.render_root_pass(key, &mut content)?;
@@ -322,38 +334,48 @@ impl<A: Applier + 'static> Composition<A> {
         self.root_render_requested || self.runtime.has_updates()
     }
 
+    /// Returns a handle to the runtime this composition uses.
     pub fn runtime_handle(&self) -> RuntimeHandle {
         self.runtime.handle()
     }
 
+    /// Borrows the applier mutably. Panics if it is already borrowed.
     pub fn applier_mut(&mut self) -> ApplierGuard<'_, A> {
         self.applier.borrow_typed()
     }
 
+    /// Returns the root node a pass produced, or `None` if none has yet.
     pub fn root(&self) -> Option<NodeId> {
         self.root
     }
 
+    /// Returns one `(group index, call site key, scope id, subtree length)` tuple per group in the
+    /// slot table, for debugging.
     pub fn debug_dump_slot_table_groups(&self) -> Vec<(usize, Key, Option<ScopeId>, usize)> {
         self.slots.borrow().debug_dump_groups()
     }
 
+    /// Returns the entries of the slot table, for debugging.
     pub fn debug_dump_slot_entries(&self) -> Vec<crate::SlotDebugEntry> {
         self.slots.borrow().debug_dump_slot_entries()
     }
 
+    /// Returns the heap memory in bytes that the slot table holds.
     pub fn slot_table_heap_bytes(&self) -> usize {
         self.slots.borrow().heap_bytes()
     }
 
+    /// Returns size counters of the slot table, for debugging.
     pub fn debug_slot_table_stats(&self) -> SlotTableDebugStats {
         self.slots.debug_stats()
     }
 
+    /// Returns a copy of the slot table's structure, for debugging.
     pub fn debug_slot_snapshot(&self) -> SlotDebugSnapshot {
         self.slots.debug_snapshot()
     }
 
+    /// Returns the buffer sizes of the last composition pass, for debugging.
     pub fn debug_last_pass_stats(&self) -> CompositionPassDebugStats {
         self.last_pass_stats
     }
@@ -548,6 +570,8 @@ impl<A: Applier + 'static> Composition<A> {
         Ok(did_recompose)
     }
 
+    /// Recomposes the scopes that state changes invalidated, until none remain or a root render is
+    /// requested. Returns `true` if a pass recomposed content.
     pub fn process_invalid_scopes(&mut self) -> Result<bool, NodeError> {
         self.process_invalid_scopes_until_root_request()
     }
@@ -583,6 +607,7 @@ fn recomposes_content(scopes: &[RecomposeScope]) -> bool {
 }
 
 impl<A: Applier + 'static> Composition<A> {
+    /// Applies the node updates that the runtime has queued to the applier, without recomposing.
     pub fn flush_pending_node_updates(&mut self) -> Result<(), NodeError> {
         let updates = self.runtime_handle().take_updates();
         let mut applier = self.applier.borrow_dyn();

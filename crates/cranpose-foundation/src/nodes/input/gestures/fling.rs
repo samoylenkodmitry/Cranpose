@@ -6,13 +6,19 @@ use crate::{
     nodes::input::{PointerEvent, PointerEventKind, PointerId},
 };
 
+/// What a `FlingGesture` reports for one pointer event.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FlingGestureEvent {
+    /// The event ends no fling.
     None,
+    /// The pointer lifted while moving. The value is the velocity on each axis, in logical pixels
+    /// per second.
     Fling(Point),
+    /// The system canceled the gesture.
     Canceled,
 }
 
+/// Tracks the velocity of one pointer and reports a fling when the pointer lifts while moving.
 #[derive(Clone)]
 pub struct FlingGesture {
     pointer_id: Option<PointerId>,
@@ -35,6 +41,7 @@ impl std::fmt::Debug for FlingGesture {
 }
 
 impl FlingGesture {
+    /// Creates a gesture that tracks no pointer.
     pub fn new() -> Self {
         Self {
             pointer_id: None,
@@ -43,6 +50,8 @@ impl FlingGesture {
         }
     }
 
+    /// Feeds one pointer event with its timestamp `time_ms`, in milliseconds, and returns a fling
+    /// when the tracked pointer lifts while moving.
     pub fn handle_event(&mut self, event: &PointerEvent, time_ms: i64) -> FlingGestureEvent {
         match event.kind {
             PointerEventKind::Down if !event.is_consumed() => {
@@ -74,6 +83,8 @@ impl FlingGesture {
         }
     }
 
+    /// The velocity of the tracked pointer on each axis, in logical pixels per second, capped at
+    /// `MAX_FLING_VELOCITY`.
     pub fn velocity(&self) -> Point {
         Point {
             x: self
@@ -85,6 +96,7 @@ impl FlingGesture {
         }
     }
 
+    /// Forgets the tracked pointer and its recorded movement.
     pub fn reset(&mut self) {
         self.pointer_id = None;
         self.x_tracker.reset();

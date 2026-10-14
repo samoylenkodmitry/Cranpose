@@ -20,6 +20,7 @@ use crate::{
     modifier::{Modifier, Point, PointerEvent, PointerEventKind, inspector_metadata},
 };
 
+/// Records the press and hover interactions of the nodes bound to it, and exposes them as state.
 #[derive(Clone, Copy)]
 pub struct MutableInteractionSource {
     inner: MutableState<Rc<MutableInteractionSourceInner>>,
@@ -34,16 +35,21 @@ struct MutableInteractionSourceInner {
     last_interaction: OwnedMutableState<Option<Interaction>>,
 }
 
+/// One event an interaction source received.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Interaction {
+    /// A press, release or cancel of a press.
     Press(PressInteraction),
+    /// A hover enter or exit.
     Hover(HoverInteraction),
 }
 
 /// The pointer resting over a node: Compose's `HoverInteraction`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum HoverInteraction {
+    /// A pointer came to rest over a node.
     Enter(HoverInteractionEnter),
+    /// A pointer left a node it was resting over.
     Exit(HoverInteractionExit),
 }
 
@@ -56,38 +62,51 @@ pub struct HoverInteractionEnter {
 /// The pointer that [`Self::enter`] reported left.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HoverInteractionExit {
+    /// The enter that this exit ends.
     pub enter: HoverInteractionEnter,
 }
 
+/// The events of one press on a node.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PressInteraction {
+    /// The pointer went down on the node.
     Press(PressInteractionPress),
+    /// The pointer went up after a press.
     Release(PressInteractionRelease),
+    /// The press ended without a release, for example because a parent consumed the gesture.
     Cancel(PressInteractionCancel),
 }
 
+/// A pointer went down on a node.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PressInteractionPress {
     id: u64,
+    /// Where the pointer went down, in the node's local coordinates in logical pixels.
     pub press_position: Point,
 }
 
+/// A press that ended with the pointer going up.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PressInteractionRelease {
+    /// The press that ended.
     pub press: PressInteractionPress,
 }
 
+/// A press that ended without the pointer going up.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PressInteractionCancel {
+    /// The press that ended.
     pub press: PressInteractionPress,
 }
 
 impl MutableInteractionSource {
+    /// Creates a source bound to the runtime of the composition that is active now.
     pub fn new() -> Self {
         let runtime = with_current_composer(cranpose_core::Composer::runtime_handle);
         Self::with_runtime(runtime)
     }
 
+    /// Creates a source bound to `runtime`, for use outside composition.
     pub fn with_runtime(runtime: RuntimeHandle) -> Self {
         Self {
             inner: MutableState::with_runtime(
@@ -108,6 +127,7 @@ impl MutableInteractionSource {
         self.inner.get_non_reactive()
     }
 
+    /// Returns an id that is stable for this source and differs from the ids of other sources.
     pub fn id(&self) -> u64 {
         let mut hasher = cranpose_core::hash::default::new();
         self.inner.runtime_state_id().hash(&mut hasher);
@@ -123,6 +143,8 @@ impl MutableInteractionSource {
         id
     }
 
+    /// Reports a press at `press_position` in the node's local coordinates, in logical pixels, and
+    /// returns the press to end with [`Self::release`] or [`Self::cancel`].
     pub fn press(&self, press_position: Point) -> PressInteractionPress {
         let press = PressInteractionPress {
             id: self.next_id(),
@@ -132,12 +154,14 @@ impl MutableInteractionSource {
         press
     }
 
+    /// Reports that `press` ended with the pointer going up.
     pub fn release(&self, press: PressInteractionPress) {
         self.emit(Interaction::Press(PressInteraction::Release(
             PressInteractionRelease { press },
         )));
     }
 
+    /// Reports that `press` ended without the pointer going up.
     pub fn cancel(&self, press: PressInteractionPress) {
         self.emit(Interaction::Press(PressInteraction::Cancel(
             PressInteractionCancel { press },
@@ -160,6 +184,7 @@ impl MutableInteractionSource {
         )));
     }
 
+    /// Records `interaction` and updates the pressed and hovered state to match.
     pub fn emit(&self, interaction: Interaction) {
         let inner = self.inner();
         inner.last_interaction.set(Some(interaction));
@@ -217,18 +242,24 @@ impl MutableInteractionSource {
         self.inner().hovered.as_state()
     }
 
+    /// Returns the interaction that happened last, or `None` before the first one, as a reactive
+    /// [`State`].
     pub fn collectLastInteractionAsState(&self) -> State<Option<Interaction>> {
         self.inner().last_interaction.as_state()
     }
 }
 
 impl PressInteractionPress {
+    /// Returns the id of this press, which differs from the id of every other interaction of the
+    /// source.
     pub fn id(&self) -> u64 {
         self.id
     }
 }
 
 impl HoverInteractionEnter {
+    /// Returns the id of this enter, which differs from the id of every other interaction of the
+    /// source.
     pub fn id(&self) -> u64 {
         self.id
     }
@@ -256,6 +287,7 @@ impl Default for MutableInteractionSource {
     }
 }
 
+/// Returns an interaction source that stays the same across recompositions.
 #[composable]
 pub fn rememberMutableInteractionSource() -> MutableInteractionSource {
     let runtime = with_current_composer(|composer| composer.runtime_handle());
@@ -283,6 +315,9 @@ pub fn collect_is_hovered_as_state(interaction_source: &MutableInteractionSource
 }
 
 impl Modifier {
+    /// Reports presses on this node to `interaction_source`: a press when the primary pointer
+    /// goes down, a release when it goes up, and a cancel when another handler consumes the
+    /// event or the gesture is cancelled.
     pub fn press_interaction_source(self, interaction_source: MutableInteractionSource) -> Self {
         self.interaction_node("pressInteractionSource", interaction_source, PressTracker)
     }

@@ -11,6 +11,7 @@ impl Modifier {
         )
     }
 
+    /// Aligns this child inside a `Box` by `alignment`. Compose's `BoxScope.align`.
     pub fn align(self, alignment: Alignment) -> Self {
         self.then(
             Self::with_element(AlignmentElement::box_alignment(alignment)).with_inspector_metadata(
@@ -21,11 +22,13 @@ impl Modifier {
         )
     }
 
+    /// Aligns this child inside a `Box`. Same as [`Self::align`].
     #[expect(non_snake_case)]
     pub fn alignInBox(self, alignment: Alignment) -> Self {
         self.align(alignment)
     }
 
+    /// Aligns this child horizontally inside a `Column`. Compose's `ColumnScope.align`.
     #[expect(non_snake_case)]
     pub fn alignInColumn(self, alignment: HorizontalAlignment) -> Self {
         let modifier = Self::with_element(AlignmentElement::column_alignment(alignment))
@@ -35,6 +38,7 @@ impl Modifier {
         self.then(modifier)
     }
 
+    /// Aligns this child vertically inside a `Row`. Compose's `RowScope.align`.
     #[expect(non_snake_case)]
     pub fn alignInRow(self, alignment: VerticalAlignment) -> Self {
         let modifier = Self::with_element(AlignmentElement::row_alignment(alignment))

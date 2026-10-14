@@ -121,11 +121,14 @@ fn menu_text_style(on_light: bool) -> TextStyle {
 /// One tappable action.
 #[derive(Clone)]
 pub struct TextMenuItem {
+    /// Text shown on the item.
     pub label: String,
+    /// Runs when the user taps the item.
     pub action: Rc<dyn Fn()>,
 }
 
 impl TextMenuItem {
+    /// Creates an item that shows `label` and runs `action` when tapped.
     pub fn new(label: impl Into<String>, action: impl Fn() + 'static) -> Self {
         Self {
             label: label.into(),

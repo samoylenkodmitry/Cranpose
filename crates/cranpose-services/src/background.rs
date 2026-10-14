@@ -35,6 +35,7 @@ pub trait BackgroundActivity: Send + Sync {
     fn show(&self, work: Option<&BackgroundWork>);
 }
 
+/// Shared handle to a [`BackgroundActivity`].
 pub type BackgroundActivityRef = Arc<dyn BackgroundActivity>;
 
 fn slot() -> &'static Mutex<Option<BackgroundActivityRef>> {

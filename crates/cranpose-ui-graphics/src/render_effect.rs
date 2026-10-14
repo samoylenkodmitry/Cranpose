@@ -49,14 +49,17 @@ impl BlurredEdgeTreatment {
         Self { shape: Some(shape) }
     }
 
+    /// The shape the blurred output is clipped to, or `None` for the unbounded treatment.
     pub fn shape(self) -> Option<LayerShape> {
         self.shape
     }
 
+    /// Whether the blurred output is clipped, which is the case when a clip shape is set.
     pub fn clip(self) -> bool {
         self.shape.is_some()
     }
 
+    /// The tile mode blur uses at the edge: `Clamp` when bounded and `Decal` when unbounded.
     pub fn tile_mode(self) -> TileMode {
         if self.clip() {
             TileMode::Clamp
@@ -322,10 +325,16 @@ pub enum SubstrateSpec {
     Mean,
     /// The source averaged in blocks of `block` x `block` texels, one
     /// substrate texel per block.
-    Average { block: u32 },
+    Average {
+        /// Side length of a block, in texels.
+        block: u32,
+    },
     /// The source blurred by a Gaussian of `radius_px` device pixels, kept
     /// at the blur's scratch resolution.
-    Blur { radius_px: f32 },
+    Blur {
+        /// Blur radius of the Gaussian, in device pixels.
+        radius_px: f32,
+    },
 }
 
 impl SubstrateSpec {
@@ -420,14 +429,20 @@ impl RuntimeShaderUniforms {
 /// Error returned when a shader uniform write targets renderer-owned storage.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum RuntimeShaderUniformError {
+    /// A write reaches past the user range into the slots the renderer reserves.
     #[error(
         "uniform range starting at {index} with width {width} exceeds user uniform range 0..{max_user_uniforms}; slots {reserved_start}..{max_uniforms} are reserved for renderer data"
     )]
     OutOfUserRange {
+        /// First slot of the rejected write.
         index: usize,
+        /// Number of floats the write covers.
         width: usize,
+        /// Number of slots a shader may write, counted from slot 0.
         max_user_uniforms: usize,
+        /// First slot the renderer reserves for its own data.
         reserved_start: usize,
+        /// Total number of uniform slots.
         max_uniforms: usize,
     },
 }
@@ -1084,7 +1099,9 @@ fn cached_shader_source(
 /// apply, such as a `DstOut` mask).
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ShaderTarget {
+    /// The shader composites over what lies beneath.
     Page,
+    /// The shader renders into the layer's own texture and replaces its content.
     Layer,
 }
 
@@ -1093,7 +1110,9 @@ pub enum ShaderTarget {
 /// start instead of inside the frame that first needs it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShaderWarmUp {
+    /// The shader to compile.
     pub shader: RuntimeShader,
+    /// The target the shader will draw to.
     pub target: ShaderTarget,
 }
 
@@ -1105,12 +1124,20 @@ pub struct ShaderWarmUp {
 pub enum RenderEffect {
     /// Gaussian blur applied to the layer's rendered content.
     Blur {
+        /// Blur radius along the x axis, in pixels.
         radius_x: f32,
+        /// Blur radius along the y axis, in pixels.
         radius_y: f32,
+        /// How pixels beyond the layer's edge are treated while blurring.
         edge_treatment: TileMode,
     },
     /// Offset the rendered content by a fixed amount.
-    Offset { offset_x: f32, offset_y: f32 },
+    Offset {
+        /// Horizontal shift, in pixels. Positive values move the content to the right.
+        offset_x: f32,
+        /// Vertical shift, in pixels. Positive values move the content down.
+        offset_y: f32,
+    },
     /// Apply a custom WGSL shader effect.
     Shader {
         /// Shared shader configuration; use [`Arc::make_mut`] to edit a cloned effect independently.
@@ -1120,7 +1147,9 @@ pub enum RenderEffect {
     ///
     /// Child effects are shared; use [`Arc::make_mut`] to edit a cloned chain independently.
     Chain {
+        /// The effect applied first, to the layer's rendered content.
         first: Arc<RenderEffect>,
+        /// The effect applied to the result of `first`.
         second: Arc<RenderEffect>,
     },
 }

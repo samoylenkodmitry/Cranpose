@@ -212,8 +212,10 @@ pub trait Purchases: Send + Sync {
     /// Take the next pending one-shot event, if any.
     fn take_event(&self) -> Option<PurchaseEvent>;
 
+    /// Whether the backend has a working connection to the store.
     fn is_connected(&self) -> bool;
 
+    /// Reopens the connection to the store after it was lost.
     fn reconnect(&self);
 }
 
@@ -371,6 +373,7 @@ pub fn note_store_news() {
     }
 }
 
+/// Installs a purchase backend, replacing any previous one.
 pub fn set_platform_purchases(purchases: PurchasesRef) {
     PLATFORM_PURCHASES.set(purchases);
     PURCHASE_RECOVERY.succeeded();

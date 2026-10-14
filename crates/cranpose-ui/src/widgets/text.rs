@@ -17,10 +17,13 @@ use crate::{
     widgets::layout::compose_empty_layout,
 };
 
+/// Text produced by a callback that runs each time the text composes, so state read in the callback
+/// recomposes the text.
 #[derive(Clone)]
 pub struct DynamicTextSource(Rc<dyn Fn() -> Rc<crate::text::AnnotatedString>>);
 
 impl DynamicTextSource {
+    /// Creates a source whose text `resolver` returns.
     pub fn new<F>(resolver: F) -> Self
     where
         F: Fn() -> Rc<crate::text::AnnotatedString> + 'static,
@@ -39,9 +42,12 @@ impl PartialEq for DynamicTextSource {
     }
 }
 
+/// Where a text widget gets its text.
 #[derive(Clone, PartialEq)]
 pub enum TextSource {
+    /// A fixed text.
     Static(Rc<crate::text::AnnotatedString>),
+    /// A text produced by a callback each time the widget composes.
     Dynamic(DynamicTextSource),
 }
 
@@ -190,6 +196,7 @@ mod shared_style {
     }
 }
 
+/// Displays `text` in `style` with the given layout `options`. Compose's `BasicText`.
 #[track_caller]
 #[expect(non_snake_case)]
 pub fn BasicTextWithOptions<S>(
@@ -204,6 +211,8 @@ where
     shared_style::Text(text, modifier, shared_text_style(style), options)
 }
 
+/// Displays `text` in `style` with the given overflow, wrapping and line limits. Compose's
+/// `BasicText`.
 #[track_caller]
 #[expect(non_snake_case)]
 pub fn BasicText<S>(
@@ -231,6 +240,7 @@ where
     )
 }
 
+/// Displays `value` in `style` with the given text `options`. Compose's `Text`.
 #[track_caller]
 #[expect(non_snake_case)]
 pub fn TextWithOptions<S>(

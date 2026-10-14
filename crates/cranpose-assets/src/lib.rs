@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
 use std::{
@@ -13,19 +14,34 @@ pub enum AssetError {
     /// The requested asset path is empty.
     EmptyPath,
     /// Asset paths must be relative to a registered root.
-    AbsolutePath { path: PathBuf },
+    AbsolutePath {
+        /// The path as requested.
+        path: PathBuf,
+    },
     /// Asset paths cannot contain parent-directory components.
-    EscapesRoot { path: PathBuf },
+    EscapesRoot {
+        /// The path as requested.
+        path: PathBuf,
+    },
     /// No registered root contained the requested asset.
-    NotFound { path: PathBuf, roots: Vec<PathBuf> },
+    NotFound {
+        /// The requested path with `.` components removed.
+        path: PathBuf,
+        /// The registered roots that were searched, in search order.
+        roots: Vec<PathBuf>,
+    },
     /// The asset file could not be read.
     Io {
+        /// The full path of the file that failed to read.
         path: PathBuf,
+        /// The error reported by the file system.
         source: std::io::Error,
     },
     /// The asset bytes are not valid UTF-8.
     Utf8 {
+        /// The requested path with `.` components removed.
         path: PathBuf,
+        /// The decoding error, which gives the offset of the first invalid byte.
         source: std::str::Utf8Error,
     },
 }

@@ -18,6 +18,8 @@ pub struct OutputTransformation(Rc<Transform>);
 type Transform = dyn Fn(&str, &mut OutputChanges);
 
 impl OutputTransformation {
+    /// Creates a transformation from `transform`, which receives the text and names its changes in
+    /// an [`OutputChanges`].
     pub fn new(transform: impl Fn(&str, &mut OutputChanges) + 'static) -> Self {
         Self(Rc::new(transform))
     }
@@ -132,7 +134,9 @@ fn push_segment(
 /// A text as a field shows it, with how its offsets line up with the text's.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShownText {
+    /// The text as the field shows it.
     pub text: String,
+    /// How offsets in the text line up with offsets in `text`.
     pub mapping: OffsetMapping,
 }
 

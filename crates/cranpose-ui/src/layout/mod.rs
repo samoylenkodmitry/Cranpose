@@ -1,4 +1,6 @@
+/// Re-exports of the alignment, arrangement and measurable types that layout policies use.
 pub mod core;
+/// Measure policies behind the built-in layout widgets such as `Box`, `Row` and `Column`.
 pub mod policies;
 mod reveal;
 mod semantics_details;
@@ -342,10 +344,12 @@ pub struct SemanticsCallback {
 }
 
 impl SemanticsCallback {
+    /// Creates a callback that targets the node with `node_id`.
     pub fn new(node_id: NodeId) -> Self {
         Self { node_id }
     }
 
+    /// Returns the id of the node whose action this callback triggers.
     pub fn node_id(&self) -> NodeId {
         self.node_id
     }
@@ -354,7 +358,11 @@ impl SemanticsCallback {
 /// Semantics action exposed to the input system.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SemanticsAction {
-    Click { handler: SemanticsCallback },
+    /// Activates the node, as a tap or a keyboard or assistive technology click does.
+    Click {
+        /// Callback that identifies the node to activate.
+        handler: SemanticsCallback,
+    },
 }
 
 /// A text node's text in the semantics tree, shared with the node's modifier
@@ -392,7 +400,10 @@ pub enum SemanticsRole {
     /// Subcomposition boundary
     Subcompose,
     /// Text content derived from the text node semantics payload.
-    Text { value: SemanticsText },
+    Text {
+        /// The text the node shows.
+        value: SemanticsText,
+    },
     /// Spacer (non-interactive)
     Spacer,
     /// Button (derived from the semantics `role`)
@@ -409,6 +420,7 @@ pub enum SemanticsRole {
 /// (`AccessibilityRect`, `AccessibilityElement`) for the same reason.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticsNode {
+    /// Id of the runtime node this semantics node describes.
     pub node_id: NodeId,
     /// Where the node lies in the root's coordinates: its layout rect,
     /// before graphics-layer transforms, as [`LayoutBox::rect`] holds it.
@@ -424,13 +436,19 @@ pub struct SemanticsNode {
     /// Compose's `Role`. Separate from [`SemanticsNode::role`] because a
     /// clickable `Row` is structurally a layout node and semantically a button.
     pub widget_role: Option<SemanticsWidgetRole>,
+    /// Actions that the input system and assistive technology can invoke on this node.
     pub actions: Vec<SemanticsAction>,
+    /// Child semantics nodes, in layout order.
     pub children: Vec<SemanticsNode>,
+    /// Content description that a screen reader announces for the node, if one was set.
     pub description: Option<String>,
     /// Direct activation callback for keyboard and assistive technology.
     pub on_click: Option<SemanticsCustomAction>,
+    /// Selection state, or `None` if the node is not selectable.
     pub selected: Option<bool>,
+    /// Checked state, or `None` if the node is not a toggleable control.
     pub toggled: Option<cranpose_foundation::ToggleableState>,
+    /// Whether the node accepts user interaction. `true` unless the node was disabled.
     pub enabled: bool,
     /// Whether a screen reader skips this node and everything under it.
     pub hidden: bool,
@@ -570,31 +588,57 @@ fn top_modal_path(root: &SemanticsNode) -> Option<Vec<usize>> {
     search(root, &mut path).then_some(path)
 }
 
+/// Counts and heap sizes of the layout and semantics data that one measure pass retains, for memory
+/// diagnostics.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LayoutAllocationDebugStats {
+    /// Number of `LayoutBox` nodes in the tree.
     pub layout_box_count: usize,
+    /// Total number of child entries across all layout boxes.
     pub layout_box_child_count: usize,
+    /// Total allocated capacity of the child vectors across all layout boxes.
     pub layout_box_child_capacity: usize,
+    /// Heap bytes allocated for the child vectors of all layout boxes.
     pub layout_box_heap_bytes: usize,
+    /// Number of modifier slice snapshots, one per layout box.
     pub modifier_slice_count: usize,
+    /// Heap bytes held by all modifier slice snapshots.
     pub modifier_slice_heap_bytes: usize,
+    /// Number of draw commands collected from modifier nodes.
     pub modifier_draw_command_count: usize,
+    /// Allocated capacity of the draw command lists.
     pub modifier_draw_command_capacity: usize,
+    /// Number of pointer input handlers collected from modifier nodes.
     pub modifier_pointer_input_count: usize,
+    /// Allocated capacity of the pointer input handler lists.
     pub modifier_pointer_input_capacity: usize,
+    /// Number of layout boxes that carry text content.
     pub modifier_text_content_count: usize,
+    /// Number of layout boxes that carry a text style.
     pub modifier_text_style_count: usize,
+    /// Number of layout boxes that carry text layout options.
     pub modifier_text_layout_options_count: usize,
+    /// Number of layout boxes that carry a prepared text layout.
     pub modifier_prepared_text_layout_count: usize,
+    /// Number of layout boxes that carry a graphics layer.
     pub modifier_graphics_layer_count: usize,
+    /// Number of layout boxes that carry a graphics layer resolver.
     pub modifier_graphics_layer_resolver_count: usize,
+    /// Number of nodes in the semantics tree.
     pub semantics_node_count: usize,
+    /// Total number of actions across all semantics nodes.
     pub semantics_action_count: usize,
+    /// Total allocated capacity of the action vectors across all semantics nodes.
     pub semantics_action_capacity: usize,
+    /// Total number of child entries across all semantics nodes.
     pub semantics_child_count: usize,
+    /// Total allocated capacity of the child vectors across all semantics nodes.
     pub semantics_child_capacity: usize,
+    /// Number of semantics nodes that have a content description.
     pub semantics_description_count: usize,
+    /// Allocated bytes of all content description strings.
     pub semantics_description_bytes: usize,
+    /// Heap bytes held by the semantics tree: actions, children, details and descriptions.
     pub semantics_heap_bytes: usize,
 }
 
@@ -623,22 +667,27 @@ pub struct LayoutTree {
 }
 
 impl LayoutTree {
+    /// Wraps `root` as a layout tree.
     pub fn new(root: LayoutBox) -> Self {
         Self { root }
     }
 
+    /// Returns the root layout box.
     pub fn root(&self) -> &LayoutBox {
         &self.root
     }
 
+    /// Returns the root layout box for in-place changes.
     pub fn root_mut(&mut self) -> &mut LayoutBox {
         &mut self.root
     }
 
+    /// Consumes the tree and returns its root layout box.
     pub fn into_root(self) -> LayoutBox {
         self.root
     }
 
+    /// Counts the allocations that the layout boxes of this tree retain.
     pub fn debug_allocation_stats(&self) -> LayoutAllocationDebugStats {
         let mut stats = LayoutAllocationDebugStats::default();
         record_layout_box_allocation_stats(&self.root, &mut stats);
@@ -649,17 +698,23 @@ impl LayoutTree {
 /// Layout information for a single node.
 #[derive(Debug, Clone)]
 pub struct LayoutBox {
+    /// Id of the runtime node this box describes.
     pub node_id: NodeId,
     /// Incarnation of the runtime node captured with these layout bounds.
     pub node_generation: u32,
+    /// Position and size of the node in root coordinates, in logical pixels, before graphics-layer
+    /// transforms.
     pub rect: GeometryRect,
     /// Content offset for scroll/inner transforms (applies to children, NOT this node's position)
     pub content_offset: Point,
+    /// Modifier, semantics and kind data captured with the node.
     pub node_data: LayoutNodeData,
+    /// Layout boxes of the node's placed children.
     pub children: Vec<LayoutBox>,
 }
 
 impl LayoutBox {
+    /// Creates a layout box with node generation zero.
     pub fn new(
         node_id: NodeId,
         rect: GeometryRect,
@@ -684,14 +739,21 @@ pub struct LayoutNodeData {
     /// Composable origins retained by an inspection-enabled layout node.
     #[cfg(feature = "inspection")]
     pub source_trace: Rc<[cranpose_core::source_trace::SourceLocation]>,
+    /// The modifier chain of the node.
     pub modifier: Modifier,
+    /// Padding, layout properties and offset that the modifier chain resolved to.
     pub resolved_modifiers: ResolvedModifiers,
+    /// Draw commands, pointer input handlers, text and graphics layer data collected from the
+    /// modifier nodes.
     pub modifier_slices: Rc<ModifierNodeSlices>,
+    /// Semantics that the modifier chain reported, if any.
     pub semantics: Option<Rc<SemanticsConfiguration>>,
+    /// What kind of node this is.
     pub kind: LayoutNodeKind,
 }
 
 impl LayoutNodeData {
+    /// Creates node data from its parts.
     pub fn new(
         modifier: Modifier,
         resolved_modifiers: ResolvedModifiers,
@@ -716,10 +778,13 @@ impl LayoutNodeData {
         self.semantics.as_deref()
     }
 
+    /// Returns the padding, layout properties and offset that the modifier chain resolved to.
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {
         self.resolved_modifiers
     }
 
+    /// Returns the draw, pointer input, text and graphics layer data collected from the modifier
+    /// nodes.
     pub fn modifier_slices(&self) -> &ModifierNodeSlices {
         &self.modifier_slices
     }
@@ -733,10 +798,18 @@ impl LayoutNodeData {
 /// Compose's pattern where text is a modifier node capability.
 #[derive(Clone)]
 pub enum LayoutNodeKind {
+    /// A node that measures and places its children.
     Layout,
+    /// A subcomposition boundary, such as a lazy list or a `SubcomposeLayout`.
     Subcompose,
+    /// A non-interactive spacer.
     Spacer,
-    Button { on_click: Rc<RefCell<dyn FnMut()>> },
+    /// A button node.
+    Button {
+        /// Handler that runs when the button is clicked.
+        on_click: Rc<RefCell<dyn FnMut()>>,
+    },
+    /// A node that fits no other kind.
     Unknown,
 }
 
@@ -754,6 +827,7 @@ impl fmt::Debug for LayoutNodeKind {
 
 /// Extension trait that equips `MemoryApplier` with layout computation.
 pub trait LayoutEngine {
+    /// Measures the tree under `root` within `max_size` and returns its layout tree.
     fn compute_layout(&mut self, root: NodeId, max_size: Size) -> Result<LayoutTree, NodeError>;
 }
 
@@ -795,10 +869,12 @@ impl LayoutMeasurements {
         self.root.size
     }
 
+    /// Returns the semantics tree, or `None` if the measure options left it out.
     pub fn semantics_tree(&self) -> Option<&SemanticsTree> {
         self.semantics.as_ref()
     }
 
+    /// Counts the allocations that the layout tree and the semantics tree retain.
     pub fn debug_allocation_stats(&self) -> LayoutAllocationDebugStats {
         let mut stats = self
             .layout_tree
@@ -1238,9 +1314,12 @@ pub fn top_modal_from_applier(
     Ok(None)
 }
 
+/// Selects which trees [`measure_layout_with_options`] builds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MeasureLayoutOptions {
+    /// Build the semantics tree.
     pub collect_semantics: bool,
+    /// Build the layout tree.
     pub build_layout_tree: bool,
 }
 
@@ -1287,6 +1366,8 @@ pub fn measure_layout(
     measure_layout_with_options(applier, root, max_size, MeasureLayoutOptions::default())
 }
 
+/// Runs the measure phase for the subtree rooted at `root` and builds only the trees that `options`
+/// select.
 pub fn measure_layout_with_options(
     applier: &mut MemoryApplier,
     root: NodeId,

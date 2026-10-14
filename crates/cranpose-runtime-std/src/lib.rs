@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
 #[cfg(target_arch = "wasm32")]
@@ -31,6 +32,7 @@ pub struct StdScheduler {
 }
 
 impl StdScheduler {
+    /// Creates a scheduler with no pending frame request and no frame waker.
     pub fn new() -> Self {
         Self {
             frame_requested: AtomicBool::new(false),
@@ -58,6 +60,9 @@ impl StdScheduler {
         drop(old_waker);
     }
 
+    /// Registers a waker that will be invoked whenever a new frame is scheduled.
+    ///
+    /// This single-threaded variant is used on wasm, so the waker does not need to be `Send`.
     #[cfg(target_arch = "wasm32")]
     pub fn set_frame_waker(&self, waker: impl Fn() + 'static) {
         *self.frame_waker.borrow_mut() = Some(Box::new(waker));
@@ -224,6 +229,7 @@ impl StdRuntime {
         self.scheduler.take_frame_request()
     }
 
+    /// Returns whether a frame has been requested, without consuming the request.
     pub fn has_frame_request(&self) -> bool {
         self.scheduler.has_frame_request()
     }
@@ -234,6 +240,9 @@ impl StdRuntime {
         self.scheduler.set_frame_waker(waker);
     }
 
+    /// Registers a waker to be called when the runtime schedules a new frame.
+    ///
+    /// This single-threaded variant is used on wasm, so the waker does not need to be `Send`.
     #[cfg(target_arch = "wasm32")]
     pub fn set_frame_waker(&self, waker: impl Fn() + 'static) {
         self.scheduler.set_frame_waker(waker);

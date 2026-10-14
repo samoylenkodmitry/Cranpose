@@ -3,27 +3,39 @@ use std::rc::Rc;
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOfWithPolicy};
 use cranpose_macros::composable;
 
+/// Reason why [`UriHandler::open_uri`] failed.
 #[derive(thiserror::Error, Debug)]
 pub enum UriHandlerError {
+    /// The platform failed to open the URL. The text describes the cause.
     #[error("Failed to open URL: {0}")]
     OpenFailed(String),
+    /// There is no browser window object to open the URL in.
     #[error("No window object available")]
     NoWindow,
+    /// The browser blocked the new window for the URL.
     #[error("Popup blocked for URL: {0}")]
     PopupBlocked(String),
+    /// The platform has no way to open external links.
     #[error("Opening external links is not supported on this platform: {0}")]
     UnsupportedPlatform(String),
+    /// The operation needs a `cranpose-services` feature that is turned off.
     #[error("{operation} requires cranpose-services feature `{feature}`")]
     UnsupportedFeature {
+        /// The operation that the build cannot run.
         operation: &'static str,
+        /// Name of the `cranpose-services` feature that the operation needs.
         feature: &'static str,
     },
 }
 
+/// Opens a URI, such as a web link, in the application the platform picks for it.
 pub trait UriHandler {
+    /// Opens `uri` outside the app, for example in the system browser. Returns an error when the
+    /// platform cannot open it.
     fn open_uri(&self, uri: &str) -> Result<(), UriHandlerError>;
 }
 
+/// Shared handle to a [`UriHandler`].
 pub type UriHandlerRef = Rc<dyn UriHandler>;
 
 /// Installs a platform URI handler, replacing any previously installed one.
@@ -116,10 +128,14 @@ impl UriHandler for PlatformUriHandler {
     }
 }
 
+/// Returns the handler that opens a URI through a registered platform handler or else the
+/// built-in opener of the current platform.
 pub fn default_uri_handler() -> UriHandlerRef {
     Rc::new(PlatformUriHandler)
 }
 
+/// The URI handler a composable reads. It is the platform handler unless a composition local
+/// provider above it supplies another one.
 pub fn local_uri_handler() -> CompositionLocal<UriHandlerRef> {
     crate::composition_locals::cached_local(
         |locals| &locals.uri_handler,
@@ -127,6 +143,7 @@ pub fn local_uri_handler() -> CompositionLocal<UriHandlerRef> {
     )
 }
 
+/// Provides the platform URI handler to `content` through [`local_uri_handler`].
 #[composable]
 pub fn ProvideUriHandler(content: impl FnOnce()) {
     let uri_handler = cranpose_core::remember(default_uri_handler).with(|state| state.clone());

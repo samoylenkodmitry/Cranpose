@@ -10,10 +10,14 @@ where
     R: Renderer,
     R::Error: Debug,
 {
+    /// Returns a text report of the first surface: its layout tree, its headless render scene and a
+    /// summary.
     pub fn debug_info_report(&mut self) -> String {
         debug_info_report(&mut self.app, &mut self.surfaces[0])
     }
 
+    /// Logs the report from `debug_info_report` at info level under `cranpose::debug::screen` and
+    /// returns it.
     pub fn log_debug_info(&mut self) -> String {
         let report = self.debug_info_report();
         log::info!(target: "cranpose::debug::screen", "\n{report}");
@@ -78,6 +82,8 @@ where
         app_context.enter(|| self.surfaces[0].semantics_tree_in_context(&mut self.app))
     }
 
+    /// Returns the width and height of the first surface's root layout box in logical pixels, or
+    /// `None` before a layout exists.
     pub fn root_layout_size(&mut self) -> Option<(f32, f32)> {
         self.layout_tree().map(|tree| {
             let root = tree.root();
@@ -85,6 +91,8 @@ where
         })
     }
 
+    /// Returns `(x, y, width, height)` of the layout box of `target` in logical pixels, or `None`
+    /// when the node is not in the layout tree.
     pub fn node_layout_bounds(&mut self, target: NodeId) -> Option<(f32, f32, f32, f32)> {
         self.layout_tree()
             .and_then(|tree| find_layout_box(tree.root(), target))
