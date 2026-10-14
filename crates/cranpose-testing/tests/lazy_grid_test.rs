@@ -6,16 +6,18 @@ use std::{cell::RefCell, rc::Rc};
 
 use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
-use cranpose_foundation::lazy::{LazyItems, LazyListScope};
+use cranpose_foundation::lazy::{LazyItems, LazyListIntervalContent, LazyListScope};
 use cranpose_testing::{robot::TestRenderer, robot_assertions::find_semantics_node};
 use cranpose_ui::{
-    Box, BoxSpec, GridCells, LayoutDirection, LazyGridState, LazyVerticalGrid,
-    LazyVerticalGridSpec, Modifier, ProvideLayoutDirection, Rect, rememberLazyGridState,
+    Box, BoxSpec, GridCells, LayoutDirection, LazyGridState, LazyHorizontalGrid,
+    LazyHorizontalGridSpec, LazyVerticalGrid, LazyVerticalGridSpec, Modifier,
+    ProvideLayoutDirection, Rect, rememberLazyGridState,
 };
 
 const WIDTH: f32 = 300.0;
 const HEIGHT: f32 = 200.0;
 const CELL_HEIGHT: f32 = 40.0;
+const COLUMN_WIDTH: f32 = 50.0;
 
 /// What a grid holds, in order.
 #[derive(Clone, Copy)]
@@ -40,44 +42,80 @@ fn tagged(name: String, height: f32) {
     );
 }
 
+/// Adds `parts` to a grid's content, naming each item by its index.
+fn add_parts(scope: &mut LazyListIntervalContent, parts: &'static [Part], cell: fn(String)) {
+    let mut first = 0;
+    for &part in parts {
+        match part {
+            Part::Header(name) => {
+                scope.sticky_header(move || cell(name.into()));
+                first += 1;
+            }
+            Part::Items(count) => {
+                let start = first;
+                scope.items(LazyItems::new(count), move |index| {
+                    cell(format!("item {}", start + index));
+                });
+                first += count;
+            }
+        }
+    }
+}
+
+fn row_cell(name: String) {
+    tagged(name, CELL_HEIGHT);
+}
+
+fn column_cell(name: String) {
+    Box(
+        Modifier::empty()
+            .fill_max_height()
+            .width(COLUMN_WIDTH)
+            .content_description(name),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
 impl Grid {
     fn new(spec: LazyVerticalGridSpec, parts: &'static [Part], direction: LayoutDirection) -> Self {
+        Self::composed(direction, move |grid| {
+            LazyVerticalGrid(
+                Modifier::empty().size_points(WIDTH, HEIGHT),
+                grid,
+                spec.clone(),
+                |scope| add_parts(scope, parts, row_cell),
+            );
+        })
+    }
+
+    fn horizontal(
+        spec: LazyHorizontalGridSpec,
+        parts: &'static [Part],
+        direction: LayoutDirection,
+    ) -> Self {
+        Self::composed(direction, move |grid| {
+            LazyHorizontalGrid(
+                Modifier::empty().size_points(WIDTH, HEIGHT),
+                grid,
+                spec.clone(),
+                |scope| add_parts(scope, parts, column_cell),
+            );
+        })
+    }
+
+    fn composed(direction: LayoutDirection, grid: impl Fn(LazyGridState) + 'static) -> Self {
         let state = Rc::new(RefCell::new(None));
         let captured = Rc::clone(&state);
+        let grid = Rc::new(grid);
         let mut shell = AppShell::new(
             TestRenderer::default(),
             location_key(file!(), line!(), column!()),
             move || {
-                let grid = rememberLazyGridState();
-                captured.replace(Some(grid.clone()));
-                let spec = spec.clone();
-                ProvideLayoutDirection(direction, move || {
-                    LazyVerticalGrid(
-                        Modifier::empty().size_points(WIDTH, HEIGHT),
-                        grid.clone(),
-                        spec.clone(),
-                        |scope| {
-                            let mut first = 0;
-                            for &part in parts {
-                                match part {
-                                    Part::Header(name) => {
-                                        scope.sticky_header(move || {
-                                            tagged(name.into(), CELL_HEIGHT);
-                                        });
-                                        first += 1;
-                                    }
-                                    Part::Items(count) => {
-                                        let start = first;
-                                        scope.items(LazyItems::new(count), move |index| {
-                                            tagged(format!("item {}", start + index), CELL_HEIGHT);
-                                        });
-                                        first += count;
-                                    }
-                                }
-                            }
-                        },
-                    );
-                });
+                let grid_state = rememberLazyGridState();
+                captured.replace(Some(grid_state.clone()));
+                let grid = Rc::clone(&grid);
+                ProvideLayoutDirection(direction, move || grid(grid_state.clone()));
             },
         );
         shell.set_viewport(WIDTH, 400.0);
@@ -260,5 +298,30 @@ fn keyed_cells_keep_their_state_when_an_insertion_moves_them_to_another_line() {
         *created.borrow(),
         [1, 2, 3, 4, 5, 0],
         "cell 3 moved to the second line and kept its composition"
+    );
+}
+
+#[test]
+fn a_horizontal_grid_fills_columns_top_to_bottom_and_mirrors_right_to_left() {
+    let parts: &'static [Part] = &[Part::Header("header"), Part::Items(4)];
+    let spec = LazyHorizontalGridSpec::new(GridCells::Fixed(2));
+    let mut grid = Grid::horizontal(spec.clone(), parts, LayoutDirection::Ltr);
+    assert_eq!(
+        grid.bounds("header").map(|bounds| bounds.height),
+        Some(HEIGHT)
+    );
+    assert_eq!(grid.origin("item 1"), Some((COLUMN_WIDTH, 0.0)));
+    assert_eq!(grid.origin("item 2"), Some((COLUMN_WIDTH, 100.0)));
+    assert_eq!(grid.origin("item 3"), Some((2.0 * COLUMN_WIDTH, 0.0)));
+    let mut mirrored = Grid::horizontal(spec, parts, LayoutDirection::Rtl);
+    assert_eq!(mirrored.origin("header"), Some((WIDTH - COLUMN_WIDTH, 0.0)));
+    assert_eq!(
+        mirrored.origin("item 1"),
+        Some((WIDTH - 2.0 * COLUMN_WIDTH, 0.0)),
+        "each cell mirrors by its own width"
+    );
+    assert_eq!(
+        mirrored.origin("item 2"),
+        Some((WIDTH - 2.0 * COLUMN_WIDTH, 100.0))
     );
 }

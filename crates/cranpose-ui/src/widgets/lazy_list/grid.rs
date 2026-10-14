@@ -15,8 +15,9 @@ use cranpose_ui_layout::{LinearArrangement, MeasureScope as _};
 
 use super::{
     LazyColumnNode, LazyColumnSpec, LazyFrame, LazyListContentHandle, LazyListItemMeasureInputs,
-    LazyListItems, LazyListMeasureContext, PaddingValues, SubcomposeMeasureScopeImpl,
-    beyond_composition, lazy_list_child_constraints, pin_sticky_header, request_beyond_items,
+    LazyListItems, LazyListMeasureContext, LazyRowNode, LazyRowSpec, PaddingValues,
+    SubcomposeMeasureScopeImpl, beyond_composition, lazy_list_child_constraints, pin_sticky_header,
+    request_beyond_items,
 };
 use crate::{composable, modifier::Modifier};
 
@@ -74,6 +75,47 @@ impl LazyVerticalGridSpec {
     pub fn spacing(mut self, spacing: f32) -> Self {
         self.vertical_arrangement = LinearArrangement::SpacedBy(spacing);
         self.horizontal_spacing = spacing;
+        self
+    }
+
+    #[must_use]
+    pub fn content_padding(mut self, padding: PaddingValues) -> Self {
+        self.content_padding = padding;
+        self
+    }
+}
+
+/// Options for a [`LazyHorizontalGrid`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct LazyHorizontalGridSpec {
+    pub rows: GridCells,
+    /// How the lines sit and the space between them.
+    pub horizontal_arrangement: LinearArrangement,
+    /// The space between the cells of a line, in logical pixels.
+    pub vertical_spacing: f32,
+    pub content_padding: PaddingValues,
+    pub beyond_bounds_item_count: usize,
+    pub reverse_layout: bool,
+}
+
+impl LazyHorizontalGridSpec {
+    /// A grid of `rows` and no spacing.
+    pub fn new(rows: GridCells) -> Self {
+        Self {
+            rows,
+            horizontal_arrangement: LinearArrangement::Start,
+            vertical_spacing: 0.0,
+            content_padding: PaddingValues::default(),
+            beyond_bounds_item_count: LazyRowSpec::default().beyond_bounds_item_count,
+            reverse_layout: false,
+        }
+    }
+
+    /// `spacing` logical pixels between the lines and between the cells.
+    #[must_use]
+    pub fn spacing(mut self, spacing: f32) -> Self {
+        self.horizontal_arrangement = LinearArrangement::SpacedBy(spacing);
+        self.vertical_spacing = spacing;
         self
     }
 
@@ -381,6 +423,13 @@ impl LazyItemSource for LazyGridLines<'_, '_, '_> {
                         .unwrap_or(cell.cross_axis_size),
                 );
                 measured.child_cross_offsets.push(cross);
+                let start = cell.child_offsets.get(root).copied().unwrap_or(0.0);
+                let end = cell
+                    .child_offsets
+                    .get(root + 1)
+                    .copied()
+                    .unwrap_or(cell.main_axis_size);
+                measured.child_main_sizes.push(end - start);
             }
         }
         measured.main_axis_size = measured.main_axis_size.max(1.0);
@@ -524,6 +573,26 @@ fn register_grid_measurements(
     }
 }
 
+/// The content and the grid layout a grid's lazy column or row gets.
+fn grid_parts<F>(
+    state: &LazyGridState,
+    cells: GridCells,
+    spacing: f32,
+    content: F,
+) -> (Option<GridLayout>, LazyListContentHandle)
+where
+    F: FnOnce(&mut LazyListIntervalContent),
+{
+    let mut interval_content = LazyListIntervalContent::new();
+    content(&mut interval_content);
+    let grid = GridLayout {
+        cells,
+        spacing,
+        lines: Rc::clone(&state.lines),
+    };
+    (Some(grid), LazyListContentHandle::new(interval_content))
+}
+
 /// Composes and measures the items needed for a vertical grid's viewport,
 /// in lines of cells — Compose's `LazyVerticalGrid`. `content` adds the
 /// items as a [`LazyColumn`](super::LazyColumn)'s does; a sticky header takes
@@ -537,24 +606,35 @@ pub fn LazyVerticalGrid<F>(
 where
     F: FnOnce(&mut LazyListIntervalContent),
 {
-    let mut interval_content = LazyListIntervalContent::new();
-    content(&mut interval_content);
     let column = LazyColumnSpec {
         vertical_arrangement: spec.vertical_arrangement,
         content_padding: spec.content_padding,
         beyond_bounds_item_count: spec.beyond_bounds_item_count,
         reverse_layout: spec.reverse_layout,
     };
-    let grid = GridLayout {
-        cells: spec.columns,
-        spacing: spec.horizontal_spacing,
-        lines: Rc::clone(&state.lines),
+    let (grid, content) = grid_parts(&state, spec.columns, spec.horizontal_spacing, content);
+    LazyColumnNode(modifier, state.list, column, grid, content)
+}
+
+/// Composes and measures the items needed for a horizontal grid's
+/// viewport, in columns of cells from top to bottom — Compose's
+/// `LazyHorizontalGrid`. A sticky header takes a whole column and holds the
+/// start edge.
+pub fn LazyHorizontalGrid<F>(
+    modifier: Modifier,
+    state: LazyGridState,
+    spec: LazyHorizontalGridSpec,
+    content: F,
+) -> NodeId
+where
+    F: FnOnce(&mut LazyListIntervalContent),
+{
+    let row = LazyRowSpec {
+        horizontal_arrangement: spec.horizontal_arrangement,
+        content_padding: spec.content_padding,
+        beyond_bounds_item_count: spec.beyond_bounds_item_count,
+        reverse_layout: spec.reverse_layout,
     };
-    LazyColumnNode(
-        modifier,
-        state.list,
-        column,
-        Some(grid),
-        LazyListContentHandle::new(interval_content),
-    )
+    let (grid, content) = grid_parts(&state, spec.rows, spec.vertical_spacing, content);
+    LazyRowNode(modifier, state.list, row, grid, content)
 }

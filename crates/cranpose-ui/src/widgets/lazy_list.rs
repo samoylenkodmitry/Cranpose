@@ -176,7 +176,8 @@ struct LazyListLayoutConfig {
 mod grid;
 
 pub use grid::{
-    GridCells, LazyGridState, LazyVerticalGrid, LazyVerticalGridSpec, rememberLazyGridState,
+    GridCells, LazyGridState, LazyHorizontalGrid, LazyHorizontalGridSpec, LazyVerticalGrid,
+    LazyVerticalGridSpec, rememberLazyGridState,
 };
 
 /// A list's content padding along its axes, in layout pixels rounded to the
@@ -1403,12 +1404,18 @@ fn push_lazy_item_placements(
                         .copied()
                         .unwrap_or(item.cross_axis_size)
             } else {
-                let end = item
-                    .child_offsets
-                    .get(index + 1)
+                let extent = item
+                    .child_main_sizes
+                    .get(index)
                     .copied()
-                    .unwrap_or(item.main_axis_size);
-                viewport_size - x - (end - offset)
+                    .unwrap_or_else(|| {
+                        item.child_offsets
+                            .get(index + 1)
+                            .copied()
+                            .unwrap_or(item.main_axis_size)
+                            - offset
+                    });
+                viewport_size - x - extent
             };
         }
         placements.push(Placement::new(node_id as NodeId, x, y, 0));
@@ -1574,6 +1581,7 @@ fn LazyRowImpl(
     modifier: Modifier,
     state: LazyListState,
     spec: LazyRowSpec,
+    grid: Option<grid::GridLayout>,
     content: LazyListContentHandle,
 ) -> NodeId {
     use std::cell::RefCell;
@@ -1614,7 +1622,7 @@ fn LazyRowImpl(
             horizontal_arrangement: Some(spec.horizontal_arrangement),
         },
         cross_padding: padding.cross,
-        grid: None,
+        grid,
     };
     let config_cell =
         cranpose_core::remember(|| Rc::new(RefCell::new(config.clone()))).with(Clone::clone);
@@ -1760,10 +1768,11 @@ fn LazyRowNode(
     modifier: Modifier,
     state: LazyListState,
     spec: LazyRowSpec,
+    grid: Option<grid::GridLayout>,
     content: LazyListContentHandle,
 ) -> NodeId {
     cranpose_core::debug_label_current_scope("LazyRowNode");
-    LazyRowImpl(modifier, state, spec, content)
+    LazyRowImpl(modifier, state, spec, grid, content)
 }
 
 /// Composes and measures the rows needed for a vertical viewport. The content
@@ -1847,6 +1856,7 @@ where
         modifier,
         state,
         spec,
+        None,
         LazyListContentHandle::new(interval_content),
     )
 }
