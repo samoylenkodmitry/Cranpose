@@ -68,6 +68,20 @@ pub fn rememberPagerState(initial_page: usize) -> PagerState {
 }
 
 impl PagerState {
+    /// A pager's state on `initial_page`, for code that remembers the state
+    /// itself. Call it inside a `remember`, as [`LazyListState::new`].
+    pub fn new(initial_page: usize) -> Self {
+        Self {
+            list: LazyListState::new(initial_page, 0.0),
+        }
+    }
+
+    /// The first page in view, or `None` once the slot that held this state
+    /// was released.
+    pub fn try_first_page(&self) -> Option<usize> {
+        self.list.try_position().map(|(page, _)| page)
+    }
+
     /// The page that fills most of the pager. A composable that reads it
     /// recomposes while the pager scrolls.
     pub fn current_page(&self) -> usize {

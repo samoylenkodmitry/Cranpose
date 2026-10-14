@@ -151,6 +151,12 @@ pub fn rememberLazyGridState() -> LazyGridState {
     LazyGridState { list, lines }
 }
 
+impl Default for LazyGridState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LazyGridState {
     /// The first item of the first line the grid shows. A composable that
     /// reads it recomposes when it changes.
@@ -165,9 +171,30 @@ impl LazyGridState {
     }
 
     /// Scrolls the line of `index` to the top, moved `offset` further.
+    /// Before the grid's first layout it goes there on that layout.
     pub fn scroll_to_item(&self, index: usize, offset: f32) {
-        let line = self.lines.borrow().line_of(index);
-        self.list.scroll_to_item(line, offset);
+        let lines = self.lines.borrow();
+        if lines.content.strong_count() == 0 {
+            lines.pending.set(Some((index, offset)));
+            return;
+        }
+        self.list.scroll_to_item(lines.line_of(index), offset);
+    }
+
+    /// The first item of the first visible line and how far that line is
+    /// scrolled, or `None` once the slot that held this state was released.
+    pub fn try_position(&self) -> Option<(usize, f32)> {
+        let (line, offset) = self.list.try_position()?;
+        Some((self.lines.borrow().line(line).first, offset))
+    }
+
+    /// A grid's state at its top, for code that remembers the state itself.
+    /// Call it inside a `remember`, as [`LazyListState::new`].
+    pub fn new() -> Self {
+        Self {
+            list: LazyListState::new(0, 0.0),
+            lines: Rc::new(RefCell::new(GridLines::default())),
+        }
     }
 
     /// [`Self::scroll_to_item`] with a spring, which a press on the grid
@@ -261,6 +288,9 @@ pub(super) struct GridLines {
     /// The content the lines were built from. A weak pointer keeps its
     /// address from being reused by a later content.
     content: Weak<LazyListIntervalContent>,
+    /// An item to scroll to that came before the lines were built, as a
+    /// restored position does; the next measure moves to its line.
+    pending: std::cell::Cell<Option<(usize, f32)>>,
 }
 
 impl Default for GridLines {
@@ -272,6 +302,7 @@ impl Default for GridLines {
             headers: Vec::new(),
             line_count: 0,
             content: Weak::new(),
+            pending: std::cell::Cell::new(None),
         }
     }
 }
@@ -639,11 +670,16 @@ pub(super) fn measure_grid_viewport(
     let available = frame.item_cross_axis_size;
     let columns = grid.cells.columns(available, grid.spacing);
     if !grid.lines.borrow().built_for(content, columns) {
+        let pending = grid.lines.borrow().pending.take();
         *grid.lines.borrow_mut() = GridLines::new(content, columns);
+        grid.lines.borrow().pending.set(pending);
     }
     // A cell composed in this pass may read the grid's state, which reads
     // the lines.
     let lines = grid.lines.borrow();
+    if let Some((item, offset)) = lines.pending.take() {
+        state.scroll_to_item(lines.line_of(item), offset);
+    }
     let sizes = CellSizes::new(available, columns, grid.spacing, scope.density());
     let line_count = lines.line_count;
     context

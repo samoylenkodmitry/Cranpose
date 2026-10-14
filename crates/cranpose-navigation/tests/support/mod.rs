@@ -4,10 +4,39 @@ use std::{
     cell::{Cell, RefCell},
     rc::Rc,
     sync::{
-        Arc,
+        Arc, Mutex, MutexGuard, OnceLock, PoisonError,
         atomic::{AtomicUsize, Ordering},
     },
+    time::Duration,
 };
+
+use cranpose_services::{
+    DurableSaveOutcome, MemoryPreferences, run_durable_saves, set_platform_preferences,
+};
+
+/// Runs the tests that share the platform preferences one at a time.
+pub fn serial() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Empty preferences for the platform to save in.
+pub fn fresh_store() -> Arc<MemoryPreferences> {
+    let store = Arc::new(MemoryPreferences::new());
+    set_platform_preferences(store.clone());
+    store
+}
+
+/// Saves what the composition holds, as a host does when it goes to the
+/// background.
+pub fn save() {
+    assert_eq!(
+        run_durable_saves(Duration::from_secs(5)),
+        DurableSaveOutcome::Completed
+    );
+}
 
 use cranpose_core::DisposableEffect;
 use cranpose_coroflow::viewModel;

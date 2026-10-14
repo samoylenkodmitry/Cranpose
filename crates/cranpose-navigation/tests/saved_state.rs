@@ -7,7 +7,6 @@ use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     rc::Rc,
-    sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError},
     time::Duration,
 };
 
@@ -17,31 +16,8 @@ use cranpose_coroflow::{SavedStateHandle, viewModel};
 use cranpose_navigation::{
     NavController, NavHost, rememberNavController, rememberSaveableNavController,
 };
-use cranpose_services::{
-    DurableSaveOutcome, MemoryPreferences, PreferencesStore, Saver, run_durable_saves,
-    set_platform_preferences,
-};
-use support::{Host, Screen};
-
-fn serial() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(Mutex::default)
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-}
-
-fn fresh_store() -> Arc<MemoryPreferences> {
-    let store = Arc::new(MemoryPreferences::new());
-    set_platform_preferences(store.clone());
-    store
-}
-
-fn save() {
-    assert_eq!(
-        run_durable_saves(Duration::from_secs(5)),
-        DurableSaveOutcome::Completed
-    );
-}
+use cranpose_services::{DurableSaveOutcome, PreferencesStore, Saver, run_durable_saves};
+use support::{Host, Screen, fresh_store, save, serial};
 
 fn routes() -> Saver<Screen> {
     Saver::new(
