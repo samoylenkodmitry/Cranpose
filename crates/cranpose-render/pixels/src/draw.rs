@@ -57,15 +57,30 @@ impl Target<'_> {
         }
     }
 
-    fn index(&self, x: i32, y: i32) -> usize {
-        (((y - self.top) as u32 * self.width + (x - self.left) as u32) * 4) as usize
-    }
-
-    fn pixel(&mut self, x: i32, y: i32) -> &mut [u8] {
-        let index = self.index(x, y);
-        &mut self.pixels[index..index + 4]
+    /// The pixels `start..end` of row `y`, which lie inside the window
+    /// unless the run is empty (`end <= start`).
+    fn row(&mut self, y: i32, start: i32, end: i32) -> &mut [[u8; 4]] {
+        if end <= start {
+            return &mut [];
+        }
+        let row = (y - self.top) as usize * self.width as usize;
+        let from = row + (start - self.left) as usize;
+        let to = row + (end - self.left) as usize;
+        &mut self.pixels.as_chunks_mut::<4>().0[from..to]
     }
 }
+
+/// `UNIT[c]` is `c as f32 / 255.0`, worked out at build time, so a byte
+/// channel becomes a float without a division per pixel.
+static UNIT: [f32; 256] = {
+    let mut table = [0.0; 256];
+    let mut channel = 0;
+    while channel < 256 {
+        table[channel] = channel as f32 / 255.0;
+        channel += 1;
+    }
+    table
+};
 
 #[derive(Clone, Copy)]
 pub(crate) struct ClipBounds {
@@ -163,9 +178,7 @@ pub(crate) fn draw_scene_scaled(
 }
 
 fn clear_frame(frame: &mut [u8]) {
-    for chunk in frame.as_chunks_mut::<4>().0 {
-        chunk.copy_from_slice(&[18, 18, 24, 255]);
-    }
+    frame.as_chunks_mut::<4>().0.fill([18, 18, 24, 255]);
 }
 
 fn draw_raster_scene(
@@ -194,7 +207,7 @@ pub(crate) fn draw_raster_window(
 ) {
     clear_frame(target.pixels);
     let window = target.window();
-    for item in scene.ordered_items() {
+    for &item in &scene.order {
         if scene.item_bounds(item, window).is_some() {
             draw_item(target, scene, item, diagnostics, text_resources);
         }
@@ -278,39 +291,6 @@ impl RasterScene {
             }
         }
     }
-
-    /// Every item, in the order they are drawn.
-    pub(crate) fn ordered_items(&self) -> Vec<RenderItem> {
-        let mut ordered = Vec::with_capacity(
-            self.shapes.len() + self.images.len() + self.texts.len() + self.shadows.len(),
-        );
-        ordered.extend(
-            self.shapes
-                .iter()
-                .enumerate()
-                .map(|(index, shape)| (shape.z_index, RenderItem::Shape(index))),
-        );
-        ordered.extend(
-            self.images
-                .iter()
-                .enumerate()
-                .map(|(index, image)| (image.z_index, RenderItem::Image(index))),
-        );
-        ordered.extend(
-            self.texts
-                .iter()
-                .enumerate()
-                .map(|(index, text)| (text.z_index, RenderItem::Text(index))),
-        );
-        ordered.extend(
-            self.shadows
-                .iter()
-                .enumerate()
-                .map(|(index, shadow)| (shadow.z_index, RenderItem::Shadow(index))),
-        );
-        ordered.sort_unstable_by_key(|(z, _)| *z);
-        ordered.into_iter().map(|(_, item)| item).collect()
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -339,13 +319,15 @@ fn draw_shadow(
         draw.color.a(),
     ];
     for py in bounds.min_y..bounds.max_y {
-        for px in bounds.min_x..bounds.max_x {
-            let coverage = shadow.coverage(px as f32 + 0.5, py as f32 + 0.5);
+        let center_y = py as f32 + 0.5;
+        let row = target.row(py, bounds.min_x, bounds.max_x);
+        for (px, dst) in (bounds.min_x..).zip(row) {
+            let coverage = shadow.coverage(px as f32 + 0.5, center_y);
             if coverage <= 0.0 {
                 continue;
             }
             blend_pixel(
-                target.pixel(px, py),
+                dst,
                 [color[0], color[1], color[2], color[3] * coverage],
                 BlendMode::SrcOver,
                 diagnostics,
@@ -422,10 +404,16 @@ fn draw_shape(
     };
 
     let opaque = opaque_solid_bytes(&draw.brush, draw.blend_mode);
+    let fills_runs = opaque.filter(|_| coverage.covers_runs_whole());
     for py in clip_bounds.min_y..clip_bounds.max_y {
         let center_y = py as f32 + 0.5;
         for (start, end) in coverage.row_runs(center_y, clip_bounds.min_x, clip_bounds.max_x) {
-            for px in start..end {
+            let row = target.row(py, start, end);
+            if let Some(bytes) = fills_runs {
+                row.fill(bytes);
+                continue;
+            }
+            for (px, dst) in (start..).zip(row) {
                 let center_x = px as f32 + 0.5;
                 let coverage = coverage.at(Point::new(center_x, center_y));
                 if coverage <= 0.0 {
@@ -434,7 +422,7 @@ fn draw_shape(
                 if let Some(bytes) = opaque
                     && coverage >= 1.0
                 {
-                    target.pixel(px, py).copy_from_slice(&bytes);
+                    *dst = bytes;
                     continue;
                 }
 
@@ -445,7 +433,7 @@ fn draw_shape(
                 if alpha <= 0.0 {
                     continue;
                 }
-                blend_pixel(target.pixel(px, py), sample, draw.blend_mode, diagnostics);
+                blend_pixel(dst, sample, draw.blend_mode, diagnostics);
             }
         }
     }
@@ -690,10 +678,22 @@ impl ShapeCoverage {
                 half_width,
                 join,
             } => stroke_row_runs(*rect, *radii, *half_width, *join, y, min_x, max_x),
+            Self::Fill {
+                rect,
+                radii: Some(radii),
+            } => [rounded_fill_run(*rect, radii, y, min_x, max_x), NO_RUN],
             _ => [(min_x, max_x), NO_RUN],
         }
     }
 
+    /// Whether every pixel of its row runs is covered whole: a fill, whose
+    /// runs hold exactly the pixels it covers.
+    fn covers_runs_whole(&self) -> bool {
+        matches!(self, Self::Fill { .. })
+    }
+
+    /// The coverage of the pixel centred at `point`, which lies in one of its
+    /// row's runs.
     fn at(&self, point: Point) -> f32 {
         match self {
             Self::Line(line) => line.coverage(point),
@@ -705,14 +705,28 @@ impl ShapeCoverage {
                 half_width,
                 join,
             } => shape_sdf::stroked_rect_coverage(point, *rect, *radii, *half_width, *join),
-            Self::Fill { rect, radii } => match radii {
-                Some(radii) if !point_in_resolved_rounded_rect(point.x, point.y, *rect, radii) => {
-                    0.0
-                }
-                _ => 1.0,
-            },
+            Self::Fill { .. } => 1.0,
         }
     }
+}
+
+/// The pixels of the row centred at `y` whose centres lie in the rounded
+/// rect, within `min_x..max_x`. The shape is convex, so they form one run;
+/// its ends lie at most a corner radius in from the rect's sides.
+fn rounded_fill_run(rect: Rect, radii: &CornerRadii, y: f32, min_x: i32, max_x: i32) -> (i32, i32) {
+    if !(y >= rect.y && y <= rect.y + rect.height) {
+        return NO_RUN;
+    }
+    let inside = |x: i32| point_in_resolved_rounded_rect(x as f32 + 0.5, y, rect, radii);
+    let mut start = min_x;
+    while start < max_x && !inside(start) {
+        start += 1;
+    }
+    let mut end = max_x;
+    while end > start && !inside(end - 1) {
+        end -= 1;
+    }
+    (start, end)
 }
 
 fn placed_shadow(draw: &crate::scene::ShadowDraw) -> (ShadowRRect, Option<Rect>) {
@@ -763,11 +777,12 @@ fn draw_image(target: &mut Target, draw: &ImageDraw, diagnostics: &RenderDiagnos
     };
 
     for py in clip_bounds.min_y..clip_bounds.max_y {
-        for px in clip_bounds.min_x..clip_bounds.max_x {
+        let sample_y = py as f32 + 0.5;
+        let v = ((sample_y - rect.y) / rect.height).clamp(0.0, 1.0);
+        let row = target.row(py, clip_bounds.min_x, clip_bounds.max_x);
+        for (px, dst) in (clip_bounds.min_x..).zip(row) {
             let sample_x = px as f32 + 0.5;
-            let sample_y = py as f32 + 0.5;
             let u = ((sample_x - rect.x) / rect.width).clamp(0.0, 1.0);
-            let v = ((sample_y - rect.y) / rect.height).clamp(0.0, 1.0);
 
             let mut sample = match draw.sampling {
                 cranpose_ui_graphics::ImageSampling::Nearest => {
@@ -789,7 +804,7 @@ fn draw_image(target: &mut Target, draw: &ImageDraw, diagnostics: &RenderDiagnos
                 continue;
             }
 
-            blend_pixel(target.pixel(px, py), sample, draw.blend_mode, diagnostics);
+            blend_pixel(dst, sample, draw.blend_mode, diagnostics);
         }
     }
 }
@@ -801,7 +816,7 @@ fn sample_image_nearest(
 ) -> [f32; 4] {
     image
         .rgba8_pixel(src_y as usize * image.width() as usize + src_x as usize)
-        .map(|channel| channel as f32 / 255.0)
+        .map(|channel| UNIT[usize::from(channel)])
 }
 
 fn sample_image_linear(image: &cranpose_ui_graphics::ImageBitmap, x: f32, y: f32) -> [f32; 4] {
@@ -911,29 +926,33 @@ fn blit_rasterized_text_image(
         return;
     }
 
+    // The image is the rect's size. On whole pixels each pixel takes the
+    // image pixel under it; between pixels it takes the image moved by the
+    // fraction, sampled linearly.
+    let whole = rect.x.fract() == 0.0 && rect.y.fract() == 0.0;
     for py in clip_bounds.min_y..clip_bounds.max_y {
-        for px in clip_bounds.min_x..clip_bounds.max_x {
-            let sample_x = px as f32 + 0.5;
-            let sample_y = py as f32 + 0.5;
-            let u = ((sample_x - rect.x) / rect.width).clamp(0.0, 1.0);
-            let v = ((sample_y - rect.y) / rect.height).clamp(0.0, 1.0);
-
-            let src = sample_image_linear(
-                image,
-                u * img_width.saturating_sub(1) as f32,
-                v * img_height.saturating_sub(1) as f32,
-            );
+        let image_y = py as f32 - rect.y;
+        let row = target.row(py, clip_bounds.min_x, clip_bounds.max_x);
+        for (px, dst) in (clip_bounds.min_x..).zip(row) {
+            let image_x = px as f32 - rect.x;
+            let src = if whole {
+                let index = image_y as usize * img_width as usize + image_x as usize;
+                image
+                    .rgba8_pixel(index)
+                    .map(|channel| UNIT[usize::from(channel)])
+            } else {
+                sample_image_linear(image, image_x, image_y)
+            };
             if src[3] <= 0.0 {
                 continue;
             }
-
-            blend_pixel(target.pixel(px, py), src, BlendMode::SrcOver, diagnostics);
+            blend_pixel(dst, src, BlendMode::SrcOver, diagnostics);
         }
     }
 }
 
 fn blend_pixel(
-    dst: &mut [u8],
+    dst: &mut [u8; 4],
     src: [f32; 4],
     blend_mode: BlendMode,
     diagnostics: &RenderDiagnostics,
@@ -962,10 +981,7 @@ fn blend_pixel(
         dst[3] = 255;
         return;
     }
-    let dst_r = dst[0] as f32 / 255.0;
-    let dst_g = dst[1] as f32 / 255.0;
-    let dst_b = dst[2] as f32 / 255.0;
-    let dst_a = dst[3] as f32 / 255.0;
+    let [dst_r, dst_g, dst_b, dst_a] = dst.map(|channel| UNIT[usize::from(channel)]);
 
     let (out_r, out_g, out_b, out_a) = match resolved_blend_mode {
         BlendMode::DstOut => {

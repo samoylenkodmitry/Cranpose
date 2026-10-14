@@ -91,6 +91,8 @@ pub struct TextureUpload {
 /// from frame to frame: compose into the same one every frame.
 #[derive(Default)]
 pub struct SpriteFrame {
+    /// The scene the last frame composed, whose storage the next one reuses.
+    pub(crate) scene: RasterScene,
     sprites: Vec<f32>,
     uploads: Vec<TextureUpload>,
     releases: Vec<u32>,
@@ -148,7 +150,7 @@ impl SpriteFrame {
             max_x: width as i32,
             max_y: height as i32,
         };
-        for item in scene.ordered_items() {
+        for &item in &scene.order {
             if let RenderItem::Shape(index) = item
                 && let Some(sprite) = shape_sprite(&scene.shapes[index], screen)
             {

@@ -165,11 +165,21 @@ impl ProjectiveTransform {
         let x = point.x;
         let y = point.y;
         let w = self.matrix[2][0] * x + self.matrix[2][1] * y + self.matrix[2][2];
+        let mapped_x = self.matrix[0][0] * x + self.matrix[0][1] * y + self.matrix[0][2];
+        let mapped_y = self.matrix[1][0] * x + self.matrix[1][1] * y + self.matrix[1][2];
+        // Without perspective `w` is exactly 1, and dividing by it changes no
+        // bit. Targets without a float divider pay a call per division.
+        if w == 1.0 {
+            return Point {
+                x: mapped_x,
+                y: mapped_y,
+            };
+        }
         let safe_w = if w.abs() <= f32::EPSILON { 1.0 } else { w };
 
         Point {
-            x: (self.matrix[0][0] * x + self.matrix[0][1] * y + self.matrix[0][2]) / safe_w,
-            y: (self.matrix[1][0] * x + self.matrix[1][1] * y + self.matrix[1][2]) / safe_w,
+            x: mapped_x / safe_w,
+            y: mapped_y / safe_w,
         }
     }
 

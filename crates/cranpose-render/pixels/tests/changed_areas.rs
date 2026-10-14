@@ -1,7 +1,8 @@
 //! A frame kept by a host and redrawn only in the areas
 //! `PixelsRenderer::update_picture` reports stays equal to a full redraw, frame
-//! after frame, while content moves, changes color, text, alpha, shadow and
-//! stacking order, scrolls under a clip, and appears and disappears.
+//! after frame, while content moves, resizes, changes color, text, alpha,
+//! shadow and stacking order, scrolls under a clip, and appears and
+//! disappears.
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -96,6 +97,28 @@ fn Scenes(captured: Step) {
                     || {},
                 );
             }
+            // A rounded fill that moves and resizes on fractional points in
+            // both axes, cut by its parent's clip on the left and top.
+            Box(
+                Modifier::empty()
+                    .offset(4.0, 140.0)
+                    .width(120.0)
+                    .height(36.0)
+                    .clip_to_bounds(),
+                BoxSpec::default(),
+                move || {
+                    Box(
+                        Modifier::empty()
+                            .offset((n % 5) as f32 * 1.7 - 3.0, (n % 3) as f32 * 2.3 - 2.0)
+                            .width(40.0 + (n * 11 % 50) as f32 * 0.9)
+                            .height(16.0 + (n % 4) as f32 * 1.6)
+                            .rounded_corners(7.0)
+                            .background(color(7, 6)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
             Column(
                 Modifier::empty().offset(170.0, 100.0),
                 ColumnSpec::default(),
@@ -271,5 +294,68 @@ fn a_still_frame_changes_nothing_and_a_new_count_changes_only_its_text() {
     assert!(
         changed < WIDTH * HEIGHT / 10,
         "the count's area is small: {changed} pixels in {areas:?}"
+    );
+}
+
+#[composable]
+fn ProgressBar(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    let width = 40.0 + step.value() as f32 * 3.0;
+    Box(
+        Modifier::empty()
+            .offset(20.0, 50.0)
+            .width(200.0)
+            .height(16.0)
+            .background(Color::from_rgb_u8(40, 44, 64))
+            .rounded_corners(8.0),
+        BoxSpec::default(),
+        move || {
+            Box(
+                Modifier::empty()
+                    .width(width)
+                    .height(16.0)
+                    .background(Color::from_rgb_u8(98, 160, 255))
+                    .rounded_corners(8.0),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
+#[test]
+fn a_growing_bar_changes_only_the_strip_at_its_end() {
+    let captured: Step = Rc::default();
+    let content = Rc::clone(&captured);
+    let mut shell = AppShell::new_with_size(
+        PixelsRenderer::new(),
+        location_key(file!(), line!(), column!()),
+        move || ProgressBar(Rc::clone(&content)),
+        (WIDTH, HEIGHT),
+        (WIDTH as f32, HEIGHT as f32),
+    );
+    let mut picture = Picture::default();
+    let mut areas = Vec::new();
+    shell.update();
+    shell.primary().with_renderer(|renderer| {
+        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+    });
+
+    let step = (*captured.borrow()).expect("the composition remembered the step");
+    step.set(1);
+    shell.update();
+    shell.primary().with_renderer(|renderer| {
+        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+    });
+    // The bar's end moves from x = 60 to 63, and its corners reach 8 in.
+    assert_eq!(
+        areas,
+        [PixelRect {
+            x: 52,
+            y: 50,
+            width: 11,
+            height: 16
+        }]
     );
 }

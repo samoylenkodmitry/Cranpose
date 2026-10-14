@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 use cranpose_render_common::{
     Brush,
@@ -367,8 +367,8 @@ fn push_text_style_draws(
     rect: Rect,
     text_rect: Rect,
     node_layer: &GraphicsLayer,
-    text: &cranpose_ui::text::AnnotatedString,
-    text_style: &TextStyle,
+    text: &Rc<cranpose_ui::text::AnnotatedString>,
+    text_style: &Arc<TextStyle>,
     font_size: f32,
     text_clip: Option<Rect>,
 ) {
@@ -399,13 +399,21 @@ fn push_text_style_draws(
     let text_color =
         resolve_text_color_without_gradient_fallback(text_style, Color(1.0, 1.0, 1.0, 1.0));
     let transformed_text_color = apply_layer_to_color(text_color, node_layer);
-    let mut transformed_text_style = text_style.clone();
-    transformed_text_style.span_style.shadow = None;
-    transformed_text_style.span_style.brush = text_style
-        .span_style
-        .brush
-        .clone()
-        .map(|brush| apply_layer_to_brush(brush, node_layer));
+    // The glyphs draw without the shadow and with the brush the layer
+    // tints; a style with neither is shared as it is.
+    let transformed_text_style =
+        if text_style.span_style.shadow.is_none() && text_style.span_style.brush.is_none() {
+            Arc::clone(text_style)
+        } else {
+            let mut style = TextStyle::clone(text_style);
+            style.span_style.shadow = None;
+            style.span_style.brush = text_style
+                .span_style
+                .brush
+                .clone()
+                .map(|brush| apply_layer_to_brush(brush, node_layer));
+            Arc::new(style)
+        };
     let text_brush = transformed_text_style
         .span_style
         .brush
@@ -421,7 +429,7 @@ fn push_text_style_draws(
         };
         let transformed_shadow_rect = apply_layer_to_rect(shadow_rect, rect, node_layer);
         let transformed_shadow_color = apply_layer_to_color(shadow.color, node_layer);
-        let mut shadow_text_style = transformed_text_style.clone();
+        let mut shadow_text_style = TextStyle::clone(&transformed_text_style);
         shadow_text_style.span_style.brush = None;
         shadow_text_style.span_style.shadow = Some(cranpose_ui::text::Shadow {
             color: transformed_shadow_color,
@@ -430,9 +438,9 @@ fn push_text_style_draws(
         });
         scene.push_text(
             transformed_shadow_rect,
-            Rc::new(text.clone()),
+            Rc::clone(text),
             Color::TRANSPARENT,
-            shadow_text_style,
+            Arc::new(shadow_text_style),
             font_size,
             layer_uniform_scale(node_layer),
             text_clip,
@@ -441,7 +449,7 @@ fn push_text_style_draws(
 
     scene.push_text(
         transformed_shifted_text_rect,
-        Rc::new(text.clone()),
+        Rc::clone(text),
         transformed_text_color,
         transformed_text_style,
         font_size,
@@ -472,7 +480,20 @@ fn push_text_decorations(
     text_brush: &Brush,
     text_clip: Option<Rect>,
 ) {
-    if annotated_text.is_empty() {
+    // A span draws a line only when its style or a span over it has one;
+    // without any, measuring the spans finds nothing to draw.
+    let decorated = |style: &cranpose_ui::text::SpanStyle| {
+        style
+            .text_decoration
+            .is_some_and(|decoration| decoration != TextDecoration::NONE)
+    };
+    if annotated_text.is_empty()
+        || !(decorated(&global_style.span_style)
+            || annotated_text
+                .span_styles
+                .iter()
+                .any(|span| decorated(&span.item)))
+    {
         return;
     }
 
@@ -582,9 +603,22 @@ pub(crate) fn build_raster_scene(
     scale: f32,
 ) -> RasterScene {
     let mut scene = RasterScene::new();
+    fill_raster_scene(&mut scene, graph, diagnostics, scale);
+    scene
+}
+
+/// Replaces what `scene` holds with `graph` drawn at `scale`, keeping the
+/// scene's storage.
+pub(crate) fn fill_raster_scene(
+    scene: &mut RasterScene,
+    graph: &RenderGraph,
+    diagnostics: &RenderDiagnostics,
+    scale: f32,
+) {
+    scene.clear();
     populate_draws_from_graph(
         &graph.root,
-        &mut scene,
+        scene,
         RasterTraversalContext {
             parent_transform: ProjectiveTransform::uniform_scale(scale),
             parent_content_style: GraphicsLayer::default(),
@@ -600,7 +634,6 @@ pub(crate) fn build_raster_scene(
             ),
         },
     );
-    scene
 }
 
 #[derive(Clone, Copy)]
@@ -992,7 +1025,7 @@ pub(crate) fn push_draw_primitive(
                 params.rect,
                 params.text,
                 params.color,
-                params.text_style,
+                Arc::new(params.text_style),
                 params.font_size,
                 params.scale,
                 params.clip,
@@ -1027,7 +1060,7 @@ fn push_shadow_primitive(
     ) -> Option<(crate::scene::DrawShape, BlendMode)> {
         let params = draw_shape_params_for_primitive(prim, layer_bounds, layer, None, blend_mode)?;
         let blend_mode = params.blend_mode;
-        Some((crate::scene::DrawShape::of_params(params, 0), blend_mode))
+        Some((crate::scene::DrawShape::of_params(params), blend_mode))
     }
 
     match shadow_prim {
