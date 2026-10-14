@@ -1404,7 +1404,7 @@ fn FadingLabel(visible: bool) {
 ```
 
 The layer reads `alpha` each frame. The label keeps its layout space.
-Use `AnimatedVisibility` for content entry and exit. Use `Crossfade` to switch content.
+Use `AnimatedVisibility` for content entry and exit. Use `AnimatedContent` to switch content with a transition, and `Crossfade` to fade between contents.
 Use `spring(...)` for spring motion.
 
 ### Draw custom content
@@ -1511,6 +1511,35 @@ fn SaveStatus(saved: bool) {
     });
 }
 ```
+
+#### AnimatedContent
+
+Switch content with enter and exit transitions. `transition_spec` receives the
+state that goes and the state that comes. `.using(SizeTransform::default())`
+animates the container's size between them. A running transition moves layers
+only, so nothing recomposes while it runs.
+
+```rust
+#[composable]
+fn Step(page: u32) {
+    AnimatedContent(
+        page,
+        |from, to| {
+            let forward = to > from;
+            let side = if forward { 1.0 } else { -1.0 };
+            (slide_in_horizontally(side) + fade_in())
+                .together_with(slide_out_horizontally(-side) + fade_out())
+                .using(SizeTransform::default())
+        },
+        |page| {
+            Text(format!("Step {page}"), Modifier::empty(), TextStyle::default());
+        },
+    );
+}
+```
+
+`SeekableAnimatedContent` takes a `ContentSeek` that a gesture holds part of
+the way toward another state, as predictive back does.
 
 ## Accessibility
 

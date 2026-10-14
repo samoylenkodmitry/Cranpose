@@ -1601,6 +1601,13 @@ impl<T: Clone + 'static> State<T> {
         self.value()
     }
 
+    /// Reads the value without subscribing the current scope, for a
+    /// composition that changes what it shows by the value only through a
+    /// layer or a draw that reads it again.
+    pub fn get_non_reactive(&self) -> T {
+        self.with_inner(|inner| inner.state.get())
+    }
+
     pub fn has_subscribers(&self) -> bool {
         self.with_inner(MutableStateInner::has_subscribers)
     }
