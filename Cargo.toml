@@ -50,7 +50,7 @@ exclude = ["forks", "benchmarks"]
 resolver = "2"
 
 [workspace.package]
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 # The oldest toolchain the crates build with: the ESP32 firmware's toolchain
 # (scripts/ci/msrv_toolchain_test.sh); `just msrv-check` builds with it nightly.
@@ -67,43 +67,43 @@ categories = ["gui"]
 # 64-bit atomics on every target: the CPU's own where it has them, and a
 # lock-based fallback on 32-bit microcontrollers such as the ESP32-S3.
 portable-atomic = { version = "1.15", features = ["fallback"] }
-cranpose-localization = { path = "crates/cranpose-localization", version = "0.10.0" }
+cranpose-localization = { path = "crates/cranpose-localization", version = "0.11.0" }
 # Cranpose's patched wgpu (forks/README.md). Its library is still `wgpu`.
 wgpu = { package = "cranpose-wgpu", path = "forks/wgpu/wgpu", version = "30.0.20", default-features = false }
 # Force android-activity to use native-activity feature across all workspace crates
 android-activity = { version = "0.6", features = ["native-activity"] }
 bytemuck = { version = "1.25", features = ["derive"] }
-cranpose-animation = { path = "crates/cranpose-animation", version = "0.10.0" }
-cranpose-capabilities = { path = "crates/cranpose-capabilities", version = "0.10.0" }
-cranpose-liquid = { path = "crates/cranpose-liquid", version = "0.10.0" }
-cranpose = { path = "crates/cranpose", version = "0.10.0", default-features = false }
-cranpose-native = { path = "crates/cranpose-native", version = "0.10.0" }
-cranpose-app-shell = { path = "crates/cranpose-app-shell", version = "0.10.0" }
-cranpose-audio = { path = "crates/cranpose-audio", version = "0.10.0", default-features = false }
-cranpose-core = { path = "crates/cranpose-core", version = "0.10.0" }
-coroflow = { path = "crates/coroflow", version = "0.10.0" }
-cranpose-coroflow = { path = "crates/cranpose-coroflow", version = "0.10.0" }
-cranpose-navigation = { path = "crates/cranpose-navigation", version = "0.10.0" }
-cranpose-foundation = { path = "crates/cranpose-foundation", version = "0.10.0" }
-cranpose-fonts = { path = "crates/cranpose-fonts", version = "0.10.0", default-features = false }
-cranpose-fonts-cjk-data-1 = { path = "crates/cranpose-fonts-cjk-data-1", version = "0.10.0" }
-cranpose-fonts-cjk-data-2 = { path = "crates/cranpose-fonts-cjk-data-2", version = "0.10.0" }
-cranpose-fonts-cjk-data-3 = { path = "crates/cranpose-fonts-cjk-data-3", version = "0.10.0" }
-cranpose-macros = { path = "crates/cranpose-macros", version = "0.10.0" }
-cranpose-media = { path = "crates/cranpose-media", version = "0.10.0", default-features = false }
-cranpose-platform-android = { path = "crates/cranpose-platform/android", version = "0.10.0" }
-cranpose-platform-desktop-winit = { path = "crates/cranpose-platform/desktop-winit", version = "0.10.0", default-features = false }
-cranpose-platform-web = { path = "crates/cranpose-platform/web", version = "0.10.0" }
-cranpose-render-common = { path = "crates/cranpose-render/common", version = "0.10.0", default-features = false }
-cranpose-render-pixels = { path = "crates/cranpose-render/pixels", version = "0.10.0" }
-cranpose-render-wgpu = { path = "crates/cranpose-render/wgpu", version = "0.10.0" }
-cranpose-gl-templates = { path = "crates/cranpose-render/gl-templates", version = "0.10.0" }
-cranpose-runtime-std = { path = "crates/cranpose-runtime-std", version = "0.10.0" }
-cranpose-services = { path = "crates/cranpose-services", version = "0.10.0", default-features = false }
-cranpose-storekit = { path = "crates/cranpose-storekit", version = "0.10.0", default-features = false }
-cranpose-ui = { path = "crates/cranpose-ui", version = "0.10.0" }
-cranpose-ui-graphics = { path = "crates/cranpose-ui-graphics", version = "0.10.0" }
-cranpose-ui-layout = { path = "crates/cranpose-ui-layout", version = "0.10.0" }
+cranpose-animation = { path = "crates/cranpose-animation", version = "0.11.0" }
+cranpose-capabilities = { path = "crates/cranpose-capabilities", version = "0.11.0" }
+cranpose-liquid = { path = "crates/cranpose-liquid", version = "0.11.0" }
+cranpose = { path = "crates/cranpose", version = "0.11.0", default-features = false }
+cranpose-native = { path = "crates/cranpose-native", version = "0.11.0" }
+cranpose-app-shell = { path = "crates/cranpose-app-shell", version = "0.11.0" }
+cranpose-audio = { path = "crates/cranpose-audio", version = "0.11.0", default-features = false }
+cranpose-core = { path = "crates/cranpose-core", version = "0.11.0" }
+coroflow = { path = "crates/coroflow", version = "0.11.0" }
+cranpose-coroflow = { path = "crates/cranpose-coroflow", version = "0.11.0" }
+cranpose-navigation = { path = "crates/cranpose-navigation", version = "0.11.0" }
+cranpose-foundation = { path = "crates/cranpose-foundation", version = "0.11.0" }
+cranpose-fonts = { path = "crates/cranpose-fonts", version = "0.11.0", default-features = false }
+cranpose-fonts-cjk-data-1 = { path = "crates/cranpose-fonts-cjk-data-1", version = "0.11.0" }
+cranpose-fonts-cjk-data-2 = { path = "crates/cranpose-fonts-cjk-data-2", version = "0.11.0" }
+cranpose-fonts-cjk-data-3 = { path = "crates/cranpose-fonts-cjk-data-3", version = "0.11.0" }
+cranpose-macros = { path = "crates/cranpose-macros", version = "0.11.0" }
+cranpose-media = { path = "crates/cranpose-media", version = "0.11.0", default-features = false }
+cranpose-platform-android = { path = "crates/cranpose-platform/android", version = "0.11.0" }
+cranpose-platform-desktop-winit = { path = "crates/cranpose-platform/desktop-winit", version = "0.11.0", default-features = false }
+cranpose-platform-web = { path = "crates/cranpose-platform/web", version = "0.11.0" }
+cranpose-render-common = { path = "crates/cranpose-render/common", version = "0.11.0", default-features = false }
+cranpose-render-pixels = { path = "crates/cranpose-render/pixels", version = "0.11.0" }
+cranpose-render-wgpu = { path = "crates/cranpose-render/wgpu", version = "0.11.0" }
+cranpose-gl-templates = { path = "crates/cranpose-render/gl-templates", version = "0.11.0" }
+cranpose-runtime-std = { path = "crates/cranpose-runtime-std", version = "0.11.0" }
+cranpose-services = { path = "crates/cranpose-services", version = "0.11.0", default-features = false }
+cranpose-storekit = { path = "crates/cranpose-storekit", version = "0.11.0", default-features = false }
+cranpose-ui = { path = "crates/cranpose-ui", version = "0.11.0" }
+cranpose-ui-graphics = { path = "crates/cranpose-ui-graphics", version = "0.11.0" }
+cranpose-ui-layout = { path = "crates/cranpose-ui-layout", version = "0.11.0" }
 
 cursor-icon = "1.2"
 unicode-segmentation = "1.13.3"
