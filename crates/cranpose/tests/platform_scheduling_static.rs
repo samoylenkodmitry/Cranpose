@@ -453,17 +453,18 @@ fn every_nightly_job_waits_for_the_duplicate_check() {
 fn workflow_actions_are_pinned_to_commit_shas() {
     let mut unpinned = Vec::new();
     let mut seen = 0usize;
-    for name in [
-        "rust.yml",
-        "heavy-selfhosted.yml",
-        "nightly.yml",
-        "cancel-superseded.yml",
-        "publish.yml",
-        "release.yml",
-        "deploy-pages.yml",
-        "build-one.yml",
-    ] {
-        let workflow = workspace_source(&format!(".github/workflows/{name}"));
+    let workflows = std::fs::read_dir(workspace_path(".github/workflows"))
+        .expect("failed to read the workflow directory");
+    for entry in workflows {
+        let path = entry.expect("failed to read a workflow entry").path();
+        let Some(name) = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| name.ends_with(".yml"))
+        else {
+            continue;
+        };
+        let workflow = std::fs::read_to_string(&path).expect("failed to read a workflow");
         for line in workflow.lines() {
             let trimmed = line.trim();
             let Some(reference) = trimmed

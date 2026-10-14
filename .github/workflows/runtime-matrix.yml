@@ -1,0 +1,318 @@
+name: Runtime matrix
+
+# The supported platforms run here, not only compile (docs/platform_support.md).
+# Each job starts the real app on that platform and drives it through its
+# input, focus and accessibility paths. Nightly calls this workflow, so a
+# failure here is a red nightly; dispatch it to check one tree by hand.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  # The release web demo in Chromium and Firefox on Linux. The Chromium
+  # checks cover focus, the accessibility mirror and native composition;
+  # Firefox runs the shared WebDriver keyboard checks. Chrome's WebGPU and
+  # WebGL2 page checks already run on every push (rust.yml).
+  web:
+    name: web demo in Chromium and Firefox (linux)
+    runs-on: [self-hosted, Linux, cranpose-heavy]
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Provision toolchain
+        id: provision
+        run: |
+          scripts/ci/provision_toolchain.sh
+          scripts/ci/rustup_locked.sh target add wasm32-unknown-unknown
+          command -v wasm-pack >/dev/null || cargo install wasm-pack --version 0.15.0 --locked
+
+      - name: Build and package the web demo
+        run: |
+          just web
+          apps/desktop-demo/package-web.sh "$RUNNER_TEMP/site"
+
+      - name: Keep the packaged site for the Safari job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-web-site
+          path: ${{ runner.temp }}/site
+          retention-days: 1
+
+      - name: Chromium focus, accessibility and composition
+        run: just robot-accessibility-web "$RUNNER_TEMP/site" "$RUNNER_TEMP/web-results/chromium"
+
+      - name: Firefox keyboard checks
+        if: ${{ !cancelled() }}
+        run: xvfb-run -a just test-web-ime firefox "$RUNNER_TEMP/site" "$RUNNER_TEMP/web-results/firefox"
+
+      - name: Keep the browser reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-web-results
+          path: ${{ runner.temp }}/web-results
+          if-no-files-found: ignore
+
+  safari:
+    name: web demo in Safari (macOS)
+    needs: web
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: runtime-web-site
+          path: ${{ runner.temp }}/site
+      - name: Safari keyboard checks
+        run: |
+          sudo safaridriver --enable
+          bash scripts/a11y/run_webdriver.sh safari "$RUNNER_TEMP/site" "$RUNNER_TEMP/safari"
+      - name: Keep the Safari report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-safari
+          path: ${{ runner.temp }}/safari
+          if-no-files-found: ignore
+
+  # The desktop demo under AT-SPI on a private session bus: activation, ranges,
+  # text and modals through the Linux accessibility API.
+  linux-desktop:
+    name: desktop demo accessibility (linux)
+    runs-on: [self-hosted, Linux, cranpose-heavy]
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Provision toolchain
+        run: scripts/ci/provision_toolchain.sh
+      - name: Build the desktop demo
+        run: just build-accessibility-desktop
+      - name: Network status from NetworkManager
+        run: cargo test --locked --profile ci -p cranpose --lib --features desktop,renderer-wgpu linux_network
+      - name: AT-SPI robot
+        # The recipe takes the host lock's exclusive side itself.
+        shell: bash --noprofile --norc -eo pipefail {0}
+        run: just robot-accessibility-linux target/ci/desktop-app "$RUNNER_TEMP/linux-desktop"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: runtime-linux-desktop
+          path: ${{ runner.temp }}/linux-desktop
+          if-no-files-found: ignore
+
+  # A native Windows desktop session: UI Automation reads the demo's
+  # accessibility tree, and the floating inspector robot runs on Windows.
+  windows:
+    name: desktop demo and inspector (Windows)
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Provision just
+        run: cargo install just --locked
+      - name: Native Windows accessibility and inspector robots
+        run: just test-windows-accessibility
+      - name: Network status from the internet connection profile
+        if: ${{ !cancelled() }}
+        run: cargo test --locked --profile ci -p cranpose --lib --features desktop,renderer-wgpu windows_network
+      - name: Keep Windows robot evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-windows
+          path: target/windows-accessibility
+          if-no-files-found: error
+
+  # The demo and its instrumentation, built for the x86_64 emulator on the Mac
+  # runner, which carries the NDK every Android build uses.
+  android-apks:
+    name: Android robot APKs for the emulator (self-hosted)
+    runs-on: [self-hosted, macOS, ARM64, recent-repo]
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Configure machine-local SDK and cache paths
+        env:
+          RUNNER_NAME: ${{ runner.name }}
+          RUNNER_OS: ${{ runner.os }}
+        run: scripts/ci/android_env.sh
+      - name: Provision toolchains
+        run: |
+          scripts/ci/provision_toolchain.sh
+          scripts/ci/rustup_locked.sh target add x86_64-linux-android
+          command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
+          test -f "$ANDROID_NDK_HOME/source.properties"
+      - name: Build the app and its instrumentation for x86_64
+        env:
+          ORG_GRADLE_PROJECT_cranposeReleaseAbis: x86_64
+        run: just android-robot-build
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-android-apks
+          path: |
+            apps/android-demo/android/app/build/outputs/apk/release/app-release.apk
+            apps/android-demo/android/app/build/outputs/apk/androidTest/release/app-release-androidTest.apk
+          retention-days: 1
+          if-no-files-found: error
+
+  # Reader navigation, the accessibility audit and interaction tests in an
+  # Android emulator. Hosted Linux runners have KVM.
+  android-emulator:
+    name: demo accessibility in the Android emulator
+    needs: android-apks
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: runtime-android-apks
+          path: ${{ runner.temp }}/apks
+      - name: Boot an API 35 emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          image="system-images;android-35;google_apis;x86_64"
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/avd"
+          echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
+          mkdir -p "$ANDROID_AVD_HOME"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install emulator "$image" | tail -3
+          echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n runtime -k "$image" -d pixel_6
+          "$ANDROID_HOME/emulator/emulator" -list-avds
+          "$ANDROID_HOME/emulator/emulator" -avd runtime -no-window -no-audio -no-boot-anim \
+            -no-snapshot -gpu swiftshader_indirect > "$RUNNER_TEMP/emulator.log" 2>&1 &
+          adb wait-for-device
+          for _ in $(seq 150); do
+            [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ] && exit 0
+            sleep 2
+          done
+          echo "The emulator did not finish booting in five minutes." >&2
+          exit 1
+      - name: Accessibility robot
+        run: |
+          python3 scripts/android_accessibility_robot.py --serial emulator-5554 \
+            --output "$RUNNER_TEMP/android" \
+            --app-apk "$RUNNER_TEMP/apks/release/app-release.apk" \
+            --test-apk "$RUNNER_TEMP/apks/androidTest/release/app-release-androidTest.apk"
+      - name: Keep the emulator report
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/android"
+          cp "$RUNNER_TEMP/emulator.log" "$RUNNER_TEMP/android/" || true
+          adb logcat -d > "$RUNNER_TEMP/android/logcat.txt" || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: runtime-android
+          path: ${{ runner.temp }}/android
+          if-no-files-found: ignore
+
+  # The simulator app bundle and the macOS desktop demo, built on the
+  # self-hosted Mac where sccache keeps them warm. An artifact drops file
+  # modes, so both travel as tars.
+  apple-apps:
+    name: iOS simulator and macOS apps (self-hosted)
+    runs-on: [self-hosted, macOS, ARM64, recent-repo]
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Provision toolchain
+        run: |
+          scripts/ci/provision_toolchain.sh
+          scripts/ci/rustup_locked.sh target add aarch64-apple-ios-sim
+      - name: Assemble and pack the simulator app
+        run: |
+          app="$(just ios-sim)"
+          tar -C "$(dirname "$app")" -cf "$RUNNER_TEMP/ios-app.tar" "$(basename "$app")"
+      - name: Build and pack the desktop demo
+        run: |
+          just build-accessibility-desktop
+          tar -C target/ci -cf "$RUNNER_TEMP/macos-app.tar" desktop-app
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-apple-apps
+          path: |
+            ${{ runner.temp }}/ios-app.tar
+            ${{ runner.temp }}/macos-app.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  # The desktop demo under the macOS accessibility API on a hosted Mac, whose
+  # runner may drive other apps' accessibility.
+  macos-desktop:
+    name: desktop demo accessibility (macOS)
+    needs: apple-apps
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: runtime-apple-apps
+          path: ${{ runner.temp }}
+      - name: Accessibility robot
+        run: |
+          brew install just
+          tar -C "$RUNNER_TEMP" -xf "$RUNNER_TEMP/macos-app.tar"
+          just robot-accessibility-macos "$RUNNER_TEMP/desktop-app" "$RUNNER_TEMP/macos-desktop"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: runtime-macos-desktop
+          path: ${{ runner.temp }}/macos-desktop
+          if-no-files-found: ignore
+
+  # XCTest drives the demo's accessibility tree in an iPhone simulator on a
+  # hosted Mac, so the self-hosted Mac keeps its simulators free.
+  ios-simulator:
+    name: demo accessibility in the iOS simulator
+    needs: apple-apps
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: runtime-apple-apps
+          path: ${{ runner.temp }}
+      - name: Accessibility robot
+        run: |
+          tar -C "$RUNNER_TEMP" -xf "$RUNNER_TEMP/ios-app.tar"
+          device="$(xcrun simctl list devices available --json | python3 -c '
+          import json, sys
+          groups = json.load(sys.stdin)["devices"]
+          print(next(d["udid"] for runtime, devices in sorted(groups.items(), reverse=True)
+                     if "iOS" in runtime for d in devices if d["name"].startswith("iPhone")))')"
+          python3 scripts/a11y/ios_robot.py --app "$RUNNER_TEMP/CranposeDemo.app" \
+            --device "$device" --output "$RUNNER_TEMP/ios"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: runtime-ios
+          path: ${{ runner.temp }}/ios
+          if-no-files-found: ignore

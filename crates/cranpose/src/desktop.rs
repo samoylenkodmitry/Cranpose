@@ -7334,6 +7334,10 @@ pub fn try_run(
 
     #[cfg(target_os = "macos")]
     crate::apple_network::register();
+    #[cfg(target_os = "linux")]
+    crate::linux_network::register();
+    #[cfg(target_os = "windows")]
+    crate::windows_network::register();
 
     crate::desktop_bundled_assets::register();
 

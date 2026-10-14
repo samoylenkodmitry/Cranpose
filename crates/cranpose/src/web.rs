@@ -367,6 +367,27 @@ pub async fn run(
         desired_maximum_frame_latency: 2,
     };
 
+    // The renderer starts, and with it the first screen's recorded
+    // pipelines, before the surface: the page reads nothing back from the
+    // GPU process until its first frame, so on WebGL the GPU process links
+    // their programs, one at a time, while the page sets up its surface and
+    // composes. On a Mate 20 X the gauntlet's programs started linking
+    // 30-40 ms sooner, and its first content in a cold Chrome came about
+    // 35 ms sooner.
+    let fonts = settings.resolve_font_set();
+    fold_glass_on_mobile_devices(&window);
+    let mut renderer = WgpuRenderer::with_font_set(fonts);
+    let (device, queue) = (Arc::new(device), Arc::new(queue));
+    let discovery = PipelineDiscovery::new(GpuTarget {
+        device: Arc::clone(&device),
+        queue: Arc::clone(&queue),
+        surface_format: crate::surface_format::display_surface_view_format(surface_format),
+        backend: adapter_info.backend,
+        downlevel: adapter.get_downlevel_capabilities().flags,
+        surface_size: (buffer_width, buffer_height),
+    });
+    discovery.start(&mut renderer).await;
+
     surface.configure(&device, &surface_config);
 
     let mut surface_config = surface_config;
@@ -417,28 +438,15 @@ pub async fn run(
         "Web canvas css={width}x{height}, buffer={actual_width}x{actual_height}, effective_scale={effective_scale:.2}, device_scale={scale_factor:.2}"
     );
 
-    let fonts = settings.resolve_font_set();
-    fold_glass_on_mobile_devices(&window);
-    let mut renderer = WgpuRenderer::with_font_set(fonts);
-    let (device, queue) = (Arc::new(device), Arc::new(queue));
     let content = crate::gpu_context::provide_gpu_context(
         crate::GpuContext {
             instance: instance.clone(),
             adapter: adapter.clone(),
-            device: Arc::clone(&device),
-            queue: Arc::clone(&queue),
+            device,
+            queue,
         },
         content,
     );
-    let discovery = PipelineDiscovery::new(GpuTarget {
-        device,
-        queue,
-        surface_format: crate::surface_format::display_surface_view_format(surface_format),
-        backend: adapter_info.backend,
-        downlevel: adapter.get_downlevel_capabilities().flags,
-        surface_size: (actual_width, actual_height),
-    });
-    discovery.start(&mut renderer).await;
 
     // The page runs idle prefetch passes between frames (`web_idle_prefetch`):
     // a lazy list leaves them the items beyond its viewport that its scroll

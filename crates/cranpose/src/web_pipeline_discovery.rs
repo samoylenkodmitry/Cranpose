@@ -59,7 +59,7 @@ pub(crate) struct GpuTarget {
     pub(crate) surface_format: wgpu::TextureFormat,
     pub(crate) backend: wgpu::Backend,
     pub(crate) downlevel: wgpu::DownlevelFlags,
-    /// The size of the canvas's drawing buffer, in pixels.
+    /// The size the canvas's drawing buffer was given, in pixels.
     pub(crate) surface_size: (u32, u32),
 }
 

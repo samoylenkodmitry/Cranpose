@@ -74,8 +74,8 @@ fn alpha_masks_render_exactly_as_rgba_images() {
 
 fn draw_raster_scene_for_test(frame: &mut [u8], width: u32, height: u32, scene: &RasterScene) {
     let diagnostics = RenderDiagnostics::new();
-    let text_resources = SoftwareTextResources::default();
-    draw_raster_scene(frame, width, height, scene, &diagnostics, &text_resources);
+    let text = TextRaster::new(SoftwareTextResources::default());
+    draw_raster_scene(frame, width, height, scene, &diagnostics, &text);
 }
 
 #[test]

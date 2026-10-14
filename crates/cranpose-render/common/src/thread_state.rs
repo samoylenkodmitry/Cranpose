@@ -8,7 +8,7 @@ use cranpose_ui_graphics::FxBuildHasher;
 
 use crate::{
     layer_recycling::Pool,
-    scene_builder::{HitGraphState, RecorderKey, RecorderSlot, TranslateScratch},
+    scene_builder::{HitGraphState, NodeUpdate, RecorderKey, RecorderSlot, TranslateScratch},
 };
 
 pub(crate) struct RenderThreadState {
@@ -18,6 +18,10 @@ pub(crate) struct RenderThreadState {
     /// The hit geometry a subtree had before its rebuild, kept from one
     /// rebuild to the next so no frame allocates it.
     pub(crate) hit_geometry_scratch: Cell<Vec<HitGraphState>>,
+    /// The dirty nodes of a scene update, kept empty between updates so no
+    /// frame makes or allocates the map.
+    pub(crate) dirty_node_scratch:
+        Cell<Option<cranpose_core::collections::map::HashMap<cranpose_core::NodeId, NodeUpdate>>>,
     pub(crate) command_recordings: RefCell<HashMap<RecorderKey, RecorderSlot, FxBuildHasher>>,
     pub(crate) recording_generation: Cell<u64>,
     #[cfg(test)]
@@ -31,6 +35,7 @@ impl RenderThreadState {
             dirty_ancestry: Cell::new(NodeMarks::default()),
             translate_scratch: Cell::new(TranslateScratch::default()),
             hit_geometry_scratch: Cell::new(Vec::new()),
+            dirty_node_scratch: Cell::new(None),
             command_recordings: RefCell::new(HashMap::default()),
             recording_generation: Cell::new(0),
             #[cfg(test)]

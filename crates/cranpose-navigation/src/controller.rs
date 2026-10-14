@@ -39,6 +39,9 @@ impl<R> PartialEq for Entry<R> {
 #[derive(Clone)]
 pub(crate) struct BackStack<R> {
     entries: Vec<Entry<R>>,
+    /// The segments that pops with [`NavOptions::save_state`] kept, each
+    /// bottom first, for [`NavOptions::restore_state`] to bring back.
+    saved: Vec<Vec<Entry<R>>>,
     next_id: u64,
     /// Where the entries' saved state lives, each entry in a child scope
     /// named by its id.
@@ -49,6 +52,7 @@ impl<R: Clone + PartialEq> BackStack<R> {
     fn new(start: R, saveables: SaveableScope) -> Self {
         let mut stack = Self {
             entries: Vec::new(),
+            saved: Vec::new(),
             next_id: 0,
             saveables,
         };
@@ -72,6 +76,36 @@ impl<R: Clone + PartialEq> BackStack<R> {
         };
         self.entries
             .split_off(if inclusive { index } else { index + 1 })
+    }
+
+    /// Keeps `popped` for a later [`NavOptions::restore_state`], in place of
+    /// the segments kept before that hold one of its routes. Those are off
+    /// screen, so their view models are dropped here; they are returned for
+    /// [`forget`] to forget their saved state.
+    fn keep(&mut self, popped: Vec<Entry<R>>) -> Vec<Entry<R>> {
+        let (replaced, kept) = std::mem::take(&mut self.saved)
+            .into_iter()
+            .partition::<Vec<_>, _>(|segment| {
+                segment
+                    .iter()
+                    .any(|entry| popped.iter().any(|new| new.route == entry.route))
+            });
+        self.saved = kept;
+        self.saved.push(popped);
+        let replaced: Vec<Entry<R>> = replaced.into_iter().flatten().collect();
+        for entry in &replaced {
+            entry.store.clear();
+        }
+        replaced
+    }
+
+    /// Takes the kept segment that holds `route`.
+    fn take_saved(&mut self, route: &R) -> Option<Vec<Entry<R>>> {
+        let index = self
+            .saved
+            .iter()
+            .position(|segment| segment.iter().any(|entry| entry.route == *route))?;
+        Some(self.saved.swap_remove(index))
     }
 
     fn top_route(&self) -> Option<&R> {
@@ -109,6 +143,8 @@ fn forget<R>(popped: impl IntoIterator<Item = Entry<R>>) -> bool {
 pub struct NavOptions<R> {
     pop_up_to: Option<(R, bool)>,
     launch_single_top: bool,
+    save_state: bool,
+    restore_state: bool,
 }
 
 impl<R> Default for NavOptions<R> {
@@ -116,6 +152,8 @@ impl<R> Default for NavOptions<R> {
         Self {
             pop_up_to: None,
             launch_single_top: false,
+            save_state: false,
+            restore_state: false,
         }
     }
 }
@@ -140,6 +178,27 @@ impl<R> NavOptions<R> {
     #[must_use]
     pub fn launch_single_top(mut self) -> Self {
         self.launch_single_top = true;
+        self
+    }
+
+    /// Keeps the entries that [`Self::pop_up_to`] pops, with their view
+    /// models and saved state, for a later navigation with
+    /// [`Self::restore_state`] to bring back — Android's
+    /// `popUpTo(route) { saveState = true }`. A tab bar uses it to give each
+    /// tab its own back stack.
+    #[must_use]
+    pub fn save_state(mut self) -> Self {
+        self.save_state = true;
+        self
+    }
+
+    /// Brings back the entries a [`Self::save_state`] pop kept for the route,
+    /// bottom first, in place of a new entry for it — Android's
+    /// `restoreState = true`. Without such entries the route is pushed as
+    /// usual.
+    #[must_use]
+    pub fn restore_state(mut self) -> Self {
+        self.restore_state = true;
         self
     }
 }
@@ -177,17 +236,28 @@ impl<R: Clone + PartialEq + 'static> NavController<R> {
     /// Navigates to `route` the way `options` say — Android's
     /// `navigate(route) { popUpTo(...); launchSingleTop = true }`.
     pub fn navigate_with(&self, route: R, options: NavOptions<R>) {
-        let popped = self.stack.update(|stack| {
+        let forgotten = self.stack.update(|stack| {
             let popped = options
                 .pop_up_to
                 .map(|(target, inclusive)| stack.split_above(&target, inclusive))
                 .unwrap_or_default();
-            if !(options.launch_single_top && stack.top_route() == Some(&route)) {
+            let forgotten = if options.save_state && !popped.is_empty() {
+                stack.keep(popped)
+            } else {
+                popped
+            };
+            let restored = options
+                .restore_state
+                .then(|| stack.take_saved(&route))
+                .flatten();
+            if let Some(restored) = restored {
+                stack.entries.extend(restored);
+            } else if !(options.launch_single_top && stack.top_route() == Some(&route)) {
                 stack.push(route);
             }
-            popped
+            forgotten
         });
-        forget(popped);
+        forget(forgotten);
     }
 
     /// Pops the top entry and returns whether there was one — Android's
@@ -306,7 +376,13 @@ pub fn rememberSaveableNavController<R: Clone + PartialEq + 'static>(
             .and_then(|saved| saved_stack::decode(&saved, &saver, &saveables));
         let stack = match restored {
             Some(stack) => {
-                saveables.forget_children_except(stack.entries.iter().map(|entry| entry.id));
+                saveables.forget_children_except(
+                    stack
+                        .entries
+                        .iter()
+                        .chain(stack.saved.iter().flatten())
+                        .map(|entry| entry.id),
+                );
                 stack
             }
             None => {

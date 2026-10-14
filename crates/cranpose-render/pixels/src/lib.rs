@@ -66,7 +66,7 @@ fn valid_scale(scale: f32) -> f32 {
 /// A renderer that draws the scene into a caller-owned RGBA pixel buffer on the CPU.
 pub struct PixelsRenderer {
     scene: Scene,
-    text_resources: SoftwareTextResources,
+    text: draw::TextRaster,
     /// The app context this renderer gave its text measurer.
     app_context: Option<std::rc::Weak<cranpose_ui::AppContext>>,
 }
@@ -90,7 +90,7 @@ impl PixelsRenderer {
     pub fn with_fonts(fonts: &[&'static [u8]]) -> Self {
         Self {
             scene: Scene::new(),
-            text_resources: SoftwareTextResources::from_fonts(fonts),
+            text: draw::TextRaster::new(SoftwareTextResources::from_fonts(fonts)),
             app_context: None,
         }
     }
@@ -98,13 +98,7 @@ impl PixelsRenderer {
     /// Draws the scene into `frame`, an RGBA8 buffer of `width` by `height` pixels, at one device
     /// pixel per logical pixel.
     pub fn draw(&self, frame: &mut [u8], width: u32, height: u32) {
-        draw::draw_scene_with_text_resources(
-            frame,
-            width,
-            height,
-            &self.scene,
-            &self.text_resources,
-        );
+        draw::draw_scene_scaled(frame, width, height, &self.scene, &self.text, 1.0);
     }
 
     /// Rasterizes logical scene coordinates at `scale` device pixels per point.
@@ -115,7 +109,7 @@ impl PixelsRenderer {
             width,
             height,
             &self.scene,
-            &self.text_resources,
+            &self.text,
             valid_scale(scale),
         );
     }
@@ -193,12 +187,7 @@ impl PixelsRenderer {
             width: area.width,
             height: area.height,
         };
-        draw::draw_raster_window(
-            &mut target,
-            raster,
-            self.scene.diagnostics(),
-            &self.text_resources,
-        );
+        draw::draw_raster_window(&mut target, raster, self.scene.diagnostics(), &self.text);
     }
 }
 
@@ -215,13 +204,7 @@ impl PixelsRenderer {
     ) {
         let mut scene = std::mem::take(&mut frame.scene);
         self.fill_raster_scene(&mut scene, valid_scale(scale));
-        frame.compose(
-            &scene,
-            width,
-            height,
-            self.scene.diagnostics(),
-            &self.text_resources,
-        );
+        frame.compose(&scene, width, height, self.scene.diagnostics(), &self.text);
         frame.scene = scene;
     }
 }
@@ -232,7 +215,7 @@ impl Renderer for PixelsRenderer {
 
     fn attach_app_context_services(&mut self, app_context: &cranpose_ui::AppContext) {
         app_context.set_text_measurer(CachedFontTextMeasurer::with_text_resources(
-            self.text_resources.clone(),
+            self.text.resources.clone(),
             64,
         ));
         self.app_context = Some(app_context.downgrade());
@@ -240,10 +223,10 @@ impl Renderer for PixelsRenderer {
 
     #[cfg(feature = "installed-fonts")]
     fn apply_installed_fonts(&mut self, app_context: &cranpose_ui::AppContext) {
-        let Some(resources) = self.text_resources.with_installed_faces() else {
+        let Some(resources) = self.text.resources.with_installed_faces() else {
             return;
         };
-        self.text_resources = resources;
+        self.text = draw::TextRaster::new(resources);
         let attached = self
             .app_context
             .as_ref()
