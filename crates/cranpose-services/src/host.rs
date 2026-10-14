@@ -4,9 +4,11 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicU8, AtomicU64, Ordering},
+        atomic::{AtomicU8, Ordering},
     },
 };
+
+use portable_atomic::AtomicU64;
 
 pub use crate::durable_save::{
     DurableSaveEffect, DurableSaveError, DurableSaveOutcome, DurableSaveRegistration,

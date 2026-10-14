@@ -2,10 +2,11 @@
 
 use std::sync::{
     OnceLock,
-    atomic::{AtomicU32, AtomicU64, Ordering},
+    atomic::{AtomicU32, Ordering},
 };
 
 use ab_glyph::{Font, GlyphId};
+use portable_atomic::AtomicU64;
 
 /// The first character the table holds: space.
 const FIRST: u32 = 0x20;

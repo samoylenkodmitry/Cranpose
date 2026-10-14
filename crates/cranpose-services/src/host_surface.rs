@@ -7,12 +7,10 @@
 //! different size — reads observable state here instead of reaching for a
 //! platform API and a resize callback of its own.
 
-use std::sync::{
-    Arc, Mutex, OnceLock,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::{Arc, Mutex, OnceLock, atomic::Ordering};
 
 use cranpose_core::{State, rememberEventStream};
+use portable_atomic::AtomicU64;
 
 use crate::registry::ServiceRegistry;
 

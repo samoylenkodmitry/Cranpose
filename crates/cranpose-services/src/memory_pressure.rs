@@ -6,12 +6,10 @@
 //! stream and give back what they can rebuild — caches, warm model sessions,
 //! pools.
 
-use std::sync::{
-    Arc, Mutex, OnceLock,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::{Arc, Mutex, OnceLock, atomic::Ordering};
 
 use cranpose_core::{EventStream, rememberEventStream};
+use portable_atomic::AtomicU64;
 
 /// How hard the platform asks for memory back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

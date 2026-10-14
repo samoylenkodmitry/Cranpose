@@ -2,11 +2,10 @@ use std::{
     collections::BTreeMap,
     ffi::{OsStr, OsString},
     str::FromStr,
-    sync::{
-        Mutex, OnceLock, PoisonError,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Mutex, OnceLock, PoisonError, atomic::Ordering},
 };
+
+use portable_atomic::AtomicU64;
 
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 

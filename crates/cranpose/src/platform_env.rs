@@ -34,7 +34,7 @@ impl PlatformEnvironment {
     }
 
     #[cfg_attr(
-        not(any(target_os = "android", target_os = "ios", feature = "watchos")),
+        not(any(target_os = "android", target_os = "ios", feature = "framebuffer")),
         expect(dead_code)
     )]
     pub(crate) fn set_safe_area(&self, insets: EdgeInsets) -> bool {

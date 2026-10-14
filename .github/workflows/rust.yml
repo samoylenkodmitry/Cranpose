@@ -226,6 +226,10 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just clippy-robot
 
+      - name: Run clippy for a CPU without 64-bit atomics
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just clippy-no-atomic64
+
       - name: Build documentation
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         # A broken intra-doc link is a broken published page.

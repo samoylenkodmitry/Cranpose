@@ -37,6 +37,7 @@ log = "0.4"
 tiny-skia = { version = "0.12.0", default-features = false, features = ["std", "simd"], optional = true }
 thiserror = "2.0.21"
 cranpose-localization = { workspace = true, optional = true }
+portable-atomic.workspace = true
 
 [features]
 default = []

@@ -154,6 +154,8 @@ mod android_wire_escape;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_writable_folder;
 mod app_launcher;
+#[cfg(feature = "framebuffer")]
+pub mod framebuffer;
 #[cfg(feature = "preview")]
 pub mod preview;
 #[cfg(feature = "watchos")]
@@ -461,7 +463,7 @@ pub mod prelude {
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"),
     feature = "embed",
-    feature = "watchos"
+    feature = "framebuffer"
 ))]
 pub(crate) mod platform_env;
 

@@ -8,13 +8,11 @@
 
 use std::{
     collections::VecDeque,
-    sync::{
-        Arc, Mutex, OnceLock,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex, OnceLock, atomic::Ordering},
 };
 
 use cranpose_core::{EventStream, rememberEventStream};
+use portable_atomic::AtomicU64;
 
 use crate::content::{BytesContent, ContentHandle, ContentMetadata, resolve_content};
 

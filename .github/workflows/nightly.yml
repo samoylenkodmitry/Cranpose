@@ -163,3 +163,41 @@ jobs:
       - name: sccache stats
         if: always()
         run: '"$RUSTC_WRAPPER" --show-stats || true'
+
+  # The ESP32-S3 firmware, built with the Xtensa toolchain, linted, and booted
+  # in Espressif's QEMU until it presents its first frame. The first build on
+  # a runner downloads ESP-IDF, too slow for a push; `clippy-no-atomic64`
+  # covers the framework crates there.
+  esp32:
+    name: ESP32-S3 firmware in QEMU (macOS)
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Provision the ESP32 toolchain
+        id: provision
+        run: |
+          scripts/ci/provision_toolchain.sh
+          just esp32-setup
+
+      - name: Lint the ESP-IDF crates
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just esp32-clippy
+
+      - name: Boot the demo in QEMU
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just esp32-qemu-check
+
+      - name: Upload the panel picture
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: esp32-qemu-panel
+          path: target/esp32/qemu.png
+          if-no-files-found: ignore
