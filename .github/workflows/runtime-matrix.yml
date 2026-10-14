@@ -109,11 +109,11 @@ jobs:
           path: target/windows-accessibility
           if-no-files-found: error
 
-  # The demo and its instrumentation, built for the x86_64 emulator on the
-  # Linux runner, where sccache keeps the build warm.
+  # The demo and its instrumentation, built for the x86_64 emulator on the Mac
+  # runner, which carries the NDK every Android build uses.
   android-apks:
-    name: Android robot APKs for the emulator (linux)
-    runs-on: [self-hosted, Linux, cranpose-heavy]
+    name: Android robot APKs for the emulator (self-hosted)
+    runs-on: [self-hosted, macOS, ARM64, recent-repo]
     timeout-minutes: 60
     defaults:
       run:
@@ -130,9 +130,7 @@ jobs:
           scripts/ci/provision_toolchain.sh
           scripts/ci/rustup_locked.sh target add x86_64-linux-android
           command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
-          if [[ ! -f "$ANDROID_NDK_HOME/source.properties" ]]; then
-            sdkmanager --install "ndk;$(basename "$ANDROID_NDK_HOME")" < <(yes)
-          fi
+          test -f "$ANDROID_NDK_HOME/source.properties"
       - name: Build the app and its instrumentation for x86_64
         env:
           ORG_GRADLE_PROJECT_cranposeReleaseAbis: x86_64
