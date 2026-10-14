@@ -243,6 +243,9 @@ preview = ["embed", "dep:inventory", "cranpose-ui/inspection"]
 # the default feature set are unaffected.
 hot-reload = ["cranpose-core/hot-reload", "cranpose-macros/hot-reload"]
 webview = ["dep:wry", "dep:gtk"]
+# A tray icon on macOS, Windows and Linux and a native menu bar on macOS
+# (`Tray`, `MenuBar`). Linux trays go over D-Bus, without GTK.
+desktop-menus = ["desktop-shell", "dep:tray-icon", "dep:muda"]
 
 [dependencies]
 cranpose-app-shell = { workspace = true }
@@ -755,8 +758,15 @@ wgpu = { version = "30.0.1", default-features = false, optional = true, features
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux", target_os = "ios"))'.dependencies]
 wry = { version = "0.57", default-features = false, features = ["os-webview", "x11"], optional = true }
 
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+tray-icon = { version = "0.26.1", default-features = false, optional = true }
+muda = { version = "0.21.2", default-features = false, optional = true }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = { version = "0.18.2", optional = true }
+# The tray as a StatusNotifierItem over D-Bus (`ksni`): no GTK main loop.
+tray-icon = { version = "0.26.1", default-features = false, features = ["ksni"], optional = true }
+muda = { version = "0.21.2", default-features = false, features = ["snapshot"], optional = true }
 
 [dev-dependencies]
 cranpose-animation.workspace = true

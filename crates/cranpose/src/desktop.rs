@@ -698,6 +698,16 @@ struct App {
     #[cfg(target_os = "macos")]
     application_menu: ApplicationMenu,
     integration: crate::desktop_integration::Integration,
+    /// The tray icon and menu bar built for the composition.
+    #[cfg(all(
+        feature = "desktop-menus",
+        any(
+            target_os = "macos",
+            target_os = "windows",
+            all(target_os = "linux", not(target_arch = "wasm32"))
+        )
+    ))]
+    native_menus: crate::desktop_menus::NativeMenus,
     device_loss: device_loss::DeviceLoss,
     primary_initial_present_pending: bool,
     /// The primary window's GPU, opening while the platform starts.
@@ -786,6 +796,15 @@ impl App {
             #[cfg(target_os = "macos")]
             application_menu: ApplicationMenu::Owed,
             integration,
+            #[cfg(all(
+                feature = "desktop-menus",
+                any(
+                    target_os = "macos",
+                    target_os = "windows",
+                    all(target_os = "linux", not(target_arch = "wasm32"))
+                )
+            ))]
+            native_menus: crate::desktop_menus::NativeMenus::default(),
             device_loss: device_loss::DeviceLoss::default(),
             primary_initial_present_pending: false,
             gpu_start,
@@ -1266,9 +1285,32 @@ impl App {
         #[cfg(target_os = "macos")]
         self.application_menu.install_when_due();
         self.recover_lost_device(event_loop);
+        // The menu bar follows the application menu, which waits for the
+        // first presented frame.
+        let menu_bar_due = self.application_menu_installed();
         if let Some(app) = self.app.as_mut() {
             self.integration.about_to_wait(app, &self.event_proxy);
+            #[cfg(all(
+                feature = "desktop-menus",
+                any(
+                    target_os = "macos",
+                    target_os = "windows",
+                    all(target_os = "linux", not(target_arch = "wasm32"))
+                )
+            ))]
+            self.native_menus
+                .serve(app, &self.event_proxy, menu_bar_due);
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn application_menu_installed(&self) -> bool {
+        self.application_menu == ApplicationMenu::Installed
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn application_menu_installed(&self) -> bool {
+        true
     }
 
     fn sync_native_windows(&mut self, event_loop: &dyn ActiveEventLoop) {
@@ -6717,6 +6759,21 @@ impl ApplicationHandler for App {
                         self.exiting = true;
                         event_loop.exit();
                         return;
+                    }
+                    #[cfg(all(
+                        feature = "desktop-menus",
+                        any(
+                            target_os = "macos",
+                            target_os = "windows",
+                            all(target_os = "linux", not(target_arch = "wasm32"))
+                        )
+                    ))]
+                    RobotCommand::ChooseMenuItem { tray, labels } => {
+                        let response = match self.native_menus.choose(tray, &labels) {
+                            Ok(()) => RobotResponse::Ok,
+                            Err(error) => RobotResponse::Error(error),
+                        };
+                        let _ = controller.tx.send(response);
                     }
                 }
             }

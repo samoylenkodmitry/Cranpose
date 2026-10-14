@@ -53,7 +53,7 @@ web = [
     "dep:wasm-logger",
 ]
 # Enable real app robot testing
-robot-app = ["logging", "cranpose-ui/test-helpers"]
+robot-app = ["logging", "cranpose-ui/test-helpers", "cranpose/desktop-menus"]
 # Enable env_logger (adds ~600KB from regex)
 logging = ["dep:env_logger"]
 
