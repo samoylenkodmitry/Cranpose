@@ -25,6 +25,7 @@ mod slider_motion;
 mod tab_bar;
 mod tab_lighting;
 mod toggle;
+mod tooltip;
 mod vibrancy;
 
 pub use bottom_sheet::{LiquidModalBottomSheet, LiquidSheetState, rememberLiquidSheetState};
@@ -54,6 +55,7 @@ pub use tab_bar::{
     tab_lens_resting_left,
 };
 pub use toggle::LiquidToggle;
+pub use tooltip::LiquidTooltipBox;
 
 #[cfg(test)]
 #[path = "tests/widgets_warm_up_tests.rs"]

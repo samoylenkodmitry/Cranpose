@@ -1603,6 +1603,29 @@ fn DoneButton() {
 }
 ```
 
+`Modifier::on_long_press(label, action)` calls `action` when a press rests on
+a control for 400 ms without moving, and offers a screen reader the same
+action under `label`. The press then belongs to the long press, so the control
+does not click when it ends. `FocusWithin(on_change, content)` tells
+`on_change` whether keyboard focus is on a control composed in `content`; Tab
+does not stop on it.
+
+```rust
+use cranpose::prelude::*;
+
+#[composable]
+fn PhotoTile(selected: MutableState<bool>, on_open: impl Fn() + 'static) {
+    Box(
+        Modifier::empty()
+            .size(Size::new(96.0, 96.0))
+            .clickable(move |_| on_open())
+            .on_long_press("Select photo", move || selected.set(true)),
+        BoxSpec::default(),
+        || {},
+    );
+}
+```
+
 Verify custom controls with TalkBack on Android, VoiceOver on Apple platforms,
 and the target desktop or browser screen reader. The [accessibility guide](accessibility.md)
 covers focus groups, canvas controls, announcements and validation tools.
@@ -3451,6 +3474,21 @@ if open.get() {
         LiquidActionChip(Modifier::empty().padding(16.0), false, move || done.hide(), "Done".into());
     });
 }
+```
+
+#### LiquidTooltipBox
+
+Show a short label above a control while the pointer rests on it, while the
+control has keyboard focus, and for a moment after a long press. A screen
+reader asks for it with the long press action the app names.
+
+```rust preview=tooltip
+use cranpose::liquid::prelude::*;
+
+let count = rememberMutableStateOf(|| 0);
+LiquidTooltipBox("Add an item", "Show tooltip", Modifier::empty(), move || {
+    LiquidActionChip(Modifier::empty(), true, move || count.update(|value| *value += 1), "Add".into());
+});
 ```
 
 #### LiquidSlider
