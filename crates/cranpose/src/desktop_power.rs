@@ -15,7 +15,7 @@ impl PowerMonitor for DesktopPowerMonitor {
     fn capabilities(&self) -> PowerCapabilities {
         PowerCapabilities {
             thermal: self.thermal_state().is_supported(),
-            battery: cfg!(target_os = "linux"),
+            battery: self.battery_status().is_supported(),
             background_restriction: false,
         }
     }
@@ -40,10 +40,40 @@ impl PowerMonitor for DesktopPowerMonitor {
         {
             linux::battery_status()
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
+        {
+            windows_power::battery_status()
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
             PowerReading::Unsupported
         }
+    }
+}
+
+/// The battery from WinRT's `PowerManager`.
+#[cfg(target_os = "windows")]
+mod windows_power {
+    use windows::System::Power::{BatteryStatus as WindowsBattery, PowerManager};
+
+    use super::{BatteryStatus, PowerReading};
+
+    pub(super) fn battery_status() -> PowerReading<BatteryStatus> {
+        let Ok(status) = PowerManager::BatteryStatus() else {
+            return PowerReading::Unsupported;
+        };
+        if status == WindowsBattery::NotPresent {
+            return PowerReading::Unsupported;
+        }
+        let Ok(percent) = PowerManager::RemainingChargePercent() else {
+            return PowerReading::Unsupported;
+        };
+        PowerReading::Known(BatteryStatus {
+            percent: u8::try_from(percent.clamp(0, 100)).unwrap_or(100),
+            // Idle: on external power and neither charging nor draining, as
+            // a full battery is.
+            charging: status == WindowsBattery::Charging || status == WindowsBattery::Idle,
+        })
     }
 }
 
