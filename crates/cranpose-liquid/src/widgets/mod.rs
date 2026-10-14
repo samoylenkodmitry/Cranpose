@@ -1,5 +1,6 @@
 //! The Liquid component set.
 
+mod bottom_sheet;
 mod button;
 mod card;
 mod chip;
@@ -26,6 +27,7 @@ mod tab_lighting;
 mod toggle;
 mod vibrancy;
 
+pub use bottom_sheet::{LiquidModalBottomSheet, LiquidSheetState, rememberLiquidSheetState};
 pub use button::{
     GlassButton, GlassButtonLabel, GlassButtonSize, GlassButtonSpec, GlassButtonStyle,
     GlassIconButton, GlassIconButtonGroup, GlassIconButtonGroupItem, GlassIconButtonGroupScope,
