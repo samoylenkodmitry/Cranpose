@@ -11,15 +11,15 @@ enable_local_sccache
 enable_local_cargo_job_limit
 
 if [ -n "${RUSTC_WRAPPER:-}" ]; then
-    echo "Using local rustc wrapper: $RUSTC_WRAPPER"
+    echo "Using local rustc wrapper: $RUSTC_WRAPPER" >&2
 fi
 
 if [ -n "${TMPDIR:-}" ]; then
-    echo "Using local tmpdir: $TMPDIR"
+    echo "Using local tmpdir: $TMPDIR" >&2
 fi
 
 if [ -n "${CARGO_BUILD_JOBS:-}" ]; then
-    echo "Using local cargo build jobs: $CARGO_BUILD_JOBS"
+    echo "Using local cargo build jobs: $CARGO_BUILD_JOBS" >&2
 fi
 
 exec cargo "$@"
