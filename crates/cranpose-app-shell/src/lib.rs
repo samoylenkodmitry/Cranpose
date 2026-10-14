@@ -64,8 +64,33 @@ pub use wheel::WheelScroll;
     not(target_os = "android"),
     not(target_os = "ios")
 ))]
+#[derive(Default)]
 struct ShellClipboard {
-    inner: std::rc::Rc<std::cell::RefCell<Option<arboard::Clipboard>>>,
+    /// The system clipboard, opened at the first copy or paste: opened at
+    /// launch, it held the main thread ~0.8 ms on an Apple M5, for apps that
+    /// never touch it too.
+    inner: std::cell::OnceCell<std::cell::RefCell<Option<arboard::Clipboard>>>,
+}
+
+#[cfg(all(
+    feature = "clipboard-native",
+    not(target_arch = "wasm32"),
+    not(target_os = "android"),
+    not(target_os = "ios")
+))]
+impl ShellClipboard {
+    /// `use_clipboard`'s answer for the system clipboard, opened on first
+    /// use; `None` when it cannot be opened.
+    fn with<T>(
+        &self,
+        use_clipboard: impl FnOnce(&mut arboard::Clipboard) -> Option<T>,
+    ) -> Option<T> {
+        self.inner
+            .get_or_init(|| std::cell::RefCell::new(arboard::Clipboard::new().ok()))
+            .borrow_mut()
+            .as_mut()
+            .and_then(use_clipboard)
+    }
 }
 
 #[cfg(all(
@@ -76,16 +101,11 @@ struct ShellClipboard {
 ))]
 impl cranpose_ui::clipboard_session::PlatformClipboard for ShellClipboard {
     fn write_text(&self, text: &str) {
-        if let Some(clipboard) = self.inner.borrow_mut().as_mut() {
-            let _ = clipboard.set_text(text);
-        }
+        self.with(|clipboard| clipboard.set_text(text).ok());
     }
 
     fn read_text(&self) -> Option<String> {
-        self.inner
-            .borrow_mut()
-            .as_mut()
-            .and_then(|clipboard| clipboard.get_text().ok())
+        self.with(|clipboard| clipboard.get_text().ok())
     }
 }
 #[cfg(any(test, feature = "test-support"))]
@@ -630,10 +650,8 @@ where
                 not(target_os = "ios")
             ))]
             {
-                let clipboard =
-                    std::rc::Rc::new(std::cell::RefCell::new(arboard::Clipboard::new().ok()));
                 cranpose_ui::clipboard_session::set_platform_clipboard(std::rc::Rc::new(
-                    ShellClipboard { inner: clipboard },
+                    ShellClipboard::default(),
                 ));
             }
             if let Err(err) = composition.render_stable(root_key, &mut *build) {
