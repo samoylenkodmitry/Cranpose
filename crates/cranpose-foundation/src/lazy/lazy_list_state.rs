@@ -263,6 +263,9 @@ struct LazyListStateInner {
     pending_scroll_to_index: Option<(usize, f32)>,
 
     layout_info: LazyListLayoutInfo,
+    /// The visible items of the layout info before the last, cleared, which
+    /// the next measure pass fills.
+    spare_items_info: Vec<LazyListItemInfo>,
     current_can_scroll_forward: bool,
     current_can_scroll_backward: bool,
 
@@ -364,6 +367,7 @@ impl LazyListState {
                     next_scroll_animation: 1,
                     pending_scroll_to_index: None,
                     layout_info: LazyListLayoutInfo::default(),
+                    spare_items_info: Vec::new(),
                     current_can_scroll_forward: false,
                     current_can_scroll_backward: false,
                     invalidate_callbacks: Vec::new(),
@@ -964,8 +968,18 @@ impl LazyListState {
         self.inner.with(|rc| {
             let mut inner = rc.borrow_mut();
             info.snap_anchor_offset = continuous_snap_anchor_offset(&inner.layout_info, &info);
-            inner.layout_info = info;
+            let mut spare = std::mem::replace(&mut inner.layout_info, info).visible_items_info;
+            spare.clear();
+            inner.spare_items_info = spare;
         });
+    }
+
+    /// An empty list for the next layout info's visible items, which keeps
+    /// the storage of the one before.
+    pub(crate) fn spare_items_info(&self) -> Vec<LazyListItemInfo> {
+        self.inner
+            .try_with(|rc| std::mem::take(&mut rc.borrow_mut().spare_items_info))
+            .unwrap_or_default()
     }
 
     /// Returns whether we can scroll forward (more items below/right).
