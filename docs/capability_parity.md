@@ -29,7 +29,7 @@ platform backend reports an observed value.
 | Launch arguments | iOS and desktop read process arguments; Android reads launch intent extras. Web starts with an empty `launch_args()` snapshot. |
 | Media playback | iOS uses AVFoundation and MediaPlayer; Android uses `cranpose-media` with Android audio focus and media sessions; desktop uses `cranpose-media`; web uses `<audio>`, Media Session, and Web Audio. Native and desktop `cranpose-media` decoders read HTTP(S) sources through byte-range requests. The iOS player accepts HTTP(S) URLs through AVPlayer. The web player passes URIs to the browser audio element. Android document URIs use the media source opener. |
 | Media capabilities | The active player reports seek, speed, loop, analysis, session, equalizer, and probe support through `MediaCapabilities`. Native iOS reports playback analysis and equalizer as unavailable; Android and software playback provide both. |
-| Power | iOS reports thermal state and battery status; Android reports thermal state, battery, and background restrictions. macOS reports thermal state; Linux reports battery status. Web reads battery status when `navigator.getBattery` exists. |
+| Power | iOS reports thermal state and battery status; Android reports thermal state, battery, and background restrictions. macOS reports thermal state; Linux reports battery status and thermal state, from the highest trip point its thermal zones reached. Web reads battery status when `navigator.getBattery` exists. |
 | Bundled assets | iOS streams assets from `NSBundle`; Android streams assets through `AssetManager`; desktop reads beside the executable, from app resources, or from the working directory. Web assets use HTTP. |
 | Incoming content | Android accepts declared media shares and open-with intents at launch and through `onNewIntent`. Desktop and web accept file drops; desktop also reads file paths from `argv`. |
 | App updates | iOS and desktop check for updates. Android checks and installs verified packages through `PackageInstaller`. Update checks require the application's `http-native` feature. |
@@ -49,9 +49,9 @@ platform backend reports an observed value.
   CompositionLocal accessors for future API work.
 - Web applications save files through browser downloads. Writable-folder
   selection covers iOS, Android, and desktop.
-- Desktop power support covers macOS thermal state and Linux battery status.
-  macOS battery status, Linux and Windows thermal state, and Windows battery
-  status remain future platform work.
+- Desktop power support covers macOS thermal state and Linux battery status
+  and thermal state. macOS battery status, Windows thermal state, and Windows
+  battery status remain future platform work.
 - Incoming-content adapters cover Android launch intents and desktop/web file
   drops. iOS open-URL events and macOS Finder document-open events remain future
   integration work.
