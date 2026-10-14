@@ -28,6 +28,14 @@ next header pushes it out. The header is placed last, so it draws over the
 items under it and takes their touches. Like Compose's, it covers the before
 content padding. A list whose items all fit leaves its headers in place.
 
+`LazyVerticalGrid` is a `LazyColumn` whose measure pass runs over lines
+instead of items. Each line composes and measures its cells as list items,
+with their own keys and reuse classes, so a cell keeps its state when an
+insertion moves it to another line. Cells take whole device pixels, the
+leftover pixels going one each to the first cells, as Compose's grid gives
+them; a sticky header takes a whole line. `LazyGridState` scrolls by items
+and maps them to lines with the lines of the last pass.
+
 `HorizontalPager` and `VerticalPager` lay their pages out as a `LazyRow` or
 `LazyColumn` whose items each take the pager's size. They install a settle
 policy on the list state (`LazyListState::set_settle_policy`), which the
