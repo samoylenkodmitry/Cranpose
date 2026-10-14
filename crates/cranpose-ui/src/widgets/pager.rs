@@ -1,7 +1,7 @@
 //! Pagers: Compose's `HorizontalPager` and `VerticalPager`. The pages fill
 //! the pager or take a fixed length, compose lazily as a lazy row or
 //! column's items do, and a drag or a fling the user lets go of comes to
-//! rest at the start of a page.
+//! rest at the start of a page, as far as [`PagerFling`] lets it.
 
 use std::rc::Rc;
 
@@ -34,6 +34,29 @@ pub enum PageSize {
     Fixed(f32),
 }
 
+/// How a pager comes to rest after the user lets go — the options of
+/// Compose's `PagerDefaults.flingBehavior`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PagerFling {
+    /// The most pages one fling turns, at least one — Compose's
+    /// `PagerSnapDistance.atMost(pages)`. A fling turns as many pages as its
+    /// speed carries the pager, up to this many.
+    pub max_pages: usize,
+    /// How far into the next page a slow release must have carried the
+    /// pager to turn to it, as a fraction of a page — Compose's
+    /// `snapPositionalThreshold`.
+    pub positional_threshold: f32,
+}
+
+impl Default for PagerFling {
+    fn default() -> Self {
+        Self {
+            max_pages: 1,
+            positional_threshold: 0.5,
+        }
+    }
+}
+
 /// Options for a pager, Compose's pager arguments beside its state and its
 /// page count.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -49,6 +72,8 @@ pub struct PagerSpec {
     /// Pages composed and laid out beyond the ones in view on each side:
     /// Compose's `beyondViewportPageCount`.
     pub beyond_viewport_page_count: usize,
+    /// How a release comes to rest: Compose's `flingBehavior`.
+    pub fling: PagerFling,
 }
 
 impl Default for PagerSpec {
@@ -58,6 +83,7 @@ impl Default for PagerSpec {
             page_spacing: 0.0,
             content_padding: PaddingValues::default(),
             beyond_viewport_page_count: 2,
+            fling: PagerFling::default(),
         }
     }
 }
@@ -196,23 +222,43 @@ impl PagerState {
     }
 }
 
-/// Where a scroll the user lets go of comes to rest: the start of the first
-/// page it shows or of the page after, the way the release goes when it is a
-/// fling, else the one closer to where it would stop.
-fn page_settle(state: PagerState) -> LazySettlePolicy {
+/// Where a scroll the user lets go of comes to rest: a fling turns toward
+/// its direction as many pages as it would carry the pager, from one to
+/// `fling.max_pages`; a slow release goes to the page it would stop in, or
+/// the next one past `fling.positional_threshold` of it.
+fn page_settle(state: PagerState, fling: PagerFling) -> LazySettlePolicy {
     Rc::new(move |proposed, velocity| {
         let page = state.page_extent();
         if page <= 0.0 {
             return proposed;
         }
-        let forward = if velocity.abs() >= PAGE_FLING_VELOCITY {
-            velocity > 0.0
+        // In pages from the start of the first page in view: where the
+        // pager stands and where the release would stop.
+        let now = state.list.first_visible_item_scroll_offset_non_reactive() / page;
+        let rest = proposed / page;
+        let turn = if velocity.abs() >= PAGE_FLING_VELOCITY {
+            let most = fling.max_pages.max(1) as f32;
+            if velocity > 0.0 {
+                rest.ceil().clamp(now.floor() + 1.0, now.floor() + most)
+            } else {
+                rest.floor().clamp(now.ceil() - most, now.ceil() - 1.0)
+            }
         } else {
-            proposed > page / 2.0
+            let whole = rest.floor();
+            if rest - whole > fling.positional_threshold {
+                whole + 1.0
+            } else {
+                whole
+            }
         };
-        let first = state.list.first_visible_item_index_non_reactive();
-        state.target.set(Some(first + usize::from(forward)));
-        if forward { page } else { 0.0 }
+        let first = state.list.first_visible_item_index_non_reactive() as f32;
+        let last = state
+            .list
+            .with_layout_info(|info| info.total_items_count.saturating_sub(1))
+            .unwrap_or_default() as f32;
+        let target = (first + turn).clamp(0.0, last);
+        state.target.set(Some(target as usize));
+        (target - first) * page
     })
 }
 
@@ -269,8 +315,10 @@ fn Pager(
     horizontal: bool,
     page_content: Rc<dyn Fn(usize)>,
 ) {
-    cranpose_core::DisposableEffect(state, move |scope| {
-        state.list.set_settle_policy(Some(page_settle(state)));
+    cranpose_core::DisposableEffect((state, spec.fling), move |scope| {
+        state
+            .list
+            .set_settle_policy(Some(page_settle(state, spec.fling)));
         scope.on_dispose(move || state.list.set_settle_policy(None))
     });
     BoxWithConstraints(modifier, move |scope| {

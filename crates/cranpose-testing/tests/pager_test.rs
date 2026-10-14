@@ -1,6 +1,7 @@
 //! A pager comes to rest on a page when the user lets go: the next page past
 //! half a page or after a flick, the same page short of that, and one page
-//! at a time however fast the fling, through the shell's pointer input.
+//! at a time however fast the fling unless `PagerFling` lets it turn more,
+//! through the shell's pointer input.
 
 use std::{cell::Cell, rc::Rc};
 
@@ -8,8 +9,8 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
 use cranpose_testing::{robot::TestRenderer, robot_assertions::find_semantics_node};
 use cranpose_ui::{
-    Box, BoxSpec, HorizontalPager, Modifier, PaddingValues, PageSize, PagerSpec, PagerState,
-    VerticalPager, composable, rememberPagerState,
+    Box, BoxSpec, HorizontalPager, Modifier, PaddingValues, PageSize, PagerFling, PagerSpec,
+    PagerState, VerticalPager, composable, rememberPagerState,
 };
 
 /// A composition counter that stays equal to itself while it counts, so it
@@ -208,6 +209,46 @@ fn a_long_fast_fling_turns_one_page() {
     let mut pager = Pager::new(true);
     pager.drag(true, 290.0, 10.0, 40);
     assert!(pager.rests_on(true, 1));
+}
+
+fn fling(fling: PagerFling) -> Pager {
+    Pager::with(
+        true,
+        PagerSpec {
+            fling,
+            ..PagerSpec::default()
+        },
+    )
+}
+
+#[test]
+fn a_fling_turns_as_many_pages_as_it_carries_up_to_the_most_it_may() {
+    let three = PagerFling {
+        max_pages: 3,
+        ..PagerFling::default()
+    };
+    let mut pager = fling(three);
+    pager.drag(true, 290.0, 10.0, 40);
+    assert!(
+        pager.rests_on(true, 3),
+        "the fling would carry past three pages"
+    );
+    pager.drag(true, 250.0, 220.0, 30);
+    assert!(pager.rests_on(true, 4), "a flick still turns one page");
+    pager.drag(true, 10.0, 290.0, 40);
+    assert!(pager.rests_on(true, 1), "three pages back");
+}
+
+#[test]
+fn a_lower_positional_threshold_turns_the_page_on_a_shorter_slow_drag() {
+    let mut pager = fling(PagerFling {
+        positional_threshold: 0.2,
+        ..PagerFling::default()
+    });
+    pager.drag(true, 250.0, 160.0, 1_000);
+    assert!(pager.rests_on(true, 1), "90 of 300 pixels is past a fifth");
+    pager.drag(true, 250.0, 200.0, 1_000);
+    assert!(pager.rests_on(true, 1), "50 pixels is short of a fifth");
 }
 
 #[test]
