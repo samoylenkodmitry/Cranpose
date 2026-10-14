@@ -22,7 +22,7 @@ use std::{
 
 pub use cranpose::framebuffer::{SurfaceError, TouchPhase};
 use cranpose::{SystemTheme, framebuffer::Framebuffer};
-use esp_idf_svc::sys::EspError;
+use esp_idf_svc::{sys::EspError, timer::EspTaskTimerService};
 pub use panel::{Panel, PixelFormat};
 
 use crate::present::Presenter;
@@ -87,31 +87,19 @@ impl Wake {
         }
     }
 
-    fn wait_until(&self, deadline: Option<Instant>) {
+    /// Sleeps until a notice arrives, or returns at once if one came since
+    /// the last wait.
+    fn wait(&self) {
         if self.pending.swap(false, Ordering::SeqCst) {
             return;
         }
         let mut guard = self.lock.lock().unwrap_or_else(PoisonError::into_inner);
         self.sleeping.store(true, Ordering::SeqCst);
         while !self.pending.load(Ordering::SeqCst) {
-            match deadline {
-                None => {
-                    guard = self
-                        .signal
-                        .wait(guard)
-                        .unwrap_or_else(PoisonError::into_inner);
-                }
-                Some(deadline) => {
-                    let Some(timeout) = deadline.checked_duration_since(Instant::now()) else {
-                        break;
-                    };
-                    guard = self
-                        .signal
-                        .wait_timeout(guard, timeout)
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .0;
-                }
-            }
+            guard = self
+                .signal
+                .wait(guard)
+                .unwrap_or_else(PoisonError::into_inner);
         }
         self.sleeping.store(false, Ordering::SeqCst);
         self.pending.store(false, Ordering::SeqCst);
@@ -124,8 +112,8 @@ impl Wake {
 ///
 /// The calling task becomes the UI thread. Its stack holds composition and
 /// layout, so give it at least 32 KB (`CONFIG_ESP_MAIN_TASK_STACK_SIZE` for
-/// the main task). Timed waits round to the FreeRTOS tick: set
-/// `CONFIG_FREERTOS_HZ=1000` to keep `frame_interval`.
+/// the main task). An `esp_timer` wakes the task at each frame or timed
+/// event, so frame timing does not depend on `CONFIG_FREERTOS_HZ`.
 pub fn run(
     mut panel: Panel,
     config: DisplayConfig,
@@ -144,6 +132,10 @@ pub fn run(
     let wake = Arc::new(Wake::default());
     let waker = Arc::clone(&wake);
     framebuffer.set_frame_waker(move || waker.notify());
+    // The FreeRTOS tick would round each wait up to whole ticks.
+    let timer_wake = Arc::clone(&wake);
+    let timers = EspTaskTimerService::new()?;
+    let deadline_timer = timers.timer(move || timer_wake.notify())?;
     framebuffer.set_active(true);
     let mut stats: Option<FrameStats> = None;
     // The start of the last tick. The next one waits `frame_interval` after
@@ -184,7 +176,14 @@ pub fn run(
         } else {
             schedule.next_deadline
         };
-        wake.wait_until(deadline);
+        if let Some(deadline) = deadline {
+            let delay = deadline.saturating_duration_since(Instant::now());
+            if delay.is_zero() {
+                continue;
+            }
+            deadline_timer.after(delay)?;
+        }
+        wake.wait();
     }
 }
 
