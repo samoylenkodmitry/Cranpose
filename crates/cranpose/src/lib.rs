@@ -1,5 +1,9 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
+// An `ExternalTexture` needs `wgpu::Texture: Send`, which on the wgpu-core
+// backends, such as GL under Emscripten, the compiler proves through wgpu-core's
+// nested resource registries, deeper than the default limit of 128.
+#![recursion_limit = "256"]
 
 extern crate self as cranpose;
 

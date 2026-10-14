@@ -96,6 +96,22 @@ clippy-wasm:
     scripts/ci/with_host_lock.sh --shared \
       cargo clippy --target wasm32-unknown-unknown -p desktop-app-platform --no-default-features --features web,renderer-wgpu,cranpose/localization -- -D warnings
 
+# Type-check the Emscripten build an engine's web export loads, such as a
+# Godot extension: wasm32 without the browser's wasm-bindgen. The target has
+# no prebuilt std, so a nightly with rust-src builds it.
+check-emscripten:
+    scripts/ci/rustup_locked.sh toolchain install nightly-2026-10-03 --profile minimal --component rust-src
+    RUSTFLAGS="-D warnings" cargo +nightly-2026-10-03 check -Zbuild-std=std,panic_abort --target wasm32-unknown-emscripten -p cranpose --features renderer-wgpu,embedded-default-font
+
+# Run in Node the core tests whose paths differ under Emscripten: delays the
+# host's drains fire and work launched on the runtime. Installs Emscripten
+# 4.0.20, the version of Godot 4.7's web templates, on first use.
+test-emscripten: check-emscripten
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "$(scripts/ci/emsdk_env.sh 4.0.20)" >/dev/null
+    CARGO_TARGET_WASM32_UNKNOWN_EMSCRIPTEN_RUNNER=node cargo +nightly-2026-10-03 test -Zbuild-std --target wasm32-unknown-emscripten -p cranpose-core --test integration -- a_delay_resolves a_coroutine_scope
+
 # Lint the iOS simulator binary.
 clippy-ios:
     cargo clippy -p desktop-app --bin cranpose-ios --bin cranpose-liquid-reference --target aarch64-apple-ios-sim --no-default-features --features ios -- -D warnings

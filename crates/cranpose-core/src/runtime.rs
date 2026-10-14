@@ -669,6 +669,8 @@ impl RuntimeInner {
     }
 
     fn drain_ui(&self) {
+        #[cfg(target_os = "emscripten")]
+        crate::concurrency::fire_due_alarms();
         loop {
             let mut executed = false;
 

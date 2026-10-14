@@ -333,9 +333,10 @@ impl LaunchedEffectScope {
     /// Runs background work and delivers results to the UI.
     ///
     /// On native targets, `work` runs on a worker thread and its future is
-    /// driven to completion there. On WASM, `work` runs as a task on the
-    /// browser event loop. The `on_ui` continuation always runs on the runtime
-    /// thread, so it may capture `Rc`/`RefCell` state safely.
+    /// driven to completion there. On the web, `work` runs as a task on the
+    /// browser event loop, and under Emscripten as a task of the runtime. The
+    /// `on_ui` continuation always runs on the runtime thread, so it may
+    /// capture `Rc`/`RefCell` state safely.
     #[cfg(target_arch = "wasm32")]
     pub fn launch_background<T, Work, Ui, Fut>(&self, work: Work, on_ui: Ui)
     where
@@ -349,7 +350,7 @@ impl LaunchedEffectScope {
         }
         let active_for_task = Arc::clone(&self.active);
         let scope = self.clone();
-        wasm_bindgen_futures::spawn_local(async move {
+        let task = async move {
             let token = CancelToken::new(Arc::clone(&active_for_task));
             let value = work(token.clone()).await;
             if token.is_cancelled() {
@@ -360,7 +361,13 @@ impl LaunchedEffectScope {
                     on_ui(value);
                 }
             });
-        });
+        };
+        #[cfg(target_os = "unknown")]
+        wasm_bindgen_futures::spawn_local(task);
+        #[cfg(target_os = "emscripten")]
+        if self.runtime.spawn_ui(task).is_none() {
+            log::warn!("cranpose: background work launched without a runtime");
+        }
     }
 }
 

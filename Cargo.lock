@@ -1689,7 +1689,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu"
-version = "30.0.18"
+version = "30.0.19"
 dependencies = [
  "arrayvec",
  "bitflags 2.13.2",
@@ -1717,7 +1717,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu-core"
-version = "30.0.15"
+version = "30.0.16"
 dependencies = [
  "arrayvec",
  "bit-set 0.10.0",
@@ -1778,7 +1778,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu-hal"
-version = "30.0.14"
+version = "30.0.15"
 dependencies = [
  "android_system_properties",
  "arrayvec",
@@ -2797,9 +2797,9 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "glow"
-version = "0.17.0"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29038e1c483364cc6bb3cf78feee1816002e127c331a1eec55a4d202b9e1adb5"
+checksum = "263218b0ba2b0715c3370fb04674f5f8aa331594b521c94ff0a8e4a8472d1386"
 dependencies = [
  "js-sys",
  "slotmap",
