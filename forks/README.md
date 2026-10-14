@@ -16,15 +16,16 @@ formatting, spelling and diff gates skip the forks.
 
 Upstream: <https://github.com/gfx-rs/wgpu>, commit
 `40f4a34ebaf56f9a046231f54125ad046239d3f3` (`wgpu-hal` 30.0.1).
-`cranpose-wgpu-hal` is at 30.0.12 for the catch-up barrier, the Metal
+`cranpose-wgpu-hal` is at 30.0.14 for the catch-up barrier, the Metal
 pipeline switch, the dedicated Vulkan allocations, the GL point size, the
 GL state tracker, the web surface usages, the boxed GL copy commands, the
 Vulkan command pools that give a burst's memory back, the GL shaders
 without the branches their constants decide, the GL program status read
-only on failure, the GLSL templates, the GL link reads and the WebGL extensions below,
-and `cranpose-wgpu-core` is at 30.0.13 to require it, to make template
-modules and to configure a surface while another thread submits.
-`cranpose-wgpu` is at 30.0.15 for the WebGPU pipeline discovery and the
+only on failure, the GLSL templates, the GL link reads, the WebGL extensions,
+the GL varying minimum and the first Metal drawables of a window not shown
+yet below, and `cranpose-wgpu-core` is at 30.0.15 to require it, to make
+template modules and to configure a surface while another thread submits.
+`cranpose-wgpu` is at 30.0.17 for the WebGPU pipeline discovery and the
 background compiles below and to require them.
 
 | fork | upstream |
@@ -380,6 +381,25 @@ pipeline, failed validation on a GPU that runs it. Cranpose's HUD over a Bevy
 game drew nothing in Brave on a Mate 20 X on github.io, while the same page on
 localhost, where the noise left 60, drew it. The GL adapter now takes at least
 60 components.
+
+### A window not shown yet gets its Metal layer's first drawables
+
+On macOS, `wgpu-hal` refuses a drawable while the window's occlusion state
+is not visible: a drawable presented to a window off screen waits for a
+display refresh that does not come, and with the layer's timeout off
+`nextDrawable` then blocks (gfx-rs/wgpu#8309). The rule also refused the
+drawables of a window just shown, though the layer had presented nothing
+yet: the window server reports a window visible 75 to 85 ms after
+`setIsVisible` on an Apple M5, so a launch's first frame waited for that,
+about 40 ms past its first redraw.
+
+Before an acquisition first finds the window visible, the fork hands out
+all but one of the layer's drawables whatever the window's state (two of
+three at a frame latency of two: the launch's placeholder and its first
+frame); one stays free, so `nextDrawable` returns at once. From the first
+acquisition that finds the window visible on, upstream's rule holds. The
+gauntlet's first frame on that M5 came 190 to 202 ms after the process
+started, against 218 to 239 ms.
 
 ### Update the fork
 
