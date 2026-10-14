@@ -42,7 +42,8 @@ pub mod wear;
 
 pub use animate_scroll::AnimateScroll;
 pub use animated_content::{
-    AnimatedContent, ContentSeek, ContentTransform, SeekableAnimatedContent, SizeTransform,
+    AnimatedContent, AnimatedContentWithKey, ContentSeek, ContentTransform,
+    SeekableAnimatedContent, SizeTransform,
 };
 pub use animated_visibility::*;
 pub use basic_text_field::*;

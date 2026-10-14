@@ -206,3 +206,57 @@ fn a_size_transform_animates_the_container_to_the_new_content() {
     screen.frames(40);
     assert_eq!(screen.container(), Page::B.size());
 }
+
+#[derive(Clone, PartialEq, Debug)]
+struct Item {
+    id: u32,
+    text: &'static str,
+}
+
+#[test]
+fn a_target_with_the_shown_key_changes_the_content_in_place() {
+    use std::cell::RefCell;
+
+    use cranpose_ui::{AnimatedContentWithKey, fade_in, fade_out};
+
+    let mut rule = ComposeTestRule::new();
+    let target = MutableState::with_runtime(Item { id: 1, text: "a" }, rule.runtime_handle());
+    let composed: Rc<RefCell<Vec<Item>>> = Rc::default();
+    let log = Rc::clone(&composed);
+    rule.set_content(move || {
+        let log = Rc::clone(&log);
+        AnimatedContentWithKey(
+            target.get(),
+            |item: &Item| item.id,
+            |_, _| fade_in().together_with(fade_out()),
+            move |item: Item| log.borrow_mut().push(item),
+        );
+    })
+    .expect("compose");
+    let mut now = 0;
+    let mut frame = |rule: &mut ComposeTestRule| {
+        now += FRAME;
+        rule.advance_frame(now).expect("frame");
+    };
+    composed.borrow_mut().clear();
+
+    target.set(Item { id: 1, text: "b" });
+    frame(&mut rule);
+    assert_eq!(
+        *composed.borrow(),
+        [Item { id: 1, text: "b" }],
+        "the same key: the content shows the new state, with nothing leaving"
+    );
+
+    composed.borrow_mut().clear();
+    target.set(Item { id: 2, text: "c" });
+    frame(&mut rule);
+    let mut seen: Vec<u32> = composed.borrow().iter().map(|item| item.id).collect();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(
+        seen,
+        [1, 2],
+        "another key: the old content leaves as the new comes"
+    );
+}
