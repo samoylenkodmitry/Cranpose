@@ -1,10 +1,15 @@
+#![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
 pub use cranpose_app_shell::{accessibility_audit, placed_semantics};
+/// The robot: a whole app driven by clicks, drags and keys, headless or in
+/// a desktop window.
 pub mod robot;
 pub mod robot_assertions;
 #[cfg(feature = "desktop-robot")]
 pub mod robot_helpers;
+/// Composition tests without a window: `ComposeTestRule` composes content,
+/// runs frames and reads the placed semantics.
 pub mod testing;
 
 pub use accessibility_audit::{
@@ -23,6 +28,7 @@ pub use robot_assertions::{Bounds, SemanticElementLike};
 pub use robot_helpers::*;
 pub use testing::*;
 
+/// The testing API in one import.
 pub mod prelude {
     #[cfg(feature = "desktop-robot")]
     pub use crate::robot_assertions::assert_robot_fps_over;

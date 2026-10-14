@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 //! Shared runtime and native-language bindings for embedding Cranpose in native views.
 #![doc = include_str!("../README.md")]
 

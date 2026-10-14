@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 //! Optional multilingual font data for Cranpose applications.
 
 /// A font family and its requested variable weights, backed by static bytes.

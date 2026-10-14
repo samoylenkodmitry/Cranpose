@@ -181,7 +181,7 @@ pub(crate) fn main() {
 
             let semantics_before = robot.get_semantics().expect("Failed to get semantics");
             let move_elem_before = find_by_text_recursive(&semantics_before, "Move");
-            if let Some(ref elem) = move_elem_before {
+            if let Some(elem) = move_elem_before {
                 println!("   Initial 'Move' box position: x={:.1}", elem.bounds.x);
             }
 
