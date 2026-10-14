@@ -108,3 +108,143 @@ jobs:
           name: runtime-windows
           path: target/windows-accessibility
           if-no-files-found: error
+
+  # The demo and its instrumentation, built for the x86_64 emulator on the
+  # Linux runner, where sccache keeps the build warm.
+  android-apks:
+    name: Android robot APKs for the emulator (linux)
+    runs-on: [self-hosted, Linux, cranpose-heavy]
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Configure machine-local SDK and cache paths
+        env:
+          RUNNER_NAME: ${{ runner.name }}
+          RUNNER_OS: ${{ runner.os }}
+        run: scripts/ci/android_env.sh
+      - name: Provision toolchains
+        run: |
+          scripts/ci/provision_toolchain.sh
+          scripts/ci/rustup_locked.sh target add x86_64-linux-android
+          command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
+      - name: Build the app and its instrumentation for x86_64
+        env:
+          ORG_GRADLE_PROJECT_cranposeReleaseAbis: x86_64
+        run: just android-robot-build
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-android-apks
+          path: |
+            apps/android-demo/android/app/build/outputs/apk/release/app-release.apk
+            apps/android-demo/android/app/build/outputs/apk/androidTest/release/app-release-androidTest.apk
+          retention-days: 1
+          if-no-files-found: error
+
+  # Reader navigation, the accessibility audit and interaction tests in an
+  # Android emulator. Hosted Linux runners have KVM.
+  android-emulator:
+    name: demo accessibility in the Android emulator
+    needs: android-apks
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: runtime-android-apks
+          path: ${{ runner.temp }}/apks
+      - name: Boot an API 35 emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          image="system-images;android-35;google_apis;x86_64"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install emulator "$image" >/dev/null
+          echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n runtime -k "$image" -d pixel_6
+          "$ANDROID_HOME/emulator/emulator" -avd runtime -no-window -no-audio -no-boot-anim \
+            -no-snapshot -gpu swiftshader_indirect > "$RUNNER_TEMP/emulator.log" 2>&1 &
+          adb wait-for-device
+          for _ in $(seq 150); do
+            [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ] && exit 0
+            sleep 2
+          done
+          echo "The emulator did not finish booting in five minutes." >&2
+          exit 1
+      - name: Accessibility robot
+        run: |
+          python3 scripts/android_accessibility_robot.py --serial emulator-5554 \
+            --output "$RUNNER_TEMP/android" \
+            --app-apk "$RUNNER_TEMP/apks/release/app-release.apk" \
+            --test-apk "$RUNNER_TEMP/apks/androidTest/release/app-release-androidTest.apk"
+      - name: Keep the emulator report
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/android"
+          cp "$RUNNER_TEMP/emulator.log" "$RUNNER_TEMP/android/" || true
+          adb logcat -d > "$RUNNER_TEMP/android/logcat.txt" || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: runtime-android
+          path: ${{ runner.temp }}/android
+          if-no-files-found: ignore
+
+  # The simulator app bundle, built on the self-hosted Mac where sccache keeps
+  # it warm. An artifact drops file modes, so the bundle travels as a tar.
+  ios-app:
+    name: iOS simulator app (self-hosted)
+    runs-on: [self-hosted, macOS, ARM64, recent-repo]
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Provision toolchain
+        run: |
+          scripts/ci/provision_toolchain.sh
+          scripts/ci/rustup_locked.sh target add aarch64-apple-ios-sim
+      - name: Assemble and pack the simulator app
+        run: |
+          app="$(just ios-sim)"
+          tar -C "$(dirname "$app")" -cf "$RUNNER_TEMP/ios-app.tar" "$(basename "$app")"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-ios-app
+          path: ${{ runner.temp }}/ios-app.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  # XCTest drives the demo's accessibility tree in an iPhone simulator on a
+  # hosted Mac, so the self-hosted Mac keeps its simulators free.
+  ios-simulator:
+    name: demo accessibility in the iOS simulator
+    needs: ios-app
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: runtime-ios-app
+          path: ${{ runner.temp }}
+      - name: Accessibility robot
+        run: |
+          tar -C "$RUNNER_TEMP" -xf "$RUNNER_TEMP/ios-app.tar"
+          device="$(xcrun simctl list devices available --json | python3 -c '
+          import json, sys
+          groups = json.load(sys.stdin)["devices"]
+          print(next(d["udid"] for runtime, devices in sorted(groups.items(), reverse=True)
+                     if "iOS" in runtime for d in devices if d["name"].startswith("iPhone")))')"
+          python3 scripts/a11y/ios_robot.py --app "$RUNNER_TEMP/CranposeDemo.app" \
+            --device "$device" --output "$RUNNER_TEMP/ios"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: runtime-ios
+          path: ${{ runner.temp }}/ios
+          if-no-files-found: ignore
