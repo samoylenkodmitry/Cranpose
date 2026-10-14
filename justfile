@@ -353,6 +353,16 @@ ci-contract-gates:
     scripts/ci/nightly_should_run_test.sh
     scripts/ci/tree_memo_test.sh
     scripts/ci/so_crate_sizes_test.sh
+    scripts/ci/msrv_toolchain_test.sh
+
+# Check the workspace with the oldest toolchain the crates declare
+# (`rust-version`), so the declared minimum stays true.
+msrv-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    msrv="$(sed -n '/^\[workspace.package\]/,/^\[/s/^rust-version = "\(.*\)"/\1/p' Cargo.toml)"
+    scripts/ci/rustup_locked.sh toolchain install "$msrv" --profile minimal
+    cargo "+$msrv" check --workspace --all-targets --locked
 
 # Point git at the repository's hooks. Once per clone.
 hooks:

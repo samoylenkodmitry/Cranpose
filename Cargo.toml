@@ -52,6 +52,9 @@ resolver = "2"
 [workspace.package]
 version = "0.9.43"
 edition = "2024"
+# The oldest toolchain the crates build with: the ESP32 firmware's toolchain
+# (scripts/ci/msrv_toolchain_test.sh); `just msrv-check` builds with it nightly.
+rust-version = "1.98"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/samoylenkodmitry/cranpose"
 homepage = "https://samoylenkodmitry.github.io/cranpose/"

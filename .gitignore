@@ -58,3 +58,6 @@ __pycache__/
 # canonical reference and stay tracked, the raw video does not. Keep the
 # source clips locally / in external storage instead.
 example/iphone17_records/
+
+# Written by `cargo xtask publish-order`.
+/publish-order.txt

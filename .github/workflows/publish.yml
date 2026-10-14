@@ -36,16 +36,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      # The semver gate builds every published crate twice. The runner's own
+      # target directory and sccache keep the build warm from one release to
+      # the next: a cold gate takes about 25 minutes.
+      - name: Configure machine-local cache paths
+        env:
+          RUNNER_NAME: ${{ runner.name }}
+          RUNNER_OS: ${{ runner.os }}
+        run: scripts/ci/android_env.sh
       - name: Provision the pinned Rust toolchain
         run: |
-          # $HOME is not reliable here: actions/checkout temporarily overrides
-          # it, so resolve the account's real home instead.
-          real_home="$(eval echo "~$(id -un)")"
-          export PATH="$real_home/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
-          echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
-          # Named step so the pinned toolchain's first-use download shows up
-          # here rather than inside whichever cargo step ran first.
-          scripts/ci/install_toolchains.sh
+          scripts/ci/provision_toolchain.sh
           rustc --version
 
       - name: Sync Cargo versions with tag
@@ -72,7 +73,16 @@ jobs:
             exit 1
           fi
 
+          previous="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)"
           cargo xtask bump-release-version "$tag"
+
+          # A patch release must keep every published crate's API (docs/release.md).
+          # A rerun of a tag that main already carries has nothing to compare.
+          if [[ "$previous" != "${tag#v}" ]]; then
+            cargo semver-checks --version 2>/dev/null | grep -qx "cargo-semver-checks 0.51.0" \
+              || cargo install --locked cargo-semver-checks --version 0.51.0
+            scripts/ci/semver_gate.sh "$previous"
+          fi
 
           # Do not update the isolated crates.io consumer before publishing.
           # At this point the tagged version does not exist in the registry;
