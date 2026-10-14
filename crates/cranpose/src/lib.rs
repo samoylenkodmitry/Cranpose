@@ -607,6 +607,12 @@ mod macos_menu;
     feature = "renderer-wgpu",
     target_os = "macos"
 ))]
+mod macos_open;
+#[cfg(all(
+    feature = "desktop-shell",
+    feature = "renderer-wgpu",
+    target_os = "macos"
+))]
 mod macos_window;
 #[cfg(all(
     feature = "desktop-shell",

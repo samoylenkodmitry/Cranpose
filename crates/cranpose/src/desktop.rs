@@ -200,6 +200,9 @@ fn robot_app_response(app: &mut AppShell<WgpuRenderer>, command: RobotCommand) -
         }
         RobotCommand::ChooseMenuItem { tray, labels } => choose_menu_item(tray, &labels)
             .map_or_else(RobotResponse::Error, |()| RobotResponse::Ok),
+        RobotCommand::OpenUrls(urls) => {
+            open_urls(&urls).map_or_else(RobotResponse::Error, |()| RobotResponse::Ok)
+        }
         _ => RobotResponse::Error("not an app query".into()),
     }
 }
@@ -228,6 +231,16 @@ use crate::desktop_menus::choose as choose_menu_item;
 ))]
 fn choose_menu_item(_tray: bool, _labels: &[String]) -> Result<(), String> {
     Err("menus need the desktop-menus feature on macOS, Windows or Linux".to_owned())
+}
+
+#[cfg(all(feature = "robot", target_os = "macos"))]
+fn open_urls(urls: &[String]) -> Result<(), String> {
+    crate::macos_open::deliver(urls)
+}
+
+#[cfg(all(feature = "robot", not(target_os = "macos")))]
+fn open_urls(_urls: &[String]) -> Result<(), String> {
+    Err("only macOS hands opened URLs to the application delegate".to_owned())
 }
 
 #[cfg(feature = "robot")]
@@ -6636,7 +6649,8 @@ impl ApplicationHandler for App {
                     | RobotCommand::MeasureText { .. }
                     | RobotCommand::HasFocusedTextField
                     | RobotCommand::SetSemanticsEnabled(_)
-                    | RobotCommand::ChooseMenuItem { .. }) => {
+                    | RobotCommand::ChooseMenuItem { .. }
+                    | RobotCommand::OpenUrls(_)) => {
                         let _ = controller.tx.send(robot_app_response(app, command));
                     }
                     RobotCommand::LoseGpuDevice => {
@@ -7300,6 +7314,10 @@ pub fn try_run(
 
     let gpu_start = GpuStart::open(settings.gpu_requirements);
     let event_loop = build_event_loop().map_err(LaunchError::EventLoopCreate)?;
+    // Held while the event loop runs: the application keeps its delegate
+    // weakly.
+    #[cfg(target_os = "macos")]
+    let _delegate = crate::macos_open::install();
     let event_proxy = event_loop.create_proxy();
     let launch_error = Rc::new(RefCell::new(None));
 

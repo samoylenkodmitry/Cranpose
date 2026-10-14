@@ -2193,6 +2193,7 @@ fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
         "desktop_accessibility.rs",
         "macos_cursor.rs",
         "macos_menu.rs",
+        "macos_open.rs",
         "macos_window.rs",
         "windows_cursor.rs",
     ];
@@ -2407,6 +2408,7 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose/src/desktop_accessibility.rs",
         "crates/cranpose/src/macos_cursor.rs",
         "crates/cranpose/src/macos_menu.rs",
+        "crates/cranpose/src/macos_open.rs",
         "crates/cranpose/src/macos_window.rs",
         "crates/cranpose/src/windows_cursor.rs",
         "crates/cranpose-storekit/src/apple.rs",
