@@ -83,7 +83,9 @@ impl PagerState {
     }
 
     fn page_size(&self) -> f32 {
-        self.list.layout_info().viewport_size
+        self.list
+            .with_layout_info(|info| info.viewport_size)
+            .unwrap_or_default()
     }
 }
 
