@@ -167,6 +167,13 @@ impl LazyGridState {
         self.list.scroll_to_item(line, offset);
     }
 
+    /// [`Self::scroll_to_item`] with a spring, which a press on the grid
+    /// stops.
+    pub fn animate_scroll_to_item(&self, index: usize, offset: f32) {
+        let line = self.lines.borrow().line_of(index);
+        crate::AnimateScroll::animate_scroll_to_item(&self.list, line, offset);
+    }
+
     /// The state of the column the lines sit in, for a scroll indicator.
     pub fn lazy_list_state(&self) -> LazyListState {
         self.list

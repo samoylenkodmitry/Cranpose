@@ -217,16 +217,16 @@ pub use pointer_dispatch::{
     schedule_pointer_repass,
 };
 pub use primitives::{
-    AnimatedVisibility, BasicSecureTextField, BasicText, BasicTextField, BasicTextFieldDecorated,
-    BasicTextFieldDecorationScope, BasicTextFieldOptions, BasicTextFieldWithOptions,
-    BasicTextWithOptions, BitmapPainter, BitmapRegionPainter, Box, BoxScope, BoxSpec,
-    BoxWithConstraints, BoxWithConstraintsScope, BoxWithConstraintsScopeImpl, Button, ButtonSpec,
-    Canvas, Column, ColumnSpec, ContentScale, Crossfade, CrossfadeSeek, DEFAULT_ALPHA,
-    EnterTransition, ExitTransition, ForEach, HorizontalPager, Image, Layout, LayoutNode,
-    PagerState, Painter, Row, RowSpec, SecureTextFieldOptions, SeekableCrossfade, Spacer,
-    SubcomposeLayout, SvgPainter, SvgPainterError, Text, TextObfuscationMode, TextWithOptions,
-    VerticalPager, fade_in, fade_out, rememberPagerState, rememberSvg, slide_in_vertically,
-    slide_out_vertically,
+    AnimateScroll, AnimatedVisibility, BasicSecureTextField, BasicText, BasicTextField,
+    BasicTextFieldDecorated, BasicTextFieldDecorationScope, BasicTextFieldOptions,
+    BasicTextFieldWithOptions, BasicTextWithOptions, BitmapPainter, BitmapRegionPainter, Box,
+    BoxScope, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, BoxWithConstraintsScopeImpl,
+    Button, ButtonSpec, Canvas, Column, ColumnSpec, ContentScale, Crossfade, CrossfadeSeek,
+    DEFAULT_ALPHA, EnterTransition, ExitTransition, ForEach, HorizontalPager, Image, Layout,
+    LayoutNode, PagerState, Painter, Row, RowSpec, SecureTextFieldOptions, SeekableCrossfade,
+    Spacer, SubcomposeLayout, SvgPainter, SvgPainterError, Text, TextObfuscationMode,
+    TextWithOptions, VerticalPager, fade_in, fade_out, rememberPagerState, rememberSvg,
+    slide_in_vertically, slide_out_vertically,
 };
 #[cfg(any(test, feature = "test-helpers"))]
 #[doc(hidden)]

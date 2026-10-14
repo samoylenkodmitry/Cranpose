@@ -180,3 +180,51 @@ fn a_vertical_pager_turns_its_pages_up() {
     pager.drag(false, 180.0, 60.0, 1_000);
     assert!(pager.rests_on(false, 1));
 }
+
+#[test]
+fn animate_scroll_to_page_springs_there_and_a_press_stops_it_where_it_is() {
+    let mut pager = Pager::new(true);
+    pager.state().animate_scroll_to_page(3);
+    pager.frames(4);
+    let moving = pager.state().lazy_list_state().first_visible_item_index();
+    assert!(
+        moving < 3,
+        "the spring takes frames, at page {moving} after four"
+    );
+    pager.frames(120);
+    assert!(pager.rests_on(true, 3));
+
+    pager.state().animate_scroll_to_page(0);
+    pager.frames(4);
+    pager
+        .shell
+        .set_cursor_at_time(150.0, 100.0, Some(pager.now_ms));
+    pager.shell.pointer_pressed_at_time(Some(pager.now_ms));
+    let held = pager
+        .state()
+        .lazy_list_state()
+        .first_visible_item_scroll_offset();
+    let held_page = pager.state().lazy_list_state().first_visible_item_index();
+    pager.frames(30);
+    assert_eq!(
+        (
+            pager.state().lazy_list_state().first_visible_item_index(),
+            pager
+                .state()
+                .lazy_list_state()
+                .first_visible_item_scroll_offset()
+        ),
+        (held_page, held),
+        "the press stopped the spring"
+    );
+    pager.now_ms += 16;
+    pager
+        .shell
+        .pointer_released_at_position_time(150.0, 100.0, Some(pager.now_ms));
+    pager.frames(90);
+    let rested = pager.state().current_page();
+    assert!(
+        rested > 0 && pager.rests_on(true, rested),
+        "it settles where it stopped, on {rested}"
+    );
+}

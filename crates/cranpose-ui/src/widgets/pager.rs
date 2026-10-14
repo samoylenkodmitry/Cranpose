@@ -10,7 +10,7 @@ use cranpose_foundation::lazy::{
 };
 
 use crate::{
-    composable,
+    AnimateScroll, composable,
     modifier::Modifier,
     widgets::{
         Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, LazyColumn, LazyColumnSpec,
@@ -68,6 +68,12 @@ impl PagerState {
     /// Shows `page` at once.
     pub fn scroll_to_page(&self, page: usize) {
         self.list.scroll_to_item(page, 0.0);
+    }
+
+    /// Scrolls to `page` with a spring — Compose's `animateScrollToPage`. A
+    /// press on the pager stops it, and letting go settles on a page.
+    pub fn animate_scroll_to_page(&self, page: usize) {
+        self.list.animate_scroll_to_item(page, 0.0);
     }
 
     /// The state of the lazy row or column the pages sit in, for a scroll

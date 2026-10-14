@@ -481,8 +481,9 @@ Sampled against Compose's `androidx.compose.ui`/`foundation-layout`:
 | `Image`, `Canvas`, `Icon` | Same names | Implemented |
 | `LazyColumn`, `LazyRow` | `LazyColumn`, `LazyRow`; lower-level node functions also exist | Implemented; checked against current source |
 | `LazyListScope.stickyHeader` | `LazyListScope::sticky_header`, `sticky_header_keyed` | Implemented |
+| `LazyListState.animateScrollBy`, `animateScrollToItem` | `AnimateScroll::animate_scroll_by`, `animate_scroll_to_item` (a trait on `LazyListState`) | Implemented; a press on the list stops the animation |
 | `LazyVerticalGrid`, `GridCells.Fixed`, `GridCells.Adaptive`, `rememberLazyGridState`, `LazyGridState.scrollToItem` | `LazyVerticalGrid`, `GridCells::Fixed`, `GridCells::Adaptive`, `rememberLazyGridState`, `LazyGridState::scroll_to_item` | Implemented, with `LazyHorizontalGrid`; a sticky header takes a full line; other spans and staggered grids are not |
-| `HorizontalPager`, `VerticalPager`, `rememberPagerState`, `PagerState.currentPage`, `currentPageOffsetFraction`, `scrollToPage` | Same names in snake case for the methods | Implemented; `animateScrollToPage`, `beyondViewportPageCount` and custom page sizes are not |
+| `HorizontalPager`, `VerticalPager`, `rememberPagerState`, `PagerState.currentPage`, `currentPageOffsetFraction`, `scrollToPage` | Same names in snake case for the methods, `animate_scroll_to_page` among them | Implemented; `beyondViewportPageCount` and custom page sizes are not |
 | `Popup`, `Dialog` | Same names, plus `PopupAnchored`/`PopupDismissable`/`PopupDismissableWhen`/`DialogWithScrim` variants | Implemented, plus extensions |
 | `AnimatedVisibility`, `Crossfade` | Same names | Implemented |
 | `Layout`, `SubcomposeLayout` | Same names | Implemented |

@@ -256,6 +256,9 @@ pub type LazySettlePolicy = Rc<dyn Fn(f32, f32) -> f32>;
 struct LazyListStateInner {
     scroll_to_be_consumed: f32,
     settle_policy: Option<LazySettlePolicy>,
+    /// The id of the running scroll animation and how to stop it.
+    scroll_animation: Option<(u64, Rc<dyn Fn()>)>,
+    next_scroll_animation: u64,
 
     pending_scroll_to_index: Option<(usize, f32)>,
 
@@ -357,6 +360,8 @@ impl LazyListState {
                 LazyListStateInner {
                     scroll_to_be_consumed: 0.0,
                     settle_policy: None,
+                    scroll_animation: None,
+                    next_scroll_animation: 1,
                     pending_scroll_to_index: None,
                     layout_info: LazyListLayoutInfo::default(),
                     current_can_scroll_forward: false,
@@ -543,6 +548,47 @@ impl LazyListState {
         self.inner.with(|rc| rc.borrow().settle_policy.clone())
     }
 
+    /// Registers a scroll animation, which `stop` stops, in place of the one
+    /// running, which it stops, and returns the new one's id. A press on the
+    /// list stops it too.
+    pub fn start_scroll_animation(&self, stop: Rc<dyn Fn()>) -> u64 {
+        let Some((id, previous)) = self.inner.try_with(|rc| {
+            let mut inner = rc.borrow_mut();
+            let id = inner.next_scroll_animation;
+            inner.next_scroll_animation += 1;
+            (id, inner.scroll_animation.replace((id, stop)))
+        }) else {
+            return 0;
+        };
+        if let Some((_, stop)) = previous {
+            stop();
+        }
+        id
+    }
+
+    /// Forgets the scroll animation `id` once it ended on its own.
+    pub fn end_scroll_animation(&self, id: u64) {
+        let _ = self.inner.try_with(|rc| {
+            let mut inner = rc.borrow_mut();
+            if inner
+                .scroll_animation
+                .as_ref()
+                .is_some_and(|(running, _)| *running == id)
+            {
+                inner.scroll_animation = None;
+            }
+        });
+    }
+
+    /// Stops the running scroll animation, and returns whether one ran.
+    pub fn stop_scroll_animation(&self) -> bool {
+        let running = self
+            .inner
+            .try_with(|rc| rc.borrow_mut().scroll_animation.take())
+            .flatten();
+        running.map(|(_, stop)| stop()).is_some()
+    }
+
     /// Scrolls to the specified item index.
     ///
     /// # Arguments
@@ -558,7 +604,10 @@ impl LazyListState {
             );
         }
         self.inner.with(|rc| {
-            rc.borrow_mut().pending_scroll_to_index = Some((index, scroll_offset));
+            let mut inner = rc.borrow_mut();
+            inner.pending_scroll_to_index = Some((index, scroll_offset));
+            // The jump replaces the scroll deltas that have not been applied.
+            inner.scroll_to_be_consumed = 0.0;
         });
 
         self.scroll_position
