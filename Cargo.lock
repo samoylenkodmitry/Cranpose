@@ -1231,6 +1231,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "objc2-health-kit",
  "objc2-media-player",
+ "objc2-quartz-core 0.3.2",
  "objc2-ui-kit",
  "objc2-uniform-type-identifiers",
  "objc2-user-notifications",

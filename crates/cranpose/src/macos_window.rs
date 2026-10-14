@@ -3,6 +3,7 @@
 
 use objc2::rc::Retained;
 use objc2_app_kit::{NSView, NSWindow, NSWindowAnimationBehavior};
+use objc2_quartz_core::CATransaction;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
 
@@ -19,6 +20,7 @@ pub(crate) fn ns_window(window: &dyn Window) -> Option<Retained<NSWindow>> {
 
 /// Shows `window` without the animation AppKit plays as a window opens, then
 /// hands the window its own animation back for the times it is shown later.
+/// The window goes to the window server at once.
 ///
 /// Starting that animation held the main thread 14 ms on an Apple M5, with
 /// the launch's first frame waiting behind it (median of six launches).
@@ -31,4 +33,11 @@ pub(crate) fn show_without_open_animation(window: &dyn Window) {
     ns_window.setAnimationBehavior(NSWindowAnimationBehavior::None);
     window.set_visible(true);
     ns_window.setAnimationBehavior(behavior);
+    // AppKit sends a shown window to the window server when the run loop
+    // pass ends, and draws its view inside that commit: a first frame that
+    // compiles its shaders kept the window off the screen for as long. On an
+    // Apple M5 with no shader cached, the gauntlet's window came up at
+    // ~200 ms after exec with the flush and ~450-600 without; with shaders
+    // cached, at 165 ms against 180.
+    CATransaction::flush();
 }

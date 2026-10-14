@@ -85,6 +85,7 @@ desktop-shell = [
     "cranpose-app-shell/clipboard-native",
     "dep:objc2",
     "dep:objc2-app-kit",
+    "dep:objc2-quartz-core",
     "dep:block2",
     "dep:dispatch2",
     "dep:windows-sys",
@@ -453,6 +454,12 @@ objc2-app-kit = { version = "0.3", default-features = false, optional = true, fe
     "NSResponder",
     "NSView",
     "NSWindow",
+] }
+# The transaction flush that puts a shown window on screen before its first
+# frame (`macos_window`). The version wgpu-hal already resolves.
+objc2-quartz-core = { version = "0.3", default-features = false, optional = true, features = [
+    "std",
+    "CATransaction",
 ] }
 # The macOS half of the AVFoundation camera (`camera-desktop`). Same crates
 # and same versions the iOS backend takes, so a Mac build adds no dependency
