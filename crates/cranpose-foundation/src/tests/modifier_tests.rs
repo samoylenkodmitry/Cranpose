@@ -1550,6 +1550,113 @@ fn delegate_parent_links_owner() {
 }
 
 #[test]
+fn an_element_updated_in_place_keeps_the_chain_linked() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+    let updates = Rc::new(Cell::new(0));
+    let elements = |value| {
+        vec![
+            modifier_element(TestLayoutElement),
+            modifier_element(EqualityElement {
+                value,
+                updates: updates.clone(),
+            }),
+            modifier_element(TestDrawElement),
+        ]
+    };
+    chain.update_from_slice(&elements(1), &mut context);
+    let aggregate = chain.head().aggregate_child_capabilities();
+
+    chain.update_from_slice(&elements(2), &mut context);
+
+    assert_eq!(
+        chain.node::<EqualityNode>(1).map(|node| node.value),
+        Some(2)
+    );
+    let nodes: Vec<_> = chain.head_to_tail().collect();
+    assert_eq!(nodes.len(), 3);
+    for pair in nodes.windows(2) {
+        let child_of_first = pair[0].child().expect("a node links to the next one");
+        let parent_of_second = pair[1].parent().expect("a node links to the one before");
+        assert!(
+            child_of_first.with_node(|node| node as *const dyn ModifierNode as *const ())
+                == pair[1].with_node(|node| node as *const dyn ModifierNode as *const ())
+        );
+        assert!(
+            parent_of_second.with_node(|node| node as *const dyn ModifierNode as *const ())
+                == pair[0].with_node(|node| node as *const dyn ModifierNode as *const ())
+        );
+    }
+    assert!(nodes[2].child().is_some_and(|tail| tail.is_tail()));
+    assert_eq!(chain.head().aggregate_child_capabilities(), aggregate);
+}
+
+/// An element whose update gives its node a new delegate.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SwappingDelegateElement {
+    delegate_id: &'static str,
+}
+
+impl ModifierNodeElement for SwappingDelegateElement {
+    type Node = DelegatingHostNode;
+
+    fn create(&self) -> Self::Node {
+        DelegatingHostNode::new("host", self.delegate_id)
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        node.delegate = DelegatedDrawNode::new(self.delegate_id);
+    }
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::LAYOUT | NodeCapabilities::MODIFIER_LOCALS
+    }
+}
+
+#[test]
+fn an_update_that_swaps_a_delegate_links_the_new_one() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+    let elements = |delegate_id| {
+        vec![
+            modifier_element(SwappingDelegateElement { delegate_id }),
+            modifier_element(TestDrawElement),
+        ]
+    };
+    chain.update_from_slice(&elements("first"), &mut context);
+    chain.update_from_slice(&elements("second"), &mut context);
+
+    let delegate_ptr = {
+        let host = chain
+            .node::<DelegatingHostNode>(0)
+            .expect("host node should exist");
+        host.delegate() as *const dyn ModifierNode as *const ()
+    };
+    let delegate_ref = chain
+        .head_to_tail()
+        .find(|node_ref| {
+            node_ref
+                .with_node(|node| node as *const dyn ModifierNode as *const () == delegate_ptr)
+                .unwrap_or(false)
+        })
+        .expect("the new delegate should be discoverable");
+    let parent_is_host = delegate_ref
+        .parent()
+        .and_then(|parent| {
+            parent.with_node(|node| node.as_any().downcast_ref::<DelegatingHostNode>().is_some())
+        })
+        .unwrap_or(false);
+    assert!(parent_is_host);
+    let child_is_draw = delegate_ref
+        .child()
+        .and_then(|child| {
+            child.with_node(|node| node.as_any().downcast_ref::<TestDrawNode>().is_some())
+        })
+        .unwrap_or(false);
+    assert!(child_is_draw);
+}
+
+#[test]
 fn sentinel_links_exist_for_empty_chain() {
     let chain = ModifierNodeChain::new();
     let head_child = chain.head().child().expect("head should link to tail");
