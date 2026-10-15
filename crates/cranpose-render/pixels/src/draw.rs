@@ -466,37 +466,111 @@ fn draw_shape(
         return;
     };
 
-    let opaque = opaque_solid_bytes(&draw.brush, draw.blend_mode);
-    let fills_runs = opaque.filter(|_| coverage.covers_runs_whole());
-    for py in clip_bounds.min_y..clip_bounds.max_y {
-        let center_y = py as f32 + 0.5;
-        for (start, end) in coverage.row_runs(center_y, clip_bounds.min_x, clip_bounds.max_x) {
-            let row = target.row(py, start, end);
-            if let Some(bytes) = fills_runs {
-                fill_pixels(row, bytes);
-                continue;
-            }
-            for (px, dst) in (start..).zip(row) {
-                let center_x = px as f32 + 0.5;
-                let coverage = coverage.at(Point::new(center_x, center_y));
-                if coverage <= 0.0 {
-                    continue;
-                }
-                if let Some(bytes) = opaque
-                    && coverage >= 1.0
-                {
-                    *dst = bytes;
-                    continue;
-                }
+    let paint = ShapeRows {
+        target,
+        draw,
+        rect,
+        clip_bounds,
+        dither_origin,
+        opaque: opaque_solid_bytes(&draw.brush, draw.blend_mode),
+        diagnostics,
+    };
+    let whole_rows = |_: f32, min_x: i32, max_x: i32| [(min_x, max_x), NO_RUN];
+    match &coverage {
+        ShapeCoverage::Line(line) => paint.paint(whole_rows, |point| line.coverage(point)),
+        ShapeCoverage::Trapezoid(trapezoid) => {
+            paint.paint(whole_rows, |point| trapezoid.coverage(point));
+        }
+        ShapeCoverage::Arc(arc) => paint.paint(
+            |y, min_x, max_x| arc_row_runs(arc, y, min_x, max_x),
+            |point| shape_sdf::arc_coverage(point, arc),
+        ),
+        &ShapeCoverage::Stroke {
+            rect,
+            radii,
+            half_width,
+            join,
+        } => paint.paint(
+            |y, min_x, max_x| stroke_row_runs(rect, radii, half_width, join, y, min_x, max_x),
+            |point| shape_sdf::stroked_rect_coverage(point, rect, radii, half_width, join),
+        ),
+        ShapeCoverage::Fill {
+            rect,
+            radii: Some(radii),
+        } => {
+            paint.fill(|y, min_x, max_x| [rounded_fill_run(*rect, radii, y, min_x, max_x), NO_RUN]);
+        }
+        ShapeCoverage::Fill { radii: None, .. } => paint.fill(whole_rows),
+    }
+}
 
-                let mut sample =
-                    sample_brush_rgba(&draw.brush, rect, center_x, center_y, dither_origin);
-                sample[3] *= coverage;
-                let alpha = sample[3];
-                if alpha <= 0.0 {
-                    continue;
+/// A placed shape's rows to paint. Each kind of coverage paints them through
+/// its own copy of the loop: the work a kind does once per shape, such as an
+/// arc's sines or a line's direction, then stays out of the other kinds'
+/// rows, where the compiler would otherwise hoist it for every shape.
+struct ShapeRows<'a, 'p> {
+    target: &'a mut Target<'p>,
+    draw: &'a crate::scene::DrawShape,
+    rect: Rect,
+    clip_bounds: ClipBounds,
+    dither_origin: Point,
+    /// The bytes the brush leaves on a pixel it covers whole, when it is an
+    /// opaque solid colour.
+    opaque: Option<[u8; 4]>,
+    diagnostics: &'a RenderDiagnostics,
+}
+
+impl ShapeRows<'_, '_> {
+    /// Paints a fill, which covers every pixel of its runs whole.
+    fn fill(self, runs: impl Fn(f32, i32, i32) -> RowRuns) {
+        match self.opaque {
+            Some(bytes) => {
+                let bounds = self.clip_bounds;
+                for py in bounds.min_y..bounds.max_y {
+                    for (start, end) in runs(py as f32 + 0.5, bounds.min_x, bounds.max_x) {
+                        fill_pixels(self.target.row(py, start, end), bytes);
+                    }
                 }
-                blend_pixel(dst, sample, draw.blend_mode, diagnostics);
+            }
+            None => self.paint(runs, |_| 1.0),
+        }
+    }
+
+    /// Paints the pixels of each row's `runs` by their `coverage`.
+    fn paint(self, runs: impl Fn(f32, i32, i32) -> RowRuns, coverage: impl Fn(Point) -> f32) {
+        let Self {
+            target,
+            draw,
+            rect,
+            clip_bounds,
+            dither_origin,
+            opaque,
+            diagnostics,
+        } = self;
+        for py in clip_bounds.min_y..clip_bounds.max_y {
+            let center_y = py as f32 + 0.5;
+            for (start, end) in runs(center_y, clip_bounds.min_x, clip_bounds.max_x) {
+                for (px, dst) in (start..).zip(target.row(py, start, end)) {
+                    let center_x = px as f32 + 0.5;
+                    let coverage = coverage(Point::new(center_x, center_y));
+                    if coverage <= 0.0 {
+                        continue;
+                    }
+                    if let Some(bytes) = opaque
+                        && coverage >= 1.0
+                    {
+                        *dst = bytes;
+                        continue;
+                    }
+
+                    let mut sample =
+                        sample_brush_rgba(&draw.brush, rect, center_x, center_y, dither_origin);
+                    sample[3] *= coverage;
+                    if sample[3] <= 0.0 {
+                        continue;
+                    }
+                    blend_pixel(dst, sample, draw.blend_mode, diagnostics);
+                }
             }
         }
     }
@@ -727,48 +801,6 @@ impl ShapeCoverage {
             Self::Trapezoid(trapezoid) => expand_rect(trapezoid.bounds(), 0.5),
             Self::Arc(arc) => expand_rect(arc.bounds(), INK_REACH),
             _ => rect,
-        }
-    }
-
-    /// The pixels of the row centred at `y` that can take ink, within
-    /// `min_x..max_x`.
-    fn row_runs(&self, y: f32, min_x: i32, max_x: i32) -> RowRuns {
-        match self {
-            Self::Arc(arc) => arc_row_runs(arc, y, min_x, max_x),
-            Self::Stroke {
-                rect,
-                radii,
-                half_width,
-                join,
-            } => stroke_row_runs(*rect, *radii, *half_width, *join, y, min_x, max_x),
-            Self::Fill {
-                rect,
-                radii: Some(radii),
-            } => [rounded_fill_run(*rect, radii, y, min_x, max_x), NO_RUN],
-            _ => [(min_x, max_x), NO_RUN],
-        }
-    }
-
-    /// Whether every pixel of its row runs is covered whole: a fill, whose
-    /// runs hold exactly the pixels it covers.
-    fn covers_runs_whole(&self) -> bool {
-        matches!(self, Self::Fill { .. })
-    }
-
-    /// The coverage of the pixel centred at `point`, which lies in one of its
-    /// row's runs.
-    fn at(&self, point: Point) -> f32 {
-        match self {
-            Self::Line(line) => line.coverage(point),
-            Self::Trapezoid(trapezoid) => trapezoid.coverage(point),
-            Self::Arc(arc) => shape_sdf::arc_coverage(point, arc),
-            Self::Stroke {
-                rect,
-                radii,
-                half_width,
-                join,
-            } => shape_sdf::stroked_rect_coverage(point, *rect, *radii, *half_width, *join),
-            Self::Fill { .. } => 1.0,
         }
     }
 }
