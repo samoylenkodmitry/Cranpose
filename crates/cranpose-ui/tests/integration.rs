@@ -8,6 +8,7 @@ mod draw_scope_text_integration;
 mod flow_column;
 mod geometry_and_modifiers;
 mod graphics_layer_backdrop_integration;
+mod grid;
 mod inspector_and_insets;
 mod lazy_content_padding;
 mod lazy_retained_many_roots;

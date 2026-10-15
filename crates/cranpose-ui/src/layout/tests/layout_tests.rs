@@ -2188,9 +2188,7 @@ fn parent_data_uses_resolved_layout_properties() {
                 LayoutChildBinding {
                     cache: node.cache_handles(),
                     layout_state: Some(node.layout_state_handle()),
-                    parent_data: Some(parent_data_of(
-                        node.resolved_modifiers().layout_properties(),
-                    )),
+                    parent_data: Some(node.parent_data()),
                     dirty: false,
                     descendant_dirty: false,
                 },

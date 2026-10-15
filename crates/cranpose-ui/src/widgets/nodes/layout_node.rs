@@ -1042,15 +1042,14 @@ impl LayoutNode {
 
     /// What the chain tells the parent's measure policy about this node.
     pub(crate) fn parent_data(&self) -> cranpose_ui_layout::ParentData {
-        self.parent_data.get()
+        crate::layout::read_cell(&self.parent_data, Clone::clone)
     }
 
     /// Copies the parent data out of the chain's resolved modifiers, after
     /// they were computed again.
     fn refresh_parent_data(&self) {
-        self.parent_data.set(crate::layout::parent_data_of(
-            self.modifier_chain.resolved_modifiers().layout_properties(),
-        ));
+        self.parent_data
+            .set(crate::layout::parent_data_of(&self.modifier_chain));
     }
 
     /// Returns the union of the capabilities of all nodes in the modifier chain.
@@ -1258,7 +1257,7 @@ impl Clone for LayoutNode {
             needs_measure: Cell::new(self.needs_measure.get()),
             needs_layout: Cell::new(self.needs_layout.get()),
             descendant_dirt: Cell::new(self.descendant_dirt.get()),
-            parent_data: Cell::new(self.parent_data.get()),
+            parent_data: Cell::new(self.parent_data()),
             needs_semantics: Cell::new(self.needs_semantics.get()),
             descendant_needs_semantics: Cell::new(self.descendant_needs_semantics.get()),
             semantics_reach: Cell::new(None),

@@ -62,7 +62,8 @@ curate, gives these public APIs that Cranpose lacks. They are tracked in
 | Compose API | Cranpose |
 |---|---|
 | `FlowColumn` | `FlowColumn(modifier, FlowSpec, content)`, beside `FlowRow`; both take one `FlowSpec` |
-| `FlexBox`, `Grid` (non-lazy) in `foundation-layout` | Absent |
+| `Grid` (non-lazy) in `foundation-layout` | `Grid(GridConfig, modifier, content)`, with `Modifier::grid_item(GridItem)` on the children. The config is a value built while composing, where Compose runs its block at measure and hands it the constraints; read them with `BoxWithConstraints`. Area ids are `&'static str` names. Out-of-range indices, spans and gaps are clamped where Compose throws |
+| `FlexBox` in `foundation-layout` | Absent |
 | The Styles API, `androidx.compose.foundation.style` (`Style`, `Modifier.styleable`, appearance and placement scopes; 94 classes in 1.13, all `@ExperimentalFoundationStyleApi`) | Absent |
 | `retain`, `RetainedEffect`, `RetainedValuesStore` (`runtime-retain`) | Absent; view models and `rememberSaveable` cover the retained-state cases apps use most |
 | `computedStateOf`, `staticCompositionLocalWithComputedDefaultOf` | Absent; `derivedStateOf` exists |
@@ -591,6 +592,7 @@ Sampled against Compose's `androidx.compose.ui`/`foundation-layout`:
 | `Modifier.zIndex()` | `Modifier::z_index(z)` | Implemented | Orders siblings for drawing and taps; equal ones keep the composition order, and several on one node add up. `Placement::z_index` from a custom `MeasurePolicy` is not read yet. |
 | `FocusRequester`, `Modifier.focusRequester()` | `FocusRequester`, `Modifier::focus_requester()` | Implemented | `request_focus()` returns `Result`, with `NotAttached` (never attached, or the node left composition) and `NoFocusTarget` distinguished -- no panic and no lying `Ok`. Reentrancy is safe by construction: a `request_focus()` from inside `on_focus_changed` enqueues and returns, and the outer dispatch loop drains it, with the manager's `RefCell` never held across a callback. |
 | `Constraints`, `Density`, `Alignment`, `Arrangement`, `Measurable`, `Placeable`, `MeasureResult`, `MeasurePolicy` | `cranpose-ui-layout::{Constraints, ..., MeasurePolicy}`, `cranpose-ui::Density` | Implemented | Full layout-contract vocabulary present under the same names. |
+| `ParentDataModifierNode`, `Measurable.parentData` | `Modifier::layout_data(data)`, read in a policy with `measurable.parent_data().layout_data::<T>()` | Renamed/reshaped | Any `'static` type with `Debug` and `PartialEq` is layout data. The outermost one in a chain wins, as Compose's fold of `modifyParentData` gives the outermost node the last word. Weights and alignments stay in their own `ParentData` fields, so they combine with it. |
 | `Dp`, `Sp`, `Px` (typed units, used everywhere in Compose's own modifier signatures) | `cranpose-ui-graphics::unit::{Dp, Sp, Px}` (types exist) | **Partial** | The types exist, but the widget/modifier surface itself (`padding`, `size`, `weight`, `offset`, ...) takes raw `f32`, not `Dp` -- Compose's type-safety guarantee against mixing raw pixels and density-independent units is not carried through to the call sites that would benefit from it. |
 
 ### Core widgets (`#[composable]` fns)

@@ -52,7 +52,7 @@ impl Measurable for MockMeasurable {
     }
 
     fn parent_data(&self) -> cranpose_ui_layout::ParentData {
-        self.parent_data
+        self.parent_data.clone()
     }
 }
 
