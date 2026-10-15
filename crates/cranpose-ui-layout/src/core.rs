@@ -1,6 +1,6 @@
 //! Core layout traits and types shared by Compose UI widgets.
 
-use std::rc::Rc;
+use std::{any::Any, fmt, rc::Rc};
 
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::Size;
@@ -31,11 +31,37 @@ impl FlexParentData {
     }
 }
 
+/// Data a child's modifier gives one kind of parent layout, which that
+/// layout's measure policy reads by its type: a grid cell, or the data of
+/// an app's own layout. Compose's `ParentDataModifierNode` data. Every
+/// `'static` type with `Debug` and `PartialEq` is layout data.
+pub trait LayoutData: Any + fmt::Debug {
+    /// Whether `other` holds the same data, so a parent can keep its last
+    /// measure.
+    fn same_as(&self, other: &dyn LayoutData) -> bool;
+
+    /// The data as `Any`, to read it by its type.
+    fn as_any(&self) -> &dyn Any;
+}
+
+impl<T: Any + fmt::Debug + PartialEq> LayoutData for T {
+    fn same_as(&self, other: &dyn LayoutData) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<T>()
+            .is_some_and(|other| other == self)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
 /// Layout metadata supplied by a child for its direct parent.
 ///
 /// Weight/fill apply to Row and Column. Alignment values override the
 /// corresponding parent layout's default alignment for this child only.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub struct ParentData {
     /// The child's share of a Row's or Column's room left over; 0 for none.
     pub weight: f32,
@@ -49,6 +75,25 @@ pub struct ParentData {
     pub row_baseline: bool,
     /// Where the child sits across a Column, over the Column's own alignment.
     pub column_alignment: Option<HorizontalAlignment>,
+    /// The data of the child's outermost [`LayoutData`] modifier, for a
+    /// parent that reads it by its type.
+    pub layout_data: Option<Rc<dyn LayoutData>>,
+}
+
+impl PartialEq for ParentData {
+    fn eq(&self, other: &Self) -> bool {
+        self.weight == other.weight
+            && self.fill == other.fill
+            && self.box_alignment == other.box_alignment
+            && self.row_alignment == other.row_alignment
+            && self.row_baseline == other.row_baseline
+            && self.column_alignment == other.column_alignment
+            && match (&self.layout_data, &other.layout_data) {
+                (None, None) => true,
+                (Some(data), Some(other)) => Rc::ptr_eq(data, other) || data.same_as(&**other),
+                _ => false,
+            }
+    }
 }
 
 impl From<FlexParentData> for ParentData {
@@ -65,6 +110,11 @@ impl ParentData {
     /// Whether the child takes a share of the room left over.
     pub fn has_weight(&self) -> bool {
         self.weight > 0.0
+    }
+
+    /// The child's [`LayoutData`] when it is a `T`.
+    pub fn layout_data<T: Any>(&self) -> Option<&T> {
+        self.layout_data.as_deref()?.as_any().downcast_ref()
     }
 }
 

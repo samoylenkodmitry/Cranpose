@@ -175,8 +175,8 @@ pub use layout::{
     SemanticsTree, build_layout_tree_from_applier, build_semantics_tree_from_applier,
     build_semantics_tree_from_layout_tree,
     core::{
-        Alignment, Arrangement, HorizontalAlignment, LinearArrangement, Measurable, Placeable,
-        VerticalAlignment,
+        Alignment, Arrangement, HorizontalAlignment, LayoutData, LinearArrangement, Measurable,
+        ParentData, Placeable, VerticalAlignment,
     },
     has_placed_content, measure_layout, measure_layout_with_options, placed_content_extent,
     top_modal_from_applier, tree_needs_layout, tree_needs_semantics,

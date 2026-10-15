@@ -904,7 +904,6 @@ impl SubcomposeLayoutNode {
     pub fn set_layout_direction(&mut self, direction: crate::LayoutDirection) {
         let mut inner = self.inner.borrow_mut();
         if inner.modifier_chain.set_layout_direction(direction) {
-            inner.resolved_modifiers = inner.modifier_chain.resolved_modifiers();
             drop(inner);
             self.modifier_slices_dirty.set(true);
             self.mark_needs_measure();
@@ -958,7 +957,12 @@ impl SubcomposeLayoutNode {
 
     /// Returns the padding, layout properties and offset that the modifier chain resolved to.
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {
-        self.inner.borrow().resolved_modifiers
+        self.inner.borrow().modifier_chain.resolved_modifiers()
+    }
+
+    /// What the chain tells the parent's measure policy about this node.
+    pub(crate) fn parent_data(&self) -> cranpose_ui_layout::ParentData {
+        crate::layout::parent_data_of(&self.inner.borrow().modifier_chain)
     }
 
     /// Returns a clone of the current layout state.
@@ -1419,7 +1423,7 @@ impl SubcomposeLayoutNodeHandle {
     }
 
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {
-        self.inner.borrow().resolved_modifiers
+        self.inner.borrow().modifier_chain.resolved_modifiers()
     }
 
     pub fn total_offset(&self) -> Point {
@@ -1600,7 +1604,6 @@ impl SubcomposeLayoutNodeHandle {
 struct SubcomposeLayoutNodeInner {
     modifier: Modifier,
     modifier_chain: ModifierChainHandle,
-    resolved_modifiers: ResolvedModifiers,
     modifier_capabilities: NodeCapabilities,
     state: SubcomposeState,
     measure_policy: Rc<MeasurePolicy>,
@@ -1659,7 +1662,6 @@ impl SubcomposeLayoutNodeInner {
         Self {
             modifier: Modifier::empty(),
             modifier_chain: ModifierChainHandle::detached(),
-            resolved_modifiers: ResolvedModifiers::default(),
             modifier_capabilities: NodeCapabilities::default(),
             state: SubcomposeState::default(),
             measure_policy,
@@ -1691,7 +1693,6 @@ impl SubcomposeLayoutNodeInner {
         let invalidations = self
             .modifier_chain
             .update_on_node(self.node_id, &self.modifier);
-        self.resolved_modifiers = self.modifier_chain.resolved_modifiers();
         self.modifier_capabilities = self.modifier_chain.capabilities();
 
         (invalidations, modifier_changed)

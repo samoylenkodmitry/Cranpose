@@ -304,6 +304,23 @@ impl ModifierChainHandle {
         self.resolved
     }
 
+    /// The data of the chain's first `layout_data` modifier, for the parent.
+    pub(crate) fn layout_data(&self) -> Option<Rc<dyn cranpose_ui_layout::LayoutData>> {
+        let mut found = None;
+        self.chain
+            .for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
+                if found.is_none() {
+                    node_ref.with_node(|node| {
+                        found = node
+                            .as_any()
+                            .downcast_ref::<super::layout_data::LayoutDataNode>()
+                            .map(|node| Rc::clone(node.data()));
+                    });
+                }
+            });
+        found
+    }
+
     /// The chain's modifier locals, or `None` while it has never provided or
     /// read one.
     pub fn modifier_locals_handle(&self) -> Option<ModifierLocalsHandle> {

@@ -1,5 +1,6 @@
 /// Re-exports of the alignment, arrangement and measurable types that layout policies use.
 pub mod core;
+pub(crate) mod grid;
 /// Measure policies behind the built-in layout widgets such as `Box`, `Row` and `Column`.
 pub mod policies;
 mod reveal;
@@ -1556,7 +1557,7 @@ impl ChildView {
     fn of(
         node: &dyn Node,
         cache: &LayoutNodeCacheHandles,
-        props: &dyn Fn() -> crate::modifier::LayoutProperties,
+        parent_data: &dyn Fn() -> cranpose_ui_layout::ParentData,
         placed: bool,
     ) -> Option<Self> {
         let self_dirty = node.needs_measure() || node.needs_layout();
@@ -1565,7 +1566,7 @@ impl ChildView {
         }
         Some(Self {
             self_dirty,
-            parent_data: self_dirty.then(|| parent_data_of(props())),
+            parent_data: self_dirty.then(parent_data),
             cached_constraints: cache.measured_constraints(),
             read_intrinsics: cache.has_intrinsics(),
             placed,
@@ -2327,9 +2328,9 @@ impl LayoutBuilderState {
         };
         *next_state += offset + 1;
         self.child_change(child_id, |view| {
-            let parent_data_changed = view
-                .parent_data
-                .is_some_and(|data| Some(data) != state.parent_data.get());
+            let parent_data_changed = view.parent_data.as_ref().is_some_and(|data| {
+                read_cell(&state.parent_data, |bound| bound.as_ref() != Some(data))
+            });
             match state.measured_constraints.get() {
                 Some(constraints) if !state.read_intrinsics.get() && !parent_data_changed => {
                     ChildChange::Changed(ChangedChild {
@@ -2452,9 +2453,7 @@ impl LayoutBuilderState {
                         LayoutChildBinding {
                             cache: child.cache_handles(),
                             layout_state: None,
-                            parent_data: Some(parent_data_of(
-                                child.resolved_modifiers().layout_properties(),
-                            )),
+                            parent_data: Some(child.parent_data()),
                             dirty: child.needs_layout() || child.needs_measure(),
                             descendant_dirty: Node::descendant_needs_layout(child),
                         },
@@ -3471,14 +3470,14 @@ struct LayoutChildBinding<'a> {
 }
 
 /// Reads a child that is a layout node or a subcompose node: its flags,
-/// cache, layout properties and placement. `None` for another node type.
+/// cache, parent data and placement. `None` for another node type.
 fn read_layout_child<R>(
     applier: &mut MemoryApplier,
     child_id: NodeId,
     read: impl Fn(
         &dyn Node,
         &LayoutNodeCacheHandles,
-        &dyn Fn() -> crate::modifier::LayoutProperties,
+        &dyn Fn() -> cranpose_ui_layout::ParentData,
         bool,
     ) -> R,
 ) -> Result<Option<R>, NodeError> {
@@ -3486,7 +3485,7 @@ fn read_layout_child<R>(
         read(
             &*child,
             child.cache_handles(),
-            &|| child.resolved_modifiers().layout_properties(),
+            &|| child.parent_data(),
             child.is_placed(),
         )
     }) {
@@ -3496,7 +3495,7 @@ fn read_layout_child<R>(
                 read(
                     &*child,
                     child.cache_handles(),
-                    &|| child.resolved_modifiers().layout_properties(),
+                    &|| child.parent_data(),
                     child.layout_state().is_placed(),
                 )
             }) {
@@ -3525,8 +3524,9 @@ fn measures_the_same_for_parent(previous: &MeasuredNode, measured: &MeasuredNode
 }
 
 pub(crate) fn parent_data_of(
-    props: crate::modifier::LayoutProperties,
+    chain: &crate::modifier::ModifierChainHandle,
 ) -> cranpose_ui_layout::ParentData {
+    let props = chain.resolved_modifiers().layout_properties();
     let weight = props.weight().unwrap_or_default();
     cranpose_ui_layout::ParentData {
         weight: weight.weight,
@@ -3535,6 +3535,7 @@ pub(crate) fn parent_data_of(
         row_alignment: props.row_alignment(),
         row_baseline: props.row_baseline(),
         column_alignment: props.column_alignment(),
+        layout_data: chain.layout_data(),
     }
 }
 
@@ -3560,7 +3561,7 @@ struct LayoutChildMeasureState {
 
 /// Runs `read` on what `cell` holds and puts it back. `read` must not reach
 /// the same cell again.
-fn read_cell<T: Default, R>(cell: &Cell<T>, read: impl FnOnce(&T) -> R) -> R {
+pub(crate) fn read_cell<T: Default, R>(cell: &Cell<T>, read: impl FnOnce(&T) -> R) -> R {
     let value = cell.take();
     let result = read(&value);
     cell.set(value);
@@ -3730,7 +3731,7 @@ impl LayoutChildMeasurable {
         if self.state.frame.builder.borrow().is_none() {
             return None;
         }
-        self.state.parent_data.get()
+        read_cell(&self.state.parent_data, Clone::clone)
     }
 
     fn intrinsic(

@@ -1,6 +1,6 @@
 use cranpose_ui_layout::{
-    Axis, Constraints, MeasurePolicy, MeasureResult, MeasureScope, ParentData, Placement,
-    bias_offset, round_to_px,
+    Axis, Constraints, FlexParentData, MeasurePolicy, MeasureResult, MeasureScope, ParentData,
+    Placement, bias_offset, round_to_px,
 };
 use smallvec::SmallVec;
 
@@ -541,7 +541,7 @@ impl FlexMeasurePolicy {
     fn measure_weighted_children(
         &self,
         measurables: &[Box<dyn Measurable>],
-        weighted_children: &[(usize, ParentData)],
+        weighted_children: &[(usize, FlexParentData)],
         (max_main, max_cross): (f32, f32),
         (fixed_space, spacing): (f32, f32),
         placeables: &mut [Option<cranpose_ui_layout::Placeable>],
@@ -595,7 +595,7 @@ impl FlexMeasurePolicy {
     fn cross_axis_position(
         &self,
         placeable: &cranpose_ui_layout::Placeable,
-        parent_data: ParentData,
+        parent_data: &ParentData,
         container_cross: f32,
         before_baseline: f32,
     ) -> f32 {
@@ -755,11 +755,11 @@ impl MeasurePolicy for FlexMeasurePolicy {
             .iter()
             .map(|child| child.parent_data())
             .collect();
-        let mut weighted_children: SmallVec<[(usize, ParentData); 8]> = SmallVec::new();
+        let mut weighted_children: SmallVec<[(usize, FlexParentData); 8]> = SmallVec::new();
 
-        for (idx, data) in parent_data.iter().copied().enumerate() {
+        for (idx, data) in parent_data.iter().enumerate() {
             if data.has_weight() {
-                weighted_children.push((idx, data));
+                weighted_children.push((idx, FlexParentData::new(data.weight, data.fill)));
             } else {
                 fixed_children.push(idx);
             }
@@ -834,7 +834,7 @@ impl MeasurePolicy for FlexMeasurePolicy {
         for (idx, (placeable, main_pos)) in placeables.into_iter().zip(main_positions).enumerate() {
             let cross_pos = self.cross_axis_position(
                 &placeable,
-                parent_data[idx],
+                &parent_data[idx],
                 container_cross,
                 before_baseline,
             );
