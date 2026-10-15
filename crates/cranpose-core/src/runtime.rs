@@ -473,6 +473,9 @@ struct RuntimeInner {
     ui_thread_id: ThreadId,
     tasks: RefCell<HashMap<u64, TaskEntry>>,
     task_order: RefCell<Vec<u64>>,
+    /// Set by every task wake after the task's own flag, and cleared by the
+    /// poll that then looks at the tasks: a poll after no wake skips them.
+    task_woken: Arc<AtomicBool>,
     next_task_id: Cell<u64>,
     state_arena: StateArena,
     external_state_owners: RefCell<HashMap<StateId, Rc<StateHandleLease>>>,
@@ -521,6 +524,7 @@ impl RuntimeInner {
             ui_thread_id: std::thread::current().id(),
             tasks: RefCell::new(HashMap::default()),
             task_order: RefCell::new(Vec::new()),
+            task_woken: Arc::new(AtomicBool::new(false)),
             next_task_id: Cell::new(1),
             state_arena: StateArena::default(),
             external_state_owners: RefCell::new(HashMap::default()),
@@ -662,6 +666,7 @@ impl RuntimeInner {
         let label = thread_state::runtimes(|state| state.next_task_label.borrow_mut().take())
             .unwrap_or_else(|| "unnamed".to_string());
         let runnable = Arc::new(AtomicBool::new(true));
+        self.task_woken.store(true, Ordering::Release);
         let waker = RuntimeTaskWaker::new(self, Arc::clone(&runnable)).into_waker();
         self.tasks.borrow_mut().insert(
             id,
@@ -693,6 +698,17 @@ impl RuntimeInner {
         // The tasks still pending move to the front of `order`, which goes
         // back as the task order, after any task spawned while polling.
         let mut order = std::mem::take(&mut *self.task_order.borrow_mut());
+        // An empty order is a poll nested in another, which holds the order:
+        // the wake flag stays for the polls after it.
+        if order.is_empty() || !self.task_woken.swap(false, Ordering::AcqRel) {
+            let mut task_order = self.task_order.borrow_mut();
+            if task_order.is_empty() {
+                *task_order = order;
+            } else {
+                task_order.extend(order);
+            }
+            return false;
+        }
         let mut pending = 0;
         let mut made_progress = false;
         for index in 0..order.len() {
@@ -812,12 +828,14 @@ impl RuntimeInner {
         local_pending || self.ui_dispatcher.has_pending() || self.has_runnable_tasks()
     }
 
+    /// A finished task's waker may still wake after the task is gone; with
+    /// no task left that wake is stale.
     fn has_runnable_tasks(&self) -> bool {
-        self.tasks.try_borrow().map_or(true, |tasks| {
-            tasks
-                .values()
-                .any(|task| task.runnable.load(Ordering::Acquire))
-        })
+        self.task_woken.load(Ordering::Acquire)
+            && self
+                .tasks
+                .try_borrow()
+                .map_or(true, |tasks| !tasks.is_empty())
     }
 
     fn register_ui_cont<T: 'static>(&self, f: impl FnOnce(T) + 'static) -> u64 {
@@ -1705,12 +1723,14 @@ enum FrameCallback {
 struct RuntimeTaskWaker {
     scheduler: SchedulerRef,
     runnable: Arc<AtomicBool>,
+    woken: Arc<AtomicBool>,
 }
 
 #[cfg(target_arch = "wasm32")]
 struct RuntimeTaskWaker {
     runtime_id: RuntimeId,
     runnable: Arc<AtomicBool>,
+    woken: Arc<AtomicBool>,
 }
 
 impl RuntimeTaskWaker {
@@ -1720,6 +1740,7 @@ impl RuntimeTaskWaker {
         Self {
             scheduler,
             runnable,
+            woken: Arc::clone(&inner.task_woken),
         }
     }
 
@@ -1729,6 +1750,7 @@ impl RuntimeTaskWaker {
         Self {
             runtime_id,
             runnable,
+            woken: Arc::clone(&inner.task_woken),
         }
     }
 
@@ -1741,12 +1763,14 @@ impl futures_task::ArcWake for RuntimeTaskWaker {
     #[cfg(not(target_arch = "wasm32"))]
     fn wake_by_ref(arc_self: &Arc<Self>) {
         arc_self.runnable.store(true, Ordering::Release);
+        arc_self.woken.store(true, Ordering::Release);
         arc_self.scheduler.schedule_frame();
     }
 
     #[cfg(target_arch = "wasm32")]
     fn wake_by_ref(arc_self: &Arc<Self>) {
         arc_self.runnable.store(true, Ordering::Release);
+        arc_self.woken.store(true, Ordering::Release);
         if let Some(handle) = runtime_handle_by_id(arc_self.runtime_id) {
             handle.schedule();
         }
