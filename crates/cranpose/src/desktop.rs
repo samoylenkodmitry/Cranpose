@@ -751,6 +751,10 @@ struct App {
     native_menus: crate::desktop_menus::NativeMenus,
     device_loss: device_loss::DeviceLoss,
     primary_initial_present_pending: bool,
+    /// Whether the primary window is on the screen transparent, waiting for
+    /// its first frame with content (`macos_window::stage`).
+    #[cfg(target_os = "macos")]
+    primary_staged: bool,
     /// The primary window's GPU, opening while the platform starts.
     gpu_start: GpuStart,
     vsync_interval: Duration,
@@ -848,6 +852,8 @@ impl App {
             native_menus: crate::desktop_menus::NativeMenus::default(),
             device_loss: device_loss::DeviceLoss::default(),
             primary_initial_present_pending: false,
+            #[cfg(target_os = "macos")]
+            primary_staged: false,
             gpu_start,
             vsync_interval: default_vsync_interval(),
             exiting: false,
@@ -1629,6 +1635,14 @@ impl App {
                 .primary_shown
                 .load(std::sync::atomic::Ordering::Relaxed)
         {
+            // A staged window that a frame already reached shows it now; one
+            // still waiting for its first frame shows with it.
+            #[cfg(target_os = "macos")]
+            reveal_staged_primary(
+                &mut self.primary_staged,
+                !self.primary_initial_present_pending,
+                window.as_ref(),
+            );
             request_redraw_once(&window, &mut self.primary_redraw_pending);
         }
     }
@@ -4926,6 +4940,16 @@ fn show_primary_when_it_has_content(
     }
 }
 
+/// Makes the primary window that `macos_window::stage` put on the screen
+/// opaque once it is `ready`: it shows the app's content with a frame in it.
+#[cfg(target_os = "macos")]
+fn reveal_staged_primary(staged: &mut bool, ready: bool, window: &dyn Window) {
+    if *staged && ready {
+        crate::macos_window::reveal(window);
+        *staged = false;
+    }
+}
+
 /// Shows the primary window as its content arrives: at once, without the
 /// animation macOS plays as a window opens (`macos_window`). A window whose
 /// first frame `builds_pipelines` goes to the window server before it.
@@ -5591,6 +5615,11 @@ impl ApplicationHandler for App {
                 return;
             }
         };
+        #[cfg(target_os = "macos")]
+        if !headless {
+            crate::macos_window::stage(window.as_ref());
+            self.primary_staged = true;
+        }
 
         let (
             OpenedGpu {
@@ -6204,6 +6233,13 @@ impl ApplicationHandler for App {
                     ));
                     #[cfg(target_os = "macos")]
                     self.application_menu.frame_presented();
+                    #[cfg(target_os = "macos")]
+                    reveal_staged_primary(
+                        &mut self.primary_staged,
+                        self.primary_shown
+                            .load(std::sync::atomic::Ordering::Relaxed),
+                        window.as_ref(),
+                    );
                     self.device_loss.presented();
                     #[cfg(feature = "robot")]
                     {
