@@ -135,8 +135,41 @@ fn Scenes(captured: Step) {
                     }
                 },
             );
+            GrowingBars(n);
         },
     );
+}
+
+/// Bars that grow inside rounded bars: an opaque outer bar hides what lies
+/// under the strip that changes, a translucent one does not.
+#[composable]
+fn GrowingBars(n: u32) {
+    for (row, outer) in [
+        (0u32, Color::from_rgb_u8(40, 44, 64)),
+        (1, Color::from_rgba_u8(40, 44, 64, 128)),
+    ] {
+        let fill = 10.0 + ((n + row * 5) * 13 % 70) as f32;
+        Box(
+            Modifier::empty()
+                .offset(120.0, 140.0 + row as f32 * 20.0)
+                .width(100.0)
+                .height(16.0)
+                .background(outer)
+                .rounded_corners(8.0),
+            BoxSpec::default(),
+            move || {
+                Box(
+                    Modifier::empty()
+                        .width(fill)
+                        .height(16.0)
+                        .background(Color::from_rgb_u8(98, 160, 255))
+                        .rounded_corners(8.0),
+                    BoxSpec::default(),
+                    || {},
+                );
+            },
+        );
+    }
 }
 
 fn shell(scale: f32) -> (AppShell<PixelsRenderer>, Step) {
