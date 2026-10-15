@@ -57,11 +57,7 @@ impl LossSignal {
     }
 
     /// Marks the current device lost, as its loss callback does.
-    #[cfg(any(
-        all(feature = "android", target_os = "android"),
-        all(feature = "ios", target_os = "ios"),
-        all(feature = "web", target_arch = "wasm32")
-    ))]
+    #[cfg(all(feature = "web", target_arch = "wasm32"))]
     pub(crate) fn report_loss(&self) {
         self.lost.store(self.generation, Ordering::SeqCst);
     }
@@ -79,18 +75,28 @@ impl LossSignal {
     }
 }
 
+/// How long after its first presented frame a drill reports its device lost.
+#[cfg(any(
+    all(feature = "android", target_os = "android"),
+    all(feature = "ios", target_os = "ios")
+))]
+const DRILL_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// A debuggable build launched with `cranpose_lose_gpu_device` (an Android
 /// extra or a `--cranpose_lose_gpu_device` argument) reports its GPU device
-/// lost once, after its first 120 presented frames, to try the recovery on a
-/// device. It reports the loss as the device's loss callback does rather than
-/// destroying the device: a destroy while the present thread draws freezes
-/// some drivers, where a driver reset reports a loss without that.
+/// lost once, [`DRILL_DELAY`] after its first presented frame, to try the
+/// recovery on a device. A timer rather than a frame count fires it, so an
+/// app that draws no frames while idle runs the drill too. It reports the
+/// loss as the device's loss callback does rather than destroying the
+/// device: a destroy while the present thread draws freezes some drivers,
+/// where a driver reset reports a loss without that.
 #[cfg(any(
     all(feature = "android", target_os = "android"),
     all(feature = "ios", target_os = "ios")
 ))]
 pub(crate) struct LossDrill {
-    frames_left: Option<u32>,
+    /// The loss callback of the first device, until the drill starts.
+    lose: Option<DeviceLostHandler>,
 }
 
 #[cfg(any(
@@ -98,29 +104,38 @@ pub(crate) struct LossDrill {
     all(feature = "ios", target_os = "ios")
 ))]
 impl LossDrill {
-    pub(crate) fn from_launch_args() -> Self {
+    /// The drill the launch asks for, which reports its loss through
+    /// `signal` and then calls `wake`.
+    pub(crate) fn from_launch_args(
+        signal: &LossSignal,
+        wake: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
         let asked = cranpose_services::is_debuggable()
             && cranpose_services::launch_args()
                 .boolean("cranpose_lose_gpu_device")
                 .unwrap_or(false);
         Self {
-            frames_left: asked.then_some(120),
+            lose: asked.then(|| signal.handler(wake)),
         }
     }
 
-    /// A frame presented; after the drill's last one, `signal` reports a
-    /// loss.
-    pub(crate) fn presented(&mut self, signal: &LossSignal) {
-        let Some(left) = self.frames_left.as_mut() else {
+    /// A frame presented; the first one starts the drill's timer.
+    pub(crate) fn presented(&mut self) {
+        let Some(lose) = self.lose.take() else {
             return;
         };
-        *left = left.saturating_sub(1);
-        if *left > 0 {
-            return;
+        let timer = std::thread::Builder::new()
+            .name("cranpose-loss-drill".into())
+            .spawn(move || {
+                std::thread::sleep(DRILL_DELAY);
+                log::warn!(
+                    "[gpu-device] reporting a device loss, as cranpose_lose_gpu_device asks"
+                );
+                lose();
+            });
+        if let Err(error) = timer {
+            log::warn!("[gpu-device] the device loss drill could not start: {error}");
         }
-        self.frames_left = None;
-        log::warn!("[gpu-device] reporting a device loss, as cranpose_lose_gpu_device asks");
-        signal.report_loss();
     }
 }
 
