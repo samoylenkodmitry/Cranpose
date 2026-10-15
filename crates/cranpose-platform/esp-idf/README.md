@@ -45,13 +45,17 @@ just esp32-qemu-check   # boots the demo in QEMU and saves the panel picture
 just esp32-qemu         # shows the demo on QEMU's virtual panel in a window
 ```
 
-The demo firmware takes about 2.9 MB of flash: 2.5 MB of code at
-`opt-level = 2` and 0.35 MB of read-only data. It turns off `cranpose`'s default features and passes an 18 KB
+The demo firmware takes about 2.7 MB of flash: 2.4 MB of code at
+`opt-level = 2` with fat LTO in one codegen unit, and 0.3 MB of read-only data. It turns off `cranpose`'s default features and passes an 18 KB
 Latin subset of Noto Sans in `DisplayConfig::fonts`; the embedded default font
 would add 1.3 MB.
 
 The toolchain is `esp-1.98.1`. The `std` of esp 1.99.0.0 does not build for
 ESP-IDF: it calls `libc::fchmodat`, which its `libc` does not define there.
+
+An application's release profile takes the demo's `opt-level = 2`,
+`lto = "fat"` and `codegen-units = 1`: the measurements behind them are in
+[`apps/esp32-demo/Cargo.toml`](../../../apps/esp32-demo/Cargo.toml).
 
 The application's `Cargo.toml` keeps host build tools unstripped
 (`[profile.*.build-override] strip = false`). The repository sets

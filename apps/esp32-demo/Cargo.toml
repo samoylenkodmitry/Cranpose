@@ -26,11 +26,17 @@ embuild = "0.33.5"
 members = [".", "../../crates/cranpose-platform/esp-idf"]
 
 # Measured under QEMU's instruction counter with the S3's 16 KB instruction
-# cache simulated: a frame of the demo runs 19% fewer instructions with 11%
-# fewer cache misses than at "s", for 290 KB more code in an 8 MB partition.
+# cache simulated. Against "s", opt-level 2 runs a frame of the demo in 19%
+# fewer instructions with 11% fewer cache misses, for 290 KB more code in an
+# 8 MB partition. Fat LTO in one codegen unit, as the workspace's release
+# profile has, then inlines the small functions of other crates: a frame
+# fetches 5.5% fewer instructions with 10% fewer instruction cache misses,
+# and the image has 160 KB less code and 57 KB less read-only data.
 # esp-idf-sys builds ESP-IDF's C code at -O2 to match.
 [profile.release]
 opt-level = 2
+lto = "fat"
+codegen-units = 1
 
 [profile.dev]
 debug = true
