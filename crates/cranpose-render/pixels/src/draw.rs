@@ -103,7 +103,7 @@ static UNIT: [f32; 256] = {
     table
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ClipBounds {
     pub min_x: i32,
     pub min_y: i32,
@@ -218,9 +218,17 @@ pub(crate) fn draw_raster_window(
     diagnostics: &RenderDiagnostics,
     text: &TextRaster,
 ) {
-    clear_frame(target.pixels);
     let window = target.window();
-    for &item in &scene.order {
+    // The topmost item that paints the whole window opaquely hides what
+    // lies under it there: drawing starts with it.
+    let first = scene
+        .order
+        .iter()
+        .rposition(|&item| scene.covers_window(item, window));
+    if first.is_none() {
+        clear_frame(target.pixels);
+    }
+    for &item in &scene.order[first.unwrap_or(0)..] {
         if scene.item_bounds(item, window).is_some() {
             draw_item(target, scene, item, diagnostics, text);
         }
@@ -272,6 +280,37 @@ impl RasterScene {
             }
             RenderItem::Text(_) => None,
         }
+    }
+
+    /// Whether `item` paints every pixel of `window` with opaque bytes: an
+    /// opaque solid fill whose clipped bounds hold the window and, when
+    /// rounded, whose shape holds the window's corner pixels, and so every
+    /// pixel between them, the shape being convex.
+    fn covers_window(&self, item: RenderItem, window: ClipBounds) -> bool {
+        let RenderItem::Shape(index) = item else {
+            return false;
+        };
+        let draw = &self.shapes[index];
+        if opaque_solid_bytes(&draw.brush, draw.blend_mode).is_none() {
+            return false;
+        }
+        let Some(PlacedShape {
+            coverage: ShapeCoverage::Fill { rect, radii },
+            ..
+        }) = place_shape(draw)
+        else {
+            return false;
+        };
+        if clip_rect_to_window(rect, draw.clip, window) != Some(window) {
+            return false;
+        }
+        radii.is_none_or(|radii| {
+            let (left, right) = (window.min_x as f32 + 0.5, window.max_x as f32 - 0.5);
+            let (top, bottom) = (window.min_y as f32 + 0.5, window.max_y as f32 - 0.5);
+            [(left, top), (right, top), (left, bottom), (right, bottom)]
+                .into_iter()
+                .all(|(x, y)| point_in_resolved_rounded_rect(x, y, rect, &radii))
+        })
     }
 
     pub(crate) fn item_bounds(&self, item: RenderItem, window: ClipBounds) -> Option<ClipBounds> {
