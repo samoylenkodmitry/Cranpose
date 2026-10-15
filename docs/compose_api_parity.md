@@ -69,7 +69,7 @@ curate, gives these public APIs that Cranpose lacks. They are tracked in
 | `PolygonShape`, `MorphPolygonShape`, `CornerRounding` | Absent |
 | `MeshGradientPainter`, blur radius stops (`BlurRadiusSpec`) | Absent; `Modifier::blur` and backdrop blurs exist |
 | `UiMediaScope` fold posture (`WindowPosture`, `FoldState`) | Absent |
-| Semantics `hintText` and `backgroundColor` | Absent |
+| Semantics `hintText` and `backgroundColor` | `Modifier::hint_text(..)` reaches TalkBack (`setHintText`), VoiceOver (`accessibilityHint`, after the tap label) and the end of the AccessKit and web description. `backgroundColor` is absent: no platform bridge reads one yet |
 | `CapturedAnimatedVisibility`, the `Veil` enter and exit transitions | Absent |
 | `LazyLayoutCacheWindow` | Absent; lazy lists keep `beyond_bounds_item_count` and idle prefetch |
 

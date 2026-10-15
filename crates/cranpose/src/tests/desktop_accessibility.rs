@@ -891,3 +891,35 @@ fn a_partly_checked_box_reads_as_mixed() {
     let update = tree_update(&elements, None, false);
     assert_eq!(update.nodes[1].1.toggled(), Some(Toggled::Mixed));
 }
+
+#[test]
+fn the_description_ends_with_the_hint_after_the_state_and_the_error() {
+    let element = AccessibilityElement {
+        label: "Amount".into(),
+        details: Some(Box::new(AccessibilityDetails {
+            state_description: Some("Required".into()),
+            error: Some("needs a number".into()),
+            hint_text: Some("up to two decimals".into()),
+            ..Default::default()
+        })),
+        role: AccessibilityRole::TextField,
+        ..AccessibilityElement::default()
+    };
+    assert_eq!(
+        accesskit_node(&element).description(),
+        Some("Required, invalid, needs a number, up to two decimals")
+    );
+    let hint_only = AccessibilityElement {
+        label: "Color".into(),
+        details: Some(Box::new(AccessibilityDetails {
+            hint_text: Some("double tap to choose".into()),
+            ..Default::default()
+        })),
+        role: AccessibilityRole::Button,
+        ..AccessibilityElement::default()
+    };
+    assert_eq!(
+        accesskit_node(&hint_only).description(),
+        Some("double tap to choose")
+    );
+}

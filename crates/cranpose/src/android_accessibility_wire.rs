@@ -207,6 +207,7 @@ fn encode_record(
     record.number(i32::from(details.scroll_to_index));
     record.number(selection_start);
     record.number(selection_end);
+    record.text(details.hint_text.as_deref().unwrap_or(""));
 }
 
 /// Writes a record's fields straight into the update, in the order the host

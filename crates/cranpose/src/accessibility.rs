@@ -398,6 +398,8 @@ pub(crate) struct AccessibilityDetails {
     pub(crate) collection: Option<CollectionInfo>,
     pub(crate) pane_title: Option<String>,
     pub(crate) error: Option<String>,
+    /// What using the control does or what it wants, read after the rest.
+    pub(crate) hint_text: Option<String>,
     pub(crate) password: bool,
     pub(crate) expanded: Option<bool>,
     pub(crate) dismissable: bool,
@@ -427,6 +429,7 @@ impl AccessibilityDetails {
         collection: None,
         pane_title: None,
         error: None,
+        hint_text: None,
         password: false,
         expanded: None,
         dismissable: false,
@@ -1164,6 +1167,7 @@ fn fill_node_details(
         collection: details.collection,
         pane_title: reuse_text(held.pane_title.take(), details.pane_title.as_deref()),
         error: reuse_text(held.error.take(), details.error.as_deref()),
+        hint_text: reuse_text(held.hint_text.take(), details.hint_text.as_deref()),
         password: details.password,
         expanded: expansion(details),
         dismissable: details.dismiss.is_some(),
@@ -1959,6 +1963,24 @@ pub(crate) fn state_with_error(element: &AccessibilityElement) -> Option<String>
         .into_iter()
         .chain(error_text(element))
         .collect();
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
+
+/// The description a reader hears after the label and the value, for the
+/// platforms that carry state, error and hint in one: the state, the reason
+/// the content is wrong, and the hint.
+#[cfg(any(
+    test,
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn description_text(element: &AccessibilityElement) -> Option<String> {
+    let hint = element
+        .details()
+        .hint_text
+        .clone()
+        .filter(|hint| !hint.trim().is_empty());
+    let parts: Vec<String> = state_with_error(element).into_iter().chain(hint).collect();
     (!parts.is_empty()).then(|| parts.join(", "))
 }
 

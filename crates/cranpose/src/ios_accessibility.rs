@@ -920,11 +920,15 @@ fn update_native_element(
     native.setAccessibilityLabel(Some(&NSString::from_str(&element.label)));
     let value = accessibility::voiceover_value(element);
     native.setAccessibilityValue(value.as_deref().map(NSString::from_str).as_deref());
+    let hint = [details.click_label.as_deref(), details.hint_text.as_deref()]
+        .into_iter()
+        .flatten()
+        .filter(|part| !part.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(", ");
     native.setAccessibilityHint(
-        details
-            .click_label
-            .as_deref()
-            .map(NSString::from_str)
+        (!hint.is_empty())
+            .then(|| NSString::from_str(&hint))
             .as_deref(),
     );
     native.setAccessibilityFrameInContainerSpace(CGRect::new(
