@@ -260,6 +260,8 @@ controls inside Cranpose. Examples pass state and events across the boundary.
 The [IntelliJ plugin template](https://github.com/samoylenkodmitry/cranpose-intellij-plugin-template)
 uses `cranpose/embed` for a Rust UI inside an IDE tool window.
 
+[ESP32-S3 example](https://samoylenkodmitry.github.io/cranpose-esp32/)
+
 ## Choose APIs
 
 Start with the `cranpose` crate and its prelude. Add a crate for each feature the
