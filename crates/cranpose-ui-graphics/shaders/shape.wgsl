@@ -1847,7 +1847,8 @@ fn fragment() -> vec4<f32> {
     } else if (brush_type == 3u) {
         // Sweep gradient: the angle around the centre.
         let offset = rect_pos - frag.gradient_params.xy;
-        raw_t = atan2(offset.y, offset.x) / (2.0 * 3.14159265358979) + 0.5;
+        // From 3 o'clock, clockwise, as Compose's sweep.
+        raw_t = fract(atan2(offset.y, offset.x) / (2.0 * 3.14159265358979));
     }
     if ((brush_type >= 1u) & (brush_type <= 3u)) {
         let sample = remap_gradient_t(raw_t, frag.brush.w);

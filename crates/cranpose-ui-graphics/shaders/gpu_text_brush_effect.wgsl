@@ -116,7 +116,8 @@ fn evaluate_brush(local: vec2<f32>) -> vec4<f32> {
         let center = u[4].xy;
         let delta = local - center;
         let angle = atan2(delta.y, delta.x);
-        let raw_t = angle / (2.0 * 3.14159265358979) + 0.5;
+        // From 3 o'clock, clockwise, as Compose's sweep.
+        let raw_t = fract(angle / (2.0 * 3.14159265358979));
         let sample = remap_gradient_t(raw_t, TILE_CLAMP);
         if (!sample.valid) {
             return vec4<f32>(0.0);

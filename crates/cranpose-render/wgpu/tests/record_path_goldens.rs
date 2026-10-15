@@ -430,3 +430,50 @@ fn shadows_match_the_golden() {
 fn arena_run_at_a_fractional_root_scale_matches_the_golden() {
     check("arena_run_scaled", arena_run(), SIZE, 130.0 / 96.0);
 }
+
+/// A sweep gradient starts at 3 o'clock and turns clockwise, as Compose's.
+#[test]
+fn sweep_gradient_starts_at_three_o_clock() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping sweep gradient check: headless WGPU init failed: {err}");
+            return;
+        }
+    };
+    let size = 64;
+    let mut scope = scope(size);
+    scope.draw_rect_at(
+        bounds(size),
+        Brush::sweep_gradient(
+            vec![
+                Color(1.0, 0.0, 0.0, 1.0),
+                Color(0.0, 1.0, 0.0, 1.0),
+                Color(0.0, 0.0, 1.0, 1.0),
+            ],
+            Point::new(32.0, 32.0),
+        ),
+    );
+    let pixels = capture(
+        &mut renderer,
+        &root(size, vec![run_node(scope.into_primitives())]),
+        size,
+        1.0,
+    );
+    let at = |x: usize, y: usize| {
+        let index = (y * size as usize + x) * 4;
+        [pixels[index], pixels[index + 1], pixels[index + 2]]
+    };
+    let [red, green, _] = at(60, 33);
+    assert!(
+        red > 200 && green < 40,
+        "just clockwise of 3 o'clock is the first color: {:?}",
+        at(60, 33)
+    );
+    let [red, green, blue] = at(4, 32);
+    assert!(
+        green > 200 && red < 40 && blue < 40,
+        "9 o'clock is the middle color: {:?}",
+        at(4, 32)
+    );
+}

@@ -40,7 +40,8 @@ pub enum Brush {
         /// How the gradient continues beyond `radius`.
         tile_mode: TileMode,
     },
-    /// Colors blend by angle around `center`. Compose's `Brush.sweepGradient`.
+    /// Colors blend by angle around `center`, the first at 3 o'clock and the
+    /// rest clockwise from it. Compose's `Brush.sweepGradient`.
     SweepGradient {
         /// Colors to blend between, in order.
         colors: Vec<Color>,
@@ -323,7 +324,8 @@ impl Brush {
                 center,
             } => {
                 let angle = (y - (rect.y + center.y)).atan2(x - (rect.x + center.x));
-                let t = angle / std::f32::consts::TAU + 0.5;
+                // From 3 o'clock, clockwise, as Compose's sweep.
+                let t = (angle / std::f32::consts::TAU).rem_euclid(1.0);
                 (colors, stops, t, TileMode::Clamp)
             }
         };
