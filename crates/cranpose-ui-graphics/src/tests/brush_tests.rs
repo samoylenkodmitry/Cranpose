@@ -225,3 +225,18 @@ fn a_colour_converts_into_a_solid_brush() {
     let color = Color(0.1, 0.2, 0.3, 0.4);
     assert_eq!(Brush::from(color), Brush::solid(color));
 }
+
+#[test]
+fn color_at_follows_the_tile_mode_past_the_gradient_end() {
+    let rect = Rect::from_size(crate::Size::new(100.0, 10.0));
+    let at = |brush: &Brush, x: f32| brush.color_at(rect, Point::new(x, 5.0));
+    let mirror = Brush::horizontal_gradient_tiled(red_to_blue(), 0.0, 100.0, TileMode::Mirror);
+    assert_eq!(at(&mirror, 125.0), at(&mirror, 75.0));
+    assert_eq!(at(&mirror, 175.0), at(&mirror, 25.0));
+    let repeated = Brush::horizontal_gradient_tiled(red_to_blue(), 0.0, 100.0, TileMode::Repeated);
+    assert_eq!(at(&repeated, 125.0), at(&repeated, 25.0));
+    let decal = Brush::horizontal_gradient_tiled(red_to_blue(), 0.0, 100.0, TileMode::Decal);
+    assert_eq!(at(&decal, 125.0), Color(0.0, 0.0, 0.0, 0.0));
+    let clamp = Brush::horizontal_gradient_tiled(red_to_blue(), 0.0, 100.0, TileMode::Clamp);
+    assert_eq!(at(&clamp, 125.0), Color(0.0, 0.0, 1.0, 1.0));
+}

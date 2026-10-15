@@ -43,12 +43,6 @@ fn clamped_gradient_samples_last_color_at_end() {
     }
 }
 
-#[test]
-fn mirror_tile_mode_normalizes_across_repeated_segments() {
-    assert_eq!(normalize_gradient_t(1.25, TileMode::Mirror), Some(0.75));
-    assert_eq!(normalize_gradient_t(1.75, TileMode::Mirror), Some(0.25));
-}
-
 const BAYER_4X4: [[u32; 4]; 4] = [[0, 4, 1, 5], [8, 12, 9, 13], [2, 6, 3, 7], [10, 14, 11, 15]];
 
 #[test]

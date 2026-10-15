@@ -1,14 +1,11 @@
 use std::rc::Rc;
 
-use cranpose_render_common::{
-    brush_sampling::normalize_gradient_t,
-    graph::{
-        DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph,
-        RenderNode,
-    },
+use cranpose_render_common::graph::{
+    DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph,
+    RenderNode,
 };
 use cranpose_ui::Brush;
-use cranpose_ui_graphics::{Color, TileMode};
+use cranpose_ui_graphics::Color;
 
 use super::*;
 
@@ -266,12 +263,6 @@ fn unsupported_blend_mode_falls_back_without_abort() {
     blend_pixel(&mut src_over, src, BlendMode::SrcOver, &diagnostics);
 
     assert_eq!(unsupported, src_over);
-}
-
-#[test]
-fn mirror_tile_mode_reflects_second_interval() {
-    assert_eq!(normalize_gradient_t(1.25, TileMode::Mirror), Some(0.75));
-    assert_eq!(normalize_gradient_t(1.75, TileMode::Mirror), Some(0.25));
 }
 
 #[test]
