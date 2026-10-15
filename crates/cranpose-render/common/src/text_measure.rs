@@ -5,8 +5,8 @@
 //! is installed.
 
 use std::{
+    cell::{RefCell, RefMut},
     hash::{Hash, Hasher},
-    sync::{Mutex, MutexGuard, PoisonError},
 };
 
 use cranpose_core::collections::pass_aged::PassAgedCache;
@@ -116,7 +116,9 @@ pub fn fallback_cursor_x_for_byte_offset(text: &str, byte_offset: usize, font_si
 /// metrics by text, font size and style.
 pub struct CachedFontTextMeasurer {
     text_resources: SoftwareTextResources,
-    cache: Mutex<TextMetricsCache>,
+    /// In a `RefCell`: a measurer serves the one thread of its composition,
+    /// and on ESP-IDF a `Mutex` is a FreeRTOS mutex, taken every layout pass.
+    cache: RefCell<TextMetricsCache>,
     hyphenation: HyphenationDictionaryStore,
 }
 
@@ -164,13 +166,13 @@ impl CachedFontTextMeasurer {
     pub fn with_text_resources(text_resources: SoftwareTextResources, capacity: usize) -> Self {
         Self {
             text_resources,
-            cache: Mutex::new(TextMetricsCache::new(capacity)),
+            cache: RefCell::new(TextMetricsCache::new(capacity)),
             hyphenation: HyphenationDictionaryStore::new(),
         }
     }
 
-    fn lock_cache(&self) -> MutexGuard<'_, TextMetricsCache> {
-        self.cache.lock().unwrap_or_else(PoisonError::into_inner)
+    fn cache_mut(&self) -> RefMut<'_, TextMetricsCache> {
+        self.cache.borrow_mut()
     }
 }
 
@@ -180,7 +182,7 @@ fn resolve_font_size(style: &cranpose_ui::text::TextStyle) -> f32 {
 
 impl TextMeasurer for CachedFontTextMeasurer {
     fn begin_layout_pass(&self) {
-        self.lock_cache().map.begin_pass(|_| {});
+        self.cache_mut().map.begin_pass(|_| {});
     }
 
     fn glyph_line_box(&self, style: &cranpose_ui::text::TextStyle) -> Option<(f32, f32)> {
@@ -226,7 +228,7 @@ impl TextMeasurer for CachedFontTextMeasurer {
             text.span_measurement_hash().hash(&mut hasher);
             style_hash = hasher.finish();
         }
-        self.lock_cache()
+        self.cache_mut()
             .get_or_measure(text_str, font_size, style_hash, |_, size| {
                 measure_annotated_text_with_font_set(text, style, size, self.text_resources.fonts())
             })

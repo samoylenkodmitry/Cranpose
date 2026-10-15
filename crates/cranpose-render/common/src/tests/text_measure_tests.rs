@@ -24,23 +24,3 @@ fn fallback_cursor_position_handles_non_boundary_byte_offsets() {
         width * 2.0
     );
 }
-
-#[test]
-fn cached_font_text_metrics_cache_recovers_after_poison() {
-    let measurer = CachedFontTextMeasurer::with_text_resources(SoftwareTextResources::default(), 8);
-    let text = cranpose_ui::text::AnnotatedString::from("Recovered software text");
-
-    let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _guard = measurer
-            .cache
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        panic!("poison software text metrics cache for recovery test");
-    }));
-
-    assert!(poison_result.is_err());
-
-    let metrics = measurer.measure(&text, &cranpose_ui::text::TextStyle::default());
-    assert!(metrics.width > 0.0);
-    assert!(metrics.height > 0.0);
-}
