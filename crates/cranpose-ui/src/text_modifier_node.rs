@@ -222,6 +222,12 @@ impl TextPreparedLayoutOwner {
             })
     }
 
+    /// The widest word of the text: see [`crate::text::measure::min_intrinsic_text_width`].
+    fn min_intrinsic_width(&self) -> f32 {
+        let source = self.source.borrow();
+        crate::text::measure::min_intrinsic_text_width(&source.text, &source.style)
+    }
+
     fn measure_text_content(&self, max_width: Option<f32>) -> Size {
         self.with_prepared(max_width, |prepared| Size {
             width: prepared.metrics.width,
@@ -424,7 +430,7 @@ impl LayoutModifierNode for TextModifierNode {
         _height: f32,
         _density: f32,
     ) -> f32 {
-        self.pixel_size(self.measure_text_content(None)).width
+        self.density.ceil(self.layout.min_intrinsic_width())
     }
 
     fn max_intrinsic_width(
