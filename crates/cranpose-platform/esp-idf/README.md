@@ -45,8 +45,8 @@ just esp32-qemu-check   # boots the demo in QEMU and saves the panel picture
 just esp32-qemu         # shows the demo on QEMU's virtual panel in a window
 ```
 
-The demo firmware takes about 2.6 MB of flash: 2.2 MB of code and 0.35 MB of
-read-only data. It turns off `cranpose`'s default features and passes an 18 KB
+The demo firmware takes about 2.9 MB of flash: 2.5 MB of code at
+`opt-level = 2` and 0.35 MB of read-only data. It turns off `cranpose`'s default features and passes an 18 KB
 Latin subset of Noto Sans in `DisplayConfig::fonts`; the embedded default font
 would add 1.3 MB.
 
@@ -62,11 +62,22 @@ the esp toolchain links for it and then strips.
 
 - `CONFIG_ESP_MAIN_TASK_STACK_SIZE` of at least 32 KB: composition and layout
   run on the task that calls `run`.
-- `CONFIG_FREERTOS_HZ=1000`: timed waits round to the tick, so at 100 Hz a
-  16.7 ms frame interval waits 20 ms.
 - Drawing takes a 30 KB RGBA strip and a 15 KB RGB565 strip in internal DMA
   memory, or one display row of each when the display is wider than 320
   pixels. The composition's own heap decides whether the app needs PSRAM.
+
+## Thread-local lookups
+
+Rust's `std` keeps each `thread_local!` of an ESP-IDF build in a pthread key,
+and ESP-IDF's `pthread_getspecific` masks interrupts to find the current task
+and walks the task's list of values: about 90 instructions for every access,
+some 190 of them a frame in the demo. The crate's
+[`cranpose_fast_tls`](components/cranpose_fast_tls/fast_tls.c) component,
+which ESP-IDF builds into every application that depends on the crate, wraps
+`pthread_getspecific` and `pthread_setspecific`: each task keeps a copy of its
+values of the first 32 keys in a C thread-local array, read in a few
+instructions through the `THREADPTR` register. The array takes 128 bytes of
+every task's stack.
 
 ## QEMU
 

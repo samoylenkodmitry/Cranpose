@@ -21,3 +21,8 @@ thiserror = "2.0.21"
 [[package.metadata.esp-idf-sys.extra_components]]
 remote_component = { name = "espressif/esp_lcd_qemu_rgb", version = "1.0.2" }
 bindings_header = "src/bindings.h"
+
+# Thread-local lookups in a few instructions: see
+# components/cranpose_fast_tls/fast_tls.c.
+[[package.metadata.esp-idf-sys.extra_components]]
+component_dirs = ["components/cranpose_fast_tls"]
