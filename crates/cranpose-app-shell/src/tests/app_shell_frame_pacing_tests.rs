@@ -1,8 +1,4 @@
-use std::{
-    cell::RefCell,
-    panic::{AssertUnwindSafe, catch_unwind},
-    time::Duration,
-};
+use std::{cell::RefCell, time::Duration};
 
 use web_time::Instant;
 
@@ -179,31 +175,5 @@ fn frame_scheduler_clears_deadline_for_immediate_frame() {
     assert_eq!(
         driver.calls(),
         vec![DriverCall::ClearWake, DriverCall::RequestFrame]
-    );
-}
-
-#[test]
-fn frame_scheduler_recovers_poisoned_deadline_lock() {
-    let scheduler = FrameScheduler::default();
-    let deadline = Instant::now() + Duration::from_millis(25);
-
-    let _ = catch_unwind(AssertUnwindSafe(|| {
-        let _guard = scheduler.lock_deadline();
-        panic!("poison frame scheduler deadline lock");
-    }));
-
-    scheduler.record(FrameSchedule {
-        needs_update: false,
-        needs_frame: false,
-        next_deadline: Some(deadline),
-    });
-
-    assert_eq!(
-        scheduler.snapshot(),
-        FrameSchedule {
-            needs_update: false,
-            needs_frame: false,
-            next_deadline: Some(deadline),
-        }
     );
 }

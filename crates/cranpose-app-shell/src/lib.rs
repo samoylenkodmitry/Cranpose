@@ -1,7 +1,6 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
-use std::sync::PoisonError;
 mod focus_reveal;
 mod fps_monitor;
 mod frame_rate_boost;
@@ -16,13 +15,9 @@ mod shell_input;
 mod surface;
 mod wheel;
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     fmt::{Debug, Write},
     rc::Rc,
-    sync::{
-        Mutex, MutexGuard,
-        atomic::{AtomicBool, Ordering},
-    },
 };
 
 use cranpose_core::{
@@ -358,8 +353,8 @@ impl FramePacingMode {
 }
 
 /// What the shell needs from the platform loop next: an update now, a display frame, or a wake at a
-/// later time.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// later time. The default needs nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FrameSchedule {
     /// Whether queued UI tasks, state changes, layout or semantics work can run now, without
     /// waiting for a display frame.
@@ -401,44 +396,25 @@ pub trait PlatformFrameDriver {
     fn clear_wake(&self);
 }
 
-/// Stores the latest [`FrameSchedule`] of a surface so that platform code on other threads can read
-/// it.
-#[derive(Debug)]
+/// Stores the latest [`FrameSchedule`] of a surface for the platform code that drives it. A
+/// surface lives on its shell's thread, so the schedule sits in a `Cell`: on ESP-IDF a `Mutex`
+/// is a FreeRTOS mutex, which every frame took.
+#[derive(Debug, Default)]
 pub struct FrameScheduler {
-    update_pending: AtomicBool,
-    frame_pending: AtomicBool,
-    next_deadline: Mutex<Option<web_time::Instant>>,
-}
-
-impl Default for FrameScheduler {
-    fn default() -> Self {
-        Self {
-            update_pending: AtomicBool::new(false),
-            frame_pending: AtomicBool::new(false),
-            next_deadline: Mutex::new(None),
-        }
-    }
+    latest: Cell<FrameSchedule>,
 }
 
 impl FrameScheduler {
-    fn lock_deadline(&self) -> MutexGuard<'_, Option<web_time::Instant>> {
-        self.next_deadline
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-    }
-
     /// Stores `schedule` as the latest one. A schedule that needs an update drops its deadline.
     pub fn record(&self, schedule: FrameSchedule) {
-        self.update_pending
-            .store(schedule.needs_update, Ordering::SeqCst);
-        self.frame_pending
-            .store(schedule.needs_frame, Ordering::SeqCst);
-        let mut next_deadline = self.lock_deadline();
-        *next_deadline = if schedule.needs_update {
-            None
-        } else {
-            schedule.next_deadline
-        };
+        self.latest.set(FrameSchedule {
+            next_deadline: if schedule.needs_update {
+                None
+            } else {
+                schedule.next_deadline
+            },
+            ..schedule
+        });
     }
 
     /// Stores `schedule` and asks `driver` for the frame or wake it calls for.
@@ -452,11 +428,7 @@ impl FrameScheduler {
 
     /// Returns the latest stored schedule.
     pub fn snapshot(&self) -> FrameSchedule {
-        FrameSchedule {
-            needs_update: self.update_pending.load(Ordering::SeqCst),
-            needs_frame: self.frame_pending.load(Ordering::SeqCst),
-            next_deadline: *self.lock_deadline(),
-        }
+        self.latest.get()
     }
 }
 
