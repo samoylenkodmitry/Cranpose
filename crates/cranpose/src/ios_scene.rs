@@ -35,8 +35,16 @@ define_class!(
                 });
                 link();
             }
-            publish_url_contexts(&options.URLContexts());
-            for activity in &options.userActivities() {
+            // iOS 27 answers nil, not an empty set, for a launch with no URL
+            // or activity, where the generated getters panic.
+            let contexts: Option<Retained<NSSet<UIOpenURLContext>>> =
+                unsafe { msg_send![options, URLContexts] };
+            if let Some(contexts) = contexts {
+                publish_url_contexts(&contexts);
+            }
+            let activities: Option<Retained<NSSet<NSUserActivity>>> =
+                unsafe { msg_send![options, userActivities] };
+            for activity in activities.iter().flat_map(|activities| activities.iter()) {
                 publish_web_link(&activity);
             }
         }
