@@ -1839,6 +1839,25 @@ impl TextStyleSynthesis {
     }
 }
 
+/// Straight-alpha RGBA8 pixels, row by row, that a text was rasterized
+/// into: what an image of it holds, without the content hash a bitmap
+/// computes over every pixel.
+pub struct TextPixels {
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// Four bytes a pixel, `width` pixels a row.
+    pub pixels: Vec<u8>,
+}
+
+impl TextPixels {
+    /// The pixels as a bitmap, hashed for caches keyed by content.
+    pub fn into_image(self) -> Option<ImageBitmap> {
+        ImageBitmap::from_rgba8(self.width, self.height, self.pixels).ok()
+    }
+}
+
 /// Rasterizes `text` with `font` into an RGBA image that covers `rect`, in logical pixels, at
 /// `scale` device pixels per logical pixel. `fallback_color` paints text whose style names no
 /// color, and `font_size` is in logical pixels. Returns `None` when there is nothing to draw.
@@ -1851,37 +1870,17 @@ pub fn rasterize_text_to_image(
     scale: f32,
     font: &SoftwareTextFont,
 ) -> Option<ImageBitmap> {
-    if requires_font_layout(text, style) {
-        return rasterize_styled_text_region(
-            StyledTextRef {
-                text,
-                span_styles: &[],
-            },
-            rect,
-            Point::new(rect.x, rect.y),
-            style,
-            fallback_color,
-            font_size,
-            scale,
-            font.into(),
-            None,
-        );
-    }
-    let shaped = font.shaped_for(style);
-    let font = &*shaped;
-    rasterize_text_to_image_impl(
-        TextRasterImageRequest {
-            text,
-            rect,
-            style,
-            fallback_color,
-            font_size,
-            scale,
-        },
-        font.raster_ref(),
-        font.content_hash(),
+    rasterize_text_pixels(
+        text,
+        rect,
+        style,
+        fallback_color,
+        font_size,
+        scale,
+        font,
         None,
     )
+    .and_then(TextPixels::into_image)
 }
 
 /// Like `rasterize_text_to_image`, and reuses glyph masks from `glyph_cache`.
@@ -1896,6 +1895,30 @@ pub fn rasterize_text_to_image_with_glyph_cache(
     font: &SoftwareTextFont,
     glyph_cache: &mut SoftwareGlyphRasterCache,
 ) -> Option<ImageBitmap> {
+    rasterize_text_pixels(
+        text,
+        rect,
+        style,
+        fallback_color,
+        font_size,
+        scale,
+        font,
+        Some(glyph_cache),
+    )
+    .and_then(TextPixels::into_image)
+}
+
+#[expect(clippy::too_many_arguments)]
+fn rasterize_text_pixels(
+    text: &str,
+    rect: Rect,
+    style: &TextStyle,
+    fallback_color: Color,
+    font_size: f32,
+    scale: f32,
+    font: &SoftwareTextFont,
+    glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
+) -> Option<TextPixels> {
     if requires_font_layout(text, style) {
         return rasterize_styled_text_region(
             StyledTextRef {
@@ -1909,7 +1932,7 @@ pub fn rasterize_text_to_image_with_glyph_cache(
             font_size,
             scale,
             font.into(),
-            Some(glyph_cache),
+            glyph_cache,
         );
     }
     let shaped = font.shaped_for(style);
@@ -1925,7 +1948,7 @@ pub fn rasterize_text_to_image_with_glyph_cache(
         },
         font.raster_ref(),
         font.content_hash(),
-        Some(glyph_cache),
+        glyph_cache,
     )
 }
 
@@ -2166,6 +2189,33 @@ pub fn rasterize_annotated_text_to_image_with_glyph_cache<'a>(
     )
 }
 
+/// Like [`rasterize_annotated_text_region`], as pixels: a caller that draws
+/// them right away skips hashing a bitmap's content.
+#[expect(clippy::too_many_arguments)]
+pub fn rasterize_annotated_text_region_pixels<'a>(
+    text: impl Into<StyledTextRef<'a>>,
+    rect: Rect,
+    text_origin: Point,
+    style: &TextStyle,
+    fallback_color: Color,
+    font_size: f32,
+    scale: f32,
+    fonts: &SoftwareTextFontSet,
+    glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
+) -> Option<TextPixels> {
+    rasterize_styled_text_region(
+        text.into(),
+        rect,
+        text_origin,
+        style,
+        fallback_color,
+        font_size,
+        scale,
+        fonts.into(),
+        glyph_cache,
+    )
+}
+
 /// Rasterizes an annotated paragraph into `rect`, preserving its original
 /// `text_origin` when the image covers only a clipped portion of the paragraph.
 /// Glyphs from every span share line baselines and may extend across line boxes.
@@ -2181,17 +2231,18 @@ pub fn rasterize_annotated_text_region<'a>(
     fonts: &SoftwareTextFontSet,
     glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
 ) -> Option<ImageBitmap> {
-    rasterize_styled_text_region(
-        text.into(),
+    rasterize_annotated_text_region_pixels(
+        text,
         rect,
         text_origin,
         style,
         fallback_color,
         font_size,
         scale,
-        fonts.into(),
+        fonts,
         glyph_cache,
     )
+    .and_then(TextPixels::into_image)
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -2206,7 +2257,7 @@ fn rasterize_styled_text_region(
     scale: f32,
     fonts: FontResolver<'_>,
     mut glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
-) -> Option<ImageBitmap> {
+) -> Option<TextPixels> {
     if text_render_request_is_degenerate(text.is_empty(), rect, font_size, scale) {
         return None;
     }
@@ -2216,27 +2267,16 @@ fn rasterize_styled_text_region(
         && text_origin.y == rect.y
         && let Some(font) = fonts.single_font_for_text(text.text, style)
     {
-        return match glyph_cache.as_deref_mut() {
-            Some(cache) => rasterize_text_to_image_with_glyph_cache(
-                text.text,
-                rect,
-                style,
-                fallback_color,
-                font_size,
-                scale,
-                font,
-                cache,
-            ),
-            None => rasterize_text_to_image(
-                text.text,
-                rect,
-                style,
-                fallback_color,
-                font_size,
-                scale,
-                font,
-            ),
-        };
+        return rasterize_text_pixels(
+            text.text,
+            rect,
+            style,
+            fallback_color,
+            font_size,
+            scale,
+            font,
+            glyph_cache.as_deref_mut(),
+        );
     }
     let layout = AnnotatedTextLayout::new(text, style, font_size, scale, 1.0, fonts)?;
     let solid = layout.all_styles(style_can_rasterize_direct_solid);
@@ -2324,7 +2364,7 @@ fn rasterize_styled_text_region(
             |mask| canvas.paint(mask, &paint),
         ))
     })?;
-    canvas.into_image()
+    canvas.into_pixels()
 }
 
 fn annotated_brush_rect(
@@ -3120,6 +3160,7 @@ pub fn rasterize_text_to_image_with_font(
         0,
         None,
     )
+    .and_then(TextPixels::into_image)
 }
 
 struct GlyphPaint<'a> {
@@ -3228,7 +3269,10 @@ impl TextRasterCanvas {
         }
     }
 
-    fn into_image(self) -> Option<ImageBitmap> {
+    fn into_pixels(self) -> Option<TextPixels> {
+        if self.width == 0 || self.height == 0 {
+            return None;
+        }
         let pixels = match self.pixels {
             TextRasterPixels::Solid(pixels) => pixels,
             TextRasterPixels::Blended(canvas) => {
@@ -3241,7 +3285,11 @@ impl TextRasterCanvas {
                 pixels
             }
         };
-        ImageBitmap::from_rgba8(self.width, self.height, pixels).ok()
+        Some(TextPixels {
+            width: self.width,
+            height: self.height,
+            pixels,
+        })
     }
 }
 
@@ -3259,7 +3307,7 @@ fn rasterize_text_to_image_impl(
     font_ref: RasterFontRef<'_, impl Font>,
     font_cache_key: u64,
     glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
-) -> Option<ImageBitmap> {
+) -> Option<TextPixels> {
     let TextRasterImageRequest {
         text,
         rect,
@@ -3358,7 +3406,7 @@ fn rasterize_text_to_image_impl(
         None,
         |mask| canvas.paint(mask, &paint),
     );
-    canvas.into_image()
+    canvas.into_pixels()
 }
 
 #[expect(clippy::too_many_arguments)]

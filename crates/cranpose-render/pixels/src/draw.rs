@@ -8,7 +8,9 @@ use cranpose_render_common::{
     graph_scene::RenderDiagnostics,
     layer_shadow::ShadowRRect,
     shape_sdf,
-    software_text_raster::{SoftwareGlyphRasterCache, rasterize_annotated_text_region},
+    software_text_raster::{
+        SoftwareGlyphRasterCache, TextPixels, rasterize_annotated_text_region_pixels,
+    },
     text_measure::SoftwareTextResources,
 };
 use cranpose_ui::text::TextMotion;
@@ -913,20 +915,17 @@ fn draw_text(
     diagnostics: &RenderDiagnostics,
     text: &TextRaster,
 ) {
-    if let Some((image, rect)) = rasterize_text(draw, text) {
-        blit_rasterized_text_image(target, rect, draw.clip, &image, diagnostics);
+    if let Some((pixels, rect)) = rasterize_text(draw, text) {
+        blit_rasterized_text(target, rect, draw.clip, pixels, diagnostics);
     }
 }
 
 /// `draw` rasterized into an image of its own, straight alpha, and the
 /// rect that image covers.
-pub(crate) fn rasterize_text(
-    draw: &TextDraw,
-    text: &TextRaster,
-) -> Option<(cranpose_ui_graphics::ImageBitmap, Rect)> {
+pub(crate) fn rasterize_text(draw: &TextDraw, text: &TextRaster) -> Option<(TextPixels, Rect)> {
     let raster_rect = text_raster_rect(draw)?;
     let mut glyphs = text.glyphs.try_borrow_mut().ok();
-    let image = rasterize_annotated_text_region(
+    let pixels = rasterize_annotated_text_region_pixels(
         draw.text.as_ref(),
         raster_rect,
         Point::new(raster_rect.x, raster_rect.y),
@@ -940,10 +939,10 @@ pub(crate) fn rasterize_text(
     let rect = Rect {
         x: raster_rect.x,
         y: raster_rect.y,
-        width: image.width() as f32,
-        height: image.height() as f32,
+        width: pixels.width as f32,
+        height: pixels.height as f32,
     };
-    Some((image, rect))
+    Some((pixels, rect))
 }
 
 fn text_raster_rect(draw: &TextDraw) -> Option<Rect> {
@@ -968,47 +967,55 @@ fn text_raster_rect(draw: &TextDraw) -> Option<Rect> {
     ))
 }
 
-fn blit_rasterized_text_image(
+fn blit_rasterized_text(
     target: &mut Target,
     rect: Rect,
     clip: Option<Rect>,
-    image: &cranpose_ui_graphics::ImageBitmap,
+    text: TextPixels,
     diagnostics: &RenderDiagnostics,
 ) {
-    if rect.width <= 0.0 || rect.height <= 0.0 {
+    if rect.width <= 0.0 || rect.height <= 0.0 || text.width == 0 || text.height == 0 {
         return;
     }
     let Some(clip_bounds) = clip_rect_to_bounds(rect, clip, target) else {
         return;
     };
 
-    let img_width = image.width();
-    let img_height = image.height();
-    if img_width == 0 || img_height == 0 {
+    // The pixels are the rect's size. On whole pixels each pixel takes the
+    // text pixel under it; between pixels it takes the text moved by the
+    // fraction, sampled linearly from it as an image.
+    if rect.x.fract() != 0.0 || rect.y.fract() != 0.0 {
+        if let Some(image) = text.into_image() {
+            blit_image_between_pixels(target, rect, clip_bounds, &image, diagnostics);
+        }
         return;
     }
+    let source_pixels = text.pixels.as_chunks::<4>().0;
+    for py in clip_bounds.min_y..clip_bounds.max_y {
+        let row = target.row(py, clip_bounds.min_x, clip_bounds.max_x);
+        let first = (py as f32 - rect.y) as usize * text.width as usize
+            + (clip_bounds.min_x as f32 - rect.x) as usize;
+        let source = source_pixels
+            .get(first..first + row.len())
+            .unwrap_or_default();
+        for (dst, src) in row.iter_mut().zip(source) {
+            blend_byte_pixel(dst, *src);
+        }
+    }
+}
 
-    // The image is the rect's size. On whole pixels each pixel takes the
-    // image pixel under it; between pixels it takes the image moved by the
-    // fraction, sampled linearly.
-    let whole = rect.x.fract() == 0.0 && rect.y.fract() == 0.0;
-    let image_pixels = whole.then(|| image.rgba8_pixels());
+/// Draws `image`, the size of `rect`, at a rect between whole pixels: each
+/// pixel samples the image linearly.
+fn blit_image_between_pixels(
+    target: &mut Target,
+    rect: Rect,
+    clip_bounds: ClipBounds,
+    image: &cranpose_ui_graphics::ImageBitmap,
+    diagnostics: &RenderDiagnostics,
+) {
     for py in clip_bounds.min_y..clip_bounds.max_y {
         let image_y = py as f32 - rect.y;
         let row = target.row(py, clip_bounds.min_x, clip_bounds.max_x);
-        if let Some(image_pixels) = image_pixels.as_deref() {
-            let first = image_y as usize * img_width as usize
-                + (clip_bounds.min_x as f32 - rect.x) as usize;
-            let source = image_pixels
-                .as_chunks::<4>()
-                .0
-                .get(first..first + row.len())
-                .unwrap_or_default();
-            for (dst, src) in row.iter_mut().zip(source) {
-                blend_byte_pixel(dst, *src);
-            }
-            continue;
-        }
         for (px, dst) in (clip_bounds.min_x..).zip(row) {
             let src = sample_image_linear(image, px as f32 - rect.x, image_y);
             if src[3] <= 0.0 {
