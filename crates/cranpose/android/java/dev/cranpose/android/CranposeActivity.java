@@ -706,6 +706,8 @@ public class CranposeActivity extends NativeActivity {
         int itemColumn;
         String paneTitle = "";
         String error = "";
+        /** Compose's hintText: what using the control does, read after the rest. */
+        String hintText = "";
         boolean password;
         int expanded;
         /**
@@ -773,6 +775,7 @@ public class CranposeActivity extends NativeActivity {
             scrollToIndex = flag(in);
             selectionStart = in.getInt();
             selectionEnd = in.getInt();
+            hintText = text(in, hintText);
         }
 
         /**
@@ -1232,6 +1235,9 @@ public class CranposeActivity extends NativeActivity {
             if (!element.error.isEmpty()) {
                 info.setContentInvalid(true);
                 info.setError(element.error);
+            }
+            if (Build.VERSION.SDK_INT >= 26 && !element.hintText.isEmpty()) {
+                info.setHintText(element.hintText);
             }
             // Compose's stateDescription. TalkBack speaks it after the label
             // and, unlike the label, re-speaks it on its own when only the

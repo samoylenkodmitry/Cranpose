@@ -726,8 +726,8 @@ fn apply_state(node: &mut Node, element: &AccessibilityElement) {
     if let Some(value) = &element.value {
         node.set_value(value.as_str());
     }
-    if let Some(state) = accessibility::state_with_error(element) {
-        node.set_description(state.as_str());
+    if let Some(description) = accessibility::description_text(element) {
+        node.set_description(description.as_str());
     }
     if let Some(language) = &details.language {
         node.set_language(language.as_str());

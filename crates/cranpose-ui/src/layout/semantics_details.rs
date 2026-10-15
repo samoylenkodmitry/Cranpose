@@ -46,6 +46,8 @@ pub struct SemanticsDetails {
     pub pane_title: Option<String>,
     /// Why the control's content is wrong, when it is.
     pub error: Option<String>,
+    /// What using the control does or what it wants.
+    pub hint_text: Option<String>,
     /// Whether this field holds a secret, so its text stays unspoken.
     pub password: bool,
     /// Where the caret of an editable field sits, or which stretch of its
@@ -103,6 +105,7 @@ impl SemanticsDetails {
         selectable_group: false,
         pane_title: None,
         error: None,
+        hint_text: None,
         password: false,
         text_selection: None,
         live_region: None,
@@ -143,6 +146,7 @@ impl SemanticsDetails {
             selectable_group: config.selectable_group,
             pane_title: config.pane_title,
             error: config.error,
+            hint_text: config.hint_text,
             password: config.password,
             text_selection: config.text_selection,
             live_region: config.live_region,

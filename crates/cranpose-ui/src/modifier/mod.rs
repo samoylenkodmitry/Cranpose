@@ -653,6 +653,14 @@ impl Modifier {
         self.stable_semantics(move |config| config.error = Some(message.clone()))
     }
 
+    /// Tells a screen reader what using the control does or what it wants,
+    /// read after its other words: "double tap to choose a color", "a name of
+    /// up to 20 letters". Compose's `Modifier.semantics { hintText = "..." }`.
+    pub fn hint_text(self, hint: impl Into<String>) -> Self {
+        let hint = hint.into();
+        self.stable_semantics(move |config| config.hint_text = Some(hint.clone()))
+    }
+
     /// Names the screen or pane this node is the root of, so a screen reader
     /// hears where it is when the app moves on: "Library" as the library
     /// opens. Compose's `Modifier.semantics { paneTitle = "..." }`.

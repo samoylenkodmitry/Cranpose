@@ -148,8 +148,8 @@ impl MirrorAttributes {
     /// flag, and whether the control is disabled.
     fn describe_aria_state(&mut self, element: &AccessibilityElement) {
         let details = element.details();
-        if let Some(state) = accessibility::state_with_error(element) {
-            self.set("aria-description", &state);
+        if let Some(description) = accessibility::description_text(element) {
+            self.set("aria-description", &description);
         }
         if details.password {
             self.set("aria-roledescription", "password");

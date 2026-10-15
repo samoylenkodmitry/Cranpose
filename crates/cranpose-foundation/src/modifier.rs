@@ -1562,6 +1562,9 @@ pub struct SemanticsConfiguration {
     /// Why the control's content is wrong, read after its state: "invalid,
     /// the amount needs a number". Compose's `error`.
     pub error: Option<String>,
+    /// What using the control does or what it wants, read after its other
+    /// words: "double tap to choose a color". Compose's `hintText`.
+    pub hint_text: Option<String>,
     /// Whether this field holds a secret, so screen readers never receive its
     /// text and native editors use protected input. Compose's `password`.
     pub password: bool,
@@ -1644,6 +1647,7 @@ impl Default for SemanticsConfiguration {
             selectable_group: false,
             pane_title: None,
             error: None,
+            hint_text: None,
             password: false,
             traversal_index: 0.0,
             test_tag: None,
@@ -1787,6 +1791,12 @@ impl SemanticsConfiguration {
         self
     }
 
+    /// What using the control does or what it wants. Compose's `hintText`.
+    pub fn hint_text(mut self, hint: impl Into<String>) -> Self {
+        self.hint_text = Some(hint.into());
+        self
+    }
+
     /// Holds a secret, so no reader reads the text out. Compose's `password`.
     pub fn password(mut self) -> Self {
         self.password = true;
@@ -1897,6 +1907,9 @@ impl SemanticsConfiguration {
         }
         if let Some(error) = &other.error {
             self.error = Some(error.clone());
+        }
+        if let Some(hint) = &other.hint_text {
+            self.hint_text = Some(hint.clone());
         }
         if let Some(tag) = &other.test_tag {
             self.test_tag = Some(tag.clone());

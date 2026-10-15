@@ -3,11 +3,11 @@ use crate::accessibility::AccessibilityDetails;
 
 /// The fields in one record, as `CranposeAccessibilityElement.read` in
 /// `CranposeActivity` reads them.
-const RECORD_FIELDS: usize = 41;
+const RECORD_FIELDS: usize = 42;
 
 /// Each field's kind in wire order: N a little-endian `i32`, F an `f32`, T
 /// UTF-8 text after its `u32` length, A a count of labels, then each.
-const FIELD_KINDS: &[u8; RECORD_FIELDS] = b"NNNNNNFFNTTTTNNNANNNFFFNNNNNNNNNTTNNTNNNN";
+const FIELD_KINDS: &[u8; RECORD_FIELDS] = b"NNNNNNFFNTTTTNNNANNNFFFNNNNNNNNNTTNNTNNNNT";
 
 /// Reads a payload the way the host does, field by field.
 struct PayloadReader<'a> {
@@ -349,6 +349,7 @@ fn records_carry_every_field_java_reads() {
                 error: Some("Bad%".into()),
                 long_click_label: Some("Hold".into()),
                 expanded: Some(false),
+                hint_text: Some("Pick one".into()),
                 ..Default::default()
             })),
             bounds: AccessibilityRect::new(1.25, 2.5, 30.0, 40.75),
@@ -405,11 +406,12 @@ fn records_carry_every_field_java_reads() {
                 "0",
                 "-1",
                 "-1",
+                "Pick one",
             ]),
             strings(&[
                 "2", "2", "0", "0", "15", "15", "5", "5", "0", "Row", "", "", "", "-1", "-1", "1",
                 "", "0", "0", "0", "0", "0", "0", "0", "0", "0", "-1", "0", "0", "0", "-1", "-1",
-                "", "", "0", "-1", "", "0", "0", "-1", "-1",
+                "", "", "0", "-1", "", "0", "0", "-1", "-1", "",
             ]),
         ]
     );
@@ -743,6 +745,22 @@ fn the_record_carries_the_title_of_a_pane() {
         Some(""),
         "a button names no pane"
     );
+}
+
+#[test]
+fn the_record_carries_the_hint_last() {
+    let mut picker = save_button(8);
+    picker
+        .update_details(|details| details.hint_text = Some("double tap to choose a color".into()));
+
+    let payload = encode_elements(&[picker, save_button(9)], 1.0);
+    let records: Vec<_> = payload.split('\n').collect();
+
+    assert_eq!(
+        records[0].split('\t').nth(RECORD_FIELDS - 1),
+        Some("double tap to choose a color")
+    );
+    assert_eq!(records[1].split('\t').nth(RECORD_FIELDS - 1), Some(""));
 }
 
 #[test]

@@ -4598,11 +4598,35 @@ fn every_platform_says_why_a_field_is_wrong() {
         crate_source("src/desktop_accessibility.rs"),
     ] {
         assert!(
-            source.contains("accessibility::state_with_error(element)"),
+            source.contains("accessibility::description_text(element)"),
             "every other bridge reads the reason after the state"
         );
     }
+    assert!(
+        crate_source("src/accessibility.rs").contains(
+            "let parts: Vec<String> = state_with_error(element).into_iter().chain(hint).collect();"
+        ),
+        "the description carries the state and the reason before the hint"
+    );
     assert!(voiceover_value_source().contains("parts.extend(state_with_error(element));"));
+}
+
+#[test]
+fn every_platform_reads_the_hint() {
+    let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    assert!(
+        java_source.contains("info.setHintText(element.hintText);"),
+        "TalkBack gets the node's hint"
+    );
+    assert!(
+        crate_source("src/ios_accessibility.rs")
+            .contains("[details.click_label.as_deref(), details.hint_text.as_deref()]"),
+        "VoiceOver hears the hint after what a tap does"
+    );
+    assert!(
+        crate_source("src/accessibility.rs").contains(".hint_text\n        .clone()"),
+        "the desktop and web description ends with the hint"
+    );
 }
 
 #[test]
