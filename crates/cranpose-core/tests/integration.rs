@@ -16,4 +16,5 @@ mod snapshot_runtime_thread_isolation;
 mod stage_times;
 mod state_hooks;
 mod static_locals;
+mod task_wakes;
 mod value_slot_handle_ui;
