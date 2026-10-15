@@ -111,6 +111,69 @@ impl<T: Clone + 'static> StaticLocalEntry<T> {
     }
 }
 
+type ComputeLocalFn<T> = dyn Fn(&CompositionLocalAccessorScope) -> T;
+
+/// The value of a local whose provider computes it where it is read, from
+/// the other locals there. A reader recomposes when the provider gives a
+/// new computation, as with Compose's lambdas that are not remembered.
+pub(crate) struct ComputedLocalEntry<T: 'static> {
+    compute: OwnedMutableState<Rc<ComputeLocalFn<T>>>,
+}
+
+impl<T: 'static> ComputedLocalEntry<T> {
+    pub(crate) fn value(&self) -> T {
+        let compute = self.compute.value();
+        compute(&CompositionLocalAccessorScope { _private: () })
+    }
+}
+
+/// A static local's computed value: see [`ComputedLocalEntry`]. A new
+/// computation recomposes all the provider's content, as a new static value
+/// does.
+pub(crate) struct StaticComputedLocalEntry<T: 'static> {
+    compute: Rc<ComputeLocalFn<T>>,
+}
+
+impl<T: 'static> StaticComputedLocalEntry<T> {
+    pub(crate) fn value(&self) -> T {
+        (self.compute)(&CompositionLocalAccessorScope { _private: () })
+    }
+}
+
+/// What a computed composition local's value reads other locals through:
+/// their values where the computed local is read, not where it was
+/// provided. Compose's `CompositionLocalAccessorScope`.
+pub struct CompositionLocalAccessorScope {
+    _private: (),
+}
+
+impl CompositionLocalAccessorScope {
+    /// The value `local` has where the computed local is read. Compose's
+    /// `CompositionLocal.currentValue` in this scope.
+    pub fn current_value<T>(&self, local: &impl ReadableCompositionLocal<T>) -> T {
+        local.read_current()
+    }
+}
+
+/// A composition local whose current value a computed local can read; see
+/// [`CompositionLocalAccessorScope`].
+pub trait ReadableCompositionLocal<T> {
+    /// The local's value where it is read, as `current` gives it.
+    fn read_current(&self) -> T;
+}
+
+impl<T: Clone + 'static> ReadableCompositionLocal<T> for CompositionLocal<T> {
+    fn read_current(&self) -> T {
+        self.current()
+    }
+}
+
+impl<T: Clone + 'static> ReadableCompositionLocal<T> for StaticCompositionLocal<T> {
+    fn read_current(&self) -> T {
+        self.current()
+    }
+}
+
 /// A value that composables read from their surroundings without passing it as a parameter, as
 /// Jetpack Compose's `compositionLocalOf`. A scope that reads `current` recomposes when the
 /// provided value changes.
@@ -150,6 +213,41 @@ impl<T: Clone + 'static> CompositionLocal<T> {
                     ))
                 });
                 entry_ref.update(|entry| entry.set(value.clone()));
+                entry_ref.with(|entry| (entry.clone() as Rc<dyn Any>, false))
+            }),
+        }
+    }
+
+    /// Pairs this local with `compute`, which runs at each read of the local
+    /// under the provider and reads other locals there through its scope.
+    /// A reader recomposes when a local the computation read changes, and
+    /// when a later composition of the provider gives a new computation.
+    /// Compose's `providesComputed`.
+    #[track_caller]
+    pub fn provides_computed(
+        &self,
+        compute: impl Fn(&CompositionLocalAccessorScope) -> T + 'static,
+    ) -> ProvidedValue {
+        let key = self.key.clone();
+        let entry_source = provider_entry_source(&key, crate::caller_location_key());
+        let compute: Rc<ComputeLocalFn<T>> = Rc::new(compute);
+        ProvidedValue {
+            key,
+            apply: Box::new(move |composer: &Composer, site: crate::Key| {
+                let runtime = composer.runtime_handle();
+                let source = (entry_source ^ site).wrapping_mul(0x0000_0100_0000_01b3);
+                let entry_ref = composer.remember_internal(source, || {
+                    Rc::new(ComputedLocalEntry {
+                        compute: OwnedMutableState::with_runtime_and_policy(
+                            Rc::clone(&compute),
+                            runtime.clone(),
+                            Rc::new(LocalValuePolicy::<Rc<ComputeLocalFn<T>>> {
+                                equivalent: Arc::new(Rc::ptr_eq),
+                            }),
+                        ),
+                    })
+                });
+                entry_ref.update(|entry| entry.compute.replace(Rc::clone(&compute)));
                 entry_ref.with(|entry| (entry.clone() as Rc<dyn Any>, false))
             }),
         }
@@ -248,6 +346,27 @@ impl<T: Clone + 'static> StaticCompositionLocal<T> {
         }
     }
 
+    /// Pairs this local with `compute`, which runs at each read of the local
+    /// under the provider and reads other locals there through its scope.
+    /// Each composition of the provider gives a new computation, which
+    /// recomposes everything under it. Compose's `providesComputed`.
+    #[track_caller]
+    pub fn provides_computed(
+        &self,
+        compute: impl Fn(&CompositionLocalAccessorScope) -> T + 'static,
+    ) -> ProvidedValue {
+        let compute: Rc<ComputeLocalFn<T>> = Rc::new(compute);
+        ProvidedValue {
+            key: self.key.clone(),
+            apply: Box::new(move |_: &Composer, _: crate::Key| {
+                let entry = Rc::new(StaticComputedLocalEntry {
+                    compute: Rc::clone(&compute),
+                });
+                (entry as Rc<dyn Any>, true)
+            }),
+        }
+    }
+
     /// Returns the value from the innermost enclosing provider, or the default value when none is
     /// in scope. Must be called during composition. A read subscribes nothing.
     pub fn current(&self) -> T {
@@ -288,4 +407,26 @@ pub fn staticCompositionLocalOfWithPolicy<T: Clone + 'static>(
         default: Rc::new(default),
         equivalent: Arc::new(equivalent),
     }
+}
+
+/// A [`CompositionLocal`] whose default is computed at each read without a
+/// provider, from the other locals there. A scope that reads it recomposes
+/// when a dynamic local the computation read changes. As the default reads
+/// locals, it is computed during composition only. Compose's
+/// `compositionLocalWithComputedDefaultOf`.
+#[expect(non_snake_case)]
+pub fn compositionLocalWithComputedDefaultOf<T: Clone + PartialEq + 'static>(
+    compute: impl Fn(&CompositionLocalAccessorScope) -> T + 'static,
+) -> CompositionLocal<T> {
+    compositionLocalOf(move || compute(&CompositionLocalAccessorScope { _private: () }))
+}
+
+/// A [`StaticCompositionLocal`] whose default is computed at each read
+/// without a provider, from the other locals there. Compose's
+/// `staticCompositionLocalWithComputedDefaultOf`.
+#[expect(non_snake_case)]
+pub fn staticCompositionLocalWithComputedDefaultOf<T: Clone + PartialEq + 'static>(
+    compute: impl Fn(&CompositionLocalAccessorScope) -> T + 'static,
+) -> StaticCompositionLocal<T> {
+    staticCompositionLocalOf(move || compute(&CompositionLocalAccessorScope { _private: () }))
 }
