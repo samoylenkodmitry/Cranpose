@@ -689,6 +689,7 @@ impl Robot {
     /// - Letters: "a" to "z"
     /// - Navigation: "Up", "Down", "Left", "Right", "Home", "End"
     /// - Editing: "Return" (Enter), "BackSpace", "Delete"
+    /// - Other: "Tab", "Escape", "space"
     ///
     /// # Example
     /// ```text
@@ -1428,45 +1429,32 @@ pub(crate) fn robot_wait_for_idle_animation_loop_only(
         && idle_structure_clean_frames > 0
 }
 
+/// The keys [`Robot::send_key`] names that are not a lowercase letter, with
+/// the text each types.
+const NAMED_KEYS: [(&str, KeyCode, &str); 12] = [
+    ("Up", KeyCode::ArrowUp, ""),
+    ("Down", KeyCode::ArrowDown, ""),
+    ("Left", KeyCode::ArrowLeft, ""),
+    ("Right", KeyCode::ArrowRight, ""),
+    ("Home", KeyCode::Home, ""),
+    ("End", KeyCode::End, ""),
+    ("Return", KeyCode::Enter, "\n"),
+    ("BackSpace", KeyCode::Backspace, ""),
+    ("Delete", KeyCode::Delete, ""),
+    ("Tab", KeyCode::Tab, "\t"),
+    ("Escape", KeyCode::Escape, ""),
+    ("space", KeyCode::Space, " "),
+];
+
 pub(crate) fn robot_key_code_and_text(key: &str) -> (KeyCode, String) {
-    match key {
-        "Up" => (KeyCode::ArrowUp, String::new()),
-        "Down" => (KeyCode::ArrowDown, String::new()),
-        "Left" => (KeyCode::ArrowLeft, String::new()),
-        "Right" => (KeyCode::ArrowRight, String::new()),
-        "Home" => (KeyCode::Home, String::new()),
-        "End" => (KeyCode::End, String::new()),
-        "Return" => (KeyCode::Enter, String::from("\n")),
-        "BackSpace" => (KeyCode::Backspace, String::new()),
-        "Delete" => (KeyCode::Delete, String::new()),
-        "Tab" => (KeyCode::Tab, String::from("\t")),
-        "space" => (KeyCode::Space, String::from(" ")),
-        "a" => (KeyCode::A, String::from("a")),
-        "b" => (KeyCode::B, String::from("b")),
-        "c" => (KeyCode::C, String::from("c")),
-        "d" => (KeyCode::D, String::from("d")),
-        "e" => (KeyCode::E, String::from("e")),
-        "f" => (KeyCode::F, String::from("f")),
-        "g" => (KeyCode::G, String::from("g")),
-        "h" => (KeyCode::H, String::from("h")),
-        "i" => (KeyCode::I, String::from("i")),
-        "j" => (KeyCode::J, String::from("j")),
-        "k" => (KeyCode::K, String::from("k")),
-        "l" => (KeyCode::L, String::from("l")),
-        "m" => (KeyCode::M, String::from("m")),
-        "n" => (KeyCode::N, String::from("n")),
-        "o" => (KeyCode::O, String::from("o")),
-        "p" => (KeyCode::P, String::from("p")),
-        "q" => (KeyCode::Q, String::from("q")),
-        "r" => (KeyCode::R, String::from("r")),
-        "s" => (KeyCode::S, String::from("s")),
-        "t" => (KeyCode::T, String::from("t")),
-        "u" => (KeyCode::U, String::from("u")),
-        "v" => (KeyCode::V, String::from("v")),
-        "w" => (KeyCode::W, String::from("w")),
-        "x" => (KeyCode::X, String::from("x")),
-        "y" => (KeyCode::Y, String::from("y")),
-        "z" => (KeyCode::Z, String::from("z")),
+    if let Some((_, code, text)) = NAMED_KEYS.iter().find(|(name, ..)| *name == key) {
+        return (*code, (*text).to_owned());
+    }
+    let mut chars = key.chars();
+    match (chars.next(), chars.next()) {
+        (Some(letter), None) if letter.is_ascii_lowercase() => {
+            (char_to_key_code(letter), key.to_owned())
+        }
         _ => (KeyCode::Unknown, String::new()),
     }
 }

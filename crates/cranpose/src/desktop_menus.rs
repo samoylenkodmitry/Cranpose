@@ -6,13 +6,17 @@
 //! The tray icon shows on macOS, Windows and Linux; on Linux it is a
 //! StatusNotifierItem over D-Bus, which GNOME shows with the AppIndicator
 //! extension. The menu bar is the macOS application menu bar, after the
-//! application menu, and on Windows the window's own menu bar; on Linux
-//! [`MenuBar`] shows nothing yet.
+//! application menu, and on Windows the window's own menu bar. On Linux,
+//! where the system has no menu bar outside GTK windows, Cranpose draws it
+//! at the top of the window, as Compose Desktop does: see
+//! [`WindowMenuBar`].
 
 use std::{
     rc::Rc,
     sync::{Mutex, Once, PoisonError},
 };
+
+mod window_menu_bar;
 
 use cranpose_app_shell::AppShell;
 use cranpose_core::{DisposableEffect, SideEffect, remember};
@@ -23,6 +27,7 @@ use muda::{
     accelerator::{Accelerator, CMD_OR_CTRL, Code, Modifiers as AcceleratorModifiers},
 };
 use tray_icon::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+pub use window_menu_bar::WindowMenuBar;
 use winit::event_loop::EventLoopProxy;
 
 /// The keys that run a menu item without opening its menu: Compose
@@ -224,8 +229,10 @@ pub fn Tray(spec: TraySpec) {
 
 /// Shows `menus` in the menu bar while this composable is in the
 /// composition: on macOS after the application menu, which keeps About,
-/// Hide and Quit, and on Windows in the main window, where the items'
-/// shortcuts run them too. The last `MenuBar` composed wins while two are.
+/// Hide and Quit, on Windows in the main window, and on Linux in a bar
+/// Cranpose draws at the top of the main window. On Windows and Linux the
+/// items' shortcuts run them too. The last `MenuBar` composed wins while
+/// two are.
 #[composable(no_skip)]
 pub fn MenuBar(menus: Vec<Menu>) {
     let owner = remember(next_owner).with(|owner| *owner);
@@ -254,6 +261,9 @@ pub(crate) struct MenuRequests {
     tray: Option<(u64, TraySpec)>,
     menu_bar: Option<(u64, Vec<Menu>)>,
     revision: u64,
+    /// Counts the menu bar's changes for the bar drawn in the window, which
+    /// composes again when it moves.
+    drawn_bar: Option<cranpose_core::MutableState<u64>>,
 }
 
 impl MenuRequests {
@@ -284,6 +294,15 @@ impl MenuRequests {
         self.menu_bar = Some((owner, menus));
         if !same {
             self.revision += 1;
+        }
+        // The drawn bar reads the menus again for their current callbacks.
+        self.redraw_bar();
+    }
+
+    /// Composes the drawn bar again, when one shows.
+    fn redraw_bar(&self) {
+        if let Some(drawn) = self.drawn_bar {
+            drawn.update(|count| *count += 1);
         }
     }
 
@@ -347,6 +366,7 @@ impl MenuRequests {
         {
             self.menu_bar = None;
             self.revision += 1;
+            self.redraw_bar();
         }
     }
 }
@@ -852,4 +872,49 @@ fn choose_in_menu_bar(labels: &[String]) -> Result<(), String> {
     }
     menu.performActionForItemAtIndex(index);
     Ok(())
+}
+
+/// The root content under the bar drawn in the window, behind a handle
+/// that equals itself, so the app does not compose again when only the bar
+/// does.
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+#[derive(Clone)]
+struct HostedContent(Rc<std::cell::RefCell<dyn FnMut()>>);
+
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+impl PartialEq for HostedContent {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// `content` under the menus of [`MenuBar`], in a bar Cranpose draws in the
+/// window: Linux has no menu bar outside GTK windows, which the shell does
+/// not use.
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+pub(crate) fn with_window_menu_bar(content: impl FnMut() + 'static) -> impl FnMut() + 'static {
+    let content = HostedContent(Rc::new(std::cell::RefCell::new(content)));
+    move || MenuBarHost(content.clone())
+}
+
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+#[composable(no_skip)]
+fn MenuBarHost(content: HostedContent) {
+    let drawn = cranpose_core::rememberMutableStateOf(|| 0_u64);
+    SideEffect(move || with_requests(|requests| requests.drawn_bar = Some(drawn)));
+    drawn.get();
+    let menus = with_requests(|requests| {
+        requests
+            .menu_bar
+            .as_ref()
+            .map(|(_, menus)| menus.clone())
+            .unwrap_or_default()
+    });
+    window_menu_bar::bar_frame(Rc::new(menus), move || HostedRoot(content.clone()));
+}
+
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+#[composable]
+fn HostedRoot(content: HostedContent) {
+    (content.0.borrow_mut())();
 }
