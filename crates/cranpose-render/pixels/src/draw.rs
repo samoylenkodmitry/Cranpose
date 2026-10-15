@@ -781,13 +781,22 @@ fn rounded_fill_run(rect: Rect, radii: &CornerRadii, y: f32, min_x: i32, max_x: 
         return NO_RUN;
     }
     let inside = |x: i32| point_in_resolved_rounded_rect(x as f32 + 0.5, y, rect, radii);
+    // A pixel whose centre lies between the corners' widest reach on either
+    // side is inside on every row of the rect: an end there needs no test.
+    let flat_left = rect.x + radii.top_left.max(radii.bottom_left);
+    let flat_right = rect.x + rect.width - radii.top_right.max(radii.bottom_right);
+    let flat = |x: i32| (flat_left..=flat_right).contains(&(x as f32 + 0.5));
     let mut start = min_x;
-    while start < max_x && !inside(start) {
-        start += 1;
+    if !(start < max_x && flat(start)) {
+        while start < max_x && !inside(start) {
+            start += 1;
+        }
     }
     let mut end = max_x;
-    while end > start && !inside(end - 1) {
-        end -= 1;
+    if !(end > start && flat(end - 1)) {
+        while end > start && !inside(end - 1) {
+            end -= 1;
+        }
     }
     (start, end)
 }
