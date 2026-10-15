@@ -12,6 +12,7 @@ import android.view.MotionEvent;
 import android.view.accessibility.AccessibilityManager;
 import android.view.accessibility.AccessibilityNodeInfo;
 
+import androidx.lifecycle.Lifecycle;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
@@ -23,6 +24,7 @@ import org.junit.runner.RunWith;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.IntPredicate;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -41,16 +43,8 @@ public final class CranposeAccessibilityNavigationTest {
             automation = instrumentation.getUiAutomation(UiAutomation.FLAG_DONT_USE_ACCESSIBILITY);
             awaitAccessibilityDisabled(context);
             tap(target.centerX(), target.centerY());
-            SystemClock.sleep(500);
-            Bitmap frame = automation.takeScreenshot();
-            assertNotNull("The rendered page must be captured", frame);
-            try {
-                int background = frame.getPixel(frame.getWidth() / 2, frame.getHeight() / 4);
-                assertTrue("Settings must render green before its hierarchy is checked",
-                        Color.green(background) > 240 && Color.blue(background) < 15);
-            } finally {
-                frame.recycle();
-            }
+            awaitBackground(automation, CranposeAccessibilityNavigationTest::green,
+                    "Settings must render green before its hierarchy is checked");
             automation = instrumentation.getUiAutomation();
             awaitPage(automation, "Settings page", "Library page");
         }
@@ -69,12 +63,57 @@ public final class CranposeAccessibilityNavigationTest {
         }
     }
 
+    @Test
+    public void stoppedAndResumedActivityKeepsItsPageAndDraws() {
+        UiAutomation automation = instrumentation.getUiAutomation();
+        try (ActivityScenario<CranposeActivity> scenario = launchScreen()) {
+            Rect target = awaitPage(automation, "Library page", "Settings page");
+            tap(target.centerX(), target.centerY());
+            awaitPage(automation, "Settings page", "Library page");
+            // Stopped, the activity loses its window's surface, as when the
+            // user leaves the app; resumed, it gets a new one.
+            scenario.moveToState(Lifecycle.State.CREATED);
+            scenario.moveToState(Lifecycle.State.RESUMED);
+            target = awaitPage(automation, "Settings page", "Library page");
+            awaitBackground(automation, CranposeAccessibilityNavigationTest::green,
+                    "The resumed activity must draw the page it showed before it stopped");
+            tap(target.centerX(), target.centerY());
+            awaitPage(automation, "Library page", "Settings page");
+            awaitBackground(automation, CranposeAccessibilityNavigationTest::blue,
+                    "The resumed activity must draw the page its input opened");
+        }
+    }
+
     private ActivityScenario<CranposeActivity> launchScreen() {
         Intent intent = new Intent(instrumentation.getTargetContext(), CranposeActivity.class)
                 .putExtra("test_screen", "accessibility_navigation");
         ActivityScenario<CranposeActivity> scenario = ActivityScenario.launch(intent);
         scenario.onActivity(activity -> activity.cranposeSetKeepScreenOn(true));
         return scenario;
+    }
+
+    private static boolean green(int pixel) {
+        return Color.green(pixel) > 240 && Color.blue(pixel) < 15;
+    }
+
+    private static boolean blue(int pixel) {
+        return Color.blue(pixel) > 240 && Color.green(pixel) < 15;
+    }
+
+    /** Waits up to three seconds for a frame whose page background passes {@code expected}. */
+    private static void awaitBackground(UiAutomation automation, IntPredicate expected, String message) {
+        long deadline = SystemClock.uptimeMillis() + 3000;
+        do {
+            Bitmap frame = automation.takeScreenshot();
+            assertNotNull("The rendered page must be captured", frame);
+            try {
+                if (expected.test(frame.getPixel(frame.getWidth() / 2, frame.getHeight() / 4))) return;
+            } finally {
+                frame.recycle();
+            }
+            SystemClock.sleep(100);
+        } while (SystemClock.uptimeMillis() < deadline);
+        throw new AssertionError(message);
     }
 
     private static void awaitAccessibilityDisabled(Context context) {
