@@ -60,6 +60,7 @@ runners! {
     robot_demo,
     robot_desktop_integration,
     robot_desktop_menus,
+    robot_navigation_restoration,
     robot_window_menu_bar,
     robot_desktop_open_urls,
     robot_developer_inspector,

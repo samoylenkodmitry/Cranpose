@@ -117,9 +117,9 @@ jobs:
         # The recipe takes the host lock's exclusive side itself.
         shell: bash --noprofile --norc -eo pipefail {0}
         run: just robot-accessibility-linux target/ci/desktop-app "$RUNNER_TEMP/linux-desktop"
-      - name: Menu bar drawn in the window
+      - name: Menu bar drawn in the window, secure and Unicode input, navigation
         if: ${{ !cancelled() }}
-        run: just robot-menus-linux
+        run: just robot-runtime-linux
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
@@ -143,6 +143,12 @@ jobs:
       - name: Menu bar items chosen through the native Windows menu
         if: ${{ !cancelled() }}
         run: target/ci/examples/robot.exe robot_desktop_menus
+      - name: Secure and Unicode text input
+        if: ${{ !cancelled() }}
+        run: target/ci/examples/robot.exe robot_secure_unicode_input
+      - name: Navigation that restores a covered screen
+        if: ${{ !cancelled() }}
+        run: target/ci/examples/robot.exe robot_navigation_restoration
       - name: Network status from the internet connection profile
         if: ${{ !cancelled() }}
         run: cargo test --locked --profile ci -p cranpose --lib --features desktop,renderer-wgpu windows_network
@@ -270,10 +276,11 @@ jobs:
         run: |
           app="$(just ios-sim)"
           tar -C "$(dirname "$app")" -cf "$RUNNER_TEMP/ios-app.tar" "$(basename "$app")"
-      - name: Build and pack the desktop demo
+      - name: Build and pack the desktop demo and its robots
         run: |
           just build-accessibility-desktop
-          tar -C target/ci -cf "$RUNNER_TEMP/macos-app.tar" desktop-app
+          cargo build --locked --profile ci -p desktop-app --features robot-app --example robot
+          tar -C target/ci -cf "$RUNNER_TEMP/macos-app.tar" desktop-app examples/robot
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: runtime-apple-apps
@@ -301,6 +308,9 @@ jobs:
           brew install just
           tar -C "$RUNNER_TEMP" -xf "$RUNNER_TEMP/macos-app.tar"
           just robot-accessibility-macos "$RUNNER_TEMP/desktop-app" "$RUNNER_TEMP/macos-desktop"
+      - name: Native menu bar, secure and Unicode input, navigation, GPU device loss
+        if: ${{ !cancelled() }}
+        run: just robot-runtime-macos "$RUNNER_TEMP/examples/robot"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
