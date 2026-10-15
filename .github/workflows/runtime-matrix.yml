@@ -277,10 +277,13 @@ jobs:
           app="$(just ios-sim)"
           tar -C "$(dirname "$app")" -cf "$RUNNER_TEMP/ios-app.tar" "$(basename "$app")"
       - name: Build and pack the desktop demo and its robots
+        # The robots build without debug info: with it, macOS ld cannot fit
+        # the binary's unwind table (`__eh_frame` over 16 MB).
         run: |
           just build-accessibility-desktop
-          cargo build --locked --profile ci -p desktop-app --features robot-app --example robot
-          tar -C target/ci -cf "$RUNNER_TEMP/macos-app.tar" desktop-app examples/robot
+          cargo build --locked --profile robot -p desktop-app --features robot-app --example robot
+          tar -C target/ci -cf "$RUNNER_TEMP/macos-app.tar" desktop-app
+          tar -C target/robot -rf "$RUNNER_TEMP/macos-app.tar" examples/robot
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: runtime-apple-apps
