@@ -29,6 +29,16 @@ pub(crate) fn wake_with(wake: Rc<dyn Fn()>) {
     crate::thread_state::with(|state| *state.web.host_surface_wake.borrow_mut() = Some(wake));
 }
 
+/// Asks for a frame through the waker the page registered, from a callback
+/// that cannot hold it, as a GPU device's loss callback.
+pub(crate) fn wake_frame() {
+    crate::thread_state::with(|state| {
+        if let Some(wake) = state.web.host_surface_wake.borrow().as_ref() {
+            wake();
+        }
+    });
+}
+
 pub(crate) fn install() {
     set_platform_host_surface(Arc::new(WebHostSurface));
 }

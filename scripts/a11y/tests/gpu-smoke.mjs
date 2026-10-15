@@ -97,6 +97,52 @@ async function visit(query, index, whileOpen = async () => undefined) {
     return found;
 }
 
+// The page's device lost on purpose (`cranpose_lose_gpu_device`): the page
+// opens another and draws on. The renderer's own [gpu-device] lines about the
+// loss and its recovery are expected here, and so is WebGL's note that an
+// object freed after the restore belonged to the lost context, which WebGL
+// then ignores; any other failure line is not.
+const EXPECTED_LOSS = /\[gpu-device\] (losing the device|device lost|the WebGL context (was lost|is back)|opened a new device)|WebGL: INVALID_OPERATION: \w+: object does not belong to this context/;
+const RECOVERED = "[gpu-device] opened a new device after the last one was lost";
+// The drill loses the device at the first frame two seconds after start.
+const LOSS_WAIT_MS = 20000;
+
+async function deviceLoss() {
+    const page = new URL(url);
+    page.searchParams.set("backend", backend);
+    page.searchParams.set("cranpose_lose_gpu_device", "1");
+    const start = cdp.logs.length;
+    await cdp.send("Page.navigate", { url: page.href });
+    await cdp.until(`location.href === ${JSON.stringify(page.href)}
+        && ['running', 'error'].includes(window.__cranposeAppState?.phase)`);
+    const errors = [];
+    const deadline = Date.now() + LOSS_WAIT_MS;
+    // Pointer moves over the canvas keep frames coming for the drill.
+    for (let step = 0; Date.now() < deadline; step++) {
+        if (cdp.logs.slice(start).some(line => line.includes(RECOVERED))) break;
+        await cdp.send("Input.dispatchMouseEvent", {
+            type: "mouseMoved", x: 200 + (step % 40) * 10, y: 300 + (step % 7) * 20,
+        });
+        await pause(100);
+    }
+    if (!cdp.logs.slice(start).some(line => line.includes(RECOVERED))) {
+        errors.push("the page did not open a new device after losing its device");
+    }
+    await pause(SETTLE_MS);
+    const phase = await cdp.evaluate("window.__cranposeAppState.phase");
+    if (phase !== "running") errors.push(`the page stopped in phase ${phase}`);
+    const colors = await distinctColors("device-loss.png");
+    if (colors < MIN_COLORS) errors.push(`after the recovery the page drew ${colors} distinct colors`);
+    await cdp.send("Page.navigate", { url: "about:blank" });
+    await cdp.until("location.href === 'about:blank'");
+    await pause(LEAVE_MS);
+    const lines = cdp.logs.slice(start);
+    errors.push(...lines.filter(line => FAILURE.test(line) && !EXPECTED_LOSS.test(line)));
+    results.push({ page: "(device loss)", colors, errors, console: lines });
+    console.log(`${errors.length ? "FAIL" : "ok  "} (device loss) colors=${colors}`);
+    for (const error of new Set(errors.map(error => error.split("\n")[0]))) console.log("     " + error);
+}
+
 // Prints each distinct error once in full, with the pages that showed it.
 function printErrors() {
     const pages = new Map();
@@ -129,6 +175,7 @@ try {
     })()`));
     assert.ok(pages, "the default page did not start, so the demo's page list is unknown");
     for (const [index, query] of pages.entries()) await visit(query, index + 1);
+    await deviceLoss();
     const failed = results.filter(result => result.errors.length);
     printErrors();
     console.log(`${results.length - failed.length} of ${results.length} pages passed on ${BACKEND.name}`);

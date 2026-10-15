@@ -30,7 +30,8 @@ pub use gpu_context::{GpuContext, GpuRequirements, gpu_context};
     any(
         feature = "desktop-shell",
         all(feature = "android", target_os = "android"),
-        all(feature = "ios", target_os = "ios")
+        all(feature = "ios", target_os = "ios"),
+        all(feature = "web", target_arch = "wasm32")
     )
 ))]
 mod gpu_loss;
@@ -855,6 +856,8 @@ mod web_accessibility_options;
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
 ))]
 mod web_accessibility_order;
+#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
+mod web_device_loss;
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 mod web_idle_prefetch;
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]

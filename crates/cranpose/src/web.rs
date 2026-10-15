@@ -308,41 +308,15 @@ pub async fn run(
         .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
         .map_err(|e| format!("failed to create surface: {e:?}"))?;
 
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-            apply_limit_buckets: false,
-        })
-        .await
-        .map_err(|e| format!("failed to find suitable adapter: {e:?}"))?;
-
+    let (adapter, device, queue) =
+        open_device(&instance, &surface, settings.gpu_requirements).await?;
     let adapter_info = adapter.get_info();
-    let adapter_limits = adapter.limits();
-    let required_limits = settings.gpu_requirements.limits_on(
-        &adapter,
-        required_limits_for_web_backend(adapter_info.backend, adapter_limits.clone()),
-    );
     log::info!(
         "Web backend preference={:?}, selected backend={:?}, max_texture_dimension_2d={}",
         backend_preference,
         adapter_info.backend,
-        adapter_limits.max_texture_dimension_2d
+        adapter.limits().max_texture_dimension_2d
     );
-
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            label: Some("Main Device"),
-            required_features: cranpose_render_wgpu::optional_device_features(&adapter)
-                | settings.gpu_requirements.features_on(&adapter),
-            required_limits,
-            experimental_features: wgpu::ExperimentalFeatures::disabled(),
-            memory_hints: wgpu::MemoryHints::default(),
-            trace: wgpu::Trace::Off,
-        })
-        .await
-        .map_err(|e| format!("failed to create device: {e:?}"))?;
 
     let surface_caps = surface.get_capabilities(&adapter);
     let surface_format =
@@ -378,14 +352,25 @@ pub async fn run(
     fold_glass_on_mobile_devices(&window);
     let mut renderer = WgpuRenderer::with_font_set(fonts);
     let (device, queue) = (Arc::new(device), Arc::new(queue));
-    let discovery = PipelineDiscovery::new(GpuTarget {
+    let device_loss = crate::web_device_loss::WebDeviceLoss::new(
+        crate::GpuContext {
+            instance: instance.clone(),
+            adapter: adapter.clone(),
+            device: Arc::clone(&device),
+            queue: Arc::clone(&queue),
+        },
+        settings.gpu_requirements,
+        adapter_info.backend,
+    );
+    renderer.set_device_lost_handler(device_loss.handler());
+    let discovery = Rc::new(PipelineDiscovery::new(GpuTarget {
         device: Arc::clone(&device),
         queue: Arc::clone(&queue),
         surface_format: crate::surface_format::display_surface_view_format(surface_format),
         backend: adapter_info.backend,
         downlevel: adapter.get_downlevel_capabilities().flags,
         surface_size: (buffer_width, buffer_height),
-    });
+    }));
     discovery.start(&mut renderer).await;
 
     surface.configure(&device, &surface_config);
@@ -438,15 +423,7 @@ pub async fn run(
         "Web canvas css={width}x{height}, buffer={actual_width}x{actual_height}, effective_scale={effective_scale:.2}, device_scale={scale_factor:.2}"
     );
 
-    let content = crate::gpu_context::provide_gpu_context(
-        crate::GpuContext {
-            instance: instance.clone(),
-            adapter: adapter.clone(),
-            device,
-            queue,
-        },
-        content,
-    );
+    let content = crate::gpu_context::provide_current_gpu_context(device_loss.share(), content);
 
     // The page runs idle prefetch passes between frames (`web_idle_prefetch`):
     // a lazy list leaves them the items beyond its viewport that its scroll
@@ -760,6 +737,16 @@ pub async fn run(
     let render_loop_for_deadline = render_loop.clone();
     #[cfg(feature = "webview")]
     let request_frame_for_loop = request_frame.clone();
+    let recovery = Rc::new(crate::web_device_loss::Recovery {
+        app: app.clone(),
+        surface: surface.clone(),
+        config: surface_config.clone(),
+        surface_dirty: surface_dirty.clone(),
+        request_frame: request_frame.clone(),
+        discovery: Rc::clone(&discovery),
+    });
+    device_loss.watch_canvas(&canvas, &recovery)?;
+    device_loss.schedule_drill(&window, &canvas);
     let presenter = CanvasPresenter::new(
         surface.clone(),
         surface_config,
@@ -822,8 +809,9 @@ pub async fn run(
             update_result.visual_changed,
             app.borrow().needs_redraw(),
         );
-        if present_required {
-            presenter.present(&app, frame_started_at);
+        device_loss.recover(&recovery);
+        if present_required && !device_loss.paused() && presenter.present(&app, frame_started_at) {
+            device_loss.presented();
         }
 
         frame_running.set(false);
@@ -849,7 +837,7 @@ struct CanvasPresenter {
     /// Whether the canvas shows less than the app holds.
     dirty: Rc<Cell<bool>>,
     request_frame: Rc<dyn Fn()>,
-    discovery: PipelineDiscovery,
+    discovery: Rc<PipelineDiscovery>,
     /// Asks for a frame that draws again.
     redraw: Rc<dyn Fn()>,
     /// Draws the frame the app holds at once, outside an animation frame:
@@ -865,7 +853,7 @@ impl CanvasPresenter {
         config: Rc<RefCell<wgpu::SurfaceConfiguration>>,
         dirty: Rc<Cell<bool>>,
         request_frame: Rc<dyn Fn()>,
-        discovery: PipelineDiscovery,
+        discovery: Rc<PipelineDiscovery>,
         app: std::rc::Weak<RefCell<AppShell<WgpuRenderer>>>,
     ) -> Rc<Self> {
         let redraw: Rc<dyn Fn()> = {
@@ -902,9 +890,13 @@ impl CanvasPresenter {
     /// reconfigures a surface the browser reports lost. While the first
     /// frame's pipelines compile, the canvas keeps what it shows. A
     /// presented frame counts in the frame statistics from `started_at`.
-    fn present(&self, app: &RefCell<AppShell<WgpuRenderer>>, started_at: web_time::Instant) {
+    fn present(
+        &self,
+        app: &RefCell<AppShell<WgpuRenderer>>,
+        started_at: web_time::Instant,
+    ) -> bool {
         if !self.discovery.may_draw() {
-            return;
+            return false;
         }
         let config = self.config.borrow();
         match current_surface_texture(&self.surface, "web") {
@@ -933,6 +925,7 @@ impl CanvasPresenter {
                 }
                 self.discovery.end_frame(&self.redraw, &self.draw_now);
                 self.dirty.set(false);
+                true
             }
             SurfaceFrame::Reconfigure => {
                 {
@@ -947,10 +940,50 @@ impl CanvasPresenter {
                 }
                 self.dirty.set(true);
                 (self.request_frame)();
+                false
             }
-            SurfaceFrame::Skip => self.dirty.set(true),
+            SurfaceFrame::Skip => {
+                self.dirty.set(true);
+                false
+            }
         }
     }
+}
+
+/// Opens a device on an adapter that draws to `surface`, with the features and
+/// limits the app asks for: at startup and after a device is lost.
+pub(crate) async fn open_device(
+    instance: &wgpu::Instance,
+    surface: &wgpu::Surface<'static>,
+    requirements: crate::GpuRequirements,
+) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), String> {
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: Some(surface),
+            force_fallback_adapter: false,
+            apply_limit_buckets: false,
+        })
+        .await
+        .map_err(|e| format!("failed to find suitable adapter: {e:?}"))?;
+    let backend = adapter.get_info().backend;
+    let required_limits = requirements.limits_on(
+        &adapter,
+        required_limits_for_web_backend(backend, adapter.limits()),
+    );
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("Main Device"),
+            required_features: cranpose_render_wgpu::optional_device_features(&adapter)
+                | requirements.features_on(&adapter),
+            required_limits,
+            experimental_features: wgpu::ExperimentalFeatures::disabled(),
+            memory_hints: wgpu::MemoryHints::default(),
+            trace: wgpu::Trace::Off,
+        })
+        .await
+        .map_err(|e| format!("failed to create device: {e:?}"))?;
+    Ok((adapter, device, queue))
 }
 
 fn request_animation_frame(window: &web_sys::Window, f: &Closure<dyn FnMut()>) -> bool {

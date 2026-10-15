@@ -59,9 +59,10 @@ impl LossSignal {
     /// Marks the current device lost, as its loss callback does.
     #[cfg(any(
         all(feature = "android", target_os = "android"),
-        all(feature = "ios", target_os = "ios")
+        all(feature = "ios", target_os = "ios"),
+        all(feature = "web", target_arch = "wasm32")
     ))]
-    fn report_loss(&self) {
+    pub(crate) fn report_loss(&self) {
         self.lost.store(self.generation, Ordering::SeqCst);
     }
 

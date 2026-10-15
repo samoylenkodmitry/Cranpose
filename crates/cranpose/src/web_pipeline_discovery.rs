@@ -82,7 +82,8 @@ enum Stage {
 
 /// Runs the first frame's pipeline discovery and installs the renderer.
 pub(crate) struct PipelineDiscovery {
-    target: GpuTarget,
+    /// The device the pipelines are for; a device recovery replaces it.
+    target: RefCell<GpuTarget>,
     stage: Rc<RefCell<Stage>>,
     /// Whether this is a recording run whose first screen is still to be
     /// left in [`RECORDED`].
@@ -97,7 +98,7 @@ impl PipelineDiscovery {
         let recording = js_sys::Reflect::get(&js_sys::global(), &RECORD_REQUEST.into())
             .is_ok_and(|requested| requested.is_truthy());
         Self {
-            target,
+            target: RefCell::new(target),
             stage: Rc::new(RefCell::new(Stage::Cold)),
             recording: std::cell::Cell::new(recording),
             landed: Rc::default(),
@@ -108,14 +109,20 @@ impl PipelineDiscovery {
     /// pipelines, which the browser compiles beside the page's start.
     pub(crate) async fn start(&self, renderer: &mut WgpuRenderer) {
         self.install(renderer);
-        if self.target.backend == wgpu::Backend::Gl {
-            renderer.build_first_screen_pipelines(FIRST_SCREEN_PIPELINES, self.target.surface_size);
+        if self.target.borrow().backend == wgpu::Backend::Gl {
+            renderer.build_first_screen_pipelines(
+                FIRST_SCREEN_PIPELINES,
+                self.target.borrow().surface_size,
+            );
         } else if !FIRST_SCREEN_PIPELINES.is_empty()
-            && self.target.device.begin_pipeline_discovery()
+            && self.target.borrow().device.begin_pipeline_discovery()
         {
             *self.stage.borrow_mut() = Stage::Discovering;
             renderer.begin_discovery_frame();
-            renderer.build_first_screen_pipelines(FIRST_SCREEN_PIPELINES, self.target.surface_size);
+            renderer.build_first_screen_pipelines(
+                FIRST_SCREEN_PIPELINES,
+                self.target.borrow().surface_size,
+            );
             // Chrome sends WebGPU calls to its GPU process at a microtask
             // checkpoint: yielding once lets it compile them while the page
             // composes its first screen.
@@ -128,16 +135,25 @@ impl PipelineDiscovery {
     /// discovery, whose frame left the renderer's caches holding what it did
     /// not draw.
     pub(crate) fn install(&self, renderer: &mut WgpuRenderer) {
+        let target = self.target.borrow();
         renderer.init_gpu(
-            Arc::clone(&self.target.device),
-            Arc::clone(&self.target.queue),
-            self.target.surface_format,
-            self.target.backend,
-            self.target.downlevel,
+            Arc::clone(&target.device),
+            Arc::clone(&target.queue),
+            target.surface_format,
+            target.backend,
+            target.downlevel,
         );
     }
 
     /// Whether a frame may draw: not while the discovered pipelines compile.
+    /// Hands discovery the device that replaced a lost one. The first
+    /// screen's pipelines are behind it then: what is left compiles in the
+    /// background on the new device.
+    pub(crate) fn recovered(&self, target: GpuTarget) {
+        *self.target.borrow_mut() = target;
+        *self.stage.borrow_mut() = Stage::Done;
+    }
+
     pub(crate) fn may_draw(&self) -> bool {
         !matches!(*self.stage.borrow(), Stage::Compiling)
     }
@@ -149,7 +165,9 @@ impl PipelineDiscovery {
         self.leave_recorded(renderer);
         let mut stage = self.stage.borrow_mut();
         *stage = match std::mem::replace(&mut *stage, Stage::Done) {
-            Stage::Cold if self.target.device.begin_pipeline_discovery() => Stage::Discovering,
+            Stage::Cold if self.target.borrow().device.begin_pipeline_discovery() => {
+                Stage::Discovering
+            }
             Stage::Landed(compiled) => {
                 self.install(renderer);
                 Stage::Redrawing {
@@ -157,7 +175,10 @@ impl PipelineDiscovery {
                 }
             }
             Stage::Cold => {
-                self.target.device.compile_pipelines_in_background();
+                self.target
+                    .borrow()
+                    .device
+                    .compile_pipelines_in_background();
                 Stage::Done
             }
             Stage::Redrawing { .. } | Stage::Done => Stage::Done,
@@ -206,7 +227,7 @@ impl PipelineDiscovery {
         match &*stage {
             Stage::Discovering => {
                 *stage = Stage::Compiling;
-                let compiling = self.target.device.end_pipeline_discovery();
+                let compiling = self.target.borrow().device.end_pipeline_discovery();
                 let landed = Rc::clone(&self.stage);
                 let draw_now = Rc::clone(draw_now);
                 wasm_bindgen_futures::spawn_local(async move {
@@ -217,10 +238,13 @@ impl PipelineDiscovery {
             }
             Stage::Redrawing { .. } => {
                 *stage = Stage::Done;
-                self.target.device.compile_pipelines_in_background();
+                self.target
+                    .borrow()
+                    .device
+                    .compile_pipelines_in_background();
             }
             Stage::Done => {
-                if let Some(compiling) = self.target.device.take_background_pipelines() {
+                if let Some(compiling) = self.target.borrow().device.take_background_pipelines() {
                     let landed = Rc::clone(&self.landed);
                     let redraw = Rc::clone(redraw);
                     wasm_bindgen_futures::spawn_local(async move {
