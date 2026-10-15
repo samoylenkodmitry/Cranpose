@@ -253,7 +253,9 @@ pub(crate) enum RobotCommand {
     },
     HasFocusedTextField,
     SetSemanticsEnabled(bool),
-    LoseGpuDevice,
+    LoseGpuDevice {
+        times: u32,
+    },
     InvokeAppHook {
         name: String,
         argument: String,
@@ -1180,11 +1182,14 @@ impl Robot {
         self.recv_ack()
     }
 
-    /// Destroys the app's GPU device, as a driver reset or a removed GPU
-    /// would lose it, so a test can check that the app opens another.
-    pub fn lose_gpu_device(&self) -> Result<(), String> {
+    /// Destroys the app's GPU device `times` times in a row, as driver
+    /// resets or a removed GPU would lose it, so a test can check that the
+    /// app opens another. Each device after the first is lost before it
+    /// presents a frame, so more losses in a row than the app recovers from
+    /// end it with [`LaunchError::GpuDeviceLost`](crate::LaunchError::GpuDeviceLost).
+    pub fn lose_gpu_device(&self, times: u32) -> Result<(), String> {
         self.tx
-            .send(RobotCommand::LoseGpuDevice)
+            .send(RobotCommand::LoseGpuDevice { times })
             .map_err(|e| format!("Failed to send device loss command: {e}"))?;
         self.recv_ack()
     }

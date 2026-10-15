@@ -1331,6 +1331,8 @@ impl App {
     fn serve_platform_before_waiting(&mut self, event_loop: &dyn ActiveEventLoop) {
         #[cfg(target_os = "macos")]
         self.application_menu.install_when_due();
+        #[cfg(feature = "robot")]
+        self.serve_robot_device_losses(event_loop);
         self.recover_lost_device(event_loop);
         // The menu bar follows the application menu, which waits for the
         // first presented frame.
@@ -6695,11 +6697,10 @@ impl ApplicationHandler for App {
                     | RobotCommand::OpenUrls(_)) => {
                         let _ = controller.tx.send(robot_app_response(app, command));
                     }
-                    RobotCommand::LoseGpuDevice => {
-                        device_loss::lose_device(
-                            self.gpu_context.as_ref().map(|context| &context.gpu),
-                        );
-                        let _ = controller.tx.send(RobotResponse::Ok);
+                    RobotCommand::LoseGpuDevice { times } => {
+                        // The pass before the next wait loses the devices.
+                        self.device_loss.lose_for_robot(times);
+                        self.event_proxy.wake_up();
                     }
                     RobotCommand::InvokeAppHook { name, argument } => {
                         let response = match self.robot_app_hook.as_mut() {
