@@ -983,7 +983,12 @@ fn refresh_retained_redraw_nodes<R: Renderer>(
     };
     {
         let mut applier = app.composition.applier_mut();
-        collect_retained_redraw_nodes(&mut applier, root, &mut dirty_nodes);
+        collect_retained_redraw_nodes(
+            &mut applier,
+            root,
+            &mut dirty_nodes,
+            &mut surface.redraw_walk,
+        );
     }
     refresh_draw_nodes(app, surface, dirty_nodes)
 }
@@ -1179,48 +1184,44 @@ pub(crate) fn build_draw_refresh_scope(
     refresh_scope
 }
 
-fn take_needs_redraw(applier: &mut MemoryApplier, node_id: NodeId) -> bool {
-    match applier.with_node::<LayoutNode, _>(node_id, |node| {
-        let needs_redraw = node.needs_redraw();
-        if needs_redraw {
-            node.clear_needs_redraw();
-        }
-        needs_redraw
-    }) {
-        Ok(needs_redraw) => needs_redraw,
-        Err(NodeError::TypeMismatch { .. }) => applier
-            .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-                let needs_redraw = node.needs_redraw();
-                if needs_redraw {
-                    node.clear_needs_redraw();
-                }
-                needs_redraw
-            })
-            .unwrap_or(false),
-        Err(_) => false,
-    }
-}
-
+/// Collects into `dirty_nodes` the nodes under `root` whose redraw flag no
+/// draw repass took, clearing the flags. A window root below `root` draws on
+/// a surface of its own. Each node takes one lookup; `pending` holds the
+/// nodes still to visit and keeps its storage for the next frame.
 fn collect_retained_redraw_nodes(
     applier: &mut MemoryApplier,
     root: NodeId,
     dirty_nodes: &mut Vec<NodeId>,
+    pending: &mut Vec<NodeId>,
 ) {
-    let mut children = Default::default();
-    match applier.get_mut(root) {
-        Ok(node) => node.collect_children_into(&mut children),
-        Err(_) => return,
-    }
-
-    if take_needs_redraw(applier, root) {
-        dirty_nodes.push(root);
-    }
-
-    for child in children {
-        if cranpose_ui::is_window_root(applier, child) {
+    pending.clear();
+    pending.push(root);
+    while let Some(id) = pending.pop() {
+        let Ok(node) = applier.get_mut(id) else {
+            continue;
+        };
+        if let Some(layout) = node.as_any_mut().downcast_mut::<LayoutNode>() {
+            if id != root && layout.is_window_root() {
+                continue;
+            }
+            if layout.needs_redraw() {
+                layout.clear_needs_redraw();
+                dirty_nodes.push(id);
+            }
+            // Reversed, so the first child comes off next and the nodes
+            // come in tree order.
+            pending.extend(layout.children.iter().rev());
             continue;
         }
-        collect_retained_redraw_nodes(applier, child, dirty_nodes);
+        let mut children = Default::default();
+        node.collect_children_into(&mut children);
+        pending.extend(children.iter().rev());
+        if let Some(subcompose) = node.as_any_mut().downcast_mut::<SubcomposeLayoutNode>()
+            && subcompose.needs_redraw()
+        {
+            subcompose.clear_needs_redraw();
+            dirty_nodes.push(id);
+        }
     }
 }
 

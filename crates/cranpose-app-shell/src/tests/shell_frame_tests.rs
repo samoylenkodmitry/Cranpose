@@ -23,10 +23,11 @@ fn retained_redraw_traversal_keeps_wide_child_lists_and_clears_only_attached_nod
         }
 
         let mut dirty = Vec::new();
-        collect_retained_redraw_nodes(&mut applier, root, &mut dirty);
+        let mut pending = Vec::new();
+        collect_retained_redraw_nodes(&mut applier, root, &mut dirty, &mut pending);
         assert_eq!(dirty, [children[0], children[15]]);
         dirty.clear();
-        collect_retained_redraw_nodes(&mut applier, root, &mut dirty);
+        collect_retained_redraw_nodes(&mut applier, root, &mut dirty, &mut pending);
         assert!(dirty.is_empty());
         assert!(
             applier
