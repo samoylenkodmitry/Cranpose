@@ -95,6 +95,7 @@ cranpose-app-shell = { path = "../../crates/cranpose-app-shell", features = ["te
 cranpose-macros = { path = "../../crates/cranpose-macros" }
 cranpose-render-common = { path = "../../crates/cranpose-render/common" }
 cranpose-render-wgpu = { path = "../../crates/cranpose-render/wgpu" }
+cranpose-navigation = { path = "../../crates/cranpose-navigation" }
 cranpose-testing = { path = "../../crates/cranpose-testing", features = ["desktop-robot"] }
 pollster = "0.4.0"
 

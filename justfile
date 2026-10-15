@@ -687,12 +687,23 @@ robot-accessibility-macos binary output:
 robot-accessibility-linux binary output:
     scripts/ci/with_host_lock.sh --exclusive dbus-run-session -- scripts/a11y/linux_a11y_bus.sh xvfb-run -a python3 scripts/a11y/desktop_robot.py --binary {{quote(binary)}} --output {{quote(output)}}
 
-# The menu bar the Linux shell draws in the window, and `WindowMenuBar`,
-# chosen through clicks and keys under Xvfb.
-robot-menus-linux: _disk-guard
+# Runtime robots for the Linux desktop under Xvfb: the menu bar the shell
+# draws in the window and `WindowMenuBar`, secure and Unicode text input, and
+# navigation that restores a covered screen.
+robot-runtime-linux: _disk-guard
     cargo build --locked --profile ci -p desktop-app --features robot-app --example robot
-    dbus-run-session -- xvfb-run -a -s "-screen 0 1280x800x24" target/ci/examples/robot robot_desktop_menus
-    dbus-run-session -- xvfb-run -a -s "-screen 0 1280x800x24" target/ci/examples/robot robot_window_menu_bar
+    for runner in robot_desktop_menus robot_window_menu_bar robot_secure_unicode_input robot_navigation_restoration; do \
+        dbus-run-session -- xvfb-run -a -s "-screen 0 1280x800x24" target/ci/examples/robot "$runner" || exit 1; \
+    done
+
+# Runtime robots for the macOS desktop, from a prebuilt robot binary: the
+# native menu bar and `WindowMenuBar`, secure and Unicode text input,
+# navigation that restores a covered screen, and recovery from a lost GPU
+# device.
+robot-runtime-macos binary:
+    for runner in robot_desktop_menus robot_window_menu_bar robot_secure_unicode_input robot_navigation_restoration robot_gpu_device_loss; do \
+        {{quote(binary)}} "$runner" || exit 1; \
+    done
 
 robot-accessibility-windows binary output:
     python scripts/a11y/desktop_robot.py --binary {{quote(binary)}} --output {{quote(output)}}

@@ -2045,6 +2045,7 @@ dependencies = [
  "cranpose-core",
  "cranpose-foundation",
  "cranpose-macros",
+ "cranpose-navigation",
  "cranpose-render-common",
  "cranpose-render-wgpu",
  "cranpose-services",
