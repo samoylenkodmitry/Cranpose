@@ -347,3 +347,30 @@ jobs:
           name: runtime-ios
           path: ${{ runner.temp }}/ios
           if-no-files-found: ignore
+
+  # What ran on this tree and on which builds: each job's result, passed,
+  # failed, skipped or cancelled, and the SHA-256 of every file the jobs
+  # kept, recorded with the run for a release candidate.
+  record:
+    name: runtime matrix record
+    if: ${{ always() }}
+    needs: [web, safari, linux-desktop, windows, android-apks, android-emulator, apple-apps, macos-desktop, ios-simulator]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: ${{ runner.temp }}/artifacts
+      - name: Record the job results and artifact hashes
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: >-
+          python3 scripts/ci/runtime_matrix_record.py --results "$RESULTS"
+          --artifacts "$RUNNER_TEMP/artifacts" --commit "$GITHUB_SHA"
+          --output "$RUNNER_TEMP/record"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-matrix-record
+          path: ${{ runner.temp }}/record
+          if-no-files-found: error
