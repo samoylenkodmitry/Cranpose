@@ -27,6 +27,7 @@ embedded-default-font = ["cranpose-render-common/embedded-default-font"]
 installed-fonts = ["cranpose-render-common/installed-fonts"]
 
 [dependencies]
+bytemuck = { workspace = true }
 cranpose-render-common = { workspace = true }
 cranpose-ui = { workspace = true }
 cranpose-core = { workspace = true }

@@ -835,6 +835,7 @@ dependencies = [
 name = "cranpose-render-pixels"
 version = "0.12.0"
 dependencies = [
+ "bytemuck",
  "cranpose-core",
  "cranpose-foundation",
  "cranpose-render-common",

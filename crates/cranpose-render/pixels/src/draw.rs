@@ -191,7 +191,16 @@ pub(crate) fn draw_scene_scaled(
 }
 
 fn clear_frame(frame: &mut [u8]) {
-    frame.as_chunks_mut::<4>().0.fill([18, 18, 24, 255]);
+    fill_pixels(frame.as_chunks_mut::<4>().0, [18, 18, 24, 255]);
+}
+
+/// Paints every pixel of `pixels` with `bytes`: as whole 32-bit words where
+/// the pixels are aligned for them, a store a pixel instead of four.
+fn fill_pixels(pixels: &mut [[u8; 4]], bytes: [u8; 4]) {
+    match bytemuck::try_cast_slice_mut::<[u8; 4], u32>(pixels) {
+        Ok(words) => words.fill(u32::from_ne_bytes(bytes)),
+        Err(_) => pixels.fill(bytes),
+    }
 }
 
 fn draw_raster_scene(
@@ -462,7 +471,7 @@ fn draw_shape(
         for (start, end) in coverage.row_runs(center_y, clip_bounds.min_x, clip_bounds.max_x) {
             let row = target.row(py, start, end);
             if let Some(bytes) = fills_runs {
-                row.fill(bytes);
+                fill_pixels(row, bytes);
                 continue;
             }
             for (px, dst) in (start..).zip(row) {
