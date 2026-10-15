@@ -240,3 +240,31 @@ fn color_at_follows_the_tile_mode_past_the_gradient_end() {
     let clamp = Brush::horizontal_gradient_tiled(red_to_blue(), 0.0, 100.0, TileMode::Clamp);
     assert_eq!(at(&clamp, 125.0), Color(0.0, 0.0, 1.0, 1.0));
 }
+
+#[test]
+fn sweep_starts_at_three_o_clock_and_turns_clockwise() {
+    let rect = Rect::from_size(crate::Size::new(100.0, 100.0));
+    let colors = vec![
+        Color(1.0, 0.0, 0.0, 1.0),
+        Color(0.0, 1.0, 0.0, 1.0),
+        Color(0.0, 0.0, 1.0, 1.0),
+    ];
+    let sweep = Brush::sweep_gradient(colors.clone(), Point::new(50.0, 50.0));
+    let at = |x: f32, y: f32| sweep.color_at(rect, Point::new(x, y));
+    let close = |a: Color, b: Color| {
+        [a.0 - b.0, a.1 - b.1, a.2 - b.2, a.3 - b.3]
+            .iter()
+            .all(|delta| delta.abs() < 0.01)
+    };
+    // Just below 3 o'clock, a little way clockwise: the first color.
+    assert!(close(at(90.0, 50.1), colors[0]), "{:?}", at(90.0, 50.1));
+    // 9 o'clock is half way round: the middle color.
+    assert!(close(at(10.0, 50.0), colors[1]), "{:?}", at(10.0, 50.0));
+    // 6 o'clock, a quarter turn clockwise on a y-down screen, is between
+    // the first and the middle color.
+    assert!(
+        close(at(50.0, 90.0), Color(0.5, 0.5, 0.0, 1.0)),
+        "{:?}",
+        at(50.0, 90.0)
+    );
+}

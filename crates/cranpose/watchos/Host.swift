@@ -123,7 +123,8 @@ vec4 paint(vec2 p, float brush, float tile_mode, vec4 color, vec4 color_end, vec
         t = tile(length(p - gradient.xy) / gradient.z, tile_mode);
     } else {
         vec2 d = p - gradient.xy;
-        t = clamp(atan(d.y, d.x) / 6.28318531 + 0.5, 0.0, 1.0);
+        // From 3 o'clock, clockwise, as Compose's sweep.
+        t = fract(atan(d.y, d.x) / 6.28318531);
     }
     if (t < 0.0) {
         return vec4(0.0);
