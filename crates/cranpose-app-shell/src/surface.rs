@@ -67,6 +67,9 @@ pub struct RootSurface<R: Renderer> {
     pub(crate) scoped_layer_property_nodes: Vec<NodeId>,
     pub(crate) structural_scene_nodes: Vec<NodeId>,
     pub(crate) partial_scene_nodes: Vec<NodeId>,
+    /// The nodes the retained redraw walk has yet to visit, empty between
+    /// frames; kept for its storage.
+    pub(crate) redraw_walk: Vec<NodeId>,
     pub(crate) retained_visual_nodes: HashSet<NodeId>,
     pub(crate) is_dirty: bool,
     pub(crate) buttons_pressed: PointerButtons,
@@ -112,6 +115,7 @@ impl<R: Renderer> RootSurface<R> {
             scoped_layer_property_nodes: Vec::new(),
             structural_scene_nodes: Vec::new(),
             partial_scene_nodes: Vec::new(),
+            redraw_walk: Vec::new(),
             retained_visual_nodes: HashSet::default(),
             is_dirty: true,
             buttons_pressed: PointerButtons::NONE,
