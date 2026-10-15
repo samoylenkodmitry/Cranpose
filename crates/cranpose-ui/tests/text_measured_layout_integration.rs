@@ -240,3 +240,29 @@ fn a_text_that_changes_in_place_names_each_new_string_to_semantics() {
         assert_eq!(texts, [text, "static"], "{text}");
     }
 }
+
+#[test]
+fn a_text_s_smallest_intrinsic_width_is_its_widest_word() {
+    for (text, lines, width) in [
+        (BODY, vec!["aaaa", "bbbb", "cccc"], 4.0 * CHAR_WIDTH),
+        ("x  wwwwww  y", vec!["x", "wwwwww", "y"], 6.0 * CHAR_WIDTH),
+        ("日本語", vec!["日", "本", "語"], CHAR_WIDTH),
+    ] {
+        lay_out_in_column(
+            move || {
+                cranpose_ui::Box(
+                    Modifier::empty().width_intrinsic(cranpose_ui::IntrinsicSize::Min),
+                    cranpose_ui::BoxSpec::default(),
+                    move || {
+                        Text(text, Modifier::empty(), TextStyle::default());
+                    },
+                );
+            },
+            |layout| {
+                let (measured, size) = text_box_layout(layout, text);
+                assert_eq!(measured, lines, "{text}");
+                assert_eq!(size.width, width, "{text}");
+            },
+        );
+    }
+}

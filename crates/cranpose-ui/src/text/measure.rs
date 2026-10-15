@@ -1213,6 +1213,53 @@ fn wrapped_line_ranges_with_measurer<M: TextMeasurer + ?Sized>(
     lines.into_iter().map(|line| line.source_range).collect()
 }
 
+/// The widest stretch of `text` between two places where a line may wrap,
+/// its trailing spaces left out: below that width a word has to break.
+/// Compose's `ParagraphIntrinsics.minIntrinsicWidth`.
+pub(crate) fn min_intrinsic_text_width(
+    text: &crate::text::AnnotatedString,
+    style: &TextStyle,
+) -> f32 {
+    with_system_font_scale(text, style, |text, style| {
+        crate::render_state::with_text_measurer(|measurer| {
+            widest_unbreakable_width(measurer, text, style)
+        })
+    })
+}
+
+fn widest_unbreakable_width<M: TextMeasurer + ?Sized>(
+    measurer: &M,
+    text: &crate::text::AnnotatedString,
+    style: &TextStyle,
+) -> f32 {
+    let mut widest = 0.0_f32;
+    for line_range in split_line_ranges(text.text.as_str()) {
+        let line_text = &text.text[line_range.clone()];
+        if line_text.is_empty() {
+            continue;
+        }
+        let boundaries = cluster_boundaries(line_text);
+        let end = boundaries.len() - 1;
+        let context = LineMeasureContext::new(measurer, text, &line_range, style, boundaries.len());
+        let breaks = LineBreaks::new(line_text, &boundaries);
+        let mut start = 0;
+        for idx in 1..=end {
+            if idx < end && !breaks.before(idx) {
+                continue;
+            }
+            let mut word_end = idx;
+            while word_end > start && breaks.is_space(word_end - 1) {
+                word_end -= 1;
+            }
+            if word_end > start {
+                widest = widest.max(context.measure_char_range(&boundaries, start, word_end));
+            }
+            start = idx;
+        }
+    }
+    widest
+}
+
 fn prepare_text_layout_fallback<M: TextMeasurer + ?Sized>(
     measurer: &M,
     text: &crate::text::AnnotatedString,
@@ -2262,10 +2309,7 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
                 resolve_auto_hyphen_break(measurer, style, &breaks, start_idx, wrap_idx);
         }
 
-        let broke_at_word_boundary = effective_wrap_idx > start_idx
-            && line_text[boundaries[effective_wrap_idx - 1]..boundaries[effective_wrap_idx]]
-                .chars()
-                .all(char::is_whitespace);
+        let broke_at_word_boundary = breaks.ends_at_space(start_idx, effective_wrap_idx);
         let segment_start = boundaries[start_idx];
         let mut segment_end = boundaries[effective_wrap_idx];
         if wrap_idx != best || broke_at_word_boundary {
@@ -2416,6 +2460,14 @@ impl<'a> LineBreaks<'a> {
         self.line[self.boundaries[idx]..self.boundaries[idx + 1]]
             .chars()
             .all(char::is_whitespace)
+    }
+
+    /// Whether a line from character `start` that ends before character
+    /// `end` ends next to a space: at a word, so the spaces after it hang at
+    /// its end and the next line starts after them.
+    fn ends_at_space(&self, start: usize, end: usize) -> bool {
+        (end > start && self.is_space(end - 1))
+            || (end < self.boundaries.len() - 1 && self.is_space(end))
     }
 
     /// Whether the line may wrap before character `idx`, which is not the
