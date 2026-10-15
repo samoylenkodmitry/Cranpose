@@ -641,14 +641,30 @@ fn queued_packets_keep_complete_pixels_while_the_producer_changes_the_scene() {
     let (_lock, mut producer, device, queue, backend, downlevel) =
         threaded_parts().expect("queued packet guard requires a GPU adapter");
     let format = wgpu::TextureFormat::Rgba8Unorm;
-    producer.init_gpu(device.clone(), queue.clone(), format, backend, downlevel);
+    // Both renderers compile each pipeline where first needed: a frame drawn
+    // while a pipeline compiles in the background carries stand-in draws,
+    // which neither the expected pixels nor the packet compared with them
+    // may hold.
+    producer.init_gpu_compiling_inline_for_tests(
+        device.clone(),
+        queue.clone(),
+        format,
+        backend,
+        downlevel,
+    );
     let (packets, incoming) =
         std::sync::mpsc::sync_channel::<(cranpose_render_wgpu::HeldFramePacket, Vec<u8>)>(2);
     let (start, ready) = std::sync::mpsc::sync_channel(0);
     std::thread::scope(|scope| {
         let worker = scope.spawn(move || {
             let mut consumer = WgpuRenderer::new(&[support::TEST_FONT]);
-            consumer.init_gpu(device.clone(), queue.clone(), format, backend, downlevel);
+            consumer.init_gpu_compiling_inline_for_tests(
+                device.clone(),
+                queue.clone(),
+                format,
+                backend,
+                downlevel,
+            );
             let (texture, view) = support::render_target(
                 &device,
                 WIDTH,

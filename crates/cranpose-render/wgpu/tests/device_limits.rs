@@ -30,7 +30,8 @@ fn downlevel_uniform_renderer() -> Result<(WgpuRenderer, Arc<wgpu::Device>), Str
 
     let device = Arc::new(device);
     let mut renderer = WgpuRenderer::new(&[support::TEST_FONT]);
-    renderer.init_gpu(
+    // Compiled where first needed, the captured frame holds no stand-in draw.
+    renderer.init_gpu_compiling_inline_for_tests(
         Arc::clone(&device),
         Arc::new(queue),
         wgpu::TextureFormat::Bgra8UnormSrgb,
