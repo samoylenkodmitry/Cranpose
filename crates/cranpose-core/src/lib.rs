@@ -77,11 +77,14 @@ pub use composer::{
 pub(crate) use composer::{ComposerCore, EmittedNode, ParentAttachMode, ParentFrame};
 pub use composition::{Composition, ROOT_RENDER_REPLAY_LIMIT};
 pub use composition_locals::{
-    CompositionLocal, CompositionLocalProvider, ProvidedValue, StaticCompositionLocal,
-    compositionLocalOf, compositionLocalOfWithPolicy, staticCompositionLocalOf,
-    staticCompositionLocalOfWithPolicy,
+    CompositionLocal, CompositionLocalAccessorScope, CompositionLocalProvider, ProvidedValue,
+    ReadableCompositionLocal, StaticCompositionLocal, compositionLocalOf,
+    compositionLocalOfWithPolicy, compositionLocalWithComputedDefaultOf, staticCompositionLocalOf,
+    staticCompositionLocalOfWithPolicy, staticCompositionLocalWithComputedDefaultOf,
 };
-pub(crate) use composition_locals::{LocalStateEntry, StaticLocalEntry};
+pub(crate) use composition_locals::{
+    ComputedLocalEntry, LocalStateEntry, StaticComputedLocalEntry, StaticLocalEntry,
+};
 pub use concurrency::{
     CollectEvents, CoroutineScope, Delay, EventChannel, EventSender, EventStream, EventStreamNext,
     ProduceScope, collectAsState, delay, interval, produceState, rememberCoroutineScope,

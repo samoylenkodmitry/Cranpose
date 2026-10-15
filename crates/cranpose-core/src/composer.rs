@@ -10,11 +10,12 @@ use smallvec::SmallVec;
 
 use crate::{
     AnchorId, Applier, ApplierGuard, ApplierHost, COMMAND_FLUSH_THRESHOLD, ChildList, Command,
-    CommandQueue, CompositionLocal, DirtyBubble, Key, LocalKey, LocalStackSnapshot,
-    LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned, ProvidedValue, RecomposeOptions,
-    RecomposeScope, RecomposeScopeInner, RecycledNode, RetentionMode, RetentionPolicy,
-    RuntimeHandle, ScopeId, SlotId, SlotPassOutcome, SlotTable, SlotsHost, SnapshotStateList,
-    SnapshotStateMap, StaticCompositionLocal, StaticLocalEntry, SubcomposeState,
+    CommandQueue, CompositionLocal, ComputedLocalEntry, DirtyBubble, Key, LocalKey,
+    LocalStackSnapshot, LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned,
+    ProvidedValue, RecomposeOptions, RecomposeScope, RecomposeScopeInner, RecycledNode,
+    RetentionMode, RetentionPolicy, RuntimeHandle, ScopeId, SlotId, SlotPassOutcome, SlotTable,
+    SlotsHost, SnapshotStateList, SnapshotStateMap, StaticCompositionLocal,
+    StaticComputedLocalEntry, StaticLocalEntry, SubcomposeState,
     collections::map::{HashMap, HashSet},
     composer_context, explicit_group_key_seed,
     retention::{RetainKey, RetentionManager},
@@ -2090,8 +2091,12 @@ impl Composer {
     /// Returns the value of `local` from the innermost enclosing provider, or the local's default
     /// value when no provider is in scope.
     pub fn read_composition_local<T: Clone + 'static>(&self, local: &CompositionLocal<T>) -> T {
-        self.provided_local::<LocalStateEntry<T>>(&local.key)
-            .map_or_else(|| local.default_value(), |entry| entry.value())
+        self.read_provided(
+            &local.key,
+            |entry: &LocalStateEntry<T>| entry.value(),
+            |entry: &ComputedLocalEntry<T>| entry.value(),
+        )
+        .unwrap_or_else(|| local.default_value())
     }
 
     /// Returns the value of `local` from the innermost enclosing provider, or the local's default
@@ -2100,17 +2105,34 @@ impl Composer {
         &self,
         local: &StaticCompositionLocal<T>,
     ) -> T {
-        self.provided_local::<StaticLocalEntry<T>>(&local.key)
-            .map_or_else(|| local.default_value(), |entry| entry.value())
+        self.read_provided(
+            &local.key,
+            |entry: &StaticLocalEntry<T>| entry.value(),
+            |entry: &StaticComputedLocalEntry<T>| entry.value(),
+        )
+        .unwrap_or_else(|| local.default_value())
     }
 
-    /// The innermost provided entry for `key`, when it is an `E`.
-    fn provided_local<E: 'static>(&self, key: &LocalKey) -> Option<Rc<E>> {
+    /// The value of the innermost provided entry for `key`, a plain value
+    /// `V` or a computed one `C`; `None` without a provider. A computed value
+    /// runs after the local stack is released, as it reads other locals.
+    fn read_provided<V: 'static, C: 'static, T>(
+        &self,
+        key: &LocalKey,
+        value: impl FnOnce(&V) -> T,
+        computed: impl FnOnce(&C) -> T,
+    ) -> Option<T> {
         let entry = provided_entry(&self.core.local_stack.borrow(), key)?;
-        entry
-            .downcast::<E>()
-            .inspect_err(|_| log::error!("composition local entry type mismatch for key {key:?}"))
-            .ok()
+        match entry.downcast::<V>() {
+            Ok(entry) => Some(value(&entry)),
+            Err(entry) => entry
+                .downcast::<C>()
+                .inspect_err(|_| {
+                    log::error!("composition local entry type mismatch for key {key:?}");
+                })
+                .ok()
+                .map(|entry| computed(&entry)),
+        }
     }
 
     /// Returns the recompose scope being composed, or `None` outside any scope.

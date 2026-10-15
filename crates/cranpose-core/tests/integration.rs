@@ -1,5 +1,6 @@
 mod applier_disposal;
 mod blocking_work;
+mod computed_locals;
 mod effects_and_frames;
 mod lifetime_cancellation;
 mod nested_context;
