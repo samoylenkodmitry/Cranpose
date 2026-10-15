@@ -21,6 +21,10 @@ pub(super) struct DeviceLoss {
     signal: LossSignal,
     /// The GPU context the composition reads.
     content: Option<Rc<RefCell<crate::GpuContext>>>,
+    /// The losses in a row a robot asked for, which the next pass before
+    /// the event loop waits makes.
+    #[cfg(feature = "robot")]
+    robot_losses: u32,
 }
 
 impl DeviceLoss {
@@ -45,18 +49,36 @@ impl DeviceLoss {
     pub(super) fn presented(&mut self) {
         self.signal.presented();
     }
-}
 
-/// Destroys `gpu`'s device, as a driver reset would lose it, for a robot test
-/// of the recovery.
-#[cfg(feature = "robot")]
-pub(super) fn lose_device(gpu: Option<&crate::GpuContext>) {
-    if let Some(gpu) = gpu {
-        crate::gpu_loss::lose_device(&gpu.device);
+    /// Asks the next pass before the event loop waits to lose the device
+    /// `times` times in a row.
+    #[cfg(feature = "robot")]
+    pub(super) fn lose_for_robot(&mut self, times: u32) {
+        self.robot_losses = times;
     }
 }
 
 impl App {
+    /// Destroys the device the times a robot asked for, as driver resets
+    /// would lose it, and recovers after each loss before any frame; then
+    /// answers the robot.
+    #[cfg(feature = "robot")]
+    pub(super) fn serve_robot_device_losses(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let times = std::mem::take(&mut self.device_loss.robot_losses);
+        if times == 0 {
+            return;
+        }
+        for _ in 0..times {
+            if let Some(context) = &self.gpu_context {
+                crate::gpu_loss::lose_device(&context.gpu.device);
+            }
+            self.recover_lost_device(event_loop);
+        }
+        if let Some(controller) = &self.robot_controller {
+            let _ = controller.tx.send(crate::robot::RobotResponse::Ok);
+        }
+    }
+
     /// Replaces a lost device, or ends the app when that keeps failing.
     pub(super) fn recover_lost_device(&mut self, event_loop: &dyn ActiveEventLoop) {
         if !self.device_loss.signal.take_loss() || self.exiting {

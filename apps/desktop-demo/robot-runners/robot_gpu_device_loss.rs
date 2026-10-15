@@ -1,10 +1,13 @@
 //! The app opens another GPU device when its device is lost: frames reach
 //! the screen again, and the composition keeps its state and its input.
-//! The device is lost twice in a row, each time after a frame.
+//! The device is lost twice, each time after a frame. Then four losses in a
+//! row, with no frame between them, end the app with
+//! `LaunchError::GpuDeviceLost`: it recovers three times without a frame and
+//! gives up at the fourth loss.
 
 use std::time::Duration;
 
-use cranpose::Robot;
+use cranpose::{LaunchError, Robot};
 use cranpose_core::{mutableStateOf, remember};
 use cranpose_testing::{find_in_semantics, find_text};
 use cranpose_ui::{
@@ -40,7 +43,7 @@ fn count_to(robot: &Robot, count: u32) -> bool {
 
 pub(crate) fn main() {
     env_logger::init();
-    robot_launch::launch("GPU Device Loss", 300, 200)
+    let outcome = robot_launch::launch("GPU Device Loss", 300, 200)
         .with_test_driver(|robot| {
             robot_exit::arm_timeout(60);
             if !red_box_shows(&robot) {
@@ -50,7 +53,7 @@ pub(crate) fn main() {
                 robot_exit::fail(&robot, "the counter did not count before the loss");
             }
             for (loss, count) in [(1, 2), (2, 3)] {
-                if let Err(error) = robot.lose_gpu_device() {
+                if let Err(error) = robot.lose_gpu_device(1) {
                     robot_exit::fail(&robot, &format!("losing the device failed: {error}"));
                 }
                 std::thread::sleep(Duration::from_millis(200));
@@ -61,10 +64,12 @@ pub(crate) fn main() {
                     robot_exit::fail(&robot, &format!("the counter lost its state or input after loss {loss}"));
                 }
             }
-            println!("PASS: the app drew and counted on through two device losses");
-            let _ = robot.exit();
+            // The app ends at the fourth loss; its launch reports why.
+            if let Err(error) = robot.lose_gpu_device(4) {
+                robot_exit::fail(&robot, &format!("losing four devices in a row failed: {error}"));
+            }
         })
-        .run(|| {
+        .try_run(|| {
             let count = remember(|| mutableStateOf(0u32)).with(|count| *count);
             Column(Modifier::empty(), ColumnSpec::default(), move || {
                 Box(
@@ -83,4 +88,13 @@ pub(crate) fn main() {
                 );
             });
         });
+    match outcome {
+        Err(LaunchError::GpuDeviceLost) => {
+            println!("PASS: the app drew and counted on through two device losses and ended at four in a row");
+        }
+        other => {
+            eprintln!("FAIL: four device losses in a row should end the app with GpuDeviceLost, got {other:?}");
+            std::process::exit(1);
+        }
+    }
 }
