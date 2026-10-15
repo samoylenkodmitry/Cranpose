@@ -50,8 +50,11 @@ mod state;
 pub use source_trace::__source_scope;
 #[doc(hidden)]
 pub use thread_state::with_or_fresh;
+mod stage_times;
 pub mod subcompose;
 mod thread_state;
+#[doc(hidden)]
+pub use stage_times::{StageTimes, stage_ms};
 
 #[cfg(feature = "internal")]
 #[doc(hidden)]
