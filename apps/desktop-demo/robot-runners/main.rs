@@ -200,6 +200,7 @@ runners! {
     robot_scroll_persistence,
     robot_scroll_to_item_redraw,
     robot_scroll_visual,
+    robot_secure_unicode_input,
     robot_selection_container,
     robot_selection_vertical_grab,
     robot_services_registration,
