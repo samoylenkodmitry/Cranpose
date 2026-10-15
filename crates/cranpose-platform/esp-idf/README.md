@@ -79,6 +79,19 @@ values of the first 32 keys in a C thread-local array, read in a few
 instructions through the `THREADPTR` register. The array takes 128 bytes of
 every task's stack.
 
+## Allocator
+
+ESP-IDF's heap takes a spinlock for each call, and Rust's 8-byte aligned
+blocks go through `heap_caps_aligned_alloc`: about 1,000 instructions for an
+allocation and its free. With the default `small-block-alloc` feature the
+crate installs [`SmallBlockAllocator`](src/small_alloc.rs) as the global
+allocator. Each task keeps up to 8 freed blocks of each of ten size classes
+up to 128 bytes in lists of its own and takes them back without a lock;
+other blocks come from the heap. A task's blocks go back to the heap when it
+is deleted. An application that installs another global allocator, or links
+code that frees memory from C `malloc` through Rust's allocator, turns the
+feature off with `default-features = false`.
+
 ## QEMU
 
 Espressif's QEMU emulates the ESP32-S3 with PSRAM and a virtual RGB panel that
