@@ -11,6 +11,11 @@ pub fn round_to_px(value: f32, density: f32) -> f32 {
     if density <= 0.0 || !density.is_finite() || !value.is_finite() {
         return value;
     }
+    // At density 1 the scale and the division change no bit; a chip with no
+    // float divider skips them.
+    if density == 1.0 {
+        return (value + 0.5).floor();
+    }
     (value * density + 0.5).floor() / density
 }
 
@@ -19,6 +24,9 @@ pub fn round_to_px(value: f32, density: f32) -> f32 {
 pub fn ceil_to_px(value: f32, density: f32) -> f32 {
     if density <= 0.0 || !density.is_finite() || !value.is_finite() {
         return value;
+    }
+    if density == 1.0 {
+        return value.ceil();
     }
     (value * density).ceil() / density
 }
