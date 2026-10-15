@@ -87,8 +87,14 @@ impl Wake {
         }
     }
 
+    /// Forgets the notices that came so far: the caller handles what they
+    /// were for before it waits.
+    fn clear(&self) {
+        self.pending.store(false, Ordering::SeqCst);
+    }
+
     /// Sleeps until a notice arrives, or returns at once if one came since
-    /// the last wait.
+    /// the last wait or clear.
     fn wait(&self) {
         if self.pending.swap(false, Ordering::SeqCst) {
             return;
@@ -143,7 +149,6 @@ pub fn run(
     // every frame request, the composition's own among them.
     let mut last_tick: Option<Instant> = None;
     loop {
-        framebuffer.run_pending_tasks();
         let now = Instant::now();
         if last_tick.is_none_or(|last| now >= last + config.frame_interval) {
             last_tick = Some(now);
@@ -170,6 +175,12 @@ pub fn run(
                 }
             }
         }
+        // A tick notifies the wake itself when the composition asks for
+        // its next frame, which the schedule below covers. Clearing before
+        // running the posted tasks keeps every later notice for the wait,
+        // so the loop does not go round once more for the tick's own one.
+        wake.clear();
+        framebuffer.run_pending_tasks();
         let schedule = framebuffer.frame_schedule();
         let deadline = if schedule.needs_update || schedule.needs_frame {
             last_tick.map(|last| last + config.frame_interval)
