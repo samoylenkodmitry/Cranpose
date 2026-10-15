@@ -1,4 +1,20 @@
-use cranpose::{AppLauncher, embedded_view::EmbeddedViewError, prelude::*};
+use std::time::{Duration, Instant};
+
+use cranpose::{
+    AppLauncher,
+    embedded_view::{EmbeddedView, EmbeddedViewError},
+    prelude::*,
+};
+
+/// Draws until the view has nothing left to draw. A frame skips a shape
+/// whose pipeline still compiles, and the view draws again once it lands.
+fn draw_settled(view: &mut EmbeddedView, pixels: &mut Vec<u8>) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    assert!(view.draw(pixels).expect("first frame"));
+    while view.draw(pixels).expect("follow-up frame") {
+        assert!(Instant::now() < deadline, "the view kept drawing");
+    }
+}
 
 #[test]
 fn resizing_a_small_host_matches_a_component_created_at_its_final_size() {
@@ -34,8 +50,8 @@ fn resizing_a_small_host_matches_a_component_created_at_its_final_size() {
         .expect("fresh");
     let mut before = Vec::new();
     let mut after = Vec::new();
-    resized.draw(&mut before).expect("resized");
-    fresh.draw(&mut after).expect("fresh");
+    draw_settled(&mut resized, &mut before);
+    draw_settled(&mut fresh, &mut after);
     assert_eq!(before, after);
     assert_eq!(&after[..4], &[255, 0, 0, 255]);
     let green = (10 * 64 + 10) * 4;
@@ -54,12 +70,9 @@ fn host_driven_frames_resize_suspend_and_reject_invalid_dimensions() {
         })
         .expect("GPU embedded component");
     let mut pixels = Vec::new();
-    assert!(view.draw(&mut pixels).expect("first frame"));
+    draw_settled(&mut view, &mut pixels);
     assert_eq!(pixels.len(), 64 * 48 * 4);
     assert_eq!(&pixels[..4], &[255, 0, 0, 255]);
-    for _ in 0..12 {
-        view.draw(&mut pixels).expect("pipeline warmup");
-    }
     assert!(!view.draw(&mut pixels).expect("unchanged component"));
     view.resize(80, 60, 2.0).expect("native resize");
     assert!(view.draw(&mut pixels).expect("resized frame"));
