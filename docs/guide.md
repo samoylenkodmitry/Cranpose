@@ -2115,7 +2115,12 @@ fn Menus(icon: ImageBitmap) {
   extension. `TraySpec::on_action` runs on a left click, and the menu then
   opens on a right click.
 - The menu bar is the macOS menu bar, after the application menu with About,
-  Hide and Quit. On Windows and Linux `MenuBar` shows nothing yet.
+  Hide and Quit, and on Windows the window's own menu bar. Linux has no menu
+  bar outside GTK windows, so there the shell draws it at the top of the
+  window, as Compose Desktop does. `WindowMenuBar(menus, content)` draws the
+  same bar above `content` on any desktop: the open menu takes the keyboard
+  focus (arrow keys, Return, Escape), a submenu opens where the pointer rests,
+  and the items' shortcuts run them for keys the content does not take.
 - `KeyShortcut`'s `ctrl` is Command on macOS. A check item's mark shows the
   state the app keeps, whatever a click asked for.
 - A robot test chooses an item with `robot.choose_menu_item(&["View", "Refresh"])`

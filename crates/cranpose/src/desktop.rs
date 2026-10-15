@@ -5711,6 +5711,12 @@ impl ApplicationHandler for App {
             self.abort_launch(event_loop, LaunchError::ContentUnavailable);
             return;
         };
+        #[cfg(all(
+            feature = "desktop-menus",
+            target_os = "linux",
+            not(target_arch = "wasm32")
+        ))]
+        let content = crate::desktop_menus::with_window_menu_bar(content);
         let gpu = crate::GpuContext {
             instance,
             adapter,

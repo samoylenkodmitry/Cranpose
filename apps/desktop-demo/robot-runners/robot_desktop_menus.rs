@@ -1,7 +1,8 @@
 //! A menu bar and a tray icon from the composition: choosing a menu bar item
 //! (on macOS through the native menu bar) or a tray menu item runs its
 //! callback as an event handler, and a check item's mark follows the state
-//! the app keeps.
+//! the app keeps. On Linux the menu bar is drawn in the window, and clicks
+//! there choose its items.
 
 use cranpose::{CheckItem, KeyShortcut, Menu, MenuBar, MenuEntry, MenuItem, Tray, TraySpec};
 use cranpose_core::{mutableStateOf, remember};
@@ -29,6 +30,30 @@ fn choose(robot: &cranpose::Robot, tray: bool, labels: &[&str], expected: &str) 
     println!("PASS: {labels:?} shows {expected:?}");
 }
 
+/// Linux has no menu bar outside GTK windows: the shell draws the menus at
+/// the top of the window, where a click opens them and chooses an item.
+#[cfg(target_os = "linux")]
+fn choose_in_drawn_bar(robot: &cranpose::Robot) {
+    for (label, shown) in [("Tools", "Count"), ("Count", "counted 3, unmarked")] {
+        let found = text_input_robot_helpers::wait_for_in_semantics(robot, |robot| {
+            find_in_semantics(robot, |element| find_text_exact(element, label))
+        });
+        let Some((x, y, width, height)) = found else {
+            robot_exit::fail(robot, &format!("the drawn menu bar shows no {label:?}"));
+        };
+        if let Err(error) = robot.click(x + width / 2.0, y + height / 2.0) {
+            robot_exit::fail(robot, &format!("clicking {label:?} failed: {error}"));
+        }
+        let next = text_input_robot_helpers::wait_for_in_semantics(robot, |robot| {
+            find_in_semantics(robot, |element| find_text_exact(element, shown))
+        });
+        if next.is_none() {
+            robot_exit::fail(robot, &format!("clicking {label:?} did not show {shown:?}"));
+        }
+        println!("PASS: the drawn menu bar's {label:?} shows {shown:?}");
+    }
+}
+
 pub(crate) fn main() {
     env_logger::init();
     // A shown window: macOS installs the menu bar after the first presented
@@ -47,6 +72,8 @@ pub(crate) fn main() {
             choose(&robot, false, &["Tools", "Options", "Mark"], "counted 1, marked");
             choose(&robot, false, &["Tools", "Options", "Mark"], "counted 1, unmarked");
             choose(&robot, true, &["Count"], "counted 2, unmarked");
+            #[cfg(target_os = "linux")]
+            choose_in_drawn_bar(&robot);
             let _ = robot.exit();
         })
         .run(|| {

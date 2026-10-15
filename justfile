@@ -687,6 +687,13 @@ robot-accessibility-macos binary output:
 robot-accessibility-linux binary output:
     scripts/ci/with_host_lock.sh --exclusive dbus-run-session -- scripts/a11y/linux_a11y_bus.sh xvfb-run -a python3 scripts/a11y/desktop_robot.py --binary {{quote(binary)}} --output {{quote(output)}}
 
+# The menu bar the Linux shell draws in the window, and `WindowMenuBar`,
+# chosen through clicks and keys under Xvfb.
+robot-menus-linux: _disk-guard
+    cargo build --locked --profile ci -p desktop-app --features robot-app --example robot
+    dbus-run-session -- xvfb-run -a -s "-screen 0 1280x800x24" target/ci/examples/robot robot_desktop_menus
+    dbus-run-session -- xvfb-run -a -s "-screen 0 1280x800x24" target/ci/examples/robot robot_window_menu_bar
+
 robot-accessibility-windows binary output:
     python scripts/a11y/desktop_robot.py --binary {{quote(binary)}} --output {{quote(output)}}
 

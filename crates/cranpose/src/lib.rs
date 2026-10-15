@@ -578,7 +578,7 @@ pub use desktop_integration::{
     )
 ))]
 pub use desktop_menus::{
-    CheckItem, KeyShortcut, Menu, MenuBar, MenuEntry, MenuItem, Tray, TraySpec,
+    CheckItem, KeyShortcut, Menu, MenuBar, MenuEntry, MenuItem, Tray, TraySpec, WindowMenuBar,
 };
 /// The raw window handle traits a [`DesktopWindow`] implements, at the
 /// version the shell uses.
