@@ -3,7 +3,7 @@ use cranpose_macros::composable;
 use cranpose_ui::{
     LanguagePreference, LinearArrangement, LocalizationController, Modifier,
     text::TextStyle,
-    widgets::{Column, ColumnSpec, FlowRow, FlowRowSpec, Text},
+    widgets::{Column, ColumnSpec, FlowRow, FlowSpec, Text},
 };
 
 use super::{
@@ -73,7 +73,7 @@ pub fn LiquidLanguagePicker(controller: LocalizationController) {
                     let system_name = system_name.clone();
                     FlowRow(
                         Modifier::empty().fill_max_width(),
-                        FlowRowSpec::new()
+                        FlowSpec::new()
                             .main_axis_spacing(8.0)
                             .cross_axis_spacing(8.0),
                         move || {

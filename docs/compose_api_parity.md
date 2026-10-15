@@ -61,7 +61,7 @@ curate, gives these public APIs that Cranpose lacks. They are tracked in
 
 | Compose API | Cranpose |
 |---|---|
-| `FlowColumn` | Absent; `FlowRow` exists |
+| `FlowColumn` | `FlowColumn(modifier, FlowSpec, content)`, beside `FlowRow`; both take one `FlowSpec` |
 | `FlexBox`, `Grid` (non-lazy) in `foundation-layout` | Absent |
 | The Styles API, `androidx.compose.foundation.style` (`Style`, `Modifier.styleable`, appearance and placement scopes; 94 classes in 1.13, all `@ExperimentalFoundationStyleApi`) | Absent |
 | `retain`, `RetainedEffect`, `RetainedValuesStore` (`runtime-retain`) | Absent; view models and `rememberSaveable` cover the retained-state cases apps use most |

@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use cranpose::{LazyItems, prelude::*};
 use cranpose_foundation::lazy::rememberLazyListState;
-use cranpose_ui::widgets::{FlowRow, FlowRowSpec};
+use cranpose_ui::widgets::{FlowRow, FlowSpec};
 
 use super::{clamped_text_options, text_style};
 use crate::data::{self, BAR_COUNT, CHIP_BACKGROUND, Comment, GRADIENT_END, PALETTE, Post};
@@ -130,7 +130,7 @@ fn PostCard(post: Rc<Post>, comments: usize, s: f32) {
             // Chips and counters wrap onto new lines on narrow cards.
             FlowRow(
                 Modifier::empty(),
-                FlowRowSpec::new()
+                FlowSpec::new()
                     .main_axis_spacing(8.0 * s)
                     .cross_axis_spacing(6.0 * s),
                 {
@@ -302,7 +302,7 @@ fn MediaChart(post: Rc<Post>, s: f32) {
 fn PostActions(post: Rc<Post>, s: f32) {
     FlowRow(
         Modifier::empty(),
-        FlowRowSpec::new()
+        FlowSpec::new()
             .main_axis_spacing(20.0 * s)
             .cross_axis_spacing(6.0 * s),
         move || {

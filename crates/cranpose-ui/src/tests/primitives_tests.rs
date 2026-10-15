@@ -2195,7 +2195,7 @@ fn flow_row_widget_wraps_spacers_and_applies_spacing() {
             let children_capture = Rc::clone(&children_render);
             *flow_capture.borrow_mut() = Some(crate::widgets::FlowRow(
                 Modifier::empty(),
-                crate::widgets::FlowRowSpec::new()
+                crate::widgets::FlowSpec::new()
                     .main_axis_spacing(10.0)
                     .cross_axis_spacing(5.0),
                 move || {

@@ -71,7 +71,7 @@ fn rtl_rows_columns_boxes_and_flow_rows_resolve_start_from_the_right() {
                     );
                     cranpose_ui::widgets::FlowRow(
                         Modifier::empty().width(200.0),
-                        cranpose_ui::widgets::FlowRowSpec::default(),
+                        cranpose_ui::widgets::FlowSpec::default(),
                         || {
                             Box(
                                 Modifier::empty()

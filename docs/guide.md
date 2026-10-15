@@ -2694,14 +2694,15 @@ Row(
 
 #### FlowRow
 
-Wrap children to the next row when the available width fills.
+Wrap children to the next row when the available width fills. `FlowColumn`
+takes the same `FlowSpec` and wraps children down into the next column.
 
 ```rust preview=flow_row
 use cranpose::widgets::*;
 
 FlowRow(
     Modifier::empty().fill_max_width(),
-    FlowRowSpec::default(),
+    FlowSpec::default(),
     || {
         for label in ["Rust", "Android", "Desktop", "Web"] {
             Text(label, Modifier::empty().padding(8.0), TextStyle::default());
