@@ -299,26 +299,6 @@
             ]);
         });
 
-        function registerGraphicsContextMonitor(canvas) {
-            if (!canvas) {
-                return;
-            }
-
-            canvas.addEventListener('webglcontextlost', (event) => {
-                event.preventDefault();
-                const message = 'Graphics context lost';
-                console.error(message);
-                showFailure(message);
-            });
-
-            canvas.addEventListener('webglcontextrestored', (event) => {
-                event.preventDefault();
-                const message = 'Graphics context restored; reload to resume';
-                console.warn(message);
-                showFailure(message);
-            });
-        }
-
         function verifiedAssetUrl(path) {
             if (typeof path !== 'string' || !path.startsWith('assets/')) {
                 throw new Error('The web release manifest is invalid.');
@@ -362,7 +342,6 @@
                 const initialTab = params.get('tab');
                 const initialShaderSection = params.get('shader_section');
                 updateAppState('initializing', { backend, initialTab, initialShaderSection });
-                registerGraphicsContextMonitor(document.getElementById('cranpose-canvas'));
 
                 const hasWebGpu = 'gpu' in navigator;
                 const probeCanvas = document.createElement('canvas');

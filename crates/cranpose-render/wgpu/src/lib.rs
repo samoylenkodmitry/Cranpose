@@ -390,6 +390,14 @@ impl WgpuRenderer {
         drop(backend);
     }
 
+    /// Drops what the renderer holds on its device, for a host whose device
+    /// is gone: the frees then reach the lost device, as a WebGL context
+    /// that is lost ignores them, rather than the device that replaces it.
+    /// [`Self::init_gpu`] gives the renderer a device again.
+    pub fn release_gpu(&mut self) {
+        self.retire_live_backend();
+    }
+
     /// Initialize GPU resources with a WGPU device and queue.
     ///
     /// Replacing a live renderer (Android surface recreation, device loss)
