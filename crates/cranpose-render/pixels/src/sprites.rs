@@ -581,8 +581,8 @@ impl Canonical {
 
 /// Text drawn as the rasterizer draws it, into its own premultiplied image.
 fn rasterize_text(draw: &crate::scene::TextDraw, text: &TextRaster) -> Option<(Rect, Vec<u8>)> {
-    let (image, rect) = crate::draw::rasterize_text(draw, text)?;
-    let mut pixels = image.rgba8_pixels().to_vec();
+    let (text, rect) = crate::draw::rasterize_text(draw, text)?;
+    let mut pixels = text.pixels;
     for pixel in pixels.as_chunks_mut::<4>().0 {
         let alpha = u32::from(pixel[3]);
         for channel in &mut pixel[..3] {

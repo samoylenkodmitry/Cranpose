@@ -46,7 +46,7 @@ impl TextLuminance {
 
     /// The correction for glyph masks of this class.
     pub fn correction(self) -> MaskGammaCorrection {
-        MaskGammaCorrection(&correction_tables()[usize::from(self.0)])
+        MaskGammaCorrection(correction_table_of(usize::from(self.0)))
     }
 }
 
@@ -88,9 +88,13 @@ fn unit_to_u8(value: f32) -> u8 {
     (value.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
-fn correction_tables() -> &'static [CorrectionTable; LUMINANCE_CLASSES] {
-    static TABLES: OnceLock<[CorrectionTable; LUMINANCE_CLASSES]> = OnceLock::new();
-    TABLES.get_or_init(|| std::array::from_fn(correction_table))
+/// The table of luminance class `class`, built the first time a text of
+/// that class draws: a screen shows few classes, and each table takes 256
+/// `powf` calls.
+fn correction_table_of(class: usize) -> &'static CorrectionTable {
+    static TABLES: [OnceLock<CorrectionTable>; LUMINANCE_CLASSES] =
+        [const { OnceLock::new() }; LUMINANCE_CLASSES];
+    TABLES[class].get_or_init(|| correction_table(class))
 }
 
 /// `SkTMaskGamma_build_correcting_lut` for the class's representative
