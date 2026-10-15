@@ -103,9 +103,25 @@ impl Color {
     pub const TRANSPARENT: Color = Color(0.0, 0.0, 0.0, 0.0);
 }
 
+/// `level / 255.0` for each 8-bit level, as the division gives it: a chip
+/// with no float divider looks the quotient up instead.
+const LEVEL_FRACTIONS: [f32; 256] = {
+    let mut fractions = [0.0; 256];
+    let mut level = 0;
+    while level < 256 {
+        fractions[level] = level as f32 / 255.0;
+        level += 1;
+    }
+    fractions
+};
+
 /// One channel snapped to the 8-bit value an sRGB colour holds.
 fn srgb_channel_8bit(channel: f32) -> f32 {
-    (channel.clamp(0.0, 1.0) * 255.0).round() / 255.0
+    let level = (channel.clamp(0.0, 1.0) * 255.0).round();
+    if level.is_nan() {
+        return level;
+    }
+    LEVEL_FRACTIONS[level as usize]
 }
 
 #[cfg(test)]

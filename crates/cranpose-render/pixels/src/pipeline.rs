@@ -714,17 +714,21 @@ impl RasterLayerMapping {
 }
 
 fn raster_layer_scale(transformed_bounds: Rect, local_bounds: Rect) -> (f32, f32) {
-    let scale_x = if local_bounds.width.abs() <= f32::EPSILON {
+    (
+        axis_scale(transformed_bounds.width, local_bounds.width).max(0.0),
+        axis_scale(transformed_bounds.height, local_bounds.height).max(0.0),
+    )
+}
+
+/// How far a transform stretches an axis of `local` extent to `transformed`,
+/// 1 for an empty axis. An axis it keeps gives 1 without the division, which
+/// a chip with no float divider pays for on every layer.
+fn axis_scale(transformed: f32, local: f32) -> f32 {
+    if local.abs() <= f32::EPSILON || (transformed == local && local.is_finite()) {
         1.0
     } else {
-        transformed_bounds.width / local_bounds.width
-    };
-    let scale_y = if local_bounds.height.abs() <= f32::EPSILON {
-        1.0
-    } else {
-        transformed_bounds.height / local_bounds.height
-    };
-    (scale_x.max(0.0), scale_y.max(0.0))
+        transformed / local
+    }
 }
 
 fn raster_layer_mapping(
