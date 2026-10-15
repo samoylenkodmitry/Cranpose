@@ -2183,7 +2183,10 @@ pub fn run(
     let mut android_platform = AndroidPlatform::new();
     let mut current_host_window_size = Size::ZERO;
     let mut device_loss = crate::gpu_loss::LossSignal::default();
-    let mut device_loss_drill = crate::gpu_loss::LossDrill::from_launch_args();
+    let mut device_loss_drill = crate::gpu_loss::LossDrill::from_launch_args(
+        &device_loss,
+        crate::android_services::wake_native_loop,
+    );
     let mut initial_host_window_size = settings.initial_size_explicit.then(|| {
         Size::new(
             settings.initial_width as f32,
@@ -2378,7 +2381,8 @@ pub fn run(
                                     width,
                                     height,
                                     density,
-                                    present_thread,                                    &device_loss.handler(crate::android_services::wake_native_loop),
+                                    present_thread,
+                                    &device_loss.handler(crate::android_services::wake_native_loop),
                                 ) {
                                     Ok((resources, actual_size)) => {
                                         if let Some(actual_size) = actual_size {
@@ -2948,7 +2952,7 @@ pub fn run(
         };
         if let Some(frame) = presented {
             device_loss.presented();
-            device_loss_drill.presented(&device_loss);
+            device_loss_drill.presented();
             if let Some(work_ns) = frame.work_ns {
                 let present_thread = app_shell
                     .as_mut()

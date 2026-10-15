@@ -80,6 +80,12 @@ impl<F: FnMut() + 'static> IosApp<F> {
         event_proxy: EventLoopProxy,
         launch_error: Rc<RefCell<Option<LaunchError>>>,
     ) -> Self {
+        let device_loss = crate::gpu_loss::LossSignal::default();
+        let drill_proxy = event_proxy.clone();
+        let device_loss_drill =
+            crate::gpu_loss::LossDrill::from_launch_args(&device_loss, move || {
+                drill_proxy.wake_up();
+            });
         Self {
             #[cfg(feature = "webview")]
             webviews: Default::default(),
@@ -98,8 +104,8 @@ impl<F: FnMut() + 'static> IosApp<F> {
             launch_error,
             touch_router: TouchPointerRouter::default(),
             next_off_screen_render: None,
-            device_loss: crate::gpu_loss::LossSignal::default(),
-            device_loss_drill: crate::gpu_loss::LossDrill::from_launch_args(),
+            device_loss,
+            device_loss_drill,
         }
     }
 
@@ -355,7 +361,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
                 shell.renderer().present(frame);
                 gpu.surface_dirty = false;
                 self.device_loss.presented();
-                self.device_loss_drill.presented(&self.device_loss);
+                self.device_loss_drill.presented();
             }
             SurfaceFrame::Reconfigure => {
                 gpu.surface.configure(&gpu.device, &gpu.config);
