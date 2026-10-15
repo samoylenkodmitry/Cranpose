@@ -1,6 +1,4 @@
-use cranpose_ui_graphics::{Brush, Color, Point, Rect, TileMode};
-
-const TRANSPARENT: Color = Color(0.0, 0.0, 0.0, 0.0);
+use cranpose_ui_graphics::{Brush, Color, Point, Rect};
 
 #[doc(hidden)]
 pub fn color_to_rgba(color: Color) -> [f32; 4] {
@@ -84,24 +82,8 @@ fn dither_gradient(rgba: [f32; 4], x: f32, y: f32) -> [f32; 4] {
     ]
 }
 
-fn sample_tiled_gradient_rgba(
-    t: f32,
-    tile_mode: TileMode,
-    colors: &[Color],
-    stops: Option<&[f32]>,
-    x: f32,
-    y: f32,
-) -> [f32; 4] {
-    match normalize_gradient_t(t, tile_mode) {
-        Some(sample_t) => dither_gradient(
-            color_to_rgba(interpolate_colors(colors, stops, sample_t)),
-            x,
-            y,
-        ),
-        None => color_to_rgba(TRANSPARENT),
-    }
-}
-
+/// The brush's color at `(x, y)` in `rect`, a gradient's dithered from
+/// `dither_origin` as Skia dithers it.
 #[doc(hidden)]
 pub fn sample_brush_rgba(
     brush: &Brush,
@@ -110,144 +92,11 @@ pub fn sample_brush_rgba(
     y: f32,
     dither_origin: Point,
 ) -> [f32; 4] {
-    let dither = Point::new(x - dither_origin.x, y - dither_origin.y);
+    let rgba = color_to_rgba(brush.color_at(rect, Point::new(x, y)));
     match brush {
-        Brush::Solid(color) => color_to_rgba(*color),
-        Brush::LinearGradient {
-            colors,
-            stops,
-            start,
-            end,
-            tile_mode,
-        } => {
-            let sx = resolve_gradient_point(rect.x, rect.width, start.x);
-            let sy = resolve_gradient_point(rect.y, rect.height, start.y);
-            let ex = resolve_gradient_point(rect.x, rect.width, end.x);
-            let ey = resolve_gradient_point(rect.y, rect.height, end.y);
-            let dx = ex - sx;
-            let dy = ey - sy;
-            let denom = (dx * dx + dy * dy).max(f32::EPSILON);
-            let t = ((x - sx) * dx + (y - sy) * dy) / denom;
-            sample_tiled_gradient_rgba(t, *tile_mode, colors, stops.as_deref(), dither.x, dither.y)
-        }
-        Brush::RadialGradient {
-            colors,
-            stops,
-            center,
-            radius,
-            tile_mode,
-        } => {
-            let cx = rect.x + center.x;
-            let cy = rect.y + center.y;
-            let radius = (*radius).max(f32::EPSILON);
-            let dx = x - cx;
-            let dy = y - cy;
-            let distance = (dx * dx + dy * dy).sqrt();
-            let t = distance / radius;
-            sample_tiled_gradient_rgba(t, *tile_mode, colors, stops.as_deref(), dither.x, dither.y)
-        }
-        Brush::SweepGradient {
-            colors,
-            stops,
-            center,
-        } => {
-            let cx = rect.x + center.x;
-            let cy = rect.y + center.y;
-            let dx = x - cx;
-            let dy = y - cy;
-            let angle = dy.atan2(dx);
-            let t = (angle / std::f32::consts::TAU + 0.5).clamp(0.0, 1.0);
-            dither_gradient(
-                color_to_rgba(interpolate_colors(colors, stops.as_deref(), t)),
-                dither.x,
-                dither.y,
-            )
-        }
+        Brush::Solid(_) => rgba,
+        _ => dither_gradient(rgba, x - dither_origin.x, y - dither_origin.y),
     }
-}
-
-fn resolve_gradient_point(origin: f32, extent: f32, value: f32) -> f32 {
-    if value.is_finite() {
-        origin + value
-    } else if value.is_sign_positive() {
-        origin + extent
-    } else {
-        origin
-    }
-}
-
-#[doc(hidden)]
-pub fn normalize_gradient_t(t: f32, tile_mode: TileMode) -> Option<f32> {
-    match tile_mode {
-        TileMode::Clamp => Some(t.clamp(0.0, 1.0)),
-        TileMode::Decal => {
-            if (0.0..=1.0).contains(&t) {
-                Some(t)
-            } else {
-                None
-            }
-        }
-        TileMode::Repeated => Some(t.rem_euclid(1.0)),
-        TileMode::Mirror => {
-            let wrapped = t.rem_euclid(2.0);
-            if wrapped <= 1.0 {
-                Some(wrapped)
-            } else {
-                Some(2.0 - wrapped)
-            }
-        }
-    }
-}
-
-fn interpolate_colors(colors: &[Color], stops: Option<&[f32]>, t: f32) -> Color {
-    if colors.is_empty() {
-        return TRANSPARENT;
-    }
-    if colors.len() == 1 {
-        return colors[0];
-    }
-    let clamped = t.clamp(0.0, 1.0);
-
-    if let Some(stops) = stops
-        && stops.len() == colors.len()
-    {
-        if clamped <= stops[0] {
-            return colors[0];
-        }
-        for index in 0..(stops.len() - 1) {
-            let start = stops[index];
-            let end = stops[index + 1];
-            if clamped <= end {
-                let span = (end - start).max(f32::EPSILON);
-                let frac = ((clamped - start) / span).clamp(0.0, 1.0);
-                return lerp_color(colors[index], colors[index + 1], frac);
-            }
-        }
-        return last_color(colors);
-    }
-
-    let segments = (colors.len() - 1) as f32;
-    let scaled = clamped * segments;
-    let index = scaled.floor() as usize;
-    if index >= colors.len() - 1 {
-        return last_color(colors);
-    }
-    let frac = scaled - index as f32;
-    lerp_color(colors[index], colors[index + 1], frac)
-}
-
-fn last_color(colors: &[Color]) -> Color {
-    colors.last().copied().unwrap_or(TRANSPARENT)
-}
-
-fn lerp_color(a: Color, b: Color, t: f32) -> Color {
-    let lerp = |start: f32, end: f32| start + (end - start) * t;
-    Color(
-        lerp(a.0, b.0),
-        lerp(a.1, b.1),
-        lerp(a.2, b.2),
-        lerp(a.3, b.3),
-    )
 }
 
 #[cfg(test)]

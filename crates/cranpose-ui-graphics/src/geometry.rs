@@ -53,12 +53,14 @@ impl VectorPathMaskCache {
     }
 }
 
+/// The key of `path`'s raster: a gradient's colors depend on the rect it
+/// resolves against, a solid color's do not.
 fn vector_path_mask_key(
     path: &crate::VectorPath,
     origin: Point,
     mask_size: (usize, usize),
-    rgb: [u8; 3],
-    alpha: f32,
+    brush: &Brush,
+    brush_rect: Rect,
 ) -> u64 {
     use std::hash::Hasher;
     let mut hasher = crate::fx_hash::FxHasher::default();
@@ -67,8 +69,17 @@ fn vector_path_mask_key(
     hasher.write_u32(origin.y.to_bits());
     hasher.write_usize(mask_size.0);
     hasher.write_usize(mask_size.1);
-    hasher.write(&rgb);
-    hasher.write_u32(alpha.to_bits());
+    crate::render_hash::hash_brush(brush, &mut hasher);
+    if !matches!(brush, Brush::Solid(_)) {
+        for value in [
+            brush_rect.x,
+            brush_rect.y,
+            brush_rect.width,
+            brush_rect.height,
+        ] {
+            hasher.write_u32(value.to_bits());
+        }
+    }
     for subpath in path.subpaths() {
         hasher.write_usize(subpath.len());
         for point in subpath {
@@ -77,6 +88,55 @@ fn vector_path_mask_key(
         }
     }
     hasher.finish()
+}
+
+/// How many raster pixels a vector path's fill gets per logical pixel along
+/// each axis.
+const VECTOR_PATH_SUPERSAMPLE: f32 = 2.0;
+
+/// Whether `brush` paints anything: some color of it is not transparent.
+fn paints(brush: &Brush) -> bool {
+    match brush {
+        Brush::Solid(color) => color.3 > 0.0,
+        Brush::LinearGradient { colors, .. }
+        | Brush::RadialGradient { colors, .. }
+        | Brush::SweepGradient { colors, .. } => colors.iter().any(|color| color.3 > 0.0),
+    }
+}
+
+/// `path`'s fill over `size` raster pixels from `origin`: one alpha byte of
+/// a solid color per pixel, or for a gradient the color it paints at each
+/// pixel's center with the pixel's coverage.
+fn rasterize_vector_path(
+    path: &crate::VectorPath,
+    brush: &Brush,
+    brush_rect: Rect,
+    origin: Point,
+    (width, height): (usize, usize),
+) -> Option<ImageBitmap> {
+    let byte = |value: f32| (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    if let Brush::Solid(color) = brush {
+        let opacity = color.3.clamp(0.0, 1.0);
+        let mask = path.coverage_mask(width, height, origin, VECTOR_PATH_SUPERSAMPLE, opacity);
+        let rgb = [byte(color.0), byte(color.1), byte(color.2)];
+        return ImageBitmap::from_alpha8(width as u32, height as u32, rgb, mask).ok();
+    }
+    let coverage = path.coverage_mask(width, height, origin, VECTOR_PATH_SUPERSAMPLE, 1.0);
+    let mut pixels = Vec::with_capacity(coverage.len() * 4);
+    for (row, line) in coverage.chunks_exact(width).enumerate() {
+        let y = origin.y + (row as f32 + 0.5) / VECTOR_PATH_SUPERSAMPLE;
+        for (column, &covered) in line.iter().enumerate() {
+            if covered == 0 {
+                pixels.extend_from_slice(&[0; 4]);
+                continue;
+            }
+            let x = origin.x + (column as f32 + 0.5) / VECTOR_PATH_SUPERSAMPLE;
+            let color = brush.color_at(brush_rect, Point::new(x, y));
+            let alpha = (color.3.clamp(0.0, 1.0) * f32::from(covered) + 0.5) as u8;
+            pixels.extend_from_slice(&[byte(color.0), byte(color.1), byte(color.2), alpha]);
+        }
+    }
+    ImageBitmap::from_rgba8(width as u32, height as u32, pixels).ok()
 }
 
 fn vector_path_mask_cache_get(key: u64) -> Option<ImageBitmap> {
@@ -1245,9 +1305,8 @@ pub trait DrawScope {
     /// The fill is rasterized on the CPU into a supersampled, anti-aliased
     /// bitmap covering the path bounds and drawn as an image primitive, so
     /// it works on every render backend. Parse the path once with
-    /// [`crate::VectorPath::parse`] and redraw it per frame. Solid brushes
-    /// are honored exactly; gradient brushes currently fall back to their
-    /// first stop color.
+    /// [`crate::VectorPath::parse`] and redraw it per frame. A gradient brush
+    /// resolves against the scope's size, as other fills do.
     fn draw_vector_path(&mut self, path: &crate::VectorPath, brush: Brush);
     /// Parses SVG path data (the `d` attribute syntax: `M/m L/l H/h V/v
     /// C/c S/s Q/q T/t A/a Z/z`) and fills it. Invalid path data draws
@@ -1477,18 +1536,25 @@ impl DrawScopeDefault {
             self.push_vector_path(
                 &path.to_vector_path(PathFillRule::NonZero),
                 brush,
+                brush_rect,
                 blend_mode,
             );
         }
     }
 
-    /// Rasterizes the fill of `path` into a cached coverage image and
-    /// records it, blended by `blend_mode`.
-    fn push_vector_path(&mut self, path: &crate::VectorPath, brush: &Brush, blend_mode: BlendMode) {
-        const SUPERSAMPLE: f32 = 2.0;
+    /// Rasterizes the fill of `path` into a cached image and records it,
+    /// blended by `blend_mode`. A gradient `brush` resolves against
+    /// `brush_rect`.
+    fn push_vector_path(
+        &mut self,
+        path: &crate::VectorPath,
+        brush: &Brush,
+        brush_rect: Rect,
+        blend_mode: BlendMode,
+    ) {
         const MAX_MASK_PIXELS: f32 = 4096.0;
 
-        if path.is_empty() {
+        if path.is_empty() || !paints(brush) {
             return;
         }
         let bounds = path.bounds();
@@ -1496,51 +1562,23 @@ impl DrawScopeDefault {
             return;
         }
 
-        let color = match brush {
-            Brush::Solid(color) => *color,
-            Brush::LinearGradient { colors, .. }
-            | Brush::RadialGradient { colors, .. }
-            | Brush::SweepGradient { colors, .. } => match colors.first() {
-                Some(color) => *color,
-                None => return,
-            },
-        };
-        if color.3 <= 0.0 {
-            return;
-        }
-
         let origin = Point::new(bounds.x.floor() - 1.0, bounds.y.floor() - 1.0);
         let rect_width = (bounds.x + bounds.width).ceil() - origin.x + 1.0;
         let rect_height = (bounds.y + bounds.height).ceil() - origin.y + 1.0;
-        let mask_width = (rect_width * SUPERSAMPLE)
+        let mask_width = (rect_width * VECTOR_PATH_SUPERSAMPLE)
             .ceil()
             .clamp(1.0, MAX_MASK_PIXELS) as usize;
-        let mask_height = (rect_height * SUPERSAMPLE)
+        let mask_height = (rect_height * VECTOR_PATH_SUPERSAMPLE)
             .ceil()
             .clamp(1.0, MAX_MASK_PIXELS) as usize;
+        let mask_size = (mask_width, mask_height);
 
-        let red = (color.0.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-        let green = (color.1.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-        let blue = (color.2.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-        let alpha = color.3.clamp(0.0, 1.0);
-        let key = vector_path_mask_key(
-            path,
-            origin,
-            (mask_width, mask_height),
-            [red, green, blue],
-            alpha,
-        );
-        let cached = vector_path_mask_cache_get(key);
-        let image = match cached {
+        let key = vector_path_mask_key(path, origin, mask_size, brush, brush_rect);
+        let image = match vector_path_mask_cache_get(key) {
             Some(image) => image,
             None => {
-                let mask = path.coverage_mask(mask_width, mask_height, origin, SUPERSAMPLE, alpha);
-                let Ok(image) = ImageBitmap::from_alpha8(
-                    mask_width as u32,
-                    mask_height as u32,
-                    [red, green, blue],
-                    mask,
-                ) else {
+                let Some(image) = rasterize_vector_path(path, brush, brush_rect, origin, mask_size)
+                else {
                     return;
                 };
                 vector_path_mask_cache_put(key, image.clone());
@@ -2034,7 +2072,7 @@ impl DrawScope for DrawScopeDefault {
     }
 
     fn draw_vector_path(&mut self, path: &crate::VectorPath, brush: Brush) {
-        self.push_vector_path(path, &brush, BlendMode::SrcOver);
+        self.push_vector_path(path, &brush, Rect::from_size(self.size), BlendMode::SrcOver);
     }
 
     fn measure_text(&self, text: &str, style: &DrawTextStyle) -> TextMeasurement {
@@ -2079,7 +2117,7 @@ impl DrawScope for DrawScopeDefault {
 /// The single color a brush paints with, or its first stop for a gradient.
 ///
 /// Text is filled per glyph from one vertex color, so a gradient cannot be
-/// honored; this mirrors the fallback [`DrawScope::draw_vector_path`] documents.
+/// honored there.
 fn solid_fill_color(brush: &Brush) -> Option<Color> {
     match brush {
         Brush::Solid(color) => Some(*color),

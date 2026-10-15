@@ -156,7 +156,7 @@ fn hash_layer_shape<H: Hasher>(shape: LayerShape, state: &mut H) {
     }
 }
 
-fn hash_brush<H: Hasher>(brush: &Brush, state: &mut H) {
+pub(crate) fn hash_brush<H: Hasher>(brush: &Brush, state: &mut H) {
     match brush {
         Brush::Solid(color) => {
             0u8.hash(state);

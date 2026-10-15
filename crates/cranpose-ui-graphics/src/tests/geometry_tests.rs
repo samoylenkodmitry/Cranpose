@@ -228,6 +228,46 @@ fn vector_mask_pixels_preserve_quantized_color_and_coverage() {
 }
 
 #[test]
+fn draw_vector_path_paints_every_color_of_a_gradient() {
+    let path = crate::VectorPath::parse("M 0 0 H 8 V 16 H 0 Z").expect("valid path");
+    let red = Color::rgba(1.0, 0.0, 0.0, 1.0);
+    let clear_blue = Color::rgba(0.0, 0.0, 1.0, 0.0);
+    let raster_of = |size: Size| {
+        let mut scope = DrawScopeDefault::new(size);
+        scope.draw_vector_path(
+            &path,
+            Brush::vertical_gradient_default(vec![red, clear_blue]),
+        );
+        let primitives = scope.into_primitives();
+        let DrawPrimitive::Image { image, rect, .. } = &primitives[0] else {
+            panic!("expected image primitive");
+        };
+        (image.clone(), *rect)
+    };
+    let (image, rect) = raster_of(Size::new(16.0, 16.0));
+    let width = image.width() as usize;
+    let pixel_at = |y: f32| {
+        let row = ((y - rect.y) * image.height() as f32 / rect.height) as usize;
+        image.rgba8_pixel(row * width + width / 2)
+    };
+    let top = pixel_at(1.0);
+    let middle = pixel_at(8.0);
+    let bottom = pixel_at(15.0);
+    assert!(
+        top[0] > 230 && top[3] > 230,
+        "the top is red and opaque: {top:?}"
+    );
+    assert!(
+        (100..156).contains(&middle[3]) && middle[2] > 100,
+        "the middle is half way: {middle:?}"
+    );
+    assert!(bottom[3] < 25, "the bottom fades out: {bottom:?}");
+    // The same gradient over a taller scope reaches its end lower down.
+    let (taller, _) = raster_of(Size::new(16.0, 32.0));
+    assert_ne!(image.id(), taller.id());
+}
+
+#[test]
 fn draw_vector_path_applies_brush_alpha() {
     let path = crate::VectorPath::parse("M 0 0 H 8 V 8 H 0 Z").expect("valid path");
     let mut scope = DrawScopeDefault::new(Size::new(16.0, 16.0));
