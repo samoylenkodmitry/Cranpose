@@ -28,35 +28,38 @@ fn frame_stage_telemetry_threshold_ms() -> Option<f64> {
     })
 }
 
-fn log_frame_stage_telemetry(
-    frame_start: Instant,
-    after_initial_layout: Instant,
-    after_layout: Instant,
-    after_dispatch: Instant,
-    after_render: Instant,
-) {
+/// The stages of a frame that its telemetry times: start, initial layout,
+/// post-layout recomposition, dispatch and render.
+type FrameStages = cranpose_core::StageTimes<5>;
+
+fn log_frame_stage_telemetry(stages: &FrameStages) {
     let Some(threshold_ms) = frame_stage_telemetry_threshold_ms() else {
         return;
     };
-
-    let total_ms = after_render.duration_since(frame_start).as_secs_f64() * 1000.0;
+    let Some(
+        [
+            frame_start,
+            after_initial_layout,
+            after_layout,
+            after_dispatch,
+            after_render,
+        ],
+    ) = stages.times()
+    else {
+        return;
+    };
+    let ms = cranpose_core::stage_ms;
+    let total_ms = ms(frame_start, after_render);
     if total_ms < threshold_ms {
         return;
     }
-
-    let layout_ms = after_layout.duration_since(frame_start).as_secs_f64() * 1000.0;
-    let initial_layout_ms = after_initial_layout
-        .duration_since(frame_start)
-        .as_secs_f64()
-        * 1000.0;
-    let post_layout_ms = after_layout
-        .duration_since(after_initial_layout)
-        .as_secs_f64()
-        * 1000.0;
-    let dispatch_ms = after_dispatch.duration_since(after_layout).as_secs_f64() * 1000.0;
-    let scene_ms = after_render.duration_since(after_dispatch).as_secs_f64() * 1000.0;
     log::warn!(
-        "[frame-stage-telemetry] total_ms={total_ms:.2} layout_ms={layout_ms:.2} initial_layout_ms={initial_layout_ms:.2} post_layout_ms={post_layout_ms:.2} dispatch_ms={dispatch_ms:.2} scene_ms={scene_ms:.2}",
+        "[frame-stage-telemetry] total_ms={total_ms:.2} layout_ms={:.2} initial_layout_ms={:.2} post_layout_ms={:.2} dispatch_ms={:.2} scene_ms={:.2}",
+        ms(frame_start, after_layout),
+        ms(frame_start, after_initial_layout),
+        ms(after_initial_layout, after_layout),
+        ms(after_layout, after_dispatch),
+        ms(after_dispatch, after_render),
     );
 }
 
@@ -344,35 +347,29 @@ where
         &mut self,
         recomposed_before_frame: bool,
     ) -> FrameUpdateResult {
-        let frame_start = Instant::now();
+        let mut stages = FrameStages::start(frame_stage_telemetry_threshold_ms().is_some());
 
         #[cfg(feature = "installed-fonts")]
         self.apply_installed_fonts();
         self.sync_window_roots_in_context();
         self.run_layout_phase_in_context();
-        let after_initial_layout = Instant::now();
+        stages.reached();
 
         let recomposed_this_frame = recomposed_before_frame || self.run_post_layout_recomposition();
 
-        let after_layout = Instant::now();
+        stages.reached();
 
         self.run_dispatch_queues();
         self.update_modal_focus();
         self.reveal_new_focus();
 
-        let after_dispatch = Instant::now();
+        stages.reached();
 
         clear_transient_scroll_motion_contexts();
 
         let result = self.run_render_phase_in_context(recomposed_this_frame);
-        let after_render = Instant::now();
-        log_frame_stage_telemetry(
-            frame_start,
-            after_initial_layout,
-            after_layout,
-            after_dispatch,
-            after_render,
-        );
+        stages.reached();
+        log_frame_stage_telemetry(&stages);
         result
     }
 

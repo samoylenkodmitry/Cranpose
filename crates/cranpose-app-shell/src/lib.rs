@@ -273,54 +273,46 @@ fn update_stage_telemetry_threshold_ms() -> Option<f64> {
     })
 }
 
-#[derive(Clone, Copy, Debug)]
-struct UpdateStageTelemetry {
-    started_at: Instant,
-    after_frame_callbacks: Instant,
-    after_ui_drain: Instant,
-    after_reconcile: Instant,
-    after_process_frame: Instant,
+/// The stages of an update that its telemetry times: start, frame
+/// callbacks, UI drain, reconcile and frame processing.
+type UpdateStages = cranpose_core::StageTimes<5>;
+
+struct UpdateOutcome {
     should_render: bool,
     reconcile_attempted: bool,
     reconcile_changed: bool,
 }
 
-fn log_update_stage_telemetry(telemetry: UpdateStageTelemetry) {
+fn log_update_stage_telemetry(stages: &UpdateStages, outcome: UpdateOutcome) {
     let Some(threshold_ms) = update_stage_telemetry_threshold_ms() else {
         return;
     };
-    let total_ms = telemetry
-        .after_process_frame
-        .duration_since(telemetry.started_at)
-        .as_secs_f64()
-        * 1000.0;
+    let Some(
+        [
+            started_at,
+            after_frame_callbacks,
+            after_ui_drain,
+            after_reconcile,
+            after_process_frame,
+        ],
+    ) = stages.times()
+    else {
+        return;
+    };
+    let ms = cranpose_core::stage_ms;
+    let total_ms = ms(started_at, after_process_frame);
     if total_ms < threshold_ms {
         return;
     }
-
-    let frame_callbacks_ms = telemetry
-        .after_frame_callbacks
-        .duration_since(telemetry.started_at)
-        .as_secs_f64()
-        * 1000.0;
-    let ui_drain_ms = telemetry
-        .after_ui_drain
-        .duration_since(telemetry.after_frame_callbacks)
-        .as_secs_f64()
-        * 1000.0;
-    let reconcile_ms = telemetry
-        .after_reconcile
-        .duration_since(telemetry.after_ui_drain)
-        .as_secs_f64()
-        * 1000.0;
-    let process_frame_ms = telemetry
-        .after_process_frame
-        .duration_since(telemetry.after_reconcile)
-        .as_secs_f64()
-        * 1000.0;
     eprintln!(
-        "[update-stage-telemetry] total_ms={total_ms:.2} frame_callbacks_ms={frame_callbacks_ms:.2} ui_drain_ms={ui_drain_ms:.2} reconcile_ms={reconcile_ms:.2} process_frame_ms={process_frame_ms:.2} should_render={} reconcile_attempted={} reconcile_changed={}",
-        telemetry.should_render, telemetry.reconcile_attempted, telemetry.reconcile_changed
+        "[update-stage-telemetry] total_ms={total_ms:.2} frame_callbacks_ms={:.2} ui_drain_ms={:.2} reconcile_ms={:.2} process_frame_ms={:.2} should_render={} reconcile_attempted={} reconcile_changed={}",
+        ms(started_at, after_frame_callbacks),
+        ms(after_frame_callbacks, after_ui_drain),
+        ms(after_ui_drain, after_reconcile),
+        ms(after_reconcile, after_process_frame),
+        outcome.should_render,
+        outcome.reconcile_attempted,
+        outcome.reconcile_changed
     );
 }
 
@@ -1420,7 +1412,7 @@ where
     fn update_with_frame_time(&mut self, frame_time: Option<u64>) -> FrameUpdateResult {
         let app_context = Rc::clone(&self.app.app_context);
         app_context.enter(|| {
-            let update_started_at = Instant::now();
+            let mut stages = UpdateStages::start(update_stage_telemetry_threshold_ms().is_some());
             let runtime_handle = self.app.runtime.runtime_handle();
             runtime_handle.with_deferred_state_releases(|| {
                 if let Some(frame_time) = frame_time {
@@ -1428,10 +1420,10 @@ where
                     self.app.runtime.drain_frame_callbacks(self.app.last_frame_time_nanos);
                     self.apply_pointer_claim();
                 }
-                let after_frame_callbacks = Instant::now();
+                stages.reached();
                 runtime_handle.drain_ui();
                 self.dispatch_requested_mouse_moves(self.app.last_frame_time_nanos);
-                let after_ui_drain = Instant::now();
+                stages.reached();
                 let should_render = self.app.composition.should_recompose();
                 let mut reconcile_attempted = false;
                 let mut reconcile_changed = false;
@@ -1445,19 +1437,17 @@ where
                     );
                     (reconcile_attempted, reconcile_changed) = self.reconcile_in_context();
                 }
-                let after_reconcile = Instant::now();
+                stages.reached();
                 let result = self.process_frame_in_context(reconcile_changed);
-                let after_process_frame = Instant::now();
-                log_update_stage_telemetry(UpdateStageTelemetry {
-                    started_at: update_started_at,
-                    after_frame_callbacks,
-                    after_ui_drain,
-                    after_reconcile,
-                    after_process_frame,
-                    should_render,
-                    reconcile_attempted,
-                    reconcile_changed,
-                });
+                stages.reached();
+                log_update_stage_telemetry(
+                    &stages,
+                    UpdateOutcome {
+                        should_render,
+                        reconcile_attempted,
+                        reconcile_changed,
+                    },
+                );
                 self.clear_surface_dirt();
                 result
             })

@@ -110,7 +110,8 @@ pub fn is_cursor_visible() -> bool {
 /// draw repass on the focused field, so the caller only has to run the
 /// ordinary dirty-node paths — no whole-scene work.
 pub fn tick_cursor_blink() -> bool {
-    tick_cursor_blink_at(Instant::now())
+    // Without a focused field no caret blinks, and the clock is not read.
+    next_cursor_blink_time().is_some() && tick_cursor_blink_at(Instant::now())
 }
 
 pub(crate) fn tick_cursor_blink_at(now: Instant) -> bool {

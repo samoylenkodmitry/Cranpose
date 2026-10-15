@@ -106,76 +106,46 @@ fn layout_measure_telemetry_threshold_ms() -> Option<f64> {
     })
 }
 
-struct LayoutMeasureTelemetry {
-    root: NodeId,
-    start: Instant,
-    after_repasses: Instant,
-    after_guard: Instant,
-    after_builder: Instant,
-    after_measure: Instant,
-    after_root_place: Instant,
-    after_aux: Instant,
-    after_builder_drop: Instant,
-    after_guard_drop: Instant,
-}
+/// The stages of a layout pass that its telemetry times: start, repasses,
+/// applier guard, builder, measure, root placement, layout and semantics
+/// trees, builder drop and guard drop.
+type LayoutStages = cranpose_core::StageTimes<9>;
 
-fn log_layout_measure_telemetry(times: LayoutMeasureTelemetry) {
+fn log_layout_measure_telemetry(root: NodeId, stages: &LayoutStages) {
     let Some(threshold_ms) = layout_measure_telemetry_threshold_ms() else {
         return;
     };
-
-    let total_ms = times
-        .after_guard_drop
-        .duration_since(times.start)
-        .as_secs_f64()
-        * 1000.0;
+    let Some(
+        [
+            start,
+            after_repasses,
+            after_guard,
+            after_builder,
+            after_measure,
+            after_root_place,
+            after_aux,
+            after_builder_drop,
+            after_guard_drop,
+        ],
+    ) = stages.times()
+    else {
+        return;
+    };
+    let ms = cranpose_core::stage_ms;
+    let total_ms = ms(start, after_guard_drop);
     if total_ms < threshold_ms {
         return;
     }
-
-    let repass_ms = times
-        .after_repasses
-        .duration_since(times.start)
-        .as_secs_f64()
-        * 1000.0;
-    let guard_ms = times
-        .after_guard
-        .duration_since(times.after_repasses)
-        .as_secs_f64()
-        * 1000.0;
-    let builder_ms = times
-        .after_builder
-        .duration_since(times.after_guard)
-        .as_secs_f64()
-        * 1000.0;
-    let measure_ms = times
-        .after_measure
-        .duration_since(times.after_builder)
-        .as_secs_f64()
-        * 1000.0;
-    let root_place_ms = times
-        .after_root_place
-        .duration_since(times.after_measure)
-        .as_secs_f64()
-        * 1000.0;
-    let aux_ms = times
-        .after_aux
-        .duration_since(times.after_root_place)
-        .as_secs_f64()
-        * 1000.0;
-    let builder_drop_ms = times
-        .after_builder_drop
-        .duration_since(times.after_aux)
-        .as_secs_f64()
-        * 1000.0;
-    let guard_drop_ms = times
-        .after_guard_drop
-        .duration_since(times.after_builder_drop)
-        .as_secs_f64()
-        * 1000.0;
     log::warn!(
-        "[layout-measure-telemetry] root={} total_ms={total_ms:.2} repass_ms={repass_ms:.2} guard_ms={guard_ms:.2} builder_ms={builder_ms:.2} measure_ms={measure_ms:.2} root_place_ms={root_place_ms:.2} aux_ms={aux_ms:.2} builder_drop_ms={builder_drop_ms:.2} guard_drop_ms={guard_drop_ms:.2}",
-        times.root
+        "[layout-measure-telemetry] root={root} total_ms={total_ms:.2} repass_ms={:.2} guard_ms={:.2} builder_ms={:.2} measure_ms={:.2} root_place_ms={:.2} aux_ms={:.2} builder_drop_ms={:.2} guard_drop_ms={:.2}",
+        ms(start, after_repasses),
+        ms(after_repasses, after_guard),
+        ms(after_guard, after_builder),
+        ms(after_builder, after_measure),
+        ms(after_measure, after_root_place),
+        ms(after_root_place, after_aux),
+        ms(after_aux, after_builder_drop),
+        ms(after_builder_drop, after_guard_drop),
     );
 }
 
@@ -1365,11 +1335,11 @@ pub fn measure_layout_with_options(
     max_size: Size,
     options: MeasureLayoutOptions,
 ) -> Result<LayoutMeasurements, NodeError> {
-    let telemetry_start = Instant::now();
+    let mut stages = LayoutStages::start(layout_measure_telemetry_threshold_ms().is_some());
     crate::render_state::begin_text_layout_pass();
     begin_placement_pass();
     process_pending_layout_repasses(applier, root)?;
-    let after_repasses = Instant::now();
+    stages.reached();
 
     let constraints = Constraints {
         min_width: 0.0,
@@ -1407,7 +1377,7 @@ pub fn measure_layout_with_options(
     let guard = ApplierSlotGuard::new(applier);
     let applier_host = guard.host();
     let slots_handle = guard.slots_handle();
-    let after_guard = Instant::now();
+    stages.reached();
 
     let frame_arena = crate::render_state::take_layout_frame_arena();
     let builder = LayoutBuilder::new_with_epoch(
@@ -1416,17 +1386,17 @@ pub fn measure_layout_with_options(
         Rc::clone(slots_handle),
         frame_arena,
     );
-    let after_builder = Instant::now();
+    stages.reached();
 
     let measured = builder
         .state
         .measure_node(root, normalize_constraints(constraints))?;
-    let after_measure = Instant::now();
+    stages.reached();
 
     if let Ok(mut applier) = applier_host.try_borrow_typed() {
         finish_placement(&mut applier, root);
     }
-    let after_root_place = Instant::now();
+    stages.reached();
 
     let (layout_tree, semantics) = {
         let mut applier_ref = applier_host.borrow_typed();
@@ -1448,26 +1418,15 @@ pub fn measure_layout_with_options(
         };
         (layout_tree, semantics)
     };
-    let after_aux = Instant::now();
+    stages.reached();
 
     drop(builder);
-    let after_builder_drop = Instant::now();
+    stages.reached();
 
     drop(guard);
-    let after_guard_drop = Instant::now();
+    stages.reached();
 
-    log_layout_measure_telemetry(LayoutMeasureTelemetry {
-        root,
-        start: telemetry_start,
-        after_repasses,
-        after_guard,
-        after_builder,
-        after_measure,
-        after_root_place,
-        after_aux,
-        after_builder_drop,
-        after_guard_drop,
-    });
+    log_layout_measure_telemetry(root, &stages);
 
     Ok(LayoutMeasurements::new(measured, semantics, layout_tree))
 }
