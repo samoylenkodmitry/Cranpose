@@ -2,9 +2,9 @@
 
 ## Current source audit: 2026-10-14
 
-The audit uses the [Cranpose source revision](https://github.com/samoylenkodmitry/Cranpose/tree/d165444c2e57d6398f3e1aeda33965afce030ff9). Generated comparison counts describe the
-**2026-08-29 historical snapshot**. A current coverage percentage requires a
-fresh generation.
+The audit uses the [Cranpose source revision](https://github.com/samoylenkodmitry/Cranpose/tree/d165444c2e57d6398f3e1aeda33965afce030ff9). The current generated counts are under
+**Generated comparison, 2026-10-15**, against Compose 1.13.0-beta01; the
+**2026-08-29 historical snapshot** further down is kept for the trend.
 
 - [Text support](text.md) now points to the implemented AnnotatedString,
   LinkedText and mixed-style baseline integration tests.
@@ -21,6 +21,57 @@ fresh generation.
 Use the [application guide](guide.md) for current usage and the
 [release ledger](release_readiness.md) for 1.0 acceptance. The historical
 comparison below is not a claim of complete behavioral parity.
+
+## Generated comparison, 2026-10-15
+
+Cranpose at [`75e5c04f9`](https://github.com/samoylenkodmitry/Cranpose/tree/75e5c04f99f9a96542a405693c21c6b9ef601f5d) against
+Jetpack Compose at androidx commit
+[`ffadc46c0`](https://github.com/androidx/androidx/tree/ffadc46c08a3423475e126935917bfa2cf91b9ba):
+the newest frozen API file of each module, `1.13.0-beta01.txt` for the
+compose-ui family and `1.5.0-beta01.txt` for Material3. `material3-a2ui`
+has no frozen file yet and is left out. **Sources** says how the files
+were fetched.
+
+| | 2026-08-29 (Compose 1.12) | 2026-10-15 (Compose 1.13) |
+|---|---:|---:|
+| Compose modules | 31 | 38 |
+| Compose entries, all modules | 19,838 | 23,020 |
+| Compose entries, core modules (14, then 16 with `runtime-annotation` and `runtime-retain`) | 15,373 | 16,493 |
+| Cranpose crates | 23 | 34 |
+| Cranpose flattened rows | 8,464 | 12,037 |
+| Cranpose rows with a Compose candidate | 2,414 (28.5%) | 3,476 (28.9%) |
+| ...against core-module keys only | 2,303 (27.2%) | 3,272 (27.2%) |
+| Compose core entries with a Cranpose candidate | 3,300 (21.5%) | 4,140 (25.1%) |
+| Compose entries, all modules, with a Cranpose candidate | 3,838 (19.3%) | 5,126 (22.3%) |
+
+The buckets for 2026-10-15: 16 core modules (the 14 below under **Scope**,
+plus `runtime-annotation`, which now holds `@Stable` and `@Immutable`, and
+`runtime-retain`); 7 Material modules (5,988 entries, 15.1% matched); 15
+interop and tooling modules (539 entries). The core share rose from 21.5% to
+25.1% while Compose's core grew by 1,120 entries: the parity work since the
+first snapshot (pagers, grids, navigation, shared transitions, savers) shows
+here.
+
+### Compose API since the 1.12 snapshot
+
+Diffing the core modules' `1.12.0-beta01.txt` against `1.13.0-beta01.txt`
+at the same commit, and reading the 1.12 surface the first snapshot did not
+curate, gives these public APIs that Cranpose lacks. They are tracked in
+#1550.
+
+| Compose API | Cranpose |
+|---|---|
+| `FlowColumn` | Absent; `FlowRow` exists |
+| `FlexBox`, `Grid` (non-lazy) in `foundation-layout` | Absent |
+| The Styles API, `androidx.compose.foundation.style` (`Style`, `Modifier.styleable`, appearance and placement scopes; 94 classes in 1.13, all `@ExperimentalFoundationStyleApi`) | Absent |
+| `retain`, `RetainedEffect`, `RetainedValuesStore` (`runtime-retain`) | Absent; view models and `rememberSaveable` cover the retained-state cases apps use most |
+| `computedStateOf`, `staticCompositionLocalWithComputedDefaultOf` | Absent; `derivedStateOf` exists |
+| `PolygonShape`, `MorphPolygonShape`, `CornerRounding` | Absent |
+| `MeshGradientPainter`, blur radius stops (`BlurRadiusSpec`) | Absent; `Modifier::blur` and backdrop blurs exist |
+| `UiMediaScope` fold posture (`WindowPosture`, `FoldState`) | Absent |
+| Semantics `hintText` and `backgroundColor` | Absent |
+| `CapturedAnimatedVisibility`, the `Veil` enter and exit transitions | Absent |
+| `LazyLayoutCacheWindow` | Absent; lazy lists keep `beyond_bounds_item_count` and idle prefetch |
 
 ## Cranpose surface, 2026-10-14
 
@@ -161,6 +212,26 @@ target/release/dump-cranpose-api --workspace-root ../.. \
 ```
 
 ### Jetpack Compose: androidx binary-compatibility-validator files
+
+**2026-10-15 refresh.** No androidx checkout was used. The module list came
+from the GitHub contents API at androidx-main commit
+`ffadc46c08a3423475e126935917bfa2cf91b9ba` (every `compose/<group>/<module>`
+with an `api/` directory), and each module's newest frozen
+`<version>-betaNN.txt` was downloaded from `raw.githubusercontent.com` at
+that commit into a local `<module>/api/current.txt` mirror, 38 files and
+3.4 MB. The core modules' `1.12.0-beta01.txt` files at the same commit gave
+the diff above. Then:
+
+```
+cd tools/api-surface && cargo build --release
+target/release/dump-compose-api --root <mirror> --out /tmp/compose_api_surface.json
+target/release/dump-cranpose-api --workspace-root ../.. --out /tmp/cranpose_api_surface.json
+target/release/match-api --compose /tmp/compose_api_surface.json \
+  --cranpose /tmp/cranpose_api_surface.json --out /tmp/match_result.json
+```
+
+The 2026-08-29 pass below read the same kind of files from a checkout on
+samarch-1.
 
 The task pointed at `/media/huge/composerepo/` on `samarch-1`; that path
 does not exist. The actual checkout is
