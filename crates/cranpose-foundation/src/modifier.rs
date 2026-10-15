@@ -2758,29 +2758,48 @@ impl EntryIndex {
     }
 }
 
+/// What updating an entry in place did to the chain's links.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InPlace {
+    /// The links and capability aggregates stand as they were.
+    LinksHold,
+    /// The entry's capabilities changed, or its updated node delegates and
+    /// may have changed its delegates: the chain links again.
+    Relink,
+}
+
 /// Updates `entry` for `element` where it is, when the element is of the
 /// entry's type and key and its node can take it: an element of a node's
 /// type and key updates the node whatever its content, as Compose does.
-/// `false` leaves the entry as it was.
+/// `None` leaves the entry as it was.
 fn update_entry_in_place(
     entry: &mut ModifierNodeEntry,
     element: &DynModifierElement,
     context: &mut dyn ModifierNodeContext,
-) -> bool {
+) -> Option<InPlace> {
     if entry.element.element_type() != element.element_type()
         || entry.element.node_type() != element.node_type()
         || entry.key != element.key()
         || !element.can_update_node(&*entry.node.borrow())
     {
-        return false;
+        return None;
     }
     let same_element = entry.element.as_ref().equals_element(element.as_ref());
     let capabilities = element.capabilities();
+    let mut outcome = if capabilities == entry.capabilities {
+        InPlace::LinksHold
+    } else {
+        InPlace::Relink
+    };
     if !same_element || element.requires_update() {
         element.update_node(&mut *entry.node.borrow_mut());
         entry.element = element.clone();
         entry.hash_code = element.hash_code();
         request_update_auto_invalidations(element.as_ref(), context, capabilities);
+        entry
+            .node
+            .borrow()
+            .for_each_delegate(&mut |_| outcome = InPlace::Relink);
     }
     entry.capabilities = capabilities;
     entry
@@ -2788,7 +2807,7 @@ fn update_entry_in_place(
         .borrow()
         .node_state()
         .set_capabilities(capabilities);
-    true
+    Some(outcome)
 }
 
 /// A new entry for `element` and its node, updated, and attached when
@@ -2958,11 +2977,25 @@ impl ModifierNodeChain {
         if element_count != self.entries.len() {
             return false;
         }
-        self.entries
+        let mut relink = false;
+        let updated = self
+            .entries
             .iter_mut()
             .zip(elements)
             .filter(|(_, element)| element.element_type() == element_type)
-            .all(|(entry, element)| update_entry_in_place(entry, element, context))
+            .all(
+                |(entry, element)| match update_entry_in_place(entry, element, context) {
+                    Some(outcome) => {
+                        relink |= outcome == InPlace::Relink;
+                        true
+                    }
+                    None => false,
+                },
+            );
+        if relink {
+            self.sync_chain_links();
+        }
+        updated
     }
 
     /// Reconciles the chain against the elements that `elements` yields, without collecting them
@@ -2996,13 +3029,19 @@ impl ModifierNodeChain {
         let old_len = self.entries.len();
         let mut fast_path_failed_at: Option<usize> = None;
         let mut elements_count = 0;
+        // Entries updated where they are keep the links between them, unless
+        // their capabilities or delegates change or the links were cleared.
+        let mut relink = self.links_cleared;
 
         scratch.elements.clear();
 
         for (idx, element) in elements.enumerate() {
             elements_count = idx + 1;
             if fast_path_failed_at.is_none() && idx < old_len {
-                if update_entry_in_place(&mut self.entries[idx], element, context) {
+                if let Some(outcome) =
+                    update_entry_in_place(&mut self.entries[idx], element, context)
+                {
+                    relink |= outcome == InPlace::Relink;
                     continue;
                 }
                 fast_path_failed_at = Some(idx);
@@ -3016,8 +3055,11 @@ impl ModifierNodeChain {
                     request_auto_invalidations(context, entry.capabilities);
                     detach_node_tree(&mut *entry.node.borrow_mut());
                 }
+                relink = true;
             }
-            self.sync_chain_links();
+            if relink {
+                self.sync_chain_links();
+            }
             return;
         }
 
