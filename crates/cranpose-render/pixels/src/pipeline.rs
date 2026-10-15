@@ -115,7 +115,7 @@ impl ContentStyle {
     };
 
     /// The style of `layer`'s content beneath content drawn in `self`.
-    fn under(self, layer: &GraphicsLayer) -> Self {
+    fn under(&self, layer: &GraphicsLayer) -> Self {
         Self {
             alpha: (self.alpha * folded_layer_alpha(layer)).clamp(0.0, 1.0),
             color_filter: compose_color_filters(self.color_filter, layer.color_filter),
@@ -124,8 +124,8 @@ impl ContentStyle {
 }
 
 struct RasterTraversalContext<'a> {
-    parent_transform: ProjectiveTransform,
-    parent_content_style: ContentStyle,
+    parent_transform: &'a ProjectiveTransform,
+    parent_content_style: &'a ContentStyle,
     parent_visual_clip: Option<Rect>,
     inherited_translated_snap_anchor: Option<Point>,
     inherited_translated_content_context: bool,
@@ -645,9 +645,9 @@ pub(crate) fn fill_raster_scene(
     populate_draws_from_graph(
         &graph.root,
         scene,
-        RasterTraversalContext {
-            parent_transform: ProjectiveTransform::uniform_scale(scale),
-            parent_content_style: ContentStyle::PLAIN,
+        &RasterTraversalContext {
+            parent_transform: &ProjectiveTransform::uniform_scale(scale),
+            parent_content_style: &ContentStyle::PLAIN,
             parent_visual_clip: None,
             inherited_translated_snap_anchor: None,
             inherited_translated_content_context: false,
@@ -686,7 +686,6 @@ impl RasterLayerBounds {
     }
 }
 
-#[derive(Clone)]
 struct RasterLayerMapping {
     layer_bounds: RasterLayerBounds,
     /// Where the node's own draws and text sit: its rect, whose origin is
@@ -695,7 +694,23 @@ struct RasterLayerMapping {
     content_bounds: RasterLayerBounds,
     transformed_bounds: Rect,
     content_style: ContentStyle,
-    raster_content_layer: GraphicsLayer,
+    scale_x: f32,
+    scale_y: f32,
+}
+
+impl RasterLayerMapping {
+    /// The layer the node's own draws take: its content style, scaled from
+    /// local to device pixels about its origin.
+    fn content_layer(&self) -> GraphicsLayer {
+        GraphicsLayer {
+            alpha: self.content_style.alpha,
+            color_filter: self.content_style.color_filter,
+            scale_x: self.scale_x,
+            scale_y: self.scale_y,
+            transform_origin: TransformOrigin::new(0.0, 0.0),
+            ..GraphicsLayer::default()
+        }
+    }
 }
 
 fn raster_layer_scale(transformed_bounds: Rect, local_bounds: Rect) -> (f32, f32) {
@@ -714,8 +729,8 @@ fn raster_layer_scale(transformed_bounds: Rect, local_bounds: Rect) -> (f32, f32
 
 fn raster_layer_mapping(
     layer: &LayerNode,
-    transform: ProjectiveTransform,
-    parent_content_style: ContentStyle,
+    transform: &ProjectiveTransform,
+    parent_content_style: &ContentStyle,
 ) -> RasterLayerMapping {
     let transformed_bounds = transform.bounds_for_rect(layer.local_bounds);
     let (scale_x, scale_y) = raster_layer_scale(transformed_bounds, layer.local_bounds);
@@ -725,21 +740,14 @@ fn raster_layer_mapping(
     let node_rect = layer.node_rect();
     let content_bounds =
         RasterLayerBounds::from_transformed_bounds(transform.bounds_for_rect(node_rect), node_rect);
-    let raster_content_layer = GraphicsLayer {
-        alpha: content_style.alpha,
-        color_filter: content_style.color_filter,
-        scale_x,
-        scale_y,
-        transform_origin: TransformOrigin::new(0.0, 0.0),
-        ..GraphicsLayer::default()
-    };
 
     RasterLayerMapping {
         layer_bounds,
         content_bounds,
         transformed_bounds,
         content_style,
-        raster_content_layer,
+        scale_x,
+        scale_y,
     }
 }
 
@@ -764,8 +772,8 @@ fn push_layer_shadow_of(
     );
     let shadow_layer = GraphicsLayer {
         alpha: layer.graphics_layer.alpha,
-        scale_x: mapping.raster_content_layer.scale_x,
-        scale_y: mapping.raster_content_layer.scale_y,
+        scale_x: mapping.scale_x,
+        scale_y: mapping.scale_y,
         transform_origin: TransformOrigin::new(0.0, 0.0),
         shadow_elevation: layer.graphics_layer.shadow_elevation,
         ambient_shadow_color: layer.graphics_layer.ambient_shadow_color,
@@ -786,11 +794,12 @@ fn push_layer_shadow_of(
 fn populate_draws_from_graph(
     layer: &LayerNode,
     scene: &mut RasterScene,
-    context: RasterTraversalContext<'_>,
+    context: &RasterTraversalContext<'_>,
 ) {
     let diagnostics = context.diagnostics;
-    let transform = layer.transform_to_parent.then(context.parent_transform);
-    let mapping = raster_layer_mapping(layer, transform, context.parent_content_style);
+    let transform = layer.transform_to_parent.then(*context.parent_transform);
+    let mapping = raster_layer_mapping(layer, &transform, context.parent_content_style);
+    let raster_content_layer = mapping.content_layer();
     report_unsupported_effects(&layer.graphics_layer, diagnostics);
 
     if mapping.transformed_bounds.width <= 0.0 || mapping.transformed_bounds.height <= 0.0 {
@@ -815,7 +824,7 @@ fn populate_draws_from_graph(
                 layer.translated_content_offset.x,
                 layer.translated_content_offset.y,
             )),
-            &mapping.raster_content_layer,
+            &raster_content_layer,
         )
     } else {
         None
@@ -825,10 +834,7 @@ fn populate_draws_from_graph(
         .or(boundary_snap_anchor);
     let layer_snap_anchor = translated_snap_anchor.or_else(|| {
         if allow_rigid_snap && layer_needs_rigid_snap(layer, effective_translated_content_context) {
-            rigid_snap_anchor(
-                mapping.layer_bounds.raster_rect(),
-                &mapping.raster_content_layer,
-            )
+            rigid_snap_anchor(mapping.layer_bounds.raster_rect(), &raster_content_layer)
         } else {
             None
         }
@@ -854,7 +860,7 @@ fn populate_draws_from_graph(
                 PrimitivePhase::BeforeChildren => {
                     let primitive_context = PrimitiveRenderContext {
                         layer_bounds: mapping.content_bounds,
-                        node_layer: &mapping.raster_content_layer,
+                        node_layer: &raster_content_layer,
                         visual_clip,
                         motion_context_animated: layer.motion_context_animated,
                         content_offset_translation: effective_translated_content_context,
@@ -870,7 +876,7 @@ fn populate_draws_from_graph(
                 PrimitivePhase::BeforeChildren => {
                     let primitive_context = PrimitiveRenderContext {
                         layer_bounds: mapping.content_bounds,
-                        node_layer: &mapping.raster_content_layer,
+                        node_layer: &raster_content_layer,
                         visual_clip,
                         motion_context_animated: layer.motion_context_animated,
                         content_offset_translation: effective_translated_content_context,
@@ -886,9 +892,9 @@ fn populate_draws_from_graph(
                 populate_draws_from_graph(
                     child_layer,
                     scene,
-                    RasterTraversalContext {
-                        parent_transform: transform,
-                        parent_content_style: mapping.content_style,
+                    &RasterTraversalContext {
+                        parent_transform: &transform,
+                        parent_content_style: &mapping.content_style,
                         parent_visual_clip: visual_clip,
                         inherited_translated_snap_anchor: translated_snap_anchor,
                         inherited_translated_content_context: effective_translated_content_context,
@@ -903,7 +909,7 @@ fn populate_draws_from_graph(
     for child in deferred_draws {
         let primitive_context = PrimitiveRenderContext {
             layer_bounds: mapping.content_bounds,
-            node_layer: &mapping.raster_content_layer,
+            node_layer: &raster_content_layer,
             visual_clip,
             motion_context_animated: layer.motion_context_animated,
             content_offset_translation: effective_translated_content_context,
