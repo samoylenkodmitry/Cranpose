@@ -395,22 +395,13 @@ impl ModifierChainHandle {
                 } else if let Some(fill_node) = any.downcast_ref::<FillNode>() {
                     apply_fill_node(&mut layout, fill_node);
                 } else if let Some(weight_node) = any.downcast_ref::<WeightNode>() {
-                    layout.weight = Some(weight_node.layout_weight());
+                    // Parent data goes to the outermost node, as Compose
+                    // folds `modifyParentData` from the innermost node out.
+                    layout
+                        .weight
+                        .get_or_insert_with(|| weight_node.layout_weight());
                 } else if let Some(alignment_node) = any.downcast_ref::<AlignmentNode>() {
-                    if let Some(alignment) = alignment_node.box_alignment() {
-                        layout.box_alignment = Some(alignment);
-                    }
-                    if let Some(alignment) = alignment_node.column_alignment() {
-                        layout.column_alignment = Some(alignment);
-                    }
-                    if let Some(alignment) = alignment_node.row_alignment() {
-                        layout.row_alignment = Some(alignment);
-                        layout.row_baseline = false;
-                    }
-                    if alignment_node.row_baseline() {
-                        layout.row_alignment = None;
-                        layout.row_baseline = true;
-                    }
+                    apply_alignment_node(&mut layout, alignment_node);
                 } else if let Some(offset_node) = any.downcast_ref::<OffsetNode>() {
                     let delta = offset_node.offset();
                     offset.x += delta.x;
@@ -425,6 +416,22 @@ impl ModifierChainHandle {
         resolved
     }
 }
+/// Sets the alignments a parent reads from `node` that no outer node set.
+fn apply_alignment_node(layout: &mut LayoutProperties, node: &AlignmentNode) {
+    if layout.box_alignment.is_none() {
+        layout.box_alignment = node.box_alignment();
+    }
+    if layout.column_alignment.is_none() {
+        layout.column_alignment = node.column_alignment();
+    }
+    // A row alignment and a baseline alignment both set where a Row child
+    // sits across it: the outer one of either kind wins.
+    if layout.row_alignment.is_none() && !layout.row_baseline {
+        layout.row_alignment = node.row_alignment();
+        layout.row_baseline = node.row_baseline();
+    }
+}
+
 fn apply_size_node(layout: &mut LayoutProperties, node: &SizeNode) {
     apply_size_axis(
         node.min_width(),

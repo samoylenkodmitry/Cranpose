@@ -14,6 +14,7 @@ mod lazy_content_padding;
 mod lazy_retained_many_roots;
 #[cfg(feature = "localization")]
 mod localization;
+mod parent_data_order;
 mod round_scaling_list_integration;
 mod round_scroll_indicator_integration;
 mod semantics_hint;

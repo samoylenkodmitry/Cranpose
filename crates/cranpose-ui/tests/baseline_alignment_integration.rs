@@ -369,7 +369,7 @@ fn subcomposed_layout_can_align_to_the_last_drawn_line_inside_padding_and_offset
 }
 
 #[test]
-fn missing_baselines_fall_back_to_top_and_the_last_row_alignment_wins() {
+fn missing_baselines_fall_back_to_top_and_the_outermost_row_alignment_wins() {
     lay_out_in_column_with_measurer(
         || {
             Row(
@@ -384,14 +384,14 @@ fn missing_baselines_fall_back_to_top_and_the_last_row_alignment_wins() {
                         || {},
                     );
                     Text(
-                        "bottom",
+                        "baseline",
                         Modifier::empty()
                             .align_by_baseline()
                             .alignInRow(VerticalAlignment::Bottom),
                         style(10.0),
                     );
                     Text(
-                        "baseline",
+                        "bottom",
                         Modifier::empty()
                             .alignInRow(VerticalAlignment::Bottom)
                             .align_by_baseline(),
