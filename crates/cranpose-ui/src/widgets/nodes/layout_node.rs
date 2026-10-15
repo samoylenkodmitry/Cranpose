@@ -1048,8 +1048,7 @@ impl LayoutNode {
     /// Copies the parent data out of the chain's resolved modifiers, after
     /// they were computed again.
     fn refresh_parent_data(&self) {
-        self.parent_data
-            .set(crate::layout::parent_data_of(&self.modifier_chain));
+        self.parent_data.set(self.modifier_chain.parent_data());
     }
 
     /// Returns the union of the capabilities of all nodes in the modifier chain.

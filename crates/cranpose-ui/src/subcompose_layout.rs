@@ -962,7 +962,7 @@ impl SubcomposeLayoutNode {
 
     /// What the chain tells the parent's measure policy about this node.
     pub(crate) fn parent_data(&self) -> cranpose_ui_layout::ParentData {
-        crate::layout::parent_data_of(&self.inner.borrow().modifier_chain)
+        self.inner.borrow().modifier_chain.parent_data()
     }
 
     /// Returns a clone of the current layout state.

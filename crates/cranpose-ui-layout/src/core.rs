@@ -75,6 +75,12 @@ pub struct ParentData {
     pub row_baseline: bool,
     /// Where the child sits across a Column, over the Column's own alignment.
     pub column_alignment: Option<HorizontalAlignment>,
+    /// The fraction of the parent's width the child's outermost horizontal
+    /// fill modifier asks for; 0 without one. A FlexBox reads it as the
+    /// child's default grow. Compose's `FillModifierParentData`.
+    pub fill_width_fraction: f32,
+    /// The same for height.
+    pub fill_height_fraction: f32,
     /// The data of the child's outermost [`LayoutData`] modifier, for a
     /// parent that reads it by its type.
     pub layout_data: Option<Rc<dyn LayoutData>>,
@@ -88,6 +94,8 @@ impl PartialEq for ParentData {
             && self.row_alignment == other.row_alignment
             && self.row_baseline == other.row_baseline
             && self.column_alignment == other.column_alignment
+            && self.fill_width_fraction == other.fill_width_fraction
+            && self.fill_height_fraction == other.fill_height_fraction
             && match (&self.layout_data, &other.layout_data) {
                 (None, None) => true,
                 (Some(data), Some(other)) => Rc::ptr_eq(data, other) || data.same_as(&**other),

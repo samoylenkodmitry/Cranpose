@@ -63,7 +63,7 @@ curate, gives these public APIs that Cranpose lacks. They are tracked in
 |---|---|
 | `FlowColumn` | `FlowColumn(modifier, FlowSpec, content)`, beside `FlowRow`; both take one `FlowSpec` |
 | `Grid` (non-lazy) in `foundation-layout` | `Grid(GridConfig, modifier, content)`, with `Modifier::grid_item(GridItem)` on the children. The config is a value built while composing, where Compose runs its block at measure and hands it the constraints; read them with `BoxWithConstraints`. Area ids are `&'static str` names. Out-of-range indices, spans and gaps are clamped where Compose throws |
-| `FlexBox` in `foundation-layout` | Absent |
+| `FlexBox` in `foundation-layout` | `FlexBox(modifier, FlexBoxConfig, content)`, with `Modifier::flex(FlexConfig)` on the children: direction, wrap, justify content, align items and content, items per line, gaps; per child align self, order, grow, shrink and basis. A child's fill modifier is its default grow, as in Compose. Both configs are values built while composing, where Compose runs their blocks at measure. Baseline alignment uses the first baseline; the `AlignmentLine` and `(Measured) -> Int` overloads and the `FlexBoxConfig(..)` combinators are absent |
 | The Styles API, `androidx.compose.foundation.style` (`Style`, `Modifier.styleable`, appearance and placement scopes; 94 classes in 1.13, all `@ExperimentalFoundationStyleApi`) | Absent |
 | `retain`, `RetainedEffect`, `RetainedValuesStore` (`runtime-retain`) | Absent; view models and `rememberSaveable` cover the retained-state cases apps use most |
 | `computedStateOf`, `staticCompositionLocalWithComputedDefaultOf` | Absent; `derivedStateOf` exists |
