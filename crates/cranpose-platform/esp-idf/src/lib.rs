@@ -15,7 +15,7 @@ mod small_alloc;
 use std::{
     convert::Infallible,
     sync::{
-        Arc, Condvar, Mutex, PoisonError,
+        Arc,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -23,7 +23,11 @@ use std::{
 
 pub use cranpose::framebuffer::{SurfaceError, TouchPhase};
 use cranpose::{SystemTheme, framebuffer::Framebuffer};
-use esp_idf_svc::{sys::EspError, timer::EspTaskTimerService};
+use esp_idf_svc::{
+    hal::{delay::BLOCK, task::queue::Queue},
+    sys::{ESP_ERR_NO_MEM, EspError},
+    timer::EspTaskTimerService,
+};
 pub use panel::{Panel, PixelFormat};
 pub use small_alloc::SmallBlockAllocator;
 
@@ -72,24 +76,36 @@ impl Default for DisplayConfig {
 
 /// Wakes the run loop from any thread. Most notices come from the loop's own
 /// thread during a tick, when it does not sleep: they set `pending` and
-/// take no lock.
-#[derive(Default)]
+/// touch no FreeRTOS object. A notice to a sleeping loop leaves a token in
+/// `signal`, a FreeRTOS queue of one slot: one call to give it and one to
+/// take it, where a pthread mutex and condition variable made four mutex
+/// operations and a semaphore for every wait.
 struct Wake {
     pending: AtomicBool,
     sleeping: AtomicBool,
-    lock: Mutex<()>,
-    signal: Condvar,
+    signal: Queue<u8>,
 }
 
 impl Wake {
+    fn new() -> Result<Self, EspError> {
+        let signal = Queue::new(1);
+        if signal.as_raw().is_null() {
+            return Err(EspError::from_infallible::<ESP_ERR_NO_MEM>());
+        }
+        Ok(Self {
+            pending: AtomicBool::new(false),
+            sleeping: AtomicBool::new(false),
+            signal,
+        })
+    }
+
     fn notify(&self) {
         // Sequentially consistent on both sides: either the sleeper sees
-        // `pending` before it waits, or this sees `sleeping` and signals
-        // once the sleeper waits, since the lock is held until then.
+        // `pending` before it blocks, or this sees `sleeping` and leaves a
+        // token for it. A full slot holds one already.
         self.pending.store(true, Ordering::SeqCst);
         if self.sleeping.load(Ordering::SeqCst) {
-            let _guard = self.lock.lock().unwrap_or_else(PoisonError::into_inner);
-            self.signal.notify_one();
+            let _ = self.signal.send_back(0, 0);
         }
     }
 
@@ -100,22 +116,18 @@ impl Wake {
     }
 
     /// Sleeps until a notice arrives, or returns at once if one came since
-    /// the last wait or clear.
+    /// the last wait or clear. A token left by a notice that raced the end
+    /// of an earlier wait returns one wait early; the loop then waits again.
     fn wait(&self) {
         if self.pending.swap(false, Ordering::SeqCst) {
             return;
         }
-        let mut guard = self.lock.lock().unwrap_or_else(PoisonError::into_inner);
         self.sleeping.store(true, Ordering::SeqCst);
-        while !self.pending.load(Ordering::SeqCst) {
-            guard = self
-                .signal
-                .wait(guard)
-                .unwrap_or_else(PoisonError::into_inner);
+        if !self.pending.load(Ordering::SeqCst) {
+            let _ = self.signal.recv_front(BLOCK);
         }
         self.sleeping.store(false, Ordering::SeqCst);
         self.pending.store(false, Ordering::SeqCst);
-        drop(guard);
     }
 }
 
@@ -141,7 +153,7 @@ pub fn run(
         content,
     )?;
     let mut presenter = Presenter::new(&panel)?;
-    let wake = Arc::new(Wake::default());
+    let wake = Arc::new(Wake::new()?);
     let waker = Arc::clone(&wake);
     framebuffer.set_frame_waker(move || waker.notify());
     // The FreeRTOS tick would round each wait up to whole ticks.
@@ -167,18 +179,7 @@ pub fn run(
                     update: updated.duration_since(now),
                     present: presented.duration_since(updated),
                 };
-                match stats.as_mut() {
-                    Some(stats) => stats.record(phases, presented),
-                    None => {
-                        log::info!(
-                            "first frame after {} ms: update {} ms, draw and send {} ms",
-                            presented.duration_since(start).as_millis(),
-                            phases.update.as_millis(),
-                            phases.present.as_millis(),
-                        );
-                        stats = Some(FrameStats::new(presented));
-                    }
-                }
+                FrameStats::record_into(&mut stats, start, phases, presented);
             }
         }
         // A tick notifies the wake itself when the composition asks for
@@ -228,6 +229,28 @@ impl FrameStats {
             update: Duration::ZERO,
             present: Duration::ZERO,
             slowest: Duration::ZERO,
+        }
+    }
+
+    /// Counts a frame into `stats`, which the first frame, logged on its
+    /// own, starts.
+    fn record_into(
+        stats: &mut Option<Self>,
+        start: Instant,
+        phases: FramePhases,
+        presented: Instant,
+    ) {
+        match stats.as_mut() {
+            Some(stats) => stats.record(phases, presented),
+            None => {
+                log::info!(
+                    "first frame after {} ms: update {} ms, draw and send {} ms",
+                    presented.duration_since(start).as_millis(),
+                    phases.update.as_millis(),
+                    phases.present.as_millis(),
+                );
+                *stats = Some(Self::new(presented));
+            }
         }
     }
 
