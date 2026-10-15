@@ -10,6 +10,7 @@
 
 mod panel;
 mod present;
+mod small_alloc;
 
 use std::{
     convert::Infallible,
@@ -24,6 +25,11 @@ pub use cranpose::framebuffer::{SurfaceError, TouchPhase};
 use cranpose::{SystemTheme, framebuffer::Framebuffer};
 use esp_idf_svc::{sys::EspError, timer::EspTaskTimerService};
 pub use panel::{Panel, PixelFormat};
+pub use small_alloc::SmallBlockAllocator;
+
+#[cfg(feature = "small-block-alloc")]
+#[global_allocator]
+static ALLOCATOR: SmallBlockAllocator = SmallBlockAllocator;
 
 use crate::present::Presenter;
 

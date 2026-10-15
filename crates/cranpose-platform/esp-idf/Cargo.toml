@@ -11,6 +11,12 @@ publish = false
 # ESP-IDF cargo configuration.
 workspace = "../../../apps/esp32-demo"
 
+[features]
+default = ["small-block-alloc"]
+# Makes `SmallBlockAllocator` the global allocator. Turn it off to keep the
+# standard one or to install another.
+small-block-alloc = []
+
 [dependencies]
 cranpose = { path = "../../cranpose", default-features = false, features = ["framebuffer"] }
 esp-idf-svc = "0.53"
@@ -26,3 +32,8 @@ bindings_header = "src/bindings.h"
 # components/cranpose_fast_tls/fast_tls.c.
 [[package.metadata.esp-idf-sys.extra_components]]
 component_dirs = ["components/cranpose_fast_tls"]
+
+# Small blocks from per-task lists: see
+# components/cranpose_small_alloc/small_alloc.c.
+[[package.metadata.esp-idf-sys.extra_components]]
+component_dirs = ["components/cranpose_small_alloc"]
