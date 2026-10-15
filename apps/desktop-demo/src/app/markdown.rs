@@ -855,7 +855,7 @@ fn MarkdownExample(code: Rc<AnnotatedString>, preview: usize, width: f32) {
     };
     cranpose_ui::widgets::FlowRow(
         Modifier::empty().fill_max_width(),
-        cranpose_ui::widgets::FlowRowSpec::default()
+        cranpose_ui::widgets::FlowSpec::default()
             .main_axis_spacing(16.0)
             .cross_axis_spacing(12.0),
         move || {

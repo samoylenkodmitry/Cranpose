@@ -14,7 +14,7 @@ use cranpose_ui::{
     AppContext, Color, Composition, LayoutNode, Modifier, ParagraphStyle, SpanStyle, Text,
     TextStyle, composable,
     text::TextUnit,
-    widgets::{FlowRow, FlowRowSpec},
+    widgets::{FlowRow, FlowSpec},
 };
 
 #[derive(Clone, Copy, PartialEq)]
@@ -42,7 +42,7 @@ fn style() -> TextStyle {
 fn Scene(frame: MutableState<u32>, count: usize, mode: Mode) {
     FlowRow(
         Modifier::empty().fill_max_width().padding(4.0),
-        FlowRowSpec::new()
+        FlowSpec::new()
             .main_axis_spacing(4.0)
             .cross_axis_spacing(4.0),
         move || {

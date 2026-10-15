@@ -8,7 +8,7 @@ use cranpose_core::{self, MutableState};
 use cranpose_services::{isSystemInDarkTheme, local_http_client, local_uri_handler, HttpClientRef};
 use cranpose_ui::{
     composable,
-    widgets::{FlowRow, FlowRowSpec},
+    widgets::{FlowRow, FlowSpec},
     Alignment, Box, BoxSpec, Brush, Button, ButtonSpec, Canvas, Color, Column, ColumnSpec,
     DrawScope, DrawStyle, LinearArrangement, Modifier, Path, Point, Row, RowSpec, ScrollState,
     Stroke, Text, TextOptions, TextOverflow, TextWithOptions, VerticalAlignment,
@@ -870,7 +870,7 @@ fn Chips(
     let choose: Rc<dyn Fn(usize)> = Rc::new(choose);
     FlowRow(
         Modifier::empty().fill_max_width(),
-        FlowRowSpec::default()
+        FlowSpec::default()
             .main_axis_spacing(6.0)
             .cross_axis_spacing(6.0),
         move || {

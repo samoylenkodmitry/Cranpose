@@ -392,9 +392,9 @@ fn a_flow_row_composes_every_item_it_is_given() {
     let counter = Rc::clone(&seen);
     composed(move || {
         let counter = Rc::clone(&counter);
-        cranpose_ui::widgets::flow_row::FlowRow(
+        cranpose_ui::widgets::flow::FlowRow(
             Modifier::empty(),
-            cranpose_ui::widgets::flow_row::FlowRowSpec::default(),
+            cranpose_ui::widgets::flow::FlowSpec::default(),
             move || {
                 for _ in 0..4 {
                     counter.set(counter.get() + 1);

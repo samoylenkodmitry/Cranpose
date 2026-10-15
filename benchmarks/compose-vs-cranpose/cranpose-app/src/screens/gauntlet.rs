@@ -18,7 +18,7 @@ use cranpose::{LazyItems, prelude::*};
 use cranpose_foundation::lazy::rememberLazyListState;
 use cranpose_ui::{
     text::{AnnotatedString, FontWeight, SpanStyle},
-    widgets::{FlowRow, FlowRowSpec},
+    widgets::{FlowRow, FlowSpec},
 };
 
 use super::{clamped_text_options, text_style};
@@ -181,7 +181,7 @@ fn TickerPanel(shared: Shared) {
             .fill_max_width()
             .background(PANEL)
             .padding(6.0 * s),
-        FlowRowSpec::new()
+        FlowSpec::new()
             .main_axis_spacing(4.0 * s)
             .cross_axis_spacing(4.0 * s),
         move || {
@@ -511,7 +511,7 @@ fn Sparkline(card: usize, color: usize, frame: MutableState<u32>, s: f32) {
 fn Chips(post: Rc<Post>, s: f32) {
     FlowRow(
         Modifier::empty(),
-        FlowRowSpec::new()
+        FlowSpec::new()
             .main_axis_spacing(4.0 * s)
             .cross_axis_spacing(4.0 * s),
         move || {

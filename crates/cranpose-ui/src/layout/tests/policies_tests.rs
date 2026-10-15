@@ -376,7 +376,7 @@ fn loose(max_width: f32, max_height: f32) -> Constraints {
 
 #[test]
 fn flow_row_wraps_children_of_varying_widths() {
-    let policy = FlowRowMeasurePolicy::new(0.0, 0.0);
+    let policy = FlowMeasurePolicy::new(FlowAxis::Horizontal, 0.0, 0.0);
     let measurables: Vec<Box<dyn Measurable>> = vec![
         Box::new(MockMeasurable::new(50.0, 20.0, 1)),
         Box::new(MockMeasurable::new(20.0, 20.0, 2)),
@@ -411,7 +411,7 @@ fn flow_row_wraps_children_of_varying_widths() {
 
 #[test]
 fn flow_row_respects_main_and_cross_axis_spacing() {
-    let policy = FlowRowMeasurePolicy::new(10.0, 5.0);
+    let policy = FlowMeasurePolicy::new(FlowAxis::Horizontal, 10.0, 5.0);
     let measurables: Vec<Box<dyn Measurable>> = vec![
         Box::new(MockMeasurable::new(30.0, 20.0, 1)),
         Box::new(MockMeasurable::new(30.0, 25.0, 2)),
@@ -436,7 +436,7 @@ fn flow_row_respects_main_and_cross_axis_spacing() {
 
 #[test]
 fn flow_row_children_share_line_top_when_heights_differ() {
-    let policy = FlowRowMeasurePolicy::new(0.0, 0.0);
+    let policy = FlowMeasurePolicy::new(FlowAxis::Horizontal, 0.0, 0.0);
     let measurables: Vec<Box<dyn Measurable>> = vec![
         Box::new(MockMeasurable::new(40.0, 10.0, 1)),
         Box::new(MockMeasurable::new(40.0, 30.0, 2)),
@@ -453,7 +453,7 @@ fn flow_row_children_share_line_top_when_heights_differ() {
 
 #[test]
 fn flow_row_gives_oversized_child_its_own_line() {
-    let policy = FlowRowMeasurePolicy::new(0.0, 0.0);
+    let policy = FlowMeasurePolicy::new(FlowAxis::Horizontal, 0.0, 0.0);
     let measurables: Vec<Box<dyn Measurable>> = vec![
         Box::new(MockMeasurable::new(60.0, 10.0, 1)),
         Box::new(MockMeasurable::new(150.0, 10.0, 2)),
@@ -478,7 +478,7 @@ fn flow_row_gives_oversized_child_its_own_line() {
 
 #[test]
 fn flow_row_with_unbounded_width_stays_on_one_line() {
-    let policy = FlowRowMeasurePolicy::new(4.0, 4.0);
+    let policy = FlowMeasurePolicy::new(FlowAxis::Horizontal, 4.0, 4.0);
     let measurables: Vec<Box<dyn Measurable>> = vec![
         Box::new(MockMeasurable::new(50.0, 20.0, 1)),
         Box::new(MockMeasurable::new(60.0, 20.0, 2)),
@@ -494,7 +494,7 @@ fn flow_row_with_unbounded_width_stays_on_one_line() {
 
 #[test]
 fn flow_row_empty_respects_min_constraints() {
-    let policy = FlowRowMeasurePolicy::new(8.0, 8.0);
+    let policy = FlowMeasurePolicy::new(FlowAxis::Horizontal, 8.0, 8.0);
     let result = policy.measure(
         &test_scope(),
         &[],
@@ -513,7 +513,7 @@ fn flow_row_empty_respects_min_constraints() {
 
 #[test]
 fn flow_row_intrinsics_follow_the_wrap() {
-    let policy = FlowRowMeasurePolicy::new(10.0, 5.0);
+    let policy = FlowMeasurePolicy::new(FlowAxis::Horizontal, 10.0, 5.0);
     let measurables: Vec<Box<dyn Measurable>> = vec![
         Box::new(MockMeasurable::new(30.0, 20.0, 1)),
         Box::new(MockMeasurable::new(30.0, 25.0, 2)),

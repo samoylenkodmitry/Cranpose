@@ -5,7 +5,7 @@ use cranpose_foundation::{
 };
 use cranpose_ui::{
     composable,
-    widgets::{FlowRow, FlowRowSpec},
+    widgets::{FlowRow, FlowSpec},
     BasicTextField, Button, ButtonSpec, Color, Column, ColumnSpec, LinearArrangement, Modifier,
     Row, RowSpec, Text, TextStyle,
 };
@@ -28,7 +28,7 @@ pub fn AccessibilityRobotScreen() {
             // on a phone: a reader only reaches what the window shows.
             FlowRow(
                 Modifier::empty().fill_max_width(),
-                FlowRowSpec::new()
+                FlowSpec::new()
                     .main_axis_spacing(16.0)
                     .cross_axis_spacing(8.0),
                 move || {
