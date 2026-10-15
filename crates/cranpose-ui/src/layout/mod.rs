@@ -1,5 +1,6 @@
 /// Re-exports of the alignment, arrangement and measurable types that layout policies use.
 pub mod core;
+pub(crate) mod flex_box;
 pub(crate) mod grid;
 /// Measure policies behind the built-in layout widgets such as `Box`, `Row` and `Column`.
 pub mod policies;
@@ -3521,22 +3522,6 @@ fn measures_the_same_for_parent(previous: &MeasuredNode, measured: &MeasuredNode
         && previous.offset == measured.offset
         && before.first_baseline() == after.first_baseline()
         && before.last_baseline() == after.last_baseline()
-}
-
-pub(crate) fn parent_data_of(
-    chain: &crate::modifier::ModifierChainHandle,
-) -> cranpose_ui_layout::ParentData {
-    let props = chain.resolved_modifiers().layout_properties();
-    let weight = props.weight().unwrap_or_default();
-    cranpose_ui_layout::ParentData {
-        weight: weight.weight,
-        fill: weight.fill,
-        box_alignment: props.box_alignment(),
-        row_alignment: props.row_alignment(),
-        row_baseline: props.row_baseline(),
-        column_alignment: props.column_alignment(),
-        layout_data: chain.layout_data(),
-    }
 }
 
 /// A parent's record of one child, for each child of every parent: its

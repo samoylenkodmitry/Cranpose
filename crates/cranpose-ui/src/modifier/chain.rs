@@ -304,21 +304,48 @@ impl ModifierChainHandle {
         self.resolved
     }
 
-    /// The data of the chain's first `layout_data` modifier, for the parent.
-    pub(crate) fn layout_data(&self) -> Option<Rc<dyn cranpose_ui_layout::LayoutData>> {
-        let mut found = None;
+    /// What the chain tells the parent's measure policy about its node.
+    /// The outermost node of each kind wins, as Compose folds
+    /// `modifyParentData` from the innermost node out.
+    pub(crate) fn parent_data(&self) -> cranpose_ui_layout::ParentData {
+        let props = self.resolved.layout_properties();
+        let weight = props.weight().unwrap_or_default();
+        let mut data = cranpose_ui_layout::ParentData {
+            weight: weight.weight,
+            fill: weight.fill,
+            box_alignment: props.box_alignment(),
+            row_alignment: props.row_alignment(),
+            row_baseline: props.row_baseline(),
+            column_alignment: props.column_alignment(),
+            ..Default::default()
+        };
+        let (mut fill_width, mut fill_height) = (None, None);
         self.chain
             .for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
-                if found.is_none() {
-                    node_ref.with_node(|node| {
-                        found = node
-                            .as_any()
-                            .downcast_ref::<super::layout_data::LayoutDataNode>()
-                            .map(|node| Rc::clone(node.data()));
-                    });
-                }
+                node_ref.with_node(|node| {
+                    let any = node.as_any();
+                    if let Some(fill) = any.downcast_ref::<FillNode>() {
+                        let (horizontal, vertical) = match fill.direction() {
+                            FillDirection::Horizontal => (true, false),
+                            FillDirection::Vertical => (false, true),
+                            FillDirection::Both => (true, true),
+                        };
+                        if horizontal {
+                            fill_width.get_or_insert_with(|| fill.fraction());
+                        }
+                        if vertical {
+                            fill_height.get_or_insert_with(|| fill.fraction());
+                        }
+                    } else if data.layout_data.is_none()
+                        && let Some(node) = any.downcast_ref::<super::layout_data::LayoutDataNode>()
+                    {
+                        data.layout_data = Some(Rc::clone(node.data()));
+                    }
+                });
             });
-        found
+        data.fill_width_fraction = fill_width.unwrap_or_default();
+        data.fill_height_fraction = fill_height.unwrap_or_default();
+        data
     }
 
     /// The chain's modifier locals, or `None` while it has never provided or
