@@ -352,8 +352,8 @@ cranpose-render-common.workspace = true
 raw-window-handle = "0.6"
 accesskit = { version = "0.25.1", optional = true }
 serde = { version = "1.0.229", features = ["derive"], optional = true }
-serde_json = { version = "1.0.151", optional = true }
-inventory = { version = "0.3.24", optional = true }
+serde_json = { version = "1.0.154", optional = true }
+inventory = { version = "0.3.25", optional = true }
 cranpose-macros = { workspace = true }
 sys-locale = { version = "0.3.2", features = ["js"], optional = true }
 

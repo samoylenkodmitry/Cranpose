@@ -26,12 +26,7 @@ pub fn load_skin(wsz_bytes: &[u8]) -> Result<WszSkin> {
     let mut decode = |name: &str| -> Result<ImageBitmap> {
         let index = archive
             .file_names()
-            .position(|entry| {
-                entry
-                    .rsplit(['/', '\\'])
-                    .next()
-                    .is_some_and(|basename| basename.trim().eq_ignore_ascii_case(name))
-            })
+            .position(|entry| entry.is_ok_and(|entry| names_sheet(&entry, name)))
             .with_context(|| format!("missing required skin entry: {name}"))?;
         let mut file = archive
             .by_index(index)
@@ -56,6 +51,14 @@ pub fn load_skin(wsz_bytes: &[u8]) -> Result<WszSkin> {
         eqmain: decode("eqmain.bmp")?,
         pledit: decode("pledit.bmp")?,
     })
+}
+
+/// Whether the archive entry is the sheet `name`, in any folder and any case.
+fn names_sheet(entry: &str, name: &str) -> bool {
+    entry
+        .rsplit(['/', '\\'])
+        .next()
+        .is_some_and(|basename| basename.trim().eq_ignore_ascii_case(name))
 }
 
 fn decode_bmp(bytes: &[u8]) -> Result<ImageBitmap> {

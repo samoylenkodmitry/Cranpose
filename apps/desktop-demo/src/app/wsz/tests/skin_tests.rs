@@ -12,7 +12,10 @@ fn load_skin_accepts_nested_case_insensitive_sheets() {
         let prefix = if index % 2 == 0 { "SKINS\\" } else { "skins/" };
         nested
             .start_file(
-                format!("{prefix}{}", entry.name().to_ascii_uppercase()),
+                format!(
+                    "{prefix}{}",
+                    entry.name().expect("entry name").to_ascii_uppercase()
+                ),
                 zip::write::SimpleFileOptions::default(),
             )
             .expect("nested entry");
