@@ -731,6 +731,10 @@ impl RuntimeInner {
     }
 
     fn poll_async_tasks(&self) -> bool {
+        // Without a wake no task can make progress, and the order stays.
+        if !self.task_woken.load(Ordering::Acquire) {
+            return false;
+        }
         // The tasks still pending move to the front of `order`, which goes
         // back as the task order, after any task spawned while polling.
         let mut order = std::mem::take(&mut *self.task_order.borrow_mut());
@@ -804,7 +808,9 @@ impl RuntimeInner {
         loop {
             let mut executed = false;
 
-            {
+            // A message counts as pending from before it is sent until it
+            // ran, so none waits while none is pending.
+            if self.ui_dispatcher.has_pending() {
                 let rx = &mut *self.ui_rx.borrow_mut();
                 for message in rx.try_iter() {
                     executed = true;
