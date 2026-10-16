@@ -232,6 +232,50 @@ fn add_area(areas: &mut Vec<ClipBounds>, mut area: ClipBounds) {
     areas.push(area);
 }
 
+/// How many items `old` and `new` share at their start and at their end.
+/// The runs `new` copied in place from `old` are equal without a comparison.
+fn common_ends(old: &RasterScene, new: &RasterScene) -> (usize, usize) {
+    let (old_items, new_items) = (&old.order, &new.order);
+    let shared = old_items.len().min(new_items.len());
+    let mut start = 0;
+    let mut runs = new.kept.iter().peekable();
+    while start < shared {
+        if let Some(run) = runs.next_if(|run| run.start <= start) {
+            start = start.max(run.end.min(shared));
+            continue;
+        }
+        if !same_item(old, old_items[start], new, new_items[start]) {
+            break;
+        }
+        start += 1;
+    }
+    let rest = shared - start;
+    // A run copied in place after the change keeps its index only where
+    // both scenes hold as many items.
+    let same_length = old_items.len() == new_items.len();
+    let mut end = 0;
+    let mut runs = new.kept.iter().rev().peekable();
+    while end < rest {
+        let index = new_items.len() - 1 - end;
+        if same_length && let Some(run) = runs.next_if(|run| run.end > index) {
+            if run.start <= index {
+                end = (new_items.len() - run.start).min(rest);
+            }
+            continue;
+        }
+        if !same_item(
+            old,
+            old_items[old_items.len() - 1 - end],
+            new,
+            new_items[index],
+        ) {
+            break;
+        }
+        end += 1;
+    }
+    (start, end)
+}
+
 pub(crate) fn changed_areas(
     old: &RasterScene,
     new: &RasterScene,
@@ -241,17 +285,7 @@ pub(crate) fn changed_areas(
     areas.clear();
     let old_items = &old.order;
     let new_items = &new.order;
-    let common_start = old_items
-        .iter()
-        .zip(new_items)
-        .take_while(|(a, b)| same_item(old, **a, new, **b))
-        .count();
-    let common_end = old_items[common_start..]
-        .iter()
-        .rev()
-        .zip(new_items[common_start..].iter().rev())
-        .take_while(|(a, b)| same_item(old, **a, new, **b))
-        .count();
+    let (common_start, common_end) = common_ends(old, new);
     let old_changed = &old_items[common_start..old_items.len() - common_end];
     let new_changed = &new_items[common_start..new_items.len() - common_end];
     let add_bounds = |areas: &mut Vec<ClipBounds>, scene: &RasterScene, item: RenderItem| {

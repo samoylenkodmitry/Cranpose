@@ -225,6 +225,9 @@ pub(crate) struct RasterScene {
     pub passed_down: Vec<PassedDown>,
     /// The scale and the shadow light the walk started from.
     pub start: Option<(f32, ShadowLight)>,
+    /// The runs of `order` copied in place from the scene the walk started
+    /// from, ascending: their items equal that scene's at the same indices.
+    pub(crate) kept: Vec<Range<usize>>,
 }
 
 impl RasterScene {
@@ -238,6 +241,7 @@ impl RasterScene {
             subtrees: Vec::new(),
             passed_down: Vec::new(),
             start: None,
+            kept: Vec::new(),
         }
     }
 
@@ -251,6 +255,7 @@ impl RasterScene {
         self.subtrees.clear();
         self.passed_down.clear();
         self.start = None;
+        self.kept.clear();
     }
 
     pub(crate) fn counts(&self) -> ItemCounts {
@@ -345,6 +350,12 @@ impl RasterScene {
             .get(run(from.order, stop.order))
             .unwrap_or_default();
         if in_place {
+            let kept = self.order.len()..self.order.len() + order.len();
+            match self.kept.last_mut() {
+                Some(last) if last.end == kept.start => last.end = kept.end,
+                _ if !kept.is_empty() => self.kept.push(kept),
+                _ => {}
+            }
             self.order.extend_from_slice(order);
         } else {
             self.order.extend(order.iter().map(|item| match *item {
