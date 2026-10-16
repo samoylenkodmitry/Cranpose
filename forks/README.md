@@ -29,8 +29,9 @@ Vulkan command pools that give a burst's memory back, the GL shaders
 without the branches their constants decide, the GL program status read
 only on failure, the GLSL templates, the GL link reads, the WebGL
 extensions and the GL varying minimum below. `cranpose-wgpu-core` is at
-30.0.17 to require those, to make template modules and to configure a
-surface while another thread submits. `cranpose-wgpu` is at 30.0.20 for
+30.0.18 to require those, to make template modules, to configure a
+surface while another thread submits and to let Vulkan pipelines drop their
+shader modules. `cranpose-wgpu` is at 30.0.21 for
 the WebGPU pipeline discovery, the background compiles and the pipeline
 readiness below and to require them.
 
@@ -393,6 +394,23 @@ pipeline, failed validation on a GPU that runs it. Cranpose's HUD over a Bevy
 game drew nothing in Brave on a Mate 20 X on github.io, while the same page on
 localhost, where the noise left 60, drew it. The GL adapter now takes at least
 60 components.
+
+### Vulkan pipelines let their shader modules go
+
+`wgpu-core` keeps every shader module a render pipeline was made from for
+as long as the pipeline lives, and a `wgpu-hal` module made from WGSL or
+naga IR keeps that IR, from which it writes SPIR-V when each pipeline is
+made. Cranpose specializes and folds each stage of a pipeline into a
+module of its own, so every pipeline it kept held the IR of both its
+stages. A Vulkan pipeline needs none of its modules once it is made: the
+`VkShaderModule`s written for it are destroyed at once. On Vulkan the
+pipeline now lets its modules go, and the caller's handles alone keep
+them.
+
+On a Mate 20 X the gauntlet at tier 12 held 78.0 to 78.2 MB of native heap
+on a second start instead of 81.4 to 82.2 (PSS 149.8 instead of 153.3 MB),
+and 1.8 to 2.0 MB less on a first start (three launches each, paired).
+Other backends keep the modules: their pipelines may need them.
 
 ### Update the fork
 

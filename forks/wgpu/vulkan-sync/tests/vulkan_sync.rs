@@ -3,7 +3,9 @@
 //!
 //! A command buffer begun before a bind group layout lets a vertex shader
 //! read a texture waits for texture writes only in fragment and compute.
-//! These tests read such a texture from a vertex shader afterwards.
+//! These tests read such a texture from a vertex shader afterwards. Each
+//! draw's pipeline outlives its shader module, which the fork's Vulkan
+//! pipelines let go once made.
 //!
 //! `just vulkan-sync` provides the layer, enables its analysis of shader
 //! accesses and sets `CRANPOSE_REQUIRE_SYNC_VALIDATION`. Without it, a
@@ -85,7 +87,6 @@ struct Reader {
 struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    module: wgpu::ShaderModule,
     _turn: MutexGuard<'static, ()>,
 }
 
@@ -130,14 +131,9 @@ impl Gpu {
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
                 .expect("Vulkan device");
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: None,
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
-        });
         Some(Self {
             device,
             queue,
-            module,
             _turn: turn,
         })
     }
@@ -160,8 +156,15 @@ impl Gpu {
     }
 
     /// A draw whose `stage` shader reads `texture`; its bind group layout
-    /// is created here.
+    /// is created here, and its shader module dropped once the pipeline is
+    /// made.
     fn reader(&self, stage: wgpu::ShaderStages, texture: &wgpu::Texture) -> Reader {
+        let module = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: None,
+                source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            });
         let layout = self
             .device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -195,13 +198,13 @@ impl Gpu {
                 label: Some(vertex),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
-                    module: &self.module,
+                    module: &module,
                     entry_point: Some(vertex),
                     compilation_options: Default::default(),
                     buffers: &[],
                 },
                 fragment: Some(wgpu::FragmentState {
-                    module: &self.module,
+                    module: &module,
                     entry_point: Some(fragment),
                     compilation_options: Default::default(),
                     targets: &[Some(FORMAT.into())],

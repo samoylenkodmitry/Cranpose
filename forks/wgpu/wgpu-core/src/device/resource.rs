@@ -5084,7 +5084,13 @@ impl Device {
                 flags |= pipeline::PipelineFlags::WRITES_STENCIL;
             }
         }
-        let shader_modules = {
+        // A Vulkan pipeline needs none of its shader modules once it is
+        // made, and a module made from naga IR keeps that IR in memory, so
+        // on Vulkan the pipeline lets its modules go and the caller's
+        // handles alone keep them.
+        let shader_modules = if self.backend() == wgt::Backend::Vulkan {
+            ArrayVec::new()
+        } else {
             let mut shader_modules = ArrayVec::new();
             match desc.vertex {
                 pipeline::RenderPipelineVertexProcessor::Vertex(vertex) => {

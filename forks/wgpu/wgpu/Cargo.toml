@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.87.0"
 name = "cranpose-wgpu"
-version = "30.0.20"
+version = "30.0.21"
 authors = ["gfx-rs developers"]
 build = "build.rs"
 exclude = ["Cargo.lock"]
@@ -200,7 +200,7 @@ version = "1.1"
 [dependencies.wgpu-core]
 package = "cranpose-wgpu-core"
 path = "../wgpu-core"
-version = "30.0.17"
+version = "30.0.18"
 optional = true
 
 [dependencies.wgpu-types]
@@ -248,7 +248,7 @@ default-features = false
 [target.'cfg(all(target_arch = "wasm32", not(target_os = "emscripten")))'.dependencies.wgpu-core]
 package = "cranpose-wgpu-core"
 path = "../wgpu-core"
-version = "30.0.17"
+version = "30.0.18"
 optional = true
 
 [target.'cfg(all(target_arch = "wasm32", not(target_os = "emscripten")))'.dependencies.wgpu-hal]
@@ -263,7 +263,7 @@ version = "1.14"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.wgpu-core]
 package = "cranpose-wgpu-core"
 path = "../wgpu-core"
-version = "30.0.17"
+version = "30.0.18"
 features = [
     "renderdoc",
     "wgsl",
@@ -284,7 +284,7 @@ version = "1.14"
 [target.'cfg(target_os = "emscripten")'.dependencies.wgpu-core]
 package = "cranpose-wgpu-core"
 path = "../wgpu-core"
-version = "30.0.17"
+version = "30.0.18"
 
 [target.'cfg(target_os = "emscripten")'.dependencies.wgpu-hal]
 package = "cranpose-wgpu-hal"
