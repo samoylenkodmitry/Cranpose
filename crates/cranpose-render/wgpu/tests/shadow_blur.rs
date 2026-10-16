@@ -122,13 +122,12 @@ fn clipped_offscreen_shadow_graph(recorded: bool) -> RenderGraph {
             })),
         })
     };
-    let mut child = LayerNode {
+    let child = LayerNode {
         local_bounds: rect(0.0, 0.0, 20.0, 20.0),
         transform_to_parent: ProjectiveTransform::translation(52.0, 25.0),
         children: vec![draw],
         ..LayerNode::default()
     };
-    child.draws_within_bounds = child.content_draws_within_bounds();
     let clipped_parent = LayerNode {
         local_bounds: rect(0.0, 0.0, 50.0, FRAME as f32),
         graphics_layer: GraphicsLayer {

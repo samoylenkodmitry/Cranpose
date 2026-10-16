@@ -4189,13 +4189,13 @@ fn built_layers_know_whether_their_content_stays_inside() {
     assert!(
         find_layer_by_node_id(&graph.root, inside)
             .expect("inside layer")
-            .draws_within_bounds,
+            .draws_within_bounds(),
         "a background and a text inside the column stay inside it"
     );
     assert!(
         !find_layer_by_node_id(&graph.root, spilling)
             .expect("spilling layer")
-            .draws_within_bounds,
+            .draws_within_bounds(),
         "a child offset past the column's edge draws past it"
     );
 }

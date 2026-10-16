@@ -245,7 +245,7 @@ fn bounded(width: f32, height: f32, children: Vec<RenderNode>) -> LayerNode {
 fn inner(x: f32, y: f32, draws_within_bounds: bool) -> RenderNode {
     RenderNode::Layer(Box::new(LayerNode {
         transform_to_parent: ProjectiveTransform::translation(x, y),
-        draws_within_bounds,
+        contained: Some(draws_within_bounds).into(),
         ..bounded(20.0, 20.0, Vec::new())
     }))
 }
@@ -298,7 +298,7 @@ fn a_clip_or_a_shadow_decides_containment_whatever_the_content() {
             ..Default::default()
         }
         .into(),
-        draws_within_bounds: true,
+        contained: Some(true).into(),
         ..bounded(20.0, 20.0, Vec::new())
     }));
     assert!(!bounded(50.0, 50.0, vec![shadowed]).content_draws_within_bounds());

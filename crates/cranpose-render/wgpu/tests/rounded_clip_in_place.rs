@@ -865,7 +865,7 @@ fn alpha_isolated_full_clip_child_respects_rounded_ancestor_corners() {
         width: 24.0,
         height: 24.0,
     };
-    let mut child = shared_test_support::layer_node(
+    let child = shared_test_support::layer_node(
         bounds,
         ProjectiveTransform::identity(),
         GraphicsLayer {
@@ -874,7 +874,7 @@ fn alpha_isolated_full_clip_child_respects_rounded_ancestor_corners() {
         },
         vec![solid_rect(bounds, Color(0.1, 0.7, 0.2, 1.0))],
     );
-    child.draws_within_bounds = true;
+    child.contained.set(Some(true));
     assert_corner_matches_rounded_surface(
         RenderNode::Layer(Box::new(child)),
         "alpha-isolated full-clip child",
@@ -911,7 +911,6 @@ fn effect_output_padding_respects_rounded_ancestor_corners() {
         ))],
     );
     child.node_id = Some(89_003);
-    child.draws_within_bounds = child.content_draws_within_bounds();
     assert_corner_matches_rounded_surface(
         RenderNode::Layer(Box::new(child)),
         "effect output padding",
@@ -949,22 +948,20 @@ fn nested_contained_layers_keep_their_cumulative_draw_slack_visible() {
                 }],
             ));
             for _ in 0..4 {
-                let mut layer = shared_test_support::layer_node(
+                let layer = shared_test_support::layer_node(
                     bounds,
                     ProjectiveTransform::translation(-1.0, 0.0),
                     GraphicsLayer::default(),
                     vec![child],
                 );
-                layer.draws_within_bounds = layer.content_draws_within_bounds();
                 child = RenderNode::Layer(Box::new(layer));
             }
-            let mut outer = shared_test_support::layer_node(
+            let outer = shared_test_support::layer_node(
                 bounds,
                 ProjectiveTransform::translation(52.0, 4.0),
                 GraphicsLayer::default(),
                 vec![child],
             );
-            outer.draws_within_bounds = outer.content_draws_within_bounds();
             RenderNode::Layer(Box::new(outer))
         } else {
             RenderNode::DrawRun(DrawRunNode::new(
@@ -980,7 +977,7 @@ fn nested_contained_layers_keep_their_cumulative_draw_slack_visible() {
                 }],
             ))
         };
-        let mut clip = shared_test_support::layer_node(
+        let clip = shared_test_support::layer_node(
             clip_bounds,
             ProjectiveTransform::identity(),
             GraphicsLayer {
@@ -989,7 +986,6 @@ fn nested_contained_layers_keep_their_cumulative_draw_slack_visible() {
             },
             vec![content],
         );
-        clip.draws_within_bounds = clip.content_draws_within_bounds();
         page_graph(
             WIDTH,
             HEIGHT,

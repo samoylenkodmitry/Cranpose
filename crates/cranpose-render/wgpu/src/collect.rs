@@ -726,7 +726,7 @@ fn child_takes_corners(child: &LayerNode, offset: Point, corners: &RoundedClipCo
 }
 
 fn child_stays_clear(child: &LayerNode, offset: Point, corners: &RoundedClipCorners) -> bool {
-    if !child.draws_within_bounds || child.graphics_layer.shadow_elevation > 0.0 {
+    if !child.draws_within_bounds() || child.graphics_layer.shadow_elevation > 0.0 {
         return false;
     }
     let padding = cranpose_render_common::graph::CONTAINED_DRAW_SLACK
@@ -1380,7 +1380,7 @@ fn clipped_away(child: &LayerNode, bounds: Rect, clip: Option<Rect>) -> bool {
         return false;
     };
     let slack = cranpose_render_common::graph::CONTAINED_DRAW_SLACK;
-    child.draws_within_bounds
+    child.draws_within_bounds()
         && child.graphics_layer.shadow_elevation <= 0.0
         && Rect {
             x: bounds.x - slack,

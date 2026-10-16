@@ -873,7 +873,7 @@ fn row_at(y: f32, draws_within_bounds: bool, shadow_elevation: f32) -> LayerNode
             ..Default::default()
         }
         .into(),
-        draws_within_bounds,
+        contained: Some(draws_within_bounds).into(),
         children: vec![run(vec![solid(rect(0.0, 0.0, 100.0, 40.0))])],
         ..Default::default()
     }

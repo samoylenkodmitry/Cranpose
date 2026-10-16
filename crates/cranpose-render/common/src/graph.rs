@@ -281,11 +281,9 @@ pub struct LayerNode {
     /// written during a full lowering, so the scroll fast path may translate
     /// a retained subtree in place only when this is false.
     pub has_origin_sinks: bool,
-    /// Whether everything this layer and its subtree draw lies within its
-    /// `local_bounds`, give or take [`CONTAINED_DRAW_SLACK`], so a renderer
-    /// may skip the whole subtree where those bounds are clipped away. Scene
-    /// building keeps it current; `false` promises nothing.
-    pub draws_within_bounds: bool,
+    /// [`Self::draws_within_bounds`], worked out the first time a renderer
+    /// asks and forgotten when the layer's children change.
+    pub contained: Cell<Option<bool>>,
     /// The reasons this layer is drawn through its own offscreen buffer.
     pub isolation: IsolationReasons,
     /// Set on a layer that holds part of one draw command's draws, those a
@@ -372,7 +370,7 @@ impl Default for LayerNode {
             hit_test: None,
             has_hit_targets: false,
             has_origin_sinks: false,
-            draws_within_bounds: false,
+            contained: Cell::new(None),
             isolation: IsolationReasons::default(),
             draw_phase: None,
             cache_policy: CachePolicy::None,
@@ -416,6 +414,19 @@ impl LayerNode {
         }
     }
 
+    /// Whether everything this layer and its subtree draw lies within its
+    /// `local_bounds`, give or take [`CONTAINED_DRAW_SLACK`], so a renderer
+    /// may skip the whole subtree where those bounds are clipped away.
+    /// Worked out at the first call after a change and kept until the next.
+    pub fn draws_within_bounds(&self) -> bool {
+        if let Some(contained) = self.contained.get() {
+            return contained;
+        }
+        let contained = self.content_draws_within_bounds();
+        self.contained.set(Some(contained));
+        contained
+    }
+
     /// Whether this layer's content, as [`LayerNode::draws_within_bounds`]
     /// describes it, stays within its bounds: it clips to them, or its draws,
     /// its texts and its children placed where they are all fit inside.
@@ -446,14 +457,14 @@ impl LayerNode {
                 RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
                 RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
             });
-        self.draws_within_bounds = self.content_draws_within_bounds();
+        self.contained.set(None);
     }
 
     /// Whether this layer, drawn as a child, puts nothing outside `bounds`:
     /// it draws within its own bounds, casts no shadow, applies no effect,
     /// and its bounds placed in its parent lie inside.
     fn draws_within_parent(&self, bounds: Rect) -> bool {
-        self.draws_within_bounds
+        self.draws_within_bounds()
             && self.graphics_layer.shadow_elevation <= 0.0
             && self.effect().is_none()
             && self.backdrop().is_none()

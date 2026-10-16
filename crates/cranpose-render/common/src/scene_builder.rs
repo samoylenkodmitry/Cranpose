@@ -1538,7 +1538,7 @@ fn assign_layer(layer: &mut LayerNode, head: LayerHead) {
         hit_test,
         has_hit_targets,
         has_origin_sinks,
-        draws_within_bounds,
+        contained,
         isolation,
         draw_phase,
         cache_policy,
@@ -1565,7 +1565,7 @@ fn assign_layer(layer: &mut LayerNode, head: LayerHead) {
     *hit_test = head.hit_test;
     *has_hit_targets = false;
     *has_origin_sinks = head.has_origin_sinks || children_have_origin_sinks(children);
-    *draws_within_bounds = false;
+    contained.set(None);
     *isolation = head.isolation;
     *draw_phase = head.draw_phase;
     *cache_policy = head.cache_policy;
