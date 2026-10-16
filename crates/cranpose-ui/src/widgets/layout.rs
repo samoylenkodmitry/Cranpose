@@ -31,6 +31,25 @@ struct RetainedMeasurePolicy<P> {
     policy: Rc<dyn MeasurePolicy>,
 }
 
+/// The density and layout direction a layout node composes under. A widget
+/// reads them once, for its measure policy and its node: each read looks a
+/// composition local up.
+#[derive(Clone, Copy)]
+pub(crate) struct LayoutEnvironment {
+    pub(crate) density: crate::density::Density,
+    pub(crate) direction: crate::layout_direction::LayoutDirection,
+}
+
+impl LayoutEnvironment {
+    /// The density and layout direction in force here.
+    pub(crate) fn current() -> Self {
+        Self {
+            density: crate::density::density(),
+            direction: crate::layout_direction(),
+        }
+    }
+}
+
 /// Emits a layout node whose children `measure_policy` measures and places. `content` composes the
 /// children. Compose's `Layout`.
 #[composable]
@@ -39,7 +58,12 @@ where
     F: FnMut() + 'static,
     P: MeasurePolicy + Clone + PartialEq + 'static,
 {
-    compose_layout(modifier, measure_policy, crate::density::density(), content)
+    compose_layout(
+        modifier,
+        measure_policy,
+        LayoutEnvironment::current(),
+        content,
+    )
 }
 
 /// Emits a layout node in the calling composable's group, so a widget that
@@ -47,7 +71,7 @@ where
 pub(crate) fn compose_layout<F, P>(
     modifier: Modifier,
     measure_policy: P,
-    composed_density: crate::density::Density,
+    environment: LayoutEnvironment,
     content: F,
 ) -> NodeId
 where
@@ -72,17 +96,14 @@ where
         }
         Rc::clone(&holder.policy)
     };
-    emit_layout(modifier, policy, composed_density, content)
+    emit_layout(modifier, policy, environment, content)
 }
 
-pub(crate) fn compose_empty_layout(
-    modifier: Modifier,
-    composed_density: crate::density::Density,
-) -> NodeId {
+pub(crate) fn compose_empty_layout(modifier: Modifier, environment: LayoutEnvironment) -> NodeId {
     let (id, provided, holds_children) = emit_layout_node(
         modifier,
         super::nodes::layout_node::empty_measure_policy(),
-        composed_density,
+        environment,
     );
     if provided.is_empty() {
         cranpose_core::with_current_composer(|composer| {
@@ -99,13 +120,13 @@ pub(crate) fn compose_empty_layout(
 fn emit_layout<F>(
     modifier: Modifier,
     policy: Rc<dyn MeasurePolicy>,
-    composed_density: crate::density::Density,
+    environment: LayoutEnvironment,
     mut content: F,
 ) -> NodeId
 where
     F: FnMut() + 'static,
 {
-    let (id, provided, _) = emit_layout_node(modifier, policy, composed_density);
+    let (id, provided, _) = emit_layout_node(modifier, policy, environment);
     cranpose_core::push_parent(id);
     compose_under_locals(provided, &mut content);
     cranpose_core::pop_parent();
@@ -117,7 +138,7 @@ where
 fn emit_layout_node(
     modifier: Modifier,
     policy: Rc<dyn MeasurePolicy>,
-    composed_density: crate::density::Density,
+    environment: LayoutEnvironment,
 ) -> (NodeId, Vec<cranpose_core::ProvidedValue>, bool) {
     let id = cranpose_core::with_current_composer(|composer| {
         composer.emit_recyclable_node(
@@ -126,12 +147,11 @@ fn emit_layout_node(
         )
     });
     let provided = modifier.provided_composition_locals();
-    let direction = crate::layout_direction();
     let holds_children = cranpose_core::with_node_mut(id, |node: &mut LayoutNode| {
         node.set_modifier(modifier);
         node.set_measure_policy(policy);
-        node.set_density(composed_density);
-        node.set_layout_direction(direction);
+        node.set_density(environment.density);
+        node.set_layout_direction(environment.direction);
         !node.children.is_empty()
     })
     .unwrap_or_else(|err| {

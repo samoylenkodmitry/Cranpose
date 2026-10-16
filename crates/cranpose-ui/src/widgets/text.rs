@@ -14,7 +14,7 @@ use crate::{
     modifier::Modifier,
     text::{TextLayoutOptions, TextOptions, TextOverflow, TextStyle},
     text_modifier_node::{TextModifierElement, shared_text_style},
-    widgets::layout::compose_empty_layout,
+    widgets::layout::{LayoutEnvironment, compose_empty_layout},
 };
 
 /// Text produced by a callback that runs each time the text composes, so state read in the callback
@@ -155,14 +155,17 @@ fn compose_basic_text_group(
         )),
         None => modifier,
     };
-    let density = crate::density::density();
+    let environment = LayoutEnvironment::current();
     let text_element = modifier_element(TextModifierElement::with_shared_style(
-        current, style, options, density,
+        current,
+        style,
+        options,
+        environment.density,
     ));
     let final_modifier = Modifier::from_parts(&[text_element]);
     let combined_modifier = modifier.then(final_modifier);
 
-    compose_empty_layout(combined_modifier, density)
+    compose_empty_layout(combined_modifier, environment)
 }
 
 /// The composable every text widget calls, named `Text` for the source
