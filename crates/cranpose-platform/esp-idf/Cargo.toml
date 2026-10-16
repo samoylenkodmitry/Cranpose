@@ -18,7 +18,8 @@ default = ["small-block-alloc"]
 small-block-alloc = []
 
 [dependencies]
-cranpose = { path = "../../cranpose", default-features = false, features = ["framebuffer"] }
+bytemuck = "1.25"
+cranpose ={ path = "../../cranpose", default-features = false, features = ["framebuffer"] }
 esp-idf-svc = "0.53"
 log = "0.4"
 thiserror = "2.0.21"

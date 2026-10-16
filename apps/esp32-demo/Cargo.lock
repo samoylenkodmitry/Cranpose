@@ -807,6 +807,7 @@ dependencies = [
 name = "cranpose-platform-esp-idf"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "cranpose",
  "esp-idf-svc",
  "log",
