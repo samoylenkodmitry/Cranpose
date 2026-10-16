@@ -886,6 +886,15 @@ impl ComposableGroup<'_> {
         &self.scope
     }
 
+    /// Registers `callback` as the code that recomposes the group's scope,
+    /// as [`Composer::set_recompose_callback`] does for the current scope.
+    pub fn set_recompose_callback<F>(&self, callback: F)
+    where
+        F: FnMut(&Composer) + 'static,
+    {
+        self.scope.set_recompose_callback(callback);
+    }
+
     /// Skips the group's body: what it composed last stays. The call
     /// composes nothing more in the group before closing it.
     pub fn skip(&self) {
@@ -893,6 +902,7 @@ impl ComposableGroup<'_> {
     }
 
     /// Ends the group after its body composed.
+    #[inline]
     pub fn close(mut self) {
         self.completed = true;
     }
@@ -1503,14 +1513,11 @@ impl Composer {
         scope_ref.reactivate();
         {
             let mut stack = self.scope_stack();
-            let parent_scope = stack.last();
-            scope_ref.set_parent_scope(parent_scope);
-            if parent_scope.is_none() {
-                scope_ref.set_lifetime_owner_scope(
+            match stack.last() {
+                Some(parent_scope) => scope_ref.set_parent_scope(Some(parent_scope)),
+                None => scope_ref.set_lifetime_owner_scope(
                     self.core.subcomposition_owner_scope.borrow().as_ref(),
-                );
-            } else {
-                scope_ref.set_lifetime_owner_scope(None);
+                ),
             }
             stack.push(scope_ref.clone());
         }
@@ -1625,7 +1632,7 @@ impl Composer {
     #[inline(never)]
     fn close_group_in_active_pass(&self, host: &Rc<SlotsHost>, scope: &RecomposeScope) {
         let result = host.with_write_session(|slots| {
-            let result = slots.finish_group_body();
+            let result = slots.finish_group_body_changes();
             slots.end_group();
             result
         });
@@ -1637,12 +1644,9 @@ impl Composer {
     /// nodes stay attached where they were.
     #[inline(never)]
     fn close_skipped_group_in_active_pass(&self, host: &Rc<SlotsHost>, scope: &RecomposeScope) {
-        #[expect(
-            clippy::redundant_closure_for_method_calls,
-            reason = "the method path is not general over the session lifetime"
-        )]
-        let root_nodes = host.with_write_session(|slots| slots.skip_and_end_group());
-        self.attach_root_nodes(root_nodes);
+        // Attaching a node reaches the parent stack and the applier, never
+        // the slot table the session holds.
+        host.with_write_session(|slots| slots.skip_and_end_group(|id| self.attach_to_parent(id)));
         self.pop_closed_scope(scope);
         self.settle_closed_group(scope);
     }
@@ -1894,17 +1898,21 @@ impl Composer {
             clippy::redundant_closure_for_method_calls,
             reason = "the method path is not general over the session lifetime"
         )]
-        let result = host.with_write_session(|slots| slots.finish_group_body());
+        let result = host.with_write_session(|slots| slots.finish_group_body_changes());
         self.close_finished_group(host, scope, result);
     }
 
+    /// Handles what a group's body left, when it left anything, and pops
+    /// the group's scope.
     fn close_finished_group(
         &self,
         host: &Rc<SlotsHost>,
         scope: &RecomposeScope,
-        result: FinishGroupResult,
+        result: Option<FinishGroupResult>,
     ) {
-        self.handle_finished_group_result(host, Some(scope.id()), result);
+        if let Some(result) = result {
+            self.handle_finished_group_result(host, Some(scope.id()), result);
+        }
         self.pop_closed_scope(scope);
     }
 
@@ -2430,36 +2438,16 @@ impl Composer {
     where
         F: FnMut(&Composer) + 'static,
     {
-        let stateless = std::mem::size_of::<F>() == 0;
-        if stateless && self.current_scope_reruns(std::any::TypeId::of::<F>()) {
-            return;
-        }
-        let stateless_body = stateless.then_some(std::any::TypeId::of::<F> as fn() -> _);
-        self.set_recompose_callback_boxed(Box::new(callback), stateless_body);
-    }
-
-    fn current_scope_reruns(&self, body: std::any::TypeId) -> bool {
-        self.core
-            .scope_stack
-            .borrow()
-            .last()
-            .is_some_and(|scope| scope.reruns_stateless(body))
-    }
-
-    #[inline(never)]
-    fn set_recompose_callback_boxed(
-        &self,
-        callback: Box<dyn FnMut(&Composer)>,
-        stateless: Option<fn() -> std::any::TypeId>,
-    ) {
         if let Some(scope) = self.current_recompose_scope() {
-            scope.set_boxed_recompose(callback, stateless);
+            scope.set_recompose_callback(callback);
         }
     }
 
     /// Like `set_recompose_callback` for a plain function pointer.
     pub fn set_recompose_fn(&self, callback: fn(&Composer)) {
-        self.set_recompose_callback_boxed(Box::new(callback), None);
+        if let Some(scope) = self.current_recompose_scope() {
+            scope.set_boxed_recompose(Box::new(callback), None);
+        }
     }
 
     /// Runs `f` with `provided` in scope over the locals around it; of values

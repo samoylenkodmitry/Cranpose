@@ -8,11 +8,9 @@ fn group_key(key: Key) -> GroupKey {
 fn inline_ordinals_track_repeated_unkeyed_calls() {
     let mut state = FrameKeyState::default();
 
-    assert_eq!(state.expected_ordinal(10), 0);
     assert_eq!(state.next_ordinal(10), 0);
-    assert_eq!(state.expected_ordinal(10), 1);
     assert_eq!(state.next_ordinal(10), 1);
-    assert_eq!(state.expected_ordinal(10), 2);
+    assert_eq!(state.next_ordinal(10), 2);
     assert!(!state.ordinals_are_promoted());
 }
 
@@ -28,7 +26,7 @@ fn ordinals_promote_after_inline_capacity() {
     assert_eq!(state.next_ordinal(100), 0);
     assert!(state.ordinals_are_promoted());
     assert_eq!(state.next_ordinal(3), 1);
-    assert_eq!(state.expected_ordinal(3), 2);
+    assert_eq!(state.next_ordinal(3), 2);
 }
 
 #[test]
@@ -67,16 +65,15 @@ fn a_cleared_frame_forgets_spilled_keys() {
 
     state.clear();
 
-    assert_eq!(state.expected_ordinal(1), 0);
     assert_eq!(state.next_ordinal(1), 0);
     assert!(state.insert_seen(group_key(1)));
     assert!(!state.insert_seen(group_key(1)));
     for key in 0..=INLINE_KEY_STATE_CAPACITY as Key {
         let _ = state.next_ordinal(key + 100);
     }
-    assert_eq!(state.expected_ordinal(1), 1);
+    assert_eq!(state.next_ordinal(1), 1);
     assert_eq!(
-        state.expected_ordinal(INLINE_KEY_STATE_CAPACITY as Key + 100),
+        state.next_ordinal(INLINE_KEY_STATE_CAPACITY as Key + 100),
         1
     );
 }

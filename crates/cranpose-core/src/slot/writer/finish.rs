@@ -60,26 +60,29 @@ impl SlotTable {
         }
     }
 
+    /// Ends the open group's body. `None` when the body left nothing for the
+    /// composer to handle: it ran and composed every payload, node and child
+    /// the group held.
     fn finish_group_body_internal(
         &mut self,
         lifecycle: &mut SlotLifecycleCoordinator,
         state: &mut SlotWriteSessionState,
-    ) -> FinishGroupResult {
+    ) -> Option<FinishGroupResult> {
         let (group_anchor, group_index, payload_cursor, node_cursor, next_child_index, was_skipped) = {
             let Some(frame) = state.group_stack.last_mut() else {
                 log::error!("slot writer finish_group_body called with an empty group stack");
-                return FinishGroupResult::empty();
+                return None;
             };
             if !frame.mark_body_finished() {
-                return FinishGroupResult::empty();
+                return None;
             }
             if frame.untouched_since_skip() {
-                return FinishGroupResult {
+                return Some(FinishGroupResult {
                     root_nodes: self
                         .open_frame_root_node_ids(frame.group_anchor, frame.group_index),
                     was_skipped: true,
                     ..FinishGroupResult::empty()
-                };
+                });
             }
 
             (
@@ -98,6 +101,14 @@ impl SlotTable {
             node_cursor,
             next_child_index,
         );
+        if !(leftovers.payloads | leftovers.nodes | leftovers.children | was_skipped) {
+            self.flush_payload_location_refreshes(state);
+            #[cfg(any(test, debug_assertions))]
+            if state.group_stack.len() == 1 {
+                self.debug_assert_valid_after("finish_group_body");
+            }
+            return None;
+        }
 
         if leftovers.payloads {
             let removed = self.remove_payload_tail_at_cursor(group_anchor, payload_cursor);
@@ -142,7 +153,7 @@ impl SlotTable {
             self.debug_assert_valid_after("finish_group_body");
         }
 
-        result
+        Some(result)
     }
 
     fn open_frame_root_node_ids(&self, group_anchor: AnchorId, group_index: usize) -> RootNodeIds {
@@ -158,6 +169,15 @@ impl SlotTable {
 
 impl SlotWriteSession<'_> {
     pub(crate) fn finish_group_body(&mut self) -> FinishGroupResult {
+        self.finish_group_body_changes()
+            .unwrap_or_else(FinishGroupResult::empty)
+    }
+
+    /// Ends the open group's body, as [`Self::finish_group_body`] does, and
+    /// returns what it left for the composer to handle, or `None` when it
+    /// left nothing: the body ran and composed every payload, node and child
+    /// the group held.
+    pub(crate) fn finish_group_body_changes(&mut self) -> Option<FinishGroupResult> {
         self.table
             .finish_group_body_internal(self.lifecycle, self.state)
     }

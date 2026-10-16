@@ -92,8 +92,14 @@ impl BranchFolds {
         self.entries.borrow().len()
     }
 
-    /// The fold of the live entries from `watermark`, the current watermark.
+    /// The fold of the live entries above the current watermark, while it
+    /// is known without a walk.
     #[inline]
+    pub(crate) fn cached_fold(&self) -> Option<Key> {
+        self.fold.get()
+    }
+
+    /// The fold of the live entries from `watermark`, the current watermark.
     pub(crate) fn fold(&self, watermark: usize) -> Key {
         if let Some(fold) = self.fold.get() {
             return fold;
@@ -118,6 +124,15 @@ impl BranchFolds {
     #[inline]
     pub(crate) fn watermark_moved(&self) {
         self.fold.set(None);
+    }
+
+    /// The current watermark moved down to `watermark`, an enclosing
+    /// group's or pass's. With no entry above it, as when no branch guard
+    /// is open, its fold is the root's, known without a walk.
+    #[inline]
+    pub(crate) fn watermark_moved_to(&self, watermark: usize) {
+        let none_above = self.entries.borrow().len() <= watermark;
+        self.fold.set(none_above.then_some(BRANCH_PATH_ROOT));
     }
 
     /// A slot host pass that began at `base` ends: drops the entries its

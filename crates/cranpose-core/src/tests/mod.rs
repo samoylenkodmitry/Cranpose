@@ -378,7 +378,7 @@ pub(crate) fn begin_test_group(
 ) -> ActiveGroupId {
     with_test_slot_lifecycle(|lifecycle| {
         let mut session = slots.write_session(lifecycle, state);
-        let group_key = session.preview_group_key(crate::slot::GroupKeySeed::unkeyed(key));
+        let group_key = session.reserve_group_key(crate::slot::GroupKeySeed::unkeyed(key));
         session.begin_group(group_key, None, None).group
     })
 }

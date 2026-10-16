@@ -222,7 +222,7 @@ fn begin_unkeyed(
     key: Key,
     restored: Option<DetachedSubtree>,
 ) -> GroupStart<ActiveGroupId> {
-    let group_key = session.preview_group_key(GroupKeySeed::unkeyed(key));
+    let group_key = session.reserve_group_key(GroupKeySeed::unkeyed(key));
     session.begin_group(group_key, restored.map(Box::new), None)
 }
 
@@ -232,7 +232,7 @@ fn begin_keyed(
     explicit_key: Key,
     restored: Option<DetachedSubtree>,
 ) -> GroupStart<ActiveGroupId> {
-    let group_key = session.preview_group_key(GroupKeySeed::keyed(static_key, explicit_key));
+    let group_key = session.reserve_group_key(GroupKeySeed::keyed(static_key, explicit_key));
     session.begin_group(group_key, restored.map(Box::new), None)
 }
 

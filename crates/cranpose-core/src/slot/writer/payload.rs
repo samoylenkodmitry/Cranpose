@@ -64,10 +64,46 @@ impl SlotWriteSession<'_> {
         init: &mut PayloadInit<'_>,
     ) -> (ValueSlotId, Option<usize>) {
         init.mix_source(self.state.branch_fold());
+        if let Some(reused) = self.reuse_value_slot_at_cursor(kind, init) {
+            return reused;
+        }
         let Some((group_anchor, group_index, payload_cursor)) = self.live_value_slot_frame() else {
             return (self.recover_value_slot_with_kind(kind, init), None);
         };
         self.value_slot_in_group(group_anchor, group_index, payload_cursor, kind, init)
+    }
+
+    /// The value slot at the open group's payload cursor when the payload
+    /// there is the one `init` names, as a pass that composes the same
+    /// content again finds it: the open group is where its frame says, and
+    /// the cursor lies within its payloads. This is what the general path
+    /// does in that case, reading each record once. `None` leaves the
+    /// general path to handle the rest.
+    #[inline(always)]
+    fn reuse_value_slot_at_cursor(
+        &mut self,
+        kind: PayloadKind,
+        init: &PayloadInit<'_>,
+    ) -> Option<(ValueSlotId, Option<usize>)> {
+        let frame = self.state.group_stack.last_mut()?;
+        let group = self.table.groups.get(frame.group_index)?;
+        if group.anchor != frame.group_anchor || frame.payload_cursor >= group.payload_len as usize
+        {
+            return None;
+        }
+        let record_index = group.payload_start as usize + frame.payload_cursor;
+        let storage_id = self.table.storage_id();
+        let payload = self.table.payloads.get_mut(record_index)?;
+        if !init.matches(payload) {
+            return None;
+        }
+        payload.kind = kind;
+        let anchor = payload.anchor;
+        frame.advance_payload_cursor();
+        Some((
+            ValueSlotId::new_for_table(anchor, storage_id),
+            Some(record_index),
+        ))
     }
 
     /// The top frame's group, its index and payload cursor, after dropping
@@ -131,7 +167,7 @@ impl SlotWriteSession<'_> {
         // A frame whose anchor no longer resolves may come from a wrong index:
         // rewrite them all from the groups before inserting more.
         self.table.rewrite_group_indexes();
-        let key = self.preview_group_key(GroupKeySeed::unkeyed(RECOVERY_VALUE_SLOT_STATIC_KEY));
+        let key = self.reserve_group_key(GroupKeySeed::unkeyed(RECOVERY_VALUE_SLOT_STATIC_KEY));
         self.begin_group(key, None, None);
         let slot = match self.live_value_slot_frame() {
             Some((group_anchor, group_index, payload_cursor)) => {

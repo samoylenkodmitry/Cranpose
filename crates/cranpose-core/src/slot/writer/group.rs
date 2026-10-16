@@ -1,7 +1,7 @@
 use super::{
     super::{
         ActiveGroupId, ActiveSubtreeRoot, ChildCursor, DetachedSubtree, GroupKey, GroupKeySeed,
-        GroupStart, GroupStartKind, RootNodeIds, SlotTable, SlotWriteSession,
+        GroupStart, GroupStartKind, SlotTable, SlotWriteSession,
     },
     SlotWriteSessionState,
 };
@@ -43,10 +43,6 @@ impl SlotTable {
 }
 
 impl SlotWriteSession<'_> {
-    pub(crate) fn preview_group_key(&mut self, seed: GroupKeySeed) -> GroupKey {
-        self.state.preview_group_key(seed)
-    }
-
     #[inline(always)]
     fn open_started_group(
         &mut self,
@@ -136,8 +132,11 @@ impl SlotWriteSession<'_> {
         }
     }
 
+    /// The key of the next child group `seed` begins. An unkeyed group takes
+    /// its sibling ordinal here, so [`Self::begin_group`] must follow with
+    /// this key.
     pub(crate) fn reserve_group_key(&mut self, seed: GroupKeySeed) -> GroupKey {
-        self.preview_group_key(seed)
+        self.state.reserve_group_key(seed)
     }
 
     fn recover_malformed_group_start(
@@ -286,6 +285,11 @@ impl SlotWriteSession<'_> {
         restored: Option<Box<DetachedSubtree>>,
         parent_node: Option<NodeId>,
     ) -> GroupStart<ActiveGroupId> {
+        if restored.is_none()
+            && let Some(started) = self.begin_expected_group(key)
+        {
+            return started;
+        }
         self.flush_payload_location_refreshes();
         #[cfg(any(test, debug_assertions))]
         self.state
@@ -311,6 +315,55 @@ impl SlotWriteSession<'_> {
         let started = self.materialize_group_at_cursor(cursor, key, resolution);
         self.open_started_group(started.anchor, cursor.index(), started.kind)
             .unwrap_or_else(|| self.recover_malformed_group_start(key, started.anchor))
+    }
+
+    /// Opens the group at the writer's cursor when it is the one `key`
+    /// names, as a pass that composes the same content again finds it: the
+    /// open group is where its frame says, the group at the cursor is its
+    /// child with the same key, and no payload locations wait for a refresh.
+    /// This is what the general start does in that case, reading each
+    /// record once. `None` leaves the general start to handle the rest.
+    #[inline(always)]
+    fn begin_expected_group(&mut self, key: GroupKey) -> Option<GroupStart<ActiveGroupId>> {
+        if self.state.has_pending_payload_location_refreshes() {
+            return None;
+        }
+        let groups = &self.table.groups;
+        let (parent_anchor, cursor, end) = match self.state.group_stack.last() {
+            Some(frame) => {
+                let parent = groups.get(frame.group_index)?;
+                if parent.anchor != frame.group_anchor {
+                    return None;
+                }
+                let end = frame.group_index + parent.subtree_len as usize;
+                (frame.group_anchor, frame.next_child_index, end)
+            }
+            None => (
+                AnchorId::INVALID,
+                self.state.root.next_child_index,
+                groups.len(),
+            ),
+        };
+        if cursor >= end {
+            return None;
+        }
+        let record = groups.get(cursor)?;
+        if record.key != key || record.parent_anchor != parent_anchor {
+            return None;
+        }
+        let anchor = record.anchor;
+        let group = ActiveGroupId::new(cursor, record.generation);
+        let (payload_len, node_len) = (record.payload_len as usize, record.node_len as usize);
+        let scope = record.scope.clone();
+        self.state.consume_group_key(key);
+        self.state
+            .push_group_frame(anchor, cursor, payload_len, node_len);
+        Some(GroupStart {
+            group,
+            anchor,
+            scope,
+            kind: GroupStartKind::Reused,
+        })
     }
 
     pub(crate) fn end_group(&mut self) {
@@ -350,22 +403,23 @@ impl SlotWriteSession<'_> {
 
     /// Skips the open group's body and ends the group, as `skip_group`,
     /// `finish_group_body` and `end_group` would one after another, and
-    /// returns the group's root nodes.
-    pub(crate) fn skip_and_end_group(&mut self) -> RootNodeIds {
+    /// gives `attach_root` each of the group's root nodes.
+    pub(crate) fn skip_and_end_group(&mut self, attach_root: impl FnMut(NodeId)) {
         let Some((group_anchor, opened_index)) = self.state.pop_group_frame() else {
             log::error!("slot writer skip_and_end_group called with an empty group stack");
-            return RootNodeIds::new();
+            return;
         };
         let Some(group_index) = self.table.open_group_index(group_anchor, opened_index) else {
             log::error!(
                 "slot writer skip_and_end_group ignored stale group frame anchor {group_anchor:?}"
             );
-            return RootNodeIds::new();
+            return;
         };
-        let root_nodes = self.table.subtree_root_node_ids_at(group_index);
+        self.table
+            .subtree_root_node_id_iter_at(group_index)
+            .for_each(attach_root);
         let subtree_end = self.group_subtree_end(group_index, "group skip cursor advance");
         self.state.advance_parent_after_child(subtree_end);
-        root_nodes
     }
 
     pub(crate) fn set_group_scope(&mut self, group: ActiveGroupId, scope: RecomposeScope) -> bool {

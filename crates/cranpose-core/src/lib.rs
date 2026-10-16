@@ -728,16 +728,18 @@ fn update_cell<T: Default, R>(cell: &Cell<T>, update: impl FnOnce(&mut T) -> R) 
     result
 }
 
-type ScopeLink = Cell<Option<Weak<RecomposeScopeInner>>>;
-
-fn link_scope(link: &ScopeLink, target: Option<&RecomposeScope>) {
-    update_cell(link, |link| {
-        if link.as_ref().map(Weak::as_ptr) != target.map(|scope| Rc::as_ptr(&scope.inner)) {
-            *link = target.map(RecomposeScope::downgrade);
-            note_scope_activity_change();
-        }
-    });
+/// How a scope is tied to the scope its lifetime follows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OwnerKind {
+    /// The scope it composes under, its recomposition ancestor.
+    Parent,
+    /// For the root of a slot table composed for another scope's content,
+    /// that scope, which is no recomposition ancestor.
+    Lifetime,
 }
+
+/// The scope a scope's lifetime follows, and how it is tied to it.
+type OwnerLink = Cell<Option<(OwnerKind, Weak<RecomposeScopeInner>)>>;
 
 /// The node id a scope's `parent_hint` holds for none: ids index the
 /// applier's nodes, which never reach it.
@@ -760,8 +762,7 @@ pub(crate) struct RecomposeScopeInner {
     parent_hint: Cell<NodeId>,
     group_anchor: Cell<AnchorId>,
     recompose: Cell<Option<RecomposeCallback>>,
-    parent_scope: ScopeLink,
-    lifetime_owner_scope: ScopeLink,
+    owner: OwnerLink,
     local_stack: Cell<LocalStackSnapshot>,
     #[cfg(feature = "inspection")]
     source_trace: RefCell<Rc<[source_trace::SourceLocation]>>,
@@ -809,16 +810,13 @@ enum ScopeOwner {
 
 impl RecomposeScopeInner {
     fn owner(&self) -> ScopeOwner {
-        let upgrade = |owner: &Option<Weak<RecomposeScopeInner>>| {
-            owner.as_ref().map(|owner| {
+        read_cell(&self.owner, |owner| {
+            owner.as_ref().map_or(ScopeOwner::Root, |(_, owner)| {
                 owner
                     .upgrade()
                     .map_or(ScopeOwner::Dropped, ScopeOwner::Live)
             })
-        };
-        read_cell(&self.parent_scope, upgrade)
-            .or_else(|| read_cell(&self.lifetime_owner_scope, upgrade))
-            .unwrap_or(ScopeOwner::Root)
+        })
     }
 
     fn is_effectively_active(&self, epoch: u64) -> bool {
@@ -857,8 +855,7 @@ impl RecomposeScopeInner {
             parent_hint: Cell::new(NO_PARENT_HINT),
             group_anchor: Cell::new(AnchorId::INVALID),
             recompose: Cell::new(None),
-            parent_scope: Cell::new(None),
-            lifetime_owner_scope: Cell::new(None),
+            owner: Cell::new(None),
             local_stack: Cell::new(None),
             #[cfg(feature = "inspection")]
             source_trace: RefCell::new(Rc::from([])),
@@ -1052,7 +1049,9 @@ impl RecomposeScope {
     /// does; a skipped or unfinished one keeps the subscriptions it had.
     pub(crate) fn end_reads(&self, ran: bool) {
         let cursor = self.inner.read_cursor.replace(NOT_READING);
-        if cursor == NOT_READING {
+        // A skipped body that read in order keeps the subscriptions as they
+        // are.
+        if cursor == NOT_READING || (!ran && cursor != DIVERGED) {
             return;
         }
         let id = self.id();
@@ -1120,11 +1119,14 @@ impl RecomposeScope {
     }
 
     fn mark_recomposed(&self) {
-        self.inner.invalid.set(false);
+        // An invalidation notes its source and sets `invalid` together, so a
+        // scope nothing invalidated has no source to forget.
+        if self.inner.invalid.replace(false) {
+            self.inner.unknown_invalidation_source.set(false);
+            update_cell(&self.inner.invalidation_sources, StateIds::clear);
+        }
         self.inner.force_reuse.set(false);
         self.inner.force_recompose.set(false);
-        self.inner.unknown_invalidation_source.set(false);
-        update_cell(&self.inner.invalidation_sources, StateIds::clear);
         if self.inner.enqueued.replace(false) {
             self.inner.runtime.mark_scope_recomposed();
         }
@@ -1138,6 +1140,22 @@ impl RecomposeScope {
         }
     }
 
+    /// Registers `callback` as the code that recomposes the scope when state
+    /// its body read changes. A stateless body the scope reruns already
+    /// stays as it is.
+    pub(crate) fn set_recompose_callback<F>(&self, callback: F)
+    where
+        F: FnMut(&Composer) + 'static,
+    {
+        let body: fn() -> TypeId = TypeId::of::<F>;
+        let stateless = std::mem::size_of::<F>() == 0;
+        if stateless && self.reruns_stateless(body) {
+            return;
+        }
+        self.set_boxed_recompose(Box::new(callback), stateless.then_some(body));
+    }
+
+    #[inline(never)]
     fn set_boxed_recompose(
         &self,
         body: Box<dyn FnMut(&Composer) + 'static>,
@@ -1153,12 +1171,15 @@ impl RecomposeScope {
         }));
     }
 
-    fn reruns_stateless(&self, body: TypeId) -> bool {
+    /// Whether the scope reruns the stateless body whose type `body` names.
+    /// The same function names the same type; a copy of it in another
+    /// codegen unit is told by the type itself.
+    fn reruns_stateless(&self, body: fn() -> TypeId) -> bool {
         read_cell(&self.inner.recompose, |callback| {
             callback
                 .as_ref()
                 .and_then(|callback| callback.stateless_body)
-                .is_some_and(|current_body| current_body() == body)
+                .is_some_and(|current| std::ptr::fn_addr_eq(current, body) || current() == body())
         })
     }
 
@@ -1204,25 +1225,46 @@ impl RecomposeScope {
         self.inner.parent_hint.set(parent.unwrap_or(NO_PARENT_HINT));
     }
 
-    fn set_parent_scope(&self, parent: Option<&RecomposeScope>) {
-        link_scope(&self.inner.parent_scope, parent);
+    /// Ties the scope to the scope its lifetime follows, or to none.
+    fn set_owner(&self, kind: OwnerKind, owner: Option<&RecomposeScope>) {
+        update_cell(&self.inner.owner, |link| {
+            let current = link
+                .as_ref()
+                .map(|(kind, owner)| (*kind, Weak::as_ptr(owner)));
+            if current != owner.map(|owner| (kind, Rc::as_ptr(&owner.inner))) {
+                *link = owner.map(|owner| (kind, owner.downgrade()));
+                note_scope_activity_change();
+            }
+        });
     }
 
-    fn parent_scope(&self) -> Option<RecomposeScope> {
-        read_cell(&self.inner.parent_scope, |parent| {
-            parent.as_ref().and_then(RecomposeScope::upgrade)
+    /// Makes `parent` the scope this one composes under, or makes it a root.
+    fn set_parent_scope(&self, parent: Option<&RecomposeScope>) {
+        self.set_owner(OwnerKind::Parent, parent);
+    }
+
+    fn owner_of_kind(&self, kind: OwnerKind) -> Option<RecomposeScope> {
+        read_cell(&self.inner.owner, |owner| {
+            owner
+                .as_ref()
+                .filter(|(owner_kind, _)| *owner_kind == kind)
+                .and_then(|(_, owner)| RecomposeScope::upgrade(owner))
         })
     }
 
+    fn parent_scope(&self) -> Option<RecomposeScope> {
+        self.owner_of_kind(OwnerKind::Parent)
+    }
+
+    /// Makes this scope a root whose lifetime follows `owner`, or a plain
+    /// root.
     fn set_lifetime_owner_scope(&self, owner: Option<&RecomposeScope>) {
-        link_scope(&self.inner.lifetime_owner_scope, owner);
+        self.set_owner(OwnerKind::Lifetime, owner);
     }
 
     #[cfg(test)]
     fn lifetime_owner_scope(&self) -> Option<RecomposeScope> {
-        read_cell(&self.inner.lifetime_owner_scope, |owner| {
-            owner.as_ref().and_then(RecomposeScope::upgrade)
-        })
+        self.owner_of_kind(OwnerKind::Lifetime)
     }
 
     fn callback_promotion_target(&self) -> Option<RecomposeScope> {
