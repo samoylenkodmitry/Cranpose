@@ -12,10 +12,10 @@ def command(*args, **kwargs):
 
 
 def verify_summary(summary):
-    if (summary.get('passedTests') != 3 or summary.get('failedTests') != 0
+    if (summary.get('passedTests') != 4 or summary.get('failedTests') != 0
             or summary.get('skippedTests') != 0 or summary.get('expectedFailures') != 0
-            or summary.get('totalTestCount') != 3 or summary.get('result') != 'Passed'):
-        raise AssertionError(f'Three iOS accessibility tests must execute and pass: {summary}')
+            or summary.get('totalTestCount') != 4 or summary.get('result') != 'Passed'):
+        raise AssertionError(f'Four iOS accessibility and lifecycle tests must execute and pass: {summary}')
 
 
 def main():

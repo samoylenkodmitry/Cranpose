@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 @MainActor
@@ -21,6 +22,41 @@ final class AccessibilityRobotTests: XCTestCase {
             attachment.lifetime = .keepAlways
             add(attachment)
         }
+    }
+
+    /// The screen below the status bar, whose clock changes, as PNG data.
+    private func content(_ app: XCUIApplication) -> Data? {
+        guard let image = app.screenshot().image.cgImage else { return nil }
+        let top = image.height / 8
+        let below = CGRect(x: 0, y: top, width: image.width, height: image.height - top)
+        return image.cropping(to: below).flatMap { UIImage(cgImage: $0).pngData() }
+    }
+
+    /// Whether the app draws a screen other than `previous` within five seconds.
+    private func drawsChange(from previous: Data?, in app: XCUIApplication) -> Bool {
+        let deadline = Date().addingTimeInterval(5)
+        repeat {
+            if content(app) != previous { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        } while Date() < deadline
+        return false
+    }
+
+    func testBackgroundAndReturn() {
+        let app = launch()
+        defer { capture(app, "background-return") }
+        app.buttons["Increase"].tap()
+        XCTAssertTrue(named("Action count: 1", in: app).waitForExistence(timeout: 5))
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(app.wait(for: .runningBackgroundSuspended, timeout: 10) || app.state == .runningBackground)
+        app.activate()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+        // The composition kept its state, and its input draws new frames.
+        XCTAssertTrue(named("Action count: 1", in: app).waitForExistence(timeout: 5))
+        let returned = content(app)
+        app.buttons["Increase"].tap()
+        XCTAssertTrue(named("Action count: 2", in: app).waitForExistence(timeout: 5))
+        XCTAssertTrue(drawsChange(from: returned, in: app))
     }
 
     func testNamesStateAndRanges() {

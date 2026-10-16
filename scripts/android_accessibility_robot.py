@@ -39,7 +39,9 @@ def main():
             device.wake()
             navigation = 'com.compose_rs.demo.CranposeAccessibilityNavigationTest'
             if args.connected_only:
-                navigation += '#connectedAccessibilityTracksPageChangesInBothDirections'
+                navigation = ','.join(f'{navigation}#{test}' for test in [
+                    'connectedAccessibilityTracksPageChangesInBothDirections',
+                    'stoppedAndResumedActivityKeepsItsPageAndDraws'])
             tests = ','.join([navigation,
                               'com.compose_rs.demo.CranposeAccessibilityAuditTest',
                               'com.compose_rs.demo.CranposeAccessibilityParserTest',
@@ -50,7 +52,7 @@ def main():
                 'com.compose_rs.demo.robot.test/androidx.test.runner.AndroidJUnitRunner', timeout=120)
             (args.output / 'instrumentation.log').write_text(output)
             report['tests_passed'] = completed_tests(output)
-            expected = 13 if args.connected_only else 14
+            expected = 15 if args.connected_only else 16
             if report['tests_passed'] != expected:
                 raise RuntimeError(f"Expected {expected} Android tests, got {report['tests_passed']}")
             report['reconnect'] = 'not_requested' if args.connected_only else 'included'
