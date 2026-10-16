@@ -22,7 +22,7 @@ where
     }
 
     pub(crate) fn reveal_new_focus(&mut self) {
-        let focused = cranpose_ui::active_focus_target();
+        let focused = self.app.app_context.active_focus_target();
         if focused == self.app.revealed_focus {
             return;
         }

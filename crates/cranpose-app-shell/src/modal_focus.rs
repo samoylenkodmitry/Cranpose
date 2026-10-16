@@ -32,7 +32,7 @@ where
             if modal == surface.modal_focus.last().map(|entry| entry.0) {
                 continue;
             }
-            let current = cranpose_ui::active_focus_target();
+            let current = self.app.app_context.active_focus_target();
             let order = surface
                 .layout_tree_in_context(&mut self.app)
                 .map(cranpose_ui::collect_focus_order)

@@ -121,9 +121,16 @@ pub(crate) fn schedule_semantics_invalidation_in(
 
 /// Whether any semantics invalidations are waiting to be serviced.
 pub fn has_pending_semantics_invalidations() -> bool {
-    crate::render_state::with_semantics_dispatch(
-        SemanticsInvalidationState::has_pending_invalidation,
-    )
+    crate::render_state::require_current_app_context("semantics dispatch access")
+        .has_pending_semantics_invalidations()
+}
+
+impl crate::AppContext {
+    /// Whether a semantics invalidation waits, as
+    /// [`has_pending_semantics_invalidations`] says in the current context.
+    pub fn has_pending_semantics_invalidations(&self) -> bool {
+        self.semantics_dispatch.has_pending_invalidation()
+    }
 }
 
 /// Services every pending semantics invalidation.

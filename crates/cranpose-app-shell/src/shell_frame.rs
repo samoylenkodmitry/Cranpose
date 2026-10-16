@@ -266,14 +266,14 @@ struct SurfaceFrame {
     rebuilt: bool,
 }
 
-fn pending_repass_nodes() -> Vec<NodeId> {
-    let mut nodes = if cranpose_ui::has_pending_layout_repasses() {
-        cranpose_ui::pending_layout_repass_nodes_snapshot()
+fn pending_repass_nodes(context: &cranpose_ui::AppContext) -> Vec<NodeId> {
+    let mut nodes = if context.has_pending_layout_repasses() {
+        context.pending_layout_repass_nodes_snapshot()
     } else {
         Vec::new()
     };
-    if cranpose_ui::has_pending_measure_repasses() {
-        for node in cranpose_ui::pending_measure_repass_nodes_snapshot() {
+    if context.has_pending_measure_repasses() {
+        for node in context.pending_measure_repass_nodes_snapshot() {
             if !nodes.contains(&node) {
                 nodes.push(node);
             }
@@ -365,7 +365,9 @@ where
 
         stages.reached();
 
-        clear_transient_scroll_motion_contexts();
+        self.app
+            .app_context
+            .clear_transient_scroll_motion_contexts();
 
         let result = self.run_render_phase_in_context(recomposed_this_frame);
         stages.reached();
@@ -435,11 +437,11 @@ where
     }
 
     pub(crate) fn run_layout_phase_in_context(&mut self) {
-        let has_scoped_repasses = cranpose_ui::has_pending_layout_repasses()
-            || cranpose_ui::has_pending_measure_repasses();
-        let scoped_layout_nodes = pending_repass_nodes();
-
-        let global_layout_invalidation = take_layout_invalidation();
+        let context = &self.app.app_context;
+        let has_scoped_repasses =
+            context.has_pending_layout_repasses() || context.has_pending_measure_repasses();
+        let scoped_layout_nodes = pending_repass_nodes(context);
+        let global_layout_invalidation = context.take_layout_invalidation();
         let force_layout_pass = self.app.force_layout_pass;
 
         if global_layout_invalidation {
@@ -531,7 +533,9 @@ where
         has_scoped_repasses: bool,
         scoped_layout_nodes: Vec<NodeId>,
     ) {
-        cranpose_ui::take_geometry_scene_nodes_into(&mut self.geometry_scene_nodes);
+        self.app
+            .app_context
+            .take_geometry_scene_nodes_into(&mut self.geometry_scene_nodes);
         self.app.content_moved |= !self.geometry_scene_nodes.is_empty();
         if global {
             for surface in &mut self.surfaces {
@@ -605,7 +609,7 @@ where
     }
 
     fn run_dispatch_queues(&mut self) {
-        if has_pending_pointer_repasses() {
+        if self.app.app_context.has_pending_pointer_repasses() {
             let mut applier = self.app.composition.applier_mut();
             process_pointer_repasses(|node_id| {
                 match clear_dispatch_invalidation(
@@ -624,7 +628,7 @@ where
             });
         }
 
-        if has_pending_focus_invalidations() {
+        if self.app.app_context.has_pending_focus_invalidations() {
             let mut applier = self.app.composition.applier_mut();
             process_focus_invalidations(|node_id| {
                 match clear_dispatch_invalidation(
@@ -663,7 +667,9 @@ where
         // A child's z index orders it among its siblings, in its parent's
         // layer: the parent changed as a child list does.
         let reordered = self.pending_dirty_nodes.len();
-        cranpose_ui::append_z_order_changes(&mut self.pending_dirty_nodes);
+        self.app
+            .app_context
+            .append_z_order_changes(&mut self.pending_dirty_nodes);
         if self.pending_dirty_nodes.len() == reordered {
             return;
         }
@@ -692,16 +698,19 @@ where
         } else {
             0
         };
-        cranpose_ui::tick_cursor_blink();
-        let render_dirty = take_render_invalidation();
-        let pointer_dirty = take_pointer_invalidation();
-        take_focus_invalidation();
+        let context = &self.app.app_context;
+        context.tick_cursor_blink();
+        let render_dirty = context.take_render_invalidation();
+        let pointer_dirty = context.take_pointer_invalidation();
+        context.take_focus_invalidation();
         for surface in &mut self.surfaces {
             surface.scoped_draw_nodes.clear();
             surface.scoped_layer_property_nodes.clear();
             surface.structural_scene_nodes.clear();
         }
-        cranpose_ui::take_draw_repass_nodes_into(&mut self.pending_dirty_nodes);
+        self.app
+            .app_context
+            .take_draw_repass_nodes_into(&mut self.pending_dirty_nodes);
         route_nodes_by_surface(
             &mut self.app,
             &mut self.surfaces,
@@ -709,7 +718,9 @@ where
             SurfaceDirtyLane::Draw,
             &mut self.routing_scratch,
         );
-        cranpose_ui::take_layer_property_repass_nodes_into(&mut self.pending_layer_property_nodes);
+        self.app
+            .app_context
+            .take_layer_property_repass_nodes_into(&mut self.pending_layer_property_nodes);
         route_nodes_by_surface(
             &mut self.app,
             &mut self.surfaces,
@@ -727,7 +738,7 @@ where
         );
         self.pending_dirty_nodes.clear();
         self.pending_layer_property_nodes.clear();
-        let _ = cranpose_ui::has_focused_field();
+        let _ = self.app.app_context.has_focused_field();
         let attributed = self.surfaces.iter().any(|surface| {
             !surface.scoped_draw_nodes.is_empty()
                 || !surface.scoped_layer_property_nodes.is_empty()

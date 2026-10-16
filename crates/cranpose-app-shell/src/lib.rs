@@ -34,12 +34,9 @@ use cranpose_render_common::{HitTestTarget, RenderScene, Renderer, SceneUpdates}
 use cranpose_runtime_std::StdRuntime;
 use cranpose_ui::{
     HeadlessRenderer, LayoutBox, LayoutNode, LayoutTree, MeasureLayoutOptions, SemanticsTree,
-    SubcomposeLayoutNode, WindowRootEntry, clear_transient_scroll_motion_contexts,
-    format_layout_tree, format_render_scene, format_screen_summary,
-    has_pending_focus_invalidations, has_pending_pointer_repasses,
-    has_pending_semantics_invalidations, process_focus_invalidations, process_pointer_repasses,
-    process_semantics_invalidations, request_render_invalidation, take_focus_invalidation,
-    take_layout_invalidation, take_pointer_invalidation, take_render_invalidation,
+    SubcomposeLayoutNode, WindowRootEntry, format_layout_tree, format_render_scene,
+    format_screen_summary, process_focus_invalidations, process_pointer_repasses,
+    process_semantics_invalidations, request_render_invalidation,
 };
 pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType};
 use cranpose_ui_graphics::{Point, PointerIcon, Rect, Size};
@@ -497,7 +494,7 @@ pub struct RuntimeLeakDebugStats {
 
 impl ShellApp {
     pub(crate) fn flush_semantics_invalidations(&mut self) {
-        if has_pending_semantics_invalidations() {
+        if self.app_context.has_pending_semantics_invalidations() {
             let mut applier = self.composition.applier_mut();
             process_semantics_invalidations(|node_id| {
                 cranpose_core::bubble_semantics_dirty(&mut *applier, node_id);
@@ -539,7 +536,7 @@ impl ShellApp {
         surfaces_dirty
             || self.has_stale_work_in_context()
             || self.composition.runtime_handle().has_pending_ui()
-            || has_pending_semantics_invalidations()
+            || self.app_context.has_pending_semantics_invalidations()
             || self.composition.should_render()
     }
 
@@ -882,7 +879,7 @@ where
     }
 
     pub(crate) fn sync_window_roots_in_context(&mut self) {
-        let revision = cranpose_ui::window_roots_revision();
+        let revision = self.app.app_context.window_roots().revision();
         if self.app.window_roots_seen == Some(revision) {
             return;
         }
@@ -1098,7 +1095,7 @@ where
                 || self.app.has_stale_work_in_context()
                 || self.app.composition.should_recompose()
                 || self.app.composition.runtime_handle().has_pending_ui()
-                || has_pending_semantics_invalidations()
+                || self.app.app_context.has_pending_semantics_invalidations()
                 || cranpose_ui::next_cursor_blink_time().is_some_and(|at| at <= Instant::now())
                 || self
                     .surfaces
