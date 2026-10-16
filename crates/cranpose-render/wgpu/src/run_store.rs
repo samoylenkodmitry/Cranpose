@@ -289,14 +289,18 @@ fn paint_layer(placement: &Placement) -> GraphicsLayer {
 
 fn painted_stops(
     stops: &[GradientStopRecord],
-    layer: &GraphicsLayer,
+    placement: &Placement,
     out: &mut Vec<GradientStopRecord>,
 ) {
     out.clear();
+    if stops.is_empty() {
+        return;
+    }
+    let layer = paint_layer(placement);
     out.extend(stops.iter().map(|stop| {
         let color = apply_layer_to_color(
             Color(stop.color[0], stop.color[1], stop.color[2], stop.color[3]),
-            layer,
+            &layer,
         );
         GradientStopRecord {
             color: [color.0, color.1, color.2, color.3],
@@ -943,8 +947,9 @@ impl ArenaStaging {
             && self.placements.len() < PLACEMENT_CHUNK
     }
 
-    /// Records `record` under `key`, extending the last draw when it
-    /// continues it.
+    // Records `record` under `key`, extending the last draw when it
+    // continues it.
+    #[cfg(test)]
     fn push_draw(
         &mut self,
         key: crate::render::ShapePipelineKey,
@@ -952,7 +957,16 @@ impl ArenaStaging {
         record: u32,
         occluders: bool,
     ) {
-        let records = record..record + 1;
+        self.push_draw_range(key, band_class, record..record + 1, occluders);
+    }
+
+    fn push_draw_range(
+        &mut self,
+        key: crate::render::ShapePipelineKey,
+        band_class: u8,
+        records: std::ops::Range<u32>,
+        occluders: bool,
+    ) {
         if self
             .draws
             .last_mut()
@@ -962,6 +976,37 @@ impl ArenaStaging {
         }
         self.draws
             .push(RunDrawCall::new(key, band_class, records, occluders));
+    }
+
+    fn map_brush(
+        &mut self,
+        tables: &RecordTables,
+        placement: &Placement,
+        storage: bool,
+        source: usize,
+    ) -> Option<u32> {
+        let mapped = self.brush_map[source];
+        if mapped != u32::MAX {
+            return Some(mapped);
+        }
+        let brush = tables.brushes[source];
+        let stop_range = brush.stop_start as usize..(brush.stop_start + brush.stop_count) as usize;
+        if !storage
+            && (self.brushes.len() >= BRUSH_CHUNK
+                || self.stops.len() + brush.stop_count as usize > STOP_CHUNK)
+        {
+            return None;
+        }
+        painted_stops(&tables.stops[stop_range], placement, &mut self.painted);
+        let stop_start = self.stops.len() as u32;
+        self.stops.extend_from_slice(&self.painted);
+        self.brushes.push(BrushRecord {
+            stop_start,
+            ..brush
+        });
+        let index = self.brushes.len() as u32;
+        self.brush_map[source] = index;
+        Some(index)
     }
 }
 
@@ -1638,7 +1683,7 @@ impl RunStore {
                         std::mem::replace(&mut entry.recorder, Arc::clone(&run.recorder));
                     let previous = previous_recorder.tables();
                     let stops_changed = entry.paint != paint || previous.stops != tables.stops;
-                    painted_stops(&tables.stops, &paint_layer(&run.placement), scratch_stops);
+                    painted_stops(&tables.stops, &run.placement, scratch_stops);
                     let update = TableUpdate {
                         previous,
                         tables,
@@ -1658,7 +1703,7 @@ impl RunStore {
                 (entry, stats)
             }
             Entry::Vacant(slot) => {
-                painted_stops(&tables.stops, &paint_layer(&run.placement), scratch_stops);
+                painted_stops(&tables.stops, &run.placement, scratch_stops);
                 let update = TableUpdate {
                     previous: tables,
                     tables,
@@ -1798,74 +1843,92 @@ impl RunStore {
         staging
             .placements
             .push(PlacementData::of(&run.placement, root_scale, turn));
-        staging.brush_map.clear();
-        staging.brush_map.resize(tables.brushes.len(), u32::MAX);
-        let layer = paint_layer(&run.placement);
+        if !tables.brushes.is_empty() {
+            staging.brush_map.clear();
+            staging.brush_map.resize(tables.brushes.len(), u32::MAX);
+        }
         let record_limit = mode.arena_records();
         let mut taken = 0u32;
         let mut skipped = 0u32;
         for segment in run.segment_records() {
+            if skipped + segment.count <= from {
+                skipped += segment.count;
+                continue;
+            }
+            if from + taken >= window.end || staging.bodies.len() >= record_limit {
+                break;
+            }
             let key = key_for(segment);
             let band_class = if mode.storage { segment.band_class } else { 0 };
-            let class_segments = mode
-                .storage
-                .then(|| band_class_segments(segment.band_class));
             staging.arcs |= segment_holds_arcs(segment);
+            let skip_in_segment = from.saturating_sub(skipped);
+            skipped = skipped.max(from);
+            let available = (segment.count - skip_in_segment)
+                .min(window.end - (from + taken))
+                .min((record_limit - staging.bodies.len()) as u32);
+            let slice_start = (segment.start + skip_in_segment) as usize;
+            let slice_end = slice_start + available as usize;
+            let records_start = staging.bodies.len() as u32;
             let segment_start = taken;
             let mut stopped = false;
-            for index in segment.range() {
-                if skipped < from {
-                    skipped += 1;
-                    continue;
-                }
-                if from + taken >= window.end || staging.bodies.len() >= record_limit {
-                    stopped = true;
-                    break;
-                }
-                let mut body = tables.shapes.bodies()[index];
-                if body.brush != 0 {
-                    let source = (body.brush - 1) as usize;
-                    if staging.brush_map[source] == u32::MAX {
-                        let brush = tables.brushes[source];
-                        let stop_range = brush.stop_start as usize
-                            ..(brush.stop_start + brush.stop_count) as usize;
-                        if !mode.storage
-                            && (staging.brushes.len() >= BRUSH_CHUNK
-                                || staging.stops.len() + brush.stop_count as usize > STOP_CHUNK)
-                        {
+            if segment.brushes <= 1 && !fill_stats {
+                staging
+                    .bodies
+                    .extend(
+                        tables.shapes.bodies()[slice_start..slice_end]
+                            .iter()
+                            .map(|&body| ShapeRecordBody {
+                                placement: placement_index,
+                                ..body
+                            }),
+                    );
+                staging
+                    .curves
+                    .extend_from_slice(&tables.shapes.curves()[slice_start..slice_end]);
+                taken += available;
+            } else {
+                let class_segments = mode
+                    .storage
+                    .then(|| band_class_segments(segment.band_class));
+                for index in slice_start..slice_end {
+                    let mut body = tables.shapes.bodies()[index];
+                    if body.brush != 0 {
+                        let Some(mapped) = staging.map_brush(
+                            tables,
+                            &run.placement,
+                            mode.storage,
+                            (body.brush - 1) as usize,
+                        ) else {
                             stopped = true;
                             break;
-                        }
-                        painted_stops(&tables.stops[stop_range], &layer, &mut staging.painted);
-                        let stop_start = staging.stops.len() as u32;
-                        staging.stops.extend_from_slice(&staging.painted);
-                        staging.brushes.push(BrushRecord {
-                            stop_start,
-                            ..brush
-                        });
-                        staging.brush_map[source] = staging.brushes.len() as u32;
+                        };
+                        body.brush = mapped;
                     }
-                    body.brush = staging.brush_map[source];
+                    body.placement = placement_index;
+                    staging.bodies.push(body);
+                    staging.curves.push(tables.shapes.curves()[index]);
+                    if fill_stats {
+                        staging.fill.add_record(
+                            &tables.shapes.get(index).expect("recorded shape index"),
+                            run.placement.offset,
+                            root_scale,
+                            class_segments,
+                        );
+                    }
+                    taken += 1;
                 }
-                body.placement = placement_index;
-                let record_index = staging.bodies.len() as u32;
-                staging.bodies.push(body);
-                staging.curves.push(tables.shapes.curves()[index]);
-                staging.push_draw(key, band_class, record_index, segment.occluders);
-                if fill_stats {
-                    staging.fill.add_record(
-                        &tables.shapes.get(index).expect("recorded shape index"),
-                        run.placement.offset,
-                        root_scale,
-                        class_segments,
-                    );
-                }
-                taken += 1;
             }
             if taken > segment_start {
+                let records_end = staging.bodies.len() as u32;
+                staging.push_draw_range(
+                    key,
+                    band_class,
+                    records_start..records_end,
+                    segment.occluders,
+                );
                 pipelines.add(key);
             }
-            if stopped {
+            if stopped || available < segment.count - skip_in_segment {
                 break;
             }
         }
@@ -1949,9 +2012,7 @@ impl RunStore {
 /// The shape segments of `run` that draw: not the content markers and not
 /// the other lane.
 pub(crate) fn run_has_shapes(run: &RunDraw) -> bool {
-    run.tables().segments[run.segments.start as usize..run.segments.end as usize]
-        .iter()
-        .any(|segment| segment.lane == RecordLane::Shapes && segment.count > 0)
+    run.records > 0
 }
 
 #[cfg(test)]

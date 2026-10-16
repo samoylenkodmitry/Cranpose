@@ -1557,6 +1557,9 @@ fn push_primitive(
 /// other lane (text, images, shadows) take their own item paths between
 /// them, in the order the command drew.
 fn push_draw_run(out: &mut LayerScene, run: &DrawRunNode, content: &ContentContext<'_>) {
+    if !run.summary.has_shapes && !run.summary.has_others {
+        return;
+    }
     let ContentContext {
         layer_bounds,
         local_layer,
@@ -1565,7 +1568,6 @@ fn push_draw_run(out: &mut LayerScene, run: &DrawRunNode, content: &ContentConte
         anchor: snap_anchor,
         motion_context_animated,
     } = *content;
-    let counts = scene_counts(&out.scene);
     let placement = RunPlacement::painted(
         Point::new(layer_bounds.x, layer_bounds.y),
         snap_anchor,
@@ -1582,9 +1584,9 @@ fn push_draw_run(out: &mut LayerScene, run: &DrawRunNode, content: &ContentConte
             run.segments.clone(),
             placement,
         ));
-        assign_snap_anchor_since(&mut out.scene, counts, snap_anchor);
         return;
     }
+    let counts = scene_counts(&out.scene);
     let mut shapes_from: Option<u32> = None;
     let flush_shapes = |out: &mut LayerScene, end: u32, from: &mut Option<u32>| {
         if let Some(start) = from.take() {
