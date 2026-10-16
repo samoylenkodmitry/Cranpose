@@ -4890,20 +4890,18 @@ pub(crate) struct FinishedSlotPass {
     pub(crate) detached_root_children: Vec<slot::DetachedSubtree>,
 }
 
-struct ActivePassState {
-    state: slot::SlotWriteSessionState,
-    storage_capacity: usize,
-}
-
 struct SlotsHostInner {
     table: SlotTable,
     nested_hosts: Vec<std::rc::Weak<SlotsHost>>,
     lifecycle: slot::SlotLifecycleCoordinator,
     runtime_state: Option<Rc<crate::composer::ComposerRuntimeState>>,
-    active_pass: Option<ActivePassState>,
-    /// The last finished pass's writer state, whose storage the next pass
-    /// reuses.
-    spare_pass_state: Option<slot::SlotWriteSessionState>,
+    /// The table's storage capacity when the active pass began; `None`
+    /// while no pass is active.
+    active_pass: Option<usize>,
+    /// The passes' writer state, `None` before the first pass. It stays in
+    /// place between passes, each reusing its storage: moved, its hundreds
+    /// of bytes cost a copy at each pass's start and end.
+    pass_state: Option<slot::SlotWriteSessionState>,
 }
 
 impl Drop for SlotsHost {
@@ -4950,7 +4948,7 @@ impl SlotsHost {
                 lifecycle: slot::SlotLifecycleCoordinator::default(),
                 runtime_state: None,
                 active_pass: None,
-                spare_pass_state: None,
+                pass_state: None,
             }),
         }
     }
@@ -5198,23 +5196,25 @@ impl SlotsHost {
 
     pub(crate) fn begin_pass(&self, mode: slot::SlotPassMode, folds: &Rc<slot::BranchFolds>) {
         let mut inner = self.inner.borrow_mut();
-        if inner.active_pass.is_some() {
+        let SlotsHostInner {
+            table,
+            active_pass,
+            pass_state,
+            ..
+        } = &mut *inner;
+        if active_pass.is_some() {
             log::error!("slot pass already active for host");
             return;
         }
-        let mut state = match inner.spare_pass_state.take() {
-            Some(mut state) => {
+        let state = match pass_state {
+            Some(state) => {
                 state.set_folds(Rc::clone(folds));
                 state
             }
-            None => slot::SlotWriteSessionState::new(Rc::clone(folds)),
+            None => pass_state.insert(slot::SlotWriteSessionState::new(Rc::clone(folds))),
         };
         state.reset_for_pass(mode);
-        let storage_capacity = inner.table.storage_capacity();
-        inner.active_pass = Some(ActivePassState {
-            state,
-            storage_capacity,
-        });
+        *active_pass = Some(table.storage_capacity());
     }
 
     pub(crate) fn has_active_pass(&self) -> bool {
@@ -5234,12 +5234,14 @@ impl SlotsHost {
             table,
             lifecycle,
             active_pass,
+            pass_state,
             ..
         } = &mut *inner;
-        let active_pass = active_pass
+        let state = pass_state
             .as_mut()
+            .filter(|_| active_pass.is_some())
             .expect("slot write session requires an active pass");
-        let mut session = table.write_session(lifecycle, &mut active_pass.state);
+        let mut session = table.write_session(lifecycle, state);
         f(&mut session)
     }
 
@@ -5262,18 +5264,19 @@ impl SlotsHost {
         let SlotsHostInner {
             table,
             lifecycle,
-            active_pass: active_pass_slot,
-            spare_pass_state,
+            active_pass,
+            pass_state,
             ..
         } = &mut *inner;
-        let Some(mut active_pass) = active_pass_slot.take() else {
+        let (Some(storage_capacity), Some(state)) = (active_pass.take(), pass_state.as_mut())
+        else {
             return Ok(FinishedSlotPass::default());
         };
 
-        active_pass.state.flush_payload_location_refreshes(table);
+        state.flush_payload_location_refreshes(table);
 
         #[cfg(any(test, debug_assertions))]
-        if let Err(err) = active_pass.state.validate(table) {
+        if let Err(err) = state.validate(table) {
             log::error!("slot writer invariant violation before finalize_pass: {err:?}");
             return Err(NodeError::SlotHostUnavailable {
                 operation: "SlotsHost::finish_pass",
@@ -5282,18 +5285,17 @@ impl SlotsHost {
         }
 
         let detached_root_children = {
-            let mut session = table.write_session(lifecycle, &mut active_pass.state);
+            let mut session = table.write_session(lifecycle, state);
             session.finalize_pass(applier)?
         };
 
         let outcome = SlotPassOutcome {
-            compacted: active_pass.state.request_compaction,
-            compact_anchor_registry_storage: active_pass.state.request_anchor_storage_compaction,
-            compact_payload_storage: active_pass.state.request_payload_storage_compaction,
-            trim_growth_slack: active_pass.state.removed_nothing()
-                && table.storage_capacity() > active_pass.storage_capacity,
+            compacted: state.request_compaction,
+            compact_anchor_registry_storage: state.request_anchor_storage_compaction,
+            compact_payload_storage: state.request_payload_storage_compaction,
+            trim_growth_slack: state.removed_nothing()
+                && table.storage_capacity() > storage_capacity,
         };
-        *spare_pass_state = Some(active_pass.state);
         Ok(FinishedSlotPass {
             outcome,
             detached_root_children,
