@@ -1047,6 +1047,7 @@ impl RecomposeScope {
     /// Ends collecting reads. A body that ran makes its reads the scope's
     /// subscriptions and drops the states it did not read again, as Compose
     /// does; a skipped or unfinished one keeps the subscriptions it had.
+    #[inline]
     pub(crate) fn end_reads(&self, ran: bool) {
         let cursor = self.inner.read_cursor.replace(NOT_READING);
         // A skipped body that read in order keeps the subscriptions as they
@@ -1054,6 +1055,13 @@ impl RecomposeScope {
         if cursor == NOT_READING || (!ran && cursor != DIVERGED) {
             return;
         }
+        self.settle_reads(cursor, ran);
+    }
+
+    /// The part of [`Self::end_reads`] for a body that ran or left the
+    /// order of its reads: `cursor` is where the read cursor stood.
+    #[inline(never)]
+    fn settle_reads(&self, cursor: u32, ran: bool) {
         let id = self.id();
         let mut subscribed = self.inner.state_subscriptions.borrow_mut();
         if cursor != DIVERGED {

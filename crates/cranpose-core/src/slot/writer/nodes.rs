@@ -1,9 +1,14 @@
-use super::super::{NodeRecord, NodeSlotUpdate, RootNodeIds, SlotTable, SlotWriteSession};
+use super::super::{
+    GroupRecord, NodeRecord, NodeSlotUpdate, RootNodeIds, SlotTable, SlotWriteSession,
+};
 use crate::NodeId;
 
 impl SlotTable {
     fn subtree_node_records_at(&self, group_index: usize) -> &[NodeRecord] {
-        let group = &self.groups[group_index];
+        self.subtree_node_records_of(&self.groups[group_index], group_index)
+    }
+
+    fn subtree_node_records_of(&self, group: &GroupRecord, group_index: usize) -> &[NodeRecord] {
         let start = group.node_start as usize;
         let records = start
             .checked_add(group.subtree_node_count as usize)
@@ -26,24 +31,25 @@ impl SlotTable {
         &self,
         group_index: usize,
     ) -> impl Iterator<Item = NodeId> + '_ {
-        let records = self.subtree_node_records_at(group_index);
-        #[cfg(any(test, debug_assertions))]
-        if crate::slot_validation_diagnostics_enabled() {
-            let parent = records.first().map(|record| record.parent_id);
-            assert!(
-                records
-                    .iter()
-                    .filter(|record| Some(record.parent_id) == parent)
-                    .map(|record| record.id)
-                    .eq(super::super::types::root_node_ids(records)),
-                "the roots of a group subtree must be the records sharing its first record's parent"
-            );
-        }
-        let parent = records.first().map(|record| record.parent_id);
-        records
-            .iter()
-            .filter(move |record| Some(record.parent_id) == parent)
-            .map(|record| record.id)
+        root_node_id_iter(self.subtree_node_records_at(group_index))
+    }
+
+    /// The end of the subtree at `group_index` and the ids of its root
+    /// nodes, from one read of its record. `None` when its stored span
+    /// reaches past the groups.
+    pub(in crate::slot) fn subtree_end_and_root_node_ids_at(
+        &self,
+        group_index: usize,
+    ) -> Option<(usize, impl Iterator<Item = NodeId> + '_)> {
+        let group = self.groups.get(group_index)?;
+        let len = group.subtree_len as usize;
+        let end = group_index
+            .checked_add(len)
+            .filter(|&end| len > 0 && end <= self.groups.len())?;
+        Some((
+            end,
+            root_node_id_iter(self.subtree_node_records_of(group, group_index)),
+        ))
     }
 
     pub(in crate::slot) fn first_subtree_root_node_id_at(
@@ -168,4 +174,26 @@ impl SlotWriteSession<'_> {
         self.table
             .node_identity_at_cursor(frame.group_anchor, frame.node_cursor)
     }
+}
+
+/// The ids of the root nodes among a subtree's node `records`: those sharing
+/// the first record's parent, in order.
+fn root_node_id_iter(records: &[NodeRecord]) -> impl Iterator<Item = NodeId> + '_ {
+    #[cfg(any(test, debug_assertions))]
+    if crate::slot_validation_diagnostics_enabled() {
+        let parent = records.first().map(|record| record.parent_id);
+        assert!(
+            records
+                .iter()
+                .filter(|record| Some(record.parent_id) == parent)
+                .map(|record| record.id)
+                .eq(super::super::types::root_node_ids(records)),
+            "the roots of a group subtree must be the records sharing its first record's parent"
+        );
+    }
+    let parent = records.first().map(|record| record.parent_id);
+    records
+        .iter()
+        .filter(move |record| Some(record.parent_id) == parent)
+        .map(|record| record.id)
 }

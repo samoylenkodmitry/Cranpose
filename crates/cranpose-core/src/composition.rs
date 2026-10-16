@@ -14,6 +14,10 @@ use crate::{
 /// A running composition that turns root content into nodes. `A` is the applier type that creates
 /// and edits those nodes.
 pub struct Composition<A: Applier + 'static> {
+    /// The composer of the last pass over the root slots, kept so the next
+    /// pass reuses its core. First, so it lets go of the tree before the
+    /// fields below do.
+    parked_composer: Option<Composer>,
     pub(crate) composer_state: Rc<crate::composer::ComposerRuntimeState>,
     pub(crate) slots: Rc<SlotsHost>,
     pub(crate) applier: Rc<ConcreteApplierHost<A>>,
@@ -56,6 +60,7 @@ impl<A: Applier + 'static> Composition<A> {
         let slots = Rc::new(SlotsHost::new(SlotTable::new()));
         let applier = Rc::new(ConcreteApplierHost::new(applier));
         Self {
+            parked_composer: None,
             composer_state,
             slots,
             applier,
@@ -487,7 +492,8 @@ impl<A: Applier + 'static> Composition<A> {
                     .unwrap_or_else(|| Rc::clone(&self.composer_state));
                 let side_effects = {
                     let _teardown = runtime::enter_state_teardown_scope();
-                    let composer = Composer::new_with_shared_state(
+                    let composer = Composer::for_pass(
+                        self.parked_composer.take(),
                         shared_state,
                         Rc::clone(host),
                         self.applier_host(),
@@ -544,6 +550,7 @@ impl<A: Applier + 'static> Composition<A> {
                     if requested_root_render {
                         self.root_render_requested = true;
                     }
+                    self.park_composer(host, composer);
                     side_effects
                 };
                 runtime_handle.drain_ui();
@@ -575,6 +582,13 @@ impl<A: Applier + 'static> Composition<A> {
     /// requested. Returns `true` if a pass recomposed content.
     pub fn process_invalid_scopes(&mut self) -> Result<bool, NodeError> {
         self.process_invalid_scopes_until_root_request()
+    }
+
+    /// Keeps the composer of a pass over the root slots for the next pass.
+    fn park_composer(&mut self, host: &Rc<SlotsHost>, composer: Composer) {
+        if Rc::ptr_eq(host, &self.slots) {
+            self.parked_composer = composer.park();
+        }
     }
 
     fn dispose_forgotten_movables(&mut self) -> Result<(), NodeError> {

@@ -415,10 +415,18 @@ impl SlotWriteSession<'_> {
             );
             return;
         };
-        self.table
-            .subtree_root_node_id_iter_at(group_index)
-            .for_each(attach_root);
-        let subtree_end = self.group_subtree_end(group_index, "group skip cursor advance");
+        let subtree_end = match self.table.subtree_end_and_root_node_ids_at(group_index) {
+            Some((end, roots)) => {
+                roots.for_each(attach_root);
+                end
+            }
+            None => {
+                self.table
+                    .subtree_root_node_id_iter_at(group_index)
+                    .for_each(attach_root);
+                self.group_subtree_end(group_index, "group skip cursor advance")
+            }
+        };
         self.state.advance_parent_after_child(subtree_end);
     }
 
