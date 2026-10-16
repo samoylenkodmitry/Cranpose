@@ -813,8 +813,10 @@ impl LayoutEngine for MemoryApplier {
 #[derive(Debug, Clone)]
 pub struct LayoutMeasurements {
     root: Rc<MeasuredNode>,
-    semantics: Option<SemanticsTree>,
-    layout_tree: Option<LayoutTree>,
+    // Boxed: a frame that builds neither tree moves a few words, not the
+    // hundreds of bytes the trees take inline.
+    semantics: Option<Box<SemanticsTree>>,
+    layout_tree: Option<Box<LayoutTree>>,
 }
 
 impl LayoutMeasurements {
@@ -825,8 +827,8 @@ impl LayoutMeasurements {
     ) -> Self {
         Self {
             root,
-            semantics,
-            layout_tree,
+            semantics: semantics.map(Box::new),
+            layout_tree: layout_tree.map(Box::new),
         }
     }
 
@@ -837,14 +839,14 @@ impl LayoutMeasurements {
 
     /// Returns the semantics tree, or `None` if the measure options left it out.
     pub fn semantics_tree(&self) -> Option<&SemanticsTree> {
-        self.semantics.as_ref()
+        self.semantics.as_deref()
     }
 
     /// Counts the allocations that the layout tree and the semantics tree retain.
     pub fn debug_allocation_stats(&self) -> LayoutAllocationDebugStats {
         let mut stats = self
             .layout_tree
-            .as_ref()
+            .as_deref()
             .map(LayoutTree::debug_allocation_stats)
             .unwrap_or_default();
         if let Some(semantics) = &self.semantics {
@@ -855,12 +857,12 @@ impl LayoutMeasurements {
 
     /// Consumes the measurements and returns the built [`LayoutTree`], if requested.
     pub fn into_layout_tree(self) -> Option<LayoutTree> {
-        self.layout_tree
+        self.layout_tree.map(|tree| *tree)
     }
 
     /// Returns a cloned [`LayoutTree`] for rendering/debug consumers, if requested.
     pub fn layout_tree(&self) -> Option<LayoutTree> {
-        self.layout_tree.clone()
+        self.layout_tree.as_deref().cloned()
     }
 }
 
