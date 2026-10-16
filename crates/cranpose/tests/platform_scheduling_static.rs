@@ -309,6 +309,35 @@ fn every_workflow_says_what_happens_when_it_overlaps_itself() {
     }
 }
 
+/// The self-hosted Macs' runner user has `core.fsmonitor` on, and
+/// `actions/checkout` copies that config: every checkout left a watcher
+/// daemon behind, and one hung behind a busy daemon for its whole job
+/// (nightly 38862621908). Every workflow with a self-hosted job turns it off.
+#[test]
+fn self_hosted_workflows_run_git_without_fsmonitor() {
+    let workflows = std::fs::read_dir(workspace_path(".github/workflows"))
+        .expect("the workflows directory must be readable");
+    let mut checked = 0;
+    for entry in workflows.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|extension| extension != "yml") {
+            continue;
+        }
+        let workflow = std::fs::read_to_string(&path).expect("a workflow must be readable");
+        if !workflow.contains("self-hosted") || workflow.contains("pull_request_target") {
+            continue;
+        }
+        checked += 1;
+        assert!(
+            workflow.contains("  GIT_CONFIG_KEY_0: core.fsmonitor\n")
+                && workflow.contains("  GIT_CONFIG_VALUE_0: \"false\"\n"),
+            "{} runs on a self-hosted machine and must set core.fsmonitor=false in its env",
+            path.display()
+        );
+    }
+    assert!(checked > 0, "the check must find the self-hosted workflows");
+}
+
 /// Returns the lines of one job in a workflow, from its key to the next job.
 fn workflow_job_block(workflow: &str, job: &str) -> String {
     let header = format!("  {job}:");
