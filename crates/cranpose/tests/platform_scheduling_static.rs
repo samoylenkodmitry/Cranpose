@@ -265,7 +265,17 @@ fn workflow_concurrency(name: &str) -> Option<(String, String)> {
 
 #[test]
 fn every_workflow_says_what_happens_when_it_overlaps_itself() {
-    for name in ["rust.yml", "heavy-selfhosted.yml", "build-one.yml"] {
+    // A pull request's newer push supersedes its older run. On main a run
+    // finishes: merges come faster than a run takes, and cancelling main's
+    // run at every merge left main with no answer for a day.
+    for (name, cancel_expected) in [
+        ("rust.yml", "${{ github.ref != 'refs/heads/main' }}"),
+        (
+            "heavy-selfhosted.yml",
+            "${{ github.ref != 'refs/heads/main' }}",
+        ),
+        ("build-one.yml", "true"),
+    ] {
         let (group, cancel) = workflow_concurrency(name)
             .unwrap_or_else(|| panic!("{name} must declare a concurrency group"));
         assert!(
@@ -273,8 +283,9 @@ fn every_workflow_says_what_happens_when_it_overlaps_itself() {
             "{name} groups per ref so a new push supersedes the old one, found {group:?}"
         );
         assert_eq!(
-            cancel, "true",
-            "{name} answers a merge; an older commit's answer is dead weight on five runners"
+            cancel, cancel_expected,
+            "{name}: an older pull-request commit's answer is dead weight on five runners, \
+             and main needs a finished run"
         );
     }
 

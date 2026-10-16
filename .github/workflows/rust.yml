@@ -37,9 +37,13 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
+# A pull request's newer push replaces its older run. A run on main finishes:
+# main merges come faster than a run takes, and a main run cancelled by the
+# next merge left main with no finished run from 2026-10-15 06:30 to 10-16
+# 07:30. GitHub keeps one pending main run, the newest, behind the running one.
 concurrency:
   group: rust-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   CARGO_TERM_COLOR: always
