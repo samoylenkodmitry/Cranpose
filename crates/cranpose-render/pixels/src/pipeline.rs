@@ -22,7 +22,7 @@ use cranpose_ui::{
 };
 use cranpose_ui_graphics::{
     BlendMode, Color, ColorFilter, CompositingStrategy, DrawPrimitive, GraphicsLayer, LayerShape,
-    Point, Rect, RenderEffect, RoundedCornerShape, TransformOrigin,
+    Point, Rect, RenderEffect, RoundedCornerShape, TransformOrigin, whole,
 };
 
 use crate::{
@@ -252,7 +252,7 @@ fn blur_samples(blur_radius: f32) -> Vec<ShadowSample> {
         return Vec::new();
     }
 
-    let sample_count = ((blur_radius * 2.4).ceil() as usize).clamp(8, 36);
+    let sample_count = (whole::ceil(blur_radius * 2.4) as usize).clamp(8, 36);
     let sigma = (blur_radius * 0.5).max(1.0);
     let mut samples = Vec::with_capacity(sample_count);
     let mut weight_sum = 0.0f32;
@@ -665,7 +665,7 @@ fn text_decoration_rect(x: f32, y: f32, width: f32, thickness: f32) -> Rect {
         x,
         y,
         width,
-        height: thickness.ceil().max(1.0),
+        height: whole::ceil(thickness).max(1.0),
     }
 }
 

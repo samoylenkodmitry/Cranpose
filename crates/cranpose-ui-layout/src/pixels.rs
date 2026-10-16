@@ -1,4 +1,5 @@
 //! Snapping lengths to the device pixel grid the way Compose does.
+use cranpose_ui_graphics::whole;
 
 /// A length moved onto the whole device pixel Compose would give it.
 ///
@@ -14,9 +15,9 @@ pub fn round_to_px(value: f32, density: f32) -> f32 {
     // At density 1 the scale and the division change no bit; a chip with no
     // float divider skips them.
     if density == 1.0 {
-        return (value + 0.5).floor();
+        return whole::floor(value + 0.5);
     }
-    (value * density + 0.5).floor() / density
+    whole::floor(value * density + 0.5) / density
 }
 
 /// A length moved up onto the next whole device pixel, as Compose sizes
@@ -26,9 +27,9 @@ pub fn ceil_to_px(value: f32, density: f32) -> f32 {
         return value;
     }
     if density == 1.0 {
-        return value.ceil();
+        return whole::ceil(value);
     }
-    (value * density).ceil() / density
+    whole::ceil(value * density) / density
 }
 
 #[cfg(test)]
