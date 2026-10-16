@@ -186,3 +186,35 @@ fn schedule_node_update_without_runtime_is_ignored() {
 
     assert!(ok);
 }
+
+#[test]
+fn a_finished_task_handle_never_names_the_task_after_it() {
+    let runtime = TestRuntime::new();
+    let handle = runtime.handle();
+    let first = handle.spawn_ui(async {}).expect("test runtime is alive");
+    handle.drain_ui();
+    assert!(first.is_finished());
+
+    let polls = Rc::new(Cell::new(0));
+    let notices = Rc::new(Cell::new(0));
+    let second = handle
+        .spawn_ui(Restless {
+            polls: Rc::clone(&polls),
+            notices: Rc::clone(&notices),
+            queue: handle.clone(),
+        })
+        .expect("test runtime is alive");
+    first.cancel();
+    handle.drain_ui();
+
+    assert!(first.is_finished());
+    assert!(
+        !second.is_finished(),
+        "the stale handle cancelled the next task"
+    );
+    assert_eq!(polls.get(), 1);
+    assert_eq!(handle.debug_stats().tasks_len, 1);
+    second.cancel();
+    assert!(second.is_finished());
+    assert_eq!(handle.debug_stats().tasks_len, 0);
+}
