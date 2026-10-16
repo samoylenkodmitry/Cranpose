@@ -293,11 +293,12 @@ pub use cranpose_capabilities as capabilities;
 mod composition_api {
     pub use cranpose_core::{
         BlockingError, BlockingExecutor, BlockingExecutorConfig, BlockingTask, CollectEvents,
-        CoroutineScope, DisposableEffect, DisposableEffectResult, DisposableEffectScope,
-        EventStream, LaunchedEffect, LaunchedEffectAsync, LaunchedEffectScope, MovableContent,
-        MutableState, SnapshotStateList, SnapshotStateMap, State, TaskHandle, collectAsState,
-        delay, forget_movable, interval, key, launchBlocking, movable, movableContentOf,
-        mutableStateList, mutableStateListOf, mutableStateMap, mutableStateMapOf, mutableStateOf,
+        ComputedState, CoroutineScope, DisposableEffect, DisposableEffectResult,
+        DisposableEffectScope, EventStream, LaunchedEffect, LaunchedEffectAsync,
+        LaunchedEffectScope, MovableContent, MutableState, SnapshotStateList, SnapshotStateMap,
+        State, TaskHandle, collectAsState, computedStateOf, delay, derivedStateOf, forget_movable,
+        interval, key, launchBlocking, movable, movableContentOf, mutableStateList,
+        mutableStateListOf, mutableStateMap, mutableStateMapOf, mutableStateOf,
         mutableStateOfNeverEqual, produceState, remember, rememberCoroutineScope,
         rememberEventStream, rememberKeyed, rememberMovableContentOf, rememberMutableStateOf,
         rememberMutableStateOfNeverEqual, rememberUpdatedState, withBlocking,
