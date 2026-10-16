@@ -996,6 +996,7 @@ fn refresh_retained_redraw_nodes<R: Renderer>(
         let mut applier = app.composition.applier_mut();
         collect_retained_redraw_nodes(
             &mut applier,
+            &app.app_context,
             root,
             &mut dirty_nodes,
             &mut surface.redraw_walk,
@@ -1195,44 +1196,90 @@ pub(crate) fn build_draw_refresh_scope(
     refresh_scope
 }
 
-/// Collects into `dirty_nodes` the nodes under `root` whose redraw flag no
-/// draw repass took, clearing the flags. A window root below `root` draws on
-/// a surface of its own. Each node takes one lookup; `pending` holds the
-/// nodes still to visit and keeps its storage for the next frame.
+/// Collects into `dirty_nodes` the nodes under `root` whose redraw flag was
+/// set before they had an id, clearing the flags: a draw repass names every
+/// other node whose content changed. A node under another window root, or
+/// not attached yet, stays noted in `context` for a later frame. `pending`
+/// keeps its storage for the next frame.
 fn collect_retained_redraw_nodes(
     applier: &mut MemoryApplier,
+    context: &cranpose_ui::AppContext,
     root: NodeId,
     dirty_nodes: &mut Vec<NodeId>,
     pending: &mut Vec<NodeId>,
 ) {
     pending.clear();
-    pending.push(root);
-    while let Some(id) = pending.pop() {
-        let Ok(node) = applier.get_mut(id) else {
-            continue;
+    context.take_retained_redraw_nodes_into(pending);
+    for &id in pending.iter() {
+        match redraw_place(applier, id, root) {
+            RedrawPlace::Here => {
+                if take_redraw_flag(applier, id) {
+                    dirty_nodes.push(id);
+                }
+            }
+            RedrawPlace::Elsewhere => context.keep_retained_redraw_node(id),
+            RedrawPlace::Gone => {}
+        }
+    }
+}
+
+/// Where a node noted for a redraw lies for the surface of `root`.
+enum RedrawPlace {
+    /// Under `root` and under no other window root: the surface takes it.
+    Here,
+    /// Under another window root, or not attached to a root yet.
+    Elsewhere,
+    /// The node is gone.
+    Gone,
+}
+
+fn redraw_place(applier: &mut MemoryApplier, id: NodeId, root: NodeId) -> RedrawPlace {
+    let mut current = id;
+    loop {
+        if current == root {
+            return RedrawPlace::Here;
+        }
+        let Ok(node) = applier.get_mut(current) else {
+            return if current == id {
+                RedrawPlace::Gone
+            } else {
+                RedrawPlace::Elsewhere
+            };
         };
-        if let Some(layout) = node.as_any_mut().downcast_mut::<LayoutNode>() {
-            if id != root && layout.is_window_root() {
-                continue;
-            }
-            if layout.needs_redraw() {
-                layout.clear_needs_redraw();
-                dirty_nodes.push(id);
-            }
-            // Reversed, so the first child comes off next and the nodes
-            // come in tree order.
-            pending.extend(layout.children.iter().rev());
-            continue;
-        }
-        let mut children = Default::default();
-        node.collect_children_into(&mut children);
-        pending.extend(children.iter().rev());
-        if let Some(subcompose) = node.as_any_mut().downcast_mut::<SubcomposeLayoutNode>()
-            && subcompose.needs_redraw()
+        let parent = node.parent();
+        if node
+            .as_any_mut()
+            .downcast_mut::<LayoutNode>()
+            .is_some_and(|layout| layout.is_window_root())
         {
-            subcompose.clear_needs_redraw();
-            dirty_nodes.push(id);
+            return RedrawPlace::Elsewhere;
         }
+        let Some(parent) = parent else {
+            return RedrawPlace::Elsewhere;
+        };
+        current = parent;
+    }
+}
+
+/// Clears the redraw flag of the layout or subcompose node `id`, and returns
+/// whether it was set.
+fn take_redraw_flag(applier: &mut MemoryApplier, id: NodeId) -> bool {
+    let Ok(node) = applier.get_mut(id) else {
+        return false;
+    };
+    let any = node.as_any_mut();
+    if let Some(layout) = any.downcast_mut::<LayoutNode>() {
+        let redraw = layout.needs_redraw();
+        layout.clear_needs_redraw();
+        return redraw;
+    }
+    match any.downcast_mut::<SubcomposeLayoutNode>() {
+        Some(subcompose) => {
+            let redraw = subcompose.needs_redraw();
+            subcompose.clear_needs_redraw();
+            redraw
+        }
+        None => false,
     }
 }
 
