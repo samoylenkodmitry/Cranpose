@@ -39,6 +39,15 @@ concurrency:
   group: build-one-${{ github.ref }}-${{ inputs.runner }}-${{ inputs.target }}
   cancel-in-progress: true
 
+env:
+  # The self-hosted Macs' runner user has core.fsmonitor on in ~/.gitconfig,
+  # which actions/checkout copies: every checkout left a watcher daemon
+  # behind (over 130 on macm3), and a checkout behind a busy one hung for its
+  # job's whole hour (nightly 38862621908, 2026-10-16). CI's git runs without.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: core.fsmonitor
+  GIT_CONFIG_VALUE_0: "false"
+
 jobs:
   build:
     name: ${{ inputs.target }} on ${{ inputs.runner }}

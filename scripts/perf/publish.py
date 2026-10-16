@@ -50,8 +50,11 @@ def credentials():
     asking for credentials (macm3, 2026-10-10 and 11)."""
     if not os.environ.get('GH_TOKEN'):
         return None
+    # These replace the job's own GIT_CONFIG_* settings, so the workflows'
+    # core.fsmonitor=false is kept here too.
     settings = [('http.extraheader', ''), (f'http.{GITHUB}/.extraheader', ''),
-                ('credential.helper', ''), ('credential.helper', TOKEN_HELPER)]
+                ('credential.helper', ''), ('credential.helper', TOKEN_HELPER),
+                ('core.fsmonitor', 'false')]
     return {**os.environ, 'GIT_CONFIG_COUNT': str(len(settings)),
             **{f'GIT_CONFIG_KEY_{index}': key for index, (key, _) in enumerate(settings)},
             **{f'GIT_CONFIG_VALUE_{index}': value for index, (_, value) in enumerate(settings)}}
