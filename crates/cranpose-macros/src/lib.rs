@@ -1032,7 +1032,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
 
         let recompose_setter = quote! {
             {
-                #composer_ident.set_recompose_callback(move |
+                #group_ident.set_recompose_callback(move |
                     #composer_ident: &#core_path::Composer|
                 {
                     let _ = #recompose_fn_ident #ty_generics_turbofish (

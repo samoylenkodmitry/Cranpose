@@ -22,6 +22,7 @@ pub(crate) fn hot_guard_paths(block: &mut Block) -> Vec<String> {
         in_content_closure: false,
         uses_composer_alias: false,
         branch_depth: 0,
+        lone_statement: false,
         hot: HotPaths::new(true, "Card"),
     };
     injector.visit_block_mut(block);
@@ -45,6 +46,7 @@ pub(crate) fn inject_branch_groups_with(
         in_content_closure: false,
         uses_composer_alias: false,
         branch_depth: 0,
+        lone_statement: false,
         hot: HotPaths::new(hot, &scope.to_string()),
     };
     injector.visit_block_mut(block);
@@ -142,6 +144,11 @@ struct BranchGroupInjector<'a> {
     in_content_closure: bool,
     uses_composer_alias: bool,
     branch_depth: u32,
+    /// Whether the statement being visited is the only one in its block.
+    /// The block's own guard, or the body's, already sets it apart, as a
+    /// tail expression is, so outside hot reload it needs no guard of its
+    /// own.
+    lone_statement: bool,
     hot: HotPaths,
 }
 
@@ -308,6 +315,7 @@ impl BranchGroupInjector<'_> {
             } else {
                 None
             };
+            self.lone_statement = count == 1 && !self.hot.enabled;
             self.visit_stmt_mut(stmt);
             self.hot.close(&hot);
             sandwiches.push(hot);
@@ -317,6 +325,9 @@ impl BranchGroupInjector<'_> {
 
     fn fold_local_statements(&mut self, block: &mut Block, mut sandwiches: Vec<Option<String>>) {
         let count = block.stmts.len();
+        if count == 1 && !self.hot.enabled {
+            return;
+        }
         if !block
             .stmts
             .iter()
@@ -837,13 +848,16 @@ impl VisitMut for BranchGroupInjector<'_> {
     }
 
     fn visit_stmt_mut(&mut self, stmt: &mut Stmt) {
+        let lone = std::mem::take(&mut self.lone_statement);
         let hot = match &*stmt {
             Stmt::Expr(expr, Some(_)) => self.hot.open("stmt", &statement_name(expr)),
             _ => None,
         };
         visit_mut::visit_stmt_mut(self, stmt);
         self.hot.close(&hot);
-        if let Stmt::Expr(expr, Some(semi)) = stmt {
+        if let Stmt::Expr(expr, Some(semi)) = stmt
+            && !lone
+        {
             let guard = self.branch_guard_stmt(expr.span(), hot);
             let original = expr.clone();
             let semi = *semi;

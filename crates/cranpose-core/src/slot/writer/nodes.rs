@@ -17,25 +17,33 @@ impl SlotTable {
     }
 
     pub(in crate::slot) fn subtree_root_node_ids_at(&self, group_index: usize) -> RootNodeIds {
-        Self::root_node_ids(self.subtree_node_records_at(group_index))
+        self.subtree_root_node_id_iter_at(group_index).collect()
     }
 
-    fn root_node_ids(records: &[NodeRecord]) -> RootNodeIds {
-        let parent = records.first().map(|record| record.parent_id);
-        let roots: RootNodeIds = records
-            .iter()
-            .filter(|record| Some(record.parent_id) == parent)
-            .map(|record| record.id)
-            .collect();
+    /// The ids of the root nodes of the subtree at `group_index`: the
+    /// records sharing its first record's parent, in order.
+    pub(in crate::slot) fn subtree_root_node_id_iter_at(
+        &self,
+        group_index: usize,
+    ) -> impl Iterator<Item = NodeId> + '_ {
+        let records = self.subtree_node_records_at(group_index);
         #[cfg(any(test, debug_assertions))]
         if crate::slot_validation_diagnostics_enabled() {
-            let expected: RootNodeIds = super::super::types::root_node_ids(records).collect();
-            assert_eq!(
-                roots, expected,
+            let parent = records.first().map(|record| record.parent_id);
+            assert!(
+                records
+                    .iter()
+                    .filter(|record| Some(record.parent_id) == parent)
+                    .map(|record| record.id)
+                    .eq(super::super::types::root_node_ids(records)),
                 "the roots of a group subtree must be the records sharing its first record's parent"
             );
         }
-        roots
+        let parent = records.first().map(|record| record.parent_id);
+        records
+            .iter()
+            .filter(move |record| Some(record.parent_id) == parent)
+            .map(|record| record.id)
     }
 
     pub(in crate::slot) fn first_subtree_root_node_id_at(
@@ -48,7 +56,7 @@ impl SlotTable {
         if crate::slot_validation_diagnostics_enabled() {
             assert_eq!(
                 first,
-                Self::root_node_ids(records).first().copied(),
+                self.subtree_root_node_id_iter_at(group_index).next(),
                 "the first record of a group subtree must be one of its roots"
             );
         }

@@ -89,17 +89,6 @@ impl FrameKeyState {
         }
     }
 
-    pub(in crate::slot) fn expected_ordinal(&self, key: Key) -> u32 {
-        if self.ordinals_spilled {
-            return self.ordinal_map.get(&key).copied().unwrap_or(0);
-        }
-        self.ordinals
-            .as_slice()
-            .iter()
-            .find_map(|(entry_key, ordinal)| (*entry_key == key).then_some(*ordinal))
-            .unwrap_or(0)
-    }
-
     pub(in crate::slot) fn next_ordinal(&mut self, key: Key) -> u32 {
         if self.ordinals_spilled {
             let ordinal = self.ordinal_map.entry(key).or_insert(0);

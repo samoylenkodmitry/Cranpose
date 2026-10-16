@@ -45,7 +45,7 @@ impl<'a> PayloadInit<'a> {
         }
     }
 
-    fn matches(&self, payload: &PayloadRecord) -> bool {
+    pub(in crate::slot) fn matches(&self, payload: &PayloadRecord) -> bool {
         payload.payload_type.type_id == self.payload_type.type_id && payload.source == self.source
     }
 

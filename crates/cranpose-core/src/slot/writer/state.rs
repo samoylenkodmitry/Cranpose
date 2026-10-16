@@ -181,8 +181,11 @@ impl SlotWriteSessionState {
             .map_or(self.root_fold_watermark, |frame| frame.fold_watermark)
     }
 
+    #[inline]
     pub(in crate::slot) fn branch_fold(&self) -> crate::Key {
-        self.folds.fold(self.fold_watermark())
+        self.folds
+            .cached_fold()
+            .unwrap_or_else(|| self.folds.fold(self.fold_watermark()))
     }
 
     pub(in crate::slot) fn mix_branch_fold(&self, key: crate::Key) -> crate::Key {
@@ -232,7 +235,7 @@ impl SlotWriteSessionState {
     pub(in crate::slot) fn pop_group_frame(&mut self) -> Option<(AnchorId, usize)> {
         let frame = self.group_stack.pop()?;
         let group = (frame.group_anchor, frame.group_index);
-        self.folds.watermark_moved();
+        self.folds.watermark_moved_to(self.fold_watermark());
         Some(group)
     }
 }
