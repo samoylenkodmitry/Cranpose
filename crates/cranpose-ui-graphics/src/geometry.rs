@@ -105,16 +105,6 @@ fn vector_path_mask_key(
 /// each axis.
 const VECTOR_PATH_SUPERSAMPLE: f32 = 2.0;
 
-/// Whether `brush` paints anything: some color of it is not transparent.
-fn paints(brush: &Brush) -> bool {
-    match brush {
-        Brush::Solid(color) => color.3 > 0.0,
-        Brush::LinearGradient { colors, .. }
-        | Brush::RadialGradient { colors, .. }
-        | Brush::SweepGradient { colors, .. } => colors.iter().any(|color| color.3 > 0.0),
-    }
-}
-
 /// `path`'s fill, or with [`PathSide::Outside`] the rest of the mask, over
 /// `size` raster pixels from `origin`: one alpha byte of a solid color per
 /// pixel, or for a gradient the color it paints at each pixel's center with
@@ -894,10 +884,9 @@ pub struct TextPrimitive {
     pub text: std::rc::Rc<str>,
     /// Font, size, alignment and other styling the glyphs are laid out and drawn with.
     pub style: DrawTextStyle,
-    /// Text is filled with a single color: the glyph atlas path modulates one
-    /// vertex color per glyph. Gradient brushes are resolved to their first
-    /// stop by the draw scope, exactly like [`DrawScope::draw_vector_path`].
-    pub color: Color,
+    /// Paint for the glyphs: a solid colour, or a gradient laid over the
+    /// text block, as Compose's `drawText(brush)` lays it over the layout.
+    pub brush: Brush,
 }
 
 /// Returns a shared `Rc<str>` for `text`, reusing the copy made on an earlier
@@ -1704,7 +1693,7 @@ impl DrawScopeDefault {
     ) {
         const MAX_MASK_PIXELS: f32 = 4096.0;
 
-        if path.is_empty() || !paints(brush) {
+        if path.is_empty() || !brush.paints() {
             return;
         }
         let bounds = path.bounds();
@@ -2284,13 +2273,7 @@ impl DrawScope for DrawScopeDefault {
     }
 
     fn draw_text_at(&mut self, rect: Rect, brush: Brush, text: &str, style: &DrawTextStyle) {
-        if text.is_empty() {
-            return;
-        }
-        let Some(color) = solid_fill_color(&brush) else {
-            return;
-        };
-        if color.3 <= 0.0 {
+        if text.is_empty() || !brush.paints() {
             return;
         }
         let measurement = self.measure_text(text, style);
@@ -2306,25 +2289,12 @@ impl DrawScope for DrawScopeDefault {
                 rect: Rect::from_origin_size(origin, measurement.size),
                 text: shared_text_str(text),
                 style: style.clone(),
-                color,
+                brush,
             })));
     }
 
     fn into_primitives(self) -> Vec<DrawPrimitive> {
         self.finish().into_primitives_with_markers()
-    }
-}
-
-/// The single color a brush paints with, or its first stop for a gradient.
-///
-/// Text is filled per glyph from one vertex color, so a gradient cannot be
-/// honored there.
-fn solid_fill_color(brush: &Brush) -> Option<Color> {
-    match brush {
-        Brush::Solid(color) => Some(*color),
-        Brush::LinearGradient { colors, .. }
-        | Brush::RadialGradient { colors, .. }
-        | Brush::SweepGradient { colors, .. } => colors.first().copied(),
     }
 }
 

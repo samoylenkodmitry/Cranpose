@@ -2163,7 +2163,7 @@ fn text_draw_primitive(rect: Rect, text: &str) -> DrawPrimitive {
         rect,
         text: std::rc::Rc::from(text),
         style: cranpose_ui_graphics::DrawTextStyle::new(16.0),
-        color: cranpose_ui_graphics::Color::WHITE,
+        brush: cranpose_ui_graphics::Brush::solid(cranpose_ui_graphics::Color::WHITE),
     }))
 }
 

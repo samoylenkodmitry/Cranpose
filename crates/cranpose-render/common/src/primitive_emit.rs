@@ -16,8 +16,8 @@ use crate::{
         apply_layer_to_rect, layer_uniform_scale,
     },
     style_shared::{
-        ResolvedBrush, apply_layer_to_color, compose_color_filters, resolve_layer_brush,
-        scale_corner_radii,
+        ResolvedBrush, apply_layer_to_brush, apply_layer_to_color, compose_color_filters,
+        resolve_layer_brush, scale_corner_radii,
     },
 };
 
@@ -662,8 +662,28 @@ fn text_draw_params(
     if !scale.is_finite() || scale <= 0.0 {
         return None;
     }
-    let color = apply_layer_to_color(text.color, layer);
-    if color.3 <= 0.0 {
+    let mut text_style = text_style_for_draw_style(&text.style);
+    // A gradient fills the glyphs through the style's brush, as a `Text`
+    // composable's does, laid over the text's extent.
+    let color = match text.brush {
+        Brush::Solid(color) => apply_layer_to_color(color, layer),
+        gradient => {
+            let gradient = apply_layer_to_brush(gradient, layer);
+            let first = gradient
+                .colors()
+                .first()
+                .copied()
+                .unwrap_or(Color::TRANSPARENT);
+            text_style.span_style.brush = Some(gradient);
+            first
+        }
+    };
+    if !text_style
+        .span_style
+        .brush
+        .as_ref()
+        .map_or(color.3 > 0.0, Brush::paints)
+    {
         return None;
     }
 
@@ -672,7 +692,7 @@ fn text_draw_params(
         text: cranpose_ui::text::shared_plain_annotated_string(text.text.as_ref()),
         render_text: cranpose_ui::text::shared_plain_render_string(text.text.as_ref()),
         color,
-        text_style: text_style_for_draw_style(&text.style),
+        text_style,
         font_size: text.style.resolved_font_size(),
         scale,
         layout_options: TextLayoutOptions {

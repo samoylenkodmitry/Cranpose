@@ -53,7 +53,7 @@ fn snap_test_text() -> DrawPrimitive {
         rect: rect(0.0, 0.0, 60.0, 20.0),
         text: std::rc::Rc::from("pixel"),
         style: cranpose_ui_graphics::DrawTextStyle::new(16.0),
-        color: cranpose_ui_graphics::Color::WHITE,
+        brush: cranpose_ui_graphics::Brush::solid(cranpose_ui_graphics::Color::WHITE),
     }))
 }
 

@@ -81,7 +81,7 @@ fn sensitive_text_run() -> RenderNode {
             },
             text: Rc::from("M"),
             style: DrawTextStyle::new(18.0),
-            color: Color::BLACK,
+            brush: cranpose_ui_graphics::Brush::solid(Color::BLACK),
         }))],
     ))
 }

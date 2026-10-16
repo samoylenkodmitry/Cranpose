@@ -19,6 +19,7 @@ use crate::{
 };
 
 mod draw_groups;
+mod draw_text_brush;
 
 const BACKGROUND_COLOR: Color = Color(18.0 / 255.0, 18.0 / 255.0, 24.0 / 255.0, 1.0);
 const FOREGROUND_COLOR: Color = Color::WHITE;
@@ -100,10 +101,12 @@ pub enum SharedRenderCase {
     /// Draws in groups of a node whose graphics layer modulates alpha and
     /// filters colour, painted as the node's plain draws are.
     PaintedDrawGroups,
+    /// `DrawScope` text filled with a gradient brush across its extent.
+    GradientDrawText,
 }
 
 /// Every `SharedRenderCase`, for running the whole contract.
-pub const ALL_SHARED_RENDER_CASES: [SharedRenderCase; 12] = [
+pub const ALL_SHARED_RENDER_CASES: [SharedRenderCase; 13] = [
     SharedRenderCase::RoundedRect,
     SharedRenderCase::PrimitiveClip,
     SharedRenderCase::TranslatedSubtree,
@@ -116,6 +119,7 @@ pub const ALL_SHARED_RENDER_CASES: [SharedRenderCase; 12] = [
     SharedRenderCase::FilledPath,
     SharedRenderCase::DrawScopeGroups,
     SharedRenderCase::PaintedDrawGroups,
+    SharedRenderCase::GradientDrawText,
 ];
 
 impl SharedRenderCase {
@@ -134,6 +138,7 @@ impl SharedRenderCase {
             SharedRenderCase::FilledPath => "filled_path",
             SharedRenderCase::DrawScopeGroups => "draw_scope_groups",
             SharedRenderCase::PaintedDrawGroups => "painted_draw_groups",
+            SharedRenderCase::GradientDrawText => "gradient_draw_text",
         }
     }
 
@@ -162,6 +167,7 @@ impl SharedRenderCase {
             SharedRenderCase::FilledPath => vec![filled_path_fixture()],
             SharedRenderCase::DrawScopeGroups => vec![draw_groups::draw_groups_fixture()],
             SharedRenderCase::PaintedDrawGroups => vec![draw_groups::painted_groups_fixture()],
+            SharedRenderCase::GradientDrawText => vec![draw_text_brush::gradient_text_fixture()],
         }
     }
 
@@ -231,6 +237,16 @@ impl SharedRenderCase {
                     panic!("painted_draw_groups expects exactly one rendered frame");
                 };
                 draw_groups::assert_painted_groups_frame(&frame.pixels, frame.width, frame.height);
+            }
+            SharedRenderCase::GradientDrawText => {
+                let [frame] = frames else {
+                    panic!("gradient_draw_text expects exactly one rendered frame");
+                };
+                draw_text_brush::assert_gradient_text_frame(
+                    &frame.pixels,
+                    frame.width,
+                    frame.height,
+                );
             }
         }
     }

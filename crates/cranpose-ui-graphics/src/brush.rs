@@ -76,6 +76,22 @@ impl Brush {
         Brush::Solid(color)
     }
 
+    /// The brush's colours: its one colour, or a gradient's stops in order.
+    pub fn colors(&self) -> &[Color] {
+        match self {
+            Brush::Solid(color) => std::slice::from_ref(color),
+            Brush::LinearGradient { colors, .. }
+            | Brush::RadialGradient { colors, .. }
+            | Brush::SweepGradient { colors, .. } => colors,
+        }
+    }
+
+    /// Whether the brush paints anything: some colour of it is not
+    /// transparent.
+    pub fn paints(&self) -> bool {
+        self.colors().iter().any(|color| color.3 > 0.0)
+    }
+
     /// Creates a linear gradient that defaults to Compose semantics:
     /// start at `(0,0)`, end at `(+inf,+inf)`, and `TileMode::Clamp`.
     pub fn linear_gradient(colors: Vec<Color>) -> Self {

@@ -1241,7 +1241,7 @@ fn drawn_text_occupies_exactly_the_box_measure_text_reported() {
         "the drawn block must be the measured block, or callers cannot center text"
     );
     assert_eq!(&*text.text, "ABCD");
-    assert_eq!(text.color, Color::WHITE);
+    assert_eq!(text.brush, Brush::solid(Color::WHITE));
 }
 
 #[test]
@@ -1391,15 +1391,12 @@ fn invisible_text_draws_nothing() {
 }
 
 #[test]
-fn gradient_text_brushes_fall_back_to_their_first_stop() {
+fn text_keeps_its_gradient_brush() {
     let (mut scope, _) = text_scope(Size::new(100.0, 100.0));
-    scope.draw_text(
-        Brush::linear_gradient(vec![Color::RED, Color::BLUE]),
-        "AB",
-        &DrawTextStyle::new(16.0),
-    );
+    let gradient = Brush::linear_gradient(vec![Color::RED, Color::BLUE]);
+    scope.draw_text(gradient.clone(), "AB", &DrawTextStyle::new(16.0));
     let primitives = scope.into_primitives();
-    assert_eq!(unwrap_text(&primitives[0]).color, Color::RED);
+    assert_eq!(unwrap_text(&primitives[0]).brush, gradient);
 }
 
 #[test]
