@@ -68,7 +68,7 @@ pub use blocking::{
 };
 pub use callbacks::{
     CallbackHolder, CallbackHolder1, ParamReturnState, ParamSlot, ParamState, ReturnSlot,
-    SharedParam, refresh_param, refresh_shared_param,
+    SharedParam, refresh_param, refresh_shared_param, store_param,
 };
 pub use composer::{
     BranchGroupGuard, CapturedCompositionContext, ComposableGroup, Composer,

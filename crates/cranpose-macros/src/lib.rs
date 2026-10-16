@@ -213,10 +213,9 @@ impl PackedParams<'_> {
         let param_state = Ident::new("__param_state", Span::mixed_site());
         let stored = Ident::new("__stored", Span::mixed_site());
         let idents = self.params.iter().map(|(ident, _)| ident);
-        let refreshes =
-            self.params.iter().enumerate().map(|(index, (ident, ty))| {
-                param_field_refresh(core_path, &stored, ident, ty, index)
-            });
+        let refreshes = self.params.iter().enumerate().map(|(index, (ident, ty))| {
+            param_field_refresh(core_path, &stored, (ident, ty), index, skippable)
+        });
         let update = quote! {
             #param_state.update_fields(
                 || (#(::core::clone::Clone::clone(&#idents),)*),
@@ -458,15 +457,19 @@ impl ReturningCall<'_> {
 /// date with `ident` and says whether it changed: `refresh_shared_param` for
 /// an `Rc` or `Arc`, whose unchanged allocation needs no comparison of its
 /// contents.
+/// The statement that refreshes one stored parameter. A call that cannot
+/// skip only stores it: no comparison would change what the call does.
 fn param_field_refresh(
     core_path: &TokenStream2,
     stored: &Ident,
-    ident: &Ident,
-    ty: &Type,
+    (ident, ty): (&Ident, &Type),
     index: usize,
+    skippable: bool,
 ) -> TokenStream2 {
     let index = syn::Index::from(index);
-    if is_shared_pointer(ty) {
+    if !skippable {
+        quote! { #core_path::store_param(&mut #stored.#index, &#ident) }
+    } else if is_shared_pointer(ty) {
         quote! { #core_path::refresh_shared_param(&mut #stored.#index, &#ident) }
     } else {
         quote! { #core_path::refresh_param(&mut #stored.#index, &#ident) }
