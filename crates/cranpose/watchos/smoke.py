@@ -6,20 +6,30 @@ from pathlib import Path
 import plistlib
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
+# CoreSimulator on the build fleet cannot create devices or captures on its
+# external build drive. Only the temporary device set uses the internal disk.
+SCRATCH_ROOT = '/Users/Shared'
+
+# What simctl prints on stderr when CoreSimulator itself went away: its service
+# died under a command, or the device shut down under a running session.
+CORESIMULATOR_DIED = ('Mach error -308', 'device is not booted', 'Bad or unknown session')
+
 
 def command(*args):
-    return subprocess.check_output(list(map(str, args)), text=True, timeout=180).strip()
+    done = subprocess.run(list(map(str, args)), text=True, capture_output=True, timeout=180)
+    sys.stderr.write(done.stderr)
+    done.check_returncode()
+    return done.stdout.strip()
 
 
-def smoke(bundle, evidence):
+def session(bundle, evidence, repeated):
     info = plistlib.loads((bundle / 'Info.plist').read_bytes())
     evidence.mkdir(parents=True, exist_ok=True)
-    # CoreSimulator on the build fleet cannot create devices or captures on its
-    # external build drive. Only this temporary set uses the internal disk.
-    with tempfile.TemporaryDirectory(prefix='cranpose-watch-', dir='/Users/Shared') as scratch:
+    with tempfile.TemporaryDirectory(prefix='cranpose-watch-', dir=SCRATCH_ROOT) as scratch:
         def sim(*args):
             return command('xcrun', 'simctl', '--set', scratch, *args)
 
@@ -42,11 +52,26 @@ def smoke(bundle, evidence):
             capture = Path(scratch) / 'watch.png'
             sim('io', device, 'screenshot', capture)
             shutil.copyfile(capture, evidence / 'watch.png')
-            (evidence / 'launch.txt').write_text(f'{runtime["name"]}\n{launched}\nAlive after 15 seconds\n')
+            report = f'{runtime["name"]}\n{launched}\nAlive after 15 seconds\n'
+            if repeated:
+                report += 'Repeated once after CoreSimulator died\n'
+            (evidence / 'launch.txt').write_text(report)
             print(f'Simulator smoke passed: {launched}', flush=True)
         finally:
-            subprocess.run(['xcrun', 'simctl', '--set', scratch, 'shutdown', device], check=False, timeout=60)
-            sim('delete', device)
+            # Cleanup must not replace the failure that ended the session.
+            for verb in ('shutdown', 'delete'):
+                subprocess.run(['xcrun', 'simctl', '--set', scratch, verb, device], check=False, timeout=60)
+
+
+def smoke(bundle, evidence):
+    """Run one session. If CoreSimulator died under it, run it once more in a new device set."""
+    try:
+        session(bundle, evidence, repeated=False)
+    except subprocess.CalledProcessError as failure:
+        if not any(text in failure.stderr for text in CORESIMULATOR_DIED):
+            raise
+        print('CoreSimulator died; repeating the session once in a new device set', flush=True)
+        session(bundle, evidence, repeated=True)
 
 
 if __name__ == '__main__':
