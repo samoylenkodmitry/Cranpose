@@ -25,6 +25,8 @@ use crate::{
     thread_state,
 };
 
+mod task_slots;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FrameCallbackKind {
     Transient,
@@ -507,12 +509,11 @@ struct RuntimeInner {
     ui_conts: RefCell<UiContinuationMap>,
     next_cont_id: Cell<u64>,
     ui_thread_id: ThreadId,
-    tasks: RefCell<HashMap<u64, TaskEntry>>,
+    tasks: RefCell<task_slots::Slots<TaskEntry>>,
     task_order: RefCell<Vec<u64>>,
     /// Set by every task wake after the task's own flag, and cleared by the
     /// poll that then looks at the tasks: a poll after no wake skips them.
     task_woken: Arc<AtomicBool>,
-    next_task_id: Cell<u64>,
     state_arena: StateArena,
     external_state_owners: RefCell<HashMap<StateId, Rc<StateHandleLease>>>,
     live_recompose_scope_count: Cell<usize>,
@@ -558,10 +559,9 @@ impl RuntimeInner {
             ui_conts: RefCell::new(UiContinuationMap::default()),
             next_cont_id: Cell::new(1),
             ui_thread_id: std::thread::current().id(),
-            tasks: RefCell::new(HashMap::default()),
+            tasks: RefCell::new(task_slots::Slots::new()),
             task_order: RefCell::new(Vec::new()),
             task_woken: Arc::new(AtomicBool::new(false)),
-            next_task_id: Cell::new(1),
             state_arena: StateArena::default(),
             external_state_owners: RefCell::new(HashMap::default()),
             live_recompose_scope_count: Cell::new(0),
@@ -697,29 +697,24 @@ impl RuntimeInner {
     }
 
     fn spawn_ui_task(&self, future: Pin<Box<dyn Future<Output = ()> + 'static>>) -> u64 {
-        let id = self.next_task_id.get();
-        self.next_task_id.set(id + 1);
         let label = thread_state::runtimes(|state| state.next_task_label.borrow_mut().take())
             .unwrap_or_else(|| "unnamed".to_string());
         let runnable = Arc::new(AtomicBool::new(true));
         self.task_woken.store(true, Ordering::Release);
         let waker = RuntimeTaskWaker::new(self, Arc::clone(&runnable)).into_waker();
-        self.tasks.borrow_mut().insert(
-            id,
-            TaskEntry {
-                label,
-                future: Some(future),
-                runnable,
-                waker,
-            },
-        );
+        let id = self.tasks.borrow_mut().insert(TaskEntry {
+            label,
+            future: Some(future),
+            runnable,
+            waker,
+        });
         self.task_order.borrow_mut().push(id);
         self.schedule();
         id
     }
 
     fn cancel_task(&self, id: u64) {
-        let task = self.tasks.borrow_mut().remove(&id);
+        let task = self.tasks.borrow_mut().remove(id);
         self.task_order.borrow_mut().retain(|queued| *queued != id);
         drop(task);
     }
@@ -727,7 +722,7 @@ impl RuntimeInner {
     fn has_task(&self, id: u64) -> bool {
         self.tasks
             .try_borrow()
-            .map_or(true, |tasks| tasks.contains_key(&id))
+            .map_or(true, |tasks| tasks.contains(id))
     }
 
     fn poll_async_tasks(&self) -> bool {
@@ -755,7 +750,7 @@ impl RuntimeInner {
             let id = order[index];
             let task = {
                 let mut tasks = self.tasks.borrow_mut();
-                let Some(entry) = tasks.get_mut(&id) else {
+                let Some(entry) = tasks.get_mut(id) else {
                     continue;
                 };
                 if entry.runnable.swap(false, Ordering::AcqRel) {
@@ -780,7 +775,7 @@ impl RuntimeInner {
                 }
                 Poll::Pending => {
                     let mut tasks = self.tasks.borrow_mut();
-                    if let Some(entry) = tasks.get_mut(&id) {
+                    if let Some(entry) = tasks.get_mut(id) {
                         entry.future = Some(future);
                         order[pending] = id;
                         pending += 1;
@@ -1424,7 +1419,7 @@ impl RuntimeHandle {
                     .tasks
                     .borrow()
                     .iter()
-                    .map(|(id, entry)| (*id, entry.label.clone()))
+                    .map(|(id, entry)| (id, entry.label.clone()))
                     .collect()
             })
             .unwrap_or_default()
