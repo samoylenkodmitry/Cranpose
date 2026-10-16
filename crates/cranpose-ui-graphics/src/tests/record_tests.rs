@@ -63,7 +63,7 @@ fn text() -> DrawPrimitive {
         rect: rect(1.0, 1.0, 20.0, 10.0),
         text: "hi".into(),
         style: DrawTextStyle::default(),
-        color: Color::WHITE,
+        brush: Brush::solid(Color::WHITE),
     }))
 }
 

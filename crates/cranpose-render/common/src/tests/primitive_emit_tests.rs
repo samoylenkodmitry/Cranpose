@@ -467,7 +467,7 @@ fn text_primitive(rect: Rect, text: &str, style: DrawTextStyle) -> DrawPrimitive
         rect,
         text: StdRc::from(text),
         style,
-        color: Color::WHITE,
+        brush: Brush::solid(Color::WHITE),
     }))
 }
 

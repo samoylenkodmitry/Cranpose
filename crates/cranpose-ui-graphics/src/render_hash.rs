@@ -415,7 +415,7 @@ fn hash_draw_primitive<H: Hasher>(primitive: &DrawPrimitive, state: &mut H) {
             hash_rect(text.rect, state);
             text.text.hash(state);
             hash_text_style(&text.style, state);
-            hash_color(text.color, state);
+            hash_brush(&text.brush, state);
         }
         DrawPrimitive::Shadow(shadow) => {
             5u8.hash(state);
