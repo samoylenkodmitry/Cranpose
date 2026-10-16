@@ -554,7 +554,7 @@ impl SaveableScope {
         crate::durable_save::forget(self.store(), format!("{namespace}/"), keep);
     }
 
-    fn key(&self, key: impl std::fmt::Display) -> String {
+    pub(crate) fn key(&self, key: impl std::fmt::Display) -> String {
         match &self.namespace {
             Some(namespace) => format!("{namespace}/{key}"),
             None => key.to_string(),
