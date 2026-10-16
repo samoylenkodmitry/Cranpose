@@ -8,9 +8,9 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 
 use crate::{
-    ArcGeometry, BlendMode, Brush, Color, CornerRadii, DrawPrimitive, FxHasher, LineGeometry,
-    Point, Rect, RenderHash, ShapeRecordBody, ShapeRecordCurve, ShapeRecords, Stroke, StrokeCap,
-    StrokeJoin, TAU, TileMode, Trapezoid, arc_band,
+    ArcGeometry, BlendMode, Brush, Color, CornerRadii, DrawGroup, DrawPrimitive, FxHasher,
+    GroupMarker, LineGeometry, Point, Rect, RenderHash, ShapeRecordBody, ShapeRecordCurve,
+    ShapeRecords, Stroke, StrokeCap, StrokeJoin, TAU, TileMode, Trapezoid, arc_band,
     float::{at_least, within},
     vertex_gradient,
 };
@@ -682,6 +682,20 @@ pub enum RecordLane {
     Others,
     /// One `draw_content` marker; carries no entry.
     Content,
+    /// Where a group of draws starts; its `start` indexes
+    /// [`CommandRecording::groups`]. The segments up to the matching
+    /// [`RecordLane::GroupEnd`] are in the group's coordinates.
+    GroupStart,
+    /// Where the group opened last ends; carries no entry.
+    GroupEnd,
+}
+
+impl RecordLane {
+    /// Whether the lane's entries draw: shapes and other primitives, not
+    /// the markers.
+    pub fn draws(self) -> bool {
+        matches!(self, Self::Shapes | Self::Others)
+    }
 }
 
 /// A run of consecutive entries of one lane that a single draw can take:
@@ -851,6 +865,8 @@ pub struct RecordingSummary {
     pub has_others: bool,
     /// Any marker where a with-content command draws its node's content.
     pub has_content_markers: bool,
+    /// Any group of draws that a scope transform or clip places.
+    pub has_groups: bool,
 }
 
 impl RecordingSummary {
@@ -860,7 +876,7 @@ impl RecordingSummary {
             self.has_shadow = true;
             return;
         }
-        if matches!(primitive, DrawPrimitive::Content) {
+        if matches!(primitive, DrawPrimitive::Content | DrawPrimitive::Group(_)) {
             return;
         }
         self.has_non_shadow = true;
@@ -882,12 +898,13 @@ impl RecordingSummary {
         self.has_shapes |= other.has_shapes;
         self.has_others |= other.has_others;
         self.has_content_markers |= other.has_content_markers;
+        self.has_groups |= other.has_groups;
     }
 
     /// Whether the entries are shapes alone, with no other primitive or
-    /// content marker between them, so one run draws them all.
+    /// marker between them, so one run draws them all.
     pub fn shapes_only(&self) -> bool {
-        self.has_shapes && !self.has_others && !self.has_content_markers
+        self.has_shapes && !self.has_others && !self.has_content_markers && !self.has_groups
     }
 }
 
@@ -912,7 +929,7 @@ pub fn expand_rect(rect: Rect, margin: f32) -> Rect {
 }
 
 /// The rect a primitive's pixels can reach, or `None` when it has none of
-/// its own (a content marker or a shadow).
+/// its own (a content marker, a group marker or a shadow).
 pub fn primitive_coverage_rect(primitive: &DrawPrimitive) -> Option<Rect> {
     match primitive {
         DrawPrimitive::Blend { primitive, .. } => primitive_coverage_rect(primitive),
@@ -928,7 +945,7 @@ pub fn primitive_coverage_rect(primitive: &DrawPrimitive) -> Option<Rect> {
         DrawPrimitive::Trapezoid { trapezoid, .. } => Some(trapezoid.bounds()),
         DrawPrimitive::Image { rect, .. } => Some(*rect),
         DrawPrimitive::Text(text) => Some(text.rect),
-        DrawPrimitive::Content | DrawPrimitive::Shadow(_) => None,
+        DrawPrimitive::Content | DrawPrimitive::Shadow(_) | DrawPrimitive::Group(_) => None,
     }
 }
 
@@ -1114,11 +1131,12 @@ impl ShapeRecorder {
         })
     }
 
-    fn push_content_segment(&mut self) {
+    /// Records a marker segment of `lane`, whose one entry is `start`.
+    fn push_marker_segment(&mut self, lane: RecordLane, start: u32) {
         self.last_segment_key = NO_SEGMENT_KEY;
         self.tables_mut().segments.push(RecordSegment {
-            lane: RecordLane::Content,
-            start: 0,
+            lane,
+            start,
             count: 1,
             blend: BlendMode::SrcOver,
             gradient: false,
@@ -1717,6 +1735,11 @@ pub struct CommandRecording {
 #[derive(Clone, Debug)]
 struct RecordingContent {
     others: Vec<DrawPrimitive>,
+    /// The groups that [`RecordLane::GroupStart`] segments open.
+    groups: Vec<DrawGroup>,
+    /// While recording, the groups open now, outermost first, as indices
+    /// into `groups`. Empty once the recording is finished.
+    open_groups: Vec<u32>,
     min: [f32; 2],
     max: [f32; 2],
     shape_bounds: Option<Rect>,
@@ -1730,6 +1753,8 @@ impl Default for RecordingContent {
     fn default() -> Self {
         Self {
             others: Vec::new(),
+            groups: Vec::new(),
+            open_groups: Vec::new(),
             min: [f32::INFINITY; 2],
             max: [f32::NEG_INFINITY; 2],
             shape_bounds: None,
@@ -1757,6 +1782,7 @@ impl PartialEq for CommandRecording {
     fn eq(&self, other: &Self) -> bool {
         self.shapes == other.shapes
             && self.content.others == other.content.others
+            && self.content.groups == other.content.groups
             && self.content.content_markers == other.content.content_markers
     }
 }
@@ -1838,7 +1864,7 @@ impl CommandRecording {
             return self.content.shape_count as usize + self.content.others.len();
         }
         self.segments_in(segments)
-            .filter(|segment| segment.lane != RecordLane::Content)
+            .filter(|segment| segment.lane.draws())
             .map(|segment| segment.count as usize)
             .sum()
     }
@@ -1878,6 +1904,11 @@ impl CommandRecording {
     /// The primitives that are not shapes, such as images, text and shadows, in recorded order.
     pub fn others(&self) -> &[DrawPrimitive] {
         &self.content.others
+    }
+
+    /// The groups that [`RecordLane::GroupStart`] segments open, in recorded order.
+    pub fn groups(&self) -> &[DrawGroup] {
+        &self.content.groups
     }
 
     /// The segments in recorded order.
@@ -1940,6 +1971,9 @@ impl CommandRecording {
             for primitive in &self.content.others {
                 hasher.write_u64(primitive.render_hash());
             }
+            for group in &self.content.groups {
+                crate::render_hash::hash_draw_group(group, &mut hasher);
+            }
             hasher.write_u32(self.content.content_markers);
             hasher.finish()
         })
@@ -1952,7 +1986,7 @@ impl CommandRecording {
         }
         !self
             .segments_in(segments)
-            .any(|segment| segment.lane != RecordLane::Content && segment.count > 0)
+            .any(|segment| segment.lane.draws() && segment.count > 0)
     }
 
     /// Iterates over the segments in the index range `segments`.
@@ -1979,6 +2013,7 @@ impl CommandRecording {
                     }
                 }
                 RecordLane::Content => summary.has_content_markers = true,
+                RecordLane::GroupStart | RecordLane::GroupEnd => summary.has_groups = true,
                 RecordLane::Shapes => {}
             }
         }
@@ -2016,7 +2051,7 @@ impl CommandRecording {
                     .get(index)
                     .map(|record| record.coverage_rect()),
                 RecordLane::Others => primitive_coverage_rect(&self.content.others[index]),
-                RecordLane::Content => None,
+                RecordLane::Content | RecordLane::GroupStart | RecordLane::GroupEnd => None,
             })
         })
     }
@@ -2053,6 +2088,10 @@ impl CommandRecording {
             RecordLane::Shapes => Some(self.materialize_shape(index)),
             RecordLane::Others => Some(self.content.others[index].clone()),
             RecordLane::Content => markers.then_some(DrawPrimitive::Content),
+            RecordLane::GroupStart => Some(DrawPrimitive::Group(GroupMarker::Start(
+                self.content.groups[index],
+            ))),
+            RecordLane::GroupEnd => Some(DrawPrimitive::Group(GroupMarker::End)),
         })
     }
 
@@ -2244,6 +2283,9 @@ impl CommandRecorder {
     /// A recording that took no earlier one's allocation gives back the
     /// room its growth left: drawing it again then refills that allocation.
     pub fn finish(mut self) -> CommandRecording {
+        while !self.content.open_groups.is_empty() {
+            self.push_group_end();
+        }
         if self.vessel.is_none() {
             self.shapes.tables.trim_growth();
         }
@@ -2279,6 +2321,8 @@ impl CommandRecorder {
     pub fn clear(&mut self) {
         self.shapes.clear();
         self.content.others.clear();
+        self.content.groups.clear();
+        self.content.open_groups.clear();
         self.content.min = [f32::INFINITY; 2];
         self.content.max = [f32::NEG_INFINITY; 2];
         self.content.shape_bounds = None;
@@ -2293,19 +2337,58 @@ impl CommandRecorder {
         self.shapes.tables_mut().shapes.reserve(additional);
     }
 
-    /// Records a content marker at the current command position.
+    /// Records a content marker at the current command position. The
+    /// node's content draws outside the groups open here: they end before
+    /// the marker and start again after it.
     pub fn push_content(&mut self) {
         self.content.content_markers += 1;
         self.content.summary.has_content_markers = true;
-        self.shapes.push_content_segment();
+        for _ in &self.content.open_groups {
+            self.shapes.push_marker_segment(RecordLane::GroupEnd, 0);
+        }
+        self.shapes.push_marker_segment(RecordLane::Content, 0);
+        for &group in &self.content.open_groups {
+            self.shapes
+                .push_marker_segment(RecordLane::GroupStart, group);
+        }
+    }
+
+    /// Starts a group of draws that `group` places: what is recorded until
+    /// the matching [`Self::push_group_end`] is in the group's coordinates.
+    pub fn push_group_start(&mut self, group: DrawGroup) {
+        let index = self.content.groups.len() as u32;
+        self.content.groups.push(group);
+        self.content.open_groups.push(index);
+        self.content.summary.has_groups = true;
+        self.shapes
+            .push_marker_segment(RecordLane::GroupStart, index);
+    }
+
+    /// Ends the group started last; nothing when no group is open.
+    pub fn push_group_end(&mut self) {
+        if self.content.open_groups.pop().is_some() {
+            self.shapes.push_marker_segment(RecordLane::GroupEnd, 0);
+        }
     }
 
     /// Records a primitive the way the draw scope would have: shapes and
-    /// blended shapes become records, everything else joins the others lane.
+    /// blended shapes become records, group markers open and end groups,
+    /// everything else joins the others lane.
     pub fn push_primitive(&mut self, primitive: DrawPrimitive) {
-        if matches!(primitive, DrawPrimitive::Content) {
-            self.push_content();
-            return;
+        match primitive {
+            DrawPrimitive::Content => {
+                self.push_content();
+                return;
+            }
+            DrawPrimitive::Group(GroupMarker::Start(group)) => {
+                self.push_group_start(group);
+                return;
+            }
+            DrawPrimitive::Group(GroupMarker::End) => {
+                self.push_group_end();
+                return;
+            }
+            _ => {}
         }
         match self.shapes.push_primitive(primitive) {
             Recorded::Shape(_) => self.note_shape(),

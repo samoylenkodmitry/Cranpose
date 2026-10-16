@@ -475,7 +475,8 @@ pub fn trapezoid_shape_params(
 
 /// Lowers `primitive` to shape, image, shadow and text draw calls on `sink`, with the transform
 /// of `layer` applied at `layer_bounds`. `blend_mode` is the mode inherited from an enclosing
-/// blend primitive, and `motion_context_animated` is passed on to every call.
+/// blend primitive, and `motion_context_animated` is passed on to every call. Content and group
+/// markers draw nothing: the scene builder turns groups into layers.
 pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
     primitive: &DrawPrimitive,
     layer_bounds: Rect,
@@ -486,7 +487,7 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
     motion_context_animated: bool,
 ) {
     match primitive {
-        DrawPrimitive::Content => {}
+        DrawPrimitive::Content | DrawPrimitive::Group(_) => {}
         DrawPrimitive::Blend {
             primitive,
             blend_mode: nested,

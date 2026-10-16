@@ -8,6 +8,7 @@ mod pipeline;
 pub mod scene;
 pub mod sprites;
 mod style;
+mod surface;
 
 use cranpose_render_common::{
     RenderScene, Renderer, SceneUpdates,
@@ -129,6 +130,7 @@ impl PixelsRenderer {
                 self.scene.diagnostics(),
                 scale,
                 previous,
+                &self.text,
             ),
             None => raster.clear(),
         }

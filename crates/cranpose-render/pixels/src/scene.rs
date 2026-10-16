@@ -95,6 +95,9 @@ pub(crate) struct ImageDraw {
     pub clip: Option<Rect>,
     pub blend_mode: BlendMode,
     pub src_rect: Option<Rect>,
+    /// Maps `rect`'s space to device pixels for an image drawn turned or
+    /// mirrored; `None` when `rect` is in device pixels.
+    pub transform: Option<ProjectiveTransform>,
 }
 
 /// One pass of a layer's elevation shadow: Skia's round rect shadow in
@@ -122,8 +125,16 @@ impl TextDraw {
 impl ImageDraw {
     /// The image moved by `dx`, `dy`, with no clip.
     pub(crate) fn translated(&self, dx: f32, dy: f32) -> Self {
+        let (rect, transform) = match self.transform {
+            Some(transform) => (
+                self.rect,
+                Some(transform.then(ProjectiveTransform::translation(dx, dy))),
+            ),
+            None => (self.rect.translate(dx, dy), None),
+        };
         Self {
-            rect: self.rect.translate(dx, dy),
+            rect,
+            transform,
             snap_anchor: self.snap_anchor.map(|anchor| shifted(anchor, dx, dy)),
             clip: None,
             ..self.clone()
@@ -454,6 +465,38 @@ impl RasterScene {
             clip,
             blend_mode,
             src_rect,
+            transform: None,
+        });
+    }
+
+    /// Queues the pixels a layer drew into a surface of its own: `image`
+    /// over `rect`, which `transform` maps to device pixels when the surface
+    /// is turned, cut to `clip` and drawn at `alpha`.
+    pub(crate) fn push_surface_image(
+        &mut self,
+        image: ImageBitmap,
+        rect: Rect,
+        transform: Option<ProjectiveTransform>,
+        clip: Option<Rect>,
+        alpha: f32,
+    ) {
+        let sampling = if transform.is_some() {
+            ImageSampling::Linear
+        } else {
+            ImageSampling::Nearest
+        };
+        self.order.push(RenderItem::Image(self.images.len()));
+        self.images.push(ImageDraw {
+            rect,
+            snap_anchor: None,
+            image,
+            alpha,
+            color_filter: None,
+            sampling,
+            clip,
+            blend_mode: BlendMode::SrcOver,
+            src_rect: None,
+            transform,
         });
     }
 

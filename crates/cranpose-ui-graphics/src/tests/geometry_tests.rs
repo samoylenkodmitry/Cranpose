@@ -1611,7 +1611,7 @@ fn a_translated_primitive_moves_every_position_it_carries() {
 fn an_inset_scope_draws_inside_the_insets_and_keeps_content_markers() {
     let mut scope = DrawScopeDefault::new(Size::new(20.0, 10.0));
     let mut seen = None;
-    scope.inset(EdgeInsets::from_components(1.0, 2.0, 3.0, 4.0), |inner| {
+    scope.draw_inset(EdgeInsets::from_components(1.0, 2.0, 3.0, 4.0), |inner| {
         seen = Some(inner.size());
         inner.draw_content();
         inner.draw_round_rect(Brush::solid(Color::RED), CornerRadii::uniform(2.0));

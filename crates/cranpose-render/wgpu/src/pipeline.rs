@@ -1650,7 +1650,7 @@ const DRAW_PRIMITIVE_TEXT_NODE_ID: cranpose_core::NodeId = 0;
 
 /// The primitive with the layer's paint folded into its brushes, for a
 /// shape that joins the layer's loose run; `None` for text, images,
-/// shadows and content, which take their own paths. The layer's affine
+/// shadows, content and group markers, which take their own paths. The layer's affine
 /// part is identity for anything drawn direct, so only the paint applies.
 fn loose_shape(primitive: &DrawPrimitive, layer: &GraphicsLayer) -> Option<DrawPrimitive> {
     let painted = |brush: &Brush| resolve_layer_brush(brush, layer).into_brush();
@@ -1724,6 +1724,7 @@ fn loose_shape(primitive: &DrawPrimitive, layer: &GraphicsLayer) -> Option<DrawP
             blend_mode: *blend_mode,
         },
         DrawPrimitive::Content
+        | DrawPrimitive::Group(_)
         | DrawPrimitive::Image { .. }
         | DrawPrimitive::Text(_)
         | DrawPrimitive::Shadow(_) => return None,

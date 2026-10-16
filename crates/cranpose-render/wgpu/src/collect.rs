@@ -2,8 +2,8 @@ use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::{
     geometry::{blur_reach, blur_reach_for_minimum_scale},
     graph::{
-        CachePolicy, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
-        ProjectiveTransform, RenderNode, quad_bounds,
+        CachePolicy, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, ProjectiveTransform,
+        RenderNode, for_each_in_draw_order, quad_bounds,
     },
     layer_composition::{
         layer_composite_params, layer_requires_isolation, local_content_layer_for,
@@ -769,7 +769,10 @@ fn run_others_all(run: &DrawRunNode, keeps: impl Fn(&DrawPrimitive) -> bool) -> 
     recording
         .segments_in(&run.segments)
         .all(|segment| match segment.lane {
-            RecordLane::Shapes | RecordLane::Content => true,
+            RecordLane::Shapes
+            | RecordLane::Content
+            | RecordLane::GroupStart
+            | RecordLane::GroupEnd => true,
             RecordLane::Others => recording.others()[segment.range()].iter().all(&keeps),
         })
 }
@@ -1169,48 +1172,34 @@ fn collect_into(
         anchor: layer_anchor,
         motion_context_animated: layer.motion_context_animated || translated,
     };
-    let mut first_deferred = layer.children.len();
+    let child_context = WalkContext {
+        offset: context.offset,
+        visual_clip,
+        rounding,
+        snap_anchor: translated_anchor,
+        translated,
+        raster_scale: context.raster_scale,
+        light: context.light,
+        wants_pixel_sensitive: context.wants_pixel_sensitive,
+        update: context.update,
+    };
     let mut has_pixel_sensitive_subtree = false;
-
-    for (index, child) in layer.children.iter().enumerate() {
-        match child {
-            RenderNode::Layer(child_layer) => {
-                let child_context = WalkContext {
-                    offset: context.offset,
-                    visual_clip,
-                    rounding,
-                    snap_anchor: translated_anchor,
-                    translated,
-                    raster_scale: context.raster_scale,
-                    light: context.light,
-                    wants_pixel_sensitive: context.wants_pixel_sensitive,
-                    update: context.update,
-                };
-                has_pixel_sensitive_subtree |= collect_child(
-                    child_layer,
-                    text_layout,
-                    motion,
-                    child_context,
-                    out,
-                    recycler,
-                );
-            }
+    for_each_in_draw_order(&layer.children, |child| {
+        has_pixel_sensitive_subtree |= match child {
+            RenderNode::Layer(child_layer) => collect_child(
+                child_layer,
+                text_layout,
+                motion,
+                child_context,
+                out,
+                recycler,
+            ),
             _ => {
-                has_pixel_sensitive_subtree |= node_is_pixel_sensitive(child);
-                if content_phase(child) == PrimitivePhase::AfterChildren {
-                    first_deferred = first_deferred.min(index);
-                } else {
-                    push_content(out, text_layout, child, &content);
-                }
+                push_content(out, text_layout, child, &content);
+                node_is_pixel_sensitive(child)
             }
-        }
-    }
-
-    for child in &layer.children[first_deferred..] {
-        if content_phase(child) == PrimitivePhase::AfterChildren {
-            push_content(out, text_layout, child, &content);
-        }
-    }
+        };
+    });
     has_pixel_sensitive_subtree
 }
 
@@ -1225,14 +1214,6 @@ struct ContentContext<'a> {
     rounding: Option<ClipRounding>,
     anchor: Option<SnapAnchor>,
     motion_context_animated: bool,
-}
-
-fn content_phase(node: &RenderNode) -> PrimitivePhase {
-    match node {
-        RenderNode::Primitive(entry) => entry.phase,
-        RenderNode::DrawRun(run) => run.phase,
-        RenderNode::Layer(_) => PrimitivePhase::BeforeChildren,
-    }
 }
 
 fn push_content(
@@ -1604,7 +1585,7 @@ fn push_draw_run(out: &mut LayerScene, run: &DrawRunNode, content: &ContentConte
             RecordLane::Shapes => {
                 shapes_from.get_or_insert(position);
             }
-            RecordLane::Content => {}
+            RecordLane::Content | RecordLane::GroupStart | RecordLane::GroupEnd => {}
             RecordLane::Others => {
                 flush_shapes(out, position, &mut shapes_from);
                 for primitive in &recording.others()[segment.range()] {

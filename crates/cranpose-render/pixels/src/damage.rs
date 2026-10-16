@@ -168,8 +168,10 @@ fn same_image(old: &ImageDraw, new: &ImageDraw) -> bool {
         clip,
         blend_mode,
         src_rect,
+        transform,
     } = old;
     *rect == new.rect
+        && *transform == new.transform
         && *snap_anchor == new.snap_anchor
         && *image == new.image
         && *alpha == new.alpha

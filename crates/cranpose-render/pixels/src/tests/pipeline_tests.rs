@@ -15,7 +15,8 @@ fn with_test_app_context<R>(block: impl FnOnce() -> R) -> R {
 
 fn build_raster_scene_for_test(graph: &RenderGraph) -> RasterScene {
     let diagnostics = RenderDiagnostics::new();
-    with_test_app_context(|| build_raster_scene(graph, &diagnostics, 1.0))
+    let text = TextRaster::new(Default::default());
+    with_test_app_context(|| build_raster_scene(graph, &diagnostics, 1.0, &text))
 }
 
 fn push_text_style_draws_for_test(
@@ -155,9 +156,10 @@ fn fallback_detection_triggers_for_effects_and_offscreen() {
     layer.backdrop_effect = Some(RenderEffect::offset(1.0, 2.0));
     assert!(layer_requires_effect_fallback(&layer));
 
+    // An offscreen layer draws through a surface of its own.
     layer.backdrop_effect = None;
-    layer.compositing_strategy = CompositingStrategy::Offscreen;
-    assert!(layer_requires_effect_fallback(&layer));
+    layer.compositing_strategy = cranpose_ui_graphics::CompositingStrategy::Offscreen;
+    assert!(!layer_requires_effect_fallback(&layer));
 }
 
 #[test]
