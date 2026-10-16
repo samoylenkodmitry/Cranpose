@@ -186,8 +186,16 @@ impl PlacementData {
     }
 
     /// The placement data of `placement` at `root_scale`, drawn in place
-    /// under `turn`: the identity except for a layer that turns.
-    pub(crate) fn of(placement: &Placement, root_scale: f32, turn: SegmentTransform) -> Self {
+    /// under `turn`: the identity except for a layer that turns. `shift`
+    /// moves its device space by whole pixels into the space of a binding
+    /// the segment shares with others beside it: zero for every other
+    /// segment.
+    pub(crate) fn of(
+        placement: &Placement,
+        root_scale: f32,
+        turn: SegmentTransform,
+        shift: [f32; 2],
+    ) -> Self {
         let snap_delta = placement
             .snap_anchor
             .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
@@ -201,9 +209,9 @@ impl PlacementData {
             flags |= PLACEMENT_PAINTED;
         }
         let clip = match tested_device_clip(placement, root_scale) {
-            Some(clip) => {
+            Some([x, y, width, height]) => {
                 flags |= PLACEMENT_CLIPPED;
-                clip
+                [x + shift[0], y + shift[1], width, height]
             }
             None => [0.0; 4],
         };
@@ -237,13 +245,13 @@ impl PlacementData {
         };
         Self {
             offset: [
-                placement.offset.x + snap_delta.x,
-                placement.offset.y + snap_delta.y,
+                placement.offset.x + snap_delta.x + shift[0] / root_scale,
+                placement.offset.y + snap_delta.y + shift[1] / root_scale,
             ],
             root_scale,
             flags,
             clip,
-            dither_origin: [dither_origin.x, dither_origin.y],
+            dither_origin: [dither_origin.x + shift[0], dither_origin.y + shift[1]],
             alpha: placement.alpha,
             clip_radius: placement
                 .rounding
@@ -1802,7 +1810,7 @@ impl RunStore {
         chunk: usize,
         run: &RunDraw,
         window: std::ops::Range<u32>,
-        (root_scale, turn): (f32, SegmentTransform),
+        (root_scale, turn, shift): (f32, SegmentTransform, [f32; 2]),
         key_for: &mut dyn FnMut(&RecordSegment) -> crate::render::ShapePipelineKey,
         pipelines: &mut crate::shape_pipelines::PipelineDemand,
     ) -> u32 {
@@ -1819,7 +1827,7 @@ impl RunStore {
         let placement_index = staging.placements.len() as u32;
         staging
             .placements
-            .push(PlacementData::of(&run.placement, root_scale, turn));
+            .push(PlacementData::of(&run.placement, root_scale, turn, shift));
         if !tables.brushes.is_empty() {
             staging.brush_map.clear();
             staging.brush_map.resize(tables.brushes.len(), u32::MAX);

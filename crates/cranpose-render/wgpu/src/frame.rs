@@ -26,8 +26,8 @@ use crate::{
     },
     debug_toggles::DebugToggle,
     draw_pass::{
-        PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SourceContent,
-        op_draw_bounds, scissor_in_target, segment_draws_anything,
+        PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SegmentLayout,
+        SourceContent, op_draw_bounds, scissor_in_target, segment_draws_anything,
     },
     effect_renderer::{
         AtlasSideWork, BlurRegion, CompositeSampleMode, EffectReads, EffectScratchTargetProvider,
@@ -2794,7 +2794,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             self.renderer.encode_pass(
                 self.recorder,
                 page.pass_target(),
-                std::slice::from_ref(&segment),
+                (std::slice::from_ref(&segment), SegmentLayout::Stacked),
                 wgpu::LoadOp::Load,
                 "Probe Draw Pass",
             )?;
@@ -3178,7 +3178,13 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let label = LAYER_PASS_LABELS[pass.segments.min(LAYER_PASS_LABELS.len() - 1)];
         pass.segments += 1;
         self.renderer
-            .encode_pass(self.recorder, target, &segments, load_op, label)
+            .encode_pass(
+                self.recorder,
+                target,
+                (&segments, SegmentLayout::Stacked),
+                load_op,
+                label,
+            )
             .map(drop)
     }
 
@@ -3264,7 +3270,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         self.renderer.encode_pass(
             self.recorder,
             pass.page.pass_target(),
-            std::slice::from_ref(&segment),
+            (std::slice::from_ref(&segment), SegmentLayout::Stacked),
             base,
             "Layer Pass Prefix",
         )?;
@@ -4091,7 +4097,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         self.renderer.encode_pass(
             self.recorder,
             target,
-            &segments,
+            (&segments, SegmentLayout::Stacked),
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             label,
         )?;
@@ -4179,7 +4185,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         self.renderer.encode_pass(
             self.recorder,
             target,
-            std::slice::from_ref(&segment),
+            (std::slice::from_ref(&segment), SegmentLayout::Stacked),
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             "Effect Range Pass",
         )?;
@@ -4974,7 +4980,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             self.renderer.encode_pass(
                 self.recorder,
                 target,
-                &segments,
+                (&segments, SegmentLayout::SideBySide),
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                 "Layer Surface Atlas Pass",
             )?;

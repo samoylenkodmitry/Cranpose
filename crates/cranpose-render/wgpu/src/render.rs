@@ -38,8 +38,8 @@ use crate::{
     collect::LayerScene,
     debug_toggles::DebugToggle,
     draw_pass::{
-        PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SourceContent,
-        TrackedPass,
+        PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SegmentLayout,
+        SourceContent, TrackedPass,
     },
     effect_renderer::{CompositeSampleMode, EffectRenderer, RoundedCompositeMask},
     fixed_pipeline::{FixedPipeline, FixedPipelineJob},
@@ -243,6 +243,22 @@ pub(crate) fn intersect_target_rects(a: TargetRect, b: TargetRect) -> Option<Tar
     (right > left && bottom > top).then(|| (left, top, right - left, bottom - top))
 }
 
+/// Whether `inner` lies within `outer`.
+pub(crate) fn target_rect_within(inner: TargetRect, outer: TargetRect) -> bool {
+    inner.0 >= outer.0
+        && inner.1 >= outer.1
+        && inner.0 + inner.2 <= outer.0 + outer.2
+        && inner.1 + inner.3 <= outer.1 + outer.3
+}
+
+/// The scissor that keeps a draw under `scissor`, or under none, within
+/// `slot`: empty when they share no pixel.
+pub(crate) fn confined_scissor(scissor: Option<TargetRect>, slot: TargetRect) -> TargetRect {
+    scissor
+        .map_or(Some(slot), |scissor| intersect_target_rects(scissor, slot))
+        .unwrap_or((slot.0, slot.1, 0, 0))
+}
+
 /// A draw's scissor cut down to the pixels its pass segment may touch;
 /// `None` when nothing of it remains.
 pub(crate) fn bounded_scissor(
@@ -250,7 +266,7 @@ pub(crate) fn bounded_scissor(
     bound: Option<(u32, u32, u32, u32)>,
 ) -> Option<(u32, u32, u32, u32)> {
     let Some((bx, by, bw, bh)) = bound else {
-        return Some(scissor);
+        return (scissor.2 > 0 && scissor.3 > 0).then_some(scissor);
     };
     let (x, y, width, height) = scissor;
     let left = x.max(bx);
@@ -2271,6 +2287,17 @@ impl GlyphInstances {
         (self.plain.len(), self.turned.len())
     }
 
+    /// Moves the upright quads from `from` on by `shift` (see
+    /// [`PlacementData::of`]).
+    pub(crate) fn shift_plain(&mut self, from: usize, [x, y]: [f32; 2]) {
+        for glyph in &mut self.plain[from..] {
+            glyph.rect[0] += x;
+            glyph.rect[1] += y;
+            glyph.rect[2] += x;
+            glyph.rect[3] += y;
+        }
+    }
+
     /// How many turned glyphs, or plain ones, the pass holds.
     fn len_of(&self, turned: bool) -> usize {
         if turned {
@@ -2778,6 +2805,26 @@ impl ImageDrawCmd {
     }
 }
 
+/// Moves image quads and the rounded clips they take by `shift` (see
+/// [`PlacementData::of`]) and keeps their commands within `slot`.
+pub(crate) fn place_image_draws(
+    (vertices, clips, cmds): (&mut [Vertex], &mut [DeviceRoundedClip], &mut [ImageDrawCmd]),
+    [x, y]: [f32; 2],
+    slot: TargetRect,
+) {
+    for vertex in vertices {
+        vertex.position[0] += x;
+        vertex.position[1] += y;
+    }
+    for clip in clips {
+        clip.rect[0] += x;
+        clip.rect[1] += y;
+    }
+    for cmd in cmds {
+        cmd.scissor = confined_scissor(Some(cmd.scissor), slot);
+    }
+}
+
 /// Which glyph pipeline draws a stretch of quads: plain quads, sampled
 /// within their glyph's texel centers; plain quads on whole pixels at one
 /// texel a pixel, whose samples land on those centers unclamped; or quads
@@ -2916,6 +2963,13 @@ impl<'a> Iterator for GlyphDraws<'a> {
 }
 
 impl GlyphDrawCmd {
+    /// Keeps the draw within `slot` when its quads may reach past it.
+    pub(crate) fn confine(&mut self, slot: TargetRect) {
+        if !target_rect_within(self.bounds, slot) {
+            self.scissor = Some(confined_scissor(self.scissor, slot));
+        }
+    }
+
     /// The quads the command draws, which pick its pipeline.
     fn quads(&self) -> GlyphQuads {
         match &self.source {
@@ -4315,7 +4369,8 @@ impl GpuRenderer {
             brushes: &tables.brushes,
             stops: &tables.stops,
         };
-        let placement = PlacementData::of(&run.placement, root_scale, viewport.transform).mesh();
+        let placement =
+            PlacementData::of(&run.placement, root_scale, viewport.transform, [0.0; 2]).mesh();
         self.mesh_unready(
             draws,
             range,
@@ -5726,7 +5781,7 @@ impl GpuRenderer {
         let drew = self.encode_pass(
             recorder,
             target,
-            std::slice::from_ref(&segment),
+            (std::slice::from_ref(&segment), SegmentLayout::Stacked),
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             "Shadow Source Pass",
         );
@@ -5802,7 +5857,7 @@ impl GpuRenderer {
             if let Err(error) = self.encode_pass(
                 recorder,
                 target,
-                std::slice::from_ref(&segment),
+                (std::slice::from_ref(&segment), SegmentLayout::Stacked),
                 wgpu::LoadOp::Load,
                 "Shadow Cutout Pass",
             ) {
@@ -5966,7 +6021,7 @@ impl GpuRenderer {
         }
         let uniforms = Uniforms::of(
             viewport,
-            PlacementData::of(&run.placement, root_scale, viewport.transform),
+            PlacementData::of(&run.placement, root_scale, viewport.transform, [0.0; 2]),
             RunTier::Store,
         );
         let uniform_slot =
@@ -5997,7 +6052,8 @@ impl GpuRenderer {
     }
 
     /// Appends `window` of `run`'s records to the open arena chunk, their
-    /// placement under `turn`, keyed for a pass whose flat and turned
+    /// placement under `turn` and moved by `shift` (see
+    /// [`PlacementData::of`]), keyed for a pass whose flat and turned
     /// records alternate often when `mixed_turns`, and the pipelines they
     /// draw with to `pipelines`. `clip` says how its variant tests its clip:
     /// an unturned run leaves a rect clip to its paint's scissor, never a
@@ -6008,7 +6064,7 @@ impl GpuRenderer {
         chunk: usize,
         run: &RunDraw,
         window: std::ops::Range<u32>,
-        root_scale: f32,
+        (root_scale, shift): (f32, [f32; 2]),
         viewport: ViewportUniformParams,
         mixed_turns: bool,
         (depth, clip): (bool, SegmentClip),
@@ -6022,7 +6078,7 @@ impl GpuRenderer {
             chunk,
             run,
             window,
-            (root_scale, turn),
+            (root_scale, turn, shift),
             &mut |segment| {
                 let key = |depth| {
                     Self::run_pipeline_key(
