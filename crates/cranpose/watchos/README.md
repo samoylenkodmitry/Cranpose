@@ -102,8 +102,11 @@ signing profile carries the HealthKit entitlements.
 
 `python3 smoke.py BUNDLE EVIDENCE_DIRECTORY` installs and launches a built
 simulator app, captures evidence and removes the simulator created for the
-check. `just test-watchos` runs the portable renderer, runtime and packager
-checks. `just watchos` runs the Apple build and simulator check.
+check. When CoreSimulator dies under the check (simctl reports Mach error -308,
+a device that is not booted or a bad session), the check runs once more in a
+new device set and `launch.txt` records the repeat. Every other failure ends
+the check. `just test-watchos` runs the portable renderer, runtime and
+packager checks. `just watchos` runs the Apple build and simulator check.
 
 Simulator checks cover startup and presentation, and the simulator draws the
 SpriteKit sprites on the Mac's GPU. Measure performance and battery use, and
