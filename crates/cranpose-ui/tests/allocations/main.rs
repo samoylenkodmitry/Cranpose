@@ -1,8 +1,9 @@
-use std::alloc::System;
+use std::{alloc::System, cell::Cell, rc::Rc};
 
 use cranpose_animation::{
     AnimationSpec, RepeatMode, StartOffset, infiniteRepeatable, rememberInfiniteTransition,
 };
+use cranpose_core::{mutableStateOf, remember};
 use cranpose_ui::{
     MeasureLayoutOptions, Modifier, measure_layout, measure_layout_with_options,
     run_test_composition,
@@ -58,19 +59,20 @@ fn remeasure_allocations(rows: usize) -> usize {
     allocations / PASSES
 }
 
-/// Measuring a node again allocates its new measurement and nothing that
-/// could be kept from the last pass.
-fn remeasuring_a_row_allocates_only_its_measurement() {
+/// Measuring a node again fills the memory of its last measurement: a
+/// remeasured row allocates nothing.
+fn remeasuring_a_row_allocates_nothing() {
     let few = remeasure_allocations(10);
     let many = remeasure_allocations(110);
-    let per_row = (many - few) as f64 / 100.0;
+    let per_row = many.saturating_sub(few) as f64 / 100.0;
     println!("allocations per remeasured row: {per_row}");
-    assert!(per_row <= 1.0, "{per_row} allocations per remeasured row");
+    assert!(per_row == 0.0, "{per_row} allocations per remeasured row");
 }
 
 /// A layout pass as an app shell runs it, with no layout or semantics tree,
-/// lends its applier to the host the pass before gave back: remeasuring a
-/// column of three rows allocates the builder and each node's measurement.
+/// lends its applier to the host the pass before gave back, and each node
+/// fills its last measurement: remeasuring a column of three rows allocates
+/// the builder alone.
 fn a_layout_pass_lends_its_applier_without_rebuilding_it() {
     let mut composition = run_test_composition(|| {
         Column(
@@ -106,7 +108,69 @@ fn a_layout_pass_lends_its_applier_without_rebuilding_it() {
     let allocations = region.change().allocations;
     applier.clear_runtime_handle();
     println!("allocations of a shell layout pass over four nodes: {allocations}");
-    assert!(allocations <= 6, "{allocations} allocations a pass");
+    assert!(allocations <= 1, "{allocations} allocations a pass");
+}
+
+/// A row whose width changes inside a box of fixed size measures again, and
+/// so does the box, while the column around them keeps its measurement:
+/// each node that measures again fills its last measurement, and the pass
+/// allocates the builder alone.
+fn a_kept_column_lets_its_changed_children_fill_their_measurements() {
+    let width_handle = Rc::new(Cell::new(None));
+    let output = Rc::clone(&width_handle);
+    let mut composition = run_test_composition(move || {
+        let width = remember(|| mutableStateOf(10.0_f32)).with(|state| *state);
+        output.set(Some(width));
+        Column(
+            Modifier::empty().fill_max_width(),
+            ColumnSpec::default(),
+            move || {
+                Box(
+                    Modifier::empty().fill_max_width().height(10.0),
+                    BoxSpec::default(),
+                    || {},
+                );
+                Box(
+                    Modifier::empty().size(Size::new(50.0, 10.0)),
+                    BoxSpec::default(),
+                    move || {
+                        Box(
+                            Modifier::empty().width(width.value()).height(10.0),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    },
+                );
+            },
+        );
+    });
+    let width = width_handle.get().expect("the width state");
+    let root = composition.root().expect("a composed root");
+    let handle = composition.runtime_handle();
+    let options = MeasureLayoutOptions {
+        collect_semantics: false,
+        build_layout_tree: false,
+    };
+    let mut allocations = 0;
+    for pass in 0..PASSES + 2 {
+        width.set_value(10.0 + pass as f32);
+        while composition
+            .process_invalid_scopes()
+            .expect("the row recomposes")
+        {}
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle.clone());
+        let region = Region::new(GLOBAL);
+        measure_layout_with_options(&mut applier, root, Size::new(100.0, 4000.0), options)
+            .expect("the column measures");
+        if pass >= 2 {
+            allocations += region.change().allocations;
+        }
+        applier.clear_runtime_handle();
+    }
+    let allocations = allocations / PASSES;
+    println!("allocations of a pass under a kept column: {allocations}");
+    assert!(allocations <= 1, "{allocations} allocations a pass");
 }
 
 /// An animation frame wakes the animation's task, which stores the new value
@@ -250,8 +314,9 @@ fn a_thread_that_held_a_composition_frees_its_memory_at_exit() {
 /// counting allocator counts every thread.
 #[test]
 fn layout_and_modifiers_stay_within_their_allocation_budgets() {
-    remeasuring_a_row_allocates_only_its_measurement();
+    remeasuring_a_row_allocates_nothing();
     a_layout_pass_lends_its_applier_without_rebuilding_it();
+    a_kept_column_lets_its_changed_children_fill_their_measurements();
     an_animation_frame_allocates_only_its_recomposition();
     if !cfg!(feature = "inspection") {
         a_modifier_chain_allocates_its_elements_and_one_shared_box();

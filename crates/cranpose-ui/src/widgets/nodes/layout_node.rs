@@ -305,9 +305,21 @@ impl Hash for IntrinsicKind {
 struct NodeCacheState {
     epoch: u64,
     measurement: Option<MeasurementCacheEntry>,
+    /// The measurement the cache last let go of. It is never served: the
+    /// node's next measure takes it to fill its memory in place of new
+    /// allocations.
+    spare: Option<Rc<MeasuredNode>>,
     intrinsics: Vec<(IntrinsicKind, f32)>,
     /// Whether a parent read intrinsic sizes since the cache was cleared.
     intrinsics_read: bool,
+}
+
+impl NodeCacheState {
+    fn retire_measurement(&mut self) {
+        if let Some(entry) = self.measurement.take() {
+            self.spare = Some(entry.measured);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -332,7 +344,7 @@ impl Clone for LayoutNodeCacheHandles {
 impl LayoutNodeCacheHandles {
     pub(crate) fn clear(&self) {
         let mut state = self.state.borrow_mut();
-        state.measurement = None;
+        state.retire_measurement();
         state.intrinsics.clear();
         state.intrinsics_read = false;
         state.epoch = 0;
@@ -341,11 +353,33 @@ impl LayoutNodeCacheHandles {
     pub(crate) fn activate(&self, epoch: u64) {
         let mut state = self.state.borrow_mut();
         if state.epoch != epoch {
-            state.measurement = None;
+            state.retire_measurement();
             state.intrinsics.clear();
             state.intrinsics_read = false;
             state.epoch = epoch;
         }
+    }
+
+    /// The node's last measurement, whatever constraints it was made under:
+    /// the one the cache holds, or else the one it last let go of.
+    pub(crate) fn held_measurement(&self) -> Option<Rc<MeasuredNode>> {
+        let state = self.state.borrow();
+        state
+            .measurement
+            .as_ref()
+            .map(|entry| &entry.measured)
+            .or(state.spare.as_ref())
+            .cloned()
+    }
+
+    /// Takes the measurement the cache last let go of, or else the one it
+    /// holds, for a measure of the node that replaces it.
+    pub(crate) fn take_previous_measurement(&self) -> Option<Rc<MeasuredNode>> {
+        let mut state = self.state.borrow_mut();
+        state
+            .spare
+            .take()
+            .or_else(|| state.measurement.take().map(|entry| entry.measured))
     }
 
     /// Drops the intrinsic sizes, which depend on every node below: one of
