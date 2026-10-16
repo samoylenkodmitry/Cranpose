@@ -3,6 +3,7 @@ use std::{
     mem::size_of,
     ops::{Deref, DerefMut, Range},
     rc::Rc,
+    sync::atomic::{AtomicU32, Ordering},
 };
 
 use cranpose_core::{NodeId, collections::map::HashSet};
@@ -289,8 +290,31 @@ pub struct LayerNode {
     pub cache_hashes: Cell<Option<LayerRasterCacheHashes>>,
     /// The scene updates that changed what the layer draws.
     pub content_changes: ContentChanges,
+    /// The number the layer took when it or a layer beneath it last changed.
+    pub change: LayerChange,
     /// Content in draw order: primitives, draw runs and child layers.
     pub children: Vec<RenderNode>,
+}
+
+/// A number a layer takes when it is made and whenever it or a layer beneath
+/// it changes, as its raster cache hashes are forgotten: a renderer that
+/// kept what it built from a subtree knows from an equal number that nothing
+/// in it changed since, save the subtree's placement in its parent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LayerChange(u32);
+
+impl LayerChange {
+    /// A number no layer took in the last 2^32 changes.
+    fn next() -> Self {
+        static LAST: AtomicU32 = AtomicU32::new(0);
+        Self(LAST.fetch_add(1, Ordering::Relaxed).wrapping_add(1))
+    }
+}
+
+impl Default for LayerChange {
+    fn default() -> Self {
+        Self::next()
+    }
 }
 
 /// The last scene update that changed what a layer draws, and how many
@@ -343,6 +367,7 @@ impl Default for LayerNode {
             cache_policy: CachePolicy::None,
             cache_hashes: Cell::new(None),
             content_changes: ContentChanges::default(),
+            change: LayerChange::default(),
             children: Vec::new(),
         }
     }
@@ -513,7 +538,7 @@ impl LayerNode {
     /// it, after a change the scene builder did not make: they are computed
     /// again when asked for.
     pub fn forget_raster_cache_hashes(&mut self) {
-        self.cache_hashes.set(None);
+        self.forget_own_raster_cache_hashes();
         for child in &mut self.children {
             if let RenderNode::Layer(child) = child {
                 child.forget_raster_cache_hashes();
@@ -521,16 +546,17 @@ impl LayerNode {
         }
     }
 
-    /// Forgets this layer's own raster cache hashes: a property its hash
-    /// covers, or a layer beneath it, changed.
+    /// Forgets this layer's own raster cache hashes and takes a new change
+    /// number: a property its hash covers, or a layer beneath it, changed.
     pub(crate) fn forget_own_raster_cache_hashes(&mut self) {
         self.cache_hashes.set(None);
+        self.change = LayerChange::next();
     }
 
     /// Records that scene update `update` changed what this layer draws, and
     /// forgets its hashes.
     pub(crate) fn note_content_change(&mut self, update: u64) {
-        self.cache_hashes.set(None);
+        self.forget_own_raster_cache_hashes();
         self.content_changes.note(update);
     }
 

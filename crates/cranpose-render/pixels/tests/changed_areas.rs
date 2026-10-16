@@ -83,7 +83,18 @@ fn Scenes(captured: Step) {
                     .rounded_corners(10.0)
                     .background(color(n / 2, 3)),
                 BoxSpec::default(),
-                || {},
+                // A child that does not change takes the parent's new alpha.
+                || {
+                    Box(
+                        Modifier::empty()
+                            .offset(8.0, 8.0)
+                            .width(24.0)
+                            .height(12.0)
+                            .background(color(4, 7)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
             );
             let order = if n % 2 == 0 { [0u32, 1] } else { [1, 0] };
             for which in order {
@@ -135,7 +146,37 @@ fn Scenes(captured: Step) {
                     }
                 },
             );
+            MovedBox(n);
             GrowingBars(n);
+        },
+    );
+}
+
+/// A box with a text inside that only moves, as the box above it grows: the
+/// frame before drew it, at another place.
+#[composable]
+fn MovedBox(n: u32) {
+    Column(
+        Modifier::empty().offset(4.0, 52.0),
+        ColumnSpec::default(),
+        move || {
+            Box(
+                Modifier::empty()
+                    .width(20.0)
+                    .height(4.0 + (n % 5) as f32 * 3.0),
+                BoxSpec::default(),
+                || {},
+            );
+            Box(
+                Modifier::empty()
+                    .width(44.0)
+                    .height(16.0)
+                    .background(color(3, 8)),
+                BoxSpec::default(),
+                || {
+                    Text("moves", Modifier::empty(), TextStyle::default());
+                },
+            );
         },
     );
 }
@@ -172,13 +213,75 @@ fn GrowingBars(n: u32) {
     }
 }
 
-fn shell(scale: f32) -> (AppShell<PixelsRenderer>, Step) {
+/// A parent whose alpha only its layer block reads, so a new alpha changes
+/// its layer and nothing else, over a child that never changes: the child
+/// takes the parent's alpha.
+#[composable]
+fn FadingParent(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    Box(
+        Modifier::empty()
+            .offset(20.0, 20.0)
+            .width(80.0)
+            .height(40.0)
+            .graphics_layer(move || GraphicsLayer {
+                alpha: 0.2 + (step.value() % 5) as f32 * 0.2,
+                ..GraphicsLayer::default()
+            })
+            .background(Color::from_rgb_u8(30, 40, 50)),
+        BoxSpec::default(),
+        || {
+            Box(
+                Modifier::empty()
+                    .offset(10.0, 10.0)
+                    .width(40.0)
+                    .height(16.0)
+                    .background(Color::from_rgb_u8(200, 120, 40)),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
+/// A parent whose layer block alone turns its clip on and off, over a wider
+/// child that never changes: the child shows as far as the parent's clip
+/// lets it.
+#[composable]
+fn ClippingParent(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    Box(
+        Modifier::empty()
+            .offset(20.0, 20.0)
+            .width(40.0)
+            .height(30.0)
+            .graphics_layer(move || GraphicsLayer {
+                clip: step.value() % 2 == 0,
+                ..GraphicsLayer::default()
+            }),
+        BoxSpec::default(),
+        || {
+            Box(
+                Modifier::empty()
+                    .width(120.0)
+                    .height(20.0)
+                    .background(Color::from_rgb_u8(60, 160, 90)),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
+fn shell(scale: f32, scenes: fn(Step)) -> (AppShell<PixelsRenderer>, Step) {
     let captured: Step = Rc::default();
     let content = Rc::clone(&captured);
     let shell = AppShell::new_with_size_and_density(
         PixelsRenderer::new(),
         location_key(file!(), line!(), column!()),
-        move || Scenes(Rc::clone(&content)),
+        move || scenes(Rc::clone(&content)),
         (WIDTH, HEIGHT),
         (WIDTH as f32 / scale, HEIGHT as f32 / scale),
         scale,
@@ -204,8 +307,8 @@ fn first_difference(kept: &[u8], full: &[u8]) -> Option<(usize, usize)> {
     Some((pixel % WIDTH as usize, pixel / WIDTH as usize))
 }
 
-fn kept_frames_match_full_redraws(scale: f32) {
-    let (mut shell, captured) = shell(scale);
+fn kept_frames_match_full_redraws(scale: f32, scenes: fn(Step)) {
+    let (mut shell, captured) = shell(scale, scenes);
     let mut picture = Picture::default();
     let mut areas = Vec::new();
     let mut kept = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
@@ -236,17 +339,27 @@ fn kept_frames_match_full_redraws(scale: f32) {
 
 #[test]
 fn kept_frames_match_full_redraws_at_one_pixel_per_point() {
-    kept_frames_match_full_redraws(1.0);
+    kept_frames_match_full_redraws(1.0, Scenes);
 }
 
 #[test]
 fn kept_frames_match_full_redraws_at_fractional_density() {
-    kept_frames_match_full_redraws(1.5);
+    kept_frames_match_full_redraws(1.5, Scenes);
 }
 
 #[test]
 fn kept_frames_match_full_redraws_at_two_pixels_per_point() {
-    kept_frames_match_full_redraws(2.0);
+    kept_frames_match_full_redraws(2.0, Scenes);
+}
+
+#[test]
+fn a_parent_alpha_its_layer_alone_reads_reaches_a_child_that_did_not_change() {
+    kept_frames_match_full_redraws(1.0, FadingParent);
+}
+
+#[test]
+fn a_parent_clip_its_layer_alone_reads_reaches_a_child_that_did_not_change() {
+    kept_frames_match_full_redraws(1.0, ClippingParent);
 }
 
 #[composable]

@@ -1,4 +1,4 @@
-use std::{rc::Rc, sync::Arc};
+use std::{ops::Range, rc::Rc, sync::Arc};
 
 use cranpose_render_common::{
     Brush,
@@ -26,7 +26,7 @@ use cranpose_ui_graphics::{
 };
 
 use crate::{
-    scene::{RasterScene, Scene},
+    scene::{ItemCounts, PassedDown, RasterScene, Scene},
     style::{
         apply_layer_to_brush, apply_layer_to_color, compose_color_filters, scale_corner_radii,
     },
@@ -49,26 +49,9 @@ fn rigid_snap_anchor(layer_bounds: Rect, layer: &GraphicsLayer) -> Option<Point>
     Some(Point::new(mapped.x, mapped.y))
 }
 
-#[derive(Clone, Copy)]
-struct SceneCounts {
-    shapes: usize,
-    images: usize,
-    texts: usize,
-    shadows: usize,
-}
-
-fn scene_counts(scene: &RasterScene) -> SceneCounts {
-    SceneCounts {
-        shapes: scene.shapes.len(),
-        images: scene.images.len(),
-        texts: scene.texts.len(),
-        shadows: scene.shadows.len(),
-    }
-}
-
 fn assign_snap_anchor_since(
     scene: &mut RasterScene,
-    counts: SceneCounts,
+    counts: ItemCounts,
     snap_anchor: Option<Point>,
 ) {
     let Some(snap_anchor) = snap_anchor else {
@@ -133,6 +116,69 @@ struct RasterTraversalContext<'a> {
     /// The window's shadow light in device pixels, the space the raster
     /// scene is drawn in.
     light: ShadowLight,
+    /// Whether everything above is what the walk passed down to the layer's
+    /// old record in the frame before's scene.
+    same_as_before: bool,
+}
+
+/// The scene the frame before built, whose items a walk copies for each
+/// subtree that did not change since.
+struct Reuse<'a> {
+    old: &'a RasterScene,
+    /// The old record of the layer the walk reaches next, while the graph
+    /// keeps the shape it had.
+    cursor: usize,
+    /// The old records of unchanged subtrees, siblings one after another,
+    /// to copy before the scene takes anything else, and the counts their
+    /// items reach there: a run of them copies as one.
+    pending: Option<(Range<usize>, ItemCounts)>,
+}
+
+impl Reuse<'_> {
+    /// The index of `layer`'s old record, at the cursor or one subtree on,
+    /// after a sibling before it went away.
+    fn find(&self, layer: &LayerNode) -> Option<usize> {
+        let identity = (layer.node_id, layer.wraps);
+        let records = &self.old.subtrees;
+        let at = records.get(self.cursor)?;
+        if at.identity == identity {
+            return Some(self.cursor);
+        }
+        records
+            .get(at.end)
+            .is_some_and(|next| next.identity == identity)
+            .then_some(at.end)
+    }
+
+    /// Queues the copy of the subtree of the old record `index`, which ends
+    /// at `end` and pushed its items up to `stop`.
+    fn copy_later(&mut self, scene: &mut RasterScene, index: usize, end: usize, stop: ItemCounts) {
+        match &mut self.pending {
+            Some((records, pending_stop)) if records.end == index => {
+                records.end = end;
+                *pending_stop = stop;
+            }
+            _ => {
+                self.flush(scene);
+                self.pending = Some((index..end, stop));
+            }
+        }
+    }
+
+    /// Copies the queued subtrees into `scene`.
+    fn flush(&mut self, scene: &mut RasterScene) {
+        if let Some((records, stop)) = self.pending.take() {
+            scene.copy_subtrees(self.old, records, stop);
+        }
+    }
+}
+
+/// Copies the subtrees `reuse` queued into `scene`, before it takes items of
+/// its own.
+fn flush_copies(reuse: &mut Option<Reuse<'_>>, scene: &mut RasterScene) {
+    if let Some(reuse) = reuse.as_mut() {
+        reuse.flush(scene);
+    }
 }
 
 fn layer_contains_text_primitives(layer: &LayerNode) -> bool {
@@ -629,19 +675,34 @@ pub(crate) fn build_raster_scene(
     scale: f32,
 ) -> RasterScene {
     let mut scene = RasterScene::new();
-    fill_raster_scene(&mut scene, graph, diagnostics, scale);
+    fill_raster_scene(&mut scene, graph, diagnostics, scale, None);
     scene
 }
 
 /// Replaces what `scene` holds with `graph` drawn at `scale`, keeping the
-/// scene's storage.
+/// scene's storage. The items of each subtree that `previous`, the scene of
+/// the frame before, holds for the same content in the same place are
+/// copied from it.
 pub(crate) fn fill_raster_scene(
     scene: &mut RasterScene,
     graph: &RenderGraph,
     diagnostics: &RenderDiagnostics,
     scale: f32,
+    previous: Option<&RasterScene>,
 ) {
     scene.clear();
+    let light = ShadowLight::for_window(
+        graph.root.local_bounds.width * scale,
+        graph.root.local_bounds.height * scale,
+        scale,
+        1.0,
+    );
+    scene.start = Some((scale, light));
+    let mut reuse = previous.map(|old| Reuse {
+        old,
+        cursor: 0,
+        pending: None,
+    });
     populate_draws_from_graph(
         &graph.root,
         scene,
@@ -652,14 +713,12 @@ pub(crate) fn fill_raster_scene(
             inherited_translated_snap_anchor: None,
             inherited_translated_content_context: false,
             diagnostics,
-            light: ShadowLight::for_window(
-                graph.root.local_bounds.width * scale,
-                graph.root.local_bounds.height * scale,
-                scale,
-                1.0,
-            ),
+            light,
+            same_as_before: previous.is_some_and(|old| old.start == scene.start),
         },
+        &mut reuse,
     );
+    flush_copies(&mut reuse, scene);
 }
 
 #[derive(Clone, Copy)]
@@ -795,10 +854,62 @@ fn push_layer_shadow_of(
     );
 }
 
+/// Pushes the items of `layer` and its subtree, copied from the frame
+/// before's scene when they did not change since, and records them for the
+/// next frame.
 fn populate_draws_from_graph(
     layer: &LayerNode,
     scene: &mut RasterScene,
     context: &RasterTraversalContext<'_>,
+    reuse: &mut Option<Reuse<'_>>,
+) {
+    // The end of the layer's old record and where the old scene holds what
+    // the layer passed down then.
+    let mut before = None;
+    if let Some(reuse) = reuse.as_mut()
+        && let Some(index) = reuse.find(layer)
+        && let Some(record) = reuse.old.subtrees.get(index)
+    {
+        // The layer's number covers its subtree, save its placement.
+        if context.same_as_before
+            && record.change == layer.change
+            && record.transform == layer.transform_to_parent
+        {
+            let (end, stop) = (record.end, record.stop);
+            reuse.cursor = end;
+            reuse.copy_later(scene, index, end, stop);
+            return;
+        }
+        reuse.cursor = index + 1;
+        before = Some((record.end, record.passed_down));
+    }
+    flush_copies(reuse, scene);
+    let record = scene.open_subtree(layer);
+    push_layer_items(
+        layer,
+        scene,
+        context,
+        record,
+        before.and_then(|(_, passed_down)| passed_down),
+        reuse,
+    );
+    flush_copies(reuse, scene);
+    scene.close_subtree(record);
+    if let (Some(reuse), Some((end, _))) = (reuse.as_mut(), before) {
+        reuse.cursor = end;
+    }
+}
+
+/// Pushes the items of `layer` and its subtree, whose record is `record`.
+/// `passed_down_before` is where the old scene holds what the layer passed
+/// to its child layers in the frame before.
+fn push_layer_items(
+    layer: &LayerNode,
+    scene: &mut RasterScene,
+    context: &RasterTraversalContext<'_>,
+    record: usize,
+    passed_down_before: Option<usize>,
+    reuse: &mut Option<Reuse<'_>>,
 ) {
     let diagnostics = context.diagnostics;
     let transform = layer.transform_to_parent.then(*context.parent_transform);
@@ -818,31 +929,8 @@ fn populate_draws_from_graph(
     );
     let effective_translated_content_context =
         context.inherited_translated_content_context || layer.translated_content_context;
-    let allow_rigid_snap = effective_translated_content_context || !layer.motion_context_animated;
-    let boundary_snap_anchor = if !context.inherited_translated_content_context
-        && layer.translated_content_context
-        && allow_rigid_snap
-    {
-        rigid_snap_anchor(
-            transform.bounds_for_rect(layer.local_bounds.translate(
-                layer.translated_content_offset.x,
-                layer.translated_content_offset.y,
-            )),
-            &raster_content_layer,
-        )
-    } else {
-        None
-    };
-    let translated_snap_anchor = context
-        .inherited_translated_snap_anchor
-        .or(boundary_snap_anchor);
-    let layer_snap_anchor = translated_snap_anchor.or_else(|| {
-        if allow_rigid_snap && layer_needs_rigid_snap(layer, effective_translated_content_context) {
-            rigid_snap_anchor(mapping.layer_bounds.raster_rect(), &raster_content_layer)
-        } else {
-            None
-        }
-    });
+    let (translated_snap_anchor, layer_snap_anchor) =
+        layer_snap_anchors(layer, context, &transform, &mapping, &raster_content_layer);
 
     if visual_clip.is_some_and(|clip| clip.is_empty()) {
         return;
@@ -857,42 +945,38 @@ fn populate_draws_from_graph(
         context.light,
     );
 
+    let primitive_context = PrimitiveRenderContext {
+        layer_bounds: mapping.content_bounds,
+        node_layer: &raster_content_layer,
+        visual_clip,
+        motion_context_animated: layer.motion_context_animated,
+        content_offset_translation: effective_translated_content_context,
+        layer_snap_anchor,
+    };
+    let passed_down = PassedDown {
+        transform,
+        alpha: mapping.content_style.alpha,
+        color_filter: mapping.content_style.color_filter,
+        clip: visual_clip,
+        snap_anchor: translated_snap_anchor,
+        translated: effective_translated_content_context,
+    };
+    // Worked out at the first child layer: most layers have none.
+    let mut children_same_as_before = None;
     let mut deferred_draws: Vec<&RenderNode> = Vec::new();
     for child in &layer.children {
         match child {
-            RenderNode::Primitive(primitive) => match primitive.phase {
-                PrimitivePhase::BeforeChildren => {
-                    let primitive_context = PrimitiveRenderContext {
-                        layer_bounds: mapping.content_bounds,
-                        node_layer: &raster_content_layer,
-                        visual_clip,
-                        motion_context_animated: layer.motion_context_animated,
-                        content_offset_translation: effective_translated_content_context,
-                        layer_snap_anchor,
-                    };
-                    render_graph_primitive(scene, primitive, primitive_context);
-                }
-                PrimitivePhase::AfterChildren => {
-                    deferred_draws.push(child);
-                }
-            },
-            RenderNode::DrawRun(run) => match run.phase {
-                PrimitivePhase::BeforeChildren => {
-                    let primitive_context = PrimitiveRenderContext {
-                        layer_bounds: mapping.content_bounds,
-                        node_layer: &raster_content_layer,
-                        visual_clip,
-                        motion_context_animated: layer.motion_context_animated,
-                        content_offset_translation: effective_translated_content_context,
-                        layer_snap_anchor,
-                    };
-                    render_graph_draw_run(scene, run, primitive_context);
-                }
-                PrimitivePhase::AfterChildren => {
-                    deferred_draws.push(child);
-                }
-            },
             RenderNode::Layer(child_layer) => {
+                let same_as_before = *children_same_as_before.get_or_insert_with(|| {
+                    note_passed_down(
+                        scene,
+                        record,
+                        passed_down,
+                        context,
+                        passed_down_before,
+                        reuse,
+                    )
+                });
                 populate_draws_from_graph(
                     child_layer,
                     scene,
@@ -904,30 +988,101 @@ fn populate_draws_from_graph(
                         inherited_translated_content_context: effective_translated_content_context,
                         diagnostics,
                         light: context.light,
+                        same_as_before,
                     },
+                    reuse,
                 );
+            }
+            _ if draws_after_children(child) => deferred_draws.push(child),
+            _ => {
+                flush_copies(reuse, scene);
+                render_draw_child(scene, child, primitive_context);
             }
         }
     }
 
+    flush_copies(reuse, scene);
     for child in deferred_draws {
-        let primitive_context = PrimitiveRenderContext {
-            layer_bounds: mapping.content_bounds,
-            node_layer: &raster_content_layer,
-            visual_clip,
-            motion_context_animated: layer.motion_context_animated,
-            content_offset_translation: effective_translated_content_context,
-            layer_snap_anchor,
-        };
-        match child {
-            RenderNode::Primitive(primitive) => {
-                render_graph_primitive(scene, primitive, primitive_context);
-            }
-            RenderNode::DrawRun(run) => {
-                render_graph_draw_run(scene, run, primitive_context);
-            }
-            RenderNode::Layer(_) => {}
+        render_draw_child(scene, child, primitive_context);
+    }
+}
+
+/// The snap anchor `layer`'s child layers inherit and the one its own draws
+/// take.
+fn layer_snap_anchors(
+    layer: &LayerNode,
+    context: &RasterTraversalContext<'_>,
+    transform: &ProjectiveTransform,
+    mapping: &RasterLayerMapping,
+    content_layer: &GraphicsLayer,
+) -> (Option<Point>, Option<Point>) {
+    let effective_translated_content_context =
+        context.inherited_translated_content_context || layer.translated_content_context;
+    let allow_rigid_snap = effective_translated_content_context || !layer.motion_context_animated;
+    let boundary_snap_anchor = if !context.inherited_translated_content_context
+        && layer.translated_content_context
+        && allow_rigid_snap
+    {
+        rigid_snap_anchor(
+            transform.bounds_for_rect(layer.local_bounds.translate(
+                layer.translated_content_offset.x,
+                layer.translated_content_offset.y,
+            )),
+            content_layer,
+        )
+    } else {
+        None
+    };
+    let translated_snap_anchor = context
+        .inherited_translated_snap_anchor
+        .or(boundary_snap_anchor);
+    let layer_snap_anchor = translated_snap_anchor.or_else(|| {
+        if allow_rigid_snap && layer_needs_rigid_snap(layer, effective_translated_content_context) {
+            rigid_snap_anchor(mapping.layer_bounds.raster_rect(), content_layer)
+        } else {
+            None
         }
+    });
+    (translated_snap_anchor, layer_snap_anchor)
+}
+
+/// Notes in `record` what its layer passes down to its child layers, and
+/// returns whether that is what it passed in the frame before, which the old
+/// scene holds at `before`, under an unchanged walk above.
+fn note_passed_down(
+    scene: &mut RasterScene,
+    record: usize,
+    passed_down: PassedDown,
+    context: &RasterTraversalContext<'_>,
+    before: Option<usize>,
+    reuse: &Option<Reuse<'_>>,
+) -> bool {
+    let same = context.same_as_before
+        && before.and_then(|at| reuse.as_ref()?.old.passed_down.get(at)) == Some(&passed_down);
+    scene.note_passed_down(record, passed_down);
+    same
+}
+
+/// Whether `child`, a primitive or draw run, draws after the layer's child
+/// layers.
+fn draws_after_children(child: &RenderNode) -> bool {
+    match child {
+        RenderNode::Primitive(primitive) => primitive.phase == PrimitivePhase::AfterChildren,
+        RenderNode::DrawRun(run) => run.phase == PrimitivePhase::AfterChildren,
+        RenderNode::Layer(_) => false,
+    }
+}
+
+/// Pushes the items of `child`, a primitive or draw run of a layer.
+fn render_draw_child(
+    scene: &mut RasterScene,
+    child: &RenderNode,
+    context: PrimitiveRenderContext<'_>,
+) {
+    match child {
+        RenderNode::Primitive(primitive) => render_graph_primitive(scene, primitive, context),
+        RenderNode::DrawRun(run) => render_graph_draw_run(scene, run, context),
+        RenderNode::Layer(_) => {}
     }
 }
 
@@ -937,7 +1092,7 @@ fn render_graph_draw_run(
     context: PrimitiveRenderContext<'_>,
 ) {
     let rect = context.layer_bounds.raster_rect();
-    let counts_before = scene_counts(scene);
+    let counts_before = scene.counts();
     for primitive in run.primitives() {
         push_draw_primitive(
             &primitive,
@@ -958,7 +1113,7 @@ fn render_graph_primitive(
     context: PrimitiveRenderContext<'_>,
 ) {
     let rect = context.layer_bounds.raster_rect();
-    let counts_before = scene_counts(scene);
+    let counts_before = scene.counts();
     match &primitive.node {
         PrimitiveNode::Draw(draw) => {
             let effective_clip = resolve_primitive_clip(

@@ -1524,8 +1524,9 @@ fn assign_layer(layer: &mut LayerNode, head: LayerHead) {
         draws_within_bounds,
         isolation,
         cache_policy,
-        cache_hashes,
+        cache_hashes: _,
         content_changes,
+        change: _,
         children,
     } = layer;
     if *node_id != head.node_id {
@@ -1549,7 +1550,7 @@ fn assign_layer(layer: &mut LayerNode, head: LayerHead) {
     *draws_within_bounds = false;
     *isolation = head.isolation;
     *cache_policy = head.cache_policy;
-    cache_hashes.set(None);
+    layer.forget_own_raster_cache_hashes();
     layer.refresh_child_facts();
 }
 
