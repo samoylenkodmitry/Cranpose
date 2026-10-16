@@ -123,7 +123,11 @@ fn fs_mesh(shaded: Shaded) -> @location(0) vec4<f32> {
                             write_mask: wgpu::ColorWrites::ALL,
                         })],
                     }),
-                    primitive: wgpu::PrimitiveState::default(),
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleStrip,
+                        strip_index_format: Some(wgpu::IndexFormat::Uint16),
+                        ..wgpu::PrimitiveState::default()
+                    },
                     depth_stencil: crate::render::overlay_depth_state(depth),
                     multisample: wgpu::MultisampleState::default(),
                     multiview_mask: None,
@@ -178,11 +182,34 @@ pub(crate) struct MeshRecords<'a> {
     pub(crate) stops: &'a [GradientStopRecord],
 }
 
-/// The fallback triangles of one pass.
+/// The index that ends a triangle strip; the next index starts another.
+const RESTART: u16 = u16::MAX;
+
+/// The vertices one run of indices reaches past its first: those a 16-bit
+/// index other than [`RESTART`] names.
+const CHUNK_VERTICES: usize = RESTART as usize;
+
+/// A run of a pass's indices that count from one of its vertices: the
+/// vertex buffer binds from that vertex while they draw.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MeshChunk {
+    first_index: u32,
+    first_vertex: u32,
+}
+
+/// The fallback triangles of one pass, as triangle strips of 16-bit
+/// indices, each strip ended by [`RESTART`]: a band between two rings takes
+/// two indices a step and a convex ring one a corner, where separate
+/// triangles of 32-bit indices took 24 and 12 bytes. A sharp corner takes
+/// one point. The gauntlet's first frames at tier 12 drew up to 135,000
+/// corners in one pass, uploaded each frame while the shape pipelines
+/// compile; with strips a first start on a Mate 20 X held 166.7 MB instead
+/// of 171.5 (four launches each).
 #[derive(Default)]
 pub(crate) struct MeshBuilder {
     vertices: Vec<MeshVertex>,
-    indices: Vec<u32>,
+    indices: Vec<u16>,
+    chunks: Vec<MeshChunk>,
     /// Corners waiting to be clipped, three a triangle.
     clipped: Vec<Corner>,
     /// The rings of the record being laid out.
@@ -210,6 +237,61 @@ impl RingSpan {
 enum Join {
     Fan(usize),
     Strip(usize, usize, bool),
+}
+
+impl Join {
+    /// Calls `emit` with the join's triangle strip, as indices into the
+    /// record's points: a convex ring zigzags from its first corner across
+    /// to its last, a band alternates between its rings.
+    fn strip(self, rings: &[RingSpan], mut emit: impl FnMut(usize)) {
+        match self {
+            Self::Fan(index) => {
+                let ring = &rings[index];
+                zigzag(ring.len(), |corner| emit(ring.start + corner));
+            }
+            Self::Strip(a, b, closed) => {
+                let (a, b) = (&rings[a], &rings[b]);
+                let count = a.len().min(b.len());
+                let steps = if closed && count > 0 {
+                    count + 1
+                } else {
+                    count
+                };
+                for step in 0..steps {
+                    emit(a.start + step % count);
+                    emit(b.start + step % count);
+                }
+            }
+        }
+    }
+
+    /// Calls `emit` with each triangle of the strip [`Self::strip`] gives.
+    fn triangles(self, rings: &[RingSpan], mut emit: impl FnMut([usize; 3])) {
+        let mut last = [0usize; 2];
+        let mut seen = 0usize;
+        self.strip(rings, |point| {
+            if seen >= 2 {
+                emit([last[0], last[1], point]);
+            }
+            last = [last[1], point];
+            seen += 1;
+        });
+    }
+}
+
+/// Calls `emit` with the corners of a convex polygon of `count` corners in
+/// the order of a triangle strip that covers it: from the first, across to
+/// the last, and on, inward from both ends.
+fn zigzag(count: usize, mut emit: impl FnMut(usize)) {
+    let (mut low, mut high) = (0, count);
+    while low < high {
+        emit(low);
+        low += 1;
+        if low < high {
+            high -= 1;
+            emit(high);
+        }
+    }
 }
 
 /// Where a record's points lie against a clip rect.
@@ -249,6 +331,7 @@ impl MeshBuilder {
     pub(crate) fn clear(&mut self) {
         self.vertices.clear();
         self.indices.clear();
+        self.chunks.clear();
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -259,8 +342,33 @@ impl MeshBuilder {
         &self.vertices
     }
 
-    pub(crate) fn indices(&self) -> &[u32] {
+    /// The indices, an even number of them, so their bytes fill whole
+    /// words.
+    pub(crate) fn indices(&self) -> &[u16] {
         &self.indices
+    }
+
+    pub(crate) fn chunks(&self) -> &[MeshChunk] {
+        &self.chunks
+    }
+
+    /// Readies the indices of `count` more vertices: in the open chunk
+    /// while its indices reach them, else in a new chunk from the next
+    /// vertex.
+    fn reserve(&mut self, count: usize) {
+        let first = self.chunks.last().map(|chunk| chunk.first_vertex as usize);
+        if first.is_none_or(|first| self.vertices.len() + count - first > CHUNK_VERTICES) {
+            self.chunks.push(MeshChunk {
+                first_index: self.indices.len() as u32,
+                first_vertex: self.vertices.len() as u32,
+            });
+        }
+    }
+
+    /// The index of the next vertex in the open chunk.
+    fn next_index(&self) -> u16 {
+        let first = self.chunks.last().map_or(0, |chunk| chunk.first_vertex);
+        (self.vertices.len() as u32 - first) as u16
     }
 
     /// Appends the triangles of `records` from `tables`, each placed by
@@ -295,6 +403,9 @@ impl MeshBuilder {
                 depth,
             };
             record.push(body, curve);
+        }
+        if self.indices.len() % 2 == 1 {
+            self.indices.push(RESTART);
         }
         start..self.indices.len() as u32
     }
@@ -532,13 +643,13 @@ impl Record<'_, '_> {
     fn fill(&mut self, body: &ShapeRecordBody, curve: &ShapeRecordCurve) {
         let rect = record_edges(body, &self.placement);
         let radii = self.radii(body, curve);
-        let segments = corner_segments(&radii);
+        let steps = corner_steps(&radii);
         let (inset, coverage) = thin_inset(rect);
         let core = self.ring(coverage, |points| {
-            rounded_ring(points, rect, radii, -inset, segments);
+            rounded_ring(points, rect, radii, -inset, steps);
         });
         let outer = self.ring(0.0, |points| {
-            rounded_ring(points, rect, radii, 0.5, segments);
+            rounded_ring(points, rect, radii, 0.5, steps);
         });
         self.commit(&[Join::Fan(core), Join::Strip(core, outer, true)]);
     }
@@ -551,7 +662,7 @@ impl Record<'_, '_> {
         let half = width * 0.5;
         let outline = self.radii(body, curve);
         let outer_radii = outline.map(|radius| if radius > 0.0 { radius + half } else { 0.0 });
-        let segments = corner_segments(&outer_radii);
+        let steps = corner_steps(&outer_radii);
         if width >= 1.0 {
             let inner_rect = [
                 rect[0] + width,
@@ -561,16 +672,16 @@ impl Record<'_, '_> {
             ];
             let inner_radii = outline.map(|radius| (radius - half).max(0.0));
             let outer_edge = self.ring(0.0, |points| {
-                rounded_ring(points, rect, outer_radii, 0.5, segments);
+                rounded_ring(points, rect, outer_radii, 0.5, steps);
             });
             let outer_core = self.ring(1.0, |points| {
-                rounded_ring(points, rect, outer_radii, -0.5, segments);
+                rounded_ring(points, rect, outer_radii, -0.5, steps);
             });
             let inner_core = self.ring(1.0, |points| {
-                rounded_ring(points, inner_rect, inner_radii, 0.5, segments);
+                rounded_ring(points, inner_rect, inner_radii, 0.5, steps);
             });
             let inner_edge = self.ring(0.0, |points| {
-                rounded_ring(points, inner_rect, inner_radii, -0.5, segments);
+                rounded_ring(points, inner_rect, inner_radii, -0.5, steps);
             });
             self.commit(&[
                 Join::Strip(outer_edge, outer_core, true),
@@ -587,13 +698,13 @@ impl Record<'_, '_> {
                 (rect[3] - width).max(0.0),
             ];
             let outer = self.ring(0.0, |points| {
-                rounded_ring(points, line_rect, outline, 0.5, segments);
+                rounded_ring(points, line_rect, outline, 0.5, steps);
             });
             let middle = self.ring(width, |points| {
-                rounded_ring(points, line_rect, outline, 0.0, segments);
+                rounded_ring(points, line_rect, outline, 0.0, steps);
             });
             let inner = self.ring(0.0, |points| {
-                rounded_ring(points, line_rect, outline, -0.5, segments);
+                rounded_ring(points, line_rect, outline, -0.5, steps);
             });
             self.commit(&[
                 Join::Strip(outer, middle, true),
@@ -764,7 +875,8 @@ impl Record<'_, '_> {
     }
 
     fn commit_shared(&mut self, points: &[Point], rings: &[RingSpan], joins: &[Join]) {
-        let base = self.builder.vertices.len() as u32;
+        self.builder.reserve(points.len());
+        let base = self.builder.next_index();
         for ring in rings {
             for at in &points[ring.start..ring.end] {
                 let vertex = self.vertex(Corner {
@@ -774,85 +886,33 @@ impl Record<'_, '_> {
                 self.builder.vertices.push(vertex);
             }
         }
-        let first = |ring: &RingSpan| base + ring.start as u32;
+        let indices = &mut self.builder.indices;
         for join in joins {
-            match *join {
-                Join::Fan(index) => {
-                    let ring = &rings[index];
-                    let origin = first(ring);
-                    for corner in 1..ring.len().saturating_sub(1) as u32 {
-                        self.builder.indices.extend_from_slice(&[
-                            origin,
-                            origin + corner,
-                            origin + corner + 1,
-                        ]);
-                    }
-                }
-                Join::Strip(a, b, closed) => {
-                    let (a, b) = (&rings[a], &rings[b]);
-                    let count = a.len().min(b.len()) as u32;
-                    let pairs = if closed {
-                        count
-                    } else {
-                        count.saturating_sub(1)
-                    };
-                    let (a_first, b_first) = (first(a), first(b));
-                    for index in 0..pairs {
-                        let next = (index + 1) % count;
-                        self.builder.indices.extend_from_slice(&[
-                            a_first + index,
-                            a_first + next,
-                            b_first + next,
-                            a_first + index,
-                            b_first + next,
-                            b_first + index,
-                        ]);
-                    }
-                }
-            }
+            join.strip(rings, |point| indices.push(base + point as u16));
+            indices.push(RESTART);
         }
     }
 
     fn commit_clipped(&mut self, points: &[Point], rings: &[RingSpan], joins: &[Join]) {
-        let corner = |ring: &RingSpan, index: usize| Corner {
-            at: points[ring.start + index],
-            coverage: ring.coverage,
+        let corner = |point: usize| {
+            let coverage = rings
+                .iter()
+                .find(|ring| (ring.start..ring.end).contains(&point))
+                .map_or(0.0, |ring| ring.coverage);
+            Corner {
+                at: points[point],
+                coverage,
+            }
         };
         for join in joins {
-            match *join {
-                Join::Fan(index) => {
-                    let ring = &rings[index];
-                    for next in 1..ring.len().saturating_sub(1) {
-                        self.clipped_triangle([
-                            corner(ring, 0),
-                            corner(ring, next),
-                            corner(ring, next + 1),
-                        ]);
-                    }
-                }
-                Join::Strip(a, b, closed) => {
-                    let (a, b) = (&rings[a], &rings[b]);
-                    let count = a.len().min(b.len());
-                    let pairs = if closed {
-                        count
-                    } else {
-                        count.saturating_sub(1)
-                    };
-                    for index in 0..pairs {
-                        let next = (index + 1) % count;
-                        self.clipped_triangle([corner(a, index), corner(a, next), corner(b, next)]);
-                        self.clipped_triangle([
-                            corner(a, index),
-                            corner(b, next),
-                            corner(b, index),
-                        ]);
-                    }
-                }
-            }
+            join.triangles(rings, |triangle| {
+                self.clipped_triangle(triangle.map(corner));
+            });
         }
     }
 
-    /// One triangle cut to the placement's clip.
+    /// One triangle cut to the placement's clip, as a strip of the convex
+    /// polygon left.
     fn clipped_triangle(&mut self, corners: [Corner; 3]) {
         let Some(clip) = self.placement.clip else {
             return;
@@ -861,15 +921,16 @@ impl Record<'_, '_> {
         polygon.clear();
         polygon.extend_from_slice(&corners);
         clip_polygon(&mut polygon, clip);
-        for index in 1..polygon.len().saturating_sub(1) {
-            let base = self.builder.vertices.len() as u32;
-            for corner in [polygon[0], polygon[index], polygon[index + 1]] {
-                let vertex = self.vertex(corner);
+        if polygon.len() >= 3 {
+            self.builder.reserve(polygon.len());
+            let base = self.builder.next_index();
+            for corner in &polygon {
+                let vertex = self.vertex(*corner);
                 self.builder.vertices.push(vertex);
             }
-            self.builder
-                .indices
-                .extend_from_slice(&[base, base + 1, base + 2]);
+            let indices = &mut self.builder.indices;
+            zigzag(polygon.len(), |corner| indices.push(base + corner as u16));
+            indices.push(RESTART);
         }
         self.builder.clipped = polygon;
     }
@@ -931,26 +992,26 @@ fn thin_inset(rect: [f32; 4]) -> (f32, f32) {
     }
 }
 
-/// The segments each corner's arc takes: enough that its chords stay
-/// within about a tenth of a pixel of the circle.
-fn corner_segments(radii: &[f32; 4]) -> usize {
+/// The steps each corner's arc takes: enough that the chords of the
+/// largest stay within about a tenth of a pixel of its circle, and none at
+/// a sharp corner, which every ring of a record keeps sharp, so the rings
+/// keep as many points as each other.
+fn corner_steps(radii: &[f32; 4]) -> [usize; 4] {
     let largest = radii.iter().copied().fold(0.0f32, f32::max);
-    if largest <= 0.0 {
-        return 1;
-    }
-    ((largest.sqrt() * 1.2).ceil() as usize).clamp(1, 12)
+    let segments = ((largest.sqrt() * 1.2).ceil() as usize).clamp(1, 12);
+    radii.map(|radius| if radius > 0.0 { segments } else { 0 })
 }
 
 /// The outline of `rect` (x, y, width, height) with `radii` (top-left,
 /// top-right, bottom-right, bottom-left), moved out by `grow` (in when
-/// negative), clockwise from the top-left corner's start, `segments` steps
-/// a corner. Sharp corners stay sharp.
+/// negative), clockwise from the top-left corner's start, each corner in
+/// its `steps`: one point where it has none.
 fn rounded_ring(
     ring: &mut Vec<Point>,
     rect: [f32; 4],
     radii: [f32; 4],
     grow: f32,
-    segments: usize,
+    steps: [usize; 4],
 ) {
     let left = rect[0] - grow;
     let top = rect[1] - grow;
@@ -970,8 +1031,9 @@ fn rounded_ring(
             0.0
         };
         let center = [at[0] + x_in * radius, at[1] + y_in * radius];
+        let segments = steps[corner];
         for step in 0..=segments {
-            let angle = start + std::f32::consts::FRAC_PI_2 * step as f32 / segments as f32;
+            let angle = start + std::f32::consts::FRAC_PI_2 * step as f32 / segments.max(1) as f32;
             ring.push([
                 center[0] + angle.cos() * radius,
                 center[1] + angle.sin() * radius,
@@ -1080,10 +1142,12 @@ pub(crate) struct MeshBuffers {
 }
 
 /// What a batch's run draws draw with while their pipelines compile: the
-/// index range of each, as the batch holds its draws, and the buffers.
+/// index range of each, as the batch holds its draws, the pass's chunks
+/// and the buffers.
 #[derive(Clone, Copy)]
 pub(crate) struct RunMeshes<'a> {
     pub(crate) ranges: &'a [Option<Range<u32>>],
+    pub(crate) chunks: &'a [MeshChunk],
     pub(crate) buffers: &'a MeshBuffers,
 }
 
@@ -1094,7 +1158,33 @@ impl RunMeshes<'_> {
         let end = draws.end.min(self.ranges.len());
         Self {
             ranges: self.ranges.get(draws.start..end).unwrap_or_default(),
-            buffers: self.buffers,
+            ..self
+        }
+    }
+
+    /// Draws the indices in `range` into `pass`, which has the fallback
+    /// pipeline set: one draw for each chunk the range reaches, with the
+    /// vertices bound from the chunk's first.
+    pub(crate) fn draw(&self, pass: &mut crate::draw_pass::TrackedPass<'_, '_>, range: Range<u32>) {
+        pass.set_index_buffer(self.buffers.indices.slice(), wgpu::IndexFormat::Uint16);
+        for (position, chunk) in self.chunks.iter().enumerate() {
+            let end = self
+                .chunks
+                .get(position + 1)
+                .map_or(u32::MAX, |next| next.first_index);
+            let drawn = range.start.max(chunk.first_index)..range.end.min(end);
+            if drawn.is_empty() {
+                continue;
+            }
+            let vertices = &self.buffers.vertices;
+            let from = u64::from(chunk.first_vertex) * std::mem::size_of::<MeshVertex>() as u64;
+            pass.set_vertex_buffer(
+                0,
+                vertices
+                    .buffer
+                    .slice(vertices.offset + from..vertices.offset + vertices.len),
+            );
+            pass.draw_indexed(drawn, 0, 0..1);
         }
     }
 }
