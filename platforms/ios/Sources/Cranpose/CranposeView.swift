@@ -25,7 +25,9 @@ import CranposeBindings
     private var pending = false
     private var closed = false
     private var contentVisible = false
-    private var primaryTouch: UITouch?
+    /// Each finger's pointer id, from its touch down to its lift or cancel.
+    private var fingers: [ObjectIdentifier: UInt64] = [:]
+    private var nextFinger: UInt64 = 0
     private lazy var registry = NativeViewRegistry(parent: self, factories: factories) { [weak self] id, event in
         self?.command { try self?.session.nativeEvent(id: id, event: event) }
     }
@@ -36,6 +38,7 @@ import CranposeBindings
         self.factories = factories
         super.init(frame: .zero)
         clipsToBounds = true
+        isMultipleTouchEnabled = true
         accessibilityIdentifier = "cranpose-component"
         image.isUserInteractionEnabled = false
         addSubview(image)
@@ -112,7 +115,7 @@ import CranposeBindings
             timer?.cancel()
             timer = nil
             displayLink?.isPaused = true
-            primaryTouch = nil
+            fingers.removeAll()
         }
     }
 
@@ -179,21 +182,32 @@ import CranposeBindings
         do { try action() } catch { onError?(error.localizedDescription) }
     }
 
-    private func send(_ phase: TouchPhase, _ touch: UITouch) {
-        let point = touch.location(in: self)
-        command { try session.touch(phase: phase, x: Float(point.x), y: Float(point.y)) }
+    /// Sends what each of `touches` did, by its finger's pointer id. A touch
+    /// that `starts` gets the next id; one that `ends` gives its id up.
+    private func send(_ phase: TouchPhase, _ touches: Set<UITouch>, starts: Bool = false, ends: Bool = false) {
+        for touch in touches {
+            let key = ObjectIdentifier(touch)
+            if starts, fingers[key] == nil {
+                nextFinger += 1
+                fingers[key] = nextFinger
+            }
+            guard let pointer = fingers[key] else { continue }
+            if ends { fingers[key] = nil }
+            let point = touch.location(in: self)
+            command { try session.touch(pointer: pointer, phase: phase, x: Float(point.x), y: Float(point.y)) }
+        }
     }
 
     public override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if primaryTouch == nil, let touch = touches.first { primaryTouch = touch; send(.down, touch) }
+        send(.down, touches, starts: true)
     }
     public override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if let touch = primaryTouch, touches.contains(touch) { send(.move, touch) }
+        send(.move, touches)
     }
     public override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if let touch = primaryTouch, touches.contains(touch) { send(.up, touch); primaryTouch = nil }
+        send(.up, touches, ends: true)
     }
     public override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if let touch = primaryTouch { send(.cancel, touch); primaryTouch = nil }
+        send(.cancel, touches, ends: true)
     }
 }

@@ -49,6 +49,9 @@ mod layer_property_updates;
 #[path = "unhandled_key_tests.rs"]
 mod unhandled_key_tests;
 
+#[path = "touch_router_tests.rs"]
+mod touch_router_tests;
+
 fn reader_control_id<R: Renderer>(shell: &mut AppShell<R>, name: &str) -> NodeId
 where
     R::Error: Debug,

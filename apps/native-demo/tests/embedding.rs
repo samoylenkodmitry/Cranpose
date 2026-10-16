@@ -20,8 +20,12 @@ fn embedded_component_renders_and_handles_rust_touch() {
             .iter()
             .all(|value| *value > 235)
     );
-    session.touch(TouchPhase::Down, 60.0, 96.0).expect("press");
-    session.touch(TouchPhase::Up, 60.0, 96.0).expect("release");
+    session
+        .touch(0, TouchPhase::Down, 60.0, 96.0)
+        .expect("press");
+    session
+        .touch(0, TouchPhase::Up, 60.0, 96.0)
+        .expect("release");
     let frame = pollster::block_on(session.frame(1110, 780, 3.0)).expect("touch frame");
     assert!(has_event(&frame, "count", "1"));
     for (width, height, density) in [(720, 1200, 2.0), (1110, 780, 3.0)] {

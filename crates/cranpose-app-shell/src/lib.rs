@@ -13,6 +13,7 @@ mod shell_debug;
 mod shell_frame;
 mod shell_input;
 mod surface;
+mod touch_router;
 mod wheel;
 use std::{
     cell::{Cell, RefCell},
@@ -49,6 +50,7 @@ use hit_path_tracker::PointerId;
 use shell_frame::build_draw_refresh_scope;
 pub use surface::{RootId, RootSurface, SurfaceMut};
 use surface::{SurfaceDirtyLane, TextInputRouter, TextInputRoutes, route_nodes_by_surface};
+pub use touch_router::TouchRouter;
 use web_time::Instant;
 pub use wheel::WheelScroll;
 

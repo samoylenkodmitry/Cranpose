@@ -1,6 +1,6 @@
 use std::sync::{Arc, mpsc};
 
-use cranpose::{AppLauncher, embedded_view::EmbeddedView, prelude::PointerSource};
+use cranpose::{AppLauncher, TouchRouter, embedded_view::EmbeddedView, prelude::PointerSource};
 
 use crate::{
     NativeContent, NativeContext, NativeError, NativeEvent, NativeFrame, NativeSlot, TouchPhase,
@@ -11,6 +11,7 @@ struct Component {
     view: EmbeddedView,
     context: NativeContext,
     event: Box<dyn FnMut(NativeEvent)>,
+    touches: TouchRouter<u64>,
 }
 
 impl Component {
@@ -28,6 +29,7 @@ impl Component {
             view,
             context,
             event,
+            touches: TouchRouter::default(),
         })
     }
 
@@ -80,22 +82,16 @@ impl Component {
             Command::Frame(width, height, density, reply) => {
                 let _ = reply.send(self.frame(width, height, density));
             }
-            Command::Touch(phase, x, y) => {
+            Command::Touch(pointer, phase, x, y) => {
                 let shell = self.view.shell();
                 shell.set_pointer_source(PointerSource::Touch);
+                let finger = Some(pointer);
                 match phase {
-                    TouchPhase::Down => {
-                        shell.set_cursor(x, y);
-                        shell.pointer_pressed();
-                    }
-                    TouchPhase::Move => {
-                        shell.set_cursor(x, y);
-                    }
-                    TouchPhase::Up => {
-                        shell.pointer_released_at_position(x, y);
-                    }
-                    TouchPhase::Cancel => shell.cancel_gesture(),
-                }
+                    TouchPhase::Down => self.touches.press(shell, finger, x, y),
+                    TouchPhase::Move => self.touches.moved(shell, finger, x, y),
+                    TouchPhase::Up => self.touches.release(shell, finger, x, y),
+                    TouchPhase::Cancel => self.touches.cancel(shell, finger, Some((x, y))),
+                };
             }
             Command::Event(event) => (self.event)(event),
             Command::NativeEvent(id, event) => {
