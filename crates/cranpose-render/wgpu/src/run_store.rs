@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use cranpose_core::collections::map::{Entry, HashMap};
-use cranpose_render_common::{graph::DrawCommandId, style_shared::apply_layer_to_color};
+use cranpose_render_common::{graph::DrawCommandId, style_shared::apply_paint_to_color};
 use cranpose_ui_graphics::{
-    ARC_BUCKETS, BrushRecord, Color, FRAGMENT_KIND_ARC, GradientStopRecord, GraphicsLayer,
-    RecordLane, RecordSegment, RecordTables, Rect, ShapeRecordBody, ShapeRecordCurve,
-    band_class_segments, strip_index_pattern, strip_indices,
+    ARC_BUCKETS, BrushRecord, Color, FRAGMENT_KIND_ARC, GradientStopRecord, RecordLane,
+    RecordSegment, RecordTables, Rect, ShapeRecordBody, ShapeRecordCurve, band_class_segments,
+    strip_index_pattern, strip_indices,
 };
 
 use crate::{
@@ -279,28 +279,18 @@ impl PaintKey {
     }
 }
 
-fn paint_layer(placement: &Placement) -> GraphicsLayer {
-    GraphicsLayer {
-        alpha: placement.alpha,
-        color_filter: placement.color_filter.as_deref().copied(),
-        ..GraphicsLayer::default()
-    }
-}
-
 fn painted_stops(
     stops: &[GradientStopRecord],
     placement: &Placement,
     out: &mut Vec<GradientStopRecord>,
 ) {
     out.clear();
-    if stops.is_empty() {
-        return;
-    }
-    let layer = paint_layer(placement);
+    let filter = placement.color_filter.as_deref();
     out.extend(stops.iter().map(|stop| {
-        let color = apply_layer_to_color(
+        let color = apply_paint_to_color(
             Color(stop.color[0], stop.color[1], stop.color[2], stop.color[3]),
-            &layer,
+            placement.alpha,
+            filter,
         );
         GradientStopRecord {
             color: [color.0, color.1, color.2, color.3],
@@ -947,20 +937,7 @@ impl ArenaStaging {
             && self.placements.len() < PLACEMENT_CHUNK
     }
 
-    // Records `record` under `key`, extending the last draw when it
-    // continues it.
-    #[cfg(test)]
     fn push_draw(
-        &mut self,
-        key: crate::render::ShapePipelineKey,
-        band_class: u8,
-        record: u32,
-        occluders: bool,
-    ) {
-        self.push_draw_range(key, band_class, record..record + 1, occluders);
-    }
-
-    fn push_draw_range(
         &mut self,
         key: crate::render::ShapePipelineKey,
         band_class: u8,
@@ -1920,7 +1897,7 @@ impl RunStore {
             }
             if taken > segment_start {
                 let records_end = staging.bodies.len() as u32;
-                staging.push_draw_range(
+                staging.push_draw(
                     key,
                     band_class,
                     records_start..records_end,

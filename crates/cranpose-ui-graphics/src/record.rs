@@ -1009,18 +1009,6 @@ impl ShapeRecorder {
         0..self.tables.segments.len() as u32
     }
 
-    /// The shape records inside `segments`.
-    pub fn shape_count_in(&self, segments: &Range<u32>) -> u32 {
-        if *segments == self.all_segments() {
-            return self.tables.shapes.len() as u32;
-        }
-        self.tables.segments[segments.start as usize..segments.end as usize]
-            .iter()
-            .filter(|segment| segment.lane == RecordLane::Shapes)
-            .map(|segment| segment.count)
-            .sum()
-    }
-
     /// The rect every recorded shape's pixels lie within; `None` when
     /// nothing was recorded.
     pub fn bounds(&self) -> Option<Rect> {

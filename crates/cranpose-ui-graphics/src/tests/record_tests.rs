@@ -1234,10 +1234,6 @@ fn a_recording_counts_and_bounds_its_shapes_across_splits_and_reuse() {
     assert_eq!(first.shape_count_in(&first.all_segments()), 3);
     assert_eq!(first.shape_count_in(&behind), 2);
     assert_eq!(first.shape_count_in(&overlay), 1);
-    assert_eq!(
-        first.shape_recorder().shape_count_in(&behind),
-        first.shape_count_in(&behind)
-    );
     assert_eq!(first.shape_bounds(), Some(rect(2.0, 0.0, 23.0, 4.0)));
 
     let mut recorder = CommandRecorder::reusing(first);

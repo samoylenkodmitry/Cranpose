@@ -153,7 +153,7 @@ impl RunDraw {
     ) -> Self {
         let records = recording.shape_count_in(&segments);
         Self::with_bounds_and_records(
-            recording.shape_recorder(),
+            Arc::clone(recording.shape_recorder()),
             command,
             segments,
             records,
@@ -162,25 +162,8 @@ impl RunDraw {
         )
     }
 
-    pub(crate) fn of_recorder(
-        recorder: &Arc<ShapeRecorder>,
-        command: Option<DrawCommandId>,
-        segments: Range<u32>,
-        placement: Placement,
-    ) -> Self {
-        let records = recorder.shape_count_in(&segments);
-        Self::with_bounds_and_records(
-            recorder,
-            command,
-            segments,
-            records,
-            recorder.bounds(),
-            placement,
-        )
-    }
-
     fn with_bounds_and_records(
-        recorder: &Arc<ShapeRecorder>,
+        recorder: Arc<ShapeRecorder>,
         command: Option<DrawCommandId>,
         segments: Range<u32>,
         records: u32,
@@ -197,7 +180,7 @@ impl RunDraw {
             |bounds| placement.translated_bounds(bounds),
         );
         Self {
-            recorder: Arc::clone(recorder),
+            recorder,
             command,
             segments,
             records,
@@ -210,7 +193,9 @@ impl RunDraw {
     pub(crate) fn whole(recorder: Arc<ShapeRecorder>, placement: Placement) -> Option<Self> {
         (!recorder.is_empty()).then(|| {
             let segments = recorder.all_segments();
-            Self::of_recorder(&recorder, None, segments, placement)
+            let records = recorder.tables().shapes.len() as u32;
+            let bounds = recorder.bounds();
+            Self::with_bounds_and_records(recorder, None, segments, records, bounds, placement)
         })
     }
 

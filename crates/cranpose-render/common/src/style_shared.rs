@@ -18,20 +18,16 @@ use crate::layer_transform::{layer_scale_x, layer_scale_y, layer_uniform_scale};
 /// buffer and the alpha multiplies whole channel values, so
 /// `round(round(c * 255) * a)` and not `round(c * 255 * a)`.
 pub fn apply_layer_to_color(color: Color, layer: &GraphicsLayer) -> Color {
-    let color = color.srgb_8bit();
-    apply_color_filter_to_color(
-        Color(
-            color.0,
-            color.1,
-            color.2,
-            (color.3 * layer.alpha).clamp(0.0, 1.0),
-        ),
-        layer.color_filter,
-    )
+    apply_paint_to_color(color, layer.alpha, layer.color_filter.as_ref())
 }
 
-fn apply_color_filter_to_color(color: Color, filter: Option<ColorFilter>) -> Color {
-    match filter {
+/// The colour a primitive is painted in under a layer's `alpha` and
+/// `color_filter`, the only parts of a layer a colour takes; see
+/// [`apply_layer_to_color`].
+pub fn apply_paint_to_color(color: Color, alpha: f32, color_filter: Option<&ColorFilter>) -> Color {
+    let color = color.srgb_8bit();
+    let color = Color(color.0, color.1, color.2, (color.3 * alpha).clamp(0.0, 1.0));
+    match color_filter {
         Some(filter) => {
             let [r, g, b, a] = filter.apply_rgba([color.0, color.1, color.2, color.3]);
             Color(r, g, b, a)
