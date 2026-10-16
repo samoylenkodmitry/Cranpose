@@ -143,24 +143,28 @@ pub(crate) fn saved(store: Option<&PreferencesRef>, key: &str) -> Option<String>
 
 /// Forgets the saves under `prefix`, apart from those under one of `keep`:
 /// live ones stop saving, the last values of dropped ones are discarded and
-/// stored ones are removed from `store` at the next save boundary.
+/// stored ones are removed from `store` at the next save boundary. The
+/// values `retain` keeps under those keys are dropped.
 pub(crate) fn forget(store: Option<PreferencesRef>, prefix: String, keep: Vec<String>) {
     let keys = Arc::new(Forget { prefix, keep });
     if let Some(store) = &store {
         super::stop_preference_saves(store, &keys);
     }
-    let stopped: Vec<_> = crate::thread_state::with(|state| {
+    let (stopped, retired): (Vec<_>, _) = crate::thread_state::with(|state| {
         let mut saves = state.local_saves.borrow_mut();
         saves.retired.retain(|key, _| !keys.matches(key));
         if let Some(store) = store {
             saves.forgotten.push((store, Arc::clone(&keys)));
         }
-        saves
+        let retired = state.retained.borrow_mut().forget(|key| keys.matches(key));
+        let stopped = saves
             .live
             .extract_if(.., |_, save| keys.matches(&save.key))
-            .collect()
+            .collect();
+        (stopped, retired)
     });
     drop(stopped);
+    drop(retired);
 }
 
 /// What a save boundary took from this thread's saves, so that a completed
