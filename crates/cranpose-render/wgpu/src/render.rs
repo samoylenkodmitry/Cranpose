@@ -4830,6 +4830,7 @@ impl GpuRenderer {
         self.viewport_uniforms.begin_frame();
         self.run_store.begin_frame(gpu_stats_enabled());
         self.begin_text_glyph_run_frame();
+        self.scratch_meshes.begin_frame();
 
         let reads_page = packet.root.contains_backdrop()
             || packet
