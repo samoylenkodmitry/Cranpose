@@ -2063,6 +2063,32 @@ impl CommandRecording {
             .flat_map(|segment| self.segment_primitives(segment, false))
     }
 
+    /// Runs `visit` on each primitive [`Self::primitives`] yields for
+    /// `segments`, in order. It reads a segment's lane once for all its
+    /// entries, where the iterator matches it for each.
+    pub fn for_each_primitive(&self, segments: Range<u32>, mut visit: impl FnMut(DrawPrimitive)) {
+        for segment in self.segments_in(&segments) {
+            let entries = segment.range();
+            match segment.lane {
+                RecordLane::Shapes => {
+                    entries.for_each(|index| visit(self.materialize_shape(index)));
+                }
+                RecordLane::Others => {
+                    entries.for_each(|index| visit(self.content.others[index].clone()));
+                }
+                RecordLane::Content => {}
+                RecordLane::GroupStart => entries.for_each(|index| {
+                    visit(DrawPrimitive::Group(GroupMarker::Start(
+                        self.content.groups[index],
+                    )));
+                }),
+                RecordLane::GroupEnd => {
+                    entries.for_each(|_| visit(DrawPrimitive::Group(GroupMarker::End)));
+                }
+            }
+        }
+    }
+
     /// Every primitive in recorded order, content markers included.
     pub fn primitives_with_markers(&self) -> impl Iterator<Item = DrawPrimitive> + '_ {
         self.shapes

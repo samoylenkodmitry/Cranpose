@@ -111,6 +111,41 @@ fn a_path_clip_ends_with_its_mask_inside_an_isolated_group() {
 }
 
 #[test]
+fn walking_a_recording_draws_what_its_iterator_yields() {
+    let image = crate::ImageBitmap::from_rgba8(2, 2, vec![255; 16]).expect("image");
+    let mut scope = DrawScopeDefault::new(Size::new(40.0, 40.0));
+    scope.draw_rect(red());
+    scope.translate(3.0, 0.0, &mut |scope| {
+        scope.scale(2.0, 2.0, Point::ZERO, &mut |scope| {
+            scope.draw_rect(red());
+            scope.draw_content();
+            scope.draw_image(image.clone());
+        });
+    });
+    scope.draw_rect(red());
+    let recording = scope.finish();
+    for segments in [
+        recording.all_segments(),
+        recording.content_split(true),
+        recording.content_split(false),
+    ] {
+        let iterated: Vec<_> = recording.primitives(segments.clone()).collect();
+        let mut walked = Vec::new();
+        recording.for_each_primitive(segments, |primitive| walked.push(primitive));
+        assert_eq!(walked, iterated);
+    }
+    let mut walked = Vec::new();
+    recording.for_each_primitive(recording.all_segments(), |primitive| walked.push(primitive));
+    // Both groups open again after the content marker.
+    assert_eq!((starts(&walked).len(), ends(&walked)), (4, 4));
+    assert!(
+        walked
+            .iter()
+            .any(|primitive| matches!(primitive, DrawPrimitive::Image { .. }))
+    );
+}
+
+#[test]
 fn content_drawn_inside_a_group_leaves_both_halves_balanced() {
     let mut scope = DrawScopeDefault::new(Size::new(40.0, 40.0));
     scope.translate(3.0, 0.0, &mut |scope| {

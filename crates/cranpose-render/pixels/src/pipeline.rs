@@ -1174,7 +1174,7 @@ fn render_graph_draw_run(
 ) {
     let rect = context.layer_bounds.raster_rect();
     let counts_before = scene.counts();
-    for primitive in run.primitives() {
+    run.for_each_primitive(|primitive| {
         push_draw_primitive(
             &primitive,
             rect,
@@ -1184,7 +1184,7 @@ fn render_graph_draw_run(
             None,
             context.motion_context_animated || context.content_offset_translation,
         );
-    }
+    });
     assign_snap_anchor_since(scene, counts_before, context.layer_snap_anchor);
 }
 
