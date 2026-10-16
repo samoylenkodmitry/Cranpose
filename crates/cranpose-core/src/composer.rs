@@ -201,6 +201,14 @@ fn spare_composer_stacks() -> ComposerStacks {
         .unwrap_or_default()
 }
 
+impl ComposerStacks {
+    fn holds_storage(&self) -> bool {
+        self.slot_hosts.capacity() > 0
+            || self.parent_stack.capacity() > 0
+            || self.scope_stack.capacity() > 0
+    }
+}
+
 /// Keeps a dropped composer's emptied stacks for the next composer.
 fn recycle_composer_stacks(mut stacks: ComposerStacks) {
     let ComposerStacks {
@@ -685,7 +693,7 @@ pub(crate) struct ComposerCore {
     subcomposition_owner_scope: RefCell<Option<RecomposeScope>>,
     pub(crate) local_stack: RefCell<LocalStackSnapshot>,
     pub(crate) side_effects: RefCell<Vec<Box<dyn FnOnce()>>>,
-    pub(crate) pending_scope_options: RefCell<Option<RecomposeOptions>>,
+    pub(crate) pending_scope_options: Cell<Option<RecomposeOptions>>,
     pub(crate) phase: Cell<crate::Phase>,
     pub(crate) recompose_parent_hint: Cell<Option<NodeId>>,
     pub(crate) recompose_child_cursor: Cell<crate::recompose::RecomposeChildCursor>,
@@ -759,40 +767,29 @@ impl Drop for ComposerCore {
         if commands.len() == 0 && commands.capacity() > 0 {
             recycle_commands(commands);
         }
-        recycle_composer_stacks(ComposerStacks {
-            slot_hosts: std::mem::take(self.slot_hosts.get_mut()),
-            parent_stack: std::mem::take(self.parent_stack.get_mut()),
-            scope_stack: std::mem::take(self.scope_stack.get_mut()),
-        });
+        let stacks = self.take_stacks();
+        if stacks.holds_storage() {
+            recycle_composer_stacks(stacks);
+        }
     }
 }
 
 impl ComposerCore {
-    pub(crate) fn new(
-        shared_state: Rc<ComposerRuntimeState>,
-        slots: Rc<SlotsHost>,
-        applier: Rc<dyn ApplierHost>,
-        runtime: RuntimeHandle,
-        root: Option<NodeId>,
-        initial_parent_frame: InitialParentFrame,
-    ) -> Self {
+    fn new(parts: ComposerParts) -> Self {
+        let ComposerParts {
+            shared_state,
+            slots,
+            applier,
+            runtime,
+            root,
+            initial_parent_frame,
+        } = parts;
         let ComposerStacks {
             slot_hosts,
             mut parent_stack,
             scope_stack,
         } = spare_composer_stacks();
-        if let Some(root_id) = root {
-            parent_stack.push(ParentFrame {
-                id: root_id,
-                previous: ChildList::new(),
-                new_children: ChildList::new(),
-                new_children_membership: None,
-                attach_mode: ParentAttachMode::DeferredSync,
-                synthetic_root: matches!(initial_parent_frame, InitialParentFrame::SyntheticRoot),
-            });
-        }
-
-        let commands = spare_commands();
+        push_root_frame(&mut parent_stack, root, initial_parent_frame);
         Self {
             branch_folds: Rc::clone(&shared_state.branch_folds),
             shared_state,
@@ -803,12 +800,12 @@ impl ComposerCore {
             parent_stack: RefCell::new(parent_stack),
             subcompose_stack: RefCell::new(Vec::new()),
             root: Cell::new(root),
-            commands: RefCell::new(commands),
+            commands: RefCell::new(spare_commands()),
             scope_stack: RefCell::new(scope_stack),
             subcomposition_owner_scope: RefCell::new(None),
             local_stack: RefCell::new(None),
             side_effects: RefCell::new(Vec::new()),
-            pending_scope_options: RefCell::new(None),
+            pending_scope_options: Cell::new(None),
             phase: Cell::new(crate::Phase::Compose),
             recompose_parent_hint: Cell::new(None),
             recompose_child_cursor: Cell::new(crate::recompose::RecomposeChildCursor::Unknown),
@@ -817,6 +814,116 @@ impl ComposerCore {
             _not_send: PhantomData,
         }
     }
+
+    /// The stacks, emptied, with their storage.
+    fn take_stacks(&mut self) -> ComposerStacks {
+        let mut stacks = ComposerStacks {
+            slot_hosts: std::mem::take(self.slot_hosts.get_mut()),
+            parent_stack: std::mem::take(self.parent_stack.get_mut()),
+            scope_stack: std::mem::take(self.scope_stack.get_mut()),
+        };
+        stacks.slot_hosts.clear();
+        stacks.parent_stack.clear();
+        stacks.scope_stack.clear();
+        stacks
+    }
+
+    /// Becomes the core of a new pass, in place, as [`Self::new`] builds
+    /// one: the allocation and the stacks' storage stay. Every field is
+    /// named, so a new field cannot be left out.
+    fn restart(&mut self, parts: ComposerParts) {
+        let Self {
+            shared_state,
+            branch_folds,
+            slots,
+            slot_hosts,
+            applier,
+            runtime,
+            parent_stack,
+            subcompose_stack,
+            root,
+            commands,
+            scope_stack,
+            subcomposition_owner_scope,
+            local_stack,
+            side_effects,
+            pending_scope_options,
+            phase,
+            recompose_parent_hint,
+            recompose_child_cursor,
+            root_render_requested,
+            locals_changed,
+            _not_send: _,
+        } = self;
+        if !Rc::ptr_eq(shared_state, &parts.shared_state) {
+            *branch_folds = Rc::clone(&parts.shared_state.branch_folds);
+            *shared_state = parts.shared_state;
+        }
+        *slots = parts.slots;
+        *applier = parts.applier;
+        *runtime = parts.runtime;
+        slot_hosts.get_mut().clear();
+        let parent_stack = parent_stack.get_mut();
+        parent_stack.clear();
+        push_root_frame(parent_stack, parts.root, parts.initial_parent_frame);
+        subcompose_stack.get_mut().clear();
+        root.set(parts.root);
+        let commands = commands.get_mut();
+        if commands.len() > 0 || commands.capacity() == 0 {
+            *commands = spare_commands();
+        }
+        scope_stack.get_mut().clear();
+        *subcomposition_owner_scope.get_mut() = None;
+        *local_stack.get_mut() = None;
+        side_effects.get_mut().clear();
+        pending_scope_options.set(None);
+        phase.set(crate::Phase::Compose);
+        recompose_parent_hint.set(None);
+        recompose_child_cursor.set(crate::recompose::RecomposeChildCursor::Unknown);
+        root_render_requested.set(false);
+        locals_changed.set(false);
+    }
+
+    /// Lets go of what the finished pass composed under: its stacks, locals,
+    /// owner scope and side effects.
+    fn park(&mut self) {
+        self.slot_hosts.get_mut().clear();
+        self.parent_stack.get_mut().clear();
+        self.scope_stack.get_mut().clear();
+        self.subcompose_stack.get_mut().clear();
+        *self.subcomposition_owner_scope.get_mut() = None;
+        *self.local_stack.get_mut() = None;
+        self.side_effects.get_mut().clear();
+    }
+}
+
+/// Opens the parent frame of a pass's top-level nodes under `root`.
+fn push_root_frame(
+    parent_stack: &mut Vec<ParentFrame>,
+    root: Option<NodeId>,
+    initial_parent_frame: InitialParentFrame,
+) {
+    if let Some(root_id) = root {
+        parent_stack.push(ParentFrame {
+            id: root_id,
+            previous: ChildList::new(),
+            new_children: ChildList::new(),
+            new_children_membership: None,
+            attach_mode: ParentAttachMode::DeferredSync,
+            synthetic_root: matches!(initial_parent_frame, InitialParentFrame::SyntheticRoot),
+        });
+    }
+}
+
+/// What a composer core is built for: the tree it composes and the
+/// parent its top-level nodes attach under.
+struct ComposerParts {
+    shared_state: Rc<ComposerRuntimeState>,
+    slots: Rc<SlotsHost>,
+    applier: Rc<dyn ApplierHost>,
+    runtime: RuntimeHandle,
+    root: Option<NodeId>,
+    initial_parent_frame: InitialParentFrame,
 }
 
 /// The state of one composition pass. It writes the slot table and queues node changes for the
@@ -966,15 +1073,53 @@ impl Composer {
     ) -> Self {
         shared_state.bind_applier_host(&applier);
         let slots = bind_slots_host_to_runtime_state(&shared_state, &slots);
-        let core = Rc::new(ComposerCore::new(
+        let core = Rc::new(ComposerCore::new(ComposerParts {
             shared_state,
             slots,
             applier,
             runtime,
             root,
             initial_parent_frame,
-        ));
+        }));
         Self { core }
+    }
+
+    /// A composer for a pass, as [`Self::new_with_shared_state`] makes,
+    /// built in place of `parked`'s core when nothing else holds it: the
+    /// pass then allocates no core and reuses the stacks' storage.
+    pub(crate) fn for_pass(
+        parked: Option<Composer>,
+        shared_state: Rc<ComposerRuntimeState>,
+        slots: Rc<SlotsHost>,
+        applier: Rc<dyn ApplierHost>,
+        runtime: RuntimeHandle,
+        root: Option<NodeId>,
+    ) -> Self {
+        let Some(mut composer) = parked.filter(|parked| Rc::strong_count(&parked.core) == 1) else {
+            return Self::new_with_shared_state(shared_state, slots, applier, runtime, root);
+        };
+        let Some(core) = Rc::get_mut(&mut composer.core) else {
+            return Self::new_with_shared_state(shared_state, slots, applier, runtime, root);
+        };
+        shared_state.bind_applier_host(&applier);
+        let slots = bind_slots_host_to_runtime_state(&shared_state, &slots);
+        core.restart(ComposerParts {
+            shared_state,
+            slots,
+            applier,
+            runtime,
+            root,
+            initial_parent_frame: InitialParentFrame::SyntheticRoot,
+        });
+        composer
+    }
+
+    /// The composer of a finished pass, kept for [`Self::for_pass`] when
+    /// nothing else holds its core. It lets go of what the pass composed
+    /// under.
+    pub(crate) fn park(mut self) -> Option<Composer> {
+        Rc::get_mut(&mut self.core)?.park();
+        Some(self)
     }
 
     /// Creates a composer that writes into `slots` and queues node changes for `applier`. Top-level
@@ -1208,10 +1353,6 @@ impl Composer {
 
     pub(crate) fn side_effects_mut(&self) -> RefMut<'_, Vec<Box<dyn FnOnce()>>> {
         self.core.side_effects.borrow_mut()
-    }
-
-    fn pending_scope_options(&self) -> RefMut<'_, Option<RecomposeOptions>> {
-        self.core.pending_scope_options.borrow_mut()
     }
 
     pub(crate) fn borrow_applier(&self) -> ApplierGuard<'_, dyn Applier> {
@@ -1589,7 +1730,7 @@ impl Composer {
         host: &Rc<SlotsHost>,
         key: crate::slot::GroupKeySeed,
     ) -> (RecomposeScope, bool) {
-        let options = self.pending_scope_options().take().unwrap_or_default();
+        let options = self.core.pending_scope_options.take().unwrap_or_default();
         let parent_node = self.current_parent_hint();
         let (
             GroupStart {
@@ -1721,7 +1862,7 @@ impl Composer {
         f: impl FnOnce(&Composer) -> R,
     ) -> R {
         options.retention = RetentionMode::RetainWhenInactive;
-        self.pending_scope_options().replace(options);
+        self.core.pending_scope_options.set(Some(options));
         self.with_group(key, f)
     }
 
@@ -2242,14 +2383,14 @@ impl Composer {
         let shared_state = slots
             .runtime_state()
             .unwrap_or_else(|| Rc::clone(&self.core.shared_state));
-        let core = Rc::new(ComposerCore::new(
+        let core = Rc::new(ComposerCore::new(ComposerParts {
             shared_state,
-            Rc::clone(slots),
-            Rc::clone(&self.core.applier),
-            runtime_handle.clone(),
+            slots: Rc::clone(slots),
+            applier: Rc::clone(&self.core.applier),
+            runtime: runtime_handle.clone(),
             root,
-            InitialParentFrame::RealParent,
-        ));
+            initial_parent_frame: InitialParentFrame::RealParent,
+        }));
         core.phase.set(phase);
         core.locals_changed.set(self.core.locals_changed.get());
         *core.local_stack.borrow_mut() = locals;
