@@ -22,11 +22,11 @@ perf-data = { path = "../perf-data" }
 # egui's own native shell with its default renderer (glow) and fonts, and
 # AccessKit for accessibility services, as the Android toolkits serve them.
 # AccessKit's Android adapter attaches to GameActivity's view.
-eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts", "accesskit", "android-game-activity"] }
+eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts", "accesskit", "android-game-activity"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # The same shell in a browser, on the same renderer: glow is WebGL2 there.
-eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts"] }
+eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "Location"] }
@@ -34,7 +34,7 @@ web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlC
 [target.'cfg(target_os = "android")'.dependencies]
 # egui-winit leaves AccessKit's Android adapter out, so Android would get the
 # adapter that drops every tree; this feature turns the real one on.
-accesskit_winit = { version = "0.32.2", default-features = false, features = ["accesskit_android"] }
+accesskit_winit = { version = "0.34.1", default-features = false, features = ["accesskit_android"] }
 android_logger = "0.15"
 winit = { version = "0.30.13", default-features = false }
 
