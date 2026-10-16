@@ -153,6 +153,10 @@ pub(crate) struct RuntimeThreadState {
     pub(crate) spare_commands: RefCell<Vec<CommandQueue>>,
     pub(crate) spare_composer_stacks: Cell<Option<crate::composer::ComposerStacks>>,
     pub(crate) bridges: RefCell<FixedHashMap<u64, Rc<dyn Any>>>,
+    /// Notes what the calculations of computed states read; made at the
+    /// first such read.
+    pub(crate) computed_observer:
+        RefCell<Option<crate::snapshot_state_observer::SnapshotStateObserver>>,
     #[cfg(any(test, debug_assertions))]
     pub(crate) location_keys: RefCell<FixedHashMap<Key, crate::LocationKeyDebugInfo>>,
     #[cfg(debug_assertions)]
@@ -185,6 +189,7 @@ impl RuntimeThreadState {
             spare_commands: RefCell::new(Vec::new()),
             spare_composer_stacks: Cell::new(None),
             bridges: RefCell::new(fixed_hash_map()),
+            computed_observer: RefCell::new(None),
             #[cfg(any(test, debug_assertions))]
             location_keys: RefCell::new(fixed_hash_map()),
             #[cfg(debug_assertions)]
@@ -218,6 +223,7 @@ impl RuntimeThreadState {
             spare_commands,
             spare_composer_stacks,
             bridges,
+            computed_observer,
             #[cfg(any(test, debug_assertions))]
             location_keys,
             #[cfg(debug_assertions)]
@@ -243,6 +249,7 @@ impl RuntimeThreadState {
         swap_values(spare_commands, &other.spare_commands);
         spare_composer_stacks.swap(&other.spare_composer_stacks);
         swap_values(bridges, &other.bridges);
+        swap_values(computed_observer, &other.computed_observer);
         #[cfg(any(test, debug_assertions))]
         swap_values(location_keys, &other.location_keys);
         #[cfg(debug_assertions)]

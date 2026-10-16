@@ -14,6 +14,7 @@ mod composer;
 pub mod composer_context;
 mod composition;
 mod composition_locals;
+mod computed_state;
 pub mod concurrency;
 mod debug_trace;
 mod effect_key;
@@ -85,6 +86,8 @@ pub use composition_locals::{
 pub(crate) use composition_locals::{
     ComputedLocalEntry, LocalStateEntry, StaticComputedLocalEntry, StaticLocalEntry,
 };
+#[doc(hidden)]
+pub use computed_state::{ComputedState, computedStateOf};
 pub use concurrency::{
     CollectEvents, CoroutineScope, Delay, EventChannel, EventSender, EventStream, EventStreamNext,
     ProduceScope, collectAsState, delay, interval, produceState, rememberCoroutineScope,
@@ -122,7 +125,6 @@ pub use slot::{
     SlotDebugSnapshot, SlotRetentionDebugStats, SlotTable, SlotTableDebugStats,
     SlotTableLocalDebugStats, SlotTableMutationDebugStats,
 };
-#[doc(hidden)]
 pub use snapshot_state_observer::SnapshotStateObserver;
 
 /// Runs the provided closure inside a mutable snapshot and applies the result.
