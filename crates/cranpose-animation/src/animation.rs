@@ -584,9 +584,16 @@ impl<T: Lerp + Clone + PartialEq + 'static> TransitionAnimationState<T> {
         compute_repeatable_value(local_play_time, &initial, &target, spec)
     }
 
-    fn install_subscriber_callback(&self, callback: impl Fn() + 'static) {
+    /// Restarts `transition`'s loop whenever the value gains a reader, from
+    /// the first call on: later calls make no callback.
+    fn install_subscriber_callback(&self, transition: &Rc<InfiniteTransitionInner>) {
         if !self.subscriber_callback_installed.replace(true) {
-            self.value_state.as_state().on_subscriber(callback);
+            let transition = Rc::downgrade(transition);
+            self.value_state.as_state().on_subscriber(move || {
+                if let Some(transition) = transition.upgrade() {
+                    transition.request_restart();
+                }
+            });
         }
     }
 }
@@ -748,16 +755,13 @@ impl InfiniteTransition {
         animation_spec: InfiniteRepeatableSpec<T>,
     ) -> State<T> {
         let caller = cranpose_core::caller_location_key();
-        let runtime = with_current_composer(cranpose_core::Composer::runtime_handle);
-        let initial_for_remember = initial_value.clone();
-        let target_for_remember = target_value.clone();
-        let spec_for_remember = animation_spec.clone();
-        let animation_state = cranpose_core::remember(move || {
+        // Only the first pass makes the state: later passes copy nothing for it.
+        let animation_state = cranpose_core::remember(|| {
             Rc::new(TransitionAnimationState::new(
-                initial_for_remember,
-                target_for_remember,
-                spec_for_remember,
-                runtime,
+                initial_value.clone(),
+                target_value.clone(),
+                animation_spec.clone(),
+                with_current_composer(cranpose_core::Composer::runtime_handle),
             ))
         })
         .with(Rc::clone);
@@ -775,14 +779,9 @@ impl InfiniteTransition {
             });
         }
 
+        animation_state.install_subscriber_callback(&self.inner);
         let animation_any: Rc<dyn InfiniteTransitionAnimation> = animation_state.clone();
         let transition_inner = Rc::clone(&self.inner);
-        let transition_for_subscriber = Rc::downgrade(&transition_inner);
-        animation_state.install_subscriber_callback(move || {
-            if let Some(transition) = transition_for_subscriber.upgrade() {
-                transition.request_restart();
-            }
-        });
         let animation_id = Rc::as_ptr(&animation_state) as usize;
         cranpose_core::__disposable_effect_impl(
             caller ^ cranpose_core::location_key!(),
@@ -880,10 +879,13 @@ impl InfiniteTransitionInner {
 #[expect(non_snake_case)]
 #[track_caller]
 pub fn rememberInfiniteTransition(label: &str) -> InfiniteTransition {
-    let runtime = with_current_composer(cranpose_core::Composer::runtime_handle);
-    let transition =
-        cranpose_core::remember(move || InfiniteTransition::new(label, runtime.clone()))
-            .with(Clone::clone);
+    let transition = cranpose_core::remember(|| {
+        InfiniteTransition::new(
+            label,
+            with_current_composer(cranpose_core::Composer::runtime_handle),
+        )
+    })
+    .with(Clone::clone);
     transition.run();
     transition
 }
@@ -1276,9 +1278,8 @@ pub fn animateValueAsState<T: SpringScalar + PartialEq + 'static>(
     let _ = label;
     let caller = cranpose_core::caller_location_key();
     with_current_composer(|composer| {
-        let runtime = composer.runtime_handle();
         let anim: Owned<Animatable<T>> = composer.remember_at(caller, || {
-            Animatable::new_with_animation(target.clone(), animation, runtime)
+            Animatable::new_with_animation(target.clone(), animation, composer.runtime_handle())
         });
         anim.update(|animatable| {
             let is_new_target = animatable.target() != target;
