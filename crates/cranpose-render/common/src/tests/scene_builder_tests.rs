@@ -545,8 +545,9 @@ fn translated_content_offset_changes_visual_position_and_full_surface_hash() {
 
 #[test]
 fn rounded_clip_to_bounds_records_shape_clip_without_runtime_shader() {
-    let layer = graphics_layer_with_shaped_clip(
-        Some(GraphicsLayer::default()),
+    let mut layer = Some(GraphicsLayer::default());
+    shape_clip(
+        &mut layer,
         true,
         Some(RoundedCornerShape::new(4.0, 8.0, 12.0, 16.0)),
         Rect {
@@ -555,8 +556,8 @@ fn rounded_clip_to_bounds_records_shape_clip_without_runtime_shader() {
             width: 100.0,
             height: 40.0,
         },
-    )
-    .expect("rounded clip properties");
+    );
+    let layer = layer.expect("rounded clip properties");
 
     assert!(layer.clip);
     assert!(layer.render_effect.is_none());
@@ -570,11 +571,12 @@ fn rounded_clip_to_bounds_records_shape_clip_without_runtime_shader() {
 #[test]
 fn rounded_clip_to_bounds_keeps_existing_effect_inside_mask() {
     let existing = RenderEffect::blur(3.0);
-    let layer = graphics_layer_with_shaped_clip(
-        Some(GraphicsLayer {
-            render_effect: Some(existing.clone()),
-            ..GraphicsLayer::default()
-        }),
+    let mut layer = Some(GraphicsLayer {
+        render_effect: Some(existing.clone()),
+        ..GraphicsLayer::default()
+    });
+    shape_clip(
+        &mut layer,
         true,
         Some(RoundedCornerShape::uniform(10.0)),
         Rect {
@@ -583,8 +585,8 @@ fn rounded_clip_to_bounds_keeps_existing_effect_inside_mask() {
             width: 100.0,
             height: 40.0,
         },
-    )
-    .expect("rounded clip properties");
+    );
+    let layer = layer.expect("rounded clip properties");
 
     let Some(RenderEffect::Chain { first, second }) = layer.render_effect else {
         panic!("existing effect should chain into rounded clip mask");

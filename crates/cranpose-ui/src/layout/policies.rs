@@ -118,7 +118,9 @@ impl MeasurePolicy for BoxMeasurePolicy {
         let height = max_height.clamp(constraints.min_height, constraints.max_height);
 
         placements.reserve(placeables.len());
-        for (placeable, alignment) in placeables {
+        // In place: a by-value loop moves the list's inline storage, hundreds
+        // of bytes, before its first step.
+        for (placeable, alignment) in &placeables {
             let child_width = placeable.width();
             let child_height = placeable.height();
 
@@ -793,7 +795,7 @@ impl MeasurePolicy for FlexMeasurePolicy {
         ));
 
         let placeables: SmallVec<[cranpose_ui_layout::Placeable; 8]> = placeables
-            .into_iter()
+            .drain(..)
             .enumerate()
             .map(|(idx, placeable)| {
                 placeable.unwrap_or_else(|| measurables[idx].measure(child_constraints))
@@ -831,9 +833,9 @@ impl MeasurePolicy for FlexMeasurePolicy {
         );
 
         placements.reserve(placeables.len());
-        for (idx, (placeable, main_pos)) in placeables.into_iter().zip(main_positions).enumerate() {
+        for (idx, (placeable, &main_pos)) in placeables.iter().zip(&main_positions).enumerate() {
             let cross_pos = self.cross_axis_position(
-                &placeable,
+                placeable,
                 &parent_data[idx],
                 container_cross,
                 before_baseline,

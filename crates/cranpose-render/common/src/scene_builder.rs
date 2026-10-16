@@ -833,24 +833,29 @@ fn translated_container(
     // shaped to them follow its size. Any other change to its graphics layer
     // may change what its children inherit.
     let shaped = |bounds: Rect| {
-        graphics_layer_with_shaped_clip(
-            modifier_slices.graphics_layer(),
+        let mut graphics_layer = modifier_slices.graphics_layer();
+        shape_clip(
+            &mut graphics_layer,
             clip_to_bounds,
             modifier_slices.corner_shape(),
             bounds,
-        )
+        );
+        graphics_layer
     };
-    if shaped(container.local_bounds)
-        .as_ref()
-        .unwrap_or(&GraphicsLayer::DEFAULT)
-        != &*container.graphics_layer
-    {
+    let current = shaped(container.local_bounds);
+    if current.as_ref().unwrap_or(&GraphicsLayer::DEFAULT) != &*container.graphics_layer {
         return Err("container graphics layer changed");
     }
     let (local_bounds, node_bounds) = layer_and_node_bounds(modifier_slices, layout_state.size());
+    // A container that kept its size keeps the layer just shaped.
+    let graphics_layer = if local_bounds == container.local_bounds {
+        current
+    } else {
+        shaped(local_bounds)
+    };
     Ok(TranslatedContainer {
         node_id,
-        graphics_layer: shaped(local_bounds),
+        graphics_layer,
         local_bounds,
         node_bounds,
     })
@@ -1894,8 +1899,9 @@ fn prepare_node_layer(
     let size = layout_state.size();
     let placement = layout_state.position();
     let (local_bounds, node_bounds) = layer_and_node_bounds(slices, size);
-    let graphics_layer = graphics_layer_with_shaped_clip(
-        slices.graphics_layer(),
+    let mut graphics_layer = slices.graphics_layer();
+    shape_clip(
+        &mut graphics_layer,
         slices.clip_to_bounds(),
         slices.corner_shape(),
         local_bounds,
@@ -2405,10 +2411,10 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
         // Stable: equal z indices keep the composition order.
         children.sort_by(|a, b| a.slices.z_index().total_cmp(&b.slices.z_index()));
     }
-    let base_graphics_layer = node.node_data.modifier_slices.graphics_layer();
-    let has_graphics_layer = base_graphics_layer.is_some();
-    let graphics_layer = graphics_layer_with_shaped_clip(
-        base_graphics_layer,
+    let mut graphics_layer = node.node_data.modifier_slices.graphics_layer();
+    let has_graphics_layer = graphics_layer.is_some();
+    shape_clip(
+        &mut graphics_layer,
         node.node_data.modifier_slices.clip_to_bounds(),
         node.node_data.modifier_slices.corner_shape(),
         Rect {
@@ -2441,18 +2447,21 @@ fn modifier_slices_have_origin_sinks(slices: &ModifierNodeSlices) -> bool {
     slices.text_window().is_some() || slices.viewport_window_rect().is_some()
 }
 
-fn graphics_layer_with_shaped_clip(
-    mut graphics_layer: Option<GraphicsLayer>,
+/// Shapes the clip of `graphics_layer`, a layer's own, to the corner shape
+/// of a layer that clips to its bounds `local_bounds`. In place: the layer
+/// moved in and out of a call is hundreds of bytes copied each way.
+fn shape_clip(
+    graphics_layer: &mut Option<GraphicsLayer>,
     clip_to_bounds: bool,
     corner_shape: Option<RoundedCornerShape>,
     local_bounds: Rect,
-) -> Option<GraphicsLayer> {
+) {
     if !clip_to_bounds {
-        return graphics_layer;
+        return;
     }
 
     let Some(corner_shape) = corner_shape else {
-        return graphics_layer;
+        return;
     };
     let radii = corner_shape.resolve(local_bounds.width, local_bounds.height);
     if radii.top_left <= f32::EPSILON
@@ -2460,7 +2469,7 @@ fn graphics_layer_with_shaped_clip(
         && radii.bottom_right <= f32::EPSILON
         && radii.bottom_left <= f32::EPSILON
     {
-        return graphics_layer;
+        return;
     }
 
     let properties = graphics_layer.get_or_insert_default();
@@ -2476,7 +2485,6 @@ fn graphics_layer_with_shaped_clip(
         properties.shape = LayerShape::Rounded(corner_shape);
         properties.clip = true;
     }
-    graphics_layer
 }
 
 fn layer_cache_policy(layer: &GraphicsLayer, isolation: IsolationReasons) -> CachePolicy {
