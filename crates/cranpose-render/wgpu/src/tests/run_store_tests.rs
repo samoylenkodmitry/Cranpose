@@ -1,4 +1,6 @@
-use cranpose_ui_graphics::{BlendMode, ColorFilter, Point};
+use cranpose_ui_graphics::{
+    BlendMode, Brush, ColorFilter, DrawScope, DrawScopeDefault, Point, Size, Stroke,
+};
 
 use super::*;
 
@@ -41,15 +43,80 @@ fn arena_key(segment: &RecordSegment) -> crate::render::ShapePipelineKey {
     }
 }
 
+/// A run of what `draw` records, placed at the origin.
+fn drawn_run(draw: impl FnOnce(&mut DrawScopeDefault)) -> RunDraw {
+    let mut scope = DrawScopeDefault::new(Size::new(400.0, 400.0));
+    draw(&mut scope);
+    let recording = scope.finish();
+    RunDraw::of(
+        &recording,
+        None,
+        recording.all_segments(),
+        crate::scene::Placement::at(Point::default(), None, None),
+    )
+}
+
+/// The draws one arena chunk records for `runs`, appended whole and in
+/// order, every segment of a run drawn with the key beside it.
+fn arena_draws(runs: &[(RunDraw, crate::render::ShapePipelineKey)]) -> Vec<RunDrawCall> {
+    let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
+    let mut store = storage_store(&device, UploadMode::Copied);
+    let chunk = store.open_arena();
+    let mut wanted = crate::shape_pipelines::PipelineDemand::default();
+    for (run, key) in runs {
+        let records = run.record_count();
+        let taken = store.append_arena(
+            chunk,
+            run,
+            0..records,
+            (1.0, crate::geometry::SegmentTransform::IDENTITY),
+            &mut |_| *key,
+            &mut wanted,
+        );
+        assert_eq!(taken, records, "the chunk takes every record of the run");
+    }
+    let mut draws = Vec::new();
+    store.cut_arena(&device, chunk, &mut draws);
+    draws
+}
+
+/// The draws of runs of small solid rects, each run `count` rects drawn
+/// with its key.
+fn keyed_draws(
+    runs: impl IntoIterator<Item = (usize, crate::render::ShapePipelineKey)>,
+) -> Vec<(std::ops::Range<u32>, crate::render::ShapePipelineKey)> {
+    let runs: Vec<_> = runs
+        .into_iter()
+        .map(|(count, key)| (fill_run(count, 0), key))
+        .collect();
+    arena_draws(&runs)
+        .into_iter()
+        .map(|draw| (draw.records, draw.key))
+        .collect()
+}
+
 #[test]
 fn shared_pipelines_preserve_each_draws_strip_index_count() {
     let key = arena_key(&shape_segment(4, BlendMode::SrcOver, (false, false, false)));
-    let mut staging = ArenaStaging::default();
-    for (record, class) in [0, 0, 3, 3, 0].into_iter().enumerate() {
-        staging.push_draw(key, class, record as u32, false);
-    }
-    let draws: Vec<_> = staging
-        .draws
+    let arcs = drawn_run(|scope| {
+        for _ in 0..2 {
+            scope.draw_arc(
+                Brush::solid(Color::WHITE),
+                Point::new(200.0, 200.0),
+                200.0,
+                0.0,
+                1.0,
+                Stroke::new(3.0),
+            );
+        }
+    });
+    let classes: Vec<u8> = arcs
+        .segment_records()
+        .map(|segment| segment.band_class)
+        .collect();
+    assert_eq!(classes, [3]);
+    let runs = [(fill_run(2, 0), key), (arcs, key), (fill_run(1, 0), key)];
+    let draws: Vec<_> = arena_draws(&runs)
         .iter()
         .map(|draw| (draw.records.clone(), draw.indices()))
         .collect();
@@ -65,28 +132,14 @@ fn fill_key(interiors: bool, blend: BlendMode) -> crate::render::ShapePipelineKe
     })
 }
 
-fn staged_draws(
-    keys: impl IntoIterator<Item = crate::render::ShapePipelineKey>,
-) -> Vec<(std::ops::Range<u32>, crate::render::ShapePipelineKey)> {
-    let mut staging = ArenaStaging::default();
-    for (record, key) in keys.into_iter().enumerate() {
-        staging.push_draw(key, 0, record as u32, false);
-    }
-    staging
-        .draws
-        .iter()
-        .map(|draw| (draw.records.clone(), draw.key))
-        .collect()
-}
-
 #[test]
 fn backgrounds_and_their_small_chips_share_one_draw_testing_interiors() {
     let background = fill_key(true, BlendMode::SrcOver);
     let chip = fill_key(false, BlendMode::SrcOver);
-    let level = [background, chip, chip, chip, chip, chip, chip];
-    let draws = staged_draws(level.iter().chain(&level).copied());
+    let level = [(1, background), (6, chip)];
+    let draws = keyed_draws(level.into_iter().chain(level));
     assert_eq!(draws, [(0..14, background)]);
-    let draws = staged_draws([chip, chip, background, chip]);
+    let draws = keyed_draws([(2, chip), (1, background), (1, chip)]);
     assert_eq!(draws, [(0..4, background)]);
 }
 
@@ -94,25 +147,22 @@ fn backgrounds_and_their_small_chips_share_one_draw_testing_interiors() {
 fn a_run_of_shapes_without_interiors_keeps_its_own_draw() {
     let background = fill_key(true, BlendMode::SrcOver);
     let particle = fill_key(false, BlendMode::SrcOver);
-    let many = JOINED_PLAIN_RECORDS as usize + 1;
-    let draws =
-        staged_draws(std::iter::once(background).chain(std::iter::repeat_n(particle, many + 3)));
+    let joined = JOINED_PLAIN_RECORDS;
+    let draws = keyed_draws([(1, background), (joined as usize, particle)]);
     assert_eq!(
         draws,
-        [
-            (0..many as u32, background),
-            (many as u32..many as u32 + 4, particle),
-        ]
+        [(0..joined + 1, background)],
+        "a run at the limit joins"
     );
-    let draws =
-        staged_draws(std::iter::repeat_n(particle, many).chain(std::iter::once(background)));
+    let many = joined + 1;
+    let draws = keyed_draws([(1, background), (many as usize, particle)]);
     assert_eq!(
         draws,
-        [
-            (0..many as u32, particle),
-            (many as u32..many as u32 + 1, background),
-        ]
+        [(0..1, background), (1..many + 1, particle)],
+        "a run past the limit keeps every record in a draw of its own"
     );
+    let draws = keyed_draws([(many as usize, particle), (1, background)]);
+    assert_eq!(draws, [(0..many, particle), (many..many + 1, background)]);
 }
 
 fn solid_fill_key(vertex_gradient: bool) -> crate::render::ShapePipelineKey {
@@ -126,17 +176,24 @@ fn solid_fill_key(vertex_gradient: bool) -> crate::render::ShapePipelineKey {
 fn a_vertex_gradient_and_its_small_solid_shapes_share_one_dithered_draw() {
     let chart = solid_fill_key(true);
     let bar = solid_fill_key(false);
-    assert_eq!(staged_draws([bar, chart, bar, bar, bar]), [(0..5, chart)]);
+    assert_eq!(
+        keyed_draws([(1, bar), (1, chart), (3, bar)]),
+        [(0..5, chart)]
+    );
     let many = JOINED_PLAIN_RECORDS + 1;
-    let draws = staged_draws(std::iter::once(chart).chain(std::iter::repeat_n(bar, many as usize)));
-    assert_eq!(draws, [(0..many, chart), (many..many + 1, bar)]);
+    let draws = keyed_draws([(1, chart), (many as usize, bar)]);
+    assert_eq!(
+        draws,
+        [(0..1, chart), (1..many + 1, bar)],
+        "no bar of a run past the limit is dithered"
+    );
 }
 
 #[test]
 fn draws_keyed_apart_by_more_than_the_interior_test_stay_apart() {
     let over = fill_key(true, BlendMode::SrcOver);
     let multiply = fill_key(false, BlendMode::Multiply);
-    let draws = staged_draws([over, multiply]);
+    let draws = keyed_draws([(1, over), (1, multiply)]);
     assert_eq!(draws, [(0..1, over), (1..2, multiply)]);
 }
 
@@ -225,13 +282,23 @@ fn a_draw_holds_occluders_once_any_record_it_takes_does() {
         depth: crate::render::ShapeDepth::Tested,
         ..fill_key(true, BlendMode::SrcOver)
     };
-    let mut staging = ArenaStaging::default();
-    staging.push_draw(key, 0, 0, false);
-    assert!(!staging.draws[0].occluders);
-    staging.push_draw(key, 0, 1, true);
-    staging.push_draw(key, 0, 2, false);
-    assert_eq!(staging.draws.len(), 1);
-    assert!(staging.draws[0].occluders);
+    let card = drawn_run(|scope| {
+        scope.draw_rect_at(
+            cranpose_ui_graphics::Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 64.0,
+                height: 64.0,
+            },
+            Brush::solid(Color::WHITE),
+        );
+    });
+    assert!(card.segment_records().all(|segment| segment.occluders));
+    let chips = arena_draws(&[(fill_run(2, 0), key)]);
+    assert!(!chips[0].occluders);
+    let draws = arena_draws(&[(fill_run(1, 0), key), (card, key), (fill_run(1, 0), key)]);
+    assert_eq!(draws.len(), 1);
+    assert!(draws[0].occluders);
 }
 
 #[test]
