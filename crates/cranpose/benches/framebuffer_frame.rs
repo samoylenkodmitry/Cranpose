@@ -4,6 +4,7 @@
 //!
 //! `FRAMES` frames (default 600) run in `steady_frames` after a warm-up; under
 //! callgrind, `--toggle-collect=*steady_frames*` counts only those.
+//! `STATIC_ROWS` text rows (default 0) that never change sit above the bar.
 
 use std::hint::black_box;
 
@@ -20,6 +21,15 @@ const WIDTH: u32 = 320;
 const HEIGHT: u32 = 240;
 const FRAME_NANOS: u64 = 16_666_667;
 const WARMUP_FRAMES: u64 = 60;
+
+/// Text rows that never change, above the bar: `STATIC_ROWS` (default 0).
+/// Each frame's cost should not grow with them.
+fn static_rows() -> usize {
+    std::env::var("STATIC_ROWS")
+        .ok()
+        .and_then(|rows| rows.parse().ok())
+        .unwrap_or(0)
+}
 
 #[composable]
 fn AnimatedBar() {
@@ -66,6 +76,15 @@ fn Screen() {
                 Modifier::empty(),
                 TextStyle::default(),
             );
+            for row in 0..static_rows() {
+                cranpose_core::with_key(&row, || {
+                    Text(
+                        format!("Static row {row}"),
+                        Modifier::empty(),
+                        TextStyle::default(),
+                    );
+                });
+            }
             AnimatedBar();
         },
     );
