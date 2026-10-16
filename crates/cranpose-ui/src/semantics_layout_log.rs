@@ -1,8 +1,16 @@
-use std::cell::{Cell, RefCell};
+use std::{
+    cell::{Cell, RefCell},
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use cranpose_core::NodeId;
 
 const MAX_PENDING: usize = 4096;
+
+/// How many logs are armed on any thread. Most layout changes happen with
+/// none, and this answers that with one load where a thread-local read
+/// costs a key lookup on targets without native thread-locals.
+static ARMED_LOGS: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) struct SemanticsLayoutLog {
     armed: Cell<bool>,
@@ -33,14 +41,11 @@ impl SemanticsLayoutLog {
         if self.armed.replace(armed) == armed {
             return;
         }
-        crate::thread_state::cells(|cells| {
-            let logs = &cells.armed_semantics_layout_logs;
-            logs.set(if armed {
-                logs.get() + 1
-            } else {
-                logs.get().saturating_sub(1)
-            });
-        });
+        if armed {
+            ARMED_LOGS.fetch_add(1, Ordering::Relaxed);
+        } else {
+            ARMED_LOGS.fetch_sub(1, Ordering::Relaxed);
+        }
     }
 
     fn record(&self, node: NodeId, stamp: &mut u64) {
@@ -80,7 +85,7 @@ impl Drop for SemanticsLayoutLog {
 }
 
 pub(crate) fn record_layout_change(node: NodeId, stamp: &mut u64) {
-    if crate::thread_state::cells(|cells| cells.armed_semantics_layout_logs.get()) == 0 {
+    if ARMED_LOGS.load(Ordering::Relaxed) == 0 {
         return;
     }
     crate::render_state::with_current_semantics_layout_log(|log| log.record(node, stamp));

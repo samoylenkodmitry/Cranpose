@@ -29,7 +29,6 @@ pub(crate) struct ThreadCells {
     pub(crate) keyboard_focus_visible: Cell<bool>,
     pub(crate) clean_slot_skips: Cell<u64>,
     pub(crate) last_modifier_revision: Cell<u64>,
-    pub(crate) armed_semantics_layout_logs: Cell<usize>,
     pub(crate) modal_counting_contexts: Cell<usize>,
     /// How many `z_index` modifier nodes are attached on this thread.
     pub(crate) z_index_nodes: Cell<usize>,
@@ -50,7 +49,6 @@ impl ThreadCells {
             keyboard_focus_visible: Cell::new(false),
             clean_slot_skips: Cell::new(0),
             last_modifier_revision: Cell::new(0),
-            armed_semantics_layout_logs: Cell::new(0),
             modal_counting_contexts: Cell::new(0),
             z_index_nodes: Cell::new(0),
             placement_pass: PlacementPass::new(),
