@@ -334,14 +334,7 @@ fn a_shadow_is_left_out_until_its_blur_lands() {
         6.0,
     );
     let graph = page(GraphicsLayer::default(), vec![shadow, square()]);
-    let mut renderer = support::headless_renderer_compiling_in_background().expect("GPU required");
-    let first = support::capture_graph(&mut renderer, graph.clone(), SIZE, SIZE);
-    let stats = renderer.last_frame_stats().expect("frame statistics");
-    assert!(
-        stats.placeholder_draws > 0,
-        "the shadow must wait for its blur"
-    );
-    assert!(renderer.needs_frame_warmup());
+    let (mut renderer, first) = first_frame(&graph);
     support::assert_same_bytes(
         "the page without its shadow",
         SIZE,

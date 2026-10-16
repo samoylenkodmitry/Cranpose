@@ -22,13 +22,20 @@ use cranpose_ui_graphics::{
 
 use crate::frame_graph::BufferUpload;
 
-/// One corner of a fallback triangle: its clip position and its
-/// premultiplied colour.
+/// One corner of a fallback triangle: its clip position and depth, and its
+/// premultiplied colour in the 8 bits a channel of the target keeps. A
+/// launch's first frames draw every shape this way, and the gauntlet's
+/// largest pass at tier 12 laid out 186,000 corners: the frame upload rings
+/// grew to hold them, and a Mali driver counts such a peak for the rest of a
+/// run. At 16 bytes a corner instead of 32, with the triangles' storage freed
+/// once a frame draws none, a first start of the gauntlet on a Mate 20 X
+/// held 168 MB instead of 176 (eight launches each; second starts, which
+/// draw no fallback, unchanged).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
 pub(crate) struct MeshVertex {
-    position: [f32; 4],
-    color: [f32; 4],
+    position: [f32; 3],
+    color: [u8; 4],
 }
 
 /// The fallback pipeline. The web's frames build their shape pipelines, or
@@ -41,11 +48,11 @@ mod pipeline {
     use crate::fixed_pipeline::FixedPipelineJob;
 
     const MESH_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
-        wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4];
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Unorm8x4];
 
     const MESH_WGSL: &str = r"
 struct Vertex {
-    @location(0) position: vec4<f32>,
+    @location(0) position: vec3<f32>,
     @location(1) color: vec4<f32>,
 }
 
@@ -56,7 +63,7 @@ struct Shaded {
 
 @vertex
 fn vs_mesh(vertex: Vertex) -> Shaded {
-    return Shaded(vertex.position, vertex.color);
+    return Shaded(vec4<f32>(vertex.position, 1.0), vertex.color);
 }
 
 @fragment
@@ -887,8 +894,8 @@ impl Record<'_, '_> {
         let x = ((at[0] - self.target.offset[0]) / size[0]) * 2.0 - 1.0;
         let y = 1.0 - ((at[1] - self.target.offset[1]) / size[1]) * 2.0;
         MeshVertex {
-            position: [x, y, self.depth, 1.0],
-            color: premultiplied,
+            position: [x, y, self.depth],
+            color: premultiplied.map(|value| (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8),
         }
     }
 }
@@ -1037,6 +1044,8 @@ pub(crate) struct PassMeshes {
     /// By run draw, as the pass's run draws hold them, up to the last
     /// that takes a range.
     pub(crate) ranges: Vec<Option<Range<u32>>>,
+    /// Whether a pass of the current frame drew fallback triangles.
+    drew: bool,
 }
 
 impl PassMeshes {
@@ -1045,8 +1054,18 @@ impl PassMeshes {
         self.ranges.clear();
     }
 
+    /// Opens a frame. The triangles draw only while shape pipelines
+    /// compile, so the storage a frame without any leaves is freed: a
+    /// launch grows it to megabytes.
+    pub(crate) fn begin_frame(&mut self) {
+        if !std::mem::take(&mut self.drew) {
+            *self = Self::default();
+        }
+    }
+
     /// Records that the run draw at `draw` draws the fallback `indices`.
     pub(crate) fn set(&mut self, draw: usize, indices: Range<u32>) {
+        self.drew = true;
         if self.ranges.len() <= draw {
             self.ranges.resize(draw + 1, None);
         }
