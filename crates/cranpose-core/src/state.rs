@@ -1521,6 +1521,9 @@ trait StateArenaHandle<T: Clone + 'static> {
 pub struct State<T: Clone + 'static> {
     id: StateId,
     runtime_id: runtime::RuntimeId,
+    /// The cell holds a derived state's value, which a read brings up to
+    /// date first.
+    derived: bool,
     _marker: PhantomData<fn() -> T>,
 }
 
@@ -1603,20 +1606,20 @@ impl<T: Clone + 'static> State<T> {
     /// Reads the value through `f` without subscribing the current scope. Returns `None` if the
     /// state was released or has no readable value.
     pub fn try_with<R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
-        self.try_with_inner(|inner| inner.state.try_with_value(f))?
+        self.try_with_fresh_inner(|inner| inner.state.try_with_value(f))?
     }
 
     /// Returns a copy of the value without subscribing the current scope, or `None` if the state
     /// was released or has no readable value.
     pub fn try_value(&self) -> Option<T> {
-        self.try_with_inner(|inner| inner.state.try_get())?
+        self.try_with_fresh_inner(|inner| inner.state.try_get())?
     }
 
     /// Reads a copy of the value through `f` and subscribes the current
     /// scope. `f` may write this state; see [`Self::read`] for a read that
     /// borrows instead of copying.
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        let value = self.read_subscribed(|inner| inner.state.get());
+        let value = self.read_fresh_subscribed(|inner| inner.state.get());
         f(&value)
     }
 
@@ -1625,13 +1628,13 @@ impl<T: Clone + 'static> State<T> {
     /// beyond `f`; in return `f` borrows the stored value and must not write
     /// this state.
     pub fn read<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        self.read_subscribed(|inner| inner.state.with_value(f))
+        self.read_fresh_subscribed(|inner| inner.state.with_value(f))
     }
 
     /// Returns a copy of the value and subscribes the current scope, which recomposes when the
     /// value changes. Panics if the state was released.
     pub fn value(&self) -> T {
-        self.read_subscribed(|inner| inner.state.get())
+        self.read_fresh_subscribed(|inner| inner.state.get())
     }
 
     /// Same as `value`.
@@ -1643,7 +1646,49 @@ impl<T: Clone + 'static> State<T> {
     /// composition that changes what it shows by the value only through a
     /// layer or a draw that reads it again.
     pub fn get_non_reactive(&self) -> T {
-        self.with_inner(|inner| inner.state.get())
+        self.with_fresh_inner(|inner| inner.state.get())
+    }
+
+    /// The view a derived state hands out of its cell.
+    fn of_derived(self) -> Self {
+        Self {
+            derived: true,
+            ..self
+        }
+    }
+
+    /// Runs `f` on the cell, a derived state's once its value is up to date:
+    /// a read derives the value again when a state it read changed since
+    /// its derivation last ran, as Compose's `derivedStateOf` does. A plain
+    /// state's read pays one branch. Panics if the state was released.
+    fn with_fresh_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> R {
+        runtime::with_state_arena_by_id(self.runtime_id, |arena| {
+            if self.derived {
+                arena.refresh_derived(self.id);
+            }
+            arena.with_typed::<T, R>(self.id, f)
+        })
+        .unwrap_or_else(|| panic!("runtime {:?} dropped", self.runtime_id))
+    }
+
+    /// [`Self::with_fresh_inner`], or `None` if the state was released.
+    fn try_with_fresh_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> Option<R> {
+        runtime::with_state_arena_by_id(self.runtime_id, |arena| {
+            if self.derived {
+                arena.refresh_derived(self.id);
+            }
+            arena.with_typed_opt::<T, R>(self.id, f)
+        })?
+    }
+
+    /// Reads the up-to-date cell through `read` and subscribes the current
+    /// scope.
+    fn read_fresh_subscribed<R>(&self, read: impl FnOnce(&MutableStateInner<T>) -> R) -> R {
+        self.with_fresh_inner(|inner| {
+            let result = read(inner);
+            register_current_state_scope(inner);
+            result
+        })
     }
 
     /// Returns `true` if any scope or observer is subscribed to this state.
@@ -1743,6 +1788,7 @@ impl<T: Clone + 'static> MutableState<T> {
         State {
             id: self.id,
             runtime_id: self.runtime_id,
+            derived: false,
             _marker: PhantomData,
         }
     }
@@ -2217,26 +2263,79 @@ where
     }
 }
 
+/// The value `derivedStateOf` derives, kept in a state cell its readers
+/// subscribe to.
 pub(crate) struct DerivedState<T: Clone + PartialEq + 'static> {
-    compute: Rc<dyn Fn() -> T>,
-    pub(crate) state: OwnedMutableState<T>,
+    core: Rc<DerivedCore<T>>,
+}
+
+struct DerivedCore<T: Clone + PartialEq + 'static> {
+    compute: RefCell<Rc<dyn Fn() -> T>>,
+    state: OwnedMutableState<T>,
+    /// The scope whose recomposition derives the value: the states the
+    /// derivation reads invalidate it.
+    derivation: Weak<RecomposeScopeInner>,
+    /// A read derives the value right now, so a read inside the derivation
+    /// takes the last value.
+    refreshing: Cell<bool>,
 }
 
 impl<T: Clone + PartialEq + 'static> DerivedState<T> {
-    pub(crate) fn new(runtime: RuntimeHandle, compute: Rc<dyn Fn() -> T>) -> Self {
+    /// A derived state whose value `compute` derives, again whenever
+    /// `derivation` recomposes and before a read once a state it read
+    /// changed.
+    pub(crate) fn new(
+        runtime: RuntimeHandle,
+        compute: Rc<dyn Fn() -> T>,
+        derivation: Option<&RecomposeScope>,
+    ) -> Self {
         let initial = compute();
-        Self {
-            compute,
+        let core = Rc::new(DerivedCore {
+            compute: RefCell::new(compute),
             state: OwnedMutableState::with_runtime_structural_eq(initial, runtime),
-        }
+            derivation: derivation.map_or_else(Weak::new, RecomposeScope::downgrade),
+            refreshing: Cell::new(false),
+        });
+        let cell = core.state.handle();
+        let refresh: Weak<dyn runtime::DerivedRefresh> = Rc::downgrade(&core) as Weak<_>;
+        runtime::with_state_arena_by_id(cell.runtime_id, |arena| {
+            arena.register_derived(cell.id, refresh);
+        });
+        Self { core }
     }
 
-    pub(crate) fn set_compute(&mut self, compute: Rc<dyn Fn() -> T>) {
-        self.compute = compute;
+    pub(crate) fn set_compute(&self, compute: Rc<dyn Fn() -> T>) {
+        *self.core.compute.borrow_mut() = compute;
     }
 
     pub(crate) fn recompute(&self) {
-        let value = (self.compute)();
+        let value = self.core.compute()();
+        self.core.state.set_value(value);
+    }
+
+    /// The view readers read the value through.
+    pub(crate) fn state(&self) -> State<T> {
+        self.core.state.as_state().of_derived()
+    }
+}
+
+impl<T: Clone + PartialEq + 'static> DerivedCore<T> {
+    fn compute(&self) -> Rc<dyn Fn() -> T> {
+        Rc::clone(&self.compute.borrow())
+    }
+}
+
+impl<T: Clone + PartialEq + 'static> runtime::DerivedRefresh for DerivedCore<T> {
+    fn refresh(&self) {
+        let stale =
+            RecomposeScope::upgrade(&self.derivation).is_some_and(|scope| scope.is_invalid());
+        if !stale || self.refreshing.replace(true) {
+            return;
+        }
+        // No scope subscribes to what this derivation reads: the
+        // derivation's own recomposition keeps that subscription.
+        let value = crate::composer_context::without_composer(|| self.compute()());
+        self.refreshing.set(false);
         self.state.set_value(value);
     }
 }

@@ -552,3 +552,92 @@ fn a_derived_state_recomposes_its_readers_only_when_its_value_changes() {
     );
     assert_eq!(*seen.borrow(), vec![false, true]);
 }
+
+/// Composes a reader of `derivedStateOf(source >= 10)`, `source` starting at
+/// 2, and hands the derived state out for reads from outside the
+/// composition.
+fn held_derived_reader() -> (
+    Composition<MemoryApplier>,
+    cranpose_core::MutableState<u32>,
+    cranpose_core::State<bool>,
+    Rc<Cell<u32>>,
+) {
+    fn body(
+        source: cranpose_core::MutableState<u32>,
+        reads: &Rc<Cell<u32>>,
+        held: &Rc<Cell<Option<cranpose_core::State<bool>>>>,
+    ) {
+        let big = derivedStateOf(move || source.get() >= 10);
+        held.set(Some(big));
+        reads.set(reads.get() + 1);
+        let _ = big.get();
+    }
+    let mut composition = composition();
+    let source = mutableStateOf(2u32);
+    let key = location_key(file!(), line!(), column!());
+    let reads = Rc::new(Cell::new(0u32));
+    let held = Rc::new(Cell::new(None));
+    {
+        let (reads, held) = (Rc::clone(&reads), Rc::clone(&held));
+        composition
+            .render(key, move || {
+                let (reads, held) = (Rc::clone(&reads), Rc::clone(&held));
+                cranpose_core::with_current_composer(|composer| {
+                    composer.with_group(key, |composer| {
+                        let (again_reads, again_held) = (Rc::clone(&reads), Rc::clone(&held));
+                        composer.set_recompose_callback(move |_| {
+                            body(source, &again_reads, &again_held);
+                        });
+                        body(source, &reads, &held);
+                    });
+                });
+            })
+            .expect("render succeeds");
+    }
+    let big = held.get().expect("the composition made the derived state");
+    (composition, source, big, reads)
+}
+
+#[test]
+fn a_derived_state_read_right_after_a_write_sees_the_new_value() {
+    let (mut composition, source, big, _) = held_derived_reader();
+    assert!(!big.get());
+
+    source.set(12);
+    assert!(
+        big.get(),
+        "a read between a write and the next recomposition derives the value again"
+    );
+    assert_eq!(big.try_value(), Some(true));
+    source.set(3);
+    assert!(!big.get_non_reactive(), "every later write is seen too");
+
+    composition
+        .process_invalid_scopes()
+        .expect("recomposition succeeds");
+    assert!(!big.get());
+}
+
+#[test]
+fn an_early_read_of_a_derived_state_still_recomposes_readers_only_on_a_change() {
+    let (mut composition, source, big, reads) = held_derived_reader();
+    assert_eq!(reads.get(), 1);
+
+    source.set(5);
+    assert!(!big.get());
+    composition
+        .process_invalid_scopes()
+        .expect("recomposition succeeds");
+    assert_eq!(reads.get(), 1, "an unchanged value recomposes no reader");
+
+    source.set(12);
+    assert!(big.get());
+    composition
+        .process_invalid_scopes()
+        .expect("recomposition succeeds");
+    assert_eq!(
+        reads.get(),
+        2,
+        "a changed value read early still recomposes its reader"
+    );
+}
