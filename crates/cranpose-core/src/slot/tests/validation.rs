@@ -31,11 +31,15 @@ fn slots_host_finish_pass_reports_writer_invariant_violation() {
     slots_host.begin_pass(SlotPassMode::Compose, &std::rc::Rc::default());
     {
         let mut inner = slots_host.inner.borrow_mut();
-        let active_pass = inner
-            .active_pass
+        assert!(
+            inner.active_pass.is_some(),
+            "test setup should leave a pass active"
+        );
+        let state = inner
+            .pass_state
             .as_mut()
-            .expect("test setup should leave a pass active");
-        active_pass.state.root.next_child_index = 1;
+            .expect("a pass that began has its writer state");
+        state.root.next_child_index = 1;
     }
 
     let mut applier = MemoryApplier::new();
