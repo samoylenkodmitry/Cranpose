@@ -37,7 +37,7 @@ use crate::{
     winit_pointer::{
         is_primary_pointer_button, pointer_source_from_button, pointer_source_from_winit,
     },
-    winit_touch::{TouchLeave, TouchPointerRouter, TouchRoute},
+    winit_touch::{button_finger, kind_finger, source_finger},
 };
 
 struct GpuResources {
@@ -65,7 +65,7 @@ struct IosApp<F: FnMut() + 'static> {
     last_keyboard_bottom: f32,
     event_proxy: EventLoopProxy,
     launch_error: Rc<RefCell<Option<LaunchError>>>,
-    touch_router: TouchPointerRouter,
+    touch_router: cranpose_app_shell::TouchRouter<winit::event::FingerId>,
     next_off_screen_render: Option<Instant>,
     device_loss: crate::gpu_loss::LossSignal,
     device_loss_drill: crate::gpu_loss::LossDrill,
@@ -102,7 +102,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
             last_keyboard_bottom: 0.0,
             event_proxy,
             launch_error,
-            touch_router: TouchPointerRouter::default(),
+            touch_router: cranpose_app_shell::TouchRouter::default(),
             next_off_screen_render: None,
             device_loss,
             device_loss_drill,
@@ -556,17 +556,12 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
                 position, source, ..
             } => {
                 let logical = self.platform.pointer_position(position);
-                let route = self.touch_router.moved(&source);
                 if let Some(shell) = self.shell.as_mut() {
                     shell.set_pointer_source(pointer_source_from_winit(&source));
-                    let changed = match route {
-                        TouchRoute::Primary => shell.set_cursor(logical.x, logical.y),
-                        TouchRoute::Secondary(id) => {
-                            shell.secondary_pointer_moved(id, logical.x, logical.y, None)
-                        }
-                        TouchRoute::Untracked => false,
-                    };
-                    if changed {
+                    if self
+                        .touch_router
+                        .moved(shell, source_finger(&source), logical.x, logical.y)
+                    {
                         window.request_redraw();
                     }
                 }
@@ -578,68 +573,31 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
                 ..
             } if is_primary_pointer_button(&button) => {
                 let logical = self.platform.pointer_position(position);
-                match state {
-                    ElementState::Pressed => {
-                        let route = self.touch_router.press(&button);
-                        if let Some(shell) = self.shell.as_mut() {
-                            shell.set_pointer_source(pointer_source_from_button(&button));
-                            let changed = match route {
-                                TouchRoute::Primary => {
-                                    let event_time = shell.realtime_pointer_event_time(None);
-                                    shell
-                                        .set_cursor_at_event_time(logical.x, logical.y, event_time);
-                                    shell.pointer_pressed_at_event_time(event_time)
-                                }
-                                TouchRoute::Secondary(id) => {
-                                    shell.secondary_pointer_pressed(id, logical.x, logical.y, None)
-                                }
-                                TouchRoute::Untracked => false,
-                            };
-                            if changed {
-                                window.request_redraw();
-                            }
+                if let Some(shell) = self.shell.as_mut() {
+                    shell.set_pointer_source(pointer_source_from_button(&button));
+                    let finger = button_finger(&button);
+                    let changed = match state {
+                        ElementState::Pressed => {
+                            self.touch_router.press(shell, finger, logical.x, logical.y)
                         }
-                    }
-                    ElementState::Released => {
-                        let release = self.touch_router.release(&button);
-                        if let Some(shell) = self.shell.as_mut() {
-                            shell.set_pointer_source(pointer_source_from_button(&button));
-                            let mut changed = false;
-                            for id in release.secondaries {
-                                changed |= shell
-                                    .secondary_pointer_released(id, logical.x, logical.y, None);
-                            }
-                            if release.releases_primary {
-                                let event_time = shell.realtime_pointer_event_time(None);
-                                changed |= shell.pointer_released_at_position_event_time(
-                                    logical.x, logical.y, event_time,
-                                );
-                            }
-                            if changed {
-                                window.request_redraw();
-                            }
-                        }
+                        ElementState::Released => self
+                            .touch_router
+                            .release(shell, finger, logical.x, logical.y),
+                    };
+                    if changed {
+                        window.request_redraw();
                     }
                 }
             }
             WindowEvent::PointerLeft { position, kind, .. } => {
-                let leave = self.touch_router.left(&kind);
-                let logical = position.map(|position| self.platform.pointer_position(position));
-                if let Some(shell) = self.shell.as_mut() {
-                    match leave {
-                        TouchLeave::CancelGesture => {
-                            shell.cancel_gesture();
-                            window.request_redraw();
-                        }
-                        TouchLeave::ReleaseSecondary(id) => {
-                            shell.set_pointer_source(cranpose_app_shell::PointerSource::Touch);
-                            let (x, y) = logical.map_or((0.0, 0.0), |point| (point.x, point.y));
-                            if shell.secondary_pointer_released(id, x, y, None) {
-                                window.request_redraw();
-                            }
-                        }
-                        TouchLeave::Ignore => {}
-                    }
+                let logical = position.map(|position| {
+                    let point = self.platform.pointer_position(position);
+                    (point.x, point.y)
+                });
+                if let Some(shell) = self.shell.as_mut()
+                    && self.touch_router.cancel(shell, kind_finger(&kind), logical)
+                {
+                    window.request_redraw();
                 }
             }
             WindowEvent::RedrawRequested => {

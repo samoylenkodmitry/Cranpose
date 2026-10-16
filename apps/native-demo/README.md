@@ -173,7 +173,8 @@ not need to change its integration when a native GPU surface backend is added.
 Native children are axis-aligned overlays above Cranpose, clipped to their host container.
 Ancestor clipping, arbitrary transforms, interleaved z-order and Cranpose effects over a native
 child are not supported. Hide native children before displaying overlapping Cranpose popups.
-The adapters route one touch pointer and do not yet bridge Rust text input or accessibility.
+The adapters route every finger, each by its own pointer id, and do not yet bridge Rust text
+input or accessibility.
 The native WebView retains its own input and accessibility.
 
 ## Validation

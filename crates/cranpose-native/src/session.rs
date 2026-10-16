@@ -31,16 +31,18 @@ pub struct NativeEvent {
     pub value: String,
 }
 
-/// Touch input in logical host coordinates.
+/// What one finger did, in logical host coordinates.
 #[derive(Clone, Copy, uniffi::Enum)]
 pub enum TouchPhase {
-    /// Begins a gesture.
+    /// The finger touched. The first finger down starts a gesture; each one
+    /// after it joins that gesture, as a pinch's second finger does.
     Down,
-    /// Moves the active pointer.
+    /// The finger moved.
     Move,
-    /// Ends the gesture.
+    /// The finger lifted. The first finger's lift ends the gesture.
     Up,
-    /// Cancels the gesture.
+    /// The system took the finger, as a scrolling parent does. The first
+    /// finger's cancel cancels the gesture.
     Cancel,
 }
 
@@ -94,7 +96,7 @@ pub(crate) enum Command {
         f32,
         oneshot::Sender<Result<NativeFrame, NativeError>>,
     ),
-    Touch(TouchPhase, f32, f32),
+    Touch(u64, TouchPhase, f32, f32),
     Event(NativeEvent),
     NativeEvent(u64, String),
     Visible(bool),
@@ -182,9 +184,17 @@ impl NativeSession {
         Ok(())
     }
 
-    /// Routes a pointer event in logical points.
-    pub fn touch(&self, phase: TouchPhase, x: f32, y: f32) -> Result<(), NativeError> {
-        self.send(Command::Touch(phase, x, y))?;
+    /// Routes what the finger `pointer` did, at `(x, y)` in logical points.
+    /// `pointer` names one finger from its `Down` to its `Up` or `Cancel`,
+    /// as Android's pointer id does; a host gives each finger its own.
+    pub fn touch(
+        &self,
+        pointer: u64,
+        phase: TouchPhase,
+        x: f32,
+        y: f32,
+    ) -> Result<(), NativeError> {
+        self.send(Command::Touch(pointer, phase, x, y))?;
         self.wake.request();
         Ok(())
     }

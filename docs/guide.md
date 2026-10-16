@@ -4375,8 +4375,9 @@ See Android's [View-in-Compose lifecycle](https://developer.android.com/develop/
 Each language owns its composition. Exchange data and events across the boundary.
 For example, Rust sends `open-details`; Kotlin changes the navigation destination.
 
-Embedded touch support covers one pointer.
-Use native host controls for text input and accessibility in embedded components.
+`CranposeView` passes every finger to the embedded composition, so pinch and other
+multi-touch gestures work there. Use native host controls for text input and
+accessibility in embedded components.
 Standalone Cranpose apps use the platform input and accessibility bridges.
 
 ### Host the component in UIKit

@@ -17,6 +17,8 @@ mod android_file_picker;
 /// An in-process Cranpose component driven by its native host.
 #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
 pub mod embedded_view;
+#[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+pub use cranpose_app_shell::TouchRouter;
 #[cfg(feature = "renderer-wgpu")]
 mod external_frames;
 #[cfg(feature = "renderer-wgpu")]
@@ -660,11 +662,7 @@ mod process_info;
 ))]
 mod winit_pointer;
 
-#[cfg(any(
-    all(feature = "desktop-shell", feature = "renderer-wgpu"),
-    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
-))]
-#[cfg_attr(not(all(feature = "ios", target_os = "ios")), expect(dead_code))]
+#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod winit_touch;
 
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]

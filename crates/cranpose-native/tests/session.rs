@@ -2,7 +2,7 @@ use std::{cell::Cell, rc::Rc};
 
 use cranpose::prelude::*;
 use cranpose_core::rememberMutableStateOf;
-use cranpose_native::{NativeContent, NativeError, NativeSession, SendToHost, WebView};
+use cranpose_native::{NativeContent, NativeError, NativeSession, SendToHost, TouchPhase, WebView};
 
 fn component() -> std::sync::Arc<NativeSession> {
     NativeSession::new(|| {
@@ -55,6 +55,56 @@ fn independent_sessions_exchange_events_and_preserve_native_identity() {
     ));
     assert!(a.send_event("increment".into(), String::new()).is_err());
     b.shutdown();
+}
+
+/// A session whose whole surface zooms with a pinch and tells the host its
+/// scale.
+fn zoomable() -> std::sync::Arc<NativeSession> {
+    NativeSession::new(|| {
+        NativeContent::new(|| {
+            let zoom = cranpose_core::remember(ZoomState::new).with(|state| *state);
+            SendToHost("scale", format!("{:.1}", zoom.scale()));
+            Box(
+                Modifier::empty().fill_max_size().zoomable(zoom),
+                BoxSpec::default(),
+                || {},
+            );
+        })
+    })
+}
+
+#[test]
+fn a_two_finger_pinch_reaches_the_embedded_content() {
+    let session = zoomable();
+    pollster::block_on(session.frame(400, 400, 1.0)).expect("first frame");
+    session
+        .touch(7, TouchPhase::Down, 140.0, 200.0)
+        .expect("first finger");
+    session
+        .touch(9, TouchPhase::Down, 220.0, 200.0)
+        .expect("second finger");
+    for step in 1..=5u8 {
+        let x = 220.0 + f32::from(step) * 16.0;
+        session
+            .touch(9, TouchPhase::Move, x, 200.0)
+            .expect("spread");
+    }
+    session
+        .touch(9, TouchPhase::Up, 300.0, 200.0)
+        .expect("lift");
+    session
+        .touch(7, TouchPhase::Up, 140.0, 200.0)
+        .expect("lift");
+    let frame = pollster::block_on(session.frame(400, 400, 1.0)).expect("pinched");
+    assert!(
+        frame
+            .events
+            .iter()
+            .any(|event| event.name == "scale" && event.value == "2.0"),
+        "doubling the finger spread doubles the scale: {:?}",
+        frame.events
+    );
+    session.shutdown();
 }
 
 #[test]

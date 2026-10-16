@@ -29,7 +29,7 @@ hand, with dated evidence in the linked documents.
 | Wear OS | As Android | wgpu | 2 | Built on every push; checked on a Pixel Watch 3. |
 | watchOS | watchOS 10 (simulator), 27 (device) | SpriteKit host | 2 | Built on every push; checked in the simulator and on an Apple Watch. |
 | ESP32-S3 | ESP-IDF | pixels | 2 | Boots in QEMU to its first frame every night. |
-| Embedded in a native app | Android and UIKit hosts | wgpu | 2 | Built on every push; text input, readers and multi-touch inside an embedded screen are incomplete (#1161). |
+| Embedded in a native app | Android and UIKit hosts | wgpu | 2 | Built on every push; multi-touch works; text input and readers inside an embedded screen are incomplete (#1161). |
 
 ## Scenarios
 

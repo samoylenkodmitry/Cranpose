@@ -40,7 +40,6 @@ class CranposeView(
     private var pending = false
     private var scheduled = false
     private var closed = false
-    private var pointerId = -1
     private val drawFrame = Runnable { scheduled = false; render() }
     private val wakeFrame = Runnable { requestFrame() }
 
@@ -83,7 +82,6 @@ class CranposeView(
         removeCallbacks(drawFrame)
         removeCallbacks(wakeFrame)
         scheduled = false
-        pointerId = -1
         super.onDetachedFromWindow()
     }
 
@@ -110,7 +108,6 @@ class CranposeView(
             removeCallbacks(drawFrame)
             removeCallbacks(wakeFrame)
             scheduled = false
-            pointerId = -1
         }
     }
 
@@ -162,23 +159,24 @@ class CranposeView(
 
     private fun routeTouch(event: MotionEvent): Boolean {
         if (closed) return false
-        val phase = when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> { pointerId = event.getPointerId(0); TouchPhase.DOWN }
-            MotionEvent.ACTION_MOVE -> TouchPhase.MOVE
-            MotionEvent.ACTION_UP -> TouchPhase.UP
-            MotionEvent.ACTION_CANCEL -> TouchPhase.CANCEL
-            MotionEvent.ACTION_POINTER_UP -> {
-                if (event.getPointerId(event.actionIndex) != pointerId) return true
-                TouchPhase.CANCEL
-            }
-            else -> return true
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN ->
+                send(event, event.actionIndex, TouchPhase.DOWN)
+            MotionEvent.ACTION_MOVE ->
+                for (index in 0 until event.pointerCount) send(event, index, TouchPhase.MOVE)
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP ->
+                send(event, event.actionIndex, TouchPhase.UP)
+            MotionEvent.ACTION_CANCEL ->
+                for (index in 0 until event.pointerCount) send(event, index, TouchPhase.CANCEL)
         }
-        val index = event.findPointerIndex(pointerId)
-        if (index < 0) return true
-        val density = resources.displayMetrics.density
-        command { session.touch(phase, event.getX(index) / density, event.getY(index) / density) }
-        if (phase == TouchPhase.UP || phase == TouchPhase.CANCEL) pointerId = -1
         return true
+    }
+
+    /** Sends what the finger at [index] of [event] did, by its pointer id, in logical points. */
+    private fun send(event: MotionEvent, index: Int, phase: TouchPhase) {
+        val density = resources.displayMetrics.density
+        val pointer = event.getPointerId(index).toULong()
+        command { session.touch(pointer, phase, event.getX(index) / density, event.getY(index) / density) }
     }
 
     private fun command(action: () -> Unit) {
