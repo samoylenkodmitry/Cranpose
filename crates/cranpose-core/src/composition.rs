@@ -180,13 +180,28 @@ impl<A: Applier + 'static> Composition<A> {
         self.finalize_runtime_state();
     }
 
+    /// Notes a finished pass's queue and side effects in the debug stats,
+    /// then applies its commands.
+    fn apply_pass(
+        &mut self,
+        host: &Rc<SlotsHost>,
+        runtime_handle: &RuntimeHandle,
+        composer: &Composer,
+        side_effects: &Vec<Box<dyn FnOnce()>>,
+    ) -> Result<(), NodeError> {
+        composer.with_commands(|commands| self.record_pass_stats(commands, side_effects));
+        self.apply_commands_and_updates_for_host(host, runtime_handle, composer)
+    }
+
+    /// Applies the commands `composer`'s pass queued, in its queue, which
+    /// keeps its storage for the next pass, and then the runtime's updates.
     fn apply_commands_and_updates_for_host(
         &mut self,
         host: &Rc<SlotsHost>,
         runtime_handle: &RuntimeHandle,
-        mut commands: CommandQueue,
+        composer: &Composer,
     ) -> Result<(), NodeError> {
-        let result = {
+        let result = composer.with_commands(|commands| {
             let mut applier = self.applier.borrow_dyn();
             let mut result = commands.apply(&mut *applier);
             if result.is_ok() {
@@ -198,8 +213,7 @@ impl<A: Applier + 'static> Composition<A> {
                 }
             }
             result
-        };
-        crate::composer::recycle_commands(commands);
+        });
         if result.is_err() {
             self.abandon_host_after_apply_failure(host);
         }
@@ -220,22 +234,21 @@ impl<A: Applier + 'static> Composition<A> {
                 runtime_handle.clone(),
                 self.root,
             );
-            let (root, commands, side_effects, compact_applier) = composer.install(|composer| {
+            let (root, side_effects, compact_applier) = composer.install(|composer| {
                 let ((), outcome) = composer.try_with_slot_host_pass(
                     Rc::clone(&self.slots),
                     crate::slot::SlotPassMode::Compose,
                     |composer| composer.with_group(key, |_| content()),
                 )?;
                 let root = composer.root();
-                let commands = composer.take_commands();
                 let side_effects = composer.take_side_effects();
-                Ok((root, commands, side_effects, outcome.compacted))
+                Ok((root, side_effects, outcome.compacted))
             })?;
-            self.record_pass_stats(&commands, &side_effects);
-            self.apply_commands_and_updates_for_host(
+            self.apply_pass(
                 &Rc::clone(&self.slots),
                 &runtime_handle,
-                commands,
+                &composer,
+                &side_effects,
             )?;
             if compact_applier {
                 self.applier.compact();
@@ -501,7 +514,7 @@ impl<A: Applier + 'static> Composition<A> {
                         self.root,
                     );
                     composer.parent_stack().clear();
-                    let (root, commands, side_effects, requested_root_render, compact_applier) =
+                    let (root, side_effects, requested_root_render, compact_applier) =
                         composer.install(|composer| {
                             let ((), outcome) = composer.try_with_slot_host_pass(
                                 Rc::clone(host),
@@ -527,19 +540,16 @@ impl<A: Applier + 'static> Composition<A> {
                                 },
                             )?;
                             let root = composer.root();
-                            let commands = composer.take_commands();
                             let side_effects = composer.take_side_effects();
                             let requested_root_render = composer.take_root_render_request();
                             Ok((
                                 root,
-                                commands,
                                 side_effects,
                                 requested_root_render,
                                 outcome.compacted,
                             ))
                         })?;
-                    self.record_pass_stats(&commands, &side_effects);
-                    self.apply_commands_and_updates_for_host(host, &runtime_handle, commands)?;
+                    self.apply_pass(host, &runtime_handle, &composer, &side_effects)?;
                     if compact_applier {
                         self.applier.compact();
                         self.applier.borrow_dyn().clear_recycled_nodes();
@@ -606,11 +616,8 @@ impl<A: Applier + 'static> Composition<A> {
             runtime_handle.clone(),
             self.root,
         );
-        let commands = composer.install(|composer| {
-            composer.forget_movables(&ids)?;
-            Ok::<_, NodeError>(composer.take_commands())
-        })?;
-        self.apply_commands_and_updates_for_host(&host, &runtime_handle, commands)
+        composer.install(|composer| composer.forget_movables(&ids))?;
+        self.apply_commands_and_updates_for_host(&host, &runtime_handle, &composer)
     }
 }
 

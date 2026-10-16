@@ -475,6 +475,12 @@ impl Composer {
         std::mem::take(&mut *self.commands_mut())
     }
 
+    /// Lends the queued commands to `f` where they are, without moving the
+    /// queue.
+    pub(crate) fn with_commands<R>(&self, f: impl FnOnce(&mut CommandQueue) -> R) -> R {
+        f(&mut self.commands_mut())
+    }
+
     /// Applies any pending applier commands and runtime updates.
     ///
     /// This is useful during measure-time subcomposition to ensure newly created
