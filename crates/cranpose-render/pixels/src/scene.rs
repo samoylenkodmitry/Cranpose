@@ -156,7 +156,7 @@ impl ShadowDraw {
 
 /// How many items of each kind a scene holds where a run of its items starts
 /// or stops.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ItemCounts {
     pub order: usize,
     pub shapes: usize,
@@ -335,33 +335,36 @@ impl RasterScene {
                 .unwrap_or_default(),
         );
         let moved = |index: usize, from: usize, to: usize| to + index.saturating_sub(from);
-        self.order.extend(
-            old.order
-                .get(run(from.order, stop.order))
-                .unwrap_or_default()
-                .iter()
-                .map(|item| match *item {
-                    RenderItem::Shape(index) => {
-                        RenderItem::Shape(moved(index, from.shapes, to.shapes))
-                    }
-                    RenderItem::Image(index) => {
-                        RenderItem::Image(moved(index, from.images, to.images))
-                    }
-                    RenderItem::Text(index) => RenderItem::Text(moved(index, from.texts, to.texts)),
-                    RenderItem::Shadow(index) => {
-                        RenderItem::Shadow(moved(index, from.shadows, to.shadows))
-                    }
-                }),
-        );
+        // A run that lands where it was in the old scene, as every run
+        // before the first change does, keeps its indices.
         let base = self.subtrees.len();
         let first = records.start;
+        let in_place = from == to && first == base;
+        let order = old
+            .order
+            .get(run(from.order, stop.order))
+            .unwrap_or_default();
+        if in_place {
+            self.order.extend_from_slice(order);
+        } else {
+            self.order.extend(order.iter().map(|item| match *item {
+                RenderItem::Shape(index) => RenderItem::Shape(moved(index, from.shapes, to.shapes)),
+                RenderItem::Image(index) => RenderItem::Image(moved(index, from.images, to.images)),
+                RenderItem::Text(index) => RenderItem::Text(moved(index, from.texts, to.texts)),
+                RenderItem::Shadow(index) => {
+                    RenderItem::Shadow(moved(index, from.shadows, to.shadows))
+                }
+            }));
+        }
         self.subtrees
             .extend_from_slice(old.subtrees.get(records).unwrap_or_default());
         let passed_down = &mut self.passed_down;
         for record in self.subtrees.get_mut(base..).unwrap_or_default() {
-            record.end = moved(record.end, first, base);
-            record.start = record.start.moved(from, to);
-            record.stop = record.stop.moved(from, to);
+            if !in_place {
+                record.end = moved(record.end, first, base);
+                record.start = record.start.moved(from, to);
+                record.stop = record.stop.moved(from, to);
+            }
             record.passed_down = record
                 .passed_down
                 .and_then(|at| old.passed_down.get(at))

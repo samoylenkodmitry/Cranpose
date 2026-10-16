@@ -20,9 +20,27 @@ impl WindowCoordinates {
 }
 
 /// A projective mapping of a two-dimensional coordinate plane.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub struct ProjectiveTransform {
     matrix: [[f32; 3]; 3],
+}
+
+impl PartialEq for ProjectiveTransform {
+    fn eq(&self, other: &Self) -> bool {
+        // Entry by entry, as a derived comparison: written out, it compiles
+        // to nine comparisons where the derived one loops over each row.
+        let [[a0, a1, a2], [a3, a4, a5], [a6, a7, a8]] = self.matrix;
+        let [[b0, b1, b2], [b3, b4, b5], [b6, b7, b8]] = other.matrix;
+        a0 == b0
+            && a1 == b1
+            && a2 == b2
+            && a3 == b3
+            && a4 == b4
+            && a5 == b5
+            && a6 == b6
+            && a7 == b7
+            && a8 == b8
+    }
 }
 
 impl ProjectiveTransform {
