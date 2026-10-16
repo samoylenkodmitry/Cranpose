@@ -45,6 +45,7 @@ use crate::{
         DimensionConstraint, EdgeInsets, Modifier, ModifierNodeSlices,
         ModifierNodeSlicesDebugStats, Point, Rect as GeometryRect, ResolvedModifiers, Size,
     },
+    render_state::AppContext,
     subcompose_layout::{CachedBatchMeasureInputs, SubcomposeLayoutNode},
     widgets::nodes::{
         IntrinsicKind, LayoutNode, LayoutNodeCacheHandles, LayoutState, begin_placement_pass,
@@ -191,17 +192,18 @@ impl Default for LayoutHost {
     }
 }
 
-/// Lends `target` to a [`LayoutHost`] for one pass and gives it back when
-/// dropped, also after a panic.
+/// Lends `target` to a [`LayoutHost`] of `context` for one pass and gives it
+/// back when dropped, also after a panic.
 struct ApplierSlotGuard<'a> {
     target: &'a mut MemoryApplier,
     lent: LayoutHost,
     slots: Rc<RefCell<SlotTable>>,
+    context: &'a AppContext,
 }
 
 impl<'a> ApplierSlotGuard<'a> {
-    fn new(target: &'a mut MemoryApplier) -> Self {
-        let lent = crate::render_state::take_layout_host();
+    fn new(target: &'a mut MemoryApplier, context: &'a AppContext) -> Self {
+        let lent = context.take_layout_host();
         let slots = {
             let mut applier_ref = lent.host.borrow_typed();
             std::mem::swap(target, &mut *applier_ref);
@@ -211,6 +213,7 @@ impl<'a> ApplierSlotGuard<'a> {
             target,
             lent,
             slots,
+            context,
         }
     }
 
@@ -229,7 +232,7 @@ impl Drop for ApplierSlotGuard<'_> {
         std::mem::swap(self.target, &mut *host.borrow_typed());
         // A host still shared past the pass stays with whoever holds it.
         if Rc::strong_count(host) == 1 {
-            crate::render_state::replace_layout_host(LayoutHost {
+            self.context.replace_layout_host(LayoutHost {
                 host: Rc::clone(host),
             });
         }
@@ -1338,9 +1341,10 @@ pub fn measure_layout_with_options(
     options: MeasureLayoutOptions,
 ) -> Result<LayoutMeasurements, NodeError> {
     let mut stages = LayoutStages::start(layout_measure_telemetry_threshold_ms().is_some());
-    crate::render_state::begin_text_layout_pass();
+    let context = crate::render_state::require_current_app_context("a layout pass");
+    context.begin_text_layout_pass();
     begin_placement_pass();
-    process_pending_layout_repasses(applier, root)?;
+    process_pending_layout_repasses(&context, applier, root)?;
     stages.reached();
 
     let constraints = Constraints {
@@ -1369,24 +1373,23 @@ pub fn measure_layout_with_options(
     };
 
     let epoch = if needs_remeasure {
-        crate::render_state::next_layout_cache_epoch()
+        context.next_layout_cache_epoch()
     } else if cached_epoch != 0 {
         cached_epoch
     } else {
-        crate::render_state::current_layout_cache_epoch()
+        context.current_layout_cache_epoch()
     };
 
-    let guard = ApplierSlotGuard::new(applier);
+    let guard = ApplierSlotGuard::new(applier, &context);
     let applier_host = guard.host();
     let slots_handle = guard.slots_handle();
     stages.reached();
 
-    let frame_arena = crate::render_state::take_layout_frame_arena();
     let builder = LayoutBuilder::new_with_epoch(
         Rc::clone(applier_host),
         epoch,
         Rc::clone(slots_handle),
-        frame_arena,
+        &context,
     );
     stages.reached();
 
@@ -1434,10 +1437,11 @@ pub fn measure_layout_with_options(
 }
 
 fn process_pending_layout_repasses(
+    context: &AppContext,
     applier: &mut MemoryApplier,
     root: NodeId,
 ) -> Result<(), NodeError> {
-    for node_id in crate::render_state::take_modifier_slice_repass_nodes() {
+    for node_id in context.take_modifier_slice_repass_nodes() {
         if let Ok(node) = applier.get_mut(node_id) {
             let any = node.as_any_mut();
             if let Some(layout) = any.downcast_mut::<crate::widgets::nodes::LayoutNode>() {
@@ -1449,8 +1453,8 @@ fn process_pending_layout_repasses(
             }
         }
     }
-    let measure_repass_nodes = crate::take_measure_repass_nodes();
-    let repass_nodes = crate::take_layout_repass_nodes();
+    let measure_repass_nodes = context.take_measure_repass_nodes();
+    let repass_nodes = context.take_layout_repass_nodes();
     if measure_repass_nodes.is_empty() && repass_nodes.is_empty() {
         return Ok(());
     }
@@ -1464,29 +1468,33 @@ fn process_pending_layout_repasses(
     Ok(())
 }
 
-struct LayoutBuilder {
+/// A layout pass's builder, with the frame arena it took from `context` and
+/// gives back when dropped.
+struct LayoutBuilder<'a> {
     state: Rc<LayoutBuilderState>,
+    context: &'a AppContext,
 }
 
-impl LayoutBuilder {
+impl<'a> LayoutBuilder<'a> {
     fn new_with_epoch(
         applier: Rc<ConcreteApplierHost<MemoryApplier>>,
         epoch: u64,
         slots: Rc<RefCell<SlotTable>>,
-        frame_arena: FrameLayoutArena,
+        context: &'a AppContext,
     ) -> Self {
         Self {
             state: Rc::new(LayoutBuilderState::new_with_epoch(
                 applier,
                 epoch,
                 slots,
-                frame_arena,
+                context.take_layout_frame_arena(),
             )),
+            context,
         }
     }
 }
 
-impl Drop for LayoutBuilder {
+impl Drop for LayoutBuilder<'_> {
     fn drop(&mut self) {
         if Rc::strong_count(&self.state) != 1 {
             return;
@@ -1494,7 +1502,8 @@ impl Drop for LayoutBuilder {
         let Ok(mut frame_arena) = self.state.frame_arena.try_borrow_mut() else {
             return;
         };
-        crate::render_state::replace_layout_frame_arena(std::mem::take(&mut *frame_arena));
+        self.context
+            .replace_layout_frame_arena(std::mem::take(&mut *frame_arena));
     }
 }
 

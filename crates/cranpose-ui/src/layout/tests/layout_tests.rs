@@ -1130,7 +1130,8 @@ fn scoped_layout_repass_remeasures_only_dirty_subtree() -> Result<(), NodeError>
     })?;
 
     crate::schedule_layout_repass(dirty_child);
-    super::process_pending_layout_repasses(&mut applier, root_id)?;
+    let context = crate::render_state::require_current_app_context("a layout test");
+    super::process_pending_layout_repasses(&context, &mut applier, root_id)?;
 
     let root_needs_measure =
         applier.with_node::<LayoutNode, _>(root_id, |node| node.needs_measure())?;
@@ -1249,7 +1250,8 @@ fn scoped_layout_repass_remeasures_dirty_subcompose_child() -> Result<(), NodeEr
     })?;
 
     crate::schedule_layout_repass(child_id);
-    super::process_pending_layout_repasses(&mut applier, root_id)?;
+    let context = crate::render_state::require_current_app_context("a layout test");
+    super::process_pending_layout_repasses(&context, &mut applier, root_id)?;
 
     let root_needs_measure =
         applier.with_node::<LayoutNode, _>(root_id, |node| node.needs_measure())?;
@@ -1441,14 +1443,15 @@ fn nested_measurement_returns_multiple_scratch_vecs_to_pool() -> Result<(), Node
     root.children.push(child_id);
     let root_id = applier.create(Box::new(root));
 
-    let guard = ApplierSlotGuard::new(&mut applier);
+    let context = crate::render_state::require_current_app_context("a layout test");
+    let guard = ApplierSlotGuard::new(&mut applier, &context);
     let applier_host = guard.host();
     let slots_handle = guard.slots_handle();
     let builder = LayoutBuilder::new_with_epoch(
         Rc::clone(applier_host),
         1,
         Rc::clone(slots_handle),
-        FrameLayoutArena::default(),
+        &context,
     );
 
     builder.state.measure_node(
@@ -2171,11 +2174,12 @@ fn parent_data_uses_resolved_layout_properties() {
         Rc::new(MaxSizePolicy),
     );
     let node_id = applier.create(Box::new(layout_node));
+    let context = crate::render_state::require_current_app_context("a layout test");
     let builder = LayoutBuilder::new_with_epoch(
         Rc::new(ConcreteApplierHost::new(applier)),
         1,
         Rc::new(RefCell::new(SlotTable::default())),
-        FrameLayoutArena::default(),
+        &context,
     );
     let frame = Rc::new(LayoutChildFrame::default());
     let state = LayoutChildMeasureState::new(node_id, Rc::clone(&frame));
