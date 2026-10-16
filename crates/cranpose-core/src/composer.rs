@@ -59,12 +59,18 @@ fn bind_slots_host_to_runtime_state(
     state: &Rc<ComposerRuntimeState>,
     host: &Rc<SlotsHost>,
 ) -> Rc<SlotsHost> {
-    if let Some(bound_state) = host.runtime_state() {
-        if Rc::ptr_eq(&bound_state, state) {
-            state.bind_slots_host(host);
-            return Rc::clone(host);
-        }
-        drop(bound_state);
+    // A host bound to `state` is in its registry: whatever drops the entry
+    // also unbinds the host, so binding it again would change nothing.
+    if host.runtime_state_ptr() == Some(Rc::as_ptr(state)) {
+        debug_assert!(
+            state
+                .host_for_storage_key(host.storage_key())
+                .is_some_and(|registered| Rc::ptr_eq(&registered, host)),
+            "a slot host bound to a runtime state must be in its registry"
+        );
+        return Rc::clone(host);
+    }
+    if host.runtime_state().is_some() {
         if host.rebind_orphaned_runtime_state(state) {
             state.bind_slots_host(host);
             return Rc::clone(host);
@@ -422,9 +428,11 @@ impl ComposerRuntimeState {
     /// content may be let go by a parent composed in another table, so a pass
     /// that ends has to look wider than itself.
     pub(crate) fn hosts_awaiting_movables(&self) -> Vec<Rc<SlotsHost>> {
-        let waiting = self
-            .pending_movables_by_host
-            .borrow()
+        let by_host = self.pending_movables_by_host.borrow();
+        if by_host.is_empty() {
+            return Vec::new();
+        }
+        let waiting = by_host
             .iter()
             .filter(|(_, sites)| !sites.is_empty())
             .map(|(host_key, _)| *host_key)
@@ -448,9 +456,12 @@ impl ComposerRuntimeState {
         &self,
         host: &Rc<SlotsHost>,
     ) -> Vec<crate::slot::DetachedSubtree> {
+        let mut retention_by_host = self.retention_by_host.borrow_mut();
+        if retention_by_host.is_empty() {
+            return Vec::new();
+        }
         let host_key = slots_storage_key(host);
         let policy = self.retention_policy();
-        let mut retention_by_host = self.retention_by_host.borrow_mut();
         let Some(manager) = retention_by_host.get_mut(&host_key) else {
             return Vec::new();
         };
