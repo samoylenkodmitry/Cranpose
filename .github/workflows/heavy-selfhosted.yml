@@ -27,10 +27,12 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
-# Supersede older runs of the same ref: fleet minutes are real machines.
+# Supersede older runs of the same pull request: fleet minutes are real
+# machines. A run on main finishes, as in rust.yml, so main gets an answer while
+# merges keep coming; GitHub keeps one pending main run, the newest.
 concurrency:
   group: heavy-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   robot-linux:
