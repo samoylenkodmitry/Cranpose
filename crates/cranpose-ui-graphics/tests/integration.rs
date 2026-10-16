@@ -4,3 +4,4 @@ mod path_fill_slices;
 mod record_preparation;
 mod transform_bounds;
 mod vector_path_fill;
+mod whole_rounding;

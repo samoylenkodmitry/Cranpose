@@ -64,6 +64,7 @@ mod typography;
 pub mod unit;
 mod vector_path;
 mod vertex_gradient;
+pub mod whole;
 
 pub use alpha_mask::*;
 pub use brush::*;

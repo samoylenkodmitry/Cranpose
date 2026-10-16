@@ -16,7 +16,7 @@ use cranpose_render_common::{
 use cranpose_ui::text::TextMotion;
 use cranpose_ui_graphics::{
     ArcGeometry, BlendMode, Brush, CornerRadii, LineGeometry, Point, Rect, StrokeJoin, Trapezoid,
-    expand_rect,
+    expand_rect, whole,
 };
 
 use crate::{
@@ -51,7 +51,7 @@ fn is_blend_mode_supported(mode: BlendMode) -> bool {
 }
 
 fn snapped_anchor_origin(anchor: Point) -> Point {
-    Point::new(anchor.x.round(), anchor.y.round())
+    Point::new(whole::round(anchor.x), whole::round(anchor.y))
 }
 
 pub(crate) fn snap_delta_for_anchor(anchor: Point) -> Point {
@@ -145,10 +145,10 @@ pub(crate) fn clip_rect_to_window(
         return None;
     }
 
-    let min_x = (min_x.floor() as i32).clamp(window.min_x, window.max_x);
-    let min_y = (min_y.floor() as i32).clamp(window.min_y, window.max_y);
-    let max_x = (max_x.ceil() as i32).clamp(window.min_x, window.max_x);
-    let max_y = (max_y.ceil() as i32).clamp(window.min_y, window.max_y);
+    let min_x = (whole::floor(min_x) as i32).clamp(window.min_x, window.max_x);
+    let min_y = (whole::floor(min_y) as i32).clamp(window.min_y, window.max_y);
+    let max_x = (whole::ceil(max_x) as i32).clamp(window.min_x, window.max_x);
+    let max_y = (whole::ceil(max_y) as i32).clamp(window.min_y, window.max_y);
 
     if min_x >= max_x || min_y >= max_y {
         return None;
@@ -200,9 +200,19 @@ fn clear_frame(frame: &mut [u8]) {
 /// the pixels are aligned for them, a store a pixel instead of four.
 fn fill_pixels(pixels: &mut [[u8; 4]], bytes: [u8; 4]) {
     match bytemuck::try_cast_slice_mut::<[u8; 4], u32>(pixels) {
-        Ok(words) => words.fill(u32::from_ne_bytes(bytes)),
+        Ok(words) => fill_words(words, u32::from_ne_bytes(bytes)),
         Err(_) => pixels.fill(bytes),
     }
+}
+
+/// `words.fill(word)` four words a step: a step of the plain loop stores one
+/// word, and its counter and branch cost more than the store.
+fn fill_words(words: &mut [u32], word: u32) {
+    let (quads, rest) = words.as_chunks_mut::<4>();
+    for quad in quads {
+        *quad = [word; 4];
+    }
+    rest.fill(word);
 }
 
 fn draw_raster_scene(
@@ -302,7 +312,7 @@ impl RasterScene {
             return false;
         };
         let draw = &self.shapes[index];
-        if opaque_solid_bytes(&draw.brush, draw.blend_mode).is_none() {
+        if !paints_opaque(&draw.brush, draw.blend_mode) {
             return false;
         }
         let Some(PlacedShape {
@@ -346,8 +356,8 @@ impl RasterScene {
                 let draw = &self.texts[index];
                 let raster_rect = text_raster_rect(draw)?;
                 let reach = Rect {
-                    width: raster_rect.width.ceil().max(1.0),
-                    height: raster_rect.height.ceil().max(1.0),
+                    width: whole::ceil(raster_rect.width).max(1.0),
+                    height: whole::ceil(raster_rect.height).max(1.0),
                     ..raster_rect
                 };
                 clip_rect_to_window(reach, draw.clip, window)
@@ -410,15 +420,15 @@ pub(crate) struct PlacedShape {
 /// `rect` moved to whole pixels and grown to cover at least one.
 fn on_pixel_grid(rect: Rect) -> Rect {
     Rect {
-        x: rect.x.round(),
-        y: rect.y.round(),
+        x: whole::round(rect.x),
+        y: whole::round(rect.y),
         width: if rect.width > 0.0 {
-            rect.width.ceil().max(1.0)
+            whole::ceil(rect.width).max(1.0)
         } else {
             rect.width
         },
         height: if rect.height > 0.0 {
-            rect.height.ceil().max(1.0)
+            whole::ceil(rect.height).max(1.0)
         } else {
             rect.height
         },
@@ -582,15 +592,21 @@ fn opaque_solid_bytes(brush: &Brush, blend_mode: BlendMode) -> Option<[u8; 4]> {
     let Brush::Solid(color) = brush else {
         return None;
     };
-    let rgba = color_to_rgba(*color);
-    (blend_mode == BlendMode::SrcOver && rgba[3] >= 1.0).then(|| {
+    paints_opaque(brush, blend_mode).then(|| {
+        let rgba = color_to_rgba(*color);
         [
-            (rgba[0] * 255.0).round() as u8,
-            (rgba[1] * 255.0).round() as u8,
-            (rgba[2] * 255.0).round() as u8,
+            whole::round(rgba[0] * 255.0) as u8,
+            whole::round(rgba[1] * 255.0) as u8,
+            whole::round(rgba[2] * 255.0) as u8,
             255,
         ]
     })
+}
+
+/// Whether [`opaque_solid_bytes`] has bytes for `brush` under `blend_mode`,
+/// without working them out.
+fn paints_opaque(brush: &Brush, blend_mode: BlendMode) -> bool {
+    blend_mode == BlendMode::SrcOver && matches!(brush, Brush::Solid(color) if color.3 >= 1.0)
 }
 
 /// How far from a band's edge a pixel centre still takes ink: the
@@ -607,15 +623,15 @@ const NO_RUN: (i32, i32) = (0, 0);
 /// The pixels whose centres lie within `half` of `centre`, cut to
 /// `min..max`.
 fn run_within(centre: f32, half: f32, min: i32, max: i32) -> (i32, i32) {
-    let start = ((centre - half - 0.5).ceil() as i32).max(min);
-    let end = ((centre + half - 0.5).floor() as i32 + 1).min(max);
+    let start = (whole::ceil(centre - half - 0.5) as i32).max(min);
+    let end = (whole::floor(centre + half - 0.5) as i32 + 1).min(max);
     (start, end)
 }
 
 /// `run` without the pixels whose centres lie in `from..=to`.
 fn runs_around(run: (i32, i32), from: f32, to: f32) -> RowRuns {
-    let first = (from - 0.5).ceil() as i32;
-    let last = (to - 0.5).floor() as i32;
+    let first = whole::ceil(from - 0.5) as i32;
+    let last = whole::floor(to - 0.5) as i32;
     if first > last {
         return [run, NO_RUN];
     }
@@ -719,8 +735,8 @@ fn stroke_row_runs(
         (left, right) => {
             let from = centre_x - left.unwrap_or(0.0);
             let to = centre_x + right.unwrap_or(0.0);
-            let start = ((from - 0.5).ceil() as i32).max(min_x);
-            let end = ((to - 0.5).floor() as i32 + 1).min(max_x);
+            let start = (whole::ceil(from - 0.5) as i32).max(min_x);
+            let end = (whole::floor(to - 0.5) as i32 + 1).min(max_x);
             (start, end)
         }
     };
@@ -890,8 +906,10 @@ fn draw_image(target: &mut Target, draw: &ImageDraw, diagnostics: &RenderDiagnos
 
             let mut sample = match draw.sampling {
                 cranpose_ui_graphics::ImageSampling::Nearest => {
-                    let src_x = ((sr_x + u * sr_w).floor() as i32).clamp(0, img_width as i32 - 1);
-                    let src_y = ((sr_y + v * sr_h).floor() as i32).clamp(0, img_height as i32 - 1);
+                    let src_x =
+                        (whole::floor(sr_x + u * sr_w) as i32).clamp(0, img_width as i32 - 1);
+                    let src_y =
+                        (whole::floor(sr_y + v * sr_h) as i32).clamp(0, img_height as i32 - 1);
                     sample_image_nearest(&draw.image, src_x as u32, src_y as u32)
                 }
                 cranpose_ui_graphics::ImageSampling::Linear => {
@@ -928,8 +946,8 @@ fn sample_image_linear(image: &cranpose_ui_graphics::ImageBitmap, x: f32, y: f32
     let img_height = image.height();
     let x = x.clamp(0.0, img_width.saturating_sub(1) as f32);
     let y = y.clamp(0.0, img_height.saturating_sub(1) as f32);
-    let x0 = x.floor();
-    let y0 = y.floor();
+    let x0 = whole::floor(x);
+    let y0 = whole::floor(y);
     let tx = x - x0;
     let ty = y - y0;
     let x0 = (x0 as i32).clamp(0, img_width as i32 - 1) as u32;
@@ -1116,9 +1134,9 @@ fn blend_pixel(
     // An opaque source over anything is the source: the same bytes the
     // blend below works out, without reading the destination.
     if src_alpha >= 1.0 && resolved_blend_mode != BlendMode::DstOut {
-        dst[0] = (src[0].clamp(0.0, 1.0) * 255.0).round() as u8;
-        dst[1] = (src[1].clamp(0.0, 1.0) * 255.0).round() as u8;
-        dst[2] = (src[2].clamp(0.0, 1.0) * 255.0).round() as u8;
+        dst[0] = whole::round(src[0].clamp(0.0, 1.0) * 255.0) as u8;
+        dst[1] = whole::round(src[1].clamp(0.0, 1.0) * 255.0) as u8;
+        dst[2] = whole::round(src[2].clamp(0.0, 1.0) * 255.0) as u8;
         dst[3] = 255;
         return;
     }
@@ -1143,10 +1161,10 @@ fn blend_pixel(
         ),
     };
 
-    dst[0] = (out_r.clamp(0.0, 1.0) * 255.0).round() as u8;
-    dst[1] = (out_g.clamp(0.0, 1.0) * 255.0).round() as u8;
-    dst[2] = (out_b.clamp(0.0, 1.0) * 255.0).round() as u8;
-    dst[3] = (out_a.clamp(0.0, 1.0) * 255.0).round() as u8;
+    dst[0] = whole::round(out_r.clamp(0.0, 1.0) * 255.0) as u8;
+    dst[1] = whole::round(out_g.clamp(0.0, 1.0) * 255.0) as u8;
+    dst[2] = whole::round(out_b.clamp(0.0, 1.0) * 255.0) as u8;
+    dst[3] = whole::round(out_a.clamp(0.0, 1.0) * 255.0) as u8;
 }
 
 #[cfg(test)]

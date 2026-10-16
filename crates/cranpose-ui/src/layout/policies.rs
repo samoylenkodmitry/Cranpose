@@ -1,3 +1,4 @@
+use cranpose_ui_graphics::whole;
 use cranpose_ui_layout::{
     Axis, Constraints, FlexParentData, MeasurePolicy, MeasureResult, MeasureScope, ParentData,
     Placement, bias_offset, round_to_px,
@@ -241,13 +242,15 @@ impl WeightShares {
             1.0
         };
         let total_weight: f32 = weights.clone().sum();
-        let remaining_px = (remaining * density).round();
+        let remaining_px = whole::round(remaining * density);
         let unit_px = if total_weight > 0.0 {
             remaining_px / total_weight
         } else {
             0.0
         };
-        let rounded_px: f32 = weights.map(|weight| (unit_px * weight + 0.5).floor()).sum();
+        let rounded_px: f32 = weights
+            .map(|weight| whole::floor(unit_px * weight + 0.5))
+            .sum();
         Self {
             density,
             unit_px,
@@ -265,7 +268,7 @@ impl WeightShares {
             0.0
         };
         self.remainder_px -= step;
-        ((self.unit_px * weight + 0.5).floor() + step).max(0.0) / self.density
+        (whole::floor(self.unit_px * weight + 0.5) + step).max(0.0) / self.density
     }
 }
 

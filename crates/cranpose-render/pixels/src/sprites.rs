@@ -19,7 +19,9 @@ use std::{
 };
 
 use cranpose_render_common::{brush_sampling::color_to_rgba, graph_scene::RenderDiagnostics};
-use cranpose_ui_graphics::{BlendMode, Brush, Color, Point, Rect, StrokeCap, StrokeJoin, TileMode};
+use cranpose_ui_graphics::{
+    BlendMode, Brush, Color, Point, Rect, StrokeCap, StrokeJoin, TileMode, whole,
+};
 
 use crate::{
     draw::{
@@ -468,7 +470,7 @@ impl Canonical {
         if !(origin.x.is_finite() && origin.y.is_finite()) {
             return None;
         }
-        let shift = Point::new(origin.x.floor(), origin.y.floor());
+        let shift = Point::new(whole::floor(origin.x), whole::floor(origin.y));
         let item = match item {
             RenderItem::Shape(index) => {
                 canonical

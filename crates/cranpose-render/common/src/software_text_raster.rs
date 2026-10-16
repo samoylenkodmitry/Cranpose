@@ -21,7 +21,7 @@ use cranpose_ui::{
     },
     text_layout_result::{GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult},
 };
-use cranpose_ui_graphics::{Color, ImageBitmap, Point, Rect};
+use cranpose_ui_graphics::{Color, ImageBitmap, Point, Rect, whole};
 use tiny_skia::{LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -1835,7 +1835,7 @@ impl TextStyleSynthesis {
         if self.slant <= 0.0 || !self.font_size.is_finite() || !self.scale.is_finite() {
             return 0.0;
         }
-        (self.font_size * self.scale * self.slant).ceil().max(0.0)
+        whole::ceil(self.font_size * self.scale * self.slant).max(0.0)
     }
 }
 
@@ -2280,8 +2280,8 @@ fn rasterize_styled_text_region(
     }
     let layout = AnnotatedTextLayout::new(text, style, font_size, scale, 1.0, fonts)?;
     let solid = layout.all_styles(style_can_rasterize_direct_solid);
-    let width = rect.width.ceil().max(1.0) as u32;
-    let height = rect.height.ceil().max(1.0) as u32;
+    let width = whole::ceil(rect.width).max(1.0) as u32;
+    let height = whole::ceil(rect.height).max(1.0) as u32;
     let mut canvas = TextRasterCanvas::new(width, height, solid);
     let offsets = annotated_line_alignment_offsets(&layout, &text, style, scale);
     let brush_extents = layout.has_non_solid_brush().then(|| {
@@ -2302,7 +2302,7 @@ fn rasterize_styled_text_region(
         );
         let local_rect = Rect {
             x: if static_text_motion {
-                origin.x.round()
+                whole::round(origin.x)
             } else {
                 origin.x + rect.x.fract()
             },
@@ -2444,7 +2444,7 @@ fn walk_solid_text_atlas_segments<'a, T>(
         collect_segment(
             segment.text,
             Rect {
-                x: segment.origin.x.round(),
+                x: whole::round(segment.origin.x),
                 y: segment.origin.y,
                 width: rect.width,
                 height: rect.height,
@@ -2663,7 +2663,7 @@ pub fn text_offset_for_position_with_font(
     let line_box = font_line_box(style, font, font_size);
     let line_height = line_box.height;
 
-    let line_index = ((y + line_box.trim_top) / line_height).floor().max(0.0) as usize;
+    let line_index = whole::floor((y + line_box.trim_top) / line_height).max(0.0) as usize;
     let lines: Vec<&str> = text.split('\n').collect();
     let target_line = line_index.min(lines.len().saturating_sub(1));
 
@@ -3187,8 +3187,9 @@ impl GlyphRasterClip {
             shadow: paint.shadow.map(|shadow| {
                 (
                     Point::new(shadow.offset.x * paint.scale, shadow.offset.y * paint.scale),
-                    (shadow_blur_sigma((shadow.blur_radius * paint.scale).max(0.0)) * 3.0).ceil()
-                        + 1.0,
+                    whole::ceil(
+                        shadow_blur_sigma((shadow.blur_radius * paint.scale).max(0.0)) * 3.0,
+                    ) + 1.0,
                 )
             }),
         }
@@ -3279,7 +3280,7 @@ impl TextRasterCanvas {
                 let mut pixels = Vec::with_capacity(canvas.len() * 4);
                 for pixel in canvas {
                     pixels.extend(
-                        pixel.map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8),
+                        pixel.map(|channel| whole::round(channel.clamp(0.0, 1.0) * 255.0) as u8),
                     );
                 }
                 pixels
@@ -3321,8 +3322,8 @@ fn rasterize_text_to_image_impl(
         return None;
     }
 
-    let width = rect.width.ceil().max(1.0) as u32;
-    let height = rect.height.ceil().max(1.0) as u32;
+    let width = whole::ceil(rect.width).max(1.0) as u32;
+    let height = whole::ceil(rect.height).max(1.0) as u32;
 
     let fallback_brush = Brush::solid(fallback_color);
     let (brush, brush_alpha_multiplier) = match style.span_style.brush.as_ref() {
@@ -3771,7 +3772,7 @@ fn collect_atlas_segment<T>(
     let m = text_segment_metrics(text, local_rect, style, font_size, scale, font);
     let font_hash = font.content_hash();
     let kerned = &font.font;
-    let origin_x = local_rect.x.round();
+    let origin_x = whole::round(local_rect.x);
     let initial_len = out.len();
     #[cfg(feature = "text-shaping")]
     if requires_font_layout(text, style) {
@@ -4044,7 +4045,7 @@ fn fallback_text_offset_for_position(text: &str, style: &TextStyle, x: f32, y: f
 
     let font_size = resolve_font_size(style);
     let line_height = fallback_line_height(style, font_size);
-    let line_index = (y / line_height).floor().max(0.0) as usize;
+    let line_index = whole::floor(y / line_height).max(0.0) as usize;
     let lines: Vec<&str> = text.split('\n').collect();
     let target_line = line_index.min(lines.len().saturating_sub(1));
 
@@ -4060,7 +4061,7 @@ fn fallback_text_offset_for_position(text: &str, style: &TextStyle, x: f32, y: f
 
     let advance =
         (fallback_char_width(font_size) + resolve_letter_spacing(style, font_size)).max(1.0);
-    let target_char = (x / advance).round().max(0.0) as usize;
+    let target_char = whole::round(x / advance).max(0.0) as usize;
     line_start_byte + byte_offset_for_char_index(line_text, target_char)
 }
 
@@ -4556,8 +4557,8 @@ fn align_glyph_for_text_motion(glyph: Glyph, static_text_motion: bool) -> Glyph 
 
 fn static_glyph_pixel_origin(glyph: &Glyph) -> (i32, i32) {
     (
-        glyph.position.x.round() as i32,
-        glyph.position.y.round() as i32,
+        whole::round(glyph.position.x) as i32,
+        whole::round(glyph.position.y) as i32,
     )
 }
 
@@ -4631,7 +4632,7 @@ fn complete_glyph_bounds(
     let vertical = (horizontal / 2).min(1) as f32;
     let height = bounds.height() as f32 + 2.0 * (pad + vertical);
     let slant = if style.slant > 0.0 {
-        ((height - 1.0).max(0.0) * style.slant).ceil() + 1.0
+        whole::ceil((height - 1.0).max(0.0) * style.slant) + 1.0
     } else {
         0.0
     };
@@ -4896,10 +4897,10 @@ fn blend_src_over_u8(dst: &mut [u8], src: [f32; 4]) {
 
     let dst_alpha = dst[3] as f32 / 255.0;
     if dst_alpha <= 0.0 {
-        dst[0] = (src[0].clamp(0.0, 1.0) * 255.0).round() as u8;
-        dst[1] = (src[1].clamp(0.0, 1.0) * 255.0).round() as u8;
-        dst[2] = (src[2].clamp(0.0, 1.0) * 255.0).round() as u8;
-        dst[3] = (src_alpha * 255.0).round() as u8;
+        dst[0] = whole::round(src[0].clamp(0.0, 1.0) * 255.0) as u8;
+        dst[1] = whole::round(src[1].clamp(0.0, 1.0) * 255.0) as u8;
+        dst[2] = whole::round(src[2].clamp(0.0, 1.0) * 255.0) as u8;
+        dst[3] = whole::round(src_alpha * 255.0) as u8;
         return;
     }
 
@@ -4913,9 +4914,9 @@ fn blend_src_over_u8(dst: &mut [u8], src: [f32; 4]) {
         let src_premult = src[channel].clamp(0.0, 1.0) * src_alpha;
         let dst_premult = (dst[channel] as f32 / 255.0) * dst_alpha;
         dst[channel] =
-            ((src_premult + dst_premult * (1.0 - src_alpha)) / out_alpha * 255.0).round() as u8;
+            whole::round((src_premult + dst_premult * (1.0 - src_alpha)) / out_alpha * 255.0) as u8;
     }
-    dst[3] = (out_alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
+    dst[3] = whole::round(out_alpha.clamp(0.0, 1.0) * 255.0) as u8;
 }
 
 fn draw_mask_glyph_solid_u8(
@@ -4926,9 +4927,9 @@ fn draw_mask_glyph_solid_u8(
     color: [f32; 4],
     alpha_multiplier: f32,
 ) {
-    let red = (color[0].clamp(0.0, 1.0) * 255.0).round() as u8;
-    let green = (color[1].clamp(0.0, 1.0) * 255.0).round() as u8;
-    let blue = (color[2].clamp(0.0, 1.0) * 255.0).round() as u8;
+    let red = whole::round(color[0].clamp(0.0, 1.0) * 255.0) as u8;
+    let green = whole::round(color[1].clamp(0.0, 1.0) * 255.0) as u8;
+    let blue = whole::round(color[2].clamp(0.0, 1.0) * 255.0) as u8;
     let alpha_scale = color[3].clamp(0.0, 1.0) * alpha_multiplier.clamp(0.0, 1.0);
     if alpha_scale <= 0.0 {
         return;
@@ -4959,7 +4960,7 @@ fn draw_mask_glyph_solid_u8(
             let alpha_u8 = if alpha_scale == 1.0 {
                 corrected
             } else {
-                (alpha * 255.0).round() as u8
+                whole::round(alpha * 255.0) as u8
             };
             if alpha_u8 == 0 {
                 continue;
@@ -4996,7 +4997,7 @@ fn draw_shadow_mask(
     let blur_radius = (shadow.blur_radius * text_scale).max(0.0);
     let sigma = shadow_blur_sigma(blur_radius);
     let blur_margin = if sigma > 0.0 {
-        (sigma * 3.0).ceil() as i32
+        whole::ceil(sigma * 3.0) as i32
     } else {
         0
     };
@@ -5046,8 +5047,8 @@ fn draw_shadow_mask(
                     canvas,
                     width,
                     height,
-                    target_x.round() as i32,
-                    target_y.round() as i32,
+                    whole::round(target_x) as i32,
+                    whole::round(target_y) as i32,
                     shadow_rgba,
                     alpha.clamp(0.0, 1.0),
                 );
@@ -5098,8 +5099,8 @@ fn blend_shadow_pixel_subpixel(
         return;
     }
 
-    let base_x = x.floor();
-    let base_y = y.floor();
+    let base_x = whole::floor(x);
+    let base_y = whole::floor(y);
     let frac_x = x - base_x;
     let frac_y = y - base_y;
     let base_x_i32 = base_x as i32;
@@ -5172,7 +5173,7 @@ fn gaussian_blur_alpha(src: &[f32], width: usize, height: usize, sigma: f32) -> 
 }
 
 fn gaussian_kernel_1d(sigma: f32) -> Vec<f32> {
-    let half = ((sigma * 3.0).ceil() as i32).clamp(1, MAX_GAUSSIAN_KERNEL_HALF);
+    let half = (whole::ceil(sigma * 3.0) as i32).clamp(1, MAX_GAUSSIAN_KERNEL_HALF);
     if half <= 0 {
         return vec![1.0];
     }
@@ -5301,7 +5302,7 @@ fn build_stroke_mask(
 
 fn stroke_mask_padding(width: f32) -> i32 {
     if width.is_finite() && width > 0.0 {
-        (width * 0.5 * COMPOSE_STROKE_MITER_LIMIT).ceil().max(1.0) as i32 + 1
+        whole::ceil(width * 0.5 * COMPOSE_STROKE_MITER_LIMIT).max(1.0) as i32 + 1
     } else {
         0
     }
@@ -5350,7 +5351,7 @@ fn synthesize_glyph_style(mask: GlyphMask, synthesis: TextStyleSynthesis) -> Gly
         return mask;
     }
 
-    let max_shift = ((mask.height.saturating_sub(1)) as f32 * synthesis.slant).ceil() as usize;
+    let max_shift = whole::ceil((mask.height.saturating_sub(1)) as f32 * synthesis.slant) as usize;
     if max_shift == 0 {
         return mask;
     }
@@ -5359,8 +5360,8 @@ fn synthesize_glyph_style(mask: GlyphMask, synthesis: TextStyleSynthesis) -> Gly
     let mut alpha = vec![0.0f32; output_width * mask.height];
     for y in 0..mask.height {
         let shift = (mask.height.saturating_sub(1) - y) as f32 * synthesis.slant;
-        let shift_floor = shift.floor() as usize;
-        let shift_fraction = shift - shift.floor();
+        let shift_floor = whole::floor(shift) as usize;
+        let shift_fraction = shift - whole::floor(shift);
         for x in 0..mask.width {
             let coverage = mask.alpha[y * mask.width + x];
             if coverage <= 0.0 {
@@ -5397,7 +5398,7 @@ fn synthetic_weight_shift_px(embolden_px: f32) -> usize {
     if !embolden_px.is_finite() || embolden_px < 0.35 {
         return 0;
     }
-    embolden_px.ceil().max(1.0) as usize
+    whole::ceil(embolden_px).max(1.0) as usize
 }
 
 fn build_outline_path(
