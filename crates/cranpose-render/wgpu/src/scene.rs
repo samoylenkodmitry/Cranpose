@@ -63,8 +63,8 @@ pub(crate) struct Placement {
     pub clip: Option<Rect>,
     pub rounding: Option<ClipRounding>,
     pub alpha: f32,
-    /// Boxed: few layers filter, and inline the 4x5 matrix took 84 of a
-    /// run draw's 184 bytes.
+    /// Boxed: few layers filter, and inline a filter takes 24 bytes of
+    /// every placement against 8.
     pub color_filter: Option<Arc<ColorFilter>>,
 }
 
@@ -120,7 +120,10 @@ impl Placement {
             clip,
             rounding: None,
             alpha: layer.alpha.clamp(0.0, 1.0),
-            color_filter: layer.color_filter.as_ref().map(|filter| Arc::new(*filter)),
+            color_filter: layer
+                .color_filter
+                .as_ref()
+                .map(|filter| Arc::new(filter.clone())),
         }
     }
 

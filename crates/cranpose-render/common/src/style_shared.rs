@@ -38,12 +38,12 @@ pub fn apply_paint_to_color(color: Color, alpha: f32, color_filter: Option<&Colo
 
 /// Combines two optional color filters into one. With only one present, that filter is returned.
 pub fn compose_color_filters(
-    base: Option<ColorFilter>,
-    overlay: Option<ColorFilter>,
+    base: Option<&ColorFilter>,
+    overlay: Option<&ColorFilter>,
 ) -> Option<ColorFilter> {
     match (base, overlay) {
         (None, None) => None,
-        (Some(filter), None) | (None, Some(filter)) => Some(filter),
+        (Some(filter), None) | (None, Some(filter)) => Some(filter.clone()),
         (Some(filter), Some(next)) => Some(filter.compose(next)),
     }
 }

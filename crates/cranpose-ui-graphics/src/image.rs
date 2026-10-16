@@ -183,7 +183,7 @@ pub enum ImageSampling {
 }
 
 /// Simple image color filter model.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ColorFilter {
     /// Compose-style tint using `BlendMode::SrcIn`.
     Tint(Color),
@@ -192,8 +192,10 @@ pub enum ColorFilter {
     /// 4x5 color matrix in row-major order.
     ///
     /// Rows map output RGBA channels, columns map input RGBA plus constant term:
-    /// `out = M * [r, g, b, a, 1]`.
-    Matrix([f32; 20]),
+    /// `out = M * [r, g, b, a, 1]`. Shared, as Compose shares a filter's
+    /// matrix: a layer or a draw that carries the filter holds a pointer, not
+    /// the 80 bytes of the matrix.
+    Matrix(Arc<[f32; 20]>),
 }
 
 impl ColorFilter {
@@ -209,17 +211,17 @@ impl ColorFilter {
 
     /// Creates a filter from a 4x5 color matrix.
     pub fn matrix(matrix: [f32; 20]) -> Self {
-        Self::Matrix(matrix)
+        Self::Matrix(Arc::new(matrix))
     }
 
     /// Returns a filter that applies `self` first and then `next`, as a single color matrix.
-    pub fn compose(self, next: ColorFilter) -> ColorFilter {
-        ColorFilter::Matrix(compose_color_matrices(self.as_matrix(), next.as_matrix()))
+    pub fn compose(&self, next: &ColorFilter) -> ColorFilter {
+        ColorFilter::matrix(compose_color_matrices(self.as_matrix(), next.as_matrix()))
     }
 
     /// Returns the filter as a 4x5 color matrix in row-major order, in the layout
     /// [`ColorFilter::Matrix`] describes.
-    pub fn as_matrix(self) -> [f32; 20] {
+    pub fn as_matrix(&self) -> [f32; 20] {
         match self {
             Self::Tint(tint) => [
                 0.0,
@@ -265,25 +267,25 @@ impl ColorFilter {
                 modulate.a(),
                 0.0,
             ],
-            Self::Matrix(matrix) => matrix,
+            Self::Matrix(matrix) => **matrix,
         }
     }
 
     /// Applies the filter to a color given as red, green, blue and alpha from 0.0 to 1.0. Each
     /// result channel is clamped to that range.
-    pub fn apply_rgba(self, rgba: [f32; 4]) -> [f32; 4] {
+    pub fn apply_rgba(&self, rgba: [f32; 4]) -> [f32; 4] {
         apply_color_matrix(self.as_matrix(), rgba)
     }
 
     /// Whether the filter is a plain modulation, which a renderer can apply by multiplying vertex
     /// colors instead of sampling a matrix.
-    pub fn supports_gpu_vertex_modulation(self) -> bool {
+    pub fn supports_gpu_vertex_modulation(&self) -> bool {
         matches!(self, Self::Modulate(_))
     }
 
     /// Returns the red, green, blue and alpha factors to multiply into vertex colors when the
     /// filter is a modulation, and `None` otherwise.
-    pub fn gpu_vertex_tint(self) -> Option<[f32; 4]> {
+    pub fn gpu_vertex_tint(&self) -> Option<[f32; 4]> {
         match self {
             Self::Modulate(tint) => Some([tint.r(), tint.g(), tint.b(), tint.a()]),
             _ => None,
@@ -292,7 +294,7 @@ impl ColorFilter {
 
     /// Returns the blend mode that gives the same result when the filter can be expressed as one:
     /// `SrcIn` for a tint, `Modulate` for a modulation and `SrcOver` for a matrix.
-    pub fn blend_mode(self) -> BlendMode {
+    pub fn blend_mode(&self) -> BlendMode {
         match self {
             Self::Tint(_) => BlendMode::SrcIn,
             Self::Modulate(_) => BlendMode::Modulate,

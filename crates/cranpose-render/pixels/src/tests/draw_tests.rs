@@ -32,7 +32,7 @@ fn alpha_masks_render_exactly_as_rgba_images() {
                         snap_anchor: None,
                         image: image.clone(),
                         alpha: 0.7,
-                        color_filter,
+                        color_filter: color_filter.clone(),
                         sampling,
                         clip: Some(Rect {
                             x: 3.0,

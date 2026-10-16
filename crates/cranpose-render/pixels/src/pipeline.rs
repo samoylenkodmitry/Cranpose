@@ -85,7 +85,7 @@ struct PrimitiveRenderContext<'a> {
 /// The alpha and colour filter content draws with: a layer's own folded
 /// alpha and filter combined with those of every layer above it. No other
 /// property of a layer passes to the content beneath it.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct ContentStyle {
     alpha: f32,
     color_filter: Option<ColorFilter>,
@@ -101,7 +101,10 @@ impl ContentStyle {
     fn under(&self, layer: &GraphicsLayer) -> Self {
         Self {
             alpha: (self.alpha * folded_layer_alpha(layer)).clamp(0.0, 1.0),
-            color_filter: compose_color_filters(self.color_filter, layer.color_filter),
+            color_filter: compose_color_filters(
+                self.color_filter.as_ref(),
+                layer.color_filter.as_ref(),
+            ),
         }
     }
 }
@@ -763,7 +766,7 @@ impl RasterLayerMapping {
     fn content_layer(&self) -> GraphicsLayer {
         GraphicsLayer {
             alpha: self.content_style.alpha,
-            color_filter: self.content_style.color_filter,
+            color_filter: self.content_style.color_filter.clone(),
             scale_x: self.scale_x,
             scale_y: self.scale_y,
             transform_origin: TransformOrigin::new(0.0, 0.0),
@@ -953,14 +956,6 @@ fn push_layer_items(
         content_offset_translation: effective_translated_content_context,
         layer_snap_anchor,
     };
-    let passed_down = PassedDown {
-        transform,
-        alpha: mapping.content_style.alpha,
-        color_filter: mapping.content_style.color_filter,
-        clip: visual_clip,
-        snap_anchor: translated_snap_anchor,
-        translated: effective_translated_content_context,
-    };
     // Worked out at the first child layer: most layers have none.
     let mut children_same_as_before = None;
     let mut deferred_draws: Vec<&RenderNode> = Vec::new();
@@ -968,6 +963,14 @@ fn push_layer_items(
         match child {
             RenderNode::Layer(child_layer) => {
                 let same_as_before = *children_same_as_before.get_or_insert_with(|| {
+                    let passed_down = PassedDown {
+                        transform,
+                        alpha: mapping.content_style.alpha,
+                        color_filter: mapping.content_style.color_filter.clone(),
+                        clip: visual_clip,
+                        snap_anchor: translated_snap_anchor,
+                        translated: effective_translated_content_context,
+                    };
                     note_passed_down(
                         scene,
                         record,

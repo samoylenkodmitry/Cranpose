@@ -215,7 +215,7 @@ fn painted_layers() -> RenderGraph {
         Point::new(8.0, 120.0),
         GraphicsLayer {
             alpha: 0.85,
-            color_filter: Some(ColorFilter::Matrix([
+            color_filter: Some(ColorFilter::matrix([
                 0.4, 0.4, 0.2, 0.0, 0.05, 0.2, 0.6, 0.2, 0.0, 0.0, 0.1, 0.3, 0.6, 0.0, 0.1, 0.0,
                 0.0, 0.0, 1.0, 0.0,
             ])),

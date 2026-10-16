@@ -169,7 +169,7 @@ impl ItemCounts {
 }
 
 /// What a layer passes down to the walks of its child layers.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct PassedDown {
     pub transform: ProjectiveTransform,
     pub alpha: f32,
@@ -355,7 +355,7 @@ impl RasterScene {
                 .passed_down
                 .and_then(|at| old.passed_down.get(at))
                 .map(|copied| {
-                    passed_down.push(*copied);
+                    passed_down.push(copied.clone());
                     passed_down.len() - 1
                 });
         }

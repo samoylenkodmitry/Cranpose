@@ -566,7 +566,7 @@ fn color_filter_modifier_sets_graphics_layer_filter() {
     use crate::modifier_nodes::GraphicsLayerNode;
 
     let filter = ColorFilter::tint(Color::from_rgba_u8(128, 200, 255, 128));
-    let modifier = Modifier::empty().color_filter(filter);
+    let modifier = Modifier::empty().color_filter(filter.clone());
     let mut handle = ModifierChainHandle::new();
     let _ = handle.update(&modifier);
 

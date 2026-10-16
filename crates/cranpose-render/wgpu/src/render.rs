@@ -6409,7 +6409,8 @@ impl GpuRenderer {
             return Ok(());
         }
 
-        let (mut tint, cpu_filter) = tint_for_image(image_draw.color_filter, image_draw.alpha);
+        let (mut tint, cpu_filter) =
+            tint_for_image(image_draw.color_filter.as_ref(), image_draw.alpha);
         if tint[3] <= 0.0 {
             return Ok(());
         }
@@ -7523,9 +7524,9 @@ fn scissor_rect_for_layer(
     scissor_rect_for_rect(clipped_rect, root_scale, viewport)
 }
 fn tint_for_image(
-    color_filter: Option<ColorFilter>,
+    color_filter: Option<&ColorFilter>,
     alpha: f32,
-) -> ([f32; 4], Option<ColorFilter>) {
+) -> ([f32; 4], Option<&ColorFilter>) {
     let alpha = alpha.clamp(0.0, 1.0);
     match color_filter {
         Some(filter) if filter.supports_gpu_vertex_modulation() => {
@@ -7798,7 +7799,10 @@ fn source_axis_uv(start: f32, extent: f32, image_extent: f32) -> Option<(f32, f3
     ))
 }
 
-fn apply_filter_to_bitmap(image: &ImageBitmap, filter: ColorFilter) -> Result<ImageBitmap, String> {
+fn apply_filter_to_bitmap(
+    image: &ImageBitmap,
+    filter: &ColorFilter,
+) -> Result<ImageBitmap, String> {
     let pixel_count = image.width() as usize * image.height() as usize;
     let mut filtered = Vec::with_capacity(pixel_count * 4);
     for index in 0..pixel_count {

@@ -830,7 +830,7 @@ fn draw_patch_quads(
             clipped_source,
             clipped_destination,
             alpha,
-            color_filter,
+            color_filter.clone(),
             sampling,
         );
     }
@@ -1029,7 +1029,7 @@ where
                     alignment,
                     content_scale,
                     draw_alpha,
-                    color_filter,
+                    color_filter.clone(),
                     density,
                 ),
                 PainterKind::BitmapRegion {
@@ -1043,7 +1043,7 @@ where
                     alignment,
                     content_scale,
                     draw_alpha,
-                    color_filter,
+                    color_filter.clone(),
                     *sampling,
                     density,
                 ),
@@ -1056,7 +1056,7 @@ where
                     bitmap.clone(),
                     source.rect(),
                     draw_alpha,
-                    color_filter,
+                    color_filter.clone(),
                     *sampling,
                 ),
                 PainterKind::NinePatch {
@@ -1074,7 +1074,7 @@ where
                     *center,
                     *edges,
                     draw_alpha,
-                    color_filter,
+                    color_filter.clone(),
                     *sampling,
                 ),
                 PainterKind::Svg(svg) => draw_svg_painter(
@@ -1084,7 +1084,7 @@ where
                     alignment,
                     content_scale,
                     draw_alpha,
-                    color_filter,
+                    color_filter.clone(),
                     density,
                 ),
             }

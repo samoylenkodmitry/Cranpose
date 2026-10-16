@@ -268,7 +268,7 @@ fn compose_color_filters(
     match (base, overlay) {
         (None, None) => None,
         (Some(filter), None) | (None, Some(filter)) => Some(filter),
-        (Some(filter), Some(next)) => Some(filter.compose(next)),
+        (Some(filter), Some(next)) => Some(filter.compose(&next)),
     }
 }
 
