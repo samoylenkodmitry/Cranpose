@@ -3,7 +3,7 @@ use cranpose_render_common::{
     geometry::{blur_reach, blur_reach_for_minimum_scale},
     graph::{
         CachePolicy, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, ProjectiveTransform,
-        RenderNode, for_each_in_draw_order, quad_bounds,
+        RenderNode, for_each_in_draw_order,
     },
     layer_composition::{
         layer_composite_params, layer_requires_isolation, local_content_layer_for,
@@ -732,11 +732,9 @@ fn child_stays_clear(child: &LayerNode, offset: Point, corners: &RoundedClipCorn
     let padding = cranpose_render_common::graph::CONTAINED_DRAW_SLACK
         + child.effect().map_or(0.0, RenderEffect::output_padding);
     stays_clear(
-        quad_bounds(
-            child
-                .transform_to_parent
-                .map_rect(expand_rect(child.local_bounds, padding)),
-        ),
+        child
+            .transform_to_parent
+            .bounds_for_rect(expand_rect(child.local_bounds, padding)),
         offset,
         corners,
     )
@@ -999,7 +997,7 @@ fn isolated_child(
             context.offset.x,
             context.offset.y,
         ));
-    let parent_bounds = quad_bounds(transform.map_rect(layer.local_bounds));
+    let parent_bounds = transform.bounds_for_rect(layer.local_bounds);
     let rigid = context.translated || has_pixel_sensitive_subtree;
     let snap_anchor = context.snap_anchor.or_else(|| {
         rigid
@@ -1342,12 +1340,12 @@ fn collect_isolated_child(
             context.offset.x,
             context.offset.y,
         ));
-    let child_bounds = quad_bounds(transform.map_rect(child.local_bounds));
+    let child_bounds = transform.bounds_for_rect(child.local_bounds);
     let shadow_clip = resolve_clip(
         context.visual_clip,
         child
             .shadow_clip()
-            .map(|clip| quad_bounds(transform.map_rect(clip))),
+            .map(|clip| transform.bounds_for_rect(clip)),
     );
     let shadows_before = out.scene.rrect_shadows.len();
     push_layer_shadow(

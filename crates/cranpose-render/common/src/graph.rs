@@ -458,10 +458,8 @@ impl LayerNode {
             && self.effect().is_none()
             && self.backdrop().is_none()
             && rect_within(
-                quad_bounds(
-                    self.transform_to_parent
-                        .map_rect(inflate_rect(self.local_bounds, CONTAINED_DRAW_SLACK)),
-                ),
+                self.transform_to_parent
+                    .bounds_for_rect(inflate_rect(self.local_bounds, CONTAINED_DRAW_SLACK)),
                 bounds,
             )
     }
