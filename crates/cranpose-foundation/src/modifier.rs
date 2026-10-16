@@ -2260,18 +2260,19 @@ pub trait AnyModifierElement: fmt::Debug {
 
 struct TypedModifierElement<E: ModifierNodeElement> {
     element: E,
-    cached_hash: u64,
+    /// The element's hash, worked out the first time a chain rebuilding
+    /// asks for it: most elements are built for a recomposition and only
+    /// compared with the last ones.
+    hash: Cell<Option<u64>>,
     provides_locals: bool,
 }
 
 impl<E: ModifierNodeElement> TypedModifierElement<E> {
     fn new(element: E) -> Self {
-        let mut hasher = default::new();
-        element.hash(&mut hasher);
         let provides_locals = !element.provided_composition_locals().is_empty();
         Self {
             element,
-            cached_hash: hasher.finish(),
+            hash: Cell::new(None),
             provides_locals,
         }
     }
@@ -2331,7 +2332,14 @@ where
     }
 
     fn hash_code(&self) -> u64 {
-        self.cached_hash
+        if let Some(hash) = self.hash.get() {
+            return hash;
+        }
+        let mut hasher = default::new();
+        self.element.hash(&mut hasher);
+        let hash = hasher.finish();
+        self.hash.set(Some(hash));
+        hash
     }
 
     fn equals_element(&self, other: &dyn AnyModifierElement) -> bool {
@@ -2455,10 +2463,12 @@ impl<'a> Iterator for ModifierChainIter<'a> {
 impl ExactSizeIterator for ModifierChainIter<'_> {}
 impl std::iter::FusedIterator for ModifierChainIter<'_> {}
 
+/// One node of a chain and the element it last took. The element's hash,
+/// which matches entries when a chain rebuilds, is worked out then: an
+/// element updated in place on every frame is not hashed for it.
 #[derive(Debug)]
 struct ModifierNodeEntry {
     key: Option<u64>,
-    hash_code: u64,
     element: DynModifierElement,
     node: Rc<RefCell<dyn ModifierNode>>,
     capabilities: NodeCapabilities,
@@ -2469,12 +2479,10 @@ impl ModifierNodeEntry {
         key: Option<u64>,
         element: DynModifierElement,
         node: Rc<RefCell<dyn ModifierNode>>,
-        hash_code: u64,
         capabilities: NodeCapabilities,
     ) -> Self {
         let entry = Self {
             key,
-            hash_code,
             element,
             node,
             capabilities,
@@ -2694,7 +2702,7 @@ impl EntryIndex {
                     .push(i);
             } else {
                 hashed
-                    .entry((element_type, node_type, entry.hash_code))
+                    .entry((element_type, node_type, entry.element.hash_code()))
                     .or_insert_with(Vec::new)
                     .push(i);
                 typed
@@ -2794,7 +2802,6 @@ fn update_entry_in_place(
     if !same_element || element.requires_update() {
         element.update_node(&mut *entry.node.borrow_mut());
         entry.element = element.clone();
-        entry.hash_code = element.hash_code();
         request_update_auto_invalidations(element.as_ref(), context, capabilities);
         entry
             .node
@@ -2822,7 +2829,6 @@ fn fresh_entry(
         element.key(),
         element.clone(),
         element.create_node(),
-        element.hash_code(),
         capabilities,
     );
     if attach {
@@ -2848,7 +2854,12 @@ fn reconcile_element(
     let element_type = element.element_type();
     let node_type = element.node_type();
     let key = element.key();
-    let hash_code = element.hash_code();
+    // Only an unkeyed element is matched by its hash.
+    let hash_code = if key.is_none() {
+        element.hash_code()
+    } else {
+        0
+    };
     let capabilities = element.capabilities();
     let Some(idx) = index.find_match(
         old_entries,
@@ -2874,7 +2885,6 @@ fn reconcile_element(
     if !same_element || element.requires_update() {
         element.update_node(&mut *entry.node.borrow_mut());
         entry.element = element;
-        entry.hash_code = hash_code;
         request_update_auto_invalidations(entry.element.as_ref(), context, capabilities);
     }
     if idx != new_pos {
