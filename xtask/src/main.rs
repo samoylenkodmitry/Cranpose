@@ -517,10 +517,6 @@ const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
         reason: "follows the thiserror split via ndk 0.9.0",
     },
     DuplicateDebt {
-        family: "windows-sys",
-        reason: "rustls-platform-verifier 0.7.1 and tempfile 3.27 require windows-sys 0.52; arboard 3.6.1 requires 0.60; winit-win32 and tokio require 0.61",
-    },
-    DuplicateDebt {
         family: "rustc-hash",
         reason: "fluent-bundle 0.16.0 and type-map 0.5.1 require rustc-hash 2.x (Askama 0.16 in UniFFI's all-features graph also requires 2.x), while wgpu-core 30.0.7, naga 30.0.1, and naga-types 30.0.1 require 1.1.x; unifying these incompatible major-version constraints would require changing upstream dependencies",
     },

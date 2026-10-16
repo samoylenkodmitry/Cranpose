@@ -28,7 +28,6 @@ exact versions.
 | `miniz_oxide` | `flate2` and `png` |
 | `objc2`, `objc2-app-kit`, `objc2-foundation` | AccessKit's macOS adapter and winit's AppKit backend |
 | `syn` | Procedural macro dependencies on different major versions |
-| `windows-sys` | Platform verifier, temporary files, clipboard and window/runtime dependencies |
 | `env_filter` (all features) | Android and desktop loggers |
 | `glow` (all features) | Desktop GL fallback on upstream WGPU and the WGPU fork |
 | `rustc-hash` | Fluent localization and the shader stack; UniFFI's all-features bindings also enable Askama |
