@@ -67,7 +67,7 @@ curate, gives these public APIs that Cranpose lacks. They are tracked in
 | The Styles API, `androidx.compose.foundation.style` (`Style`, `Modifier.styleable`, appearance and placement scopes; 94 classes in 1.13, all `@ExperimentalFoundationStyleApi`) | Not taken while Compose keeps it experimental (decided 2026-10-15). A style there is a value of modifiers and state-dependent appearance; in Cranpose a widget takes the caller's `Modifier` first, and Liquid widgets take their own specs for state-dependent looks. Revisit when Compose marks it stable, so Cranpose follows one settled shape instead of each experimental revision |
 | `retain`, `RetainedEffect`, `RetainedValuesStore` (`runtime-retain`) | Absent; view models and `rememberSaveable` cover the retained-state cases apps use most |
 | `staticCompositionLocalWithComputedDefaultOf` | `staticCompositionLocalWithComputedDefaultOf(\|scope\| ..)`, beside `compositionLocalWithComputedDefaultOf` and `provides_computed`; the scope's `current_value(&local)` reads other locals where the computed one is read |
-| `computedStateOf` | Absent; `derivedStateOf` exists. Its value can lag a write until the next recomposition, which a fresh-on-read `computedStateOf` needs fixed first (#1607) |
+| `computedStateOf` | Absent; `derivedStateOf` exists, and a read of it after a write to a state it read derives the value again (#1607) |
 | `PolygonShape`, `MorphPolygonShape`, `CornerRounding` | Absent |
 | `MeshGradientPainter`, blur radius stops (`BlurRadiusSpec`) | Absent; `Modifier::blur` and backdrop blurs exist |
 | `UiMediaScope` fold posture (`WindowPosture`, `FoldState`) | Absent |

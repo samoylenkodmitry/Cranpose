@@ -69,6 +69,15 @@ struct StateArenaSlot {
 struct StateArenaInner {
     cells: Vec<StateArenaSlot>,
     free: Vec<u32>,
+    /// The derived states among the cells, by slot.
+    derived: HashMap<u32, Weak<dyn DerivedRefresh>>,
+}
+
+/// A derived state that brings its value up to date before a read.
+pub(crate) trait DerivedRefresh {
+    /// Derives the value again when a state it read changed since the
+    /// recomposition that last derived it.
+    fn refresh(&self);
 }
 
 /// Sizes of a runtime's state arena, for leak and memory checks. A `_len` field counts entries and
@@ -244,10 +253,37 @@ impl StateArena {
             let cell = slot.cell.take();
             if cell.is_some() {
                 inner.free.push(id.slot());
+                if !inner.derived.is_empty() {
+                    inner.derived.remove(&id.slot());
+                }
             }
             cell
         };
         drop(cell);
+    }
+
+    /// Makes `refresh` what brings the derived state `id` up to date before
+    /// each read, until the state is released.
+    pub(crate) fn register_derived(&self, id: StateId, refresh: Weak<dyn DerivedRefresh>) {
+        self.inner.borrow_mut().derived.insert(id.slot(), refresh);
+    }
+
+    /// Brings the derived state `id` up to date before a read; see
+    /// [`DerivedRefresh`].
+    #[cold]
+    pub(crate) fn refresh_derived(&self, id: StateId) {
+        let refresh = {
+            let inner = self.inner.borrow();
+            inner
+                .cells
+                .get(id.slot_index())
+                .filter(|cell| cell.generation == id.generation())
+                .and_then(|_| inner.derived.get(&id.slot()))
+                .and_then(Weak::upgrade)
+        };
+        if let Some(refresh) = refresh {
+            refresh.refresh();
+        }
     }
 
     pub(crate) fn stats(&self) -> (usize, usize) {

@@ -322,6 +322,10 @@ pub fn rememberMutableStateOfNeverEqual<T: Clone + 'static>(
 /// when the result differs from the last one. A composable that reads
 /// `derivedStateOf(|| index_under(offset.get()))` as an offset animates
 /// recomposes once per new index rather than once per frame.
+///
+/// A read between a write to a state `compute` read and the next
+/// recomposition, as in an event handler or an effect, runs `compute` first
+/// and sees the new result.
 #[expect(non_snake_case)]
 #[track_caller]
 pub fn derivedStateOf<T: 'static + Clone + PartialEq>(
@@ -331,7 +335,8 @@ pub fn derivedStateOf<T: 'static + Clone + PartialEq>(
     let compute: Rc<dyn Fn() -> T> = Rc::new(compute);
     composer_context::with_composer(|composer| {
         composer.with_group(source, |composer| {
-            if let Some(scope) = composer.current_recompose_scope() {
+            let derivation = composer.current_recompose_scope();
+            if let Some(scope) = &derivation {
                 scope.mark_derivation();
             }
             composer.set_recompose_callback(move |composer| {
@@ -348,14 +353,14 @@ pub fn derivedStateOf<T: 'static + Clone + PartialEq>(
                 .remember_at(source, || None::<DerivedState<T>>)
                 .update(|slot| {
                     let derived = match slot.take() {
-                        Some(mut derived) => {
+                        Some(derived) => {
                             derived.set_compute(compute);
                             derived.recompute();
                             derived
                         }
-                        None => DerivedState::new(runtime, compute),
+                        None => DerivedState::new(runtime, compute, derivation.as_ref()),
                     };
-                    let state = derived.state.as_state();
+                    let state = derived.state();
                     *slot = Some(derived);
                     state
                 })
