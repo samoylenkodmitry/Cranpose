@@ -184,6 +184,22 @@ def npm_lock(app_dir):
     return lambda: run('npm', 'install', '--package-lock-only', '--no-audit', '--no-fund', cwd=HERE / app_dir)
 
 
+def rn_update():
+    """React at the newest release React Native's peer range takes, then the
+    lock: React Native 0.88.0 takes React ^19.3.0, and the lock refused it
+    beside React 19.2.3."""
+    package = HERE / 'rn-app/package.json'
+    text = package.read_text()
+    version = re.search(r'"react-native": "([^"]+)"', text).group(1)
+    peer = json.loads(fetch(f'https://registry.npmjs.org/react-native/{version}'))['peerDependencies']['react']
+    floor = numbers(peer.lstrip('^'))
+    react = newest([release for release in json.loads(fetch('https://registry.npmjs.org/react'))['versions']
+                    if numbers(release)[0] == floor[0] and numbers(release) >= floor])
+    if peer.startswith('^') and react:
+        package.write_text(re.sub(r'"react": "[^"]+"', f'"react": "{react}"', text))
+    npm_lock('rn-app')()
+
+
 PINS = {
     'egui': Pin(['egui-app/Cargo.toml'], r'eframe = \{ version = "([^"]+)"', lambda: crates_io('eframe'),
                 egui_update),
@@ -201,7 +217,10 @@ PINS = {
                            lambda: maven(CENTRAL, 'org.jetbrains.compose', 'org.jetbrains.compose.gradle.plugin')),
     'views': Pin(['views-app/app/build.gradle.kts'], r'androidx.recyclerview:recyclerview:([\d.]+)',
                  lambda: maven(GOOGLE, 'androidx.recyclerview', 'recyclerview')),
-    'rn': Pin(['rn-app/package.json'], r'"react-native": "([^"]+)"', lambda: npm('react-native'), npm_lock('rn-app')),
+    # React Native's own packages share its version: `@react-native/metro-config`
+    # is a peer of it at that version.
+    'rn': Pin(['rn-app/package.json'], r'"(?:react-native|@react-native/[a-z-]+)": "([^"]+)"',
+              lambda: npm('react-native'), rn_update),
     'lynx': Pin(['lynx-app/app/build.gradle.kts'], r'val lynx = "([^"]+)"',
                 lambda: maven(CENTRAL, 'org.lynxsdk.lynx', 'lynx')),
     'nativescript': Pin(['nativescript-app/package.json'], r'"@nativescript/(?:core|types)": "([^"]+)"',
