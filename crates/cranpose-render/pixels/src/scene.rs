@@ -1,7 +1,12 @@
-use std::{rc::Rc, sync::Arc};
+use std::{ops::Range, rc::Rc, sync::Arc};
 
+use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
-use cranpose_render_common::{layer_shadow::ShadowRRect, primitive_emit::ShapeDrawParams};
+use cranpose_render_common::{
+    graph::{LayerChange, LayerNode, ProjectiveTransform},
+    layer_shadow::{ShadowLight, ShadowRRect},
+    primitive_emit::ShapeDrawParams,
+};
 use cranpose_ui::TextStyle;
 use cranpose_ui_graphics::{
     ArcGeometry, BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, LineGeometry,
@@ -138,6 +143,63 @@ impl ShadowDraw {
     }
 }
 
+/// How many items of each kind a scene holds where a run of its items starts
+/// or stops.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ItemCounts {
+    pub order: usize,
+    pub shapes: usize,
+    pub images: usize,
+    pub texts: usize,
+    pub shadows: usize,
+}
+
+impl ItemCounts {
+    /// The counts of a run copied from where `from` began in one scene to
+    /// where `to` begins in another.
+    fn moved(self, from: Self, to: Self) -> Self {
+        Self {
+            order: to.order + self.order.saturating_sub(from.order),
+            shapes: to.shapes + self.shapes.saturating_sub(from.shapes),
+            images: to.images + self.images.saturating_sub(from.images),
+            texts: to.texts + self.texts.saturating_sub(from.texts),
+            shadows: to.shadows + self.shadows.saturating_sub(from.shadows),
+        }
+    }
+}
+
+/// What a layer passes down to the walks of its child layers.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct PassedDown {
+    pub transform: ProjectiveTransform,
+    pub alpha: f32,
+    pub color_filter: Option<ColorFilter>,
+    pub clip: Option<Rect>,
+    pub snap_anchor: Option<Point>,
+    pub translated: bool,
+}
+
+/// The items a layer's subtree pushed into a scene, in a run of each list,
+/// so the next scene can copy them when nothing they depend on changed.
+#[derive(Clone, Copy)]
+pub(crate) struct SubtreeItems {
+    /// The layer's node and the node whose outer draws it wraps.
+    pub identity: (Option<NodeId>, Option<NodeId>),
+    /// The layer's change number, which covers its subtree, when it pushed
+    /// the items.
+    pub change: LayerChange,
+    /// The layer's placement in its parent, which the number leaves out.
+    pub transform: ProjectiveTransform,
+    /// Where [`RasterScene::passed_down`] holds what the layer passed to its
+    /// child layers, when it has any.
+    pub passed_down: Option<usize>,
+    /// The index of the first record after the subtree's, its descendants'
+    /// included.
+    pub end: usize,
+    pub start: ItemCounts,
+    pub stop: ItemCounts,
+}
+
 pub(crate) struct RasterScene {
     pub shapes: Vec<DrawShape>,
     pub images: Vec<ImageDraw>,
@@ -145,6 +207,13 @@ pub(crate) struct RasterScene {
     pub shadows: Vec<ShadowDraw>,
     /// Every item in the order it was pushed, which is the order it draws in.
     pub order: Vec<RenderItem>,
+    /// A record for each layer the scene was built from, in the order the
+    /// layers were visited: a layer's descendants follow it.
+    pub subtrees: Vec<SubtreeItems>,
+    /// What the layers with child layers passed down to them.
+    pub passed_down: Vec<PassedDown>,
+    /// The scale and the shadow light the walk started from.
+    pub start: Option<(f32, ShadowLight)>,
 }
 
 impl RasterScene {
@@ -155,6 +224,9 @@ impl RasterScene {
             texts: Vec::new(),
             shadows: Vec::new(),
             order: Vec::new(),
+            subtrees: Vec::new(),
+            passed_down: Vec::new(),
+            start: None,
         }
     }
 
@@ -165,6 +237,130 @@ impl RasterScene {
         self.texts.clear();
         self.shadows.clear();
         self.order.clear();
+        self.subtrees.clear();
+        self.passed_down.clear();
+        self.start = None;
+    }
+
+    pub(crate) fn counts(&self) -> ItemCounts {
+        ItemCounts {
+            order: self.order.len(),
+            shapes: self.shapes.len(),
+            images: self.images.len(),
+            texts: self.texts.len(),
+            shadows: self.shadows.len(),
+        }
+    }
+
+    /// Opens the record of `layer`'s subtree, whose items come next, and
+    /// returns its index for [`Self::close_subtree`].
+    pub(crate) fn open_subtree(&mut self, layer: &LayerNode) -> usize {
+        let index = self.subtrees.len();
+        let counts = self.counts();
+        self.subtrees.push(SubtreeItems {
+            identity: (layer.node_id, layer.wraps),
+            change: layer.change,
+            transform: layer.transform_to_parent,
+            passed_down: None,
+            end: index + 1,
+            start: counts,
+            stop: counts,
+        });
+        index
+    }
+
+    /// Notes in the record `index` what its layer passes down.
+    pub(crate) fn note_passed_down(&mut self, index: usize, passed_down: PassedDown) {
+        let at = self.passed_down.len();
+        self.passed_down.push(passed_down);
+        if let Some(record) = self.subtrees.get_mut(index) {
+            record.passed_down = Some(at);
+        }
+    }
+
+    /// Closes the record `index`: the subtree pushed everything since it
+    /// opened.
+    pub(crate) fn close_subtree(&mut self, index: usize) {
+        let end = self.subtrees.len();
+        let stop = self.counts();
+        if let Some(record) = self.subtrees.get_mut(index) {
+            record.end = end;
+            record.stop = stop;
+        }
+    }
+
+    /// Pushes the items and records of the subtree `old` recorded at
+    /// `index`, as that subtree pushed them there.
+    /// Pushes the items and records of the subtrees `old` recorded at
+    /// `records`, siblings one after another, which pushed their items there
+    /// up to `stop`.
+    pub(crate) fn copy_subtrees(
+        &mut self,
+        old: &RasterScene,
+        records: Range<usize>,
+        stop: ItemCounts,
+    ) {
+        let Some(from) = old.subtrees.get(records.start).map(|first| first.start) else {
+            return;
+        };
+        let to = self.counts();
+        let run = |start: usize, stop: usize| start..stop.max(start);
+        self.shapes.extend_from_slice(
+            old.shapes
+                .get(run(from.shapes, stop.shapes))
+                .unwrap_or_default(),
+        );
+        self.images.extend_from_slice(
+            old.images
+                .get(run(from.images, stop.images))
+                .unwrap_or_default(),
+        );
+        self.texts.extend_from_slice(
+            old.texts
+                .get(run(from.texts, stop.texts))
+                .unwrap_or_default(),
+        );
+        self.shadows.extend_from_slice(
+            old.shadows
+                .get(run(from.shadows, stop.shadows))
+                .unwrap_or_default(),
+        );
+        let moved = |index: usize, from: usize, to: usize| to + index.saturating_sub(from);
+        self.order.extend(
+            old.order
+                .get(run(from.order, stop.order))
+                .unwrap_or_default()
+                .iter()
+                .map(|item| match *item {
+                    RenderItem::Shape(index) => {
+                        RenderItem::Shape(moved(index, from.shapes, to.shapes))
+                    }
+                    RenderItem::Image(index) => {
+                        RenderItem::Image(moved(index, from.images, to.images))
+                    }
+                    RenderItem::Text(index) => RenderItem::Text(moved(index, from.texts, to.texts)),
+                    RenderItem::Shadow(index) => {
+                        RenderItem::Shadow(moved(index, from.shadows, to.shadows))
+                    }
+                }),
+        );
+        let base = self.subtrees.len();
+        let first = records.start;
+        self.subtrees
+            .extend_from_slice(old.subtrees.get(records).unwrap_or_default());
+        let passed_down = &mut self.passed_down;
+        for record in self.subtrees.get_mut(base..).unwrap_or_default() {
+            record.end = moved(record.end, first, base);
+            record.start = record.start.moved(from, to);
+            record.stop = record.stop.moved(from, to);
+            record.passed_down = record
+                .passed_down
+                .and_then(|at| old.passed_down.get(at))
+                .map(|copied| {
+                    passed_down.push(*copied);
+                    passed_down.len() - 1
+                });
+        }
     }
 
     /// Queues `shape` to draw over everything queued before.

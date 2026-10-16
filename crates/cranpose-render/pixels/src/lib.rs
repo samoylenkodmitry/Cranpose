@@ -114,12 +114,22 @@ impl PixelsRenderer {
         );
     }
 
-    /// Fills `raster` with the scene at `scale`, keeping its storage.
-    fn fill_raster_scene(&self, raster: &mut scene::RasterScene, scale: f32) {
+    /// Fills `raster` with the scene at `scale`, keeping its storage, and
+    /// copying from `previous`, the frame before's, what did not change.
+    fn fill_raster_scene(
+        &self,
+        raster: &mut scene::RasterScene,
+        scale: f32,
+        previous: Option<&scene::RasterScene>,
+    ) {
         match self.scene.graph.as_ref() {
-            Some(graph) => {
-                pipeline::fill_raster_scene(raster, graph, self.scene.diagnostics(), scale);
-            }
+            Some(graph) => pipeline::fill_raster_scene(
+                raster,
+                graph,
+                self.scene.diagnostics(),
+                scale,
+                previous,
+            ),
             None => raster.clear(),
         }
     }
@@ -138,7 +148,7 @@ impl PixelsRenderer {
     ) {
         let scale = valid_scale(scale);
         let mut raster = std::mem::take(&mut picture.spare);
-        self.fill_raster_scene(&mut raster, scale);
+        self.fill_raster_scene(&mut raster, scale, picture.raster.as_ref());
         changed.clear();
         match picture.raster.as_ref() {
             Some(old)
@@ -203,7 +213,7 @@ impl PixelsRenderer {
         scale: f32,
     ) {
         let mut scene = std::mem::take(&mut frame.scene);
-        self.fill_raster_scene(&mut scene, valid_scale(scale));
+        self.fill_raster_scene(&mut scene, valid_scale(scale), None);
         frame.compose(&scene, width, height, self.scene.diagnostics(), &self.text);
         frame.scene = scene;
     }
