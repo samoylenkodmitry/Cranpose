@@ -289,8 +289,6 @@ impl RasterScene {
         }
     }
 
-    /// Pushes the items and records of the subtree `old` recorded at
-    /// `index`, as that subtree pushed them there.
     /// Pushes the items and records of the subtrees `old` recorded at
     /// `records`, siblings one after another, which pushed their items there
     /// up to `stop`.

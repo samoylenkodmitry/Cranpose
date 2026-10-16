@@ -46,6 +46,13 @@ impl Composer {
         state.with(super::state::OwnedMutableState::handle)
     }
 
+    /// The current scope's id and debug label, for a trace line.
+    fn trace_scope(&self) -> (usize, Option<&'static str>) {
+        self.current_recompose_scope().map_or((0, None), |scope| {
+            (scope.id(), debug_scope_label(scope.id()))
+        })
+    }
+
     fn emit_node_box<N: Node + 'static>(
         &self,
         source: crate::Key,
@@ -77,16 +84,14 @@ impl Composer {
 
         if let Some(found) = adopted {
             let id = found.id;
-            let scope_debug = self.current_recompose_scope().map_or((0, None), |scope| {
-                (scope.id(), debug_scope_label(scope.id()))
-            });
-            log::trace!(
-                target: "cranpose::compose::emit",
-                "reusing node #{id} as {} [scope_id={} scope_label={:?}]",
-                std::any::type_name::<N>(),
-                scope_debug.0,
-                scope_debug.1,
-            );
+            if log::log_enabled!(target: "cranpose::compose::emit", log::Level::Trace) {
+                let (scope_id, scope_label) = self.trace_scope();
+                log::trace!(
+                    target: "cranpose::compose::emit",
+                    "reusing node #{id} as {} [scope_id={scope_id} scope_label={scope_label:?}]",
+                    std::any::type_name::<N>(),
+                );
+            }
             self.attach_to_parent(id);
             let parent_id = self.planned_node_parent(id);
             let recorded = self
@@ -141,18 +146,18 @@ impl Composer {
             let generation = applier.node_generation(id);
             (id, generation)
         };
-        let scope_debug = self.current_recompose_scope().map_or((0, None), |scope| {
-            (scope.id(), debug_scope_label(scope.id()))
-        });
-        log::trace!(
-            target: "cranpose::compose::emit",
-            "creating node #{} (gen={}) as {} [scope_id={} scope_label={:?}]",
-            id,
-            generation,
-            std::any::type_name::<N>(),
-            scope_debug.0,
-            scope_debug.1,
-        );
+        if log::log_enabled!(target: "cranpose::compose::emit", log::Level::Trace) {
+            let (scope_id, scope_label) = self.trace_scope();
+            log::trace!(
+                target: "cranpose::compose::emit",
+                "creating node #{} (gen={}) as {} [scope_id={} scope_label={:?}]",
+                id,
+                generation,
+                std::any::type_name::<N>(),
+                scope_id,
+                scope_label,
+            );
+        }
         self.commands_mut().push(Command::MountNode { id });
         self.attach_to_parent(id);
         let parent_id = self.planned_node_parent(id);
