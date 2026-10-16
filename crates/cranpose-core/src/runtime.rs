@@ -1847,8 +1847,25 @@ pub fn current_runtime_handle() -> Option<RuntimeHandle> {
 }
 
 pub(crate) fn runtime_handle_by_id(id: RuntimeId) -> Option<RuntimeHandle> {
-    thread_state::try_runtimes(|state| state.registered_runtimes.borrow().get(&id).cloned())
-        .flatten()
+    with_registered_runtime(id, |handle| Some(handle.clone()))
+}
+
+/// Runs `f` on this thread's handle of the runtime `id`: the active
+/// runtime's, which most lookups name, without hashing the id, or else the
+/// registered one.
+fn with_registered_runtime<R>(
+    id: RuntimeId,
+    f: impl FnOnce(&RuntimeHandle) -> Option<R>,
+) -> Option<R> {
+    thread_state::try_runtimes(|state| {
+        if let Some(handle) = state.active_runtimes.borrow().last()
+            && handle.id == id
+        {
+            return f(handle);
+        }
+        state.registered_runtimes.borrow().get(&id).and_then(f)
+    })
+    .flatten()
 }
 
 #[cfg(target_os = "android")]
@@ -1872,14 +1889,7 @@ pub(crate) fn with_state_arena_by_id<R>(
     id: RuntimeId,
     f: impl FnOnce(&StateArena) -> R,
 ) -> Option<R> {
-    let inner = thread_state::try_runtimes(|state| {
-        state
-            .registered_runtimes
-            .borrow()
-            .get(&id)
-            .and_then(|handle| handle.inner.upgrade())
-    })
-    .flatten()?;
+    let inner = with_registered_runtime(id, |handle| handle.inner.upgrade())?;
     Some(f(&inner.state_arena))
 }
 
@@ -1968,12 +1978,17 @@ impl Drop for StateTeardownScope {
 
 pub(crate) fn push_active_runtime(handle: &RuntimeHandle) {
     thread_state::runtimes(|state| {
+        // A runtime's handles are alike: the ones the thread holds stay.
         state
             .registered_runtimes
             .borrow_mut()
-            .insert(handle.id(), handle.clone());
+            .entry(handle.id())
+            .or_insert_with(|| handle.clone());
         state.active_runtimes.borrow_mut().push(handle.clone());
-        *state.last_runtime.borrow_mut() = Some(handle.clone());
+        let mut last = state.last_runtime.borrow_mut();
+        if last.as_ref().is_none_or(|last| last.id != handle.id) {
+            *last = Some(handle.clone());
+        }
     });
 }
 
