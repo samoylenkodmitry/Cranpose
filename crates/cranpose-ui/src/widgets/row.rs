@@ -3,7 +3,7 @@
 use cranpose_core::NodeId;
 use cranpose_ui_layout::{LinearArrangement, VerticalAlignment};
 
-use super::layout::compose_layout;
+use super::layout::{LayoutEnvironment, compose_layout};
 use crate::{composable, layout::policies::FlexMeasurePolicy, modifier::Modifier};
 
 /// Specification for Row layout behavior.
@@ -68,12 +68,12 @@ pub fn Row<F>(modifier: Modifier, spec: RowSpec, content: F) -> NodeId
 where
     F: FnMut() + 'static,
 {
-    let density = crate::density::density();
+    let environment = LayoutEnvironment::current();
     let mut policy = FlexMeasurePolicy::row(
         spec.horizontal_arrangement,
         spec.vertical_alignment,
-        density.density(),
+        environment.density.density(),
     );
-    policy.layout_direction = crate::layout_direction();
-    compose_layout(modifier, policy, density, content)
+    policy.layout_direction = environment.direction;
+    compose_layout(modifier, policy, environment, content)
 }

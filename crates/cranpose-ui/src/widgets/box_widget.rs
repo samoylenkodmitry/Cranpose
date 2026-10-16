@@ -3,7 +3,7 @@
 use cranpose_core::NodeId;
 use cranpose_ui_layout::Alignment;
 
-use super::layout::compose_layout;
+use super::layout::{LayoutEnvironment, compose_layout};
 use crate::{composable, layout::policies::BoxMeasurePolicy, modifier::Modifier};
 
 /// Specification for Box layout behavior.
@@ -69,7 +69,8 @@ pub fn Box<F>(modifier: Modifier, spec: BoxSpec, content: F) -> NodeId
 where
     F: FnMut() + 'static,
 {
+    let environment = LayoutEnvironment::current();
     let mut policy = BoxMeasurePolicy::new(spec.content_alignment, spec.propagate_min_constraints);
-    policy.layout_direction = crate::layout_direction();
-    compose_layout(modifier, policy, crate::density::density(), content)
+    policy.layout_direction = environment.direction;
+    compose_layout(modifier, policy, environment, content)
 }

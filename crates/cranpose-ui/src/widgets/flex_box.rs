@@ -3,7 +3,7 @@
 
 use cranpose_core::NodeId;
 
-use super::layout::compose_layout;
+use super::layout::{LayoutEnvironment, compose_layout};
 use crate::{composable, layout::flex_box::FlexBoxMeasurePolicy, modifier::Modifier};
 
 /// The main axis of a [`FlexBox`]. Compose's `FlexDirection`.
@@ -337,11 +337,11 @@ pub fn FlexBox<F>(modifier: Modifier, config: FlexBoxConfig, content: F) -> Node
 where
     F: FnMut() + 'static,
 {
-    let density = crate::density::density();
+    let environment = LayoutEnvironment::current();
     let policy = FlexBoxMeasurePolicy {
         config,
-        layout_direction: crate::layout_direction(),
-        density: density.density(),
+        layout_direction: environment.direction,
+        density: environment.density.density(),
     };
-    compose_layout(modifier, policy, density, content)
+    compose_layout(modifier, policy, environment, content)
 }
