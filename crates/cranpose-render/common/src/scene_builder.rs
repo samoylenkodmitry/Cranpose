@@ -1175,6 +1175,15 @@ fn reconcile_translated_children(
     }
 }
 
+/// Runs `f` on the thread's translate scratch where it lies, or on a new one
+/// while another translate holds it.
+fn with_translate_scratch<R>(f: impl FnOnce(&mut TranslateScratch) -> R) -> R {
+    crate::thread_state::with(|state| match state.translate_scratch.try_borrow_mut() {
+        Ok(mut scratch) => f(&mut scratch),
+        Err(_) => f(&mut TranslateScratch::default()),
+    })
+}
+
 fn translate_layer_from_data(
     applier: &MemoryApplier,
     container: &mut LayerNode,
@@ -1226,57 +1235,49 @@ fn translate_layer_from_data(
     // children it keeps: an unchanged draw reuses its recording, while
     // building the container anew lowered every child layer beneath it too.
     crate::layer_recycling::recycle_primitives(container);
-    let mut scratch = crate::thread_state::with(|state| state.translate_scratch.take());
-    let children_unchanged = match translated_children(
-        applier,
-        container,
-        dirty_nodes,
-        fresh_children,
-        &mut scratch,
-    ) {
-        Ok(unchanged) => unchanged,
-        Err(reason) => {
-            crate::thread_state::with(|state| state.translate_scratch.set(scratch));
-            return translate_bail(reason);
-        }
-    };
-
-    let geometry = TranslateGeometry::new(
-        &layout_state,
-        &container.graphics_layer,
-        container.local_bounds,
-        parent_abs,
-    );
-    let child_inherited_translated_content_context =
-        inherited_translated_content_context || container.translated_content_context;
-    if !children_unchanged {
-        recycle_leaving_children(container, &mut scratch, dirty_nodes);
-        build_entering_children(
-            applier,
-            container,
-            &mut scratch,
-            dirty_nodes,
-            geometry,
-            (child_inherited_translated_content_context, update),
+    let translated = with_translate_scratch(|scratch| {
+        let children_unchanged =
+            translated_children(applier, container, dirty_nodes, fresh_children, scratch)?;
+        let geometry = TranslateGeometry::new(
+            &layout_state,
+            &container.graphics_layer,
+            container.local_bounds,
+            parent_abs,
         );
+        let child_inherited_translated_content_context =
+            inherited_translated_content_context || container.translated_content_context;
+        if !children_unchanged {
+            recycle_leaving_children(container, scratch, dirty_nodes);
+            build_entering_children(
+                applier,
+                container,
+                scratch,
+                dirty_nodes,
+                geometry,
+                (child_inherited_translated_content_context, update),
+            );
+        }
+
+        apply_translated_container_state(
+            container,
+            &modifier_slices,
+            &layout_state,
+            parent_content_offset,
+            geometry,
+        );
+
+        reconcile_translated_children(
+            container,
+            dirty_nodes,
+            scratch,
+            children_unchanged,
+            geometry,
+        );
+        Ok(())
+    });
+    if let Err(reason) = translated {
+        return translate_bail(reason);
     }
-
-    apply_translated_container_state(
-        container,
-        &modifier_slices,
-        &layout_state,
-        parent_content_offset,
-        geometry,
-    );
-
-    reconcile_translated_children(
-        container,
-        dirty_nodes,
-        &mut scratch,
-        children_unchanged,
-        geometry,
-    );
-    crate::thread_state::with(|state| state.translate_scratch.set(scratch));
     write_own_content_around_children(container, node_id, &modifier_slices, layout_state.size());
     container.hit_test = hit_test_from_slices(&modifier_slices);
 

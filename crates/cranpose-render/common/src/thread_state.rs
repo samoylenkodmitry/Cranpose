@@ -14,7 +14,7 @@ use crate::{
 pub(crate) struct RenderThreadState {
     pub(crate) layer_pool: RefCell<Pool>,
     pub(crate) dirty_ancestry: Cell<NodeMarks>,
-    pub(crate) translate_scratch: Cell<TranslateScratch>,
+    pub(crate) translate_scratch: RefCell<TranslateScratch>,
     /// The hit geometry a subtree had before its rebuild, kept from one
     /// rebuild to the next so no frame allocates it.
     pub(crate) hit_geometry_scratch: Cell<Vec<HitGraphState>>,
@@ -33,7 +33,7 @@ impl RenderThreadState {
         Self {
             layer_pool: RefCell::new(Pool::default()),
             dirty_ancestry: Cell::new(NodeMarks::default()),
-            translate_scratch: Cell::new(TranslateScratch::default()),
+            translate_scratch: RefCell::new(TranslateScratch::default()),
             hit_geometry_scratch: Cell::new(Vec::new()),
             dirty_node_scratch: Cell::new(None),
             command_recordings: RefCell::new(HashMap::default()),
