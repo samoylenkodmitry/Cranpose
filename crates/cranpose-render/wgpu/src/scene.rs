@@ -138,6 +138,7 @@ pub(crate) struct RunDraw {
     pub recorder: Arc<ShapeRecorder>,
     pub command: Option<DrawCommandId>,
     pub segments: Range<u32>,
+    pub records: u32,
     pub placement: Placement,
     /// The scene-space rect the run's records can reach, before snapping.
     pub bounds: Rect,
@@ -150,7 +151,15 @@ impl RunDraw {
         segments: Range<u32>,
         placement: Placement,
     ) -> Self {
-        Self::of_recorder(recording.shape_recorder(), command, segments, placement)
+        let records = recording.shape_count_in(&segments);
+        Self::with_bounds_and_records(
+            recording.shape_recorder(),
+            command,
+            segments,
+            records,
+            recording.shape_bounds(),
+            placement,
+        )
     }
 
     pub(crate) fn of_recorder(
@@ -159,7 +168,26 @@ impl RunDraw {
         segments: Range<u32>,
         placement: Placement,
     ) -> Self {
-        let bounds = recorder.bounds().map_or(
+        let records = recorder.shape_count_in(&segments);
+        Self::with_bounds_and_records(
+            recorder,
+            command,
+            segments,
+            records,
+            recorder.bounds(),
+            placement,
+        )
+    }
+
+    fn with_bounds_and_records(
+        recorder: &Arc<ShapeRecorder>,
+        command: Option<DrawCommandId>,
+        segments: Range<u32>,
+        records: u32,
+        shape_bounds: Option<Rect>,
+        placement: Placement,
+    ) -> Self {
+        let bounds = shape_bounds.map_or(
             Rect {
                 x: placement.offset.x,
                 y: placement.offset.y,
@@ -172,6 +200,7 @@ impl RunDraw {
             recorder: Arc::clone(recorder),
             command,
             segments,
+            records,
             placement,
             bounds,
         }
@@ -198,7 +227,7 @@ impl RunDraw {
     }
 
     pub(crate) fn record_count(&self) -> u32 {
-        self.segment_records().map(|segment| segment.count).sum()
+        self.records
     }
 }
 

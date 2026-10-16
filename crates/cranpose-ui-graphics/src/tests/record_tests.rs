@@ -1210,3 +1210,39 @@ fn only_a_run_of_shapes_alone_reads_as_shapes_only() {
             .shapes_only()
     );
 }
+
+#[test]
+fn a_recording_counts_and_bounds_its_shapes_across_splits_and_reuse() {
+    let shape = |x: f32, width: f32| DrawPrimitive::Rect {
+        rect: rect(x, 0.0, width, 4.0),
+        brush: solid(),
+        stroke: None,
+    };
+    let mut recorder = CommandRecorder::default();
+    for primitive in [
+        shape(2.0, 6.0),
+        shape(10.0, 4.0),
+        DrawPrimitive::Content,
+        text(),
+        shape(20.0, 5.0),
+    ] {
+        recorder.push_primitive(primitive);
+    }
+    let first = recorder.finish();
+    let behind = first.content_split(true);
+    let overlay = first.content_split(false);
+    assert_eq!(first.shape_count_in(&first.all_segments()), 3);
+    assert_eq!(first.shape_count_in(&behind), 2);
+    assert_eq!(first.shape_count_in(&overlay), 1);
+    assert_eq!(
+        first.shape_recorder().shape_count_in(&behind),
+        first.shape_count_in(&behind)
+    );
+    assert_eq!(first.shape_bounds(), Some(rect(2.0, 0.0, 23.0, 4.0)));
+
+    let mut recorder = CommandRecorder::reusing(first);
+    recorder.push_primitive(text());
+    let text_only = recorder.finish();
+    assert_eq!(text_only.shape_count_in(&text_only.all_segments()), 0);
+    assert_eq!(text_only.shape_bounds(), None);
+}

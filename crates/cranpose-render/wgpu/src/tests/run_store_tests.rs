@@ -516,11 +516,7 @@ fn holds(bytes: &[u8], table: &[u8]) -> bool {
 
 fn painted_stop_bytes(run: &RunDraw) -> Vec<u8> {
     let mut painted = Vec::new();
-    painted_stops(
-        &run.tables().stops,
-        &paint_layer(&run.placement),
-        &mut painted,
-    );
+    painted_stops(&run.tables().stops, &run.placement, &mut painted);
     bytemuck::cast_slice(&painted).to_vec()
 }
 

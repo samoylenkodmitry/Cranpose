@@ -1009,6 +1009,18 @@ impl ShapeRecorder {
         0..self.tables.segments.len() as u32
     }
 
+    /// The shape records inside `segments`.
+    pub fn shape_count_in(&self, segments: &Range<u32>) -> u32 {
+        if *segments == self.all_segments() {
+            return self.tables.shapes.len() as u32;
+        }
+        self.tables.segments[segments.start as usize..segments.end as usize]
+            .iter()
+            .filter(|segment| segment.lane == RecordLane::Shapes)
+            .map(|segment| segment.count)
+            .sum()
+    }
+
     /// The rect every recorded shape's pixels lie within; `None` when
     /// nothing was recorded.
     pub fn bounds(&self) -> Option<Rect> {
@@ -1719,6 +1731,9 @@ struct RecordingContent {
     others: Vec<DrawPrimitive>,
     min: [f32; 2],
     max: [f32; 2],
+    shape_bounds: Option<Rect>,
+    shape_count: u32,
+    segment_count: u32,
     summary: RecordingSummary,
     content_markers: u32,
 }
@@ -1729,6 +1744,9 @@ impl Default for RecordingContent {
             others: Vec::new(),
             min: [f32::INFINITY; 2],
             max: [f32::NEG_INFINITY; 2],
+            shape_bounds: None,
+            shape_count: 0,
+            segment_count: 0,
             summary: RecordingSummary::default(),
             content_markers: 0,
         }
@@ -1828,10 +1846,30 @@ impl CommandRecording {
 
     /// The entries inside `segments` that draw, content markers left out.
     pub fn len_in(&self, segments: &Range<u32>) -> usize {
+        if *segments == self.all_segments() {
+            return self.content.shape_count as usize + self.content.others.len();
+        }
         self.segments_in(segments)
             .filter(|segment| segment.lane != RecordLane::Content)
             .map(|segment| segment.count as usize)
             .sum()
+    }
+
+    /// The shape records inside `segments`.
+    pub fn shape_count_in(&self, segments: &Range<u32>) -> u32 {
+        if *segments == self.all_segments() {
+            return self.content.shape_count;
+        }
+        self.segments_in(segments)
+            .filter(|segment| segment.lane == RecordLane::Shapes)
+            .map(|segment| segment.count)
+            .sum()
+    }
+
+    /// The rect every recorded shape's pixels lie within; `None` when no
+    /// shape was recorded.
+    pub fn shape_bounds(&self) -> Option<Rect> {
+        self.content.shape_bounds
     }
 
     /// The shape columns, with complete records available on demand.
@@ -1861,7 +1899,7 @@ impl CommandRecording {
 
     /// Every segment, the range a placement without a content split draws.
     pub fn all_segments(&self) -> Range<u32> {
-        0..self.shapes.tables.segments.len() as u32
+        0..self.content.segment_count
     }
 
     /// A rect containing every entry's coverage rect: exact for rects and
@@ -1875,7 +1913,7 @@ impl CommandRecording {
                 width: self.content.max[0] - self.content.min[0],
                 height: self.content.max[1] - self.content.min[1],
             });
-        match (self.shapes.bounds(), others) {
+        match (self.content.shape_bounds, others) {
             (Some(shapes), Some(others)) => Some(union_rect(shapes, others)),
             (shapes, others) => shapes.or(others),
         }
@@ -1893,7 +1931,7 @@ impl CommandRecording {
 
     /// Entries of every lane, content markers included.
     pub fn len(&self) -> usize {
-        self.shapes.tables.shapes.len()
+        self.content.shape_count as usize
             + self.content.others.len()
             + self.content.content_markers as usize
     }
@@ -1921,6 +1959,9 @@ impl CommandRecording {
 
     /// The segments of `segments` that draw anything.
     pub fn is_empty_in(&self, segments: &Range<u32>) -> bool {
+        if *segments == self.all_segments() {
+            return self.content.shape_count == 0 && self.content.others.is_empty();
+        }
         !self
             .segments_in(segments)
             .any(|segment| segment.lane != RecordLane::Content && segment.count > 0)
@@ -1959,6 +2000,9 @@ impl CommandRecording {
     /// The segments before the last content marker (`behind`) or after it;
     /// with no marker, behind is empty and overlay is everything.
     pub fn content_split(&self, behind: bool) -> Range<u32> {
+        if self.content.content_markers == 0 {
+            return if behind { 0..0 } else { self.all_segments() };
+        }
         let last_marker = self
             .shapes
             .tables
@@ -1967,7 +2011,7 @@ impl CommandRecording {
             .rposition(|segment| segment.lane == RecordLane::Content);
         match (last_marker, behind) {
             (Some(index), true) => 0..index as u32,
-            (Some(index), false) => index as u32 + 1..self.shapes.tables.segments.len() as u32,
+            (Some(index), false) => index as u32 + 1..self.content.segment_count,
             (None, true) => 0..0,
             (None, false) => self.all_segments(),
         }
@@ -2215,6 +2259,9 @@ impl CommandRecorder {
         if self.vessel.is_none() {
             self.shapes.tables.trim_growth();
         }
+        self.content.shape_bounds = self.shapes.bounds();
+        self.content.shape_count = self.shapes.tables.shapes.len() as u32;
+        self.content.segment_count = self.shapes.tables.segments.len() as u32;
         CommandRecording {
             shapes: fill_vessel(self.vessel, self.shapes),
             content: self.content,
@@ -2246,6 +2293,9 @@ impl CommandRecorder {
         self.content.others.clear();
         self.content.min = [f32::INFINITY; 2];
         self.content.max = [f32::NEG_INFINITY; 2];
+        self.content.shape_bounds = None;
+        self.content.shape_count = 0;
+        self.content.segment_count = 0;
         self.content.summary = RecordingSummary::default();
         self.content.content_markers = 0;
     }
