@@ -30,6 +30,11 @@ fi
 
 if [ -n "${GITHUB_ENV:-}" ]; then
     echo "RUSTC_WRAPPER=$sccache_bin" >> "$GITHUB_ENV"
+    # A shared server that stops answering under another job's load failed
+    # the nightly minimum-Rust check outright on 2026-10-15 ("Failed to read
+    # response header" at `rustc -vV`). A server I/O error now compiles
+    # locally: slower, but the build goes on.
+    echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1" >> "$GITHUB_ENV"
 fi
 
 # --start-server is idempotent but not instantaneous, and that window is what
