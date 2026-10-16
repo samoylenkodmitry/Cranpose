@@ -125,6 +125,33 @@ pub(crate) struct PassSegment<'a> {
     pub(crate) scale: f32,
 }
 
+/// How the segments of a pass lie: in order, each over the ones before it,
+/// or side by side, as the members of an atlas lie, each within its
+/// scissor, which no other segment's touches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SegmentLayout {
+    Stacked,
+    SideBySide,
+}
+
+/// Whether side-by-side segments `a` and `b`, next to each other, share one
+/// binding as members (see [`PassPrep::members`]).
+fn joins_members(a: &PassSegment<'_>, b: &PassSegment<'_>) -> bool {
+    is_member(a) && is_member(b)
+}
+
+/// Whether a side-by-side segment can share a binding with others: it is
+/// untransformed, without composites and within its scissor, and its offset
+/// is whole pixels, so its records snapped to the device grid stay on it in
+/// the target's space.
+fn is_member(segment: &PassSegment<'_>) -> bool {
+    segment.transform.is_identity()
+        && segment.composites.is_empty()
+        && segment.scissor.is_some()
+        && segment.offset[0].fract() == 0.0
+        && segment.offset[1].fract() == 0.0
+}
+
 enum Item<'a> {
     /// A run, the window of its records the segment draws, and its draw
     /// bounds: see [`run_draw_bounds`].
@@ -490,7 +517,7 @@ impl GpuRenderer {
         &mut self,
         recorder: &mut C,
         target: PassTarget<'_>,
-        segments: &'s [PassSegment<'s>],
+        (segments, layout): (&'s [PassSegment<'s>], SegmentLayout),
         load_op: wgpu::LoadOp<wgpu::Color>,
         label: &'static str,
     ) -> Result<bool, String> {
@@ -520,10 +547,9 @@ impl GpuRenderer {
             chunk_base: 0,
             chunk_slot: None,
             chunk_clip: None,
+            chunk_scissor: None,
         };
-        let prepared = segments
-            .iter()
-            .try_for_each(|segment| prep.segment(self, segment, &mut scratch));
+        let prepared = prep.segments(self, (segments, layout), &mut scratch);
         prep.finish(self);
         self.flush_glyph_uploads();
         self.prefetch_overlay_pipelines(
@@ -1063,16 +1089,13 @@ fn merge_items<'a>(
     let root_scale = segment.scale;
     let mut ops = segment.ops.iter().enumerate().peekable();
     let mut composites = segment.composites.iter().peekable();
-    let mut shadow_texts: std::slice::Iter<'a, TextDraw> = [].iter();
+    let mut pending = OpItems::empty(viewport_rect, root_scale);
     let offset = segment.offset;
     let scissor = segment.scissor;
     let first_run_window = segment.first_run_window.clone();
     std::iter::from_fn(move || {
         loop {
-            if let Some(item) = shadow_texts.find_map(|text| {
-                text_draw_geometry_in_rect(text, viewport_rect, root_scale)
-                    .map(|geometry| Item::Text(text, geometry))
-            }) {
+            if let Some(item) = pending.next() {
                 return Some(item);
             }
             let next_z = ops.peek().map(|(_, op)| op.z_index);
@@ -1088,16 +1111,7 @@ fn merge_items<'a>(
             }
             let (op_index, op) = ops.next()?;
             let window = (op_index == 0).then(|| first_run_window.clone()).flatten();
-            match op_item(scene, op, window, (viewport_rect, root_scale, skip_text)) {
-                OpItem::Draw(item) => return Some(item),
-                OpItem::Shadow(texts, casters) => {
-                    shadow_texts = texts;
-                    if let Some(item) = casters {
-                        return Some(item);
-                    }
-                }
-                OpItem::Nothing => {}
-            }
+            pending = OpItems::of(scene, op, window, (viewport_rect, root_scale, skip_text));
         }
     })
 }
@@ -1108,6 +1122,62 @@ enum OpItem<'a> {
     /// A shadow's texts, drawn next, and its casters when unblurred.
     Shadow(std::slice::Iter<'a, TextDraw>, Option<Item<'a>>),
     Nothing,
+}
+
+/// The items one op draws into a segment's viewport, in order: its own, or
+/// a shadow's casters and then the shadow's texts that reach the viewport.
+struct OpItems<'a> {
+    first: Option<Item<'a>>,
+    texts: std::slice::Iter<'a, TextDraw>,
+    viewport_rect: Rect,
+    root_scale: f32,
+}
+
+impl<'a> OpItems<'a> {
+    fn empty(viewport_rect: Rect, root_scale: f32) -> Self {
+        Self {
+            first: None,
+            texts: [].iter(),
+            viewport_rect,
+            root_scale,
+        }
+    }
+
+    /// See [`op_item`].
+    fn of(
+        scene: &'a CompositorScene,
+        op: &DrawOp,
+        window: Option<std::ops::Range<u32>>,
+        (viewport_rect, root_scale, skip_text): (Rect, f32, bool),
+    ) -> Self {
+        let (first, texts) =
+            match op_item(scene, op, window, (viewport_rect, root_scale, skip_text)) {
+                OpItem::Draw(item) => (Some(item), [].iter()),
+                OpItem::Shadow(texts, casters) => (casters, texts),
+                OpItem::Nothing => (None, [].iter()),
+            };
+        Self {
+            first,
+            texts,
+            viewport_rect,
+            root_scale,
+        }
+    }
+}
+
+impl<'a> Iterator for OpItems<'a> {
+    type Item = Item<'a>;
+
+    fn next(&mut self) -> Option<Item<'a>> {
+        if let Some(item) = self.first.take() {
+            return Some(item);
+        }
+        let (viewport_rect, root_scale) = (self.viewport_rect, self.root_scale);
+        self.texts.find_map(|text| {
+            text_draw_geometry_in_rect(text, viewport_rect, root_scale)
+                .map(|geometry| Item::Text(text, geometry))
+        })
+    }
 }
 
 /// The item `op` draws into `viewport_rect`, its records windowed by
@@ -1198,6 +1268,53 @@ struct PassScratch {
     pipelines: PipelineDemand,
     held: HeldDraws,
     meshes: crate::mesh_fallback::PassMeshes,
+}
+
+/// Where the image draws an item appends start in a pass's scratch.
+#[derive(Clone, Copy)]
+struct ImageMark {
+    vertices: usize,
+    clips: usize,
+    cmds: usize,
+}
+
+impl PassScratch {
+    fn image_mark(&self) -> ImageMark {
+        ImageMark {
+            vertices: self.image_vertices.len(),
+            clips: self.image_clips.len(),
+            cmds: self.image_cmds.len(),
+        }
+    }
+
+    /// Moves the image draws appended since `mark` into a member's binding
+    /// space and keeps them within its slot; a segment of its own keeps
+    /// them as they are.
+    fn place_images(&mut self, mark: ImageMark, run: &SegmentRun<'_, '_>) {
+        if let Some(slot) = run.slot {
+            crate::render::place_image_draws(
+                (
+                    &mut self.image_vertices[mark.vertices..],
+                    &mut self.image_clips[mark.clips..],
+                    &mut self.image_cmds[mark.cmds..],
+                ),
+                run.shift,
+                slot,
+            );
+        }
+    }
+
+    /// Moves the glyph quads appended from `instances` on, for the glyph
+    /// commands from `cmds` on, into a member's binding space and keeps
+    /// the commands within its slot.
+    fn place_glyphs(&mut self, (instances, cmds): (usize, usize), run: &SegmentRun<'_, '_>) {
+        if let Some(slot) = run.slot {
+            self.glyph_instances.shift_plain(instances, run.shift);
+            for cmd in &mut self.glyph_cmds[cmds..] {
+                cmd.confine(slot);
+            }
+        }
+    }
 }
 
 /// The commands a pass's batches draw ranges of.
@@ -1452,11 +1569,76 @@ struct PassPrep<'a, 's, C> {
     /// chunk's last cut puts on their paint: a run clipped otherwise cuts
     /// the chunk first.
     chunk_clip: Option<TargetRect>,
+    /// The scissor every draw of the open chunk takes, its interiors' too:
+    /// its binding's, or the slot of a member whose run may reach past it.
+    /// A run that takes another closes the chunk first.
+    chunk_scissor: Option<TargetRect>,
 }
 
 impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
     fn target_size(&self) -> (u32, u32) {
         (self.target.width, self.target.height)
+    }
+
+    /// Batches the pass's segments in order; side-by-side members that share
+    /// a binding go together (see [`Self::members`]).
+    fn segments(
+        &mut self,
+        renderer: &mut GpuRenderer,
+        (segments, layout): (&'s [PassSegment<'s>], SegmentLayout),
+        scratch: &mut PassScratch,
+    ) -> Result<(), String> {
+        match layout {
+            SegmentLayout::Stacked => segments
+                .iter()
+                .try_for_each(|segment| self.segment(renderer, segment, scratch)),
+            SegmentLayout::SideBySide => {
+                segments
+                    .chunk_by(joins_members)
+                    .try_for_each(|members| match members {
+                        [segment] => self.segment(renderer, segment, scratch),
+                        members => self.members(renderer, members, scratch),
+                    })
+            }
+        }
+    }
+
+    /// The viewport `segment` draws under in the pass's target.
+    fn viewport_of(&self, segment: &PassSegment<'_>) -> ViewportUniformParams {
+        ViewportUniformParams {
+            width: self.target.width,
+            height: self.target.height,
+            offset: segment.offset,
+            transform: segment.transform,
+            origin: [0.0; 2],
+            depth_base: 0.0,
+        }
+    }
+
+    /// The open binding when it binds `bound` under `scissor`, else a fresh
+    /// one, once what the open one holds is drawn.
+    fn bind(
+        &mut self,
+        renderer: &mut GpuRenderer,
+        bound: ViewportUniformParams,
+        scissor: Option<TargetRect>,
+    ) -> SegmentBinding {
+        match self.open {
+            Some(open) if open.bound == bound && open.scissor == scissor => open,
+            _ => {
+                self.finish(renderer);
+                let open = SegmentBinding {
+                    uniform_slot: renderer.claim_uniform_slot(bound),
+                    bound,
+                    scissor,
+                };
+                self.open = Some(open);
+                // A batch pushed under another binding takes no later draws.
+                self.overlay_segment = None;
+                self.overlay_images = None;
+                open
+            }
+        }
     }
 
     fn segment(
@@ -1469,35 +1651,20 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             segment.transform.is_identity() || segment.composites.is_empty(),
             "a transformed segment places its composites nowhere"
         );
-        let viewport = ViewportUniformParams {
-            width: self.target.width,
-            height: self.target.height,
-            offset: segment.offset,
-            transform: segment.transform,
-            origin: [0.0; 2],
-            depth_base: 0.0,
-        };
-        let viewport_rect = segment_viewport_rect(self.target, segment);
+        let viewport = self.viewport_of(segment);
         let bound = ViewportUniformParams {
             transform: SegmentTransform::IDENTITY,
             ..viewport
         };
-        let binding = match self.open {
-            Some(open) if open.bound == bound && open.scissor == segment.scissor => open,
-            _ => {
-                self.finish(renderer);
-                let open = SegmentBinding {
-                    uniform_slot: renderer.claim_uniform_slot(bound),
-                    bound,
-                    scissor: segment.scissor,
-                };
-                self.open = Some(open);
-                // A batch pushed under another binding takes no later draws.
-                self.overlay_segment = None;
-                self.overlay_images = None;
-                open
-            }
+        let binding = self.bind(renderer, bound, segment.scissor);
+        let run = SegmentRun {
+            segment,
+            viewport,
+            binding,
+            shift: [0.0; 2],
+            slot: None,
         };
+        let viewport_rect = segment_viewport_rect(self.target, segment);
         let mut items = merge_items(
             segment,
             viewport_rect,
@@ -1505,32 +1672,96 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             renderer.ablation.text,
         )
         .peekable();
-        let run = SegmentRun {
-            segment,
-            viewport,
-            binding,
+        self.items(renderer, &mut items, &run, scratch)
+    }
+
+    /// Draws `members`, segments side by side that [`is_member`] lets share
+    /// one binding, without their scissors: the binding draws the target's
+    /// own space, each member's records, glyphs and images move into it by
+    /// the member's offset, and a draw that may reach past a member's
+    /// scissor keeps to it. A glyph or image quad moves on the CPU by the
+    /// one subtraction the vertex stage made of it, so it lands where it
+    /// did. Their ops go in lockstep, every member's first, then every
+    /// member's second, so members drawn from one template, as an atlas's
+    /// cards are, fill each batch together; no pixel of one is another's,
+    /// so the order between them shows nowhere.
+    fn members(
+        &mut self,
+        renderer: &mut GpuRenderer,
+        members: &[PassSegment<'s>],
+        scratch: &mut PassScratch,
+    ) -> Result<(), String> {
+        let Some(first) = members.first() else {
+            return Ok(());
         };
+        let bound = ViewportUniformParams {
+            offset: [0.0; 2],
+            ..self.viewport_of(first)
+        };
+        let binding = self.bind(renderer, bound, None);
+        let ops = members
+            .iter()
+            .map(|member| member.ops.len())
+            .max()
+            .unwrap_or(0);
+        for op_index in 0..ops {
+            for segment in members {
+                let Some(op) = segment.ops.get(op_index) else {
+                    continue;
+                };
+                let run = SegmentRun {
+                    segment,
+                    viewport: self.viewport_of(segment),
+                    binding,
+                    shift: [-segment.offset[0], -segment.offset[1]],
+                    slot: segment.scissor,
+                };
+                let window = (op_index == 0)
+                    .then(|| segment.first_run_window.clone())
+                    .flatten();
+                let viewport_rect = segment_viewport_rect(self.target, segment);
+                let mut items = OpItems::of(
+                    segment.scene,
+                    op,
+                    window,
+                    (viewport_rect, segment.scale, renderer.ablation.text),
+                )
+                .peekable();
+                self.items(renderer, &mut items, &run, scratch)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Batches `items`, drawn as `run` places them.
+    fn items(
+        &mut self,
+        renderer: &mut GpuRenderer,
+        items: &mut Peekable<impl Iterator<Item = Item<'s>>>,
+        run: &SegmentRun<'s, '_>,
+        scratch: &mut PassScratch,
+    ) -> Result<(), String> {
         while let Some(item) = items.peek() {
             match item {
                 Item::Run(..) => {
-                    self.run_items(renderer, &mut items, &run);
+                    self.run_items(renderer, items, run);
                     continue;
                 }
                 Item::Image(_) => {
-                    self.image_items(renderer, &mut items, &run, scratch)?;
+                    self.image_items(renderer, items, run, scratch)?;
                     continue;
                 }
                 Item::Text(text, geometry) => {
-                    self.text_item(renderer, (text, *geometry), &run, scratch)?;
+                    self.text_item(renderer, (text, *geometry), run, scratch)?;
                 }
                 Item::RRectShadow(_) => {
                     self.flush(renderer, run.binding);
-                    self.shadow_run(renderer, &mut items, &run, scratch);
+                    self.shadow_run(renderer, items, run, scratch);
                     continue;
                 }
                 Item::Composite(composite) => {
                     self.flush(renderer, run.binding);
-                    self.composite_item(renderer, composite, &run)?;
+                    self.composite_item(renderer, composite, run)?;
                 }
             }
             items.next();
@@ -1599,7 +1830,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             uniform_slot,
             paint: paint_start..end,
             interiors: Some(self.chunk_start..end),
-            scissor: binding.scissor,
+            scissor: self.chunk_scissor,
             clip: self.chunk_clip,
         });
     }
@@ -1662,7 +1893,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                 uniform_slot,
                 paint: paint_start..end,
                 interiors: None,
-                scissor: binding.scissor,
+                scissor: self.chunk_scissor,
                 clip: self.chunk_clip,
             });
         }
@@ -1846,6 +2077,37 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         )
     }
 
+    /// How an arena run's clip applies: the scissor its paint takes, how its
+    /// pipeline tests the clip, and the scissor its chunk takes. A rect clip
+    /// becomes the paint's scissor, and the shader tests what a scissor
+    /// cannot. A member's rect clip goes to the shader instead, so the clips
+    /// of members leave their records one batch, and a member's run that
+    /// may reach past its slot takes a chunk scissored to the slot.
+    fn arena_clip(&self, draw: &RunDraw, bounds: Rect, run: &SegmentRun<'s, '_>) -> ArenaClip {
+        let clip = crate::render::clip_scissor(&draw.placement, run.segment.scale, run.viewport);
+        let Some(slot) = run.slot else {
+            return ArenaClip {
+                paint: clip,
+                tested: crate::render::SegmentClip::of(&draw.placement, clip.is_some()),
+                chunk: run.binding.scissor,
+            };
+        };
+        let paint = clip.filter(|_| draw.placement.clip_rounded());
+        let reach = self
+            .run_target_bounds(bounds, run)
+            .and_then(|reach| match clip {
+                Some(clip) => crate::render::intersect_target_rects(reach, clip),
+                None => Some(reach),
+            });
+        ArenaClip {
+            paint,
+            tested: crate::render::SegmentClip::of(&draw.placement, paint.is_some()),
+            chunk: reach
+                .is_some_and(|reach| !crate::render::target_rect_within(reach, slot))
+                .then_some(slot),
+        }
+    }
+
     fn run_items(
         &mut self,
         renderer: &mut GpuRenderer,
@@ -1897,15 +2159,18 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             } else {
                 let total = draw.record_count().min(window.end);
                 let mut from = window.start;
-                let clip =
-                    crate::render::clip_scissor(&draw.placement, run.segment.scale, run.viewport);
+                let clip = self.arena_clip(draw, bounds, run);
+                if self.chunk.is_some() && clip.chunk != self.chunk_scissor {
+                    self.close_chunk(renderer, run.binding);
+                }
+                self.chunk_scissor = clip.chunk;
                 if let Some(open) = self.chunk
-                    && clip != self.chunk_clip
+                    && clip.paint != self.chunk_clip
                 {
                     self.cut_paint(renderer, run.binding, open);
                 }
-                self.chunk_clip = clip;
-                let segment_clip = crate::render::SegmentClip::of(&draw.placement, clip.is_some());
+                self.chunk_clip = clip.paint;
+                let segment_clip = clip.tested;
                 while from < total {
                     if self
                         .chunk
@@ -1921,7 +2186,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                         open,
                         draw,
                         from..total,
-                        run.segment.scale,
+                        (run.segment.scale, run.shift),
                         run.viewport,
                         self.mixed_turns,
                         (self.depth, segment_clip),
@@ -1956,15 +2221,16 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             return self.image_run(renderer, items, run, scratch);
         }
         items.next();
+        let viewport = run.image_viewport();
         if self.held.full()
             || self
                 .held
                 .image_viewport()
-                .is_some_and(|viewport| viewport != run.viewport)
+                .is_some_and(|held| held != viewport)
         {
             self.draw_held(renderer, run.binding);
         }
-        let start = scratch.image_cmds.len();
+        let mark = scratch.image_mark();
         renderer.append_image_draw_cmd(
             image,
             run.viewport,
@@ -1973,13 +2239,14 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             &mut scratch.image_clips,
             &mut scratch.image_cmds,
         )?;
+        scratch.place_images(mark, run);
         if let Some(bounds) = scratch
             .image_cmds
-            .get(start)
+            .get(mark.cmds)
             .map(crate::render::ImageDrawCmd::bounds)
         {
             self.held
-                .hold_image(start..scratch.image_cmds.len(), run.viewport, bounds);
+                .hold_image(mark.cmds..scratch.image_cmds.len(), viewport, bounds);
         }
         Ok(())
     }
@@ -1996,7 +2263,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         };
         let images = &run.segment.scene.images;
         let blend_mode = supported_blend_mode(images[*first].blend_mode);
-        let cmd_start = scratch.image_cmds.len();
+        let mark = scratch.image_mark();
         while let Some(Item::Image(index)) = items.next_if(|item| {
             matches!(item, Item::Image(index) if supported_blend_mode(images[*index].blend_mode) == blend_mode)
         }) {
@@ -2010,10 +2277,11 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                 &mut scratch.image_cmds,
             )?;
         }
+        scratch.place_images(mark, run);
         self.push_images(
             renderer,
-            (run.binding, run.viewport),
-            cmd_start..scratch.image_cmds.len(),
+            (run.binding, run.image_viewport()),
+            mark.cmds..scratch.image_cmds.len(),
             (blend_mode, None),
         );
         Ok(())
@@ -2057,6 +2325,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         scratch: &mut PassScratch,
     ) -> Result<(), String> {
         let glyph_start = scratch.glyph_cmds.len();
+        let instance_start = scratch.glyph_instances.plain.len();
         let drew_glyphs = renderer.append_text_glyph_draws(
             (text, geometry),
             self.text_viewport(renderer, run),
@@ -2064,6 +2333,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             &mut scratch.glyph_instances,
             &mut scratch.glyph_cmds,
         );
+        scratch.place_glyphs((instance_start, glyph_start), run);
         if drew_glyphs {
             let glyph_end = scratch.glyph_cmds.len();
             if glyph_start < glyph_end {
@@ -2079,7 +2349,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             return Ok(());
         }
         self.flush(renderer, run.binding);
-        let cmd_start = scratch.image_cmds.len();
+        let mark = scratch.image_mark();
         renderer.append_text_image_draw_cmds(
             text,
             run.viewport,
@@ -2088,10 +2358,11 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             &mut scratch.image_indices,
             &mut scratch.image_cmds,
         )?;
+        scratch.place_images(mark, run);
         self.push_images(
             renderer,
-            (run.binding, run.viewport),
-            cmd_start..scratch.image_cmds.len(),
+            (run.binding, run.image_viewport()),
+            mark.cmds..scratch.image_cmds.len(),
             (BlendMode::SrcOver, None),
         );
         Ok(())
@@ -2215,11 +2486,37 @@ struct SegmentRun<'s, 'a> {
     segment: &'a PassSegment<'s>,
     viewport: ViewportUniformParams,
     binding: SegmentBinding,
+    /// What moves the segment's device space into the binding's: whole
+    /// pixels for a member of side-by-side segments, else zero.
+    shift: [f32; 2],
+    /// A member's scissor, which its binding leaves to each draw that may
+    /// reach past it.
+    slot: Option<TargetRect>,
+}
+
+/// How an arena run's clip applies: see [`PassPrep::arena_clip`].
+struct ArenaClip {
+    paint: Option<TargetRect>,
+    tested: crate::render::SegmentClip,
+    chunk: Option<TargetRect>,
+}
+
+impl SegmentRun<'_, '_> {
+    /// The viewport the segment's images draw under: a member's are moved
+    /// into its binding's space.
+    fn image_viewport(&self) -> ViewportUniformParams {
+        if self.slot.is_some() {
+            self.binding.bound
+        } else {
+            self.viewport
+        }
+    }
 }
 
 /// What a segment's shape and glyph batches bind: its viewport without its
 /// turn, which its records and glyphs carry, the slot claimed for that and
-/// its scissor.
+/// its scissor. Members side by side bind the target's own space without a
+/// scissor: their records and glyphs carry their offsets.
 #[derive(Clone, Copy)]
 struct SegmentBinding {
     uniform_slot: usize,

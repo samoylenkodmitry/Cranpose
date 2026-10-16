@@ -643,7 +643,7 @@ fn draw_scene(renderer: &mut GpuRenderer, scene: &CompositorScene) -> (Vec<u8>, 
                 width: 128,
                 height: 32,
             },
-            &segments,
+            (&segments, crate::draw_pass::SegmentLayout::Stacked),
             wgpu::LoadOp::Clear(wgpu::Color::BLACK),
             "Batched text test",
         )?;

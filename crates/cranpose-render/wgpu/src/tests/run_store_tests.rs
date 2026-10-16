@@ -69,7 +69,7 @@ fn arena_draws(runs: &[(RunDraw, crate::render::ShapePipelineKey)]) -> Vec<RunDr
             chunk,
             run,
             0..records,
-            (1.0, crate::geometry::SegmentTransform::IDENTITY),
+            (1.0, crate::geometry::SegmentTransform::IDENTITY, [0.0; 2]),
             &mut |_| *key,
             &mut wanted,
         );
@@ -316,7 +316,12 @@ fn a_placement_folds_its_snap_delta_clip_and_filter_into_the_uniform() {
         alpha: 0.5,
         color_filter: Some(Arc::new(ColorFilter::modulate(Color(0.5, 0.25, 1.0, 1.0)))),
     };
-    let data = PlacementData::of(&placement, 2.0, crate::geometry::SegmentTransform::IDENTITY);
+    let data = PlacementData::of(
+        &placement,
+        2.0,
+        crate::geometry::SegmentTransform::IDENTITY,
+        [0.0; 2],
+    );
     assert_eq!(
         data.flags,
         PLACEMENT_CANONICALIZE | PLACEMENT_CLIPPED | PLACEMENT_FILTERED | PLACEMENT_PAINTED
@@ -332,6 +337,7 @@ fn a_placement_folds_its_snap_delta_clip_and_filter_into_the_uniform() {
         &Placement::at(Point::default(), None, None),
         1.0,
         crate::geometry::SegmentTransform::IDENTITY,
+        [0.0; 2],
     );
     assert_eq!(plain.flags, 0);
     assert_eq!(plain.color_matrix[2][2], 1.0);
@@ -339,7 +345,12 @@ fn a_placement_folds_its_snap_delta_clip_and_filter_into_the_uniform() {
     assert_eq!(plain.translation, [0.0, 0.0]);
     let turn = crate::geometry::SegmentTransform::affine([0.0, -1.0, 1.0, 0.0], [5.0, 7.0])
         .expect("a quarter turn");
-    let turned = PlacementData::of(&Placement::at(Point::default(), None, None), 1.0, turn);
+    let turned = PlacementData::of(
+        &Placement::at(Point::default(), None, None),
+        1.0,
+        turn,
+        [0.0; 2],
+    );
     assert_eq!(
         (turned.transform, turned.translation),
         ([0.0, -1.0, 1.0, 0.0], [5.0, 7.0]),
@@ -451,7 +462,7 @@ fn arena_wants(
         chunk,
         run,
         window,
-        (1.0, crate::geometry::SegmentTransform::IDENTITY),
+        (1.0, crate::geometry::SegmentTransform::IDENTITY, [0.0; 2]),
         &mut |segment| arena_key(segment),
         &mut wanted,
     );
