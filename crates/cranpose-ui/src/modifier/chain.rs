@@ -1,4 +1,8 @@
-use std::{any::type_name_of_val, cell::RefCell, rc::Rc};
+use std::{
+    any::{TypeId, type_name_of_val},
+    cell::RefCell,
+    rc::Rc,
+};
 
 use cranpose_core::NodeId;
 #[expect(unused_imports)]
@@ -13,8 +17,12 @@ use super::{
     ModifierLocalAncestorResolver, ModifierLocalToken, Point, ResolvedModifiers,
     local::ModifierLocalManager, modifier_debug_enabled,
 };
-use crate::modifier_nodes::{
-    AlignmentNode, FillDirection, FillNode, OffsetNode, PaddingNode, SizeNode, WeightNode,
+use crate::{
+    modifier_nodes::{
+        AlignmentNode, FillDirection, FillElement, FillNode, OffsetNode, PaddingNode, SizeElement,
+        SizeNode, WeightNode,
+    },
+    text_modifier_node::TextModifierElement,
 };
 
 /// Snapshot of a modifier node inside a reconciled chain for debugging & inspector tooling.
@@ -55,6 +63,36 @@ pub struct ModifierChainHandle {
     /// attachment: a reader that keeps what it derived from a chain knows
     /// when to derive it again, also after its node takes a new chain.
     revision: u64,
+}
+
+/// What an update in place of a modifier element changes beyond its own
+/// node. A chain takes a change in place only in elements whose values the
+/// node's slices, coordinators, semantics and registry entry do not read:
+/// those stay as they were.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InPlaceReach {
+    /// Nothing else: a text's slices read its layout through a handle that
+    /// the update changes in place.
+    Node,
+    /// The chain's resolved layout properties and the parent data they give.
+    Resolved,
+}
+
+impl InPlaceReach {
+    /// The reach of an update in place of an element of `element_type`;
+    /// `None` when something else reads its values and a change to it
+    /// updates the whole chain.
+    pub(crate) fn of(element_type: TypeId) -> Option<Self> {
+        if element_type == TypeId::of::<TextModifierElement>() {
+            Some(Self::Node)
+        } else if element_type == TypeId::of::<SizeElement>()
+            || element_type == TypeId::of::<FillElement>()
+        {
+            Some(Self::Resolved)
+        } else {
+            None
+        }
+    }
 }
 
 impl Default for ModifierChainHandle {
@@ -173,14 +211,15 @@ impl ModifierChainHandle {
         }
     }
 
-    /// Updates in place the chain's elements of type `E`, for a modifier
-    /// that differs from the last one only in those, as a text's string
-    /// does: the elements must not change the chain's capabilities, links,
-    /// offsets or resolved layout properties. `false` when the chain cannot
-    /// take it so; the caller then updates the whole chain.
-    pub(crate) fn update_elements_in_place<E: 'static>(
+    /// Updates in place the chain's elements that [`InPlaceReach::of`]
+    /// accepts, for a modifier that differs from the last one only in those
+    /// with `reach`, as a text's string or an animated fill fraction does.
+    /// `false` when the chain cannot take it so; the caller then updates the
+    /// whole chain.
+    pub(crate) fn update_elements_in_place(
         &mut self,
         modifier: &Modifier,
+        reach: InPlaceReach,
         context: &mut BasicModifierNodeContext,
     ) -> bool {
         // A chain that reads modifier locals syncs them on every update.
@@ -190,12 +229,16 @@ impl ModifierChainHandle {
         {
             return false;
         }
-        self.chain.update_entries_of_type(
+        let updated = self.chain.update_entries_in_place(
             modifier.iter_elements(),
             modifier.element_count(),
-            std::any::TypeId::of::<E>(),
+            |element_type| InPlaceReach::of(element_type).is_some(),
             context,
-        )
+        );
+        if updated && reach == InPlaceReach::Resolved {
+            self.resolved = self.compute_resolved();
+        }
+        updated
     }
 
     /// Reconciles the chain with `modifier`, its nodes asking `context` for
