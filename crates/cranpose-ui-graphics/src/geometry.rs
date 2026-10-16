@@ -3,8 +3,9 @@
 use std::{ops::AddAssign, rc::Rc};
 
 use crate::{
-    ArcRecordArgs, Brush, Color, ColorFilter, CommandRecorder, CommandRecording, ImageBitmap,
-    ImageSampling, PathFillRule, Trapezoid, normalized_band,
+    ArcRecordArgs, Brush, Color, ColorFilter, CommandRecorder, CommandRecording, DrawGroup,
+    DrawTransform, GroupMarker, ImageBitmap, ImageSampling, PathFillRule, Trapezoid,
+    normalized_band,
     path::{DrawStyle, Path},
     stroke::{LineGeometry, Stroke},
     typography::{
@@ -55,16 +56,26 @@ impl VectorPathMaskCache {
 
 /// The key of `path`'s raster: a gradient's colors depend on the rect it
 /// resolves against, a solid color's do not.
+/// Which side of a path's edge a coverage mask covers: its fill, or the
+/// rest of the mask's rect, as a clip's mask erases it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PathSide {
+    Inside,
+    Outside,
+}
+
 fn vector_path_mask_key(
     path: &crate::VectorPath,
     origin: Point,
     mask_size: (usize, usize),
     brush: &Brush,
     brush_rect: Rect,
+    side: PathSide,
 ) -> u64 {
     use std::hash::Hasher;
     let mut hasher = crate::fx_hash::FxHasher::default();
     hasher.write_u8(path.fill_rule() as u8);
+    hasher.write_u8(side as u8);
     hasher.write_u32(origin.x.to_bits());
     hasher.write_u32(origin.y.to_bits());
     hasher.write_usize(mask_size.0);
@@ -104,24 +115,45 @@ fn paints(brush: &Brush) -> bool {
     }
 }
 
-/// `path`'s fill over `size` raster pixels from `origin`: one alpha byte of
-/// a solid color per pixel, or for a gradient the color it paints at each
-/// pixel's center with the pixel's coverage.
+/// `path`'s fill, or with [`PathSide::Outside`] the rest of the mask, over
+/// `size` raster pixels from `origin`: one alpha byte of a solid color per
+/// pixel, or for a gradient the color it paints at each pixel's center with
+/// the pixel's coverage.
 fn rasterize_vector_path(
     path: &crate::VectorPath,
     brush: &Brush,
     brush_rect: Rect,
     origin: Point,
     (width, height): (usize, usize),
+    side: PathSide,
 ) -> Option<ImageBitmap> {
     let byte = |value: f32| (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    let covered = |opacity: f32| {
+        let mut mask = path.coverage_mask(width, height, origin, VECTOR_PATH_SUPERSAMPLE, 1.0);
+        for value in &mut mask {
+            let share = match side {
+                PathSide::Inside => *value,
+                PathSide::Outside => u8::MAX - *value,
+            };
+            *value = (f32::from(share) * opacity + 0.5) as u8;
+        }
+        mask
+    };
     if let Brush::Solid(color) = brush {
-        let opacity = color.3.clamp(0.0, 1.0);
-        let mask = path.coverage_mask(width, height, origin, VECTOR_PATH_SUPERSAMPLE, opacity);
+        let mask = match side {
+            PathSide::Inside => path.coverage_mask(
+                width,
+                height,
+                origin,
+                VECTOR_PATH_SUPERSAMPLE,
+                color.3.clamp(0.0, 1.0),
+            ),
+            PathSide::Outside => covered(color.3.clamp(0.0, 1.0)),
+        };
         let rgb = [byte(color.0), byte(color.1), byte(color.2)];
         return ImageBitmap::from_alpha8(width as u32, height as u32, rgb, mask).ok();
     }
-    let coverage = path.coverage_mask(width, height, origin, VECTOR_PATH_SUPERSAMPLE, 1.0);
+    let coverage = covered(1.0);
     let mut pixels = Vec::with_capacity(coverage.len() * 4);
     for (row, line) in coverage.chunks_exact(width).enumerate() {
         let y = origin.y + (row as f32 + 0.5) / VECTOR_PATH_SUPERSAMPLE;
@@ -839,6 +871,9 @@ pub enum DrawPrimitive {
     /// Shadow that requires blur processing. The renderer decides technique
     /// (GPU blur, CPU approximation, etc.).
     Shadow(ShadowPrimitive),
+    /// Where a group of draws that [`DrawScope::with_transform`] places starts
+    /// or ends. The primitives between are in the group's coordinates.
+    Group(GroupMarker),
 }
 
 /// A run of text, positioned and ready to rasterize.
@@ -1016,6 +1051,10 @@ impl DrawPrimitive {
                 blend_mode,
                 clip_rect: clip_rect.translate(dx, dy),
             }),
+            DrawPrimitive::Group(GroupMarker::Start(group)) => {
+                DrawPrimitive::Group(GroupMarker::Start(group.translate(dx, dy)))
+            }
+            DrawPrimitive::Group(GroupMarker::End) => DrawPrimitive::Group(GroupMarker::End),
         }
     }
 }
@@ -1363,6 +1402,79 @@ pub trait DrawScope {
         );
     }
 
+    /// Draws `block` with every primitive it records, text and images
+    /// included, placed by `transform`'s steps in order, each inside the
+    /// ones before it: Compose's `withTransform`. The block sees the scope
+    /// size the steps leave. Content that `draw_content` draws inside the
+    /// block keeps its place: only the block's own draws move.
+    fn with_transform(
+        &mut self,
+        transform: &[DrawTransform<'_>],
+        block: &mut dyn FnMut(&mut dyn DrawScope),
+    );
+
+    /// Draws `block` moved by `dx`, `dy`. Compose's `translate`.
+    fn translate(&mut self, dx: f32, dy: f32, block: &mut dyn FnMut(&mut dyn DrawScope)) {
+        self.with_transform(&[DrawTransform::Translate { dx, dy }], block);
+    }
+
+    /// Draws `block` scaled by `scale_x`, `scale_y` about `pivot`, which
+    /// stays where it is. Compose's `scale`.
+    fn scale(
+        &mut self,
+        scale_x: f32,
+        scale_y: f32,
+        pivot: Point,
+        block: &mut dyn FnMut(&mut dyn DrawScope),
+    ) {
+        self.with_transform(
+            &[DrawTransform::Scale {
+                scale_x,
+                scale_y,
+                pivot,
+            }],
+            block,
+        );
+    }
+
+    /// Draws `block` turned clockwise by `degrees` about `pivot`. Compose's
+    /// `rotate`.
+    fn rotate(&mut self, degrees: f32, pivot: Point, block: &mut dyn FnMut(&mut dyn DrawScope)) {
+        self.with_transform(&[DrawTransform::Rotate { degrees, pivot }], block);
+    }
+
+    /// Draws `block` in the scope shrunk by the four insets: it sees the
+    /// smaller size and draws moved by `left`, `top`. Compose's `inset`.
+    fn inset(
+        &mut self,
+        left: f32,
+        top: f32,
+        right: f32,
+        bottom: f32,
+        block: &mut dyn FnMut(&mut dyn DrawScope),
+    ) {
+        self.with_transform(
+            &[DrawTransform::Inset {
+                left,
+                top,
+                right,
+                bottom,
+            }],
+            block,
+        );
+    }
+
+    /// Draws `block` cut to `rect`. Compose's `clipRect`.
+    fn clip_rect(&mut self, rect: Rect, block: &mut dyn FnMut(&mut dyn DrawScope)) {
+        self.with_transform(&[DrawTransform::ClipRect(rect)], block);
+    }
+
+    /// Draws `block` cut to the fill of `path`, its edge anti-aliased.
+    /// Compose's `clipPath`.
+    fn clip_path(&mut self, path: &Path, block: &mut dyn FnMut(&mut dyn DrawScope)) {
+        self.with_transform(&[DrawTransform::ClipPath(path)], block);
+    }
+
     /// Consumes the scope and returns the recorded primitives in draw order, including the
     /// `Content` markers.
     fn into_primitives(self) -> Vec<DrawPrimitive>;
@@ -1386,6 +1498,19 @@ pub fn align_text_block(rect: Rect, measurement: TextMeasurement, style: &DrawTe
         TextVerticalAlign::Baseline => rect.y - measurement.first_baseline,
     };
     Point::new(x, y)
+}
+
+/// The rect a path's coverage mask covers: its bounds out to whole pixels and
+/// one pixel more each way, so the anti-aliased edge fits.
+fn vector_mask_rect(bounds: Rect) -> Rect {
+    let x = bounds.x.floor() - 1.0;
+    let y = bounds.y.floor() - 1.0;
+    Rect {
+        x,
+        y,
+        width: (bounds.x + bounds.width).ceil() - x + 1.0,
+        height: (bounds.y + bounds.height).ceil() - y + 1.0,
+    }
 }
 
 /// The `DrawScope` the framework passes to draw closures. It records the primitives drawn in draw
@@ -1442,7 +1567,7 @@ impl DrawScopeDefault {
     /// Runs `draw` in this scope's rect shrunk by `insets`, where a draw
     /// modifier placed after layout padding draws: `draw` sees the inner
     /// size, and what it records lands offset by the leading insets.
-    pub fn inset(&mut self, insets: EdgeInsets, draw: impl FnOnce(&mut DrawScopeDefault)) {
+    pub fn draw_inset(&mut self, insets: EdgeInsets, draw: impl FnOnce(&mut DrawScopeDefault)) {
         let inner = insets.inset_rect(self.size);
         let mut scope = Self::with_storage(
             Size {
@@ -1454,11 +1579,11 @@ impl DrawScopeDefault {
         );
         draw(&mut scope);
         let recording = scope.finish();
-        self.push_recorded(
-            recording
-                .primitives_with_markers()
-                .map(|primitive| primitive.translate(inner.x, inner.y)),
-        );
+        self.push_recorded(crate::translate_recorded(
+            recording.primitives_with_markers(),
+            inner.x,
+            inner.y,
+        ));
     }
 
     /// Records primitives already built, as if each had been drawn here.
@@ -1538,19 +1663,44 @@ impl DrawScopeDefault {
                 brush,
                 brush_rect,
                 blend_mode,
+                PathSide::Inside,
             );
         }
     }
 
-    /// Rasterizes the fill of `path` into a cached image and records it,
-    /// blended by `blend_mode`. A gradient `brush` resolves against
-    /// `brush_rect`.
+    /// Draws `block` under the `rest` of its steps in a group that `mask`'s
+    /// fill cuts. The group ends with a mask that erases what lies outside
+    /// the fill: a blend every renderer draws, where keeping what lies inside
+    /// is not.
+    fn with_path_mask(
+        &mut self,
+        mask: &crate::VectorPath,
+        rest: &[DrawTransform<'_>],
+        block: &mut dyn FnMut(&mut dyn DrawScope),
+    ) {
+        let rect = vector_mask_rect(mask.bounds());
+        self.recording.push_group_start(DrawGroup::masked(rect));
+        self.with_transform(rest, block);
+        self.push_vector_path(
+            mask,
+            &Brush::solid(Color::BLACK),
+            rect,
+            BlendMode::DstOut,
+            PathSide::Outside,
+        );
+        self.recording.push_group_end();
+    }
+
+    /// Rasterizes the `side` of `path`'s edge into a cached image and
+    /// records it, blended by `blend_mode`. A gradient `brush` resolves
+    /// against `brush_rect`.
     fn push_vector_path(
         &mut self,
         path: &crate::VectorPath,
         brush: &Brush,
         brush_rect: Rect,
         blend_mode: BlendMode,
+        side: PathSide,
     ) {
         const MAX_MASK_PIXELS: f32 = 4096.0;
 
@@ -1562,22 +1712,22 @@ impl DrawScopeDefault {
             return;
         }
 
-        let origin = Point::new(bounds.x.floor() - 1.0, bounds.y.floor() - 1.0);
-        let rect_width = (bounds.x + bounds.width).ceil() - origin.x + 1.0;
-        let rect_height = (bounds.y + bounds.height).ceil() - origin.y + 1.0;
-        let mask_width = (rect_width * VECTOR_PATH_SUPERSAMPLE)
+        let rect = vector_mask_rect(bounds);
+        let origin = Point::new(rect.x, rect.y);
+        let mask_width = (rect.width * VECTOR_PATH_SUPERSAMPLE)
             .ceil()
             .clamp(1.0, MAX_MASK_PIXELS) as usize;
-        let mask_height = (rect_height * VECTOR_PATH_SUPERSAMPLE)
+        let mask_height = (rect.height * VECTOR_PATH_SUPERSAMPLE)
             .ceil()
             .clamp(1.0, MAX_MASK_PIXELS) as usize;
         let mask_size = (mask_width, mask_height);
 
-        let key = vector_path_mask_key(path, origin, mask_size, brush, brush_rect);
+        let key = vector_path_mask_key(path, origin, mask_size, brush, brush_rect, side);
         let image = match vector_path_mask_cache_get(key) {
             Some(image) => image,
             None => {
-                let Some(image) = rasterize_vector_path(path, brush, brush_rect, origin, mask_size)
+                let Some(image) =
+                    rasterize_vector_path(path, brush, brush_rect, origin, mask_size, side)
                 else {
                     return;
                 };
@@ -1587,12 +1737,7 @@ impl DrawScopeDefault {
         };
 
         let image = DrawPrimitive::Image {
-            rect: Rect {
-                x: origin.x,
-                y: origin.y,
-                width: rect_width,
-                height: rect_height,
-            },
+            rect,
             image,
             alpha: 1.0,
             color_filter: None,
@@ -1614,6 +1759,56 @@ impl DrawScopeDefault {
 impl DrawScope for DrawScopeDefault {
     fn size(&self) -> Size {
         self.size
+    }
+
+    fn with_transform(
+        &mut self,
+        transform: &[DrawTransform<'_>],
+        block: &mut dyn FnMut(&mut dyn DrawScope),
+    ) {
+        let Some((step, rest)) = transform.split_first() else {
+            block(self);
+            return;
+        };
+        let outer = self.size;
+        let (group, size) = match *step {
+            DrawTransform::Translate { dx, dy } => (DrawGroup::moved(dx, dy, outer), outer),
+            DrawTransform::Scale {
+                scale_x,
+                scale_y,
+                pivot,
+            } => (DrawGroup::about(pivot, scale_x, scale_y, 0.0, outer), outer),
+            DrawTransform::Rotate { degrees, pivot } => {
+                (DrawGroup::about(pivot, 1.0, 1.0, degrees, outer), outer)
+            }
+            DrawTransform::Inset {
+                left,
+                top,
+                right,
+                bottom,
+            } => {
+                let inner = Size::new(
+                    (outer.width - left - right).max(0.0),
+                    (outer.height - top - bottom).max(0.0),
+                );
+                (DrawGroup::moved(left, top, inner), inner)
+            }
+            DrawTransform::ClipRect(rect) => (DrawGroup::plain(rect, true), outer),
+            DrawTransform::ClipPath(path) => {
+                let mask = path.to_vector_path(PathFillRule::NonZero);
+                if !mask.is_empty() {
+                    self.with_path_mask(&mask, rest, block);
+                    return;
+                }
+                // A path with no fill leaves nothing of the block.
+                (DrawGroup::plain(Rect::EMPTY, true), outer)
+            }
+        };
+        self.recording.push_group_start(group);
+        self.size = size;
+        self.with_transform(rest, block);
+        self.size = outer;
+        self.recording.push_group_end();
     }
 
     fn draw_content(&mut self) {
@@ -2072,7 +2267,13 @@ impl DrawScope for DrawScopeDefault {
     }
 
     fn draw_vector_path(&mut self, path: &crate::VectorPath, brush: Brush) {
-        self.push_vector_path(path, &brush, Rect::from_size(self.size), BlendMode::SrcOver);
+        self.push_vector_path(
+            path,
+            &brush,
+            Rect::from_size(self.size),
+            BlendMode::SrcOver,
+            PathSide::Inside,
+        );
     }
 
     fn measure_text(&self, text: &str, style: &DrawTextStyle) -> TextMeasurement {

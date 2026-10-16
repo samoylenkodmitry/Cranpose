@@ -39,7 +39,7 @@ pub(crate) fn apply_draw_commands(
         blend_mode: Option<BlendMode>,
     ) {
         match primitive {
-            DrawPrimitive::Content => {}
+            DrawPrimitive::Content | DrawPrimitive::Group(_) => {}
             DrawPrimitive::Blend {
                 primitive,
                 blend_mode: nested,

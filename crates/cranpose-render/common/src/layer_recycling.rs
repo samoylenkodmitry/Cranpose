@@ -46,34 +46,36 @@ pub(crate) fn recycle_children(layer: &mut LayerNode) {
 }
 
 /// Takes `layer`'s own primitives out of its child list, keeping its child
-/// layers in their order, and moves their text boxes into the pool. A
-/// layer's own primitives come before and after its child layers, so only
-/// those ends of the list are read.
+/// layers in their order, and moves their text boxes and the layers of
+/// their draw groups into the pool. A layer's own primitives come before
+/// and after its child layers, so only those ends of the list are read.
 pub(crate) fn recycle_primitives(layer: &mut LayerNode) {
     let children = &mut layer.children;
-    let is_layer = |child: &RenderNode| matches!(child, RenderNode::Layer(_));
-    let first_layer = children.iter().position(is_layer).unwrap_or(children.len());
+    let is_child_layer = |child: &RenderNode| child.draw_phase().is_none();
+    let first_layer = children
+        .iter()
+        .position(is_child_layer)
+        .unwrap_or(children.len());
     let end = children
         .iter()
-        .rposition(is_layer)
+        .rposition(is_child_layer)
         .map_or(first_layer, |last| last + 1);
     debug_assert!(
-        children[first_layer..end].iter().all(is_layer),
+        children[first_layer..end].iter().all(is_child_layer),
         "a layer's own primitives never sit between its child layers"
     );
     crate::thread_state::with(|state| {
-        let texts = &mut state.layer_pool.borrow_mut().texts;
-        let mut keep_text = |child| {
-            if let RenderNode::Primitive(PrimitiveEntry {
+        let mut pool = state.layer_pool.borrow_mut();
+        let mut keep = |child| match child {
+            RenderNode::Primitive(PrimitiveEntry {
                 node: PrimitiveNode::Text(text),
                 ..
-            }) = child
-            {
-                texts.push(text);
-            }
+            }) => pool.texts.push(text),
+            RenderNode::Layer(group) => pool.recycle_layer(group),
+            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {}
         };
-        children.drain(end..).for_each(&mut keep_text);
-        children.drain(..first_layer).for_each(keep_text);
+        children.drain(end..).for_each(&mut keep);
+        children.drain(..first_layer).for_each(keep);
     });
 }
 

@@ -184,6 +184,11 @@ pub struct PrimitiveEntry {
 pub struct LayerProperties(Option<Box<GraphicsLayer>>);
 
 impl LayerProperties {
+    /// The properties that were set, or `None` when they read as defaults.
+    pub fn get(&self) -> Option<&GraphicsLayer> {
+        self.0.as_deref()
+    }
+
     pub(crate) fn replace(&mut self, value: Option<GraphicsLayer>) {
         match (&mut self.0, value) {
             (Some(current), Some(value)) => **current = value,
@@ -283,6 +288,11 @@ pub struct LayerNode {
     pub draws_within_bounds: bool,
     /// The reasons this layer is drawn through its own offscreen buffer.
     pub isolation: IsolationReasons,
+    /// Set on a layer that holds part of one draw command's draws, those a
+    /// `DrawScope` transform or clip groups: the phase they paint in among
+    /// the parent's own draws, which they belong to. `None` on the layer of
+    /// a layout node and on the root.
+    pub draw_phase: Option<PrimitivePhase>,
     /// Whether a renderer may keep this layer's pixels between frames.
     pub cache_policy: CachePolicy,
     /// The raster cache hashes, computed the first time a renderer asks and
@@ -364,6 +374,7 @@ impl Default for LayerNode {
             has_origin_sinks: false,
             draws_within_bounds: false,
             isolation: IsolationReasons::default(),
+            draw_phase: None,
             cache_policy: CachePolicy::None,
             cache_hashes: Cell::new(None),
             content_changes: ContentChanges::default(),
@@ -584,6 +595,41 @@ pub enum RenderNode {
     Layer(Box<LayerNode>),
 }
 
+impl RenderNode {
+    /// The phase the node paints in among its layer's own draws: a
+    /// primitive's or run's, or a draw group layer's. `None` for the layer
+    /// of a layout node, which is a child of the layer.
+    pub fn draw_phase(&self) -> Option<PrimitivePhase> {
+        match self {
+            RenderNode::Primitive(entry) => Some(entry.phase),
+            RenderNode::DrawRun(run) => Some(run.phase),
+            RenderNode::Layer(layer) => layer.draw_phase,
+        }
+    }
+
+    fn draws_after_children(&self) -> bool {
+        self.draw_phase() == Some(PrimitivePhase::AfterChildren)
+    }
+}
+
+/// Visits `children`, a layer's child list, in the order they draw: in list
+/// order, save that the draws after the children wait until every other
+/// node has drawn.
+pub fn for_each_in_draw_order(children: &[RenderNode], mut visit: impl FnMut(&RenderNode)) {
+    let mut first_deferred = children.len();
+    for (index, child) in children.iter().enumerate() {
+        if child.draws_after_children() {
+            first_deferred = first_deferred.min(index);
+        } else {
+            visit(child);
+        }
+    }
+    children[first_deferred..]
+        .iter()
+        .filter(|child| child.draws_after_children())
+        .for_each(visit);
+}
+
 /// Stable identity of one placement of a draw command: its layout node,
 /// command index and placement pass. A `WithContent` command shares one CPU
 /// recording between its two runs, while each placement retains independent
@@ -785,6 +831,7 @@ fn primitive_entry_heap_bytes(entry: &PrimitiveEntry) -> usize {
 fn draw_primitive_heap_bytes(primitive: &DrawPrimitive) -> usize {
     match primitive {
         DrawPrimitive::Content
+        | DrawPrimitive::Group(_)
         | DrawPrimitive::Rect { .. }
         | DrawPrimitive::RoundRect { .. }
         | DrawPrimitive::Arc { .. }

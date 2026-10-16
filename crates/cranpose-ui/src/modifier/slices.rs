@@ -1049,7 +1049,7 @@ fn placed_draw_command(command: DrawCommand, site: &DrawSite) -> DrawCommand {
             if insets.is_zero() {
                 draw(scope);
             } else {
-                scope.inset(insets, |inner| draw(inner));
+                scope.draw_inset(insets, |inner| draw(inner));
             }
         })
     };

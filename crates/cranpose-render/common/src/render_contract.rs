@@ -18,6 +18,8 @@ use crate::{
     },
 };
 
+mod draw_groups;
+
 const BACKGROUND_COLOR: Color = Color(18.0 / 255.0, 18.0 / 255.0, 24.0 / 255.0, 1.0);
 const FOREGROUND_COLOR: Color = Color::WHITE;
 const PIXEL_DIFFERENCE_TOLERANCE: u32 = 24;
@@ -91,10 +93,17 @@ pub enum SharedRenderCase {
     AnnularSector,
     /// A filled path.
     FilledPath,
+    /// Draws a `DrawScope` transform or clip places: scaled, turned, cut to
+    /// a rect and to a path, moved, inset, text scaled, and a grouped
+    /// overlay over the overlay before it.
+    DrawScopeGroups,
+    /// Draws in groups of a node whose graphics layer modulates alpha and
+    /// filters colour, painted as the node's plain draws are.
+    PaintedDrawGroups,
 }
 
 /// Every `SharedRenderCase`, for running the whole contract.
-pub const ALL_SHARED_RENDER_CASES: [SharedRenderCase; 10] = [
+pub const ALL_SHARED_RENDER_CASES: [SharedRenderCase; 12] = [
     SharedRenderCase::RoundedRect,
     SharedRenderCase::PrimitiveClip,
     SharedRenderCase::TranslatedSubtree,
@@ -105,6 +114,8 @@ pub const ALL_SHARED_RENDER_CASES: [SharedRenderCase; 10] = [
     SharedRenderCase::StrokedRoundRect,
     SharedRenderCase::AnnularSector,
     SharedRenderCase::FilledPath,
+    SharedRenderCase::DrawScopeGroups,
+    SharedRenderCase::PaintedDrawGroups,
 ];
 
 impl SharedRenderCase {
@@ -121,6 +132,8 @@ impl SharedRenderCase {
             SharedRenderCase::StrokedRoundRect => "stroked_round_rect",
             SharedRenderCase::AnnularSector => "annular_sector",
             SharedRenderCase::FilledPath => "filled_path",
+            SharedRenderCase::DrawScopeGroups => "draw_scope_groups",
+            SharedRenderCase::PaintedDrawGroups => "painted_draw_groups",
         }
     }
 
@@ -147,6 +160,8 @@ impl SharedRenderCase {
             SharedRenderCase::StrokedRoundRect => vec![stroked_round_rect_fixture()],
             SharedRenderCase::AnnularSector => vec![annular_sector_fixture()],
             SharedRenderCase::FilledPath => vec![filled_path_fixture()],
+            SharedRenderCase::DrawScopeGroups => vec![draw_groups::draw_groups_fixture()],
+            SharedRenderCase::PaintedDrawGroups => vec![draw_groups::painted_groups_fixture()],
         }
     }
 
@@ -204,6 +219,18 @@ impl SharedRenderCase {
                     panic!("filled_path expects exactly one rendered frame");
                 };
                 assert_filled_path_frame(&frame.pixels, frame.width, frame.height);
+            }
+            SharedRenderCase::DrawScopeGroups => {
+                let [frame] = frames else {
+                    panic!("draw_scope_groups expects exactly one rendered frame");
+                };
+                draw_groups::assert_draw_groups_frame(&frame.pixels, frame.width, frame.height);
+            }
+            SharedRenderCase::PaintedDrawGroups => {
+                let [frame] = frames else {
+                    panic!("painted_draw_groups expects exactly one rendered frame");
+                };
+                draw_groups::assert_painted_groups_frame(&frame.pixels, frame.width, frame.height);
             }
         }
     }

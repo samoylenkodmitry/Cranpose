@@ -140,9 +140,13 @@ fn collect_primitives_from_commands(
     for command in commands {
         match command {
             ModifierDrawCommand::Behind(func) => {
-                for primitive in record(func, size) {
-                    append_primitive(&mut behind, node_id, rect, PaintLayer::Behind, primitive);
-                }
+                append_primitives(
+                    &mut behind,
+                    node_id,
+                    rect,
+                    PaintLayer::Behind,
+                    record(func, size),
+                );
             }
             ModifierDrawCommand::Overlay(func) => {
                 overlay.push(PendingOverlay::Command(func));
@@ -154,9 +158,13 @@ fn collect_primitives_from_commands(
                     .rposition(|primitive| matches!(primitive, DrawPrimitive::Content));
                 let mut primitives = primitives.into_iter();
                 if let Some(last_content) = last_content {
-                    for primitive in primitives.by_ref().take(last_content) {
-                        append_primitive(&mut behind, node_id, rect, PaintLayer::Behind, primitive);
-                    }
+                    append_primitives(
+                        &mut behind,
+                        node_id,
+                        rect,
+                        PaintLayer::Behind,
+                        primitives.by_ref().take(last_content),
+                    );
                     let _ = primitives.next();
                 }
                 if !primitives.as_slice().is_empty() {
@@ -190,26 +198,28 @@ fn append_overlay(
             PendingOverlay::Recorded(primitives) => primitives,
             PendingOverlay::Command(func) => record(func, size).into_iter(),
         };
-        for primitive in primitives {
-            append_primitive(operations, node_id, rect, PaintLayer::Overlay, primitive);
-        }
+        append_primitives(operations, node_id, rect, PaintLayer::Overlay, primitives);
     }
 }
 
-fn append_primitive(
+/// Appends a node's recorded primitives, content markers left out, moved
+/// from the node's coordinates to the root's.
+fn append_primitives(
     operations: &mut Vec<RenderOp>,
     node_id: NodeId,
     rect: Rect,
     layer: PaintLayer,
-    primitive: DrawPrimitive,
+    primitives: impl IntoIterator<Item = DrawPrimitive>,
 ) {
-    if !matches!(primitive, DrawPrimitive::Content) {
-        operations.push(RenderOp::Primitive {
-            node_id,
-            layer,
-            primitive: primitive.translate(rect.x, rect.y),
-        });
-    }
+    operations.extend(
+        cranpose_ui_graphics::translate_recorded(primitives, rect.x, rect.y)
+            .filter(|primitive| !matches!(primitive, DrawPrimitive::Content))
+            .map(|primitive| RenderOp::Primitive {
+                node_id,
+                layer,
+                primitive,
+            }),
+    );
 }
 
 impl HeadlessRenderer {

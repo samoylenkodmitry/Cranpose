@@ -1,8 +1,8 @@
 use std::hash::{Hash, Hasher};
 
 use crate::{
-    Brush, Color, ColorFilter, CornerRadii, DrawPrimitive, FxHasher, ImageBitmap, LayerShape,
-    Point, Rect, RenderEffect, RuntimeShader, ShadowPrimitive, Stroke,
+    Brush, Color, ColorFilter, CornerRadii, DrawGroup, DrawPrimitive, FxHasher, GroupMarker,
+    ImageBitmap, LayerShape, Point, Rect, RenderEffect, RuntimeShader, ShadowPrimitive, Stroke,
 };
 
 /// A hash of the data that decides how something renders, so a renderer can tell cheaply whether a
@@ -421,7 +421,25 @@ fn hash_draw_primitive<H: Hasher>(primitive: &DrawPrimitive, state: &mut H) {
             5u8.hash(state);
             hash_shadow_primitive(shadow, state);
         }
+        DrawPrimitive::Group(GroupMarker::Start(group)) => {
+            11u8.hash(state);
+            hash_draw_group(group, state);
+        }
+        DrawPrimitive::Group(GroupMarker::End) => {
+            12u8.hash(state);
+        }
     }
+}
+
+/// Hashes every value of `group` that changes where its draws land.
+pub(crate) fn hash_draw_group<H: Hasher>(group: &DrawGroup, state: &mut H) {
+    hash_point(group.translation, state);
+    hash_f32_bits(group.scale_x, state);
+    hash_f32_bits(group.scale_y, state);
+    hash_f32_bits(group.rotation, state);
+    hash_rect(group.bounds, state);
+    group.clip.hash(state);
+    group.isolated.hash(state);
 }
 
 fn hash_text_style<H: Hasher>(style: &crate::DrawTextStyle, state: &mut H) {

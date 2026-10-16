@@ -47,6 +47,7 @@ fn alpha_masks_render_exactly_as_rgba_images() {
                             width: -12.0,
                             height: 13.0,
                         }),
+                        transform: None,
                     };
                     let mut frame = [41, 71, 101, 255].repeat(32 * 32);
                     let mut target = Target {

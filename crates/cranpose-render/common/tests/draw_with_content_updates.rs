@@ -20,17 +20,32 @@ use cranpose_ui_graphics::DrawScope;
 
 const VIEWPORT: Size = Size::new(120.0, 80.0);
 
+/// How the with-content command draws around its content: plainly, or
+/// inside a group that a scope transform opens around the content marker.
+#[derive(Clone, Copy)]
+enum Around {
+    Plain,
+    Grouped,
+}
+
 fn with_content_modifier(
     outer_wrapper: bool,
+    around: Around,
     draw_calls: Rc<Cell<usize>>,
     before: Rc<Cell<Color>>,
     after: Rc<Cell<Color>>,
 ) -> Modifier {
     let draw = move |scope: &mut dyn DrawScope| {
         draw_calls.set(draw_calls.get() + 1);
-        scope.draw_rect(Brush::solid(before.get()));
-        scope.draw_content();
-        scope.draw_rect(Brush::solid(after.get()));
+        let mut around_content = |scope: &mut dyn DrawScope| {
+            scope.draw_rect(Brush::solid(before.get()));
+            scope.draw_content();
+            scope.draw_rect(Brush::solid(after.get()));
+        };
+        match around {
+            Around::Plain => around_content(scope),
+            Around::Grouped => scope.translate(2.0, 1.0, &mut around_content),
+        }
     };
     let layer = || GraphicsLayer {
         rotation_z: 17.0,
@@ -52,7 +67,7 @@ fn initial_graph(composition: &mut TestComposition, root: NodeId) -> RenderGraph
     crate::scene_probe::initial_graph(composition, root, VIEWPORT)
 }
 
-fn assert_callback_once_per_update(outer_wrapper: bool) {
+fn assert_callback_once_per_update(outer_wrapper: bool, around: Around) {
     clear_command_recordings_for_tests();
     let calls = Rc::new(Cell::new(0));
     let before = Rc::new(Cell::new(Color::BLUE));
@@ -66,6 +81,7 @@ fn assert_callback_once_per_update(outer_wrapper: bool) {
         let parent = Box(
             with_content_modifier(
                 outer_wrapper,
+                around,
                 Rc::clone(&draw_calls),
                 Rc::clone(&draw_before),
                 Rc::clone(&draw_after),
@@ -130,12 +146,22 @@ fn assert_callback_once_per_update(outer_wrapper: bool) {
 
 #[test]
 fn outer_with_content_draws_once_per_scene_update_and_keeps_child_order() {
-    assert_callback_once_per_update(true);
+    assert_callback_once_per_update(true, Around::Plain);
 }
 
 #[test]
 fn ordinary_with_content_draws_once_per_scene_update_and_keeps_child_order() {
-    assert_callback_once_per_update(false);
+    assert_callback_once_per_update(false, Around::Plain);
+}
+
+#[test]
+fn grouped_outer_with_content_draws_once_per_scene_update_and_keeps_child_order() {
+    assert_callback_once_per_update(true, Around::Grouped);
+}
+
+#[test]
+fn grouped_with_content_draws_once_per_scene_update_and_keeps_child_order() {
+    assert_callback_once_per_update(false, Around::Grouped);
 }
 
 #[test]
@@ -155,7 +181,7 @@ fn nested_scene_build_does_not_replace_parent_with_content_recording() {
         let before = Rc::clone(&nested_before_for_comp);
         let after = Rc::clone(&nested_after_for_comp);
         let parent = Box(
-            with_content_modifier(false, calls, before, after).size(VIEWPORT),
+            with_content_modifier(false, Around::Plain, calls, before, after).size(VIEWPORT),
             BoxSpec::default(),
             || {
                 Canvas(Modifier::empty().size(Size::new(40.0, 24.0)), |scope| {
@@ -183,7 +209,7 @@ fn nested_scene_build_does_not_replace_parent_with_content_recording() {
         let nested = Rc::clone(&nested_for_parent);
         let should_build_nested = Rc::clone(&build_nested_for_parent);
         let parent = Box(
-            with_content_modifier(false, calls, before, after).size(VIEWPORT),
+            with_content_modifier(false, Around::Plain, calls, before, after).size(VIEWPORT),
             BoxSpec::default(),
             move || {
                 let nested = Rc::clone(&nested);

@@ -203,7 +203,7 @@ fn record_arc_frame(
     );
     match path {
         ArcRecordingPath::Direct => emit_arcs(&mut scope, arcs, angle),
-        ArcRecordingPath::Inset => scope.inset(EdgeInsets::uniform(8.0), |inner| {
+        ArcRecordingPath::Inset => scope.draw_inset(EdgeInsets::uniform(8.0), |inner| {
             emit_arcs_at(inner, arcs, angle, Point::new(120.0, 120.0));
         }),
     }

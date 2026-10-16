@@ -173,10 +173,10 @@ fn renderer_translates_draw_commands() {
                         saw_translated = true;
                     }
                 }
-                DrawPrimitive::Content | DrawPrimitive::Blend { .. } => {}
+                DrawPrimitive::Content | DrawPrimitive::Blend { .. } | DrawPrimitive::Group(_) => {}
                 DrawPrimitive::Text(_) | DrawPrimitive::Shadow(_) => {}
             },
-            DrawPrimitive::Content => {}
+            DrawPrimitive::Content | DrawPrimitive::Group(_) => {}
             DrawPrimitive::Shadow(_) => {}
         }
     }
@@ -224,10 +224,10 @@ fn renderer_translates_draw_commands() {
                     assert!(rect.x >= 10.0);
                     assert!(rect.y >= 10.0);
                 }
-                DrawPrimitive::Content | DrawPrimitive::Blend { .. } => {}
+                DrawPrimitive::Content | DrawPrimitive::Blend { .. } | DrawPrimitive::Group(_) => {}
                 DrawPrimitive::Text(_) | DrawPrimitive::Shadow(_) => {}
             },
-            DrawPrimitive::Content => {}
+            DrawPrimitive::Content | DrawPrimitive::Group(_) => {}
             DrawPrimitive::Shadow(_) => {}
         }
     }

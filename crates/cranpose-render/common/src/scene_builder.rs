@@ -1,4 +1,4 @@
-use std::{any::Any, rc::Rc};
+use std::{any::Any, ops::Range, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId, NodeMarks, collections::map::HashMap};
 use cranpose_ui::{
@@ -6,8 +6,8 @@ use cranpose_ui::{
     SubcomposeLayoutNode, TextLayoutOptions, TextOverflow, TextPanResolver, text::TextStyle,
 };
 use cranpose_ui_graphics::{
-    CommandRecording, CompositingStrategy, GraphicsLayer, LayerShape, RoundedCornerShape,
-    rounded_corner_alpha_mask_effect,
+    CommandRecording, CompositingStrategy, DrawGroup, GraphicsLayer, LayerShape, RecordLane,
+    RoundedCornerShape, rounded_corner_alpha_mask_effect,
 };
 
 use crate::{
@@ -775,7 +775,12 @@ fn try_translate_scrolled_layer(
         if !translate_layer_from_data(applier, inner, dirty_nodes, ancestors, data, true) {
             return false;
         }
-        let outer = outer_draws(node_id, slices.draw_commands(), outer_count, size)
+        let draws = DrawTarget {
+            size,
+            motion_context_animated: inner.motion_context_animated,
+            layer: None,
+        };
+        let outer = outer_draws(node_id, slices.draw_commands(), outer_count, draws)
             .expect("outer command count is nonzero");
         let layer =
             take_wrapped_layer(container, node_id).expect("the wrapped layer was found above");
@@ -1094,11 +1099,16 @@ fn write_own_content_around_children(
         return;
     }
     let kept = container.children.len();
+    let draws = DrawTarget {
+        size,
+        motion_context_animated: container.motion_context_animated,
+        layer: container.graphics_layer.get(),
+    };
     write_node_content(
         &mut container.children,
         node_id,
         modifier_slices,
-        size,
+        draws,
         (kept, 0),
         |_| {},
     );
@@ -1458,6 +1468,7 @@ struct LayerHead {
     has_origin_sinks: bool,
     isolation: IsolationReasons,
     cache_policy: CachePolicy,
+    draw_phase: Option<PrimitivePhase>,
 }
 
 struct NodeFrame {
@@ -1506,6 +1517,7 @@ fn node_layer_head(
         clip_to_bounds,
         hit_test: hit_test_from_slices(slices),
         has_origin_sinks: modifier_slices_have_origin_sinks(slices),
+        draw_phase: None,
     }
 }
 
@@ -1528,6 +1540,7 @@ fn assign_layer(layer: &mut LayerNode, head: LayerHead) {
         has_origin_sinks,
         draws_within_bounds,
         isolation,
+        draw_phase,
         cache_policy,
         cache_hashes: _,
         content_changes,
@@ -1554,6 +1567,7 @@ fn assign_layer(layer: &mut LayerNode, head: LayerHead) {
     *has_origin_sinks = head.has_origin_sinks || children_have_origin_sinks(children);
     *draws_within_bounds = false;
     *isolation = head.isolation;
+    *draw_phase = head.draw_phase;
     *cache_policy = head.cache_policy;
     layer.forget_own_raster_cache_hashes();
     layer.refresh_child_facts();
@@ -1589,10 +1603,11 @@ fn write_node_content(
     list: &mut Vec<RenderNode>,
     node_id: NodeId,
     slices: &ModifierNodeSlices,
-    size: Size,
+    draws: DrawTarget,
     (kept, written): (usize, usize),
     write_children: impl FnOnce(&mut Vec<RenderNode>),
 ) {
+    let size = draws.size;
     let outer_count = slices.outer_draw_command_count();
     let commands = &slices.draw_commands()[outer_count..];
     crate::layer_recycling::reserve_nodes(
@@ -1607,7 +1622,7 @@ fn write_node_content(
         commands,
         outer_count,
         DrawPass::Record(DrawPlacement::Behind),
-        size,
+        draws,
         PrimitivePhase::BeforeChildren,
     );
     if let Some(text) = text_node_from_parts(TextNodeParts {
@@ -1633,7 +1648,7 @@ fn write_node_content(
         commands,
         outer_count,
         DrawPass::OverlayFromOutput(first_draw),
-        size,
+        draws,
         PrimitivePhase::AfterChildren,
     );
 }
@@ -1644,16 +1659,16 @@ fn write_layer_with_outer(
     outer: Option<OuterDraws>,
     placement: Point,
     parent_content_offset: Point,
-    write_children: impl FnOnce(&mut Vec<RenderNode>),
+    write_children: impl FnOnce(&mut Vec<RenderNode>, Option<&GraphicsLayer>),
 ) {
     debug_assert!(target.children.is_empty(), "a layer is written emptied");
     let Some(outer) = outer else {
-        write_children(&mut target.children);
+        write_children(&mut target.children, head.graphics_layer.as_ref());
         assign_layer(target, head);
         return;
     };
     let mut layer = crate::layer_recycling::layer_box();
-    write_children(&mut layer.children);
+    write_children(&mut layer.children, head.graphics_layer.as_ref());
     assign_layer(&mut layer, head);
     write_wrapper(target, layer, placement, outer, parent_content_offset);
 }
@@ -1687,11 +1702,16 @@ fn write_snapshot_layer(
         graphics_layer,
         context,
     );
+    let draws = DrawTarget {
+        size,
+        motion_context_animated: head.motion_context_animated,
+        layer: None,
+    };
     let outer = outer_draws(
         node_id,
         slices.draw_commands(),
         slices.outer_draw_command_count(),
-        size,
+        draws,
     );
     write_layer_with_outer(
         target,
@@ -1699,8 +1719,9 @@ fn write_snapshot_layer(
         outer,
         placement,
         context.parent_content_offset,
-        |list| {
-            write_node_content(list, node_id, &slices, size, (0, children.len()), |list| {
+        |list, layer| {
+            let draws = DrawTarget { layer, ..draws };
+            write_node_content(list, node_id, &slices, draws, (0, children.len()), |list| {
                 for child in children {
                     let mut layer = crate::layer_recycling::layer_box();
                     write_snapshot_layer(child, child_context, &mut layer);
@@ -1963,11 +1984,16 @@ fn write_node_layer(
         );
     }
     let (head, child_context) = prepare_node_layer(node_id, &slices, &layout_state, context);
+    let draws = DrawTarget {
+        size,
+        motion_context_animated: head.motion_context_animated,
+        layer: None,
+    };
     let outer = outer_draws(
         node_id,
         slices.draw_commands(),
         slices.outer_draw_command_count(),
-        size,
+        draws,
     );
     write_layer_with_outer(
         target,
@@ -1975,8 +2001,9 @@ fn write_node_layer(
         outer,
         placement,
         context.parent_content_offset,
-        |list| {
-            write_node_content(list, node_id, &slices, size, (0, children.len()), |list| {
+        |list, layer| {
+            let draws = DrawTarget { layer, ..draws };
+            write_node_content(list, node_id, &slices, draws, (0, children.len()), |list| {
                 for &child_id in children {
                     if let Some(child) = lower_child(applier, child_id, child_context) {
                         list.push(RenderNode::Layer(child));
@@ -2118,10 +2145,178 @@ impl DrawPass<'_> {
                 node
             }
         };
-        let RenderNode::DrawRun(run) = node else {
-            unreachable!("behind commands produce draw runs");
+        // A command whose draws a group places is a layer that starts
+        // with the run before its first group.
+        let run = match node {
+            RenderNode::DrawRun(run) => run,
+            RenderNode::Layer(layer) => match layer.children.first() {
+                Some(RenderNode::DrawRun(run)) => run,
+                _ => return None,
+            },
+            RenderNode::Primitive(_) => return None,
         };
         matches!(command, DrawCommand::WithContent(_)).then(|| Rc::clone(&run.recording))
+    }
+}
+
+/// Where a node's draw commands draw: the scope size, and what the layers
+/// of their groups take from the node: its motion context and the paint of
+/// its graphics layer, which the node's own draws take.
+#[derive(Clone, Copy)]
+struct DrawTarget<'a> {
+    size: Size,
+    motion_context_animated: bool,
+    layer: Option<&'a GraphicsLayer>,
+}
+
+/// Writes the part of one draw command's recording that a draw pass draws,
+/// turning each group its draws open into a layer that the group places.
+struct GroupedDraws<'a> {
+    id: DrawCommandId,
+    phase: PrimitivePhase,
+    recording: &'a Rc<CommandRecording>,
+    motion_context_animated: bool,
+    /// The paint of the node's graphics layer that its own draws take, when
+    /// it paints them: the group layers take it as well, as the group's
+    /// draws are the node's own, where the node's child layers do not.
+    paint: Option<GraphicsLayer>,
+}
+
+impl<'a> GroupedDraws<'a> {
+    fn new(
+        id: DrawCommandId,
+        phase: PrimitivePhase,
+        recording: &'a Rc<CommandRecording>,
+        draws: DrawTarget<'_>,
+    ) -> Self {
+        Self {
+            id,
+            phase,
+            recording,
+            motion_context_animated: draws.motion_context_animated,
+            paint: draws
+                .layer
+                .map(crate::layer_composition::local_content_layer_for)
+                .filter(|paint| paint.alpha != 1.0 || paint.color_filter.is_some()),
+        }
+    }
+
+    /// One layer that holds the draws of `segments` in the parent's own
+    /// draws, the groups among them as layers. It starts with the run
+    /// before the first group, even an empty one, where the overlay pass of
+    /// a with-content command finds the recording.
+    fn wrapper(&self, segments: Range<u32>, size: Size) -> RenderNode {
+        let first_group = self
+            .recording
+            .segments_in(&segments)
+            .position(|segment| segment.lane == RecordLane::GroupStart)
+            .map_or(segments.end, |offset| segments.start + offset as u32);
+        let mut wrapper = crate::layer_recycling::layer_box();
+        wrapper.children.push(self.run(segments.start..first_group));
+        self.write(&mut wrapper.children, first_group, segments.end);
+        assign_layer(
+            &mut wrapper,
+            self.head(&DrawGroup::plain(Rect::from_size(size), false)),
+        );
+        RenderNode::Layer(wrapper)
+    }
+
+    /// Writes the segments from `position` into `list` up to the end of the
+    /// group open at `position` or up to `end`, and returns the position
+    /// after what it wrote.
+    fn write(&self, list: &mut Vec<RenderNode>, mut position: u32, end: u32) -> u32 {
+        let segments = self.recording.segments();
+        let mut run_start = position;
+        while position < end {
+            let segment = segments[position as usize];
+            match segment.lane {
+                RecordLane::GroupStart => {
+                    self.push_run(list, run_start..position);
+                    let mut layer = crate::layer_recycling::layer_box();
+                    position = self.write(&mut layer.children, position + 1, end);
+                    let group = self.recording.groups()[segment.start as usize];
+                    assign_layer(&mut layer, self.head(&group));
+                    list.push(RenderNode::Layer(layer));
+                    run_start = position;
+                }
+                RecordLane::GroupEnd => {
+                    self.push_run(list, run_start..position);
+                    return position + 1;
+                }
+                RecordLane::Shapes | RecordLane::Others | RecordLane::Content => position += 1,
+            }
+        }
+        self.push_run(list, run_start..end);
+        end
+    }
+
+    fn run(&self, segments: Range<u32>) -> RenderNode {
+        RenderNode::DrawRun(DrawRunNode::for_command_shared(
+            self.phase,
+            Some(self.id),
+            Rc::clone(self.recording),
+            segments,
+        ))
+    }
+
+    fn push_run(&self, list: &mut Vec<RenderNode>, segments: Range<u32>) {
+        if !segments.is_empty() {
+            list.push(self.run(segments));
+        }
+    }
+
+    /// The graphics layer of a group's layer: the group's scale and turn,
+    /// and the node's paint. An isolated group takes the alpha as it
+    /// composites, so the mask it ends with keeps its own.
+    fn group_layer(&self, group: &DrawGroup) -> Option<GraphicsLayer> {
+        if self.paint.is_none() && !group.scales_or_turns() {
+            return None;
+        }
+        let mut layer = group.layer();
+        if let Some(paint) = &self.paint {
+            layer.alpha = paint.alpha;
+            layer.color_filter.clone_from(&paint.color_filter);
+            if !group.isolated {
+                layer.compositing_strategy = CompositingStrategy::ModulateAlpha;
+            }
+        }
+        Some(layer)
+    }
+
+    fn head(&self, group: &DrawGroup) -> LayerHead {
+        let bounds = group.bounds;
+        // The group's draws sit in its coordinates, whose origin a clip's
+        // bounds may leave, as a clip bounds a node's layer away from it.
+        let node_bounds = (bounds.x != 0.0 || bounds.y != 0.0).then(|| Rect {
+            x: 0.0,
+            y: 0.0,
+            width: (bounds.x + bounds.width).max(0.0),
+            height: (bounds.y + bounds.height).max(0.0),
+        });
+        LayerHead {
+            node_id: None,
+            wraps: None,
+            local_bounds: bounds,
+            node_bounds,
+            transform_to_parent: group.transform_to_parent(),
+            content_offset: Point::default(),
+            motion_context_animated: self.motion_context_animated,
+            translated_content_context: false,
+            translated_content_offset: Point::default(),
+            origin_in_parent: Point::default(),
+            graphics_layer: self.group_layer(group),
+            clip_to_bounds: group.clip,
+            hit_test: None,
+            has_origin_sinks: false,
+            isolation: IsolationReasons {
+                explicit_offscreen: group.isolated,
+                group_opacity: group.isolated
+                    && self.paint.as_ref().is_some_and(|paint| paint.alpha < 1.0),
+                ..IsolationReasons::default()
+            },
+            cache_policy: CachePolicy::None,
+            draw_phase: Some(self.phase),
+        }
     }
 }
 
@@ -2140,7 +2335,7 @@ fn draw_nodes(
     commands: &[DrawCommand],
     first_command_index: usize,
     placement: DrawPlacement,
-    size: Size,
+    draws: DrawTarget,
     phase: PrimitivePhase,
 ) -> Vec<RenderNode> {
     let mut nodes = crate::layer_recycling::child_list(commands.len());
@@ -2150,7 +2345,7 @@ fn draw_nodes(
         commands,
         first_command_index,
         DrawPass::Record(placement),
-        size,
+        draws,
         phase,
     );
     nodes
@@ -2162,9 +2357,10 @@ fn append_draw_nodes(
     commands: &[DrawCommand],
     first_command_index: usize,
     mut pass: DrawPass<'_>,
-    size: Size,
+    draws: DrawTarget,
     phase: PrimitivePhase,
 ) {
+    let size = draws.size;
     let placement = pass.placement();
     for (command_index, command) in commands.iter().enumerate() {
         let id = DrawCommandId {
@@ -2183,12 +2379,20 @@ fn append_draw_nodes(
             };
             (publish_recording(id, recording), segments)
         };
-        nodes.push(RenderNode::DrawRun(DrawRunNode::for_command_shared(
-            phase,
-            Some(id),
-            shared,
-            segments,
-        )));
+        let grouped = shared.summary().has_groups
+            && shared
+                .segments_in(&segments)
+                .any(|segment| segment.lane == RecordLane::GroupStart);
+        nodes.push(if grouped {
+            GroupedDraws::new(id, phase, &shared, draws).wrapper(segments, size)
+        } else {
+            RenderNode::DrawRun(DrawRunNode::for_command_shared(
+                phase,
+                Some(id),
+                shared,
+                segments,
+            ))
+        });
     }
 }
 
@@ -2201,7 +2405,12 @@ pub fn draw_command_nodes_for_tests(
     phase: PrimitivePhase,
 ) -> Vec<RenderNode> {
     bump_recording_generation();
-    draw_nodes(node_id, commands, 0, placement, size, phase)
+    let draws = DrawTarget {
+        size,
+        motion_context_animated: false,
+        layer: None,
+    };
+    draw_nodes(node_id, commands, 0, placement, draws, phase)
 }
 
 struct OuterDraws {
@@ -2213,7 +2422,7 @@ fn outer_draws(
     node_id: NodeId,
     draw_commands: &[DrawCommand],
     outer_draw_command_count: usize,
-    size: Size,
+    draws: DrawTarget,
 ) -> Option<OuterDraws> {
     (outer_draw_command_count > 0).then(|| {
         let commands = &draw_commands[..outer_draw_command_count];
@@ -2222,7 +2431,7 @@ fn outer_draws(
             commands,
             0,
             DrawPlacement::Behind,
-            size,
+            draws,
             PrimitivePhase::BeforeChildren,
         );
         let mut overlay = crate::layer_recycling::child_list(commands.len());
@@ -2232,7 +2441,7 @@ fn outer_draws(
             commands,
             0,
             DrawPass::OverlayFrom(behind.iter()),
-            size,
+            draws,
             PrimitivePhase::AfterChildren,
         );
         OuterDraws { behind, overlay }
@@ -2274,6 +2483,7 @@ fn write_wrapper(
         has_origin_sinks: false,
         isolation: IsolationReasons::default(),
         cache_policy: CachePolicy::None,
+        draw_phase: None,
     };
     let OuterDraws {
         mut behind,

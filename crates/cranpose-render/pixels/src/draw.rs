@@ -178,7 +178,7 @@ pub(crate) fn draw_scene_scaled(
     scale: f32,
 ) {
     if let Some(graph) = scene.graph.as_ref() {
-        let raster_scene = pipeline::build_raster_scene(graph, scene.diagnostics(), scale);
+        let raster_scene = pipeline::build_raster_scene(graph, scene.diagnostics(), scale, text);
         draw_raster_scene(
             frame,
             width,
@@ -283,14 +283,7 @@ impl RasterScene {
                 let placed = place_shape(&self.shapes[index])?;
                 Some(placed.coverage.reach(placed.rect))
             }
-            RenderItem::Image(index) => {
-                let draw = &self.images[index];
-                let snap = draw
-                    .snap_anchor
-                    .map(snap_delta_for_anchor)
-                    .unwrap_or_default();
-                Some(draw.rect.translate(snap.x, snap.y))
-            }
+            RenderItem::Image(index) => Some(image_rect(&self.images[index])),
             RenderItem::Shadow(index) => {
                 let draw = &self.shadows[index];
                 let snap = draw
@@ -861,7 +854,12 @@ fn placed_shadow(draw: &crate::scene::ShadowDraw) -> (ShadowRRect, Option<Rect>)
     )
 }
 
+/// The device pixels an image covers: its rect where it lands, or the box
+/// of its turned rect.
 fn image_rect(draw: &ImageDraw) -> Rect {
+    if let Some(transform) = draw.transform {
+        return transform.bounds_for_rect(draw.rect);
+    }
     let snap_delta = draw
         .snap_anchor
         .map(snap_delta_for_anchor)
@@ -871,63 +869,102 @@ fn image_rect(draw: &ImageDraw) -> Rect {
 
 fn draw_image(target: &mut Target, draw: &ImageDraw, diagnostics: &RenderDiagnostics) {
     let rect = image_rect(draw);
-    let clip = draw.clip;
-
     if draw.alpha <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
         return;
     }
-
-    let Some(clip_bounds) = clip_rect_to_bounds(rect, clip, target) else {
+    let Some(clip_bounds) = clip_rect_to_bounds(rect, draw.clip, target) else {
         return;
     };
-
-    let img_width = draw.image.width();
-    let img_height = draw.image.height();
-    if img_width == 0
-        || img_height == 0
-        || draw.image.format() == cranpose_ui_graphics::ImagePixelFormat::External
-    {
+    let Some(sampler) = ImageSampler::of(draw) else {
         return;
-    }
-
-    let (sr_x, sr_y, sr_w, sr_h) = if let Some(sr) = draw.src_rect {
-        (sr.x, sr.y, sr.width, sr.height)
-    } else {
-        (0.0, 0.0, img_width as f32, img_height as f32)
     };
-
+    // A turned image is read back through its transform: each pixel's
+    // centre lands somewhere in its rect, or outside it.
+    let to_image = match draw.transform {
+        Some(transform) => match transform.inverse() {
+            Some(inverse) => Some(inverse),
+            None => return,
+        },
+        None => None,
+    };
+    let image = draw.rect;
+    let local = |x: f32, y: f32| match to_image {
+        Some(inverse) => {
+            let point = inverse.map_point(Point::new(x, y));
+            image.contains(point.x, point.y).then(|| {
+                (
+                    (point.x - image.x) / image.width,
+                    (point.y - image.y) / image.height,
+                )
+            })
+        }
+        None => Some((
+            ((x - rect.x) / rect.width).clamp(0.0, 1.0),
+            ((y - rect.y) / rect.height).clamp(0.0, 1.0),
+        )),
+    };
     for py in clip_bounds.min_y..clip_bounds.max_y {
         let sample_y = py as f32 + 0.5;
-        let v = ((sample_y - rect.y) / rect.height).clamp(0.0, 1.0);
         let row = target.row(py, clip_bounds.min_x, clip_bounds.max_x);
         for (px, dst) in (clip_bounds.min_x..).zip(row) {
-            let sample_x = px as f32 + 0.5;
-            let u = ((sample_x - rect.x) / rect.width).clamp(0.0, 1.0);
-
-            let mut sample = match draw.sampling {
-                cranpose_ui_graphics::ImageSampling::Nearest => {
-                    let src_x =
-                        (whole::floor(sr_x + u * sr_w) as i32).clamp(0, img_width as i32 - 1);
-                    let src_y =
-                        (whole::floor(sr_y + v * sr_h) as i32).clamp(0, img_height as i32 - 1);
-                    sample_image_nearest(&draw.image, src_x as u32, src_y as u32)
-                }
-                cranpose_ui_graphics::ImageSampling::Linear => {
-                    sample_image_linear(&draw.image, sr_x + u * sr_w - 0.5, sr_y + v * sr_h - 0.5)
-                }
-            };
-
-            if let Some(filter) = &draw.color_filter {
-                sample = filter.apply_rgba(sample);
-            }
-
-            sample[3] *= draw.alpha.clamp(0.0, 1.0);
-            if sample[3] <= 0.0 {
+            let Some((u, v)) = local(px as f32 + 0.5, sample_y) else {
                 continue;
+            };
+            let sample = sampler.sample(u, v);
+            if sample[3] > 0.0 {
+                blend_pixel(dst, sample, draw.blend_mode, diagnostics);
             }
-
-            blend_pixel(dst, sample, draw.blend_mode, diagnostics);
         }
+    }
+}
+
+/// Reads an image's pixels at a place within its rect, with its sampling,
+/// source rect, colour filter and alpha applied.
+struct ImageSampler<'a> {
+    draw: &'a ImageDraw,
+    source: Rect,
+}
+
+impl<'a> ImageSampler<'a> {
+    /// `None` for an image with no pixels of its own to read.
+    fn of(draw: &'a ImageDraw) -> Option<Self> {
+        let (width, height) = (draw.image.width(), draw.image.height());
+        if width == 0
+            || height == 0
+            || draw.image.format() == cranpose_ui_graphics::ImagePixelFormat::External
+        {
+            return None;
+        }
+        let source = draw.src_rect.unwrap_or(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: width as f32,
+            height: height as f32,
+        });
+        Some(Self { draw, source })
+    }
+
+    /// The colour at `u`, `v`, the fractions of the rect's width and height.
+    fn sample(&self, u: f32, v: f32) -> [f32; 4] {
+        let Self { draw, source } = self;
+        let image = &draw.image;
+        let x = source.x + u * source.width;
+        let y = source.y + v * source.height;
+        let mut sample = match draw.sampling {
+            cranpose_ui_graphics::ImageSampling::Nearest => {
+                let src_x = (whole::floor(x) as i32).clamp(0, image.width() as i32 - 1);
+                let src_y = (whole::floor(y) as i32).clamp(0, image.height() as i32 - 1);
+                sample_image_nearest(image, src_x as u32, src_y as u32)
+            }
+            cranpose_ui_graphics::ImageSampling::Linear => {
+                sample_image_linear(image, x - 0.5, y - 0.5)
+            }
+        };
+        if let Some(filter) = &draw.color_filter {
+            sample = filter.apply_rgba(sample);
+        }
+        sample[3] *= draw.alpha.clamp(0.0, 1.0);
+        sample
     }
 }
 

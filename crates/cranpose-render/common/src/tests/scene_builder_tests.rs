@@ -2451,7 +2451,11 @@ fn appending_empty_draw_commands_preserves_existing_nodes_and_command_identity()
             &commands,
             3,
             DrawPass::Record(placement),
-            Size::default(),
+            DrawTarget {
+                size: Size::default(),
+                motion_context_animated: false,
+                layer: None,
+            },
             phase,
         );
     }

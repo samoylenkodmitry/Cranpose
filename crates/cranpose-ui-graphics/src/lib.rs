@@ -38,6 +38,7 @@ macro_rules! runtime_shader_wgsl {
 pub mod alpha_mask;
 mod brush;
 mod color;
+mod draw_group;
 mod float;
 pub mod framework_shaders;
 mod fx_hash;
@@ -69,6 +70,7 @@ pub mod whole;
 pub use alpha_mask::*;
 pub use brush::*;
 pub use color::*;
+pub use draw_group::*;
 pub use fx_hash::*;
 pub use geometry::*;
 pub use gradient_blur::*;

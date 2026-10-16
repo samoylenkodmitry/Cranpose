@@ -521,7 +521,7 @@ impl Canonical {
                 let draw = &scene.images[0];
                 write!(
                     hasher,
-                    "image {} {:?} {:?} {} {:?} {:?} {:?} {:?}",
+                    "image {} {:?} {:?} {} {:?} {:?} {:?} {:?} {:?}",
                     draw.image.id(),
                     draw.rect,
                     draw.snap_anchor,
@@ -530,6 +530,7 @@ impl Canonical {
                     draw.sampling,
                     draw.blend_mode,
                     draw.src_rect,
+                    draw.transform,
                 )
             }
         };
