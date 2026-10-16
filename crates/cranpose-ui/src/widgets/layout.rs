@@ -140,23 +140,25 @@ fn emit_layout_node(
     policy: Rc<dyn MeasurePolicy>,
     environment: LayoutEnvironment,
 ) -> (NodeId, Vec<cranpose_core::ProvidedValue>, bool) {
-    let id = cranpose_core::with_current_composer(|composer| {
-        composer.emit_recyclable_node(
+    let provided = modifier.provided_composition_locals();
+    let (id, holds_children) = cranpose_core::with_current_composer(|composer| {
+        let id = composer.emit_recyclable_node(
             || LayoutNode::new(modifier.clone(), Rc::clone(&policy)),
             |node| *node = LayoutNode::new(modifier.clone(), Rc::clone(&policy)),
-        )
-    });
-    let provided = modifier.provided_composition_locals();
-    let holds_children = cranpose_core::with_node_mut(id, |node: &mut LayoutNode| {
-        node.set_modifier(modifier);
-        node.set_measure_policy(policy);
-        node.set_density(environment.density);
-        node.set_layout_direction(environment.direction);
-        !node.children.is_empty()
-    })
-    .unwrap_or_else(|err| {
-        debug_assert!(false, "failed to update Layout node: {err}");
-        true
+        );
+        let holds_children = composer
+            .with_node_mut(id, |node: &mut LayoutNode| {
+                node.set_modifier(modifier);
+                node.set_measure_policy(policy);
+                node.set_density(environment.density);
+                node.set_layout_direction(environment.direction);
+                !node.children.is_empty()
+            })
+            .unwrap_or_else(|err| {
+                debug_assert!(false, "failed to update Layout node: {err}");
+                true
+            });
+        (id, holds_children)
     });
     (id, provided, holds_children)
 }
