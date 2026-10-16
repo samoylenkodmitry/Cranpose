@@ -113,6 +113,15 @@ pub fn refresh_param<T: PartialEq + Clone>(stored: &mut T, new: &T) -> bool {
     true
 }
 
+/// Stores `new` as a parameter without comparing, and says it changed: for a
+/// call that runs its body whatever its parameters, as one with a callback
+/// does, a comparison would decide nothing. A `Modifier` compares element by
+/// element.
+pub fn store_param<T: Clone>(stored: &mut T, new: &T) -> bool {
+    stored.clone_from(new);
+    true
+}
+
 /// [`refresh_param`] for an `Rc` or `Arc` parameter: the same allocation is
 /// unchanged without comparing its contents, which `PartialEq` on a pointer
 /// to a type that is not `Eq` otherwise walks in full on every recomposition.
