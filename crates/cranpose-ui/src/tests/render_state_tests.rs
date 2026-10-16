@@ -249,9 +249,9 @@ fn app_contexts_keep_layout_frame_arenas_isolated() {
 
     first.enter(|| {
         assert_eq!(layout_frame_arena_placement_scratch_count(), 0);
-        let mut arena = take_layout_frame_arena();
+        let mut arena = first.take_layout_frame_arena();
         arena.seed_placement_scratch_for_test();
-        replace_layout_frame_arena(arena);
+        first.replace_layout_frame_arena(arena);
         assert_eq!(layout_frame_arena_placement_scratch_count(), 1);
     });
 

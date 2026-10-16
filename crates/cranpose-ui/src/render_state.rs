@@ -480,9 +480,10 @@ pub(crate) fn with_text_measurer<R>(f: impl FnOnce(&dyn crate::text::TextMeasure
 
 /// Tells the current app context's text service, and its measurer, a
 /// layout pass starts. Outside an app context there is neither to tell.
+#[cfg(test)]
 pub(crate) fn begin_text_layout_pass() {
     if let Some(context) = current_app_context() {
-        context.text.begin_layout_pass();
+        context.begin_text_layout_pass();
     }
 }
 
@@ -520,44 +521,65 @@ pub(crate) fn emit_modifier_chain_trace(nodes: &[crate::modifier::ModifierChainI
     }
 }
 
-pub(crate) fn take_layout_frame_arena() -> crate::layout::FrameLayoutArena {
-    let context = require_current_app_context("layout frame arena access");
-
-    std::mem::take(&mut *context.layout_frame_arena.borrow_mut())
-}
-
-/// The host for a layout pass: the one the last pass gave back, or a new one
-/// when a pass is still running or none ran yet.
-pub(crate) fn take_layout_host() -> crate::layout::LayoutHost {
-    let context = require_current_app_context("layout host access");
-    context.layout_host.borrow_mut().take().unwrap_or_default()
-}
-
-pub(crate) fn replace_layout_host(host: crate::layout::LayoutHost) {
-    if let Some(context) = current_app_context() {
-        *context.layout_host.borrow_mut() = Some(host);
+/// What a layout pass takes from its app context. A pass looks the context
+/// up once and asks it directly: each lookup reads a thread-local, which on
+/// ESP-IDF goes through a pthread key.
+impl AppContext {
+    /// Tells the text service, and its measurer, a layout pass starts.
+    pub(crate) fn begin_text_layout_pass(&self) {
+        self.text.begin_layout_pass();
     }
-}
 
-pub(crate) fn replace_layout_frame_arena(arena: crate::layout::FrameLayoutArena) {
-    let context = require_current_app_context("layout frame arena access");
-    *context.layout_frame_arena.borrow_mut() = arena;
+    pub(crate) fn take_layout_frame_arena(&self) -> crate::layout::FrameLayoutArena {
+        std::mem::take(&mut *self.layout_frame_arena.borrow_mut())
+    }
+
+    pub(crate) fn replace_layout_frame_arena(&self, arena: crate::layout::FrameLayoutArena) {
+        *self.layout_frame_arena.borrow_mut() = arena;
+    }
+
+    /// The host for a layout pass: the one the last pass gave back, or a new
+    /// one when a pass is still running or none ran yet.
+    pub(crate) fn take_layout_host(&self) -> crate::layout::LayoutHost {
+        self.layout_host.borrow_mut().take().unwrap_or_default()
+    }
+
+    pub(crate) fn replace_layout_host(&self, host: crate::layout::LayoutHost) {
+        *self.layout_host.borrow_mut() = Some(host);
+    }
+
+    pub(crate) fn next_layout_cache_epoch(&self) -> u64 {
+        let epoch = self.layout_cache_epoch.get();
+        self.layout_cache_epoch.set(epoch + 1);
+        epoch
+    }
+
+    pub(crate) fn current_layout_cache_epoch(&self) -> u64 {
+        self.layout_cache_epoch.get()
+    }
+
+    pub(crate) fn take_modifier_slice_repass_nodes(&self) -> Vec<NodeId> {
+        self.state
+            .modifier_slice_repasses
+            .borrow_mut()
+            .take_dirty_nodes()
+    }
+
+    pub(crate) fn take_measure_repass_nodes(&self) -> Vec<NodeId> {
+        self.state.measure_repasses.borrow_mut().take_dirty_nodes()
+    }
+
+    pub(crate) fn take_layout_repass_nodes(&self) -> Vec<NodeId> {
+        self.state.layout_repasses.borrow_mut().take_dirty_nodes()
+    }
 }
 
 pub(crate) fn invalidate_layout_cache_epoch() {
     require_current_app_context("layout cache epoch access").invalidate_layout_caches();
 }
 
-pub(crate) fn next_layout_cache_epoch() -> u64 {
-    let context = require_current_app_context("layout cache epoch access");
-    let epoch = context.layout_cache_epoch.get();
-    context.layout_cache_epoch.set(epoch + 1);
-    epoch
-}
-
 pub(crate) fn current_layout_cache_epoch() -> u64 {
-    let context = require_current_app_context("layout cache epoch access");
-    context.layout_cache_epoch.get()
+    require_current_app_context("layout cache epoch access").current_layout_cache_epoch()
 }
 
 pub(crate) fn layout_cache_floor() -> u64 {
@@ -1025,7 +1047,7 @@ pub fn pending_layout_repass_nodes_snapshot() -> Vec<NodeId> {
 ///
 /// The caller should iterate over these and call `bubble_layout_dirty` for each.
 pub fn take_layout_repass_nodes() -> Vec<NodeId> {
-    with_render_state(|state| state.layout_repasses.borrow_mut().take_dirty_nodes())
+    require_current_app_context("render state access").take_layout_repass_nodes()
 }
 
 /// Schedules a scoped re-*measure* of `node_id` on the next frame.
@@ -1064,16 +1086,12 @@ pub fn pending_measure_repass_nodes_snapshot() -> Vec<NodeId> {
 ///
 /// The caller should iterate over these and call `bubble_measure_dirty` for each.
 pub fn take_measure_repass_nodes() -> Vec<NodeId> {
-    with_render_state(|state| state.measure_repasses.borrow_mut().take_dirty_nodes())
+    require_current_app_context("render state access").take_measure_repass_nodes()
 }
 
+#[cfg(any(test, feature = "test-helpers"))]
 pub(crate) fn take_modifier_slice_repass_nodes() -> Vec<NodeId> {
-    with_render_state(|state| {
-        state
-            .modifier_slice_repasses
-            .borrow_mut()
-            .take_dirty_nodes()
-    })
+    require_current_app_context("render state access").take_modifier_slice_repass_nodes()
 }
 
 pub(crate) fn record_geometry_scene_node(node_id: NodeId) {
