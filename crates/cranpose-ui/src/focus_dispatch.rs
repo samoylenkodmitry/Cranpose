@@ -180,7 +180,7 @@ impl FocusInvalidationState {
         self.manager.borrow_mut().set_active_focus_target(node_id);
     }
 
-    fn active_focus_target(&self) -> Option<NodeId> {
+    pub(crate) fn active_focus_target(&self) -> Option<NodeId> {
         self.manager.borrow().active_focus_target()
     }
 
@@ -318,7 +318,8 @@ pub fn schedule_focus_invalidation(node_id: NodeId) {
 
 /// Returns true if any focus invalidations are pending.
 pub fn has_pending_focus_invalidations() -> bool {
-    crate::render_state::with_focus_dispatch(FocusInvalidationState::has_pending_invalidation)
+    crate::render_state::require_current_app_context("focus dispatch access")
+        .has_pending_focus_invalidations()
 }
 
 /// Sets the currently active focus target.
@@ -331,7 +332,7 @@ pub fn set_active_focus_target(node_id: Option<NodeId>) {
 
 /// Returns the currently active focus target, if any.
 pub fn active_focus_target() -> Option<NodeId> {
-    crate::render_state::with_focus_dispatch(FocusInvalidationState::active_focus_target)
+    crate::render_state::require_current_app_context("focus dispatch access").active_focus_target()
 }
 
 pub(crate) fn register_focus_target(node_id: NodeId, handle: Rc<dyn FocusTargetHandle>) {

@@ -484,12 +484,20 @@ pub fn focused_field_target() -> Option<cranpose_core::NodeId> {
 /// Returns true if any text field currently has focus.
 /// Checks weak ref liveness and clears stale focus state.
 pub fn has_focused_field() -> bool {
-    let has_focus =
-        crate::render_state::with_text_field_focus(TextFieldFocusState::has_focused_field);
-    if !has_focus {
-        crate::text_input_session::notify_text_input_focus_lost();
+    crate::render_state::require_current_app_context("text field focus access").has_focused_field()
+}
+
+impl crate::AppContext {
+    /// Whether a text field holds focus, as [`has_focused_field`] says in
+    /// the current context; without one, the keyboard the framework asked
+    /// for goes away.
+    pub fn has_focused_field(&self) -> bool {
+        let has_focus = self.text_field_focus.has_focused_field();
+        if !has_focus {
+            self.notify_text_input_focus_lost();
+        }
+        has_focus
     }
-    has_focus
 }
 
 /// Dispatches a key event to the focused text field. Returns true if consumed.

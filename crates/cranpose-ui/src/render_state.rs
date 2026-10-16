@@ -61,10 +61,10 @@ pub struct AppContext {
     modal_nodes: crate::modal_nodes::ModalNodes,
     semantics_layout: crate::semantics_layout_log::SemanticsLayoutLog,
     hosted_popups: crate::widgets::popup::HostedPopupRegistries,
-    semantics_dispatch: crate::semantics_dispatch::SemanticsInvalidationState,
-    cursor_animation: crate::cursor_animation::CursorAnimationState,
-    text_field_focus: crate::text_field_focus::TextFieldFocusState,
-    text_input_session: crate::text_input_session::PlatformTextInputState,
+    pub(crate) semantics_dispatch: crate::semantics_dispatch::SemanticsInvalidationState,
+    pub(crate) cursor_animation: crate::cursor_animation::CursorAnimationState,
+    pub(crate) text_field_focus: crate::text_field_focus::TextFieldFocusState,
+    pub(crate) text_input_session: crate::text_input_session::PlatformTextInputState,
     clipboard_session: crate::clipboard_session::ClipboardSessionState,
     pointer_icon: crate::pointer_icon_session::PointerIconState,
     pointer_input_tasks: crate::modifier::pointer_input::PointerInputTaskRegistry,
@@ -554,6 +554,10 @@ impl AppContext {
         epoch
     }
 
+    pub(crate) fn layout_cache_floor(&self) -> u64 {
+        self.layout_cache_floor.get()
+    }
+
     pub(crate) fn current_layout_cache_epoch(&self) -> u64 {
         self.layout_cache_epoch.get()
     }
@@ -580,11 +584,6 @@ pub(crate) fn invalidate_layout_cache_epoch() {
 
 pub(crate) fn current_layout_cache_epoch() -> u64 {
     require_current_app_context("layout cache epoch access").current_layout_cache_epoch()
-}
-
-pub(crate) fn layout_cache_floor() -> u64 {
-    let context = require_current_app_context("layout cache epoch access");
-    context.layout_cache_floor.get()
 }
 
 pub(crate) fn record_last_fling_velocity(velocity: f32) {
@@ -636,6 +635,132 @@ impl AppContext {
             || self.pointer_dispatch.has_pending_repass()
             || self.focus_dispatch.has_pending_invalidation()
     }
+
+    /// Moves the nodes waiting for a draw repass into `output`, as
+    /// [`take_draw_repass_nodes_into`] does in the current context.
+    pub fn take_draw_repass_nodes_into(&self, output: &mut Vec<NodeId>) {
+        self.state
+            .draw_repasses
+            .borrow_mut()
+            .take_dirty_nodes_into(output);
+    }
+
+    /// Appends the nodes whose z index changed since the last call to
+    /// `output`, as [`append_z_order_changes`] does in the current context.
+    pub fn append_z_order_changes(&self, output: &mut Vec<NodeId>) {
+        output.extend(self.state.z_order_changes.borrow_mut().dirty_nodes.drain());
+    }
+
+    /// Moves the nodes waiting for a graphics-layer property update into
+    /// `output`, as [`take_layer_property_repass_nodes_into`] does in the
+    /// current context.
+    pub fn take_layer_property_repass_nodes_into(&self, output: &mut Vec<NodeId>) {
+        self.state
+            .layer_property_repasses
+            .borrow_mut()
+            .take_dirty_nodes_into(output);
+    }
+
+    /// Whether a layout repass waits, as [`has_pending_layout_repasses`]
+    /// says in the current context.
+    pub fn has_pending_layout_repasses(&self) -> bool {
+        self.state.layout_repasses.borrow_mut().has_pending_repass()
+    }
+
+    /// The nodes waiting for a layout repass, which stay waiting.
+    pub fn pending_layout_repass_nodes_snapshot(&self) -> Vec<NodeId> {
+        self.state
+            .layout_repasses
+            .borrow_mut()
+            .dirty_nodes_snapshot()
+    }
+
+    /// Whether a measure repass waits, as [`has_pending_measure_repasses`]
+    /// says in the current context.
+    pub fn has_pending_measure_repasses(&self) -> bool {
+        self.state
+            .measure_repasses
+            .borrow_mut()
+            .has_pending_repass()
+    }
+
+    /// The nodes waiting for a measure repass, which stay waiting.
+    pub fn pending_measure_repass_nodes_snapshot(&self) -> Vec<NodeId> {
+        self.state
+            .measure_repasses
+            .borrow_mut()
+            .dirty_nodes_snapshot()
+    }
+
+    /// Moves the nodes whose geometry the last layout pass changed into
+    /// `output`, as [`take_geometry_scene_nodes_into`] does in the current
+    /// context.
+    pub fn take_geometry_scene_nodes_into(&self, output: &mut GeometrySceneNodes) {
+        self.state
+            .geometry_scene_nodes
+            .borrow_mut()
+            .take_dirty_nodes_into(&mut output.reshaped);
+        self.state
+            .moved_scene_nodes
+            .borrow_mut()
+            .take_dirty_nodes_into(&mut output.moved);
+    }
+
+    /// Notes that the layout pass changed `node_id`'s geometry.
+    pub(crate) fn record_geometry_scene_node(&self, node_id: NodeId) {
+        self.state
+            .geometry_scene_nodes
+            .borrow_mut()
+            .schedule_repass(node_id);
+    }
+
+    /// Takes the pending layout invalidation, as [`take_layout_invalidation`]
+    /// does in the current context.
+    pub fn take_layout_invalidation(&self) -> bool {
+        self.state.layout_invalidated.replace(false)
+    }
+
+    /// Takes the pending render invalidation, as [`take_render_invalidation`]
+    /// does in the current context.
+    pub fn take_render_invalidation(&self) -> bool {
+        self.state.render_invalidated.replace(false)
+    }
+
+    /// Takes the pending pointer invalidation, as
+    /// [`take_pointer_invalidation`] does in the current context.
+    pub fn take_pointer_invalidation(&self) -> bool {
+        self.state.pointer_invalidated.replace(false)
+    }
+
+    /// Takes the pending focus invalidation, as [`take_focus_invalidation`]
+    /// does in the current context.
+    pub fn take_focus_invalidation(&self) -> bool {
+        self.state.focus_invalidated.replace(false)
+    }
+
+    /// Ends the frame for the transient scroll motion contexts, as
+    /// [`clear_transient_scroll_motion_contexts`] does in the current context.
+    pub fn clear_transient_scroll_motion_contexts(&self) {
+        self.scroll_motion_contexts.clear_transient_after_frame();
+    }
+
+    /// Whether a pointer repass waits, as
+    /// [`crate::has_pending_pointer_repasses`] says in the current context.
+    pub fn has_pending_pointer_repasses(&self) -> bool {
+        self.pointer_dispatch.has_pending_repass()
+    }
+
+    /// Whether a focus invalidation waits, as
+    /// [`crate::has_pending_focus_invalidations`] says in the current context.
+    pub fn has_pending_focus_invalidations(&self) -> bool {
+        self.focus_dispatch.has_pending_invalidation()
+    }
+
+    /// The node holding focus, as [`crate::active_focus_target`] says in the
+    /// current context.
+    pub fn active_focus_target(&self) -> Option<NodeId> {
+        self.focus_dispatch.active_focus_target()
+    }
 }
 
 pub(crate) fn with_scroll_motion_context_store<R>(
@@ -647,10 +772,9 @@ pub(crate) fn with_scroll_motion_context_store<R>(
 
 #[doc(hidden)]
 pub fn clear_transient_scroll_motion_contexts() {
-    let Some(context) = current_app_context() else {
-        return;
-    };
-    context.scroll_motion_contexts.clear_transient_after_frame();
+    if let Some(context) = current_app_context() {
+        context.clear_transient_scroll_motion_contexts();
+    }
 }
 
 #[cfg(test)]
@@ -985,12 +1109,7 @@ pub fn take_draw_repass_nodes() -> Vec<NodeId> {
 /// });
 /// ```
 pub fn take_draw_repass_nodes_into(output: &mut Vec<NodeId>) {
-    with_render_state(|state| {
-        state
-            .draw_repasses
-            .borrow_mut()
-            .take_dirty_nodes_into(output);
-    });
+    require_current_app_context("render state access").take_draw_repass_nodes_into(output);
 }
 
 /// Records that `node_id`'s z index changed. The frame rebuilds the layer of
@@ -1006,9 +1125,7 @@ pub fn schedule_z_order_change(node_id: NodeId) {
 /// Appends the nodes whose z index changed since the last call to `output`,
 /// after what it already holds.
 pub fn append_z_order_changes(output: &mut Vec<NodeId>) {
-    with_render_state(|state| {
-        output.extend(state.z_order_changes.borrow_mut().dirty_nodes.drain());
-    });
+    require_current_app_context("render state access").append_z_order_changes(output);
 }
 
 /// Returns true if graphics-layer property updates are pending.
@@ -1025,22 +1142,18 @@ pub fn has_pending_layer_property_repasses() -> bool {
 /// Takes pending graphics-layer property updates into reusable storage.
 #[doc(hidden)]
 pub fn take_layer_property_repass_nodes_into(output: &mut Vec<NodeId>) {
-    with_render_state(|state| {
-        state
-            .layer_property_repasses
-            .borrow_mut()
-            .take_dirty_nodes_into(output);
-    });
+    require_current_app_context("render state access")
+        .take_layer_property_repass_nodes_into(output);
 }
 
 /// Returns true if any layout repasses are pending.
 pub fn has_pending_layout_repasses() -> bool {
-    with_render_state(|state| state.layout_repasses.borrow_mut().has_pending_repass())
+    require_current_app_context("render state access").has_pending_layout_repasses()
 }
 
 /// Returns a stable snapshot of pending layout repass node IDs without consuming them.
 pub fn pending_layout_repass_nodes_snapshot() -> Vec<NodeId> {
-    with_render_state(|state| state.layout_repasses.borrow_mut().dirty_nodes_snapshot())
+    require_current_app_context("render state access").pending_layout_repass_nodes_snapshot()
 }
 
 /// Takes all pending layout repass node IDs.
@@ -1067,7 +1180,7 @@ pub fn schedule_measure_repass(node_id: NodeId) {
 
 /// Returns true if any measure repasses are pending.
 pub fn has_pending_measure_repasses() -> bool {
-    with_render_state(|state| state.measure_repasses.borrow_mut().has_pending_repass())
+    require_current_app_context("render state access").has_pending_measure_repasses()
 }
 
 /// Returns a stable snapshot of pending measure repass node IDs without
@@ -1079,7 +1192,7 @@ pub fn has_pending_measure_repasses() -> bool {
 /// phase as "something changed, but nothing says where", which is
 /// indistinguishable from a full invalidation.
 pub fn pending_measure_repass_nodes_snapshot() -> Vec<NodeId> {
-    with_render_state(|state| state.measure_repasses.borrow_mut().dirty_nodes_snapshot())
+    require_current_app_context("render state access").pending_measure_repass_nodes_snapshot()
 }
 
 /// Takes all pending measure repass node IDs.
@@ -1095,12 +1208,7 @@ pub(crate) fn take_modifier_slice_repass_nodes() -> Vec<NodeId> {
 }
 
 pub(crate) fn record_geometry_scene_node(node_id: NodeId) {
-    with_render_state(|state| {
-        state
-            .geometry_scene_nodes
-            .borrow_mut()
-            .schedule_repass(node_id);
-    });
+    require_current_app_context("render state access").record_geometry_scene_node(node_id);
 }
 
 pub(crate) fn record_moved_scene_node(node_id: NodeId) {
@@ -1153,16 +1261,7 @@ pub fn take_geometry_scene_nodes() -> GeometrySceneNodes {
 /// });
 /// ```
 pub fn take_geometry_scene_nodes_into(output: &mut GeometrySceneNodes) {
-    with_render_state(|state| {
-        state
-            .geometry_scene_nodes
-            .borrow_mut()
-            .take_dirty_nodes_into(&mut output.reshaped);
-        state
-            .moved_scene_nodes
-            .borrow_mut()
-            .take_dirty_nodes_into(&mut output.moved);
-    });
+    require_current_app_context("render state access").take_geometry_scene_nodes_into(output);
 }
 
 /// Returns the current density scale factor (logical px per dp).
@@ -1273,7 +1372,7 @@ pub fn request_render_invalidation() {
 
 /// Returns true if a render invalidation was pending and clears the flag.
 pub fn take_render_invalidation() -> bool {
-    with_render_state(|state| state.render_invalidated.replace(false))
+    require_current_app_context("render state access").take_render_invalidation()
 }
 
 /// Returns true if a render invalidation is pending without clearing it.
@@ -1288,7 +1387,7 @@ pub fn request_pointer_invalidation() {
 
 /// Returns true if a pointer invalidation was pending and clears the flag.
 pub fn take_pointer_invalidation() -> bool {
-    with_render_state(|state| state.pointer_invalidated.replace(false))
+    require_current_app_context("render state access").take_pointer_invalidation()
 }
 
 /// Returns true if a pointer invalidation is pending without clearing it.
@@ -1303,7 +1402,7 @@ pub fn request_focus_invalidation() {
 
 /// Returns true if a focus invalidation was pending and clears the flag.
 pub fn take_focus_invalidation() -> bool {
-    with_render_state(|state| state.focus_invalidated.replace(false))
+    require_current_app_context("render state access").take_focus_invalidation()
 }
 
 /// Returns true if a focus invalidation is pending without clearing it.
@@ -1343,7 +1442,7 @@ pub fn request_layout_invalidation() {
 
 /// Returns true if a layout invalidation was pending and clears the flag.
 pub fn take_layout_invalidation() -> bool {
-    with_render_state(|state| state.layout_invalidated.replace(false))
+    require_current_app_context("render state access").take_layout_invalidation()
 }
 
 /// Returns true if a layout invalidation is pending without clearing it.

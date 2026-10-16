@@ -807,6 +807,11 @@ cranpose-runtime-std = { path = "../cranpose-runtime-std" }
 name = "integration"
 path = "tests/integration.rs"
 
+[[bench]]
+name = "framebuffer_frame"
+harness = false
+required-features = ["framebuffer"]
+
 [[example]]
 name = "localization"
 path = "examples/localization.rs"

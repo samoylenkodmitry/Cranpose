@@ -92,14 +92,19 @@ pub(crate) fn notify_text_input_focus_gained() {
 }
 
 pub(crate) fn notify_text_input_focus_lost() {
-    let handler = crate::render_state::with_text_input_session(|state| {
+    crate::render_state::require_current_app_context("platform text input session access")
+        .notify_text_input_focus_lost();
+}
+
+impl crate::AppContext {
+    pub(crate) fn notify_text_input_focus_lost(&self) {
+        let state = &self.text_input_session;
         if !state.keyboard_requested.replace(false) {
-            return None;
+            return;
         }
-        state.handler()
-    });
-    if let Some(handler) = handler {
-        handler.hide_keyboard();
+        if let Some(handler) = state.handler() {
+            handler.hide_keyboard();
+        }
     }
 }
 

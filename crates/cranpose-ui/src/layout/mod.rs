@@ -1482,14 +1482,14 @@ impl<'a> LayoutBuilder<'a> {
         applier: Rc<ConcreteApplierHost<MemoryApplier>>,
         epoch: u64,
         slots: Rc<RefCell<SlotTable>>,
-        context: &'a AppContext,
+        context: &'a Rc<AppContext>,
     ) -> Self {
         Self {
             state: Rc::new(LayoutBuilderState::new_with_epoch(
                 applier,
                 epoch,
                 slots,
-                context.take_layout_frame_arena(),
+                Rc::clone(context),
             )),
             context,
         }
@@ -1516,6 +1516,9 @@ struct LayoutBuilderState {
     cache_epoch: u64,
     cache_floor: u64,
     frame_arena: RefCell<FrameLayoutArena>,
+    /// The context the pass lays out in, which takes the nodes whose
+    /// geometry it changed.
+    context: Rc<AppContext>,
 }
 
 struct LayoutRuntimeFrameBindingCleanup<'a> {
@@ -1598,7 +1601,7 @@ impl LayoutBuilderState {
         applier: Rc<ConcreteApplierHost<MemoryApplier>>,
         epoch: u64,
         slots: Rc<RefCell<SlotTable>>,
-        frame_arena: FrameLayoutArena,
+        context: Rc<AppContext>,
     ) -> Self {
         let runtime_handle = applier.borrow_typed().runtime_handle();
 
@@ -1607,8 +1610,9 @@ impl LayoutBuilderState {
             runtime_handle: RefCell::new(runtime_handle),
             slots,
             cache_epoch: epoch,
-            cache_floor: crate::render_state::layout_cache_floor(),
-            frame_arena: RefCell::new(frame_arena),
+            cache_floor: context.layout_cache_floor(),
+            frame_arena: RefCell::new(context.take_layout_frame_arena()),
+            context,
         }
     }
 
@@ -2127,7 +2131,9 @@ impl LayoutBuilderState {
             }
             self.with_applier_result(|applier| {
                 applier.with_node::<LayoutNode, _>(node_id, |node| {
-                    runtime_state.write_node_geometry(node_id, node, &measurement);
+                    if runtime_state.write_node_geometry(node, &measurement) {
+                        self.context.record_geometry_scene_node(node_id);
+                    }
                 })
             })
             .ok();
@@ -2162,7 +2168,9 @@ impl LayoutBuilderState {
                     Rc::clone(&measured),
                     measurement.hold,
                 );
-                runtime_state.write_node_geometry(node_id, node, &measurement);
+                if runtime_state.write_node_geometry(node, &measurement) {
+                    self.context.record_geometry_scene_node(node_id);
+                }
                 node.clear_needs_measure();
                 node.clear_needs_layout();
                 node.set_measured_size(measurement.size);
@@ -3446,14 +3454,14 @@ impl LayoutRuntimeState {
         }
     }
 
+    /// Writes the node's coordinator geometry and returns whether it moved.
     fn write_node_geometry(
         &self,
-        node_id: NodeId,
         node: &LayoutNode,
         measurement: &ModifierChainMeasurement,
-    ) {
+    ) -> bool {
         let geometry = node.coordinator_geometry();
-        let moved = if measurement.uses_chain {
+        if measurement.uses_chain {
             self.coordinator_chain
                 .write_geometry(geometry, measurement.offset)
         } else {
@@ -3463,9 +3471,6 @@ impl LayoutRuntimeState {
                 width: measurement.size.width,
                 height: measurement.size.height,
             }])
-        };
-        if moved {
-            crate::render_state::record_geometry_scene_node(node_id);
         }
     }
 
