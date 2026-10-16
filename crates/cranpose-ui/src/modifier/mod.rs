@@ -46,6 +46,7 @@ mod window_root;
 mod wrap_content;
 mod z_index;
 
+pub(crate) use chain::InPlaceReach;
 pub use chain::{ModifierChainHandle, ModifierChainInspectorNode, ModifierLocalsHandle};
 pub(crate) use coordinator_geometry::{CoordinatorGeometry, CoordinatorRect};
 pub use cranpose_foundation::{
@@ -1125,25 +1126,36 @@ impl Modifier {
         self.eq_internal(other, false)
     }
 
-    /// Whether `other` has this modifier's elements in the same order, equal
-    /// except elements of type `E`, which may differ. An element that asks
-    /// for an update on every set counts as different.
-    pub(crate) fn differs_only_in<E: 'static>(&self, other: &Self) -> bool {
+    /// How far an update in place to `other` reaches, when `other` has this
+    /// modifier's elements in the same order, equal except elements that
+    /// [`InPlaceReach::of`] accepts. `None` when another element differs; an
+    /// element that asks for an update on every set counts as different.
+    pub(crate) fn in_place_reach(&self, other: &Self) -> Option<InPlaceReach> {
         if self.element_count != other.element_count {
-            return false;
+            return None;
         }
-        let differing = std::any::TypeId::of::<E>();
-        self.iter_elements()
-            .zip(other.iter_elements())
-            .all(|(a, b)| {
-                if a.requires_update() || b.requires_update() {
-                    false
-                } else if a.element_type() == differing {
-                    b.element_type() == differing
-                } else {
-                    a.equals_element(&**b)
+        let mut reach = InPlaceReach::Node;
+        for (a, b) in self.iter_elements().zip(other.iter_elements()) {
+            if a.requires_update() || b.requires_update() {
+                return None;
+            }
+            let element_type = a.element_type();
+            match InPlaceReach::of(element_type) {
+                // A text updates in place whether it changed or not.
+                Some(InPlaceReach::Node) if b.element_type() == element_type => {}
+                Some(InPlaceReach::Resolved) if b.element_type() == element_type => {
+                    if !a.equals_element(&**b) {
+                        reach = InPlaceReach::Resolved;
+                    }
                 }
-            })
+                _ => {
+                    if !a.equals_element(&**b) {
+                        return None;
+                    }
+                }
+            }
+        }
+        Some(reach)
     }
 
     fn eq_internal(&self, other: &Self, consider_always_update: bool) -> bool {

@@ -17,7 +17,7 @@ use crate::layout::LayoutRuntimeDebugStats;
 use crate::{
     layout::{LayoutRuntimeState, MeasuredNode},
     modifier::{
-        Modifier, ModifierChainHandle, ModifierLocalSource, ModifierLocalToken,
+        InPlaceReach, Modifier, ModifierChainHandle, ModifierLocalSource, ModifierLocalToken,
         ModifierLocalsHandle, ModifierNodeSlices, Point, ResolvedModifierLocal, ResolvedModifiers,
         Size,
     },
@@ -628,7 +628,7 @@ impl LayoutNode {
             layout_runtime_state,
             coordinator_geometry: Rc::default(),
         };
-        node.sync_modifier_chain(false);
+        node.sync_modifier_chain(None);
         node
     }
 
@@ -652,25 +652,22 @@ impl LayoutNode {
         {
             return;
         }
-        // A text that changed and nothing else, as a ticker's does, keeps
-        // the slices the chain gave: their text reads the layout the update
-        // changes in place.
-        let text_only = self
-            .modifier
-            .differs_only_in::<crate::text_modifier_node::TextModifierElement>(&modifier);
-        let modifier_changed = text_only || !self.modifier.structural_eq(&modifier);
+        // A change only in elements nothing else reads, as a ticker's text
+        // or an animated size, keeps the slices the chain gave.
+        let reach = self.modifier.in_place_reach(&modifier);
+        let modifier_changed = reach.is_some() || !self.modifier.structural_eq(&modifier);
         self.modifier = modifier;
-        self.sync_modifier_chain(text_only);
+        self.sync_modifier_chain(reach);
         if modifier_changed {
             self.cache.clear();
             self.request_semantics_update();
         }
     }
 
-    /// Reconciles the chain with the node's modifier. `text_only` says the
-    /// modifier changed only in its text elements: when the chain updates
-    /// them in place, the current slices are kept.
-    fn sync_modifier_chain(&mut self, text_only: bool) {
+    /// Reconciles the chain with the node's modifier. `in_place` says how
+    /// far the change reaches when the modifier changed only in elements the
+    /// chain can update in place: when it does, the current slices are kept.
+    fn sync_modifier_chain(&mut self, in_place: Option<InPlaceReach>) {
         let prev_caps = self.modifier_capabilities();
         let start_parent = self.parent();
         let mut resolver = move |token: &ModifierLocalToken| {
@@ -679,13 +676,14 @@ impl LayoutNode {
         self.modifier_chain
             .set_debug_logging(self.debug_modifiers.get());
         let mut context = self.modifier_chain.context(self.id.get());
-        let in_place = text_only
-            && self
-                .modifier_chain
-                .update_elements_in_place::<crate::text_modifier_node::TextModifierElement>(
-                    &self.modifier,
-                    &mut context,
-                );
+        let reach = in_place.filter(|&reach| {
+            self.modifier_chain
+                .update_elements_in_place(&self.modifier, reach, &mut context)
+        });
+        let in_place = reach.is_some();
+        if reach == Some(InPlaceReach::Resolved) {
+            self.refresh_parent_data();
+        }
         let modifier_local_invalidations = if in_place {
             ModifierInvalidations::new()
         } else {
@@ -704,8 +702,9 @@ impl LayoutNode {
         {
             self.note_semantics_layout_change();
         }
-        // A text element reaches nothing, so an update in place leaves the
-        // chain's reach as it was, and the modal count does not read it again.
+        // An element updated in place reaches nothing, so the update leaves
+        // the chain's reach as it was, and the modal count does not read it
+        // again.
         if !in_place {
             self.forget_semantics_reach();
         }
@@ -1275,7 +1274,7 @@ impl Clone for LayoutNode {
             layout_runtime_state: self.layout_runtime_state.clone(),
             coordinator_geometry: Rc::clone(&self.coordinator_geometry),
         };
-        node.sync_modifier_chain(false);
+        node.sync_modifier_chain(None);
         node
     }
 }

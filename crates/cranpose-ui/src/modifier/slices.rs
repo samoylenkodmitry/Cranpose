@@ -803,6 +803,8 @@ fn collect_modifier_slices_into(
                 collect_draw_node(node, &draw, slices, &mut backgrounds);
             }
 
+            // `InPlaceReach::of` names the layout elements whose values no
+            // slice reads; a slice that reads one here takes it off that list.
             if has_layout && node_caps.intersects(NodeCapabilities::LAYOUT) {
                 if let Some(padding_node) = any.downcast_ref::<PaddingNode>() {
                     padding +=
