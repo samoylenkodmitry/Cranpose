@@ -34,9 +34,57 @@ env:
   GIT_CONFIG_VALUE_0: "false"
 
 jobs:
+  # The release crates name the patched upstream forks (forks/README.md) by
+  # version, and the semver gate in `sync_versions` builds each release crate
+  # outside the workspace, where the workspace's patch onto forks/ does not
+  # apply. So the forks go to crates.io first. A fork takes the next patch
+  # version only when it changes, so most releases skip every one of them.
+  # Each fork depends on the one before it.
+  publish_forks:
+    name: Publish the wgpu forks
+    runs-on: [self-hosted, macOS, ARM64, recent-repo]
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      - name: Provision the pinned Rust toolchain
+        run: |
+          # $HOME is not reliable here: actions/checkout temporarily overrides
+          # it, so resolve the account's real home instead.
+          real_home="$(eval echo "~$(id -un)")"
+          export PATH="$real_home/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
+          scripts/ci/install_toolchains.sh
+          rustc --version
+      - name: Publish upstream forks (skip existing versions)
+        run: |
+          set -euo pipefail
+          for fork in \
+            wgpu-hal \
+            wgpu-core-deps-apple \
+            wgpu-core-deps-emscripten \
+            wgpu-core-deps-wasm \
+            wgpu-core-deps-windows-linux-android \
+            wgpu-core \
+            wgpu; do
+            manifest="forks/wgpu/${fork}/Cargo.toml"
+            version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$manifest" | head -n 1)"
+            if cargo xtask crate-published "cranpose-${fork}" "$version"; then
+              echo "Skipping cranpose-${fork} ${version} (already published)."
+              continue
+            elif [ "$?" -ne 1 ]; then
+              echo "Failed to determine publish status for cranpose-${fork} ${version}." >&2
+              exit 1
+            fi
+            cargo publish --manifest-path "$manifest"
+          done
+
   sync_versions:
     name: Sync versions with tag
     runs-on: [self-hosted, macOS, ARM64, recent-repo]
+    needs: publish_forks
     permissions:
       contents: write
     outputs:
@@ -178,33 +226,6 @@ jobs:
             exit 1
           fi
           cargo xtask verify-tag "$TAG_NAME"
-
-      # The release crates depend on the patched upstream forks
-      # (forks/README.md), which start at the upstream version and take the
-      # next patch version only when the fork changes, so most releases skip
-      # every one of them. Each fork depends on the one before it.
-      - name: Publish upstream forks (skip existing versions)
-        run: |
-          set -euo pipefail
-          for fork in \
-            wgpu-hal \
-            wgpu-core-deps-apple \
-            wgpu-core-deps-emscripten \
-            wgpu-core-deps-wasm \
-            wgpu-core-deps-windows-linux-android \
-            wgpu-core \
-            wgpu; do
-            manifest="forks/wgpu/${fork}/Cargo.toml"
-            version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$manifest" | head -n 1)"
-            if cargo xtask crate-published "cranpose-${fork}" "$version"; then
-              echo "Skipping cranpose-${fork} ${version} (already published)."
-              continue
-            elif [ "$?" -ne 1 ]; then
-              echo "Failed to determine publish status for cranpose-${fork} ${version}." >&2
-              exit 1
-            fi
-            cargo publish --manifest-path "$manifest"
-          done
 
       - name: Publish crates (skip existing versions)
         run: |

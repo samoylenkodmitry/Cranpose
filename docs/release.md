@@ -73,14 +73,17 @@ missing a public API; report that as a bug.
 
 ## Workflow
 
-1. `sync_versions` validates the tag shape and the `main` head. The job runs
+1. `publish_forks` publishes the Cranpose WGPU forks whose versions crates.io
+   does not have yet. The semver gate builds each crate outside the
+   workspace, so it needs the forks the crates name on crates.io.
+2. `sync_versions` validates the tag shape and the `main` head. The job runs
    `cargo xtask bump-release-version` and the semver gate, commits
    `release: vX.Y.Z [skip ci]`, pushes the metadata commit and moves the tag to
    the new commit.
-2. `publish` checks out the tag, publishes the Cranpose WGPU forks, then
-   publishes framework crates in dependency order.
-3. `bump_isolated_demo` updates the isolated consumer after registry publication.
-4. The consumer checks build the published desktop, web and Android packages.
+3. `publish` checks out the tag and publishes framework crates in dependency
+   order.
+4. `bump_isolated_demo` updates the isolated consumer after registry publication.
+5. The consumer checks build the published desktop, web and Android packages.
 
 The workspace version and isolated consumer pin differ between the metadata
 commit and the consumer update. The workflow's `[skip ci]` marker covers this
