@@ -708,6 +708,13 @@ impl DrawRunNode {
         self.recording.primitives(self.segments.clone())
     }
 
+    /// Runs `visit` on the run's primitives in order, as [`Self::primitives`]
+    /// yields them, without the iterator's step between segments.
+    pub fn for_each_primitive(&self, visit: impl FnMut(DrawPrimitive)) {
+        self.recording
+            .for_each_primitive(self.segments.clone(), visit);
+    }
+
     /// The rect every entry of the run can reach.
     pub fn coverage_rects(&self) -> impl Iterator<Item = Rect> + '_ {
         self.recording.coverage_rects(self.segments.clone())
