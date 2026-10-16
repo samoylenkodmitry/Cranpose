@@ -166,8 +166,8 @@ class IosContractTests(unittest.TestCase):
 
     @staticmethod
     def summary():
-        return {'passedTests': 3, 'failedTests': 0, 'skippedTests': 0,
-                'expectedFailures': 0, 'totalTestCount': 3, 'result': 'Passed'}
+        return {'passedTests': 4, 'failedTests': 0, 'skippedTests': 0,
+                'expectedFailures': 0, 'totalTestCount': 4, 'result': 'Passed'}
 
 
 if __name__ == '__main__':
