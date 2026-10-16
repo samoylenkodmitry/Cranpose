@@ -184,7 +184,7 @@ fn replace_clipped_out_descendant(graph: &mut RenderGraph, descendant: RenderNod
         panic!("expected the isolated outer layer");
     };
     outer.graphics_layer.clip = true;
-    let mut child = shared_test_support::layer_node(
+    let child = shared_test_support::layer_node(
         Rect {
             x: 0.0,
             y: 0.0,
@@ -195,7 +195,7 @@ fn replace_clipped_out_descendant(graph: &mut RenderGraph, descendant: RenderNod
         GraphicsLayer::default(),
         vec![descendant],
     );
-    child.draws_within_bounds = true;
+    child.contained.set(Some(true));
     outer.children = vec![visible_content(), RenderNode::Layer(Box::new(child))];
 }
 

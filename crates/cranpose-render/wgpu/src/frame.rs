@@ -890,7 +890,10 @@ fn child_composite_support(
         return Some(visible);
     };
     let local = support.translate(child.local_bounds.x, child.local_bounds.y);
-    let logical = quad_bounds(child.transform.map_rect(local)).translate(snap.x, snap.y);
+    let logical = child
+        .transform
+        .bounds_for_rect(local)
+        .translate(snap.x, snap.y);
     visible.intersect(DeviceRect::from_logical(logical, scale))
 }
 
@@ -1153,7 +1156,10 @@ fn child_device_placement(
 
 /// `local`, a rect in the child's own space, on the device.
 fn child_device_rect(child: &ChildLayer, local: Rect, snap: Point, scale: f32) -> DeviceRect {
-    let logical = quad_bounds(child.transform.map_rect(local)).translate(snap.x, snap.y);
+    let logical = child
+        .transform
+        .bounds_for_rect(local)
+        .translate(snap.x, snap.y);
     DeviceRect::from_logical(logical, scale)
 }
 
@@ -5321,7 +5327,10 @@ fn grid_rounded_mask(child: &ChildLayer, snap: Point, scale: f32) -> Option<Roun
     let (uniform, _) = uniform_scale_translation(child.transform)?;
     Some(rounded_mask(
         LayerRoundedClip {
-            rect: quad_bounds(child.transform.map_rect(clip.rect)).translate(snap.x, snap.y),
+            rect: child
+                .transform
+                .bounds_for_rect(clip.rect)
+                .translate(snap.x, snap.y),
             radii: clip.radii.map(|radius| radius * uniform),
         },
         Point::default(),
@@ -5580,7 +5589,7 @@ pub(crate) fn scene_bounds(layer: &LayerScene, scale: f32) -> Option<Rect> {
     }
     for child in &layer.children {
         let surface_rect = child_surface_rect(child, scale).unwrap_or(child.local_bounds);
-        let child_bounds = quad_bounds(child.transform.map_rect(surface_rect));
+        let child_bounds = child.transform.bounds_for_rect(surface_rect);
         bounds = union_rect(bounds, clipped(child_bounds, child.clip));
     }
     bounds
