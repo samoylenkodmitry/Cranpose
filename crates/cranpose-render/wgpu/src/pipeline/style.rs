@@ -80,7 +80,8 @@ pub(crate) fn apply_draw_commands(
                 let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
                 let transformed = quad_bounds(quad);
                 let combined_alpha = (alpha * layer.alpha).clamp(0.0, 1.0);
-                let combined_filter = compose_color_filters(color_filter, layer.color_filter);
+                let combined_filter =
+                    compose_color_filters(color_filter.as_ref(), layer.color_filter.as_ref());
                 scene.push_image_with_geometry(
                     transformed,
                     quad,

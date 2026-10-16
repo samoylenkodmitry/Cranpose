@@ -71,7 +71,7 @@ fn hash_graphics_layer<H: Hasher>(state: &mut H, layer: &GraphicsLayer) {
         }
     }
     state.write_u8(layer.clip as u8);
-    match layer.color_filter {
+    match &layer.color_filter {
         Some(ColorFilter::Tint(color)) => {
             state.write_u8(1);
             hash_f32_value(state, color.r());
@@ -88,7 +88,7 @@ fn hash_graphics_layer<H: Hasher>(state: &mut H, layer: &GraphicsLayer) {
         }
         Some(ColorFilter::Matrix(matrix)) => {
             state.write_u8(3);
-            for value in matrix {
+            for &value in matrix.iter() {
                 hash_f32_value(state, value);
             }
         }

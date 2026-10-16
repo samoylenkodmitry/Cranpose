@@ -87,8 +87,8 @@ fn color_filter_render_hash_tracks_variant_and_values() {
         ColorFilter::Modulate(Color::RED).render_hash()
     );
     assert_ne!(
-        ColorFilter::Matrix([1.0; 20]).render_hash(),
-        ColorFilter::Matrix([0.0; 20]).render_hash()
+        ColorFilter::matrix([1.0; 20]).render_hash(),
+        ColorFilter::matrix([0.0; 20]).render_hash()
     );
 }
 

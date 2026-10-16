@@ -504,8 +504,8 @@ impl LayerNode {
     }
 
     /// The color filter applied to the layer's content, if any.
-    pub fn color_filter(&self) -> Option<ColorFilter> {
-        self.graphics_layer.color_filter
+    pub fn color_filter(&self) -> Option<&ColorFilter> {
+        self.graphics_layer.color_filter.as_ref()
     }
 
     /// Hash of everything the layer draws into its target: bounds, clip, alpha, children and their

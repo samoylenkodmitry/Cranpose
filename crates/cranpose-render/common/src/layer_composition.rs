@@ -90,7 +90,7 @@ pub fn local_content_layer_for(layer: &GraphicsLayer) -> GraphicsLayer {
     };
     GraphicsLayer {
         alpha,
-        color_filter: layer.color_filter,
+        color_filter: layer.color_filter.clone(),
         ..GraphicsLayer::default()
     }
 }

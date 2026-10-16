@@ -621,7 +621,10 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
                 quad,
                 image: image.clone(),
                 alpha: (alpha * layer.alpha).clamp(0.0, 1.0),
-                color_filter: compose_color_filters(*color_filter, layer.color_filter),
+                color_filter: compose_color_filters(
+                    color_filter.as_ref(),
+                    layer.color_filter.as_ref(),
+                ),
                 sampling: *sampling,
                 clip,
                 src_rect: *src_rect,

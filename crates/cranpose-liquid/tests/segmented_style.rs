@@ -16,8 +16,8 @@ const WIDTH: f32 = 300.0;
 fn find_label<'a>(
     layer: &'a LayerNode,
     label: &str,
-    filter: Option<ColorFilter>,
-) -> Option<(&'a TextPrimitiveNode, Option<ColorFilter>)> {
+    filter: Option<&'a ColorFilter>,
+) -> Option<(&'a TextPrimitiveNode, Option<&'a ColorFilter>)> {
     let filter = layer.color_filter().or(filter);
     layer.children.iter().find_map(|node| match node {
         RenderNode::Primitive(entry) => match &entry.node {

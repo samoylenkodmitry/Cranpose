@@ -57,7 +57,7 @@ impl RenderHash for Brush {
 
 impl RenderHash for ColorFilter {
     fn render_hash(&self) -> u64 {
-        finish_hash(|state| hash_color_filter(*self, state))
+        finish_hash(|state| hash_color_filter(self, state))
     }
 }
 
@@ -223,19 +223,19 @@ fn hash_optional_stop_list<H: Hasher>(stops: Option<&[f32]>, state: &mut H) {
     }
 }
 
-fn hash_color_filter<H: Hasher>(filter: ColorFilter, state: &mut H) {
+fn hash_color_filter<H: Hasher>(filter: &ColorFilter, state: &mut H) {
     match filter {
         ColorFilter::Tint(color) => {
             0u8.hash(state);
-            hash_color(color, state);
+            hash_color(*color, state);
         }
         ColorFilter::Modulate(color) => {
             1u8.hash(state);
-            hash_color(color, state);
+            hash_color(*color, state);
         }
         ColorFilter::Matrix(matrix) => {
             2u8.hash(state);
-            for value in matrix {
+            for &value in matrix.iter() {
                 hash_f32_bits(value, state);
             }
         }
@@ -398,7 +398,7 @@ fn hash_draw_primitive<H: Hasher>(primitive: &DrawPrimitive, state: &mut H) {
             match color_filter {
                 Some(filter) => {
                     1u8.hash(state);
-                    hash_color_filter(*filter, state);
+                    hash_color_filter(filter, state);
                 }
                 None => 0u8.hash(state),
             }

@@ -32,7 +32,7 @@ fn graph(
             rect: Rect { x, ..rect },
             image,
             alpha: 0.73,
-            color_filter: filter,
+            color_filter: filter.clone(),
             sampling,
             src_rect: Some(Rect {
                 x: 14.0,
@@ -101,7 +101,7 @@ fn assert_alpha_mask_parity(backends: wgpu::Backends) {
         .expect("GPU for alpha-mask parity");
     let mask = ImageBitmap::from_alpha8(16, 16, [19, 127, 239], (0..=255).collect()).expect("mask");
     let rgba = ImageBitmap::from_rgba8(16, 16, mask.rgba8_pixels().into_owned()).expect("rgba");
-    let matrix = ColorFilter::Matrix([
+    let matrix = ColorFilter::matrix([
         0.0, 0.7, 0.0, 0.2, 0.1, 0.0, 0.0, 0.8, 0.0, 0.1, 0.9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         0.6, 0.2,
     ]);
@@ -110,17 +110,17 @@ fn assert_alpha_mask_parity(backends: wgpu::Backends) {
             None,
             Some(ColorFilter::Modulate(Color(0.7, 0.5, 0.3, 0.8))),
             Some(ColorFilter::Tint(Color(0.4, 0.2, 0.9, 0.6))),
-            Some(matrix),
+            Some(matrix.clone()),
         ] {
             for blend in [BlendMode::SrcOver, BlendMode::DstOut] {
                 for transformed in [false, true] {
                     let expected = support::settled_capture(
                         &mut renderer,
-                        &graph(&rgba, sampling, filter, blend, transformed),
+                        &graph(&rgba, sampling, filter.clone(), blend, transformed),
                     );
                     let actual = support::settled_capture(
                         &mut renderer,
-                        &graph(&mask, sampling, filter, blend, transformed),
+                        &graph(&mask, sampling, filter.clone(), blend, transformed),
                     );
                     assert!(
                         support::distinct_colors(&expected) > 10,

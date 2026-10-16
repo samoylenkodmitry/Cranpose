@@ -198,7 +198,7 @@ fn one_flipped_bit_deep_in_a_large_bitmap_changes_its_id() {
 
 #[test]
 fn every_colour_filter_states_itself_as_a_matrix() {
-    let identity = ColorFilter::Matrix([
+    let identity = ColorFilter::matrix([
         1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
         1.0, 0.0,
     ]);
@@ -348,7 +348,7 @@ fn matrix_filter_transforms_channels() {
 fn filter_compose_applies_in_order() {
     let first = ColorFilter::modulate(Color::from_rgba_u8(128, 255, 255, 255));
     let second = ColorFilter::tint(Color::from_rgba_u8(255, 0, 0, 255));
-    let chained = first.compose(second);
+    let chained = first.compose(&second);
     let direct_second = second.apply_rgba(first.apply_rgba([0.8, 0.4, 0.2, 0.5]));
     let composed = chained.apply_rgba([0.8, 0.4, 0.2, 0.5]);
     assert!((direct_second[0] - composed[0]).abs() < 1e-5);

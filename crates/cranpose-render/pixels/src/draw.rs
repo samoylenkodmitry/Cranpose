@@ -15,8 +15,8 @@ use cranpose_render_common::{
 };
 use cranpose_ui::text::TextMotion;
 use cranpose_ui_graphics::{
-    ArcGeometry, BlendMode, Brush, ColorFilter, CornerRadii, LineGeometry, Point, Rect, StrokeJoin,
-    Trapezoid, expand_rect,
+    ArcGeometry, BlendMode, Brush, CornerRadii, LineGeometry, Point, Rect, StrokeJoin, Trapezoid,
+    expand_rect,
 };
 
 use crate::{
@@ -899,8 +899,8 @@ fn draw_image(target: &mut Target, draw: &ImageDraw, diagnostics: &RenderDiagnos
                 }
             };
 
-            if let Some(filter) = draw.color_filter {
-                sample = apply_color_filter(sample, filter);
+            if let Some(filter) = &draw.color_filter {
+                sample = filter.apply_rgba(sample);
             }
 
             sample[3] *= draw.alpha.clamp(0.0, 1.0);
@@ -1147,10 +1147,6 @@ fn blend_pixel(
     dst[1] = (out_g.clamp(0.0, 1.0) * 255.0).round() as u8;
     dst[2] = (out_b.clamp(0.0, 1.0) * 255.0).round() as u8;
     dst[3] = (out_a.clamp(0.0, 1.0) * 255.0).round() as u8;
-}
-
-fn apply_color_filter(sample: [f32; 4], filter: ColorFilter) -> [f32; 4] {
-    filter.apply_rgba(sample)
 }
 
 #[cfg(test)]
