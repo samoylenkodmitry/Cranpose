@@ -183,8 +183,13 @@ enum Batch<'a> {
 pub(crate) struct TrackedPass<'a, 'p> {
     pass: &'a mut wgpu::RenderPass<'p>,
     scissor: Option<TargetRect>,
-    /// The bound index buffer's address, offset and size.
-    index: Option<(usize, wgpu::BufferAddress, wgpu::BufferAddress)>,
+    /// The bound index buffer's address, offset, size and index format.
+    index: Option<(
+        usize,
+        wgpu::BufferAddress,
+        wgpu::BufferAddress,
+        wgpu::IndexFormat,
+    )>,
     pipeline: Option<wgpu::RenderPipeline>,
     /// Bind groups 0 and 1 with their dynamic offsets.
     groups: [Option<BoundGroup>; TRACKED_GROUPS],
@@ -240,14 +245,19 @@ impl<'a, 'p> TrackedPass<'a, 'p> {
     }
 
     /// Binds `slice` as `u32` indices.
-    pub(crate) fn set_index_buffer(&mut self, slice: wgpu::BufferSlice<'_>) {
+    pub(crate) fn set_index_buffer(
+        &mut self,
+        slice: wgpu::BufferSlice<'_>,
+        format: wgpu::IndexFormat,
+    ) {
         let bound = (
             std::ptr::from_ref(slice.buffer()).addr(),
             slice.offset(),
             slice.size(),
+            format,
         );
         if self.index != Some(bound) {
-            self.pass.set_index_buffer(slice, wgpu::IndexFormat::Uint32);
+            self.pass.set_index_buffer(slice, format);
             self.index = Some(bound);
         }
     }
@@ -449,7 +459,7 @@ impl GpuRenderer {
                 indices: recorder.upload_buffer(
                     crate::frame_graph::UploadAllocatorSpec::index(
                         "Mesh Fallback Index Buffer",
-                        std::mem::size_of::<u32>() as u64,
+                        std::mem::size_of::<u16>() as u64,
                     ),
                     &self.device,
                     bytemuck::cast_slice(builder.indices()),
@@ -568,7 +578,7 @@ impl GpuRenderer {
                             images: &scratch.image_cmds,
                             glyphs: &scratch.glyph_cmds,
                             arena: &scratch.arena_draws,
-                            meshes: &scratch.meshes.ranges,
+                            meshes: &scratch.meshes,
                         },
                         &buffers,
                     )
@@ -1158,15 +1168,19 @@ struct PassBuffers {
 }
 
 impl PassBuffers {
-    /// The pass's fallback triangles, with `ranges`, the index range of each
-    /// run draw that takes some.
+    /// The pass's fallback triangles, with the index range of each run draw
+    /// of `meshes` that takes some.
     fn run_meshes<'a>(
         &'a self,
-        ranges: &'a [Option<std::ops::Range<u32>>],
+        meshes: &'a crate::mesh_fallback::PassMeshes,
     ) -> Option<crate::mesh_fallback::RunMeshes<'a>> {
         self.meshes
             .as_ref()
-            .map(|buffers| crate::mesh_fallback::RunMeshes { ranges, buffers })
+            .map(|buffers| crate::mesh_fallback::RunMeshes {
+                ranges: &meshes.ranges,
+                chunks: meshes.builder.chunks(),
+                buffers,
+            })
     }
 }
 
@@ -1192,8 +1206,9 @@ struct PassCmds<'a> {
     images: &'a [crate::render::ImageDrawCmd],
     glyphs: &'a [crate::render::GlyphDrawCmd],
     arena: &'a [RunDrawCall],
-    /// The fallback index range of each of `arena`'s draws that takes one.
-    meshes: &'a [Option<std::ops::Range<u32>>],
+    /// The pass's fallback triangles: the index range of each of `arena`'s
+    /// draws that takes one, and the chunks the indices count in.
+    meshes: &'a crate::mesh_fallback::PassMeshes,
 }
 
 /// Draws each glyph batch's retained runs after its shared quads, and its

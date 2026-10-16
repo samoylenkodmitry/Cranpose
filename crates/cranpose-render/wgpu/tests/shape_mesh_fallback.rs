@@ -69,6 +69,30 @@ fn solid_shapes(scope: &mut DrawScopeDefault) {
     scope.draw_arc(brush, Point::new(60.0, 175.0), 24.0, 0.4, 3.9, ring);
 }
 
+/// A grid of 1,600 small stroked rounded rects: about 77,000 fallback
+/// corners in one pass, more than 16-bit indices name from one vertex.
+fn many_shapes(scope: &mut DrawScopeDefault) {
+    let brush = Brush::solid(Color(0.3, 0.75, 0.55, 1.0));
+    for row in 0..40 {
+        for column in 0..40 {
+            scope.draw_round_rect_at_stroked(
+                Rect {
+                    x: 12.0 + column as f32 * 4.75,
+                    y: 8.0 + row as f32 * 4.5,
+                    width: 3.5,
+                    height: 3.25,
+                },
+                brush.clone(),
+                cranpose_ui_graphics::CornerRadii::uniform(1.25),
+                Stroke {
+                    width: 1.2,
+                    ..Stroke::default()
+                },
+            );
+        }
+    }
+}
+
 /// The first frame of `graph` on a renderer that has built what every
 /// screen draws with, but none of the graph's own shape pipelines, with its
 /// statistics, and the frame once those landed.
@@ -157,6 +181,11 @@ fn assert_fallback_matches(record: impl FnOnce(&mut DrawScopeDefault)) {
 #[test]
 fn a_first_frame_draws_solid_shapes_as_their_pipelines_do() {
     assert_fallback_matches(solid_shapes);
+}
+
+#[test]
+fn a_first_frame_draws_more_corners_than_one_index_range_holds() {
+    assert_fallback_matches(many_shapes);
 }
 
 #[test]

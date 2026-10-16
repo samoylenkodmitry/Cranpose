@@ -6139,17 +6139,15 @@ impl GpuRenderer {
                 // triangles, or is left out, until it lands.
                 let mesh = meshes.and_then(|(meshes, depth)| {
                     let range = meshes.ranges.get(position)?.clone()?;
-                    Some((range, meshes.buffers, self.mesh_pipeline(depth)?))
+                    Some((range, meshes, self.mesh_pipeline(depth)?))
                 });
-                let Some((range, buffers, mesh_pipeline)) = mesh else {
+                let Some((range, meshes, mesh_pipeline)) = mesh else {
                     self.note_placeholder();
                     continue;
                 };
                 self.note_mesh_fallback();
                 pass.set_pipeline(mesh_pipeline);
-                pass.set_vertex_buffer(0, buffers.vertices.slice());
-                pass.set_index_buffer(buffers.indices.slice());
-                pass.draw_indexed(range, 0, 0..1);
+                meshes.draw(pass, range);
                 bound_class = None;
                 records_bound = false;
                 continue;
@@ -6168,7 +6166,10 @@ impl GpuRenderer {
                     .set(self.frame_stats.shape_specialized_draws.get() + 1);
             }
             if bound_class != Some(draw.band_class) {
-                pass.set_index_buffer(self.run_store.strip_index_buffer(draw.band_class).slice(..));
+                pass.set_index_buffer(
+                    self.run_store.strip_index_buffer(draw.band_class).slice(..),
+                    wgpu::IndexFormat::Uint32,
+                );
                 bound_class = Some(draw.band_class);
             }
             pass.set_pipeline(pipeline);
@@ -6266,7 +6267,7 @@ impl GpuRenderer {
         self.frame_stats.add_draw_calls(cmds.len() as u32);
         let mut bound_pipeline = None;
         self.viewport_uniforms.bind(pass, uniform_slot)?;
-        pass.set_index_buffer(image_slot.indices.slice());
+        pass.set_index_buffer(image_slot.indices.slice(), wgpu::IndexFormat::Uint32);
         pass.set_vertex_buffer(0, image_slot.vertices.slice());
         let mut clips_bound = false;
         for cmd in cmds {
