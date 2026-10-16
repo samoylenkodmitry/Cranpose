@@ -1,5 +1,5 @@
 use std::{
-    any::{TypeId, type_name_of_val},
+    any::{Any, TypeId, type_name_of_val},
     cell::RefCell,
     rc::Rc,
 };
@@ -15,7 +15,7 @@ use cranpose_foundation::{
 use super::{
     DimensionConstraint, EdgeInsets, LayoutProperties, Modifier, ModifierInspectorRecord,
     ModifierLocalAncestorResolver, ModifierLocalToken, Point, ResolvedModifiers,
-    local::ModifierLocalManager, modifier_debug_enabled,
+    layout_data::LayoutDataNode, local::ModifierLocalManager, modifier_debug_enabled,
 };
 use crate::{
     modifier_nodes::{
@@ -52,6 +52,9 @@ pub struct ModifierChainHandle {
     /// one took a hundred bytes of every node.
     pending_invalidations: Option<Box<ModifierInvalidations>>,
     resolved: ResolvedModifiers,
+    /// What the chain tells the parent's measure policy, worked out with
+    /// `resolved`.
+    parent_data: cranpose_ui_layout::ParentData,
     capabilities: NodeCapabilities,
     aggregate_child_capabilities: NodeCapabilities,
     /// `None` until the chain first provides or reads a modifier local, as
@@ -120,6 +123,7 @@ impl ModifierChainHandle {
             layout_direction: crate::LayoutDirection::Ltr,
             pending_invalidations: None,
             resolved: ResolvedModifiers::default(),
+            parent_data: cranpose_ui_layout::ParentData::default(),
             capabilities: NodeCapabilities::default(),
             aggregate_child_capabilities: NodeCapabilities::default(),
             modifier_locals: None,
@@ -157,7 +161,7 @@ impl ModifierChainHandle {
         self.layout_direction = direction;
         self.revision = next_revision();
         self.update_offset_direction();
-        self.resolved = self.compute_resolved();
+        self.resolve();
         true
     }
 
@@ -236,7 +240,7 @@ impl ModifierChainHandle {
             context,
         );
         if updated && reach == InPlaceReach::Resolved {
-            self.resolved = self.compute_resolved();
+            self.resolve();
         }
         updated
     }
@@ -260,7 +264,7 @@ impl ModifierChainHandle {
         let modifier_local_invalidations = self.sync_modifier_locals(resolver);
 
         if !context.invalidations().is_empty() {
-            self.resolved = self.compute_resolved();
+            self.resolve();
         }
 
         let should_log = self.debug_logging || modifier_debug_enabled();
@@ -351,44 +355,7 @@ impl ModifierChainHandle {
     /// The outermost node of each kind wins, as Compose folds
     /// `modifyParentData` from the innermost node out.
     pub(crate) fn parent_data(&self) -> cranpose_ui_layout::ParentData {
-        let props = self.resolved.layout_properties();
-        let weight = props.weight().unwrap_or_default();
-        let mut data = cranpose_ui_layout::ParentData {
-            weight: weight.weight,
-            fill: weight.fill,
-            box_alignment: props.box_alignment(),
-            row_alignment: props.row_alignment(),
-            row_baseline: props.row_baseline(),
-            column_alignment: props.column_alignment(),
-            ..Default::default()
-        };
-        let (mut fill_width, mut fill_height) = (None, None);
-        self.chain
-            .for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
-                node_ref.with_node(|node| {
-                    let any = node.as_any();
-                    if let Some(fill) = any.downcast_ref::<FillNode>() {
-                        let (horizontal, vertical) = match fill.direction() {
-                            FillDirection::Horizontal => (true, false),
-                            FillDirection::Vertical => (false, true),
-                            FillDirection::Both => (true, true),
-                        };
-                        if horizontal {
-                            fill_width.get_or_insert_with(|| fill.fraction());
-                        }
-                        if vertical {
-                            fill_height.get_or_insert_with(|| fill.fraction());
-                        }
-                    } else if data.layout_data.is_none()
-                        && let Some(node) = any.downcast_ref::<super::layout_data::LayoutDataNode>()
-                    {
-                        data.layout_data = Some(Rc::clone(node.data()));
-                    }
-                });
-            });
-        data.fill_width_fraction = fill_width.unwrap_or_default();
-        data.fill_height_fraction = fill_height.unwrap_or_default();
-        data
+        self.parent_data.clone()
     }
 
     /// The chain's modifier locals, or `None` while it has never provided or
@@ -449,41 +416,108 @@ impl ModifierChainHandle {
         snapshot
     }
 
-    fn compute_resolved(&self) -> ResolvedModifiers {
-        let mut resolved = ResolvedModifiers::default();
-        let mut layout = LayoutProperties::default();
-        let mut padding = EdgeInsets::default();
-        let mut offset = Point::default();
-
-        self.chain.for_each_forward(|node_ref| {
-            node_ref.with_node(|node| {
-                let any = node.as_any();
-                if let Some(padding_node) = any.downcast_ref::<PaddingNode>() {
-                    padding += padding_node.padding();
-                } else if let Some(size_node) = any.downcast_ref::<SizeNode>() {
-                    apply_size_node(&mut layout, size_node);
-                } else if let Some(fill_node) = any.downcast_ref::<FillNode>() {
-                    apply_fill_node(&mut layout, fill_node);
-                } else if let Some(weight_node) = any.downcast_ref::<WeightNode>() {
-                    // Parent data goes to the outermost node, as Compose
-                    // folds `modifyParentData` from the innermost node out.
-                    layout
-                        .weight
-                        .get_or_insert_with(|| weight_node.layout_weight());
-                } else if let Some(alignment_node) = any.downcast_ref::<AlignmentNode>() {
-                    apply_alignment_node(&mut layout, alignment_node);
-                } else if let Some(offset_node) = any.downcast_ref::<OffsetNode>() {
-                    let delta = offset_node.offset();
-                    offset.x += delta.x;
-                    offset.y += delta.y;
-                }
+    /// Works out the chain's resolved modifiers and parent data again, in
+    /// one walk over its layout nodes.
+    fn resolve(&mut self) {
+        let mut resolution = Resolution::default();
+        self.chain
+            .for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
+                node_ref.with_node(|node| resolution.take(node.as_any()));
             });
-        });
+        let Resolution {
+            layout,
+            padding,
+            offset,
+            fill_width,
+            fill_height,
+            layout_data,
+        } = resolution;
+        let weight = layout.weight.unwrap_or_default();
+        self.parent_data = cranpose_ui_layout::ParentData {
+            weight: weight.weight,
+            fill: weight.fill,
+            box_alignment: layout.box_alignment,
+            row_alignment: layout.row_alignment,
+            row_baseline: layout.row_baseline,
+            column_alignment: layout.column_alignment,
+            fill_width_fraction: fill_width.unwrap_or_default(),
+            fill_height_fraction: fill_height.unwrap_or_default(),
+            layout_data,
+        };
+        self.resolved.set_padding(padding);
+        self.resolved.set_layout_properties(layout);
+        self.resolved.set_offset(offset);
+    }
+}
 
-        resolved.set_padding(padding);
-        resolved.set_layout_properties(layout);
-        resolved.set_offset(offset);
-        resolved
+/// What a walk over a chain's layout nodes, from the outermost in, gathers
+/// for its resolved modifiers and parent data. Of each kind the parent reads,
+/// the outermost node wins, as Compose folds `modifyParentData` from the
+/// innermost node out.
+#[derive(Default)]
+struct Resolution {
+    layout: LayoutProperties,
+    padding: EdgeInsets,
+    offset: Point,
+    fill_width: Option<f32>,
+    fill_height: Option<f32>,
+    layout_data: Option<Rc<dyn cranpose_ui_layout::LayoutData>>,
+}
+
+impl Resolution {
+    /// Takes in the next node of the walk.
+    fn take(&mut self, node: &dyn Any) {
+        // One type lookup a node: each `downcast_ref` asks for it again.
+        let kind = Any::type_id(node);
+        if kind == TypeId::of::<PaddingNode>() {
+            if let Some(padding) = node.downcast_ref::<PaddingNode>() {
+                self.padding += padding.padding();
+            }
+        } else if kind == TypeId::of::<SizeNode>() {
+            if let Some(size) = node.downcast_ref::<SizeNode>() {
+                apply_size_node(&mut self.layout, size);
+            }
+        } else if kind == TypeId::of::<FillNode>() {
+            if let Some(fill) = node.downcast_ref::<FillNode>() {
+                self.take_fill(fill);
+            }
+        } else if kind == TypeId::of::<WeightNode>() {
+            if let Some(weight) = node.downcast_ref::<WeightNode>() {
+                self.layout
+                    .weight
+                    .get_or_insert_with(|| weight.layout_weight());
+            }
+        } else if kind == TypeId::of::<AlignmentNode>() {
+            if let Some(alignment) = node.downcast_ref::<AlignmentNode>() {
+                apply_alignment_node(&mut self.layout, alignment);
+            }
+        } else if kind == TypeId::of::<OffsetNode>() {
+            if let Some(offset) = node.downcast_ref::<OffsetNode>() {
+                let delta = offset.offset();
+                self.offset.x += delta.x;
+                self.offset.y += delta.y;
+            }
+        } else if kind == TypeId::of::<LayoutDataNode>()
+            && self.layout_data.is_none()
+            && let Some(data) = node.downcast_ref::<LayoutDataNode>()
+        {
+            self.layout_data = Some(Rc::clone(data.data()));
+        }
+    }
+
+    fn take_fill(&mut self, fill: &FillNode) {
+        apply_fill_node(&mut self.layout, fill);
+        let (horizontal, vertical) = match fill.direction() {
+            FillDirection::Horizontal => (true, false),
+            FillDirection::Vertical => (false, true),
+            FillDirection::Both => (true, true),
+        };
+        if horizontal {
+            self.fill_width.get_or_insert_with(|| fill.fraction());
+        }
+        if vertical {
+            self.fill_height.get_or_insert_with(|| fill.fraction());
+        }
     }
 }
 /// Sets the alignments a parent reads from `node` that no outer node set.

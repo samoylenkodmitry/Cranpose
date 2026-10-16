@@ -500,9 +500,6 @@ pub struct LayoutNode {
     layout_runtime_state: Rc<RefCell<LayoutRuntimeState>>,
     /// The actual children of this node (folded view - includes virtual nodes as-is)
     pub children: Vec<NodeId>,
-    /// What the chain tells the parent's policy about this node: its
-    /// weight and alignments, kept beside the binding fields.
-    parent_data: Cell<cranpose_ui_layout::ParentData>,
     needs_measure: Cell<bool>,
     needs_layout: Cell<bool>,
     /// A node below this one needs layout or measure.
@@ -609,7 +606,6 @@ impl LayoutNode {
             needs_measure: Cell::new(true),
             needs_layout: Cell::new(true),
             descendant_dirt: Cell::default(),
-            parent_data: Cell::default(),
             needs_semantics: Cell::new(true),
             descendant_needs_semantics: Cell::new(false),
             semantics_reach: Cell::new(None),
@@ -676,24 +672,15 @@ impl LayoutNode {
         self.modifier_chain
             .set_debug_logging(self.debug_modifiers.get());
         let mut context = self.modifier_chain.context(self.id.get());
-        let reach = in_place.filter(|&reach| {
+        let in_place = in_place.is_some_and(|reach| {
             self.modifier_chain
                 .update_elements_in_place(&self.modifier, reach, &mut context)
         });
-        let in_place = reach.is_some();
-        if reach == Some(InPlaceReach::Resolved) {
-            self.refresh_parent_data();
-        }
         let modifier_local_invalidations = if in_place {
             ModifierInvalidations::new()
         } else {
-            let invalidations = self.modifier_chain.update_with_resolver(
-                &self.modifier,
-                &mut resolver,
-                &mut context,
-            );
-            self.refresh_parent_data();
-            invalidations
+            self.modifier_chain
+                .update_with_resolver(&self.modifier, &mut resolver, &mut context)
         };
         if prev_caps.contains(NodeCapabilities::WINDOW_ROOT)
             != self
@@ -839,7 +826,6 @@ impl LayoutNode {
     /// Updates relative modifier placement for this node's composition scope.
     pub fn set_layout_direction(&mut self, direction: crate::LayoutDirection) {
         if self.modifier_chain.set_layout_direction(direction) {
-            self.refresh_parent_data();
             self.cache.clear();
             self.modifier_slices_dirty.set(true);
             self.mark_needs_measure();
@@ -1041,13 +1027,7 @@ impl LayoutNode {
 
     /// What the chain tells the parent's measure policy about this node.
     pub(crate) fn parent_data(&self) -> cranpose_ui_layout::ParentData {
-        crate::layout::read_cell(&self.parent_data, Clone::clone)
-    }
-
-    /// Copies the parent data out of the chain's resolved modifiers, after
-    /// they were computed again.
-    fn refresh_parent_data(&self) {
-        self.parent_data.set(self.modifier_chain.parent_data());
+        self.modifier_chain.parent_data()
     }
 
     /// Returns the union of the capabilities of all nodes in the modifier chain.
@@ -1255,7 +1235,6 @@ impl Clone for LayoutNode {
             needs_measure: Cell::new(self.needs_measure.get()),
             needs_layout: Cell::new(self.needs_layout.get()),
             descendant_dirt: Cell::new(self.descendant_dirt.get()),
-            parent_data: Cell::new(self.parent_data()),
             needs_semantics: Cell::new(self.needs_semantics.get()),
             descendant_needs_semantics: Cell::new(self.descendant_needs_semantics.get()),
             semantics_reach: Cell::new(None),
