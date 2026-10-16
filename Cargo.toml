@@ -71,7 +71,7 @@ cranpose-localization = { path = "crates/cranpose-localization", version = "0.12
 # Cranpose's patched wgpu (forks/README.md), which the web, Android and iOS
 # take. Its library is still `wgpu`. Desktop builds take wgpu 30.0.1 from
 # crates.io, which each crate names in its desktop target tables.
-wgpu = { package = "cranpose-wgpu", version = "30.0.20", default-features = false }
+wgpu = { package = "cranpose-wgpu", version = "30.0.21", default-features = false }
 # Force android-activity to use native-activity feature across all workspace crates
 android-activity = { version = "0.6", features = ["native-activity"] }
 bytemuck = { version = "1.25", features = ["derive"] }

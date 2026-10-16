@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.87"
 name = "cranpose-wgpu-core"
-version = "30.0.17"
+version = "30.0.18"
 authors = ["gfx-rs developers"]
 build = "build.rs"
 autolib = false
