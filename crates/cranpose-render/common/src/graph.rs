@@ -763,12 +763,19 @@ pub struct RenderGraph {
     pub root: LayerNode,
     /// How many scene updates the graph took: the number of the latest.
     pub update: u64,
+    /// The way to the layer the last scene updates changed alone, for the
+    /// next update that changes it alone.
+    pub(crate) retained_path: Option<crate::scene_builder::RetainedPath>,
 }
 
 impl RenderGraph {
     /// Creates a graph around `root` at update zero.
     pub fn new(root: LayerNode) -> Self {
-        Self { root, update: 0 }
+        Self {
+            root,
+            update: 0,
+            retained_path: None,
+        }
     }
 
     /// Number of nodes in the graph. A layer counts once and each primitive of a draw run counts on
