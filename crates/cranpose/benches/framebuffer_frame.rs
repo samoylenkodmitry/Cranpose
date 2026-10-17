@@ -78,7 +78,7 @@ fn Nested(depth: usize) {
         AnimatedBar();
     } else {
         Box(Modifier::empty(), BoxSpec::default(), move || {
-            Nested(depth - 1)
+            Nested(depth - 1);
         });
     }
 }
