@@ -35,18 +35,17 @@ fn hash_option_f32<H: Hasher>(state: &mut H, value: Option<f32>) {
     }
 }
 
-fn hash_projection<H: Hasher>(
-    state: &mut H,
-    projection: Option<cranpose_ui_graphics::ProjectiveTransform>,
-) {
-    match projection {
-        Some(projection) => {
-            state.write_u8(1);
-            for value in projection.matrix().into_iter().flatten() {
-                hash_f32_value(state, value);
-            }
-        }
+/// Hashes which 3D role a layer has and which mesh it is drawn on: equal
+/// layers hash alike, and the camera and placement are left to equality.
+fn hash_space<H: Hasher>(state: &mut H, space: Option<&cranpose_ui_graphics::space::LayerSpace>) {
+    use cranpose_ui_graphics::space::LayerSpace;
+    match space {
         None => state.write_u8(0),
+        Some(LayerSpace::Scene(_)) => state.write_u8(1),
+        Some(LayerSpace::Surface(surface)) => {
+            state.write_u8(2);
+            state.write_u64(surface.mesh.id());
+        }
     }
 }
 
@@ -63,7 +62,7 @@ fn hash_graphics_layer<H: Hasher>(state: &mut H, layer: &GraphicsLayer) {
     hash_f32_value(state, layer.transform_origin.pivot_fraction_y);
     hash_f32_value(state, layer.translation_x);
     hash_f32_value(state, layer.translation_y);
-    hash_projection(state, layer.projection);
+    hash_space(state, layer.space.as_deref());
     hash_f32_value(state, layer.shadow_elevation);
     hash_f32_value(state, layer.ambient_shadow_color.r());
     hash_f32_value(state, layer.ambient_shadow_color.g());

@@ -1,9 +1,13 @@
+use std::time::Duration;
+
 use crate::{output_paths, robot_exit, robot_launch, robot_shot};
 
 use cranpose::Robot;
 use cranpose_testing::{click_button_in_semantics, find_text_in_semantics};
 
 const STEP_IN: &str = "Step into the room";
+/// Longer than the 0.9 s walk between the screen and the room.
+const WALK: Duration = Duration::from_millis(1400);
 
 pub(crate) fn main() {
     let _ = env_logger::try_init();
@@ -25,8 +29,20 @@ pub(crate) fn main() {
             if !click_button_in_semantics(&robot, STEP_IN) {
                 robot_exit::fail(&robot, "no button to step into the room");
             }
-            robot_shot::settle(&robot, 1500);
+            // The globe spins, so the app does not go idle until it stops.
+            walk(&robot);
             save(&robot, &shots, "room.png");
+
+            if !click_button_in_semantics(&robot, "Stop the spin") {
+                robot_exit::fail(&robot, "the globe's button is missing in the room");
+            }
+            robot_shot::settle(&robot, 300);
+            if find_text_in_semantics(&robot, "Spin the globe").is_none() {
+                robot_exit::fail(
+                    &robot,
+                    "a click on the globe's button, where it shows on the sphere, missed it",
+                );
+            }
 
             if !click_button_in_semantics(&robot, "Pressed 0 times") {
                 robot_exit::fail(&robot, "the far wall's counter is missing in the room");
@@ -46,7 +62,8 @@ pub(crate) fn main() {
             if !click_button_in_semantics(&robot, "Back to the screen") {
                 robot_exit::fail(&robot, "no button to leave the room");
             }
-            robot_shot::settle(&robot, 1500);
+            walk(&robot);
+            robot_shot::settle(&robot, 300);
             save(&robot, &shots, "back.png");
             let back = step_in_button(&robot);
             if (back.0 - flat.0).abs() > 1.0 || (back.1 - flat.1).abs() > 1.0 {
@@ -60,6 +77,14 @@ pub(crate) fn main() {
             robot.exit().ok();
         })
         .run(robot_launch::counter_demo);
+}
+
+/// Lets the camera walk between the screen and the room.
+fn walk(robot: &Robot) {
+    std::thread::sleep(WALK);
+    if let Err(err) = robot.pump_frames(3) {
+        robot_exit::fail(robot, &format!("pump frames: {err}"));
+    }
 }
 
 fn step_in_button(robot: &Robot) -> (f32, f32, f32, f32) {

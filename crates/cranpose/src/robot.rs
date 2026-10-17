@@ -6,7 +6,9 @@ use std::{
 
 use cranpose_app_shell::{AppShell, KeyCode, PointerSource, RuntimeLeakDebugStats};
 use cranpose_render_common::{
-    Renderer, graph::ProjectiveTransform, layer_transform::layer_transform_to_window,
+    Renderer,
+    graph::ProjectiveTransform,
+    layer_transform::{SceneFrame, node_transform_to_window},
 };
 #[cfg(feature = "renderer-wgpu")]
 use cranpose_render_wgpu::{DebugCpuAllocationStats, RenderStatsSnapshot};
@@ -1814,20 +1816,16 @@ fn build_semantic_bounds_index(
     root: &cranpose_ui::LayoutBox,
 ) -> HashMap<cranpose_core::NodeId, SemanticRect> {
     let mut bounds = HashMap::new();
-    collect_semantic_bounds(
-        root,
-        (
-            ProjectiveTransform::identity(),
-            cranpose_ui::Point::default(),
-        ),
-        &mut bounds,
-    );
+    collect_semantic_bounds(root, (ProjectiveTransform::identity(), None), &mut bounds);
     bounds
 }
 
+/// Records where each node of `layout_box`'s subtree shows in the window:
+/// `parent` maps the parent's children to the window, through the scene the
+/// parent shows, if any.
 fn collect_semantic_bounds(
     layout_box: &cranpose_ui::LayoutBox,
-    (parent, parent_origin): (ProjectiveTransform, cranpose_ui::Point),
+    parent: (ProjectiveTransform, Option<&SceneFrame>),
     bounds: &mut HashMap<cranpose_core::NodeId, SemanticRect>,
 ) {
     let laid_out = bounds_from_layout_box(layout_box);
@@ -1837,17 +1835,20 @@ fn collect_semantic_bounds(
         width: laid_out.width,
         height: laid_out.height,
     };
+    let size = cranpose_ui::Size {
+        width: rect.width,
+        height: rect.height,
+    };
+    let origin = cranpose_ui::Point::new(rect.x, rect.y);
     let slices = &layout_box.node_data.modifier_slices;
-    let window = slices.graphics_layer().map_or(parent, |layer| {
-        layer_transform_to_window(
-            parent,
-            parent_origin,
-            cranpose_ui::Point::new(rect.x, rect.y),
-            slices.layer_bounds(cranpose_ui::Size {
-                width: rect.width,
-                height: rect.height,
-            }),
-            &layer,
+    let layer = slices.graphics_layer();
+    let window = layer.as_ref().map_or(parent.0, |layer| {
+        node_transform_to_window(
+            parent.0,
+            parent.1,
+            (origin, size),
+            slices.layer_bounds(size),
+            layer,
         )
     });
     let shown = window.bounds_for_rect(rect);
@@ -1860,12 +1861,11 @@ fn collect_semantic_bounds(
             height: shown.height,
         },
     );
-    let content_origin = cranpose_ui::Point::new(
-        rect.x + layout_box.content_offset.x,
-        rect.y + layout_box.content_offset.y,
-    );
+    let scene = layer
+        .as_ref()
+        .and_then(|layer| SceneFrame::of(layer, origin, size));
     for child in &layout_box.children {
-        collect_semantic_bounds(child, (window, content_origin), bounds);
+        collect_semantic_bounds(child, (window, scene.as_ref()), bounds);
     }
 }
 

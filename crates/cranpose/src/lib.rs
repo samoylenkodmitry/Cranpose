@@ -315,9 +315,6 @@ pub use cranpose_media::{SoftwareMediaPlayer, path_from_uri, uri_for_path};
 /// Whether the host's current application theme is dark.
 pub use cranpose_services::isSystemInDarkTheme;
 pub use cranpose_services::*;
-/// Composable surfaces placed in a room seen through a camera.
-#[cfg(feature = "spatial")]
-pub use cranpose_spatial as spatial;
 pub use cranpose_ui::*;
 
 static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =

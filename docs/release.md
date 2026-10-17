@@ -43,7 +43,6 @@ meets.
 | `cranpose` | The facade: app launcher, platform shells, renderers and the prelude. |
 | `cranpose-core`, `cranpose-ui`, `cranpose-ui-graphics`, `cranpose-ui-layout`, `cranpose-foundation`, `cranpose-animation` | Composition, widgets, modifiers, graphics types, custom layouts, input and animation. |
 | `cranpose-services`, `cranpose-capabilities`, `cranpose-navigation`, `cranpose-liquid`, `cranpose-fonts` | Platform services, permissions, navigation, the Liquid design system and fonts. |
-| `cranpose-spatial` | Composable surfaces on the walls of a room seen through a camera. |
 | `cranpose-coroflow`, `coroflow` | Coroutines and flows. |
 | `cranpose-audio`, `cranpose-media` | Audio and media playback. |
 | `cranpose-native` | Cranpose inside Android and UIKit apps, and native views inside Cranpose. |

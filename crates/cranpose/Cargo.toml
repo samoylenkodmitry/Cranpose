@@ -250,8 +250,6 @@ webview = ["dep:wry", "dep:gtk"]
 # A tray icon on macOS, Windows and Linux and a native menu bar on macOS
 # (`Tray`, `MenuBar`). Linux trays go over D-Bus, without GTK.
 desktop-menus = ["desktop-shell", "dep:tray-icon", "dep:muda"]
-# Composable surfaces placed in a room seen through a camera (`spatial`).
-spatial = ["dep:cranpose-spatial"]
 
 [dependencies]
 cranpose-app-shell = { workspace = true }
@@ -346,7 +344,6 @@ js-sys = { version = "0.3", optional = true }
 log = "0.4"
 cranpose-capabilities = { workspace = true }
 cranpose-liquid = { workspace = true }
-cranpose-spatial = { workspace = true, optional = true }
 cranpose-services = { workspace = true, default-features = false }
 cranpose-storekit = { workspace = true, default-features = false, optional = true }
 thiserror = "2.0.21"

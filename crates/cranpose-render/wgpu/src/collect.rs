@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::{
     geometry::{blur_reach, blur_reach_for_minimum_scale},
@@ -9,12 +11,15 @@ use cranpose_render_common::{
         layer_composite_params, layer_requires_isolation, local_content_layer_for,
     },
     layer_shadow::ShadowLight,
-    layer_transform::{apply_layer_affine_to_rect, layer_turns, layer_uniform_scale},
+    layer_transform::{
+        apply_layer_affine_to_rect, layer_scene, layer_surface, layer_uniform_scale,
+    },
     primitive_emit::{PrimitiveClipSpace, resolve_clip, resolve_primitive_clip},
 };
 use cranpose_ui_graphics::{
     BlendMode, CompositingStrategy, DrawPrimitive, GraphicsLayer, LayerShape, Point, RecordLane,
     Rect, RenderEffect, ShadowPrimitive, expand_rect, primitive_coverage_rect,
+    space::{Camera, Light, MeshSurface},
 };
 
 use crate::{
@@ -179,6 +184,29 @@ pub(crate) struct ChildLayer {
     pub(crate) cache_policy: CachePolicy,
     pub(crate) in_place: bool,
     pub(crate) content: LayerScene,
+    /// For a mesh surface in a scene: the mesh its surface is drawn on in
+    /// the scene's 3D pass, in place of a composite.
+    pub(crate) mesh: Option<Arc<MeshChild>>,
+}
+
+/// A scene that a layer shows, as the 3D pass of its surfaces draws it.
+pub(crate) struct SceneDraw {
+    pub(crate) camera: Camera,
+    pub(crate) light: Option<Light>,
+    /// The scene node's rect in the coordinates its parent's content is
+    /// collected in. The camera looks through its middle.
+    pub(crate) rect: Rect,
+    /// What cuts the scene, in the same coordinates.
+    pub(crate) clip: Option<Rect>,
+}
+
+/// A mesh surface child of a scene.
+pub(crate) struct MeshChild {
+    pub(crate) scene: Arc<SceneDraw>,
+    pub(crate) surface: MeshSurface,
+    /// The surface node's own rect, which the mesh's texture coordinates
+    /// span.
+    pub(crate) content: Rect,
 }
 
 impl ChildLayer {
@@ -188,7 +216,7 @@ impl ChildLayer {
 }
 
 #[derive(Clone, Copy)]
-struct WalkContext {
+struct WalkContext<'s> {
     offset: Point,
     visual_clip: Option<Rect>,
     /// The rounded clip `visual_clip` cuts from, whole.
@@ -205,6 +233,9 @@ struct WalkContext {
     /// The graph's latest scene update, which tells an isolated layer whose
     /// content changes every frame from one a raster cache can keep.
     update: u64,
+    /// The scene that places the mesh surfaces among the layers collected
+    /// under this context.
+    scene: Option<&'s Arc<SceneDraw>>,
 }
 
 #[derive(Clone, Copy)]
@@ -271,7 +302,9 @@ fn graphics_layer_is_rigid(layer: &GraphicsLayer) -> bool {
     (layer.scale - 1.0).abs() <= AFFINE_TOLERANCE
         && (layer.scale_x - 1.0).abs() <= AFFINE_TOLERANCE
         && (layer.scale_y - 1.0).abs() <= AFFINE_TOLERANCE
-        && !layer_turns(layer, AFFINE_TOLERANCE)
+        && layer.rotation_x.abs() <= AFFINE_TOLERANCE
+        && layer.rotation_y.abs() <= AFFINE_TOLERANCE
+        && layer.rotation_z.abs() <= AFFINE_TOLERANCE
 }
 
 fn rigid_snap_anchor(layer_bounds: Rect, layer: &GraphicsLayer) -> Option<SnapAnchor> {
@@ -641,7 +674,7 @@ fn child_placement(layer: &LayerNode, raster_scale: RasterScale) -> Placement {
 /// own clip, `layer_clip`, holds what is left of the rounded one. A clip
 /// that cuts further is a rect nothing under it may round; what reaches
 /// its corners kept the rounded layer on a surface.
-fn rounding_within(layer_clip: Option<Rect>, context: &WalkContext) -> Option<ClipRounding> {
+fn rounding_within(layer_clip: Option<Rect>, context: &WalkContext<'_>) -> Option<ClipRounding> {
     let keeps = match (layer_clip, context.visual_clip) {
         (None, _) => true,
         (Some(own), Some(rounded)) => clip_holds(own, rounded),
@@ -653,7 +686,10 @@ fn rounding_within(layer_clip: Option<Rect>, context: &WalkContext) -> Option<Cl
 /// How `child` places under `context`: a rounded clip draws in place,
 /// whatever rect clips above cut from it, but never inside another rounded
 /// clip, whose radius a placement could not carry beside its own.
-fn placement_in(child: &LayerNode, context: &WalkContext) -> Placement {
+fn placement_in(child: &LayerNode, context: &WalkContext<'_>) -> Placement {
+    if context.scene.is_some() && layer_surface(&child.graphics_layer).is_some() {
+        return Placement::Isolated;
+    }
     match child_placement(child, context.raster_scale) {
         Placement::DirectRounded(..) if context.rounding.is_some() => Placement::Isolated,
         placement => placement,
@@ -853,6 +889,7 @@ pub(crate) fn collect_root(
         ),
         wants_pixel_sensitive: false,
         update,
+        scene: None,
     };
     collect_child(root, text_layout, motion, context, &mut out, recycler);
     out.scene.flush_loose();
@@ -882,7 +919,7 @@ pub(crate) fn collect_overlay(
 fn push_backdrop_layer(
     layer: &LayerNode,
     offset: Point,
-    context: WalkContext,
+    context: WalkContext<'_>,
     scene: &mut CompositorScene,
 ) {
     let Some(effect) = layer.backdrop() else {
@@ -918,7 +955,7 @@ fn push_backdrop_layer(
 
 /// The walk's light seen from `layer`'s own space, which an isolated
 /// layer's content is collected in.
-fn light_in_layer(layer: &LayerNode, context: &WalkContext) -> ShadowLight {
+fn light_in_layer(layer: &LayerNode, context: &WalkContext<'_>) -> ShadowLight {
     let to_parent = layer
         .transform_to_parent
         .then(ProjectiveTransform::translation(
@@ -949,7 +986,7 @@ fn isolated_child(
     layer: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
-    context: WalkContext,
+    context: WalkContext<'_>,
     parent_scene: &mut CompositorScene,
     recycler: &mut LayerSceneRecycler,
 ) -> (ChildLayer, bool) {
@@ -977,6 +1014,7 @@ fn isolated_child(
         wants_pixel_sensitive: context.wants_pixel_sensitive
             || (!context.translated && context.snap_anchor.is_none()),
         update: context.update,
+        scene: None,
     };
     let mut content = recycler.take(SceneCapacityHint::default());
     let has_pixel_sensitive_subtree = collect_into(
@@ -1014,7 +1052,8 @@ fn isolated_child(
         nominal_scale
     };
     motion.record_scale(layer.node_id, surface_scale, content_hash);
-    let in_place = can_draw_in_place(layer, transform, surface_scale, &content);
+    let mesh = mesh_child(layer, &context);
+    let in_place = mesh.is_none() && can_draw_in_place(layer, transform, surface_scale, &content);
     (
         ChildLayer {
             z_index: parent_scene.next_z(),
@@ -1034,9 +1073,40 @@ fn isolated_child(
             cache_policy: layer.cache_policy,
             in_place,
             content,
+            mesh,
         },
         has_pixel_sensitive_subtree,
     )
+}
+
+/// The scene `layer` shows, as its surface children are drawn through it;
+/// `None` when it shows none.
+fn scene_draw(
+    layer: &LayerNode,
+    context: &WalkContext<'_>,
+    visual_clip: Option<Rect>,
+) -> Option<Arc<SceneDraw>> {
+    let scene = layer_scene(&layer.graphics_layer)?;
+    Some(Arc::new(SceneDraw {
+        camera: scene.camera,
+        light: scene.light,
+        rect: layer
+            .node_rect()
+            .translate(context.offset.x, context.offset.y),
+        clip: visual_clip,
+    }))
+}
+
+/// What draws `layer` on its mesh when it is a mesh surface of the scene
+/// that `context` collects in.
+fn mesh_child(layer: &LayerNode, context: &WalkContext<'_>) -> Option<Arc<MeshChild>> {
+    let scene = context.scene?;
+    let surface = layer_surface(&layer.graphics_layer)?;
+    Some(Arc::new(MeshChild {
+        scene: Arc::clone(scene),
+        surface: surface.clone(),
+        content: layer.node_rect(),
+    }))
 }
 
 fn with_backdrop_in_own_space(child: ChildLayer, recycler: &mut LayerSceneRecycler) -> ChildLayer {
@@ -1066,6 +1136,7 @@ fn with_backdrop_in_own_space(child: ChildLayer, recycler: &mut LayerSceneRecycl
         cache_policy: child.cache_policy,
         in_place: false,
         content,
+        mesh: child.mesh.clone(),
     };
     let mut inner = ChildLayer {
         z_index: outer.content.scene.next_z(),
@@ -1076,6 +1147,7 @@ fn with_backdrop_in_own_space(child: ChildLayer, recycler: &mut LayerSceneRecycl
         snap_anchor: None,
         surface_scale: 1.0,
         in_place: false,
+        mesh: None,
         ..child
     };
     detach_flat_backdrop(&mut inner, &mut outer.content.scene);
@@ -1119,7 +1191,7 @@ fn collect_into(
     layer: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
-    context: WalkContext,
+    context: WalkContext<'_>,
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
 ) -> bool {
@@ -1168,6 +1240,7 @@ fn collect_into(
         anchor: layer_anchor,
         motion_context_animated: layer.motion_context_animated || translated,
     };
+    let scene = scene_draw(layer, &context, visual_clip);
     let child_context = WalkContext {
         offset: context.offset,
         visual_clip,
@@ -1178,6 +1251,10 @@ fn collect_into(
         light: context.light,
         wants_pixel_sensitive: context.wants_pixel_sensitive,
         update: context.update,
+        scene: match layer.wraps {
+            Some(_) => context.scene,
+            None => scene.as_ref(),
+        },
     };
     let mut has_pixel_sensitive_subtree = false;
     for_each_in_draw_order(&layer.children, |child| {
@@ -1229,7 +1306,7 @@ fn collect_child(
     child: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
-    context: WalkContext,
+    context: WalkContext<'_>,
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
 ) -> bool {
@@ -1302,7 +1379,7 @@ fn push_direct_layer_shadow(
     child: &LayerNode,
     (child_offset, child_bounds): (Point, Rect),
     child_anchor: Option<SnapAnchor>,
-    context: &WalkContext,
+    context: &WalkContext<'_>,
     scene: &mut CompositorScene,
 ) {
     let shadow_clip = resolve_clip(
@@ -1328,7 +1405,7 @@ fn collect_isolated_child(
     child: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
-    context: WalkContext,
+    context: WalkContext<'_>,
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
 ) -> bool {

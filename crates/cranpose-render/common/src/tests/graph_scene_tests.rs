@@ -33,6 +33,7 @@ fn hit_geometry_for_rect(rect: Rect) -> HitGeometry<'static> {
         world_to_local: translated_world_to_local(rect),
         hit_clip_bounds: None,
         hit_clips: &[],
+        surface: None,
     }
 }
 
@@ -530,6 +531,7 @@ fn hit_test_uses_exact_quad_for_transformed_region() {
             world_to_local,
             hit_clip_bounds: None,
             hit_clips: &[],
+            surface: None,
         },
         HitTargetSpec {
             shape: None,
@@ -578,6 +580,7 @@ fn dispatch_uses_inverse_transform_for_local_position() {
             world_to_local,
             hit_clip_bounds: None,
             hit_clips: &[],
+            surface: None,
         },
         handlers: pointer_slices(&[handler]),
         ..Default::default()

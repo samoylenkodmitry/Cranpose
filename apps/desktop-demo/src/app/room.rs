@@ -1,13 +1,37 @@
-use cranpose::spatial::{rememberRoomState, Room, RoomState, Wall};
-use cranpose_core::rememberMutableStateOf;
+//! A tab that is an ordinary screen until it steps back into a room: the
+//! screen becomes the far wall, other tabs hang on the side walls, and a
+//! globe and an imported model stand in the room, each a composable drawn on
+//! a mesh.
+
+mod space;
+
+use std::sync::Arc;
+
+use cranpose_core::{key, remember, rememberMutableStateOf, LaunchedEffectAsync, MutableState};
 use cranpose_ui::{
-    composable, text::TextUnit, Box, BoxSpec, Brush, Button, ButtonSpec, Color, Column, ColumnSpec,
-    Modifier, Rect, Row, RowSpec, Text, TextStyle,
+    composable,
+    space::{Mat4, Mesh, MeshSurface, Vec3},
+    text::TextUnit,
+    Alignment, Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Brush, Button,
+    ButtonSpec, Color, Column, ColumnSpec, Modifier, Rect, Row, RowSpec, Size, Text, TextStyle,
 };
 
+use self::space::{
+    rememberRoomState, RoomShape, RoomState, Wall, LONGEST_STEP_SECONDS, TRANSITION_SECONDS,
+};
 use super::{mineswapper2::mineswapper2_tab, text_showcase::TextShowcaseTab};
 
 const TILE: f32 = 160.0;
+const TORUS_OBJ: &str = include_str!("../../assets/torus.obj");
+const GLOBE_CONTENT: Size = Size {
+    width: 1024.0,
+    height: 512.0,
+};
+const TORUS_CONTENT: Size = Size {
+    width: 1024.0,
+    height: 256.0,
+};
+const SPIN_PER_SECOND: f32 = 0.35;
 
 fn text_style(size: f32, color: Color) -> TextStyle {
     let mut style = TextStyle::default();
@@ -16,22 +40,298 @@ fn text_style(size: f32, color: Color) -> TextStyle {
     style
 }
 
+/// The meshes the room's surfaces are drawn on, made once.
+#[derive(Clone)]
+struct RoomMeshes {
+    plane: Arc<Mesh>,
+    globe: Arc<Mesh>,
+    torus: Option<Arc<Mesh>>,
+}
+
 #[composable]
 pub fn RoomTab() {
     let room = rememberRoomState();
-    let controls = room.clone();
-    Room(
-        room,
+    let meshes = remember(|| RoomMeshes {
+        plane: Arc::new(Mesh::plane()),
+        globe: Arc::new(Mesh::sphere(48, 24)),
+        torus: Mesh::from_obj(TORUS_OBJ).ok().map(Arc::new),
+    })
+    .with(Clone::clone);
+    let keys = room.clone();
+    let look = room.clone();
+    BoxWithConstraints(
         Modifier::empty()
             .fill_max_size()
-            .background(Color(0.04, 0.04, 0.06, 1.0)),
-        move |wall| match wall {
-            Wall::North => Controls(controls.clone()),
-            Wall::East => Panel(Color(0.10, 0.11, 0.15, 1.0), mineswapper2_tab),
-            Wall::West => Panel(Color(0.12, 0.10, 0.12, 1.0), TextShowcaseTab),
-            Wall::South => BackWall(),
-            Wall::Floor => Floor(),
-            Wall::Ceiling => Ceiling(),
+            .background(Color(0.04, 0.04, 0.06, 1.0))
+            .focus_requester(&room.focus)
+            .focus_target()
+            .on_key_event(move |event| keys.key(event))
+            .pointer_input((), move |scope| {
+                let look = look.clone();
+                async move { look.look(scope).await }
+            }),
+        move |scope| {
+            let constraints = scope.constraints();
+            let finite = |extent: f32| if extent.is_finite() { extent } else { 1.0 };
+            let shape = RoomShape::for_viewport(Size {
+                width: finite(constraints.max_width),
+                height: finite(constraints.max_height),
+            });
+            RoomMotion(room.clone(), shape);
+            Scene(room.clone(), shape, meshes.clone());
+        },
+    );
+}
+
+/// The room's scene: flat, the north wall alone as the screen; in space,
+/// every wall and the objects in the room, through the camera.
+#[composable(no_skip)]
+fn Scene(room: RoomState, shape: RoomShape, meshes: RoomMeshes) {
+    let spatial = room.is_spatial();
+    let camera = room.clone();
+    let modifier = Modifier::empty().fill_max_size();
+    let modifier = if spatial {
+        modifier.scene3d(move || camera.scene(&shape))
+    } else {
+        modifier
+    };
+    Box(modifier, BoxSpec::default(), move || {
+        let walls = if spatial {
+            &Wall::ALL[..]
+        } else {
+            &Wall::ALL[..1]
+        };
+        for &wall in walls {
+            let room = room.clone();
+            let plane = Arc::clone(&meshes.plane);
+            key(wall, move || {
+                WallSurface(room, shape, wall, (plane, spatial));
+            });
+        }
+        if spatial {
+            let globe = Arc::clone(&meshes.globe);
+            key("globe", move || Globe(shape, globe));
+            if let Some(torus) = meshes.torus.clone() {
+                key("torus", move || Torus(shape, torus));
+            }
+        }
+    });
+}
+
+#[composable(no_skip)]
+fn RoomMotion(room: RoomState, shape: RoomShape) {
+    let entered = room.is_entered();
+    let mover = room.clone();
+    LaunchedEffectAsync(entered, move |scope| {
+        Box::pin(async move {
+            let target = if entered { 1.0 } else { 0.0 };
+            let clock = scope.runtime().frame_clock();
+            let mut last = clock.next_frame().await;
+            while scope.is_active() && mover.progress.get() != target {
+                let now = clock.next_frame().await;
+                let step = seconds_between(last, now) / TRANSITION_SECONDS;
+                last = now;
+                mover.progress.update(|progress| {
+                    *progress = if target > *progress {
+                        (*progress + step).min(target)
+                    } else {
+                        (*progress - step).max(target)
+                    };
+                });
+            }
+            if scope.is_active() && !entered {
+                mover.flatten();
+            }
+        })
+    });
+    let moving = room.held.get() != 0;
+    LaunchedEffectAsync((moving, shape), move |scope| {
+        Box::pin(async move {
+            if !moving {
+                return;
+            }
+            let clock = scope.runtime().frame_clock();
+            let mut last = clock.next_frame().await;
+            while scope.is_active() {
+                let now = clock.next_frame().await;
+                let seconds = seconds_between(last, now).min(LONGEST_STEP_SECONDS);
+                last = now;
+                if !room.walk(&shape, seconds) {
+                    break;
+                }
+            }
+        })
+    });
+}
+
+#[composable(no_skip)]
+fn WallSurface(room: RoomState, shape: RoomShape, wall: Wall, (plane, spatial): (Arc<Mesh>, bool)) {
+    let modifier = Modifier::empty().required_size(shape.wall_size(wall));
+    let modifier = if spatial {
+        modifier.mesh_surface(move || MeshSurface {
+            mesh: Arc::clone(&plane),
+            transform: shape.wall_transform(wall),
+            lit: false,
+        })
+    } else {
+        modifier
+    };
+    Box(modifier, BoxSpec::default(), move || match wall {
+        Wall::North => Controls(room.clone()),
+        Wall::East => Panel(Color(0.10, 0.11, 0.15, 1.0), mineswapper2_tab),
+        Wall::West => Panel(Color(0.12, 0.10, 0.12, 1.0), TextShowcaseTab),
+        Wall::South => BackWall(),
+        Wall::Floor => Floor(),
+        Wall::Ceiling => Ceiling(),
+    });
+}
+
+/// A spinning globe whose surface is a live composable.
+#[composable(no_skip)]
+fn Globe(shape: RoomShape, mesh: Arc<Mesh>) {
+    let spin = rememberMutableStateOf(|| 0.0f32);
+    let spinning = rememberMutableStateOf(|| true);
+    Spin(spin, spinning);
+    let radius = shape.width.min(shape.height) * 0.16;
+    let center = Vec3::new(shape.width * 0.3, shape.height * 0.62, shape.depth * 0.62);
+    Box(
+        Modifier::empty()
+            .required_size(GLOBE_CONTENT)
+            .mesh_surface(move || MeshSurface {
+                mesh: Arc::clone(&mesh),
+                transform: Mat4::scaling(Vec3::new(radius, radius, radius))
+                    .then(&Mat4::rotation_y(spin.get()))
+                    .then(&Mat4::translation(center)),
+                lit: true,
+            }),
+        BoxSpec::default(),
+        move || GlobeFace(spinning),
+    );
+}
+
+#[composable(no_skip)]
+fn Spin(spin: MutableState<f32>, spinning: MutableState<bool>) {
+    let on = spinning.get();
+    LaunchedEffectAsync(on, move |scope| {
+        Box::pin(async move {
+            if !on {
+                return;
+            }
+            let clock = scope.runtime().frame_clock();
+            let mut last = clock.next_frame().await;
+            while scope.is_active() {
+                let now = clock.next_frame().await;
+                let seconds = seconds_between(last, now).min(LONGEST_STEP_SECONDS);
+                last = now;
+                spin.update(|angle| {
+                    *angle = (*angle + seconds * SPIN_PER_SECOND) % std::f32::consts::TAU;
+                });
+            }
+        })
+    });
+}
+
+#[composable(no_skip)]
+fn GlobeFace(spinning: MutableState<bool>) {
+    Box(
+        Modifier::empty().fill_max_size().draw_behind(|scope| {
+            let size = scope.size();
+            scope.draw_rect(Brush::solid(Color(0.10, 0.32, 0.62, 1.0)));
+            for band in 0..8 {
+                scope.draw_rect_at(
+                    Rect {
+                        x: size.width * band as f32 / 8.0,
+                        y: 0.0,
+                        width: size.width / 16.0,
+                        height: size.height,
+                    },
+                    Brush::solid(Color(0.14, 0.50, 0.36, 1.0)),
+                );
+            }
+        }),
+        BoxSpec {
+            content_alignment: Alignment::CENTER,
+            ..BoxSpec::default()
+        },
+        move || {
+            Column(
+                Modifier::empty()
+                    .rounded_corners(16.0)
+                    .background(Color(0.05, 0.07, 0.12, 0.85))
+                    .padding(18.0),
+                ColumnSpec::default(),
+                move || {
+                    Text(
+                        "A sphere mesh",
+                        Modifier::empty().padding(4.0),
+                        text_style(30.0, Color::WHITE),
+                    );
+                    Button(
+                        Modifier::empty()
+                            .padding(4.0)
+                            .rounded_corners(10.0)
+                            .background(Color(0.25, 0.45, 0.95, 1.0))
+                            .padding(12.0),
+                        ButtonSpec::default(),
+                        move || spinning.set(!spinning.get()),
+                        move || {
+                            Text(
+                                if spinning.get() {
+                                    "Stop the spin"
+                                } else {
+                                    "Spin the globe"
+                                },
+                                Modifier::empty(),
+                                text_style(18.0, Color::WHITE),
+                            );
+                        },
+                    );
+                },
+            );
+        },
+    );
+}
+
+/// A torus read from an OBJ file, wrapped in a striped composable.
+#[composable(no_skip)]
+fn Torus(shape: RoomShape, mesh: Arc<Mesh>) {
+    let scale = shape.width.min(shape.height) * 0.14;
+    let center = Vec3::new(shape.width * 0.72, shape.height * 0.55, shape.depth * 0.7);
+    // OBJ files point y up; the scene points it down.
+    let transform = Mat4::scaling(Vec3::new(scale, -scale, scale))
+        .then(&Mat4::rotation_x(1.1))
+        .then(&Mat4::translation(center));
+    Box(
+        Modifier::empty()
+            .required_size(TORUS_CONTENT)
+            .mesh_surface(move || MeshSurface {
+                mesh: Arc::clone(&mesh),
+                transform,
+                lit: true,
+            })
+            .draw_behind(|scope| {
+                let size = scope.size();
+                scope.draw_rect(Brush::solid(Color(0.85, 0.42, 0.18, 1.0)));
+                for stripe in 0..16 {
+                    scope.draw_rect_at(
+                        Rect {
+                            x: size.width * stripe as f32 / 16.0,
+                            y: 0.0,
+                            width: size.width / 32.0,
+                            height: size.height,
+                        },
+                        Brush::solid(Color(0.95, 0.80, 0.30, 1.0)),
+                    );
+                }
+            })
+            .padding(40.0),
+        BoxSpec::default(),
+        || {
+            Text(
+                "Imported from an OBJ file",
+                Modifier::empty(),
+                text_style(40.0, Color(0.12, 0.06, 0.04, 1.0)),
+            );
         },
     );
 }
@@ -54,7 +354,8 @@ fn Controls(room: RoomState) {
             );
             Text(
                 "This is an ordinary screen. Step into the room and it becomes the far wall; \
-                 the other demo tabs hang on the walls around you and stay live.",
+                 the other demo tabs hang on the walls around you, a globe and a model from \
+                 an OBJ file stand in the room, and all of them stay live.",
                 Modifier::empty().padding(6.0),
                 text_style(16.0, Color(0.75, 0.77, 0.86, 1.0)),
             );
@@ -204,4 +505,8 @@ fn Ceiling() {
         BoxSpec::default(),
         || {},
     );
+}
+
+fn seconds_between(earlier_nanos: u64, later_nanos: u64) -> f32 {
+    later_nanos.saturating_sub(earlier_nanos) as f32 * 1.0e-9
 }

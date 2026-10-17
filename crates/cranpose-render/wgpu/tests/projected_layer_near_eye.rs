@@ -1,8 +1,5 @@
-use cranpose_render_common::{
-    graph::{LayerNode, ProjectiveTransform, RenderNode},
-    layer_transform::layer_transform_to_parent,
-};
-use cranpose_ui_graphics::{Color, GraphicsLayer, Point, Rect};
+use cranpose_render_common::graph::{LayerNode, ProjectiveTransform, RenderNode};
+use cranpose_ui_graphics::{Color, Rect};
 
 use crate::support;
 
@@ -28,14 +25,9 @@ fn a_wall_reaching_behind_the_eye_draws_only_its_part_in_front() {
             return;
         }
     };
-    let layer = GraphicsLayer {
-        projection: Some(wall_beside_the_eye()),
-        ..GraphicsLayer::default()
-    };
     let wall = LayerNode {
         local_bounds: WALL,
-        transform_to_parent: layer_transform_to_parent(WALL, Point::default(), &layer),
-        graphics_layer: layer.into(),
+        transform_to_parent: wall_beside_the_eye(),
         children: vec![support::solid_rect(WALL, Color::from_rgb_u8(220, 30, 30))],
         ..Default::default()
     };

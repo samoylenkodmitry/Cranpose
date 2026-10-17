@@ -1,10 +1,11 @@
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 use cranpose_ui_graphics::{
     BlendMode, Color, ColorFilter, CompositingStrategy, Density, Dp, GradientBlurDirection,
     GradientCutMaskSpec, GradientFadeMaskSpec, LayerShape, Px, RenderEffect, RoundedCornerShape,
     RuntimeShader, TransformOrigin, gradient_blur_effect, gradient_cut_mask_effect,
     gradient_fade_dst_out_effect, rounded_alpha_mask_effect,
+    space::{LayerSpace, MeshSurface, Scene3d},
 };
 
 use super::{GraphicsLayer, Modifier, inspector_metadata};
@@ -82,6 +83,72 @@ impl Modifier {
         self.then(modifier)
     }
 
+    /// Shows a 3D scene in this node's bounds.
+    ///
+    /// Each child that has a [`mesh_surface`](Self::mesh_surface) has its
+    /// content drawn on its mesh in the scene, seen through the scene's
+    /// camera, and nearer surfaces hide farther ones. The camera looks
+    /// through the middle of the node's bounds, and the scene is cut to
+    /// them. The node's own draws and its other children stay flat: those
+    /// that come before the first surface are drawn under the scene, the
+    /// rest over it.
+    ///
+    /// The closure runs when the scene is drawn, as a lazy
+    /// [`graphics_layer`](Self::graphics_layer)'s does, so a camera that
+    /// follows a state read in it moves without recomposition.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    ///
+    /// use cranpose_ui::Modifier;
+    /// use cranpose_ui_graphics::space::{Camera, Mat4, Mesh, MeshSurface, Scene3d, Vec3};
+    ///
+    /// let camera = Camera::look_at(
+    ///     Vec3::new(0.0, 0.0, -800.0),
+    ///     Vec3::ZERO,
+    ///     Vec3::new(0.0, 1.0, 0.0),
+    ///     700.0,
+    /// );
+    /// let scene = Modifier::empty().scene3d(move || Scene3d {
+    ///     camera,
+    ///     light: None,
+    /// });
+    /// let sphere = Arc::new(Mesh::sphere(48, 24));
+    /// let globe = Modifier::empty().mesh_surface(move || MeshSurface {
+    ///     mesh: Arc::clone(&sphere),
+    ///     transform: Mat4::scaling(Vec3::new(200.0, 200.0, 200.0)),
+    ///     lit: true,
+    /// });
+    /// # let _ = (scene, globe);
+    /// ```
+    pub fn scene3d(self, scene: impl Fn() -> Scene3d + 'static) -> Self {
+        self.graphics_layer(move || GraphicsLayer {
+            space: Some(Arc::new(LayerSpace::Scene(scene()))),
+            clip: true,
+            ..GraphicsLayer::DEFAULT
+        })
+    }
+
+    /// Draws this node's content on a mesh in its parent's
+    /// [`scene3d`](Self::scene3d).
+    ///
+    /// The node's size is the size of the content laid on the mesh: content
+    /// point `(x, y)` shows where the mesh's texture coordinate is
+    /// `(x / width, y / height)`. The surface's transform places the mesh in
+    /// the scene, in place of the node's place in its parent's layout. The
+    /// content stays live and takes pointer input where it shows on the
+    /// mesh. A node whose parent shows no scene draws its content flat.
+    ///
+    /// The closure runs when the scene is drawn, as a lazy
+    /// [`graphics_layer`](Self::graphics_layer)'s does.
+    pub fn mesh_surface(self, surface: impl Fn() -> MeshSurface + 'static) -> Self {
+        self.graphics_layer(move || GraphicsLayer {
+            space: Some(Arc::new(LayerSpace::Surface(surface()))),
+            clip: true,
+            ..GraphicsLayer::DEFAULT
+        })
+    }
+
     /// Apply a concrete graphics layer snapshot.
     ///
     /// This is useful for parameter-style wrappers that already build a fixed
@@ -111,8 +178,8 @@ impl Modifier {
                 );
                 info.add_property("translationX", inspector_values.translation_x.to_string());
                 info.add_property("translationY", inspector_values.translation_y.to_string());
-                if let Some(projection) = inspector_values.projection {
-                    info.add_property("projection", format!("{:?}", projection.matrix()));
+                if let Some(space) = &inspector_values.space {
+                    info.add_property("space", format!("{space:?}"));
                 }
                 info.add_property(
                     "shadowElevation",
@@ -179,7 +246,7 @@ impl Modifier {
             transform_origin,
             translation_x,
             translation_y,
-            projection: None,
+            space: None,
             shadow_elevation,
             ambient_shadow_color,
             spot_shadow_color,

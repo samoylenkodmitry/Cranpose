@@ -56,6 +56,7 @@ mod line_coverage;
 mod liquid_control_tone;
 mod liquid_modifier_order;
 mod many_images;
+mod mesh_surface_pixels;
 mod nested_composite_order;
 mod nested_rotated_relayout;
 mod never_wait;

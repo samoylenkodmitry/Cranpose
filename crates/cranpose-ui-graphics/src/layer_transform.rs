@@ -1,5 +1,6 @@
 use crate::{
-    GraphicsLayer, Point, Rect,
+    GraphicsLayer, Point, Rect, Size,
+    space::{Camera, LayerSpace, MeshSurface, Scene3d},
     transform::{ProjectiveTransform, quad_bounds},
 };
 
@@ -71,19 +72,7 @@ fn layer_rotation_pivot(layer_bounds: Rect, layer: &GraphicsLayer) -> (f32, f32)
 
 #[doc(hidden)]
 pub fn layer_scales_or_rotates(layer: &GraphicsLayer) -> bool {
-    layer_scale_x(layer) != 1.0
-        || layer_scale_y(layer) != 1.0
-        || layer_has_rotation(layer)
-        || layer.projection.is_some()
-}
-
-/// Whether the layer turns its content off its parent's grid: a rotation
-/// about any axis, or a projection.
-pub fn layer_turns(layer: &GraphicsLayer, tolerance: f32) -> bool {
-    layer.rotation_x.abs() > tolerance
-        || layer.rotation_y.abs() > tolerance
-        || layer.rotation_z.abs() > tolerance
-        || layer.projection.is_some()
+    layer_scale_x(layer) != 1.0 || layer_scale_y(layer) != 1.0 || layer_has_rotation(layer)
 }
 
 fn layer_has_rotation(layer: &GraphicsLayer) -> bool {
@@ -142,8 +131,7 @@ fn apply_layer_to_point(point: [f32; 2], pivot: (f32, f32), layer: &GraphicsLaye
     ]
 }
 
-/// Transforms a rectangle's four corners through scale, rotation and
-/// perspective, and the layer's projection.
+/// Transforms a rectangle's four corners through scale, rotation and perspective.
 pub fn apply_layer_to_quad(rect: Rect, layer_bounds: Rect, layer: &GraphicsLayer) -> [[f32; 2]; 4] {
     let quad = [
         [rect.x, rect.y],
@@ -151,35 +139,19 @@ pub fn apply_layer_to_quad(rect: Rect, layer_bounds: Rect, layer: &GraphicsLayer
         [rect.x, rect.y + rect.height],
         [rect.x + rect.width, rect.y + rect.height],
     ];
-    if layer_affine_is_identity(layer) && !layer_has_rotation(layer) && layer.projection.is_none() {
+    if layer_affine_is_identity(layer) && !layer_has_rotation(layer) {
         return quad;
     }
     let pivot = layer_rotation_pivot(layer_bounds, layer);
-    quad.map(|point| {
-        let [x, y] = apply_layer_to_point(point, pivot, layer);
-        match layer.projection {
-            Some(projection) => {
-                let projected = projection.map_point(Point::new(x, y));
-                [projected.x, projected.y]
-            }
-            None => [x, y],
-        }
-    })
+    quad.map(|point| apply_layer_to_point(point, pivot, layer))
 }
 
-/// Returns the axis-aligned bounds after the complete layer transform; for a
-/// projected layer, of its part in front of the eye.
+/// Returns the axis-aligned bounds after the complete layer transform.
 pub fn apply_layer_to_rect(rect: Rect, layer_bounds: Rect, layer: &GraphicsLayer) -> Rect {
-    if layer.projection.is_some() {
-        return layer_transform_to_parent(layer_bounds, Point::default(), layer)
-            .bounds_for_rect(rect);
-    }
     quad_bounds(apply_layer_to_quad(rect, layer_bounds, layer))
 }
 
-/// Combines a graphics layer with the node's placement in its parent. A
-/// layer's projection replaces the placement: it maps the layer into its
-/// parent on its own.
+/// Combines a graphics layer with the node's placement in its parent.
 pub fn layer_transform_to_parent(
     local_bounds: Rect,
     placement: Point,
@@ -204,11 +176,6 @@ pub fn layer_transform_to_parent(
             1.0,
         ],
     ]);
-    let placement = if layer.projection.is_some() {
-        Point::default()
-    } else {
-        placement
-    };
     let placed = ProjectiveTransform::translation(-pivot_x, -pivot_y)
         .then(turn)
         .then(ProjectiveTransform::translation(pivot_x, pivot_y))
@@ -216,35 +183,20 @@ pub fn layer_transform_to_parent(
             placement.x + layer.translation_x,
             placement.y + layer.translation_y,
         ));
-    match layer.projection {
-        Some(projection) => placed.then(projection),
-        None => ProjectiveTransform::from_homogeneous(placed.matrix()),
-    }
+    ProjectiveTransform::from_homogeneous(placed.matrix())
 }
 
 /// Extends an ancestor mapping from untransformed layout coordinates to window
 /// coordinates with this node's graphics layer. `origin` and `bounds` describe
 /// the node before any ancestor transforms; `bounds` is relative to `origin`.
-/// `parent_origin` is where the parent's content starts, which a projected
-/// layer maps into.
 pub fn layer_transform_to_window(
     parent: ProjectiveTransform,
-    parent_origin: Point,
     origin: Point,
     bounds: Rect,
     layer: &GraphicsLayer,
 ) -> ProjectiveTransform {
-    if layer_affine_is_identity(layer) && !layer_has_rotation(layer) && layer.projection.is_none() {
+    if layer_affine_is_identity(layer) && !layer_has_rotation(layer) {
         return parent;
-    }
-    if layer.projection.is_some() {
-        return ProjectiveTransform::translation(-origin.x, -origin.y)
-            .then(layer_transform_to_parent(bounds, Point::default(), layer))
-            .then(ProjectiveTransform::translation(
-                parent_origin.x,
-                parent_origin.y,
-            ))
-            .then(parent);
     }
     let bounds = Rect {
         x: bounds.x + origin.x,
@@ -252,4 +204,99 @@ pub fn layer_transform_to_window(
         ..bounds
     };
     layer_transform_to_parent(bounds, Point::default(), layer).then(parent)
+}
+
+/// The scene a layer's graphics layer shows, or `None` for a layer that
+/// shows none.
+pub fn layer_scene(layer: &GraphicsLayer) -> Option<&Scene3d> {
+    match layer.space.as_deref()? {
+        LayerSpace::Scene(scene) => Some(scene),
+        LayerSpace::Surface(_) => None,
+    }
+}
+
+/// The mesh a layer's graphics layer draws its content on, or `None` for a
+/// layer drawn flat.
+pub fn layer_surface(layer: &GraphicsLayer) -> Option<&MeshSurface> {
+    match layer.space.as_deref()? {
+        LayerSpace::Surface(surface) => Some(surface),
+        LayerSpace::Scene(_) => None,
+    }
+}
+
+/// A scene as a walk down the layout tree meets it: what the mesh surfaces
+/// among its children are drawn through.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SceneFrame {
+    /// The scene's camera.
+    pub camera: Camera,
+    /// The scene node's top left corner, in untransformed layout
+    /// coordinates.
+    pub origin: Point,
+    /// The scene node's size. The camera looks through its middle.
+    pub size: Size,
+}
+
+impl SceneFrame {
+    /// The frame of the scene that `layer` shows from a node at `origin` of
+    /// `size`; `None` when the layer shows no scene.
+    pub fn of(layer: &GraphicsLayer, origin: Point, size: Size) -> Option<Self> {
+        layer_scene(layer).map(|scene| Self {
+            camera: scene.camera,
+            origin,
+            size,
+        })
+    }
+
+    /// The map from a mesh surface's content to the scene node's own
+    /// coordinates, for a surface node of `size`.
+    pub fn surface_to_local(
+        &self,
+        surface: &MeshSurface,
+        size: Size,
+    ) -> Option<ProjectiveTransform> {
+        surface.content_transform(&self.camera, self.size, size)
+    }
+
+    /// Maps untransformed layout coordinates of a mesh surface's content to
+    /// the window, for a surface node at `origin` of `size`: what
+    /// [`layer_transform_to_window`] gives a flat node. `scene` maps the
+    /// scene's children to the window, as [`layer_transform_to_window`] gave
+    /// it for the scene node. `None` when the surface has no plane to carry
+    /// its content into the scene.
+    pub fn surface_to_window(
+        &self,
+        scene: ProjectiveTransform,
+        (origin, size): (Point, Size),
+        surface: &MeshSurface,
+    ) -> Option<ProjectiveTransform> {
+        Some(
+            ProjectiveTransform::translation(-origin.x, -origin.y)
+                .then(self.surface_to_local(surface, size)?)
+                .then(ProjectiveTransform::translation(
+                    self.origin.x,
+                    self.origin.y,
+                ))
+                .then(scene),
+        )
+    }
+}
+
+/// [`layer_transform_to_window`] for a node whose parent may show a scene:
+/// the content of a mesh surface in `scene` maps through the scene's camera.
+/// `size` is the node's own size, and `parent` maps the parent's children
+/// to the window.
+pub fn node_transform_to_window(
+    parent: ProjectiveTransform,
+    scene: Option<&SceneFrame>,
+    (origin, size): (Point, Size),
+    bounds: Rect,
+    layer: &GraphicsLayer,
+) -> ProjectiveTransform {
+    if let (Some(scene), Some(surface)) = (scene, layer_surface(layer))
+        && let Some(transform) = scene.surface_to_window(parent, (origin, size), surface)
+    {
+        return transform;
+    }
+    layer_transform_to_window(parent, origin, bounds, layer)
 }

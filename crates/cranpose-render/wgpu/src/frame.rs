@@ -407,6 +407,9 @@ struct LayerPass<'a> {
     resolved: Vec<Option<Resolved>>,
     in_place_allowed: bool,
     in_place: Vec<usize>,
+    /// The mesh surfaces of a scene rendered and waiting for the scene's
+    /// pass.
+    meshes: Vec<scene_surfaces::PendingMesh>,
 }
 
 const LAYER_PASS_LABELS: [&str; 6] = [
@@ -3031,12 +3034,14 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             resolved: Vec::new(),
             in_place_allowed: !layer.contains_backdrop() && scene.effect_layers.is_empty(),
             in_place: Vec::new(),
+            meshes: Vec::new(),
         };
         let target_rect = pass.target_rect();
         let capture_bounds = pass.capture_bounds();
         self.resolve_flat_children(&mut pass)?;
 
         for (z, event) in layer_events(layer) {
+            self.end_scene_before(&mut pass, &event)?;
             match event {
                 Event::Backdrop(index) => {
                     let backdrop = &scene.backdrop_layers[index];
@@ -3074,6 +3079,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 Event::Child(index) => self.child_event(&mut pass, index, z)?,
             }
         }
+        self.draw_meshes(&mut pass)?;
         self.run_stages(&mut pass)?;
         self.flush_page(&mut pass, usize::MAX)
     }
@@ -3089,6 +3095,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     ) -> Result<(), String> {
         let layer = pass.layer;
         let child = &layer.children[index];
+        if let Some(mesh) = &child.mesh {
+            return self.resolve_mesh_child(pass, child, mesh);
+        }
         let in_place = match pass.resolved_in_place(index) {
             Some(in_place) => in_place,
             None => pass.can_draw_in_place(child) && self.draws_in_place(pass, index, child)?,
@@ -4816,7 +4825,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .collect();
         let mut batch: Vec<BatchMember> = Vec::new();
         for (index, child) in layer.children.iter().enumerate() {
-            if !renders_flat(child) {
+            if !renders_flat(child) || child.mesh.is_some() {
                 continue;
             }
             let frame = ChildFrame::of(child, scale, target);
@@ -5604,6 +5613,9 @@ pub(crate) fn scene_bounds(layer: &LayerScene, scale: f32) -> Option<Rect> {
     }
     bounds
 }
+
+#[path = "frame_scene.rs"]
+mod scene_surfaces;
 
 #[cfg(test)]
 #[path = "tests/frame_tests.rs"]

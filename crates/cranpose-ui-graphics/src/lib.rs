@@ -58,6 +58,7 @@ mod render_hash;
 mod shader_warm_up;
 mod shadow;
 mod shape_records;
+pub mod space;
 mod stroke;
 mod thread_state;
 pub mod transform;

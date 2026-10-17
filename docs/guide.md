@@ -1589,6 +1589,73 @@ fn Gallery(open: bool) {
 The copy in flight is the coming content's element composed once more, so
 state it remembers starts afresh during the flight.
 
+### Draw composables on 3D meshes
+
+`Modifier::scene3d` makes a node a 3D scene, seen through a `Camera` that
+looks through the middle of the node's bounds. Each child with
+`Modifier::mesh_surface` has its content drawn on a `Mesh` in that scene:
+content point `(x, y)` shows where the mesh's texture coordinate is
+`(x / width, y / height)`. The content stays live: it recomposes, animates and
+takes pointer input where it shows on the mesh, and nearer surfaces hide
+farther ones. Both closures run when the scene is drawn, so a camera or a
+surface that follows a state read in them moves without recomposition.
+
+```rust
+use std::sync::Arc;
+
+use cranpose::space::{Camera, Light, Mat4, Mesh, MeshSurface, Scene3d, Vec3};
+
+#[composable]
+fn Globe(spin: MutableState<f32>) {
+    let sphere = remember(|| Arc::new(Mesh::sphere(48, 24))).with(Arc::clone);
+    Box(
+        Modifier::empty().fill_max_size().scene3d(|| Scene3d {
+            camera: Camera::look_at(
+                Vec3::new(0.0, 0.0, -900.0),
+                Vec3::ZERO,
+                Vec3::new(0.0, 1.0, 0.0),
+                700.0,
+            ),
+            light: Some(Light {
+                direction: Vec3::new(-0.4, 1.0, 0.5),
+                ambient: 0.3,
+            }),
+        }),
+        BoxSpec::default(),
+        move || {
+            let sphere = Arc::clone(&sphere);
+            Box(
+                Modifier::empty()
+                    .size(Size::new(1024.0, 512.0))
+                    .mesh_surface(move || MeshSurface {
+                        mesh: Arc::clone(&sphere),
+                        transform: Mat4::scaling(Vec3::new(200.0, 200.0, 200.0))
+                            .then(&Mat4::rotation_y(spin.get())),
+                        lit: true,
+                    }),
+                BoxSpec::default(),
+                || {
+                    Text("Hello, sphere", Modifier::empty(), TextStyle::default());
+                },
+            );
+        },
+    );
+}
+```
+
+Scene space uses logical pixels with x to the right, y down and z away from
+the viewer. `Mesh::plane`, `Mesh::cuboid` and `Mesh::sphere` build common
+shapes, `Mesh::from_obj` reads a Wavefront OBJ file, and `Mesh::new` takes
+positions, texture coordinates and triangles. OBJ files point y up; flip
+them with a transform that scales y by -1. A camera that stands one focal
+length in front of a plane the size of the scene shows that plane exactly as
+a flat screen. The desktop demo's Room tab walks from such a screen into a
+room of walls, a globe and an imported torus.
+
+The WGPU renderer draws scenes. The pixels renderer draws a flat mesh's
+surface in its place but has no depth buffer, and draws a curved mesh's
+surface on the plane that touches the mesh at the content's middle.
+
 ## Accessibility
 
 ### Name controls and expose state

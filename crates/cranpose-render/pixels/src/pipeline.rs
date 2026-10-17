@@ -38,7 +38,9 @@ fn graphics_layer_supports_rigid_snap(layer: &GraphicsLayer) -> bool {
     (layer.scale - 1.0).abs() <= f32::EPSILON
         && (layer.scale_x - 1.0).abs() <= f32::EPSILON
         && (layer.scale_y - 1.0).abs() <= f32::EPSILON
-        && !cranpose_render_common::layer_transform::layer_turns(layer, f32::EPSILON)
+        && layer.rotation_x.abs() <= f32::EPSILON
+        && layer.rotation_y.abs() <= f32::EPSILON
+        && layer.rotation_z.abs() <= f32::EPSILON
 }
 
 fn rigid_snap_anchor(layer_bounds: Rect, layer: &GraphicsLayer) -> Option<Point> {
