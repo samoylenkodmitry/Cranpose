@@ -779,7 +779,23 @@ struct RasterLayerMapping {
     scale_y: f32,
 }
 
+/// The layer of content drawn at alpha one with no colour filter and at
+/// scale one, which most layers' content takes.
+const PLAIN_CONTENT_LAYER: GraphicsLayer = GraphicsLayer {
+    transform_origin: TransformOrigin::new(0.0, 0.0),
+    ..GraphicsLayer::DEFAULT
+};
+
 impl RasterLayerMapping {
+    /// Whether the node's own draws take [`PLAIN_CONTENT_LAYER`], so need no
+    /// [`Self::content_layer`] built.
+    fn draws_plain(&self) -> bool {
+        self.content_style.alpha == 1.0
+            && self.content_style.color_filter.is_none()
+            && self.scale_x == 1.0
+            && self.scale_y == 1.0
+    }
+
     /// The layer the node's own draws take: its content style, scaled from
     /// local to device pixels about its origin.
     fn content_layer(&self) -> GraphicsLayer {
@@ -1012,7 +1028,13 @@ fn push_layer_items(
     let diagnostics = context.diagnostics;
     let transform = layer.transform_to_parent.then(*context.parent_transform);
     let mapping = raster_layer_mapping(layer, &transform, context.parent_content_style);
-    let raster_content_layer = mapping.content_layer();
+    let styled_content_layer;
+    let raster_content_layer = if mapping.draws_plain() {
+        &PLAIN_CONTENT_LAYER
+    } else {
+        styled_content_layer = mapping.content_layer();
+        &styled_content_layer
+    };
     report_unsupported_effects(&layer.graphics_layer, diagnostics);
 
     if mapping.transformed_bounds.width <= 0.0 || mapping.transformed_bounds.height <= 0.0 {
@@ -1028,7 +1050,7 @@ fn push_layer_items(
     let effective_translated_content_context =
         context.inherited_translated_content_context || layer.translated_content_context;
     let (translated_snap_anchor, layer_snap_anchor) =
-        layer_snap_anchors(layer, context, &transform, &mapping, &raster_content_layer);
+        layer_snap_anchors(layer, context, &transform, &mapping, raster_content_layer);
 
     if visual_clip.is_some_and(|clip| clip.is_empty()) {
         return;
@@ -1052,7 +1074,7 @@ fn push_layer_items(
 
     let primitive_context = PrimitiveRenderContext {
         layer_bounds: mapping.content_bounds,
-        node_layer: &raster_content_layer,
+        node_layer: raster_content_layer,
         visual_clip,
         motion_context_animated: layer.motion_context_animated,
         content_offset_translation: effective_translated_content_context,

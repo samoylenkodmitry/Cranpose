@@ -261,13 +261,15 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
         content: Option<ProjectiveTransform>,
         parent_clip: Option<Rect>,
     ) -> ContentClip {
-        let (Some(surface), Some(content), Some(local_clip)) =
-            (self.surface.as_mut(), content, layer.clip_rect())
-        else {
-            return ContentClip {
-                bounds: parent_clip,
-                pushed: false,
-            };
+        let unclipped = ContentClip {
+            bounds: parent_clip,
+            pushed: false,
+        };
+        let (Some(surface), Some(content)) = (self.surface.as_mut(), content) else {
+            return unclipped;
+        };
+        let Some(local_clip) = layer.clip_rect() else {
+            return unclipped;
         };
         let quad = hit_quad(&content, local_clip);
         let bounds = quad_bounds(quad);

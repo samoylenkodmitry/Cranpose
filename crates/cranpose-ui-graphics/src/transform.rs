@@ -41,6 +41,22 @@ pub struct FrontPolygon {
 }
 
 impl FrontPolygon {
+    /// The whole of `rect`, which lies in a plane with no perspective:
+    /// corners top-left, top-right, bottom-right, bottom-left.
+    pub fn of_rect(rect: Rect) -> Self {
+        let (right, bottom) = (rect.x + rect.width, rect.y + rect.height);
+        Self {
+            corners: [
+                [rect.x, rect.y],
+                [right, rect.y],
+                [right, bottom],
+                [rect.x, bottom],
+                [0.0; 2],
+            ],
+            len: 4,
+        }
+    }
+
     fn push(&mut self, corner: [f32; 2]) {
         self.corners[usize::from(self.len)] = corner;
         self.len += 1;
@@ -370,11 +386,8 @@ impl ProjectiveTransform {
     /// front of the eye; empty when no part is.
     pub fn bounds_for_rect(&self, rect: Rect) -> Rect {
         let [[sx, kx, tx], [ky, sy, ty], [px, py, w]] = self.matrix;
-        if px != 0.0 || py != 0.0 || w != 1.0 {
-            return self.front_polygon(rect).bounds();
-        }
-        if kx != 0.0 || ky != 0.0 {
-            return quad_bounds(self.map_rect(rect));
+        if kx != 0.0 || ky != 0.0 || px != 0.0 || py != 0.0 || w != 1.0 {
+            return self.turned_bounds_for_rect(rect);
         }
         // Scale and translation alone keep a rectangle a rectangle: two
         // corners bound it.
@@ -388,6 +401,18 @@ impl ProjectiveTransform {
             width: (x1 - x0).abs(),
             height: (y1 - y0).abs(),
         }
+    }
+
+    /// [`Self::bounds_for_rect`] for a transform that skews, turns or has a
+    /// perspective, kept out of line: a rectangle that stays a rectangle
+    /// pays for one check.
+    #[inline(never)]
+    fn turned_bounds_for_rect(&self, rect: Rect) -> Rect {
+        let [_, _, [px, py, w]] = self.matrix;
+        if px != 0.0 || py != 0.0 || w != 1.0 {
+            return self.front_polygon(rect).bounds();
+        }
+        quad_bounds(self.map_rect(rect))
     }
 }
 

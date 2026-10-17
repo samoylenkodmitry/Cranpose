@@ -8,7 +8,7 @@ use cranpose_ui::{
 use cranpose_ui_graphics::{
     CommandRecording, CompositingStrategy, DrawGroup, GraphicsLayer, LayerShape, RecordLane,
     RoundedCornerShape, layer_transform::layer_scene, rounded_corner_alpha_mask_effect,
-    space::LayerSpace,
+    space::Scene3d,
 };
 
 use crate::{
@@ -428,13 +428,14 @@ fn walk_dirty_layers(
     update: u64,
 ) -> Option<ReplaceDirtyLayersReport> {
     let inherited = root.translated_content_context;
-    let root_children = AbsOrigin::ROOT.children_of(root, None);
+    let root_children = AbsOrigin::ROOT.children_of(root);
     let mut ancestry = crate::thread_state::with(|state| state.dirty_ancestry.take());
     mark_dirty_ancestry(applier, dirty, &mut ancestry);
-    let walked = replace_dirty_layers_from_applier(
+    let walked = walk_dirty_layer(
         applier,
-        (root, None),
+        root,
         root_children,
+        Flat,
         DirtyWalk {
             nodes: dirty,
             ancestry: &ancestry,
@@ -471,21 +472,95 @@ fn mark_dirty_ancestry(
     }
 }
 
-/// Applies the dirty nodes' updates beneath `parent`, whose children start
-/// at `parent_children`; `parent_scene` is the scene above that reaches
-/// `parent`'s children through it, the wrapper of a node's outer draws.
-fn replace_dirty_layers_from_applier(
+/// How a dirty walk places the children of the layer it walks: as layout
+/// placed them, or through the camera of a scene.
+trait ChildPlacement: Copy {
+    /// Where `layer`'s children start and map to the window, for a child
+    /// of a layer whose children start at `origin`.
+    fn children_of(self, origin: AbsOrigin, layer: &LayerNode) -> AbsOrigin;
+
+    /// Places the surfaces among `parent`'s updated children, which start
+    /// at `children`, and publishes their window geometry.
+    fn place_children(self, applier: &MemoryApplier, parent: &mut LayerNode, children: AbsOrigin);
+}
+
+/// Children placed where layout placed them.
+#[derive(Clone, Copy)]
+struct Flat;
+
+impl ChildPlacement for Flat {
+    fn children_of(self, origin: AbsOrigin, layer: &LayerNode) -> AbsOrigin {
+        origin.children_of(layer)
+    }
+
+    fn place_children(self, _: &MemoryApplier, _: &mut LayerNode, _: AbsOrigin) {}
+}
+
+/// The children of a scene's layer, or of the wrapper of a surface's outer
+/// draws, which the scene's camera places.
+#[derive(Clone, Copy)]
+struct InScene<'a>(&'a SceneFrame);
+
+impl ChildPlacement for InScene<'_> {
+    fn children_of(self, origin: AbsOrigin, layer: &LayerNode) -> AbsOrigin {
+        origin.children_in_scene(layer, self.0)
+    }
+
+    fn place_children(self, applier: &MemoryApplier, parent: &mut LayerNode, children: AbsOrigin) {
+        place_scene_surfaces(parent, self.0);
+        publish_scene_window_geometry(applier, parent, children, self.0);
+    }
+}
+
+/// Applies the dirty nodes' updates beneath `layer`, whose children start
+/// at `children`, placed as `layer` places them: a scene's layer through
+/// its camera, the wrapper of a node's outer draws as its parent's
+/// `placement` does, and any other layer flat.
+fn walk_dirty_layer<P: ChildPlacement>(
     applier: &MemoryApplier,
-    (parent, parent_scene): (&mut LayerNode, Option<&SceneFrame>),
-    parent_children: AbsOrigin,
-    mut dirty: DirtyWalk<'_>,
+    layer: &mut LayerNode,
+    children: AbsOrigin,
+    placement: P,
+    dirty: DirtyWalk<'_>,
     inherited_translated_content_context: bool,
     update: u64,
+) -> Option<ReplaceDirtyLayersReport> {
+    let walk = (inherited_translated_content_context, update);
+    if layer.wraps.is_some() {
+        return replace_dirty_layers_from_applier(applier, layer, children, placement, dirty, walk);
+    }
+    if layer_scene(&layer.graphics_layer).is_some() {
+        return walk_dirty_scene(applier, layer, children, dirty, walk);
+    }
+    replace_dirty_layers_from_applier(applier, layer, children, Flat, dirty, walk)
+}
+
+#[cold]
+#[inline(never)]
+fn walk_dirty_scene(
+    applier: &MemoryApplier,
+    layer: &mut LayerNode,
+    children: AbsOrigin,
+    dirty: DirtyWalk<'_>,
+    walk: (bool, u64),
+) -> Option<ReplaceDirtyLayersReport> {
+    let scene = shown_scene(layer, children)?;
+    replace_dirty_layers_from_applier(applier, layer, children, InScene(&scene), dirty, walk)
+}
+
+/// Applies the dirty nodes' updates beneath `parent`, whose children start
+/// at `parent_children` and take `placement`.
+fn replace_dirty_layers_from_applier<P: ChildPlacement>(
+    applier: &MemoryApplier,
+    parent: &mut LayerNode,
+    parent_children: AbsOrigin,
+    placement: P,
+    mut dirty: DirtyWalk<'_>,
+    (inherited_translated_content_context, update): (bool, u64),
 ) -> Option<ReplaceDirtyLayersReport> {
     if dirty.nodes.is_empty() {
         return Some(ReplaceDirtyLayersReport::default());
     }
-    let scene = children_scene(parent, parent_scene, parent_children);
 
     let child_inherited_translated_content_context =
         inherited_translated_content_context || parent.translated_content_context;
@@ -524,11 +599,12 @@ fn replace_dirty_layers_from_applier(
             ) {
                 report.hit_graph_dirty |= hit_graph_dirty;
                 report.updated = true;
-                let child_children = parent_children.children_of(child_layer, scene.as_ref());
-                let child_report = replace_dirty_layers_from_applier(
+                let child_children = placement.children_of(parent_children, child_layer);
+                let child_report = walk_dirty_layer(
                     applier,
-                    (child_layer, scene.as_ref()),
+                    child_layer,
                     child_children,
+                    placement,
                     dirty.reborrow(),
                     child_inherited_translated_content_context,
                     update,
@@ -565,11 +641,12 @@ fn replace_dirty_layers_from_applier(
         if marks & DIRTY_ANCESTOR == 0 {
             continue;
         }
-        let child_children = parent_children.children_of(child_layer, scene.as_ref());
-        let child_report = replace_dirty_layers_from_applier(
+        let child_children = placement.children_of(parent_children, child_layer);
+        let child_report = walk_dirty_layer(
             applier,
-            (child_layer, scene.as_ref()),
+            child_layer,
             child_children,
+            placement,
             dirty.reborrow(),
             child_inherited_translated_content_context,
             update,
@@ -579,10 +656,7 @@ fn replace_dirty_layers_from_applier(
     }
 
     if report.updated {
-        if let Some(scene) = &scene {
-            place_scene_surfaces(parent, scene);
-            publish_scene_window_geometry(applier, parent, parent_children, scene);
-        }
+        placement.place_children(applier, parent, parent_children);
         parent.refresh_child_facts();
         // A layer's own sinks are not kept apart from its children's, so a
         // child that stopped publishing leaves the flag set, which only keeps
@@ -725,17 +799,11 @@ fn update_layer_properties(
         if target.has_origin_sinks
             && let Some(child_abs) = child_context.parent_abs
         {
-            let scene = SceneFrame::of(
-                &target.graphics_layer,
-                Point::new(
-                    child_abs.content_origin.x - target.content_offset.x,
-                    child_abs.content_origin.y - target.content_offset.y,
-                ),
-                rect_size(target.node_rect()),
-            );
+            let scene = shown_scene(target, child_abs);
+            let scene = scene.as_ref();
             for child in &target.children {
                 if let RenderNode::Layer(child) = child {
-                    publish_retained_window_geometry(applier, child, child_abs, scene.as_ref());
+                    publish_retained_window_geometry(applier, child, child_abs, scene);
                 }
             }
         }
@@ -758,8 +826,12 @@ fn publish_retained_window_geometry(
     if !layer.has_origin_sinks {
         return;
     }
-    let child_abs = parent_abs.children_of(layer, parent_scene);
-    let scene = children_scene(layer, parent_scene, child_abs);
+    let child_abs = match parent_scene {
+        Some(scene) => parent_abs.children_in_scene(layer, scene),
+        None => parent_abs.children_of(layer),
+    };
+    let mut shown_scene = None;
+    let scene = children_scene(layer, parent_scene, child_abs, &mut shown_scene);
     if let Some(node_id) = layer.node_id {
         read_node_data(applier, node_id, |data| {
             data.modifier_slices.publish_window_geometry(
@@ -774,29 +846,47 @@ fn publish_retained_window_geometry(
     }
     for child in &layer.children {
         if let RenderNode::Layer(child) = child {
-            publish_retained_window_geometry(applier, child, child_abs, scene.as_ref());
+            publish_retained_window_geometry(applier, child, child_abs, scene);
         }
     }
 }
 
-/// The scene `layer` shows to its children, which start at `children`, or
-/// for the wrapper of a node's outer draws the scene above it,
+/// The frame of the scene `layer` shows to its children, which start at
+/// `children`.
+fn shown_scene(layer: &LayerNode, children: AbsOrigin) -> Option<SceneFrame> {
+    layer_scene(&layer.graphics_layer).map(|scene| scene_frame(layer, scene, children))
+}
+
+/// The scene `layer`'s children are placed in: the one it shows, kept in
+/// `shown`, or for the wrapper of a node's outer draws the scene above it,
 /// `parent_scene`, which reaches the node's own layer through it.
-fn children_scene(
+fn children_scene<'a>(
     layer: &LayerNode,
-    parent_scene: Option<&SceneFrame>,
+    parent_scene: Option<&'a SceneFrame>,
     children: AbsOrigin,
-) -> Option<SceneFrame> {
+    shown: &'a mut Option<SceneFrame>,
+) -> Option<&'a SceneFrame> {
     match layer.wraps {
-        Some(_) => parent_scene.copied(),
-        None => SceneFrame::of(
-            &layer.graphics_layer,
-            Point::new(
-                children.content_origin.x - layer.content_offset.x,
-                children.content_origin.y - layer.content_offset.y,
-            ),
-            rect_size(layer.node_rect()),
+        Some(_) => parent_scene,
+        None => match layer_scene(&layer.graphics_layer) {
+            Some(scene) => Some(shown.insert(scene_frame(layer, scene, children))),
+            None => None,
+        },
+    }
+}
+
+/// The frame of the scene `layer` shows, kept out of line: a flat layer's
+/// walk stops at the check before it.
+#[cold]
+#[inline(never)]
+fn scene_frame(layer: &LayerNode, scene: &Scene3d, children: AbsOrigin) -> SceneFrame {
+    SceneFrame {
+        camera: scene.camera,
+        origin: Point::new(
+            children.content_origin.x - layer.content_offset.x,
+            children.content_origin.y - layer.content_offset.y,
         ),
+        size: rect_size(layer.node_rect()),
     }
 }
 
@@ -838,10 +928,21 @@ fn place_scene_surfaces(scene_layer: &mut LayerNode, scene: &SceneFrame) {
 /// and publishes their window geometry through the scene's camera; the
 /// children start at `children`.
 fn finish_scene(applier: &MemoryApplier, scene_layer: &mut LayerNode, children: Option<AbsOrigin>) {
+    if layer_scene(&scene_layer.graphics_layer).is_some() {
+        finish_shown_scene(applier, scene_layer, children);
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn finish_shown_scene(
+    applier: &MemoryApplier,
+    scene_layer: &mut LayerNode,
+    children: Option<AbsOrigin>,
+) {
     let origin = children.map_or_else(Point::default, |children| children.content_origin);
-    let Some(scene) = children_scene(
+    let Some(scene) = shown_scene(
         scene_layer,
-        None,
         AbsOrigin {
             content_origin: origin,
             ..AbsOrigin::ROOT
@@ -1501,9 +1602,11 @@ pub(crate) struct HitGraphState {
     transform_to_parent: ProjectiveTransform,
     clip_rect: Option<Rect>,
     shape: LayerShape,
-    /// A scene's camera or a surface's place, which move what the layer's
-    /// surfaces take input at.
-    space: Option<Arc<LayerSpace>>,
+    /// The address of the layer's scene camera or surface place, which
+    /// move what the layer's surfaces take input at; zero for a flat layer.
+    /// A layer that changes either holds a new one, made while the old one
+    /// still lives.
+    space: usize,
 }
 
 impl HitGraphState {
@@ -1516,7 +1619,11 @@ impl HitGraphState {
             transform_to_parent: layer.transform_to_parent,
             clip_rect: layer.clip_rect(),
             shape: layer.graphics_layer.shape,
-            space: layer.graphics_layer.space.clone(),
+            space: layer
+                .graphics_layer
+                .space
+                .as_ref()
+                .map_or(0, |space| Arc::as_ptr(space).addr()),
         }
     }
 
@@ -1866,7 +1973,7 @@ fn write_snapshot_layer(
         },
     );
     if let Some(layer) = content_layer_mut(target)
-        && let Some(scene) = children_scene(layer, None, AbsOrigin::ROOT)
+        && let Some(scene) = shown_scene(layer, AbsOrigin::ROOT)
     {
         place_scene_surfaces(layer, &scene);
     }
@@ -1884,9 +1991,7 @@ impl AbsOrigin {
         window_transform: ProjectiveTransform::identity(),
     };
 
-    /// Where `layer`'s children start and map to the window; `scene` is the
-    /// scene its parent shows, which places a mesh surface.
-    fn children_of(self, layer: &LayerNode, scene: Option<&SceneFrame>) -> AbsOrigin {
+    fn children_of(self, layer: &LayerNode) -> AbsOrigin {
         let top_left = Point {
             x: self.content_origin.x + layer.origin_in_parent.x,
             y: self.content_origin.y + layer.origin_in_parent.y,
@@ -1896,9 +2001,32 @@ impl AbsOrigin {
                 x: self.content_origin.x + layer.origin_in_parent.x + layer.content_offset.x,
                 y: self.content_origin.y + layer.origin_in_parent.y + layer.content_offset.y,
             },
+            window_transform: layer_transform_to_window(
+                self.window_transform,
+                top_left,
+                layer.local_bounds,
+                &layer.graphics_layer,
+            ),
+        }
+    }
+
+    /// [`Self::children_of`] for a child of a scene's layer, which the
+    /// scene's camera places, or of the wrapper of a surface's outer draws.
+    #[cold]
+    #[inline(never)]
+    fn children_in_scene(self, layer: &LayerNode, scene: &SceneFrame) -> AbsOrigin {
+        let top_left = Point {
+            x: self.content_origin.x + layer.origin_in_parent.x,
+            y: self.content_origin.y + layer.origin_in_parent.y,
+        };
+        AbsOrigin {
+            content_origin: Point {
+                x: top_left.x + layer.content_offset.x,
+                y: top_left.y + layer.content_offset.y,
+            },
             window_transform: node_transform_to_window(
                 self.window_transform,
-                scene,
+                Some(scene),
                 (top_left, rect_size(layer.node_rect())),
                 layer.local_bounds,
                 &layer.graphics_layer,

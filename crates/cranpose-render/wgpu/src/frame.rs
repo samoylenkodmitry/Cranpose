@@ -13,8 +13,8 @@ use cranpose_render_common::{
     raster_cache::{LayerRasterCacheKey, RasterScale},
 };
 use cranpose_ui_graphics::{
-    BlendMode, Color, MAX_SUBSTRATES, Point, Rect, RenderEffect, RenderHash, RuntimeShader,
-    ShaderPlaceholder, SubstrateSpec, TileMode,
+    BlendMode, Color, FrontPolygon, MAX_SUBSTRATES, Point, Rect, RenderEffect, RenderHash,
+    RuntimeShader, ShaderPlaceholder, SubstrateSpec, TileMode,
 };
 use smallvec::SmallVec;
 
@@ -235,7 +235,7 @@ impl PageBase {
                 dest: region.tuple(),
                 scissor: None,
                 kind: ResolvedCompositeKind::Projective {
-                    dest: ProjectiveTransform::identity().front_polygon(Rect {
+                    dest: FrontPolygon::of_rect(Rect {
                         x: region.x,
                         y: region.y,
                         width: region.width,
