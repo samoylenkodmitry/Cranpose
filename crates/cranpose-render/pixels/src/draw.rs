@@ -118,6 +118,21 @@ fn clip_rect_to_bounds(rect: Rect, clip: Option<Rect>, target: &Target) -> Optio
     clip_rect_to_window(rect, clip, target.window())
 }
 
+/// The pixel at or below `edge`, a finite value within the `i32` range:
+/// the conversion truncates toward zero, so a negative edge with a fraction
+/// steps one down. A float floor and a second conversion cost more where
+/// no instruction rounds a float.
+fn floor_pixel(edge: f32) -> i32 {
+    let whole = edge as i32;
+    whole - i32::from((whole as f32) > edge)
+}
+
+/// The pixel at or above `edge`, a finite value within the `i32` range.
+fn ceil_pixel(edge: f32) -> i32 {
+    let whole = edge as i32;
+    whole + i32::from((whole as f32) < edge)
+}
+
 /// The whole pixels of `rect` cut to `clip` and to `window`.
 pub(crate) fn clip_rect_to_window(
     rect: Rect,
@@ -145,10 +160,12 @@ pub(crate) fn clip_rect_to_window(
         return None;
     }
 
-    let min_x = (whole::floor(min_x) as i32).clamp(window.min_x, window.max_x);
-    let min_y = (whole::floor(min_y) as i32).clamp(window.min_y, window.max_y);
-    let max_x = (whole::ceil(max_x) as i32).clamp(window.min_x, window.max_x);
-    let max_y = (whole::ceil(max_y) as i32).clamp(window.min_y, window.max_y);
+    // Each edge now lies within the window, whose bounds are whole, so it
+    // is finite (`max` and `min` pass over a NaN) and its whole pixel too.
+    let min_x = floor_pixel(min_x);
+    let min_y = floor_pixel(min_y);
+    let max_x = ceil_pixel(max_x);
+    let max_y = ceil_pixel(max_y);
 
     if min_x >= max_x || min_y >= max_y {
         return None;
