@@ -115,6 +115,43 @@ impl DescendantDirt {
     }
 }
 
+/// Whether a layout node, or a node below it, needs measure or layout.
+#[derive(Clone, Copy)]
+pub(crate) struct LayoutDirt {
+    pub(crate) measure: bool,
+    pub(crate) layout: bool,
+    pub(crate) descendant: DescendantDirt,
+}
+
+impl LayoutDirt {
+    /// Nothing at or below the node needs measure or layout.
+    pub(crate) const CLEAN: Self = Self {
+        measure: false,
+        layout: false,
+        descendant: DescendantDirt {
+            layout: false,
+            measure: false,
+        },
+    };
+
+    /// Whether the node or a node below it needs layout.
+    pub(crate) fn any(self) -> bool {
+        self.measure || self.layout || self.descendant.layout
+    }
+}
+
+/// A new node needs a measure, and a cache whose node keeps its flags
+/// elsewhere reads as dirty.
+impl Default for LayoutDirt {
+    fn default() -> Self {
+        Self {
+            measure: true,
+            layout: true,
+            descendant: DescendantDirt::default(),
+        }
+    }
+}
+
 /// The measured size and placed position that a layout node kept from its latest layout pass.
 #[derive(Clone, Debug, Default)]
 pub struct LayoutState {
@@ -322,9 +359,18 @@ impl NodeCacheState {
     }
 }
 
+/// What a node's cache shares with its parent's record of the node: the
+/// cache and the node's dirty flags, which the parent's keep walk reads
+/// there without looking the node up.
+#[derive(Default)]
+struct CacheShared {
+    cache: RefCell<NodeCacheState>,
+    dirt: Cell<LayoutDirt>,
+}
+
 #[derive(Default)]
 pub(crate) struct LayoutNodeCacheHandles {
-    state: Rc<RefCell<NodeCacheState>>,
+    state: Rc<CacheShared>,
 }
 
 impl Clone for LayoutNodeCacheHandles {
@@ -342,8 +388,18 @@ impl Clone for LayoutNodeCacheHandles {
 }
 
 impl LayoutNodeCacheHandles {
+    /// The flags of the node whose cache this is: dirty for a node that
+    /// keeps its flags elsewhere.
+    pub(crate) fn dirt(&self) -> LayoutDirt {
+        self.state.dirt.get()
+    }
+
+    fn set_dirt(&self, dirt: LayoutDirt) {
+        self.state.dirt.set(dirt);
+    }
+
     pub(crate) fn clear(&self) {
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.cache.borrow_mut();
         state.retire_measurement();
         state.intrinsics.clear();
         state.intrinsics_read = false;
@@ -351,7 +407,7 @@ impl LayoutNodeCacheHandles {
     }
 
     pub(crate) fn activate(&self, epoch: u64) {
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.cache.borrow_mut();
         if state.epoch != epoch {
             state.retire_measurement();
             state.intrinsics.clear();
@@ -363,7 +419,7 @@ impl LayoutNodeCacheHandles {
     /// The node's last measurement, whatever constraints it was made under:
     /// the one the cache holds, or else the one it last let go of.
     pub(crate) fn held_measurement(&self) -> Option<Rc<MeasuredNode>> {
-        let state = self.state.borrow();
+        let state = self.state.cache.borrow();
         state
             .measurement
             .as_ref()
@@ -375,7 +431,7 @@ impl LayoutNodeCacheHandles {
     /// Takes the measurement the cache last let go of, or else the one it
     /// holds, for a measure of the node that replaces it.
     pub(crate) fn take_previous_measurement(&self) -> Option<Rc<MeasuredNode>> {
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.cache.borrow_mut();
         state
             .spare
             .take()
@@ -386,18 +442,18 @@ impl LayoutNodeCacheHandles {
     /// them changed. A parent's earlier read still counts for
     /// [`Self::has_intrinsics`].
     pub(crate) fn forget_intrinsics(&self) {
-        self.state.borrow_mut().intrinsics.clear();
+        self.state.cache.borrow_mut().intrinsics.clear();
     }
 
     pub(crate) fn epoch(&self) -> u64 {
-        self.state.borrow().epoch
+        self.state.cache.borrow().epoch
     }
 
     /// The measurement the cache holds for `constraints`: one made under
     /// them, or one whose hold contains them. A caller asks only while the
     /// node and everything below it are clean.
     pub(crate) fn get_measurement(&self, constraints: Constraints) -> Option<Rc<MeasuredNode>> {
-        let state = self.state.borrow();
+        let state = self.state.cache.borrow();
         state
             .measurement
             .as_ref()
@@ -411,6 +467,7 @@ impl LayoutNodeCacheHandles {
     /// The constraints of the measurement the cache holds.
     pub(crate) fn measured_constraints(&self) -> Option<Constraints> {
         self.state
+            .cache
             .borrow()
             .measurement
             .as_ref()
@@ -419,7 +476,7 @@ impl LayoutNodeCacheHandles {
 
     /// Whether a parent read intrinsic sizes from this cache.
     pub(crate) fn has_intrinsics(&self) -> bool {
-        self.state.borrow().intrinsics_read
+        self.state.cache.borrow().intrinsics_read
     }
 
     /// The hold of the measurement the cache has, when it is `measured`.
@@ -428,6 +485,7 @@ impl LayoutNodeCacheHandles {
         measured: &Rc<MeasuredNode>,
     ) -> Option<cranpose_ui_layout::ConstraintsHold> {
         self.state
+            .cache
             .borrow()
             .measurement
             .as_ref()
@@ -438,7 +496,7 @@ impl LayoutNodeCacheHandles {
     /// Stores `measured` for `constraints`. The hold of a measurement the
     /// cache already has stays with it.
     pub(crate) fn store_measurement(&self, constraints: Constraints, measured: Rc<MeasuredNode>) {
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.cache.borrow_mut();
         let hold = state
             .measurement
             .as_ref()
@@ -459,7 +517,7 @@ impl LayoutNodeCacheHandles {
         measured: Rc<MeasuredNode>,
         hold: Option<cranpose_ui_layout::ConstraintsHold>,
     ) {
-        self.state.borrow_mut().measurement = Some(MeasurementCacheEntry {
+        self.state.cache.borrow_mut().measurement = Some(MeasurementCacheEntry {
             constraints,
             measured,
             hold,
@@ -467,7 +525,7 @@ impl LayoutNodeCacheHandles {
     }
 
     pub(crate) fn get_intrinsic(&self, kind: &IntrinsicKind) -> Option<f32> {
-        let state = self.state.borrow();
+        let state = self.state.cache.borrow();
         state
             .intrinsics
             .iter()
@@ -476,7 +534,7 @@ impl LayoutNodeCacheHandles {
     }
 
     pub(crate) fn store_intrinsic(&self, kind: IntrinsicKind, value: f32) {
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.cache.borrow_mut();
         state.intrinsics_read = true;
         if let Some((_, existing)) = state
             .intrinsics
@@ -534,10 +592,6 @@ pub struct LayoutNode {
     layout_runtime_state: Rc<RefCell<LayoutRuntimeState>>,
     /// The actual children of this node (folded view - includes virtual nodes as-is)
     pub children: Vec<NodeId>,
-    needs_measure: Cell<bool>,
-    needs_layout: Cell<bool>,
-    /// A node below this one needs layout or measure.
-    descendant_dirt: Cell<DescendantDirt>,
 
     /// Policy that measures and places the children of this node. Change it through
     /// `set_measure_policy` so that a measure is scheduled.
@@ -604,8 +658,7 @@ impl LayoutNode {
     fn new_recycled_shell(is_virtual: bool) -> Self {
         let mut shell =
             Self::new_with_virtual(Modifier::empty(), empty_measure_policy(), is_virtual);
-        shell.needs_measure.set(false);
-        shell.needs_layout.set(false);
+        shell.cache.set_dirt(LayoutDirt::CLEAN);
         shell.needs_semantics.set(false);
         shell.descendant_needs_semantics.set(false);
         shell.needs_redraw.set(false);
@@ -637,9 +690,6 @@ impl LayoutNode {
             density: crate::density::Density::default(),
             children: Vec::new(),
             cache: LayoutNodeCacheHandles::default(),
-            needs_measure: Cell::new(true),
-            needs_layout: Cell::new(true),
-            descendant_dirt: Cell::default(),
             needs_semantics: Cell::new(true),
             descendant_needs_semantics: Cell::new(false),
             semantics_reach: Cell::new(None),
@@ -881,13 +931,23 @@ impl LayoutNode {
 
     /// Mark this node as needing measure. Also marks it as needing layout.
     pub fn mark_needs_measure(&self) {
-        self.needs_measure.set(true);
-        self.needs_layout.set(true);
+        self.update_dirt(|dirt| LayoutDirt {
+            measure: true,
+            layout: true,
+            ..dirt
+        });
     }
 
     /// Mark this node as needing layout (but not necessarily measure).
     pub fn mark_needs_layout(&self) {
-        self.needs_layout.set(true);
+        self.update_dirt(|dirt| LayoutDirt {
+            layout: true,
+            ..dirt
+        });
+    }
+
+    fn update_dirt(&self, update: impl FnOnce(LayoutDirt) -> LayoutDirt) {
+        self.cache.set_dirt(update(self.cache.dirt()));
     }
 
     /// Mark this node as needing redraw without forcing measure/layout.
@@ -901,12 +961,12 @@ impl LayoutNode {
 
     /// Check if this node needs measure.
     pub fn needs_measure(&self) -> bool {
-        self.needs_measure.get()
+        self.cache.dirt().measure
     }
 
     /// Check if this node needs layout.
     pub fn needs_layout(&self) -> bool {
-        self.needs_layout.get()
+        self.cache.dirt().layout
     }
 
     /// Mark this node as needing semantics recomputation.
@@ -954,14 +1014,20 @@ impl LayoutNode {
     }
 
     pub(crate) fn clear_needs_measure(&self) {
-        self.needs_measure.set(false);
+        self.update_dirt(|dirt| LayoutDirt {
+            measure: false,
+            ..dirt
+        });
     }
 
     /// Clears the node's layout flag and its descendants': a layout pass
     /// visited them.
     pub(crate) fn clear_needs_layout(&self) {
-        self.needs_layout.set(false);
-        self.descendant_dirt.set(DescendantDirt::default());
+        self.update_dirt(|dirt| LayoutDirt {
+            layout: false,
+            descendant: DescendantDirt::default(),
+            ..dirt
+        });
     }
 
     /// Marks this node as needing a fresh pointer-input pass.
@@ -1266,9 +1332,6 @@ impl Clone for LayoutNode {
             density: self.density,
             children: self.children.clone(),
             cache: self.cache.clone(),
-            needs_measure: Cell::new(self.needs_measure.get()),
-            needs_layout: Cell::new(self.needs_layout.get()),
-            descendant_dirt: Cell::new(self.descendant_dirt.get()),
             needs_semantics: Cell::new(self.needs_semantics.get()),
             descendant_needs_semantics: Cell::new(self.descendant_needs_semantics.get()),
             semantics_reach: Cell::new(None),
@@ -1371,32 +1434,33 @@ impl Node for LayoutNode {
     }
 
     fn mark_needs_layout(&self) {
-        self.needs_layout.set(true);
+        LayoutNode::mark_needs_layout(self);
     }
 
     fn needs_layout(&self) -> bool {
-        self.needs_layout.get()
+        LayoutNode::needs_layout(self)
     }
 
     fn mark_needs_measure(&self) {
-        self.needs_measure.set(true);
-        self.needs_layout.set(true);
+        LayoutNode::mark_needs_measure(self);
     }
 
     fn needs_measure(&self) -> bool {
-        self.needs_measure.get()
+        LayoutNode::needs_measure(self)
     }
 
     fn mark_descendant_needs_layout(&self, measure: bool) {
-        self.descendant_dirt
-            .set(self.descendant_dirt.get().marked(measure));
+        self.update_dirt(|dirt| LayoutDirt {
+            descendant: dirt.descendant.marked(measure),
+            ..dirt
+        });
         if measure {
             self.cache.forget_intrinsics();
         }
     }
 
     fn descendant_needs_layout(&self) -> bool {
-        self.descendant_dirt.get().layout
+        self.cache.dirt().descendant.layout
     }
 
     fn is_virtual(&self) -> bool {
@@ -1404,7 +1468,7 @@ impl Node for LayoutNode {
     }
 
     fn descendant_needs_measure(&self) -> bool {
-        self.descendant_dirt.get().measure
+        self.cache.dirt().descendant.measure
     }
 
     fn mark_needs_semantics(&self) {

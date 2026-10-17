@@ -2345,6 +2345,12 @@ impl LayoutBuilderState {
             return Ok(ChildChange::Refuse);
         };
         *next_state += offset + 1;
+        // A clean child's flags sit in the cache its record shares with it.
+        if read_cell(&state.cache, |cache| {
+            cache.as_ref().is_some_and(|cache| !cache.dirt().any())
+        }) {
+            return Ok(ChildChange::Unchanged);
+        }
         self.child_change(child_id, |view| {
             let parent_data_changed = view.parent_data.as_ref().is_some_and(|data| {
                 read_cell(&state.parent_data, |bound| bound.as_ref() != Some(data))
