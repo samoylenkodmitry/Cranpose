@@ -255,10 +255,18 @@ fn cancelling_a_callback_suppresses_delivery_while_running_work_finishes() {
             );
         })
         .expect("render");
-    composition.runtime_handle().drain_ui();
-    entered
-        .recv_timeout(Duration::from_secs(5))
-        .expect("worker start");
+    // The work can wait for room in the shared pool, which a test running
+    // beside this one fills; each drain lets the waiting UI task try again.
+    let runtime = composition.runtime_handle();
+    finish(std::future::poll_fn(|context| {
+        runtime.drain_ui();
+        if entered.try_recv().is_ok() {
+            Poll::Ready(())
+        } else {
+            context.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }));
     handle.borrow().as_ref().expect("handle").cancel();
     release.send(()).expect("release worker");
     done.recv_timeout(Duration::from_secs(5))
