@@ -6740,13 +6740,8 @@ impl ApplicationHandler for App {
                         robot_visual_dirty |= update_result.visual_changed || app.needs_redraw();
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
-                    RobotCommand::SendKey(key) => {
-                        use cranpose_app_shell::{KeyEvent, KeyEventType, Modifiers};
-
-                        let (key_code, text) = robot_key_code_and_text(&key);
-                        let key_event =
-                            KeyEvent::new(key_code, text, Modifiers::NONE, KeyEventType::KeyDown);
-                        app.on_key_event(&key_event);
+                    RobotCommand::SendKey { key, released } => {
+                        app.on_key_event(&crate::robot::robot_key_event(&key, released));
                         let update_result = update_app_with_native_window_registry(app, &registry);
                         robot_visual_dirty |= update_result.visual_changed || app.needs_redraw();
                         let _ = controller.tx.send(RobotResponse::Ok);

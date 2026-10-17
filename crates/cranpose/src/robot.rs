@@ -204,7 +204,10 @@ pub(crate) enum RobotCommand {
         source: PointerSource,
     },
     TypeText(String),
-    SendKey(String),
+    SendKey {
+        key: String,
+        released: bool,
+    },
     SendKeyWithModifiers {
         key: String,
         shift: bool,
@@ -705,8 +708,24 @@ impl Robot {
     /// ```
     pub fn send_key(&self, key: &str) -> Result<(), String> {
         self.tx
-            .send(RobotCommand::SendKey(key.to_string()))
+            .send(RobotCommand::SendKey {
+                key: key.to_string(),
+                released: false,
+            })
             .map_err(|e| format!("Failed to send send_key command: {e}"))?;
+        self.recv_ack()
+    }
+
+    /// Releases a key: sends its key-up event. [`Self::send_key`] sends only
+    /// the key-down, so a key the app reads while it is held, as a game or a
+    /// camera does, stays down until this call.
+    pub fn release_key(&self, key: &str) -> Result<(), String> {
+        self.tx
+            .send(RobotCommand::SendKey {
+                key: key.to_string(),
+                released: true,
+            })
+            .map_err(|e| format!("Failed to send release_key command: {e}"))?;
         self.recv_ack()
     }
 
@@ -1455,6 +1474,19 @@ const NAMED_KEYS: [(&str, KeyCode, &str); 12] = [
     ("Escape", KeyCode::Escape, ""),
     ("space", KeyCode::Space, " "),
 ];
+
+/// The key event a robot sends for `key`: its press, or its release.
+pub(crate) fn robot_key_event(key: &str, released: bool) -> cranpose_app_shell::KeyEvent {
+    use cranpose_app_shell::{KeyEvent, KeyEventType, Modifiers};
+
+    let (key_code, text) = robot_key_code_and_text(key);
+    let event_type = if released {
+        KeyEventType::KeyUp
+    } else {
+        KeyEventType::KeyDown
+    };
+    KeyEvent::new(key_code, text, Modifiers::NONE, event_type)
+}
 
 pub(crate) fn robot_key_code_and_text(key: &str) -> (KeyCode, String) {
     if let Some((_, code, text)) = NAMED_KEYS.iter().find(|(name, ..)| *name == key) {
