@@ -22,8 +22,9 @@ fn event_messages_own_arguments_and_follow_later_language_changes() {
     let language = MutableState::with_runtime(locale("en"), composition.runtime_handle());
     let output = Rc::new(RefCell::new(String::new()));
     composition
-        .render(981, || {
-            DeferredRoot(language, message.clone(), output.clone());
+        .render(981, {
+            let output = Rc::clone(&output);
+            move || DeferredRoot(language, message.clone(), Rc::clone(&output))
         })
         .expect("initial render");
     assert!(output.borrow().contains("Hello"));
@@ -80,7 +81,10 @@ fn changing_language_after_a_cached_read_updates_existing_composables() {
     let tick = MutableState::with_runtime(0, composition.runtime_handle());
     let output = Rc::new(RefCell::new(Vec::new()));
     composition
-        .render(901, || Root(catalog(), language, tick, output.clone()))
+        .render(901, {
+            let output = Rc::clone(&output);
+            move || Root(catalog(), language, tick, Rc::clone(&output))
+        })
         .expect("render");
     tick.set_value(1);
     composition.process_invalid_scopes().expect("cached read");
@@ -96,21 +100,27 @@ fn changing_language_after_a_cached_read_updates_existing_composables() {
 
 #[test]
 fn nested_providers_restore_language_and_direction_and_allow_overrides() {
-    let mut seen = Vec::new();
-    run_test_composition(|| {
-        ProvideLocalization(&catalog(), locale("fr"), || {
-            seen.push((tr!("Save", id = "save").to_string(), layout_direction()));
-            ProvideLocalization(&catalog(), locale("ar"), || {
-                seen.push((UiString::Search.resolve(), layout_direction()));
-                ProvideLayoutDirection(LayoutDirection::Ltr, || {
-                    assert_eq!(layout_direction(), LayoutDirection::Ltr);
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    run_test_composition({
+        let seen = Rc::clone(&seen);
+        move || {
+            ProvideLocalization(&catalog(), locale("fr"), || {
+                let save = tr!("Save", id = "save").to_string();
+                seen.borrow_mut().push((save, layout_direction()));
+                ProvideLocalization(&catalog(), locale("ar"), || {
+                    let search = UiString::Search.resolve();
+                    seen.borrow_mut().push((search, layout_direction()));
+                    ProvideLayoutDirection(LayoutDirection::Ltr, || {
+                        assert_eq!(layout_direction(), LayoutDirection::Ltr);
+                    });
                 });
+                let save = tr!("Save", id = "save").to_string();
+                seen.borrow_mut().push((save, layout_direction()));
             });
-            seen.push((tr!("Save", id = "save").to_string(), layout_direction()));
-        });
+        }
     });
     assert_eq!(
-        seen,
+        *seen.borrow(),
         [
             ("Enregistrer".into(), LayoutDirection::Ltr),
             ("بحث".into(), LayoutDirection::Rtl),
@@ -121,43 +131,53 @@ fn nested_providers_restore_language_and_direction_and_allow_overrides() {
 
 #[test]
 fn separate_compositions_and_framework_overrides_do_not_share_language() {
-    let mut first = String::new();
-    let mut second = String::new();
-    let _a = run_test_composition(|| {
-        ProvideLocalization(&catalog(), locale("fr"), || {
-            first = UiString::Copy.resolve();
+    let copy_in = |tag: &'static str| {
+        let copy = Rc::new(RefCell::new(String::new()));
+        let composition = run_test_composition({
+            let copy = Rc::clone(&copy);
+            move || {
+                ProvideLocalization(&catalog(), locale(tag), || {
+                    *copy.borrow_mut() = UiString::Copy.resolve();
+                });
+            }
         });
-    });
-    let _b = run_test_composition(|| {
-        ProvideLocalization(&catalog(), locale("en"), || {
-            second = UiString::Copy.resolve();
-        });
-    });
-    assert_eq!(first, "Copier autrement");
-    assert_eq!(second, "Copy");
+        (composition, copy)
+    };
+    let (_a, first) = copy_in("fr");
+    let (_b, second) = copy_in("en");
+    assert_eq!(*first.borrow(), "Copier autrement");
+    assert_eq!(*second.borrow(), "Copy");
 }
 
 #[test]
 fn serbian_framework_strings_keep_the_script_the_app_asks_for() {
     let app = Catalog::from_resources("en", &[]).expect("catalog");
-    let mut seen = Vec::new();
+    let seen = Rc::new(RefCell::new(Vec::new()));
     for tag in ["sr", "sr-Latn"] {
-        let _composition = run_test_composition(|| {
-            ProvideLocalization(&app, locale(tag), || seen.push(UiString::Copy.resolve()));
+        let (app, seen) = (app.clone(), Rc::clone(&seen));
+        let _composition = run_test_composition(move || {
+            ProvideLocalization(&app, locale(tag), || {
+                seen.borrow_mut().push(UiString::Copy.resolve());
+            });
         });
     }
-    assert_eq!(seen, ["Копирај", "Kopiraj"]);
+    assert_eq!(*seen.borrow(), ["Копирај", "Kopiraj"]);
 }
 
 #[test]
 fn generated_accessors_and_borrowed_arguments_work_without_a_provider() {
-    let mut seen = Vec::new();
-    run_test_composition(|| {
-        let name = "Ana".to_owned();
-        seen.push(tr!("Hello, {name}!", name = name.as_str()).to_string());
-        seen.push(messages::files(2).to_string());
-        seen.push(messages::save().to_string());
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    run_test_composition({
+        let seen = Rc::clone(&seen);
+        move || {
+            let name = "Ana".to_owned();
+            let mut seen = seen.borrow_mut();
+            seen.push(tr!("Hello, {name}!", name = name.as_str()).to_string());
+            seen.push(messages::files(2).to_string());
+            seen.push(messages::save().to_string());
+        }
     });
+    let seen = seen.borrow();
     assert!(seen[0].contains("Ana"));
     assert!(seen[1].contains("files"));
     assert_eq!(seen[2], "Save");
@@ -166,7 +186,7 @@ fn generated_accessors_and_borrowed_arguments_work_without_a_provider() {
 #[test]
 fn replacing_catalogs_and_changing_arguments_refreshes_text() {
     let mut composition = run_test_composition(|| {});
-    let mut result = String::new();
+    let result = Rc::new(RefCell::new(String::new()));
     for (source, count, expected) in [
         ("files = { $count } documents", 2, "documents"),
         ("files = { $count } articles", 3, "articles"),
@@ -181,14 +201,17 @@ fn replacing_catalogs_and_changing_arguments_refreshes_text() {
         )
         .expect("catalog");
         composition
-            .render(905, || {
-                ProvideLocalization(&catalog, locale("fr"), || {
-                    result = messages::files(count).to_string();
-                });
+            .render(905, {
+                let result = Rc::clone(&result);
+                move || {
+                    ProvideLocalization(&catalog, locale("fr"), || {
+                        *result.borrow_mut() = messages::files(count).to_string();
+                    });
+                }
             })
             .expect("render");
-        assert!(result.contains(expected));
-        assert!(result.contains(&count.to_string()));
+        assert!(result.borrow().contains(expected));
+        assert!(result.borrow().contains(&count.to_string()));
     }
 }
 
@@ -205,13 +228,17 @@ fn application_preferences_update_retained_text_and_restore_system_language() {
     let retained = UiText::from(cranpose_ui::message!("Save", id = "save"));
     let mut composition = run_test_composition(|| {});
     composition
-        .render(991, || {
-            PreferenceRoot(
-                application.clone(),
-                controller.clone(),
-                retained.clone(),
-                output.clone(),
-            );
+        .render(991, {
+            let (application, controller) = (application.clone(), Rc::clone(&controller));
+            let output = Rc::clone(&output);
+            move || {
+                PreferenceRoot(
+                    application.clone(),
+                    Rc::clone(&controller),
+                    retained.clone(),
+                    Rc::clone(&output),
+                );
+            }
         })
         .expect("render");
     let controller = controller.borrow().clone().expect("controller");
@@ -249,13 +276,17 @@ fn in_memory_language_changes_do_not_require_a_worker_runtime() {
     let output = Rc::new(RefCell::new(String::new()));
     let mut composition = run_test_composition(|| {});
     composition
-        .render(992, || {
-            PreferenceRoot(
-                application.clone(),
-                controller.clone(),
-                cranpose_ui::message!("Save", id = "save").into(),
-                output.clone(),
-            );
+        .render(992, {
+            let (application, controller) = (application.clone(), Rc::clone(&controller));
+            let output = Rc::clone(&output);
+            move || {
+                PreferenceRoot(
+                    application.clone(),
+                    Rc::clone(&controller),
+                    cranpose_ui::message!("Save", id = "save").into(),
+                    Rc::clone(&output),
+                );
+            }
         })
         .expect("render");
     let controller = controller.borrow().clone().expect("controller");
@@ -324,7 +355,7 @@ fn wait_for_preferences(
 #[test]
 fn literal_ui_text_remains_literal_inside_a_language_provider() {
     let literal = cranpose_ui::UiText::from("Save");
-    run_test_composition(|| {
+    run_test_composition(move || {
         ProvideLocalization(&catalog(), locale("fr"), || {
             assert_eq!(literal.resolve().as_str(), "Save");
             Text(literal.clone(), Modifier::empty(), TextStyle::default());
