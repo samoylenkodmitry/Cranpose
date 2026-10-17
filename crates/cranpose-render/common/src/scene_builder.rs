@@ -402,14 +402,21 @@ impl DirtyWalk<'_> {
         }
     }
 
-    /// Whether the subtree of a layer with `identity` may hold a dirty
-    /// layer: always for a layer without a node.
-    fn may_hold(&self, identity: Option<NodeId>) -> bool {
-        identity.is_none_or(|id| self.ancestry.get(self.applier, id) == DIRTY_ANCESTOR)
+    /// The marks of the layer with `identity`: whether its node is dirty and
+    /// whether its subtree may hold a dirty layer. Both for a layer without
+    /// a node.
+    fn marks(&self, identity: Option<NodeId>) -> u8 {
+        identity.map_or(DIRTY_NODE | DIRTY_ANCESTOR, |id| {
+            self.ancestry.get(self.applier, id)
+        })
     }
 }
 
+/// The mark of a node above a dirty node.
 const DIRTY_ANCESTOR: u8 = 1;
+/// The mark of a dirty node: a layer whose node has no mark needs no map
+/// lookup.
+const DIRTY_NODE: u8 = 2;
 
 fn walk_dirty_layers(
     applier: &MemoryApplier,
@@ -444,16 +451,18 @@ fn mark_dirty_ancestry(
 ) {
     ancestry.reset(applier);
     for &node in dirty.keys() {
+        ancestry.set(applier, node, ancestry.get(applier, node) | DIRTY_NODE);
         let mut current = node;
         while let Some(parent) = applier
             .get_ref(current)
             .ok()
             .and_then(cranpose_core::Node::parent)
         {
-            if ancestry.get(applier, parent) == DIRTY_ANCESTOR {
+            let marks = ancestry.get(applier, parent);
+            if marks & DIRTY_ANCESTOR != 0 {
                 break;
             }
-            ancestry.set(applier, parent, DIRTY_ANCESTOR);
+            ancestry.set(applier, parent, marks | DIRTY_ANCESTOR);
             current = parent;
         }
     }
@@ -484,7 +493,13 @@ fn replace_dirty_layers_from_applier(
         };
 
         let identity = layer_identity(child_layer);
-        if let Some(kind) = identity.and_then(|id| dirty.nodes.remove(&id)) {
+        let marks = dirty.marks(identity);
+        if marks == 0 {
+            continue;
+        }
+        if marks & DIRTY_NODE != 0
+            && let Some(kind) = identity.and_then(|id| dirty.nodes.remove(&id))
+        {
             if let Some(hit_graph_dirty) = try_update_retained_layer(
                 applier,
                 child_layer,
@@ -540,7 +555,7 @@ fn replace_dirty_layers_from_applier(
             continue;
         }
 
-        if !dirty.may_hold(identity) {
+        if marks & DIRTY_ANCESTOR == 0 {
             continue;
         }
         let child_children = parent_children.children_of(child_layer);
