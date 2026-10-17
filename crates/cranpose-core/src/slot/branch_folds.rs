@@ -14,9 +14,15 @@ pub(crate) fn mix_fold(fold: Key, key: Key) -> Key {
 
 struct FoldEntry {
     key: Key,
-    /// The cached fold before this entry opened, restored when it closes.
-    prev_fold: Option<Key>,
     live: bool,
+}
+
+/// What [`BranchFolds::push`] returns for closing the branch: the place of
+/// its entry and the cached fold before it opened, which closing restores.
+#[derive(Clone, Copy)]
+pub(crate) struct FoldToken {
+    index: usize,
+    prev_fold: Option<Key>,
 }
 
 /// The branch fold stack of the composers that share one runtime state.
@@ -39,32 +45,55 @@ pub(crate) struct BranchFolds {
 impl BranchFolds {
     /// Opens a branch for `key` and returns the token that closes it.
     #[inline]
-    pub(crate) fn push(&self, key: Key) -> usize {
+    pub(crate) fn push(&self, key: Key) -> FoldToken {
         let prev_fold = self.fold.get();
         if let Some(fold) = prev_fold {
             self.fold.set(Some(mix_fold(fold, key)));
         }
         let mut entries = self.entries.borrow_mut();
-        entries.push(FoldEntry {
-            key,
+        entries.push(FoldEntry { key, live: true });
+        FoldToken {
+            index: entries.len() - 1,
             prev_fold,
-            live: true,
-        });
-        entries.len() - 1
+        }
     }
 
     /// Closes the branch `push` returned `token` for.
     #[inline]
-    pub(crate) fn close(&self, token: usize) {
+    pub(crate) fn close(&self, token: FoldToken) {
         let mut entries = self.entries.borrow_mut();
-        if token + 1 == entries.len()
-            && self.dead.get() == 0
-            && let Some(entry) = entries.pop()
-        {
-            self.fold.set(entry.prev_fold);
+        if token.index + 1 == entries.len() && self.dead.get() == 0 {
+            entries.pop();
+            self.fold.set(token.prev_fold);
             return;
         }
-        self.close_out_of_order(&mut entries, token);
+        self.close_out_of_order(&mut entries, token.index);
+    }
+
+    /// Closes the branch `token` is for and opens one for `key` in its
+    /// place, as `close` and then `push` do. The branch on top of the stack
+    /// only changes its key.
+    #[inline]
+    pub(crate) fn advance(&self, token: &mut FoldToken, key: Key) {
+        let mut entries = self.entries.borrow_mut();
+        if token.index + 1 == entries.len()
+            && self.dead.get() == 0
+            && let Some(entry) = entries.last_mut()
+        {
+            entry.key = key;
+            self.fold
+                .set(token.prev_fold.map(|fold| mix_fold(fold, key)));
+            return;
+        }
+        drop(entries);
+        self.advance_out_of_order(token, key);
+    }
+
+    /// [`Self::advance`] for a branch under another, out of the inlined path.
+    #[cold]
+    fn advance_out_of_order(&self, token: &mut FoldToken, key: Key) {
+        self.close_out_of_order(&mut self.entries.borrow_mut(), token.index);
+        *token = self.push(key);
     }
 
     fn close_out_of_order(&self, entries: &mut Vec<FoldEntry>, token: usize) {

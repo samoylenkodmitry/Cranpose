@@ -752,3 +752,27 @@ fn a_non_lifo_fold_close_does_not_restore_a_dead_entry() {
     folds.close(first);
     assert_eq!(folds.len(), 0);
 }
+
+#[test]
+fn advancing_a_fold_under_another_closes_it_and_opens_the_next_on_top() {
+    let folds = crate::slot::BranchFolds::default();
+
+    let mut first = folds.push(0x1111);
+    let second = folds.push(0x2222);
+    let _ = folds.fold(0);
+    folds.advance(&mut first, 0x3333);
+
+    let mut expected = crate::slot::BRANCH_PATH_ROOT;
+    for key in [0x2222_u64, 0x3333] {
+        expected ^= key;
+        expected = expected.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    assert_eq!(
+        folds.fold(0),
+        expected,
+        "an advance below the top folds what a close and a push fold"
+    );
+    folds.close(second);
+    folds.close(first);
+    assert_eq!(folds.len(), 0);
+}
