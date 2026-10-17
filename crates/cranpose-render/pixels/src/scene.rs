@@ -457,8 +457,11 @@ impl RasterScene {
         if old != new {
             return;
         }
-        let (old_head, new_head) = (self.subtrees[record], from.subtrees[from_record]);
-        let (to, at) = (old_head.start, new_head.start);
+        let (to, old_stop) = (self.subtrees[record].start, self.subtrees[record].stop);
+        let (at, new_stop) = (
+            from.subtrees[from_record].start,
+            from.subtrees[from_record].stop,
+        );
         let lists = |start: ItemCounts, stop: ItemCounts| {
             (
                 start.shapes..stop.shapes,
@@ -467,17 +470,17 @@ impl RasterScene {
                 start.shadows..stop.shadows,
             )
         };
-        let (shapes, images, texts, shadows) = lists(to, old_head.stop);
-        let (new_shapes, new_images, new_texts, new_shadows) = lists(at, new_head.stop);
+        let (shapes, images, texts, shadows) = lists(to, old_stop);
+        let (new_shapes, new_images, new_texts, new_shadows) = lists(at, new_stop);
         self.shapes[shapes].clone_from_slice(&from.shapes[new_shapes]);
         self.images[images].clone_from_slice(&from.images[new_images]);
         self.texts[texts].clone_from_slice(&from.texts[new_texts]);
         self.shadows[shadows].clone_from_slice(&from.shadows[new_shadows]);
         let moved = |index: usize, from: usize, to: usize| to + (index - from);
-        let order = to.order..old_head.stop.order;
+        let order = to.order..old_stop.order;
         for (slot, item) in self.order[order]
             .iter_mut()
-            .zip(&from.order[at.order..new_head.stop.order])
+            .zip(&from.order[at.order..new_stop.order])
         {
             *slot = match *item {
                 RenderItem::Shape(index) => RenderItem::Shape(moved(index, at.shapes, to.shapes)),
