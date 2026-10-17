@@ -14,8 +14,8 @@ const VIEWPORT: Size = Size {
     height: 100.0,
 };
 
-fn lay_out(direction: LayoutDirection, list: impl Fn()) -> LayoutTree {
-    let mut composition = cranpose_ui::run_test_composition(|| {
+fn lay_out(direction: LayoutDirection, list: impl Fn() + 'static) -> LayoutTree {
+    let mut composition = cranpose_ui::run_test_composition(move || {
         ProvideLayoutDirection(direction, &list);
     });
     layout_composition(&mut composition, VIEWPORT)
@@ -27,7 +27,7 @@ fn tagged_box(tag: &'static str, modifier: Modifier) {
 
 /// A column of a full-width row and a 20 × 20 one.
 fn column(direction: LayoutDirection, spec: LazyColumnSpec) -> LayoutTree {
-    lay_out(direction, || {
+    lay_out(direction, move || {
         LazyColumn(
             Modifier::empty()
                 .size_points(VIEWPORT.width, VIEWPORT.height)
@@ -49,7 +49,7 @@ fn column(direction: LayoutDirection, spec: LazyColumnSpec) -> LayoutTree {
 
 /// A row of a full-height item and a 30 × 20 one.
 fn row(direction: LayoutDirection, spec: LazyRowSpec) -> LayoutTree {
-    lay_out(direction, || {
+    lay_out(direction, move || {
         LazyRow(
             Modifier::empty()
                 .size_points(VIEWPORT.width, VIEWPORT.height)

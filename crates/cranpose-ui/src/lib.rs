@@ -321,6 +321,9 @@ pub struct TestComposition {
     _scope: render_state::AppContextScope,
     app_context: Rc<AppContext>,
     composition: Composition<MemoryApplier>,
+    /// The root content and its key, which a root render composes again, as
+    /// a host's reconcile does.
+    root_content: Option<(Key, Box<dyn FnMut()>)>,
 }
 
 impl TestComposition {
@@ -352,18 +355,29 @@ impl TestComposition {
         app_context.enter(|| self.composition.flush_pending_node_updates())
     }
 
-    /// Recomposes the scopes that state changes invalidated. Returns true when any scope
-    /// recomposed.
+    /// Recomposes the scopes that state changes invalidated, and composes the root content again
+    /// when a read with no composable around it asked for that, as a host does. Returns true
+    /// when anything recomposed.
     pub fn process_invalid_scopes(&mut self) -> Result<bool, NodeError> {
         let app_context = Rc::clone(&self.app_context);
-        app_context.enter(|| self.composition.process_invalid_scopes())
+        let (composition, root_content) = (&mut self.composition, &mut self.root_content);
+        app_context.enter(|| match root_content {
+            Some((key, content)) => composition.reconcile(*key, content),
+            None => composition.process_invalid_scopes(),
+        })
     }
 
     /// Renders `content` as the root composition under `root_key`, then recomposes invalidated
-    /// scopes.
-    pub fn render(&mut self, root_key: Key, content: impl FnMut()) -> Result<(), NodeError> {
+    /// scopes. Later recompositions compose `content` again when the root needs it.
+    pub fn render(
+        &mut self,
+        root_key: Key,
+        content: impl FnMut() + 'static,
+    ) -> Result<(), NodeError> {
         let app_context = Rc::clone(&self.app_context);
-        app_context.enter(|| self.composition.render(root_key, content))
+        let (key, content) = self.root_content.insert((root_key, Box::new(content)));
+        let composition = &mut self.composition;
+        app_context.enter(|| composition.render(*key, content))
     }
 
     /// Borrows the applier that holds the node tree. The guard keeps this composition's app context
@@ -405,7 +419,7 @@ impl DerefMut for TestApplierGuard<'_> {
 }
 
 /// Build a composition with a simple in-memory applier and run the provided closure once.
-pub fn run_test_composition(build: impl FnMut()) -> TestComposition {
+pub fn run_test_composition(build: impl FnMut() + 'static) -> TestComposition {
     let app_context = AppContext::new();
     app_context.enter(|| {
         #[cfg(test)]
@@ -415,6 +429,7 @@ pub fn run_test_composition(build: impl FnMut()) -> TestComposition {
         _scope: app_context.enter_scope(),
         app_context,
         composition: Composition::new(MemoryApplier::new()),
+        root_content: None,
     };
     test_composition
         .render(location_key(file!(), line!(), column!()), build)

@@ -126,12 +126,17 @@ fn offset_accumulates_across_chain() {
 #[test]
 fn lazy_scroll_modifier_keeps_motion_context_inactive_at_rest() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let mut list_state = None;
-    let _composition = crate::run_test_composition(|| {
-        list_state = Some(cranpose_foundation::lazy::rememberLazyListState());
+    let list_state = Rc::new(Cell::new(None));
+    let _composition = crate::run_test_composition({
+        let list_state = Rc::clone(&list_state);
+        move || {
+            list_state.set(Some(cranpose_foundation::lazy::rememberLazyListState()));
+        }
     });
     let modifier = Modifier::empty().lazy_vertical_scroll(
-        list_state.expect("lazy list state should be created"),
+        list_state
+            .take()
+            .expect("lazy list state should be created"),
         false,
     );
     let slices = collect_slices_from_modifier(&modifier);
@@ -142,12 +147,15 @@ fn lazy_scroll_modifier_keeps_motion_context_inactive_at_rest() {
 #[test]
 fn regular_scroll_modifier_keeps_translated_content_context_active_at_rest() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let mut state = None;
-    let _composition = crate::run_test_composition(|| {
-        state = Some(crate::ScrollState::new(12.0));
+    let state = Rc::new(Cell::new(None));
+    let _composition = crate::run_test_composition({
+        let state = Rc::clone(&state);
+        move || {
+            state.set(Some(crate::ScrollState::new(12.0)));
+        }
     });
-    let modifier =
-        Modifier::empty().vertical_scroll(state.expect("scroll state should be created"), false);
+    let modifier = Modifier::empty()
+        .vertical_scroll(state.take().expect("scroll state should be created"), false);
     let slices = collect_slices_from_modifier(&modifier);
 
     assert!(slices.translated_content_context());
@@ -156,11 +164,16 @@ fn regular_scroll_modifier_keeps_translated_content_context_active_at_rest() {
 #[test]
 fn regular_scroll_modifier_does_not_draw_implicit_scrollbar() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let mut state = None;
-    let _composition = crate::run_test_composition(|| {
-        state = Some(crate::ScrollState::new(0.0));
+    let state = Rc::new(Cell::new(None));
+    let _composition = crate::run_test_composition({
+        let state = Rc::clone(&state);
+        move || {
+            state.set(Some(crate::ScrollState::new(0.0)));
+        }
     });
-    let state = state.expect("scroll state should be created in a runtime");
+    let state = state
+        .take()
+        .expect("scroll state should be created in a runtime");
     state.set_max_value(600.0);
     state.scroll_to(300.0);
     let modifier = Modifier::empty().vertical_scroll(state, false);
@@ -174,12 +187,17 @@ fn regular_scroll_modifier_does_not_draw_implicit_scrollbar() {
 #[test]
 fn lazy_scroll_modifier_keeps_translated_content_context_active_at_rest() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let mut list_state = None;
-    let _composition = crate::run_test_composition(|| {
-        list_state = Some(cranpose_foundation::lazy::rememberLazyListState());
+    let list_state = Rc::new(Cell::new(None));
+    let _composition = crate::run_test_composition({
+        let list_state = Rc::clone(&list_state);
+        move || {
+            list_state.set(Some(cranpose_foundation::lazy::rememberLazyListState()));
+        }
     });
     let modifier = Modifier::empty().lazy_vertical_scroll(
-        list_state.expect("lazy list state should be created"),
+        list_state
+            .take()
+            .expect("lazy list state should be created"),
         false,
     );
     let slices = collect_slices_from_modifier(&modifier);
