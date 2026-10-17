@@ -24,7 +24,9 @@ use crate::{
 ///     });
 /// }
 /// ```
-#[composable]
+///
+/// Like Compose's, it is not restartable: it composes in its caller's group.
+#[composable(no_skip)]
 pub fn Spacer(modifier: Modifier) -> NodeId {
     compose_empty_layout(modifier, LayoutEnvironment::current())
 }
