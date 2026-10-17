@@ -285,7 +285,7 @@ fn atlas_glyph_collection_rejects_shadow_and_gradient_without_partial_output() {
             slant_bits: 0,
         },
         mask: SoftwareGlyphAtlasMask {
-            alpha: Arc::from([1.0f32]),
+            alpha: Arc::from([255u8]),
             width: 1,
             height: 1,
         },
@@ -480,7 +480,7 @@ fn reference_dilation_offsets(radius: i32) -> Vec<(i32, i32)> {
     offsets
 }
 
-fn reference_dilation_stroke_mask(fill: &GlyphMask, stroke_width: f32) -> GlyphMask {
+fn reference_dilation_stroke_mask(fill: &RasterMask, stroke_width: f32) -> GlyphMask {
     let radius = (stroke_width * 0.5).ceil() as i32;
     let offsets = reference_dilation_offsets(radius);
     let out_width = fill.width as i32 + radius * 2;
@@ -519,13 +519,14 @@ fn reference_dilation_stroke_mask(fill: &GlyphMask, stroke_width: f32) -> GlyphM
         }
     }
 
-    GlyphMask {
-        alpha: Arc::from(alpha),
+    RasterMask {
+        alpha,
         width: out_width as usize,
         height: out_height as usize,
         origin_x: fill.origin_x - radius,
         origin_y: fill.origin_y - radius,
     }
+    .into_glyph_mask()
 }
 
 fn rasterize_reference_dilation_stroke(
@@ -1963,4 +1964,38 @@ fn a_transparent_span_still_moves_the_glyphs_after_it() {
         place(&hidden),
         place(&visible)[visible.len() - hidden.len()..]
     );
+}
+
+#[test]
+fn a_glyph_hanging_off_the_canvas_paints_only_the_pixels_on_it() {
+    const SIDE: u32 = 4;
+    let mask = |origin_x, origin_y| GlyphMask {
+        alpha: Arc::from([255u8; 9]),
+        width: 3,
+        height: 3,
+        origin_x,
+        origin_y,
+    };
+    for (origin, covered) in [
+        ((-1, -1), vec![(0, 0), (1, 0), (0, 1), (1, 1)]),
+        ((3, 3), vec![(3, 3)]),
+        ((2, -2), vec![(2, 0), (3, 0)]),
+        ((-3, 0), vec![]),
+        ((0, 4), vec![]),
+    ] {
+        let mut canvas = vec![0u8; (SIDE * SIDE * 4) as usize];
+        draw_mask_glyph_solid_u8(
+            &mut canvas,
+            SIDE,
+            SIDE,
+            &mask(origin.0, origin.1),
+            [1.0, 1.0, 1.0, 1.0],
+            1.0,
+        );
+        let painted: Vec<(u32, u32)> = (0..SIDE * SIDE)
+            .filter(|pixel| canvas[*pixel as usize * 4 + 3] != 0)
+            .map(|pixel| (pixel % SIDE, pixel / SIDE))
+            .collect();
+        assert_eq!(painted, covered, "mask at {origin:?}");
+    }
 }

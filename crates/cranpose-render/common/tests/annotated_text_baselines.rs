@@ -359,7 +359,7 @@ fn atlas_ink_bottoms(glyphs: &[SoftwareGlyphAtlasGlyph], channel: usize) -> Vec<
             .alpha
             .iter()
             .enumerate()
-            .filter(|(_, alpha)| **alpha > 32.0 / 255.0)
+            .filter(|(_, alpha)| **alpha > 32)
             .map(|(index, _)| glyph.y + (index / glyph.mask.width) as i32)
             .max()
         {
