@@ -5,6 +5,7 @@ mod cjk_line_breaks;
 mod debug_and_draw_scopes;
 mod directional_layout;
 mod draw_scope_text_integration;
+mod fixed_box_resize;
 mod flex_box;
 mod flow_column;
 mod geometry_and_modifiers;

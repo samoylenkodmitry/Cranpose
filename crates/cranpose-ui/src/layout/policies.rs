@@ -80,6 +80,34 @@ impl MeasurePolicy for BoxMeasurePolicy {
         Some(held)
     }
 
+    /// A box reads only where each child aligns.
+    fn reads_parent_data_change(
+        &self,
+        before: &cranpose_ui_layout::ParentData,
+        after: &cranpose_ui_layout::ParentData,
+    ) -> bool {
+        before.box_alignment != after.box_alignment
+    }
+
+    /// A box whose constraints fix its size places a child at its top start
+    /// at the origin, whatever the child's size.
+    fn ignores_child_sizes(
+        &self,
+        measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+    ) -> bool {
+        constraints.min_width == constraints.max_width
+            && constraints.min_height == constraints.max_height
+            && !self.layout_direction.is_rtl()
+            && measurables.iter().all(|measurable| {
+                measurable
+                    .parent_data()
+                    .box_alignment
+                    .unwrap_or(self.content_alignment)
+                    == Alignment::TOP_START
+            })
+    }
+
     fn measure_into(
         &self,
         scope: &dyn MeasureScope,

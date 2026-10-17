@@ -286,6 +286,9 @@ struct MeasurementCacheEntry {
     measured: Rc<MeasuredNode>,
     /// The other incoming constraints the measurement holds for.
     hold: Option<cranpose_ui_layout::ConstraintsHold>,
+    /// Whether no child's size entered the measurement: see
+    /// [`cranpose_ui_layout::MeasurePolicy::ignores_child_sizes`].
+    ignores_child_sizes: bool,
 }
 
 /// Selects which intrinsic size of a node to query, together with the size on the other axis.
@@ -502,18 +505,22 @@ impl LayoutNodeCacheHandles {
     }
 
     /// Stores `measured` for `constraints`. The hold of a measurement the
-    /// cache already has stays with it.
+    /// cache already has stays with it, as does whether it ignores its
+    /// children's sizes.
     pub(crate) fn store_measurement(&self, constraints: Constraints, measured: Rc<MeasuredNode>) {
         let mut state = self.state.cache.borrow_mut();
-        let hold = state
+        let (hold, ignores_child_sizes) = state
             .measurement
             .as_ref()
             .filter(|entry| Rc::ptr_eq(&entry.measured, &measured))
-            .and_then(|entry| entry.hold);
+            .map_or((None, false), |entry| {
+                (entry.hold, entry.ignores_child_sizes)
+            });
         state.measurement = Some(MeasurementCacheEntry {
             constraints,
             measured,
             hold,
+            ignores_child_sizes,
         });
     }
 
@@ -524,12 +531,36 @@ impl LayoutNodeCacheHandles {
         constraints: Constraints,
         measured: Rc<MeasuredNode>,
         hold: Option<cranpose_ui_layout::ConstraintsHold>,
+        ignores_child_sizes: bool,
     ) {
         self.state.cache.borrow_mut().measurement = Some(MeasurementCacheEntry {
             constraints,
             measured,
             hold,
+            ignores_child_sizes,
         });
+    }
+
+    /// Stores `measured`, a measurement the cache has, for `constraints`
+    /// alone: a child of it measured to another size, which the other
+    /// constraints its hold names may not take.
+    pub(crate) fn store_resized_measurement(
+        &self,
+        constraints: Constraints,
+        measured: Rc<MeasuredNode>,
+    ) {
+        self.store_held_measurement(constraints, measured, None, true);
+    }
+
+    /// Whether `measured`, the measurement the cache has, ignores its
+    /// children's sizes.
+    pub(crate) fn ignores_child_sizes_of(&self, measured: &Rc<MeasuredNode>) -> bool {
+        self.state
+            .cache
+            .borrow()
+            .measurement
+            .as_ref()
+            .is_some_and(|entry| entry.ignores_child_sizes && Rc::ptr_eq(&entry.measured, measured))
     }
 
     pub(crate) fn get_intrinsic(&self, kind: &IntrinsicKind) -> Option<f32> {
