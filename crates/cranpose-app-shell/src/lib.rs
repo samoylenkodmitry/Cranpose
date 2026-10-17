@@ -535,7 +535,7 @@ impl ShellApp {
     pub(crate) fn needs_ui_update_in_context(&self, surfaces_dirty: bool) -> bool {
         surfaces_dirty
             || self.has_stale_work_in_context()
-            || self.composition.runtime_handle().has_pending_ui()
+            || self.composition.runtime().has_pending_ui()
             || self.app_context.has_pending_semantics_invalidations()
             || self.composition.should_render()
     }
@@ -1082,7 +1082,7 @@ where
             self.any_surface_dirty()
                 || self.app.has_stale_work_in_context()
                 || self.app.composition.should_recompose()
-                || self.app.composition.runtime_handle().has_pending_ui()
+                || self.app.composition.runtime().has_pending_ui()
                 || self.app.app_context.has_pending_semantics_invalidations()
                 || cranpose_ui::next_cursor_blink_time().is_some_and(|at| at <= Instant::now())
                 || self
@@ -1100,7 +1100,7 @@ where
     /// redrawn. A platform backend running with no surface uses it to compose
     /// for work and stay asleep for animation.
     pub fn has_pending_ui(&self) -> bool {
-        self.app.composition.runtime_handle().has_pending_ui()
+        self.app.composition.runtime().has_pending_ui()
     }
 
     /// Runs the tasks woken since they last ran, now rather than at the next
@@ -1110,12 +1110,12 @@ where
     /// only every other frame, whenever the timer fires just after one starts.
     /// A platform calls this whenever its loop wakes.
     pub fn run_pending_tasks(&mut self) {
-        let runtime_handle = self.app.composition.runtime_handle();
         // The tasks run in the app's context; a wake that brought none, as a
         // frame request does, needs no context.
-        if !runtime_handle.has_pending_ui() {
+        if !self.app.composition.runtime().has_pending_ui() {
             return;
         }
+        let runtime_handle = self.app.composition.runtime_handle();
         self.app.app_context.enter(|| {
             runtime_handle.with_deferred_state_releases(|| runtime_handle.drain_ui());
         });
@@ -1234,7 +1234,7 @@ where
     pub fn has_transient_frame_callbacks(&self) -> bool {
         self.app
             .composition
-            .runtime_handle()
+            .runtime()
             .has_transient_frame_callbacks()
     }
 

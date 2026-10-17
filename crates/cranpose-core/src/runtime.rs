@@ -1115,6 +1115,41 @@ impl Runtime {
         *self.inner.needs_frame.borrow_mut() = value;
     }
 
+    /// Returns `true` if posted UI work has not run yet. The owner of a
+    /// runtime asks it here; a [`RuntimeHandle`] costs a clone of its parts.
+    pub fn has_pending_ui(&self) -> bool {
+        self.inner.has_pending_ui()
+    }
+
+    /// Returns `true` if any recompose scope is invalid.
+    pub fn has_invalid_scopes(&self) -> bool {
+        self.inner.has_invalid_scopes()
+    }
+
+    /// Returns `true` if any frame callback is registered.
+    pub fn has_frame_callbacks(&self) -> bool {
+        self.inner.has_frame_callbacks()
+    }
+
+    /// Returns `true` while a one-shot frame callback waits for the next
+    /// frame. Perpetual frame callbacks do not count.
+    pub fn has_transient_frame_callbacks(&self) -> bool {
+        self.inner.has_transient_frame_callbacks()
+    }
+
+    /// Runs the frame callbacks due at `frame_time_nanos`.
+    pub fn drain_frame_callbacks(&self, frame_time_nanos: u64) {
+        self.inner.drain_frame_callbacks(frame_time_nanos);
+    }
+
+    pub(crate) fn take_forgotten_movables(&self) -> Vec<Key> {
+        std::mem::take(&mut *self.inner.forgotten_movables.borrow_mut())
+    }
+
+    pub(crate) fn take_updates(&self) -> Vec<Command> {
+        self.inner.take_updates()
+    }
+
     /// Animation-clock time of the most recent frame-callback drain. This is
     /// the same clock `Animatable`s advance on (virtual under robot exact
     /// captures), so per-frame integrators derive dt from it instead of wall
@@ -1655,13 +1690,6 @@ impl RuntimeHandle {
             inner.forgotten_movables.borrow_mut().push(id);
             inner.schedule();
         }
-    }
-
-    pub(crate) fn take_forgotten_movables(&self) -> Vec<Key> {
-        self.inner
-            .upgrade()
-            .map(|inner| std::mem::take(&mut *inner.forgotten_movables.borrow_mut()))
-            .unwrap_or_default()
     }
 
     /// An identity for a piece of movable content, unique within this

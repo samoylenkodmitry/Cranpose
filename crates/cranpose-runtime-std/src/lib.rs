@@ -255,8 +255,7 @@ impl StdRuntime {
 
     /// Drains pending frame callbacks using the provided frame timestamp in nanoseconds.
     pub fn drain_frame_callbacks(&self, frame_time_nanos: u64) {
-        self.runtime_handle()
-            .drain_frame_callbacks(frame_time_nanos);
+        self.runtime.drain_frame_callbacks(frame_time_nanos);
     }
 }
 
