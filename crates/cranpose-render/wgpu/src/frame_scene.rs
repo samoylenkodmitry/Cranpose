@@ -332,10 +332,11 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             },
             (page, eye),
         )?;
-        let buffers = self
+        let (buffers, staged) = self
             .renderer
             .scene_pass
-            .mesh_buffers(device, &held.mesh.surface.mesh);
+            .mesh_buffers((device, &mut *self.recorder), &held.mesh.surface.mesh);
+        self.renderer.frame_stats.record_command_stats(staged);
         let uniform = self.recorder.upload_uniform(
             UploadAllocatorId::SceneSurface,
             scene_surface_uniform_spec(),

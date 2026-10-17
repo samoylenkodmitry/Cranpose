@@ -254,3 +254,51 @@ fn a_mesh_whose_parts_disagree_is_refused() {
         Some(MeshError::IndexOutOfRange)
     );
 }
+
+const SDF_RADIUS: f32 = 0.8;
+
+fn sdf_sphere() -> Mesh {
+    Mesh::from_sdf(
+        |point| point.length() - SDF_RADIUS,
+        (Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 1.0)),
+        24,
+    )
+    .expect("the sphere's surface lies in the box")
+}
+
+#[test]
+fn a_signed_distance_field_gives_its_surface_with_outward_normals() {
+    let mesh = sdf_sphere();
+    let cell = 2.0 / 24.0;
+    for (position, normal) in mesh.positions().iter().zip(mesh.normals()) {
+        let position = Vec3::from_array(*position);
+        assert!(
+            (position.length() - SDF_RADIUS).abs() < cell * 0.5,
+            "{position:?} lies on the sphere within half a cell"
+        );
+        assert!(
+            Vec3::from_array(*normal).dot(position) > 0.0,
+            "the normal at {position:?} points out of the sphere"
+        );
+    }
+    // A ray from the viewer's side meets the surface where the sphere is.
+    let hit = mesh
+        .cast(Vec3::new(0.0, 0.0, -5.0), Vec3::new(0.0, 0.0, 1.0))
+        .expect("the ray meets the surface");
+    assert!((hit.distance - (5.0 - SDF_RADIUS)).abs() < cell);
+    assert!(
+        (hit.uv[0] - 0.5).abs() < 0.05 && (hit.uv[1] - 0.5).abs() < 0.05,
+        "the texture's middle faces the viewer: {:?}",
+        hit.uv
+    );
+}
+
+#[test]
+fn a_field_without_a_surface_in_its_box_gives_no_mesh() {
+    let empty = Mesh::from_sdf(
+        |point| point.length() + 1.0,
+        (Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 1.0)),
+        8,
+    );
+    assert_eq!(empty.err(), Some(MeshError::Empty));
+}

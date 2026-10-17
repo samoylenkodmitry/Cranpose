@@ -4,19 +4,21 @@
 //! first. Glass draws after the other surfaces from a copy of what they
 //! left, and glow after it, added onto the page.
 
-use std::{cell::OnceCell, sync::Arc};
+use std::{
+    cell::OnceCell,
+    sync::{Arc, Weak},
+};
 
 use bytemuck::{Pod, Zeroable};
 use cranpose_ui_graphics::{
     Rect,
     space::{Mat4, Material, Mesh, Vec3},
 };
-use wgpu::util::DeviceExt;
 
 use crate::{
     collect::SceneDraw,
     fixed_pipeline::FixedPipeline,
-    frame_graph::UploadAllocatorSpec,
+    frame_graph::{FrameCommandRecorder, FrameCommandStats, UploadAllocatorSpec},
     idle_pool::{IDLE_FRAMES, IdlePool},
     pipeline_compiler::CompilerSend,
     render::{DEPTH_FORMAT, create_render_pipeline_logged},
@@ -68,6 +70,16 @@ pub(crate) struct SceneMeshBuffers {
     pub(crate) index_count: u32,
 }
 
+/// The buffers of a mesh a recent frame drew, and the mesh while anyone
+/// still holds it. A mesh nobody holds is never drawn again, so its buffers
+/// take the next mesh that fits them: a shape that changes every frame
+/// keeps writing into the same buffers.
+struct KeptMesh {
+    id: u64,
+    mesh: Weak<Mesh>,
+    buffers: SceneMeshBuffers,
+}
+
 /// What the scene pipelines are built and bound from, made when a scene
 /// first draws.
 pub(crate) struct ScenePipelineParts {
@@ -104,7 +116,7 @@ pub(crate) struct ScenePass {
     pub(crate) glass_pipeline: FixedPipeline,
     pub(crate) glow_pipeline: FixedPipeline,
     pub(crate) depth_pipeline: FixedPipeline,
-    meshes: IdlePool<(u64, SceneMeshBuffers)>,
+    meshes: IdlePool<KeptMesh>,
     pub(crate) shadow_map: Option<ShadowMap>,
     /// The frames since a scene last drew shadows.
     shadow_map_idle: u64,
@@ -204,16 +216,64 @@ impl ScenePass {
         self.shadow_map.as_ref()
     }
 
-    /// The buffers of `mesh`, uploaded the first time a frame draws it.
-    pub(crate) fn mesh_buffers(&mut self, device: &wgpu::Device, mesh: &Mesh) -> SceneMeshBuffers {
+    /// The buffers of `mesh`, staged through `recorder` the first time a
+    /// frame draws it, into the buffers of a mesh nobody holds any more
+    /// where they fit; and what the staging wrote.
+    pub(crate) fn mesh_buffers(
+        &mut self,
+        (device, recorder): (&wgpu::Device, &mut impl FrameCommandRecorder),
+        mesh: &Arc<Mesh>,
+    ) -> (SceneMeshBuffers, FrameCommandStats) {
         let id = mesh.id();
-        let buffers = match self.meshes.take(|(kept, _)| *kept == id) {
-            Some((_, buffers)) => buffers,
-            None => upload_mesh(device, mesh),
+        let mut stats = FrameCommandStats::default();
+        let buffers = match self.meshes.take(|kept| kept.id == id) {
+            Some(kept) => kept.buffers,
+            None => {
+                let vertices = scene_vertices(mesh);
+                let vertices: &[u8] = bytemuck::cast_slice(&vertices);
+                let indices: &[u8] = bytemuck::cast_slice(mesh.indices());
+                let freed = self.meshes.take(|kept| {
+                    kept.mesh.strong_count() == 0
+                        && kept.buffers.vertices.size() >= vertices.len() as u64
+                        && kept.buffers.indices.size() >= indices.len() as u64
+                });
+                let (vertex_buffer, index_buffer) = match freed {
+                    Some(kept) => (kept.buffers.vertices, kept.buffers.indices),
+                    None => (
+                        mesh_buffer(
+                            device,
+                            "Scene Mesh Vertices",
+                            wgpu::BufferUsages::VERTEX,
+                            vertices,
+                        ),
+                        mesh_buffer(
+                            device,
+                            "Scene Mesh Indices",
+                            wgpu::BufferUsages::INDEX,
+                            indices,
+                        ),
+                    ),
+                };
+                stats += recorder.stage_buffer_copy(device, &vertex_buffer, 0, vertices);
+                stats += recorder.stage_buffer_copy(device, &index_buffer, 0, indices);
+                SceneMeshBuffers {
+                    vertices: vertex_buffer,
+                    indices: index_buffer,
+                    index_count: mesh.indices().len() as u32,
+                }
+            }
         };
-        self.meshes
-            .put((id, buffers.clone()), KEPT_MESHES, u64::MAX, |_| 0);
-        buffers
+        self.meshes.put(
+            KeptMesh {
+                id,
+                mesh: Arc::downgrade(mesh),
+                buffers: buffers.clone(),
+            },
+            KEPT_MESHES,
+            u64::MAX,
+            |_| 0,
+        );
+        (buffers, stats)
     }
 
     /// Drops the buffers of meshes no recent frame drew, and the shadow map
@@ -376,9 +436,9 @@ fn create_shadow_map(device: &wgpu::Device, parts: &ScenePipelineParts) -> Shado
     ShadowMap { view, group }
 }
 
-fn upload_mesh(device: &wgpu::Device, mesh: &Mesh) -> SceneMeshBuffers {
-    let vertices: Vec<SceneVertex> = mesh
-        .positions()
+/// `mesh`'s vertices as the pipelines read them.
+fn scene_vertices(mesh: &Mesh) -> Vec<SceneVertex> {
+    mesh.positions()
         .iter()
         .zip(mesh.normals())
         .zip(mesh.uvs())
@@ -387,20 +447,23 @@ fn upload_mesh(device: &wgpu::Device, mesh: &Mesh) -> SceneMeshBuffers {
             normal,
             uv,
         })
-        .collect();
-    SceneMeshBuffers {
-        vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Scene Mesh Vertices"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        }),
-        indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Scene Mesh Indices"),
-            contents: bytemuck::cast_slice(mesh.indices()),
-            usage: wgpu::BufferUsages::INDEX,
-        }),
-        index_count: mesh.indices().len() as u32,
-    }
+        .collect()
+}
+
+/// A buffer of `usage` with room for `bytes` and, rounded up to a power of
+/// two, for the next shape of a mesh that changes.
+fn mesh_buffer(
+    device: &wgpu::Device,
+    label: &'static str,
+    usage: wgpu::BufferUsages,
+    bytes: &[u8],
+) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: (bytes.len() as u64).next_power_of_two().max(256),
+        usage: usage | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
 }
 
 pub(crate) fn scene_surface_uniform_spec() -> UploadAllocatorSpec {

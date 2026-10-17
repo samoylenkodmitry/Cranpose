@@ -10,6 +10,7 @@ mod math;
 mod mesh;
 mod obj;
 mod scene;
+mod sdf;
 
 pub use math::{Mat4, Vec3};
 pub use mesh::{Mesh, MeshError, MeshHit};

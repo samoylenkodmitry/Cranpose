@@ -1669,7 +1669,11 @@ A surface's `material` sets how its content meets the light:
 Scene space uses logical pixels with x to the right, y down and z away from
 the viewer. `Mesh::plane`, `Mesh::cuboid` and `Mesh::sphere` build common
 shapes, `Mesh::from_obj` reads a Wavefront OBJ file, and `Mesh::new` takes
-positions, texture coordinates and triangles. OBJ files point y up; flip
+positions, texture coordinates and triangles. `Mesh::from_sdf` builds the
+surface of a signed distance field sampled on a grid, with the texture wrapped
+around it as around a sphere; build it again with each new field for a shape
+that changes, and the renderer writes the new shape into the GPU buffers of the
+one it replaced. OBJ files point y up; flip
 them with a transform that scales y by -1. A camera that stands one focal
 length in front of a plane the size of the scene shows that plane exactly as
 a flat screen: put the 2D UI on such a plane, and 3D objects in front of it.

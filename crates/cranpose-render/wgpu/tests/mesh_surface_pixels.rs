@@ -1,6 +1,6 @@
-use std::sync::Arc;
+use std::{cell::RefCell, sync::Arc};
 
-use cranpose_core::remember;
+use cranpose_core::{MutableState, remember, rememberMutableStateOf};
 use cranpose_macros::composable;
 use cranpose_ui::{
     Color, Modifier, Size,
@@ -351,4 +351,76 @@ fn a_glass_ball_shows_the_scene_behind_it_bent_and_glow_adds_to_it() {
         glow[0] > 200 && glow[1] > 100,
         "the glow panel adds its green to the red wall it hides nothing of: {glow:?}"
     );
+}
+
+thread_local! {
+    static SHAPE: RefCell<Option<MutableState<Arc<Mesh>>>> = const { RefCell::new(None) };
+}
+
+/// A sphere of `radius` from its signed distance field.
+fn sdf_ball(radius: f32) -> Arc<Mesh> {
+    let reach = radius * 1.25;
+    Arc::new(
+        Mesh::from_sdf(
+            move |point| point.length() - radius,
+            (
+                Vec3::new(-reach, -reach, -reach),
+                Vec3::new(reach, reach, reach),
+            ),
+            24,
+        )
+        .expect("the ball's surface lies in its box"),
+    )
+}
+
+/// A ball whose mesh the test replaces, in front of a blue wall.
+#[composable]
+fn ChangingScene() {
+    let plane = remember(|| Arc::new(Mesh::plane())).with(Arc::clone);
+    let shape = rememberMutableStateOf(|| sdf_ball(SPHERE_RADIUS));
+    SHAPE.with(|slot| *slot.borrow_mut() = Some(shape));
+    Scene(0.0, move || {
+        Surface(
+            shape.get(),
+            Mat4::translation(SPHERE),
+            (Material::Emissive, false, Color(1.0, 0.0, 0.0, 1.0)),
+        );
+        Surface(
+            Arc::clone(&plane),
+            panel((2000.0, 1500.0), Vec3::new(0.0, 0.0, 600.0)),
+            (Material::Unlit, false, Color(0.0, 0.0, 1.0, 1.0)),
+        );
+    });
+}
+
+#[test]
+fn a_mesh_replaced_by_a_smaller_one_draws_the_new_shape() {
+    let Some((_lock, mut shell)) = support::app_shell_for(
+        ChangingScene,
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        wgpu::TextureFormat::Rgba8Unorm,
+        |_| {},
+    ) else {
+        return;
+    };
+    let (frame, _) = support::warm_shell_frame(&mut shell, FRAME_WIDTH, FRAME_HEIGHT);
+    let near_rim = SPHERE + Vec3::new(-0.8, 0.0, -0.6) * SPHERE_RADIUS;
+    assert!(
+        pixel_at(&frame, near_rim)[0] > 200,
+        "the large ball covers its rim"
+    );
+
+    for radius in [SPHERE_RADIUS * 0.4, SPHERE_RADIUS * 0.5] {
+        let shape = SHAPE.with(|slot| slot.borrow().expect("the scene composed"));
+        shape.set(sdf_ball(radius));
+        let (_, frame) = support::update_and_capture(&mut shell, FRAME_WIDTH, FRAME_HEIGHT);
+        let rim = pixel_at(&frame, near_rim);
+        assert!(
+            rim[2] > 200 && rim[0] < 40,
+            "the wall shows where the large ball was, beyond the ball of radius {radius}: {rim:?}"
+        );
+        let middle = pixel_at(&frame, SPHERE + Vec3::new(0.0, 0.0, -radius));
+        assert!(middle[0] > 200, "the smaller ball shows: {middle:?}");
+    }
 }
