@@ -398,6 +398,16 @@ impl LayoutNodeCacheHandles {
         self.state.dirt.set(dirt);
     }
 
+    /// Clears the node's layout flag and its descendants' flags: the pass
+    /// laid it out.
+    pub(crate) fn clear_layout_dirt(&self) {
+        self.set_dirt(LayoutDirt {
+            layout: false,
+            descendant: DescendantDirt::default(),
+            ..self.dirt()
+        });
+    }
+
     pub(crate) fn clear(&self) {
         let mut state = self.state.cache.borrow_mut();
         state.retire_measurement();
@@ -1023,11 +1033,7 @@ impl LayoutNode {
     /// Clears the node's layout flag and its descendants': a layout pass
     /// visited them.
     pub(crate) fn clear_needs_layout(&self) {
-        self.update_dirt(|dirt| LayoutDirt {
-            layout: false,
-            descendant: DescendantDirt::default(),
-            ..dirt
-        });
+        self.cache.clear_layout_dirt();
     }
 
     /// Marks this node as needing a fresh pointer-input pass.

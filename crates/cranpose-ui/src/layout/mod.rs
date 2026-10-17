@@ -1535,8 +1535,16 @@ enum LayoutNodeVisit<'a> {
     Cached(Rc<MeasuredNode>),
     /// Only nodes below this one changed: its measurement holds unless a
     /// changed child measures differently.
-    Keep(Rc<MeasuredNode>),
+    Keep(KeptNode),
     Measure(LayoutNodeMeasure<'a>),
+}
+
+/// A node whose measurement may hold, with the parts of it the keep reads
+/// and writes, so the keep needs no lookup of the node.
+struct KeptNode {
+    measured: Rc<MeasuredNode>,
+    runtime_state: Rc<RefCell<LayoutRuntimeState>>,
+    cache: LayoutNodeCacheHandles,
 }
 
 /// What measuring one changed child of a kept node again needs.
@@ -2085,9 +2093,9 @@ impl LayoutBuilderState {
             }) {
                 Ok(LayoutNodeVisit::Measure(measure)) => break (applier, measure),
                 Ok(LayoutNodeVisit::Cached(measured)) => return Ok(Some(measured)),
-                Ok(LayoutNodeVisit::Keep(cached)) => {
+                Ok(LayoutNodeVisit::Keep(node)) => {
                     drop(applier);
-                    if let Some(kept) = self.keep_measurement(node_id, constraints, &cached)? {
+                    if let Some(kept) = self.keep_measurement(constraints, node)? {
                         return Ok(Some(kept));
                     }
                     keep = false;
@@ -2269,29 +2277,25 @@ impl LayoutBuilderState {
     /// has to measure again.
     fn keep_measurement(
         self: &Rc<Self>,
-        node_id: NodeId,
         constraints: Constraints,
-        cached: &Rc<MeasuredNode>,
+        node: KeptNode,
     ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
-        let runtime_state = self.with_applier_result(|applier| {
-            applier.with_node::<LayoutNode, _>(node_id, |node| node.layout_runtime_state_handle())
-        })?;
+        let KeptNode {
+            measured,
+            runtime_state,
+            cache,
+        } = node;
         let mut next_state = 0;
         let kept = self.remeasure_changed_children(
-            cached,
+            &measured,
             |child_id| self.layout_child_change(&runtime_state, &mut next_state, child_id),
             |_| {},
         )?;
         let Some(kept) = kept else {
             return Ok(None);
         };
-        self.with_applier_result(|applier| {
-            applier.with_node::<LayoutNode, _>(node_id, |node| {
-                node.cache_handles()
-                    .store_measurement(constraints, Rc::clone(&kept));
-                node.clear_needs_layout();
-            })
-        })?;
+        cache.store_measurement(constraints, Rc::clone(&kept));
+        cache.clear_layout_dirt();
         Ok(Some(kept))
     }
 
@@ -2407,8 +2411,12 @@ impl LayoutBuilderState {
         keep: bool,
     ) -> LayoutNodeVisit<'_> {
         node.clear_placed();
-        if keep && let Some(cached) = self.measurement_to_keep(node, constraints) {
-            return LayoutNodeVisit::Keep(cached);
+        if keep && let Some(measured) = self.measurement_to_keep(node, constraints) {
+            return LayoutNodeVisit::Keep(KeptNode {
+                measured,
+                runtime_state: node.layout_runtime_state_handle(),
+                cache: node.cache_handles().clone(),
+            });
         }
         let cache = node.cache_handles();
         cache.activate(self.cache_epoch);
