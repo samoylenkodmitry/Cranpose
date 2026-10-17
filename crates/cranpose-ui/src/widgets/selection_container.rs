@@ -7,7 +7,7 @@ use cranpose_core::{
     CompositionLocal, CompositionLocalProvider, DisposableEffect, remember, rememberMutableStateOf,
     with_current_composer,
 };
-use cranpose_foundation::{PointerButton, modifier_element};
+use cranpose_foundation::modifier_element;
 
 use crate::{
     PointerEventKind, PointerInputScope, composable,
@@ -97,13 +97,7 @@ async fn select_with_pointer(scope: PointerInputScope, gesture: Rc<SelectionGest
                     continue;
                 }
                 match event.kind {
-                    PointerEventKind::Down => {
-                        let secondary_only = event.buttons.contains(PointerButton::Secondary)
-                            && !event.buttons.contains(PointerButton::Primary);
-                        if !secondary_only {
-                            gesture.on_down(&event);
-                        }
-                    }
+                    PointerEventKind::Down => gesture.on_down(&event),
                     PointerEventKind::Move => {
                         if gesture.on_move(&event) {
                             event.consume();

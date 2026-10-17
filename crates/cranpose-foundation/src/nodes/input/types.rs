@@ -42,12 +42,27 @@ pub enum PointerPhase {
 /// What a pointer event reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PointerEventKind {
-    /// A pointer went down: a mouse button, a finger or a pen touched.
+    /// A pointer went down: the primary mouse button, a finger or a pen
+    /// touched. Other mouse buttons arrive as
+    /// [`ButtonDown`](Self::ButtonDown).
     Down,
     /// A pointer moved.
     Move,
-    /// A pointer went up.
+    /// A pointer went up: the primary mouse button, a finger or a pen
+    /// lifted.
     Up,
+    /// A mouse button other than the primary one went down: the right, the
+    /// middle or a side button. A click, a drag or a scroll starts only from
+    /// [`Down`](Self::Down); a handler that takes another button, such as one
+    /// that opens a menu or turns a camera, matches this. The nodes under the
+    /// pointer receive it, or, while another button is down, the nodes that
+    /// took that button's press. Those nodes receive the moves until the
+    /// last button goes up, with the buttons held in
+    /// [`PointerEvent::buttons`].
+    ButtonDown(PointerButton),
+    /// A mouse button other than the primary one went up; see
+    /// [`ButtonDown`](Self::ButtonDown).
+    ButtonUp(PointerButton),
     /// The system canceled the gesture of the pointer.
     Cancel,
     /// A wheel or trackpad scroll. The delta is in [`PointerEvent::scroll_delta`].
@@ -289,9 +304,11 @@ impl PointerEvent {
             kind,
             phase: match kind {
                 PointerEventKind::Down => PointerPhase::Start,
-                PointerEventKind::Move | PointerEventKind::Enter | PointerEventKind::Exit => {
-                    PointerPhase::Move
-                }
+                PointerEventKind::Move
+                | PointerEventKind::Enter
+                | PointerEventKind::Exit
+                | PointerEventKind::ButtonDown(_)
+                | PointerEventKind::ButtonUp(_) => PointerPhase::Move,
                 PointerEventKind::Up => PointerPhase::End,
                 PointerEventKind::Cancel => PointerPhase::Cancel,
                 PointerEventKind::Scroll

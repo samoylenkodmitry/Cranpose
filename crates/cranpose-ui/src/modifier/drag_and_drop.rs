@@ -366,12 +366,7 @@ impl SourceGesture {
                 }
                 *self = Self::default();
             }
-            PointerEventKind::Scroll
-            | PointerEventKind::Zoom
-            | PointerEventKind::RotaryScrollPre
-            | PointerEventKind::RotaryScroll
-            | PointerEventKind::Enter
-            | PointerEventKind::Exit => {}
+            _ => {}
         }
     }
 

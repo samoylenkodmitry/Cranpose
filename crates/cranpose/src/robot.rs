@@ -8,7 +8,7 @@ use cranpose_app_shell::{AppShell, KeyCode, PointerSource, RuntimeLeakDebugStats
 use cranpose_render_common::Renderer;
 #[cfg(feature = "renderer-wgpu")]
 use cranpose_render_wgpu::{DebugCpuAllocationStats, RenderStatsSnapshot};
-use cranpose_ui::{SemanticsAction, SemanticsNode, SemanticsRole};
+use cranpose_ui::{PointerButton, SemanticsAction, SemanticsNode, SemanticsRole};
 
 /// Presentation constraints of the window controlled by a robot.
 #[cfg(feature = "renderer-wgpu")]
@@ -163,8 +163,8 @@ pub(crate) enum RobotCommand {
         x: f32,
         y: f32,
     },
-    MouseDown,
-    MouseUp,
+    MouseDown(PointerButton),
+    MouseUp(PointerButton),
     MouseScroll {
         delta_x: f32,
         delta_y: f32,
@@ -473,7 +473,7 @@ impl Robot {
     /// ```
     pub fn mouse_down(&self) -> Result<(), String> {
         self.tx
-            .send(RobotCommand::MouseDown)
+            .send(RobotCommand::MouseDown(PointerButton::Primary))
             .map_err(|e| format!("Failed to send mouse down command: {e}"))?;
         self.recv_ack()
     }
@@ -486,9 +486,21 @@ impl Robot {
     /// ```
     pub fn mouse_up(&self) -> Result<(), String> {
         self.tx
-            .send(RobotCommand::MouseUp)
+            .send(RobotCommand::MouseUp(PointerButton::Primary))
             .map_err(|e| format!("Failed to send mouse up command: {e}"))?;
         self.recv_ack()
+    }
+
+    /// Presses `button` of the mouse at the current cursor position; the left
+    /// button presses as [`mouse_down`](Self::mouse_down) does.
+    pub fn mouse_button_down(&self, button: PointerButton) -> Result<(), String> {
+        self.send_and_ack(RobotCommand::MouseDown(button), "mouse button down")
+    }
+
+    /// Releases `button` of the mouse at the current cursor position; the
+    /// left button releases as [`mouse_up`](Self::mouse_up) does.
+    pub fn mouse_button_up(&self, button: PointerButton) -> Result<(), String> {
+        self.send_and_ack(RobotCommand::MouseUp(button), "mouse button up")
     }
 
     /// Dispatch a mouse wheel / trackpad scroll delta at the current cursor position.

@@ -37,6 +37,9 @@ mod global_layout_invalidation_tests;
 #[path = "inspector_shell_tests.rs"]
 mod inspector_shell_tests;
 
+#[path = "mouse_button_tests.rs"]
+mod mouse_button_tests;
+
 #[path = "reader_activation_tests.rs"]
 mod reader_activation_tests;
 
@@ -2468,7 +2471,9 @@ fn pointer_driven_graphics_layer_point_app(position_state: cranpose_core::Mutabl
                                             | PointerEventKind::RotaryScrollPre
                                             | PointerEventKind::RotaryScroll
                                             | PointerEventKind::Enter
-                                            | PointerEventKind::Exit => {}
+                                            | PointerEventKind::Exit
+                                            | PointerEventKind::ButtonDown(_)
+                                            | PointerEventKind::ButtonUp(_) => {}
                                         }
                                     }
                                 })
@@ -7145,7 +7150,9 @@ fn app_shell_consumed_child_drag_scroll_probe() {
                                         | PointerEventKind::RotaryScrollPre
                                         | PointerEventKind::RotaryScroll
                                         | PointerEventKind::Enter
-                                        | PointerEventKind::Exit => {}
+                                        | PointerEventKind::Exit
+                                        | PointerEventKind::ButtonDown(_)
+                                        | PointerEventKind::ButtonUp(_) => {}
                                     }
                                 }
                             })
@@ -7266,12 +7273,7 @@ fn app_shell_interactive_counter_test_tab(counter: MutableState<i32>) {
                                             PointerEventKind::Move => {
                                                 pointer_position.set(event.position);
                                             }
-                                            PointerEventKind::Scroll
-                                            | PointerEventKind::Zoom
-                                            | PointerEventKind::RotaryScrollPre
-                                            | PointerEventKind::RotaryScroll
-                                            | PointerEventKind::Enter
-                                            | PointerEventKind::Exit => {}
+                                            _ => {}
                                         }
                                     }
                                 })
@@ -7634,7 +7636,9 @@ fn app_shell_demo_like_counter_tab() {
                                                         | PointerEventKind::RotaryScrollPre
                                                         | PointerEventKind::RotaryScroll
                                                         | PointerEventKind::Enter
-                                                        | PointerEventKind::Exit => {}
+                                                        | PointerEventKind::Exit
+                                                        | PointerEventKind::ButtonDown(_)
+                                                        | PointerEventKind::ButtonUp(_) => {}
                                                     }
                                                 }
                                             })
@@ -7882,12 +7886,7 @@ fn app_shell_actual_like_counter_tab() {
                                                     y: event.position.y,
                                                 });
                                             }
-                                            PointerEventKind::Scroll
-                                            | PointerEventKind::Zoom
-                                            | PointerEventKind::RotaryScrollPre
-                                            | PointerEventKind::RotaryScroll
-                                            | PointerEventKind::Enter
-                                            | PointerEventKind::Exit => {}
+                                            _ => {}
                                         }
                                     }
                                 })

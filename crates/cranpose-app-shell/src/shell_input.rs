@@ -346,58 +346,149 @@ where
         {
             hits.insert(0, near);
         }
+        let event = self.cursor_event(PointerEventKind::Down, event_time);
+        self.press_hits(hits, event)
+    }
+
+    /// An event of `kind` at the cursor, with the buttons held and the
+    /// pointer's source.
+    fn cursor_event(&self, kind: PointerEventKind, event_time: PointerEventTime) -> PointerEvent {
+        let (x, y) = self.surface().cursor;
+        self.pointer_event(kind, Point { x, y }, Point { x, y }, event_time)
+            .with_buttons(self.surface().buttons_pressed)
+            .with_source(self.surface().pointer_source)
+    }
+
+    /// Delivers a press to `hits`, nearest first, until one consumes it, and
+    /// keeps the paths it reached as the pointer's gesture targets.
+    fn press_hits(
+        &mut self,
+        hits: Vec<<<R as Renderer>::Scene as RenderScene>::HitTarget>,
+        event: PointerEvent,
+    ) -> bool {
         if hits.is_empty() {
             self.surface_mut()
                 .hit_path_tracker
                 .remove_path(PointerId::PRIMARY);
-            false
-        } else {
-            let event = self
-                .pointer_event(
-                    PointerEventKind::Down,
-                    Point {
-                        x: self.surface().cursor.0,
-                        y: self.surface().cursor.1,
-                    },
-                    Point {
-                        x: self.surface().cursor.0,
-                        y: self.surface().cursor.1,
-                    },
-                    event_time,
-                )
-                .with_buttons(self.surface().buttons_pressed)
-                .with_source(self.surface().pointer_source);
-
-            let mut delivered_capture_paths = Vec::new();
-            let (app, surface) = self.parts();
-            let mut applier = app.composition.applier_mut();
-            for hit in hits {
-                let node_id = hit.node_id();
-                delivered_capture_paths.push(hit.capture_path());
-                hit.dispatch_with_applier(&mut applier, event.clone());
-                log::trace!(
-                    target: "cranpose::input",
-                    "dispatch {:?} node={} consumed={} stop_on_consume=true",
-                    event.kind,
-                    node_id,
-                    event.is_consumed(),
-                );
-                if event.is_consumed() {
-                    break;
-                }
-            }
-
-            surface
-                .hit_path_tracker
-                .add_hit_path(PointerId::PRIMARY, delivered_capture_paths);
+            return false;
+        }
+        let mut delivered_capture_paths = Vec::new();
+        let (app, surface) = self.parts();
+        let mut applier = app.composition.applier_mut();
+        for hit in hits {
+            let node_id = hit.node_id();
+            delivered_capture_paths.push(hit.capture_path());
+            hit.dispatch_with_applier(&mut applier, event.clone());
             log::trace!(
                 target: "cranpose::input",
-                "pointer_pressed_inner cached_hit_path={:?}",
-                surface.hit_path_tracker.get_path(PointerId::PRIMARY),
+                "dispatch {:?} node={} consumed={} stop_on_consume=true",
+                event.kind,
+                node_id,
+                event.is_consumed(),
             );
-
-            true
+            if event.is_consumed() {
+                break;
+            }
         }
+
+        surface
+            .hit_path_tracker
+            .add_hit_path(PointerId::PRIMARY, delivered_capture_paths);
+        log::trace!(
+            target: "cranpose::input",
+            "press cached_hit_path={:?}",
+            surface.hit_path_tracker.get_path(PointerId::PRIMARY),
+        );
+        true
+    }
+
+    /// Presses `button` of the mouse at the position set by `set_cursor`.
+    /// The primary button presses as [`pointer_pressed`](Self::pointer_pressed)
+    /// does. Another button reaches the nodes under the pointer as a
+    /// [`PointerEventKind::ButtonDown`], or, while a button is already down,
+    /// the nodes that took its press; those nodes take the moves until the
+    /// last button goes up. Returns `true` when a node received the press.
+    pub fn mouse_button_pressed(&mut self, button: PointerButton) -> bool {
+        if button == PointerButton::Primary {
+            return self.pointer_pressed();
+        }
+        self.mouse_button_change(|surface, event_time| {
+            surface.other_button_pressed(button, event_time)
+        })
+    }
+
+    /// Releases `button` of the mouse. The primary button releases as
+    /// [`pointer_released`](Self::pointer_released) does; another reaches the
+    /// nodes that took the press as a [`PointerEventKind::ButtonUp`]. Returns
+    /// `true` when a node received the release.
+    pub fn mouse_button_released(&mut self, button: PointerButton) -> bool {
+        if button == PointerButton::Primary {
+            return self.pointer_released();
+        }
+        self.mouse_button_change(|surface, event_time| {
+            surface.other_button_released(button, event_time)
+        })
+    }
+
+    fn mouse_button_change(
+        &mut self,
+        change: impl FnOnce(&mut Self, PointerEventTime) -> bool,
+    ) -> bool {
+        let event_time = self.shell.app.realtime_pointer_event_time(None);
+        let _event_handler = enter_event_handler_scope();
+        let result = {
+            let _app_context = self.shell.app.app_context.enter_scope();
+            run_in_mutable_snapshot(|| change(self, event_time)).unwrap_or(false)
+        };
+        if result {
+            self.mark_dirty();
+        }
+        result
+    }
+
+    fn other_button_pressed(
+        &mut self,
+        button: PointerButton,
+        event_time: PointerEventTime,
+    ) -> bool {
+        self.activate();
+        let first = self.surface().buttons_pressed == PointerButtons::NONE;
+        self.surface_mut().buttons_pressed.insert(button);
+        let event = self.cursor_event(PointerEventKind::ButtonDown(button), event_time);
+        if first {
+            let (x, y) = self.surface().cursor;
+            let hits = self.surface().renderer.scene().hit_test(x, y);
+            return self.press_hits(hits, event);
+        }
+        let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
+        if targets.is_empty() {
+            return false;
+        }
+        self.dispatch_targets(targets, event, false);
+        true
+    }
+
+    fn other_button_released(
+        &mut self,
+        button: PointerButton,
+        event_time: PointerEventTime,
+    ) -> bool {
+        if !self.surface().buttons_pressed.contains(button) {
+            return false;
+        }
+        self.surface_mut().buttons_pressed.remove(button);
+        let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
+        if self.surface().buttons_pressed == PointerButtons::NONE {
+            self.surface_mut()
+                .hit_path_tracker
+                .remove_path(PointerId::PRIMARY);
+        }
+        if targets.is_empty() {
+            return false;
+        }
+        let event = self.cursor_event(PointerEventKind::ButtonUp(button), event_time);
+        self.dispatch_targets(targets, event, false);
+        true
     }
 
     /// Releases the primary pointer button at the position set by `set_cursor`. Returns `true` when
@@ -505,9 +596,13 @@ where
         let corrected_buttons = self.surface().buttons_pressed;
         let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
 
-        self.surface_mut()
-            .hit_path_tracker
-            .remove_path(PointerId::PRIMARY);
+        // Another button still down keeps the gesture's targets for its
+        // moves and its release.
+        if corrected_buttons == PointerButtons::NONE {
+            self.surface_mut()
+                .hit_path_tracker
+                .remove_path(PointerId::PRIMARY);
+        }
 
         if !targets.is_empty() {
             let event = self
