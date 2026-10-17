@@ -1,13 +1,19 @@
 //! Pointer input of the web canvas. The mouse, the pen and the first finger
 //! drive the primary pointer. Every later finger is a secondary pointer that
 //! joins the gesture the first finger started, as on Android and iOS, so a
-//! second finger never moves the first finger's gesture.
+//! second finger never moves the first finger's gesture. The mouse's left
+//! button presses the primary pointer; its other buttons press as the
+//! shell's other mouse buttons.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use cranpose_app_shell::{AppShell, PointerSource};
 use cranpose_platform_web::WebPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
+use cranpose_ui::PointerButton;
 use cranpose_ui_graphics::Point;
 use wasm_bindgen::{JsCast, prelude::*};
 use web_sys::{HtmlCanvasElement, PointerEvent};
@@ -24,7 +30,18 @@ struct Pointers {
     // The secondary fingers that are down. Lifting the first finger releases
     // them before it ends the gesture.
     secondaries: Rc<RefCell<Vec<u64>>>,
+    // The mouse buttons last reported held, as `MouseEvent.buttons` bits.
+    mouse_buttons: Rc<Cell<u16>>,
 }
+
+/// The mouse buttons with their bits in `MouseEvent.buttons`.
+const MOUSE_BUTTONS: [(u16, PointerButton); 5] = [
+    (1, PointerButton::Primary),
+    (2, PointerButton::Secondary),
+    (4, PointerButton::Middle),
+    (8, PointerButton::Back),
+    (16, PointerButton::Forward),
+];
 
 /// Sends the canvas's pointer events to `app`.
 pub(crate) fn listen(
@@ -39,11 +56,25 @@ pub(crate) fn listen(
         canvas: canvas.clone(),
         request_frame,
         secondaries: Rc::default(),
+        mouse_buttons: Rc::default(),
     };
     pointers.on("pointermove", Pointers::moved)?;
     pointers.on("pointerdown", Pointers::pressed)?;
     pointers.on("pointerup", Pointers::released)?;
-    pointers.on("pointercancel", Pointers::cancelled)
+    pointers.on("pointercancel", Pointers::cancelled)?;
+    // The right button reaches the app, so the browser's own menu stays off
+    // the canvas.
+    let keep_menu_off =
+        Closure::wrap(Box::new(|event: web_sys::Event| event.prevent_default())
+            as Box<dyn FnMut(web_sys::Event)>);
+    canvas
+        .add_event_listener_with_callback("contextmenu", keep_menu_off.as_ref().unchecked_ref())?;
+    keep_menu_off.forget();
+    Ok(())
+}
+
+fn is_mouse(event: &PointerEvent) -> bool {
+    event.pointer_type() == "mouse"
 }
 
 pub(crate) fn web_pointer_source(event: &PointerEvent) -> PointerSource {
@@ -90,12 +121,56 @@ impl Pointers {
             }
             None => {
                 app.set_cursor(at.x, at.y);
+                if is_mouse(event) {
+                    self.mouse_buttons_changed(event, app, at);
+                }
+            }
+        }
+    }
+
+    /// Presses and releases the mouse buttons whose bits changed since the
+    /// event before: a browser reports the second button of a chord, and the
+    /// release of every button but the last, in a pointermove.
+    fn mouse_buttons_changed(
+        &self,
+        event: &PointerEvent,
+        app: &mut AppShell<WgpuRenderer>,
+        at: Point,
+    ) {
+        let held = event.buttons();
+        let before = self.mouse_buttons.replace(held);
+        for (bit, button) in MOUSE_BUTTONS {
+            if (before ^ held) & bit == 0 {
+                continue;
+            }
+            let event_time = app.realtime_pointer_event_time(None);
+            let pressed = held & bit != 0;
+            if pressed {
+                app.set_cursor_at_event_time(at.x, at.y, event_time);
+            }
+            match (button, pressed) {
+                (PointerButton::Primary, true) => {
+                    app.pointer_pressed_at_event_time(event_time);
+                }
+                (PointerButton::Primary, false) => {
+                    app.pointer_released_at_position_event_time(at.x, at.y, event_time);
+                }
+                (_, true) => {
+                    app.primary().mouse_button_pressed(button);
+                }
+                (_, false) => {
+                    app.primary().mouse_button_released(button);
+                }
             }
         }
     }
 
     fn pressed(&self, event: &PointerEvent, app: &mut AppShell<WgpuRenderer>, at: Point) {
         let _ = self.canvas.set_pointer_capture(event.pointer_id());
+        if is_mouse(event) {
+            self.mouse_buttons_changed(event, app, at);
+            return;
+        }
         match secondary_id(event) {
             Some(id) => {
                 self.secondaries.borrow_mut().push(id);
@@ -112,6 +187,7 @@ impl Pointers {
     fn released(&self, event: &PointerEvent, app: &mut AppShell<WgpuRenderer>, at: Point) {
         match secondary_id(event) {
             Some(id) => self.release_secondary(app, id, at),
+            None if is_mouse(event) => self.mouse_buttons_changed(event, app, at),
             None => {
                 let lifted = std::mem::take(&mut *self.secondaries.borrow_mut());
                 for id in lifted {
@@ -129,6 +205,7 @@ impl Pointers {
             Some(id) => self.release_secondary(app, id, at),
             None => {
                 self.secondaries.borrow_mut().clear();
+                self.mouse_buttons.set(0);
                 app.cancel_gesture();
             }
         }

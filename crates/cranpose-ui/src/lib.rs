@@ -201,14 +201,14 @@ pub use modifier::{
     DragAndDropTargetElement, DragAndDropTargetNode, EdgeInsets, FocusDirection, FocusRequestError,
     FocusRequester, GlassMaterial, GraphicsLayer, KeyEventRoute, LayerShape, Modifier,
     ModifierLocalKey, ModifierLocalReadScope, ModifierNodeSlices, ModifierNodeSlicesDebugStats,
-    Point, PointerEvent, PointerEventKind, PointerInputScope, PointerSource, Rect, RenderEffect,
-    ResolvedBackground, ResolvedModifiers, RotaryInputModifierNode, RotaryScrollEvent,
-    RoundedCornerShape, RuntimeShader, SemanticsRequester, Shadow, ShadowScope, Size, SliceTextRef,
-    TransformOrigin, WindowRootDescriptor, WindowRootElement, WindowRootEntry, WindowRootNode,
-    WindowRootRegistry, WindowRootRoutingScratch, collect_modifier_slices,
-    collect_semantics_from_modifier, collect_slices_from_modifier, is_window_root,
-    nearest_window_root, nearest_window_roots, nearest_window_roots_into, window_roots,
-    window_roots_revision, z_index_in_use,
+    Point, PointerButton, PointerButtons, PointerEvent, PointerEventKind, PointerInputScope,
+    PointerSource, Rect, RenderEffect, ResolvedBackground, ResolvedModifiers,
+    RotaryInputModifierNode, RotaryScrollEvent, RoundedCornerShape, RuntimeShader,
+    SemanticsRequester, Shadow, ShadowScope, Size, SliceTextRef, TransformOrigin,
+    WindowRootDescriptor, WindowRootElement, WindowRootEntry, WindowRootNode, WindowRootRegistry,
+    WindowRootRoutingScratch, collect_modifier_slices, collect_semantics_from_modifier,
+    collect_slices_from_modifier, is_window_root, nearest_window_root, nearest_window_roots,
+    nearest_window_roots_into, window_roots, window_roots_revision, z_index_in_use,
 };
 #[cfg(feature = "test-helpers")]
 pub use modifier::{last_fling_velocity, reset_last_fling_velocity};

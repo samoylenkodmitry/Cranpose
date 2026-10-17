@@ -1434,12 +1434,7 @@ fn PressableSprite(
                                             }
                                             is_pressed.set(false);
                                         }
-                                        PointerEventKind::Scroll
-                                        | PointerEventKind::Zoom
-                                        | PointerEventKind::RotaryScrollPre
-                                        | PointerEventKind::RotaryScroll
-                                        | PointerEventKind::Enter
-                                        | PointerEventKind::Exit => {}
+                                        _ => {}
                                     }
                                 }
                             })

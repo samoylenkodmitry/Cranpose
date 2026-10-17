@@ -20,7 +20,7 @@ use cranpose_app_shell::{
 };
 use cranpose_platform_android::AndroidPlatform;
 use cranpose_render_wgpu::{DeviceLostHandler, PresentOutcome, PublishOutcome, WgpuRenderer};
-use cranpose_ui::{Point, Size};
+use cranpose_ui::{Point, PointerButton, Size};
 use ndk::native_window::NativeWindow;
 
 use crate::{
@@ -68,6 +68,9 @@ enum PendingInput {
     SecondaryPointerUp(u64, f32, f32, Option<i64>),
     SecondaryPointerMove(u64, f32, f32, Option<i64>),
     RotaryScroll(f32, u64),
+    /// A mouse button other than the primary one went down (`true`) or up,
+    /// with the pointer at a position.
+    MouseButton(PointerButton, bool, f32, f32),
 }
 
 fn android_event_time_ms(event_time_ns: i64) -> i64 {
@@ -571,13 +574,15 @@ fn drain_android_input_events(
 
     for _ in 0..MAX_ANDROID_INPUT_EVENTS_PER_POLL {
         let event_available = iter.next(|event| {
-            if push_pending_inputs_from_android_event(
-                event,
-                android_platform,
-                key_translator,
-                pending_inputs,
-                primary_pointer_id,
-            ) {
+            if push_mouse_button_inputs(event, android_platform, pending_inputs, primary_pointer_id)
+                || push_pending_inputs_from_android_event(
+                    event,
+                    android_platform,
+                    key_translator,
+                    pending_inputs,
+                    primary_pointer_id,
+                )
+            {
                 android_activity::InputStatus::Handled
             } else {
                 android_activity::InputStatus::Unhandled
@@ -590,6 +595,147 @@ fn drain_android_input_events(
 }
 
 const MAX_ANDROID_INPUT_EVENTS_PER_POLL: usize = 10;
+
+/// Takes a mouse's events that the path for fingers would read wrongly.
+/// Android sends a press of the right or middle button alone as `Down`, the
+/// moves of a drag with no primary button as `Move`, and every button's
+/// change as `ButtonPress` or `ButtonRelease`. The primary button presses at
+/// `Down`, or at its `ButtonPress` after another button; it releases at its
+/// `ButtonRelease`, or at `Up` on a device that sends none. The other buttons
+/// press and release as the shell's other mouse buttons. Returns whether it
+/// took the event.
+fn push_mouse_button_inputs(
+    event: &android_activity::input::InputEvent<'_>,
+    android_platform: &AndroidPlatform,
+    pending_inputs: &mut Vec<PendingInput>,
+    primary_pointer_id: &mut Option<i32>,
+) -> bool {
+    use android_activity::input::{InputEvent, MotionAction, ToolType};
+
+    let InputEvent::MotionEvent(motion_event) = event else {
+        return false;
+    };
+    let Some(pointer) = motion_event.pointers().next() else {
+        return false;
+    };
+    if pointer.tool_type() != ToolType::Mouse {
+        return false;
+    }
+    let at = android_platform.pointer_position(f64::from(pointer.x()), f64::from(pointer.y()));
+    let time_ms = Some(android_event_time_ms(motion_event.event_time()));
+    let held = motion_event.button_state();
+    match motion_event.action() {
+        MotionAction::Down => held.0 != 0 && !held.primary(),
+        MotionAction::Move if primary_pointer_id.is_none() => {
+            pending_inputs.push(PendingInput::PointerMove(
+                at.x,
+                at.y,
+                time_ms,
+                PointerSource::Mouse,
+            ));
+            true
+        }
+        MotionAction::Up => primary_pointer_id.is_none(),
+        action @ (MotionAction::ButtonPress | MotionAction::ButtonRelease) => {
+            let pressed = action == MotionAction::ButtonPress;
+            match shell_mouse_button(motion_event.action_button()) {
+                Some(PointerButton::Primary) => match (pressed, *primary_pointer_id) {
+                    (true, None) => {
+                        *primary_pointer_id = Some(pointer.pointer_id());
+                        pending_inputs.push(PendingInput::PointerDown(
+                            at.x,
+                            at.y,
+                            time_ms,
+                            PointerSource::Mouse,
+                        ));
+                    }
+                    (false, Some(_)) => {
+                        *primary_pointer_id = None;
+                        pending_inputs.push(PendingInput::PointerUp(
+                            at.x,
+                            at.y,
+                            time_ms,
+                            PointerSource::Mouse,
+                        ));
+                    }
+                    _ => {}
+                },
+                Some(button) => {
+                    pending_inputs.push(PendingInput::MouseButton(button, pressed, at.x, at.y));
+                }
+                None => {}
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn shell_mouse_button(button: android_activity::input::Button) -> Option<PointerButton> {
+    use android_activity::input::Button;
+
+    match button {
+        Button::Primary => Some(PointerButton::Primary),
+        Button::Secondary => Some(PointerButton::Secondary),
+        Button::Tertiary => Some(PointerButton::Middle),
+        Button::Back => Some(PointerButton::Back),
+        Button::Forward => Some(PointerButton::Forward),
+        _ => None,
+    }
+}
+
+/// Sends one input taken from Android's queue to `shell`.
+fn dispatch_pending_input(shell: &mut AppShell<WgpuRenderer>, input: PendingInput) {
+    match input {
+        PendingInput::PointerDown(x, y, time_ms, source) => {
+            shell.set_pointer_source(source);
+            let event_time = shell.realtime_pointer_event_time(time_ms);
+            shell.set_cursor_at_event_time(x, y, event_time);
+            shell.pointer_pressed_at_event_time(event_time);
+        }
+        PendingInput::PointerUp(x, y, time_ms, source) => {
+            shell.set_pointer_source(source);
+            let event_time = shell.realtime_pointer_event_time(time_ms);
+            shell.pointer_released_at_position_event_time(x, y, event_time);
+        }
+        PendingInput::PointerMove(x, y, time_ms, source) => {
+            shell.set_pointer_source(source);
+            let event_time = shell.realtime_pointer_event_time(time_ms);
+            shell.set_cursor_at_event_time(x, y, event_time);
+        }
+        PendingInput::PointerCancel => {
+            shell.cancel_gesture();
+        }
+        PendingInput::Key(event) => {
+            shell.on_key_event(&event);
+        }
+        PendingInput::SecondaryPointerDown(id, x, y, time_ms) => {
+            shell.set_pointer_source(PointerSource::Touch);
+            shell.secondary_pointer_pressed(id, x, y, time_ms);
+        }
+        PendingInput::SecondaryPointerUp(id, x, y, time_ms) => {
+            shell.set_pointer_source(PointerSource::Touch);
+            shell.secondary_pointer_released(id, x, y, time_ms);
+        }
+        PendingInput::SecondaryPointerMove(id, x, y, time_ms) => {
+            shell.set_pointer_source(PointerSource::Touch);
+            shell.secondary_pointer_moved(id, x, y, time_ms);
+        }
+        PendingInput::RotaryScroll(detents, uptime_ms) => {
+            shell.rotary_scrolled_by_detents(detents, uptime_ms);
+        }
+        PendingInput::MouseButton(button, pressed, x, y) => {
+            shell.set_pointer_source(PointerSource::Mouse);
+            shell.set_cursor(x, y);
+            let mut surface = shell.primary();
+            if pressed {
+                surface.mouse_button_pressed(button);
+            } else {
+                surface.mouse_button_released(button);
+            }
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct PendingHostWindowSizeRequest {
@@ -2760,45 +2906,7 @@ pub fn run(
         {
             frame_rate_boost.note_input(Instant::now());
             for input in pending_inputs.drain(..) {
-                match input {
-                    PendingInput::PointerDown(x, y, time_ms, source) => {
-                        shell.set_pointer_source(source);
-                        let event_time = shell.realtime_pointer_event_time(time_ms);
-                        shell.set_cursor_at_event_time(x, y, event_time);
-                        shell.pointer_pressed_at_event_time(event_time);
-                    }
-                    PendingInput::PointerUp(x, y, time_ms, source) => {
-                        shell.set_pointer_source(source);
-                        let event_time = shell.realtime_pointer_event_time(time_ms);
-                        shell.pointer_released_at_position_event_time(x, y, event_time);
-                    }
-                    PendingInput::PointerMove(x, y, time_ms, source) => {
-                        shell.set_pointer_source(source);
-                        let event_time = shell.realtime_pointer_event_time(time_ms);
-                        shell.set_cursor_at_event_time(x, y, event_time);
-                    }
-                    PendingInput::PointerCancel => {
-                        shell.cancel_gesture();
-                    }
-                    PendingInput::Key(event) => {
-                        shell.on_key_event(&event);
-                    }
-                    PendingInput::SecondaryPointerDown(id, x, y, time_ms) => {
-                        shell.set_pointer_source(PointerSource::Touch);
-                        shell.secondary_pointer_pressed(id, x, y, time_ms);
-                    }
-                    PendingInput::SecondaryPointerUp(id, x, y, time_ms) => {
-                        shell.set_pointer_source(PointerSource::Touch);
-                        shell.secondary_pointer_released(id, x, y, time_ms);
-                    }
-                    PendingInput::SecondaryPointerMove(id, x, y, time_ms) => {
-                        shell.set_pointer_source(PointerSource::Touch);
-                        shell.secondary_pointer_moved(id, x, y, time_ms);
-                    }
-                    PendingInput::RotaryScroll(detents, uptime_ms) => {
-                        shell.rotary_scrolled_by_detents(detents, uptime_ms);
-                    }
-                }
+                dispatch_pending_input(shell, input);
             }
         }
 

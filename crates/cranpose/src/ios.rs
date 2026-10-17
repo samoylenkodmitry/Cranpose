@@ -23,7 +23,8 @@ use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::EdgeInsets;
 use winit::{
     application::ApplicationHandler,
-    event::{ElementState, WindowEvent},
+    dpi::PhysicalPosition,
+    event::{ButtonSource, ElementState, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     window::{Window, WindowAttributes, WindowId},
 };
@@ -35,7 +36,8 @@ use crate::{
         surface_present_required,
     },
     winit_pointer::{
-        is_primary_pointer_button, pointer_source_from_button, pointer_source_from_winit,
+        is_primary_pointer_button, other_mouse_button, pointer_source_from_button,
+        pointer_source_from_winit,
     },
     winit_touch::{button_finger, kind_finger, source_finger},
 };
@@ -74,6 +76,40 @@ struct IosApp<F: FnMut() + 'static> {
 const OFF_SCREEN_RENDER_PERIOD: Duration = Duration::from_millis(16);
 
 impl<F: FnMut() + 'static> IosApp<F> {
+    /// Presses or releases a pointer button: the primary one of a finger, a
+    /// pen or a mouse through the touch router, and a mouse's other buttons
+    /// as the shell's other mouse buttons. Returns whether a node took it.
+    fn pointer_button(
+        &mut self,
+        state: ElementState,
+        position: PhysicalPosition<f64>,
+        button: &ButtonSource,
+    ) -> bool {
+        let logical = self.platform.pointer_position(position);
+        let Some(shell) = self.shell.as_mut() else {
+            return false;
+        };
+        shell.set_pointer_source(pointer_source_from_button(button));
+        if !is_primary_pointer_button(button) {
+            let Some(button) = other_mouse_button(button) else {
+                return false;
+            };
+            shell.set_cursor(logical.x, logical.y);
+            let mut surface = shell.primary();
+            return match state {
+                ElementState::Pressed => surface.mouse_button_pressed(button),
+                ElementState::Released => surface.mouse_button_released(button),
+            };
+        }
+        let finger = button_finger(button);
+        match state {
+            ElementState::Pressed => self.touch_router.press(shell, finger, logical.x, logical.y),
+            ElementState::Released => self
+                .touch_router
+                .release(shell, finger, logical.x, logical.y),
+        }
+    }
+
     fn new(
         settings: AppSettings,
         content: F,
@@ -571,22 +607,9 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
                 position,
                 button,
                 ..
-            } if is_primary_pointer_button(&button) => {
-                let logical = self.platform.pointer_position(position);
-                if let Some(shell) = self.shell.as_mut() {
-                    shell.set_pointer_source(pointer_source_from_button(&button));
-                    let finger = button_finger(&button);
-                    let changed = match state {
-                        ElementState::Pressed => {
-                            self.touch_router.press(shell, finger, logical.x, logical.y)
-                        }
-                        ElementState::Released => self
-                            .touch_router
-                            .release(shell, finger, logical.x, logical.y),
-                    };
-                    if changed {
-                        window.request_redraw();
-                    }
+            } => {
+                if self.pointer_button(state, position, &button) {
+                    window.request_redraw();
                 }
             }
             WindowEvent::PointerLeft { position, kind, .. } => {

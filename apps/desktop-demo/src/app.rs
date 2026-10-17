@@ -2337,12 +2337,7 @@ fn counter_app() {
                                                     });
                                                 }
                                                 PointerEventKind::Cancel => pointer_down.set(false),
-                                                PointerEventKind::Scroll
-                                                | PointerEventKind::Zoom
-                                                | PointerEventKind::RotaryScrollPre
-                                                | PointerEventKind::RotaryScroll
-                                                | PointerEventKind::Enter
-                                                | PointerEventKind::Exit => {}
+                                                _ => {}
                                             }
                                         }
                                     })

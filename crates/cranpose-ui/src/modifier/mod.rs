@@ -50,8 +50,9 @@ pub(crate) use chain::{InPlaceReach, InPlaceUpdate};
 pub use chain::{ModifierChainHandle, ModifierChainInspectorNode, ModifierLocalsHandle};
 pub(crate) use coordinator_geometry::{CoordinatorGeometry, CoordinatorRect};
 pub use cranpose_foundation::{
-    AnyModifierElement, DynModifierElement, FocusState, PointerEvent, PointerEventKind,
-    PointerSource, RotaryScrollEvent, SemanticsConfiguration, modifier_element,
+    AnyModifierElement, DynModifierElement, FocusState, PointerButton, PointerButtons,
+    PointerEvent, PointerEventKind, PointerSource, RotaryScrollEvent, SemanticsConfiguration,
+    modifier_element,
 };
 use cranpose_foundation::{ModifierNodeElement, NodeCapabilities, ProgressBarRangeInfo};
 #[expect(unused_imports)]

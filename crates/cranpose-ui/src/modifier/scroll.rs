@@ -523,7 +523,9 @@ where
                             | PointerEventKind::RotaryScrollPre
                             | PointerEventKind::RotaryScroll
                             | PointerEventKind::Enter
-                            | PointerEventKind::Exit => false,
+                            | PointerEventKind::Exit
+                            | PointerEventKind::ButtonDown(_)
+                            | PointerEventKind::ButtonUp(_) => false,
                         };
 
                         if should_consume {

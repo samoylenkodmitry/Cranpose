@@ -412,7 +412,9 @@ impl InteractionTracker for PressTracker {
             | PointerEventKind::RotaryScrollPre
             | PointerEventKind::RotaryScroll
             | PointerEventKind::Enter
-            | PointerEventKind::Exit => {}
+            | PointerEventKind::Exit
+            | PointerEventKind::ButtonDown(_)
+            | PointerEventKind::ButtonUp(_) => {}
         }
     }
 

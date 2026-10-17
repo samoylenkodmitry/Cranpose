@@ -692,30 +692,21 @@ impl WindowModifierExt for Modifier {
                         loop {
                             let event = await_scope.await_pointer_event().await;
                             match event.kind {
-                                PointerEventKind::Down => {
-                                    if request_native_window_drag() {
-                                        dragging = true;
-                                        on_started();
-                                    }
+                                PointerEventKind::Down if request_native_window_drag() => {
+                                    dragging = true;
+                                    on_started();
                                 }
-                                PointerEventKind::Move => {
-                                    if dragging && event.buttons == Default::default() {
-                                        dragging = false;
-                                        on_finished();
-                                    }
+                                PointerEventKind::Move
+                                    if dragging && event.buttons == Default::default() =>
+                                {
+                                    dragging = false;
+                                    on_finished();
                                 }
-                                PointerEventKind::Up | PointerEventKind::Cancel => {
-                                    if dragging {
-                                        dragging = false;
-                                        on_finished();
-                                    }
+                                PointerEventKind::Up | PointerEventKind::Cancel if dragging => {
+                                    dragging = false;
+                                    on_finished();
                                 }
-                                PointerEventKind::Scroll
-                                | PointerEventKind::Zoom
-                                | PointerEventKind::RotaryScrollPre
-                                | PointerEventKind::RotaryScroll
-                                | PointerEventKind::Enter
-                                | PointerEventKind::Exit => {}
+                                _ => {}
                             }
                         }
                     })
