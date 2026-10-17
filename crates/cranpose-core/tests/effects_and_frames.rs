@@ -641,3 +641,39 @@ fn an_early_read_of_a_derived_state_still_recomposes_readers_only_on_a_change() 
         "a changed value read early still recomposes its reader"
     );
 }
+
+#[cranpose_macros::composable]
+fn EffectRow(count: cranpose_core::MutableState<usize>, log: Rc<RefCell<Vec<String>>>) {
+    for index in 0..count.value() {
+        let log = Rc::clone(&log);
+        cranpose_core::DisposableEffect(index, move |scope| {
+            log.borrow_mut().push(format!("start {index}"));
+            scope.on_dispose(move || log.borrow_mut().push(format!("stop {index}")))
+        });
+    }
+}
+
+#[test]
+fn effects_written_once_in_a_loop_each_keep_their_place() {
+    let mut composition = composition();
+    let key = location_key(file!(), line!(), column!());
+    let count = mutableStateOf(3usize);
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let mut content = {
+        let log = Rc::clone(&log);
+        move || EffectRow(count, Rc::clone(&log))
+    };
+    composition.render(key, &mut content).expect("first render");
+    assert_eq!(*log.borrow(), ["start 0", "start 1", "start 2"]);
+
+    log.borrow_mut().clear();
+    count.set(2);
+    composition
+        .reconcile(key, &mut content)
+        .expect("one fewer effect");
+    assert_eq!(
+        *log.borrow(),
+        ["stop 2"],
+        "only the effect that left stops; the others keep running"
+    );
+}
