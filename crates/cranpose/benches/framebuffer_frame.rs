@@ -4,7 +4,8 @@
 //!
 //! `FRAMES` frames (default 600) run in `steady_frames` after a warm-up; under
 //! callgrind, `--toggle-collect=*steady_frames*` counts only those.
-//! `STATIC_ROWS` text rows (default 0) that never change sit above the bar.
+//! `STATIC_ROWS` text rows (default 0) that never change sit above the bar;
+//! `NEST_DEPTH` plain boxes (default 0) wrap it.
 
 use std::hint::black_box;
 
@@ -25,9 +26,19 @@ const WARMUP_FRAMES: u64 = 60;
 /// Text rows that never change, above the bar: `STATIC_ROWS` (default 0).
 /// Each frame's cost should not grow with them.
 fn static_rows() -> usize {
-    std::env::var("STATIC_ROWS")
+    env_count("STATIC_ROWS")
+}
+
+/// Plain boxes around the bar: `NEST_DEPTH` (default 0). Each frame's cost
+/// should not grow with them either.
+fn nest_depth() -> usize {
+    env_count("NEST_DEPTH")
+}
+
+fn env_count(name: &str) -> usize {
+    std::env::var(name)
         .ok()
-        .and_then(|rows| rows.parse().ok())
+        .and_then(|count| count.parse().ok())
         .unwrap_or(0)
 }
 
@@ -62,6 +73,17 @@ fn AnimatedBar() {
 }
 
 #[composable]
+fn Nested(depth: usize) {
+    if depth == 0 {
+        AnimatedBar();
+    } else {
+        Box(Modifier::empty(), BoxSpec::default(), move || {
+            Nested(depth - 1);
+        });
+    }
+}
+
+#[composable]
 fn Screen() {
     Column(
         Modifier::empty()
@@ -85,7 +107,7 @@ fn Screen() {
                     );
                 });
             }
-            AnimatedBar();
+            Nested(nest_depth());
         },
     );
 }
