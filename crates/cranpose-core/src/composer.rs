@@ -2111,9 +2111,10 @@ impl Composer {
     }
 
     #[track_caller]
-    pub(crate) fn remember_effect<T: Default + 'static>(&self) -> Owned<T> {
-        let source = crate::caller_location_key();
-        self.with_slot_session_mut(|slots| slots.remember_effect::<T>(source))
+    /// The state of the effect written at `site`, in a slot of the current
+    /// group: it leaves with the slot, and its drop ends the effect.
+    pub(crate) fn remember_effect<T: Default + 'static>(&self, site: Key) -> Owned<T> {
+        self.with_slot_session_mut(|slots| slots.remember_effect::<T>(site))
     }
 
     /// Reserves the next slot at the call site for a `T` that `init` makes on the first

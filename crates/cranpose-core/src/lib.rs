@@ -1859,23 +1859,21 @@ where
     F: FnOnce(DisposableEffectScope) -> DisposableEffectResult + 'static,
 {
     with_current_composer(|composer| {
-        composer.with_group(group_key, |composer| {
-            let state = composer.remember_effect::<DisposableEffectState>();
-            if state.with(|state| state.should_run(&keys)) {
-                let key = effect_key::EffectKey::new(keys);
-                state.update(|state| {
-                    state.run_cleanup();
-                    state.set_key(key);
-                });
-                let mut effect_opt = Some(effect);
-                composer.register_side_effect(move || {
-                    if let Some(effect) = effect_opt.take() {
-                        let result = effect(DisposableEffectScope);
-                        state.update(|state| state.set_cleanup(result.into_cleanup()));
-                    }
-                });
-            }
-        });
+        let state = composer.remember_effect::<DisposableEffectState>(group_key);
+        if state.with(|state| state.should_run(&keys)) {
+            let key = effect_key::EffectKey::new(keys);
+            state.update(|state| {
+                state.run_cleanup();
+                state.set_key(key);
+            });
+            let mut effect_opt = Some(effect);
+            composer.register_side_effect(move || {
+                if let Some(effect) = effect_opt.take() {
+                    let result = effect(DisposableEffectScope);
+                    state.update(|state| state.set_cleanup(result.into_cleanup()));
+                }
+            });
+        }
     });
 }
 

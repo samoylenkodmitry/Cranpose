@@ -412,20 +412,18 @@ where
     F: FnOnce(LaunchedEffectScope) + 'static,
 {
     with_current_composer(|composer| {
-        composer.with_group(group_key, |composer| {
-            let state = composer.remember_effect::<LaunchedEffectState>();
-            if state.with(|state| state.should_run(&keys)) {
-                let key = EffectKey::new(keys);
-                state.update(|state| state.set_key(key));
-                let runtime = composer.runtime_handle();
-                let mut effect_opt = Some(effect);
-                composer.register_side_effect(move || {
-                    if let Some(effect) = effect_opt.take() {
-                        state.update(|state| state.launch(runtime.clone(), effect));
-                    }
-                });
-            }
-        });
+        let state = composer.remember_effect::<LaunchedEffectState>(group_key);
+        if state.with(|state| state.should_run(&keys)) {
+            let key = EffectKey::new(keys);
+            state.update(|state| state.set_key(key));
+            let runtime = composer.runtime_handle();
+            let mut effect_opt = Some(effect);
+            composer.register_side_effect(move || {
+                if let Some(effect) = effect_opt.take() {
+                    state.update(|state| state.launch(runtime.clone(), effect));
+                }
+            });
+        }
     });
 }
 
@@ -452,25 +450,23 @@ where
     F: FnOnce(LaunchedEffectScope) -> Pin<Box<dyn Future<Output = ()>>> + 'static,
 {
     with_current_composer(|composer| {
-        composer.with_group(group_key, |composer| {
-            let state = composer.remember_effect::<LaunchedEffectAsyncState>();
-            if state.with(|state| state.should_run(&keys)) {
-                let key = EffectKey::new(keys);
-                state.update(|state| {
-                    state.set_key(key);
-                    state.set_site(site);
-                });
-                let runtime = composer.runtime_handle();
-                let mut mk_future_opt = Some(mk_future);
-                composer.register_side_effect(move || {
-                    if let Some(mk_future) = mk_future_opt.take() {
-                        state.update(|state| {
-                            state.launch(runtime.clone(), mk_future);
-                        });
-                    }
-                });
-            }
-        });
+        let state = composer.remember_effect::<LaunchedEffectAsyncState>(group_key);
+        if state.with(|state| state.should_run(&keys)) {
+            let key = EffectKey::new(keys);
+            state.update(|state| {
+                state.set_key(key);
+                state.set_site(site);
+            });
+            let runtime = composer.runtime_handle();
+            let mut mk_future_opt = Some(mk_future);
+            composer.register_side_effect(move || {
+                if let Some(mk_future) = mk_future_opt.take() {
+                    state.update(|state| {
+                        state.launch(runtime.clone(), mk_future);
+                    });
+                }
+            });
+        }
     });
 }
 
