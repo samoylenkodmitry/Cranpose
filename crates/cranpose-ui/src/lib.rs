@@ -344,25 +344,23 @@ impl TestComposition {
     /// Returns true once if a root render was requested since the last call, then resets the
     /// request.
     pub fn take_root_render_request(&mut self) -> bool {
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(|| self.composition.take_root_render_request())
+        self.app_context
+            .enter(|| self.composition.take_root_render_request())
     }
 
     /// Applies the node updates that state changes queued.
     pub fn flush_pending_node_updates(&mut self) -> Result<(), NodeError> {
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(|| self.composition.flush_pending_node_updates())
+        self.app_context
+            .enter(|| self.composition.flush_pending_node_updates())
     }
 
     /// Recomposes the scopes that state changes invalidated, and composes the root content again
     /// when a read with no composable around it asked for that, as a host does. Returns true
     /// when anything recomposed.
     pub fn process_invalid_scopes(&mut self) -> Result<bool, NodeError> {
-        let app_context = Rc::clone(&self.app_context);
-        let (composition, root_content) = (&mut self.composition, &mut self.root_content);
-        app_context.enter(|| match root_content {
-            Some((key, content)) => composition.reconcile(*key, content),
-            None => composition.process_invalid_scopes(),
+        self.app_context.enter(|| match &mut self.root_content {
+            Some((key, content)) => self.composition.reconcile(*key, content),
+            None => self.composition.process_invalid_scopes(),
         })
     }
 
@@ -373,10 +371,9 @@ impl TestComposition {
         root_key: Key,
         content: impl FnMut() + 'static,
     ) -> Result<(), NodeError> {
-        let app_context = Rc::clone(&self.app_context);
         let (key, content) = self.root_content.insert((root_key, Box::new(content)));
-        let composition = &mut self.composition;
-        app_context.enter(|| composition.render(*key, content))
+        self.app_context
+            .enter(|| self.composition.render(*key, content))
     }
 
     /// Borrows the applier that holds the node tree. The guard keeps this composition's app context

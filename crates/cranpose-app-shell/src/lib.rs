@@ -541,8 +541,7 @@ impl ShellApp {
     }
 
     pub(crate) fn next_event_time(&self) -> Option<web_time::Instant> {
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(cranpose_ui::next_cursor_blink_time)
+        self.app_context.enter(cranpose_ui::next_cursor_blink_time)
     }
 
     pub(crate) fn frame_time_nanos_at(&self, now: Instant) -> u64 {
@@ -571,8 +570,7 @@ impl ShellApp {
         let router = Rc::new(TextInputRouter {
             routes: Rc::clone(&self.text_input_routes),
         });
-        let app_context = Rc::clone(&self.app_context);
-        app_context
+        self.app_context
             .enter(|| cranpose_ui::text_input_session::set_platform_text_input_handler(router));
         self.text_input_router_installed = true;
     }
@@ -781,16 +779,16 @@ where
     /// reads this after an update to open a window for each new entry and
     /// close the windows whose entries left.
     pub fn window_roots(&self) -> Vec<WindowRootEntry> {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(cranpose_ui::window_roots)
+        self.app.app_context.enter(cranpose_ui::window_roots)
     }
 
     /// Changes whenever a window root attaches, detaches or is updated; a
     /// platform that stored the last value it acted on skips
     /// [`Self::window_roots`] while it reads the same.
     pub fn window_roots_revision(&self) -> u64 {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(cranpose_ui::window_roots_revision)
+        self.app
+            .app_context
+            .enter(cranpose_ui::window_roots_revision)
     }
 
     /// Whether the primary root lays out anything of its own: a node with
@@ -819,14 +817,12 @@ where
         &mut self,
         read: impl FnOnce(&mut MemoryApplier, NodeId) -> Result<T, NodeError>,
     ) -> Option<T> {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(|| {
-            let root = self.surfaces[0].root_node(&self.app)?;
-            let mut applier = self.app.composition.applier_mut();
-            read(&mut applier, root)
-                .inspect_err(|err| log::debug!("failed to read the primary root's boxes: {err}"))
-                .ok()
-        })
+        let _app_context = self.app.app_context.enter_scope();
+        let root = self.surfaces[0].root_node(&self.app)?;
+        let mut applier = self.app.composition.applier_mut();
+        read(&mut applier, root)
+            .inspect_err(|err| log::debug!("failed to read the primary root's boxes: {err}"))
+            .ok()
     }
 
     /// The `drag_and_drop_target` under `point` and where the point falls in
@@ -835,30 +831,27 @@ where
     /// first and the primary last; a point without one only in `source`,
     /// the surface holding the press.
     pub(crate) fn drag_and_drop_target_at(
-        &mut self,
+        &self,
         point: cranpose_ui::DragAndDropPoint,
         source: usize,
     ) -> Option<(NodeId, cranpose_ui::Point)> {
-        let app_context = Rc::clone(&self.app.app_context);
-        let candidates: Vec<(usize, cranpose_ui::Point)> = match point.screen {
-            Some(screen) => (0..self.surfaces.len())
-                .rev()
-                .filter_map(|index| {
-                    let local = self.surfaces[index].screen_point_inside(screen)?;
-                    Some((index, local))
-                })
-                .collect(),
-            None => vec![(source, point.local)],
-        };
-        candidates.into_iter().find_map(|(index, local)| {
+        let drag_and_drop = self.app.app_context.drag_and_drop();
+        let target_in = |index: usize, local: cranpose_ui::Point| {
             self.surfaces[index]
                 .renderer
                 .scene()
                 .hit_test_nodes(local.x, local.y)
                 .into_iter()
-                .find(|node| app_context.drag_and_drop().is_target(*node))
+                .find(|node| drag_and_drop.is_target(*node))
                 .map(|node| (node, local))
-        })
+        };
+        match point.screen {
+            Some(screen) => (0..self.surfaces.len()).rev().find_map(|index| {
+                let local = self.surfaces[index].screen_point_inside(screen)?;
+                target_in(index, local)
+            }),
+            None => target_in(source, point.local),
+        }
     }
 
     /// Names the surface the platform considers focused, which is where the
@@ -874,8 +867,8 @@ where
     }
 
     fn sync_window_roots(&mut self) {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(|| self.sync_window_roots_in_context());
+        let _app_context = self.app.app_context.enter_scope();
+        self.sync_window_roots_in_context();
     }
 
     pub(crate) fn sync_window_roots_in_context(&mut self) {
@@ -928,8 +921,7 @@ where
     pub fn set_dev_options(&mut self, options: DevOptions) {
         self.app.dev_options = options;
         self.invalidate_dev_overlay_text();
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(request_render_invalidation);
+        self.app.app_context.enter(request_render_invalidation);
         self.mark_all_dirty();
     }
 
@@ -991,8 +983,7 @@ where
         }
         self.app.dev_options.frame_pacing_mode = mode;
         self.invalidate_dev_overlay_text();
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(request_render_invalidation);
+        self.app.app_context.enter(request_render_invalidation);
         self.mark_all_dirty();
     }
 
@@ -1069,8 +1060,7 @@ where
     /// Returns whether the shell wants a rendered frame: a frame callback or animation is active,
     /// or a surface's scene is out of date.
     pub fn should_render(&self) -> bool {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(|| {
+        self.app.app_context.enter(|| {
             self.app.wants_frame_in_context()
                 || self.surfaces.iter().any(|surface| surface.scene_dirty)
         })
@@ -1079,8 +1069,7 @@ where
     /// Returns whether the shell has work to run: queued UI tasks, state changes, layout, semantics
     /// or an active animation.
     pub fn needs_update(&self) -> bool {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(|| {
+        self.app.app_context.enter(|| {
             self.app
                 .needs_ui_update_in_context(self.any_surface_dirty())
         })
@@ -1089,8 +1078,7 @@ where
     /// Returns whether queued UI, state, layout, semantics, or due cursor work can be processed
     /// without advancing the frame clock. Awaiting a display frame alone is false.
     pub fn needs_update_without_frame(&self) -> bool {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(|| {
+        self.app.app_context.enter(|| {
             self.any_surface_dirty()
                 || self.app.has_stale_work_in_context()
                 || self.app.composition.should_recompose()
@@ -1145,8 +1133,9 @@ where
     /// which reports the work that update actually did.
     /// Note: Cursor blink is now timer-based and uses WaitUntil scheduling, not continuous redraw.
     pub fn needs_redraw(&self) -> bool {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(|| self.surfaces[0].needs_redraw_in_context(&self.app))
+        self.app
+            .app_context
+            .enter(|| self.surfaces[0].needs_redraw_in_context(&self.app))
     }
 
     /// Marks the primary surface as dirty, indicating a redraw is needed.
@@ -1159,8 +1148,7 @@ where
     pub fn request_root_render(&mut self) {
         self.app.composition.request_root_render();
         self.app.request_forced_layout_pass();
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(request_render_invalidation);
+        self.app.app_context.enter(request_render_invalidation);
         self.mark_all_dirty();
     }
 
@@ -1168,8 +1156,7 @@ where
     /// renderer draw at that root scale.
     pub fn set_density(&mut self, density: f32) {
         self.surfaces[0].renderer.set_root_scale(density);
-        let app_context = Rc::clone(&self.app.app_context);
-        let changed = app_context.enter(|| {
+        let changed = self.app.app_context.enter(|| {
             let previous = cranpose_ui::current_density().to_bits();
             cranpose_ui::set_density(density);
             previous != cranpose_ui::current_density().to_bits()
@@ -1200,8 +1187,7 @@ where
     /// multiplying, so a host that can read that table hands it over here and
     /// every `Sp` in the app resolves the way the platform's own text does.
     pub fn set_font_scale_curve(&mut self, curve: cranpose_ui::FontScaleCurve) {
-        let app_context = Rc::clone(&self.app.app_context);
-        let changed = app_context.enter(|| {
+        let changed = self.app.app_context.enter(|| {
             let previous = cranpose_ui::current_font_scale_curve();
             cranpose_ui::set_font_scale_curve(curve);
             previous != cranpose_ui::current_font_scale_curve()
@@ -1214,29 +1200,27 @@ where
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn debug_current_density(&self) -> f32 {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(cranpose_ui::current_density)
+        self.app.app_context.enter(cranpose_ui::current_density)
     }
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn debug_current_font_scale(&self) -> f32 {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(cranpose_ui::current_font_scale)
+        self.app.app_context.enter(cranpose_ui::current_font_scale)
     }
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn debug_current_font_scale_curve(&self) -> cranpose_ui::FontScaleCurve {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(cranpose_ui::current_font_scale_curve)
+        self.app
+            .app_context
+            .enter(cranpose_ui::current_font_scale_curve)
     }
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn debug_enter_app_context<T>(&self, block: impl FnOnce() -> T) -> T {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(block)
+        self.app.app_context.enter(block)
     }
 
     /// Returns true if there are active animations or pending recompositions.
@@ -1352,18 +1336,16 @@ where
     /// Use [`Self::update_without_frame`] to compose and draw the resulting state.
     pub fn dispatch_frame_at(&mut self, frame_time: Instant) {
         let frame_time = self.app.frame_time_nanos_at(frame_time);
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(|| {
-            let runtime_handle = self.app.runtime.runtime_handle();
-            runtime_handle.with_deferred_state_releases(|| {
-                self.app.last_frame_time_nanos = frame_time.max(self.app.last_frame_time_nanos);
-                self.app
-                    .runtime
-                    .drain_frame_callbacks(self.app.last_frame_time_nanos);
-                self.apply_pointer_claim();
-                runtime_handle.drain_ui();
-                self.dispatch_requested_mouse_moves(self.app.last_frame_time_nanos);
-            });
+        let _app_context = self.app.app_context.enter_scope();
+        let runtime_handle = self.app.runtime.runtime_handle();
+        runtime_handle.with_deferred_state_releases(|| {
+            self.app.last_frame_time_nanos = frame_time.max(self.app.last_frame_time_nanos);
+            self.app
+                .runtime
+                .drain_frame_callbacks(self.app.last_frame_time_nanos);
+            self.apply_pointer_claim();
+            runtime_handle.drain_ui();
+            self.dispatch_requested_mouse_moves(self.app.last_frame_time_nanos);
         });
     }
 
@@ -1381,47 +1363,45 @@ where
     }
 
     fn update_with_frame_time(&mut self, frame_time: Option<u64>) -> FrameUpdateResult {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(|| {
-            let mut stages = UpdateStages::start(update_stage_telemetry_threshold_ms().is_some());
-            let runtime_handle = self.app.runtime.runtime_handle();
-            runtime_handle.with_deferred_state_releases(|| {
-                if let Some(frame_time) = frame_time {
-                    self.app.last_frame_time_nanos = frame_time.max(self.app.last_frame_time_nanos);
-                    self.app.runtime.drain_frame_callbacks(self.app.last_frame_time_nanos);
-                    self.apply_pointer_claim();
-                }
-                stages.reached();
-                runtime_handle.drain_ui();
-                self.dispatch_requested_mouse_moves(self.app.last_frame_time_nanos);
-                stages.reached();
-                let should_render = self.app.composition.should_recompose();
-                let mut reconcile_attempted = false;
-                let mut reconcile_changed = false;
-                if should_render {
-                    log::trace!(
-                        target: "cranpose::input",
-                        "update begin: should_render=true layout_requested={} scene_dirty={} is_dirty={}",
-                        self.app.layout_requested,
-                        self.surfaces[0].scene_dirty,
-                        self.surfaces[0].is_dirty
-                    );
-                    (reconcile_attempted, reconcile_changed) = self.reconcile_in_context();
-                }
-                stages.reached();
-                let result = self.process_frame_in_context(reconcile_changed);
-                stages.reached();
-                log_update_stage_telemetry(
-                    &stages,
-                    UpdateOutcome {
-                        should_render,
-                        reconcile_attempted,
-                        reconcile_changed,
-                    },
+        let _app_context = self.app.app_context.enter_scope();
+        let mut stages = UpdateStages::start(update_stage_telemetry_threshold_ms().is_some());
+        let runtime_handle = self.app.runtime.runtime_handle();
+        runtime_handle.with_deferred_state_releases(|| {
+            if let Some(frame_time) = frame_time {
+                self.app.last_frame_time_nanos = frame_time.max(self.app.last_frame_time_nanos);
+                self.app.runtime.drain_frame_callbacks(self.app.last_frame_time_nanos);
+                self.apply_pointer_claim();
+            }
+            stages.reached();
+            runtime_handle.drain_ui();
+            self.dispatch_requested_mouse_moves(self.app.last_frame_time_nanos);
+            stages.reached();
+            let should_render = self.app.composition.should_recompose();
+            let mut reconcile_attempted = false;
+            let mut reconcile_changed = false;
+            if should_render {
+                log::trace!(
+                    target: "cranpose::input",
+                    "update begin: should_render=true layout_requested={} scene_dirty={} is_dirty={}",
+                    self.app.layout_requested,
+                    self.surfaces[0].scene_dirty,
+                    self.surfaces[0].is_dirty
                 );
-                self.clear_surface_dirt();
-                result
-            })
+                (reconcile_attempted, reconcile_changed) = self.reconcile_in_context();
+            }
+            stages.reached();
+            let result = self.process_frame_in_context(reconcile_changed);
+            stages.reached();
+            log_update_stage_telemetry(
+                &stages,
+                UpdateOutcome {
+                    should_render,
+                    reconcile_attempted,
+                    reconcile_changed,
+                },
+            );
+            self.clear_surface_dirt();
+            result
         })
     }
 

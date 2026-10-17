@@ -222,8 +222,7 @@ fn scaled_scroll_container_reveals_a_target_in_window_coordinates() {
         (300, 200),
         (300.0, 200.0),
     );
-    let context = Rc::clone(shell.app_context());
-    context.enter(|| {
+    shell.app_context().enter(|| {
         responder
             .borrow()
             .as_ref()

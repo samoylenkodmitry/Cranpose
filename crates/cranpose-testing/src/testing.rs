@@ -73,19 +73,17 @@ impl ComposeTestRule {
     /// Drain scheduled frame callbacks at the supplied timestamp and process
     /// any resulting work until the composition becomes idle.
     pub fn advance_frame(&mut self, frame_time_nanos: u64) -> Result<(), NodeError> {
-        let app_context = StdRc::clone(&self.app_context);
-        app_context.enter(|| {
-            let handle = self.composition.runtime_handle();
-            handle.drain_frame_callbacks(frame_time_nanos);
-            self.pump_until_idle_in_context()
-        })
+        let _app_context = self.app_context.enter_scope();
+        let handle = self.composition.runtime_handle();
+        handle.drain_frame_callbacks(frame_time_nanos);
+        self.pump_until_idle_in_context()
     }
 
     /// Drive the composition until there are no pending renders, invalidated
     /// scopes, or enqueued node mutations remaining.
     pub fn pump_until_idle(&mut self) -> Result<(), NodeError> {
-        let app_context = StdRc::clone(&self.app_context);
-        app_context.enter(|| self.pump_until_idle_in_context())
+        let _app_context = self.app_context.enter_scope();
+        self.pump_until_idle_in_context()
     }
 
     fn pump_until_idle_in_context(&mut self) -> Result<(), NodeError> {
@@ -198,8 +196,7 @@ impl ComposeTestRule {
             return Ok(None);
         };
         let handle = self.composition.runtime_handle();
-        let app_context = StdRc::clone(&self.app_context);
-        app_context.enter(|| {
+        self.app_context.enter(|| {
             let mut applier = self.composition.applier_mut();
             applier.set_runtime_handle(handle);
             let placed =
@@ -210,16 +207,14 @@ impl ComposeTestRule {
     }
 
     fn render(&mut self) -> Result<(), NodeError> {
-        let app_context = StdRc::clone(&self.app_context);
-        app_context.enter(|| {
-            let key = self.root_key();
-            if let Some(content) = self.content.as_mut() {
-                self.composition.render(key, &mut **content)?;
-                self.drain_root_render_requests()?;
-                request_render_invalidation();
-            }
-            Ok(())
-        })
+        let _app_context = self.app_context.enter_scope();
+        let key = self.root_key();
+        if let Some(content) = self.content.as_mut() {
+            self.composition.render(key, &mut **content)?;
+            self.drain_root_render_requests()?;
+            request_render_invalidation();
+        }
+        Ok(())
     }
 
     fn drain_root_render_requests(&mut self) -> Result<(), NodeError> {

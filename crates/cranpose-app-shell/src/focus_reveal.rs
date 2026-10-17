@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use cranpose_core::{NodeId, run_in_mutable_snapshot};
 use cranpose_foundation::{ScrollAxisRange, SemanticsScrollBy};
 use cranpose_render_common::Renderer;
@@ -17,8 +15,8 @@ where
     /// Hidden, disabled, removed and modal-background targets are rejected.
     /// Returns whether a scroll action reports movement.
     pub fn accessibility_reveal(&mut self, node_id: NodeId) -> bool {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(|| self.reveal_node_in_context(node_id))
+        let _app_context = self.app.app_context.enter_scope();
+        self.reveal_node_in_context(node_id)
     }
 
     pub(crate) fn reveal_new_focus(&mut self) {

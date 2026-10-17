@@ -339,8 +339,8 @@ where
     }
 
     pub(crate) fn process_frame(&mut self) -> FrameUpdateResult {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(|| self.process_frame_in_context(false))
+        let _app_context = self.app.app_context.enter_scope();
+        self.process_frame_in_context(false)
     }
 
     pub(crate) fn process_frame_in_context(
@@ -393,25 +393,23 @@ where
         deadline: Option<Instant>,
         mut frame_can_start: impl FnMut(&mut R) -> bool,
     ) -> bool {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(|| {
-            let mut passes = 0;
-            while passes < IDLE_PREFETCH_MAX_PASSES
-                && cranpose_ui::has_lazy_prefetch_requests()
-                && deadline.is_none_or(|deadline| {
-                    Instant::now() + cranpose_ui::lazy_prefetch_pass_cost() <= deadline
-                })
-                && !frame_can_start(self.renderer())
-            {
-                cranpose_ui::with_lazy_prefetch_pass(|| {
-                    cranpose_ui::drain_lazy_prefetch_requests(cranpose_ui::schedule_measure_repass);
-                    self.run_layout_phase_in_context();
-                    cranpose_ui::warm_prefetched_slices(&mut self.app.composition.applier_mut());
-                });
-                passes += 1;
-            }
-            passes > 0
-        })
+        let _app_context = self.app.app_context.enter_scope();
+        let mut passes = 0;
+        while passes < IDLE_PREFETCH_MAX_PASSES
+            && cranpose_ui::has_lazy_prefetch_requests()
+            && deadline.is_none_or(|deadline| {
+                Instant::now() + cranpose_ui::lazy_prefetch_pass_cost() <= deadline
+            })
+            && !frame_can_start(self.renderer())
+        {
+            cranpose_ui::with_lazy_prefetch_pass(|| {
+                cranpose_ui::drain_lazy_prefetch_requests(cranpose_ui::schedule_measure_repass);
+                self.run_layout_phase_in_context();
+                cranpose_ui::warm_prefetched_slices(&mut self.app.composition.applier_mut());
+            });
+            passes += 1;
+        }
+        passes > 0
     }
 
     /// Gives every renderer the fonts installed since the last frame, before
@@ -432,8 +430,8 @@ where
 
     #[cfg(test)]
     pub(crate) fn run_layout_phase(&mut self) {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(|| self.run_layout_phase_in_context());
+        let _app_context = self.app.app_context.enter_scope();
+        self.run_layout_phase_in_context();
     }
 
     pub(crate) fn run_layout_phase_in_context(&mut self) {
@@ -683,8 +681,8 @@ where
 
     #[cfg(test)]
     pub(crate) fn run_render_phase(&mut self) -> FrameUpdateResult {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(|| self.run_render_phase_in_context(false))
+        let _app_context = self.app.app_context.enter_scope();
+        self.run_render_phase_in_context(false)
     }
 
     fn run_render_phase_in_context(&mut self, recomposed_this_frame: bool) -> FrameUpdateResult {

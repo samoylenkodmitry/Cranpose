@@ -26,17 +26,15 @@ where
 
     /// Get the current layout tree (for robot/testing)
     pub fn layout_tree(&mut self) -> Option<&LayoutTree> {
-        let app_context = std::rc::Rc::clone(&self.app.app_context);
-        app_context.enter(|| self.surfaces[0].layout_tree_in_context(&mut self.app))
+        let _app_context = self.app.app_context.enter_scope();
+        self.surfaces[0].layout_tree_in_context(&mut self.app)
     }
 
     #[doc(hidden)]
     pub fn with_layout_tree<T>(&mut self, block: impl FnOnce(Option<&LayoutTree>) -> T) -> T {
-        let app_context = std::rc::Rc::clone(&self.app.app_context);
-        app_context.enter(|| {
-            let layout_tree = self.surfaces[0].layout_tree_in_context(&mut self.app);
-            block(layout_tree)
-        })
+        let _app_context = self.app.app_context.enter_scope();
+        let layout_tree = self.surfaces[0].layout_tree_in_context(&mut self.app);
+        block(layout_tree)
     }
 
     /// Whether a semantics snapshot could contain anything at all. Reading the
@@ -59,15 +57,14 @@ where
                 .iter()
                 .any(|surface| surface.inspector.state.open)
         {
-            let app_context = std::rc::Rc::clone(&self.app.app_context);
-            let semantics_dirty = app_context.enter(|| {
+            let semantics_dirty = {
+                let _app_context = self.app.app_context.enter_scope();
                 self.app.flush_semantics_invalidations();
-                let Some(root) = self.app.composition.root() else {
-                    return false;
-                };
-                let mut applier = self.app.composition.applier_mut();
-                cranpose_ui::tree_needs_semantics(&mut *applier, root).unwrap_or(true)
-            });
+                self.app.composition.root().is_some_and(|root| {
+                    let mut applier = self.app.composition.applier_mut();
+                    cranpose_ui::tree_needs_semantics(&mut *applier, root).unwrap_or(true)
+                })
+            };
             if semantics_dirty {
                 self.app.semantics_snapshot_revision =
                     self.app.semantics_snapshot_revision.wrapping_add(1);
@@ -78,8 +75,8 @@ where
 
     /// Get the current semantics tree (for robot/testing)
     pub fn semantics_tree(&mut self) -> Option<&SemanticsTree> {
-        let app_context = std::rc::Rc::clone(&self.app.app_context);
-        app_context.enter(|| self.surfaces[0].semantics_tree_in_context(&mut self.app))
+        let _app_context = self.app.app_context.enter_scope();
+        self.surfaces[0].semantics_tree_in_context(&mut self.app)
     }
 
     /// Returns the width and height of the first surface's root layout box in logical pixels, or
@@ -225,26 +222,24 @@ fn layout_box_bounds(layout_box: &LayoutBox) -> (f32, f32, f32, f32) {
 }
 
 fn debug_info_report<R: Renderer>(app: &mut ShellApp, surface: &mut RootSurface<R>) -> String {
-    let app_context = std::rc::Rc::clone(&app.app_context);
-    app_context.enter(|| {
-        let mut report = String::new();
-        writeln!(report, "=== DEBUG: CURRENT SCREEN STATE ===").ok();
-        if let Some(layout_tree) = surface.layout_tree_in_context(app) {
-            let renderer = HeadlessRenderer::new();
-            let render_scene = renderer.render(layout_tree);
-            writeln!(report, "{}", format_layout_tree(layout_tree)).ok();
-            writeln!(report, "{}", format_render_scene(&render_scene)).ok();
-            writeln!(
-                report,
-                "{}",
-                format_screen_summary(layout_tree, &render_scene)
-            )
-            .ok();
-        } else {
-            writeln!(report, "No layout available").ok();
-        }
-        report
-    })
+    let _app_context = app.app_context.enter_scope();
+    let mut report = String::new();
+    writeln!(report, "=== DEBUG: CURRENT SCREEN STATE ===").ok();
+    if let Some(layout_tree) = surface.layout_tree_in_context(app) {
+        let renderer = HeadlessRenderer::new();
+        let render_scene = renderer.render(layout_tree);
+        writeln!(report, "{}", format_layout_tree(layout_tree)).ok();
+        writeln!(report, "{}", format_render_scene(&render_scene)).ok();
+        writeln!(
+            report,
+            "{}",
+            format_screen_summary(layout_tree, &render_scene)
+        )
+        .ok();
+    } else {
+        writeln!(report, "No layout available").ok();
+    }
+    report
 }
 
 impl<R> SurfaceMut<'_, R>

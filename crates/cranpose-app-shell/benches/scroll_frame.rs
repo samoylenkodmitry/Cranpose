@@ -157,7 +157,6 @@ fn run_case(roots: usize, phase: &str, magnitude: f32) {
     shell.set_viewport(360.0, 360.0);
     shell.update();
     let state = (*capture.borrow()).expect("lazy list state");
-    let context = Rc::clone(shell.app_context());
     let initial = fingerprint(&shell);
     let frame = |tick: usize, shell: &mut AppShell<GraphRenderer>| {
         let delta = if tick.is_multiple_of(2) {
@@ -165,7 +164,9 @@ fn run_case(roots: usize, phase: &str, magnitude: f32) {
         } else {
             magnitude
         };
-        let consumed = context.enter(|| state.dispatch_scroll_delta(delta));
+        let consumed = shell
+            .app_context()
+            .enter(|| state.dispatch_scroll_delta(delta));
         assert!(consumed.abs() > 0.0, "each frame must move the list");
         shell.update();
     };

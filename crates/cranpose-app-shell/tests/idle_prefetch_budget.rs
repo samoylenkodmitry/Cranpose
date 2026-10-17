@@ -177,14 +177,16 @@ fn PrefetchList(
 fn drive_until_prefetch_is_pending(
     shell: &mut AppShell<EmptyRenderer>,
     states: &[LazyListState],
-    app_context: &Rc<cranpose_ui::AppContext>,
 ) -> bool {
     for _ in 0..12 {
         for state in states {
             let _ = state.dispatch_scroll_delta(-120.0);
         }
         shell.update();
-        if app_context.enter(cranpose_ui::has_lazy_prefetch_requests) {
+        if shell
+            .app_context()
+            .enter(cranpose_ui::has_lazy_prefetch_requests)
+        {
             return true;
         }
     }
@@ -226,16 +228,17 @@ fn idle_prefetch_budget_accounts_for_slice_warming_before_starting_another_pass(
     });
     let state = (*state_capture.borrow()).expect("the list state is composed");
 
-    let app_context = Rc::clone(shell.app_context());
     assert!(
-        drive_until_prefetch_is_pending(&mut shell, &[state], &app_context),
+        drive_until_prefetch_is_pending(&mut shell, &[state]),
         "scrolling leaves an item for idle prefetch"
     );
 
     let first_pass_cost = run_one_idle_pass(&mut shell, None);
     assert_eq!(slice_factory_calls.get(), 1);
     assert!(
-        app_context.enter(cranpose_ui::has_lazy_prefetch_requests),
+        shell
+            .app_context()
+            .enter(cranpose_ui::has_lazy_prefetch_requests),
         "the list still has another deferred item"
     );
 
@@ -263,17 +266,14 @@ fn idle_prefetch_cost_scales_with_lists_pending_after_a_multi_list_pass() {
         }
     });
     let states = (*state_capture.borrow()).expect("both list states are composed");
-    let app_context = Rc::clone(shell.app_context());
-    assert!(drive_until_prefetch_is_pending(
-        &mut shell,
-        &states,
-        &app_context
-    ));
+    assert!(drive_until_prefetch_is_pending(&mut shell, &states));
 
     let first_pass_cost = run_one_idle_pass(&mut shell, None);
     assert_eq!(slice_factory_calls.get(), 2);
     assert!(
-        app_context.enter(cranpose_ui::has_lazy_prefetch_requests),
+        shell
+            .app_context()
+            .enter(cranpose_ui::has_lazy_prefetch_requests),
         "the long list still has a deferred item"
     );
 

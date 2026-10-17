@@ -4155,7 +4155,7 @@ fn every_reader_action_runs_inside_the_app_context() {
     let projection_source = crate_source("src/accessibility.rs");
     assert!(
         projection_source.contains("pub(crate) fn run_reader_action<R>(")
-            && projection_source.contains("let context = std::rc::Rc::clone(shell.app_context());")
+            && projection_source.contains("let _context = shell.app_context().enter_scope();")
             && projection_source.contains("cranpose_core::run_in_mutable_snapshot(|| {"),
         "a reader action writes state and invalidates layout, which the render state refuses outside the app context"
     );

@@ -224,8 +224,7 @@ impl<R: Renderer> RootSurface<R> {
         app: &ShellApp,
         surfaces_dirty: bool,
     ) -> FrameSchedule {
-        let app_context = Rc::clone(&app.app_context);
-        let (needs_update, needs_frame) = app_context.enter(|| {
+        let (needs_update, needs_frame) = app.app_context.enter(|| {
             let needs_frame = self.is_dirty
                 || self.scene_dirty
                 || app.wants_frame_in_context()
@@ -608,8 +607,9 @@ where
             RootId::Primary => self.shell_app().request_forced_layout_pass(),
             RootId::Window(_) => {
                 if let Some(root) = self.root() {
-                    let app_context = Rc::clone(&self.shell_app_ref().app_context);
-                    app_context.enter(|| cranpose_ui::schedule_measure_repass(root));
+                    self.shell_app_ref()
+                        .app_context
+                        .enter(|| cranpose_ui::schedule_measure_repass(root));
                 }
                 self.shell_app().request_layout_pass();
             }
@@ -658,8 +658,9 @@ where
     /// renderer that has not warmed its swapchain yet. See
     /// [`AppShell::needs_redraw`].
     pub fn needs_redraw(&self) -> bool {
-        let app_context = Rc::clone(&self.shell_app_ref().app_context);
-        app_context.enter(|| self.surface().needs_redraw_in_context(self.shell_app_ref()))
+        self.shell_app_ref()
+            .app_context
+            .enter(|| self.surface().needs_redraw_in_context(self.shell_app_ref()))
     }
 
     /// Whether a primary-button gesture that started on this surface is
@@ -752,16 +753,16 @@ where
     /// Runs `block` with this surface's layout snapshot, built on demand.
     pub fn with_layout_tree<T>(&mut self, block: impl FnOnce(Option<&LayoutTree>) -> T) -> T {
         let (app, surface) = self.parts();
-        let app_context = Rc::clone(&app.app_context);
-        app_context.enter(|| block(surface.layout_tree_in_context(app)))
+        let _app_context = app.app_context.enter_scope();
+        block(surface.layout_tree_in_context(app))
     }
 
     /// Runs `block` with this surface's semantics snapshot, built on demand;
     /// `None` while semantics are disabled.
     pub fn with_semantics_tree<T>(&mut self, block: impl FnOnce(Option<&SemanticsTree>) -> T) -> T {
         let (app, surface) = self.parts();
-        let app_context = Rc::clone(&app.app_context);
-        app_context.enter(|| block(surface.semantics_tree_in_context(app)))
+        let _app_context = app.app_context.enter_scope();
+        block(surface.semantics_tree_in_context(app))
     }
 
     /// The pointer icon the platform has not applied to this surface's
