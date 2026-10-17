@@ -45,6 +45,8 @@ impl Default for RowSpec {
 
 /// Places children from left to right, or right to left for an RTL layout.
 /// `spec` sets horizontal space and vertical alignment.
+/// Like Compose's, it is inline: a state its content reads recomposes the
+/// composable that called it.
 ///
 /// # Example
 ///
@@ -63,7 +65,7 @@ impl Default for RowSpec {
 ///     );
 /// }
 /// ```
-#[composable]
+#[composable(no_skip)]
 pub fn Row<F>(modifier: Modifier, spec: RowSpec, content: F) -> NodeId
 where
     F: FnMut() + 'static,

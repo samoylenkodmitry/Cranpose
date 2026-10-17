@@ -45,6 +45,8 @@ impl Default for BoxSpec {
 
 /// Places children over the same area. `content_alignment` selects each child's
 /// position within the box; later children draw above earlier children.
+/// Like Compose's, it is inline: a state its content reads recomposes the
+/// composable that called it.
 ///
 /// # Example
 ///
@@ -64,7 +66,7 @@ impl Default for BoxSpec {
 ///     );
 /// }
 /// ```
-#[composable]
+#[composable(no_skip)]
 pub fn Box<F>(modifier: Modifier, spec: BoxSpec, content: F) -> NodeId
 where
     F: FnMut() + 'static,

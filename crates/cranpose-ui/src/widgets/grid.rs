@@ -325,7 +325,7 @@ fn start_and_span(range: RangeInclusive<i32>) -> (i32, u32) {
 ///     );
 /// }
 /// ```
-#[composable]
+#[composable(no_skip)]
 pub fn Grid<F>(config: GridConfig, modifier: Modifier, content: F) -> NodeId
 where
     F: FnMut() + 'static,

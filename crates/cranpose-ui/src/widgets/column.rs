@@ -45,6 +45,8 @@ impl Default for ColumnSpec {
 
 /// Places children from top to bottom. `spec` sets vertical space and horizontal alignment.
 /// Use [`Row`](crate::Row) for a horizontal sequence.
+/// Like Compose's, it is inline: a state its content reads recomposes the
+/// composable that called it.
 ///
 /// # Example
 ///
@@ -63,7 +65,7 @@ impl Default for ColumnSpec {
 ///     );
 /// }
 /// ```
-#[composable]
+#[composable(no_skip)]
 pub fn Column<F>(modifier: Modifier, spec: ColumnSpec, content: F) -> NodeId
 where
     F: FnMut() + 'static,

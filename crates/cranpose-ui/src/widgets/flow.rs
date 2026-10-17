@@ -2,7 +2,7 @@
 
 use cranpose_core::NodeId;
 
-use super::layout::Layout;
+use super::layout::{LayoutEnvironment, compose_layout};
 use crate::{
     composable,
     layout::policies::{FlowAxis, FlowMeasurePolicy},
@@ -66,7 +66,7 @@ impl FlowSpec {
 ///     );
 /// }
 /// ```
-#[composable]
+#[composable(no_skip)]
 pub fn FlowRow<F>(modifier: Modifier, spec: FlowSpec, content: F) -> NodeId
 where
     F: FnMut() + 'static,
@@ -78,7 +78,7 @@ where
 /// available height is full — Compose's `FlowColumn`. The spec sets the
 /// space between children and between columns. In a right-to-left layout
 /// the first column is at the right.
-#[composable]
+#[composable(no_skip)]
 pub fn FlowColumn<F>(modifier: Modifier, spec: FlowSpec, content: F) -> NodeId
 where
     F: FnMut() + 'static,
@@ -90,7 +90,8 @@ fn flow_layout<F>(modifier: Modifier, axis: FlowAxis, spec: FlowSpec, content: F
 where
     F: FnMut() + 'static,
 {
+    let environment = LayoutEnvironment::current();
     let mut policy = FlowMeasurePolicy::new(axis, spec.main_axis_spacing, spec.cross_axis_spacing);
-    policy.layout_direction = crate::layout_direction();
-    Layout(modifier, policy, content)
+    policy.layout_direction = environment.direction;
+    compose_layout(modifier, policy, environment, content)
 }

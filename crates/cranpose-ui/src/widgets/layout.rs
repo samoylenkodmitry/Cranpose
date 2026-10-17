@@ -52,7 +52,9 @@ impl LayoutEnvironment {
 
 /// Emits a layout node whose children `measure_policy` measures and places. `content` composes the
 /// children. Compose's `Layout`.
-#[composable]
+/// Like Compose's, it is inline: a state its content reads recomposes the
+/// composable that called it.
+#[composable(no_skip)]
 pub fn Layout<F, P>(modifier: Modifier, measure_policy: P, content: F) -> NodeId
 where
     F: FnMut() + 'static,
