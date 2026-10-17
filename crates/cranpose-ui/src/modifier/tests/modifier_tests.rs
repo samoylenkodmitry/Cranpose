@@ -255,21 +255,29 @@ fn structural_eq_ignores_always_update_elements() {
 }
 
 #[test]
-fn modifiers_built_incrementally_match_from_parts() {
+fn modifiers_joined_in_any_grouping_or_from_shared_chains_are_equal() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let elements = vec![
+    let elements = [
         test_fingerprint_element(10, NodeCapabilities::LAYOUT, false),
         test_fingerprint_element(11, NodeCapabilities::DRAW, false),
         test_fingerprint_element(12, NodeCapabilities::SEMANTICS, false),
     ];
+    let one = |index: usize| Modifier::from_dyn_element(elements[index].clone());
 
-    let flat = Modifier::from_parts(&elements);
-    let incremental = Modifier::from_parts(&[elements[0].clone()])
-        .then(Modifier::from_parts(&[elements[1].clone()]))
-        .then(Modifier::from_parts(&[elements[2].clone()]));
+    let left = one(0).then(one(1)).then(one(2));
+    let right = one(0).then(one(1).then(one(2)));
+    assert_eq!(left, right);
+    assert!(left.structural_eq(&right));
 
-    assert_eq!(incremental, flat);
-    assert!(incremental.structural_eq(&flat));
+    // Joining a chain that another modifier holds leaves that modifier as
+    // it was.
+    let shared = one(0).then(one(1));
+    let extended = shared.clone().then(one(2));
+    let prefixed = one(2).then(shared.clone());
+    assert_eq!(extended, left);
+    assert_eq!(shared, one(0).then(one(1)));
+    assert_eq!(prefixed, one(2).then(one(0)).then(one(1)));
+    assert_eq!(prefixed.element_count(), 3);
 }
 
 #[test]
