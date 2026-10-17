@@ -27,6 +27,26 @@ pub(crate) struct ModalNodes {
 }
 
 impl ModalNodes {
+    /// [`crate::render_state::AppContext::modal_node_may_be_live`] of the
+    /// context that holds these nodes.
+    pub(crate) fn may_be_live(&self, applier: &mut MemoryApplier, count: bool) -> bool {
+        if !count {
+            self.set_counting(false);
+            return true;
+        }
+        if self.counting.get() {
+            self.settle(applier);
+        } else {
+            self.set_counting(true);
+            applier.for_each_node_mut(|node| {
+                if let Some((id, reach)) = node_reach(node) {
+                    self.mark(id, reach.is_modal);
+                }
+            });
+        }
+        !self.modal.borrow().is_empty()
+    }
+
     fn set_counting(&self, counting: bool) {
         if self.counting.replace(counting) == counting {
             return;
@@ -117,33 +137,6 @@ pub(crate) fn reach_changed(node: Option<NodeId>) {
             nodes.changed.borrow_mut().push(node);
         }
     });
-}
-
-/// Whether a modal node may be live in the current app context.
-///
-/// While `count` holds, the context keeps its modal nodes: the first call
-/// reads every node of `applier` once, and later calls read only the nodes
-/// whose semantics changed since. Without `count` nothing is kept and the
-/// answer is always `true`, leaving the caller to walk.
-pub fn modal_node_may_be_live(applier: &mut MemoryApplier, count: bool) -> bool {
-    crate::render_state::with_current_modal_nodes(|nodes| {
-        if !count {
-            nodes.set_counting(false);
-            return true;
-        }
-        if nodes.counting.get() {
-            nodes.settle(applier);
-        } else {
-            nodes.set_counting(true);
-            applier.for_each_node_mut(|node| {
-                if let Some((id, reach)) = node_reach(node) {
-                    nodes.mark(id, reach.is_modal);
-                }
-            });
-        }
-        !nodes.modal.borrow().is_empty()
-    })
-    .unwrap_or(true)
 }
 
 #[cfg(test)]

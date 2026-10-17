@@ -194,7 +194,6 @@ pub use lazy_prefetch::{
 pub use modal::{
     ModalRegistration, clear_modals, dispatch_modal_back, local_modal_depth, modal_depth,
 };
-pub use modal_nodes::modal_node_may_be_live;
 pub use modifier::{
     BlendMode, Brush, Color, CompositingStrategy, CornerRadii, DpOffset, DragAndDropEvent,
     DragAndDropOutcome, DragAndDropPayload, DragAndDropPoint, DragAndDropSource,
