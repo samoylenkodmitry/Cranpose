@@ -1,0 +1,552 @@
+use std::{
+    cell::RefCell,
+    sync::{Arc, OnceLock},
+};
+
+use cranpose_core::{MutableState, remember, rememberMutableStateOf};
+use cranpose_macros::composable;
+use cranpose_ui::{
+    Color, Modifier, Size,
+    space::{Camera, Glass, Light, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3, Volume},
+    widgets::{Box, BoxSpec, Row, RowSpec},
+};
+
+use crate::support;
+
+const FRAME_WIDTH: u32 = 400;
+const FRAME_HEIGHT: u32 = 300;
+const FOCAL_LENGTH: f32 = 600.0;
+const EYE_Z: f32 = -800.0;
+const SPHERE: Vec3 = Vec3::new(0.0, 0.0, 200.0);
+const SPHERE_RADIUS: f32 = 150.0;
+const NEAR_PANEL: Vec3 = Vec3::new(60.0, 0.0, 0.0);
+const NEAR_PANEL_SIDE: f32 = 100.0;
+const SOFT_LIGHT: f32 = 0.1;
+const GLOW_PANEL: Vec3 = Vec3::new(-300.0, 250.0, 500.0);
+
+fn camera() -> Camera {
+    Camera::look_at(
+        Vec3::new(0.0, 0.0, EYE_Z),
+        Vec3::ZERO,
+        Vec3::new(0.0, 1.0, 0.0),
+        FOCAL_LENGTH,
+    )
+}
+
+/// The frame pixel at the scene point `point`.
+fn pixel_at(frame: &cranpose_render_wgpu::CapturedFrame, point: Vec3) -> [u8; 4] {
+    let shown = camera()
+        .project(
+            point,
+            Size {
+                width: FRAME_WIDTH as f32,
+                height: FRAME_HEIGHT as f32,
+            },
+        )
+        .expect("in front of the eye");
+    let index = (shown.y as usize * frame.width as usize + shown.x as usize) * 4;
+    [
+        frame.pixels[index],
+        frame.pixels[index + 1],
+        frame.pixels[index + 2],
+        frame.pixels[index + 3],
+    ]
+}
+
+fn surface(
+    mesh: &Arc<Mesh>,
+    transform: Mat4,
+    (material, casts_shadow): (Material, bool),
+) -> Modifier {
+    let mesh = Arc::clone(mesh);
+    Modifier::empty()
+        .required_size(Size {
+            width: 256.0,
+            height: 128.0,
+        })
+        .mesh_surface(move || MeshSurface {
+            mesh: Arc::clone(&mesh),
+            transform,
+            material: material.clone(),
+            casts_shadow,
+        })
+}
+
+#[composable]
+fn Surface(
+    mesh: Arc<Mesh>,
+    transform: Mat4,
+    (material, casts_shadow, color): (Material, bool, Color),
+) {
+    Box(
+        surface(&mesh, transform, (material, casts_shadow)).background(color),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+/// A blue wall across the frame behind the scene.
+#[composable]
+fn FarWall(plane: Arc<Mesh>) {
+    Surface(
+        plane,
+        panel((2000.0, 1500.0), Vec3::new(0.0, 0.0, 600.0)),
+        (Material::Unlit, false, Color(0.0, 0.0, 1.0, 1.0)),
+    );
+}
+
+fn panel(side: (f32, f32), at: Vec3) -> Mat4 {
+    Mat4::translation(Vec3::new(-0.5, -0.5, 0.0))
+        .then(&Mat4::scaling(Vec3::new(side.0, side.1, 1.0)))
+        .then(&Mat4::translation(at))
+}
+
+fn ball() -> Mat4 {
+    Mat4::scaling(Vec3::new(SPHERE_RADIUS, SPHERE_RADIUS, SPHERE_RADIUS))
+        .then(&Mat4::translation(SPHERE))
+}
+
+fn meshes() -> (Arc<Mesh>, Arc<Mesh>) {
+    remember(|| (Arc::new(Mesh::plane()), Arc::new(Mesh::sphere(48, 24))))
+        .with(|(plane, sphere)| (Arc::clone(plane), Arc::clone(sphere)))
+}
+
+/// A frame-sized scene seen through [`camera`], lit along `(1, 0, 1)`.
+#[composable]
+fn Scene(light_size: f32, content: impl FnMut() + 'static) {
+    Box(
+        Modifier::empty()
+            .size(Size {
+                width: FRAME_WIDTH as f32,
+                height: FRAME_HEIGHT as f32,
+            })
+            .background(Color::BLACK)
+            .scene3d(move || Scene3d {
+                camera: camera(),
+                light: Some(Light {
+                    direction: Vec3::new(1.0, 0.0, 1.0),
+                    ambient: 0.2,
+                    shadows: true,
+                    size: light_size,
+                }),
+            }),
+        BoxSpec::default(),
+        content,
+    );
+}
+
+#[composable]
+fn MeshScene() {
+    LitScene(0.0, Material::Lit);
+}
+
+#[composable]
+fn SoftLightScene() {
+    LitScene(SOFT_LIGHT, Material::Lit);
+}
+
+#[composable]
+fn EmissiveScene() {
+    LitScene(0.0, Material::Emissive);
+}
+
+#[composable]
+fn LitScene(light_size: f32, sphere_material: Material) {
+    let (plane, sphere) = meshes();
+    Scene(light_size, move || {
+        // The near panel comes first: depth, not order, hides the sphere.
+        Surface(
+            Arc::clone(&plane),
+            panel((NEAR_PANEL_SIDE, NEAR_PANEL_SIDE), NEAR_PANEL),
+            (Material::Unlit, false, Color(0.0, 1.0, 0.0, 1.0)),
+        );
+        Surface(
+            Arc::clone(&sphere),
+            ball(),
+            (sphere_material.clone(), true, Color(1.0, 0.0, 0.0, 1.0)),
+        );
+        FarWall(Arc::clone(&plane));
+    });
+}
+
+/// A clear glass ball in front of a wall whose left half is red and right
+/// half blue, the line between them behind the ball's middle; a glow panel
+/// over the wall's red half, below the ball.
+#[composable]
+fn GlassScene() {
+    let (plane, sphere) = meshes();
+    Scene(0.0, move || {
+        Surface(
+            Arc::clone(&plane),
+            panel((300.0, 60.0), GLOW_PANEL),
+            (Material::Glow, false, Color(0.0, 0.5, 0.0, 1.0)),
+        );
+        Surface(
+            Arc::clone(&sphere),
+            ball(),
+            (
+                Material::Glass(Glass::clear(2.0 * SPHERE_RADIUS)),
+                false,
+                Color::TRANSPARENT,
+            ),
+        );
+        Row(
+            surface(
+                &plane,
+                panel((2000.0, 1500.0), Vec3::new(0.0, 0.0, 600.0)),
+                (Material::Unlit, false),
+            ),
+            RowSpec::default(),
+            || {
+                for color in [Color(1.0, 0.0, 0.0, 1.0), Color(0.0, 0.0, 1.0, 1.0)] {
+                    Box(
+                        Modifier::empty()
+                            .size(Size {
+                                width: 128.0,
+                                height: 128.0,
+                            })
+                            .background(color),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                }
+            },
+        );
+    });
+}
+
+#[test]
+fn mesh_surfaces_draw_their_content_lit_shadowed_and_nearest_first() {
+    let Some((_lock, mut shell)) = support::app_shell_for(
+        MeshScene,
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        wgpu::TextureFormat::Rgba8Unorm,
+        |_| {},
+    ) else {
+        return;
+    };
+    let (frame, _) = support::warm_shell_frame(&mut shell, FRAME_WIDTH, FRAME_HEIGHT);
+
+    let near_panel = pixel_at(&frame, NEAR_PANEL);
+    assert!(
+        near_panel[1] > 200 && near_panel[0] < 40,
+        "the near panel hides the sphere behind it: {near_panel:?}"
+    );
+
+    let lit_side = pixel_at(&frame, SPHERE + Vec3::new(-0.6, 0.0, -0.8) * SPHERE_RADIUS);
+    let dark_side = pixel_at(
+        &frame,
+        SPHERE + Vec3::new(-0.2, 0.75, -0.63) * SPHERE_RADIUS,
+    );
+    assert!(
+        lit_side[0] > 150 && lit_side[1] < 40 && lit_side[2] < 40,
+        "the sphere shows its red content where the light falls: {lit_side:?}"
+    );
+    assert!(
+        dark_side[0] + 40 < lit_side[0],
+        "the sphere is shaded: {dark_side:?} away from the light, {lit_side:?} facing it"
+    );
+
+    let far_wall = pixel_at(&frame, Vec3::new(-300.0, 0.0, 600.0));
+    assert!(
+        far_wall[2] > 200 && far_wall[0] < 40,
+        "the far wall shows beside the sphere, in the light: {far_wall:?}"
+    );
+    // The light travels along (1, 0, 1): the sphere's shadow falls on the
+    // far wall 400 to the right of its centre.
+    let shadow = pixel_at(&frame, SPHERE + Vec3::new(400.0, 0.0, 400.0));
+    assert!(
+        shadow[2] < 100 && shadow[2] > 20,
+        "the sphere's shadow darkens the unlit far wall to its ambient: {shadow:?}"
+    );
+}
+
+/// How many pixels along the column through the middle of the sphere's
+/// shadow on the far wall, from the middle up past its top edge, lie between
+/// shadow and light.
+fn shadow_edge_width(frame: &cranpose_render_wgpu::CapturedFrame) -> usize {
+    let middle = camera()
+        .project(
+            SPHERE + Vec3::new(400.0, 0.0, 400.0),
+            Size {
+                width: FRAME_WIDTH as f32,
+                height: FRAME_HEIGHT as f32,
+            },
+        )
+        .expect("in front of the eye");
+    let (x, y) = (middle.x as usize, middle.y as usize);
+    (0..y)
+        .filter(|&row| {
+            let blue = frame.pixels[(row * frame.width as usize + x) * 4 + 2];
+            (70..230).contains(&blue)
+        })
+        .count()
+}
+
+fn capture(page: fn()) -> Option<cranpose_render_wgpu::CapturedFrame> {
+    let (_lock, mut shell) = support::app_shell_for(
+        page,
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        wgpu::TextureFormat::Rgba8Unorm,
+        |_| {},
+    )?;
+    Some(support::warm_shell_frame(&mut shell, FRAME_WIDTH, FRAME_HEIGHT).0)
+}
+
+#[test]
+fn a_light_of_some_size_softens_the_edge_of_a_shadow() {
+    let Some(hard) = capture(MeshScene) else {
+        return;
+    };
+    let Some(soft) = capture(SoftLightScene) else {
+        return;
+    };
+    let (hard, soft) = (shadow_edge_width(&hard), shadow_edge_width(&soft));
+    assert!(
+        hard <= 6,
+        "a light of no size casts a hard edge: {hard} pixels"
+    );
+    assert!(
+        soft >= 2 * hard.max(4),
+        "a light of some size widens the edge: {soft} pixels against {hard}"
+    );
+}
+
+#[test]
+fn an_emissive_surface_shows_its_colour_untouched_by_light() {
+    let Some(frame) = capture(EmissiveScene) else {
+        return;
+    };
+    let facing = pixel_at(&frame, SPHERE + Vec3::new(-0.6, 0.0, -0.8) * SPHERE_RADIUS);
+    let away = pixel_at(
+        &frame,
+        SPHERE + Vec3::new(-0.2, 0.75, -0.63) * SPHERE_RADIUS,
+    );
+    assert!(
+        facing[0] > 240 && away[0] > 240,
+        "the emissive sphere is red at full strength on both sides: {facing:?} and {away:?}"
+    );
+}
+
+#[test]
+fn a_glass_ball_shows_the_scene_behind_it_bent_and_glow_adds_to_it() {
+    let Some(frame) = capture(GlassScene) else {
+        return;
+    };
+    let left_of_ball = pixel_at(&frame, Vec3::new(-300.0, 0.0, 600.0));
+    assert!(
+        left_of_ball[0] > 200 && left_of_ball[2] < 40,
+        "the wall's left half is red beside the ball: {left_of_ball:?}"
+    );
+    // Through a solid ball the scene shows upside down: the ball's left side
+    // shows the wall's right half, and its right side the left half.
+    let ball_left = pixel_at(
+        &frame,
+        SPHERE + Vec3::new(-0.5, 0.0, -0.866) * SPHERE_RADIUS,
+    );
+    let ball_right = pixel_at(&frame, SPHERE + Vec3::new(0.5, 0.0, -0.866) * SPHERE_RADIUS);
+    assert!(
+        ball_left[2] > ball_left[0] + 60,
+        "the ball's left side shows the blue right half of the wall: {ball_left:?}"
+    );
+    assert!(
+        ball_right[0] > ball_right[2] + 60,
+        "the ball's right side shows the red left half of the wall: {ball_right:?}"
+    );
+    let glow = pixel_at(&frame, GLOW_PANEL);
+    assert!(
+        glow[0] > 200 && glow[1] > 100,
+        "the glow panel adds its green to the red wall it hides nothing of: {glow:?}"
+    );
+}
+
+thread_local! {
+    static SHAPE: RefCell<Option<MutableState<Arc<Mesh>>>> = const { RefCell::new(None) };
+}
+
+/// A sphere of `radius` from its signed distance field.
+fn sdf_ball(radius: f32) -> Arc<Mesh> {
+    let reach = radius * 1.25;
+    Arc::new(
+        Mesh::from_sdf(
+            move |point| point.length() - radius,
+            (
+                Vec3::new(-reach, -reach, -reach),
+                Vec3::new(reach, reach, reach),
+            ),
+            24,
+        )
+        .expect("the ball's surface lies in its box"),
+    )
+}
+
+/// A ball whose mesh the test replaces, in front of a blue wall.
+#[composable]
+fn ChangingScene() {
+    let plane = remember(|| Arc::new(Mesh::plane())).with(Arc::clone);
+    let shape = rememberMutableStateOf(|| sdf_ball(SPHERE_RADIUS));
+    SHAPE.with(|slot| *slot.borrow_mut() = Some(shape));
+    Scene(0.0, move || {
+        Surface(
+            shape.get(),
+            Mat4::translation(SPHERE),
+            (Material::Emissive, false, Color(1.0, 0.0, 0.0, 1.0)),
+        );
+        FarWall(Arc::clone(&plane));
+    });
+}
+
+#[test]
+fn a_mesh_replaced_by_a_smaller_one_draws_the_new_shape() {
+    let Some((_lock, mut shell)) = support::app_shell_for(
+        ChangingScene,
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        wgpu::TextureFormat::Rgba8Unorm,
+        |_| {},
+    ) else {
+        return;
+    };
+    let (frame, _) = support::warm_shell_frame(&mut shell, FRAME_WIDTH, FRAME_HEIGHT);
+    let near_rim = SPHERE + Vec3::new(-0.8, 0.0, -0.6) * SPHERE_RADIUS;
+    assert!(
+        pixel_at(&frame, near_rim)[0] > 200,
+        "the large ball covers its rim"
+    );
+
+    for radius in [SPHERE_RADIUS * 0.4, SPHERE_RADIUS * 0.5] {
+        let shape = SHAPE.with(|slot| slot.borrow().expect("the scene composed"));
+        shape.set(sdf_ball(radius));
+        let (_, frame) = support::update_and_capture(&mut shell, FRAME_WIDTH, FRAME_HEIGHT);
+        let rim = pixel_at(&frame, near_rim);
+        assert!(
+            rim[2] > 200 && rim[0] < 40,
+            "the wall shows where the large ball was, beyond the ball of radius {radius}: {rim:?}"
+        );
+        let middle = pixel_at(&frame, SPHERE + Vec3::new(0.0, 0.0, -radius));
+        assert!(middle[0] > 200, "the smaller ball shows: {middle:?}");
+    }
+}
+
+/// A ball of radius 0.4 about the middle of the unit cube, in its content's
+/// colour times the first value.
+const BALL_VOLUME_WGSL: &str = r"
+fn volume(eye: vec3<f32>, direction: vec3<f32>, entry: f32, exit: f32, footprint: f32) -> VolumeHit {
+    var hit: VolumeHit;
+    hit.color = vec4<f32>(0.0);
+    hit.at = eye;
+    let b = dot(eye, direction);
+    let h = b * b - dot(eye, eye) + 0.16;
+    if (h < 0.0) {
+        return hit;
+    }
+    let t = -b - sqrt(h);
+    if (t < entry || t > exit) {
+        return hit;
+    }
+    hit.at = eye + direction * t;
+    hit.color = vec4<f32>(volume_content(vec2<f32>(0.5)).rgb * volume_param(0u), 1.0);
+    return hit;
+}
+";
+
+/// The side of the cube the ball volume fills, about [`SPHERE`].
+const VOLUME_SIDE: f32 = 300.0;
+
+fn volume_of(source: &'static OnceLock<Arc<str>>, text: &str) -> Material {
+    let mut params = [0.0; Volume::PARAMS];
+    params[0] = 1.0;
+    Material::Volume(Volume {
+        shader: Arc::clone(source.get_or_init(|| Arc::from(text))),
+        params,
+    })
+}
+
+/// A ball drawn by a volume in a cube, with a green panel in front of the
+/// ball within the cube and one behind the ball's front within the cube, in
+/// front of a blue wall.
+#[composable]
+fn VolumeScene(volume: Material) {
+    let (plane, cube) = remember(|| (Arc::new(Mesh::plane()), Arc::new(Mesh::cuboid())))
+        .with(|(plane, cube)| (Arc::clone(plane), Arc::clone(cube)));
+    Scene(0.0, move || {
+        for (at, side) in [
+            (Vec3::new(80.0, 0.0, 80.0), 40.0),
+            (Vec3::new(-50.0, 0.0, 170.0), 30.0),
+        ] {
+            Surface(
+                Arc::clone(&plane),
+                panel((side, side), at),
+                (Material::Unlit, false, Color(0.0, 1.0, 0.0, 1.0)),
+            );
+        }
+        Surface(
+            Arc::clone(&cube),
+            Mat4::scaling(Vec3::new(VOLUME_SIDE, VOLUME_SIDE, VOLUME_SIDE))
+                .then(&Mat4::translation(SPHERE)),
+            (volume.clone(), true, Color(1.0, 0.0, 0.0, 1.0)),
+        );
+        FarWall(Arc::clone(&plane));
+    });
+}
+
+#[composable]
+fn BallVolumeScene() {
+    static SHADER: OnceLock<Arc<str>> = OnceLock::new();
+    VolumeScene(volume_of(&SHADER, BALL_VOLUME_WGSL));
+}
+
+#[composable]
+fn BrokenVolumeScene() {
+    static SHADER: OnceLock<Arc<str>> = OnceLock::new();
+    VolumeScene(volume_of(&SHADER, "fn volume() {}"));
+}
+
+#[test]
+fn a_volume_draws_what_its_shader_finds_at_the_depth_it_finds_it() {
+    let Some(frame) = capture(BallVolumeScene) else {
+        return;
+    };
+    let radius = 0.4 * VOLUME_SIDE;
+    let front = pixel_at(&frame, SPHERE - Vec3::new(0.0, 0.0, radius));
+    assert!(
+        front[0] > 200 && front[1] < 40 && front[2] < 40,
+        "the ball shows its content's red, times its first value: {front:?}"
+    );
+    let corner = pixel_at(&frame, SPHERE + Vec3::new(130.0, 130.0, -150.0));
+    assert!(
+        corner[2] > 200 && corner[0] < 40,
+        "the wall shows through the cube where the ball is not: {corner:?}"
+    );
+    let ahead = pixel_at(&frame, Vec3::new(80.0, 0.0, 80.0));
+    assert!(
+        ahead[1] > 200 && ahead[0] < 40,
+        "a panel in the cube in front of the ball hides it: {ahead:?}"
+    );
+    let behind = pixel_at(&frame, Vec3::new(-50.0, 0.0, 170.0));
+    assert!(
+        behind[0] > 200 && behind[1] < 40,
+        "the ball hides a panel behind its front: {behind:?}"
+    );
+    // The light travels along (1, 0, 1): the cube would shade this point of
+    // the wall, beside the ball's shadow.
+    let unshaded = pixel_at(&frame, Vec3::new(300.0, 130.0, 600.0));
+    assert!(
+        unshaded[2] > 200,
+        "a volume casts no shadow, though its surface asks for one: {unshaded:?}"
+    );
+}
+
+#[test]
+fn a_volume_whose_shader_does_not_build_is_left_out() {
+    let Some(frame) = capture(BrokenVolumeScene) else {
+        return;
+    };
+    let front = pixel_at(&frame, SPHERE - Vec3::new(0.0, 0.0, 0.4 * VOLUME_SIDE));
+    assert!(
+        front[2] > 200 && front[0] < 40,
+        "the wall shows where the ball would be: {front:?}"
+    );
+}

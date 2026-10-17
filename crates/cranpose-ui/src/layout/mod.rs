@@ -26,7 +26,10 @@ use cranpose_foundation::{
     InvalidationKind, ModifierNodeContext, NodeCapabilities, SemanticsConfiguration,
     SemanticsCustomAction, SemanticsWidgetRole,
 };
-use cranpose_ui_graphics::{ProjectiveTransform, layer_transform::layer_transform_to_window};
+use cranpose_ui_graphics::{
+    ProjectiveTransform,
+    layer_transform::{SceneFrame, node_transform_to_window},
+};
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, PlaceTarget, Placement};
 use web_time::Instant;
 
@@ -895,7 +898,10 @@ pub fn build_layout_tree_from_applier(
         applier,
         root,
         origin,
-        ProjectiveTransform::identity(),
+        WindowParent {
+            transform: ProjectiveTransform::identity(),
+            scene: None,
+        },
         &mut child_stack,
     )
     .map(|root| root.map(LayoutTree::new))
@@ -1099,13 +1105,14 @@ fn read_live_layout_node<R>(
     }
 }
 
+/// A node's layout data and where its children map to the window: through
+/// its transform, and through the scene it shows, if any.
 fn snapshot_node_data(
     applier: &mut MemoryApplier,
     node_id: NodeId,
-    top_left: Point,
-    size: Size,
-    parent_transform: ProjectiveTransform,
-) -> Result<(LayoutNodeData, ProjectiveTransform), NodeError> {
+    (top_left, size): (Point, Size),
+    parent: WindowParent<'_>,
+) -> Result<(LayoutNodeData, ProjectiveTransform, Option<SceneFrame>), NodeError> {
     let info = runtime_metadata_for(applier, node_id)?;
     let kind = layout_kind_from_metadata(node_id, &info);
     let RuntimeNodeMetadata {
@@ -1116,16 +1123,19 @@ fn snapshot_node_data(
         ..
     } = info;
 
-    let window_transform = modifier_slices
-        .graphics_layer()
-        .map_or(parent_transform, |layer| {
-            layer_transform_to_window(
-                parent_transform,
-                top_left,
-                modifier_slices.layer_bounds(size),
-                &layer,
-            )
-        });
+    let layer = modifier_slices.graphics_layer();
+    let window_transform = layer.as_ref().map_or(parent.transform, |layer| {
+        node_transform_to_window(
+            parent.transform,
+            parent.scene,
+            (top_left, size),
+            modifier_slices.layer_bounds(size),
+            layer,
+        )
+    });
+    let scene = layer
+        .as_ref()
+        .and_then(|layer| SceneFrame::of(layer, top_left, size));
     modifier_slices.publish_window_geometry(top_left, window_transform, size);
 
     let data = LayoutNodeData {
@@ -1139,7 +1149,14 @@ fn snapshot_node_data(
         semantics,
         kind,
     };
-    Ok((data, window_transform))
+    Ok((data, window_transform, scene))
+}
+
+/// What a node's parent maps its content to the window with.
+#[derive(Clone, Copy)]
+struct WindowParent<'a> {
+    transform: ProjectiveTransform,
+    scene: Option<&'a SceneFrame>,
 }
 
 /// Places `node_id`'s box and its subtree. `child_stack` is shared by the
@@ -1150,7 +1167,7 @@ fn place_layout_box(
     applier: &mut MemoryApplier,
     node_id: NodeId,
     parent_content_origin: Point,
-    parent_transform: ProjectiveTransform,
+    parent: WindowParent<'_>,
     child_stack: &mut Vec<NodeId>,
 ) -> Result<Option<LayoutBox>, NodeError> {
     let first_child = child_stack.len();
@@ -1177,8 +1194,8 @@ fn place_layout_box(
         width: state.size().width,
         height: state.size().height,
     };
-    let (data, window_transform) =
-        snapshot_node_data(applier, node_id, top_left, state.size(), parent_transform)?;
+    let (data, window_transform, scene) =
+        snapshot_node_data(applier, node_id, (top_left, state.size()), parent)?;
     let child_origin = Point {
         x: top_left.x + state.content_offset().x,
         y: top_left.y + state.content_offset().y,
@@ -1194,7 +1211,10 @@ fn place_layout_box(
             applier,
             child_id,
             child_origin,
-            window_transform,
+            WindowParent {
+                transform: window_transform,
+                scene: scene.as_ref(),
+            },
             child_stack,
         )? {
             children.push(child);
@@ -4397,7 +4417,7 @@ fn build_layout_tree(
         applier: &mut MemoryApplier,
         node: &MeasuredNode,
         origin: Point,
-        parent_transform: ProjectiveTransform,
+        parent: WindowParent<'_>,
     ) -> Result<LayoutBox, NodeError> {
         let top_left = Point {
             x: origin.x + node.offset.x,
@@ -4409,8 +4429,8 @@ fn build_layout_tree(
             width: node.size.width,
             height: node.size.height,
         };
-        let (data, window_transform) =
-            snapshot_node_data(applier, node.node_id, top_left, node.size, parent_transform)?;
+        let (data, window_transform, scene) =
+            snapshot_node_data(applier, node.node_id, (top_left, node.size), parent)?;
         let mut children = Vec::with_capacity(node.children.len());
         for child in &node.children {
             if crate::modifier::is_window_root(applier, child.node_id) {
@@ -4420,8 +4440,12 @@ fn build_layout_tree(
                 x: top_left.x + child.offset.x,
                 y: top_left.y + child.offset.y,
             };
+            let parent = WindowParent {
+                transform: window_transform,
+                scene: scene.as_ref(),
+            };
             children.push(visit_child(applier, child, |applier, child| {
-                place(applier, child, child_origin, window_transform)
+                place(applier, child, child_origin, parent)
             })?);
         }
         Ok(LayoutBox {
@@ -4434,7 +4458,10 @@ fn build_layout_tree(
         applier,
         node,
         Point { x: 0.0, y: 0.0 },
-        ProjectiveTransform::identity(),
+        WindowParent {
+            transform: ProjectiveTransform::identity(),
+            scene: None,
+        },
     )?))
 }
 

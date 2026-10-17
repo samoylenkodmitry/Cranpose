@@ -1589,6 +1589,131 @@ fn Gallery(open: bool) {
 The copy in flight is the coming content's element composed once more, so
 state it remembers starts afresh during the flight.
 
+### Draw composables on 3D meshes
+
+`Modifier::scene3d` makes a node a 3D scene, seen through a `Camera` that
+looks through the middle of the node's bounds. Each child with
+`Modifier::mesh_surface` has its content drawn on a `Mesh` in that scene:
+content point `(x, y)` shows where the mesh's texture coordinate is
+`(x / width, y / height)`. The content stays live: it recomposes, animates and
+takes pointer input where it shows on the mesh, and nearer surfaces hide
+farther ones. Both closures run when the scene is drawn, so a camera or a
+surface that follows a state read in them moves without recomposition.
+
+```rust
+use std::sync::Arc;
+
+use cranpose::space::{Camera, Light, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3};
+
+#[composable]
+fn Globe(spin: MutableState<f32>) {
+    let sphere = remember(|| Arc::new(Mesh::sphere(48, 24))).with(Arc::clone);
+    Box(
+        Modifier::empty().fill_max_size().scene3d(|| Scene3d {
+            camera: Camera::look_at(
+                Vec3::new(0.0, 0.0, -900.0),
+                Vec3::ZERO,
+                Vec3::new(0.0, 1.0, 0.0),
+                700.0,
+            ),
+            light: Some(Light {
+                direction: Vec3::new(-0.4, 1.0, 0.5),
+                ambient: 0.3,
+                shadows: true,
+                size: 0.05,
+            }),
+        }),
+        BoxSpec::default(),
+        move || {
+            let sphere = Arc::clone(&sphere);
+            Box(
+                Modifier::empty()
+                    .size(Size::new(1024.0, 512.0))
+                    .mesh_surface(move || MeshSurface {
+                        mesh: Arc::clone(&sphere),
+                        transform: Mat4::scaling(Vec3::new(200.0, 200.0, 200.0))
+                            .then(&Mat4::rotation_y(spin.get())),
+                        material: Material::Lit,
+                        casts_shadow: true,
+                    }),
+                BoxSpec::default(),
+                || {
+                    Text("Hello, sphere", Modifier::empty(), TextStyle::default());
+                },
+            );
+        },
+    );
+}
+```
+
+A light with `shadows` set casts the shadows of the surfaces with
+`casts_shadow` on every surface of the scene. A light of some `size`, the
+angle it spans, casts soft shadows: sharp where an object meets a surface,
+wider farther from it. So a 3D object in front of flat UI drops its shadow
+on the UI.
+
+A surface's `material` sets how its content meets the light:
+
+- `Material::Lit` is shaded by the angle the light falls at.
+- `Material::Unlit` shows its content as it is, as a screen does, and drops
+  to the light's `ambient` brightness where a shadow falls on it.
+- `Material::Emissive` shows its content at full colour, untouched by light
+  or shadow: fire, a lamp.
+- `Material::Glow` adds its content's colour to what lies behind it and hides
+  nothing: a halo, a flame, a spark.
+- `Material::Glass(Glass::clear(thickness))` shows the scene behind it bent by
+  its curve, with the light's highlight on it and the content over it. Glass
+  shows the surfaces that are not glass behind it; it costs one copy of the
+  pixels around it per frame, and a scene without glass takes none.
+- `Material::Volume(Volume { shader, params })` draws what the app's WGSL
+  `volume` function finds inside the mesh, ray by ray from the camera, at the
+  depth where it finds it: a ray-marched control standing out of a wall, or
+  smoke in a box. The mesh only bounds it, and a volume casts no shadow. Each
+  shader compiles once, in the background, the first time a frame draws it.
+
+```wgsl
+// A ball of radius 0.4 in the unit cube, in the content's colour.
+fn volume(eye: vec3<f32>, direction: vec3<f32>, entry: f32, exit: f32, footprint: f32) -> VolumeHit {
+    var hit: VolumeHit;
+    hit.color = vec4<f32>(0.0);
+    hit.at = eye;
+    let b = dot(eye, direction);
+    let h = b * b - dot(eye, eye) + 0.16;
+    let t = -b - sqrt(max(h, 0.0));
+    if (h >= 0.0 && t >= entry && t <= exit) {
+        hit.at = eye + direction * t;
+        hit.color = vec4<f32>(volume_content(vec2<f32>(0.5)).rgb, 1.0);
+    }
+    return hit;
+}
+```
+
+The renderer puts the framework's prelude before the shader. It works in the
+mesh's own coordinates: `entry` and `exit` are where the ray enters the mesh's
+bounds and leaves the mesh, `footprint` is a pixel's width in radians,
+`volume_param(i)` reads `params[i]`, and `volume_content(uv)` the surface's
+content. A shader that does not build logs a warning, and its volumes are left
+out.
+
+Scene space uses logical pixels with x to the right, y down and z away from
+the viewer. `Mesh::plane`, `Mesh::cuboid` and `Mesh::sphere` build common
+shapes, `Mesh::from_obj` reads a Wavefront OBJ file, and `Mesh::new` takes
+positions, texture coordinates and triangles. `Mesh::from_sdf` builds the
+surface of a signed distance field sampled on a grid, with the texture wrapped
+around it as around a sphere; build it again with each new field for a shape
+that changes, and the renderer writes the new shape into the GPU buffers of the
+one it replaced. OBJ files point y up; flip
+them with a transform that scales y by -1. A camera that stands one focal
+length in front of a plane the size of the scene shows that plane exactly as
+a flat screen: put the 2D UI on such a plane, and 3D objects in front of it.
+The desktop demo's Room tab shows a globe in front of such a screen, then
+walks into a room of walls, the globe and an imported torus.
+
+The WGPU renderer draws scenes. The pixels renderer draws a flat mesh's
+surface in its place but has no depth buffer and no shadows, and draws a
+curved mesh's surface on the plane that touches the mesh at the content's
+middle.
+
 ## Accessibility
 
 ### Name controls and expose state

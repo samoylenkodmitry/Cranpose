@@ -118,6 +118,9 @@ pub use cranpose_foundation::{
     },
     text::{TextFieldBuffer, TextFieldLineLimits, TextFieldState, TextFieldValue, TextRange},
 };
+/// Composables in 3D: meshes, cameras and scenes for
+/// [`Modifier::scene3d`] and [`Modifier::mesh_surface`].
+pub use cranpose_ui_graphics::space;
 pub use cranpose_ui_graphics::{
     BlurredEdgeTreatment, ColorFilter, CursorIcon, CustomPointerIcon, DashPathEffect, Dp,
     DrawScope, DrawSpecialization, DrawStyle, DrawTransform, ExternalTexture, ImageBitmap,

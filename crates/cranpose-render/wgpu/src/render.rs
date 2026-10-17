@@ -3420,6 +3420,9 @@ pub struct GpuRenderer {
     /// interiors down first, dropped once no frame has used them for
     /// [`crate::idle_pool::IDLE_FRAMES`].
     depth_targets: crate::idle_pool::IdlePool<((u32, u32), wgpu::TextureView)>,
+    /// The pipeline and mesh buffers of the 3D scenes; nothing in it is made
+    /// until a scene draws.
+    pub(crate) scene_pass: crate::scene_pass::ScenePass,
     pub(crate) depth_gate: crate::depth_gate::DepthGate,
     /// The size of the atlas the layer surfaces drawn again go into.
     pub(crate) surface_atlas_sizes: crate::frame::SurfaceAtlasSizes,
@@ -3810,6 +3813,7 @@ impl GpuRenderer {
             glyph_atlas_shader,
             rrect_shadow_shader,
             depth_targets: crate::idle_pool::IdlePool::default(),
+            scene_pass: crate::scene_pass::ScenePass::default(),
             depth_gate,
             surface_atlas_sizes: crate::frame::SurfaceAtlasSizes::for_backend(adapter_backend),
             uniform_bind_group_layout,
@@ -4086,6 +4090,98 @@ impl GpuRenderer {
                 Box::new(self.rrect_shadow_pipeline_job(depth))
             });
         }
+        for kind in crate::scene_pass::ScenePipeline::ALL {
+            visit(self.scene_pipeline_resource(kind), &|| {
+                Box::new(self.scene_surface_pipeline_job(kind))
+            });
+        }
+    }
+
+    fn scene_pipeline_resource(&self, kind: crate::scene_pass::ScenePipeline) -> &FixedPipeline {
+        match kind {
+            crate::scene_pass::ScenePipeline::Plain => &self.scene_pass.pipeline,
+            crate::scene_pass::ScenePipeline::Shadowed => &self.scene_pass.shadowed_pipeline,
+            crate::scene_pass::ScenePipeline::Shadow => &self.scene_pass.shadow_pipeline,
+            crate::scene_pass::ScenePipeline::Glass => &self.scene_pass.glass_pipeline,
+            crate::scene_pass::ScenePipeline::Glow => &self.scene_pass.glow_pipeline,
+            crate::scene_pass::ScenePipeline::Depth => &self.scene_pass.depth_pipeline,
+        }
+    }
+
+    /// A scene pipeline for a scene's pass, or `None` while it compiles:
+    /// the draws it takes are left out, and the frame after it lands draws
+    /// them.
+    pub(crate) fn scene_surface_pipeline(
+        &self,
+        kind: crate::scene_pass::ScenePipeline,
+    ) -> Option<&wgpu::RenderPipeline> {
+        self.ready_or_left_out(self.scene_pipeline_resource(kind), || {
+            self.scene_surface_pipeline_job(kind)
+        })
+    }
+
+    /// The pipeline of a volume shader a frame noted, or with `depth_only`
+    /// the one that draws only its volumes' depth; `None` while it compiles,
+    /// when the frame after it lands draws the volumes, or when the shader
+    /// does not build.
+    pub(crate) fn scene_volume_pipeline(
+        &self,
+        shader: &Arc<str>,
+        depth_only: bool,
+    ) -> Option<&wgpu::RenderPipeline> {
+        let kept = self.scene_pass.volume(shader)?;
+        let ready = kept.pipeline(depth_only).when_ready(
+            (
+                &self.recorder,
+                &self.pipeline_compiler,
+                self.adapter_backend,
+            ),
+            || {
+                crate::scene_pass::volume_pipeline_job(
+                    &self.device,
+                    self.pipeline_cache.clone(),
+                    (self.composition_format, self.adapter_backend, depth_only),
+                    (self.scene_pipeline_parts(), kept),
+                )
+            },
+        );
+        match ready {
+            Some(built) => built.as_ref(),
+            None => {
+                self.note_placeholder();
+                None
+            }
+        }
+    }
+
+    /// The bind group layout of a scene surface's uniforms.
+    pub(crate) fn scene_uniform_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.scene_pipeline_parts().uniform_layout
+    }
+
+    /// What a scene binds in its shadow map's place when it casts none.
+    pub(crate) fn scene_no_shadow(&self) -> &wgpu::BindGroup {
+        &self.scene_pipeline_parts().no_shadow
+    }
+
+    fn scene_pipeline_parts(&self) -> &crate::scene_pass::ScenePipelineParts {
+        self.scene_pass.parts(
+            &self.device,
+            self.adapter_backend,
+            &self.effect_renderer.effect_texture_bind_group_layout,
+        )
+    }
+
+    fn scene_surface_pipeline_job(
+        &self,
+        kind: crate::scene_pass::ScenePipeline,
+    ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
+        crate::scene_pass::scene_pipeline_job(
+            &self.device,
+            self.pipeline_cache.clone(),
+            (self.composition_format, kind),
+            self.scene_pipeline_parts(),
+        )
     }
 
     fn image_pipeline_resource(
@@ -4782,6 +4878,7 @@ impl GpuRenderer {
         self.effect_renderer.end_offscreen_frame();
         self.frame_graph_executor.end_transient_frame();
         self.depth_targets.end_frame();
+        self.scene_pass.end_frame();
         self.surface_atlas_sizes.end_frame();
     }
 

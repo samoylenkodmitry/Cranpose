@@ -1,5 +1,6 @@
 use crate::{
-    GraphicsLayer, Point, Rect,
+    GraphicsLayer, Point, Rect, Size,
+    space::{Camera, LayerSpace, MeshSurface, Scene3d},
     transform::{ProjectiveTransform, quad_bounds},
 };
 
@@ -203,4 +204,99 @@ pub fn layer_transform_to_window(
         ..bounds
     };
     layer_transform_to_parent(bounds, Point::default(), layer).then(parent)
+}
+
+/// The scene a layer's graphics layer shows, or `None` for a layer that
+/// shows none.
+pub fn layer_scene(layer: &GraphicsLayer) -> Option<&Scene3d> {
+    match layer.space.as_deref()? {
+        LayerSpace::Scene(scene) => Some(scene),
+        LayerSpace::Surface(_) => None,
+    }
+}
+
+/// The mesh a layer's graphics layer draws its content on, or `None` for a
+/// layer drawn flat.
+pub fn layer_surface(layer: &GraphicsLayer) -> Option<&MeshSurface> {
+    match layer.space.as_deref()? {
+        LayerSpace::Surface(surface) => Some(surface),
+        LayerSpace::Scene(_) => None,
+    }
+}
+
+/// A scene as a walk down the layout tree meets it: what the mesh surfaces
+/// among its children are drawn through.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SceneFrame {
+    /// The scene's camera.
+    pub camera: Camera,
+    /// The scene node's top left corner, in untransformed layout
+    /// coordinates.
+    pub origin: Point,
+    /// The scene node's size. The camera looks through its middle.
+    pub size: Size,
+}
+
+impl SceneFrame {
+    /// The frame of the scene that `layer` shows from a node at `origin` of
+    /// `size`; `None` when the layer shows no scene.
+    pub fn of(layer: &GraphicsLayer, origin: Point, size: Size) -> Option<Self> {
+        layer_scene(layer).map(|scene| Self {
+            camera: scene.camera,
+            origin,
+            size,
+        })
+    }
+
+    /// The map from a mesh surface's content to the scene node's own
+    /// coordinates, for a surface node of `size`.
+    pub fn surface_to_local(
+        &self,
+        surface: &MeshSurface,
+        size: Size,
+    ) -> Option<ProjectiveTransform> {
+        surface.content_transform(&self.camera, self.size, size)
+    }
+
+    /// Maps untransformed layout coordinates of a mesh surface's content to
+    /// the window, for a surface node at `origin` of `size`: what
+    /// [`layer_transform_to_window`] gives a flat node. `scene` maps the
+    /// scene's children to the window, as [`layer_transform_to_window`] gave
+    /// it for the scene node. `None` when the surface has no plane to carry
+    /// its content into the scene.
+    pub fn surface_to_window(
+        &self,
+        scene: ProjectiveTransform,
+        (origin, size): (Point, Size),
+        surface: &MeshSurface,
+    ) -> Option<ProjectiveTransform> {
+        Some(
+            ProjectiveTransform::translation(-origin.x, -origin.y)
+                .then(self.surface_to_local(surface, size)?)
+                .then(ProjectiveTransform::translation(
+                    self.origin.x,
+                    self.origin.y,
+                ))
+                .then(scene),
+        )
+    }
+}
+
+/// [`layer_transform_to_window`] for a node whose parent may show a scene:
+/// the content of a mesh surface in `scene` maps through the scene's camera.
+/// `size` is the node's own size, and `parent` maps the parent's children
+/// to the window.
+pub fn node_transform_to_window(
+    parent: ProjectiveTransform,
+    scene: Option<&SceneFrame>,
+    (origin, size): (Point, Size),
+    bounds: Rect,
+    layer: &GraphicsLayer,
+) -> ProjectiveTransform {
+    if let (Some(scene), Some(surface)) = (scene, layer_surface(layer))
+        && let Some(transform) = scene.surface_to_window(parent, (origin, size), surface)
+    {
+        return transform;
+    }
+    layer_transform_to_window(parent, origin, bounds, layer)
 }

@@ -194,6 +194,7 @@ runners! {
     robot_renderer_micro_contract,
     robot_renderer_pixel_precision,
     robot_request_exit,
+    robot_room_walk,
     robot_rotated_glass_shape,
     robot_scroll_bug,
     robot_scroll_decoration_invariance,

@@ -113,6 +113,7 @@ its own font data. `renderer-pixels` selects software output for custom hosts.
 | Retain screen state | [State guide](https://docs.rs/cranpose/latest/cranpose/_docs/state/index.html) |
 | Build a long list or custom layout | [Layout guide](https://docs.rs/cranpose/latest/cranpose/_docs/layout/index.html) |
 | Add glass controls and themes | [Liquid UI](https://docs.rs/cranpose-liquid/latest/cranpose_liquid/) |
+| Draw composables on 3D meshes in a scene | [3D scenes](https://docs.rs/cranpose-ui-graphics/latest/cranpose_ui_graphics/space/) |
 | Animate a value | [Animation](https://docs.rs/cranpose-animation/latest/cranpose_animation/) |
 | Collect flows and retain view models | [Coroflow integration](https://docs.rs/cranpose-coroflow/latest/cranpose_coroflow/) |
 | Navigate between screens | [Navigation](https://docs.rs/cranpose-navigation/latest/cranpose_navigation/) |

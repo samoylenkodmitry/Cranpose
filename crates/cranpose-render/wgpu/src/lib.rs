@@ -59,6 +59,7 @@ mod rrect_shadow;
 mod run_geometry;
 mod run_store;
 mod scene;
+mod scene_pass;
 mod shader_cache;
 #[cfg(not(target_arch = "wasm32"))]
 mod shader_flatten;

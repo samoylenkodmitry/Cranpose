@@ -936,23 +936,59 @@ fn validate_runtime_shader_source(
     source: &str,
     backend: wgpu::Backend,
 ) -> Result<(naga::Module, bool), String> {
+    let (module, module_info, fragment) =
+        validate_shader_source(source, backend, ("fullscreen_vs", "effect_fs"))?;
+    let position_independent = fragment_position_independent(&module, &module_info, fragment);
+    Ok((module, position_independent))
+}
+
+/// The module of a volume's shader: `source` after the framework's
+/// prelude. `None`, with a warning, when it does not validate for
+/// `backend`.
+pub(crate) fn create_volume_shader_module(
+    device: &wgpu::Device,
+    source: &str,
+    backend: wgpu::Backend,
+) -> Option<wgpu::ShaderModule> {
+    let text = format!(
+        "{}{source}",
+        cranpose_ui_graphics::framework_shaders::MESH_VOLUME_PRELUDE_WGSL
+    );
+    match validate_shader_source(&text, backend, ("mesh_volume_vs", "mesh_volume_fs")) {
+        Ok((parsed, _, _)) => Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Scene Volume"),
+            source: validated_source(&text, parsed),
+        })),
+        Err(err) => {
+            log::warn!("Leaving out the volumes of a shader that does not build: {err}");
+            None
+        }
+    }
+}
+
+/// The parsed `source`, what validation learned of it and the index of its
+/// fragment entry point, once it holds the `vertex` and `fragment` entry
+/// points and validates for `backend`.
+fn validate_shader_source(
+    source: &str,
+    backend: wgpu::Backend,
+    (vertex, fragment): (&str, &str),
+) -> Result<(naga::Module, naga::valid::ModuleInfo, usize), String> {
     let module =
         naga::front::wgsl::parse_str(source).map_err(|err| format!("WGSL parse error: {err}"))?;
-
-    let has_fullscreen_vs = module
-        .entry_points
-        .iter()
-        .any(|ep| ep.stage == ShaderStage::Vertex && ep.name == "fullscreen_vs");
-    if !has_fullscreen_vs {
-        return Err("missing required vertex entry point `fullscreen_vs`".to_string());
+    let entry = |stage: ShaderStage, name: &str| {
+        module
+            .entry_points
+            .iter()
+            .position(|ep| ep.stage == stage && ep.name == name)
+    };
+    if entry(ShaderStage::Vertex, vertex).is_none() {
+        return Err(format!("missing required vertex entry point `{vertex}`"));
     }
-
-    let fragment = module
-        .entry_points
-        .iter()
-        .position(|ep| ep.stage == ShaderStage::Fragment && ep.name == "effect_fs");
-    let Some(fragment) = fragment else {
-        return Err("missing required fragment entry point `effect_fs`".to_string());
+    let Some(fragment_index) = entry(ShaderStage::Fragment, fragment) else {
+        return Err(format!(
+            "missing required fragment entry point `{fragment}`"
+        ));
     };
 
     let mut validator = naga::valid::Validator::new(
@@ -963,10 +999,11 @@ fn validate_runtime_shader_source(
         .validate(&module)
         .map_err(|err| format!("WGSL validation error: {err}"))?;
 
-    validate_runtime_shader_backend_support(&module, &module_info, backend)?;
-
-    let position_independent = fragment_position_independent(&module, &module_info, fragment);
-    Ok((module, position_independent))
+    if backend == wgpu::Backend::Gl {
+        validate_glsl_portability(&module, &module_info, vertex, ShaderStage::Vertex)?;
+        validate_glsl_portability(&module, &module_info, fragment, ShaderStage::Fragment)?;
+    }
+    Ok((module, module_info, fragment_index))
 }
 
 fn is_position(binding: &Option<naga::Binding>) -> bool {
@@ -1008,19 +1045,6 @@ fn fragment_position_independent(
             .count();
         safe_uses == info[handle].ref_count
     })
-}
-
-fn validate_runtime_shader_backend_support(
-    module: &naga::Module,
-    module_info: &naga::valid::ModuleInfo,
-    backend: wgpu::Backend,
-) -> Result<(), String> {
-    if backend != wgpu::Backend::Gl {
-        return Ok(());
-    }
-
-    validate_glsl_portability(module, module_info, "fullscreen_vs", ShaderStage::Vertex)?;
-    validate_glsl_portability(module, module_info, "effect_fs", ShaderStage::Fragment)
 }
 
 #[cfg(any(test, feature = "backend-gles", target_arch = "wasm32"))]

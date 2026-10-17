@@ -222,6 +222,7 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
                     light: ShadowLight::for_window(100.0, 100.0, 1.0, 1.0),
                     wants_pixel_sensitive: false,
                     update: 0,
+                    scene: None,
                 },
                 &mut CompositorScene::new(),
                 &mut LayerSceneRecycler::default(),
@@ -396,6 +397,7 @@ fn a_rounded_layer_its_parent_clip_holds_draws_in_place_whatever_the_float_sums(
         light: ShadowLight::for_window(100.0, 100.0, 1.0, 1.0),
         wants_pixel_sensitive: false,
         update: 0,
+        scene: None,
     };
     assert!(matches!(
         placement_in(&bar, &panel),
