@@ -1521,6 +1521,9 @@ struct LayoutBuilderState {
     /// The context the pass lays out in, which takes the nodes whose
     /// geometry it changed.
     context: Rc<AppContext>,
+    /// The threshold of the measure telemetry, read once a pass: `None`
+    /// while the telemetry is off.
+    measure_telemetry_ms: Option<f64>,
 }
 
 struct LayoutRuntimeFrameBindingCleanup<'a> {
@@ -1623,6 +1626,7 @@ impl LayoutBuilderState {
             cache_floor: context.layout_cache_floor(),
             frame_arena: RefCell::new(context.take_layout_frame_arena()),
             context,
+            measure_telemetry_ms: layout_measure_telemetry_threshold_ms(),
         }
     }
 
@@ -1781,17 +1785,27 @@ impl LayoutBuilderState {
         node_id: NodeId,
         constraints: Constraints,
     ) -> Result<Rc<MeasuredNode>, NodeError> {
-        let telemetry = layout_measure_telemetry_threshold_ms().map(|ms| (ms, Instant::now()));
-        let (kind, measured) =
-            if let Some(measured) = self.measure_layout_node(node_id, constraints)? {
-                ("layout", measured)
-            } else {
-                self.measure_subcompose_node(node_id, constraints)?
-            };
-        if let Some(telemetry) = telemetry {
-            log_node_measure_telemetry(kind, node_id, constraints, &measured, telemetry);
-        }
+        let Some(threshold_ms) = self.measure_telemetry_ms else {
+            return self
+                .measure_node_untimed(node_id, constraints)
+                .map(|(_, measured)| measured);
+        };
+        let start = Instant::now();
+        let (kind, measured) = self.measure_node_untimed(node_id, constraints)?;
+        log_node_measure_telemetry(kind, node_id, constraints, &measured, (threshold_ms, start));
         Ok(measured)
+    }
+
+    /// The measurement of `node_id` and the kind of node it is.
+    fn measure_node_untimed(
+        self: &Rc<Self>,
+        node_id: NodeId,
+        constraints: Constraints,
+    ) -> Result<(&'static str, Rc<MeasuredNode>), NodeError> {
+        if let Some(measured) = self.measure_layout_node(node_id, constraints)? {
+            return Ok(("layout", measured));
+        }
+        self.measure_subcompose_node(node_id, constraints)
     }
 
     /// The measurement `node_id` cached for `constraints` in layout cache
