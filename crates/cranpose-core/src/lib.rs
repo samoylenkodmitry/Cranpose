@@ -83,9 +83,7 @@ pub use composition_locals::{
     compositionLocalOfWithPolicy, compositionLocalWithComputedDefaultOf, staticCompositionLocalOf,
     staticCompositionLocalOfWithPolicy, staticCompositionLocalWithComputedDefaultOf,
 };
-pub(crate) use composition_locals::{
-    ComputedLocalEntry, LocalStateEntry, StaticComputedLocalEntry, StaticLocalEntry,
-};
+pub(crate) use composition_locals::{ComputedLocalEntry, LocalStateEntry};
 #[doc(hidden)]
 pub use computed_state::{ComputedState, computedStateOf};
 pub use concurrency::{
