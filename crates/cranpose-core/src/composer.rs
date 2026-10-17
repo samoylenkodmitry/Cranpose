@@ -950,7 +950,17 @@ pub struct Composer {
 #[doc(hidden)]
 pub struct BranchGroupGuard<'a> {
     folds: &'a crate::slot::BranchFolds,
-    token: usize,
+    token: crate::slot::FoldToken,
+}
+
+impl BranchGroupGuard<'_> {
+    /// Closes this branch and opens one for `key` in its place, for the
+    /// statement after the one this guard folded.
+    #[doc(hidden)]
+    #[inline]
+    pub fn advance(&mut self, key: Key) {
+        self.folds.advance(&mut self.token, key);
+    }
 }
 
 impl Drop for BranchGroupGuard<'_> {
@@ -965,7 +975,7 @@ impl Drop for BranchGroupGuard<'_> {
 #[doc(hidden)]
 pub struct ScopedBranchGroupGuard {
     folds: Rc<crate::slot::BranchFolds>,
-    token: usize,
+    token: crate::slot::FoldToken,
 }
 
 impl ScopedBranchGroupGuard {
@@ -975,6 +985,12 @@ impl ScopedBranchGroupGuard {
             token: folds.push(key),
             folds: Rc::clone(folds),
         }
+    }
+
+    /// [`BranchGroupGuard::advance`] for a content closure's guard.
+    #[inline]
+    pub(crate) fn advance(&mut self, key: Key) {
+        self.folds.advance(&mut self.token, key);
     }
 }
 

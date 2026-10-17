@@ -610,6 +610,17 @@ pub fn __branch_group_scope_deferred(key: Key) -> Option<ScopedBranchGroupGuard>
     })
 }
 
+/// Moves a content closure's statement guard to the next statement, keyed
+/// `key`: the guard the next statement would open, without looking up the
+/// composer again. A guard opened outside composition stays empty.
+#[doc(hidden)]
+#[inline]
+pub fn __branch_group_scope_advance(guard: &mut Option<ScopedBranchGroupGuard>, key: Key) {
+    if let Some(guard) = guard {
+        guard.advance(key);
+    }
+}
+
 /// The key of the `branch`th branch guard the `#[composable]` macro wrote at
 /// a source position, as a constant.
 #[doc(hidden)]
