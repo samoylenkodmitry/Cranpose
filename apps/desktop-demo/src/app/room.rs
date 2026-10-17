@@ -89,33 +89,31 @@ pub fn RoomTab() {
 fn Scene(room: RoomState, shape: RoomShape, meshes: RoomMeshes) {
     let spatial = room.is_spatial();
     let camera = room.clone();
-    let modifier = Modifier::empty().fill_max_size();
-    let modifier = if spatial {
-        modifier.scene3d(move || camera.scene(&shape))
-    } else {
-        modifier
-    };
-    Box(modifier, BoxSpec::default(), move || {
-        let walls = if spatial {
-            &Wall::ALL[..]
-        } else {
-            &Wall::ALL[..1]
-        };
-        for &wall in walls {
-            let room = room.clone();
-            let plane = Arc::clone(&meshes.plane);
-            key(wall, move || {
-                WallSurface(room, shape, wall, (plane, spatial));
-            });
-        }
-        if spatial {
+    Box(
+        Modifier::empty()
+            .fill_max_size()
+            .scene3d(move || camera.scene(&shape)),
+        BoxSpec::default(),
+        move || {
+            let walls = if spatial {
+                &Wall::ALL[..]
+            } else {
+                &Wall::ALL[..1]
+            };
+            for &wall in walls {
+                let room = room.clone();
+                let plane = Arc::clone(&meshes.plane);
+                key(wall, move || {
+                    WallSurface(room, shape, wall, plane);
+                });
+            }
             let globe = Arc::clone(&meshes.globe);
             key("globe", move || Globe(shape, globe));
-            if let Some(torus) = meshes.torus.clone() {
+            if let Some(torus) = meshes.torus.clone().filter(|_| spatial) {
                 key("torus", move || Torus(shape, torus));
             }
-        }
-    });
+        },
+    );
 }
 
 #[composable(no_skip)]
@@ -165,35 +163,42 @@ fn RoomMotion(room: RoomState, shape: RoomShape) {
 }
 
 #[composable(no_skip)]
-fn WallSurface(room: RoomState, shape: RoomShape, wall: Wall, (plane, spatial): (Arc<Mesh>, bool)) {
-    let modifier = Modifier::empty().required_size(shape.wall_size(wall));
-    let modifier = if spatial {
-        modifier.mesh_surface(move || MeshSurface {
-            mesh: Arc::clone(&plane),
-            transform: shape.wall_transform(wall),
-            lit: false,
-        })
-    } else {
-        modifier
-    };
-    Box(modifier, BoxSpec::default(), move || match wall {
-        Wall::North => Controls(room.clone()),
-        Wall::East => Panel(Color(0.10, 0.11, 0.15, 1.0), mineswapper2_tab),
-        Wall::West => Panel(Color(0.12, 0.10, 0.12, 1.0), TextShowcaseTab),
-        Wall::South => BackWall(),
-        Wall::Floor => Floor(),
-        Wall::Ceiling => Ceiling(),
-    });
+fn WallSurface(room: RoomState, shape: RoomShape, wall: Wall, plane: Arc<Mesh>) {
+    Box(
+        Modifier::empty()
+            .required_size(shape.wall_size(wall))
+            .mesh_surface(move || MeshSurface {
+                mesh: Arc::clone(&plane),
+                transform: shape.wall_transform(wall),
+                lit: false,
+                casts_shadow: false,
+            }),
+        BoxSpec::default(),
+        move || match wall {
+            Wall::North => Controls(room.clone()),
+            Wall::East => Panel(Color(0.10, 0.11, 0.15, 1.0), mineswapper2_tab),
+            Wall::West => Panel(Color(0.12, 0.10, 0.12, 1.0), TextShowcaseTab),
+            Wall::South => BackWall(),
+            Wall::Floor => Floor(),
+            Wall::Ceiling => Ceiling(),
+        },
+    );
 }
 
-/// A spinning globe whose surface is a live composable.
+/// A spinning globe whose surface is a live composable. It stands in front
+/// of the far wall, so the flat screen shows it over the controls, with its
+/// shadow on them.
 #[composable(no_skip)]
 fn Globe(shape: RoomShape, mesh: Arc<Mesh>) {
     let spin = rememberMutableStateOf(|| 0.0f32);
     let spinning = rememberMutableStateOf(|| true);
     Spin(spin, spinning);
-    let radius = shape.width.min(shape.height) * 0.16;
-    let center = Vec3::new(shape.width * 0.3, shape.height * 0.62, shape.depth * 0.62);
+    let radius = shape.width.min(shape.height) * 0.14;
+    let center = Vec3::new(
+        shape.width * 0.68,
+        shape.height * 0.58,
+        shape.depth - radius * 1.4,
+    );
     Box(
         Modifier::empty()
             .required_size(GLOBE_CONTENT)
@@ -203,6 +208,7 @@ fn Globe(shape: RoomShape, mesh: Arc<Mesh>) {
                     .then(&Mat4::rotation_y(spin.get()))
                     .then(&Mat4::translation(center)),
                 lit: true,
+                casts_shadow: true,
             }),
         BoxSpec::default(),
         move || GlobeFace(spinning),
@@ -296,7 +302,7 @@ fn GlobeFace(spinning: MutableState<bool>) {
 #[composable(no_skip)]
 fn Torus(shape: RoomShape, mesh: Arc<Mesh>) {
     let scale = shape.width.min(shape.height) * 0.14;
-    let center = Vec3::new(shape.width * 0.72, shape.height * 0.55, shape.depth * 0.7);
+    let center = Vec3::new(shape.width * 0.3, shape.height * 0.6, shape.depth * 0.62);
     // OBJ files point y up; the scene points it down.
     let transform = Mat4::scaling(Vec3::new(scale, -scale, scale))
         .then(&Mat4::rotation_x(1.1))
@@ -308,6 +314,7 @@ fn Torus(shape: RoomShape, mesh: Arc<Mesh>) {
                 mesh: Arc::clone(&mesh),
                 transform,
                 lit: true,
+                casts_shadow: true,
             })
             .draw_behind(|scope| {
                 let size = scope.size();
@@ -353,9 +360,10 @@ fn Controls(room: RoomState) {
                 text_style(30.0, Color(0.95, 0.95, 1.0, 1.0)),
             );
             Text(
-                "This is an ordinary screen. Step into the room and it becomes the far wall; \
-                 the other demo tabs hang on the walls around you, a globe and a model from \
-                 an OBJ file stand in the room, and all of them stay live.",
+                "This screen is the far wall of a room, seen from one focal length away, so it \
+                 shows as a flat screen. The globe stands in front of it and casts its shadow \
+                 on it. Step into the room: the other demo tabs hang on the walls around you, \
+                 a model from an OBJ file stands in the middle, and all of them stay live.",
                 Modifier::empty().padding(6.0),
                 text_style(16.0, Color(0.75, 0.77, 0.86, 1.0)),
             );

@@ -107,8 +107,13 @@ pub struct Ray {
 pub struct Light {
     /// The direction the light travels, in scene space.
     pub direction: Vec3,
-    /// How bright a surface the light does not reach is, from 0 to 1.
+    /// How bright a surface the light does not reach is, from 0 to 1: the
+    /// side of a lit surface turned away from the light, and any surface in
+    /// shadow.
     pub ambient: f32,
+    /// Whether the surfaces that cast shadows cast them on the scene's
+    /// surfaces.
+    pub shadows: bool,
 }
 
 impl Light {
@@ -121,6 +126,70 @@ impl Light {
             _ => 0.0,
         };
         self.ambient + (1.0 - self.ambient) * facing
+    }
+
+    /// The map from scene space to a shadow map of this light that holds
+    /// `casters`: x and y from -1 to 1 across the map, and depth from 0 at
+    /// the caster nearest the light to 1 at the farthest. A point farther
+    /// along the light than a caster's depth there lies in its shadow.
+    /// `None` without casters, or for a light with no direction.
+    pub fn shadow_projection<'a>(
+        &self,
+        casters: impl IntoIterator<Item = &'a MeshSurface>,
+    ) -> Option<Mat4> {
+        const MARGIN: f32 = 0.02;
+        let forward = self.direction.normalized()?;
+        let hint = if forward.y.abs() < 0.9 {
+            Vec3::new(0.0, 1.0, 0.0)
+        } else {
+            Vec3::new(1.0, 0.0, 0.0)
+        };
+        let right = hint.cross(forward).normalized()?;
+        let up = forward.cross(right);
+        let view = Mat4::from_rows([
+            [right.x, right.y, right.z, 0.0],
+            [up.x, up.y, up.z, 0.0],
+            [forward.x, forward.y, forward.z, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]);
+        let mut low = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+        let mut high = -low;
+        for caster in casters {
+            let (mesh_low, mesh_high) = caster.mesh.bounds();
+            let to_light = caster.transform.then(&view);
+            for corner in 0..8 {
+                let pick =
+                    |bit: u32, low: f32, high: f32| if corner & bit == 0 { low } else { high };
+                let point = to_light.transform_point(Vec3::new(
+                    pick(1, mesh_low.x, mesh_high.x),
+                    pick(2, mesh_low.y, mesh_high.y),
+                    pick(4, mesh_low.z, mesh_high.z),
+                ));
+                low = Vec3::new(low.x.min(point.x), low.y.min(point.y), low.z.min(point.z));
+                high = Vec3::new(
+                    high.x.max(point.x),
+                    high.y.max(point.y),
+                    high.z.max(point.z),
+                );
+            }
+        }
+        let extent = high - low;
+        if !(extent.x.is_finite() && extent.y.is_finite() && extent.z.is_finite()) {
+            return None;
+        }
+        let pad = |extent: f32| (extent * MARGIN).max(1.0);
+        let (low, high) = (
+            low - Vec3::new(pad(extent.x), pad(extent.y), pad(extent.z)),
+            high + Vec3::new(pad(extent.x), pad(extent.y), pad(extent.z)),
+        );
+        let extent = high - low;
+        let fit = Mat4::from_rows([
+            [2.0 / extent.x, 0.0, 0.0, -1.0 - 2.0 * low.x / extent.x],
+            [0.0, 2.0 / extent.y, 0.0, -1.0 - 2.0 * low.y / extent.y],
+            [0.0, 0.0, 1.0 / extent.z, -low.z / extent.z],
+            [0.0, 0.0, 0.0, 1.0],
+        ]);
+        Some(view.then(&fit))
     }
 }
 
@@ -141,9 +210,13 @@ pub struct MeshSurface {
     pub mesh: Arc<Mesh>,
     /// Places the mesh in the scene.
     pub transform: Mat4,
-    /// Whether the scene's light shades the surface. An unlit surface shows
-    /// its content as it is, as a screen does.
+    /// Whether the scene's light shades the surface by the angle it falls
+    /// at. An unlit surface shows its content as it is, as a screen does,
+    /// save where a shadow falls on it.
     pub lit: bool,
+    /// Whether the surface casts a shadow from the scene's light. Every
+    /// surface takes the shadows that fall on it.
+    pub casts_shadow: bool,
 }
 
 impl MeshSurface {

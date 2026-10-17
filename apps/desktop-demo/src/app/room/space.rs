@@ -227,8 +227,9 @@ impl RoomState {
         Scene3d {
             camera: Camera::look_at(eye, eye + facing(yaw, pitch), DOWN, shape.focal_length),
             light: Some(Light {
-                direction: Vec3::new(-0.35, 1.0, 0.45),
-                ambient: 0.35,
+                direction: Vec3::new(0.5, 0.45, 0.75),
+                ambient: 0.45,
+                shadows: true,
             }),
         }
     }

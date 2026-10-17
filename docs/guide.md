@@ -1619,6 +1619,7 @@ fn Globe(spin: MutableState<f32>) {
             light: Some(Light {
                 direction: Vec3::new(-0.4, 1.0, 0.5),
                 ambient: 0.3,
+                shadows: true,
             }),
         }),
         BoxSpec::default(),
@@ -1632,6 +1633,7 @@ fn Globe(spin: MutableState<f32>) {
                         transform: Mat4::scaling(Vec3::new(200.0, 200.0, 200.0))
                             .then(&Mat4::rotation_y(spin.get())),
                         lit: true,
+                        casts_shadow: true,
                     }),
                 BoxSpec::default(),
                 || {
@@ -1643,18 +1645,26 @@ fn Globe(spin: MutableState<f32>) {
 }
 ```
 
+A light with `shadows` set casts the shadows of the surfaces with
+`casts_shadow` on every surface of the scene. A lit surface is shaded by the
+angle the light falls at; an unlit one shows its content as it is, as a
+screen does, and drops to the light's `ambient` brightness where a shadow
+falls on it. So a 3D object in front of flat UI drops its shadow on the UI.
+
 Scene space uses logical pixels with x to the right, y down and z away from
 the viewer. `Mesh::plane`, `Mesh::cuboid` and `Mesh::sphere` build common
 shapes, `Mesh::from_obj` reads a Wavefront OBJ file, and `Mesh::new` takes
 positions, texture coordinates and triangles. OBJ files point y up; flip
 them with a transform that scales y by -1. A camera that stands one focal
 length in front of a plane the size of the scene shows that plane exactly as
-a flat screen. The desktop demo's Room tab walks from such a screen into a
-room of walls, a globe and an imported torus.
+a flat screen: put the 2D UI on such a plane, and 3D objects in front of it.
+The desktop demo's Room tab shows a globe in front of such a screen, then
+walks into a room of walls, the globe and an imported torus.
 
 The WGPU renderer draws scenes. The pixels renderer draws a flat mesh's
-surface in its place but has no depth buffer, and draws a curved mesh's
-surface on the plane that touches the mesh at the content's middle.
+surface in its place but has no depth buffer and no shadows, and draws a
+curved mesh's surface on the plane that touches the mesh at the content's
+middle.
 
 ## Accessibility
 

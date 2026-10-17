@@ -4090,23 +4090,45 @@ impl GpuRenderer {
                 Box::new(self.rrect_shadow_pipeline_job(depth))
             });
         }
-        visit(&self.scene_pass.pipeline, &|| {
-            Box::new(self.scene_surface_pipeline_job())
-        });
+        for kind in [
+            crate::scene_pass::ScenePipeline::Plain,
+            crate::scene_pass::ScenePipeline::Shadowed,
+            crate::scene_pass::ScenePipeline::Shadow,
+        ] {
+            visit(self.scene_pipeline_resource(kind), &|| {
+                Box::new(self.scene_surface_pipeline_job(kind))
+            });
+        }
     }
 
-    /// The scene pipeline for a scene's 3D pass, or `None` while it
-    /// compiles: the scene's surfaces are left out, and the frame after it
-    /// lands draws them.
-    pub(crate) fn scene_surface_pipeline(&self) -> Option<&wgpu::RenderPipeline> {
-        self.ready_or_left_out(&self.scene_pass.pipeline, || {
-            self.scene_surface_pipeline_job()
+    fn scene_pipeline_resource(&self, kind: crate::scene_pass::ScenePipeline) -> &FixedPipeline {
+        match kind {
+            crate::scene_pass::ScenePipeline::Plain => &self.scene_pass.pipeline,
+            crate::scene_pass::ScenePipeline::Shadowed => &self.scene_pass.shadowed_pipeline,
+            crate::scene_pass::ScenePipeline::Shadow => &self.scene_pass.shadow_pipeline,
+        }
+    }
+
+    /// A scene pipeline for a scene's pass, or `None` while it compiles:
+    /// the draws it takes are left out, and the frame after it lands draws
+    /// them.
+    pub(crate) fn scene_surface_pipeline(
+        &self,
+        kind: crate::scene_pass::ScenePipeline,
+    ) -> Option<&wgpu::RenderPipeline> {
+        self.ready_or_left_out(self.scene_pipeline_resource(kind), || {
+            self.scene_surface_pipeline_job(kind)
         })
     }
 
     /// The bind group layout of a scene surface's uniforms.
     pub(crate) fn scene_uniform_layout(&self) -> &wgpu::BindGroupLayout {
         &self.scene_pipeline_parts().uniform_layout
+    }
+
+    /// What a scene binds in its shadow map's place when it casts none.
+    pub(crate) fn scene_no_shadow(&self) -> &wgpu::BindGroup {
+        &self.scene_pipeline_parts().no_shadow
     }
 
     fn scene_pipeline_parts(&self) -> &crate::scene_pass::ScenePipelineParts {
@@ -4119,11 +4141,12 @@ impl GpuRenderer {
 
     fn scene_surface_pipeline_job(
         &self,
+        kind: crate::scene_pass::ScenePipeline,
     ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
         crate::scene_pass::scene_pipeline_job(
             &self.device,
             self.pipeline_cache.clone(),
-            self.composition_format,
+            (self.composition_format, kind),
             self.scene_pipeline_parts(),
         )
     }

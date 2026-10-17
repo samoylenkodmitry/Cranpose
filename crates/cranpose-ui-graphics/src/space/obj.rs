@@ -52,37 +52,48 @@ struct Builder {
     indices: Vec<u32>,
 }
 
-pub(super) fn parse(source: &str) -> Result<Mesh, ObjError> {
-    let mut builder = Builder::default();
-    for (number, line) in source.lines().enumerate() {
-        let line = line.split('#').next().unwrap_or_default();
-        let mut words = line.split_whitespace();
-        let fail = |kind| ObjError {
-            line: number + 1,
-            kind,
-        };
-        match words.next() {
-            Some("v") => {
-                let [x, y, z] = numbers(&mut words).map_err(fail)?;
-                builder.positions.push([x, y, z]);
+impl Mesh {
+    /// A mesh read from the text of a Wavefront OBJ file.
+    ///
+    /// It reads the positions (`v`), texture coordinates (`vt`), normals
+    /// (`vn`) and faces (`f`, split into triangles) of every object in the
+    /// file, and skips the other statements, such as materials and groups.
+    /// OBJ counts the texture's v from the bottom; the mesh flips it, so a
+    /// model textured for an image shows a composable upright. A face
+    /// without texture coordinates takes `(0, 0)`, and one without normals
+    /// takes smooth ones.
+    pub fn from_obj(source: &str) -> Result<Self, ObjError> {
+        let mut builder = Builder::default();
+        for (number, line) in source.lines().enumerate() {
+            let line = line.split('#').next().unwrap_or_default();
+            let mut words = line.split_whitespace();
+            let fail = |kind| ObjError {
+                line: number + 1,
+                kind,
+            };
+            match words.next() {
+                Some("v") => {
+                    let [x, y, z] = numbers(&mut words).map_err(fail)?;
+                    builder.positions.push([x, y, z]);
+                }
+                Some("vt") => {
+                    let u = number_of(words.next()).map_err(fail)?;
+                    let v = words
+                        .next()
+                        .map_or(Ok(0.0), |word| number_of(Some(word)))
+                        .map_err(fail)?;
+                    builder.uvs.push([u, 1.0 - v]);
+                }
+                Some("vn") => {
+                    let [x, y, z] = numbers(&mut words).map_err(fail)?;
+                    builder.normals.push([x, y, z]);
+                }
+                Some("f") => builder.face(words).map_err(fail)?,
+                _ => {}
             }
-            Some("vt") => {
-                let u = number_of(words.next()).map_err(fail)?;
-                let v = words
-                    .next()
-                    .map_or(Ok(0.0), |word| number_of(Some(word)))
-                    .map_err(fail)?;
-                builder.uvs.push([u, 1.0 - v]);
-            }
-            Some("vn") => {
-                let [x, y, z] = numbers(&mut words).map_err(fail)?;
-                builder.normals.push([x, y, z]);
-            }
-            Some("f") => builder.face(words).map_err(fail)?,
-            _ => {}
         }
+        builder.finish()
     }
-    builder.finish()
 }
 
 impl Builder {

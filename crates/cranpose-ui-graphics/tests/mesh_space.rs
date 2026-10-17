@@ -35,6 +35,7 @@ fn wall() -> MeshSurface {
             .then(&Mat4::rotation_y(0.6))
             .then(&Mat4::translation(Vec3::new(-150.0, -100.0, 300.0))),
         lit: false,
+        casts_shadow: false,
     }
 }
 
@@ -78,6 +79,7 @@ fn a_camera_one_focal_length_from_a_facing_plane_shows_it_at_its_own_size() {
         mesh: Arc::new(Mesh::plane()),
         transform: Mat4::scaling(Vec3::new(VIEWPORT.width, VIEWPORT.height, 1.0)),
         lit: false,
+        casts_shadow: false,
     };
     let transform = screen
         .content_transform(&camera, VIEWPORT, VIEWPORT)

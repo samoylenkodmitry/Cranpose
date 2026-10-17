@@ -118,6 +118,7 @@ impl Modifier {
     ///     mesh: Arc::clone(&sphere),
     ///     transform: Mat4::scaling(Vec3::new(200.0, 200.0, 200.0)),
     ///     lit: true,
+    ///     casts_shadow: true,
     /// });
     /// # let _ = (scene, globe);
     /// ```

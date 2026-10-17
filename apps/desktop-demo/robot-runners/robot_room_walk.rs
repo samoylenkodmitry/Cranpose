@@ -22,19 +22,12 @@ pub(crate) fn main() {
         .with_robot_app_hook(robot_launch::set_tab_hook)
         .with_test_driver(move |robot| {
             robot_launch::switch_tab(&robot, "room");
-            robot_shot::settle(&robot, 300);
-            let flat = step_in_button(&robot);
-            save(&robot, &shots, "flat.png");
-
-            if !click_button_in_semantics(&robot, STEP_IN) {
-                robot_exit::fail(&robot, "no button to step into the room");
-            }
-            // The globe spins, so the app does not go idle until it stops.
+            // The globe spins on the flat screen, so the app does not go idle
+            // until it stops.
             walk(&robot);
-            save(&robot, &shots, "room.png");
-
+            save(&robot, &shots, "flat.png");
             if !click_button_in_semantics(&robot, "Stop the spin") {
-                robot_exit::fail(&robot, "the globe's button is missing in the room");
+                robot_exit::fail(&robot, "the globe's button is missing on the flat screen");
             }
             robot_shot::settle(&robot, 300);
             if find_text_in_semantics(&robot, "Spin the globe").is_none() {
@@ -43,6 +36,23 @@ pub(crate) fn main() {
                     "a click on the globe's button, where it shows on the sphere, missed it",
                 );
             }
+            let flat = step_in_button(&robot);
+
+            if !click_button_in_semantics(&robot, STEP_IN) {
+                robot_exit::fail(&robot, "no button to step into the room");
+            }
+            walk(&robot);
+            save(&robot, &shots, "room.png");
+
+            let counter = button(&robot, "Pressed 0 times");
+            // E turns the camera while it is held, Q turns it back.
+            hold_key(&robot, "e");
+            let turned = button(&robot, "Pressed 0 times");
+            println!("  counter at {counter:?}, after E at {turned:?}");
+            if (turned.0 - counter.0).abs() < 20.0 {
+                robot_exit::fail(&robot, "holding E did not turn the camera");
+            }
+            hold_key(&robot, "q");
 
             if !click_button_in_semantics(&robot, "Pressed 0 times") {
                 robot_exit::fail(&robot, "the far wall's counter is missing in the room");
@@ -79,6 +89,18 @@ pub(crate) fn main() {
         .run(robot_launch::counter_demo);
 }
 
+/// Holds `key` for a tenth of a second.
+fn hold_key(robot: &Robot, key: &str) {
+    if let Err(err) = robot.send_key(key) {
+        robot_exit::fail(robot, &format!("key {key}: {err}"));
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    if let Err(err) = robot.release_key(key) {
+        robot_exit::fail(robot, &format!("releasing {key}: {err}"));
+    }
+    robot_shot::settle(robot, 100);
+}
+
 /// Lets the camera walk between the screen and the room.
 fn walk(robot: &Robot) {
     std::thread::sleep(WALK);
@@ -88,9 +110,13 @@ fn walk(robot: &Robot) {
 }
 
 fn step_in_button(robot: &Robot) -> (f32, f32, f32, f32) {
-    match robot.find_button_bounds_exact(STEP_IN) {
+    button(robot, STEP_IN)
+}
+
+fn button(robot: &Robot, label: &str) -> (f32, f32, f32, f32) {
+    match robot.find_button_bounds_exact(label) {
         Ok(Some(bounds)) => bounds,
-        Ok(None) => robot_exit::fail(robot, "the flat screen shows no button to step in"),
+        Ok(None) => robot_exit::fail(robot, &format!("no button {label:?}")),
         Err(err) => robot_exit::fail(robot, &format!("button query: {err}")),
     }
 }

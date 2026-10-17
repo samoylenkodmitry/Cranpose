@@ -49,7 +49,7 @@ fn pixel_at(frame: &cranpose_render_wgpu::CapturedFrame, point: Vec3) -> [u8; 4]
 }
 
 #[composable]
-fn Surface(mesh: Arc<Mesh>, transform: Mat4, (lit, color): (bool, Color)) {
+fn Surface(mesh: Arc<Mesh>, transform: Mat4, (lit, casts_shadow, color): (bool, bool, Color)) {
     Box(
         Modifier::empty()
             .required_size(Size {
@@ -60,6 +60,7 @@ fn Surface(mesh: Arc<Mesh>, transform: Mat4, (lit, color): (bool, Color)) {
                 mesh: Arc::clone(&mesh),
                 transform,
                 lit,
+                casts_shadow,
             })
             .background(color),
         BoxSpec::default(),
@@ -83,6 +84,7 @@ fn MeshScene() {
                 light: Some(Light {
                     direction: Vec3::new(1.0, 0.0, 1.0),
                     ambient: 0.2,
+                    shadows: true,
                 }),
             }),
         BoxSpec::default(),
@@ -97,27 +99,27 @@ fn MeshScene() {
                         1.0,
                     )))
                     .then(&Mat4::translation(NEAR_PANEL)),
-                (false, Color(0.0, 1.0, 0.0, 1.0)),
+                (false, false, Color(0.0, 1.0, 0.0, 1.0)),
             );
             Surface(
                 Arc::clone(&sphere),
                 Mat4::scaling(Vec3::new(SPHERE_RADIUS, SPHERE_RADIUS, SPHERE_RADIUS))
                     .then(&Mat4::translation(SPHERE)),
-                (true, Color(1.0, 0.0, 0.0, 1.0)),
+                (true, true, Color(1.0, 0.0, 0.0, 1.0)),
             );
             Surface(
                 Arc::clone(&plane),
                 Mat4::translation(Vec3::new(-0.5, -0.5, 0.0))
                     .then(&Mat4::scaling(Vec3::new(2000.0, 1500.0, 1.0)))
                     .then(&Mat4::translation(Vec3::new(0.0, 0.0, 600.0))),
-                (false, Color(0.0, 0.0, 1.0, 1.0)),
+                (false, false, Color(0.0, 0.0, 1.0, 1.0)),
             );
         },
     );
 }
 
 #[test]
-fn mesh_surfaces_draw_their_content_lit_and_nearest_first() {
+fn mesh_surfaces_draw_their_content_lit_shadowed_and_nearest_first() {
     let Some((_lock, mut shell)) = support::app_shell_for(
         MeshScene,
         FRAME_WIDTH,
@@ -149,9 +151,16 @@ fn mesh_surfaces_draw_their_content_lit_and_nearest_first() {
         "the sphere is shaded: {dark_side:?} away from the light, {lit_side:?} facing it"
     );
 
-    let far_wall = pixel_at(&frame, Vec3::new(-500.0, -380.0, 600.0));
+    let far_wall = pixel_at(&frame, Vec3::new(-300.0, 0.0, 600.0));
     assert!(
         far_wall[2] > 200 && far_wall[0] < 40,
-        "the far wall shows beside the sphere: {far_wall:?}"
+        "the far wall shows beside the sphere, in the light: {far_wall:?}"
+    );
+    // The light travels along (1, 0, 1): the sphere's shadow falls on the
+    // far wall 400 to the right of its centre.
+    let shadow = pixel_at(&frame, SPHERE + Vec3::new(400.0, 0.0, 400.0));
+    assert!(
+        shadow[2] < 100 && shadow[2] > 20,
+        "the sphere's shadow darkens the unlit far wall to its ambient: {shadow:?}"
     );
 }

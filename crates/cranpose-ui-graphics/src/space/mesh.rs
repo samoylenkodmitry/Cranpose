@@ -78,6 +78,7 @@ pub struct Mesh {
     uvs: Vec<[f32; 2]>,
     indices: Vec<u32>,
     texture_plane: OnceLock<Option<TexturePlane>>,
+    bounds: OnceLock<(Vec3, Vec3)>,
 }
 
 impl PartialEq for Mesh {
@@ -213,19 +214,6 @@ impl Mesh {
         Self::assembled(positions, uvs, normals, indices)
     }
 
-    /// A mesh read from the text of a Wavefront OBJ file.
-    ///
-    /// It reads the positions (`v`), texture coordinates (`vt`), normals
-    /// (`vn`) and faces (`f`, split into triangles) of every object in the
-    /// file, and skips the other statements, such as materials and groups.
-    /// OBJ counts the texture's v from the bottom; the mesh flips it, so a
-    /// model textured for an image shows a composable upright. A face
-    /// without texture coordinates takes `(0, 0)`, and one without normals
-    /// takes smooth ones.
-    pub fn from_obj(source: &str) -> Result<Self, super::obj::ObjError> {
-        super::obj::parse(source)
-    }
-
     /// A number that no other mesh made in this process has. Renderers keep
     /// a mesh's buffers under it.
     pub fn id(&self) -> u64 {
@@ -317,6 +305,20 @@ impl Mesh {
         })
     }
 
+    /// The smallest box along the axes that holds every vertex: its lowest
+    /// and highest corners.
+    pub fn bounds(&self) -> (Vec3, Vec3) {
+        *self.bounds.get_or_init(|| {
+            let mut low = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+            let mut high = -low;
+            for &[x, y, z] in &self.positions {
+                low = Vec3::new(low.x.min(x), low.y.min(y), low.z.min(z));
+                high = Vec3::new(high.x.max(x), high.y.max(y), high.z.max(z));
+            }
+            (low, high)
+        })
+    }
+
     /// The plane that carries texture coordinates onto the mesh, worked out
     /// once: the plane of a flat mesh, or the one that touches a curved mesh
     /// at the texture's middle. `None` when the texture's middle does not lie
@@ -392,6 +394,7 @@ impl Mesh {
             uvs,
             indices,
             texture_plane: OnceLock::new(),
+            bounds: OnceLock::new(),
         }
     }
 }

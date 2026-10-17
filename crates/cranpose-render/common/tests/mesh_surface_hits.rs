@@ -76,6 +76,7 @@ fn probe() -> Probe {
                         mesh: Arc::clone(&plane),
                         transform,
                         lit: false,
+                        casts_shadow: false,
                     })
                     .clickable(move |point| sink.borrow_mut().push((name, point))),
                 BoxSpec::default(),
@@ -158,6 +159,7 @@ fn the_nearer_surface_takes_a_press_where_both_show() {
         mesh: Arc::new(Mesh::plane()),
         transform: panel_transform(FAR, 0.0),
         lit: false,
+        casts_shadow: false,
     };
     assert!(
         far_surface.cast(ray, PANEL).is_some(),
@@ -204,6 +206,7 @@ fn a_camera_that_moves_moves_where_its_surfaces_take_input() {
                             mesh: Arc::clone(&plane),
                             transform: panel_transform(FAR, 0.0),
                             lit: false,
+                            casts_shadow: false,
                         })
                         .clickable(|_| {}),
                     BoxSpec::default(),
