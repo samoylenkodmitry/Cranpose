@@ -928,17 +928,18 @@ fn try_translate_scrolled_layer(
     .unwrap_or_else(|| translate_bail("container snapshot read failed"))
 }
 
-/// What a container keeps its children under: its node, its graphics layer
-/// and its bounds at its current size.
+/// The node of a container that keeps its children, and its node bounds at
+/// its current size.
 struct TranslatedContainer {
     node_id: NodeId,
-    graphics_layer: Option<GraphicsLayer>,
-    local_bounds: Rect,
     node_bounds: Option<Rect>,
 }
 
+/// Checks that `container` can keep its children and brings its bounds and
+/// graphics layer to its current size: a container that kept its size keeps
+/// its layer as it is.
 fn translated_container(
-    container: &LayerNode,
+    container: &mut LayerNode,
     layout_state: &cranpose_ui::widgets::LayoutState,
     modifier_slices: &ModifierNodeSlices,
     inherited_motion_context_animated: bool,
@@ -982,21 +983,20 @@ fn translated_container(
         );
         graphics_layer
     };
-    let current = shaped(container.local_bounds);
-    if current.as_ref().unwrap_or(&GraphicsLayer::DEFAULT) != &*container.graphics_layer {
+    if shaped(container.local_bounds)
+        .as_ref()
+        .unwrap_or(&GraphicsLayer::DEFAULT)
+        != &*container.graphics_layer
+    {
         return Err("container graphics layer changed");
     }
     let (local_bounds, node_bounds) = layer_and_node_bounds(modifier_slices, layout_state.size());
-    // A container that kept its size keeps the layer just shaped.
-    let graphics_layer = if local_bounds == container.local_bounds {
-        current
-    } else {
-        shaped(local_bounds)
-    };
+    if local_bounds != container.local_bounds {
+        container.local_bounds = local_bounds;
+        container.graphics_layer.replace(shaped(local_bounds));
+    }
     Ok(TranslatedContainer {
         node_id,
-        graphics_layer,
-        local_bounds,
         node_bounds,
     })
 }
@@ -1357,14 +1357,8 @@ fn translate_layer_from_data(
     };
     let TranslatedContainer {
         node_id,
-        graphics_layer,
-        local_bounds,
         node_bounds,
     } = container_plan;
-    if container.local_bounds != local_bounds {
-        container.local_bounds = local_bounds;
-        container.graphics_layer.replace(graphics_layer);
-    }
     container.node_bounds = node_bounds;
     // The container's own draws and text are recorded again around the
     // children it keeps: an unchanged draw reuses its recording, while

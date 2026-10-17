@@ -256,6 +256,9 @@ struct ModifierChainMeasurement {
     uses_chain: bool,
     /// The incoming constraints this measurement holds for besides its own.
     hold: Option<cranpose_ui_layout::ConstraintsHold>,
+    /// Whether no child's size entered it: see
+    /// [`MeasurePolicy::ignores_child_sizes`].
+    ignores_child_sizes: bool,
 }
 
 struct ScratchVecPool<T> {
@@ -1541,6 +1544,9 @@ struct LayoutBuilderState {
     /// The context the pass lays out in, which takes the nodes whose
     /// geometry it changed.
     context: Rc<AppContext>,
+    /// The threshold of the measure telemetry, read once a pass: `None`
+    /// while the telemetry is off.
+    measure_telemetry_ms: Option<f64>,
 }
 
 struct LayoutRuntimeFrameBindingCleanup<'a> {
@@ -1567,6 +1573,16 @@ struct KeptNode {
     measured: Rc<MeasuredNode>,
     runtime_state: Rc<RefCell<LayoutRuntimeState>>,
     cache: LayoutNodeCacheHandles,
+    /// Whether a child that measures to another size leaves the node as it
+    /// is.
+    ignores_child_sizes: bool,
+}
+
+/// A kept measurement after the walk over its changed children: `resized`
+/// when one of them measured to another size that the node ignores.
+struct KeptChildren {
+    measured: Rc<MeasuredNode>,
+    resized: bool,
 }
 
 /// What measuring one changed child of a kept node again needs.
@@ -1643,6 +1659,7 @@ impl LayoutBuilderState {
             cache_floor: context.layout_cache_floor(),
             frame_arena: RefCell::new(context.take_layout_frame_arena()),
             context,
+            measure_telemetry_ms: layout_measure_telemetry_threshold_ms(),
         }
     }
 
@@ -1725,10 +1742,11 @@ impl LayoutBuilderState {
     ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
         let kept = self.remeasure_changed_children(
             cached,
+            false,
             |child_id| self.subcompose_child_change(child_id),
             |child_id| self.mark_measured_without_policy(child_id),
         )?;
-        let Some(kept) = kept else {
+        let Some(KeptChildren { measured: kept, .. }) = kept else {
             return Ok(None);
         };
         self.with_applier_result(|applier| {
@@ -1801,17 +1819,27 @@ impl LayoutBuilderState {
         node_id: NodeId,
         constraints: Constraints,
     ) -> Result<Rc<MeasuredNode>, NodeError> {
-        let telemetry = layout_measure_telemetry_threshold_ms().map(|ms| (ms, Instant::now()));
-        let (kind, measured) =
-            if let Some(measured) = self.measure_layout_node(node_id, constraints)? {
-                ("layout", measured)
-            } else {
-                self.measure_subcompose_node(node_id, constraints)?
-            };
-        if let Some(telemetry) = telemetry {
-            log_node_measure_telemetry(kind, node_id, constraints, &measured, telemetry);
-        }
+        let Some(threshold_ms) = self.measure_telemetry_ms else {
+            return self
+                .measure_node_untimed(node_id, constraints)
+                .map(|(_, measured)| measured);
+        };
+        let start = Instant::now();
+        let (kind, measured) = self.measure_node_untimed(node_id, constraints)?;
+        log_node_measure_telemetry(kind, node_id, constraints, &measured, (threshold_ms, start));
         Ok(measured)
+    }
+
+    /// The measurement of `node_id` and the kind of node it is.
+    fn measure_node_untimed(
+        self: &Rc<Self>,
+        node_id: NodeId,
+        constraints: Constraints,
+    ) -> Result<(&'static str, Rc<MeasuredNode>), NodeError> {
+        if let Some(measured) = self.measure_layout_node(node_id, constraints)? {
+            return Ok(("layout", measured));
+        }
+        self.measure_subcompose_node(node_id, constraints)
     }
 
     /// The measurement `node_id` cached for `constraints` in layout cache
@@ -2199,6 +2227,7 @@ impl LayoutBuilderState {
                     constraints,
                     Rc::clone(&measured),
                     measurement.hold,
+                    measurement.ignores_child_sizes,
                 );
                 if runtime_state.write_node_geometry(node, &measurement) {
                     self.context.record_geometry_scene_node(node_id);
@@ -2308,31 +2337,45 @@ impl LayoutBuilderState {
             measured,
             runtime_state,
             cache,
+            ignores_child_sizes,
         } = node;
         let mut next_state = 0;
         let kept = self.remeasure_changed_children(
             &measured,
+            ignores_child_sizes,
             |child_id| self.layout_child_change(&runtime_state, &mut next_state, child_id),
             |_| {},
         )?;
-        let Some(kept) = kept else {
+        let Some(KeptChildren {
+            measured: kept,
+            resized,
+        }) = kept
+        else {
             return Ok(None);
         };
-        cache.store_measurement(constraints, Rc::clone(&kept));
+        if resized {
+            cache.store_resized_measurement(constraints, Rc::clone(&kept));
+        } else {
+            cache.store_measurement(constraints, Rc::clone(&kept));
+        }
         cache.clear_layout_dirt();
         Ok(Some(kept))
     }
 
     /// Walks the children of a kept measurement, measures again each one
     /// `change` finds changed, at the constraints it last had, and keeps the
-    /// measurement when each of them reads the same for it. `None` as soon as
-    /// `change` refuses a child or one measures differently for its parent.
+    /// measurement when each of them reads the same for it, or, when the
+    /// measurement `ignores_child_sizes`, the same but for its size. `None`
+    /// as soon as `change` refuses a child or one measures differently for
+    /// its parent.
     fn remeasure_changed_children(
         self: &Rc<Self>,
         cached: &Rc<MeasuredNode>,
+        ignores_child_sizes: bool,
         mut change: impl FnMut(NodeId) -> Result<ChildChange, NodeError>,
         mut remeasured: impl FnMut(NodeId),
-    ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
+    ) -> Result<Option<KeptChildren>, NodeError> {
+        let mut resized = false;
         for previous in &cached.children {
             let child = match change(previous.node_id)? {
                 ChildChange::Unchanged => continue,
@@ -2341,14 +2384,21 @@ impl LayoutBuilderState {
             };
             let measured = self.measure_node(previous.node_id, child.constraints)?;
             remeasured(previous.node_id);
-            if !previous.for_parent.same_as(&ForParent::of(&measured)) {
-                return Ok(None);
+            let now = ForParent::of(&measured);
+            if !previous.for_parent.same_as(&now) {
+                if !(ignores_child_sizes && previous.for_parent.same_but_size(&now)) {
+                    return Ok(None);
+                }
+                resized = true;
             }
             if child.placed {
                 self.place_where_it_was(previous.node_id);
             }
         }
-        Ok(Some(Rc::clone(cached)))
+        Ok(Some(KeptChildren {
+            measured: Rc::clone(cached),
+            resized,
+        }))
     }
 
     /// What the walk over a kept layout node finds of a child, from the
@@ -2381,7 +2431,13 @@ impl LayoutBuilderState {
         }
         self.child_change(child_id, |view| {
             let parent_data_changed = view.parent_data.as_ref().is_some_and(|data| {
-                read_cell(&state.parent_data, |bound| bound.as_ref() != Some(data))
+                read_cell(&state.parent_data, |bound| {
+                    bound.as_ref().is_none_or(|bound| {
+                        runtime_state
+                            .measure_policy
+                            .reads_parent_data_change(bound, data)
+                    })
+                })
             });
             match state.measured_constraints.get() {
                 Some(constraints) if !state.read_intrinsics.get() && !parent_data_changed => {
@@ -2438,10 +2494,12 @@ impl LayoutBuilderState {
     ) -> LayoutNodeVisit<'_> {
         node.clear_placed(&self.context);
         if keep && let Some(measured) = self.measurement_to_keep(node, constraints) {
+            let cache = node.cache_handles();
             return LayoutNodeVisit::Keep(KeptNode {
+                ignores_child_sizes: cache.ignores_child_sizes_of(&measured),
                 measured,
                 runtime_state: node.layout_runtime_state_handle(),
-                cache: node.cache_handles().clone(),
+                cache: cache.clone(),
             });
         }
         let cache = node.cache_handles();
@@ -2569,6 +2627,10 @@ impl LayoutBuilderState {
                         measurement.size,
                     )
                 },
+                ignores_child_sizes: !chain.window_root
+                    && runtime_state
+                        .measure_policy
+                        .ignores_child_sizes(runtime_state.child_measurables(), constraints),
             };
         }
 
@@ -2625,6 +2687,11 @@ impl LayoutBuilderState {
                     runtime_state.child_measurables(),
                 )
             },
+            ignores_child_sizes: !chain.window_root
+                && runtime_state.coordinator_chain.ignores_child_sizes(
+                    runtime_state.measure_policy.as_ref(),
+                    runtime_state.child_measurables(),
+                ),
         }
     }
 }
@@ -2850,8 +2917,12 @@ impl ForParent {
     /// Whether a parent's policy, reading `other` in place of this, would
     /// lay its children out the same.
     fn same_as(&self, other: &Self) -> bool {
-        self.size == other.size
-            && self.offset == other.offset
+        self.size == other.size && self.same_but_size(other)
+    }
+
+    /// Whether `other` reads the same as this but for its size.
+    fn same_but_size(&self, other: &Self) -> bool {
+        self.offset == other.offset
             && self.alignment_lines.first_baseline() == other.alignment_lines.first_baseline()
             && self.alignment_lines.last_baseline() == other.alignment_lines.last_baseline()
     }
@@ -3147,6 +3218,19 @@ impl CoordinatorChain {
             wrapped = cranpose_ui_layout::WrappedHold { size, hold };
         }
         wrapped.hold
+    }
+
+    /// Whether the policy's last measure through this chain ignored its
+    /// children's sizes. The layout modifiers around it see only its size,
+    /// which then stays as it is.
+    fn ignores_child_sizes(
+        &self,
+        policy: &dyn MeasurePolicy,
+        measurables: &[Box<dyn Measurable>],
+    ) -> bool {
+        self.inner_constraints
+            .get()
+            .is_some_and(|constraints| policy.ignores_child_sizes(measurables, constraints))
     }
 
     fn measure_from(
