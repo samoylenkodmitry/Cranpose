@@ -341,6 +341,26 @@ pub trait MeasurePolicy: Any {
         None
     }
 
+    /// Whether this policy may lay its children out otherwise when a child's
+    /// parent data goes from `before` to `after`. The default reads all of
+    /// it; a policy that reads part of it answers for that part, so a change
+    /// elsewhere keeps its measurement.
+    fn reads_parent_data_change(&self, before: &ParentData, after: &ParentData) -> bool {
+        before != after
+    }
+
+    /// Whether the measure under `constraints` gave a size and child
+    /// positions that no child's size enters: a child that measures to
+    /// another size then leaves this layout as it is, and the layout keeps
+    /// its measurement. `false`, the default, measures the layout again.
+    fn ignores_child_sizes(
+        &self,
+        _measurables: &[Box<dyn Measurable>],
+        _constraints: Constraints,
+    ) -> bool {
+        false
+    }
+
     /// Computes the minimum intrinsic width of this policy.
     fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32;
 
