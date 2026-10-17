@@ -113,7 +113,7 @@ fn update(
     }
     areas.clear();
     for &(old, new) in pushed.iter() {
-        let (old_record, new_record) = (scene.subtrees[old], scratch.subtrees[new]);
+        let (old_record, new_record) = (&scene.subtrees[old], &scratch.subtrees[new]);
         add_changed_pairs(
             scene,
             &scene.order[old_record.start.order..old_record.stop.order],
@@ -135,7 +135,8 @@ impl Repush<'_> {
     /// down what the old scene holds at `parent`, the root's start for
     /// `None`. `None` when the graph's layers no longer match the records.
     fn visit(&mut self, layer: &LayerNode, record: usize, parent: Option<usize>) -> Option<()> {
-        let old = *self.scene.subtrees.get(record)?;
+        let scene = self.scene;
+        let old = scene.subtrees.get(record)?;
         if old.identity != (layer.node_id, layer.wraps) {
             return None;
         }
