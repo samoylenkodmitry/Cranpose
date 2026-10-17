@@ -26,11 +26,6 @@ pub(crate) fn caller_modifier_changed(modifier: &Modifier) -> bool {
     })
 }
 
-struct RetainedMeasurePolicy<P> {
-    value: P,
-    policy: Rc<dyn MeasurePolicy>,
-}
-
 /// The density and layout direction a layout node composes under. A widget
 /// reads them once, for its measure policy and its node: each read looks a
 /// composition local up.
@@ -74,37 +69,23 @@ pub(crate) fn compose_layout<F, P>(
     modifier: Modifier,
     measure_policy: P,
     environment: LayoutEnvironment,
-    content: F,
+    mut content: F,
 ) -> NodeId
 where
     F: FnMut() + 'static,
-    P: MeasurePolicy + Clone + PartialEq + 'static,
+    P: MeasurePolicy + Clone + PartialEq,
 {
-    let policy_holder = cranpose_core::remember({
-        let measure_policy = measure_policy.clone();
-        move || {
-            Rc::new(RefCell::new(RetainedMeasurePolicy {
-                value: measure_policy.clone(),
-                policy: Rc::new(measure_policy),
-            }))
-        }
-    })
-    .with(Rc::clone);
-    let policy = {
-        let mut holder = policy_holder.borrow_mut();
-        if holder.value != measure_policy {
-            holder.value = measure_policy.clone();
-            holder.policy = Rc::new(measure_policy);
-        }
-        Rc::clone(&holder.policy)
-    };
-    emit_layout(modifier, policy, environment, content)
+    let (id, provided, _) = emit_layout_node(modifier, measure_policy, environment);
+    cranpose_core::push_parent(id);
+    compose_under_locals(provided, &mut content);
+    cranpose_core::pop_parent();
+    id
 }
 
 pub(crate) fn compose_empty_layout(modifier: Modifier, environment: LayoutEnvironment) -> NodeId {
     let (id, provided, holds_children) = emit_layout_node(
         modifier,
-        super::nodes::layout_node::empty_measure_policy(),
+        crate::layout::policies::EmptyMeasurePolicy,
         environment,
     );
     if provided.is_empty() {
@@ -119,39 +100,24 @@ pub(crate) fn compose_empty_layout(modifier: Modifier, environment: LayoutEnviro
     id
 }
 
-fn emit_layout<F>(
-    modifier: Modifier,
-    policy: Rc<dyn MeasurePolicy>,
-    environment: LayoutEnvironment,
-    mut content: F,
-) -> NodeId
-where
-    F: FnMut() + 'static,
-{
-    let (id, provided, _) = emit_layout_node(modifier, policy, environment);
-    cranpose_core::push_parent(id);
-    compose_under_locals(provided, &mut content);
-    cranpose_core::pop_parent();
-    id
-}
-
 /// Emits and updates a layout node; returns it, the composition locals its
-/// modifier provides and whether it holds children.
-fn emit_layout_node(
+/// modifier provides and whether it holds children. The node keeps the policy
+/// it holds while `policy` equals it.
+fn emit_layout_node<P: MeasurePolicy + Clone + PartialEq>(
     modifier: Modifier,
-    policy: Rc<dyn MeasurePolicy>,
+    policy: P,
     environment: LayoutEnvironment,
 ) -> (NodeId, Vec<cranpose_core::ProvidedValue>, bool) {
     let provided = modifier.provided_composition_locals();
     let (id, holds_children) = cranpose_core::with_current_composer(|composer| {
         let id = composer.emit_recyclable_node(
-            || LayoutNode::new(modifier.clone(), Rc::clone(&policy)),
-            |node| *node = LayoutNode::new(modifier.clone(), Rc::clone(&policy)),
+            || LayoutNode::new(modifier.clone(), Rc::new(policy.clone())),
+            |node| *node = LayoutNode::new(modifier.clone(), Rc::new(policy.clone())),
         );
         let holds_children = composer
             .with_node_mut(id, |node: &mut LayoutNode| {
                 node.set_modifier(modifier);
-                node.set_measure_policy(policy);
+                node.update_measure_policy(policy);
                 node.set_density(environment.density);
                 node.set_layout_direction(environment.direction);
                 !node.children.is_empty()

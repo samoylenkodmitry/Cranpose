@@ -916,6 +916,14 @@ impl LayoutNode {
         }
     }
 
+    /// Takes `policy` unless the node measures with an equal one already.
+    pub(crate) fn update_measure_policy<P: MeasurePolicy + PartialEq>(&mut self, policy: P) {
+        let current: &dyn std::any::Any = &*self.measure_policy;
+        if current.downcast_ref::<P>() != Some(&policy) {
+            self.set_measure_policy(Rc::new(policy));
+        }
+    }
+
     /// Replaces the measure policy and schedules a measure. Does nothing if `policy` is the same
     /// `Rc` as the current one.
     pub fn set_measure_policy(&mut self, policy: Rc<dyn MeasurePolicy>) {
