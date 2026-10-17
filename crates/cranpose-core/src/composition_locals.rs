@@ -1,4 +1,9 @@
-use std::{any::Any, cell::RefCell, rc::Rc, sync::Arc};
+use std::{
+    any::Any,
+    cell::RefCell,
+    rc::{Rc, Weak},
+    sync::Arc,
+};
 
 use crate::{
     Composer, LocalKey, RuntimeHandle, composer_context,
@@ -316,6 +321,90 @@ pub struct StaticCompositionLocal<T: Clone + 'static> {
     pub(crate) key: LocalKey,
     default: Rc<dyn Fn() -> T>,
     equivalent: Arc<LocalEquivalentFn<T>>,
+    /// The provider frame the last read read under and what it found there,
+    /// shared by the local's clones: the next read under the same frame
+    /// takes it without walking the providers.
+    last_read: Rc<RefCell<Option<StaticRead<T>>>>,
+}
+
+/// What a static local's read found under a provider frame.
+enum Provided<T: Clone + 'static> {
+    Value(Rc<StaticLocalEntry<T>>),
+    Computed(Rc<StaticComputedLocalEntry<T>>),
+    Default,
+}
+
+impl<T: Clone + 'static> Provided<T> {
+    fn downgrade(&self) -> StaticFound<T> {
+        match self {
+            Self::Value(entry) => StaticFound::Value(Rc::downgrade(entry)),
+            Self::Computed(entry) => StaticFound::Computed(Rc::downgrade(entry)),
+            Self::Default => StaticFound::Default,
+        }
+    }
+
+    /// The value of an entry, read each time as its provider updates the
+    /// entry in place, or what reads it once the provider stack is free.
+    fn read(self) -> Result<T, StaticDeferred<T>> {
+        match self {
+            Self::Value(entry) => Ok(entry.value()),
+            Self::Computed(entry) => Err(StaticDeferred::Computed(entry)),
+            Self::Default => Err(StaticDeferred::Default),
+        }
+    }
+}
+
+/// [`Provided`], held so the last read keeps no provider's value alive.
+enum StaticFound<T: Clone + 'static> {
+    Value(Weak<StaticLocalEntry<T>>),
+    Computed(Weak<StaticComputedLocalEntry<T>>),
+    Default,
+}
+
+impl<T: Clone + 'static> StaticFound<T> {
+    fn upgrade(&self) -> Option<Provided<T>> {
+        match self {
+            Self::Value(entry) => entry.upgrade().map(Provided::Value),
+            Self::Computed(entry) => entry.upgrade().map(Provided::Computed),
+            Self::Default => Some(Provided::Default),
+        }
+    }
+}
+
+/// A static local's value that runs once the provider stack is released,
+/// as it may read other locals.
+pub(crate) enum StaticDeferred<T: Clone + 'static> {
+    Computed(Rc<StaticComputedLocalEntry<T>>),
+    Default,
+}
+
+impl<T: Clone + 'static> StaticDeferred<T> {
+    pub(crate) fn value(self, local: &StaticCompositionLocal<T>) -> T {
+        match self {
+            Self::Computed(entry) => entry.value(),
+            Self::Default => local.default_value(),
+        }
+    }
+}
+
+/// The innermost provider frame a static local was last read under, and
+/// what it found there.
+struct StaticRead<T: Clone + 'static> {
+    frame: Option<Weak<crate::composer::LocalFrame>>,
+    found: StaticFound<T>,
+}
+
+/// Whether `frame` is the innermost frame of `stack`. A weak handle keeps
+/// its frame's allocation, so no other frame takes the address meanwhile.
+fn is_top_frame(
+    frame: &Option<Weak<crate::composer::LocalFrame>>,
+    stack: &crate::LocalStackSnapshot,
+) -> bool {
+    match (frame, stack) {
+        (Some(frame), Some(top)) => std::ptr::eq(frame.as_ptr(), Rc::as_ptr(top)),
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 impl<T: Clone + 'static> PartialEq for StaticCompositionLocal<T> {
@@ -327,6 +416,47 @@ impl<T: Clone + 'static> PartialEq for StaticCompositionLocal<T> {
 impl<T: Clone + 'static> Eq for StaticCompositionLocal<T> {}
 
 impl<T: Clone + 'static> StaticCompositionLocal<T> {
+    /// The value `stack` provides for this local, or what to read it from
+    /// when it is computed or the default: those may read other locals, so
+    /// they run once the caller releases the stack.
+    pub(crate) fn provided_under(
+        &self,
+        stack: &crate::LocalStackSnapshot,
+    ) -> Result<T, StaticDeferred<T>> {
+        let mut last = self.last_read.borrow_mut();
+        if let Some(read) = &*last
+            && is_top_frame(&read.frame, stack)
+            && let Some(provided) = read.found.upgrade()
+        {
+            return provided.read();
+        }
+        let provided = self.find(stack);
+        *last = Some(StaticRead {
+            frame: stack.as_ref().map(Rc::downgrade),
+            found: provided.downgrade(),
+        });
+        provided.read()
+    }
+
+    fn find(&self, stack: &crate::LocalStackSnapshot) -> Provided<T> {
+        let Some(entry) = crate::composer::provided_entry(stack, &self.key) else {
+            return Provided::Default;
+        };
+        match entry.downcast::<StaticLocalEntry<T>>() {
+            Ok(entry) => Provided::Value(entry),
+            Err(entry) => match entry.downcast::<StaticComputedLocalEntry<T>>() {
+                Ok(entry) => Provided::Computed(entry),
+                Err(_) => {
+                    log::error!(
+                        "composition local entry type mismatch for key {:?}",
+                        self.key
+                    );
+                    Provided::Default
+                }
+            },
+        }
+    }
+
     /// Pairs this local with `value` for use in `CompositionLocalProvider`. When a later
     /// composition provides a different value, everything under the provider recomposes.
     #[track_caller]
@@ -406,6 +536,7 @@ pub fn staticCompositionLocalOfWithPolicy<T: Clone + 'static>(
         key: LocalKey::new(),
         default: Rc::new(default),
         equivalent: Arc::new(equivalent),
+        last_read: Rc::default(),
     }
 }
 

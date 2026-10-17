@@ -14,8 +14,7 @@ use crate::{
     LocalStackSnapshot, LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned,
     ProvidedValue, RecomposeOptions, RecomposeScope, RecomposeScopeInner, RecycledNode,
     RetentionMode, RetentionPolicy, RuntimeHandle, ScopeId, SlotId, SlotPassOutcome, SlotTable,
-    SlotsHost, SnapshotStateList, SnapshotStateMap, StaticCompositionLocal,
-    StaticComputedLocalEntry, StaticLocalEntry, SubcomposeState,
+    SlotsHost, SnapshotStateList, SnapshotStateMap, StaticCompositionLocal, SubcomposeState,
     collections::map::{HashMap, HashSet},
     composer_context, explicit_group_key_seed,
     retention::{RetainKey, RetentionManager},
@@ -676,7 +675,7 @@ pub(crate) struct LocalFrame {
 }
 
 /// The entry the innermost provider in `stack` supplies for `key`.
-fn provided_entry(stack: &LocalStackSnapshot, key: &LocalKey) -> Option<Rc<dyn Any>> {
+pub(crate) fn provided_entry(stack: &LocalStackSnapshot, key: &LocalKey) -> Option<Rc<dyn Any>> {
     let mut frame = stack.as_deref();
     while let Some(current) = frame {
         if let Some((_, entry)) = current.values.iter().find(|(provided, _)| provided == key) {
@@ -2282,12 +2281,8 @@ impl Composer {
         &self,
         local: &StaticCompositionLocal<T>,
     ) -> T {
-        self.read_provided(
-            &local.key,
-            |entry: &StaticLocalEntry<T>| entry.value(),
-            |entry: &StaticComputedLocalEntry<T>| entry.value(),
-        )
-        .unwrap_or_else(|| local.default_value())
+        let provided = local.provided_under(&self.core.local_stack.borrow());
+        provided.unwrap_or_else(|deferred| deferred.value(local))
     }
 
     /// The value of the innermost provided entry for `key`, a plain value

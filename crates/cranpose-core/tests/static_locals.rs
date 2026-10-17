@@ -84,3 +84,63 @@ fn a_changed_static_value_recomposes_what_its_provider_holds() {
     assert_eq!(seen.take(), []);
     assert_eq!(runs.get(), 2);
 }
+
+#[cranpose_macros::composable]
+fn TickingReader(label: &'static str, tick: MutableState<u32>, seen: Seen) {
+    let _ = tick.get();
+    seen.borrow_mut().push((label, local().current()));
+}
+
+#[cranpose_macros::composable]
+fn TwoProviders(first: MutableState<i32>, tick: MutableState<u32>, seen: Seen) {
+    CompositionLocalProvider([local().provides(first.get())], || {
+        TickingReader("first", tick, Rc::clone(&seen));
+    });
+    CompositionLocalProvider([local().provides(20)], || {
+        TickingReader("second", tick, Rc::clone(&seen));
+    });
+    TickingReader("outside", tick, Rc::clone(&seen));
+}
+
+#[test]
+fn readers_recomposing_alone_read_the_provider_they_sit_under() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let first = MutableState::with_runtime(10, runtime.clone());
+    let tick = MutableState::with_runtime(0_u32, runtime);
+    let seen: Seen = Rc::default();
+    {
+        let seen = Rc::clone(&seen);
+        composition
+            .render(location_key(file!(), line!(), column!()), move || {
+                TwoProviders(first, tick, Rc::clone(&seen));
+            })
+            .expect("initial composition");
+    }
+    let all = [("first", 10), ("outside", 0), ("second", 20)];
+    assert_eq!(sorted(&seen), all);
+
+    // Each reader recomposes on its own, under the provider frame it was
+    // composed under, one after another, in no set order.
+    tick.set(1);
+    settle(&mut composition);
+    assert_eq!(sorted(&seen), all);
+
+    first.set(11);
+    settle(&mut composition);
+    assert_eq!(sorted(&seen), [("first", 11)]);
+
+    tick.set(2);
+    settle(&mut composition);
+    assert_eq!(
+        sorted(&seen),
+        [("first", 11), ("outside", 0), ("second", 20)]
+    );
+}
+
+/// The readings so far, by label.
+fn sorted(seen: &Seen) -> Vec<(&'static str, i32)> {
+    let mut readings = seen.take();
+    readings.sort_unstable();
+    readings
+}
