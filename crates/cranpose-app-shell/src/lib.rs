@@ -1100,8 +1100,7 @@ where
     /// redrawn. A platform backend running with no surface uses it to compose
     /// for work and stay asleep for animation.
     pub fn has_pending_ui(&self) -> bool {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(|| self.app.composition.runtime_handle().has_pending_ui())
+        self.app.composition.runtime_handle().has_pending_ui()
     }
 
     /// Runs the tasks woken since they last ran, now rather than at the next
@@ -1111,12 +1110,14 @@ where
     /// only every other frame, whenever the timer fires just after one starts.
     /// A platform calls this whenever its loop wakes.
     pub fn run_pending_tasks(&mut self) {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(|| {
-            let runtime_handle = self.app.composition.runtime_handle();
-            if runtime_handle.has_pending_ui() {
-                runtime_handle.with_deferred_state_releases(|| runtime_handle.drain_ui());
-            }
+        let runtime_handle = self.app.composition.runtime_handle();
+        // The tasks run in the app's context; a wake that brought none, as a
+        // frame request does, needs no context.
+        if !runtime_handle.has_pending_ui() {
+            return;
+        }
+        self.app.app_context.enter(|| {
+            runtime_handle.with_deferred_state_releases(|| runtime_handle.drain_ui());
         });
     }
 
