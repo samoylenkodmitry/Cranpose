@@ -1,5 +1,5 @@
 use std::{
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -13,10 +13,7 @@ use cranpose_services::{
     set_media_analysis_enabled, set_media_volume, set_platform_media_player, stop_media,
 };
 
-fn one_session_at_a_time() -> MutexGuard<'static, ()> {
-    static SESSION: Mutex<()> = Mutex::new(());
-    SESSION.lock().unwrap_or_else(PoisonError::into_inner)
-}
+use crate::media_support::one_media_player_at_a_time;
 
 struct SessionPlayer {
     capabilities: MediaCapabilities,
@@ -127,7 +124,7 @@ fn track(seconds: u64) -> MediaItem {
 
 #[test]
 fn an_interruption_puts_playback_back_where_it_was() {
-    let _session = one_session_at_a_time();
+    let _media_player = one_media_player_at_a_time();
     let player = SessionPlayer::install(MediaCapabilities::TRANSPORT);
 
     open_media(track(200)).expect("the item opens");
@@ -155,7 +152,7 @@ fn an_interruption_puts_playback_back_where_it_was() {
 
 #[test]
 fn ducking_lowers_the_device_without_touching_the_applications_volume() {
-    let _session = one_session_at_a_time();
+    let _media_player = one_media_player_at_a_time();
     let player = SessionPlayer::install(MediaCapabilities::TRANSPORT);
     open_media(track(120)).expect("the item opens");
     play_media().expect("the item plays");
@@ -181,7 +178,7 @@ fn ducking_lowers_the_device_without_touching_the_applications_volume() {
 
 #[test]
 fn a_lock_screen_drives_a_transport_the_application_never_wired_up() {
-    let _session = one_session_at_a_time();
+    let _media_player = one_media_player_at_a_time();
     let player = SessionPlayer::install(MediaCapabilities {
         session: true,
         equalizer: false,
@@ -225,7 +222,7 @@ fn a_lock_screen_drives_a_transport_the_application_never_wired_up() {
 
 #[test]
 fn a_screen_composed_after_the_host_was_rebuilt_learns_what_is_playing() {
-    let _session = one_session_at_a_time();
+    let _media_player = one_media_player_at_a_time();
     let player = SessionPlayer::install(MediaCapabilities::TRANSPORT);
     open_media(track(300)).expect("the item opens");
     play_media().expect("the item plays");
@@ -267,7 +264,7 @@ fn a_screen_composed_after_the_host_was_rebuilt_learns_what_is_playing() {
 
 #[test]
 fn a_screen_is_told_which_controls_this_device_will_honour() {
-    let _session = one_session_at_a_time();
+    let _media_player = one_media_player_at_a_time();
     SessionPlayer::install(MediaCapabilities {
         seeking: true,
         speed: false,
@@ -297,7 +294,7 @@ fn a_screen_is_told_which_controls_this_device_will_honour() {
 
 #[test]
 fn stopping_leaves_nothing_of_the_last_session_behind() {
-    let _session = one_session_at_a_time();
+    let _media_player = one_media_player_at_a_time();
     let player = SessionPlayer::install(MediaCapabilities::TRANSPORT);
     open_media(track(60)).expect("the item opens");
     play_media().expect("the item plays");
@@ -315,7 +312,7 @@ fn stopping_leaves_nothing_of_the_last_session_behind() {
 
 #[test]
 fn regaining_focus_with_nothing_open_starts_nothing() {
-    let _session = one_session_at_a_time();
+    let _media_player = one_media_player_at_a_time();
     SessionPlayer::install(MediaCapabilities::TRANSPORT);
     let seen = Arc::new(Mutex::new(Vec::new()));
     let recorder = Arc::clone(&seen);
@@ -339,7 +336,7 @@ fn regaining_focus_with_nothing_open_starts_nothing() {
 
 #[test]
 fn a_user_pause_survives_an_interruption_that_follows_it() {
-    let _session = one_session_at_a_time();
+    let _media_player = one_media_player_at_a_time();
     SessionPlayer::install(MediaCapabilities::TRANSPORT);
     open_media(track(60)).expect("the item opens");
     play_media().expect("the item plays");

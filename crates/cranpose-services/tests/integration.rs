@@ -14,6 +14,7 @@ mod launch_args_integration;
 mod launcher_integration;
 mod lifecycle_steps;
 mod media_integration;
+mod media_support;
 mod opened_links_delivery;
 mod persistence_regressions;
 mod saver_forms;

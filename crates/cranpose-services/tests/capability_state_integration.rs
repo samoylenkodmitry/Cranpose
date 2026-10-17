@@ -13,6 +13,8 @@ use cranpose_services::{
     set_media_speed, start_camera, store_available,
 };
 
+use crate::media_support::one_media_player_at_a_time;
+
 fn one_registry_at_a_time() -> MutexGuard<'static, ()> {
     static REGISTRY: Mutex<()> = Mutex::new(());
     REGISTRY.lock().unwrap_or_else(PoisonError::into_inner)
@@ -31,7 +33,7 @@ fn a_platform_without_a_camera_says_so_rather_than_producing_nothing() {
 
 #[test]
 fn a_platform_without_media_playback_refuses_every_transport_call() {
-    let _registry = one_registry_at_a_time();
+    let _media_player = one_media_player_at_a_time();
     clear_platform_media_player();
 
     assert!(!media_playback_supported());
