@@ -3018,6 +3018,7 @@ fn the_cached_measure_gate_rejects_a_child_that_owes_a_layout_repass() {
         id,
         constraints,
         crate::render_state::current_layout_cache_epoch(),
+        &crate::render_state::require_current_app_context("a test"),
     )
     .expect("gate must not error");
     assert!(
@@ -3076,6 +3077,7 @@ fn the_cached_measure_gate_rejects_a_measurement_from_a_superseded_epoch() {
         id,
         constraints,
         crate::render_state::current_layout_cache_epoch(),
+        &crate::render_state::require_current_app_context("a test"),
     )
     .expect("gate must not error");
     assert!(

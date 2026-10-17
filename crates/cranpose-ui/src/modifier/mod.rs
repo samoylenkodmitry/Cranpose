@@ -46,7 +46,7 @@ mod window_root;
 mod wrap_content;
 mod z_index;
 
-pub(crate) use chain::InPlaceReach;
+pub(crate) use chain::{InPlaceReach, InPlaceUpdate};
 pub use chain::{ModifierChainHandle, ModifierChainInspectorNode, ModifierLocalsHandle};
 pub(crate) use coordinator_geometry::{CoordinatorGeometry, CoordinatorRect};
 pub use cranpose_foundation::{
@@ -1126,26 +1126,34 @@ impl Modifier {
         self.eq_internal(other, false)
     }
 
-    /// How far an update in place to `other` reaches, when `other` has this
-    /// modifier's elements in the same order, equal except elements that
-    /// [`InPlaceReach::of`] accepts. `None` when another element differs; an
-    /// element that asks for an update on every set counts as different.
-    pub(crate) fn in_place_reach(&self, other: &Self) -> Option<InPlaceReach> {
-        if self.element_count != other.element_count {
+    /// The update in place to `other`, when `other` has this modifier's
+    /// elements in the same order, equal except elements that
+    /// [`InPlaceReach::of`] accepts: how far it reaches, and the elements it
+    /// updates. `None` when another element differs, or the chain is too
+    /// long to name its elements; an element that asks for an update on
+    /// every set counts as different.
+    pub(crate) fn in_place_update(&self, other: &Self) -> Option<InPlaceUpdate> {
+        if self.element_count != other.element_count || self.element_count > u64::BITS as usize {
             return None;
         }
-        let mut reach = InPlaceReach::Node;
-        for (a, b) in self.iter_elements().zip(other.iter_elements()) {
+        let mut update = InPlaceUpdate {
+            reach: InPlaceReach::Node,
+            elements: 0,
+        };
+        for (index, (a, b)) in self.iter_elements().zip(other.iter_elements()).enumerate() {
             if a.requires_update() || b.requires_update() {
                 return None;
             }
             let element_type = a.element_type();
             match InPlaceReach::of(element_type) {
                 // A text updates in place whether it changed or not.
-                Some(InPlaceReach::Node) if b.element_type() == element_type => {}
+                Some(InPlaceReach::Node) if b.element_type() == element_type => {
+                    update.elements |= 1 << index;
+                }
                 Some(InPlaceReach::Resolved) if b.element_type() == element_type => {
                     if !a.equals_element(&**b) {
-                        reach = InPlaceReach::Resolved;
+                        update.reach = InPlaceReach::Resolved;
+                        update.elements |= 1 << index;
                     }
                 }
                 _ => {
@@ -1155,7 +1163,7 @@ impl Modifier {
                 }
             }
         }
-        Some(reach)
+        Some(update)
     }
 
     fn eq_internal(&self, other: &Self, consider_always_update: bool) -> bool {

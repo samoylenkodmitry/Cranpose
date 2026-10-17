@@ -609,20 +609,6 @@ pub fn __branch_group_scope_deferred(key: Key) -> Option<ScopedBranchGroupGuard>
     })
 }
 
-/// Runs the body of a `#[composable(no_skip)]` function on the current
-/// composer, in its caller's group, as Compose runs an inline composable:
-/// the body opens no group of its own, and its call-site `key` is folded
-/// into the identity of the groups, values and nodes it composes, as a
-/// branch's key is.
-#[doc(hidden)]
-#[inline]
-pub fn __compose_inline<R>(key: Key, body: impl FnOnce(&Composer) -> R) -> R {
-    with_current_composer(|composer| {
-        let _fold = composer.__branch_group_deferred(key);
-        body(composer)
-    })
-}
-
 /// The key of the `branch`th branch guard the `#[composable]` macro wrote at
 /// a source position, as a constant.
 #[doc(hidden)]
@@ -2607,9 +2593,11 @@ pub(crate) enum Command {
         parent_id: NodeId,
         child_id: NodeId,
     },
+    /// Makes `parent_id`'s children `expected_children`; `None` when the pass
+    /// composed the children the parent held before it, in the same order.
     SyncChildren {
         parent_id: NodeId,
-        expected_children: ChildList,
+        expected_children: Option<ChildList>,
     },
     Callback(CommandCallback),
 }
@@ -2769,7 +2757,12 @@ impl Command {
             Self::SyncChildren {
                 parent_id,
                 expected_children,
-            } => sync_children(applier, parent_id, &expected_children, deferred_cleanup),
+            } => sync_or_settle_children(
+                applier,
+                parent_id,
+                expected_children.as_deref(),
+                deferred_cleanup,
+            ),
             Self::Callback(callback) => callback(applier),
         }
     }
@@ -2855,8 +2848,9 @@ struct DetachChildCommand {
 
 struct SyncChildrenCommand {
     parent_id: NodeId,
-    child_start: usize,
-    child_len: usize,
+    /// Where the expected children start in the queue's child ids, and how
+    /// many there are; `None` for a parent that kept its children.
+    children: Option<(usize, usize)>,
 }
 
 /// The commands a composition pass queued for the applier, in order. Kept
@@ -2967,13 +2961,14 @@ impl CommandQueue {
                 parent_id,
                 expected_children,
             } => {
-                let child_start = self.sync_child_ids.len();
-                let child_len = expected_children.len();
-                self.sync_child_ids.extend(expected_children);
+                let children = expected_children.map(|expected| {
+                    let child_start = self.sync_child_ids.len();
+                    self.sync_child_ids.extend_from_slice(&expected);
+                    (child_start, expected.len())
+                });
                 self.sync_children.push(SyncChildrenCommand {
                     parent_id,
-                    child_start,
-                    child_len,
+                    children,
                 });
                 self.push_tag(CommandTag::SyncChildren);
             }
@@ -3332,14 +3327,17 @@ impl CommandPayloads<'_> {
         let tag = CommandTag::SyncChildren;
         let SyncChildrenCommand {
             parent_id,
-            child_start,
-            child_len,
+            children,
         } = next_command_payload(&mut self.sync_children, tag)?;
-        let expected_children = child_start
-            .checked_add(child_len)
-            .and_then(|child_end| self.sync_child_ids.get(child_start..child_end))
-            .ok_or_else(|| command_payload_error(tag))?;
-        sync_children(applier, parent_id, expected_children, cleanup)
+        let expected_children = children
+            .map(|(child_start, child_len)| {
+                child_start
+                    .checked_add(child_len)
+                    .and_then(|child_end| self.sync_child_ids.get(child_start..child_end))
+                    .ok_or_else(|| command_payload_error(tag))
+            })
+            .transpose()?;
+        sync_or_settle_children(applier, parent_id, expected_children, cleanup)
     }
 
     fn assert_all_taken(&mut self) {
@@ -3690,38 +3688,62 @@ fn reconcile_children(
     expected_children: &[NodeId],
     children_unchanged: bool,
 ) -> Result<(), NodeError> {
-    let mut repaired = false;
     if children_unchanged {
-        debug_assert!(
-            expected_children.iter().all(|&child_id| applier
-                .get_mut(child_id)
-                .map_or(true, |node| node.parent().is_none_or(|p| p == parent_id))),
-            "the children a parent holds must name no other parent"
-        );
-    } else {
-        for &child_id in expected_children {
-            let needs_attach = applier
-                .get_mut(child_id)
-                .is_ok_and(|node| node.parent() != Some(parent_id));
-            if needs_attach {
-                insert_child_with_reparenting(applier, parent_id, child_id);
-                repaired = true;
-            }
+        settle_kept_children(applier, parent_id);
+        return Ok(());
+    }
+    let mut repaired = false;
+    for &child_id in expected_children {
+        let needs_attach = applier
+            .get_mut(child_id)
+            .is_ok_and(|node| node.parent() != Some(parent_id));
+        if needs_attach {
+            insert_child_with_reparenting(applier, parent_id, child_id);
+            repaired = true;
         }
     }
-
-    let is_dirty = children_unchanged
-        && applier
-            .get_mut(parent_id)
-            .is_ok_and(|node| node.layout_dirty());
-
     if repaired {
         DirtyBubble::LAYOUT_AND_MEASURE.apply(applier, parent_id);
-    } else if is_dirty {
+    }
+    Ok(())
+}
+
+/// Makes `parent_id`'s children `expected_children`, or, for `None`, finishes
+/// a parent that kept the ones it held.
+fn sync_or_settle_children(
+    applier: &mut dyn Applier,
+    parent_id: NodeId,
+    expected_children: Option<&[NodeId]>,
+    deferred_cleanup: &mut DeferredChildCleanupQueue,
+) -> Result<(), NodeError> {
+    match expected_children {
+        Some(expected_children) => {
+            sync_children(applier, parent_id, expected_children, deferred_cleanup)
+        }
+        None => {
+            settle_kept_children(applier, parent_id);
+            Ok(())
+        }
+    }
+}
+
+/// Finishes a parent whose children stayed as they were: its own layout dirt,
+/// which it may have taken while it composed, reaches its ancestors.
+fn settle_kept_children(applier: &mut dyn Applier, parent_id: NodeId) {
+    debug_assert!(
+        collect_current_children(applier, parent_id)
+            .iter()
+            .all(|&child_id| applier
+                .get_mut(child_id)
+                .map_or(true, |node| node.parent().is_none_or(|p| p == parent_id))),
+        "the children a parent holds must name no other parent"
+    );
+    if applier
+        .get_mut(parent_id)
+        .is_ok_and(|node| node.layout_dirty())
+    {
         DirtyBubble::LAYOUT.apply_to_ancestors(applier, parent_id);
     }
-
-    Ok(())
 }
 
 /// The stock [`Applier`]: it keeps nodes in memory under ids that stay stable for the life of the

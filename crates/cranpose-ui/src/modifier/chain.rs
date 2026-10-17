@@ -81,6 +81,14 @@ pub(crate) enum InPlaceReach {
     Resolved,
 }
 
+/// An update in place of a modifier's chain: how far it reaches, and the
+/// elements whose nodes take it, one bit an element index.
+#[derive(Clone, Copy)]
+pub(crate) struct InPlaceUpdate {
+    pub(crate) reach: InPlaceReach,
+    pub(crate) elements: u64,
+}
+
 impl InPlaceReach {
     /// The reach of an update in place of an element of `element_type`;
     /// `None` when something else reads its values and a change to it
@@ -215,15 +223,14 @@ impl ModifierChainHandle {
         }
     }
 
-    /// Updates in place the chain's elements that [`InPlaceReach::of`]
-    /// accepts, for a modifier that differs from the last one only in those
-    /// with `reach`, as a text's string or an animated fill fraction does.
-    /// `false` when the chain cannot take it so; the caller then updates the
-    /// whole chain.
+    /// Updates in place the chain's elements `update` names, for a modifier
+    /// that differs from the last one only in those, as a text's string or
+    /// an animated fill fraction does. `false` when the chain cannot take it
+    /// so; the caller then updates the whole chain.
     pub(crate) fn update_elements_in_place(
         &mut self,
         modifier: &Modifier,
-        reach: InPlaceReach,
+        update: InPlaceUpdate,
         context: &mut BasicModifierNodeContext,
     ) -> bool {
         // A chain that reads modifier locals syncs them on every update.
@@ -236,10 +243,10 @@ impl ModifierChainHandle {
         let updated = self.chain.update_entries_in_place(
             modifier.iter_elements(),
             modifier.element_count(),
-            |element_type| InPlaceReach::of(element_type).is_some(),
+            update.elements,
             context,
         );
-        if updated && reach == InPlaceReach::Resolved {
+        if updated && update.reach == InPlaceReach::Resolved {
             self.resolve();
         }
         updated

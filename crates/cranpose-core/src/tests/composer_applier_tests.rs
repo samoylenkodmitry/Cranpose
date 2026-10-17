@@ -707,7 +707,11 @@ fn reused_parent_with_existing_children_still_defers_to_sync_children() {
     assert_eq!(commands.attach_children.len(), 0);
     assert_eq!(commands.sync_children.len(), 1);
     assert_eq!(commands.sync_children[0].parent_id, parent_id);
-    assert_eq!(commands.sync_child_ids.as_slice(), [child_id]);
+    assert_eq!(
+        commands.sync_children[0].children, None,
+        "the parent kept its child, so no list needs syncing"
+    );
+    assert!(commands.sync_child_ids.is_empty());
 
     drop(composer);
     teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
@@ -833,7 +837,9 @@ fn sync_children_reorders_small_child_lists_without_regressing_behavior() {
 
     Command::SyncChildren {
         parent_id,
-        expected_children: SmallVec::<[NodeId; 4]>::from_slice(&[child_c, child_a, child_d]),
+        expected_children: Some(SmallVec::<[NodeId; 4]>::from_slice(&[
+            child_c, child_a, child_d,
+        ])),
     }
     .apply(&mut applier)
     .expect("sync children");
@@ -866,7 +872,7 @@ fn queued_sync_children_preserves_child_reparented_later_in_same_apply() {
     let mut commands = CommandQueue::default();
     commands.push(Command::SyncChildren {
         parent_id: old_parent,
-        expected_children: SmallVec::new(),
+        expected_children: Some(SmallVec::new()),
     });
     commands.push(Command::AttachChild {
         parent_id: new_parent,
@@ -919,8 +925,7 @@ fn command_queue_invalid_sync_children_range_returns_node_error() {
     let mut commands = CommandQueue::default();
     commands.sync_children.push(SyncChildrenCommand {
         parent_id: 1,
-        child_start: 2,
-        child_len: 4,
+        children: Some((2, 4)),
     });
     commands.push_tag(CommandTag::SyncChildren);
 

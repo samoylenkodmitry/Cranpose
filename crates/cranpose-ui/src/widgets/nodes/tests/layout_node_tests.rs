@@ -405,35 +405,39 @@ fn drain_semantics_layout_changes() -> Vec<NodeId> {
 #[test]
 fn layout_state_reports_the_changes_a_semantics_tree_reads() {
     let _app_context = crate::render_state::app_context_test_scope();
+    let context = crate::render_state::require_current_app_context("a test");
     drain_semantics_layout_changes();
     let mut state = LayoutState::default();
     state.set_node_id(9);
     state.set_content_offset(Point::default());
-    state.set_size(Size::default());
-    state.clear_placed();
+    state.set_size(Size::default(), &context);
+    state.clear_placed(&context);
     assert!(
         drain_semantics_layout_changes().is_empty(),
         "writes that change nothing report nothing"
     );
 
-    state.place(Point::default());
+    state.place(Point::default(), &context);
     assert_eq!(drain_semantics_layout_changes(), vec![9], "placed");
-    state.clear_placed();
-    state.place(Point::default());
+    state.clear_placed(&context);
+    state.place(Point::default(), &context);
     assert_eq!(
         drain_semantics_layout_changes(),
         vec![9],
         "placed again in a pass, reported once"
     );
-    state.place(Point { x: 1.0, y: 0.0 });
+    state.place(Point { x: 1.0, y: 0.0 }, &context);
     assert_eq!(drain_semantics_layout_changes(), vec![9], "moved");
     state.set_content_offset(Point { x: 2.0, y: 0.0 });
     assert_eq!(state.content_offset(), Point { x: 2.0, y: 0.0 });
     assert_eq!(drain_semantics_layout_changes(), vec![9], "content moved");
-    state.set_size(Size {
-        width: 4.0,
-        height: 4.0,
-    });
+    state.set_size(
+        Size {
+            width: 4.0,
+            height: 4.0,
+        },
+        &context,
+    );
     assert_eq!(drain_semantics_layout_changes(), vec![9], "resized");
 }
 
@@ -475,6 +479,7 @@ fn cloning_cache_handles_from_the_same_cache_keeps_the_handle() {
 #[test]
 fn layout_state_handle_lends_the_state_the_node_reports() {
     let _app_context = crate::render_state::app_context_test_scope();
+    let context = crate::render_state::require_current_app_context("a test");
     let node = fresh_node();
     let handle = node.layout_state_handle();
     assert_eq!(
@@ -482,10 +487,13 @@ fn layout_state_handle_lends_the_state_the_node_reports() {
         1,
         "lending the state must not share it"
     );
-    handle.borrow_mut().set_size(Size {
-        width: 12.0,
-        height: 5.0,
-    });
+    handle.borrow_mut().set_size(
+        Size {
+            width: 12.0,
+            height: 5.0,
+        },
+        &context,
+    );
     assert_eq!(
         node.measured_size(),
         Size {
@@ -517,9 +525,10 @@ fn origin() -> Point {
 #[test]
 fn a_first_placement_reports_the_node_even_at_the_origin() {
     let _app_context = crate::render_state::app_context_test_scope();
-    begin_placement_pass();
+    let context = crate::render_state::require_current_app_context("a test");
+    context.placement_pass().begin();
     let mut state = state_of(7);
-    state.place(origin());
+    state.place(origin(), &context);
     assert!(state.is_placed());
     assert_eq!(crate::take_geometry_scene_nodes().reshaped, vec![7]);
 }
@@ -527,19 +536,20 @@ fn a_first_placement_reports_the_node_even_at_the_origin() {
 #[test]
 fn a_node_its_pass_clears_and_places_where_it_was_reports_nothing() {
     let _app_context = crate::render_state::app_context_test_scope();
+    let context = crate::render_state::require_current_app_context("a test");
     let mut state = state_of(7);
-    state.place(origin());
+    state.place(origin(), &context);
     let _ = crate::take_geometry_scene_nodes();
 
-    begin_placement_pass();
-    state.clear_placed();
-    state.clear_placed();
-    assert!(placement_pass_with_unplaced_nodes().is_some());
-    state.place(origin());
-    assert_eq!(placement_pass_with_unplaced_nodes(), None);
+    context.placement_pass().begin();
+    state.clear_placed(&context);
+    state.clear_placed(&context);
+    assert!(context.placement_pass().with_unplaced_nodes().is_some());
+    state.place(origin(), &context);
+    assert_eq!(context.placement_pass().with_unplaced_nodes(), None);
     assert!(crate::take_geometry_scene_nodes().is_empty());
 
-    state.place(Point { x: 0.0, y: 18.0 });
+    state.place(Point { x: 0.0, y: 18.0 }, &context);
     assert_eq!(
         crate::take_geometry_scene_nodes(),
         crate::GeometrySceneNodes {
@@ -549,11 +559,14 @@ fn a_node_its_pass_clears_and_places_where_it_was_reports_nothing() {
         "a move is reported apart from a reshape"
     );
 
-    state.set_size(Size {
-        width: 10.0,
-        height: 4.0,
-    });
-    state.place(Point { x: 3.0, y: 18.0 });
+    state.set_size(
+        Size {
+            width: 10.0,
+            height: 4.0,
+        },
+        &context,
+    );
+    state.place(Point { x: 3.0, y: 18.0 }, &context);
     assert_eq!(
         crate::take_geometry_scene_nodes(),
         crate::GeometrySceneNodes {
@@ -567,22 +580,26 @@ fn a_node_its_pass_clears_and_places_where_it_was_reports_nothing() {
 #[test]
 fn a_node_its_pass_clears_and_never_places_is_left_unplaced() {
     let _app_context = crate::render_state::app_context_test_scope();
+    let context = crate::render_state::require_current_app_context("a test");
     let mut state = state_of(7);
-    state.place(origin());
-    begin_placement_pass();
-    state.clear_placed();
-    let pass = placement_pass_with_unplaced_nodes().expect("the pass left a node unplaced");
+    state.place(origin(), &context);
+    context.placement_pass().begin();
+    state.clear_placed(&context);
+    let pass = context
+        .placement_pass()
+        .with_unplaced_nodes()
+        .expect("the pass left a node unplaced");
     assert!(state.unplaced_in(pass));
     assert!(!state.unplaced_in(pass + 1));
 
-    begin_placement_pass();
+    context.placement_pass().begin();
     assert_eq!(
-        placement_pass_with_unplaced_nodes(),
+        context.placement_pass().with_unplaced_nodes(),
         None,
         "a new pass starts with nothing unplaced"
     );
     let _ = crate::take_geometry_scene_nodes();
-    state.place(origin());
+    state.place(origin(), &context);
     assert_eq!(
         crate::take_geometry_scene_nodes().reshaped,
         vec![7],

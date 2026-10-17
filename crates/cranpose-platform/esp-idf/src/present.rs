@@ -19,12 +19,26 @@ fn rgb565(pixel: u32) -> u16 {
 }
 
 fn encode(rgba: &[u32], strip: &mut [u16], format: PixelFormat) {
-    let pixels = strip.iter_mut().zip(rgba);
     match format {
-        PixelFormat::Rgb565 => pixels.for_each(|(out, &pixel)| *out = rgb565(pixel)),
+        PixelFormat::Rgb565 => encode_with(rgba, strip, rgb565),
         PixelFormat::Rgb565BigEndian => {
-            pixels.for_each(|(out, &pixel)| *out = rgb565(pixel).swap_bytes());
+            encode_with(rgba, strip, |pixel| rgb565(pixel).swap_bytes());
         }
+    }
+}
+
+/// Writes `encoded` of each pixel of `rgba` into `strip`, four pixels a
+/// step: a step of the plain loop spends a third of its instructions on its
+/// counter, pointers and branch.
+fn encode_with(rgba: &[u32], strip: &mut [u16], encoded: impl Fn(u32) -> u16) {
+    let len = rgba.len().min(strip.len());
+    let (quads, rest) = rgba[..len].as_chunks::<4>();
+    let (out_quads, out_rest) = strip[..len].as_chunks_mut::<4>();
+    for (out, quad) in out_quads.iter_mut().zip(quads) {
+        *out = quad.map(&encoded);
+    }
+    for (out, &pixel) in out_rest.iter_mut().zip(rest) {
+        *out = encoded(pixel);
     }
 }
 
