@@ -14,7 +14,7 @@ const MIN_PRESSED_PIXELS: usize = 400;
 /// The card whose accessibility name is `title`, as `(reading, bounds)`. The
 /// footer prints the same name, so the stage is the one that also publishes a
 /// state description.
-fn find_card(element: &SemanticElement, title: &str) -> Option<(String, (f32, f32, f32, f32))> {
+pub(crate) fn find_card(element: &SemanticElement, title: &str) -> Option<(String, (f32, f32, f32, f32))> {
     if element.text.as_deref() == Some(title) {
         if let Some(reading) = &element.state_description {
             let bounds = element.bounds;
@@ -30,7 +30,7 @@ fn find_card(element: &SemanticElement, title: &str) -> Option<(String, (f32, f3
         .find_map(|child| find_card(child, title))
 }
 
-fn card(robot: &Robot, title: &str) -> (String, (f32, f32, f32, f32)) {
+pub(crate) fn card(robot: &Robot, title: &str) -> (String, (f32, f32, f32, f32)) {
     let semantics = robot.get_semantics().expect("semantics");
     semantics
         .iter()

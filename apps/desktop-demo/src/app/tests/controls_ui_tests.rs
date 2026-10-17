@@ -4,45 +4,49 @@ const STAGE: Size = Size {
     width: 360.0,
     height: STAGE_HEIGHT,
 };
+const DESIGN: (Size, StageView) = (STAGE, StageView::Design);
 
 #[test]
 fn projection_maps_scene_origin_near_stage_centre() {
-    let centre = project([0.0, CAMERA_TARGET_Y, 0.0], STAGE);
+    let centre = project([0.0, CAMERA_TARGET_Y, 0.0], STAGE, StageView::Design);
     assert!((centre.x - STAGE.width * 0.5).abs() < 0.01);
     assert!((centre.y - STAGE.height * 0.5).abs() < 0.01);
 }
 
 #[test]
 fn projection_keeps_rail_ends_inside_the_stage() {
-    let left = project([-SLIDER_TRAVEL, SLIDER_LIFT, 0.0], STAGE);
-    let right = project([SLIDER_TRAVEL, SLIDER_LIFT, 0.0], STAGE);
+    let left = project([-SLIDER_TRAVEL, SLIDER_LIFT, 0.0], STAGE, StageView::Design);
+    let right = project([SLIDER_TRAVEL, SLIDER_LIFT, 0.0], STAGE, StageView::Design);
     assert!(left.x > 0.0 && left.x < STAGE.width);
     assert!(right.x > left.x && right.x < STAGE.width);
 }
 
 #[test]
 fn slider_value_follows_pointer_across_the_rail() {
-    let left = project([-SLIDER_TRAVEL, SLIDER_LIFT, 0.0], STAGE);
-    let right = project([SLIDER_TRAVEL, SLIDER_LIFT, 0.0], STAGE);
-    assert_eq!(slider_value_at(left, STAGE), 0.0);
-    assert_eq!(slider_value_at(right, STAGE), 1.0);
+    let left = project([-SLIDER_TRAVEL, SLIDER_LIFT, 0.0], STAGE, StageView::Design);
+    let right = project([SLIDER_TRAVEL, SLIDER_LIFT, 0.0], STAGE, StageView::Design);
+    assert_eq!(slider_value_at(left, DESIGN), 0.0);
+    assert_eq!(slider_value_at(right, DESIGN), 1.0);
     let middle = Point {
         x: (left.x + right.x) * 0.5,
         y: left.y,
     };
-    assert!((slider_value_at(middle, STAGE) - 0.5).abs() < 1e-4);
+    assert!((slider_value_at(middle, DESIGN) - 0.5).abs() < 1e-4);
 }
 
 #[test]
 fn slider_value_clamps_outside_the_rail() {
-    assert_eq!(slider_value_at(Point { x: -400.0, y: 0.0 }, STAGE), 0.0);
-    assert_eq!(slider_value_at(Point { x: 900.0, y: 0.0 }, STAGE), 1.0);
+    assert_eq!(slider_value_at(Point { x: -400.0, y: 0.0 }, DESIGN), 0.0);
+    assert_eq!(slider_value_at(Point { x: 900.0, y: 0.0 }, DESIGN), 1.0);
 }
 
 #[test]
 fn slider_value_is_zero_for_a_stage_that_was_never_laid_out() {
     assert_eq!(
-        slider_value_at(Point { x: 0.0, y: 0.0 }, Size::default()),
+        slider_value_at(
+            Point { x: 0.0, y: 0.0 },
+            (Size::default(), StageView::Design)
+        ),
         0.0
     );
 }
@@ -103,7 +107,11 @@ fn a_stage_narrower_than_the_design_aspect_scales_the_scene_down() {
         height: STAGE_HEIGHT,
     };
     assert!(stage_unit(narrow) < STAGE_HEIGHT);
-    let rail_end = project([-SLIDER_TRAVEL, SLIDER_LIFT, 0.0], narrow);
+    let rail_end = project(
+        [-SLIDER_TRAVEL, SLIDER_LIFT, 0.0],
+        narrow,
+        StageView::Design,
+    );
     assert!(
         rail_end.x > 0.0,
         "the rail must stay inside a square stage, got {}",
@@ -129,13 +137,13 @@ fn dial_value_turns_with_the_pointer_and_clamps() {
 
 #[test]
 fn pointer_angle_ignores_the_pivot_dead_zone() {
-    let pivot = project([0.0, DIAL_PIVOT_Y, 0.0], STAGE);
-    assert!(pointer_angle(pivot, STAGE).is_none());
+    let pivot = project([0.0, DIAL_PIVOT_Y, 0.0], STAGE, StageView::Design);
+    assert!(pointer_angle(pivot, DESIGN).is_none());
     let away = Point {
         x: pivot.x + 60.0,
         y: pivot.y,
     };
-    assert!(pointer_angle(away, STAGE).expect("angle").abs() < 1e-5);
+    assert!(pointer_angle(away, DESIGN).expect("angle").abs() < 1e-5);
 }
 
 #[test]
@@ -178,15 +186,15 @@ fn a_click_counts_one_press() {
 
 #[test]
 fn a_drag_starts_the_slider_at_the_pressed_position_and_leaves_the_dial() {
-    let right = project([SLIDER_TRAVEL, SLIDER_LIFT, 0.0], STAGE);
+    let right = project([SLIDER_TRAVEL, SLIDER_LIFT, 0.0], STAGE, StageView::Design);
     let slider = ControlState::initial(ControlKind::Slider);
     assert_eq!(
-        drag_start_value(ControlKind::Slider, slider, right, STAGE).value,
+        drag_start_value(ControlKind::Slider, slider, right, DESIGN).value,
         1.0
     );
     let dial = ControlState::initial(ControlKind::VolumeDial);
     assert_eq!(
-        drag_start_value(ControlKind::VolumeDial, dial, right, STAGE),
+        drag_start_value(ControlKind::VolumeDial, dial, right, DESIGN),
         dial
     );
 }
@@ -216,7 +224,7 @@ fn a_value_is_clamped_to_its_track() {
 
 #[test]
 fn drag_turns_the_dial_and_records_the_new_angle() {
-    let pivot = project([0.0, DIAL_PIVOT_Y, 0.0], STAGE);
+    let pivot = project([0.0, DIAL_PIVOT_Y, 0.0], STAGE, StageView::Design);
     let below = Point {
         x: pivot.x,
         y: pivot.y + 60.0,
@@ -226,7 +234,7 @@ fn drag_turns_the_dial_and_records_the_new_angle() {
         active: true,
         angle: 0.0,
     };
-    let (next, tracked) = drag_state(ControlKind::VolumeDial, state, tracking, below, STAGE);
+    let (next, tracked) = drag_state(ControlKind::VolumeDial, state, tracking, below, DESIGN);
     assert!(next.value > state.value);
     assert!((tracked.angle - PI * 0.5).abs() < 1e-4);
     assert!(tracked.active);
@@ -244,7 +252,7 @@ fn drag_leaves_switches_untouched() {
         state,
         tracking,
         Point { x: 10.0, y: 10.0 },
-        STAGE,
+        DESIGN,
     );
     assert_eq!(next, state);
     assert_eq!(tracked.angle, 0.2);

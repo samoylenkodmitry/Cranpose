@@ -5,11 +5,13 @@ use std::{
 
 use cranpose_animation::{animateFloatAsState, spring, Animatable, AnimationType, Spring};
 use cranpose_core::{
-    key, rememberMutableStateOf, with_current_composer, MutableState, Owned, State,
+    key, mutableStateOf, remember, rememberMutableStateOf, with_current_composer, MutableState,
+    Owned, State,
 };
 use cranpose_foundation::SemanticsWidgetRole;
 use cranpose_ui::{
     composable,
+    space::{Mat4, Material, Mesh, MeshSurface, Volume},
     text::{FontWeight, SpanStyle, TextUnit},
     Box, BoxSpec, Brush, Color, Column, ColumnSpec, CornerRadii, GraphicsLayer, LinearArrangement,
     Modifier, Point, PointerEventKind, PointerInputScope, Row, RowSpec, SemanticsConfiguration,
@@ -19,7 +21,10 @@ use cranpose_ui_graphics::{
     CompositingStrategy, RenderEffect, RuntimeShader, RUNTIME_SHADER_PRELUDE_WGSL,
 };
 
-const STAGE_HEIGHT: f32 = 208.0;
+pub(crate) const STAGE_HEIGHT: f32 = 208.0;
+/// A stage on a wall, in its own units: its width, and how far its cube
+/// stands out of the wall.
+pub(crate) const WALL_STAGE_UNITS: (f32, f32) = (2.8, 0.7);
 const CARD_RADIUS: f32 = 22.0;
 const GRID_SPACING: f32 = 16.0;
 const FOOTER_HORIZONTAL_PADDING: f32 = 18.0;
@@ -52,7 +57,7 @@ static CONTROL_KINDS: [ControlKind; 6] = [
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum ControlKind {
+pub(crate) enum ControlKind {
     Checkmark,
     Slider,
     Toggle,
@@ -236,6 +241,14 @@ fn normalize(a: [f32; 3]) -> [f32; 3] {
     [a[0] / length, a[1] / length, a[2] / length]
 }
 
+/// How a stage is seen: from its design camera, or from above, as a wall
+/// of a 3D room shows it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum StageView {
+    Design,
+    Above,
+}
+
 fn camera_eye() -> [f32; 3] {
     [
         CAMERA_YAW.sin() * CAMERA_PITCH.cos() * CAMERA_DISTANCE,
@@ -258,7 +271,15 @@ fn grid_columns(width: f32) -> usize {
     }
 }
 
-fn project(point: [f32; 3], size: Size) -> Point {
+/// Where the stage of `size`, seen as `view` shows, shows `point`.
+fn project(point: [f32; 3], size: Size, view: StageView) -> Point {
+    if view == StageView::Above {
+        let unit = size.width / WALL_STAGE_UNITS.0;
+        return Point {
+            x: point[0] * unit + size.width * 0.5,
+            y: point[2] * unit + size.height * 0.5,
+        };
+    }
     let eye = camera_eye();
     let forward = normalize(sub([0.0, CAMERA_TARGET_Y, 0.0], eye));
     let right = normalize(cross(forward, [0.0, 1.0, 0.0]));
@@ -274,9 +295,9 @@ fn project(point: [f32; 3], size: Size) -> Point {
     }
 }
 
-fn slider_value_at(position: Point, size: Size) -> f32 {
-    let left = project([-SLIDER_TRAVEL, SLIDER_LIFT, 0.0], size).x;
-    let right = project([SLIDER_TRAVEL, SLIDER_LIFT, 0.0], size).x;
+fn slider_value_at(position: Point, (size, view): (Size, StageView)) -> f32 {
+    let left = project([-SLIDER_TRAVEL, SLIDER_LIFT, 0.0], size, view).x;
+    let right = project([SLIDER_TRAVEL, SLIDER_LIFT, 0.0], size, view).x;
     let span = right - left;
     if span.abs() < 1e-3 {
         return 0.0;
@@ -284,8 +305,8 @@ fn slider_value_at(position: Point, size: Size) -> f32 {
     ((position.x - left) / span).clamp(0.0, 1.0)
 }
 
-fn pointer_angle(position: Point, size: Size) -> Option<f32> {
-    let pivot = project([0.0, DIAL_PIVOT_Y, 0.0], size);
+fn pointer_angle(position: Point, (size, view): (Size, StageView)) -> Option<f32> {
+    let pivot = project([0.0, DIAL_PIVOT_Y, 0.0], size, view);
     let dx = position.x - pivot.x;
     let dy = position.y - pivot.y;
     if dx * dx + dy * dy < DIAL_DEAD_ZONE_PX * DIAL_DEAD_ZONE_PX {
@@ -317,10 +338,10 @@ fn drag_start_value(
     kind: ControlKind,
     state: ControlState,
     position: Point,
-    size: Size,
+    stage: (Size, StageView),
 ) -> ControlState {
     match kind {
-        ControlKind::Slider => state.with_value(slider_value_at(position, size)),
+        ControlKind::Slider => state.with_value(slider_value_at(position, stage)),
         _ => state,
     }
 }
@@ -330,11 +351,11 @@ fn drag_state(
     state: ControlState,
     tracking: DragTracking,
     position: Point,
-    size: Size,
+    stage: (Size, StageView),
 ) -> (ControlState, DragTracking) {
     match kind {
-        ControlKind::Slider => (state.with_value(slider_value_at(position, size)), tracking),
-        ControlKind::VolumeDial => match pointer_angle(position, size) {
+        ControlKind::Slider => (state.with_value(slider_value_at(position, stage)), tracking),
+        ControlKind::VolumeDial => match pointer_angle(position, stage) {
             Some(angle) => (
                 state.with_value(dial_value_after(state.value, tracking.angle, angle)),
                 DragTracking {
@@ -423,13 +444,27 @@ fn card_value_style(dark: bool) -> TextStyle {
     }
 }
 
+const STAGE_WGSL: &str = include_str!("controls_stage.wgsl");
+
 fn controls_wgsl() -> Arc<str> {
     static SOURCE: OnceLock<Arc<str>> = OnceLock::new();
     SOURCE
         .get_or_init(|| {
             Arc::<str>::from(format!(
-                "{RUNTIME_SHADER_PRELUDE_WGSL}{}",
+                "{RUNTIME_SHADER_PRELUDE_WGSL}{STAGE_WGSL}{}",
                 include_str!("controls_ui.wgsl")
+            ))
+        })
+        .clone()
+}
+
+fn controls_volume_wgsl() -> Arc<str> {
+    static SOURCE: OnceLock<Arc<str>> = OnceLock::new();
+    SOURCE
+        .get_or_init(|| {
+            Arc::<str>::from(format!(
+                "{STAGE_WGSL}{}",
+                include_str!("controls_volume.wgsl")
             ))
         })
         .clone()
@@ -445,27 +480,52 @@ struct StageUniforms {
     background: Color,
 }
 
+impl StageUniforms {
+    /// Hands `set` each value both kinds of stage read, by index.
+    fn write(&self, mut set: impl FnMut(usize, f32)) {
+        for (index, value) in [
+            (0, self.kind),
+            (1, self.value),
+            (2, self.press),
+            (4, self.dark),
+            (8, self.background.0),
+            (9, self.background.1),
+            (10, self.background.2),
+            (17, SLIDER_TRAVEL),
+            (18, SLIDER_LIFT),
+        ] {
+            set(index, value);
+        }
+    }
+}
+
 fn stage_effect(uniforms: &StageUniforms) -> RenderEffect {
     let mut shader = RuntimeShader::from_shared_source(controls_wgsl());
     shader.set_position_independent(true);
-    shader.set_float(0, uniforms.kind);
-    shader.set_float(1, uniforms.value);
-    shader.set_float(2, uniforms.press);
-    shader.set_float(4, uniforms.dark);
+    uniforms.write(|index, value| shader.set_float(index, value));
     shader.set_float(5, uniforms.tilt_yaw);
     shader.set_float(6, uniforms.tilt_pitch);
-    shader.set_float(8, uniforms.background.0);
-    shader.set_float(9, uniforms.background.1);
-    shader.set_float(10, uniforms.background.2);
     shader.set_float(12, CAMERA_YAW);
     shader.set_float(13, CAMERA_PITCH);
     shader.set_float(14, CAMERA_DISTANCE);
     shader.set_float(15, CAMERA_FOCAL);
     shader.set_float(16, CAMERA_TARGET_Y);
-    shader.set_float(17, SLIDER_TRAVEL);
-    shader.set_float(18, SLIDER_LIFT);
     shader.set_float(19, STAGE_DESIGN_ASPECT);
     RenderEffect::runtime_shader(shader)
+}
+
+/// A stage of `size` as a volume in the unit cube.
+fn stage_volume(uniforms: &StageUniforms, size: Size) -> Material {
+    let mut params = [0.0; Volume::PARAMS];
+    uniforms.write(|index, value| params[index] = value);
+    let (width, rise) = WALL_STAGE_UNITS;
+    params[24] = width;
+    params[25] = rise;
+    params[26] = width * size.height / size.width.max(1.0);
+    Material::Volume(Volume {
+        shader: controls_volume_wgsl(),
+        params,
+    })
 }
 
 #[composable]
@@ -582,19 +642,10 @@ fn press_release_animation() -> AnimationType {
     spring(Spring::DampingRatioNoBouncy, Spring::StiffnessMedium)
 }
 
-fn remember_press_depth() -> Owned<Animatable<f32>> {
-    with_current_composer(|composer| {
-        let runtime = composer.runtime_handle();
-        composer.remember(|| Animatable::new(0.0, runtime))
-    })
-}
-
-fn apply_press(depth: &Owned<Animatable<f32>>, kind: PointerEventKind) {
+fn apply_press(depth: &mut Animatable<f32>, kind: PointerEventKind) {
     match press_response(kind) {
-        PressResponse::Snap => depth.update(|animatable| animatable.snapTo(1.0)),
-        PressResponse::Release => {
-            depth.update(|animatable| animatable.animateTo(0.0, press_release_animation()));
-        }
+        PressResponse::Snap => depth.snapTo(1.0),
+        PressResponse::Release => depth.animateTo(0.0, press_release_animation()),
         PressResponse::Hold => {}
     }
 }
@@ -681,25 +732,145 @@ fn animateStageAsState(
     }
 }
 
-#[composable]
-fn ControlCard(kind: ControlKind, dark: bool, modifier: Modifier) {
-    let state = rememberMutableStateOf(move || ControlState::initial(kind));
-    let hovered = rememberMutableStateOf(|| false);
-    let tilt = rememberMutableStateOf(|| (0.0f32, 0.0f32));
-    let depth = remember_press_depth();
+/// The state of one control and of the pointer over its stage, held in one
+/// composition slot.
+struct ControlParts {
+    state: MutableState<ControlState>,
+    hovered: MutableState<bool>,
+    tilt: MutableState<(f32, f32)>,
+    depth: Animatable<f32>,
+}
 
-    let current = state.get();
-    let animation = animateStageAsState(
+/// A control's state, which its card and its stage share.
+#[derive(Clone)]
+pub(crate) struct ControlHandle(Owned<ControlParts>);
+
+impl ControlHandle {
+    fn state(&self) -> MutableState<ControlState> {
+        self.0.with(|parts| parts.state)
+    }
+
+    fn hovered(&self) -> MutableState<bool> {
+        self.0.with(|parts| parts.hovered)
+    }
+
+    fn tilt(&self) -> MutableState<(f32, f32)> {
+        self.0.with(|parts| parts.tilt)
+    }
+
+    fn press(&self, kind: PointerEventKind) {
+        self.0.update(|parts| apply_press(&mut parts.depth, kind));
+    }
+
+    fn press_depth(&self) -> State<f32> {
+        self.0.with(|parts| parts.depth.state())
+    }
+}
+
+impl PartialEq for ControlHandle {
+    /// A control's handles all come from its one composition slot.
+    fn eq(&self, other: &Self) -> bool {
+        self.state() == other.state()
+    }
+}
+
+#[composable]
+pub(crate) fn rememberControl(kind: ControlKind) -> ControlHandle {
+    let runtime = with_current_composer(|composer| composer.runtime_handle());
+    ControlHandle(remember(move || ControlParts {
+        state: mutableStateOf(ControlState::initial(kind)),
+        hovered: mutableStateOf(false),
+        tilt: mutableStateOf((0.0f32, 0.0f32)),
+        depth: Animatable::new(0.0, runtime),
+    }))
+}
+
+/// How the stage moves toward the control's state and the pointer.
+#[composable]
+fn animateControl(kind: ControlKind, control: ControlHandle) -> StageAnimation {
+    animateStageAsState(
         kind,
         StageTargets {
-            value: current.scene_value(kind),
-            hovered: hovered.get(),
-            tilt: tilt.get(),
+            value: control.state().get().scene_value(kind),
+            hovered: control.hovered().get(),
+            tilt: control.tilt().get(),
         },
-        depth.with(|animatable| animatable.state()),
-    );
-    let background = card_color(dark);
+        control.press_depth(),
+    )
+}
 
+/// The clicks, drags and accessibility of a control's stage, seen as
+/// `view` shows it.
+fn stage_input(kind: ControlKind, control: &ControlHandle, view: StageView) -> Modifier {
+    let (state, hovered, tilt) = (control.state(), control.hovered(), control.tilt());
+    let control = control.clone();
+    control_action(kind, state).pointer_input((), move |scope: PointerInputScope| {
+        let control = control.clone();
+        async move {
+            scope
+                .await_pointer_event_scope(|events| async move {
+                    let mut drag = DragTracking::default();
+                    loop {
+                        let event = events.await_pointer_event().await;
+                        let stage = (events.size(), view);
+                        control.press(event.kind);
+                        match event.kind {
+                            PointerEventKind::Enter => hovered.set(true),
+                            PointerEventKind::Exit => {
+                                hovered.set(false);
+                                drag = DragTracking::default();
+                            }
+                            PointerEventKind::Down => {
+                                hovered.set(true);
+                                drag = DragTracking {
+                                    active: kind.is_continuous(),
+                                    angle: pointer_angle(event.position, stage).unwrap_or_default(),
+                                };
+                                if kind.is_continuous() {
+                                    state.set(drag_start_value(
+                                        kind,
+                                        state.get(),
+                                        event.position,
+                                        stage,
+                                    ));
+                                    event.consume();
+                                }
+                            }
+                            PointerEventKind::Move => {
+                                // Only the design camera tilts toward the pointer.
+                                if view == StageView::Design {
+                                    tilt.set(pointer_tilt(event.position, stage.0));
+                                }
+                                if drag.active {
+                                    let (next, tracked) =
+                                        drag_state(kind, state.get(), drag, event.position, stage);
+                                    state.set(next);
+                                    drag = tracked;
+                                    event.consume();
+                                }
+                            }
+                            PointerEventKind::Up | PointerEventKind::Cancel => {
+                                drag = DragTracking::default();
+                            }
+                            _ => {}
+                        }
+                    }
+                })
+                .await;
+        }
+    })
+}
+
+/// The card of one control, its stage drawn by `stage` over the control's
+/// name and value.
+#[composable]
+fn CardFrame(
+    kind: ControlKind,
+    (control, dark): (ControlHandle, bool),
+    modifier: Modifier,
+    stage: Modifier,
+) {
+    let background = card_color(dark);
     Column(
         modifier
             .rounded_corners(CARD_RADIUS)
@@ -708,83 +879,70 @@ fn ControlCard(kind: ControlKind, dark: bool, modifier: Modifier) {
             }),
         ColumnSpec::default(),
         move || {
-            let depth = depth.clone();
             Box(
                 Modifier::empty()
                     .fill_max_width()
                     .height(STAGE_HEIGHT)
-                    .then(control_action(kind, state))
-                    .graphics_layer(move || GraphicsLayer {
-                        render_effect: Some(stage_effect(
-                            &animation.uniforms(kind, dark, background),
-                        )),
-                        compositing_strategy: CompositingStrategy::Offscreen,
-                        ..Default::default()
-                    })
-                    .pointer_input((), move |scope: PointerInputScope| {
-                        let depth = depth.clone();
-                        async move {
-                            scope
-                                .await_pointer_event_scope(|events| async move {
-                                    let mut drag = DragTracking::default();
-                                    loop {
-                                        let event = events.await_pointer_event().await;
-                                        let size = events.size();
-                                        apply_press(&depth, event.kind);
-                                        match event.kind {
-                                            PointerEventKind::Enter => hovered.set(true),
-                                            PointerEventKind::Exit => {
-                                                hovered.set(false);
-                                                drag = DragTracking::default();
-                                            }
-                                            PointerEventKind::Down => {
-                                                hovered.set(true);
-                                                drag = DragTracking {
-                                                    active: kind.is_continuous(),
-                                                    angle: pointer_angle(event.position, size)
-                                                        .unwrap_or_default(),
-                                                };
-                                                if kind.is_continuous() {
-                                                    state.set(drag_start_value(
-                                                        kind,
-                                                        state.get(),
-                                                        event.position,
-                                                        size,
-                                                    ));
-                                                    event.consume();
-                                                }
-                                            }
-                                            PointerEventKind::Move => {
-                                                tilt.set(pointer_tilt(event.position, size));
-                                                if drag.active {
-                                                    let (next, tracked) = drag_state(
-                                                        kind,
-                                                        state.get(),
-                                                        drag,
-                                                        event.position,
-                                                        size,
-                                                    );
-                                                    state.set(next);
-                                                    drag = tracked;
-                                                    event.consume();
-                                                }
-                                            }
-                                            PointerEventKind::Up | PointerEventKind::Cancel => {
-                                                drag = DragTracking::default();
-                                            }
-                                            _ => {}
-                                        }
-                                    }
-                                })
-                                .await;
-                        }
-                    }),
+                    .then(stage.clone()),
                 BoxSpec::default(),
                 || {},
             );
-
-            ControlFooter(kind, current, dark);
+            ControlFooter(kind, control.state().get(), dark);
         },
+    );
+}
+
+/// The card of one control: its stage, seen from its design camera, over
+/// the control's name and value.
+#[composable]
+fn ControlCard(kind: ControlKind, dark: bool, modifier: Modifier) {
+    let control = rememberControl(kind);
+    let animation = animateControl(kind, control.clone());
+    let background = card_color(dark);
+    let stage =
+        stage_input(kind, &control, StageView::Design).graphics_layer(move || GraphicsLayer {
+            render_effect: Some(stage_effect(&animation.uniforms(kind, dark, background))),
+            compositing_strategy: CompositingStrategy::Offscreen,
+            ..Default::default()
+        });
+    CardFrame(kind, (control, dark), modifier, stage);
+}
+
+/// A control's card on a wall of a 3D room, its stage left for
+/// [`ControlVolume`] to stand out of it.
+#[composable]
+pub(crate) fn WallCard(kind: ControlKind, control: ControlHandle, modifier: Modifier) {
+    CardFrame(kind, (control, true), modifier, Modifier::empty());
+}
+
+/// A control's stage standing out of its card on a wall of a 3D room,
+/// seen from wherever the room's eye stands: `place` puts the unit cube
+/// where the stage stands, its x along the stage's width, its y out of the
+/// wall and its z down the wall. The stage takes `width` of the card.
+#[composable]
+pub(crate) fn ControlVolume(
+    kind: ControlKind,
+    control: ControlHandle,
+    (cube, place): (Arc<Mesh>, Mat4),
+    width: f32,
+) {
+    let animation = animateControl(kind, control.clone());
+    let size = Size {
+        width,
+        height: STAGE_HEIGHT,
+    };
+    Box(
+        Modifier::empty()
+            .required_size(size)
+            .mesh_surface(move || MeshSurface {
+                mesh: Arc::clone(&cube),
+                transform: place,
+                material: stage_volume(&animation.uniforms(kind, true, card_color(true)), size),
+                casts_shadow: false,
+            })
+            .then(stage_input(kind, &control, StageView::Above)),
+        BoxSpec::default(),
+        || {},
     );
 }
 

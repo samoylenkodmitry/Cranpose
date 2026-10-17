@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use crate::{output_paths, robot_exit, robot_launch, robot_shot};
+use crate::{output_paths, robot_controls_grid, robot_exit, robot_launch, robot_shot};
 
-use cranpose::{PointerButton, Robot};
+use cranpose::{PointerButton, Robot, SemanticElement};
 use cranpose_testing::{click_button_in_semantics, find_text_in_semantics};
 
 const STEP_IN: &str = "Step into the room";
@@ -43,11 +43,14 @@ pub(crate) fn main() {
             }
             walk(&robot);
             save(&robot, &shots, "room.png");
-            // The fire flies on until it is put out, and the app never goes
-            // idle while it does.
-            if !click_button_in_semantics(&robot, "Put out the fire") {
-                robot_exit::fail(&robot, "no button to put out the fire in the room");
+            // The fire flies and the shape shifts until the motion stops,
+            // and the app never goes idle while they move.
+            if !click_button_in_semantics(&robot, "Stop the motion") {
+                robot_exit::fail(&robot, "no button to stop the motion in the room");
             }
+            robot_shot::settle(&robot, 300);
+            click_shape_and_toggle(&robot);
+            save(&robot, &shots, "toggle.png");
 
             let counter = button(&robot, "Pressed 0 times");
             // E turns the camera while it is held, Q turns it back.
@@ -88,6 +91,15 @@ pub(crate) fn main() {
             save(&robot, &shots, "turned.png");
             drag(&robot, PointerButton::Secondary, (700.0, 760.0), (600.0, 760.0));
 
+            // The wall to the screen's right holds the whole demo again: its
+            // Room tab opens a room inside the wall, flat until stepped into.
+            click_wall_tab(&robot, "Room");
+            if find_text_in_semantics(&robot, STEP_IN).is_none() {
+                robot_exit::fail(&robot, "the demo on the wall did not open its room");
+            }
+            save(&robot, &shots, "nested.png");
+            click_wall_tab(&robot, "Cranpose Guide");
+
             if !click_button_in_semantics(&robot, "Back to the screen") {
                 robot_exit::fail(&robot, "no button to leave the room");
             }
@@ -126,6 +138,59 @@ fn walk(robot: &Robot) {
     if let Err(err) = robot.pump_frames(3) {
         robot_exit::fail(robot, &format!("pump frames: {err}"));
     }
+}
+
+/// Clicks the button on the shape from a distance field, where it shows on
+/// the shape, and the toggle on the far wall, which stands out of its card
+/// as a volume, where its stage shows.
+fn click_shape_and_toggle(robot: &Robot) {
+    if !click_button_in_semantics(robot, "Clicked 0 times") {
+        robot_exit::fail(robot, "the shape's button is missing");
+    }
+    robot_shot::settle(robot, 300);
+    if find_text_in_semantics(robot, "Clicked 1 times").is_none() {
+        robot_exit::fail(robot, "a click on the shape's button, where it shows, missed it");
+    }
+    let (before, (x, y, width, height)) = robot_controls_grid::card(robot, "Toggle");
+    if let Err(err) = robot.click(x + width * 0.5, y + height * 0.5) {
+        robot_exit::fail(robot, &format!("click the toggle: {err}"));
+    }
+    robot_shot::settle(robot, 300);
+    let (after, _) = robot_controls_grid::card(robot, "Toggle");
+    println!("  the far wall's toggle read {before}, then {after}");
+    if (before.as_str(), after.as_str()) != ("Off", "On") {
+        robot_exit::fail(
+            robot,
+            "a click on the toggle's stage, where it stands out of the wall, missed it",
+        );
+    }
+}
+
+/// Clicks the tab `label` of the demo on the east wall: of the labels that
+/// read `label`, the one farthest right.
+fn click_wall_tab(robot: &Robot, label: &str) {
+    fn visit(element: &SemanticElement, label: &str, found: &mut Vec<(f32, f32, f32, f32)>) {
+        if element.text.as_deref() == Some(label) {
+            let bounds = element.bounds;
+            found.push((bounds.x, bounds.y, bounds.width, bounds.height));
+        }
+        for child in &element.children {
+            visit(child, label, found);
+        }
+    }
+    let mut found = Vec::new();
+    match robot.get_semantics() {
+        Ok(roots) => roots.iter().for_each(|root| visit(root, label, &mut found)),
+        Err(err) => robot_exit::fail(robot, &format!("semantics: {err}")),
+    }
+    let Some((x, y, width, height)) = found.into_iter().max_by(|a, b| a.0.total_cmp(&b.0)) else {
+        robot_exit::fail(robot, &format!("no tab {label:?}"));
+    };
+    println!("  the wall's tab {label:?} at ({x:.1}, {y:.1})");
+    if let Err(err) = robot.click(x + width * 0.5, y + height * 0.5) {
+        robot_exit::fail(robot, &format!("click the wall's tab {label:?}: {err}"));
+    }
+    robot_shot::settle(robot, 500);
 }
 
 fn step_in_button(robot: &Robot) -> (f32, f32, f32, f32) {

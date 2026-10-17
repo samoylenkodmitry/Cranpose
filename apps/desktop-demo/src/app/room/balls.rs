@@ -83,7 +83,9 @@ pub(super) fn GlassBall(shape: RoomShape, mesh: Arc<Mesh>) {
 #[composable(no_skip)]
 pub(super) fn FireBall(room: RoomState, shape: RoomShape, (sphere, plane): (Arc<Mesh>, Arc<Mesh>)) {
     let time = rememberMutableStateOf(|| 0.0f32);
-    Ticking(true, move |seconds| time.update(|now| *now += seconds));
+    Ticking(room.motion.get(), move |seconds| {
+        time.update(|now| *now += seconds);
+    });
     let radius = shape.width.min(shape.height) * 0.07;
     Box(
         Modifier::empty()

@@ -23,7 +23,7 @@ use cranpose_ui::{
 
 mod animations;
 pub mod chrome_tabs;
-mod controls_ui;
+pub(crate) mod controls_ui;
 mod demo_text;
 mod demo_theme;
 mod demo_trace;
@@ -933,11 +933,24 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
         })
         .unwrap_or(DEFAULT_INITIAL_TAB);
     let active_tab = cranpose_core::rememberMutableStateOf(move || initial_tab);
-    let wsz_tab_state = remember_wsz_tab_state();
     TEST_ACTIVE_TAB_STATE.with(|cell| {
         *cell.borrow_mut() = Some(active_tab);
     });
+    DemoApp(active_tab, startup);
+}
 
+/// The whole demo again, on its first tab and with a tab of its own, as a
+/// wall of the room shows it.
+#[composable]
+pub(crate) fn NestedDemoApp() {
+    let active_tab = cranpose_core::rememberMutableStateOf(|| DEFAULT_INITIAL_TAB);
+    DemoApp(active_tab, StartupSelection::default());
+}
+
+/// The demo's header and the tab `active_tab` names under it.
+#[composable]
+fn DemoApp(active_tab: cranpose_core::MutableState<DemoTab>, startup: StartupSelection) {
+    let wsz_tab_state = remember_wsz_tab_state();
     let showing_source = cranpose_core::rememberMutableStateOf(|| false);
     let picker_open = cranpose_core::rememberMutableStateOf(|| false);
     let window_size = cranpose_core::rememberMutableStateOf(Size::default);

@@ -4,24 +4,29 @@
 //! a mesh.
 
 mod balls;
+mod blob;
 mod space;
+mod wall_controls;
 
 use std::sync::Arc;
 
-use cranpose::liquid::prelude::{LiquidCheckbox, LiquidTheme, LiquidThemeSpec, SchemeMode};
+use cranpose::liquid::prelude::{
+    LiquidCheckbox, LiquidTheme, LiquidThemeSpec, LiquidToggle, SchemeMode,
+};
 use cranpose_core::{key, remember, rememberMutableStateOf, LaunchedEffectAsync, MutableState};
 use cranpose_ui::{
     composable,
     space::{Mat4, Material, Mesh, MeshSurface, Vec3},
     text::TextUnit,
     Alignment, Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Brush, Button,
-    ButtonSpec, Color, Column, ColumnSpec, Modifier, Rect, Row, RowSpec, Size, Text, TextStyle,
+    ButtonSpec, Color, Column, ColumnSpec, Modifier, Rect, Row, RowSpec, ScrollState, Size, Text,
+    TextStyle,
 };
 
 use self::space::{
     rememberRoomState, RoomShape, RoomState, Wall, LONGEST_STEP_SECONDS, TRANSITION_SECONDS,
 };
-use super::{mineswapper2::mineswapper2_tab, text_showcase::TextShowcaseTab};
+use super::{text_showcase::TextShowcaseTab, NestedDemoApp};
 
 const TILE: f32 = 160.0;
 const TORUS_OBJ: &str = include_str!("../../assets/torus.obj");
@@ -31,14 +36,11 @@ const GLOBE_CONTENT: Size = Size {
 };
 /// The torus's content, as long around the ring as the ring is around its
 /// tube's middle against the tube's own girth (radius 1 against 0.4), so
-/// its check boxes keep their shape.
+/// its switches keep their shape.
 const TORUS_CONTENT: Size = Size {
-    width: TORUS_COLUMNS as f32 * TORUS_CELL,
-    height: TORUS_ROWS as f32 * TORUS_CELL,
+    width: 640.0,
+    height: 256.0,
 };
-const TORUS_COLUMNS: usize = 20;
-const TORUS_ROWS: usize = 8;
-const TORUS_CELL: f32 = 32.0;
 const SPIN_PER_SECOND: f32 = 0.35;
 
 fn text_style(size: f32, color: Color) -> TextStyle {
@@ -52,6 +54,7 @@ fn text_style(size: f32, color: Color) -> TextStyle {
 #[derive(Clone)]
 struct RoomMeshes {
     plane: Arc<Mesh>,
+    cube: Arc<Mesh>,
     globe: Arc<Mesh>,
     torus: Option<Arc<Mesh>>,
 }
@@ -61,6 +64,7 @@ pub fn RoomTab() {
     let room = rememberRoomState();
     let meshes = remember(|| RoomMeshes {
         plane: Arc::new(Mesh::plane()),
+        cube: Arc::new(Mesh::cuboid()),
         globe: Arc::new(Mesh::sphere(48, 24)),
         torus: Mesh::from_obj(TORUS_OBJ).ok().map(Arc::new),
     })
@@ -103,32 +107,62 @@ fn Scene(room: RoomState, shape: RoomShape, meshes: RoomMeshes) {
             .scene3d(move || camera.scene(&shape)),
         BoxSpec::default(),
         move || {
-            let walls = if spatial {
-                &Wall::ALL[..]
-            } else {
-                &Wall::ALL[..1]
-            };
-            for &wall in walls {
-                let room = room.clone();
-                let plane = Arc::clone(&meshes.plane);
-                key(wall, move || {
-                    WallSurface(room, shape, wall, plane);
-                });
-            }
+            Walls(room.clone(), shape, meshes.clone());
             let globe = Arc::clone(&meshes.globe);
             key("globe", move || Globe(shape, globe));
             let glass = Arc::clone(&meshes.globe);
             key("glass", move || balls::GlassBall(shape, glass));
-            if spatial && room.fire.get() {
+            if spatial {
                 let fire = (Arc::clone(&meshes.globe), Arc::clone(&meshes.plane));
-                let room = room.clone();
-                key("fire", move || balls::FireBall(room, shape, fire));
+                let flying = room.clone();
+                key("fire", move || balls::FireBall(flying, shape, fire));
+                let shifting = room.clone();
+                key("blob", move || blob::Blob(shifting, shape));
             }
             if let Some(torus) = meshes.torus.clone().filter(|_| spatial) {
-                key("torus", move || Torus(shape, torus));
+                let toggles = Arc::clone(&torus);
+                key("torus", move || {
+                    Torus(shape, torus, CHECK_TORUS, TorusSwitch::Checkbox);
+                });
+                key("toggle torus", move || {
+                    Torus(shape, toggles, TOGGLE_TORUS, TorusSwitch::Toggle);
+                });
             }
         },
     );
+}
+
+/// The room's walls with their content, and the stages of the controls
+/// on them: flat, the north wall alone.
+#[composable(no_skip)]
+fn Walls(room: RoomState, shape: RoomShape, meshes: RoomMeshes) {
+    let spatial = room.is_spatial();
+    let walls = if spatial {
+        &Wall::ALL[..]
+    } else {
+        &Wall::ALL[..1]
+    };
+    let north = wall_controls::rememberWallControls(Wall::North, wall_controls::NORTH_CONTROLS);
+    let south = wall_controls::rememberWallControls(Wall::South, wall_controls::SOUTH_CONTROLS);
+    for &wall in walls {
+        let room = room.clone();
+        let plane = Arc::clone(&meshes.plane);
+        let cards = match wall {
+            Wall::North => Some(north.clone()),
+            Wall::South => Some(south.clone()),
+            _ => None,
+        };
+        key(wall, move || {
+            WallSurface(room, shape, (wall, cards), plane);
+        });
+    }
+    let south_stages = spatial.then_some(south);
+    for set in std::iter::once(north).chain(south_stages) {
+        let cube = Arc::clone(&meshes.cube);
+        key(set.wall(), move || {
+            wall_controls::WallStages(shape, set, cube);
+        });
+    }
 }
 
 #[composable(no_skip)]
@@ -178,7 +212,12 @@ fn RoomMotion(room: RoomState, shape: RoomShape) {
 }
 
 #[composable(no_skip)]
-fn WallSurface(room: RoomState, shape: RoomShape, wall: Wall, plane: Arc<Mesh>) {
+fn WallSurface(
+    room: RoomState,
+    shape: RoomShape,
+    (wall, cards): (Wall, Option<wall_controls::WallControlSet>),
+    plane: Arc<Mesh>,
+) {
     Box(
         Modifier::empty()
             .required_size(shape.wall_size(wall))
@@ -189,13 +228,18 @@ fn WallSurface(room: RoomState, shape: RoomShape, wall: Wall, plane: Arc<Mesh>) 
                 casts_shadow: false,
             }),
         BoxSpec::default(),
-        move || match wall {
-            Wall::North => Controls(room.clone()),
-            Wall::East => Panel(Color(0.10, 0.11, 0.15, 1.0), mineswapper2_tab),
-            Wall::West => Panel(Color(0.12, 0.10, 0.12, 1.0), TextShowcaseTab),
-            Wall::South => BackWall(),
-            Wall::Floor => Floor(),
-            Wall::Ceiling => Ceiling(),
+        move || {
+            match wall {
+                Wall::North => Controls(room.clone()),
+                Wall::East => DemoWall(),
+                Wall::West => Panel(Color(0.12, 0.10, 0.12, 1.0), TextShowcaseTab),
+                Wall::South => BackWall(),
+                Wall::Floor => Floor(),
+                Wall::Ceiling => Ceiling(),
+            }
+            if let Some(cards) = cards.clone() {
+                wall_controls::WallCards(shape, cards);
+            }
         },
     );
 }
@@ -315,14 +359,36 @@ fn GlobeFace(spinning: MutableState<bool>) {
     );
 }
 
-/// A torus read from an OBJ file, wrapped in a striped composable.
+/// Where a torus stands in the room, as shares of its width, height and
+/// depth, and how it is turned there.
+#[derive(Clone, Copy)]
+struct TorusPlace {
+    at: (f32, f32, f32),
+    turn: (f32, f32),
+}
+
+const CHECK_TORUS: TorusPlace = TorusPlace {
+    at: (0.3, 0.6, 0.62),
+    turn: (1.1, 0.0),
+};
+const TOGGLE_TORUS: TorusPlace = TorusPlace {
+    at: (0.62, 0.74, 0.6),
+    turn: (1.25, -0.45),
+};
+
+/// A torus read from an OBJ file, its content a grid of `switch`es.
 #[composable(no_skip)]
-fn Torus(shape: RoomShape, mesh: Arc<Mesh>) {
+fn Torus(shape: RoomShape, mesh: Arc<Mesh>, place: TorusPlace, switch: TorusSwitch) {
     let scale = shape.width.min(shape.height) * 0.14;
-    let center = Vec3::new(shape.width * 0.3, shape.height * 0.6, shape.depth * 0.62);
+    let center = Vec3::new(
+        shape.width * place.at.0,
+        shape.height * place.at.1,
+        shape.depth * place.at.2,
+    );
     // OBJ files point y up; the scene points it down.
     let transform = Mat4::scaling(Vec3::new(scale, -scale, scale))
-        .then(&Mat4::rotation_x(1.1))
+        .then(&Mat4::rotation_x(place.turn.0))
+        .then(&Mat4::rotation_z(place.turn.1))
         .then(&Mat4::translation(center));
     Box(
         Modifier::empty()
@@ -335,22 +401,44 @@ fn Torus(shape: RoomShape, mesh: Arc<Mesh>) {
             })
             .background(Color(0.10, 0.07, 0.20, 1.0)),
         BoxSpec::default(),
-        || TorusChecks(),
+        move || TorusGrid(switch),
     );
 }
 
-/// A grid of check boxes laid around the torus: each row runs once around
-/// the ring, and the rows go around the tube.
-#[composable]
-fn TorusChecks() {
-    let checked = rememberMutableStateOf(|| {
-        let mut rows = [0u32; TORUS_ROWS];
-        for (row, bits) in rows.iter_mut().enumerate() {
-            for column in (row % 3..TORUS_COLUMNS).step_by(3) {
+/// The switches a torus grid shows, and how many fit around it.
+#[derive(Clone, Copy, PartialEq)]
+enum TorusSwitch {
+    Checkbox,
+    Toggle,
+}
+
+impl TorusSwitch {
+    /// The columns around the ring and the rows around the tube.
+    fn grid(self) -> (usize, usize) {
+        match self {
+            TorusSwitch::Checkbox => (20, 8),
+            TorusSwitch::Toggle => (10, 6),
+        }
+    }
+}
+
+/// A grid of switches laid around the torus: each row runs once around the
+/// ring, and the rows go around the tube.
+#[composable(no_skip)]
+fn TorusGrid(switch: TorusSwitch) {
+    let (columns, rows) = switch.grid();
+    let cell = Size {
+        width: TORUS_CONTENT.width / columns as f32,
+        height: TORUS_CONTENT.height / rows as f32,
+    };
+    let on = rememberMutableStateOf(move || {
+        let mut on = [0u32; 8];
+        for (row, bits) in on.iter_mut().enumerate().take(rows) {
+            for column in (row % 3..columns).step_by(3) {
                 *bits |= 1 << column;
             }
         }
-        rows
+        on
     });
     LiquidTheme(
         LiquidThemeSpec {
@@ -360,33 +448,35 @@ fn TorusChecks() {
         },
         move || {
             Column(Modifier::empty(), ColumnSpec::default(), move || {
-                for row in 0..TORUS_ROWS {
+                for row in 0..rows {
                     Row(Modifier::empty(), RowSpec::default(), move || {
-                        for column in 0..TORUS_COLUMNS {
+                        for column in 0..columns {
                             let bit = 1u32 << column;
                             Box(
-                                Modifier::empty().size(Size {
-                                    width: TORUS_CELL,
-                                    height: TORUS_CELL,
-                                }),
+                                Modifier::empty().size(cell),
                                 BoxSpec {
                                     content_alignment: Alignment::CENTER,
                                     ..BoxSpec::default()
                                 },
                                 move || {
-                                    LiquidCheckbox(
-                                        Modifier::empty(),
-                                        checked.get()[row] & bit != 0,
-                                        move |on| {
-                                            checked.update(|rows| {
-                                                rows[row] = if on {
-                                                    rows[row] | bit
-                                                } else {
-                                                    rows[row] & !bit
-                                                };
-                                            });
-                                        },
-                                    );
+                                    let checked = on.get()[row] & bit != 0;
+                                    let set = move |checked: bool| {
+                                        on.update(|on| {
+                                            on[row] = if checked {
+                                                on[row] | bit
+                                            } else {
+                                                on[row] & !bit
+                                            };
+                                        });
+                                    };
+                                    match switch {
+                                        TorusSwitch::Checkbox => {
+                                            LiquidCheckbox(Modifier::empty(), checked, set);
+                                        }
+                                        TorusSwitch::Toggle => {
+                                            LiquidToggle(Modifier::empty(), checked, set);
+                                        }
+                                    }
                                 },
                             );
                         }
@@ -459,15 +549,15 @@ fn Controls(room: RoomState) {
                         move || format!("Pressed {} times", presses.get()),
                     );
                     if entered {
-                        let fire = room.fire;
+                        let motion = room.motion;
                         WallButton(
                             Color(0.55, 0.22, 0.08, 1.0),
-                            move || fire.set(!fire.get()),
+                            move || motion.set(!motion.get()),
                             move || {
-                                if fire.get() {
-                                    "Put out the fire"
+                                if motion.get() {
+                                    "Stop the motion"
                                 } else {
-                                    "Light the fire"
+                                    "Start the motion"
                                 }
                                 .to_string()
                             },
@@ -500,15 +590,32 @@ fn WallButton(
     );
 }
 
+/// A side wall showing a demo tab, which scrolls when it is taller than the
+/// wall: with the wheel, or a drag of the left button.
 #[composable]
 fn Panel(color: Color, content: fn()) {
+    let scroll = remember(|| ScrollState::new(0.0)).with(|state| *state);
     Box(
         Modifier::empty()
             .fill_max_size()
             .background(color)
+            .vertical_scroll(scroll, false)
             .padding(32.0),
         BoxSpec::default(),
         content,
+    );
+}
+
+/// The whole demo, a second time, on the wall to the screen's right: its
+/// tabs work there, the room's among them.
+#[composable]
+fn DemoWall() {
+    Box(
+        Modifier::empty()
+            .fill_max_size()
+            .background(Color(0.04, 0.04, 0.06, 1.0)),
+        BoxSpec::default(),
+        NestedDemoApp,
     );
 }
 
