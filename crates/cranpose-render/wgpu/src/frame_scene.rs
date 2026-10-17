@@ -1,23 +1,48 @@
 //! A scene's mesh surfaces in a layer's render: each surface's content is
 //! rendered as an isolated layer's is, then all surfaces of the scene draw
-//! in one depth-tested pass over what lies beneath the first of them.
+//! over what lies beneath the first of them, depth-tested against each
+//! other: first the surfaces that are neither glass nor glow, then glass
+//! over a copy of the page they left, then glow added onto it.
 
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use cranpose_ui_graphics::{
     Rect,
-    space::{Mat4, Vec3},
+    space::{Mat4, Material, Vec3},
 };
 
 use super::{DeviceRect, Event, FrameExecutor, LayerPass, SurfaceRender, composites_nothing};
 use crate::{
     collect::{ChildLayer, MeshChild},
     frame_graph::{FrameCommandRecorder, UploadAllocatorId},
+    offscreen::OffscreenTarget,
     scene_pass::{
         SceneMeshBuffers, ScenePage, ScenePipeline, SurfaceShading, scene_scissor,
-        scene_surface_uniform_spec, surface_uniforms, view_depth,
+        scene_surface_uniform_spec, surface_page_bounds, surface_uniforms, view_depth,
     },
 };
+
+/// The surfaces of a scene that draw together, in the order the phases
+/// draw.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScenePhase {
+    /// The surfaces that are neither glass nor glow.
+    Opaque,
+    /// Glass, which reads a copy of the page the opaque surfaces left.
+    Glass,
+    /// Glow, added onto the page.
+    Glow,
+}
+
+impl ScenePhase {
+    fn of(material: &Material) -> Self {
+        match material {
+            Material::Glass(_) => Self::Glass,
+            Material::Glow => Self::Glow,
+            Material::Lit | Material::Unlit | Material::Emissive => Self::Opaque,
+        }
+    }
+}
 
 /// A mesh surface whose content is rendered, waiting for its scene's pass.
 pub(super) struct PendingMesh {
@@ -93,20 +118,24 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         self.start_page(pass);
         let mut meshes = std::mem::take(&mut pass.meshes);
         meshes.sort_by(|a, b| b.depth.total_cmp(&a.depth));
-        self.encode_scene_pass(pass, &meshes);
-        Ok(())
+        self.encode_scene_pass(pass, &meshes, first_z)
     }
 
-    fn encode_scene_pass(&mut self, pass: &LayerPass<'_>, meshes: &[PendingMesh]) {
+    fn encode_scene_pass(
+        &mut self,
+        pass: &mut LayerPass<'_>,
+        meshes: &[PendingMesh],
+        first_z: usize,
+    ) -> Result<(), String> {
         let Some(first) = meshes.first() else {
-            return;
+            return Ok(());
         };
         let scene = Arc::clone(&first.mesh.scene);
-        let target = pass.page.pass_target();
+        let page_texture = Rc::clone(&pass.page.texture);
         let page = ScenePage {
             scale: pass.scale,
             offset: pass.page.offset,
-            size: (target.width, target.height),
+            size: (page_texture.width, page_texture.height),
         };
         let light_projection = scene.light.filter(|light| light.shadows).and_then(|light| {
             light.shadow_projection(
@@ -116,45 +145,122 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                     .filter(|surface| surface.casts_shadow),
             )
         });
+        let backdrop = glass_backdrop(meshes, page);
+        let backdrop_region = backdrop.map_or([0.0; 4], |rect| {
+            [
+                rect.x - page.offset[0],
+                rect.y - page.offset[1],
+                rect.width,
+                rect.height,
+            ]
+        });
         let eye = scene.camera.eye();
         let device = Arc::clone(&self.renderer.device);
         let mut draws = Vec::with_capacity(meshes.len());
         for held in meshes {
-            if let Some(draw) = self.prepare_surface(held, (page, eye, light_projection), &device) {
+            let shown = (page, eye, light_projection, backdrop_region);
+            if let Some(draw) = self.prepare_surface(held, shown, &device) {
                 draws.push(draw);
             }
         }
-        if draws.is_empty() {
-            return;
-        }
         let shadows = light_projection.is_some() && self.draw_shadow_map(&draws, &device);
-        let depth = self.renderer.depth_target(page.size);
-        let kind = if shadows {
+        let opaque = if shadows {
             ScenePipeline::Shadowed
         } else {
             ScenePipeline::Plain
         };
-        let Some(pipeline) = self.renderer.scene_surface_pipeline(kind) else {
-            return;
+        let depth = self.renderer.depth_target(page.size);
+        let Some(backdrop) = backdrop else {
+            self.encode_steps(
+                (&page_texture, &depth, shadows),
+                &[
+                    (opaque, ScenePhase::Opaque),
+                    (ScenePipeline::Glow, ScenePhase::Glow),
+                ],
+                (&draws, None),
+                &device,
+            );
+            return Ok(());
         };
-        let shadow_group = match (shadows, &self.renderer.scene_pass.shadow_map) {
-            (true, Some(map)) => &map.group,
-            _ => self.renderer.scene_no_shadow(),
-        };
-        let effects = &self.renderer.effect_renderer;
-        let mut render_pass = self.recorder.begin_depth_pass(
-            "Scene Surfaces",
-            target.view,
-            wgpu::LoadOp::Load,
-            &depth,
+        // Glass reads the page the other surfaces left, so draws in a pass
+        // of its own after the copy, over their depth drawn again.
+        self.encode_steps(
+            (&page_texture, &depth, shadows),
+            &[(opaque, ScenePhase::Opaque)],
+            (&draws, None),
+            &device,
         );
-        render_pass.set_pipeline(pipeline);
+        if self
+            .renderer
+            .scene_surface_pipeline(ScenePipeline::Glass)
+            .is_none()
+        {
+            return Ok(());
+        }
+        let copy = self.capture(pass, first_z, backdrop, "Scene Glass Backdrop")?;
+        self.encode_steps(
+            (&page_texture, &depth, shadows),
+            &[
+                (ScenePipeline::Depth, ScenePhase::Opaque),
+                (ScenePipeline::Glass, ScenePhase::Glass),
+                (ScenePipeline::Glow, ScenePhase::Glow),
+            ],
+            (&draws, Some(&copy)),
+            &device,
+        );
+        Ok(())
+    }
+
+    /// Draws, in one pass onto the page, each step's surfaces with the
+    /// step's pipeline; a step whose pipeline still compiles is left out,
+    /// and one without surfaces asks for no pipeline.
+    fn encode_steps(
+        &mut self,
+        (page, depth, shadows): (&OffscreenTarget, &wgpu::TextureView, bool),
+        steps: &[(ScenePipeline, ScenePhase)],
+        (draws, backdrop): (&[PreparedSurface<'_>], Option<&Rc<OffscreenTarget>>),
+        device: &wgpu::Device,
+    ) {
+        let drawn = |phase: ScenePhase| draws.iter().filter(move |draw| draw.phase == phase);
+        if steps
+            .iter()
+            .all(|&(_, phase)| drawn(phase).next().is_none())
+        {
+            return;
+        }
+        let renderer = &*self.renderer;
+        let shadow_group = match (shadows, &renderer.scene_pass.shadow_map) {
+            (true, Some(map)) => &map.group,
+            _ => renderer.scene_no_shadow(),
+        };
+        let effects = &renderer.effect_renderer;
+        let backdrop = backdrop.map(|texture| {
+            texture.get_or_create_bind_group(
+                device,
+                &effects.effect_texture_bind_group_layout,
+                &effects.effect_linear_sampler,
+            )
+        });
+        let mut render_pass =
+            self.recorder
+                .begin_depth_pass("Scene Surfaces", &page.view, wgpu::LoadOp::Load, depth);
         render_pass.set_bind_group(2, shadow_group, &[]);
-        for draw in &draws {
-            let (x, y, width, height) = draw.scissor;
-            render_pass.set_scissor_rect(x, y, width, height);
-            draw.bind(&mut render_pass, (&device, effects));
-            render_pass.draw_indexed(0..draw.buffers.index_count, 0, 0..1);
+        for &(kind, phase) in steps {
+            // A pipeline no surface takes is not asked for, so never compiles.
+            let mut phase_draws = drawn(phase).peekable();
+            if phase_draws.peek().is_none() {
+                continue;
+            }
+            let Some(pipeline) = renderer.scene_surface_pipeline(kind) else {
+                continue;
+            };
+            render_pass.set_pipeline(pipeline);
+            for draw in phase_draws {
+                let (x, y, width, height) = draw.scissor;
+                render_pass.set_scissor_rect(x, y, width, height);
+                draw.bind(&mut render_pass, (device, effects), backdrop);
+                render_pass.draw_indexed(0..draw.buffers.index_count, 0, 0..1);
+            }
         }
     }
 
@@ -198,7 +304,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             .iter()
             .filter(|draw| draw.held.mesh.surface.casts_shadow)
         {
-            draw.bind(&mut shadow_pass, (device, effects));
+            draw.bind(&mut shadow_pass, (device, effects), None);
             shadow_pass.draw_indexed(0..draw.buffers.index_count, 0, 0..1);
         }
         true
@@ -209,7 +315,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
     fn prepare_surface<'m>(
         &mut self,
         held: &'m PendingMesh,
-        (page, eye, light_projection): (ScenePage, Vec3, Option<Mat4>),
+        (page, eye, light_projection, backdrop_region): (ScenePage, Vec3, Option<Mat4>, [f32; 4]),
         device: &wgpu::Device,
     ) -> Option<PreparedSurface<'m>> {
         let scene = &held.mesh.scene;
@@ -218,10 +324,11 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             scene,
             &SurfaceShading {
                 transform: held.mesh.surface.transform,
-                lit: held.mesh.surface.lit,
+                material: held.mesh.surface.material,
                 alpha: held.alpha,
                 source_region: source_region(&held.surface, held.mesh.content),
                 light_projection,
+                backdrop_region,
             },
             (page, eye),
         )?;
@@ -238,6 +345,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         );
         Some(PreparedSurface {
             held,
+            phase: ScenePhase::of(&held.mesh.surface.material),
             buffers,
             uniform,
             scissor,
@@ -247,17 +355,21 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
 
 struct PreparedSurface<'m> {
     held: &'m PendingMesh,
+    phase: ScenePhase,
     buffers: SceneMeshBuffers,
     uniform: crate::frame_graph::UniformUpload,
     scissor: (u32, u32, u32, u32),
 }
 
 impl PreparedSurface<'_> {
-    /// Binds the surface's texture, uniforms and mesh.
+    /// Binds the surface's texture, uniforms and mesh, and the copy of the
+    /// page glass reads: a surface that reads none binds its own texture in
+    /// the copy's place.
     fn bind(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         (device, effects): (&wgpu::Device, &crate::effect_renderer::EffectRenderer),
+        backdrop: Option<&wgpu::BindGroup>,
     ) {
         let texture = self.held.surface.source.texture.get_or_create_bind_group(
             device,
@@ -265,10 +377,50 @@ impl PreparedSurface<'_> {
             &effects.effect_linear_sampler,
         );
         pass.set_bind_group(0, texture, &[]);
+        pass.set_bind_group(3, backdrop.unwrap_or(texture), &[]);
         pass.set_bind_group(1, &self.uniform.bind_group, &[self.uniform.offset]);
         pass.set_vertex_buffer(0, self.buffers.vertices.slice(..));
         pass.set_index_buffer(self.buffers.indices.slice(..), wgpu::IndexFormat::Uint32);
     }
+}
+
+/// The device pixels a scene's glass reads behind it: the pixels each glass
+/// surface covers, widened by half on each side for the rays it bends
+/// outward, within the scene; the whole scene where a surface reaches
+/// behind the eye. `None` without glass.
+fn glass_backdrop(meshes: &[PendingMesh], page: ScenePage) -> Option<DeviceRect> {
+    let mut covered: Option<DeviceRect> = None;
+    for held in meshes {
+        if !matches!(held.mesh.surface.material, Material::Glass(_)) {
+            continue;
+        }
+        let scene = &held.mesh.scene;
+        let Some((left, top, width, height)) = scene_scissor(scene, held.clip, page) else {
+            continue;
+        };
+        let shown = DeviceRect {
+            x: left as f32 + page.offset[0],
+            y: top as f32 + page.offset[1],
+            width: width as f32,
+            height: height as f32,
+        };
+        let surface = &held.mesh.surface;
+        let reach = surface_page_bounds(scene, &surface.transform, &surface.mesh, page)
+            .and_then(|[left, top, right, bottom]| {
+                let margin = (right - left).max(bottom - top) * 0.5;
+                DeviceRect {
+                    x: left + page.offset[0],
+                    y: top + page.offset[1],
+                    width: right - left,
+                    height: bottom - top,
+                }
+                .expand(margin)
+                .intersect(shown)
+            })
+            .unwrap_or(shown);
+        covered = Some(covered.map_or(reach, |covered| covered.union(reach)));
+    }
+    covered.map(DeviceRect::snap_out)
 }
 
 /// The texels of `content`, in the surface's local coordinates, within the

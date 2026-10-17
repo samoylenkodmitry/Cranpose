@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cranpose_ui_graphics::{
     Point, Size,
-    space::{Camera, Mat4, Mesh, MeshError, MeshSurface, ObjErrorKind, Vec3},
+    space::{Camera, Mat4, Material, Mesh, MeshError, MeshSurface, ObjErrorKind, Vec3},
 };
 
 const VIEWPORT: Size = Size {
@@ -34,7 +34,7 @@ fn wall() -> MeshSurface {
         transform: Mat4::scaling(Vec3::new(CONTENT.width, CONTENT.height, 1.0))
             .then(&Mat4::rotation_y(0.6))
             .then(&Mat4::translation(Vec3::new(-150.0, -100.0, 300.0))),
-        lit: false,
+        material: Material::Unlit,
         casts_shadow: false,
     }
 }
@@ -78,7 +78,7 @@ fn a_camera_one_focal_length_from_a_facing_plane_shows_it_at_its_own_size() {
     let screen = MeshSurface {
         mesh: Arc::new(Mesh::plane()),
         transform: Mat4::scaling(Vec3::new(VIEWPORT.width, VIEWPORT.height, 1.0)),
-        lit: false,
+        material: Material::Unlit,
         casts_shadow: false,
     };
     let transform = screen

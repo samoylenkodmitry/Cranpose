@@ -101,7 +101,7 @@ impl Modifier {
     /// use std::sync::Arc;
     ///
     /// use cranpose_ui::Modifier;
-    /// use cranpose_ui_graphics::space::{Camera, Mat4, Mesh, MeshSurface, Scene3d, Vec3};
+    /// use cranpose_ui_graphics::space::{Camera, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3};
     ///
     /// let camera = Camera::look_at(
     ///     Vec3::new(0.0, 0.0, -800.0),
@@ -117,7 +117,7 @@ impl Modifier {
     /// let globe = Modifier::empty().mesh_surface(move || MeshSurface {
     ///     mesh: Arc::clone(&sphere),
     ///     transform: Mat4::scaling(Vec3::new(200.0, 200.0, 200.0)),
-    ///     lit: true,
+    ///     material: Material::Lit,
     ///     casts_shadow: true,
     /// });
     /// # let _ = (scene, globe);

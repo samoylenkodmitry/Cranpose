@@ -4,7 +4,7 @@ use super::{
     math::{Mat4, Vec3},
     mesh::{Mesh, MeshHit},
 };
-use crate::{Point, Size, transform::ProjectiveTransform};
+use crate::{Color, Point, Size, transform::ProjectiveTransform};
 
 /// How much nearer than its focal length a camera sees: points closer to the
 /// eye than `focal_length * NEAR_PLANE` are cut away. It is the w at which
@@ -215,13 +215,61 @@ pub struct MeshSurface {
     pub mesh: Arc<Mesh>,
     /// Places the mesh in the scene.
     pub transform: Mat4,
-    /// Whether the scene's light shades the surface by the angle it falls
-    /// at. An unlit surface shows its content as it is, as a screen does,
-    /// save where a shadow falls on it.
-    pub lit: bool,
-    /// Whether the surface casts a shadow from the scene's light. Every
-    /// surface takes the shadows that fall on it.
+    /// How the content meets the scene's light and what lies behind it.
+    pub material: Material,
+    /// Whether the surface casts a shadow from the scene's light. Every lit
+    /// and unlit surface takes the shadows that fall on it.
     pub casts_shadow: bool,
+}
+
+/// How a surface's content meets the scene's light and what lies behind
+/// it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Material {
+    /// Shaded by the angle the light falls at, and darkened where a shadow
+    /// falls on it.
+    Lit,
+    /// The content as it is, as a screen shows it, darkened only where a
+    /// shadow falls on it.
+    Unlit,
+    /// The content at its full colour, as fire or a lamp shows: neither the
+    /// light nor a shadow changes it.
+    Emissive,
+    /// Adds the content's colour to what lies behind it, as light does: a
+    /// halo, a flame or a spark. It hides nothing, and surfaces nearer the
+    /// eye hide it.
+    Glow,
+    /// The scene behind shows through, bent by the surface's curve, with the
+    /// light's highlight on it and the content drawn over it. Glass shows
+    /// the surfaces that are not glass behind it.
+    Glass(Glass),
+}
+
+/// How glass bends and tints the scene behind it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Glass {
+    /// The refractive index: 1 bends nothing, window glass is 1.5 and
+    /// diamond 2.4.
+    pub index: f32,
+    /// How far a ray travels inside the glass, in scene units: a ball's
+    /// diameter for a solid ball. A ray bends entering the glass and again
+    /// leaving it, as through a solid ball, so a thick ball shows the scene
+    /// behind it upside down.
+    pub thickness: f32,
+    /// The colour the glass tints what shows through it; white for clear
+    /// glass.
+    pub tint: Color,
+}
+
+impl Glass {
+    /// Clear window glass a ray crosses for `thickness` scene units.
+    pub const fn clear(thickness: f32) -> Self {
+        Self {
+            index: 1.5,
+            thickness,
+            tint: Color(1.0, 1.0, 1.0, 1.0),
+        }
+    }
 }
 
 impl MeshSurface {

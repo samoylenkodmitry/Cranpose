@@ -14,4 +14,6 @@ mod scene;
 pub use math::{Mat4, Vec3};
 pub use mesh::{Mesh, MeshError, MeshHit};
 pub use obj::{ObjError, ObjErrorKind};
-pub use scene::{Camera, LayerSpace, Light, MeshSurface, NEAR_PLANE, Ray, Scene3d, SurfaceHit};
+pub use scene::{
+    Camera, Glass, LayerSpace, Light, Material, MeshSurface, NEAR_PLANE, Ray, Scene3d, SurfaceHit,
+};

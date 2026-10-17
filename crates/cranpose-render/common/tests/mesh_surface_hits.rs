@@ -6,7 +6,7 @@ use cranpose_render_common::{
 };
 use cranpose_ui::{
     LayoutEngine, Modifier, Point, Size,
-    space::{Camera, Mat4, Mesh, MeshSurface, Scene3d, Vec3},
+    space::{Camera, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3},
     widgets::{Box, BoxSpec},
 };
 
@@ -75,7 +75,7 @@ fn probe() -> Probe {
                     .mesh_surface(move || MeshSurface {
                         mesh: Arc::clone(&plane),
                         transform,
-                        lit: false,
+                        material: Material::Unlit,
                         casts_shadow: false,
                     })
                     .clickable(move |point| sink.borrow_mut().push((name, point))),
@@ -158,7 +158,7 @@ fn the_nearer_surface_takes_a_press_where_both_show() {
     let far_surface = MeshSurface {
         mesh: Arc::new(Mesh::plane()),
         transform: panel_transform(FAR, 0.0),
-        lit: false,
+        material: Material::Unlit,
         casts_shadow: false,
     };
     assert!(
@@ -205,7 +205,7 @@ fn a_camera_that_moves_moves_where_its_surfaces_take_input() {
                         .mesh_surface(move || MeshSurface {
                             mesh: Arc::clone(&plane),
                             transform: panel_transform(FAR, 0.0),
-                            lit: false,
+                            material: Material::Unlit,
                             casts_shadow: false,
                         })
                         .clickable(|_| {}),

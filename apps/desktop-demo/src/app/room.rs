@@ -3,6 +3,7 @@
 //! globe and an imported model stand in the room, each a composable drawn on
 //! a mesh.
 
+mod balls;
 mod space;
 
 use std::sync::Arc;
@@ -11,7 +12,7 @@ use cranpose::liquid::prelude::{LiquidCheckbox, LiquidTheme, LiquidThemeSpec, Sc
 use cranpose_core::{key, remember, rememberMutableStateOf, LaunchedEffectAsync, MutableState};
 use cranpose_ui::{
     composable,
-    space::{Mat4, Mesh, MeshSurface, Vec3},
+    space::{Mat4, Material, Mesh, MeshSurface, Vec3},
     text::TextUnit,
     Alignment, Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Brush, Button,
     ButtonSpec, Color, Column, ColumnSpec, Modifier, Rect, Row, RowSpec, Size, Text, TextStyle,
@@ -116,6 +117,13 @@ fn Scene(room: RoomState, shape: RoomShape, meshes: RoomMeshes) {
             }
             let globe = Arc::clone(&meshes.globe);
             key("globe", move || Globe(shape, globe));
+            let glass = Arc::clone(&meshes.globe);
+            key("glass", move || balls::GlassBall(shape, glass));
+            if spatial && room.fire.get() {
+                let fire = (Arc::clone(&meshes.globe), Arc::clone(&meshes.plane));
+                let room = room.clone();
+                key("fire", move || balls::FireBall(room, shape, fire));
+            }
             if let Some(torus) = meshes.torus.clone().filter(|_| spatial) {
                 key("torus", move || Torus(shape, torus));
             }
@@ -177,7 +185,7 @@ fn WallSurface(room: RoomState, shape: RoomShape, wall: Wall, plane: Arc<Mesh>) 
             .mesh_surface(move || MeshSurface {
                 mesh: Arc::clone(&plane),
                 transform: shape.wall_transform(wall),
-                lit: false,
+                material: Material::Unlit,
                 casts_shadow: false,
             }),
         BoxSpec::default(),
@@ -199,7 +207,11 @@ fn WallSurface(room: RoomState, shape: RoomShape, wall: Wall, plane: Arc<Mesh>) 
 fn Globe(shape: RoomShape, mesh: Arc<Mesh>) {
     let spin = rememberMutableStateOf(|| 0.0f32);
     let spinning = rememberMutableStateOf(|| true);
-    Spin(spin, spinning);
+    Ticking(spinning.get(), move |seconds| {
+        spin.update(|angle| {
+            *angle = (*angle + seconds * SPIN_PER_SECOND) % std::f32::consts::TAU;
+        });
+    });
     let radius = shape.width.min(shape.height) * 0.14;
     let center = Vec3::new(
         shape.width * 0.68,
@@ -214,7 +226,7 @@ fn Globe(shape: RoomShape, mesh: Arc<Mesh>) {
                 transform: Mat4::scaling(Vec3::new(radius, radius, radius))
                     .then(&Mat4::rotation_y(spin.get()))
                     .then(&Mat4::translation(center)),
-                lit: true,
+                material: Material::Lit,
                 casts_shadow: true,
             }),
         BoxSpec::default(),
@@ -222,9 +234,10 @@ fn Globe(shape: RoomShape, mesh: Arc<Mesh>) {
     );
 }
 
+/// Runs `tick` with the seconds each frame took while `on`, a step at most
+/// [`LONGEST_STEP_SECONDS`] long.
 #[composable(no_skip)]
-fn Spin(spin: MutableState<f32>, spinning: MutableState<bool>) {
-    let on = spinning.get();
+fn Ticking(on: bool, tick: impl Fn(f32) + 'static) {
     LaunchedEffectAsync(on, move |scope| {
         Box::pin(async move {
             if !on {
@@ -234,11 +247,8 @@ fn Spin(spin: MutableState<f32>, spinning: MutableState<bool>) {
             let mut last = clock.next_frame().await;
             while scope.is_active() {
                 let now = clock.next_frame().await;
-                let seconds = seconds_between(last, now).min(LONGEST_STEP_SECONDS);
+                tick(seconds_between(last, now).min(LONGEST_STEP_SECONDS));
                 last = now;
-                spin.update(|angle| {
-                    *angle = (*angle + seconds * SPIN_PER_SECOND) % std::f32::consts::TAU;
-                });
             }
         })
     });
@@ -320,7 +330,7 @@ fn Torus(shape: RoomShape, mesh: Arc<Mesh>) {
             .mesh_surface(move || MeshSurface {
                 mesh: Arc::clone(&mesh),
                 transform,
-                lit: true,
+                material: Material::Lit,
                 casts_shadow: true,
             })
             .background(Color(0.10, 0.07, 0.20, 1.0)),
@@ -424,50 +434,68 @@ fn Controls(room: RoomState) {
                 Modifier::empty().padding(6.0),
                 RowSpec::default(),
                 move || {
-                    let room = room.clone();
-                    Button(
-                        Modifier::empty()
-                            .rounded_corners(10.0)
-                            .background(Color(0.25, 0.45, 0.95, 1.0))
-                            .padding(14.0),
-                        ButtonSpec::default(),
+                    let steps = room.clone();
+                    WallButton(
+                        Color(0.25, 0.45, 0.95, 1.0),
                         move || {
-                            if room.is_entered() {
-                                room.leave();
+                            if steps.is_entered() {
+                                steps.leave();
                             } else {
-                                room.enter();
+                                steps.enter();
                             }
                         },
                         move || {
-                            Text(
-                                if entered {
-                                    "Back to the screen"
-                                } else {
-                                    "Step into the room"
-                                },
-                                Modifier::empty(),
-                                text_style(16.0, Color::WHITE),
-                            );
+                            if entered {
+                                "Back to the screen"
+                            } else {
+                                "Step into the room"
+                            }
+                            .to_string()
                         },
                     );
-                    Button(
-                        Modifier::empty()
-                            .padding(6.0)
-                            .rounded_corners(10.0)
-                            .background(Color(0.20, 0.22, 0.30, 1.0))
-                            .padding(14.0),
-                        ButtonSpec::default(),
+                    WallButton(
+                        Color(0.20, 0.22, 0.30, 1.0),
                         move || presses.set(presses.get() + 1),
-                        move || {
-                            Text(
-                                format!("Pressed {} times", presses.get()),
-                                Modifier::empty(),
-                                text_style(16.0, Color::WHITE),
-                            );
-                        },
+                        move || format!("Pressed {} times", presses.get()),
                     );
+                    if entered {
+                        let fire = room.fire;
+                        WallButton(
+                            Color(0.55, 0.22, 0.08, 1.0),
+                            move || fire.set(!fire.get()),
+                            move || {
+                                if fire.get() {
+                                    "Put out the fire"
+                                } else {
+                                    "Light the fire"
+                                }
+                                .to_string()
+                            },
+                        );
+                    }
                 },
             );
+        },
+    );
+}
+
+/// A button on the far wall, on `background`, that reads `label`.
+#[composable(no_skip)]
+fn WallButton(
+    background: Color,
+    on_click: impl Fn() + 'static,
+    label: impl Fn() -> String + 'static,
+) {
+    Button(
+        Modifier::empty()
+            .padding(6.0)
+            .rounded_corners(10.0)
+            .background(background)
+            .padding(14.0),
+        ButtonSpec::default(),
+        on_click,
+        move || {
+            Text(label(), Modifier::empty(), text_style(16.0, Color::WHITE));
         },
     );
 }

@@ -1,6 +1,7 @@
 // Draws a composable's surface on a mesh in a 3D scene, with a depth test
 // against the scene's other surfaces, and the depth of its shadow casters
-// as the scene's light sees them.
+// as the scene's light sees them. Glass reads the scene behind it from a
+// copy the pass takes after the surfaces that are not glass.
 
 struct MeshUniforms {
     clip_from_model: mat4x4<f32>,
@@ -8,6 +9,8 @@ struct MeshUniforms {
     // Maps the mesh into the shadow map: x and y from -1 to 1, depth from 0
     // nearest the light to 1.
     light_clip_from_model: mat4x4<f32>,
+    // Maps the scene into the page's clip space, for glass's bent rays.
+    clip_from_scene: mat4x4<f32>,
     // Rows of the inverse transpose of the model matrix's 3x3: turns model
     // normals into scene space.
     normal_x: vec4<f32>,
@@ -20,7 +23,9 @@ struct MeshUniforms {
     light: vec4<f32>,
     // xy = the texel where the content starts; zw = its size in texels.
     source_region: vec4<f32>,
-    // x = the surface's alpha; y = 1 for a lit surface, 0 for an unlit one.
+    // x = the surface's alpha; y = 1 for a lit surface, 0 for an unlit one,
+    // 2 for one that emits its colour, which neither light nor shadow
+    // changes.
     params: vec4<f32>,
     // x = one shadow map texel in texture coordinates; y = the depth bias.
     shadow: vec4<f32>,
@@ -28,6 +33,13 @@ struct MeshUniforms {
     // axis, a unit of shadow map depth behind its caster; z > 0 for a light
     // of some size, whose shadows soften away from their casters.
     shadow_soft: vec4<f32>,
+    // x = one over the glass's refractive index; y = how far a ray travels
+    // inside it, in scene units; zw = the page's size in pixels.
+    glass: vec4<f32>,
+    // rgb = the colour the glass tints what shows through it.
+    glass_tint: vec4<f32>,
+    // xy = the page pixel the backdrop copy starts at; zw = its size.
+    backdrop_region: vec4<f32>,
 }
 
 struct VertexInput {
@@ -58,6 +70,10 @@ struct ShadowOutput {
 // samples a texture with one sampler.
 @group(2) @binding(2) var shadow_depth: texture_depth_2d;
 @group(2) @binding(3) var shadow_depth_sampler: sampler;
+// The page behind the scene's glass, as the surfaces that are not glass
+// left it.
+@group(3) @binding(0) var backdrop: texture_2d<f32>;
+@group(3) @binding(1) var backdrop_sampler: sampler;
 
 @vertex
 fn mesh_surface_vs(input: VertexInput) -> VertexOutput {
@@ -89,7 +105,7 @@ fn content_color(uv: vec2<f32>) -> vec4<f32> {
 // 0 in full shadow to 1. The side the viewer sees takes the light that falls
 // on that side.
 fn shade(input: VertexOutput, visibility: f32) -> f32 {
-    if (mesh.light.w < 0.0) {
+    if ((mesh.light.w < 0.0) | (mesh.params.y > 1.5)) {
         return 1.0;
     }
     var reach = 1.0;
@@ -176,7 +192,77 @@ fn mesh_surface_shadowed_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     if (color.a < 1.0 / 255.0) {
         discard;
     }
-    return shaded(color, shade(input, shadow_visibility(input.light_position)));
+    // A surface that emits its colour takes no shadow, so reads no map.
+    var visibility = 1.0;
+    if (mesh.params.y < 1.5) {
+        visibility = shadow_visibility(input.light_position);
+    }
+    return shaded(color, shade(input, visibility));
+}
+
+// The page's colour behind the glass at `pixel`, from the backdrop copy.
+fn backdrop_at(pixel: vec2<f32>) -> vec3<f32> {
+    let region = mesh.backdrop_region;
+    let texel = clamp(pixel - region.xy, vec2<f32>(0.5), region.zw - vec2<f32>(0.5));
+    let size = vec2<f32>(textureDimensions(backdrop));
+    return textureSampleLevel(backdrop, backdrop_sampler, texel / size, 0.0).rgb;
+}
+
+// Where on the page the scene shows that the ray from the eye, seen at
+// `pixel` on the glass at `position`, meets behind the glass. `eta` (one
+// over the index) bends the ray toward the inside along `normal`, which
+// faces the eye; the ray travels the glass's thickness inside, then bends as
+// far again leaving it, as through a solid ball, and travels as far again.
+fn bent_pixel(pixel: vec2<f32>, position: vec3<f32>, normal: vec3<f32>, eta: f32) -> vec2<f32> {
+    let view = normalize(position - mesh.eye.xyz);
+    let inside = refract(view, normal, eta);
+    let leaving = normalize(2.0 * inside - view);
+    let behind = position + (inside + leaving) * mesh.glass.y;
+    let at = mesh.clip_from_scene * vec4<f32>(position, 1.0);
+    let seen = mesh.clip_from_scene * vec4<f32>(behind, 1.0);
+    if (seen.w <= 0.0) {
+        return pixel;
+    }
+    let shift = seen.xy / seen.w - at.xy / at.w;
+    return pixel + vec2<f32>(shift.x, -shift.y) * 0.5 * mesh.glass.zw;
+}
+
+@fragment
+fn mesh_glass_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    let toward_eye = normalize(mesh.eye.xyz - input.scene_position);
+    var normal = normalize(input.normal);
+    if (dot(normal, toward_eye) < 0.0) {
+        normal = -normal;
+    }
+    let pixel = input.clip_position.xy;
+    let eta = mesh.glass.x;
+    // Red bends a little less than blue, which splits colours at the rim.
+    let through = vec3<f32>(
+        backdrop_at(bent_pixel(pixel, input.scene_position, normal, eta * 1.012)).r,
+        backdrop_at(bent_pixel(pixel, input.scene_position, normal, eta)).g,
+        backdrop_at(bent_pixel(pixel, input.scene_position, normal, eta * 0.988)).b,
+    ) * mesh.glass_tint.rgb;
+    // Schlick's reflectance: the glass mirrors more of the scene toward its rim.
+    let facing = clamp(dot(normal, toward_eye), 0.0, 1.0);
+    let f0 = pow((1.0 - eta) / (1.0 + eta), 2.0);
+    let reflectance = f0 + (1.0 - f0) * pow(1.0 - facing, 5.0);
+    let mirror = reflect(-toward_eye, normal);
+    var reflected = vec3<f32>(0.5 - 0.5 * mirror.y) * reflectance;
+    if (mesh.light.w >= 0.0) {
+        reflected += vec3<f32>(pow(max(0.0, -dot(mirror, mesh.light.xyz)), 96.0) * 2.0);
+    }
+    let glass = through * (1.0 - reflectance) + reflected;
+    let content = content_color(input.uv);
+    return vec4<f32>(content.rgb + glass * (1.0 - content.a), 1.0) * mesh.params.x;
+}
+
+// Writes the depth of a surface that is not glass, for the pass that draws
+// glass after the copy it reads.
+@fragment
+fn mesh_depth_fs(input: VertexOutput) {
+    if (content_color(input.uv).a < 1.0 / 255.0) {
+        discard;
+    }
 }
 
 @vertex

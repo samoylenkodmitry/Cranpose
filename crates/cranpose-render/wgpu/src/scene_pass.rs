@@ -1,14 +1,15 @@
 //! The 3D pass of a scene: each of its mesh surfaces drawn from its rendered
 //! content, with a depth buffer so nearer surfaces hide farther ones, and,
 //! for a light that casts shadows, a shadow map its casters are drawn into
-//! first.
+//! first. Glass draws after the other surfaces from a copy of what they
+//! left, and glow after it, added onto the page.
 
 use std::{cell::OnceCell, sync::Arc};
 
 use bytemuck::{Pod, Zeroable};
 use cranpose_ui_graphics::{
     Rect,
-    space::{Mat4, Mesh, Vec3},
+    space::{Mat4, Material, Mesh, Vec3},
 };
 use wgpu::util::DeviceExt;
 
@@ -46,6 +47,7 @@ pub(crate) struct SceneSurfaceUniforms {
     clip_from_model: [[f32; 4]; 4],
     scene_from_model: [[f32; 4]; 4],
     light_clip_from_model: [[f32; 4]; 4],
+    clip_from_scene: [[f32; 4]; 4],
     normal_rows: [[f32; 4]; 3],
     eye: [f32; 4],
     light: [f32; 4],
@@ -53,6 +55,9 @@ pub(crate) struct SceneSurfaceUniforms {
     params: [f32; 4],
     shadow: [f32; 4],
     shadow_soft: [f32; 4],
+    glass: [f32; 4],
+    glass_tint: [f32; 4],
+    backdrop_region: [f32; 4],
 }
 
 /// One mesh's vertices and indices on the GPU.
@@ -96,6 +101,9 @@ pub(crate) struct ScenePass {
     pub(crate) pipeline: FixedPipeline,
     pub(crate) shadowed_pipeline: FixedPipeline,
     pub(crate) shadow_pipeline: FixedPipeline,
+    pub(crate) glass_pipeline: FixedPipeline,
+    pub(crate) glow_pipeline: FixedPipeline,
+    pub(crate) depth_pipeline: FixedPipeline,
     meshes: IdlePool<(u64, SceneMeshBuffers)>,
     pub(crate) shadow_map: Option<ShadowMap>,
     /// The frames since a scene last drew shadows.
@@ -109,6 +117,9 @@ impl Default for ScenePass {
             pipeline: FixedPipeline::new("scene/mesh-surface"),
             shadowed_pipeline: FixedPipeline::new("scene/mesh-surface-shadowed"),
             shadow_pipeline: FixedPipeline::new("scene/mesh-shadow"),
+            glass_pipeline: FixedPipeline::new("scene/mesh-glass"),
+            glow_pipeline: FixedPipeline::new("scene/mesh-glow"),
+            depth_pipeline: FixedPipeline::new("scene/mesh-depth"),
             meshes: IdlePool::default(),
             shadow_map: None,
             shadow_map_idle: 0,
@@ -125,6 +136,25 @@ pub(crate) enum ScenePipeline {
     Shadowed,
     /// Casters drawn into the shadow map.
     Shadow,
+    /// Glass, which reads the page behind it.
+    Glass,
+    /// Glow, added onto the page without hiding what lies behind it.
+    Glow,
+    /// The depth of the surfaces that are not glass, again, in the pass that
+    /// draws glass after the copy it reads.
+    Depth,
+}
+
+impl ScenePipeline {
+    /// Every scene pipeline.
+    pub(crate) const ALL: [Self; 6] = [
+        Self::Plain,
+        Self::Shadowed,
+        Self::Shadow,
+        Self::Glass,
+        Self::Glow,
+        Self::Depth,
+    ];
 }
 
 /// Where a scene's 3D pass draws: a page's pixels per logical pixel, the
@@ -136,17 +166,19 @@ pub(crate) struct ScenePage {
     pub(crate) size: (u32, u32),
 }
 
-/// How one surface is drawn: placed by `transform` in the scene, shaded or
-/// not, at `alpha`, from the content's texels in its texture, and where it
-/// lies in the scene's shadow map.
+/// How one surface is drawn: placed by `transform` in the scene, of
+/// `material`, at `alpha`, from the content's texels in its texture, and
+/// where it lies in the scene's shadow map.
 pub(crate) struct SurfaceShading {
     pub(crate) transform: Mat4,
-    pub(crate) lit: bool,
+    pub(crate) material: Material,
     pub(crate) alpha: f32,
     /// The content's top left texel and its size in texels.
     pub(crate) source_region: [f32; 4],
     /// Maps the scene into its shadow map, for a scene that casts shadows.
     pub(crate) light_projection: Option<Mat4>,
+    /// The page pixels the copy glass reads starts at, and its size.
+    pub(crate) backdrop_region: [f32; 4],
 }
 
 impl ScenePass {
@@ -258,6 +290,7 @@ fn pipeline_parts(
             Some(texture_layout),
             Some(&uniform_layout),
             Some(&shadow_layout),
+            Some(texture_layout),
         ],
     );
     let no_shadow_view = depth_texture(device, "Scene No Shadow", 1);
@@ -400,8 +433,18 @@ pub(crate) fn surface_uniforms(
         None => [0.0, 0.0, 0.0, -1.0],
     };
     let columns = |matrix: Mat4| matrix.transpose().rows();
+    let clip_from_scene = clip_from_scene(scene, page);
+    let (mode, glass) = match surface.material {
+        Material::Unlit => (0.0, None),
+        Material::Lit => (1.0, None),
+        Material::Emissive | Material::Glow => (2.0, None),
+        Material::Glass(glass) => (0.0, Some(glass)),
+    };
+    let glass_tint = glass.map_or([1.0; 4], |glass| {
+        [glass.tint.0, glass.tint.1, glass.tint.2, 1.0]
+    });
     Some(SceneSurfaceUniforms {
-        clip_from_model: columns(clip_from_model(scene, &surface.transform, page)),
+        clip_from_model: columns(surface.transform.then(&clip_from_scene)),
         scene_from_model: columns(surface.transform),
         light_clip_from_model: columns(
             surface
@@ -410,18 +453,22 @@ pub(crate) fn surface_uniforms(
                     surface.transform.then(&projection)
                 }),
         ),
+        clip_from_scene: columns(clip_from_scene),
         normal_rows: [normal_row(0), normal_row(1), normal_row(2)],
         eye: [eye.x, eye.y, eye.z, 1.0],
         light,
         source_region: surface.source_region,
-        params: [
-            surface.alpha.clamp(0.0, 1.0),
-            f32::from(u8::from(surface.lit)),
-            0.0,
-            0.0,
-        ],
+        params: [surface.alpha.clamp(0.0, 1.0), mode, 0.0, 0.0],
         shadow: [1.0 / SHADOW_MAP_SIZE as f32, SHADOW_DEPTH_BIAS, 0.0, 0.0],
         shadow_soft: penumbra_scale(scene, surface.light_projection),
+        glass: [
+            glass.map_or(1.0, |glass| 1.0 / glass.index.max(1.0)),
+            glass.map_or(0.0, |glass| glass.thickness.max(0.0)),
+            page.size.0 as f32,
+            page.size.1 as f32,
+        ],
+        glass_tint,
+        backdrop_region: surface.backdrop_region,
     })
 }
 
@@ -450,10 +497,10 @@ fn penumbra_scale(scene: &SceneDraw, light_projection: Option<Mat4>) -> [f32; 4]
     ]
 }
 
-/// The map from a surface's mesh to the clip space of `page`, through the
-/// camera of `scene`: what lies nearer than the camera's near plane falls
-/// outside it, and depth grows with distance.
-fn clip_from_model(scene: &SceneDraw, transform: &Mat4, page: ScenePage) -> Mat4 {
+/// The map from `scene` to the clip space of `page`, through the scene's
+/// camera: what lies nearer than the camera's near plane falls outside it,
+/// and depth grows with distance.
+fn clip_from_scene(scene: &SceneDraw, page: ScenePage) -> Mat4 {
     let camera = scene.camera;
     let (scale, focal_length) = (page.scale, camera.focal_length);
     let (width, height) = (page.size.0 as f32, page.size.1 as f32);
@@ -475,7 +522,50 @@ fn clip_from_model(scene: &SceneDraw, transform: &Mat4, page: ScenePage) -> Mat4
         [0.0, 0.0, 1.0, -camera.near()],
         [0.0, 0.0, 1.0, 0.0],
     ]);
-    transform.then(&camera.view).then(&projection)
+    camera.view.then(&projection)
+}
+
+/// The pixels of `page` a mesh placed by `transform` in `scene` covers,
+/// from the corners of its bounds: left, top, right and bottom. `None` when
+/// a corner lies behind the eye.
+pub(crate) fn surface_page_bounds(
+    scene: &SceneDraw,
+    transform: &Mat4,
+    mesh: &Mesh,
+    page: ScenePage,
+) -> Option<[f32; 4]> {
+    let rows = transform.then(&clip_from_scene(scene, page)).rows();
+    let (low, high) = mesh.bounds();
+    let mut bounds = [
+        f32::INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NEG_INFINITY,
+    ];
+    for corner in 0..8 {
+        let pick = |bit: usize, low: f32, high: f32| if corner & bit == 0 { low } else { high };
+        let point = [
+            pick(1, low.x, high.x),
+            pick(2, low.y, high.y),
+            pick(4, low.z, high.z),
+            1.0,
+        ];
+        let [x, y, _, w] = rows.map(|row| row.iter().zip(point).map(|(a, b)| a * b).sum::<f32>());
+        if w <= 0.0 {
+            return None;
+        }
+        let pixel = [
+            (x / w * 0.5 + 0.5) * page.size.0 as f32,
+            (0.5 - y / w * 0.5) * page.size.1 as f32,
+        ];
+        bounds = [
+            bounds[0].min(pixel[0]),
+            bounds[1].min(pixel[1]),
+            bounds[2].max(pixel[0]),
+            bounds[3].max(pixel[1]),
+        ];
+    }
+    Some(bounds)
 }
 
 /// How far from the eye a surface placed by `transform` is, along the
@@ -537,23 +627,45 @@ pub(crate) fn scene_pipeline_job(
                 "Scene Shadowed Surface Pipeline",
             ),
             ScenePipeline::Shadow => ("mesh_shadow_vs", "mesh_shadow_fs", "Scene Shadow Pipeline"),
+            ScenePipeline::Glass => ("mesh_surface_vs", "mesh_glass_fs", "Scene Glass Pipeline"),
+            ScenePipeline::Glow => ("mesh_surface_vs", "mesh_surface_fs", "Scene Glow Pipeline"),
+            ScenePipeline::Depth => ("mesh_surface_vs", "mesh_depth_fs", "Scene Depth Pipeline"),
+        };
+        let blend = match kind {
+            // Premultiplied colour added onto the page, which keeps its alpha.
+            ScenePipeline::Glow => wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Zero,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            },
+            _ => wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
         };
         let color_target = [Some(wgpu::ColorTargetState {
             format,
-            blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-            write_mask: wgpu::ColorWrites::ALL,
-        })];
-        let targets: &[Option<wgpu::ColorTargetState>] = match kind {
-            ScenePipeline::Shadow => &[],
-            ScenePipeline::Plain | ScenePipeline::Shadowed => &color_target,
-        };
-        let bias = match kind {
-            ScenePipeline::Shadow => wgpu::DepthBiasState {
-                constant: 2,
-                slope_scale: 2.0,
-                clamp: 0.0,
+            blend: Some(blend),
+            write_mask: if kind == ScenePipeline::Depth {
+                wgpu::ColorWrites::empty()
+            } else {
+                wgpu::ColorWrites::ALL
             },
-            ScenePipeline::Plain | ScenePipeline::Shadowed => wgpu::DepthBiasState::default(),
+        })];
+        let (targets, bias): (&[Option<wgpu::ColorTargetState>], _) = match kind {
+            ScenePipeline::Shadow => (
+                &[],
+                wgpu::DepthBiasState {
+                    constant: 2,
+                    slope_scale: 2.0,
+                    clamp: 0.0,
+                },
+            ),
+            _ => (&color_target, wgpu::DepthBiasState::default()),
         };
         create_render_pipeline_logged(
             &device,
@@ -593,7 +705,7 @@ pub(crate) fn scene_pipeline_job(
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(true),
+                    depth_write_enabled: Some(kind != ScenePipeline::Glow),
                     depth_compare: Some(wgpu::CompareFunction::Less),
                     stencil: wgpu::StencilState::default(),
                     bias,

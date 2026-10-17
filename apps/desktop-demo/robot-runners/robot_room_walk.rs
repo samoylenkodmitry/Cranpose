@@ -43,6 +43,11 @@ pub(crate) fn main() {
             }
             walk(&robot);
             save(&robot, &shots, "room.png");
+            // The fire flies on until it is put out, and the app never goes
+            // idle while it does.
+            if !click_button_in_semantics(&robot, "Put out the fire") {
+                robot_exit::fail(&robot, "no button to put out the fire in the room");
+            }
 
             let counter = button(&robot, "Pressed 0 times");
             // E turns the camera while it is held, Q turns it back.

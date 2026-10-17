@@ -4090,11 +4090,7 @@ impl GpuRenderer {
                 Box::new(self.rrect_shadow_pipeline_job(depth))
             });
         }
-        for kind in [
-            crate::scene_pass::ScenePipeline::Plain,
-            crate::scene_pass::ScenePipeline::Shadowed,
-            crate::scene_pass::ScenePipeline::Shadow,
-        ] {
+        for kind in crate::scene_pass::ScenePipeline::ALL {
             visit(self.scene_pipeline_resource(kind), &|| {
                 Box::new(self.scene_surface_pipeline_job(kind))
             });
@@ -4106,6 +4102,9 @@ impl GpuRenderer {
             crate::scene_pass::ScenePipeline::Plain => &self.scene_pass.pipeline,
             crate::scene_pass::ScenePipeline::Shadowed => &self.scene_pass.shadowed_pipeline,
             crate::scene_pass::ScenePipeline::Shadow => &self.scene_pass.shadow_pipeline,
+            crate::scene_pass::ScenePipeline::Glass => &self.scene_pass.glass_pipeline,
+            crate::scene_pass::ScenePipeline::Glow => &self.scene_pass.glow_pipeline,
+            crate::scene_pass::ScenePipeline::Depth => &self.scene_pass.depth_pipeline,
         }
     }
 

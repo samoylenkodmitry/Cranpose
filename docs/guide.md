@@ -1603,7 +1603,7 @@ surface that follows a state read in them moves without recomposition.
 ```rust
 use std::sync::Arc;
 
-use cranpose::space::{Camera, Light, Mat4, Mesh, MeshSurface, Scene3d, Vec3};
+use cranpose::space::{Camera, Light, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3};
 
 #[composable]
 fn Globe(spin: MutableState<f32>) {
@@ -1633,7 +1633,7 @@ fn Globe(spin: MutableState<f32>) {
                         mesh: Arc::clone(&sphere),
                         transform: Mat4::scaling(Vec3::new(200.0, 200.0, 200.0))
                             .then(&Mat4::rotation_y(spin.get())),
-                        lit: true,
+                        material: Material::Lit,
                         casts_shadow: true,
                     }),
                 BoxSpec::default(),
@@ -1649,10 +1649,22 @@ fn Globe(spin: MutableState<f32>) {
 A light with `shadows` set casts the shadows of the surfaces with
 `casts_shadow` on every surface of the scene. A light of some `size`, the
 angle it spans, casts soft shadows: sharp where an object meets a surface,
-wider farther from it. A lit surface is shaded by the
-angle the light falls at; an unlit one shows its content as it is, as a
-screen does, and drops to the light's `ambient` brightness where a shadow
-falls on it. So a 3D object in front of flat UI drops its shadow on the UI.
+wider farther from it. So a 3D object in front of flat UI drops its shadow
+on the UI.
+
+A surface's `material` sets how its content meets the light:
+
+- `Material::Lit` is shaded by the angle the light falls at.
+- `Material::Unlit` shows its content as it is, as a screen does, and drops
+  to the light's `ambient` brightness where a shadow falls on it.
+- `Material::Emissive` shows its content at full colour, untouched by light
+  or shadow: fire, a lamp.
+- `Material::Glow` adds its content's colour to what lies behind it and hides
+  nothing: a halo, a flame, a spark.
+- `Material::Glass(Glass::clear(thickness))` shows the scene behind it bent by
+  its curve, with the light's highlight on it and the content over it. Glass
+  shows the surfaces that are not glass behind it; it costs one copy of the
+  pixels around it per frame, and a scene without glass takes none.
 
 Scene space uses logical pixels with x to the right, y down and z away from
 the viewer. `Mesh::plane`, `Mesh::cuboid` and `Mesh::sphere` build common

@@ -166,6 +166,8 @@ pub(super) struct RoomState {
     pose: MutableState<Pose>,
     pub(super) held: MutableState<u8>,
     pub(super) focus: FocusRequester,
+    /// Whether the ball of fire flies around the room.
+    pub(super) fire: MutableState<bool>,
 }
 
 #[composable]
@@ -177,6 +179,7 @@ pub(super) fn rememberRoomState() -> RoomState {
         pose: mutableStateOf(Pose::default()),
         held: mutableStateOf(0),
         focus: FocusRequester::new(),
+        fire: mutableStateOf(true),
     })
     .with(Clone::clone)
 }
