@@ -531,7 +531,8 @@ fn draw_shape(
             rect,
             radii: Some(radii),
         } => {
-            paint.fill(|y, min_x, max_x| [rounded_fill_run(*rect, radii, y, min_x, max_x), NO_RUN]);
+            let fill = RoundedFill::new(*rect, radii);
+            paint.fill(|y, min_x, max_x| [fill.run(y, min_x, max_x), NO_RUN]);
         }
         ShapeCoverage::Fill { radii: None, .. } => paint.fill(whole_rows),
     }
@@ -844,32 +845,138 @@ impl ShapeCoverage {
     }
 }
 
-/// The pixels of the row centred at `y` whose centres lie in the rounded
-/// rect, within `min_x..max_x`. The shape is convex, so they form one run;
-/// its ends lie at most a corner radius in from the rect's sides.
-fn rounded_fill_run(rect: Rect, radii: &CornerRadii, y: f32, min_x: i32, max_x: i32) -> (i32, i32) {
-    if !(y >= rect.y && y <= rect.y + rect.height) {
-        return NO_RUN;
-    }
-    let inside = |x: i32| point_in_resolved_rounded_rect(x as f32 + 0.5, y, rect, radii);
-    // A pixel whose centre lies between the corners' widest reach on either
-    // side is inside on every row of the rect: an end there needs no test.
-    let flat_left = rect.x + radii.top_left.max(radii.bottom_left);
-    let flat_right = rect.x + rect.width - radii.top_right.max(radii.bottom_right);
-    let flat = |x: i32| (flat_left..=flat_right).contains(&(x as f32 + 0.5));
-    let mut start = min_x;
-    if !(start < max_x && flat(start)) {
-        while start < max_x && !inside(start) {
-            start += 1;
+/// A rounded rect to fill, with what every row of it shares worked out once.
+struct RoundedFill {
+    rect: Rect,
+    /// A pixel whose centre lies in `flat_left..=flat_right`, between the
+    /// corners' widest reach on either side, is inside on every row of the
+    /// rect: an end there needs no test.
+    flat_left: f32,
+    flat_right: f32,
+    top_left: Corner,
+    top_right: Corner,
+    bottom_right: Corner,
+    bottom_left: Corner,
+}
+
+/// A rounded corner: a point in its square, the one between the circle's
+/// centre and the rect's corner, lies outside when it lies outside the
+/// circle. A corner without a radius has its centre at infinity on the side
+/// away from its square, so no point lies in the square.
+#[derive(Clone, Copy)]
+struct Corner {
+    centre_x: f32,
+    centre_y: f32,
+    /// The square of the radius.
+    reach: f32,
+}
+
+impl Corner {
+    /// `square_left` when the corner's square lies left of its centre.
+    fn new(radius: f32, centre_x: f32, centre_y: f32, square_left: bool) -> Self {
+        if radius > 0.0 {
+            return Self {
+                centre_x,
+                centre_y,
+                reach: radius.powi(2),
+            };
+        }
+        Self {
+            centre_x: if square_left {
+                f32::NEG_INFINITY
+            } else {
+                f32::INFINITY
+            },
+            centre_y,
+            reach: f32::INFINITY,
         }
     }
-    let mut end = max_x;
-    if !(end > start && flat(end - 1)) {
-        while end > start && !inside(end - 1) {
-            end -= 1;
+
+    fn excludes(self, x: f32, y: f32) -> bool {
+        (x - self.centre_x).powi(2) + (y - self.centre_y).powi(2) > self.reach
+    }
+}
+
+impl RoundedFill {
+    fn new(rect: Rect, radii: &CornerRadii) -> Self {
+        let left = rect.x;
+        let right = rect.x + rect.width;
+        let top = rect.y;
+        let bottom = rect.y + rect.height;
+        Self {
+            rect,
+            flat_left: rect.x + radii.top_left.max(radii.bottom_left),
+            flat_right: rect.x + rect.width - radii.top_right.max(radii.bottom_right),
+            top_left: Corner::new(
+                radii.top_left,
+                left + radii.top_left,
+                top + radii.top_left,
+                true,
+            ),
+            top_right: Corner::new(
+                radii.top_right,
+                right - radii.top_right,
+                top + radii.top_right,
+                false,
+            ),
+            bottom_right: Corner::new(
+                radii.bottom_right,
+                right - radii.bottom_right,
+                bottom - radii.bottom_right,
+                false,
+            ),
+            bottom_left: Corner::new(
+                radii.bottom_left,
+                left + radii.bottom_left,
+                bottom - radii.bottom_left,
+                true,
+            ),
         }
     }
-    (start, end)
+
+    /// [`point_in_resolved_rounded_rect`] for a point of a row within the
+    /// rect's height, from the corners worked out once: each test computes
+    /// what that function computes, in the same order. Out of line, so the
+    /// row loop around a fill stays small enough to keep inline.
+    #[inline(never)]
+    fn contains(&self, x: f32, y: f32) -> bool {
+        let rect = self.rect;
+        let (top_left, top_right) = (self.top_left, self.top_right);
+        let (bottom_right, bottom_left) = (self.bottom_right, self.bottom_left);
+        x >= rect.x
+            && x <= rect.x + rect.width
+            && !(x < top_left.centre_x && y < top_left.centre_y && top_left.excludes(x, y))
+            && !(x > top_right.centre_x && y < top_right.centre_y && top_right.excludes(x, y))
+            && !(x > bottom_right.centre_x
+                && y > bottom_right.centre_y
+                && bottom_right.excludes(x, y))
+            && !(x < bottom_left.centre_x && y > bottom_left.centre_y && bottom_left.excludes(x, y))
+    }
+
+    /// The pixels of the row centred at `y` whose centres lie in the rounded
+    /// rect, within `min_x..max_x`. The shape is convex, so they form one
+    /// run; its ends lie at most a corner radius in from the rect's sides.
+    fn run(&self, y: f32, min_x: i32, max_x: i32) -> (i32, i32) {
+        let rect = self.rect;
+        if !(y >= rect.y && y <= rect.y + rect.height) {
+            return NO_RUN;
+        }
+        let inside = |x: i32| self.contains(x as f32 + 0.5, y);
+        let flat = |x: i32| (self.flat_left..=self.flat_right).contains(&(x as f32 + 0.5));
+        let mut start = min_x;
+        if !(start < max_x && flat(start)) {
+            while start < max_x && !inside(start) {
+                start += 1;
+            }
+        }
+        let mut end = max_x;
+        if !(end > start && flat(end - 1)) {
+            while end > start && !inside(end - 1) {
+                end -= 1;
+            }
+        }
+        (start, end)
+    }
 }
 
 fn placed_shadow(draw: &crate::scene::ShadowDraw) -> (ShadowRRect, Option<Rect>) {

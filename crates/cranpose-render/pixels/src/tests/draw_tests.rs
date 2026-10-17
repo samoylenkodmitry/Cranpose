@@ -815,6 +815,53 @@ fn stroked_rounded_rects_cover_each_pixel_as_their_geometry_says() {
 }
 
 #[test]
+fn filled_rounded_rects_cover_each_pixel_as_their_geometry_says() {
+    use cranpose_ui_graphics::RoundedCornerShape;
+    let rects = [
+        Rect {
+            x: 6.4,
+            y: 9.8,
+            width: 50.5,
+            height: 41.25,
+        },
+        // As tall as its two corners, so every row lies in a corner's band.
+        Rect {
+            x: 3.0,
+            y: 20.0,
+            width: 57.5,
+            height: 16.0,
+        },
+    ];
+    for rect in rects {
+        for shape_radii in [
+            RoundedCornerShape::uniform(0.3),
+            RoundedCornerShape::uniform(6.0),
+            RoundedCornerShape::uniform(8.0),
+            RoundedCornerShape::new(2.0, 11.0, 0.0, 17.5),
+            RoundedCornerShape::new(0.0, 0.0, 9.0, 0.0),
+            RoundedCornerShape::uniform(100.0),
+        ] {
+            let mut shape = shape_template(rect);
+            shape.shape = Some(shape_radii);
+            let frame = render_shape(shape);
+            let radii = shape_radii.resolve(rect.width, rect.height);
+            assert_frame_matches_coverage(
+                &format!("fill {rect:?} {shape_radii:?}"),
+                &frame,
+                |point| {
+                    if crate::style::point_in_resolved_rounded_rect(point.x, point.y, rect, &radii)
+                    {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                },
+            );
+        }
+    }
+}
+
+#[test]
 fn byte_pixels_blend_to_the_bytes_float_blending_gives() {
     let diagnostics = RenderDiagnostics::new();
     for alpha in 0..=255u8 {

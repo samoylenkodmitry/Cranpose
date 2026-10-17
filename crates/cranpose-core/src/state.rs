@@ -350,7 +350,7 @@ pub(crate) fn used_locked(head: &Rc<StateRecord>) -> Option<Rc<StateRecord>> {
     let mut valid_record: Option<Rc<StateRecord>> = None;
 
     let reuse_limit = lowest_pinned_snapshot().map_or_else(
-        || allocate_record_id().saturating_sub(1),
+        || crate::snapshot_v2::peek_next_snapshot_id().saturating_sub(1),
         |lowest| lowest.saturating_sub(1),
     );
 
@@ -720,10 +720,46 @@ struct WriteTarget<'a> {
     state: &'a dyn StateObject,
 }
 
-struct GlobalWrite {
-    record: Rc<StateRecord>,
-    new_id: SnapshotId,
-    written: Option<Rc<dyn StateObject>>,
+/// Clears the values of the records that `record`, the global snapshot's
+/// record at its current id, hides from every open snapshot, and marks them
+/// unused; their values go to `cleared`, for the caller to drop once the
+/// write is published. A snapshot pinned at an id reads the newest record
+/// below that id, so the newest record below the lowest pin stays.
+fn clear_hidden_records(record: &StateRecord, cleared: &mut SmallVec<[Box<dyn RecordValue>; 2]>) {
+    let reuse_limit = lowest_pinned_snapshot();
+    let record_hides_all = reuse_limit.is_none_or(|limit| record.snapshot_id() < limit);
+    let mut kept: Option<Rc<StateRecord>> = None;
+    let mut cursor = record.next();
+    while let Some(node) = cursor {
+        cursor = node.next();
+        let id = node.snapshot_id();
+        if node.is_tombstone()
+            || id == PREEXISTING_SNAPSHOT_ID
+            || reuse_limit.is_some_and(|limit| id >= limit)
+        {
+            continue;
+        }
+        let hidden = if record_hides_all {
+            node
+        } else {
+            match kept.take() {
+                None => {
+                    kept = Some(node);
+                    continue;
+                }
+                Some(newest) if newest.snapshot_id() < id => {
+                    kept = Some(node);
+                    newest
+                }
+                newest => {
+                    kept = newest;
+                    node
+                }
+            }
+        };
+        cleared.extend(hidden.clear_value());
+        hidden.set_tombstone(true);
+    }
 }
 
 impl WriteTarget<'_> {
@@ -731,13 +767,7 @@ impl WriteTarget<'_> {
         assert_record_chain(self.head, self.id, caller, snapshot_context);
     }
 
-    fn begin_global_write(
-        &self,
-        snapshot: &AnySnapshot,
-        global: &GlobalSnapshot,
-        snapshot_id: SnapshotId,
-        written: Option<Rc<dyn StateObject>>,
-    ) -> GlobalWrite {
+    fn begin_global_write(&self, global: &GlobalSnapshot, snapshot_id: SnapshotId) {
         assert!(
             !global.has_pending_children(),
             "SnapshotMutableState::set attempted global write while pending children {:?} exist (state {:?}, snapshot_id={})",
@@ -745,49 +775,45 @@ impl WriteTarget<'_> {
             self.id,
             snapshot_id
         );
-        if let Some(state) = &written {
-            snapshot.record_write(Rc::clone(state));
-        }
         mark_update_write(self.id);
-        let new_id = allocate_record_id();
-        let record = new_overwritable_record_as_head_locked(self.state);
-        GlobalWrite {
-            record,
-            new_id,
-            written,
-        }
     }
 
-    fn finish_global_write(
+    /// Returns a head record for a global write and the id under which
+    /// [`Self::publish_global_record`] publishes it.
+    fn push_global_record(&self) -> (Rc<StateRecord>, SnapshotId) {
+        let new_id = allocate_record_id();
+        (new_overwritable_record_as_head_locked(self.state), new_id)
+    }
+
+    /// Publishes a pushed record once its value is stored: nothing may read
+    /// the record while the store runs.
+    fn publish_global_record(
         &self,
-        global: &GlobalSnapshot,
-        write: GlobalWrite,
+        record: &StateRecord,
+        new_id: SnapshotId,
         snapshot_id: SnapshotId,
     ) {
-        // Published only now that its value is stored: nothing may read the
-        // record while the store runs.
-        write.record.set_snapshot_id(write.new_id);
-        write.record.set_tombstone(false);
-        advance_global_snapshot(write.new_id);
+        record.set_snapshot_id(new_id);
+        record.set_tombstone(false);
+        advance_global_snapshot(new_id);
         self.assert_chain_integrity("set(global-push)", Some(snapshot_id));
+    }
 
+    /// Finishes a global write that stored its value in `record`, the record
+    /// at the global snapshot's current id.
+    fn finish_global_write(
+        &self,
+        record: &StateRecord,
+        written: Option<Rc<dyn StateObject>>,
+        snapshot_id: SnapshotId,
+    ) {
         let mut cleared: SmallVec<[Box<dyn RecordValue>; 2]> = SmallVec::new();
-        if !global.has_pending_children() {
-            let mut cursor = write.record.next();
-            while let Some(node) = cursor {
-                if !node.is_tombstone() && node.snapshot_id() != PREEXISTING_SNAPSHOT_ID {
-                    cleared.extend(node.clear_value());
-                    node.set_tombstone(true);
-                }
-                cursor = node.next();
-            }
-            self.assert_chain_integrity("set(global-tombstone)", Some(snapshot_id));
-        }
-
-        if let Some(modified) = write.written.as_ref() {
+        clear_hidden_records(record, &mut cleared);
+        self.assert_chain_integrity("set(global-tombstone)", Some(snapshot_id));
+        if let Some(modified) = written.as_ref() {
             crate::snapshot_v2::notify_apply_observers(
                 std::slice::from_ref(modified),
-                write.new_id,
+                record.snapshot_id(),
             );
         }
         drop(cleared);
@@ -959,7 +985,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         readable_record_for(&head, snapshot_id, invalid)
     }
 
-    fn is_equivalent_to(&self, readable: Option<Rc<StateRecord>>, new_value: &T) -> bool {
+    fn is_equivalent_to(&self, readable: Option<&StateRecord>, new_value: &T) -> bool {
         readable.is_some_and(|record| {
             record.with_value(|current: &T| self.policy.equivalent(current, new_value))
         })
@@ -1112,20 +1138,35 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
             AnySnapshot::Global(global) => {
                 let readable =
                     snapshot.with_invalid(|invalid| self.readable_for(snapshot_id, invalid));
-                if self.is_equivalent_to(readable, &new_value) {
+                if self.is_equivalent_to(readable.as_deref(), &new_value) {
                     return false;
                 }
-                let write =
-                    target.begin_global_write(&snapshot, global, snapshot_id, self.written_state());
-                let displaced = write.record.replace_value(new_value);
-                target.finish_global_write(global, write, snapshot_id);
-                drop(displaced);
+                target.begin_global_write(global, snapshot_id);
+                // A record the global snapshot wrote at its current id is
+                // seen by no other snapshot: one taken since would have moved
+                // the global to a new id. The write replaces its value there,
+                // as Compose overwrites the record of the snapshot it writes.
+                if let Some(record) = readable.filter(|record| record.snapshot_id() == snapshot_id)
+                {
+                    let displaced = record.replace_value(new_value);
+                    target.finish_global_write(&record, self.written_state(), snapshot_id);
+                    drop(displaced);
+                } else {
+                    let (record, new_id) = target.push_global_record();
+                    let displaced = record.replace_value(new_value);
+                    target.publish_global_record(&record, new_id, snapshot_id);
+                    target.finish_global_write(&record, self.written_state(), snapshot_id);
+                    drop(displaced);
+                }
             }
             AnySnapshot::Mutable(_)
             | AnySnapshot::NestedMutable(_)
             | AnySnapshot::TransparentMutable(_) => {
                 let invalid = snapshot.invalid();
-                if self.is_equivalent_to(self.readable_for(snapshot_id, &invalid), &new_value) {
+                if self.is_equivalent_to(
+                    self.readable_for(snapshot_id, &invalid).as_deref(),
+                    &new_value,
+                ) {
                     return false;
                 }
                 let record = target.begin_child_write(

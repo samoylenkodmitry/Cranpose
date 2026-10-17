@@ -42,6 +42,13 @@ impl GlobalSnapshot {
         })
     }
 
+    /// Advances to `new_id` and lets go of the records no snapshot reads
+    /// any more, when the runtime is due to look for them.
+    fn advance_releasing(&self, new_id: SnapshotId) {
+        self.advance(new_id);
+        super::maybe_check_and_overwrite_unused_records_locked(new_id);
+    }
+
     /// Advances the global snapshot to `new_id`.
     ///
     /// A global write commits and notifies apply observers on its own, so the
@@ -97,11 +104,14 @@ impl GlobalSnapshot {
         &self,
         read_observer: Option<ReadObserver>,
     ) -> Rc<ReadonlySnapshot> {
-        ReadonlySnapshot::new(
-            self.state.id.get(),
-            self.state.invalid.borrow().clone(),
-            read_observer,
-        )
+        // A global write replaces in place a value the global snapshot wrote
+        // at its current id. The snapshot takes an id of its own and the
+        // global moves past it, so what the global writes or creates from
+        // here on stays out of the snapshot.
+        let snapshot_id = super::allocate_record_id();
+        let invalid = self.state.invalid.borrow().clear(self.state.id.get());
+        self.advance_releasing(super::allocate_record_id());
+        ReadonlySnapshot::new(snapshot_id, invalid, read_observer)
     }
 
     /// Returns `true` when a write was recorded and the global snapshot has not advanced since.
@@ -193,9 +203,7 @@ impl NestedMutableHost for GlobalSnapshot {
 
 /// Advance the global snapshot to a new ID.
 pub fn advance_global_snapshot(new_id: SnapshotId) {
-    let global = GlobalSnapshot::get_or_create();
-    global.advance(new_id);
-    super::maybe_check_and_overwrite_unused_records_locked(new_id);
+    GlobalSnapshot::get_or_create().advance_releasing(new_id);
 }
 
 #[cfg(test)]

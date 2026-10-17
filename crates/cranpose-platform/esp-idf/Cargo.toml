@@ -34,6 +34,11 @@ bindings_header = "src/bindings.h"
 [[package.metadata.esp-idf-sys.extra_components]]
 component_dirs = ["components/cranpose_fast_tls"]
 
+# `Instant::now` without a 64-bit division: see
+# components/cranpose_fast_time/fast_time.c.
+[[package.metadata.esp-idf-sys.extra_components]]
+component_dirs = ["components/cranpose_fast_time"]
+
 # Small blocks from per-task lists: see
 # components/cranpose_small_alloc/small_alloc.c.
 [[package.metadata.esp-idf-sys.extra_components]]
