@@ -629,6 +629,16 @@ pub const fn branch_location_key(file: &str, line: u32, column: u32, branch: u32
     avalanche_location_key(hash)
 }
 
+/// The key of the `index`th constant value the `#[composable]` macro keeps
+/// at a source position, as a constant.
+#[doc(hidden)]
+pub const fn constant_value_key(file: &str, line: u32, column: u32, index: u32) -> Key {
+    let mut hash = source_location_hash(file, line, column);
+    hash = fnv1a_location_key_bytes(hash, &[0xfc]);
+    hash = fnv1a_location_key_bytes(hash, &index.to_le_bytes());
+    avalanche_location_key(hash)
+}
+
 /// Stable identifier for a slot in the slot table.
 ///
 /// Anchors provide positional stability: they maintain their identity even when

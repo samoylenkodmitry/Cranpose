@@ -2102,6 +2102,15 @@ impl Composer {
         self.remember_at(crate::caller_location_key(), init)
     }
 
+    /// The value `make` gave the first time this composition reached `key`,
+    /// for an expression `#[composable]` found to give the same value every
+    /// time: a modifier chain of constants is built once and handed out
+    /// after, the same chain each time.
+    #[doc(hidden)]
+    pub fn __constant<T: Clone + 'static>(&self, key: crate::Key, make: impl FnOnce() -> T) -> T {
+        self.remember_at(key, make).with(T::clone)
+    }
+
     #[doc(hidden)]
     pub fn remember_at<T: 'static>(
         &self,
