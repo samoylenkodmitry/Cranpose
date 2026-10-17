@@ -577,7 +577,7 @@ fn replace_dirty_layers_from_applier(
         // child that stopped publishing leaves the flag set, which only keeps
         // the scroll fast path off; a child that started must set it.
         parent.has_origin_sinks |= children_have_origin_sinks(&parent.children);
-        parent.note_content_change(update);
+        parent.note_descendant_change(update);
     }
 
     Some(report)
@@ -1561,6 +1561,7 @@ fn assign_layer(layer: &mut LayerNode, head: LayerHead) {
         cache_hashes: _,
         content_changes,
         change: _,
+        own_change: _,
         children,
     } = layer;
     if *node_id != head.node_id {

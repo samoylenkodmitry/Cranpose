@@ -300,6 +300,11 @@ pub struct LayerNode {
     pub content_changes: ContentChanges,
     /// The number the layer took when it or a layer beneath it last changed.
     pub change: LayerChange,
+    /// The number the layer took when it last changed itself: its own
+    /// properties, draws or list of children. A change beneath it leaves
+    /// this number, so a renderer that kept the layer's own items knows they
+    /// hold.
+    pub own_change: LayerChange,
     /// Content in draw order: primitives, draw runs and child layers.
     pub children: Vec<RenderNode>,
 }
@@ -377,6 +382,7 @@ impl Default for LayerNode {
             cache_hashes: Cell::new(None),
             content_changes: ContentChanges::default(),
             change: LayerChange::default(),
+            own_change: LayerChange::default(),
             children: Vec::new(),
         }
     }
@@ -566,11 +572,21 @@ impl LayerNode {
         }
     }
 
-    /// Forgets this layer's own raster cache hashes and takes a new change
-    /// number: a property its hash covers, or a layer beneath it, changed.
+    /// Forgets this layer's own raster cache hashes and takes new change
+    /// numbers: a property its hash covers changed.
     pub(crate) fn forget_own_raster_cache_hashes(&mut self) {
         self.cache_hashes.set(None);
         self.change = LayerChange::next();
+        self.own_change = LayerChange::next();
+    }
+
+    /// Records that scene update `update` changed a layer beneath this one,
+    /// which it holds in its place: the hashes and the subtree's change
+    /// number go, the layer's own number stays.
+    pub(crate) fn note_descendant_change(&mut self, update: u64) {
+        self.cache_hashes.set(None);
+        self.change = LayerChange::next();
+        self.content_changes.note(update);
     }
 
     /// Records that scene update `update` changed what this layer draws, and
