@@ -471,9 +471,11 @@ fn animated_content<T, F>(
     T: Clone + PartialEq + 'static,
     F: FnMut(T) + 'static,
 {
-    let runtime = with_current_composer(cranpose_core::Composer::runtime_handle);
-    let state =
-        remember(|| StateHandle(Rc::new(ContentState::<T>::new(runtime)))).with(StateHandle::clone);
+    let state = remember(|| {
+        let runtime = with_current_composer(cranpose_core::Composer::runtime_handle);
+        StateHandle(Rc::new(ContentState::<T>::new(runtime)))
+    })
+    .with(StateHandle::clone);
     *state.0.content.borrow_mut() = Some(std::boxed::Box::new(content));
     state
         .0
