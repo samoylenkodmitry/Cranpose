@@ -47,10 +47,7 @@ use crate::{
     },
     render_state::AppContext,
     subcompose_layout::{CachedBatchMeasureInputs, SubcomposeLayoutNode},
-    widgets::nodes::{
-        IntrinsicKind, LayoutNode, LayoutNodeCacheHandles, LayoutState, begin_placement_pass,
-        placement_pass_with_unplaced_nodes,
-    },
+    widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles, LayoutState},
 };
 
 #[derive(Default)]
@@ -984,17 +981,17 @@ fn layout_tree_origin(root: Option<LayoutState>) -> Point {
 
 /// Places the root at the origin, the one placement no parent makes, and
 /// names what the pass left unplaced.
-fn finish_placement(applier: &mut MemoryApplier, root: NodeId) {
+fn finish_placement(applier: &mut MemoryApplier, root: NodeId, context: &AppContext) {
     if applier
-        .with_node::<LayoutNode, _>(root, |node| node.set_position(Point::default()))
+        .with_node::<LayoutNode, _>(root, |node| node.set_position(Point::default(), context))
         .is_err()
     {
         let _ = applier.with_node::<SubcomposeLayoutNode, _>(root, |node| {
-            node.set_position(Point::default());
+            node.set_position(Point::default(), context);
         });
     }
-    if let Some(pass) = placement_pass_with_unplaced_nodes() {
-        record_unplaced_parents(applier, root, pass);
+    if let Some(pass) = context.placement_pass().with_unplaced_nodes() {
+        record_unplaced_parents(applier, root, pass, context);
     }
 }
 
@@ -1002,7 +999,12 @@ fn finish_placement(applier: &mut MemoryApplier, root: NodeId) {
 /// left unplaced: nothing about the node itself changed, so the geometry
 /// setters had nothing to report, yet its layer has to leave the scene. A
 /// pass unplaces nodes rarely, so it pays for this walk only when it did.
-fn record_unplaced_parents(applier: &mut MemoryApplier, root: NodeId, pass: u64) {
+fn record_unplaced_parents(
+    applier: &mut MemoryApplier,
+    root: NodeId,
+    pass: u64,
+    context: &AppContext,
+) {
     let mut parents = vec![root];
     let mut children = Vec::new();
     while let Some(parent) = parents.pop() {
@@ -1015,7 +1017,7 @@ fn record_unplaced_parents(applier: &mut MemoryApplier, root: NodeId, pass: u64)
         }
         for &child in &children {
             match read_layout_node(applier, child, |state, _| state.unplaced_in(pass)) {
-                Ok(Some(true)) => crate::render_state::record_geometry_scene_node(parent),
+                Ok(Some(true)) => context.record_geometry_scene_node(parent),
                 Ok(Some(false)) => parents.push(child),
                 Ok(None) | Err(_) => {}
             }
@@ -1345,7 +1347,7 @@ pub fn measure_layout_with_options(
     let mut stages = LayoutStages::start(layout_measure_telemetry_threshold_ms().is_some());
     let context = crate::render_state::require_current_app_context("a layout pass");
     context.begin_text_layout_pass();
-    begin_placement_pass();
+    context.placement_pass().begin();
     process_pending_layout_repasses(&context, applier, root)?;
     stages.reached();
 
@@ -1401,7 +1403,7 @@ pub fn measure_layout_with_options(
     stages.reached();
 
     if let Ok(mut applier) = applier_host.try_borrow_typed() {
-        finish_placement(&mut applier, root);
+        finish_placement(&mut applier, root, &context);
     }
     stages.reached();
 
@@ -1770,7 +1772,7 @@ impl LayoutBuilderState {
             return;
         };
         let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-            node.clear_placed();
+            node.clear_placed(&self.context);
         });
     }
 
@@ -1799,6 +1801,7 @@ impl LayoutBuilderState {
         node_id: NodeId,
         constraints: Constraints,
         current_epoch: u64,
+        context: &AppContext,
     ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
         let served = |cache: &LayoutNodeCacheHandles, dirty: bool| {
             let epoch = cache.epoch();
@@ -1810,14 +1813,14 @@ impl LayoutBuilderState {
 
         match applier.with_node::<LayoutNode, _>(node_id, |node| {
             let measured = served(node.cache_handles(), Node::layout_dirty(node))?;
-            node.set_measured_size(measured.size);
+            node.set_measured_size(measured.size, context);
             Some(measured)
         }) {
             Ok(measured) => Ok(measured),
             Err(NodeError::TypeMismatch { .. }) => {
                 match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
                     let measured = served(node.cache_handles(), Node::layout_dirty(node))?;
-                    node.set_measured_size(measured.size);
+                    node.set_measured_size(measured.size, context);
                     Some(measured)
                 }) {
                     Ok(measured) => Ok(measured),
@@ -1945,6 +1948,7 @@ impl LayoutBuilderState {
                                 child_id,
                                 child_constraints,
                                 current_epoch,
+                                &self.context,
                             ) {
                                 Ok(Some(measured)) => {
                                     out[index] = Some(measured.size);
@@ -2017,7 +2021,7 @@ impl LayoutBuilderState {
 
         if let Ok(mut applier) = self.applier.try_borrow_typed() {
             let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |parent_node| {
-                parent_node.set_measured_size(Size { width, height });
+                parent_node.set_measured_size(Size { width, height }, &self.context);
                 parent_node.clear_needs_measure();
                 parent_node.clear_needs_layout();
             });
@@ -2046,12 +2050,12 @@ impl LayoutBuilderState {
             if let Ok(mut applier) = self.applier.try_borrow_typed()
                 && applier
                     .with_node::<LayoutNode, _>(placement.node_id, |node| {
-                        node.set_position(retained_position);
+                        node.set_position(retained_position, &self.context);
                     })
                     .is_err()
             {
                 let _ = applier.with_node::<SubcomposeLayoutNode, _>(placement.node_id, |node| {
-                    node.set_position(retained_position);
+                    node.set_position(retained_position, &self.context);
                 });
             }
 
@@ -2181,7 +2185,7 @@ impl LayoutBuilderState {
                 }
                 node.clear_needs_measure();
                 node.clear_needs_layout();
-                node.set_measured_size(measurement.size);
+                node.set_measured_size(measurement.size, &self.context);
                 node.set_content_offset(measurement.content_offset);
             })
         })
@@ -2395,11 +2399,13 @@ impl LayoutBuilderState {
             return;
         };
         if applier
-            .with_node::<LayoutNode, _>(child_id, |child| child.set_position(child.position()))
+            .with_node::<LayoutNode, _>(child_id, |child| {
+                child.set_position(child.position(), &self.context);
+            })
             .is_err()
         {
             let _ = applier.with_node::<SubcomposeLayoutNode, _>(child_id, |child| {
-                child.set_position(child.layout_state().position());
+                child.set_position(child.layout_state().position(), &self.context);
             });
         }
     }
@@ -2410,7 +2416,7 @@ impl LayoutBuilderState {
         constraints: Constraints,
         keep: bool,
     ) -> LayoutNodeVisit<'_> {
-        node.clear_placed();
+        node.clear_placed(&self.context);
         if keep && let Some(measured) = self.measurement_to_keep(node, constraints) {
             return LayoutNodeVisit::Keep(KeptNode {
                 measured,
@@ -3712,6 +3718,20 @@ impl LayoutChildMeasureState {
         });
     }
 
+    /// Runs `f` on the child's layout state with the context of the pass it
+    /// measures in; nothing while it is bound to no pass.
+    fn with_pass_layout_state(&self, f: impl FnOnce(&mut LayoutState, &AppContext)) {
+        let builder = self.frame.builder.borrow();
+        let Some(builder) = builder.as_ref() else {
+            return;
+        };
+        read_cell(&self.layout_state, |state| {
+            if let Some(state) = state {
+                f(&mut state.borrow_mut(), &builder.context);
+            }
+        });
+    }
+
     fn place_retained(&self, position: Point) {
         self.last_position.set(Some(position));
         let builder = self.frame.builder.borrow();
@@ -3721,7 +3741,7 @@ impl LayoutChildMeasureState {
         let placed = read_cell(&self.layout_state, |layout_state| {
             layout_state
                 .as_ref()
-                .map(|layout_state| layout_state.borrow_mut().place(position))
+                .map(|layout_state| layout_state.borrow_mut().place(position, &builder.context))
                 .is_some()
         });
         if placed {
@@ -3731,7 +3751,7 @@ impl LayoutChildMeasureState {
             return;
         };
         let _ = applier.with_node::<SubcomposeLayoutNode, _>(self.node_id, |node| {
-            node.set_position(position);
+            node.set_position(position, &builder.context);
         });
     }
 
@@ -3775,11 +3795,7 @@ impl LayoutChildMeasureState {
             // A measure clears the placed flag the parent's placement sets
             // again; a child it no longer places then leaves the scene.
             if self.frame.measures() {
-                read_cell(&self.layout_state, |state| {
-                    if let Some(state) = state {
-                        state.borrow_mut().clear_placed();
-                    }
-                });
+                self.with_pass_layout_state(LayoutState::clear_placed);
             }
             return Some(cached);
         }
@@ -3888,10 +3904,8 @@ impl Measurable for LayoutChildMeasurable {
             ),
             |measured| (measured.size, measured.size_for_parent()),
         );
-        read_cell(&state.layout_state, |layout_state| {
-            if let Some(layout_state) = layout_state {
-                layout_state.borrow_mut().set_size(measured_size);
-            }
+        state.with_pass_layout_state(|layout_state, context| {
+            layout_state.set_size(measured_size, context);
         });
         let alignment_lines = measured
             .as_ref()

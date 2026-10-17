@@ -18,6 +18,7 @@ use web_time::Instant;
 use crate::{
     layout::MeasuredNode,
     modifier::{Modifier, ModifierChainHandle, ModifierNodeSlices, Point, ResolvedModifiers, Size},
+    render_state::AppContext,
     widgets::nodes::{
         DescendantDirt, LayoutNode, LayoutNodeCacheHandles, LayoutState, allocate_virtual_node_id,
     },
@@ -976,20 +977,20 @@ impl SubcomposeLayoutNode {
 
     /// Updates the position of this node. Called during placement.
     /// [`LayoutState::place`] self-reports actual moves to the scene phase.
-    pub fn set_position(&self, position: Point) {
-        self.layout_state.borrow_mut().place(position);
+    pub fn set_position(&self, position: Point, context: &AppContext) {
+        self.layout_state.borrow_mut().place(position, context);
     }
 
     /// Updates the measured size of this node. Called during measurement.
     /// [`LayoutState::set_size`] self-reports actual changes to the scene
     /// phase.
-    pub fn set_measured_size(&self, size: Size) {
-        self.layout_state.borrow_mut().set_size(size);
+    pub fn set_measured_size(&self, size: Size, context: &AppContext) {
+        self.layout_state.borrow_mut().set_size(size, context);
     }
 
     /// Clears the is_placed flag. Called at the start of a layout pass.
-    pub fn clear_placed(&self) {
-        self.layout_state.borrow_mut().clear_placed();
+    pub fn clear_placed(&self, context: &AppContext) {
+        self.layout_state.borrow_mut().clear_placed(context);
     }
 
     /// Semantics reported by this node's live modifier chain.

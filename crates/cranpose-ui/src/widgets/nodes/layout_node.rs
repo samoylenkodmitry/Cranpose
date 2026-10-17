@@ -21,6 +21,7 @@ use crate::{
         ModifierLocalsHandle, ModifierNodeSlices, Point, ResolvedModifierLocal, ResolvedModifiers,
         Size,
     },
+    render_state::AppContext,
 };
 
 #[derive(Clone, Copy)]
@@ -80,23 +81,33 @@ impl PlacementPass {
             unplaced: Cell::new(0),
         }
     }
-}
 
-/// Starts the placement bookkeeping of a layout pass.
-pub(crate) fn begin_placement_pass() {
-    crate::thread_state::cells(|cells| {
-        let pass = &cells.placement_pass;
-        pass.id.set(pass.id.get() + 1);
-        pass.unplaced.set(0);
-    });
-}
+    /// Starts the placement bookkeeping of a layout pass.
+    pub(crate) fn begin(&self) {
+        self.id.set(self.id.get() + 1);
+        self.unplaced.set(0);
+    }
 
-/// The running pass, when it has left a node unplaced that it found placed.
-pub(crate) fn placement_pass_with_unplaced_nodes() -> Option<u64> {
-    crate::thread_state::cells(|cells| {
-        let pass = &cells.placement_pass;
-        (pass.unplaced.get() > 0).then(|| pass.id.get())
-    })
+    /// The running pass, when it has left a node unplaced that it found placed.
+    pub(crate) fn with_unplaced_nodes(&self) -> Option<u64> {
+        (self.unplaced.get() > 0).then(|| self.id.get())
+    }
+
+    /// Counts a placed node the running pass cleared, and returns the pass.
+    fn clear(&self) -> u64 {
+        self.unplaced.set(self.unplaced.get() + 1);
+        self.id.get()
+    }
+
+    /// Whether a node cleared in pass `cleared_in` was cleared by the running
+    /// pass, which then counts it placed again.
+    fn restore(&self, cleared_in: u64) -> bool {
+        let restored = cleared_in == self.id.get();
+        if restored {
+            self.unplaced.set(self.unplaced.get().saturating_sub(1));
+        }
+        restored
+    }
 }
 
 /// What a node below a node needs: layout, and measure when `measure` is set.
@@ -209,11 +220,11 @@ impl LayoutState {
     }
 
     /// Writes the measured size, self-reporting an actual change to the
-    /// scene phase.
-    pub fn set_size(&mut self, size: Size) {
+    /// scene phase of `context`, the node's app context.
+    pub fn set_size(&mut self, size: Size, context: &AppContext) {
         if self.size != size {
             if let Some(id) = self.node_id {
-                crate::render_state::record_geometry_scene_node(id);
+                context.record_geometry_scene_node(id);
             }
             self.size = size;
             self.note_semantics_change();
@@ -221,17 +232,21 @@ impl LayoutState {
     }
 
     /// Writes the placed position and marks the node placed, self-reporting
-    /// an actual move to the scene phase, and a placement of a node the
-    /// scene does not draw: one the running pass did not find placed. A move
-    /// is reported apart, so the scene can keep what it drew for the node.
-    pub fn place(&mut self, position: Point) {
-        let newly_placed = !self.is_placed && !self.restore_placement();
+    /// to the scene phase of `context`, the node's app context, an actual
+    /// move, and a placement of a node the scene does not draw: one the
+    /// running pass did not find placed. A move is reported apart, so the
+    /// scene can keep what it drew for the node.
+    pub fn place(&mut self, position: Point, context: &AppContext) {
+        // A node the running pass cleared while it was placed changes
+        // nothing the scene draws by being placed again.
+        let newly_placed =
+            !self.is_placed && !context.placement_pass().restore(self.cleared_in_pass);
         let moved = self.position != position;
         if let Some(id) = self.node_id {
             if newly_placed {
-                crate::render_state::record_geometry_scene_node(id);
+                context.record_geometry_scene_node(id);
             } else if moved {
-                crate::render_state::record_moved_scene_node(id);
+                context.record_moved_scene_node(id);
             }
         }
         self.position = position;
@@ -241,32 +256,15 @@ impl LayoutState {
         }
     }
 
-    /// Whether the running pass cleared the flag of this node while it was
-    /// placed, so placing it again changes nothing the scene draws.
-    fn restore_placement(&self) -> bool {
-        crate::thread_state::cells(|cells| {
-            let pass = &cells.placement_pass;
-            let restored = self.cleared_in_pass == pass.id.get();
-            if restored {
-                pass.unplaced.set(pass.unplaced.get().saturating_sub(1));
-            }
-            restored
-        })
-    }
-
-    /// Clears the placed flag at the start of a layout pass. Until its parent
-    /// places it again the pass counts the node unplaced, and the pass names
-    /// it to the scene phase if it ends that way.
-    pub fn clear_placed(&mut self) {
+    /// Clears the placed flag at the start of a layout pass of `context`.
+    /// Until its parent places it again the pass counts the node unplaced,
+    /// and the pass names it to the scene phase if it ends that way.
+    pub fn clear_placed(&mut self, context: &AppContext) {
         if !self.is_placed {
             return;
         }
         self.is_placed = false;
-        self.cleared_in_pass = crate::thread_state::cells(|cells| {
-            let pass = &cells.placement_pass;
-            pass.unplaced.set(pass.unplaced.get() + 1);
-            pass.id.get()
-        });
+        self.cleared_in_pass = context.placement_pass().clear();
         self.note_semantics_change();
     }
 
@@ -1261,14 +1259,14 @@ impl LayoutNode {
     /// Updates the measured size of this node. Called during measurement.
     /// [`LayoutState::set_size`] self-reports actual changes to the scene
     /// phase.
-    pub fn set_measured_size(&self, size: Size) {
-        self.layout_state.borrow_mut().set_size(size);
+    pub fn set_measured_size(&self, size: Size, context: &AppContext) {
+        self.layout_state.borrow_mut().set_size(size, context);
     }
 
     /// Updates the position of this node. Called during placement.
     /// [`LayoutState::place`] self-reports actual moves to the scene phase.
-    pub fn set_position(&self, position: Point) {
-        self.layout_state.borrow_mut().place(position);
+    pub fn set_position(&self, position: Point, context: &AppContext) {
+        self.layout_state.borrow_mut().place(position, context);
     }
 
     /// Records the content offset (e.g. from padding).
@@ -1277,8 +1275,8 @@ impl LayoutNode {
     }
 
     /// Clears the is_placed flag. Called at the start of a layout pass.
-    pub fn clear_placed(&self) {
-        self.layout_state.borrow_mut().clear_placed();
+    pub fn clear_placed(&self, context: &AppContext) {
+        self.layout_state.borrow_mut().clear_placed(context);
     }
 
     fn note_semantics_layout_change(&self) {
