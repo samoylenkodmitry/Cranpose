@@ -831,6 +831,20 @@ fn filled_rounded_rects_cover_each_pixel_as_their_geometry_says() {
             width: 57.5,
             height: 16.0,
         },
+        // Narrower than its corners: on its top row, the first pixel clear
+        // of the left corner lies outside the right one.
+        Rect {
+            x: 30.0,
+            y: 5.49,
+            width: 2.6,
+            height: 12.0,
+        },
+        Rect {
+            x: 40.6,
+            y: 44.1,
+            width: 3.1,
+            height: 3.1,
+        },
     ];
     for rect in rects {
         for shape_radii in [
