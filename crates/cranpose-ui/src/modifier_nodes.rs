@@ -955,6 +955,9 @@ pub struct SizeNode {
     min_height: Option<f32>,
     max_height: Option<f32>,
     enforce_incoming: bool,
+    /// The bounds rounded to the device grid of the density they were last
+    /// asked for: each measure asks again for the same.
+    rounded: Cell<Option<(f32, Constraints)>>,
     state: NodeState,
 }
 
@@ -975,6 +978,7 @@ impl SizeNode {
             min_height,
             max_height,
             enforce_incoming,
+            rounded: Cell::new(None),
             state: NodeState::new(),
         }
     }
@@ -982,6 +986,17 @@ impl SizeNode {
     /// The constraints the sizes ask for, each on a whole device pixel of
     /// `density` as Compose's `SizeNode` rounds them.
     fn target_constraints(&self, density: f32) -> Constraints {
+        if let Some((rounded_for, target)) = self.rounded.get()
+            && rounded_for == density
+        {
+            return target;
+        }
+        let target = self.round_targets(density);
+        self.rounded.set(Some((density, target)));
+        target
+    }
+
+    fn round_targets(&self, density: f32) -> Constraints {
         use cranpose_ui_layout::round_to_px;
 
         let max_width = self
@@ -1289,6 +1304,7 @@ impl ModifierNodeElement for SizeElement {
             node.min_height = self.min_height;
             node.max_height = self.max_height;
             node.enforce_incoming = self.enforce_incoming;
+            node.rounded.set(None);
         }
     }
 

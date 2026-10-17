@@ -239,6 +239,40 @@ fn modifier_chain_reuses_padding_nodes() {
     }
 }
 
+/// A layout pass's context whose grid has the given device pixels a point.
+struct GridContext(f32);
+
+impl cranpose_foundation::ModifierNodeContext for GridContext {
+    fn density(&self) -> f32 {
+        self.0
+    }
+}
+
+#[test]
+fn a_size_node_measured_on_another_grid_rounds_its_size_for_that_grid() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let node = SizeNode::new(Some(10.3), Some(10.3), Some(10.3), Some(10.3), true);
+    let measurable = TestMeasurable {
+        intrinsic_width: 50.0,
+        intrinsic_height: 50.0,
+    };
+    let constraints = Constraints {
+        min_width: 0.0,
+        max_width: 500.0,
+        min_height: 0.0,
+        max_height: 500.0,
+    };
+    let sizes = [1.0, 2.0, 1.0].map(|density| {
+        let result = node.measure(&mut GridContext(density), &measurable, constraints);
+        (result.size.width, result.size.height)
+    });
+    assert_eq!(
+        sizes,
+        [(10.0, 10.0), (10.5, 10.5), (10.0, 10.0)],
+        "each grid gets the size on its own whole device pixels"
+    );
+}
+
 #[test]
 fn size_node_enforces_dimensions() {
     let _app_context = crate::render_state::app_context_test_scope();
