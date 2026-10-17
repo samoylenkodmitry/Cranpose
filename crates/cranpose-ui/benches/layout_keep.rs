@@ -5,8 +5,6 @@
 //! `FRAMES=0` and `FRAMES=1000` and divide the difference in retired
 //! instructions by 1000.
 
-use std::rc::Rc;
-
 use cranpose_core::{Composition, MemoryApplier, MutableState, location_key};
 use cranpose_ui::{
     AppContext, BoxWithConstraints, Column, ColumnSpec, Modifier, Row, RowSpec, Size, Text,
@@ -76,7 +74,7 @@ fn main() {
         .expect("layout pass");
         applier.clear_runtime_handle();
     };
-    Rc::clone(&app_context).enter(|| {
+    app_context.enter(|| {
         composition
             .render(location_key(file!(), line!(), column!()), || {
                 Screen(tick, rows, changed);

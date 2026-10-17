@@ -1,8 +1,6 @@
-use std::rc::Rc;
-
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot, WgpuRenderer};
-use cranpose_ui::{AppContext, ScrollState};
+use cranpose_ui::ScrollState;
 use desktop_app::app::{self, DemoTab, StartupSelection, TEST_LIQUID_SCROLL_STATE};
 
 use crate::gpu_test_device;
@@ -12,7 +10,6 @@ use crate::gpu_test_device;
 pub struct LiquidPage {
     pub shell: AppShell<WgpuRenderer>,
     scroll: ScrollState,
-    context: Rc<AppContext>,
     logical: (u32, u32),
     density: f32,
 }
@@ -63,11 +60,9 @@ impl LiquidPage {
         let scroll = TEST_LIQUID_SCROLL_STATE
             .with(|cell| *cell.borrow())
             .expect("the liquid page installs its scroll state");
-        let context = shell.app_context().clone();
         Some(Self {
             shell,
             scroll,
-            context,
             logical,
             density,
         })
@@ -107,13 +102,16 @@ impl LiquidPage {
     }
 
     pub fn scroll_to(&self, offset: f32) {
-        self.context.enter(|| self.scroll.scroll_to(offset));
+        self.shell
+            .app_context()
+            .enter(|| self.scroll.scroll_to(offset));
     }
 
     /// Scrolls the list by one physical pixel, returning the logical delta
     /// the page consumed.
     pub fn step_one_pixel(&self) -> f32 {
-        self.context
+        self.shell
+            .app_context()
             .enter(|| self.scroll.dispatch_raw_delta(1.0 / self.density))
     }
 

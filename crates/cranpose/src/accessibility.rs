@@ -1275,13 +1275,13 @@ where
     R: Renderer,
     R::Error: Debug,
 {
-    let context = std::rc::Rc::clone(shell.app_context());
-    let changed = context.enter(|| {
+    let changed = {
+        let _context = shell.app_context().enter_scope();
         cranpose_core::run_in_mutable_snapshot(|| {
             shell.semantics_tree().is_some_and(|tree| act(tree.root()))
         })
         .unwrap_or(false)
-    });
+    };
     if changed {
         shell.mark_dirty();
     }

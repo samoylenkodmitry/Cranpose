@@ -138,8 +138,7 @@ impl PipelineFixture {
     fn compose(&mut self) {
         let sections = self.sections;
         let rows_per_section = self.rows_per_section;
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(|| {
+        self.app_context.enter(|| {
             self.composition
                 .render(self.key, || pipeline_content(sections, rows_per_section))
                 .expect("composition");
@@ -150,8 +149,8 @@ impl PipelineFixture {
         let root = self.composition.root().expect("composition root");
         let mut applier_guard = self.composition.applier_mut();
         let mut temp_applier = std::mem::take(&mut *applier_guard);
-        let app_context = Rc::clone(&self.app_context);
-        let measurements = app_context
+        let measurements = self
+            .app_context
             .enter(|| measure_layout(&mut temp_applier, root, self.root_size).expect("measure"));
         *applier_guard = temp_applier;
         measurements
@@ -187,8 +186,7 @@ impl RecursiveFixture {
     fn compose(&mut self) {
         let depth = self.depth;
         let rows_per_level = self.rows_per_level;
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(|| {
+        self.app_context.enter(|| {
             self.composition
                 .render(self.key, || {
                     recursive_pipeline_content(depth, rows_per_level);
@@ -201,8 +199,8 @@ impl RecursiveFixture {
         let root = self.composition.root().expect("composition root");
         let mut applier_guard = self.composition.applier_mut();
         let mut temp_applier = std::mem::take(&mut *applier_guard);
-        let app_context = Rc::clone(&self.app_context);
-        let measurements = app_context
+        let measurements = self
+            .app_context
             .enter(|| measure_layout(&mut temp_applier, root, self.root_size).expect("measure"));
         *applier_guard = temp_applier;
         measurements

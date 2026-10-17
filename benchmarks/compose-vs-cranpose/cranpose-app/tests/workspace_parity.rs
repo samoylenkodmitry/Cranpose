@@ -47,8 +47,10 @@ impl WorkspaceHarness {
 
     fn pixel(&mut self, x: usize, y: usize) -> [u8; 4] {
         let mut image = vec![0; 1280 * 820 * 4];
-        let context = std::rc::Rc::clone(self.shell.app_context());
-        context.enter(|| self.shell.renderer().draw(&mut image, 1280, 820));
+        {
+            let _context = self.shell.app_context().enter_scope();
+            self.shell.renderer().draw(&mut image, 1280, 820);
+        }
         image[(y * 1280 + x) * 4..][..4]
             .try_into()
             .expect("RGBA pixel")

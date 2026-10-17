@@ -107,7 +107,9 @@ impl Fixture {
     fn neighbour_does(&self, neighbour: Neighbour) {
         let node = self.neighbour;
         if let Neighbour::Repassing = neighbour {
-            Rc::clone(self.shell.app_context()).enter(|| cranpose_ui::schedule_layout_repass(node));
+            self.shell
+                .app_context()
+                .enter(|| cranpose_ui::schedule_layout_repass(node));
         }
     }
 
@@ -199,7 +201,10 @@ fn a_global_layout_invalidation_survives_a_scoped_repass_in_the_same_frame() {
     let mut fixture = Fixture::new();
     let (width, _) = fixture.scaled_label_size();
 
-    Rc::clone(fixture.shell.app_context()).enter(|| cranpose_ui::set_font_scale(2.0));
+    fixture
+        .shell
+        .app_context()
+        .enter(|| cranpose_ui::set_font_scale(2.0));
     fixture.neighbour_does(Neighbour::Repassing);
 
     assert_eq!(
@@ -324,7 +329,9 @@ fn a_root_render_that_moves_content_reaches_the_scene_while_a_scope_redraws() {
     let root = shell.surfaces[0]
         .root_node(&shell.app)
         .expect("the surface has a root");
-    let fresh = Rc::clone(shell.app_context())
+    let fresh = shell
+        .app
+        .app_context
         .enter(|| {
             cranpose_render_common::scene_builder::build_graph_from_applier(
                 &shell.app.composition.applier_mut(),

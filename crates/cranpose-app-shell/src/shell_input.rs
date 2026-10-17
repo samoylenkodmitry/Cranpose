@@ -135,10 +135,10 @@ where
         event_time: PointerEventTime,
     ) -> bool {
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        let result = app_context.enter(|| {
+        let result = {
+            let _app_context = self.shell.app.app_context.enter_scope();
             run_in_mutable_snapshot(|| self.set_cursor_inner(x, y, event_time)).unwrap_or(false)
-        });
+        };
         self.route_drag_and_drop();
         if result {
             self.mark_dirty();
@@ -238,11 +238,11 @@ where
     pub fn accessibility_activate(&mut self, node_id: NodeId, canvas_key: Option<u64>) -> bool {
         let event_time = self.shell.app.realtime_pointer_event_time(None);
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        let result = app_context.enter(|| {
+        let result = {
+            let _app_context = self.shell.app.app_context.enter_scope();
             run_in_mutable_snapshot(|| self.activate_node(node_id, canvas_key, event_time))
                 .unwrap_or(false)
-        });
+        };
         if result {
             self.mark_dirty();
         }
@@ -309,10 +309,10 @@ where
             return true;
         }
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        let result = app_context.enter(|| {
+        let result = {
+            let _app_context = self.shell.app.app_context.enter_scope();
             run_in_mutable_snapshot(|| self.pointer_pressed_inner(event_time)).unwrap_or(false)
-        });
+        };
         if result {
             self.mark_dirty();
         }
@@ -443,14 +443,14 @@ where
         event_time: PointerEventTime,
     ) -> bool {
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        let result = app_context.enter(|| {
+        let result = {
+            let _app_context = self.shell.app.app_context.enter_scope();
             run_in_mutable_snapshot(|| {
                 self.surface_mut().cursor = (x, y);
                 self.pointer_released_inner(event_time)
             })
             .unwrap_or(false)
-        });
+        };
         self.route_drag_and_drop();
         if result {
             self.mark_dirty();
@@ -474,10 +474,10 @@ where
     /// Dispatch primary-button up with an already resolved event timestamp.
     pub fn pointer_released_at_event_time(&mut self, event_time: PointerEventTime) -> bool {
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        let result = app_context.enter(|| {
+        let result = {
+            let _app_context = self.shell.app.app_context.enter_scope();
             run_in_mutable_snapshot(|| self.pointer_released_inner(event_time)).unwrap_or(false)
-        });
+        };
         self.route_drag_and_drop();
         if result {
             self.mark_dirty();
@@ -593,8 +593,8 @@ where
         }
 
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        let result = app_context.enter(|| {
+        let result = {
+            let _app_context = self.shell.app.app_context.enter_scope();
             run_in_mutable_snapshot(|| {
                 if !self.surface().hit_path_tracker.has_path(PointerId::PRIMARY) {
                     return false;
@@ -613,7 +613,7 @@ where
                 true
             })
             .unwrap_or(false)
-        });
+        };
         if result {
             self.mark_dirty();
         }
@@ -634,11 +634,11 @@ where
     pub fn pointer_zoomed(&mut self, zoom_factor: f32) -> bool {
         let event_time = self.shell.app.realtime_pointer_event_time(None);
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        let result = app_context.enter(|| {
+        let result = {
+            let _app_context = self.shell.app.app_context.enter_scope();
             run_in_mutable_snapshot(|| self.pointer_zoomed_inner(zoom_factor, event_time))
                 .unwrap_or(false)
-        });
+        };
         if result {
             self.mark_dirty();
         }
@@ -743,11 +743,11 @@ where
         }
         let event_time = self.shell.app.realtime_pointer_event_time(None);
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        let result = app_context.enter(|| {
+        let result = {
+            let _app_context = self.shell.app.app_context.enter_scope();
             run_in_mutable_snapshot(|| self.pointer_scrolled_inner(delta_x, delta_y, event_time))
                 .unwrap_or(false)
-        });
+        };
         if result {
             self.mark_dirty();
         }
@@ -857,10 +857,10 @@ where
     /// remaining step. Returns `true` when the event was consumed.
     pub fn rotary_scrolled(&mut self, event: RotaryScrollEvent) -> bool {
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        let result = app_context.enter(|| {
+        let result = {
+            let _app_context = self.shell.app.app_context.enter_scope();
             run_in_mutable_snapshot(|| self.rotary_scrolled_inner(event)).unwrap_or(false)
-        });
+        };
         if result {
             self.mark_dirty();
         }
@@ -952,12 +952,12 @@ where
     pub fn cancel_gesture(&mut self) {
         let event_time = self.shell.app.realtime_pointer_event_time(None);
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        let _ = app_context.enter(|| {
+        let _ = {
+            let _app_context = self.shell.app.app_context.enter_scope();
             run_in_mutable_snapshot(|| {
                 self.cancel_gesture_inner(event_time);
             })
-        });
+        };
         self.route_drag_and_drop();
     }
 
@@ -992,9 +992,9 @@ where
     }
 
     fn route_drag_and_drop(&mut self) {
-        let app_context = Rc::clone(&self.shell.app.app_context);
         let source = self.index;
-        let shell = &mut *self.shell;
+        let shell = &*self.shell;
+        let app_context = &shell.app.app_context;
         let routed = app_context.enter(|| {
             run_in_mutable_snapshot(|| {
                 app_context
@@ -1004,7 +1004,7 @@ where
             .unwrap_or(false)
         });
         if routed {
-            shell.mark_all_dirty();
+            self.shell.mark_all_dirty();
         }
     }
 
@@ -1170,8 +1170,8 @@ where
     /// back gesture does. Answers whether one was open to take the request.
     pub fn dismiss_top_modal(&mut self) -> bool {
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        app_context.enter(|| self.dismiss_top_modal_in_context())
+        let _app_context = self.shell.app.app_context.enter_scope();
+        self.dismiss_top_modal_in_context()
     }
 
     fn dismiss_top_modal_in_context(&mut self) -> bool {
@@ -1219,12 +1219,10 @@ where
     /// Returns `true` when the event was handled and the platform should not process it further.
     pub fn on_key_event(&mut self, event: &KeyEvent) -> bool {
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        app_context.enter(|| {
-            let handled = self.on_key_event_inner(event);
-            self.run_requested_focus_move();
-            handled
-        })
+        let _app_context = self.shell.app.app_context.enter_scope();
+        let handled = self.on_key_event_inner(event);
+        self.run_requested_focus_move();
+        handled
     }
 
     /// Makes the focus move a keyboard action asked for during the event.
@@ -1376,8 +1374,8 @@ where
             return true;
         }
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        app_context.enter(|| self.on_paste_inner(text))
+        let _app_context = self.shell.app.app_context.enter_scope();
+        self.on_paste_inner(text)
     }
 
     fn on_paste_inner(&mut self, text: &str) -> bool {
@@ -1399,11 +1397,11 @@ where
     /// Handles copy request from platform.
     /// Returns the selected text from this surface's focused field, or `None`.
     pub fn on_copy(&mut self) -> Option<String> {
-        let app_context = Rc::clone(&self.shell.app.app_context);
         if self.inspector_owns_keyboard() {
             return None;
         }
-        app_context.enter(|| self.on_copy_inner())
+        let _app_context = self.shell.app.app_context.enter_scope();
+        self.on_copy_inner()
     }
 
     fn on_copy_inner(&mut self) -> Option<String> {
@@ -1420,8 +1418,8 @@ where
         if self.inspector_owns_keyboard() {
             return None;
         }
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        app_context.enter(|| self.on_cut_inner())
+        let _app_context = self.shell.app.app_context.enter_scope();
+        self.on_cut_inner()
     }
 
     fn on_cut_inner(&mut self) -> Option<String> {
@@ -1451,8 +1449,8 @@ where
             return true;
         }
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        app_context.enter(|| self.on_ime_preedit_inner(text, cursor))
+        let _app_context = self.shell.app.app_context.enter_scope();
+        self.on_ime_preedit_inner(text, cursor)
     }
 
     fn on_ime_preedit_inner(&mut self, text: &str, cursor: Option<(usize, usize)>) -> bool {
@@ -1480,8 +1478,8 @@ where
             return true;
         }
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        app_context.enter(|| self.on_ime_finish_composing_inner())
+        let _app_context = self.shell.app.app_context.enter_scope();
+        self.on_ime_finish_composing_inner()
     }
 
     fn on_ime_finish_composing_inner(&mut self) -> bool {
@@ -1510,22 +1508,19 @@ where
             return true;
         }
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        app_context.enter(|| {
-            if !self.receives_focused_input() {
-                return false;
-            }
-            let handled = run_in_mutable_snapshot(|| {
-                cranpose_ui::text_field_focus::dispatch_ime_action(action)
-            })
-            .unwrap_or(false);
-            if handled {
-                self.mark_dirty();
-                self.shell.app.request_layout_pass();
-            }
-            self.run_requested_focus_move();
-            handled
-        })
+        let _app_context = self.shell.app.app_context.enter_scope();
+        if !self.receives_focused_input() {
+            return false;
+        }
+        let handled =
+            run_in_mutable_snapshot(|| cranpose_ui::text_field_focus::dispatch_ime_action(action))
+                .unwrap_or(false);
+        if handled {
+            self.mark_dirty();
+            self.shell.app.request_layout_pass();
+        }
+        self.run_requested_focus_move();
+        handled
     }
 
     /// Marks existing text in the focused field as the composing region
@@ -1536,26 +1531,21 @@ where
             return true;
         }
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        app_context.enter(|| {
-            if !self.receives_focused_input() {
-                return false;
-            }
-            let handled = run_in_mutable_snapshot(|| {
-                cranpose_ui::text_field_focus::dispatch_ime_set_composing_region(
-                    start_bytes,
-                    end_bytes,
-                )
-            })
-            .unwrap_or(false);
-
-            if handled {
-                self.mark_dirty();
-                self.shell.app.request_layout_pass();
-            }
-
-            handled
+        let _app_context = self.shell.app.app_context.enter_scope();
+        if !self.receives_focused_input() {
+            return false;
+        }
+        let handled = run_in_mutable_snapshot(|| {
+            cranpose_ui::text_field_focus::dispatch_ime_set_composing_region(start_bytes, end_bytes)
         })
+        .unwrap_or(false);
+
+        if handled {
+            self.mark_dirty();
+            self.shell.app.request_layout_pass();
+        }
+
+        handled
     }
 
     /// Moves the focused field's selection/caret to `[start_bytes, end_bytes)`
@@ -1567,34 +1557,30 @@ where
             return true;
         }
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        app_context.enter(|| {
-            if !self.receives_focused_input() {
-                return false;
-            }
-            let handled = run_in_mutable_snapshot(|| {
-                cranpose_ui::text_field_focus::dispatch_ime_set_selection(start_bytes, end_bytes)
-            })
-            .unwrap_or(false);
-
-            if handled {
-                self.mark_dirty();
-            }
-
-            handled
+        let _app_context = self.shell.app.app_context.enter_scope();
+        if !self.receives_focused_input() {
+            return false;
+        }
+        let handled = run_in_mutable_snapshot(|| {
+            cranpose_ui::text_field_focus::dispatch_ime_set_selection(start_bytes, end_bytes)
         })
+        .unwrap_or(false);
+
+        if handled {
+            self.mark_dirty();
+        }
+
+        handled
     }
 
     /// Returns a snapshot of the focused text field's editable state for
     /// platform IMEs (text, selection and composition in UTF-8 bytes), or
     /// `None` when this surface has no focused text field.
     pub fn ime_editor_state(&mut self) -> Option<cranpose_ui::text_field_focus::ImeEditorState> {
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        app_context.enter(|| {
-            self.receives_focused_input()
-                .then(cranpose_ui::text_field_focus::focused_editor_state)
-                .flatten()
-        })
+        let _app_context = self.shell.app.app_context.enter_scope();
+        self.receives_focused_input()
+            .then(cranpose_ui::text_field_focus::focused_editor_state)
+            .flatten()
     }
 
     /// Window-space caret geometry of the focused field for coordinate-based
@@ -1603,24 +1589,20 @@ where
     pub fn ime_caret_geometry(
         &mut self,
     ) -> Option<cranpose_ui::text_field_focus::ImeCaretGeometry> {
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        app_context.enter(|| {
-            self.receives_focused_input()
-                .then(cranpose_ui::text_field_focus::focused_caret_geometry)
-                .flatten()
-        })
+        let _app_context = self.shell.app.app_context.enter_scope();
+        self.receives_focused_input()
+            .then(cranpose_ui::text_field_focus::focused_caret_geometry)
+            .flatten()
     }
 
     /// Window bounds of the focused field in logical pixels, for platforms
     /// that place a native editor over it, or `None` when this surface has
     /// no focused text field that has been laid out.
     pub fn ime_field_bounds(&mut self) -> Option<cranpose_ui_graphics::Rect> {
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        app_context.enter(|| {
-            self.receives_focused_input()
-                .then(cranpose_ui::text_field_focus::focused_field_bounds)
-                .flatten()
-        })
+        let _app_context = self.shell.app.app_context.enter_scope();
+        self.receives_focused_input()
+            .then(cranpose_ui::text_field_focus::focused_field_bounds)
+            .flatten()
     }
 
     /// Whether the focused text field holds a secret, as
@@ -1630,41 +1612,37 @@ where
     /// which a software keyboard neither learns from nor suggests for.
     /// `false` when this surface has no focused text field.
     pub fn ime_field_is_password(&mut self) -> bool {
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        app_context.enter(|| {
-            let Some(field) = self
-                .receives_focused_input()
-                .then(cranpose_ui::text_field_focus::focused_field_target)
-                .flatten()
-            else {
-                return false;
-            };
-            let mut applier = self.shell.app.composition.applier_mut();
-            applier
-                .with_node::<LayoutNode, _>(field, |node| node.semantics_configuration())
-                .or_else(|_| {
-                    applier.with_node::<SubcomposeLayoutNode, _>(field, |node| {
-                        node.semantics_configuration()
-                    })
+        let _app_context = self.shell.app.app_context.enter_scope();
+        let Some(field) = self
+            .receives_focused_input()
+            .then(cranpose_ui::text_field_focus::focused_field_target)
+            .flatten()
+        else {
+            return false;
+        };
+        let mut applier = self.shell.app.composition.applier_mut();
+        applier
+            .with_node::<LayoutNode, _>(field, |node| node.semantics_configuration())
+            .or_else(|_| {
+                applier.with_node::<SubcomposeLayoutNode, _>(field, |node| {
+                    node.semantics_configuration()
                 })
-                .ok()
-                .flatten()
-                .is_some_and(|config| config.password)
-        })
+            })
+            .ok()
+            .flatten()
+            .is_some_and(|config| config.password)
     }
 
     /// Clears text-field focus (used by platform IME actions such as
     /// Android's Done). The focus-loss notification hides the soft keyboard.
     pub fn clear_text_field_focus(&mut self) {
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        app_context.enter(|| {
-            if self.receives_focused_input() {
-                cranpose_ui::text_field_focus::clear_focus();
-                self.mark_dirty();
-                self.shell.app.request_layout_pass();
-            }
-        });
+        let _app_context = self.shell.app.app_context.enter_scope();
+        if self.receives_focused_input() {
+            cranpose_ui::text_field_focus::clear_focus();
+            self.mark_dirty();
+            self.shell.app.request_layout_pass();
+        }
     }
 
     /// Handles IME delete-surrounding events.
@@ -1674,8 +1652,8 @@ where
             return true;
         }
         let _event_handler = enter_event_handler_scope();
-        let app_context = Rc::clone(&self.shell.app.app_context);
-        app_context.enter(|| self.on_ime_delete_surrounding_inner(before_bytes, after_bytes))
+        let _app_context = self.shell.app.app_context.enter_scope();
+        self.on_ime_delete_surrounding_inner(before_bytes, after_bytes)
     }
 
     fn on_ime_delete_surrounding_inner(&mut self, before_bytes: usize, after_bytes: usize) -> bool {
@@ -1747,8 +1725,9 @@ where
     /// restored on resume with no focused field. Platform runtimes call this
     /// from their pause lifecycle event.
     pub fn notify_app_paused(&mut self) {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(cranpose_ui::text_input_session::notify_app_paused);
+        self.app
+            .app_context
+            .enter(cranpose_ui::text_input_session::notify_app_paused);
     }
 
     /// Notifies the framework that the host app resumed/foregrounded.
@@ -1759,8 +1738,9 @@ where
     /// runtime force-hides the OS-restored keyboard. Platform runtimes call this
     /// from their resume lifecycle event.
     pub fn notify_app_resumed(&mut self) -> bool {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(cranpose_ui::text_input_session::notify_app_resumed)
+        self.app
+            .app_context
+            .enter(cranpose_ui::text_input_session::notify_app_resumed)
     }
 
     /// Copies `text` to the Linux PRIMARY selection, which a middle click pastes.

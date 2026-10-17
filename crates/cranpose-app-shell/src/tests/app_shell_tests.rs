@@ -3996,8 +3996,7 @@ fn draw_repass_updates_render_data_without_layout() {
         .expect("width state should be captured");
     width_state.set(120.0);
 
-    let app_context = Rc::clone(&shell.app.app_context);
-    app_context.enter(|| {
+    shell.app.app_context.enter(|| {
         shell
             .app
             .composition
@@ -4395,8 +4394,9 @@ fn keyed_subtree_swap_with_pending_scoped_repass_evicts_stale_layers() {
         .copied()
         .expect("tab state should be captured");
     tab.set(1);
-    let app_context = Rc::clone(shell.app_context());
-    app_context.enter(|| cranpose_ui::schedule_layout_repass(sibling_node));
+    shell
+        .app_context()
+        .enter(|| cranpose_ui::schedule_layout_repass(sibling_node));
     shell.update();
 
     assert_eq!(
@@ -5749,7 +5749,7 @@ fn a_horizontal_scroll_inside_a_lazy_item_still_moves_when_its_measurement_is_ca
     let inner = CAROUSEL_SCROLL_STATE
         .with(|slot| slot.borrow().as_ref().copied())
         .expect("probe must expose the inner scroll state");
-    shell.app_context().clone().enter(|| inner.scroll_to(80.0));
+    shell.app_context().enter(|| inner.scroll_to(80.0));
     for _ in 0..4 {
         shell.update();
         if !shell.needs_redraw() && !shell.app.composition.should_recompose() {
@@ -6499,8 +6499,7 @@ fn pointer_invalidation_without_scene_changes_skips_scene_rebuild() {
             node.mark_needs_pointer_pass();
         })
         .expect("expected layout root node");
-    let app_context = Rc::clone(&shell.app.app_context);
-    app_context.enter(|| {
+    shell.app.app_context.enter(|| {
         cranpose_ui::schedule_pointer_repass(root);
         cranpose_ui::request_pointer_invalidation();
     });
@@ -6551,8 +6550,7 @@ fn focus_invalidation_without_scene_changes_skips_rebuild() {
             node.mark_needs_focus_sync();
         })
         .expect("expected layout root node");
-    let app_context = Rc::clone(&shell.app.app_context);
-    app_context.enter(|| {
+    shell.app.app_context.enter(|| {
         cranpose_ui::schedule_focus_invalidation(root);
         cranpose_ui::request_focus_invalidation();
     });
@@ -10740,12 +10738,10 @@ where
             .iter()
             .find_map(|below| description_of(below, node_id))
     }
-    let context = Rc::clone(shell.app_context());
-    context.enter(|| {
-        let node_id = cranpose_ui::active_focus_target()?;
-        let tree = shell.surfaces[0].semantics_tree_for_input(&mut shell.app)?;
-        description_of(tree.root(), node_id)
-    })
+    let _context = shell.app_context().enter_scope();
+    let node_id = cranpose_ui::active_focus_target()?;
+    let tree = shell.surfaces[0].semantics_tree_for_input(&mut shell.app)?;
+    description_of(tree.root(), node_id)
 }
 
 fn assert_focus_semantics_before_next_frame(check_revision: bool) {
@@ -11415,7 +11411,6 @@ fn shell_with_deferred_lazy_items() -> (AppShell<TestRenderer>, LazyListState) {
 fn a_fast_lazy_scroll_composes_ahead_between_frames() {
     let _guard = test_guard();
     let (mut shell, list_state) = shell_with_deferred_lazy_items();
-    let app_context = Rc::clone(&shell.app.app_context);
 
     assert!(
         !shell.run_idle_prefetch(Some(Instant::now()), |_| false),
@@ -11425,7 +11420,12 @@ fn a_fast_lazy_scroll_composes_ahead_between_frames() {
         !shell.run_idle_prefetch(None, |_| true),
         "a frame that can start ends the wait before any pass"
     );
-    assert!(app_context.enter(cranpose_ui::has_lazy_prefetch_requests));
+    assert!(
+        shell
+            .app
+            .app_context
+            .enter(cranpose_ui::has_lazy_prefetch_requests)
+    );
 
     let composed = list_state.stats().total_composed;
     assert!(shell.run_idle_prefetch(Some(Instant::now() + Duration::from_secs(5)), |_| false));
