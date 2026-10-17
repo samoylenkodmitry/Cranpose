@@ -250,13 +250,13 @@ pub(crate) fn draw_raster_window(
         clear_frame(target.pixels);
     }
     for &item in &scene.order[first.unwrap_or(0)..] {
-        if scene.item_bounds(item, window).is_some() {
-            draw_item(target, scene, item, diagnostics, text);
-        }
+        draw_item(target, scene, item, diagnostics, text);
     }
 }
 
-/// Draws one item of `scene` into `target`.
+/// Draws one item of `scene` into `target`, where it reaches the target's
+/// window. A shape, an image or a shadow cuts itself to the window as it
+/// places itself; a text is checked first, as rasterizing it costs more.
 pub(crate) fn draw_item(
     target: &mut Target,
     scene: &RasterScene,
@@ -269,7 +269,10 @@ pub(crate) fn draw_item(
         RenderItem::Image(index) => draw_image(target, &scene.images[index], diagnostics),
         RenderItem::Shadow(index) => draw_shadow(target, &scene.shadows[index], diagnostics),
         RenderItem::Text(index) => {
-            draw_text(target, &scene.texts[index], diagnostics, text);
+            let draw = &scene.texts[index];
+            if text_bounds(draw, target.window()).is_some() {
+                draw_text(target, draw, diagnostics, text);
+            }
         }
     }
 }
@@ -321,9 +324,17 @@ impl RasterScene {
         radii.is_none_or(|radii| {
             let (left, right) = (window.min_x as f32 + 0.5, window.max_x as f32 - 0.5);
             let (top, bottom) = (window.min_y as f32 + 0.5, window.max_y as f32 - 0.5);
-            [(left, top), (right, top), (left, bottom), (right, bottom)]
-                .into_iter()
-                .all(|(x, y)| point_in_resolved_rounded_rect(x, y, rect, &radii))
+            // Between the corners on either axis, every pixel the rect covers
+            // lies inside it: no corner needs a test.
+            let between_columns = left >= rect.x + radii.top_left.max(radii.bottom_left)
+                && right <= rect.x + rect.width - radii.top_right.max(radii.bottom_right);
+            let between_rows = top >= rect.y + radii.top_left.max(radii.top_right)
+                && bottom <= rect.y + rect.height - radii.bottom_left.max(radii.bottom_right);
+            between_columns
+                || between_rows
+                || [(left, top), (right, top), (left, bottom), (right, bottom)]
+                    .into_iter()
+                    .all(|(x, y)| point_in_resolved_rounded_rect(x, y, rect, &radii))
         })
     }
 
@@ -345,18 +356,20 @@ impl RasterScene {
                 let (shadow, clip) = placed_shadow(&self.shadows[index]);
                 clip_rect_to_window(shadow.bounds, clip, window)
             }
-            RenderItem::Text(index) => {
-                let draw = &self.texts[index];
-                let raster_rect = text_raster_rect(draw)?;
-                let reach = Rect {
-                    width: whole::ceil(raster_rect.width).max(1.0),
-                    height: whole::ceil(raster_rect.height).max(1.0),
-                    ..raster_rect
-                };
-                clip_rect_to_window(reach, draw.clip, window)
-            }
+            RenderItem::Text(index) => text_bounds(&self.texts[index], window),
         }
     }
+}
+
+/// The pixels of `window` that the rasterized `draw` can reach.
+fn text_bounds(draw: &TextDraw, window: ClipBounds) -> Option<ClipBounds> {
+    let raster_rect = text_raster_rect(draw)?;
+    let reach = Rect {
+        width: whole::ceil(raster_rect.width).max(1.0),
+        height: whole::ceil(raster_rect.height).max(1.0),
+        ..raster_rect
+    };
+    clip_rect_to_window(reach, draw.clip, window)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

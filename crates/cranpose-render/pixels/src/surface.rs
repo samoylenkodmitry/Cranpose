@@ -6,7 +6,7 @@ use cranpose_render_common::{graph::ProjectiveTransform, graph_scene::RenderDiag
 use cranpose_ui_graphics::{ImageBitmap, Rect, whole};
 
 use crate::{
-    draw::{ClipBounds, Target, TextRaster, draw_item},
+    draw::{Target, TextRaster, draw_item},
     scene::RasterScene,
 };
 
@@ -119,16 +119,8 @@ pub(crate) fn rasterize_surface(
         width,
         height,
     };
-    let window = ClipBounds {
-        min_x: 0,
-        min_y: 0,
-        max_x: width as i32,
-        max_y: height as i32,
-    };
     for &item in &items.order {
-        if items.item_bounds(item, window).is_some() {
-            draw_item(&mut target, items, item, diagnostics, text);
-        }
+        draw_item(&mut target, items, item, diagnostics, text);
     }
     // Drawn over transparent pixels, the colours came out premultiplied.
     for pixel in pixels.as_chunks_mut::<4>().0 {
