@@ -24,6 +24,10 @@ struct MeshUniforms {
     params: vec4<f32>,
     // x = one shadow map texel in texture coordinates; y = the depth bias.
     shadow: vec4<f32>,
+    // xy = how wide a penumbra is, in shadow map coordinates along each
+    // axis, a unit of shadow map depth behind its caster; z > 0 for a light
+    // of some size, whose shadows soften away from their casters.
+    shadow_soft: vec4<f32>,
 }
 
 struct VertexInput {
@@ -50,6 +54,10 @@ struct ShadowOutput {
 @group(1) @binding(0) var<uniform> mesh: MeshUniforms;
 @group(2) @binding(0) var shadow_map: texture_depth_2d;
 @group(2) @binding(1) var shadow_sampler: sampler_comparison;
+// The shadow map again, read as the depth of the nearest texel: GLSL
+// samples a texture with one sampler.
+@group(2) @binding(2) var shadow_depth: texture_depth_2d;
+@group(2) @binding(3) var shadow_depth_sampler: sampler;
 
 @vertex
 fn mesh_surface_vs(input: VertexInput) -> VertexOutput {
@@ -107,21 +115,59 @@ fn mesh_surface_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     return shaded(color, shade(input, 1.0));
 }
 
+// Sixteen points spread over the unit disc, which the shadow taps take.
+fn disc_point(index: u32) -> vec2<f32> {
+    var points = array<vec2<f32>, 16>(
+        vec2<f32>(-0.9420, -0.3991), vec2<f32>(0.9456, -0.7689),
+        vec2<f32>(-0.0942, -0.9294), vec2<f32>(0.3450, 0.2939),
+        vec2<f32>(-0.9159, 0.4577), vec2<f32>(-0.8154, -0.8791),
+        vec2<f32>(-0.3828, 0.2768), vec2<f32>(0.9748, 0.7565),
+        vec2<f32>(0.4432, -0.9751), vec2<f32>(0.5374, -0.4737),
+        vec2<f32>(-0.2650, -0.4189), vec2<f32>(0.7920, 0.1909),
+        vec2<f32>(-0.2419, 0.9971), vec2<f32>(-0.8141, 0.9144),
+        vec2<f32>(0.1998, 0.7864), vec2<f32>(0.1438, -0.1410),
+    );
+    return points[index];
+}
+
 // The share of the light that reaches a point at `position` in the shadow
-// map, from four taps around it.
+// map. A light of no size takes four taps around the point; one of some
+// size first finds how far the casters around the point lie in front of
+// it, then filters over the penumbra that distance opens.
 fn shadow_visibility(position: vec3<f32>) -> f32 {
     let uv = vec2<f32>(position.x * 0.5 + 0.5, 0.5 - position.y * 0.5);
     if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) {
         return 1.0;
     }
     let depth = clamp(position.z, 0.0, 1.0) - mesh.shadow.y;
-    let step = mesh.shadow.x * 0.5;
+    if (mesh.shadow_soft.z <= 0.0) {
+        let step = mesh.shadow.x * 0.5;
+        var lit = 0.0;
+        lit += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2<f32>(-step, -step), depth);
+        lit += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2<f32>(step, -step), depth);
+        lit += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2<f32>(-step, step), depth);
+        lit += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2<f32>(step, step), depth);
+        return lit * 0.25;
+    }
+    let search = mesh.shadow_soft.xy * depth;
+    var blockers = 0.0;
+    var blocker_depth = 0.0;
+    for (var index = 0u; index < 16u; index++) {
+        let found = textureSampleLevel(shadow_depth, shadow_depth_sampler, uv + disc_point(index) * search, 0);
+        if (found < depth) {
+            blockers += 1.0;
+            blocker_depth += found;
+        }
+    }
+    if (blockers == 0.0) {
+        return 1.0;
+    }
+    let penumbra = max(mesh.shadow_soft.xy * (depth - blocker_depth / blockers), vec2<f32>(mesh.shadow.x));
     var lit = 0.0;
-    lit += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2<f32>(-step, -step), depth);
-    lit += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2<f32>(step, -step), depth);
-    lit += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2<f32>(-step, step), depth);
-    lit += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + vec2<f32>(step, step), depth);
-    return lit * 0.25;
+    for (var index = 0u; index < 16u; index++) {
+        lit += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + disc_point(index) * penumbra, depth);
+    }
+    return lit / 16.0;
 }
 
 @fragment

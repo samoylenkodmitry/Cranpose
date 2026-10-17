@@ -230,6 +230,7 @@ impl RoomState {
                 direction: Vec3::new(0.5, 0.45, 0.75),
                 ambient: 0.45,
                 shadows: true,
+                size: 0.08,
             }),
         }
     }

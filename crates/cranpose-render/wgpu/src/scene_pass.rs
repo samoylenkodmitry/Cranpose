@@ -52,6 +52,7 @@ pub(crate) struct SceneSurfaceUniforms {
     source_region: [f32; 4],
     params: [f32; 4],
     shadow: [f32; 4],
+    shadow_soft: [f32; 4],
 }
 
 /// One mesh's vertices and indices on the GPU.
@@ -68,9 +69,18 @@ pub(crate) struct ScenePipelineParts {
     shader: SharedShader,
     pub(crate) uniform_layout: wgpu::BindGroupLayout,
     shadow_layout: wgpu::BindGroupLayout,
-    shadow_sampler: wgpu::Sampler,
+    shadow_samplers: ShadowSamplers,
     /// Bound in the shadow map's place for a scene that casts no shadow.
     pub(crate) no_shadow: wgpu::BindGroup,
+}
+
+/// The two ways a surface reads the shadow map: compared with its own depth
+/// and filtered, and as the depth of the nearest caster, which the search
+/// for a soft shadow's casters reads. The map is bound once for each, as
+/// GLSL samples a texture with one sampler.
+struct ShadowSamplers {
+    compare: wgpu::Sampler,
+    depth: wgpu::Sampler,
 }
 
 /// The depth of a scene's shadow casters as its light sees them.
@@ -206,33 +216,39 @@ fn pipeline_parts(
     let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Scene Shadow Map Bind Group Layout"),
         entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Depth,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
+            shadow_map_entry(0),
             wgpu::BindGroupLayoutEntry {
                 binding: 1,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
                 count: None,
             },
+            shadow_map_entry(2),
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                count: None,
+            },
         ],
     });
-    let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("Scene Shadow Sampler"),
-        address_mode_u: wgpu::AddressMode::ClampToEdge,
-        address_mode_v: wgpu::AddressMode::ClampToEdge,
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
-        compare: Some(wgpu::CompareFunction::LessEqual),
-        ..wgpu::SamplerDescriptor::default()
-    });
+    let shadow_samplers = ShadowSamplers {
+        compare: device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Scene Shadow Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            ..wgpu::SamplerDescriptor::default()
+        }),
+        depth: device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Scene Shadow Depth Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            ..wgpu::SamplerDescriptor::default()
+        }),
+    };
     let shader = SharedShader::new(
         device,
         backend,
@@ -245,13 +261,27 @@ fn pipeline_parts(
         ],
     );
     let no_shadow_view = depth_texture(device, "Scene No Shadow", 1);
-    let no_shadow = shadow_group(device, (&shadow_layout, &shadow_sampler), &no_shadow_view);
+    let no_shadow = shadow_group(device, (&shadow_layout, &shadow_samplers), &no_shadow_view);
     ScenePipelineParts {
         shader,
         uniform_layout,
         shadow_layout,
-        shadow_sampler,
+        shadow_samplers,
         no_shadow,
+    }
+}
+
+/// A shadow map binding of the scene's shadow bind group.
+fn shadow_map_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Depth,
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
     }
 }
 
@@ -276,7 +306,7 @@ fn depth_texture(device: &wgpu::Device, label: &'static str, side: u32) -> wgpu:
 
 fn shadow_group(
     device: &wgpu::Device,
-    (layout, sampler): (&wgpu::BindGroupLayout, &wgpu::Sampler),
+    (layout, samplers): (&wgpu::BindGroupLayout, &ShadowSamplers),
     view: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -289,7 +319,15 @@ fn shadow_group(
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: wgpu::BindingResource::Sampler(sampler),
+                resource: wgpu::BindingResource::Sampler(&samplers.compare),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::Sampler(&samplers.depth),
             },
         ],
     })
@@ -297,7 +335,11 @@ fn shadow_group(
 
 fn create_shadow_map(device: &wgpu::Device, parts: &ScenePipelineParts) -> ShadowMap {
     let view = depth_texture(device, "Scene Shadow Map", SHADOW_MAP_SIZE);
-    let group = shadow_group(device, (&parts.shadow_layout, &parts.shadow_sampler), &view);
+    let group = shadow_group(
+        device,
+        (&parts.shadow_layout, &parts.shadow_samplers),
+        &view,
+    );
     ShadowMap { view, group }
 }
 
@@ -379,7 +421,33 @@ pub(crate) fn surface_uniforms(
             0.0,
         ],
         shadow: [1.0 / SHADOW_MAP_SIZE as f32, SHADOW_DEPTH_BIAS, 0.0, 0.0],
+        shadow_soft: penumbra_scale(scene, surface.light_projection),
     })
+}
+
+/// How wide a penumbra of the scene's light opens, in shadow map
+/// coordinates along each axis, a unit of shadow map depth behind its
+/// caster: the light's spread over the map's depth range, measured in the
+/// map's width and height. Zero for a light of no size.
+fn penumbra_scale(scene: &SceneDraw, light_projection: Option<Mat4>) -> [f32; 4] {
+    let (Some(light), Some(projection)) = (scene.light, light_projection) else {
+        return [0.0; 4];
+    };
+    if light.size <= 0.0 {
+        return [0.0; 4];
+    }
+    // The projection's rows scale x and y by 2 over the map's width and
+    // height, and depth by 1 over its depth range.
+    let rows = projection.rows();
+    let length = |row: [f32; 4]| Vec3::new(row[0], row[1], row[2]).length();
+    let depth = length(rows[2]).max(f32::MIN_POSITIVE);
+    let spread = light.size.tan();
+    [
+        spread * length(rows[0]) * 0.5 / depth,
+        spread * length(rows[1]) * 0.5 / depth,
+        1.0,
+        0.0,
+    ]
 }
 
 /// The map from a surface's mesh to the clip space of `page`, through the

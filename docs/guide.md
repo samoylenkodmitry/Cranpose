@@ -1620,6 +1620,7 @@ fn Globe(spin: MutableState<f32>) {
                 direction: Vec3::new(-0.4, 1.0, 0.5),
                 ambient: 0.3,
                 shadows: true,
+                size: 0.05,
             }),
         }),
         BoxSpec::default(),
@@ -1646,7 +1647,9 @@ fn Globe(spin: MutableState<f32>) {
 ```
 
 A light with `shadows` set casts the shadows of the surfaces with
-`casts_shadow` on every surface of the scene. A lit surface is shaded by the
+`casts_shadow` on every surface of the scene. A light of some `size`, the
+angle it spans, casts soft shadows: sharp where an object meets a surface,
+wider farther from it. A lit surface is shaded by the
 angle the light falls at; an unlit one shows its content as it is, as a
 screen does, and drops to the light's `ambient` brightness where a shadow
 falls on it. So a 3D object in front of flat UI drops its shadow on the UI.

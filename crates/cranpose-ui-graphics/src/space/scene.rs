@@ -114,6 +114,11 @@ pub struct Light {
     /// Whether the surfaces that cast shadows cast them on the scene's
     /// surfaces.
     pub shadows: bool,
+    /// The angle the light spans as the scene sees it, in radians: 0 for a
+    /// point far away, whose shadows have hard edges. A light of some size
+    /// casts shadows that are sharp where a caster meets a surface and soft
+    /// farther from it, as the sun's 0.0093 does and a wide lamp's more.
+    pub size: f32,
 }
 
 impl Light {

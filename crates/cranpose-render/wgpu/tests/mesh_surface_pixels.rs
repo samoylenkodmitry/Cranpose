@@ -18,6 +18,7 @@ const SPHERE: Vec3 = Vec3::new(0.0, 0.0, 200.0);
 const SPHERE_RADIUS: f32 = 150.0;
 const NEAR_PANEL: Vec3 = Vec3::new(60.0, 0.0, 0.0);
 const NEAR_PANEL_SIDE: f32 = 100.0;
+const SOFT_LIGHT: f32 = 0.1;
 
 fn camera() -> Camera {
     Camera::look_at(
@@ -70,6 +71,16 @@ fn Surface(mesh: Arc<Mesh>, transform: Mat4, (lit, casts_shadow, color): (bool, 
 
 #[composable]
 fn MeshScene() {
+    LitScene(0.0);
+}
+
+#[composable]
+fn SoftLightScene() {
+    LitScene(SOFT_LIGHT);
+}
+
+#[composable]
+fn LitScene(light_size: f32) {
     let (plane, sphere) = remember(|| (Arc::new(Mesh::plane()), Arc::new(Mesh::sphere(48, 24))))
         .with(|(plane, sphere)| (Arc::clone(plane), Arc::clone(sphere)));
     Box(
@@ -79,12 +90,13 @@ fn MeshScene() {
                 height: FRAME_HEIGHT as f32,
             })
             .background(Color::BLACK)
-            .scene3d(|| Scene3d {
+            .scene3d(move || Scene3d {
                 camera: camera(),
                 light: Some(Light {
                     direction: Vec3::new(1.0, 0.0, 1.0),
                     ambient: 0.2,
                     shadows: true,
+                    size: light_size,
                 }),
             }),
         BoxSpec::default(),
@@ -162,5 +174,57 @@ fn mesh_surfaces_draw_their_content_lit_shadowed_and_nearest_first() {
     assert!(
         shadow[2] < 100 && shadow[2] > 20,
         "the sphere's shadow darkens the unlit far wall to its ambient: {shadow:?}"
+    );
+}
+
+/// How many pixels along the column through the middle of the sphere's
+/// shadow on the far wall, from the middle up past its top edge, lie between
+/// shadow and light.
+fn shadow_edge_width(frame: &cranpose_render_wgpu::CapturedFrame) -> usize {
+    let middle = camera()
+        .project(
+            SPHERE + Vec3::new(400.0, 0.0, 400.0),
+            Size {
+                width: FRAME_WIDTH as f32,
+                height: FRAME_HEIGHT as f32,
+            },
+        )
+        .expect("in front of the eye");
+    let (x, y) = (middle.x as usize, middle.y as usize);
+    (0..y)
+        .filter(|&row| {
+            let blue = frame.pixels[(row * frame.width as usize + x) * 4 + 2];
+            (70..230).contains(&blue)
+        })
+        .count()
+}
+
+fn capture(page: fn()) -> Option<cranpose_render_wgpu::CapturedFrame> {
+    let (_lock, mut shell) = support::app_shell_for(
+        page,
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        wgpu::TextureFormat::Rgba8Unorm,
+        |_| {},
+    )?;
+    Some(support::warm_shell_frame(&mut shell, FRAME_WIDTH, FRAME_HEIGHT).0)
+}
+
+#[test]
+fn a_light_of_some_size_softens_the_edge_of_a_shadow() {
+    let Some(hard) = capture(MeshScene) else {
+        return;
+    };
+    let Some(soft) = capture(SoftLightScene) else {
+        return;
+    };
+    let (hard, soft) = (shadow_edge_width(&hard), shadow_edge_width(&soft));
+    assert!(
+        hard <= 6,
+        "a light of no size casts a hard edge: {hard} pixels"
+    );
+    assert!(
+        soft >= 2 * hard.max(4),
+        "a light of some size widens the edge: {soft} pixels against {hard}"
     );
 }
