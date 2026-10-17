@@ -1,18 +1,19 @@
 //! The 3D pass of a scene: each of its mesh surfaces drawn from its rendered
 //! content, with a depth buffer so nearer surfaces hide farther ones, and,
 //! for a light that casts shadows, a shadow map its casters are drawn into
-//! first. Glass draws after the other surfaces from a copy of what they
-//! left, and glow after it, added onto the page.
+//! first. Volumes draw after the other surfaces, each with its own shader.
+//! Glass draws after them from a copy of what they left, and glow after it,
+//! added onto the page.
 
 use std::{
-    cell::OnceCell,
+    cell::{Cell, OnceCell},
     sync::{Arc, Weak},
 };
 
 use bytemuck::{Pod, Zeroable};
 use cranpose_ui_graphics::{
     Rect,
-    space::{Mat4, Material, Mesh, Vec3},
+    space::{Mat4, Material, Mesh, Vec3, Volume},
 };
 
 use crate::{
@@ -20,8 +21,11 @@ use crate::{
     fixed_pipeline::FixedPipeline,
     frame_graph::{FrameCommandRecorder, FrameCommandStats, UploadAllocatorSpec},
     idle_pool::{IDLE_FRAMES, IdlePool},
-    pipeline_compiler::CompilerSend,
+    lazy_resource::LazyGpuResource,
+    pipeline_compiler::{CompileLane, CompilerSend, PipelineCompiler},
+    pipeline_recorder::PipelineRecorder,
     render::{DEPTH_FORMAT, create_render_pipeline_logged},
+    shader_cache::create_volume_shader_module,
     shaders,
     shared_shader::SharedShader,
 };
@@ -62,6 +66,19 @@ pub(crate) struct SceneSurfaceUniforms {
     backdrop_region: [f32; 4],
 }
 
+/// The block `mesh_volume.wgsl` reads for one volume.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub(crate) struct SceneVolumeUniforms {
+    clip_from_model: [[f32; 4]; 4],
+    eye: [f32; 4],
+    light: [f32; 4],
+    footprint: [f32; 4],
+    low: [f32; 4],
+    high: [f32; 4],
+    params: [[f32; 4]; Volume::PARAMS / 4],
+}
+
 /// One mesh's vertices and indices on the GPU.
 #[derive(Clone)]
 pub(crate) struct SceneMeshBuffers {
@@ -89,6 +106,66 @@ pub(crate) struct ScenePipelineParts {
     shadow_samplers: ShadowSamplers,
     /// Bound in the shadow map's place for a scene that casts no shadow.
     pub(crate) no_shadow: wgpu::BindGroup,
+    /// What a volume's pipeline binds: its texture and its uniforms.
+    volume_layout: wgpu::PipelineLayout,
+}
+
+/// The pipelines of one volume shader, kept while anyone holds the shader:
+/// one draws its volumes, the other only their depth, for the pass glass
+/// draws in.
+pub(crate) struct VolumeShader {
+    source: Weak<str>,
+    module: LazyGpuResource<Option<wgpu::ShaderModule>>,
+    pipelines: [VolumePipeline; 2],
+}
+
+impl VolumeShader {
+    /// The pipeline that draws its volumes, or with `depth_only` only their
+    /// depth.
+    pub(crate) fn pipeline(&self, depth_only: bool) -> &VolumePipeline {
+        &self.pipelines[usize::from(depth_only)]
+    }
+}
+
+/// One of a volume shader's pipelines; `None` once built when the shader
+/// does not build.
+pub(crate) struct VolumePipeline {
+    resource: LazyGpuResource<Option<wgpu::RenderPipeline>>,
+    /// Whether its build is queued, so it is queued once.
+    queued: Cell<bool>,
+}
+
+impl VolumePipeline {
+    fn new(label: &'static str) -> Self {
+        Self {
+            resource: LazyGpuResource::new(label),
+            queued: Cell::new(false),
+        }
+    }
+
+    /// The pipeline once built, or `None` while it compiles: a missing one
+    /// is queued on the demand lane, and built here when nothing else can
+    /// build it.
+    pub(crate) fn when_ready<J>(
+        &self,
+        (recorder, compiler, backend): (&PipelineRecorder, &PipelineCompiler, wgpu::Backend),
+        job: impl FnOnce() -> J,
+    ) -> Option<&Option<wgpu::RenderPipeline>>
+    where
+        J: FnOnce() -> Option<wgpu::RenderPipeline> + CompilerSend + 'static,
+    {
+        if let Some(built) = self.resource.get() {
+            return Some(built);
+        }
+        if !compiler.is_active() {
+            return Some(self.resource.for_draw(recorder, backend, job()));
+        }
+        if !self.queued.replace(true) {
+            self.resource
+                .queue(compiler, CompileLane::Demanded, backend, job());
+        }
+        None
+    }
 }
 
 /// The two ways a surface reads the shadow map: compared with its own depth
@@ -117,6 +194,7 @@ pub(crate) struct ScenePass {
     pub(crate) glow_pipeline: FixedPipeline,
     pub(crate) depth_pipeline: FixedPipeline,
     meshes: IdlePool<KeptMesh>,
+    volumes: Vec<VolumeShader>,
     pub(crate) shadow_map: Option<ShadowMap>,
     /// The frames since a scene last drew shadows.
     shadow_map_idle: u64,
@@ -133,6 +211,7 @@ impl Default for ScenePass {
             glow_pipeline: FixedPipeline::new("scene/mesh-glow"),
             depth_pipeline: FixedPipeline::new("scene/mesh-depth"),
             meshes: IdlePool::default(),
+            volumes: Vec::new(),
             shadow_map: None,
             shadow_map_idle: 0,
         }
@@ -181,9 +260,9 @@ pub(crate) struct ScenePage {
 /// How one surface is drawn: placed by `transform` in the scene, of
 /// `material`, at `alpha`, from the content's texels in its texture, and
 /// where it lies in the scene's shadow map.
-pub(crate) struct SurfaceShading {
+pub(crate) struct SurfaceShading<'m> {
     pub(crate) transform: Mat4,
-    pub(crate) material: Material,
+    pub(crate) material: &'m Material,
     pub(crate) alpha: f32,
     /// The content's top left texel and its size in texels.
     pub(crate) source_region: [f32; 4],
@@ -276,10 +355,35 @@ impl ScenePass {
         (buffers, stats)
     }
 
-    /// Drops the buffers of meshes no recent frame drew, and the shadow map
-    /// once no recent frame cast shadows.
+    /// Keeps the pipelines of `shader`, whose volumes a frame draws.
+    pub(crate) fn note_volume(&mut self, shader: &Arc<str>) {
+        if self.volume(shader).is_none() {
+            self.volumes.push(VolumeShader {
+                source: Arc::downgrade(shader),
+                module: LazyGpuResource::new("scene/volume-module"),
+                pipelines: [
+                    VolumePipeline::new("scene/volume"),
+                    VolumePipeline::new("scene/volume-depth"),
+                ],
+            });
+        }
+    }
+
+    /// The pipelines of `shader`, once a frame noted it.
+    pub(crate) fn volume(&self, shader: &Arc<str>) -> Option<&VolumeShader> {
+        // A weak handle keeps the shader's memory, so no other shader takes
+        // its address while the pipelines are kept.
+        self.volumes
+            .iter()
+            .find(|kept| std::ptr::addr_eq(kept.source.as_ptr(), Arc::as_ptr(shader)))
+    }
+
+    /// Drops the buffers of meshes no recent frame drew, the pipelines of
+    /// volume shaders nobody holds, and the shadow map once no recent frame
+    /// cast shadows.
     pub(crate) fn end_frame(&mut self) {
         self.meshes.end_frame();
+        self.volumes.retain(|kept| kept.source.strong_count() > 0);
         self.shadow_map_idle += 1;
         if self.shadow_map_idle > IDLE_FRAMES {
             self.shadow_map = None;
@@ -355,12 +459,18 @@ fn pipeline_parts(
     );
     let no_shadow_view = depth_texture(device, "Scene No Shadow", 1);
     let no_shadow = shadow_group(device, (&shadow_layout, &shadow_samplers), &no_shadow_view);
+    let volume_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Scene Volume Pipeline Layout"),
+        bind_group_layouts: &[Some(texture_layout), Some(&uniform_layout)],
+        immediate_size: 0,
+    });
     ScenePipelineParts {
         shader,
         uniform_layout,
         shadow_layout,
         shadow_samplers,
         no_shadow,
+        volume_layout,
     }
 }
 
@@ -474,6 +584,64 @@ pub(crate) fn scene_surface_uniform_spec() -> UploadAllocatorSpec {
     )
 }
 
+pub(crate) fn scene_volume_uniform_spec() -> UploadAllocatorSpec {
+    UploadAllocatorSpec::uniform(
+        "Scene Volume Uniform Buffer",
+        "Scene Volume Uniform Bind Group",
+        std::mem::size_of::<SceneVolumeUniforms>() as u64,
+    )
+}
+
+/// The scene's light for a shader: the direction it travels, of length one,
+/// through `into`, and its ambient share; an ambient share below zero for a
+/// scene without light.
+fn light_uniform(scene: &SceneDraw, into: impl Fn(Vec3) -> Vec3) -> [f32; 4] {
+    match scene.light {
+        Some(light) => {
+            let direction = into(light.direction).normalized().unwrap_or(Vec3::ZERO);
+            [
+                direction.x,
+                direction.y,
+                direction.z,
+                light.ambient.clamp(0.0, 1.0),
+            ]
+        }
+        None => [0.0, 0.0, 0.0, -1.0],
+    }
+}
+
+/// The uniforms of `volume` on `mesh`, placed by `transform` in `scene` and
+/// drawn on `page` at `alpha`, whose eye is at `eye`; `None` when its
+/// transform flattens space.
+pub(crate) fn volume_uniforms(
+    scene: &SceneDraw,
+    (transform, mesh, volume, alpha): (&Mat4, &Mesh, &Volume, f32),
+    (page, eye): (ScenePage, Vec3),
+) -> Option<SceneVolumeUniforms> {
+    let model_from_scene = transform.inverse()?;
+    let point = |point: Vec3| [point.x, point.y, point.z, 1.0];
+    let (low, high) = mesh.bounds();
+    Some(SceneVolumeUniforms {
+        clip_from_model: transform
+            .then(&clip_from_scene(scene, page))
+            .transpose()
+            .rows(),
+        eye: point(model_from_scene.transform_point(eye)),
+        light: light_uniform(scene, |direction| {
+            model_from_scene.transform_vector(direction)
+        }),
+        footprint: [
+            1.0 / (scene.camera.focal_length * page.scale).max(f32::MIN_POSITIVE),
+            alpha.clamp(0.0, 1.0),
+            0.0,
+            0.0,
+        ],
+        low: point(low),
+        high: point(high),
+        params: bytemuck::cast(volume.params),
+    })
+}
+
 /// The uniforms of one surface of `scene` drawn on `page`, whose eye is at
 /// `eye`; `None` when its transform flattens space.
 pub(crate) fn surface_uniforms(
@@ -483,25 +651,16 @@ pub(crate) fn surface_uniforms(
 ) -> Option<SceneSurfaceUniforms> {
     let inverse = surface.transform.inverse()?.rows();
     let normal_row = |row: usize| [inverse[0][row], inverse[1][row], inverse[2][row], 0.0];
-    let light = match scene.light {
-        Some(light) => {
-            let direction = light.direction.normalized().unwrap_or(Vec3::ZERO);
-            [
-                direction.x,
-                direction.y,
-                direction.z,
-                light.ambient.clamp(0.0, 1.0),
-            ]
-        }
-        None => [0.0, 0.0, 0.0, -1.0],
-    };
+    let light = light_uniform(scene, |direction| direction);
     let columns = |matrix: Mat4| matrix.transpose().rows();
     let clip_from_scene = clip_from_scene(scene, page);
     let (mode, glass) = match surface.material {
         Material::Unlit => (0.0, None),
         Material::Lit => (1.0, None),
         Material::Emissive | Material::Glow => (2.0, None),
-        Material::Glass(glass) => (0.0, Some(glass)),
+        Material::Glass(glass) => (0.0, Some(*glass)),
+        // A volume takes its own uniforms.
+        Material::Volume(_) => (0.0, None),
     };
     let glass_tint = glass.map_or([1.0; 4], |glass| {
         [glass.tint.0, glass.tint.1, glass.tint.2, 1.0]
@@ -710,15 +869,7 @@ pub(crate) fn scene_pipeline_job(
             },
             _ => wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
         };
-        let color_target = [Some(wgpu::ColorTargetState {
-            format,
-            blend: Some(blend),
-            write_mask: if kind == ScenePipeline::Depth {
-                wgpu::ColorWrites::empty()
-            } else {
-                wgpu::ColorWrites::ALL
-            },
-        })];
+        let color_target = color_target(format, blend, kind != ScenePipeline::Depth);
         let (targets, bias): (&[Option<wgpu::ColorTargetState>], _) = match kind {
             ScenePipeline::Shadow => (
                 &[],
@@ -730,53 +881,140 @@ pub(crate) fn scene_pipeline_job(
             ),
             _ => (&color_target, wgpu::DepthBiasState::default()),
         };
-        create_render_pipeline_logged(
+        create_scene_pipeline(
             &device,
             cache.as_ref(),
             label,
-            wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(shader.layout()),
-                vertex: wgpu::VertexState {
-                    module,
-                    entry_point: Some(vertex),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    buffers: &[Some(wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<SceneVertex>() as u64,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![
-                            0 => Float32x3,
-                            1 => Float32x3,
-                            2 => Float32x2
-                        ],
-                    })],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module,
-                    entry_point: Some(fragment),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    targets,
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    unclipped_depth: false,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    conservative: false,
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(kind != ScenePipeline::Glow),
-                    depth_compare: Some(wgpu::CompareFunction::Less),
-                    stencil: wgpu::StencilState::default(),
-                    bias,
-                }),
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            },
+            (shader.layout(), module, (vertex, fragment)),
+            (targets, kind != ScenePipeline::Glow, bias),
         )
     }
+}
+
+/// The build of one volume shader's pipeline for targets of `format`,
+/// which with `depth_only` draws only the volumes' depth; `None` when the
+/// shader does not build or nobody holds it any more.
+pub(crate) fn volume_pipeline_job(
+    device: &Arc<wgpu::Device>,
+    cache: Option<wgpu::PipelineCache>,
+    (format, backend, depth_only): (wgpu::TextureFormat, wgpu::Backend, bool),
+    (parts, kept): (&ScenePipelineParts, &VolumeShader),
+) -> impl FnOnce() -> Option<wgpu::RenderPipeline> + CompilerSend + 'static {
+    let device = Arc::clone(device);
+    let layout = parts.volume_layout.clone();
+    let module = kept.module.clone();
+    let source = kept.source.upgrade();
+    move || {
+        let source = source?;
+        let module = module
+            .get_or_init(backend, || {
+                create_volume_shader_module(&device, &source, backend)
+            })
+            .as_ref()?;
+        let label = if depth_only {
+            "Scene Volume Depth Pipeline"
+        } else {
+            "Scene Volume Pipeline"
+        };
+        Some(create_scene_pipeline(
+            &device,
+            cache.as_ref(),
+            label,
+            (&layout, module, ("mesh_volume_vs", "mesh_volume_fs")),
+            (
+                &color_target(
+                    format,
+                    wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+                    !depth_only,
+                ),
+                true,
+                wgpu::DepthBiasState::default(),
+            ),
+        ))
+    }
+}
+
+/// The colour target of a scene pipeline, which writes colour unless
+/// `writes` is false.
+fn color_target(
+    format: wgpu::TextureFormat,
+    blend: wgpu::BlendState,
+    writes: bool,
+) -> [Option<wgpu::ColorTargetState>; 1] {
+    [Some(wgpu::ColorTargetState {
+        format,
+        blend: Some(blend),
+        write_mask: if writes {
+            wgpu::ColorWrites::ALL
+        } else {
+            wgpu::ColorWrites::empty()
+        },
+    })]
+}
+
+/// A pipeline that draws the scene's meshes, depth tested, from `module`'s
+/// `entry_points` onto `targets`.
+fn create_scene_pipeline(
+    device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
+    label: &'static str,
+    (layout, module, (vertex, fragment)): (
+        &wgpu::PipelineLayout,
+        &wgpu::ShaderModule,
+        (&'static str, &'static str),
+    ),
+    (targets, depth_write, bias): (
+        &[Option<wgpu::ColorTargetState>],
+        bool,
+        wgpu::DepthBiasState,
+    ),
+) -> wgpu::RenderPipeline {
+    create_render_pipeline_logged(
+        device,
+        cache,
+        label,
+        wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module,
+                entry_point: Some(vertex),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<SceneVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x3,
+                        1 => Float32x3,
+                        2 => Float32x2
+                    ],
+                })],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module,
+                entry_point: Some(fragment),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets,
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(depth_write),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: wgpu::StencilState::default(),
+                bias,
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        },
+    )
 }

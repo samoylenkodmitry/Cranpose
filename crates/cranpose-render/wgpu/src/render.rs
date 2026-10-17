@@ -4120,6 +4120,40 @@ impl GpuRenderer {
         })
     }
 
+    /// The pipeline of a volume shader a frame noted, or with `depth_only`
+    /// the one that draws only its volumes' depth; `None` while it compiles,
+    /// when the frame after it lands draws the volumes, or when the shader
+    /// does not build.
+    pub(crate) fn scene_volume_pipeline(
+        &self,
+        shader: &Arc<str>,
+        depth_only: bool,
+    ) -> Option<&wgpu::RenderPipeline> {
+        let kept = self.scene_pass.volume(shader)?;
+        let ready = kept.pipeline(depth_only).when_ready(
+            (
+                &self.recorder,
+                &self.pipeline_compiler,
+                self.adapter_backend,
+            ),
+            || {
+                crate::scene_pass::volume_pipeline_job(
+                    &self.device,
+                    self.pipeline_cache.clone(),
+                    (self.composition_format, self.adapter_backend, depth_only),
+                    (self.scene_pipeline_parts(), kept),
+                )
+            },
+        );
+        match ready {
+            Some(built) => built.as_ref(),
+            None => {
+                self.note_placeholder();
+                None
+            }
+        }
+    }
+
     /// The bind group layout of a scene surface's uniforms.
     pub(crate) fn scene_uniform_layout(&self) -> &wgpu::BindGroupLayout {
         &self.scene_pipeline_parts().uniform_layout

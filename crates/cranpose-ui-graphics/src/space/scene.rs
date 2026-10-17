@@ -224,7 +224,7 @@ pub struct MeshSurface {
 
 /// How a surface's content meets the scene's light and what lies behind
 /// it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Material {
     /// Shaded by the angle the light falls at, and darkened where a shadow
     /// falls on it.
@@ -243,6 +243,49 @@ pub enum Material {
     /// light's highlight on it and the content drawn over it. Glass shows
     /// the surfaces that are not glass behind it.
     Glass(Glass),
+    /// A shape an app's shader finds inside the mesh, ray by ray, as the
+    /// camera sees it, with the depth of what each ray meets: the mesh only
+    /// bounds it. A volume casts no shadow.
+    Volume(Volume),
+}
+
+/// An app's shader that draws inside a mesh: each pixel the mesh covers
+/// asks it what the camera's ray through the pixel meets.
+///
+/// `shader` is WGSL that defines
+///
+/// ```text
+/// fn volume(eye: vec3<f32>, direction: vec3<f32>, entry: f32, exit: f32, footprint: f32) -> VolumeHit
+/// ```
+///
+/// in the mesh's own coordinates: the eye; the ray's direction, of length
+/// one; how far along the ray it enters the mesh's bounds, zero for an eye
+/// inside them, and leaves the mesh; and how wide a pixel is, in radians.
+/// It returns a `VolumeHit`: the colour, premultiplied, nothing at an alpha
+/// of zero; and the point the ray met, which sets the pixel's depth.
+/// `volume_param(index)` reads `params[index]`, `volume_content(uv)` the
+/// surface's content and `volume_light()` the scene's light, in the mesh's
+/// coordinates. The renderer puts
+/// [`MESH_VOLUME_PRELUDE_WGSL`](crate::framework_shaders::MESH_VOLUME_PRELUDE_WGSL),
+/// which declares them, before it. The mesh's normals must point out of it.
+#[derive(Clone, Debug)]
+pub struct Volume {
+    /// The app's WGSL. Keep one `Arc` per shader: the renderer builds a
+    /// pipeline for each.
+    pub shader: Arc<str>,
+    /// The values the shader reads.
+    pub params: [f32; Volume::PARAMS],
+}
+
+impl Volume {
+    /// How many values a volume's shader reads.
+    pub const PARAMS: usize = 32;
+}
+
+impl PartialEq for Volume {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.shader, &other.shader) && self.params == other.params
+    }
 }
 
 /// How glass bends and tints the scene behind it.

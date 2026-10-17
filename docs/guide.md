@@ -1665,6 +1665,35 @@ A surface's `material` sets how its content meets the light:
   its curve, with the light's highlight on it and the content over it. Glass
   shows the surfaces that are not glass behind it; it costs one copy of the
   pixels around it per frame, and a scene without glass takes none.
+- `Material::Volume(Volume { shader, params })` draws what the app's WGSL
+  `volume` function finds inside the mesh, ray by ray from the camera, at the
+  depth where it finds it: a ray-marched control standing out of a wall, or
+  smoke in a box. The mesh only bounds it, and a volume casts no shadow. Each
+  shader compiles once, in the background, the first time a frame draws it.
+
+```wgsl
+// A ball of radius 0.4 in the unit cube, in the content's colour.
+fn volume(eye: vec3<f32>, direction: vec3<f32>, entry: f32, exit: f32, footprint: f32) -> VolumeHit {
+    var hit: VolumeHit;
+    hit.color = vec4<f32>(0.0);
+    hit.at = eye;
+    let b = dot(eye, direction);
+    let h = b * b - dot(eye, eye) + 0.16;
+    let t = -b - sqrt(max(h, 0.0));
+    if (h >= 0.0 && t >= entry && t <= exit) {
+        hit.at = eye + direction * t;
+        hit.color = vec4<f32>(volume_content(vec2<f32>(0.5)).rgb, 1.0);
+    }
+    return hit;
+}
+```
+
+The renderer puts the framework's prelude before the shader. It works in the
+mesh's own coordinates: `entry` and `exit` are where the ray enters the mesh's
+bounds and leaves the mesh, `footprint` is a pixel's width in radians,
+`volume_param(i)` reads `params[i]`, and `volume_content(uv)` the surface's
+content. A shader that does not build logs a warning, and its volumes are left
+out.
 
 Scene space uses logical pixels with x to the right, y down and z away from
 the viewer. `Mesh::plane`, `Mesh::cuboid` and `Mesh::sphere` build common

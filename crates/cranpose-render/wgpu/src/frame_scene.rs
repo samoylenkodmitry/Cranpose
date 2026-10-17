@@ -1,14 +1,15 @@
 //! A scene's mesh surfaces in a layer's render: each surface's content is
 //! rendered as an isolated layer's is, then all surfaces of the scene draw
 //! over what lies beneath the first of them, depth-tested against each
-//! other: first the surfaces that are neither glass nor glow, then glass
-//! over a copy of the page they left, then glow added onto it.
+//! other: first the surfaces that are neither glass nor glow, then the
+//! volumes, then glass over a copy of the page they left, then glow added
+//! onto it.
 
 use std::{rc::Rc, sync::Arc};
 
 use cranpose_ui_graphics::{
     Rect,
-    space::{Mat4, Material, Vec3},
+    space::{Mat4, Material, MeshSurface, Vec3},
 };
 
 use super::{DeviceRect, Event, FrameExecutor, LayerPass, SurfaceRender, composites_nothing};
@@ -18,7 +19,8 @@ use crate::{
     offscreen::OffscreenTarget,
     scene_pass::{
         SceneMeshBuffers, ScenePage, ScenePipeline, SurfaceShading, scene_scissor,
-        scene_surface_uniform_spec, surface_page_bounds, surface_uniforms, view_depth,
+        scene_surface_uniform_spec, scene_volume_uniform_spec, surface_page_bounds,
+        surface_uniforms, view_depth, volume_uniforms,
     },
 };
 
@@ -26,9 +28,12 @@ use crate::{
 /// draw.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ScenePhase {
-    /// The surfaces that are neither glass nor glow.
+    /// The surfaces that are neither glass nor glow nor volumes.
     Opaque,
-    /// Glass, which reads a copy of the page the opaque surfaces left.
+    /// Volumes, each drawn with its own shader.
+    Volume,
+    /// Glass, which reads a copy of the page the opaque surfaces and the
+    /// volumes left.
     Glass,
     /// Glow, added onto the page.
     Glow,
@@ -39,9 +44,26 @@ impl ScenePhase {
         match material {
             Material::Glass(_) => Self::Glass,
             Material::Glow => Self::Glow,
+            Material::Volume(_) => Self::Volume,
             Material::Lit | Material::Unlit | Material::Emissive => Self::Opaque,
         }
     }
+}
+
+/// What a step draws its surfaces with.
+#[derive(Clone, Copy)]
+enum StepPipeline {
+    /// One of the scene pipelines.
+    Fixed(ScenePipeline),
+    /// Each volume's own pipeline, which with `depth_only` draws only its
+    /// depth.
+    Volumes { depth_only: bool },
+}
+
+/// Whether `surface` casts a shadow: a volume's mesh only bounds what it
+/// shows, so casts none.
+fn casts_shadow(surface: &MeshSurface) -> bool {
+    surface.casts_shadow && !matches!(surface.material, Material::Volume(_))
 }
 
 /// A mesh surface whose content is rendered, waiting for its scene's pass.
@@ -64,7 +86,9 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         child: &ChildLayer,
         mesh: &Arc<MeshChild>,
     ) -> Result<(), String> {
-        if composites_nothing(child) {
+        // A volume shows what its shader finds, with or without content.
+        let volume = matches!(mesh.surface.material, Material::Volume(_));
+        if composites_nothing(child) && (child.alpha == 0.0 || !volume) {
             return Ok(());
         }
         let shown = DeviceRect::from_logical(mesh.scene.rect, pass.scale);
@@ -142,7 +166,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 meshes
                     .iter()
                     .map(|held| &held.mesh.surface)
-                    .filter(|surface| surface.casts_shadow),
+                    .filter(|surface| casts_shadow(surface)),
             )
         });
         let backdrop = glass_backdrop(meshes, page);
@@ -164,18 +188,21 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             }
         }
         let shadows = light_projection.is_some() && self.draw_shadow_map(&draws, &device);
-        let opaque = if shadows {
+        let opaque = StepPipeline::Fixed(if shadows {
             ScenePipeline::Shadowed
         } else {
             ScenePipeline::Plain
-        };
+        });
+        let volumes = StepPipeline::Volumes { depth_only: false };
+        let glow = (StepPipeline::Fixed(ScenePipeline::Glow), ScenePhase::Glow);
         let depth = self.renderer.depth_target(page.size);
         let Some(backdrop) = backdrop else {
             self.encode_steps(
                 (&page_texture, &depth, shadows),
                 &[
                     (opaque, ScenePhase::Opaque),
-                    (ScenePipeline::Glow, ScenePhase::Glow),
+                    (volumes, ScenePhase::Volume),
+                    glow,
                 ],
                 (&draws, None),
                 &device,
@@ -186,7 +213,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         // of its own after the copy, over their depth drawn again.
         self.encode_steps(
             (&page_texture, &depth, shadows),
-            &[(opaque, ScenePhase::Opaque)],
+            &[(opaque, ScenePhase::Opaque), (volumes, ScenePhase::Volume)],
             (&draws, None),
             &device,
         );
@@ -201,9 +228,16 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         self.encode_steps(
             (&page_texture, &depth, shadows),
             &[
-                (ScenePipeline::Depth, ScenePhase::Opaque),
-                (ScenePipeline::Glass, ScenePhase::Glass),
-                (ScenePipeline::Glow, ScenePhase::Glow),
+                (
+                    StepPipeline::Fixed(ScenePipeline::Depth),
+                    ScenePhase::Opaque,
+                ),
+                (
+                    StepPipeline::Volumes { depth_only: true },
+                    ScenePhase::Volume,
+                ),
+                (StepPipeline::Fixed(ScenePipeline::Glass), ScenePhase::Glass),
+                glow,
             ],
             (&draws, Some(&copy)),
             &device,
@@ -217,7 +251,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
     fn encode_steps(
         &mut self,
         (page, depth, shadows): (&OffscreenTarget, &wgpu::TextureView, bool),
-        steps: &[(ScenePipeline, ScenePhase)],
+        steps: &[(StepPipeline, ScenePhase)],
         (draws, backdrop): (&[PreparedSurface<'_>], Option<&Rc<OffscreenTarget>>),
         device: &wgpu::Device,
     ) {
@@ -251,11 +285,26 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             if phase_draws.peek().is_none() {
                 continue;
             }
-            let Some(pipeline) = renderer.scene_surface_pipeline(kind) else {
-                continue;
+            let fixed = match kind {
+                StepPipeline::Fixed(kind) => match renderer.scene_surface_pipeline(kind) {
+                    Some(pipeline) => Some(pipeline),
+                    None => continue,
+                },
+                StepPipeline::Volumes { .. } => None,
             };
-            render_pass.set_pipeline(pipeline);
+            if let Some(pipeline) = fixed {
+                render_pass.set_pipeline(pipeline);
+            }
             for draw in phase_draws {
+                if let (StepPipeline::Volumes { depth_only }, Material::Volume(volume)) =
+                    (kind, &draw.held.mesh.surface.material)
+                {
+                    let Some(pipeline) = renderer.scene_volume_pipeline(&volume.shader, depth_only)
+                    else {
+                        continue;
+                    };
+                    render_pass.set_pipeline(pipeline);
+                }
                 let (x, y, width, height) = draw.scissor;
                 render_pass.set_scissor_rect(x, y, width, height);
                 draw.bind(&mut render_pass, (device, effects), backdrop);
@@ -302,7 +351,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         shadow_pass.set_bind_group(2, renderer.scene_no_shadow(), &[]);
         for draw in draws
             .iter()
-            .filter(|draw| draw.held.mesh.surface.casts_shadow)
+            .filter(|draw| casts_shadow(&draw.held.mesh.surface))
         {
             draw.bind(&mut shadow_pass, (device, effects), None);
             shadow_pass.draw_indexed(0..draw.buffers.index_count, 0, 0..1);
@@ -319,34 +368,56 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         device: &wgpu::Device,
     ) -> Option<PreparedSurface<'m>> {
         let scene = &held.mesh.scene;
+        let surface = &held.mesh.surface;
         let scissor = scene_scissor(scene, held.clip, page)?;
-        let uniforms = surface_uniforms(
-            scene,
-            &SurfaceShading {
-                transform: held.mesh.surface.transform,
-                material: held.mesh.surface.material,
-                alpha: held.alpha,
-                source_region: source_region(&held.surface, held.mesh.content),
-                light_projection,
-                backdrop_region,
-            },
-            (page, eye),
-        )?;
+        let layout = self.renderer.scene_uniform_layout();
+        let uniform = match &surface.material {
+            Material::Volume(volume) => {
+                let uniforms = volume_uniforms(
+                    scene,
+                    (&surface.transform, &surface.mesh, volume, held.alpha),
+                    (page, eye),
+                )?;
+                let uniform = self.recorder.upload_uniform(
+                    UploadAllocatorId::SceneVolume,
+                    scene_volume_uniform_spec(),
+                    device,
+                    layout,
+                    bytemuck::bytes_of(&uniforms),
+                );
+                self.renderer.scene_pass.note_volume(&volume.shader);
+                uniform
+            }
+            material => {
+                let uniforms = surface_uniforms(
+                    scene,
+                    &SurfaceShading {
+                        transform: surface.transform,
+                        material,
+                        alpha: held.alpha,
+                        source_region: source_region(&held.surface, held.mesh.content),
+                        light_projection,
+                        backdrop_region,
+                    },
+                    (page, eye),
+                )?;
+                self.recorder.upload_uniform(
+                    UploadAllocatorId::SceneSurface,
+                    scene_surface_uniform_spec(),
+                    device,
+                    layout,
+                    bytemuck::bytes_of(&uniforms),
+                )
+            }
+        };
         let (buffers, staged) = self
             .renderer
             .scene_pass
-            .mesh_buffers((device, &mut *self.recorder), &held.mesh.surface.mesh);
+            .mesh_buffers((device, &mut *self.recorder), &surface.mesh);
         self.renderer.frame_stats.record_command_stats(staged);
-        let uniform = self.recorder.upload_uniform(
-            UploadAllocatorId::SceneSurface,
-            scene_surface_uniform_spec(),
-            device,
-            self.renderer.scene_uniform_layout(),
-            bytemuck::bytes_of(&uniforms),
-        );
         Some(PreparedSurface {
             held,
-            phase: ScenePhase::of(&held.mesh.surface.material),
+            phase: ScenePhase::of(&surface.material),
             buffers,
             uniform,
             scissor,

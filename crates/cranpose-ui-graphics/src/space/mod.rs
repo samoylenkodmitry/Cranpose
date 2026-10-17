@@ -17,4 +17,5 @@ pub use mesh::{Mesh, MeshError, MeshHit};
 pub use obj::{ObjError, ObjErrorKind};
 pub use scene::{
     Camera, Glass, LayerSpace, Light, Material, MeshSurface, NEAR_PLANE, Ray, Scene3d, SurfaceHit,
+    Volume,
 };

@@ -52,6 +52,9 @@ pub const PROJECTIVE_BLIT_WGSL: &str = concat!(
 pub const OUTPUT_CONVERSION_WGSL: &str = framework_wgsl!("output_conversion.wgsl");
 /// Draws a composable's surface on a mesh in a 3D scene, depth tested.
 pub const MESH_SURFACE_WGSL: &str = framework_wgsl!("mesh_surface.wgsl");
+/// The framework's part of a volume's shader, which the app's `volume`
+/// function follows: see [`crate::space::Volume`].
+pub const MESH_VOLUME_PRELUDE_WGSL: &str = framework_wgsl!("mesh_volume.wgsl");
 
 /// Each module the renderer builds pipelines from, by name: the shaders a
 /// WebGL page gets as GLSL templates written at build time.

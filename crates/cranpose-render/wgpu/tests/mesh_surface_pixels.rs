@@ -1,10 +1,13 @@
-use std::{cell::RefCell, sync::Arc};
+use std::{
+    cell::RefCell,
+    sync::{Arc, OnceLock},
+};
 
 use cranpose_core::{MutableState, remember, rememberMutableStateOf};
 use cranpose_macros::composable;
 use cranpose_ui::{
     Color, Modifier, Size,
-    space::{Camera, Glass, Light, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3},
+    space::{Camera, Glass, Light, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3, Volume},
     widgets::{Box, BoxSpec, Row, RowSpec},
 };
 
@@ -64,7 +67,7 @@ fn surface(
         .mesh_surface(move || MeshSurface {
             mesh: Arc::clone(&mesh),
             transform,
-            material,
+            material: material.clone(),
             casts_shadow,
         })
 }
@@ -79,6 +82,16 @@ fn Surface(
         surface(&mesh, transform, (material, casts_shadow)).background(color),
         BoxSpec::default(),
         || {},
+    );
+}
+
+/// A blue wall across the frame behind the scene.
+#[composable]
+fn FarWall(plane: Arc<Mesh>) {
+    Surface(
+        plane,
+        panel((2000.0, 1500.0), Vec3::new(0.0, 0.0, 600.0)),
+        (Material::Unlit, false, Color(0.0, 0.0, 1.0, 1.0)),
     );
 }
 
@@ -150,13 +163,9 @@ fn LitScene(light_size: f32, sphere_material: Material) {
         Surface(
             Arc::clone(&sphere),
             ball(),
-            (sphere_material, true, Color(1.0, 0.0, 0.0, 1.0)),
+            (sphere_material.clone(), true, Color(1.0, 0.0, 0.0, 1.0)),
         );
-        Surface(
-            Arc::clone(&plane),
-            panel((2000.0, 1500.0), Vec3::new(0.0, 0.0, 600.0)),
-            (Material::Unlit, false, Color(0.0, 0.0, 1.0, 1.0)),
-        );
+        FarWall(Arc::clone(&plane));
     });
 }
 
@@ -385,11 +394,7 @@ fn ChangingScene() {
             Mat4::translation(SPHERE),
             (Material::Emissive, false, Color(1.0, 0.0, 0.0, 1.0)),
         );
-        Surface(
-            Arc::clone(&plane),
-            panel((2000.0, 1500.0), Vec3::new(0.0, 0.0, 600.0)),
-            (Material::Unlit, false, Color(0.0, 0.0, 1.0, 1.0)),
-        );
+        FarWall(Arc::clone(&plane));
     });
 }
 
@@ -423,4 +428,125 @@ fn a_mesh_replaced_by_a_smaller_one_draws_the_new_shape() {
         let middle = pixel_at(&frame, SPHERE + Vec3::new(0.0, 0.0, -radius));
         assert!(middle[0] > 200, "the smaller ball shows: {middle:?}");
     }
+}
+
+/// A ball of radius 0.4 about the middle of the unit cube, in its content's
+/// colour times the first value.
+const BALL_VOLUME_WGSL: &str = r"
+fn volume(eye: vec3<f32>, direction: vec3<f32>, entry: f32, exit: f32, footprint: f32) -> VolumeHit {
+    var hit: VolumeHit;
+    hit.color = vec4<f32>(0.0);
+    hit.at = eye;
+    let b = dot(eye, direction);
+    let h = b * b - dot(eye, eye) + 0.16;
+    if (h < 0.0) {
+        return hit;
+    }
+    let t = -b - sqrt(h);
+    if (t < entry || t > exit) {
+        return hit;
+    }
+    hit.at = eye + direction * t;
+    hit.color = vec4<f32>(volume_content(vec2<f32>(0.5)).rgb * volume_param(0u), 1.0);
+    return hit;
+}
+";
+
+/// The side of the cube the ball volume fills, about [`SPHERE`].
+const VOLUME_SIDE: f32 = 300.0;
+
+fn volume_of(source: &'static OnceLock<Arc<str>>, text: &str) -> Material {
+    let mut params = [0.0; Volume::PARAMS];
+    params[0] = 1.0;
+    Material::Volume(Volume {
+        shader: Arc::clone(source.get_or_init(|| Arc::from(text))),
+        params,
+    })
+}
+
+/// A ball drawn by a volume in a cube, with a green panel in front of the
+/// ball within the cube and one behind the ball's front within the cube, in
+/// front of a blue wall.
+#[composable]
+fn VolumeScene(volume: Material) {
+    let (plane, cube) = remember(|| (Arc::new(Mesh::plane()), Arc::new(Mesh::cuboid())))
+        .with(|(plane, cube)| (Arc::clone(plane), Arc::clone(cube)));
+    Scene(0.0, move || {
+        for (at, side) in [
+            (Vec3::new(80.0, 0.0, 80.0), 40.0),
+            (Vec3::new(-50.0, 0.0, 170.0), 30.0),
+        ] {
+            Surface(
+                Arc::clone(&plane),
+                panel((side, side), at),
+                (Material::Unlit, false, Color(0.0, 1.0, 0.0, 1.0)),
+            );
+        }
+        Surface(
+            Arc::clone(&cube),
+            Mat4::scaling(Vec3::new(VOLUME_SIDE, VOLUME_SIDE, VOLUME_SIDE))
+                .then(&Mat4::translation(SPHERE)),
+            (volume.clone(), true, Color(1.0, 0.0, 0.0, 1.0)),
+        );
+        FarWall(Arc::clone(&plane));
+    });
+}
+
+#[composable]
+fn BallVolumeScene() {
+    static SHADER: OnceLock<Arc<str>> = OnceLock::new();
+    VolumeScene(volume_of(&SHADER, BALL_VOLUME_WGSL));
+}
+
+#[composable]
+fn BrokenVolumeScene() {
+    static SHADER: OnceLock<Arc<str>> = OnceLock::new();
+    VolumeScene(volume_of(&SHADER, "fn volume() {}"));
+}
+
+#[test]
+fn a_volume_draws_what_its_shader_finds_at_the_depth_it_finds_it() {
+    let Some(frame) = capture(BallVolumeScene) else {
+        return;
+    };
+    let radius = 0.4 * VOLUME_SIDE;
+    let front = pixel_at(&frame, SPHERE - Vec3::new(0.0, 0.0, radius));
+    assert!(
+        front[0] > 200 && front[1] < 40 && front[2] < 40,
+        "the ball shows its content's red, times its first value: {front:?}"
+    );
+    let corner = pixel_at(&frame, SPHERE + Vec3::new(130.0, 130.0, -150.0));
+    assert!(
+        corner[2] > 200 && corner[0] < 40,
+        "the wall shows through the cube where the ball is not: {corner:?}"
+    );
+    let ahead = pixel_at(&frame, Vec3::new(80.0, 0.0, 80.0));
+    assert!(
+        ahead[1] > 200 && ahead[0] < 40,
+        "a panel in the cube in front of the ball hides it: {ahead:?}"
+    );
+    let behind = pixel_at(&frame, Vec3::new(-50.0, 0.0, 170.0));
+    assert!(
+        behind[0] > 200 && behind[1] < 40,
+        "the ball hides a panel behind its front: {behind:?}"
+    );
+    // The light travels along (1, 0, 1): the cube would shade this point of
+    // the wall, beside the ball's shadow.
+    let unshaded = pixel_at(&frame, Vec3::new(300.0, 130.0, 600.0));
+    assert!(
+        unshaded[2] > 200,
+        "a volume casts no shadow, though its surface asks for one: {unshaded:?}"
+    );
+}
+
+#[test]
+fn a_volume_whose_shader_does_not_build_is_left_out() {
+    let Some(frame) = capture(BrokenVolumeScene) else {
+        return;
+    };
+    let front = pixel_at(&frame, SPHERE - Vec3::new(0.0, 0.0, 0.4 * VOLUME_SIDE));
+    assert!(
+        front[2] > 200 && front[0] < 40,
+        "the wall shows where the ball would be: {front:?}"
+    );
 }

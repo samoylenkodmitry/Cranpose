@@ -1532,10 +1532,11 @@ pub(crate) enum UploadAllocatorId {
     EffectUniform,
     Viewport,
     SceneSurface,
+    SceneVolume,
 }
 
 impl UploadAllocatorId {
-    const COUNT: usize = 9;
+    const COUNT: usize = 10;
 
     fn index(self) -> usize {
         match self {
@@ -1548,6 +1549,7 @@ impl UploadAllocatorId {
             Self::EffectUniform => 6,
             Self::Viewport => 7,
             Self::SceneSurface => 8,
+            Self::SceneVolume => 9,
         }
     }
 }
