@@ -903,7 +903,7 @@ fn draw_image(target: &mut Target, draw: &ImageDraw, diagnostics: &RenderDiagnos
     let image = draw.rect;
     let local = |x: f32, y: f32| match to_image {
         Some(inverse) => {
-            let point = inverse.map_point(Point::new(x, y));
+            let point = inverse.map_point_in_front(Point::new(x, y))?;
             image.contains(point.x, point.y).then(|| {
                 (
                     (point.x - image.x) / image.width,

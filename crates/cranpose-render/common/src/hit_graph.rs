@@ -85,7 +85,7 @@ fn collect_hits_from_graph_inner<S: HitGraphSink>(
     // The node's handlers sit on its own rect; its clip, at its layer's
     // bounds, cuts them as it cuts what the layer holds.
     let node_rect = layer.node_rect();
-    let transformed_quad = transform.map_rect(node_rect);
+    let transformed_quad = hit_quad(&transform, node_rect);
     let transformed_rect = quad_bounds(transformed_quad);
 
     if transformed_rect.width <= 0.0 || transformed_rect.height <= 0.0 {
@@ -99,7 +99,7 @@ fn collect_hits_from_graph_inner<S: HitGraphSink>(
     let mut hit_clip_bounds = parent_hit_clip;
     let mut pushed_clip = false;
     if let Some(local_clip) = layer.clip_rect() {
-        let clip_quad = transform.map_rect(local_clip);
+        let clip_quad = hit_quad(&transform, local_clip);
         let clip_bounds = quad_bounds(clip_quad);
         let resolved_clip_bounds = resolve_clip(parent_hit_clip, Some(clip_bounds));
         if resolved_clip_bounds.is_some_and(|clip| clip.is_empty()) {
@@ -162,6 +162,20 @@ fn collect_hits_from_graph_inner<S: HitGraphSink>(
     if pushed_clip {
         let _ = hit_clips.pop();
     }
+}
+
+fn hit_quad(transform: &ProjectiveTransform, rect: Rect) -> [[f32; 2]; 4] {
+    if transform.rect_in_front(rect) {
+        return transform.map_rect(rect);
+    }
+    let bounds = transform.bounds_for_rect(rect);
+    let (right, bottom) = (bounds.x + bounds.width, bounds.y + bounds.height);
+    [
+        [bounds.x, bounds.y],
+        [right, bounds.y],
+        [bounds.x, bottom],
+        [right, bottom],
+    ]
 }
 
 #[cfg(test)]

@@ -548,6 +548,12 @@ pub struct GraphicsLayer {
     pub translation_x: f32,
     /// Vertical translation, in layout coordinates.
     pub translation_y: f32,
+    /// A projective map applied after every other transform of the layer, in
+    /// its parent's coordinates: a camera's view of the layer as a plane in
+    /// space, for one. The part of the layer behind the camera's eye is not
+    /// drawn and takes no input. `None` leaves the layer on its parent's
+    /// plane.
+    pub projection: Option<crate::transform::ProjectiveTransform>,
     /// Shadow elevation in layout units. A value of 0.0 or less draws no shadow.
     pub shadow_elevation: f32,
     /// Color of the ambient shadow.
@@ -587,6 +593,7 @@ impl GraphicsLayer {
         transform_origin: TransformOrigin::CENTER,
         translation_x: 0.0,
         translation_y: 0.0,
+        projection: None,
         shadow_elevation: 0.0,
         ambient_shadow_color: Color::BLACK,
         spot_shadow_color: Color::BLACK,

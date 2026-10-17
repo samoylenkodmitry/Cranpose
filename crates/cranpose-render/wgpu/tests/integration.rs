@@ -67,6 +67,7 @@ mod pipeline_cache_lifecycle;
 mod pixel_sensitive_collection;
 mod present_runtime_contract;
 mod probe_passes;
+mod projected_layer_near_eye;
 mod projected_sample_phase;
 mod projective_layer_clip;
 mod queued_surface_frames;

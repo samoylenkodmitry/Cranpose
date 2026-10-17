@@ -229,7 +229,9 @@ impl HitRegion {
             }
         }
 
-        let local_point = self.world_to_local.map_point(point);
+        let Some(local_point) = self.world_to_local.map_point_in_front(point) else {
+            return false;
+        };
         if let Some(shape) = self.shape {
             point_in_rounded_rect(local_point, self.local_bounds, shape)
         } else {

@@ -86,7 +86,7 @@ pub use shader_warm_up::*;
 pub use shadow::*;
 pub use shape_records::*;
 pub use stroke::*;
-pub use transform::{ProjectiveTransform, WindowCoordinates};
+pub use transform::{FrontPolygon, ProjectiveTransform, WindowCoordinates};
 pub use typography::*;
 pub use unit::*;
 pub use vector_path::*;

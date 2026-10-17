@@ -19,10 +19,72 @@ impl WindowCoordinates {
     }
 }
 
+/// The smallest homogeneous `w` at which a point still maps: a point with a
+/// smaller `w` lies at or behind the eye of a perspective and lands on no
+/// position of the destination plane. A layer's own plane maps at a `w` of
+/// one.
+pub const NEAR_W: f32 = 1.0 / 64.0;
+
 /// A projective mapping of a two-dimensional coordinate plane.
 #[derive(Clone, Copy, Debug)]
 pub struct ProjectiveTransform {
     matrix: [[f32; 3]; 3],
+}
+
+/// The part of a rectangle in front of a perspective's eye, mapped: a convex
+/// polygon of up to five corners, in order around it. Empty when the whole
+/// rectangle lies behind the eye.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrontPolygon {
+    corners: [[f32; 2]; 5],
+    len: u8,
+}
+
+impl FrontPolygon {
+    fn push(&mut self, corner: [f32; 2]) {
+        self.corners[usize::from(self.len)] = corner;
+        self.len += 1;
+    }
+
+    /// The corners in order around the polygon.
+    pub fn corners(&self) -> &[[f32; 2]] {
+        &self.corners[..usize::from(self.len)]
+    }
+
+    /// Whether no part of the rectangle lies in front of the eye.
+    pub fn is_empty(&self) -> bool {
+        self.len < 3
+    }
+
+    /// The corners in triangle-strip order: the strip covers the polygon,
+    /// which is convex.
+    pub fn strip(&self) -> [[f32; 2]; 5] {
+        let c = self.corners;
+        match self.len {
+            5 => [c[0], c[1], c[4], c[2], c[3]],
+            4 => [c[0], c[1], c[3], c[2], c[2]],
+            _ => c,
+        }
+    }
+
+    /// Axis-aligned bounds of the polygon; empty at the origin when the
+    /// polygon is.
+    pub fn bounds(&self) -> Rect {
+        if self.is_empty() {
+            return Rect::from_size(Size::ZERO);
+        }
+        let (mut min, mut max) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
+        for corner in self.corners() {
+            min = [min[0].min(corner[0]), min[1].min(corner[1])];
+            max = [max[0].max(corner[0]), max[1].max(corner[1])];
+        }
+        Rect {
+            x: min[0],
+            y: min[1],
+            width: (max[0] - min[0]).max(0.0),
+            height: (max[1] - min[1]).max(0.0),
+        }
+    }
 }
 
 impl PartialEq for ProjectiveTransform {
@@ -66,7 +128,8 @@ impl ProjectiveTransform {
         }
     }
 
-    /// Maps a rectangle to corners ordered top-left, top-right, bottom-left, bottom-right.
+    /// Maps a rectangle to corners ordered top-left, top-right, bottom-left,
+    /// bottom-right, with the whole rectangle in front of the eye.
     pub fn from_rect_to_quad(rect: Rect, quad: [[f32; 2]; 4]) -> Self {
         if rect.width.abs() <= f32::EPSILON || rect.height.abs() <= f32::EPSILON {
             return Self::translation(quad[0][0], quad[0][1]);
@@ -94,21 +157,35 @@ impl ProjectiveTransform {
             return Self::identity();
         };
 
-        Self {
+        let solved = Self {
             matrix: [
                 [coefficients[0], coefficients[1], coefficients[2]],
                 [coefficients[3], coefficients[4], coefficients[5]],
                 [coefficients[6], coefficients[7], 1.0],
             ],
+        };
+        if solved.w_at(rect.x + rect.width * 0.5, rect.y + rect.height * 0.5) >= 0.0 {
+            return solved;
+        }
+        Self {
+            matrix: solved.matrix.map(|row| row.map(|value| -value)),
         }
     }
 
+    /// The transform of a row-major homogeneous matrix, kept as it is: its
+    /// bottom row gives each point's `w`, which [`NEAR_W`] cuts.
+    pub const fn from_rows(matrix: [[f32; 3]; 3]) -> Self {
+        Self { matrix }
+    }
+
     /// The transform a homogeneous matrix describes, scaled so its last entry
-    /// is one wherever that entry is not zero: its other entries then read as
-    /// the scale, turn, translation and perspective they are.
+    /// is one or minus one wherever that entry is not zero: its other entries
+    /// then read as the scale, turn, translation and perspective they are.
+    /// The scale is positive, so every point keeps the side of the eye its
+    /// homogeneous `w` puts it on.
     pub fn from_homogeneous(matrix: [[f32; 3]; 3]) -> Self {
-        let w = matrix[2][2];
-        if w == 1.0 || w.abs() <= f32::EPSILON {
+        let w = matrix[2][2].abs();
+        if w == 1.0 || w <= f32::EPSILON {
             return Self { matrix };
         }
         Self {
@@ -217,10 +294,86 @@ impl ProjectiveTransform {
         ]
     }
 
-    /// Returns the axis-aligned bounds of the transformed rectangle.
+    fn w_at(&self, x: f32, y: f32) -> f32 {
+        self.matrix[2][0] * x + self.matrix[2][1] * y + self.matrix[2][2]
+    }
+
+    /// Whether `point` lies in front of the eye of the transform's
+    /// perspective, so that it maps to a position: its homogeneous `w` is at
+    /// least [`NEAR_W`]. Always true without perspective.
+    pub fn in_front(&self, point: Point) -> bool {
+        self.w_at(point.x, point.y) >= NEAR_W
+    }
+
+    /// Whether all of `rect` lies in front of the eye.
+    pub fn rect_in_front(&self, rect: Rect) -> bool {
+        let right = rect.x + rect.width;
+        let bottom = rect.y + rect.height;
+        [
+            (rect.x, rect.y),
+            (right, rect.y),
+            (rect.x, bottom),
+            (right, bottom),
+        ]
+        .into_iter()
+        .all(|(x, y)| self.w_at(x, y) >= NEAR_W)
+    }
+
+    /// Maps `point` through this transform, the [`inverse`](Self::inverse) of
+    /// a perspective, back onto the plane the perspective shows; `None` when
+    /// the eye's ray through `point` meets the plane behind the eye or nearer
+    /// than [`NEAR_W`]. The perspective's own `w` at the mapped point is one
+    /// over this transform's `w` at `point`.
+    pub fn map_point_in_front(&self, point: Point) -> Option<Point> {
+        let w = self.w_at(point.x, point.y);
+        (w > 0.0 && w * NEAR_W <= 1.0).then(|| self.map_point(point))
+    }
+
+    /// Maps the part of `rect` in front of the eye: the rectangle cut where
+    /// its homogeneous `w` falls below [`NEAR_W`], corners in order top-left,
+    /// top-right, bottom-right, bottom-left with the cut's corners between.
+    pub fn front_polygon(&self, rect: Rect) -> FrontPolygon {
+        let right = rect.x + rect.width;
+        let bottom = rect.y + rect.height;
+        let around = [
+            [rect.x, rect.y],
+            [right, rect.y],
+            [right, bottom],
+            [rect.x, bottom],
+        ];
+        let mut polygon = FrontPolygon {
+            corners: [[0.0; 2]; 5],
+            len: 0,
+        };
+        let mapped = |[x, y]: [f32; 2]| {
+            let point = self.map_point(Point { x, y });
+            [point.x, point.y]
+        };
+        for (index, &from) in around.iter().enumerate() {
+            let to = around[(index + 1) % around.len()];
+            let (w_from, w_to) = (self.w_at(from[0], from[1]), self.w_at(to[0], to[1]));
+            if w_from >= NEAR_W {
+                polygon.push(mapped(from));
+            }
+            if (w_from >= NEAR_W) != (w_to >= NEAR_W) {
+                let t = (NEAR_W - w_from) / (w_to - w_from);
+                polygon.push(mapped([
+                    from[0] + (to[0] - from[0]) * t,
+                    from[1] + (to[1] - from[1]) * t,
+                ]));
+            }
+        }
+        polygon
+    }
+
+    /// Returns the axis-aligned bounds of the transformed rectangle's part in
+    /// front of the eye; empty when no part is.
     pub fn bounds_for_rect(&self, rect: Rect) -> Rect {
         let [[sx, kx, tx], [ky, sy, ty], [px, py, w]] = self.matrix;
-        if kx != 0.0 || ky != 0.0 || px != 0.0 || py != 0.0 || w != 1.0 {
+        if px != 0.0 || py != 0.0 || w != 1.0 {
+            return self.front_polygon(rect).bounds();
+        }
+        if kx != 0.0 || ky != 0.0 {
             return quad_bounds(self.map_rect(rect));
         }
         // Scale and translation alone keep a rectangle a rectangle: two

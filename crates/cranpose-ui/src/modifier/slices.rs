@@ -202,6 +202,10 @@ fn merge_graphics_layers(base: GraphicsLayer, overlay: GraphicsLayer) -> Graphic
         transform_origin: transform_frame(&base, &overlay).transform_origin,
         translation_x: base.translation_x + overlay.translation_x,
         translation_y: base.translation_y + overlay.translation_y,
+        projection: match (base.projection, overlay.projection) {
+            (Some(outer), Some(inner)) => Some(inner.then(outer)),
+            (outer, inner) => inner.or(outer),
+        },
         shadow_elevation: overlay.shadow_elevation,
         ambient_shadow_color: overlay.ambient_shadow_color,
         spot_shadow_color: overlay.spot_shadow_color,

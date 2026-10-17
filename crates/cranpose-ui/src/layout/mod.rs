@@ -1094,7 +1094,7 @@ fn read_live_layout_node<R>(
 fn snapshot_node_data(
     applier: &mut MemoryApplier,
     node_id: NodeId,
-    top_left: Point,
+    (parent_origin, top_left): (Point, Point),
     size: Size,
     parent_transform: ProjectiveTransform,
 ) -> Result<(LayoutNodeData, ProjectiveTransform), NodeError> {
@@ -1113,6 +1113,7 @@ fn snapshot_node_data(
         .map_or(parent_transform, |layer| {
             layer_transform_to_window(
                 parent_transform,
+                parent_origin,
                 top_left,
                 modifier_slices.layer_bounds(size),
                 &layer,
@@ -1169,8 +1170,13 @@ fn place_layout_box(
         width: state.size().width,
         height: state.size().height,
     };
-    let (data, window_transform) =
-        snapshot_node_data(applier, node_id, top_left, state.size(), parent_transform)?;
+    let (data, window_transform) = snapshot_node_data(
+        applier,
+        node_id,
+        (parent_content_origin, top_left),
+        state.size(),
+        parent_transform,
+    )?;
     let child_origin = Point {
         x: top_left.x + state.content_offset().x,
         y: top_left.y + state.content_offset().y,
@@ -4308,8 +4314,13 @@ fn build_layout_tree(
             width: node.size.width,
             height: node.size.height,
         };
-        let (data, window_transform) =
-            snapshot_node_data(applier, node.node_id, top_left, node.size, parent_transform)?;
+        let (data, window_transform) = snapshot_node_data(
+            applier,
+            node.node_id,
+            (origin, top_left),
+            node.size,
+            parent_transform,
+        )?;
         let mut children = Vec::with_capacity(node.children.len());
         for child in &node.children {
             if crate::modifier::is_window_root(applier, child.node_id) {

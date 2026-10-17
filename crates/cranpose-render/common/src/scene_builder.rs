@@ -1008,6 +1008,7 @@ impl TranslateGeometry {
         };
         let window_transform = layer_transform_to_window(
             parent_abs.window_transform,
+            parent_abs.content_origin,
             top_left,
             local_bounds,
             graphics_layer,
@@ -1773,6 +1774,7 @@ impl AbsOrigin {
             },
             window_transform: layer_transform_to_window(
                 self.window_transform,
+                self.content_origin,
                 top_left,
                 layer.local_bounds,
                 &layer.graphics_layer,

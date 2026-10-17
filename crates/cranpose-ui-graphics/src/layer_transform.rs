@@ -71,7 +71,19 @@ fn layer_rotation_pivot(layer_bounds: Rect, layer: &GraphicsLayer) -> (f32, f32)
 
 #[doc(hidden)]
 pub fn layer_scales_or_rotates(layer: &GraphicsLayer) -> bool {
-    layer_scale_x(layer) != 1.0 || layer_scale_y(layer) != 1.0 || layer_has_rotation(layer)
+    layer_scale_x(layer) != 1.0
+        || layer_scale_y(layer) != 1.0
+        || layer_has_rotation(layer)
+        || layer.projection.is_some()
+}
+
+/// Whether the layer turns its content off its parent's grid: a rotation
+/// about any axis, or a projection.
+pub fn layer_turns(layer: &GraphicsLayer, tolerance: f32) -> bool {
+    layer.rotation_x.abs() > tolerance
+        || layer.rotation_y.abs() > tolerance
+        || layer.rotation_z.abs() > tolerance
+        || layer.projection.is_some()
 }
 
 fn layer_has_rotation(layer: &GraphicsLayer) -> bool {
@@ -130,7 +142,8 @@ fn apply_layer_to_point(point: [f32; 2], pivot: (f32, f32), layer: &GraphicsLaye
     ]
 }
 
-/// Transforms a rectangle's four corners through scale, rotation and perspective.
+/// Transforms a rectangle's four corners through scale, rotation and
+/// perspective, and the layer's projection.
 pub fn apply_layer_to_quad(rect: Rect, layer_bounds: Rect, layer: &GraphicsLayer) -> [[f32; 2]; 4] {
     let quad = [
         [rect.x, rect.y],
@@ -138,19 +151,35 @@ pub fn apply_layer_to_quad(rect: Rect, layer_bounds: Rect, layer: &GraphicsLayer
         [rect.x, rect.y + rect.height],
         [rect.x + rect.width, rect.y + rect.height],
     ];
-    if layer_affine_is_identity(layer) && !layer_has_rotation(layer) {
+    if layer_affine_is_identity(layer) && !layer_has_rotation(layer) && layer.projection.is_none() {
         return quad;
     }
     let pivot = layer_rotation_pivot(layer_bounds, layer);
-    quad.map(|point| apply_layer_to_point(point, pivot, layer))
+    quad.map(|point| {
+        let [x, y] = apply_layer_to_point(point, pivot, layer);
+        match layer.projection {
+            Some(projection) => {
+                let projected = projection.map_point(Point::new(x, y));
+                [projected.x, projected.y]
+            }
+            None => [x, y],
+        }
+    })
 }
 
-/// Returns the axis-aligned bounds after the complete layer transform.
+/// Returns the axis-aligned bounds after the complete layer transform; for a
+/// projected layer, of its part in front of the eye.
 pub fn apply_layer_to_rect(rect: Rect, layer_bounds: Rect, layer: &GraphicsLayer) -> Rect {
+    if layer.projection.is_some() {
+        return layer_transform_to_parent(layer_bounds, Point::default(), layer)
+            .bounds_for_rect(rect);
+    }
     quad_bounds(apply_layer_to_quad(rect, layer_bounds, layer))
 }
 
-/// Combines a graphics layer with the node's placement in its parent.
+/// Combines a graphics layer with the node's placement in its parent. A
+/// layer's projection replaces the placement: it maps the layer into its
+/// parent on its own.
 pub fn layer_transform_to_parent(
     local_bounds: Rect,
     placement: Point,
@@ -175,6 +204,11 @@ pub fn layer_transform_to_parent(
             1.0,
         ],
     ]);
+    let placement = if layer.projection.is_some() {
+        Point::default()
+    } else {
+        placement
+    };
     let placed = ProjectiveTransform::translation(-pivot_x, -pivot_y)
         .then(turn)
         .then(ProjectiveTransform::translation(pivot_x, pivot_y))
@@ -182,20 +216,35 @@ pub fn layer_transform_to_parent(
             placement.x + layer.translation_x,
             placement.y + layer.translation_y,
         ));
-    ProjectiveTransform::from_homogeneous(placed.matrix())
+    match layer.projection {
+        Some(projection) => placed.then(projection),
+        None => ProjectiveTransform::from_homogeneous(placed.matrix()),
+    }
 }
 
 /// Extends an ancestor mapping from untransformed layout coordinates to window
 /// coordinates with this node's graphics layer. `origin` and `bounds` describe
 /// the node before any ancestor transforms; `bounds` is relative to `origin`.
+/// `parent_origin` is where the parent's content starts, which a projected
+/// layer maps into.
 pub fn layer_transform_to_window(
     parent: ProjectiveTransform,
+    parent_origin: Point,
     origin: Point,
     bounds: Rect,
     layer: &GraphicsLayer,
 ) -> ProjectiveTransform {
-    if layer_affine_is_identity(layer) && !layer_has_rotation(layer) {
+    if layer_affine_is_identity(layer) && !layer_has_rotation(layer) && layer.projection.is_none() {
         return parent;
+    }
+    if layer.projection.is_some() {
+        return ProjectiveTransform::translation(-origin.x, -origin.y)
+            .then(layer_transform_to_parent(bounds, Point::default(), layer))
+            .then(ProjectiveTransform::translation(
+                parent_origin.x,
+                parent_origin.y,
+            ))
+            .then(parent);
     }
     let bounds = Rect {
         x: bounds.x + origin.x,

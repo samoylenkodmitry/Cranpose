@@ -235,12 +235,12 @@ impl PageBase {
                 dest: region.tuple(),
                 scissor: None,
                 kind: ResolvedCompositeKind::Projective {
-                    dest_quad: [
-                        [region.x, region.y],
-                        [region.x + region.width, region.y],
-                        [region.x, region.y + region.height],
-                        [region.x + region.width, region.y + region.height],
-                    ],
+                    dest: ProjectiveTransform::identity().front_polygon(Rect {
+                        x: region.x,
+                        y: region.y,
+                        width: region.width,
+                        height: region.height,
+                    }),
                     inverse,
                     alpha: 1.0,
                     blend_mode: BlendMode::SrcOver,
@@ -1421,20 +1421,30 @@ fn projected_child_composite(
 ) -> Option<ResolvedComposite> {
     let source_to_parent = surface_to_parent_device(surface, child.transform, snap, scale);
     let inverse = source_to_parent.inverse()?;
-    let dest_quad = source_to_parent.map_rect(Rect {
+    let dest = source_to_parent.front_polygon(Rect {
         x: 0.0,
         y: 0.0,
         width: surface.rect.width,
         height: surface.rect.height,
     });
+    if dest.is_empty() {
+        return None;
+    }
+    let bounds = dest.bounds();
     Some(ResolvedComposite {
         z_index: z,
         source: source.texture,
         content: source.content,
-        dest: quad_device_bounds(dest_quad).tuple(),
+        dest: DeviceRect {
+            x: bounds.x,
+            y: bounds.y,
+            width: bounds.width,
+            height: bounds.height,
+        }
+        .tuple(),
         scissor: Some(visible.tuple()),
         kind: ResolvedCompositeKind::Projective {
-            dest_quad,
+            dest,
             inverse: inverse.matrix(),
             alpha: child.alpha,
             blend_mode: child.blend_mode,

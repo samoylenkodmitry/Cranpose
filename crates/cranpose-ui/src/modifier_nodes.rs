@@ -35,6 +35,21 @@ fn hash_option_f32<H: Hasher>(state: &mut H, value: Option<f32>) {
     }
 }
 
+fn hash_projection<H: Hasher>(
+    state: &mut H,
+    projection: Option<cranpose_ui_graphics::ProjectiveTransform>,
+) {
+    match projection {
+        Some(projection) => {
+            state.write_u8(1);
+            for value in projection.matrix().into_iter().flatten() {
+                hash_f32_value(state, value);
+            }
+        }
+        None => state.write_u8(0),
+    }
+}
+
 fn hash_graphics_layer<H: Hasher>(state: &mut H, layer: &GraphicsLayer) {
     hash_f32_value(state, layer.alpha);
     hash_f32_value(state, layer.scale);
@@ -48,6 +63,7 @@ fn hash_graphics_layer<H: Hasher>(state: &mut H, layer: &GraphicsLayer) {
     hash_f32_value(state, layer.transform_origin.pivot_fraction_y);
     hash_f32_value(state, layer.translation_x);
     hash_f32_value(state, layer.translation_y);
+    hash_projection(state, layer.projection);
     hash_f32_value(state, layer.shadow_elevation);
     hash_f32_value(state, layer.ambient_shadow_color.r());
     hash_f32_value(state, layer.ambient_shadow_color.g());

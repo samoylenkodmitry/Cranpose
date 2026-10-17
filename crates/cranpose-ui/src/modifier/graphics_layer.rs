@@ -111,6 +111,9 @@ impl Modifier {
                 );
                 info.add_property("translationX", inspector_values.translation_x.to_string());
                 info.add_property("translationY", inspector_values.translation_y.to_string());
+                if let Some(projection) = inspector_values.projection {
+                    info.add_property("projection", format!("{:?}", projection.matrix()));
+                }
                 info.add_property(
                     "shadowElevation",
                     inspector_values.shadow_elevation.to_string(),
@@ -176,6 +179,7 @@ impl Modifier {
             transform_origin,
             translation_x,
             translation_y,
+            projection: None,
             shadow_elevation,
             ambient_shadow_color,
             spot_shadow_color,

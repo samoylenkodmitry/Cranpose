@@ -5,7 +5,9 @@ use std::{
 };
 
 use cranpose_app_shell::{AppShell, KeyCode, PointerSource, RuntimeLeakDebugStats};
-use cranpose_render_common::Renderer;
+use cranpose_render_common::{
+    Renderer, graph::ProjectiveTransform, layer_transform::layer_transform_to_window,
+};
 #[cfg(feature = "renderer-wgpu")]
 use cranpose_render_wgpu::{DebugCpuAllocationStats, RenderStatsSnapshot};
 use cranpose_ui::{SemanticsAction, SemanticsNode, SemanticsRole};
@@ -43,8 +45,8 @@ impl RobotPresentationInfo {
 /// Serializable semantic element combining semantics + geometry
 ///
 /// This structure combines semantic information (role, text, actions) with
-/// geometric bounds from the layout tree, enabling robot scripts to find
-/// and interact with UI elements by their semantic properties.
+/// the element's bounds where it shows in the window, enabling robot scripts
+/// to find and interact with UI elements by their semantic properties.
 #[derive(Debug, Clone)]
 pub struct SemanticElement {
     /// Semantic role (e.g., "Button", "Text", "Layout")
@@ -53,7 +55,8 @@ pub struct SemanticElement {
     pub text: Option<String>,
     /// Compose's `stateDescription` — what the control currently reads as.
     pub state_description: Option<String>,
-    /// Geometric bounds in logical pixels
+    /// Where the element shows in the window, in logical pixels: its layout
+    /// rect through the graphics layers above it.
     pub bounds: SemanticRect,
     /// Whether this element has click actions
     pub clickable: bool,
@@ -1518,7 +1521,8 @@ where
     let Some(semantic_root) = app.semantics_tree().map(|tree| tree.root().clone()) else {
         return Vec::new();
     };
-    let bounds_by_node = build_semantic_bounds_index(layout_tree.root());
+    let bounds_by_node =
+        app.debug_enter_app_context(|| build_semantic_bounds_index(layout_tree.root()));
     let mut bounds_for = |node_id| semantic_rect_for_node(&bounds_by_node, node_id);
     vec![semantic_element_from_semantics_node(
         &semantic_root,
@@ -1630,7 +1634,8 @@ where
 {
     let layout_tree = app.layout_tree()?.clone();
     let root = app.semantics_tree()?.root().clone();
-    let bounds_by_node = build_semantic_bounds_index(layout_tree.root());
+    let bounds_by_node =
+        app.debug_enter_app_context(|| build_semantic_bounds_index(layout_tree.root()));
     let result = finder(&bounds_by_node, &root, query, match_kind);
     log::trace!(
         target: "cranpose::input",
@@ -1809,17 +1814,58 @@ fn build_semantic_bounds_index(
     root: &cranpose_ui::LayoutBox,
 ) -> HashMap<cranpose_core::NodeId, SemanticRect> {
     let mut bounds = HashMap::new();
-    collect_semantic_bounds(root, &mut bounds);
+    collect_semantic_bounds(
+        root,
+        (
+            ProjectiveTransform::identity(),
+            cranpose_ui::Point::default(),
+        ),
+        &mut bounds,
+    );
     bounds
 }
 
 fn collect_semantic_bounds(
     layout_box: &cranpose_ui::LayoutBox,
+    (parent, parent_origin): (ProjectiveTransform, cranpose_ui::Point),
     bounds: &mut HashMap<cranpose_core::NodeId, SemanticRect>,
 ) {
-    bounds.insert(layout_box.node_id, bounds_from_layout_box(layout_box));
+    let laid_out = bounds_from_layout_box(layout_box);
+    let rect = cranpose_ui::Rect {
+        x: laid_out.x,
+        y: laid_out.y,
+        width: laid_out.width,
+        height: laid_out.height,
+    };
+    let slices = &layout_box.node_data.modifier_slices;
+    let window = slices.graphics_layer().map_or(parent, |layer| {
+        layer_transform_to_window(
+            parent,
+            parent_origin,
+            cranpose_ui::Point::new(rect.x, rect.y),
+            slices.layer_bounds(cranpose_ui::Size {
+                width: rect.width,
+                height: rect.height,
+            }),
+            &layer,
+        )
+    });
+    let shown = window.bounds_for_rect(rect);
+    bounds.insert(
+        layout_box.node_id,
+        SemanticRect {
+            x: shown.x,
+            y: shown.y,
+            width: shown.width,
+            height: shown.height,
+        },
+    );
+    let content_origin = cranpose_ui::Point::new(
+        rect.x + layout_box.content_offset.x,
+        rect.y + layout_box.content_offset.y,
+    );
     for child in &layout_box.children {
-        collect_semantic_bounds(child, bounds);
+        collect_semantic_bounds(child, (window, content_origin), bounds);
     }
 }
 

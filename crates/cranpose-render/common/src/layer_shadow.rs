@@ -319,10 +319,7 @@ fn pass_color(color: Color, share: f32, caster_alpha: f32) -> Option<Color> {
 /// Whether the caster covers the middle of its shadow: an opaque one that
 /// keeps its rect upright. Skia fills the shadow of any other.
 fn caster_occludes(layer: &GraphicsLayer) -> bool {
-    layer.alpha >= 1.0
-        && layer.rotation_x.abs() <= f32::EPSILON
-        && layer.rotation_y.abs() <= f32::EPSILON
-        && layer.rotation_z.abs() <= f32::EPSILON
+    layer.alpha >= 1.0 && !crate::layer_transform::layer_turns(layer, f32::EPSILON)
 }
 
 /// How far the spot shadow strays from its caster at a corner: Skia's

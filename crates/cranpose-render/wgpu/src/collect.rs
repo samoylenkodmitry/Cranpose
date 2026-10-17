@@ -9,7 +9,7 @@ use cranpose_render_common::{
         layer_composite_params, layer_requires_isolation, local_content_layer_for,
     },
     layer_shadow::ShadowLight,
-    layer_transform::{apply_layer_affine_to_rect, layer_uniform_scale},
+    layer_transform::{apply_layer_affine_to_rect, layer_turns, layer_uniform_scale},
     primitive_emit::{PrimitiveClipSpace, resolve_clip, resolve_primitive_clip},
 };
 use cranpose_ui_graphics::{
@@ -271,9 +271,7 @@ fn graphics_layer_is_rigid(layer: &GraphicsLayer) -> bool {
     (layer.scale - 1.0).abs() <= AFFINE_TOLERANCE
         && (layer.scale_x - 1.0).abs() <= AFFINE_TOLERANCE
         && (layer.scale_y - 1.0).abs() <= AFFINE_TOLERANCE
-        && layer.rotation_x.abs() <= AFFINE_TOLERANCE
-        && layer.rotation_y.abs() <= AFFINE_TOLERANCE
-        && layer.rotation_z.abs() <= AFFINE_TOLERANCE
+        && !layer_turns(layer, AFFINE_TOLERANCE)
 }
 
 fn rigid_snap_anchor(layer_bounds: Rect, layer: &GraphicsLayer) -> Option<SnapAnchor> {

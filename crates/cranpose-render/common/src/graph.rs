@@ -12,7 +12,7 @@ use cranpose_ui::{
     TextStyle,
     text::{AnnotatedString, RenderString, SpanStyle, TextDrawStyle},
 };
-pub use cranpose_ui_graphics::transform::{ProjectiveTransform, quad_bounds};
+pub use cranpose_ui_graphics::transform::{FrontPolygon, ProjectiveTransform, quad_bounds};
 use cranpose_ui_graphics::{
     BlendMode, ColorFilter, CommandRecording, DrawPrimitive, RecordingSummary, ShadowPrimitive,
 };
