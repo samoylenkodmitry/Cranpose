@@ -684,7 +684,10 @@ impl AppContext {
     /// Appends the nodes whose z index changed since the last call to
     /// `output`, as [`append_z_order_changes`] does in the current context.
     pub fn append_z_order_changes(&self, output: &mut Vec<NodeId>) {
-        output.extend(self.state.z_order_changes.borrow_mut().dirty_nodes.drain());
+        let mut changes = self.state.z_order_changes.borrow_mut();
+        if !changes.dirty_nodes.is_empty() {
+            output.extend(changes.dirty_nodes.drain());
+        }
     }
 
     /// Moves the nodes waiting for a graphics-layer property update into
@@ -1013,13 +1016,20 @@ impl DirtyNodeSet {
         !self.dirty_nodes.is_empty()
     }
 
+    // A drain clears every control byte of the table when it ends, even of
+    // an empty one: most frames take sets that are empty.
     fn take_dirty_nodes(&mut self) -> Vec<NodeId> {
+        if self.dirty_nodes.is_empty() {
+            return Vec::new();
+        }
         self.dirty_nodes.drain().collect()
     }
 
     fn take_dirty_nodes_into(&mut self, output: &mut Vec<NodeId>) {
         output.clear();
-        output.reserve(self.dirty_nodes.len());
+        if self.dirty_nodes.is_empty() {
+            return;
+        }
         output.extend(self.dirty_nodes.drain());
     }
 
