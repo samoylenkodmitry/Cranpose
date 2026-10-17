@@ -2588,10 +2588,13 @@ impl DirtyBubble {
     /// dirty node under a clean ancestor. It stops at one an earlier walk of
     /// the same batch of commands passed with its flags
     /// (`bubble_passes.rs`). A virtual start node passes its own flags to
-    /// its parent.
+    /// its parent. A walk that carries measure marks all that one carrying
+    /// layout marks, so it passes with the layout flag too, and a layout
+    /// walk after it stops where it passed.
     fn walk(self, applier: &mut dyn Applier, first: Option<NodeId>, mut start: bool) {
-        let flags =
-            u8::from(self.layout) | u8::from(self.measure) << 1 | u8::from(self.semantics) << 2;
+        let flags = u8::from(self.layout || self.measure)
+            | u8::from(self.measure) << 1
+            | u8::from(self.semantics) << 2;
         let mut next = first;
         while let Some(id) = next {
             let Some(node) = applier.bubble_node(id, flags, !start) else {
