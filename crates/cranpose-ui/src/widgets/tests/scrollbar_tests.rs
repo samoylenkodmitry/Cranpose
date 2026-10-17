@@ -14,7 +14,8 @@ fn scrollable_state(viewport: f32, content: f32, offset: f32) -> ScrollState {
 }
 
 fn scene(size: Size, state: ScrollState, axis: Axis, spec: ScrollbarSpec) -> Vec<DrawPrimitive> {
-    let mut scope = DrawScopeDefault::new(size);
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(size, &mut recording);
     draw_scrollbar(&mut scope, state, axis, spec, false);
     scope.into_primitives()
 }

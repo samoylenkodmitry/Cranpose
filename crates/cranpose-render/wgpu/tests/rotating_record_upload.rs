@@ -5,8 +5,8 @@ use cranpose_render_common::{
     style_shared::DrawPlacement,
 };
 use cranpose_ui_graphics::{
-    ArcRecordArgs, BlendMode, Brush, Color, CommandRecorder, CommandRecording, DrawScope,
-    DrawScopeDefault, Point, Rect, Size, normalized_band,
+    ArcRecordArgs, BlendMode, Brush, Color, CommandRecording, DrawScope, DrawScopeDefault, Point,
+    Rect, Size, normalized_band,
 };
 
 use crate::support;
@@ -16,7 +16,9 @@ const COLUMNS: usize = 16;
 const RECORDS: usize = COLUMNS * COLUMNS;
 
 fn rotating_arcs(angle: f32, color: Color) -> RenderGraph {
-    let mut scope = DrawScopeDefault::new(Size::new(SIDE as f32, SIDE as f32));
+    let mut scope_recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope =
+        DrawScopeDefault::new(Size::new(SIDE as f32, SIDE as f32), &mut scope_recording);
     let cell = SIDE as f32 / COLUMNS as f32;
     for index in 0..RECORDS {
         scope.draw_annular_sector(
@@ -31,7 +33,8 @@ fn rotating_arcs(angle: f32, color: Color) -> RenderGraph {
             1.5,
         );
     }
-    recording_graph(scope.finish(), SIDE)
+    scope.finish();
+    recording_graph(scope_recording, SIDE)
 }
 
 fn recording_graph(recording: CommandRecording, side: u32) -> RenderGraph {
@@ -62,8 +65,10 @@ fn recording_graph(recording: CommandRecording, side: u32) -> RenderGraph {
 fn large_arc_run(count: usize, phase: usize, scope_recorded: bool) -> RenderGraph {
     const COLUMNS: usize = 104;
     const CELL: f32 = 5.0;
-    let mut scope = DrawScopeDefault::new(Size::new(520.0, 520.0));
-    let mut serial = CommandRecorder::default();
+    let mut scope_recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(520.0, 520.0), &mut scope_recording);
+    let mut serial_recording = CommandRecording::default();
+    let mut serial = serial_recording.record();
     for index in 0..count {
         let brush = Brush::solid(if (index + phase).is_multiple_of(7) {
             Color(0.1, 0.7, 0.3, 1.0)
@@ -99,11 +104,13 @@ fn large_arc_run(count: usize, phase: usize, scope_recorded: bool) -> RenderGrap
             }
         }
     }
+    scope.finish();
+    serial.finish();
     recording_graph(
         if scope_recorded {
-            scope.finish()
+            scope_recording
         } else {
-            serial.finish()
+            serial_recording
         },
         520,
     )

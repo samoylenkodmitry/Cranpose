@@ -25,7 +25,9 @@ fn graph(stored: bool, phase: f32) -> RenderGraph {
         width: 223.0,
         height: 231.0,
     };
-    let mut scope = DrawScopeDefault::new(Size::new(SIZE as f32, SIZE as f32));
+    let mut scope_recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope =
+        DrawScopeDefault::new(Size::new(SIZE as f32, SIZE as f32), &mut scope_recording);
     support::record_mixed_scene(&mut scope);
     for (index, blend) in [BlendMode::DstOut, BlendMode::Plus, BlendMode::SrcOver]
         .into_iter()
@@ -42,7 +44,8 @@ fn graph(stored: bool, phase: f32) -> RenderGraph {
             blend,
         );
     }
-    let recording = Rc::new(scope.finish());
+    scope.finish();
+    let recording = Rc::new(scope_recording);
     let segments = recording.all_segments();
     let command = stored.then_some(DrawCommandId {
         node_id: support::STORED_RUN_NODE,

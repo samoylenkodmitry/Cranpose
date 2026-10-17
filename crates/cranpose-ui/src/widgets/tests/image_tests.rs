@@ -124,7 +124,8 @@ fn drawn_images(
     size: Size,
     draw: impl FnOnce(&mut cranpose_ui_graphics::DrawScopeDefault),
 ) -> Vec<(Rect, Rect)> {
-    let mut scope = cranpose_ui_graphics::DrawScopeDefault::new(size);
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = cranpose_ui_graphics::DrawScopeDefault::new(size, &mut recording);
     draw(&mut scope);
     scope
         .into_primitives()

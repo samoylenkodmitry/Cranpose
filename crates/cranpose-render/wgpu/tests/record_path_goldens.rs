@@ -5,8 +5,9 @@ use cranpose_render_common::{
     graph::{DrawRunNode, LayerNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode},
 };
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, ColorFilter, CompositingStrategy, CornerRadii, DrawPrimitive,
-    DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect, ShadowPrimitive, Size, Stroke,
+    BlendMode, Brush, Color, ColorFilter, CommandRecording, CompositingStrategy, CornerRadii,
+    DrawPrimitive, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect, ShadowPrimitive, Size,
+    Stroke,
 };
 use support::{SIZE, record_mixed_scene, record_solid_scene};
 
@@ -18,8 +19,8 @@ fn fixture_path(name: &str) -> PathBuf {
         .join(format!("{name}.png"))
 }
 
-fn scope(size: u32) -> DrawScopeDefault {
-    DrawScopeDefault::new(Size::new(size as f32, size as f32))
+fn scope(size: u32, recording: &mut CommandRecording) -> DrawScopeDefault<'_> {
+    DrawScopeDefault::new(Size::new(size as f32, size as f32), recording)
 }
 
 fn bounds(size: u32) -> Rect {
@@ -58,13 +59,15 @@ fn layer(
 }
 
 fn arena_run() -> RenderGraph {
-    let mut scope = scope(SIZE);
+    let mut recording = CommandRecording::default();
+    let mut scope = scope(SIZE, &mut recording);
     record_mixed_scene(&mut scope);
     root(SIZE, vec![run_node(scope.into_primitives())])
 }
 
 fn clipped_primitives() -> RenderGraph {
-    let mut scope = scope(SIZE);
+    let mut recording = CommandRecording::default();
+    let mut scope = scope(SIZE, &mut recording);
     record_solid_scene(&mut scope);
     let clip = Some(Rect {
         x: 20.0,
@@ -160,7 +163,8 @@ fn translated_thin_shapes() -> RenderGraph {
 
 fn painted_layers() -> RenderGraph {
     let content = |tint: Color| {
-        let mut scope = scope(96);
+        let mut recording = CommandRecording::default();
+        let mut scope = scope(96, &mut recording);
         scope.draw_round_rect_at(
             Rect {
                 x: 4.0,
@@ -246,7 +250,8 @@ fn painted_layers() -> RenderGraph {
 }
 
 fn blend_modes() -> RenderGraph {
-    let mut scope = scope(SIZE);
+    let mut recording = CommandRecording::default();
+    let mut scope = scope(SIZE, &mut recording);
     scope.draw_rect_at(
         bounds(SIZE),
         Brush::linear_gradient(vec![Color(0.1, 0.2, 0.4, 1.0), Color(0.6, 0.2, 0.1, 1.0)]),
@@ -442,7 +447,8 @@ fn sweep_gradient_starts_at_three_o_clock() {
         }
     };
     let size = 64;
-    let mut scope = scope(size);
+    let mut recording = CommandRecording::default();
+    let mut scope = scope(size, &mut recording);
     scope.draw_rect_at(
         bounds(size),
         Brush::sweep_gradient(

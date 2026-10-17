@@ -15,7 +15,9 @@ const TILE: u32 = 16;
 fn tiles(rows: u32, ink: [u8; 3]) -> RenderGraph {
     let children = (0..COLUMNS * rows)
         .map(|index| {
-            let mut draw = DrawScopeDefault::new(Size::new(TILE as f32, TILE as f32));
+            let mut draw_recording = cranpose_ui_graphics::CommandRecording::default();
+            let mut draw =
+                DrawScopeDefault::new(Size::new(TILE as f32, TILE as f32), &mut draw_recording);
             draw.draw_rect(Brush::solid(Color::from_rgb_u8(ink[0], ink[1], ink[2])));
             let mut layer = support::layer_node(
                 Some(index as usize + 1),

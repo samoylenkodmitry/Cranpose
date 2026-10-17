@@ -142,8 +142,7 @@ pub use draggable::{
     rememberScrollableState,
 };
 pub use draw::{
-    DrawCacheBuilder, DrawCommand, DrawCommandFn, command_draw_scope, command_draw_scope_reusing,
-    execute_draw_commands,
+    DrawCacheBuilder, DrawCommand, DrawCommandFn, command_draw_scope, execute_draw_commands,
 };
 pub use focus_dispatch::{
     active_focus_target, clear_focus_invalidations, has_pending_focus_invalidations,

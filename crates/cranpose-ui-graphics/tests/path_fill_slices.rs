@@ -3,8 +3,8 @@
 //! contour, which the sweep over all of a path's edges slices.
 
 use cranpose_ui_graphics::{
-    Brush, Color, DrawPrimitive, DrawScope, DrawScopeDefault, DrawStyle, Path, Point, Size,
-    Trapezoid,
+    Brush, Color, CommandRecording, DrawPrimitive, DrawScope, DrawScopeDefault, DrawStyle, Path,
+    Point, Size, Trapezoid,
 };
 
 const FRAME: f32 = 128.0;
@@ -21,7 +21,8 @@ fn add_contour(path: &mut Path, points: &[(f32, f32)]) {
 }
 
 fn slices_of(path: &Path) -> Vec<Trapezoid> {
-    let mut scope = DrawScopeDefault::new(Size::new(FRAME, FRAME));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(FRAME, FRAME), &mut recording);
     scope.draw_path(path, Brush::solid(Color::WHITE), DrawStyle::Fill);
     scope
         .into_primitives()

@@ -287,7 +287,8 @@ fn shapes_and_blended_shapes_are_records_everything_else_is_not() {
 fn the_scope_records_the_arc_bounds_the_primitive_used_to_carry() {
     let center = Point::new(50.0, 40.0);
     let stroke = Stroke::new(4.0);
-    let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0), &mut recording);
     scope.draw_arc(solid(), center, 30.0, 0.5, -1.5, stroke);
     scope.draw_annular_sector(radial(), center, 10.0, 20.0, 0.0, 2.0);
     scope.draw_arc(solid(), center, 30.0, 0.5, 0.0, stroke);
@@ -377,7 +378,8 @@ fn the_arc_record_carries_the_normalised_band_the_fragment_stage_reads() {
 
 #[test]
 fn segments_cut_on_blend_and_brush_class_and_lane_never_on_kind() {
-    let mut recording = CommandRecorder::default();
+    let mut storage = CommandRecording::default();
+    let mut recording = storage.record();
     recording.push_rect(rect(0.0, 0.0, 1.0, 1.0), &solid(), None, BlendMode::SrcOver);
     recording.push_round_rect(
         rect(0.0, 0.0, 1.0, 1.0),
@@ -410,7 +412,8 @@ fn segments_cut_on_blend_and_brush_class_and_lane_never_on_kind() {
     recording.push_other(text());
     recording.push_content();
     recording.push_rect(rect(0.0, 0.0, 1.0, 1.0), &solid(), None, BlendMode::SrcOver);
-    let recording = recording.finish();
+    recording.finish();
+    let recording = storage;
     let lanes: Vec<(RecordLane, u32, u32, BlendMode, bool, u8)> = recording
         .segments()
         .iter()
@@ -445,7 +448,8 @@ fn segments_cut_on_blend_and_brush_class_and_lane_never_on_kind() {
 
 #[test]
 fn a_segment_reports_its_one_brush_kind_and_none_for_a_mixed_or_empty_mask() {
-    let mut recording = CommandRecorder::default();
+    let mut storage = CommandRecording::default();
+    let mut recording = storage.record();
     recording.push_rect(
         rect(0.0, 0.0, 1.0, 1.0),
         &linear_explicit(),
@@ -472,7 +476,8 @@ fn a_segment_reports_its_one_brush_kind_and_none_for_a_mixed_or_empty_mask() {
         BlendMode::SrcOver,
     );
     recording.push_other(text());
-    let recording = recording.finish();
+    recording.finish();
+    let recording = storage;
     let brushes: Vec<(u8, Option<u32>)> = recording
         .segments()
         .iter()
@@ -596,9 +601,10 @@ fn summary_and_bounds_are_what_a_scan_of_the_primitives_finds() {
 #[test]
 fn a_scope_arc_keeps_the_disc_and_derives_the_tight_bounds() {
     let center = Point::new(50.0, 40.0);
-    let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0), &mut recording);
     scope.draw_arc(solid(), center, 30.0, 0.5, 1.0, Stroke::new(4.0));
-    let recording = scope.finish();
+    scope.finish();
     let record = recording.shapes().get(0).unwrap();
     assert!(record.has_loose_rect());
     let tight = ArcGeometry::new(center, 28.0, 32.0, 0.5, 1.0, StrokeCap::Butt).bounds();
@@ -693,10 +699,10 @@ fn the_fingerprint_sees_every_stop_the_order_and_the_blend() {
 
 #[test]
 fn clearing_keeps_the_capacity_and_forgets_the_content() {
-    let recording = CommandRecording::from_primitives(every_primitive());
+    let mut recording = CommandRecording::from_primitives(every_primitive());
     let capacity = recording.shape_capacity();
     let fingerprint = recording.fingerprint();
-    let recording = CommandRecorder::reusing(recording).finish();
+    recording.record().finish();
     assert!(recording.is_empty());
     assert_eq!(recording.shape_capacity(), capacity);
     assert_eq!(recording.segments().len(), 0);
@@ -710,8 +716,9 @@ fn clearing_keeps_the_capacity_and_forgets_the_content() {
 }
 
 #[test]
-fn publishing_and_unique_reuse_move_the_shape_columns() {
-    let mut recorder = CommandRecorder::default();
+fn recording_again_in_place_keeps_the_shape_columns() {
+    let mut published = CommandRecording::default();
+    let mut recorder = published.record();
     assert!(recorder.is_empty());
     // Four shapes fill the room growth makes, so finishing keeps it.
     for _ in 0..4 {
@@ -721,14 +728,14 @@ fn publishing_and_unique_reuse_move_the_shape_columns() {
     assert_eq!(recorder.len(), 5);
     assert_eq!(recorder.content_markers(), 1);
     let body_pointer = recorder.shapes.tables.shapes.bodies().as_ptr();
-    let published = recorder.finish();
+    recorder.finish();
     assert_eq!(published.shapes().bodies().as_ptr(), body_pointer);
     let capacity = published.shape_capacity();
-    let mut reused = CommandRecorder::reusing(published);
+    let mut reused = published.record();
     assert!(reused.is_empty());
     assert_eq!(reused.content_markers(), 0);
     reused.push_primitive(every_primitive().remove(0));
-    let published = reused.finish();
+    reused.finish();
     assert_eq!(published.len(), 1);
     assert_eq!(published.shape_capacity(), capacity);
     assert_eq!(published.shapes().bodies().as_ptr(), body_pointer);
@@ -736,40 +743,42 @@ fn publishing_and_unique_reuse_move_the_shape_columns() {
 
 #[test]
 fn a_recording_nothing_else_holds_is_recorded_again_in_its_own_allocation() {
-    let first = CommandRecording::from_primitives(every_primitive());
-    let allocation = Arc::as_ptr(first.shape_recorder());
-    let mut reused = CommandRecorder::reusing(first);
+    let mut recording = CommandRecording::from_primitives(every_primitive());
+    let allocation = Arc::as_ptr(recording.shape_recorder());
+    let mut reused = recording.record();
     reused.push_primitive(every_primitive().remove(0));
-    let again = reused.finish();
-    assert_eq!(Arc::as_ptr(again.shape_recorder()), allocation);
-    assert_eq!(again.len(), 1);
+    reused.finish();
+    assert_eq!(Arc::as_ptr(recording.shape_recorder()), allocation);
+    assert_eq!(recording.len(), 1);
 
-    let edited = again.into_recorder().finish();
-    assert_eq!(Arc::as_ptr(edited.shape_recorder()), allocation);
-    assert_eq!(edited.len(), 1);
+    recording.edit().finish();
+    assert_eq!(Arc::as_ptr(recording.shape_recorder()), allocation);
+    assert_eq!(recording.len(), 1);
 }
 
 #[test]
 fn a_recording_a_reader_still_holds_keeps_its_shapes() {
-    let first = CommandRecording::from_primitives(every_primitive());
-    let held = first.clone();
-    let mut reused = CommandRecorder::reusing(first);
+    let mut again = CommandRecording::from_primitives(every_primitive());
+    let held = again.clone();
+    assert!(again.shares_shapes());
+    let mut reused = again.record();
     reused.push_primitive(every_primitive().remove(0));
-    let again = reused.finish();
+    reused.finish();
     assert!(!Arc::ptr_eq(again.shape_recorder(), held.shape_recorder()));
     assert_eq!(held, CommandRecording::from_primitives(every_primitive()));
     assert_eq!(again.len(), 1);
+    assert!(!again.shares_shapes());
 
-    let recorder = CommandRecorder::reusing(again.clone());
-    let copy = recorder.clone();
+    let mut edited = again.clone();
+    let mut recorder = edited.edit();
+    recorder.push_primitive(every_primitive().remove(0));
+    recorder.finish();
     assert!(!Arc::ptr_eq(
-        recorder.finish().shape_recorder(),
+        edited.shape_recorder(),
         again.shape_recorder()
     ));
-    assert!(!Arc::ptr_eq(
-        copy.finish().shape_recorder(),
-        again.shape_recorder()
-    ));
+    assert_eq!(again.len(), 1);
+    assert_eq!(edited.len(), 2);
 }
 
 #[test]
@@ -778,7 +787,9 @@ fn empty_recordings_share_their_shapes() {
     let second = CommandRecording::default();
     assert!(Arc::ptr_eq(first.shape_recorder(), second.shape_recorder()));
     assert!(first.is_empty());
-    assert_eq!(first, CommandRecorder::default().finish());
+    let mut recorded = CommandRecording::default();
+    recorded.record().finish();
+    assert_eq!(first, recorded);
 }
 
 #[test]
@@ -1111,7 +1122,8 @@ fn a_segment_keeps_every_interior_flag_its_records_would_set() {
 
 #[test]
 fn a_drawn_line_records_as_a_line_and_its_slanted_square_ends_widen_the_bounds() {
-    let mut scope = crate::DrawScopeDefault::new(crate::Size::new(64.0, 64.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = crate::DrawScopeDefault::new(crate::Size::new(64.0, 64.0), &mut recording);
     let stroke = Stroke {
         width: 10.0,
         cap: StrokeCap::Square,
@@ -1147,7 +1159,8 @@ fn a_drawn_line_records_as_a_line_and_its_slanted_square_ends_widen_the_bounds()
 
 #[test]
 fn a_draw_scope_skips_a_line_that_covers_nothing() {
-    let mut scope = crate::DrawScopeDefault::new(crate::Size::new(64.0, 64.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = crate::DrawScopeDefault::new(crate::Size::new(64.0, 64.0), &mut recording);
     let point = Point::new(8.0, 8.0);
     scope.draw_line(solid(), point, point, Stroke::new(4.0));
     scope.draw_line(solid(), point, Point::new(20.0, 8.0), Stroke::new(0.0));
@@ -1156,7 +1169,8 @@ fn a_draw_scope_skips_a_line_that_covers_nothing() {
 
 #[test]
 fn a_blended_line_keeps_its_blend_mode() {
-    let mut scope = crate::DrawScopeDefault::new(crate::Size::new(64.0, 64.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = crate::DrawScopeDefault::new(crate::Size::new(64.0, 64.0), &mut recording);
     let (start, end, stroke) = (
         Point::new(4.0, 4.0),
         Point::new(40.0, 4.0),
@@ -1218,7 +1232,8 @@ fn a_recording_counts_and_bounds_its_shapes_across_splits_and_reuse() {
         brush: solid(),
         stroke: None,
     };
-    let mut recorder = CommandRecorder::default();
+    let mut first = CommandRecording::default();
+    let mut recorder = first.record();
     for primitive in [
         shape(2.0, 6.0),
         shape(10.0, 4.0),
@@ -1228,7 +1243,7 @@ fn a_recording_counts_and_bounds_its_shapes_across_splits_and_reuse() {
     ] {
         recorder.push_primitive(primitive);
     }
-    let first = recorder.finish();
+    recorder.finish();
     let behind = first.content_split(true);
     let overlay = first.content_split(false);
     assert_eq!(first.shape_count_in(&first.all_segments()), 3);
@@ -1236,9 +1251,10 @@ fn a_recording_counts_and_bounds_its_shapes_across_splits_and_reuse() {
     assert_eq!(first.shape_count_in(&overlay), 1);
     assert_eq!(first.shape_bounds(), Some(rect(2.0, 0.0, 23.0, 4.0)));
 
-    let mut recorder = CommandRecorder::reusing(first);
+    let mut text_only = first;
+    let mut recorder = text_only.record();
     recorder.push_primitive(text());
-    let text_only = recorder.finish();
+    recorder.finish();
     assert_eq!(text_only.shape_count_in(&text_only.all_segments()), 0);
     assert_eq!(text_only.shape_bounds(), None);
 }

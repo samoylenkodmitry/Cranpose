@@ -1,6 +1,6 @@
 use crate::{
-    Brush, Color, DrawGroup, DrawPrimitive, DrawScope, DrawScopeDefault, DrawTransform, EdgeInsets,
-    GroupMarker, Point, RecordLane, Rect, Size,
+    Brush, Color, CommandRecording, DrawGroup, DrawPrimitive, DrawScope, DrawScopeDefault,
+    DrawTransform, EdgeInsets, GroupMarker, Point, RecordLane, Rect, Size,
 };
 
 fn red() -> Brush {
@@ -26,7 +26,8 @@ fn ends(primitives: &[DrawPrimitive]) -> usize {
 
 #[test]
 fn a_scale_or_turn_keeps_its_pivot_in_place() {
-    let mut scope = DrawScopeDefault::new(Size::new(100.0, 60.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(100.0, 60.0), &mut recording);
     let pivot = Point::new(30.0, 20.0);
     scope.scale(0.5, 0.25, pivot, &mut |scope| scope.draw_rect(red()));
     scope.rotate(90.0, pivot, &mut |scope| scope.draw_rect(red()));
@@ -43,7 +44,8 @@ fn a_scale_or_turn_keeps_its_pivot_in_place() {
 
 #[test]
 fn steps_nest_in_order_and_an_inset_shrinks_the_scope() {
-    let mut scope = DrawScopeDefault::new(Size::new(100.0, 60.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(100.0, 60.0), &mut recording);
     let mut seen = Vec::new();
     scope.with_transform(
         &[
@@ -92,7 +94,8 @@ fn a_path_clip_ends_with_its_mask_inside_an_isolated_group() {
     path.line_to(Point::new(30.0, 10.0));
     path.line_to(Point::new(20.0, 30.0));
     path.close();
-    let mut scope = DrawScopeDefault::new(Size::new(40.0, 40.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(40.0, 40.0), &mut recording);
     scope.clip_path(&path, &mut |scope| scope.draw_rect(red()));
     let primitives = scope.into_primitives();
     let [group] = starts(&primitives)[..] else {
@@ -113,7 +116,8 @@ fn a_path_clip_ends_with_its_mask_inside_an_isolated_group() {
 #[test]
 fn walking_a_recording_draws_what_its_iterator_yields() {
     let image = crate::ImageBitmap::from_rgba8(2, 2, vec![255; 16]).expect("image");
-    let mut scope = DrawScopeDefault::new(Size::new(40.0, 40.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(40.0, 40.0), &mut recording);
     scope.draw_rect(red());
     scope.translate(3.0, 0.0, &mut |scope| {
         scope.scale(2.0, 2.0, Point::ZERO, &mut |scope| {
@@ -123,7 +127,7 @@ fn walking_a_recording_draws_what_its_iterator_yields() {
         });
     });
     scope.draw_rect(red());
-    let recording = scope.finish();
+    scope.finish();
     for segments in [
         recording.all_segments(),
         recording.content_split(true),
@@ -147,7 +151,8 @@ fn walking_a_recording_draws_what_its_iterator_yields() {
 
 #[test]
 fn content_drawn_inside_a_group_leaves_both_halves_balanced() {
-    let mut scope = DrawScopeDefault::new(Size::new(40.0, 40.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(40.0, 40.0), &mut recording);
     scope.translate(3.0, 0.0, &mut |scope| {
         scope.scale(2.0, 2.0, Point::ZERO, &mut |scope| {
             scope.draw_rect(red());
@@ -155,7 +160,7 @@ fn content_drawn_inside_a_group_leaves_both_halves_balanced() {
             scope.draw_rect(red());
         });
     });
-    let recording = scope.finish();
+    scope.finish();
     let balance = |segments: std::ops::Range<u32>| {
         recording
             .segments_in(&segments)
@@ -186,7 +191,8 @@ fn content_drawn_inside_a_group_leaves_both_halves_balanced() {
 
 #[test]
 fn a_padded_draw_moves_its_groups_and_not_what_they_hold() {
-    let mut scope = DrawScopeDefault::new(Size::new(40.0, 40.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(40.0, 40.0), &mut recording);
     scope.draw_inset(EdgeInsets::from_components(4.0, 6.0, 0.0, 0.0), |inner| {
         inner.draw_rect_at(Rect::from_size(Size::new(2.0, 2.0)), red());
         inner.translate(10.0, 0.0, &mut |scope| {

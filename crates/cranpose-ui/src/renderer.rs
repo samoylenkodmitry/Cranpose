@@ -178,7 +178,8 @@ fn collect_primitives_from_commands(
 
 fn record(func: &crate::draw::DrawCommandFn, size: Size) -> Vec<DrawPrimitive> {
     use cranpose_ui_graphics::DrawScope as _;
-    let mut scope = crate::draw::command_draw_scope(size);
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = crate::draw::command_draw_scope(size, &mut recording);
     func(&mut scope);
     scope.into_primitives()
 }

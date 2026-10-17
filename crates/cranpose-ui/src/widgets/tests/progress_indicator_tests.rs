@@ -169,7 +169,8 @@ fn circular_progress_indicator_animates_transition() {
                     crate::DrawCommand::Overlay(func) => func,
                     crate::DrawCommand::WithContent(func) => func,
                 };
-                let mut scope = crate::draw::command_draw_scope(*size);
+                let mut recording = cranpose_ui_graphics::CommandRecording::default();
+                let mut scope = crate::draw::command_draw_scope(*size, &mut recording);
                 func(&mut scope);
                 scope.into_primitives()
             })

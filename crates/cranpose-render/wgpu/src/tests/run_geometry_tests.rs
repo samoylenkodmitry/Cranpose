@@ -69,9 +69,11 @@ fn shader_shades(record: &ShapeRecord, scale: f32, point: [f32; 2]) -> bool {
 }
 
 fn recorded_arcs(record: impl FnOnce(&mut DrawScopeDefault)) -> Vec<ShapeRecord> {
-    let mut scope = DrawScopeDefault::new(Size::new(600.0, 600.0));
+    let mut scope_recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(600.0, 600.0), &mut scope_recording);
     record(&mut scope);
-    scope.finish().shapes().iter().collect()
+    scope.finish();
+    scope_recording.shapes().iter().collect()
 }
 
 fn assert_strip_covers_shader(record: &ShapeRecord, scale: f32) {
@@ -109,7 +111,8 @@ fn assert_strip_covers_pixels(strip: &BandStrip, record: &ShapeRecord, scale: f3
 
 #[test]
 fn fill_excludes_records_outside_the_draw_window() {
-    let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0));
+    let mut scope_recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0), &mut scope_recording);
     for width in [10.0, 30.0] {
         scope.draw_rect_at(
             cranpose_ui_graphics::Rect {
@@ -121,7 +124,8 @@ fn fill_excludes_records_outside_the_draw_window() {
             Brush::solid(Color::WHITE),
         );
     }
-    let recording = scope.finish();
+    scope.finish();
+    let recording = scope_recording;
     let selected = ShapeFill::of_draws(
         recording.tables(),
         Point::ZERO,
@@ -242,7 +246,8 @@ fn the_analytic_strip_area_equals_its_triangles() {
 
 #[test]
 fn the_fill_estimate_counts_strips_for_bands_and_quads_for_the_rest() {
-    let mut scope = DrawScopeDefault::new(Size::new(600.0, 600.0));
+    let mut scope_recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(600.0, 600.0), &mut scope_recording);
     scope.draw_arc(
         Brush::solid(Color::WHITE),
         Point::new(300.0, 300.0),
@@ -260,7 +265,8 @@ fn the_fill_estimate_counts_strips_for_bands_and_quads_for_the_rest() {
         },
         Brush::solid(Color::WHITE),
     );
-    let recording = scope.finish();
+    scope.finish();
+    let recording = scope_recording;
     let tables = recording.tables();
     let draws = |bands: bool| {
         tables.segments.iter().map(move |segment| {

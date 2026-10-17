@@ -53,7 +53,8 @@ fn child_drawn_rects(modifier: Modifier, content: Size) -> Vec<Rect> {
                 .draw_commands()
                 .iter()
                 .flat_map(|command| {
-                    let mut scope = crate::draw::command_draw_scope(size);
+                    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+                    let mut scope = crate::draw::command_draw_scope(size, &mut recording);
                     match command {
                         DrawCommand::Behind(draw)
                         | DrawCommand::WithContent(draw)

@@ -62,7 +62,8 @@ fn a_checked_thumb_is_the_container_colour_and_still_gets_drawn() {
         checked.thumb, checked.container,
         "invisible against the row, and still occluding the track"
     );
-    let mut scope = DrawScopeDefault::new(GraphicsSize::new(32.0, 22.0));
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(GraphicsSize::new(32.0, 22.0), &mut recording);
     draw_switch(
         &mut scope,
         SwitchButtonSpec::default().colors(scheme).progress(1.0),
@@ -74,7 +75,8 @@ fn a_checked_thumb_is_the_container_colour_and_still_gets_drawn() {
 
 #[test]
 fn an_unchecked_switch_draws_its_ring_and_no_tick() {
-    let mut scope = DrawScopeDefault::new(GraphicsSize::new(32.0, 22.0));
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(GraphicsSize::new(32.0, 22.0), &mut recording);
     draw_switch(
         &mut scope,
         SwitchButtonSpec::default().colors(colors()).progress(0.0),

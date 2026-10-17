@@ -2028,9 +2028,6 @@ fn write_node_layer(
 pub(crate) struct RecorderSlot {
     generation: u64,
     handles: [Option<Rc<CommandRecording>>; 3],
-    /// The allocation of a handle whose recording `acquire_storage` took,
-    /// which the next recording the slot publishes moves into.
-    spare: Option<Rc<CommandRecording>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -2066,37 +2063,38 @@ fn bump_recording_generation() {
     });
 }
 
-fn acquire_storage(id: DrawCommandId) -> CommandRecording {
+/// A recording of the command `id` that no reader holds any more, to draw
+/// the command again in place: first one whose shape columns no reader
+/// shares either, then the oldest of three, whose recording takes new
+/// columns with the room the old ones had. A new one when none is free.
+fn acquire_storage(id: DrawCommandId) -> Rc<CommandRecording> {
     crate::thread_state::with(|state| {
         let mut map = state.command_recordings.borrow_mut();
         let Some(slot) = map.get_mut(&RecorderKey::from(id)) else {
-            return CommandRecording::default();
+            return Rc::default();
         };
-        for handle in &mut slot.handles {
-            let Some(recording) = handle.as_mut().and_then(Rc::get_mut) else {
-                continue;
-            };
-            let Some(storage) = recording.try_take_reusable() else {
-                continue;
-            };
-            slot.spare = handle.take();
-            return storage;
-        }
-        if slot.handles.iter().all(Option::is_some) {
-            let storage = slot.handles[2]
-                .as_mut()
-                .and_then(Rc::get_mut)
-                .map(std::mem::take);
-            if let Some(storage) = storage {
-                slot.spare = slot.handles[2].take();
-                return storage;
-            }
-        }
-        CommandRecording::default()
+        let free = |handle: &Option<Rc<CommandRecording>>| {
+            handle.as_ref().is_some_and(|recording| {
+                Rc::strong_count(recording) == 1 && Rc::weak_count(recording) == 0
+            })
+        };
+        let unshared = slot.handles.iter().position(|handle| {
+            free(handle)
+                && handle
+                    .as_ref()
+                    .is_some_and(|recording| !recording.shares_shapes())
+        });
+        let at = unshared.or_else(|| {
+            (slot.handles.iter().all(Option::is_some) && free(&slot.handles[2])).then_some(2)
+        });
+        at.and_then(|at| slot.handles[at].take())
+            .unwrap_or_default()
     })
 }
 
-fn publish_recording(id: DrawCommandId, recording: CommandRecording) -> Rc<CommandRecording> {
+/// Keeps `recording`, the command `id` drew this frame, as the newest of
+/// the command's three, and hands it back for the frame's scene.
+fn publish_recording(id: DrawCommandId, recording: Rc<CommandRecording>) -> Rc<CommandRecording> {
     crate::thread_state::with(|state| {
         let mut map = state.command_recordings.borrow_mut();
         let generation = state.recording_generation.get();
@@ -2105,23 +2103,12 @@ fn publish_recording(id: DrawCommandId, recording: CommandRecording) -> Rc<Comma
             .or_insert_with(|| RecorderSlot {
                 generation,
                 handles: [None, None, None],
-                spare: None,
             });
-        let shared = match slot.spare.take() {
-            Some(mut spare) => match Rc::get_mut(&mut spare) {
-                Some(storage) => {
-                    *storage = recording;
-                    spare
-                }
-                None => Rc::new(recording),
-            },
-            None => Rc::new(recording),
-        };
         slot.generation = generation;
         slot.handles[2] = slot.handles[1].take();
         slot.handles[1] = slot.handles[0].take();
-        slot.handles[0] = Some(Rc::clone(&shared));
-        shared
+        slot.handles[0] = Some(Rc::clone(&recording));
+        recording
     })
 }
 

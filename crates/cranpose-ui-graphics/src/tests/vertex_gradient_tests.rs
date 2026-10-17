@@ -26,9 +26,11 @@ fn vertical_stops(stops: [f32; 2], start_y: f32, end_y: f32) -> Brush {
 }
 
 fn recorded(push: impl FnOnce(&mut CommandRecorder)) -> CommandRecording {
-    let mut recorder = CommandRecorder::default();
+    let mut recording = CommandRecording::default();
+    let mut recorder = recording.record();
     push(&mut recorder);
-    recorder.finish()
+    recorder.finish();
+    recording
 }
 
 fn fill(brush: &Brush) -> CommandRecording {

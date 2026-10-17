@@ -78,7 +78,8 @@ fn WithContentPage(
 }
 
 fn draw_layer(color: Color, rect: Rect) -> RenderNode {
-    let mut scope = DrawScopeDefault::new(Size::new(WIDTH as f32, HEIGHT as f32));
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(WIDTH as f32, HEIGHT as f32), &mut recording);
     scope.draw_rect_at(rect, Brush::solid(color));
     RenderNode::Layer(Box::new(support::layer_node(
         None,

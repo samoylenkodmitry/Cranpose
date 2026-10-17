@@ -3,7 +3,8 @@ use crate::{DrawScope, DrawScopeDefault, Size};
 
 #[test]
 fn wide_arcs_are_banded_by_sweep_and_radius_and_narrow_ones_stay_quads() {
-    let mut scope = DrawScopeDefault::new(Size::new(400.0, 400.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(400.0, 400.0), &mut recording);
     let brush = Brush::Solid(Color::WHITE);
     let center = Point::new(200.0, 200.0);
     scope.draw_annular_sector(brush.clone(), center, 4.0, 8.0, 0.0, 1.0);
@@ -13,7 +14,7 @@ fn wide_arcs_are_banded_by_sweep_and_radius_and_narrow_ones_stay_quads() {
     scope.draw_arc(brush.clone(), center, 500.0, 0.0, 1.0, Stroke::new(3.0));
     scope.draw_annular_sector(brush.clone(), center, 0.0, 40.0, 0.0, 3.0);
     scope.draw_annular_sector(brush, center, 30.0, 40.0, 0.0, 0.05);
-    let recording = scope.finish();
+    scope.finish();
     let banded: Vec<bool> = recording
         .shapes()
         .iter()
@@ -104,7 +105,8 @@ fn minimum_band_keeps_segment_boundaries_exact() {
 
 #[test]
 fn a_segment_is_cut_where_its_largest_class_would_collapse_more_than_a_draw_is_worth() {
-    let mut scope = DrawScopeDefault::new(Size::new(2000.0, 2000.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(2000.0, 2000.0), &mut recording);
     let brush = Brush::Solid(Color::WHITE);
     let quad = Rect {
         x: 1.0,
@@ -127,7 +129,7 @@ fn a_segment_is_cut_where_its_largest_class_would_collapse_more_than_a_draw_is_w
     for _ in 0..rects {
         scope.draw_rect_at(quad, brush.clone());
     }
-    let recording = scope.finish();
+    scope.finish();
     let ring = recording.shapes().get(rects).unwrap();
     assert!(ring.is_banded());
     let ring_quads = ring.band_segments();
@@ -155,7 +157,8 @@ fn a_segment_is_cut_where_its_largest_class_would_collapse_more_than_a_draw_is_w
 
 #[test]
 fn a_stroked_circle_is_a_band_and_a_stroked_pill_is_not() {
-    let mut scope = DrawScopeDefault::new(Size::new(400.0, 400.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(400.0, 400.0), &mut recording);
     let brush = Brush::Solid(Color::WHITE);
     let square = Rect {
         x: 10.0,
@@ -187,7 +190,7 @@ fn a_stroked_circle_is_a_band_and_a_stroked_pill_is_not() {
         CornerRadii::uniform(30.0),
         Stroke::new(4.0),
     );
-    let recording = scope.finish();
+    scope.finish();
     let banded: Vec<bool> = recording
         .shapes()
         .iter()
@@ -205,7 +208,7 @@ fn a_stroked_circle_is_a_band_and_a_stroked_pill_is_not() {
 
 #[test]
 fn the_tables_are_shared_until_recorded_into_again() {
-    let recording = CommandRecording::from_primitives(vec![DrawPrimitive::Rect {
+    let mut recording = CommandRecording::from_primitives(vec![DrawPrimitive::Rect {
         rect: Rect {
             x: 0.0,
             y: 0.0,
@@ -216,7 +219,7 @@ fn the_tables_are_shared_until_recorded_into_again() {
         stroke: None,
     }]);
     let held = Arc::clone(recording.shape_recorder());
-    let recording = CommandRecorder::reusing(recording).finish();
+    recording.record().finish();
     assert!(!Arc::ptr_eq(&held, recording.shape_recorder()));
     assert_eq!(held.tables().shapes.len(), 1);
     assert!(recording.is_empty());
