@@ -3,6 +3,7 @@ mod blocking_work;
 mod computed_locals;
 mod computed_state;
 mod effects_and_frames;
+mod global_writes;
 mod lifetime_cancellation;
 mod nested_context;
 #[path = "support/ordered_parent.rs"]
