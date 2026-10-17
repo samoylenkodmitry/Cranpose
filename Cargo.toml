@@ -19,6 +19,7 @@ members = [
     "crates/cranpose-animation",
     "crates/cranpose-ui",
     "crates/cranpose-liquid",
+    "crates/cranpose-spatial",
     "crates/cranpose-testing",
     "crates/cranpose-platform/desktop-winit",
     "crates/cranpose-platform/android",
@@ -78,6 +79,7 @@ bytemuck = { version = "1.25", features = ["derive"] }
 cranpose-animation = { path = "crates/cranpose-animation", version = "0.13.0" }
 cranpose-capabilities = { path = "crates/cranpose-capabilities", version = "0.13.0" }
 cranpose-liquid = { path = "crates/cranpose-liquid", version = "0.13.0" }
+cranpose-spatial = { path = "crates/cranpose-spatial", version = "0.13.0" }
 cranpose = { path = "crates/cranpose", version = "0.13.0", default-features = false }
 cranpose-native = { path = "crates/cranpose-native", version = "0.13.0" }
 cranpose-app-shell = { path = "crates/cranpose-app-shell", version = "0.13.0" }

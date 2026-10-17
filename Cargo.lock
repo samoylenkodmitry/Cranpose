@@ -1206,6 +1206,7 @@ dependencies = [
  "cranpose-render-wgpu",
  "cranpose-runtime-std",
  "cranpose-services",
+ "cranpose-spatial",
  "cranpose-storekit",
  "cranpose-ui",
  "cranpose-ui-graphics",
@@ -1628,6 +1629,16 @@ dependencies = [
  "web-time",
  "webbrowser",
  "webpki-root-certs",
+]
+
+[[package]]
+name = "cranpose-spatial"
+version = "0.13.0"
+dependencies = [
+ "cranpose-core",
+ "cranpose-macros",
+ "cranpose-ui",
+ "cranpose-ui-graphics",
 ]
 
 [[package]]

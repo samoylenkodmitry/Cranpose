@@ -50,6 +50,7 @@ pub(crate) mod net_image;
 pub mod performance_dashboard;
 pub mod pet;
 mod recomposition_lab;
+mod room;
 pub mod rotary;
 pub(crate) mod shader_rect;
 mod shaders;
@@ -156,6 +157,7 @@ pub enum DemoTab {
     FilePicker,
     Rotary,
     Wear,
+    Room,
 }
 
 pub const DEFAULT_INITIAL_TAB: DemoTab = DemoTab::Guide;
@@ -168,7 +170,7 @@ pub struct DemoTabInfo {
     pub startup_aliases: &'static [&'static str],
 }
 
-pub const DEMO_TAB_INFO: [DemoTabInfo; 32] = [
+pub const DEMO_TAB_INFO: [DemoTabInfo; 33] = [
     DemoTabInfo {
         tab: DemoTab::Guide,
         label: "Cranpose Guide",
@@ -393,6 +395,13 @@ pub const DEMO_TAB_INFO: [DemoTabInfo; 32] = [
         source_path: "apps/desktop-demo/src/app/wear.rs",
         startup_aliases: &[],
     },
+    DemoTabInfo {
+        tab: DemoTab::Room,
+        label: "Room",
+        slug: "room",
+        source_path: "apps/desktop-demo/src/app/room.rs",
+        startup_aliases: &["spatial"],
+    },
 ];
 
 impl DemoTab {
@@ -460,10 +469,11 @@ pub fn startup_tab_from_args(args: impl IntoIterator<Item = String>) -> DemoTab 
         .unwrap_or(DEFAULT_INITIAL_TAB)
 }
 
-pub const DEMO_TABS: [DemoTab; 32] = [
+pub const DEMO_TABS: [DemoTab; 33] = [
     DemoTab::Guide,
     DemoTab::Performance,
     DemoTab::Liquid,
+    DemoTab::Room,
     DemoTab::Gauntlet,
     DemoTab::Counter,
     DemoTab::CompositionLocal,
@@ -1070,6 +1080,7 @@ fn tab_requires_scroll(tab: DemoTab) -> bool {
             | DemoTab::Liquid
             | DemoTab::GlassFeed
             | DemoTab::GlassTiles
+            | DemoTab::Room
     )
 }
 
@@ -1107,7 +1118,8 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, wsz_tab_state: 
         | DemoTab::MarkdownViewer
         | DemoTab::Liquid
         | DemoTab::GlassFeed
-        | DemoTab::GlassTiles => render_showcase_tab(active, startup, wsz_tab_state),
+        | DemoTab::GlassTiles
+        | DemoTab::Room => render_showcase_tab(active, startup, wsz_tab_state),
     }
 }
 
@@ -1128,6 +1140,7 @@ fn render_showcase_tab(active: DemoTab, startup: StartupSelection, wsz_tab_state
         DemoTab::Liquid => LiquidUiTab(),
         DemoTab::GlassFeed => GlassFeedTab(),
         DemoTab::GlassTiles => GlassTilesTab(),
+        DemoTab::Room => room::RoomTab(),
         DemoTab::Guide
         | DemoTab::Counter
         | DemoTab::CompositionLocal

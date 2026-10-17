@@ -1,0 +1,31 @@
+[package]
+name = "cranpose-spatial"
+version.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+description = "Composable surfaces placed in a room seen through a camera, for Cranpose apps"
+autotests = false
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+[dependencies]
+cranpose-core = { workspace = true, features = ["internal"] }
+cranpose-macros = { workspace = true }
+cranpose-ui = { workspace = true }
+cranpose-ui-graphics = { workspace = true }
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
