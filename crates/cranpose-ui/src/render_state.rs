@@ -74,6 +74,7 @@ pub struct AppContext {
     modifier_chain_trace: RefCell<Option<Arc<ModifierChainTraceCallback>>>,
     window_roots: crate::modifier::WindowRootRegistry,
     drag_and_drop: crate::modifier::DragAndDropState,
+    placement_pass: crate::widgets::nodes::layout_node::PlacementPass,
 }
 
 /// Nonzero, so that an absent one takes no more room than one: every
@@ -278,6 +279,7 @@ impl AppContext {
             modifier_chain_trace: RefCell::new(None),
             window_roots: crate::modifier::WindowRootRegistry::default(),
             drag_and_drop: crate::modifier::DragAndDropState::default(),
+            placement_pass: crate::widgets::nodes::layout_node::PlacementPass::new(),
         });
         *context.self_weak.borrow_mut() = Rc::downgrade(&context);
         crate::thread_state::with(|state| {
@@ -746,6 +748,20 @@ impl AppContext {
             .geometry_scene_nodes
             .borrow_mut()
             .schedule_repass(node_id);
+    }
+
+    /// Notes that the layout pass moved `node_id` and changed nothing else of
+    /// it, so the scene can keep what it drew for the node.
+    pub(crate) fn record_moved_scene_node(&self, node_id: NodeId) {
+        self.state
+            .moved_scene_nodes
+            .borrow_mut()
+            .schedule_repass(node_id);
+    }
+
+    /// The placement bookkeeping of this context's running layout pass.
+    pub(crate) fn placement_pass(&self) -> &crate::widgets::nodes::layout_node::PlacementPass {
+        &self.placement_pass
     }
 
     /// Takes the pending layout invalidation, as [`take_layout_invalidation`]
@@ -1251,15 +1267,6 @@ pub(crate) fn take_modifier_slice_repass_nodes() -> Vec<NodeId> {
 
 pub(crate) fn record_geometry_scene_node(node_id: NodeId) {
     require_current_app_context("render state access").record_geometry_scene_node(node_id);
-}
-
-pub(crate) fn record_moved_scene_node(node_id: NodeId) {
-    with_render_state(|state| {
-        state
-            .moved_scene_nodes
-            .borrow_mut()
-            .schedule_repass(node_id);
-    });
 }
 
 /// The nodes whose geometry a layout pass changed, by what the scene redoes

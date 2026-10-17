@@ -351,7 +351,9 @@ fn unplaced_children_do_not_allocate_semantics_sibling_storage() -> Result<(), N
     scroller.set_children(&[first, second])?;
     scroller.relayout()?;
     for row in [first, second] {
-        scroller.with_row(row, |row| row.clear_placed());
+        scroller.with_row(row, |row| {
+            row.clear_placed(&crate::render_state::require_current_app_context("a test"));
+        });
     }
     scroller.update()?;
     assert_eq!(
@@ -380,7 +382,9 @@ fn unplaced_siblings_do_not_inflate_the_initial_semantics_allocation() -> Result
     scroller.set_children(&rows)?;
     scroller.relayout()?;
     for &row in &rows[1..] {
-        scroller.with_row(row, |row| row.clear_placed());
+        scroller.with_row(row, |row| {
+            row.clear_placed(&crate::render_state::require_current_app_context("a test"));
+        });
     }
     scroller.update()?;
     let children = &scroller.tree.as_ref().expect("placed root").root().children;
@@ -519,7 +523,9 @@ fn a_row_left_unplaced_leaves_the_tree_and_comes_back() -> Result<(), NodeError>
 
     scroller
         .applier
-        .with_node::<LayoutNode, _>(rows[1], |row| row.clear_placed())?;
+        .with_node::<LayoutNode, _>(rows[1], |row| {
+            row.clear_placed(&crate::render_state::require_current_app_context("a test"));
+        })?;
     scroller.update()?;
     assert_eq!(
         scroller
@@ -746,7 +752,9 @@ fn a_row_unplaced_deep_in_a_subtree_leaves_the_tree_and_comes_back() -> Result<(
                     .collect::<Vec<_>>()
             })
     };
-    scroller.with_row(rows[0], |row| row.clear_placed());
+    scroller.with_row(rows[0], |row| {
+        row.clear_placed(&crate::render_state::require_current_app_context("a test"));
+    });
     scroller.update()?;
     assert_eq!(inner_rows(&scroller), Some(vec![rows[1]]));
 
