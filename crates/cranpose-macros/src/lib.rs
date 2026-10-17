@@ -650,8 +650,10 @@ fn definition_key_stmt(
 /// Turns a function into a composable: its body runs inside a group keyed by
 /// the call site, and recomposition skips it while its arguments are
 /// unchanged. `#[composable(no_skip)]` always re-runs the body and stores no
-/// parameters: its group has no recompose scope of its own, so a state it or
-/// its content reads recomposes the composable that called it.
+/// parameters: as Compose's inline composables, it composes in its caller's
+/// group, with its call site folded into the identity of what it composes,
+/// so a state it or its content reads recomposes the composable that called
+/// it.
 ///
 /// Composables are named in CamelCase, as in Jetpack Compose, so the
 /// generated function carries `#[allow(non_snake_case)]` and callers need no
@@ -745,7 +747,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     let body_end = func.block.brace_token.span.close();
     let composer_ident = Ident::new("__composer", Span::mixed_site());
     let slot_key = slot_key(&core_path);
-    let outer_composer_ident = Ident::new("__outer_composer", Span::mixed_site());
     let caller_key_ident = Ident::new("__cranpose_caller_key", Span::mixed_site());
     let current_scope_ident = Ident::new("__current_scope", Span::mixed_site());
     let result_ident = Ident::new("__result", Span::mixed_site());
@@ -1162,15 +1163,12 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     } else {
         let wrapped = quote!({
             #caller_key_stmt
-            #core_path::with_current_composer(|#outer_composer_ident: &#core_path::Composer| {
-                #outer_composer_ident.with_group(#key_expr, |#composer_ident: &#core_path::Composer| {
-                    #core_path::debug_label_current_scope(stringify!(#scope_label_ident));
-                    #(#rebinds_for_no_skip)*
-                    let _cranpose_source_scope = #core_path::__source_scope(
-                        stringify!(#scope_label_ident), file!(), line!(), env!("CARGO_MANIFEST_DIR"),
-                    );
-                    #original_block
-                })
+            #core_path::__compose_inline(#key_expr, |#composer_ident: &#core_path::Composer| {
+                #(#rebinds_for_no_skip)*
+                let _cranpose_source_scope = #core_path::__source_scope(
+                    stringify!(#scope_label_ident), file!(), line!(), env!("CARGO_MANIFEST_DIR"),
+                );
+                #original_block
             })
         });
         *func.block = syn::parse2(wrapped).expect("failed to build block");
