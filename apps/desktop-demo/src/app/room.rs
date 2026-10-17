@@ -7,6 +7,7 @@ mod space;
 
 use std::sync::Arc;
 
+use cranpose::liquid::prelude::{LiquidCheckbox, LiquidTheme, LiquidThemeSpec, SchemeMode};
 use cranpose_core::{key, remember, rememberMutableStateOf, LaunchedEffectAsync, MutableState};
 use cranpose_ui::{
     composable,
@@ -27,10 +28,16 @@ const GLOBE_CONTENT: Size = Size {
     width: 1024.0,
     height: 512.0,
 };
+/// The torus's content, as long around the ring as the ring is around its
+/// tube's middle against the tube's own girth (radius 1 against 0.4), so
+/// its check boxes keep their shape.
 const TORUS_CONTENT: Size = Size {
-    width: 1024.0,
-    height: 256.0,
+    width: TORUS_COLUMNS as f32 * TORUS_CELL,
+    height: TORUS_ROWS as f32 * TORUS_CELL,
 };
+const TORUS_COLUMNS: usize = 20;
+const TORUS_ROWS: usize = 8;
+const TORUS_CELL: f32 = 32.0;
 const SPIN_PER_SECOND: f32 = 0.35;
 
 fn text_style(size: f32, color: Color) -> TextStyle {
@@ -316,29 +323,66 @@ fn Torus(shape: RoomShape, mesh: Arc<Mesh>) {
                 lit: true,
                 casts_shadow: true,
             })
-            .draw_behind(|scope| {
-                let size = scope.size();
-                scope.draw_rect(Brush::solid(Color(0.85, 0.42, 0.18, 1.0)));
-                for stripe in 0..16 {
-                    scope.draw_rect_at(
-                        Rect {
-                            x: size.width * stripe as f32 / 16.0,
-                            y: 0.0,
-                            width: size.width / 32.0,
-                            height: size.height,
-                        },
-                        Brush::solid(Color(0.95, 0.80, 0.30, 1.0)),
-                    );
-                }
-            })
-            .padding(40.0),
+            .background(Color(0.10, 0.07, 0.20, 1.0)),
         BoxSpec::default(),
-        || {
-            Text(
-                "Imported from an OBJ file",
-                Modifier::empty(),
-                text_style(40.0, Color(0.12, 0.06, 0.04, 1.0)),
-            );
+        || TorusChecks(),
+    );
+}
+
+/// A grid of check boxes laid around the torus: each row runs once around
+/// the ring, and the rows go around the tube.
+#[composable]
+fn TorusChecks() {
+    let checked = rememberMutableStateOf(|| {
+        let mut rows = [0u32; TORUS_ROWS];
+        for (row, bits) in rows.iter_mut().enumerate() {
+            for column in (row % 3..TORUS_COLUMNS).step_by(3) {
+                *bits |= 1 << column;
+            }
+        }
+        rows
+    });
+    LiquidTheme(
+        LiquidThemeSpec {
+            scheme: SchemeMode::Dark,
+            accent: Color(1.0, 0.45, 0.85, 1.0),
+            ..LiquidThemeSpec::default()
+        },
+        move || {
+            Column(Modifier::empty(), ColumnSpec::default(), move || {
+                for row in 0..TORUS_ROWS {
+                    Row(Modifier::empty(), RowSpec::default(), move || {
+                        for column in 0..TORUS_COLUMNS {
+                            let bit = 1u32 << column;
+                            Box(
+                                Modifier::empty().size(Size {
+                                    width: TORUS_CELL,
+                                    height: TORUS_CELL,
+                                }),
+                                BoxSpec {
+                                    content_alignment: Alignment::CENTER,
+                                    ..BoxSpec::default()
+                                },
+                                move || {
+                                    LiquidCheckbox(
+                                        Modifier::empty(),
+                                        checked.get()[row] & bit != 0,
+                                        move |on| {
+                                            checked.update(|rows| {
+                                                rows[row] = if on {
+                                                    rows[row] | bit
+                                                } else {
+                                                    rows[row] & !bit
+                                                };
+                                            });
+                                        },
+                                    );
+                                },
+                            );
+                        }
+                    });
+                }
+            });
         },
     );
 }
@@ -363,7 +407,8 @@ fn Controls(room: RoomState) {
                 "This screen is the far wall of a room, seen from one focal length away, so it \
                  shows as a flat screen. The globe stands in front of it and casts its shadow \
                  on it. Step into the room: the other demo tabs hang on the walls around you, \
-                 a model from an OBJ file stands in the middle, and all of them stay live.",
+                 a torus from an OBJ file stands in the middle, covered in check boxes, and \
+                 all of them stay live.",
                 Modifier::empty().padding(6.0),
                 text_style(16.0, Color(0.75, 0.77, 0.86, 1.0)),
             );
