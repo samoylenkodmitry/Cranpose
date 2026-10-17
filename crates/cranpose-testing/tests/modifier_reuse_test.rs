@@ -31,7 +31,7 @@ fn test_modifier_value_changes_propagate_to_layout() {
     _app_context.enter(cranpose_ui::reset_render_state_for_tests);
 
     let run_with_padding = |p: f32| {
-        let mut composition = run_test_composition(|| {
+        let mut composition = run_test_composition(move || {
             Box(Modifier::empty().padding(p), BoxSpec::default(), || {});
         });
 
@@ -213,7 +213,7 @@ fn test_complex_modifier_chain_updates() {
     };
 
     for step in 0..=5 {
-        let composition = run_test_composition(|| {
+        let composition = run_test_composition(move || {
             Box(build_modifier(step), BoxSpec::default(), || {});
         });
 

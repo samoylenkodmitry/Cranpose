@@ -716,6 +716,106 @@ fn lazy_list_item_recomposes_on_state_change() {
     );
 }
 
+#[test]
+fn a_state_read_in_a_row_of_a_lazy_item_recomposes_the_item() {
+    // A row is inline: what its content reads belongs to the item around it,
+    // which recomposes without a render of the composition's root.
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut composition = Composition::new(MemoryApplier::new());
+    let label_state = MutableState::with_runtime(0u32, composition.runtime_handle());
+
+    let key = location_key(file!(), line!(), column!());
+    composition
+        .render(key, || {
+            let list_state = rememberLazyListState();
+            LazyColumn(
+                Modifier::empty(),
+                list_state,
+                LazyColumnSpec::default(),
+                |scope| {
+                    scope.item_keyed(Some(0), None, move || {
+                        Row(Modifier::empty(), RowSpec::default(), move || {
+                            Text(
+                                format!("Row {}", label_state.value()),
+                                Modifier::empty(),
+                                TextStyle::default(),
+                            );
+                        });
+                    });
+                },
+            );
+        })
+        .expect("initial render");
+
+    let root = composition.root().expect("lazy list root");
+    assert!(
+        render_texts(&mut composition, root)
+            .iter()
+            .any(|text| text == "Row 0")
+    );
+
+    label_state.set(1);
+    composition
+        .process_invalid_scopes()
+        .expect("recompose the lazy item");
+
+    assert!(
+        !composition.take_root_render_request(),
+        "the item, not the root, takes the read"
+    );
+    assert!(
+        render_texts(&mut composition, root)
+            .iter()
+            .any(|text| text == "Row 1"),
+        "the row in the item shows the new value"
+    );
+}
+
+#[test]
+fn a_state_read_in_a_column_inside_box_with_constraints_recomposes_its_content() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut composition = Composition::new(MemoryApplier::new());
+    let label_state = MutableState::with_runtime(0u32, composition.runtime_handle());
+
+    let key = location_key(file!(), line!(), column!());
+    composition
+        .render(key, || {
+            BoxWithConstraints(Modifier::empty(), move |_| {
+                Column(Modifier::empty(), ColumnSpec::default(), move || {
+                    Text(
+                        format!("Column {}", label_state.value()),
+                        Modifier::empty(),
+                        TextStyle::default(),
+                    );
+                });
+            });
+        })
+        .expect("initial render");
+
+    let root = composition.root().expect("root");
+    assert!(
+        render_texts(&mut composition, root)
+            .iter()
+            .any(|text| text == "Column 0")
+    );
+
+    label_state.set(1);
+    composition
+        .process_invalid_scopes()
+        .expect("recompose the constrained content");
+
+    assert!(
+        !composition.take_root_render_request(),
+        "the constrained content, not the root, takes the read"
+    );
+    assert!(
+        render_texts(&mut composition, root)
+            .iter()
+            .any(|text| text == "Column 1"),
+        "the column shows the new value"
+    );
+}
+
 #[composable]
 fn ThemedLazyList(theme_state: MutableState<bool>) {
     let list_state = rememberLazyListState();

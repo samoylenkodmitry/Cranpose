@@ -7,6 +7,7 @@ mod lifetime_cancellation;
 mod nested_context;
 #[path = "support/ordered_parent.rs"]
 mod ordered_parent;
+mod recompose_ancestors_first;
 mod recompose_child_order;
 #[cfg(feature = "inspection")]
 mod recomposition_inspection;

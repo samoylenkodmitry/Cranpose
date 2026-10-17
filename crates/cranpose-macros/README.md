@@ -11,7 +11,9 @@ The `#[composable]` macro gives each function call a composition group. The
 call-site identity keeps groups stable across recomposition. Value parameters
 use `Clone` and `PartialEq`; callback parameters use stored callback slots, so a
 new closure value reaches its composition position. `#[composable(no_skip)]`
-re-runs the body on each call.
+re-runs the body on each call and stores no parameters. Its group has no
+recompose scope of its own, so a state it or its content reads recomposes the
+composable that called it, as with Compose's inline `Box` and `Row`.
 
 This app example uses the facade and UI dependencies:
 

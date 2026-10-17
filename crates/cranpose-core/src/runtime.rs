@@ -636,6 +636,12 @@ impl RuntimeInner {
             self.recycle_scopes(scopes);
             return None;
         }
+        // Ancestors first, as Compose recomposes in composition order: a
+        // scope that a recomposing parent removes or composes again does not
+        // run first with the arguments it had.
+        if scopes.len() > 1 {
+            scopes.sort_by_key(RecomposeScope::depth);
+        }
         Some(scopes)
     }
 

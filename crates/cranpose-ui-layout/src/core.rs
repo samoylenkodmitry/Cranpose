@@ -296,8 +296,9 @@ pub trait MeasureScope {
     fn font_scale(&self) -> f32;
 }
 
-/// Policy responsible for measuring and placing children.
-pub trait MeasurePolicy {
+/// Policy responsible for measuring and placing children. A layout compares
+/// the policy it is given with the one its node holds, through [`Any`].
+pub trait MeasurePolicy: Any {
     /// Runs the measurement pass with the provided children and constraints.
     fn measure(
         &self,

@@ -14,34 +14,78 @@ fn layout_recomposes_when_content_reads_state() {
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let state = MutableState::with_runtime(0_i32, runtime);
+    let key = location_key(file!(), line!(), column!());
+    // A layout is inline: a read in its content at the root recomposes the
+    // root, which the host's reconcile runs again.
+    let mut content = move || {
+        Layout(
+            Modifier::empty(),
+            crate::layout::policies::EmptyMeasurePolicy,
+            move || {
+                let _ = state.value();
+                INVOCATIONS.with(|calls| calls.set(calls.get() + 1));
+            },
+        );
+    };
 
     composition
-        .render(location_key(file!(), line!(), column!()), {
-            let observed_state = state;
-            move || {
-                Layout(
-                    Modifier::empty(),
-                    crate::layout::policies::EmptyMeasurePolicy,
-                    {
-                        let observed_state = observed_state;
-                        move || {
-                            let _ = observed_state.value();
-                            INVOCATIONS.with(|calls| calls.set(calls.get() + 1));
-                        }
-                    },
-                );
-            }
-        })
+        .render(key, &mut content)
         .expect("initial layout render");
 
     INVOCATIONS.with(|calls| assert_eq!(calls.get(), 1));
 
     state.set_value(1);
     composition
-        .process_invalid_scopes()
+        .reconcile(key, &mut content)
         .expect("layout content recomposition");
 
     INVOCATIONS.with(|calls| assert_eq!(calls.get(), 2));
+}
+
+#[composable]
+fn ReadsInRowAndBox(state: MutableState<i32>, runs: Rc<Cell<usize>>, seen: Rc<Cell<i32>>) {
+    runs.set(runs.get() + 1);
+    crate::widgets::Row(
+        Modifier::empty(),
+        crate::widgets::RowSpec::default(),
+        move || {
+            let seen = Rc::clone(&seen);
+            crate::widgets::Box(
+                Modifier::empty(),
+                crate::widgets::BoxSpec::default(),
+                move || seen.set(state.value()),
+            );
+        },
+    );
+}
+
+#[test]
+fn a_state_read_in_layout_content_recomposes_the_composable_that_called_the_layout() {
+    // Compose's Box and Row are inline: what their content reads belongs to
+    // the composable around them, which composes them again.
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut composition = Composition::new(MemoryApplier::new());
+    let state = MutableState::with_runtime(0_i32, composition.runtime_handle());
+    let runs = Rc::new(Cell::new(0));
+    let seen = Rc::new(Cell::new(-1));
+    composition
+        .render(location_key(file!(), line!(), column!()), {
+            let (runs, seen) = (Rc::clone(&runs), Rc::clone(&seen));
+            move || ReadsInRowAndBox(state, Rc::clone(&runs), Rc::clone(&seen))
+        })
+        .expect("initial render");
+    assert_eq!((runs.get(), seen.get()), (1, 0));
+
+    state.set_value(7);
+    composition
+        .process_invalid_scopes()
+        .expect("recompose the reader");
+
+    assert_eq!(
+        (runs.get(), seen.get()),
+        (2, 7),
+        "the content saw the new value through its caller's recomposition"
+    );
 }
 
 #[test]

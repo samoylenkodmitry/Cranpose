@@ -649,7 +649,9 @@ fn definition_key_stmt(
 
 /// Turns a function into a composable: its body runs inside a group keyed by
 /// the call site, and recomposition skips it while its arguments are
-/// unchanged. `#[composable(no_skip)]` always re-runs the body.
+/// unchanged. `#[composable(no_skip)]` always re-runs the body and stores no
+/// parameters: its group has no recompose scope of its own, so a state it or
+/// its content reads recomposes the composable that called it.
 ///
 /// Composables are named in CamelCase, as in Jetpack Compose, so the
 /// generated function carries `#[allow(non_snake_case)]` and callers need no

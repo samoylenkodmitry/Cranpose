@@ -332,7 +332,7 @@ impl Modifier {
 ///     );
 /// }
 /// ```
-#[composable]
+#[composable(no_skip)]
 pub fn FlexBox<F>(modifier: Modifier, config: FlexBoxConfig, content: F) -> NodeId
 where
     F: FnMut() + 'static,

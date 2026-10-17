@@ -39,7 +39,7 @@ fn native_host_preferences_override_os_queries_and_supply_composition_defaults()
         .map(|tag| cranpose::localization::Locale::parse(tag).expect("locale"))
         .collect();
     assert_eq!(cranpose::system_languages(), expected);
-    cranpose_ui::run_test_composition(|| {
+    cranpose_ui::run_test_composition(move || {
         assert_eq!(
             cranpose::local_system_languages().current().as_ref(),
             expected

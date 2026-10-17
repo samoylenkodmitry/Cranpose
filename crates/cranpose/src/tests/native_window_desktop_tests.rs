@@ -545,25 +545,28 @@ impl TornPage {
             node,
             root_key,
         };
-        let (torn, title, node) = (page.torn, page.title, Rc::clone(&page.node));
+        let content = page.content();
         page.test.with_registry(|composition| {
             composition
-                .render_stable(root_key, move || {
-                    TornPageRoot(torn, title, Rc::clone(&node));
-                })
+                .render_stable(root_key, content)
                 .expect("the torn page renders");
         });
         page
     }
 
-    fn recompose(&mut self) {
+    /// The page's root content. A host passes the same content to every
+    /// render, so the root's groups keep their call sites.
+    fn content(&self) -> impl FnMut() + 'static {
         let (torn, title, node) = (self.torn, self.title, Rc::clone(&self.node));
+        move || TornPageRoot(torn, title, Rc::clone(&node))
+    }
+
+    fn recompose(&mut self) {
+        let content = self.content();
         let root_key = self.root_key;
         self.test.with_registry(|composition| {
             composition
-                .reconcile(root_key, move || {
-                    TornPageRoot(torn, title, Rc::clone(&node));
-                })
+                .reconcile(root_key, content)
                 .expect("the torn page recomposes");
         });
     }
