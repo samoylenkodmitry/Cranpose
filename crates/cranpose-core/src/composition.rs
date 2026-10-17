@@ -161,11 +161,10 @@ impl<A: Applier + 'static> Composition<A> {
     }
 
     fn finalize_runtime_state(&mut self) {
-        let runtime_handle = self.runtime_handle();
         if !self.runtime.has_updates()
-            && !runtime_handle.has_invalid_scopes()
-            && !runtime_handle.has_frame_callbacks()
-            && !runtime_handle.has_pending_ui()
+            && !self.runtime.has_invalid_scopes()
+            && !self.runtime.has_frame_callbacks()
+            && !self.runtime.has_pending_ui()
         {
             self.runtime.set_needs_frame(false);
         }
@@ -355,6 +354,11 @@ impl<A: Applier + 'static> Composition<A> {
     /// Returns a handle to the runtime this composition uses.
     pub fn runtime_handle(&self) -> RuntimeHandle {
         self.runtime.handle()
+    }
+
+    /// The runtime this composition runs on, to ask without a handle.
+    pub fn runtime(&self) -> &Runtime {
+        &self.runtime
     }
 
     /// Borrows the applier mutably. Panics if it is already borrowed.
@@ -602,11 +606,11 @@ impl<A: Applier + 'static> Composition<A> {
     }
 
     fn dispose_forgotten_movables(&mut self) -> Result<(), NodeError> {
-        let runtime_handle = self.runtime_handle();
-        let ids = runtime_handle.take_forgotten_movables();
+        let ids = self.runtime.take_forgotten_movables();
         if ids.is_empty() {
             return Ok(());
         }
+        let runtime_handle = self.runtime_handle();
         let _teardown = runtime::enter_state_teardown_scope();
         let host = self.slots_host();
         let composer = Composer::new_with_shared_state(
@@ -642,7 +646,7 @@ fn recycle_scope_groups(
 impl<A: Applier + 'static> Composition<A> {
     /// Applies the node updates that the runtime has queued to the applier, without recomposing.
     pub fn flush_pending_node_updates(&mut self) -> Result<(), NodeError> {
-        let updates = self.runtime_handle().take_updates();
+        let updates = self.runtime.take_updates();
         let mut applier = self.applier.borrow_dyn();
         for update in updates {
             update.apply(&mut *applier)?;

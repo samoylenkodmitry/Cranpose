@@ -24,6 +24,7 @@ pub(crate) fn hot_guard_paths(block: &mut Block) -> Vec<String> {
         branch_depth: 0,
         lone_statement: false,
         hot: HotPaths::new(true, "Card"),
+        wrapped_key: None,
     };
     injector.visit_block_mut(block);
     injector.hot.allocated
@@ -48,6 +49,7 @@ pub(crate) fn inject_branch_groups_with(
         branch_depth: 0,
         lone_statement: false,
         hot: HotPaths::new(hot, &scope.to_string()),
+        wrapped_key: None,
     };
     injector.visit_block_mut(block);
     if injector.uses_composer_alias {
@@ -106,6 +108,48 @@ impl VisitMut for SyncInteriors<'_, '_> {
     }
 }
 
+/// What visiting a statement of a block leaves for folding the block: the
+/// statement's hot-reload path when it is sandwiched, and the key of the
+/// guard `visit_stmt_mut` wrapped it in when it is an expression statement.
+#[derive(Default)]
+struct VisitedStatement {
+    hot: Option<String>,
+    wrapped_key: Option<TokenStream2>,
+}
+
+/// A statement's guard: its key, and the statement that opens it when an
+/// expression statement was wrapped with one already.
+struct GuardStart {
+    key: TokenStream2,
+    open: Option<Stmt>,
+}
+
+/// The guard statement and the statement of a block `visit_stmt_mut`
+/// wrapped an expression statement in, or `stmt` when it is no such block.
+fn unwrap_guarded(stmt: Stmt) -> Result<(Stmt, Stmt), Box<Stmt>> {
+    let Stmt::Expr(Expr::Block(mut wrapped), None) = stmt else {
+        return Err(Box::new(stmt));
+    };
+    if wrapped.attrs.is_empty()
+        && wrapped.label.is_none()
+        && let [Stmt::Local(_), _] = wrapped.block.stmts.as_slice()
+        && let (Some(statement), Some(open)) =
+            (wrapped.block.stmts.pop(), wrapped.block.stmts.pop())
+    {
+        return Ok((open, statement));
+    }
+    Err(Box::new(Stmt::Expr(Expr::Block(wrapped), None)))
+}
+
+/// Makes the binding a guard statement declares mutable, for it advances.
+fn make_binding_mutable(stmt: &mut Stmt) {
+    if let Stmt::Local(local) = stmt
+        && let Pat::Ident(binding) = &mut local.pat
+    {
+        binding.mutability = Some(Default::default());
+    }
+}
+
 fn wants_sandwich(stmt: &Stmt, is_tail: bool) -> bool {
     match stmt {
         Stmt::Local(local) => local.init.is_some(),
@@ -150,6 +194,10 @@ struct BranchGroupInjector<'a> {
     /// own.
     lone_statement: bool,
     hot: HotPaths,
+    /// The key of the guard `visit_stmt_mut` wrapped the expression
+    /// statement it visited last in, so the block can chain that guard with
+    /// its neighbours'. Never set in hot-reload builds.
+    wrapped_key: Option<TokenStream2>,
 }
 
 /// Structural guard paths for hot-patched development builds.
@@ -295,9 +343,9 @@ impl BranchGroupInjector<'_> {
     fn wrap_block(&mut self, block: &mut Block, kind: &str, name: &str) {
         let hot = self.hot.open(kind, name);
         self.branch_depth += 1;
-        let sandwiches = self.visit_block_statements(block);
+        let visited = self.visit_block_statements(block);
         self.branch_depth -= 1;
-        self.fold_local_statements(block, sandwiches);
+        self.fold_local_statements(block, visited);
         self.hot.close(&hot);
         let guard = self.branch_guard_stmt(block.brace_token.span.join(), hot);
         block.stmts.insert(0, guard);
@@ -305,9 +353,9 @@ impl BranchGroupInjector<'_> {
 
     /// Visits statements in order. A statement that will be sandwiched in its
     /// own group gets its development path before its contents are visited.
-    fn visit_block_statements(&mut self, block: &mut Block) -> Vec<Option<String>> {
+    fn visit_block_statements(&mut self, block: &mut Block) -> Vec<VisitedStatement> {
         let count = block.stmts.len();
-        let mut sandwiches = Vec::with_capacity(count);
+        let mut visited = Vec::with_capacity(count);
         for (index, stmt) in block.stmts.iter_mut().enumerate() {
             let hot = if wants_sandwich(stmt, index + 1 == count) {
                 let (kind, name) = sandwich_kind(stmt);
@@ -315,15 +363,23 @@ impl BranchGroupInjector<'_> {
             } else {
                 None
             };
+            let expression_statement = matches!(stmt, Stmt::Expr(_, Some(_)));
             self.lone_statement = count == 1 && !self.hot.enabled;
+            self.wrapped_key = None;
             self.visit_stmt_mut(stmt);
             self.hot.close(&hot);
-            sandwiches.push(hot);
+            let wrapped_key = self.wrapped_key.take().filter(|_| expression_statement);
+            visited.push(VisitedStatement { hot, wrapped_key });
         }
-        sandwiches
+        visited
     }
 
-    fn fold_local_statements(&mut self, block: &mut Block, mut sandwiches: Vec<Option<String>>) {
+    /// Sandwiches each binding and macro statement between its guard and
+    /// the guard's drop. A run of guarded statements, expression statements
+    /// among them, shares one guard that advances from each statement to
+    /// the next: it folds each statement's key as a guard of its own would,
+    /// for one entry on the branch stack instead of a close and a push.
+    fn fold_local_statements(&mut self, block: &mut Block, mut visited: Vec<VisitedStatement>) {
         let count = block.stmts.len();
         if count == 1 && !self.hot.enabled {
             return;
@@ -333,20 +389,73 @@ impl BranchGroupInjector<'_> {
             .iter()
             .enumerate()
             .any(|(index, stmt)| wants_sandwich(stmt, index + 1 == count))
+            && visited
+                .iter()
+                .all(|statement| statement.wrapped_key.is_none())
         {
             return;
         }
         let guard = syn::Ident::new("__cranpose_branch_group_guard", Span::mixed_site());
-        let mut rebuilt = Vec::with_capacity(block.stmts.len());
-        sandwiches.resize(count, None);
-        for (index, (stmt, hot)) in block.stmts.drain(..).zip(sandwiches).enumerate() {
-            if wants_sandwich(&stmt, index + 1 == count) {
-                rebuilt.push(self.branch_guard_stmt(stmt.span(), hot));
-                rebuilt.push(stmt);
-                rebuilt.push(syn::parse_quote! { drop(#guard); });
+        let mut rebuilt = Vec::with_capacity(block.stmts.len() * 3);
+        // Where in `rebuilt` the guard of the run the last statement belongs
+        // to was opened.
+        let mut run: Option<usize> = None;
+        visited.resize_with(count, VisitedStatement::default);
+        for (index, (stmt, visited)) in block.stmts.drain(..).zip(visited).enumerate() {
+            let span = stmt.span();
+            let (open, statement) = if wants_sandwich(&stmt, index + 1 == count) {
+                if self.hot.enabled {
+                    rebuilt.push(self.branch_guard_stmt(span, visited.hot));
+                    rebuilt.push(stmt);
+                    rebuilt.push(syn::parse_quote! { drop(#guard); });
+                    continue;
+                }
+                let key = self.branch_key();
+                (GuardStart { key, open: None }, stmt)
+            } else if let Some(key) = visited.wrapped_key {
+                match unwrap_guarded(stmt) {
+                    Ok((open, statement)) => (
+                        GuardStart {
+                            key,
+                            open: Some(open),
+                        },
+                        statement,
+                    ),
+                    Err(stmt) => {
+                        run = None;
+                        rebuilt.push(*stmt);
+                        continue;
+                    }
+                }
             } else {
+                run = None;
                 rebuilt.push(stmt);
+                continue;
+            };
+            match run {
+                Some(opened) => {
+                    // The run's guard dropped after the statement before:
+                    // it advances instead.
+                    rebuilt.pop();
+                    make_binding_mutable(&mut rebuilt[opened]);
+                    rebuilt.push(self.guard_advance_stmt(span, &open.key));
+                }
+                None => {
+                    run = Some(rebuilt.len());
+                    let opened = match open.open {
+                        Some(opened) => opened,
+                        None => self.guard_open_stmt(span, &open.key),
+                    };
+                    rebuilt.push(opened);
+                }
             }
+            rebuilt.push(statement);
+            // After a statement that never ends, as `return` is, this drop
+            // and the advance that may replace it never run.
+            rebuilt.push(syn::parse_quote! {
+                #[allow(unreachable_code)]
+                drop(#guard);
+            });
         }
         block.stmts = rebuilt;
     }
@@ -411,28 +520,57 @@ impl BranchGroupInjector<'_> {
     }
 
     fn branch_guard_stmt(&mut self, span: Span, hot: Option<String>) -> Stmt {
+        if let Some(path) = hot {
+            self.next_branch += 1;
+            return self.hot_guard_stmt(span, &path);
+        }
+        let key = self.branch_key();
+        self.guard_open_stmt(span, &key)
+    }
+
+    /// The key of the next branch guard, a constant of its site.
+    fn branch_key(&mut self) -> TokenStream2 {
         let branch = self.next_branch;
         self.next_branch += 1;
         let core_path = self.core_path;
-        let guard = syn::Ident::new("__cranpose_branch_group_guard", Span::mixed_site());
         let key = syn::Ident::new("__CRANPOSE_BRANCH_KEY", Span::mixed_site());
-        if let Some(path) = hot {
-            return self.hot_guard_stmt(span, &path);
-        }
-        let cached_key = quote::quote! {{
+        quote::quote! {{
             const #key: #core_path::Key =
                 #core_path::branch_location_key(file!(), line!(), column!(), #branch);
             #core_path::noted_location_key(#key, file!(), line!(), column!())
-        }};
+        }}
+    }
+
+    /// Opens a guard keyed `key`.
+    fn guard_open_stmt(&mut self, span: Span, key: &TokenStream2) -> Stmt {
+        let core_path = self.core_path;
+        let guard = syn::Ident::new("__cranpose_branch_group_guard", Span::mixed_site());
         if self.in_content_closure {
             syn::parse_quote_spanned! {span=>
-                let #guard = #core_path::__branch_group_scope_deferred(#cached_key);
+                let #guard = #core_path::__branch_group_scope_deferred(#key);
             }
         } else {
             self.uses_composer_alias = true;
             let composer = composer_alias_ident();
             syn::parse_quote_spanned! {span=>
-                let #guard = #composer.__branch_group_deferred(#cached_key);
+                let #guard = #composer.__branch_group_deferred(#key);
+            }
+        }
+    }
+
+    /// Moves the open guard to the next statement, keyed `key`.
+    fn guard_advance_stmt(&self, span: Span, key: &TokenStream2) -> Stmt {
+        let core_path = self.core_path;
+        let guard = syn::Ident::new("__cranpose_branch_group_guard", Span::mixed_site());
+        if self.in_content_closure {
+            syn::parse_quote_spanned! {span=>
+                #[allow(unreachable_code)]
+                #core_path::__branch_group_scope_advance(&mut #guard, #key);
+            }
+        } else {
+            syn::parse_quote_spanned! {span=>
+                #[allow(unreachable_code)]
+                #guard.advance(#key);
             }
         }
     }
@@ -843,8 +981,8 @@ impl VisitMut for BranchGroupInjector<'_> {
     }
 
     fn visit_block_mut(&mut self, block: &mut Block) {
-        let sandwiches = self.visit_block_statements(block);
-        self.fold_local_statements(block, sandwiches);
+        let visited = self.visit_block_statements(block);
+        self.fold_local_statements(block, visited);
     }
 
     fn visit_stmt_mut(&mut self, stmt: &mut Stmt) {
@@ -858,7 +996,15 @@ impl VisitMut for BranchGroupInjector<'_> {
         if let Stmt::Expr(expr, Some(semi)) = stmt
             && !lone
         {
-            let guard = self.branch_guard_stmt(expr.span(), hot);
+            let guard = match hot {
+                Some(path) => self.branch_guard_stmt(expr.span(), Some(path)),
+                None => {
+                    let key = self.branch_key();
+                    let guard = self.guard_open_stmt(expr.span(), &key);
+                    self.wrapped_key = Some(key);
+                    guard
+                }
+            };
             let original = expr.clone();
             let semi = *semi;
             *stmt = Stmt::Expr(

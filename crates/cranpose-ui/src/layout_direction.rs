@@ -5,7 +5,7 @@
 //! direction — a code block, a phone number, a language picker — without
 //! reversing the rest of the interface with it.
 
-use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf};
+use cranpose_core::{CompositionLocalProvider, StaticCompositionLocal, staticCompositionLocalOf};
 
 /// Which side of the interface is the start.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -48,12 +48,16 @@ impl LayoutDirection {
     }
 }
 
-/// The [`CompositionLocal`] carrying the current layout direction.
-pub fn local_layout_direction() -> CompositionLocal<LayoutDirection> {
+/// The [`StaticCompositionLocal`] carrying the current layout direction.
+///
+/// Compose's `LocalLayoutDirection`, static as Compose's is: a read
+/// subscribes nothing, and a provider given another direction recomposes
+/// everything under it. Every layout reads it, and it seldom changes.
+pub fn local_layout_direction() -> StaticCompositionLocal<LayoutDirection> {
     crate::thread_state::with_environment(|locals| {
         locals
             .direction
-            .get_or_init(|| compositionLocalOf(LayoutDirection::default))
+            .get_or_init(|| staticCompositionLocalOf(LayoutDirection::default))
             .clone()
     })
 }
@@ -63,7 +67,7 @@ pub fn layout_direction() -> LayoutDirection {
     crate::thread_state::with_environment(|locals| {
         locals
             .direction
-            .get_or_init(|| compositionLocalOf(LayoutDirection::default))
+            .get_or_init(|| staticCompositionLocalOf(LayoutDirection::default))
             .current()
     })
 }

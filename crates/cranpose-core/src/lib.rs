@@ -84,9 +84,7 @@ pub use composition_locals::{
     compositionLocalOfWithPolicy, compositionLocalWithComputedDefaultOf, staticCompositionLocalOf,
     staticCompositionLocalOfWithPolicy, staticCompositionLocalWithComputedDefaultOf,
 };
-pub(crate) use composition_locals::{
-    ComputedLocalEntry, LocalStateEntry, StaticComputedLocalEntry, StaticLocalEntry,
-};
+pub(crate) use composition_locals::{ComputedLocalEntry, LocalStateEntry};
 #[doc(hidden)]
 pub use computed_state::{ComputedState, computedStateOf};
 pub use concurrency::{
@@ -608,6 +606,17 @@ pub fn __branch_group_scope_deferred(key: Key) -> Option<ScopedBranchGroupGuard>
     composer_context::with_current_core(|core| {
         ScopedBranchGroupGuard::open(&core.branch_folds, key)
     })
+}
+
+/// Moves a content closure's statement guard to the next statement, keyed
+/// `key`: the guard the next statement would open, without looking up the
+/// composer again. A guard opened outside composition stays empty.
+#[doc(hidden)]
+#[inline]
+pub fn __branch_group_scope_advance(guard: &mut Option<ScopedBranchGroupGuard>, key: Key) {
+    if let Some(guard) = guard {
+        guard.advance(key);
+    }
 }
 
 /// The key of the `branch`th branch guard the `#[composable]` macro wrote at
@@ -2389,6 +2398,16 @@ pub trait Applier: Any {
         false
     }
 
+    /// The node `id` for a dirty bubble to mark, or `None` when it is
+    /// missing or, with `note`, when [`Self::note_bubble_pass`] says a
+    /// bubble carrying `flags` passed it earlier in the open batch.
+    fn bubble_node(&mut self, id: NodeId, flags: u8, note: bool) -> Option<&mut dyn Node> {
+        if note && self.note_bubble_pass(id, flags) {
+            return None;
+        }
+        self.get_mut(id).ok()
+    }
+
     /// Records that `parent_id`'s child list changed structurally this frame
     /// (insert, remove, move, or reparent). Incremental scene consumers drain
     /// the recorded parents and re-patch those subtrees so removed nodes are
@@ -2525,10 +2544,7 @@ impl DirtyBubble {
             u8::from(self.layout) | u8::from(self.measure) << 1 | u8::from(self.semantics) << 2;
         let mut next = first;
         while let Some(id) = next {
-            if !start && applier.note_bubble_pass(id, flags) {
-                break;
-            }
-            let Ok(node) = applier.get_mut(id) else {
+            let Some(node) = applier.bubble_node(id, flags, !start) else {
                 break;
             };
             self.mark(node, start);
@@ -4836,6 +4852,21 @@ impl Applier for MemoryApplier {
     fn note_bubble_pass(&mut self, id: NodeId, flags: u8) -> bool {
         self.resolve_node_index(id)
             .is_some_and(|index| self.state.bubble_passes.note(index, flags))
+    }
+
+    /// One lookup of the node's slot serves the pass note and the node.
+    fn bubble_node(&mut self, id: NodeId, flags: u8, note: bool) -> Option<&mut dyn Node> {
+        let Some(index) = self.resolve_node_index(id) else {
+            return self
+                .state
+                .high_id_nodes
+                .get_mut(&id)
+                .map(std::convert::AsMut::as_mut);
+        };
+        if note && self.state.bubble_passes.note(index, flags) {
+            return None;
+        }
+        self.state.nodes.get_mut(index)?.as_deref_mut()
     }
 
     fn insert_with_id(&mut self, id: NodeId, node: Box<dyn Node>) -> Result<(), NodeError> {

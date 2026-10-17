@@ -14,8 +14,7 @@ use crate::{
     LocalStackSnapshot, LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned,
     ProvidedValue, RecomposeOptions, RecomposeScope, RecomposeScopeInner, RecycledNode,
     RetentionMode, RetentionPolicy, RuntimeHandle, ScopeId, SlotId, SlotPassOutcome, SlotTable,
-    SlotsHost, SnapshotStateList, SnapshotStateMap, StaticCompositionLocal,
-    StaticComputedLocalEntry, StaticLocalEntry, SubcomposeState,
+    SlotsHost, SnapshotStateList, SnapshotStateMap, StaticCompositionLocal, SubcomposeState,
     collections::map::{HashMap, HashSet},
     composer_context, explicit_group_key_seed,
     retention::{RetainKey, RetentionManager},
@@ -676,7 +675,7 @@ pub(crate) struct LocalFrame {
 }
 
 /// The entry the innermost provider in `stack` supplies for `key`.
-fn provided_entry(stack: &LocalStackSnapshot, key: &LocalKey) -> Option<Rc<dyn Any>> {
+pub(crate) fn provided_entry(stack: &LocalStackSnapshot, key: &LocalKey) -> Option<Rc<dyn Any>> {
     let mut frame = stack.as_deref();
     while let Some(current) = frame {
         if let Some((_, entry)) = current.values.iter().find(|(provided, _)| provided == key) {
@@ -950,7 +949,17 @@ pub struct Composer {
 #[doc(hidden)]
 pub struct BranchGroupGuard<'a> {
     folds: &'a crate::slot::BranchFolds,
-    token: usize,
+    token: crate::slot::FoldToken,
+}
+
+impl BranchGroupGuard<'_> {
+    /// Closes this branch and opens one for `key` in its place, for the
+    /// statement after the one this guard folded.
+    #[doc(hidden)]
+    #[inline]
+    pub fn advance(&mut self, key: Key) {
+        self.folds.advance(&mut self.token, key);
+    }
 }
 
 impl Drop for BranchGroupGuard<'_> {
@@ -965,7 +974,7 @@ impl Drop for BranchGroupGuard<'_> {
 #[doc(hidden)]
 pub struct ScopedBranchGroupGuard {
     folds: Rc<crate::slot::BranchFolds>,
-    token: usize,
+    token: crate::slot::FoldToken,
 }
 
 impl ScopedBranchGroupGuard {
@@ -975,6 +984,12 @@ impl ScopedBranchGroupGuard {
             token: folds.push(key),
             folds: Rc::clone(folds),
         }
+    }
+
+    /// [`BranchGroupGuard::advance`] for a content closure's guard.
+    #[inline]
+    pub(crate) fn advance(&mut self, key: Key) {
+        self.folds.advance(&mut self.token, key);
     }
 }
 
@@ -2266,12 +2281,8 @@ impl Composer {
         &self,
         local: &StaticCompositionLocal<T>,
     ) -> T {
-        self.read_provided(
-            &local.key,
-            |entry: &StaticLocalEntry<T>| entry.value(),
-            |entry: &StaticComputedLocalEntry<T>| entry.value(),
-        )
-        .unwrap_or_else(|| local.default_value())
+        let provided = local.provided_under(&self.core.local_stack.borrow());
+        provided.unwrap_or_else(|deferred| deferred.value(local))
     }
 
     /// The value of the innermost provided entry for `key`, a plain value
