@@ -63,7 +63,9 @@ fn test_global_snapshot_nested() {
     let global = GlobalSnapshot::new(1, SnapshotIdSet::new());
     let nested = global.take_nested_snapshot(None);
 
-    assert_eq!(nested.snapshot_id(), 1);
+    // The snapshot takes an id of its own, and the global moves past it.
+    assert!(nested.snapshot_id() > 1);
+    assert!(nested.snapshot_id() < global.snapshot_id());
     assert!(nested.read_only());
     assert_eq!(global.nested_count.get(), 0);
 }
