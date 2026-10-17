@@ -140,6 +140,10 @@ impl SnapshotThreadState {
     }
 }
 
+/// A constant value `__constant` keeps, with the key of the expression that
+/// made it.
+pub(crate) type KeptConstant = (Key, Rc<dyn Any>);
+
 pub(crate) struct RuntimeThreadState {
     pub(crate) next_runtime_id: Cell<u32>,
     pub(crate) active_runtimes: RefCell<Vec<RuntimeHandle>>,
@@ -153,6 +157,9 @@ pub(crate) struct RuntimeThreadState {
     pub(crate) spare_commands: RefCell<Vec<CommandQueue>>,
     pub(crate) spare_composer_stacks: Cell<Option<crate::composer::ComposerStacks>>,
     pub(crate) bridges: RefCell<FixedHashMap<u64, Rc<dyn Any>>>,
+    /// The constant values `__constant` keeps, by slot: empty until the
+    /// first one.
+    pub(crate) constants: RefCell<Vec<Option<KeptConstant>>>,
     /// Notes what the calculations of computed states read; made at the
     /// first such read.
     pub(crate) computed_observer:
@@ -189,6 +196,7 @@ impl RuntimeThreadState {
             spare_commands: RefCell::new(Vec::new()),
             spare_composer_stacks: Cell::new(None),
             bridges: RefCell::new(fixed_hash_map()),
+            constants: RefCell::new(Vec::new()),
             computed_observer: RefCell::new(None),
             #[cfg(any(test, debug_assertions))]
             location_keys: RefCell::new(fixed_hash_map()),
@@ -223,6 +231,7 @@ impl RuntimeThreadState {
             spare_commands,
             spare_composer_stacks,
             bridges,
+            constants,
             computed_observer,
             #[cfg(any(test, debug_assertions))]
             location_keys,
@@ -249,6 +258,7 @@ impl RuntimeThreadState {
         swap_values(spare_commands, &other.spare_commands);
         spare_composer_stacks.swap(&other.spare_composer_stacks);
         swap_values(bridges, &other.bridges);
+        swap_values(constants, &other.constants);
         swap_values(computed_observer, &other.computed_observer);
         #[cfg(any(test, debug_assertions))]
         swap_values(location_keys, &other.location_keys);

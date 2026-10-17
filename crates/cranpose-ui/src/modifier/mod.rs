@@ -216,6 +216,12 @@ fn merged_inspector(
     Some(first.iter().chain(second).cloned().collect())
 }
 
+/// Whether `a` and `b` are equal elements: one element, as a kept chain
+/// shares them, or two that compare equal.
+fn same_element(a: &DynModifierElement, b: &DynModifierElement) -> bool {
+    Rc::ptr_eq(a, b) || a.equals_element(&**b)
+}
+
 pub(crate) fn inspector_metadata<F>(name: &'static str, recorder: F) -> InspectorMetadata
 where
     F: FnOnce(&mut InspectorInfo),
@@ -1151,13 +1157,13 @@ impl Modifier {
                     update.elements |= 1 << index;
                 }
                 Some(InPlaceReach::Resolved) if b.element_type() == element_type => {
-                    if !a.equals_element(&**b) {
+                    if !same_element(a, b) {
                         update.reach = InPlaceReach::Resolved;
                         update.elements |= 1 << index;
                     }
                 }
                 _ => {
-                    if !a.equals_element(&**b) {
+                    if !same_element(a, b) {
                         return None;
                     }
                 }
@@ -1192,6 +1198,10 @@ impl Modifier {
                 }
 
                 for (a, b) in e1.iter().zip(e2.iter()) {
+                    // One element in both, as a kept chain shares them.
+                    if Rc::ptr_eq(a, b) {
+                        continue;
+                    }
                     if !consider_always_update
                         && a.element_type() == b.element_type()
                         && a.capabilities() == NodeCapabilities::DRAW

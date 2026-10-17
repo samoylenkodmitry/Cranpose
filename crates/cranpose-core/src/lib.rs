@@ -639,6 +639,46 @@ pub const fn constant_value_key(file: &str, line: u32, column: u32, index: u32) 
     avalanche_location_key(hash)
 }
 
+/// Slots of the per-thread table of constant values, as a power of two.
+const CONSTANT_SLOTS: usize = 128;
+
+/// The value `make` gives, for an expression `#[composable]` found to give
+/// the same value every time it runs, such as a modifier chain of
+/// constants: `key` names the expression. The thread keeps the value it
+/// made last for `key` in a table of [`CONSTANT_SLOTS`] slots, so the
+/// expression is made again only when another expression took its slot.
+/// It needs no composition: the expression may sit in a closure that runs
+/// in an event handler, an effect or another thread.
+#[doc(hidden)]
+pub fn __constant<T: Clone + 'static>(key: Key, make: impl FnOnce() -> T) -> T {
+    let slot = (key as usize) & (CONSTANT_SLOTS - 1);
+    let kept = thread_state::try_runtimes(|state| {
+        let constants = state.constants.try_borrow().ok()?;
+        let (kept_key, value) = constants.get(slot)?.as_ref()?;
+        (*kept_key == key)
+            .then(|| value.downcast_ref::<T>().cloned())
+            .flatten()
+    })
+    .flatten();
+    if let Some(value) = kept {
+        return value;
+    }
+    let value = make();
+    let stored: Rc<dyn Any> = Rc::new(value.clone());
+    thread_state::try_runtimes(|state| {
+        let Ok(mut constants) = state.constants.try_borrow_mut() else {
+            return;
+        };
+        if constants.is_empty() {
+            constants.resize_with(CONSTANT_SLOTS, || None);
+        }
+        if let Some(entry) = constants.get_mut(slot) {
+            *entry = Some((key, stored));
+        }
+    });
+    value
+}
+
 /// Stable identifier for a slot in the slot table.
 ///
 /// Anchors provide positional stability: they maintain their identity even when
