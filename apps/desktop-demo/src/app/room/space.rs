@@ -295,8 +295,8 @@ impl RoomState {
         true
     }
 
-    /// Turns the camera with a drag, as if the room were held and pulled
-    /// along.
+    /// Turns the camera with a drag, as a game's mouse look does: a drag to
+    /// the right looks right, a drag up looks up.
     pub(super) async fn look(&self, scope: PointerInputScope) {
         scope
             .await_pointer_event_scope(|events| async move {
@@ -315,8 +315,8 @@ impl RoomState {
                             };
                             let now = event.global_position;
                             self.turn(
-                                (previous.x - now.x) * LOOK_PER_PIXEL,
-                                (now.y - previous.y) * LOOK_PER_PIXEL,
+                                (now.x - previous.x) * LOOK_PER_PIXEL,
+                                (previous.y - now.y) * LOOK_PER_PIXEL,
                             );
                             last = Some(now);
                         }
