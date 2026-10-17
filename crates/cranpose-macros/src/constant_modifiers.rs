@@ -5,9 +5,11 @@
 //! receiver and arguments and each argument is a constant. Rebuilt on each
 //! recomposition, it costs an allocation an element, and the node it goes to
 //! compares it element by element with the one it holds and drops it. The
-//! body keeps such a chain in a slot instead: the first composition builds
-//! it, later ones hand out the same chain, which the node finds equal by
-//! identity.
+//! macro keeps such a chain in the thread's table of constants instead,
+//! under a key of its source position: the first run builds it, later runs
+//! hand out the same chain, which the node finds equal by identity. A chain
+//! whose head reads a variable keeps its constant tail the same way and
+//! joins it to the head with `then`, which is what each builder does.
 //!
 //! Only the builders in [`PURE_BUILDERS`] take part. They are inherent
 //! methods of `Modifier`, which no trait method can stand in for, and a test
@@ -67,8 +69,14 @@ const CONSTANT_CALLS: &[&[&str]] = &[
     &["Color", "from_rgba_u8"],
 ];
 
-/// Keeps each modifier chain of constants in `block`, outside closures and
-/// nested items, in a slot of the composition.
+/// The fewest constant builders after a builder that reads a variable that
+/// are kept as one tail: one builder costs about what joining a kept tail
+/// costs.
+const MIN_KEPT_TAIL: usize = 2;
+
+/// Keeps each modifier chain of constants in `block`, closures included,
+/// and the constant tail of each chain that starts with other builders, in
+/// the thread's table of constants. Nested items keep nothing.
 pub(crate) fn keep_constant_modifiers(core_path: &TokenStream2, block: &mut syn::Block) {
     let mut keeper = Keeper {
         core_path,
@@ -82,31 +90,46 @@ struct Keeper<'a> {
     next_index: u32,
 }
 
+impl Keeper<'_> {
+    /// `chain`, a modifier chain of constants, kept under a key of its own.
+    fn kept(&mut self, chain: Expr) -> Expr {
+        let index = self.next_index;
+        self.next_index += 1;
+        let core_path = self.core_path;
+        let key = syn::Ident::new("__CRANPOSE_CONSTANT_KEY", Span::mixed_site());
+        syn::parse_quote! {
+            #core_path::__constant(
+                {
+                    const #key: #core_path::Key =
+                        #core_path::constant_value_key(file!(), line!(), column!(), #index);
+                    #key
+                },
+                || #chain,
+            )
+        }
+    }
+}
+
 impl VisitMut for Keeper<'_> {
     fn visit_expr_mut(&mut self, expr: &mut Expr) {
         match expr {
-            // These run later, elsewhere or inside a slot's initializer,
-            // where the body's composer is not theirs to use.
-            Expr::Closure(_) | Expr::Async(_) | Expr::Const(_) | Expr::Macro(_) => {}
+            // A const block takes no calls, and a macro shows no expressions.
+            Expr::Const(_) | Expr::Macro(_) => {}
             _ if is_constant_chain(expr) => {
-                let index = self.next_index;
-                self.next_index += 1;
-                let core_path = self.core_path;
-                let composer = syn::Ident::new("__composer", Span::mixed_site());
-                let key = syn::Ident::new("__CRANPOSE_CONSTANT_KEY", Span::mixed_site());
                 let chain = std::mem::replace(expr, Expr::Verbatim(TokenStream2::new()));
-                *expr = syn::parse_quote! {
-                    #composer.__constant(
-                        {
-                            const #key: #core_path::Key =
-                                #core_path::constant_value_key(file!(), line!(), column!(), #index);
-                            #key
-                        },
-                        || #chain,
-                    )
-                };
+                *expr = self.kept(chain);
             }
-            _ => visit_mut::visit_expr_mut(self, expr),
+            _ => match take_constant_tail(expr) {
+                Some(mut head) => {
+                    let tail = std::mem::replace(expr, Expr::Verbatim(TokenStream2::new()));
+                    let tail = self.kept(tail);
+                    // The head's arguments read variables, and may hold
+                    // chains or closures of their own.
+                    visit_mut::visit_expr_mut(self, &mut head);
+                    *expr = syn::parse_quote! { #head.then(#tail) };
+                }
+                None => visit_mut::visit_expr_mut(self, expr),
+            },
         }
     }
 
@@ -116,8 +139,15 @@ impl VisitMut for Keeper<'_> {
 /// Whether `expr` is `Modifier::empty()` followed by builders of
 /// [`PURE_BUILDERS`] whose arguments are all constants.
 fn is_constant_chain(expr: &Expr) -> bool {
+    matches!(chain_builders(expr), Some((builders, true)) if builders > 0)
+}
+
+/// For `Modifier::empty()` followed by builders of [`PURE_BUILDERS`], how
+/// many builders follow it and whether all their arguments are constants.
+fn chain_builders(expr: &Expr) -> Option<(usize, bool)> {
     let mut current = expr;
     let mut builders = 0;
+    let mut constant = true;
     loop {
         match current {
             Expr::MethodCall(ExprMethodCall {
@@ -126,16 +156,71 @@ fn is_constant_chain(expr: &Expr) -> bool {
                 turbofish: None,
                 args,
                 ..
-            }) if PURE_BUILDERS.contains(&method.to_string().as_str())
-                && args.iter().all(is_constant) =>
-            {
+            }) if is_pure_builder(method) => {
                 builders += 1;
+                constant &= args.iter().all(is_constant);
                 current = receiver;
             }
-            Expr::Call(ExprCall { func, args, .. }) if args.is_empty() => {
-                return builders > 0 && path_is(func, &["Modifier", "empty"]);
+            Expr::Call(ExprCall { func, args, .. })
+                if args.is_empty() && path_is(func, &["Modifier", "empty"]) =>
+            {
+                return Some((builders, constant));
             }
-            _ => return false,
+            _ => return None,
+        }
+    }
+}
+
+fn is_pure_builder(method: &syn::Ident) -> bool {
+    PURE_BUILDERS.contains(&method.to_string().as_str())
+}
+
+/// For a chain of `Modifier::empty()` and [`PURE_BUILDERS`] that ends in at
+/// least [`MIN_KEPT_TAIL`] builders given constants after one that is not:
+/// cuts the chain before that tail, leaving `Modifier::empty()` and the
+/// tail in `expr`, and returns the head before it. A builder appends its
+/// element with `then`, so `head.then(tail)` is the chain.
+fn take_constant_tail(expr: &mut Expr) -> Option<Expr> {
+    let mut tail = 0;
+    let mut current = &*expr;
+    while let Expr::MethodCall(ExprMethodCall {
+        receiver,
+        method,
+        turbofish: None,
+        args,
+        ..
+    }) = current
+        && is_pure_builder(method)
+        && args.iter().all(is_constant)
+    {
+        tail += 1;
+        current = receiver;
+    }
+    if tail < MIN_KEPT_TAIL || !matches!(chain_builders(current), Some((head, _)) if head > 0) {
+        return None;
+    }
+    let mut cut = expr;
+    for _ in 1..tail {
+        let Expr::MethodCall(call) = cut else {
+            return None;
+        };
+        cut = &mut call.receiver;
+    }
+    let Expr::MethodCall(innermost) = cut else {
+        return None;
+    };
+    let root = chain_root(&innermost.receiver)?;
+    Some(std::mem::replace(&mut *innermost.receiver, root))
+}
+
+/// The `Modifier::empty()` call a chain starts from.
+fn chain_root(expr: &Expr) -> Option<Expr> {
+    let mut current = expr;
+    loop {
+        match current {
+            Expr::MethodCall(call) => current = &call.receiver,
+            Expr::Call(_) => return Some(current.clone()),
+            _ => return None,
         }
     }
 }
