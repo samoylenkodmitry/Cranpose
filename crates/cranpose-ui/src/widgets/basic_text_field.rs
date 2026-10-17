@@ -347,7 +347,7 @@ where
         }),
     };
     Layout(
-        modifier.then(Modifier::from_parts(&[modifier_element(decorator)])),
+        modifier.then(Modifier::from_dyn_element(modifier_element(decorator))),
         BoxMeasurePolicy::new(Alignment::TOP_START, true),
         move || decoration_box(scope.clone()),
     )
@@ -403,7 +403,7 @@ pub(crate) fn TextFieldNode(
     }
 
     let text_field_modifier = modifier_element(text_field_element);
-    let final_modifier = Modifier::from_parts(&[text_field_modifier]);
+    let final_modifier = Modifier::from_dyn_element(text_field_modifier);
     let combined_modifier = modifier.then(final_modifier);
 
     let node = Layout(combined_modifier, EmptyMeasurePolicy, || {});
