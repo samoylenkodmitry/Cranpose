@@ -609,20 +609,6 @@ pub fn __branch_group_scope_deferred(key: Key) -> Option<ScopedBranchGroupGuard>
     })
 }
 
-/// Runs the body of a `#[composable(no_skip)]` function on the current
-/// composer, in its caller's group, as Compose runs an inline composable:
-/// the body opens no group of its own, and its call-site `key` is folded
-/// into the identity of the groups, values and nodes it composes, as a
-/// branch's key is.
-#[doc(hidden)]
-#[inline]
-pub fn __compose_inline<R>(key: Key, body: impl FnOnce(&Composer) -> R) -> R {
-    with_current_composer(|composer| {
-        let _fold = composer.__branch_group_deferred(key);
-        body(composer)
-    })
-}
-
 /// The key of the `branch`th branch guard the `#[composable]` macro wrote at
 /// a source position, as a constant.
 #[doc(hidden)]

@@ -12,9 +12,9 @@ call-site identity keeps groups stable across recomposition. Value parameters
 use `Clone` and `PartialEq`; callback parameters use stored callback slots, so a
 new closure value reaches its composition position. `#[composable(no_skip)]`
 re-runs the body on each call and stores no parameters. It opens no group: it
-composes in its caller's group, with its call site folded into the identity of
-what it composes, so a state it or its content reads recomposes the composable
-that called it, as with Compose's inline `Box` and `Row`.
+composes in its caller's group, where what it composes is matched by position,
+as a loop's items are, so a state it or its content reads recomposes the
+composable that called it, as with Compose's inline `Box` and `Row`.
 
 This app example uses the facade and UI dependencies:
 
