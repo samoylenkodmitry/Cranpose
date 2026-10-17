@@ -54,6 +54,8 @@ pub struct Picture {
     height: u32,
     scale: f32,
     changed: Vec<draw::ClipBounds>,
+    /// The layers an update in place pushed again: their old and new records.
+    repushed: Vec<(usize, usize)>,
 }
 
 fn valid_scale(scale: f32) -> f32 {
@@ -149,6 +151,11 @@ impl PixelsRenderer {
         changed: &mut Vec<PixelRect>,
     ) {
         let scale = valid_scale(scale);
+        if self.update_picture_in_place(picture, width, height, scale) {
+            changed.clear();
+            changed.extend(picture.changed.iter().copied().map(pixel_rect));
+            return;
+        }
         let mut raster = std::mem::take(&mut picture.spare);
         self.fill_raster_scene(&mut raster, scale, picture.raster.as_ref());
         changed.clear();
@@ -179,6 +186,44 @@ impl PixelsRenderer {
         picture.width = width;
         picture.height = height;
         picture.scale = scale;
+    }
+
+    /// Brings `picture`'s scene up to the current scene where it lies, when
+    /// only some layers changed and push as many items as before, and puts
+    /// the areas they changed into `picture.changed`.
+    fn update_picture_in_place(
+        &self,
+        picture: &mut Picture,
+        width: u32,
+        height: u32,
+        scale: f32,
+    ) -> bool {
+        let (Some(raster), Some(graph)) = (picture.raster.as_mut(), self.scene.graph.as_ref())
+        else {
+            return false;
+        };
+        if (picture.width, picture.height, picture.scale) != (width, height, scale) {
+            return false;
+        }
+        let window = draw::ClipBounds {
+            min_x: 0,
+            min_y: 0,
+            max_x: i32::try_from(width).unwrap_or(i32::MAX),
+            max_y: i32::try_from(height).unwrap_or(i32::MAX),
+        };
+        pipeline::InPlaceUpdate {
+            scene: raster,
+            scratch: &mut picture.spare,
+            pushed: &mut picture.repushed,
+        }
+        .run(
+            graph,
+            self.scene.diagnostics(),
+            scale,
+            &self.text,
+            window,
+            &mut picture.changed,
+        )
     }
 
     /// Draws `area` of `picture` into `pixels` as straight-alpha RGBA8 rows of

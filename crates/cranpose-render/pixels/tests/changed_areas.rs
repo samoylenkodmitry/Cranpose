@@ -11,7 +11,7 @@ use cranpose_core::{MutableState, location_key, rememberMutableStateOf};
 use cranpose_macros::composable;
 use cranpose_render_pixels::{Picture, PixelRect, PixelsRenderer};
 use cranpose_ui::{Box, BoxSpec, Column, ColumnSpec, Modifier, Text, TextStyle};
-use cranpose_ui_graphics::{Color, GraphicsLayer};
+use cranpose_ui_graphics::{Color, ColorFilter, GraphicsLayer};
 
 const WIDTH: u32 = 240;
 const HEIGHT: u32 = 180;
@@ -275,6 +275,83 @@ fn ClippingParent(captured: Step) {
     );
 }
 
+/// A parent that never changes, translucent, tinted and clipped, over child
+/// layers that change one at a time: one fades, one moves across the
+/// parent's clip, and one stays still over a child of its own that changes
+/// colour. Each draws with the parent's alpha, tint and clip.
+#[composable]
+fn StillParent(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    Box(
+        Modifier::empty()
+            .offset(20.0, 20.0)
+            .width(120.0)
+            .height(60.0)
+            .graphics_layer(|| GraphicsLayer {
+                alpha: 0.6,
+                clip: true,
+                color_filter: Some(ColorFilter::modulate(Color::from_rgb_u8(255, 200, 160))),
+                ..GraphicsLayer::default()
+            })
+            .background(Color::from_rgb_u8(30, 40, 50)),
+        BoxSpec::default(),
+        move || {
+            Box(
+                Modifier::empty()
+                    .offset(6.0, 6.0)
+                    .width(30.0)
+                    .height(20.0)
+                    .graphics_layer(move || GraphicsLayer {
+                        alpha: 0.2 + (step.value() % 5) as f32 * 0.2,
+                        ..GraphicsLayer::default()
+                    })
+                    .background(Color::from_rgb_u8(200, 120, 40)),
+                BoxSpec::default(),
+                || {},
+            );
+            Box(
+                Modifier::empty()
+                    .offset(44.0, 10.0)
+                    .width(40.0)
+                    .height(24.0)
+                    .graphics_layer(move || GraphicsLayer {
+                        translation_x: (step.value() % 4) as f32 * 17.0,
+                        translation_y: (step.value() % 3) as f32 * 13.0,
+                        ..GraphicsLayer::default()
+                    })
+                    .background(Color::from_rgb_u8(60, 160, 90)),
+                BoxSpec::default(),
+                || {},
+            );
+            Box(
+                Modifier::empty()
+                    .offset(6.0, 32.0)
+                    .width(50.0)
+                    .height(24.0)
+                    .graphics_layer(|| GraphicsLayer {
+                        alpha: 0.8,
+                        ..GraphicsLayer::default()
+                    })
+                    .background(Color::from_rgb_u8(90, 90, 160)),
+                BoxSpec::default(),
+                move || {
+                    Box(
+                        Modifier::empty()
+                            .offset(8.0, 6.0)
+                            .width(20.0)
+                            .height(12.0)
+                            .graphics_layer(GraphicsLayer::default)
+                            .background(color(step.value(), 9)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+        },
+    );
+}
+
 fn shell(scale: f32, scenes: fn(Step)) -> (AppShell<PixelsRenderer>, Step) {
     let captured: Step = Rc::default();
     let content = Rc::clone(&captured);
@@ -360,6 +437,11 @@ fn a_parent_alpha_its_layer_alone_reads_reaches_a_child_that_did_not_change() {
 #[test]
 fn a_parent_clip_its_layer_alone_reads_reaches_a_child_that_did_not_change() {
     kept_frames_match_full_redraws(1.0, ClippingParent);
+}
+
+#[test]
+fn layers_that_change_under_a_still_parent_keep_its_alpha_tint_and_clip() {
+    kept_frames_match_full_redraws(1.5, StillParent);
 }
 
 #[composable]

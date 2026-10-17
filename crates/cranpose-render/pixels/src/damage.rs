@@ -301,21 +301,46 @@ pub(crate) fn changed_areas(
             .iter()
             .for_each(|item| add_bounds(areas, new, *item));
     } else {
-        // Lists of one length change item by item: a fill that only moved
-        // changes the strips along its moved edges.
-        for (old_item, new_item) in old_changed.iter().zip(new_changed) {
-            let moved = match (*old_item, *new_item) {
-                (RenderItem::Shape(a), RenderItem::Shape(b)) => {
-                    add_moved_fill_areas(&old.shapes[a], &new.shapes[b], window, areas)
+        add_changed_pairs(old, old_changed, new, new_changed, window, areas);
+    }
+    merge_areas(areas);
+}
+
+/// Adds to `areas` where `old_items` of `old` and `new_items` of `new`, lists
+/// of one length matched item by item, draw differently: nothing for a pair
+/// that draws alike, the strips along the moved edges of a fill that only
+/// moved, and both items' bounds for any other pair.
+pub(crate) fn add_changed_pairs(
+    old: &RasterScene,
+    old_items: &[RenderItem],
+    new: &RasterScene,
+    new_items: &[RenderItem],
+    window: ClipBounds,
+    areas: &mut Vec<ClipBounds>,
+) {
+    for (&old_item, &new_item) in old_items.iter().zip(new_items) {
+        if same_item(old, old_item, new, new_item) {
+            continue;
+        }
+        let moved = match (old_item, new_item) {
+            (RenderItem::Shape(a), RenderItem::Shape(b)) => {
+                add_moved_fill_areas(&old.shapes[a], &new.shapes[b], window, areas)
+            }
+            _ => false,
+        };
+        if !moved {
+            for (scene, item) in [(old, old_item), (new, new_item)] {
+                if let Some(area) = scene.item_bounds(item, window) {
+                    add_area(areas, area);
                 }
-                _ => false,
-            };
-            if !moved {
-                add_bounds(areas, old, *old_item);
-                add_bounds(areas, new, *new_item);
             }
         }
     }
+}
+
+/// Joins `areas` into the one around them all when they are too many to draw
+/// one by one.
+pub(crate) fn merge_areas(areas: &mut Vec<ClipBounds>) {
     if areas.len() > MAX_AREAS {
         let around = areas.iter().copied().reduce(union);
         areas.clear();

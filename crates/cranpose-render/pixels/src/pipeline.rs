@@ -693,6 +693,20 @@ pub(crate) fn build_raster_scene(
 /// scene's storage. The items of each subtree that `previous`, the scene of
 /// the frame before, holds for the same content in the same place are
 /// copied from it.
+mod in_place;
+
+pub(crate) use in_place::InPlaceUpdate;
+
+/// The shadow light of a scene `graph` gives at `scale`.
+fn scene_light(graph: &RenderGraph, scale: f32) -> ShadowLight {
+    ShadowLight::for_window(
+        graph.root.local_bounds.width * scale,
+        graph.root.local_bounds.height * scale,
+        scale,
+        1.0,
+    )
+}
+
 pub(crate) fn fill_raster_scene(
     scene: &mut RasterScene,
     graph: &RenderGraph,
@@ -702,12 +716,7 @@ pub(crate) fn fill_raster_scene(
     text: &TextRaster,
 ) {
     scene.clear();
-    let light = ShadowLight::for_window(
-        graph.root.local_bounds.width * scale,
-        graph.root.local_bounds.height * scale,
-        scale,
-        1.0,
-    );
+    let light = scene_light(graph, scale);
     scene.start = Some((scale, light));
     let mut reuse = previous.map(|old| Reuse {
         old,

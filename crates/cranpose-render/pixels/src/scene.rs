@@ -166,6 +166,17 @@ pub(crate) struct ItemCounts {
 }
 
 impl ItemCounts {
+    /// How many items of each kind lie from `start` up to `self`.
+    fn since(self, start: Self) -> Self {
+        Self {
+            order: self.order - start.order,
+            shapes: self.shapes - start.shapes,
+            images: self.images - start.images,
+            texts: self.texts - start.texts,
+            shadows: self.shadows - start.shadows,
+        }
+    }
+
     /// The counts of a run copied from where `from` began in one scene to
     /// where `to` begins in another.
     fn moved(self, from: Self, to: Self) -> Self {
@@ -177,6 +188,16 @@ impl ItemCounts {
             shadows: to.shadows + self.shadows.saturating_sub(from.shadows),
         }
     }
+}
+
+/// How much of a scene a layer's subtree holds: its records, its items of
+/// each kind, and the entries of what its layers passed down. Subtrees of
+/// one extent fit each other's places wherever each lies in its scene.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SubtreeExtent {
+    records: usize,
+    items: ItemCounts,
+    passed_down: usize,
 }
 
 /// What a layer passes down to the walks of its child layers.
@@ -199,6 +220,8 @@ pub(crate) struct SubtreeItems {
     /// The layer's change number, which covers its subtree, when it pushed
     /// the items.
     pub change: LayerChange,
+    /// The layer's own change number, which a change beneath it leaves.
+    pub own_change: LayerChange,
     /// The layer's placement in its parent, which the number leaves out.
     pub transform: ProjectiveTransform,
     /// Where [`RasterScene::passed_down`] holds what the layer passed to its
@@ -276,6 +299,7 @@ impl RasterScene {
         self.subtrees.push(SubtreeItems {
             identity: (layer.node_id, layer.wraps),
             change: layer.change,
+            own_change: layer.own_change,
             transform: layer.transform_to_parent,
             passed_down: None,
             end: index + 1,
@@ -383,6 +407,104 @@ impl RasterScene {
                     passed_down.push(copied.clone());
                     passed_down.len() - 1
                 });
+        }
+    }
+
+    /// How much of the scene the subtree whose record is `record` holds;
+    /// `None` when its layers' entries of what they passed down do not lie
+    /// in one run.
+    pub(crate) fn subtree_extent(&self, record: usize) -> Option<SubtreeExtent> {
+        self.subtree_span(record).map(|(extent, _)| extent)
+    }
+
+    /// The extent of the subtree whose record is `record`, and the index of
+    /// its first entry of what its layers passed down.
+    fn subtree_span(&self, record: usize) -> Option<(SubtreeExtent, usize)> {
+        let head = self.subtrees.get(record)?;
+        let records = self.subtrees.get(record..head.end)?;
+        let mut passed_down = records.iter().filter_map(|record| record.passed_down);
+        let first = passed_down.next();
+        let count = usize::from(first.is_some()) + passed_down.count();
+        let last = records.iter().rev().find_map(|record| record.passed_down);
+        if let (Some(first), Some(last)) = (first, last)
+            && last + 1 != first + count
+        {
+            return None;
+        }
+        let extent = SubtreeExtent {
+            records: records.len(),
+            items: head.stop.since(head.start),
+            passed_down: count,
+        };
+        Some((extent, first.unwrap_or(0)))
+    }
+
+    /// Puts the subtree `from` holds at its record `from_record` in place of
+    /// this scene's subtree at `record`, which must have the same extent:
+    /// its items, records and passed-down entries take the old ones' places,
+    /// and every other part of the scene stays as it was.
+    pub(crate) fn replace_subtree(
+        &mut self,
+        record: usize,
+        from: &RasterScene,
+        from_record: usize,
+    ) {
+        let (Some((old, old_first)), Some((new, new_first))) =
+            (self.subtree_span(record), from.subtree_span(from_record))
+        else {
+            return;
+        };
+        if old != new {
+            return;
+        }
+        let (old_head, new_head) = (self.subtrees[record], from.subtrees[from_record]);
+        let (to, at) = (old_head.start, new_head.start);
+        let lists = |start: ItemCounts, stop: ItemCounts| {
+            (
+                start.shapes..stop.shapes,
+                start.images..stop.images,
+                start.texts..stop.texts,
+                start.shadows..stop.shadows,
+            )
+        };
+        let (shapes, images, texts, shadows) = lists(to, old_head.stop);
+        let (new_shapes, new_images, new_texts, new_shadows) = lists(at, new_head.stop);
+        self.shapes[shapes].clone_from_slice(&from.shapes[new_shapes]);
+        self.images[images].clone_from_slice(&from.images[new_images]);
+        self.texts[texts].clone_from_slice(&from.texts[new_texts]);
+        self.shadows[shadows].clone_from_slice(&from.shadows[new_shadows]);
+        let moved = |index: usize, from: usize, to: usize| to + (index - from);
+        let order = to.order..old_head.stop.order;
+        for (slot, item) in self.order[order]
+            .iter_mut()
+            .zip(&from.order[at.order..new_head.stop.order])
+        {
+            *slot = match *item {
+                RenderItem::Shape(index) => RenderItem::Shape(moved(index, at.shapes, to.shapes)),
+                RenderItem::Image(index) => RenderItem::Image(moved(index, at.images, to.images)),
+                RenderItem::Text(index) => RenderItem::Text(moved(index, at.texts, to.texts)),
+                RenderItem::Shadow(index) => {
+                    RenderItem::Shadow(moved(index, at.shadows, to.shadows))
+                }
+            };
+        }
+        let count = old.passed_down;
+        self.passed_down[old_first..old_first + count]
+            .clone_from_slice(&from.passed_down[new_first..new_first + count]);
+        let records = &from.subtrees[from_record..from_record + new.records];
+        for (slot, copied) in self.subtrees[record..record + old.records]
+            .iter_mut()
+            .zip(records)
+        {
+            *slot = SubtreeItems {
+                end: moved(copied.end, from_record, record),
+                start: copied.start.moved(at, to),
+                stop: copied.stop.moved(at, to),
+                passed_down: copied
+                    .passed_down
+                    .map(|index| moved(index, new_first, old_first)),
+                ..*copied
+            };
         }
     }
 
