@@ -2969,8 +2969,8 @@ impl ModifierNodeChain {
         self.update_from_ref_iter(elements.iter(), context);
     }
 
-    /// Updates in place the entries whose element types `in_place` accepts,
-    /// for `elements` that differ from the chain's only in those: entries and
+    /// Updates in place the entries `changed` names, one bit an index, for
+    /// `elements` that differ from the chain's only in those: entries and
     /// elements line up one to one, and every other entry stays as it is.
     /// `false` when they do not line up or an entry cannot take its element;
     /// a full update then reconciles the chain.
@@ -2978,7 +2978,7 @@ impl ModifierNodeChain {
         &mut self,
         elements: I,
         element_count: usize,
-        in_place: impl Fn(TypeId) -> bool,
+        changed: u64,
         context: &mut dyn ModifierNodeContext,
     ) -> bool
     where
@@ -2992,7 +2992,14 @@ impl ModifierNodeChain {
             .entries
             .iter_mut()
             .zip(elements)
-            .filter(|(_, element)| in_place(element.element_type()))
+            .enumerate()
+            .filter(|&(index, _)| {
+                u32::try_from(index)
+                    .ok()
+                    .and_then(|bit| changed.checked_shr(bit))
+                    .is_some_and(|rest| rest & 1 == 1)
+            })
+            .map(|(_, pair)| pair)
             .all(
                 |(entry, element)| match update_entry_in_place(entry, element, context) {
                     Some(outcome) => {

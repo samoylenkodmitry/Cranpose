@@ -17,7 +17,7 @@ use crate::layout::LayoutRuntimeDebugStats;
 use crate::{
     layout::{LayoutRuntimeState, MeasuredNode},
     modifier::{
-        InPlaceReach, Modifier, ModifierChainHandle, ModifierLocalSource, ModifierLocalToken,
+        InPlaceUpdate, Modifier, ModifierChainHandle, ModifierLocalSource, ModifierLocalToken,
         ModifierLocalsHandle, ModifierNodeSlices, Point, ResolvedModifierLocal, ResolvedModifiers,
         Size,
     },
@@ -744,10 +744,10 @@ impl LayoutNode {
         }
         // A change only in elements nothing else reads, as a ticker's text
         // or an animated size, keeps the slices the chain gave.
-        let reach = self.modifier.in_place_reach(&modifier);
-        let modifier_changed = reach.is_some() || !self.modifier.structural_eq(&modifier);
+        let update = self.modifier.in_place_update(&modifier);
+        let modifier_changed = update.is_some() || !self.modifier.structural_eq(&modifier);
         self.modifier = modifier;
-        self.sync_modifier_chain(reach);
+        self.sync_modifier_chain(update);
         if modifier_changed {
             self.cache.clear();
             self.request_semantics_update();
@@ -757,7 +757,7 @@ impl LayoutNode {
     /// Reconciles the chain with the node's modifier. `in_place` says how
     /// far the change reaches when the modifier changed only in elements the
     /// chain can update in place: when it does, the current slices are kept.
-    fn sync_modifier_chain(&mut self, in_place: Option<InPlaceReach>) {
+    fn sync_modifier_chain(&mut self, in_place: Option<InPlaceUpdate>) {
         let prev_caps = self.modifier_capabilities();
         let start_parent = self.parent();
         let mut resolver = move |token: &ModifierLocalToken| {
@@ -766,9 +766,9 @@ impl LayoutNode {
         self.modifier_chain
             .set_debug_logging(self.debug_modifiers.get());
         let mut context = self.modifier_chain.context(self.id.get());
-        let in_place = in_place.is_some_and(|reach| {
+        let in_place = in_place.is_some_and(|update| {
             self.modifier_chain
-                .update_elements_in_place(&self.modifier, reach, &mut context)
+                .update_elements_in_place(&self.modifier, update, &mut context)
         });
         let modifier_local_invalidations = if in_place {
             ModifierInvalidations::new()
