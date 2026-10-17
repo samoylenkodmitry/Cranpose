@@ -12,10 +12,11 @@ fn probed_against_plain(
     let Ok(mut renderer) = support::headless_renderer() else {
         return;
     };
-    let mut scope = cranpose_ui_graphics::DrawScopeDefault::new(cranpose_ui_graphics::Size::new(
-        SIZE as f32,
-        SIZE as f32,
-    ));
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = cranpose_ui_graphics::DrawScopeDefault::new(
+        cranpose_ui_graphics::Size::new(SIZE as f32, SIZE as f32),
+        &mut recording,
+    );
     record_mixed_scene(&mut scope);
     let graph = support::draw_run_graph(SIZE, scope);
     cranpose_render_wgpu::set_debug_toggle(toggle, None);

@@ -47,7 +47,9 @@ fn unmatched_placement_leaves_recording_storage_untouched() {
         ),
         (DrawCommand::Overlay(callback), DrawPlacement::Behind),
     ] {
-        let mut storage = Some(CommandRecording::from_primitives([DrawPrimitive::Content]));
+        let mut storage = Some(Rc::new(CommandRecording::from_primitives([
+            DrawPrimitive::Content,
+        ])));
         let result =
             recording_for_placement_reusing(&command, placement, Size::new(10.0, 10.0), || {
                 storage.take().expect("recording storage")
@@ -87,7 +89,10 @@ fn reused_storage_records_identically_to_fresh() {
     let size = Size::new(10.0, 10.0);
     for placement in [DrawPlacement::Behind, DrawPlacement::Overlay] {
         let fresh = primitives_for_placement(&command, placement, size);
-        let dirty = CommandRecording::from_primitives(vec![DrawPrimitive::Content; 8]);
+        let dirty = Rc::new(CommandRecording::from_primitives(vec![
+            DrawPrimitive::Content;
+            8
+        ]));
         let (recording, segments) =
             recording_for_placement_reusing(&command, placement, size, || dirty)
                 .expect("a with-content command records for both placements");

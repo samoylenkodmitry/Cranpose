@@ -1,5 +1,8 @@
 use super::*;
-use crate::{BlendMode, Brush, Color, DrawPrimitive, DrawScope, DrawScopeDefault, Size, Trapezoid};
+use crate::{
+    BlendMode, Brush, Color, CommandRecording, DrawPrimitive, DrawScope, DrawScopeDefault, Size,
+    Trapezoid,
+};
 
 fn stroke(width: f32, cap: StrokeCap, join: StrokeJoin) -> Stroke {
     Stroke { width, cap, join }
@@ -235,7 +238,8 @@ fn a_closed_contour_strokes_its_closing_edge_with_corners_all_round() {
 }
 
 fn primitives(draw: impl FnOnce(&mut DrawScopeDefault)) -> Vec<DrawPrimitive> {
-    let mut scope = DrawScopeDefault::new(Size::new(64.0, 64.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(64.0, 64.0), &mut recording);
     draw(&mut scope);
     scope.into_primitives()
 }

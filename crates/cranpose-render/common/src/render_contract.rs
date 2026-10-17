@@ -689,7 +689,8 @@ fn filled_path_primitives() -> Vec<DrawPrimitive> {
     }
     path.line_to(Point::new(66.0, 66.0));
     path.close();
-    let mut scope = DrawScopeDefault::new(Size::new(72.0, 72.0));
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(72.0, 72.0), &mut recording);
     scope.draw_path(&path, Brush::solid(FOREGROUND_COLOR), DrawStyle::Fill);
     scope.into_primitives()
 }

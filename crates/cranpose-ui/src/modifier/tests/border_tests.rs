@@ -11,7 +11,8 @@ fn drawn(element: &BorderElement, width: f32, height: f32) -> Vec<DrawPrimitive>
     let DrawCommand::Overlay(draw) = element.command() else {
         panic!("a border draws over the content");
     };
-    let mut scope = command_draw_scope(Size::new(width, height));
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = command_draw_scope(Size::new(width, height), &mut recording);
     draw(&mut scope);
     scope.into_primitives()
 }

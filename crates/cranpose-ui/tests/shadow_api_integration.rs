@@ -5,7 +5,8 @@ use cranpose_ui::{
 use cranpose_ui_graphics::{DrawPrimitive, DrawScope as _, ShadowPrimitive};
 
 fn record(func: &DrawCommandFn, size: Size) -> Vec<DrawPrimitive> {
-    let mut scope = command_draw_scope(size);
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = command_draw_scope(size, &mut recording);
     func(&mut scope);
     scope.into_primitives()
 }

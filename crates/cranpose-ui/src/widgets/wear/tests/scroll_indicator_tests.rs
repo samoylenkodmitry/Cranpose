@@ -3,7 +3,8 @@ use cranpose_ui_graphics::{DrawPrimitive, DrawScopeDefault, Size};
 use super::*;
 
 fn scene(geometry: IndicatorGeometry, alpha: f32) -> Vec<DrawPrimitive> {
-    let mut scope = DrawScopeDefault::new(Size::new(227.0, 227.0));
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(227.0, 227.0), &mut recording);
     draw_scroll_indicator(
         &mut scope,
         geometry,
@@ -54,7 +55,8 @@ fn a_faded_indicator_draws_nothing_at_all() {
 
 #[test]
 fn a_display_with_no_room_does_not_panic() {
-    let mut scope = DrawScopeDefault::new(Size::new(1.0, 1.0));
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(1.0, 1.0), &mut recording);
     draw_scroll_indicator(
         &mut scope,
         IndicatorGeometry {

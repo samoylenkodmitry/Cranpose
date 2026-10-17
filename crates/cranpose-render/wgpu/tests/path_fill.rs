@@ -86,7 +86,8 @@ fn frame_of(primitives: Vec<DrawPrimitive>, size: f32) -> RenderGraph {
 
 /// The path filled white over black by a draw scope `size` units square.
 fn filled(path: &Path, brush: Brush, size: f32) -> Vec<DrawPrimitive> {
-    let mut scope = DrawScopeDefault::new(Size::new(size, size));
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(size, size), &mut recording);
     scope.draw_rect(Brush::solid(Color::BLACK));
     scope.draw_path(path, brush, DrawStyle::Fill);
     scope.into_primitives()
@@ -245,7 +246,8 @@ fn a_path_fill_resolves_its_brush_against_its_scope() {
             size,
         )
     };
-    let mut scope = DrawScopeDefault::new(Size::new(size, size));
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(size, size), &mut recording);
     scope.draw_rect(gradient());
     let reference = capture(&mut renderer, frame_of(scope.into_primitives(), size), 1.0);
     let lower_half = polygon([(0.0, 32.0), (size, 32.0), (size, size), (0.0, size)]);

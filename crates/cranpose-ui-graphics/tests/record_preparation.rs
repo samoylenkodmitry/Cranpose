@@ -57,7 +57,7 @@ fn primitive(index: usize) -> DrawPrimitive {
 #[test]
 fn large_recordings_preserve_every_primitive_and_retained_snapshot() {
     let expected: Vec<_> = (0..5003).map(primitive).collect();
-    let recording = CommandRecording::from_primitives(expected.clone());
+    let mut recording = CommandRecording::from_primitives(expected.clone());
     assert_eq!(
         recording.primitives_with_markers().collect::<Vec<_>>(),
         expected
@@ -84,11 +84,11 @@ fn large_recordings_preserve_every_primitive_and_retained_snapshot() {
     let retained = Arc::clone(recording.shape_recorder());
     let retained_hash = retained.fingerprint();
     let retained_shapes: Vec<_> = retained.tables().shapes.iter().collect();
-    let mut recorder = recording.into_recorder();
+    let mut recorder = recording.edit();
     for index in 5003..10007 {
         recorder.push_primitive(primitive(index));
     }
-    let recording = recorder.finish();
+    recorder.finish();
     assert_eq!(
         recording.primitives_with_markers().collect::<Vec<_>>(),
         (0..10007).map(primitive).collect::<Vec<_>>()
@@ -98,9 +98,9 @@ fn large_recordings_preserve_every_primitive_and_retained_snapshot() {
         retained.tables().shapes.iter().collect::<Vec<_>>(),
         retained_shapes
     );
-    let mut recorder = CommandRecorder::reusing(recording);
+    let mut recorder = recording.record();
     recorder.push_primitive(primitive(1));
-    let recording = recorder.finish();
+    recorder.finish();
     assert_eq!(
         recording.primitives_with_markers().collect::<Vec<_>>(),
         vec![primitive(1)]
@@ -112,34 +112,36 @@ fn large_recordings_preserve_every_primitive_and_retained_snapshot() {
 }
 
 #[test]
-fn reusable_recording_waits_for_retained_readers_and_resets_after_transfer() {
+fn recording_again_reuses_the_shapes_once_no_reader_holds_them() {
     let original = primitive(9);
     let mut recording = CommandRecording::from_primitives([original.clone()]);
-    let retained = Arc::clone(recording.shape_recorder());
-
+    let reader = recording.clone();
     assert!(
-        recording.try_take_reusable().is_none(),
+        recording.shares_shapes(),
         "recorded shapes remain owned by retained readers"
+    );
+    let mut recorder = recording.record();
+    recorder.push_primitive(primitive(21));
+    recorder.finish();
+    assert_eq!(
+        reader.primitives_with_markers().collect::<Vec<_>>(),
+        vec![original]
     );
     assert_eq!(
         recording.primitives_with_markers().collect::<Vec<_>>(),
-        vec![original]
-    );
-    drop(retained);
-    let Some(storage) = recording.try_take_reusable() else {
-        panic!("unshared shape data can be transferred for reuse");
-    };
-    assert!(
-        recording.is_empty(),
-        "the source becomes empty after transfer"
+        vec![primitive(21)]
     );
 
-    let mut next = CommandRecorder::reusing(storage);
-    next.push_primitive(primitive(21));
-    let next = next.finish();
+    drop(reader);
+    assert!(!recording.shares_shapes());
+    let allocation = Arc::as_ptr(recording.shape_recorder());
+    let mut recorder = recording.record();
+    recorder.push_primitive(primitive(22));
+    recorder.finish();
+    assert_eq!(Arc::as_ptr(recording.shape_recorder()), allocation);
     assert_eq!(
-        next.primitives_with_markers().collect::<Vec<_>>(),
-        vec![primitive(21)]
+        recording.primitives_with_markers().collect::<Vec<_>>(),
+        vec![primitive(22)]
     );
 }
 
@@ -147,19 +149,22 @@ fn reusable_recording_waits_for_retained_readers_and_resets_after_transfer() {
 fn appending_after_a_fingerprint_updates_the_recording_identity() {
     let mutations: [fn(&mut CommandRecorder); 3] = [
         |recording| recording.push_primitive(primitive(2)),
-        CommandRecorder::push_content,
+        |recording| recording.push_content(),
         |recording| recording.push_other(primitive(17)),
     ];
     for append in mutations {
-        let recording = CommandRecording::from_primitives([primitive(1)]);
+        let mut recording = CommandRecording::from_primitives([primitive(1)]);
         let first = recording.fingerprint();
-        let mut recorder = recording.into_recorder();
+        let mut recorder = recording.edit();
         append(&mut recorder);
-        let recording = recorder.finish();
+        recorder.finish();
         assert_ne!(recording.fingerprint(), first);
-        let mut expected = CommandRecorder::from_primitives([primitive(1)]);
-        append(&mut expected);
-        assert_eq!(recording.fingerprint(), expected.finish().fingerprint());
+        let mut expected = CommandRecording::default();
+        let mut recorder = expected.record();
+        recorder.push_primitive(primitive(1));
+        append(&mut recorder);
+        recorder.finish();
+        assert_eq!(recording.fingerprint(), expected.fingerprint());
     }
 }
 
@@ -252,8 +257,10 @@ fn assert_recording_bits(actual: &CommandRecording, expected: &CommandRecording)
 
 #[test]
 fn scope_batches_preserve_bits_order_metadata_and_retained_frames() {
-    let mut scope = DrawScopeDefault::new(Size::new(408.0, 408.0));
-    let mut expected = CommandRecorder::default();
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(408.0, 408.0), &mut recording);
+    let mut expected_recording = CommandRecording::default();
+    let mut expected = expected_recording.record();
     for range in [0..5003, 5003..10007] {
         for index in range {
             scope_shape(&mut scope, &mut expected, index);
@@ -264,14 +271,16 @@ fn scope_batches_preserve_bits_order_metadata_and_retained_frames() {
         scope.draw_content();
         expected.push_content();
     }
-    let actual = scope.finish();
-    assert_recording_bits(&actual, &expected.finish());
-    let retained = Arc::clone(actual.shape_recorder());
+    scope.finish();
+    expected.finish();
+    assert_recording_bits(&recording, &expected_recording);
+    let retained = Arc::clone(recording.shape_recorder());
     let retained_records: Vec<_> = retained.tables().shapes.iter().collect();
     let retained_hash = retained.fingerprint();
-    let mut recorder = CommandRecorder::reusing(actual);
+    let mut recorder = recording.record();
     recorder.push_primitive(primitive(1));
-    assert_eq!(recorder.finish().len(), 1);
+    recorder.finish();
+    assert_eq!(recording.len(), 1);
     assert_eq!(retained.fingerprint(), retained_hash);
     assert_eq!(
         bytemuck::cast_slice::<_, u8>(&retained.tables().shapes.iter().collect::<Vec<_>>()),
@@ -291,7 +300,7 @@ fn a_one_shape_recording_holds_room_for_one_record_and_one_segment() {
         brush: Brush::Solid(Color::RED),
         stroke: None,
     };
-    let one = CommandRecording::from_primitives([rect()]);
+    let mut one = CommandRecording::from_primitives([rect()]);
     assert_eq!(one.shape_capacity(), 1);
     assert_eq!(
         one.pod_heap_bytes(),
@@ -300,10 +309,11 @@ fn a_one_shape_recording_holds_room_for_one_record_and_one_segment() {
             + std::mem::size_of::<cranpose_ui_graphics::RecordSegment>(),
         "a background or border recording keeps no room it never fills"
     );
-    let mut again = CommandRecorder::reusing(one);
+    let mut again = one.record();
     again.push_primitive(rect());
+    again.finish();
     assert_eq!(
-        again.finish().shape_capacity(),
+        one.shape_capacity(),
         1,
         "recording it again keeps the one slot"
     );
@@ -313,18 +323,19 @@ fn a_one_shape_recording_holds_room_for_one_record_and_one_segment() {
         two.shape_capacity() >= 2,
         "a second shape grows the columns as usual"
     );
-    let nine = CommandRecording::from_primitives(std::iter::repeat_with(rect).take(9));
+    let mut nine = CommandRecording::from_primitives(std::iter::repeat_with(rect).take(9));
     assert_eq!(
         nine.shape_capacity(),
         10,
         "a new recording keeps an eighth more than it holds, not the sixteen its growth reached"
     );
-    let mut redrawn = CommandRecorder::reusing(nine);
+    let mut redrawn = nine.record();
     for _ in 0..10 {
         redrawn.push_primitive(rect());
     }
+    redrawn.finish();
     assert_eq!(
-        redrawn.finish().shape_capacity(),
+        nine.shape_capacity(),
         10,
         "drawing it again into its allocation keeps that room"
     );

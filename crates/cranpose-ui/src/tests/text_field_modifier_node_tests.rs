@@ -146,7 +146,8 @@ fn every_primary_pointer_source_publishes_direct_manipulation_metrics() {
             height: 20.0,
         };
         let run_draw = || {
-            let mut scope = crate::draw::command_draw_scope(size);
+            let mut recording = cranpose_ui_graphics::CommandRecording::default();
+            let mut scope = crate::draw::command_draw_scope(size, &mut recording);
             draw(&mut scope);
         };
 
@@ -741,7 +742,8 @@ fn padded_field_rects(selection: TextRange) -> Vec<cranpose_ui_graphics::Rect> {
         .draw_commands()
         .iter()
         .flat_map(|command| {
-            let mut scope = crate::draw::command_draw_scope(size);
+            let mut recording = cranpose_ui_graphics::CommandRecording::default();
+            let mut scope = crate::draw::command_draw_scope(size, &mut recording);
             match command {
                 crate::draw::DrawCommand::Behind(draw)
                 | crate::draw::DrawCommand::WithContent(draw)

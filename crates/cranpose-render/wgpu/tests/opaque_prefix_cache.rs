@@ -99,7 +99,8 @@ fn radial(stops: Vec<(f32, Color)>, tile_mode: TileMode) -> Brush {
 
 fn primitives(spec: Spec, phase: u32) -> Vec<cranpose_ui_graphics::DrawPrimitive> {
     let layer = spec.layer_rect();
-    let mut scope = DrawScopeDefault::new(Size::new(layer.width, layer.height));
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(layer.width, layer.height), &mut recording);
     let dark = Color::from_rgb_u8(4, 4, 10);
     match spec.first {
         First::Radial => scope.draw_rect(radial(stops(dark), TileMode::Clamp)),

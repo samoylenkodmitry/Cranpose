@@ -1503,47 +1503,41 @@ fn vector_mask_rect(bounds: Rect) -> Rect {
 }
 
 /// The `DrawScope` the framework passes to draw closures. It records the primitives drawn in draw
-/// order.
-#[derive(Default)]
-pub struct DrawScopeDefault {
+/// order, in place, into a [`CommandRecording`] its caller holds: a recording
+/// kept from an earlier frame is drawn again in the storage it has.
+pub struct DrawScopeDefault<'a> {
     size: Size,
-    recording: CommandRecorder,
+    recording: CommandRecorder<'a>,
     text_measurer: Option<Rc<dyn DrawTextMeasurer>>,
 }
 
-impl DrawScopeDefault {
-    /// Creates a scope of `size` without a text measurer, so text is measured by an estimate.
-    pub fn new(size: Size) -> Self {
-        Self::with_storage(size, None, CommandRecording::default())
+impl<'a> DrawScopeDefault<'a> {
+    /// Creates a scope of `size` recording into `recording` anew, without a
+    /// text measurer, so text is measured by an estimate.
+    pub fn new(size: Size, recording: &'a mut CommandRecording) -> Self {
+        Self::with_storage(size, None, recording)
     }
 
     /// A scope that measures text with the app's fonts.
     ///
     /// The framework calls this for every draw closure it runs; `new` exists
     /// for callers that never draw text.
-    pub fn with_text_measurer(size: Size, text_measurer: Rc<dyn DrawTextMeasurer>) -> Self {
-        Self::with_storage(size, Some(text_measurer), CommandRecording::default())
-    }
-
-    /// A scope recording into `storage`, a recording the caller kept from an
-    /// earlier frame so its buffers keep the capacity they earned.
-    pub fn with_text_measurer_reusing(
+    pub fn with_text_measurer(
         size: Size,
         text_measurer: Rc<dyn DrawTextMeasurer>,
-        storage: CommandRecording,
+        recording: &'a mut CommandRecording,
     ) -> Self {
-        Self::with_storage(size, Some(text_measurer), storage)
+        Self::with_storage(size, Some(text_measurer), recording)
     }
 
     fn with_storage(
         size: Size,
         text_measurer: Option<Rc<dyn DrawTextMeasurer>>,
-        recording: CommandRecording,
+        recording: &'a mut CommandRecording,
     ) -> Self {
-        let recording = CommandRecorder::reusing(recording);
         Self {
             size,
-            recording,
+            recording: recording.record(),
             text_measurer,
         }
     }
@@ -1556,18 +1550,19 @@ impl DrawScopeDefault {
     /// Runs `draw` in this scope's rect shrunk by `insets`, where a draw
     /// modifier placed after layout padding draws: `draw` sees the inner
     /// size, and what it records lands offset by the leading insets.
-    pub fn draw_inset(&mut self, insets: EdgeInsets, draw: impl FnOnce(&mut DrawScopeDefault)) {
+    pub fn draw_inset(&mut self, insets: EdgeInsets, draw: impl FnOnce(&mut DrawScopeDefault<'_>)) {
         let inner = insets.inset_rect(self.size);
-        let mut scope = Self::with_storage(
+        let mut recording = CommandRecording::default();
+        let mut scope = DrawScopeDefault::with_storage(
             Size {
                 width: inner.width,
                 height: inner.height,
             },
             self.text_measurer.clone(),
-            CommandRecording::default(),
+            &mut recording,
         );
         draw(&mut scope);
-        let recording = scope.finish();
+        scope.finish();
         self.push_recorded(crate::translate_recorded(
             recording.primitives_with_markers(),
             inner.x,
@@ -1582,10 +1577,9 @@ impl DrawScopeDefault {
         }
     }
 
-    /// The recording, in the storage it was recorded into, so the caller
-    /// can lend it to the same command's next recording.
-    pub fn finish(self) -> CommandRecording {
-        self.recording.finish()
+    /// Completes the recording in the storage the scope records into.
+    pub fn finish(self) {
+        self.recording.finish();
     }
 
     fn push_blended_primitive(&mut self, primitive: DrawPrimitive, blend_mode: BlendMode) {
@@ -1745,7 +1739,7 @@ impl DrawScopeDefault {
     }
 }
 
-impl DrawScope for DrawScopeDefault {
+impl DrawScope for DrawScopeDefault<'_> {
     fn size(&self) -> Size {
         self.size
     }
@@ -2294,7 +2288,7 @@ impl DrawScope for DrawScopeDefault {
     }
 
     fn into_primitives(self) -> Vec<DrawPrimitive> {
-        self.finish().into_primitives_with_markers()
+        self.recording.into_primitives()
     }
 }
 

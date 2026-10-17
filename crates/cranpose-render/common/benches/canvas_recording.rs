@@ -190,16 +190,16 @@ fn arc_geometry(recording: &CommandRecording) -> Vec<ArcGeometry> {
 }
 
 fn record_arc_frame(
-    storage: CommandRecording,
+    recording: &mut CommandRecording,
     measurer: &Rc<dyn DrawTextMeasurer>,
     path: ArcRecordingPath,
     arcs: usize,
     angle: f32,
-) -> CommandRecording {
-    let mut scope = DrawScopeDefault::with_text_measurer_reusing(
+) {
+    let mut scope = DrawScopeDefault::with_text_measurer(
         Size::new(256.0, 256.0),
         Rc::clone(measurer),
-        storage,
+        recording,
     );
     match path {
         ArcRecordingPath::Direct => emit_arcs(&mut scope, arcs, angle),
@@ -207,7 +207,7 @@ fn record_arc_frame(
             emit_arcs_at(inner, arcs, angle, Point::new(120.0, 120.0));
         }),
     }
-    scope.finish()
+    scope.finish();
 }
 
 fn run_inset_recording_case(
@@ -215,18 +215,11 @@ fn run_inset_recording_case(
     path: ArcRecordingPath,
     measurer: &Rc<dyn DrawTextMeasurer>,
 ) -> InsetBenchmarkResult {
-    let mut recording = Some(CommandRecording::default());
+    let mut recording = CommandRecording::default();
     let mut frame = |tick: usize| {
-        let next = record_arc_frame(
-            recording.take().expect("previous frame storage"),
-            measurer,
-            path,
-            arcs,
-            tick as f32 * 0.005,
-        );
-        assert_eq!(next.len(), arcs);
-        black_box(&next);
-        recording = Some(next);
+        record_arc_frame(&mut recording, measurer, path, arcs, tick as f32 * 0.005);
+        assert_eq!(recording.len(), arcs);
+        black_box(&recording);
     };
     for tick in 0..WARMUP {
         frame(tick);
@@ -238,7 +231,6 @@ fn run_inset_recording_case(
     }
     let elapsed_ns = started.elapsed().as_nanos();
     let stats = region.change();
-    let recording = recording.expect("last frame recording");
     let fingerprint = recording.fingerprint();
     let primitive_count = recording.len();
     InsetBenchmarkResult {

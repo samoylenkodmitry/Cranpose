@@ -1,5 +1,5 @@
 use cranpose_ui::{
-    Modifier, RecordedRenderScene, ZoomState, command_draw_scope_reusing, format_layout_tree,
+    Modifier, RecordedRenderScene, ZoomState, command_draw_scope, format_layout_tree,
     format_modifier_chain, format_render_scene, format_screen_summary, log_layout_tree,
     log_modifier_chain, log_render_scene, log_screen_summary, measure_layout, run_test_composition,
 };
@@ -77,19 +77,20 @@ fn the_modifier_chain_formatter_reports_how_many_nodes_it_walked() {
 }
 
 #[test]
-fn a_reusing_draw_scope_gives_the_callers_buffer_back() {
-    let mut storage = cranpose_ui_graphics::CommandRecorder::default();
-    storage.reserve_shapes(64);
-    let storage = storage.finish();
-    let capacity = storage.shape_capacity();
+fn a_draw_scope_records_into_the_callers_buffer() {
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut recorder = recording.record();
+    recorder.reserve_shapes(64);
+    recorder.finish();
+    let capacity = recording.shape_capacity();
 
-    let finished = command_draw_scope_reusing(Size::new(10.0, 10.0), storage).finish();
+    command_draw_scope(Size::new(10.0, 10.0), &mut recording).finish();
     assert!(
-        finished.shape_capacity() >= capacity,
-        "the scope handed back a buffer with less capacity than it was given"
+        recording.shape_capacity() >= capacity,
+        "the scope recorded into a buffer with less capacity than it was given"
     );
     assert!(
-        finished.is_empty(),
+        recording.is_empty(),
         "a scope nobody drew into produced primitives"
     );
 }

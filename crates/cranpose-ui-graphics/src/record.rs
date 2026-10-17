@@ -1724,7 +1724,7 @@ impl ShapeRecorder {
 /// A completed draw command with shared shape data, ordered segments and
 /// non-shape primitives. Bounds and content metadata are recorded while drawing;
 /// the complete fingerprint is computed when a cache first requests it.
-/// Use [`CommandRecorder`] to build a command and [`Self::into_recorder`] to edit it.
+/// [`Self::record`] records it anew in place, [`Self::edit`] records more after it.
 #[derive(Clone, Debug)]
 pub struct CommandRecording {
     shapes: Arc<ShapeRecorder>,
@@ -1788,19 +1788,17 @@ impl PartialEq for CommandRecording {
 }
 
 impl CommandRecording {
-    /// Takes this recording when no retained reader shares its shape data.
-    ///
-    /// The returned recording keeps the existing data and capacities. This
-    /// recording is reset to an empty value. Pass the returned recording to
-    /// [`CommandRecorder::reusing`] to clear it for another draw. If another
-    /// strong or weak reference shares the shape data, this returns `None` and
-    /// leaves the recording unchanged.
+    /// Records into this recording anew, in the storage it holds: what it
+    /// held is cleared and every buffer keeps its capacity. When a retained
+    /// reader still shares the shape columns, the recording takes new ones
+    /// with the same room and the reader keeps its own.
     ///
     /// ```
-    /// use cranpose_ui_graphics::{Brush, Color, CommandRecorder, DrawPrimitive, Rect};
+    /// use cranpose_ui_graphics::{Brush, Color, CommandRecording, DrawPrimitive, Rect};
     ///
-    /// let mut builder = CommandRecorder::default();
-    /// builder.push_primitive(DrawPrimitive::Rect {
+    /// let mut recording = CommandRecording::default();
+    /// let mut recorder = recording.record();
+    /// recorder.push_primitive(DrawPrimitive::Rect {
     ///     rect: Rect {
     ///         x: 0.0,
     ///         y: 0.0,
@@ -1810,32 +1808,58 @@ impl CommandRecording {
     ///     brush: Brush::Solid(Color::RED),
     ///     stroke: None,
     /// });
-    /// let mut completed = builder.finish();
-    /// if let Some(storage) = completed.try_take_reusable() {
-    ///     let mut recorder = CommandRecorder::reusing(storage);
-    ///     recorder.push_content();
-    ///     let _next = recorder.finish();
-    /// }
+    /// recorder.finish();
+    /// assert_eq!(recording.len(), 1);
     /// ```
-    pub fn try_take_reusable(&mut self) -> Option<Self> {
-        Arc::get_mut(&mut self.shapes)?;
-        Some(std::mem::take(self))
+    pub fn record(&mut self) -> CommandRecorder<'_> {
+        let fresh_shapes = Arc::get_mut(&mut self.shapes).is_none();
+        if fresh_shapes {
+            self.shapes = Arc::new(ShapeRecorder {
+                tables: self.shapes.tables.with_capacity_of(),
+                ..ShapeRecorder::default()
+            });
+        }
+        let mut recorder = self.recorder(fresh_shapes);
+        recorder.clear();
+        recorder
     }
 
-    /// Returns owned command data for further recording.
-    /// Shape data is copied only when a retained reader still shares it.
-    pub fn into_recorder(self) -> CommandRecorder {
-        let (shapes, vessel) = take_shapes(self.shapes, ShapeRecorder::clone);
-        CommandRecorder {
+    /// Records more into this recording, after what it holds. Shape data is
+    /// copied only when a retained reader still shares it.
+    pub fn edit(&mut self) -> CommandRecorder<'_> {
+        let fresh_shapes = Arc::get_mut(&mut self.shapes).is_none();
+        self.recorder(fresh_shapes)
+    }
+
+    fn recorder(&mut self, fresh_shapes: bool) -> CommandRecorder<'_> {
+        let CommandRecording {
             shapes,
-            content: self.content,
-            vessel,
+            content,
+            fingerprint,
+        } = self;
+        fingerprint.take();
+        CommandRecorder {
+            shapes: Arc::make_mut(shapes),
+            content,
+            fresh_shapes,
         }
+    }
+
+    /// Whether a reader other than this recording still holds its shape
+    /// columns, so recording anew into it takes new ones.
+    pub fn shares_shapes(&self) -> bool {
+        Arc::strong_count(&self.shapes) > 1 || Arc::weak_count(&self.shapes) > 0
     }
 
     /// Creates a completed recording from `primitives`, in the given order.
     pub fn from_primitives(primitives: impl IntoIterator<Item = DrawPrimitive>) -> Self {
-        CommandRecorder::from_primitives(primitives).finish()
+        let mut recording = Self::default();
+        let mut recorder = recording.record();
+        for primitive in primitives {
+            recorder.push_primitive(primitive);
+        }
+        recorder.finish();
+        recording
     }
 
     /// Number of shape records the recording has room for before it allocates.
@@ -2091,11 +2115,7 @@ impl CommandRecording {
 
     /// Every primitive in recorded order, content markers included.
     pub fn primitives_with_markers(&self) -> impl Iterator<Item = DrawPrimitive> + '_ {
-        self.shapes
-            .tables
-            .segments
-            .iter()
-            .flat_map(|segment| self.segment_primitives(segment, true))
+        parts_primitives_with_markers(&self.shapes, &self.content)
     }
 
     /// Consumes the recording and returns every primitive in recorded order, content markers
@@ -2109,220 +2129,201 @@ impl CommandRecording {
         segment: &RecordSegment,
         markers: bool,
     ) -> impl Iterator<Item = DrawPrimitive> + use<'a> {
-        let lane = segment.lane;
-        segment.range().filter_map(move |index| match lane {
-            RecordLane::Shapes => Some(self.materialize_shape(index)),
-            RecordLane::Others => Some(self.content.others[index].clone()),
-            RecordLane::Content => markers.then_some(DrawPrimitive::Content),
-            RecordLane::GroupStart => Some(DrawPrimitive::Group(GroupMarker::Start(
-                self.content.groups[index],
-            ))),
-            RecordLane::GroupEnd => Some(DrawPrimitive::Group(GroupMarker::End)),
-        })
+        parts_segment_primitives(&self.shapes, &self.content, segment, markers)
     }
 
     /// The exact [`DrawPrimitive`] the record was made from.
     pub fn materialize_shape(&self, index: usize) -> DrawPrimitive {
-        let record = self
-            .shapes
-            .tables
-            .shapes
-            .get(index)
-            .expect("recorded shape index");
-        let rect = record.rect_value();
-        let brush = self.brush_of(&record);
-        let stroke = record.stroke();
-        let primitive = match (record.kind(), record.trapezoid()) {
-            (_, Some(trapezoid)) => DrawPrimitive::Trapezoid {
-                rect: row_rect(record.radii),
-                brush,
-                trapezoid,
-            },
-            (RECORD_KIND_ROUND_RECT, _) => DrawPrimitive::RoundRect {
-                rect,
-                brush,
-                radii: CornerRadii {
-                    top_left: record.radii[0],
-                    top_right: record.radii[1],
-                    bottom_right: record.radii[2],
-                    bottom_left: record.radii[3],
-                },
-                stroke,
-            },
-            (RECORD_KIND_LINE, _) => DrawPrimitive::Line {
-                rect,
-                brush,
-                start: Point::new(record.arc[0], record.arc[1]),
-                end: Point::new(record.arc_band[2], record.arc_band[3]),
-                stroke: stroke.unwrap_or_default(),
-            },
-            (RECORD_KIND_ARC, _) => DrawPrimitive::Arc {
-                rect,
-                brush,
-                center: Point::new(record.arc[0], record.arc[1]),
-                radius: record.arc[2],
-                start_angle: record.arc_band[0],
-                sweep_angle: record.arc_band[1],
-                stroke,
-                inner_radius: record.arc[3],
-            },
-            _ => DrawPrimitive::Rect {
-                rect,
-                brush,
-                stroke,
-            },
-        };
-        let blend_mode = record.blend_mode();
-        if blend_mode == BlendMode::SrcOver {
-            primitive
-        } else {
-            DrawPrimitive::Blend {
-                primitive: Box::new(primitive),
-                blend_mode,
-            }
-        }
+        materialize_shape(&self.shapes, index)
     }
 
     /// The brush of a record: its solid colour, or the gradient rebuilt
     /// from the tables exactly as the app gave it.
     pub fn brush_of(&self, record: &ShapeRecord) -> Brush {
-        if record.brush == 0 {
-            return Brush::Solid(Color(
-                record.color[0],
-                record.color[1],
-                record.color[2],
-                record.color[3],
-            ));
-        }
-        let tables = &self.shapes.tables;
-        let brush = &tables.brushes[record.brush as usize - 1];
-        let colors = tables.stops
-            [brush.stop_start as usize..(brush.stop_start + brush.stop_count) as usize]
-            .iter()
-            .map(|stop| Color(stop.color[0], stop.color[1], stop.color[2], stop.color[3]))
-            .collect();
-        let stops = (brush.explicit_len != NO_EXPLICIT_STOPS).then(|| {
-            tables.explicit_stops[brush.explicit_start as usize
-                ..(brush.explicit_start + brush.explicit_len) as usize]
-                .to_vec()
-        });
-        let [a, b, c, d] = brush.params;
-        let tile_mode = TILE_MODES[brush.tile_mode as usize];
-        match brush.kind {
-            BRUSH_KIND_RADIAL => Brush::RadialGradient {
-                colors,
-                stops,
-                center: Point::new(a, b),
-                radius: c,
-                tile_mode,
-            },
-            BRUSH_KIND_SWEEP => Brush::SweepGradient {
-                colors,
-                stops,
-                center: Point::new(a, b),
-            },
-            _ => Brush::LinearGradient {
-                colors,
-                stops,
-                start: Point::new(a, b),
-                end: Point::new(c, d),
-                tile_mode,
-            },
-        }
+        brush_of(&self.shapes, record)
     }
 }
 
-/// Mutable command data owned exclusively while a draw scope records it.
-/// Publishing with [`Self::finish`] shares the completed shape data without copying it.
-#[derive(Debug, Default)]
-pub struct CommandRecorder {
-    shapes: ShapeRecorder,
-    content: RecordingContent,
-    /// The emptied shape allocation of the recording this recorder took its
-    /// data from, which [`Self::finish`] fills again instead of allocating.
-    vessel: Option<Arc<ShapeRecorder>>,
+/// Every primitive of a recording's parts in recorded order, content
+/// markers included.
+fn parts_primitives_with_markers<'a>(
+    shapes: &'a ShapeRecorder,
+    content: &'a RecordingContent,
+) -> impl Iterator<Item = DrawPrimitive> + use<'a> {
+    shapes
+        .tables
+        .segments
+        .iter()
+        .flat_map(move |segment| parts_segment_primitives(shapes, content, segment, true))
 }
 
-impl Clone for CommandRecorder {
-    fn clone(&self) -> Self {
-        Self {
-            shapes: self.shapes.clone(),
-            content: self.content.clone(),
-            vessel: None,
-        }
-    }
+/// The primitives of `segment` of a recording's parts.
+fn parts_segment_primitives<'a>(
+    shapes: &'a ShapeRecorder,
+    content: &'a RecordingContent,
+    segment: &RecordSegment,
+    markers: bool,
+) -> impl Iterator<Item = DrawPrimitive> + use<'a> {
+    let lane = segment.lane;
+    segment.range().filter_map(move |index| match lane {
+        RecordLane::Shapes => Some(materialize_shape(shapes, index)),
+        RecordLane::Others => Some(content.others[index].clone()),
+        RecordLane::Content => markers.then_some(DrawPrimitive::Content),
+        RecordLane::GroupStart => Some(DrawPrimitive::Group(GroupMarker::Start(
+            content.groups[index],
+        ))),
+        RecordLane::GroupEnd => Some(DrawPrimitive::Group(GroupMarker::End)),
+    })
 }
 
-/// The shapes `shared` holds and, when nothing else holds it, its emptied
-/// allocation; otherwise `copy` of them, for a retained reader keeps its own.
-fn take_shapes(
-    mut shared: Arc<ShapeRecorder>,
-    copy: impl FnOnce(&ShapeRecorder) -> ShapeRecorder,
-) -> (ShapeRecorder, Option<Arc<ShapeRecorder>>) {
-    match Arc::get_mut(&mut shared) {
-        Some(shapes) => (std::mem::take(shapes), Some(shared)),
-        None => (copy(&shared), None),
-    }
-}
-
-/// `shapes` shared, in `vessel` when it is still the only handle to it.
-fn fill_vessel(vessel: Option<Arc<ShapeRecorder>>, shapes: ShapeRecorder) -> Arc<ShapeRecorder> {
-    let Some(mut vessel) = vessel else {
-        return Arc::new(shapes);
+/// The exact [`DrawPrimitive`] record `index` of `shapes` was made from.
+fn materialize_shape(shapes: &ShapeRecorder, index: usize) -> DrawPrimitive {
+    let record = shapes
+        .tables
+        .shapes
+        .get(index)
+        .expect("recorded shape index");
+    let rect = record.rect_value();
+    let brush = brush_of(shapes, &record);
+    let stroke = record.stroke();
+    let primitive = match (record.kind(), record.trapezoid()) {
+        (_, Some(trapezoid)) => DrawPrimitive::Trapezoid {
+            rect: row_rect(record.radii),
+            brush,
+            trapezoid,
+        },
+        (RECORD_KIND_ROUND_RECT, _) => DrawPrimitive::RoundRect {
+            rect,
+            brush,
+            radii: CornerRadii {
+                top_left: record.radii[0],
+                top_right: record.radii[1],
+                bottom_right: record.radii[2],
+                bottom_left: record.radii[3],
+            },
+            stroke,
+        },
+        (RECORD_KIND_LINE, _) => DrawPrimitive::Line {
+            rect,
+            brush,
+            start: Point::new(record.arc[0], record.arc[1]),
+            end: Point::new(record.arc_band[2], record.arc_band[3]),
+            stroke: stroke.unwrap_or_default(),
+        },
+        (RECORD_KIND_ARC, _) => DrawPrimitive::Arc {
+            rect,
+            brush,
+            center: Point::new(record.arc[0], record.arc[1]),
+            radius: record.arc[2],
+            start_angle: record.arc_band[0],
+            sweep_angle: record.arc_band[1],
+            stroke,
+            inner_radius: record.arc[3],
+        },
+        _ => DrawPrimitive::Rect {
+            rect,
+            brush,
+            stroke,
+        },
     };
-    match Arc::get_mut(&mut vessel) {
-        Some(slot) => {
-            *slot = shapes;
-            vessel
+    let blend_mode = record.blend_mode();
+    if blend_mode == BlendMode::SrcOver {
+        primitive
+    } else {
+        DrawPrimitive::Blend {
+            primitive: Box::new(primitive),
+            blend_mode,
         }
-        None => Arc::new(shapes),
     }
 }
 
-impl CommandRecorder {
-    /// Records primitives in order into owned command data.
-    pub fn from_primitives(primitives: impl IntoIterator<Item = DrawPrimitive>) -> Self {
-        let mut recorder = Self::default();
-        for primitive in primitives {
-            recorder.push_primitive(primitive);
-        }
-        recorder
+/// The brush of a record of `shapes`: its solid colour, or the gradient
+/// rebuilt from the tables exactly as the app gave it.
+fn brush_of(shapes: &ShapeRecorder, record: &ShapeRecord) -> Brush {
+    if record.brush == 0 {
+        return Brush::Solid(Color(
+            record.color[0],
+            record.color[1],
+            record.color[2],
+            record.color[3],
+        ));
     }
-
-    /// Reuses a completed command's buffer capacities for an empty recording.
-    /// Retained readers keep their original shape data.
-    pub fn reusing(recording: CommandRecording) -> Self {
-        let (shapes, vessel) = take_shapes(recording.shapes, |shared| ShapeRecorder {
-            tables: shared.tables.with_capacity_of(),
-            ..ShapeRecorder::default()
-        });
-        let mut recorder = Self {
-            shapes,
-            content: recording.content,
-            vessel,
-        };
-        recorder.clear();
-        recorder
+    let tables = &shapes.tables;
+    let brush = &tables.brushes[record.brush as usize - 1];
+    let colors = tables.stops
+        [brush.stop_start as usize..(brush.stop_start + brush.stop_count) as usize]
+        .iter()
+        .map(|stop| Color(stop.color[0], stop.color[1], stop.color[2], stop.color[3]))
+        .collect();
+    let stops = (brush.explicit_len != NO_EXPLICIT_STOPS).then(|| {
+        tables.explicit_stops
+            [brush.explicit_start as usize..(brush.explicit_start + brush.explicit_len) as usize]
+            .to_vec()
+    });
+    let [a, b, c, d] = brush.params;
+    let tile_mode = TILE_MODES[brush.tile_mode as usize];
+    match brush.kind {
+        BRUSH_KIND_RADIAL => Brush::RadialGradient {
+            colors,
+            stops,
+            center: Point::new(a, b),
+            radius: c,
+            tile_mode,
+        },
+        BRUSH_KIND_SWEEP => Brush::SweepGradient {
+            colors,
+            stops,
+            center: Point::new(a, b),
+        },
+        _ => Brush::LinearGradient {
+            colors,
+            stops,
+            start: Point::new(a, b),
+            end: Point::new(c, d),
+            tile_mode,
+        },
     }
+}
 
-    /// Publishes completed command data without copying its shape columns.
-    /// A recording that took no earlier one's allocation gives back the
+/// Records draw commands into a [`CommandRecording`] it borrows, in place:
+/// [`CommandRecording::record`] lends the recording's shape columns and
+/// content, and [`Self::finish`] completes them there, so a recording kept
+/// from an earlier frame is drawn again in the storage it already has.
+#[derive(Debug)]
+pub struct CommandRecorder<'a> {
+    shapes: &'a mut ShapeRecorder,
+    content: &'a mut RecordingContent,
+    /// Whether the shape columns are new rather than an earlier
+    /// recording's, whose room [`Self::finish`] then trims.
+    fresh_shapes: bool,
+}
+
+impl<'a> CommandRecorder<'a> {
+    /// Completes the recording: closes the groups still open and notes its
+    /// bounds and counts. A recording into new shape columns gives back the
     /// room its growth left: drawing it again then refills that allocation.
-    pub fn finish(mut self) -> CommandRecording {
+    pub fn finish(self) {
+        self.finish_parts();
+    }
+
+    /// [`Self::finish`], then every primitive in recorded order, content
+    /// markers included.
+    pub fn into_primitives(self) -> Vec<DrawPrimitive> {
+        let (shapes, content) = self.finish_parts();
+        parts_primitives_with_markers(shapes, content).collect()
+    }
+
+    fn finish_parts(mut self) -> (&'a ShapeRecorder, &'a RecordingContent) {
         while !self.content.open_groups.is_empty() {
             self.push_group_end();
         }
-        if self.vessel.is_none() {
+        if self.fresh_shapes {
             self.shapes.tables.trim_growth();
         }
         self.content.shape_bounds = self.shapes.bounds();
         self.content.shape_count = self.shapes.tables.shapes.len() as u32;
         self.content.segment_count = self.shapes.tables.segments.len() as u32;
-        CommandRecording {
-            shapes: fill_vessel(self.vessel, self.shapes),
-            content: self.content,
-            fingerprint: OnceCell::new(),
-        }
+        (self.shapes, self.content)
     }
 
     /// Every recorded entry, including content markers.

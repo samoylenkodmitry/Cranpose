@@ -25,7 +25,8 @@ fn record(
     size: crate::modifier::Size,
 ) -> Vec<cranpose_ui_graphics::DrawPrimitive> {
     use cranpose_ui_graphics::DrawScope as _;
-    let mut scope = crate::draw::command_draw_scope(size);
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = crate::draw::command_draw_scope(size, &mut recording);
     func(&mut scope);
     scope.into_primitives()
 }
