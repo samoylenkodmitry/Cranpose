@@ -153,6 +153,7 @@ pub fn rebuild_graph_from_applier(
         Some(mut graph) => {
             release_for_rebuild(&mut graph.root);
             bump_recording_generation();
+            graph.retained_path = None;
             graph.update += 1;
             graph.root.note_content_change(graph.update);
             lower_root_into(applier, root, &mut graph.root).then_some(graph)
@@ -284,7 +285,8 @@ fn update_dirty_nodes(
                     hit_graph_dirty,
                 };
             }
-            let walked = walk_dirty_layers(applier, &mut graph.root, remaining_dirty_nodes, update);
+            let walked = walk_dirty_layers(applier, &mut graph.root, remaining_dirty_nodes, update)
+                .map(|(report, _)| report);
             return GraphUpdateReport {
                 update: classify_walk(applier, walked.is_some(), remaining_dirty_nodes),
                 hit_graph_dirty: hit_graph_dirty || walked.is_none_or(|r| r.hit_graph_dirty),
@@ -308,13 +310,41 @@ fn update_dirty_nodes(
         };
     }
 
-    let Some(report) = walk_dirty_layers(applier, &mut graph.root, remaining_dirty_nodes, update)
+    // An update that does not go along the retained path may move the
+    // layers on it, so only one that does keeps it.
+    if let Some(path) = graph.retained_path.take()
+        && let Some(report) = update_along_retained_path(
+            applier,
+            &mut graph.root,
+            &path,
+            remaining_dirty_nodes,
+            update,
+        )
+    {
+        if report.is_some() {
+            graph.retained_path = Some(RetainedPath { update, ..path });
+        }
+        return match report {
+            Some(report) => GraphUpdateReport {
+                update: GraphUpdate::Patched,
+                hit_graph_dirty: report.hit_graph_dirty,
+            },
+            None => GraphUpdateReport {
+                update: GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable),
+                hit_graph_dirty: true,
+            },
+        };
+    }
+
+    let Some((report, path)) =
+        walk_dirty_layers(applier, &mut graph.root, remaining_dirty_nodes, update)
     else {
         return GraphUpdateReport {
             update: GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable),
             hit_graph_dirty: true,
         };
     };
+    graph.retained_path = path;
 
     match classify_walk(applier, true, remaining_dirty_nodes) {
         GraphUpdate::Patched => GraphUpdateReport {
@@ -418,30 +448,179 @@ const DIRTY_ANCESTOR: u8 = 1;
 /// lookup.
 const DIRTY_NODE: u8 = 2;
 
+/// Walks from `root` down to the layers of the `dirty` nodes and updates
+/// them. With the report comes the way to the layer of a lone dirty node
+/// the walk updated, for the next update that changes that node alone.
 fn walk_dirty_layers(
     applier: &MemoryApplier,
     root: &mut LayerNode,
     dirty: &mut HashMap<NodeId, NodeUpdate>,
     update: u64,
-) -> Option<ReplaceDirtyLayersReport> {
+) -> Option<(ReplaceDirtyLayersReport, Option<RetainedPath>)> {
     let inherited = root.translated_content_context;
     let root_children = AbsOrigin::ROOT.children_of(root);
+    let lone = match dirty.keys().next() {
+        Some(&node) if dirty.len() == 1 => Some(node),
+        _ => None,
+    };
     let mut ancestry = crate::thread_state::with(|state| state.dirty_ancestry.take());
     mark_dirty_ancestry(applier, dirty, &mut ancestry);
+    let mut walk = DirtyWalk {
+        nodes: dirty,
+        ancestry: &ancestry,
+        applier,
+    };
     let walked = replace_dirty_layers_from_applier(
         applier,
         root,
         root_children,
-        DirtyWalk {
-            nodes: dirty,
-            ancestry: &ancestry,
-            applier,
-        },
+        walk.reborrow(),
         inherited,
         update,
     );
+    let path = match (&walked, lone) {
+        (Some(report), Some(node)) if report.updated && walk.nodes.is_empty() => {
+            RetainedPath::to(root, &walk, node, update)
+        }
+        _ => None,
+    };
     crate::thread_state::with(|state| state.dirty_ancestry.set(ancestry));
-    walked
+    walked.map(|report| (report, path))
+}
+
+/// The way from the root to the layer of a node that the last scene
+/// updates changed alone, as an animation changes one layer each frame,
+/// and what the layer's parent passes it. The next update that changes that
+/// node alone goes along it instead of walking down from the root: no
+/// other update ran since, so the layers on the way are where they were.
+#[derive(Clone)]
+pub(crate) struct RetainedPath {
+    node: NodeId,
+    /// The index of each layer on the way in its parent's children and the
+    /// identity it had there, from a child of the root to the node's layer.
+    steps: Vec<(usize, Option<NodeId>)>,
+    pass: ParentPass,
+    /// The update that went along the path last.
+    update: u64,
+}
+
+impl RetainedPath {
+    /// The way to the layer of `node` through the layers `walk` marks, as
+    /// the walk of update `update` went.
+    fn to(root: &LayerNode, walk: &DirtyWalk<'_>, node: NodeId, update: u64) -> Option<Self> {
+        let mut steps = Vec::new();
+        let pass = path_steps(
+            root,
+            AbsOrigin::ROOT.children_of(root),
+            root.translated_content_context,
+            walk,
+            node,
+            &mut steps,
+        )?;
+        Some(Self {
+            node,
+            steps,
+            pass,
+            update,
+        })
+    }
+}
+
+/// Appends to `steps` the way from `parent`, whose children sit at
+/// `parent_children`, to the layer of `node`, searching the children as the
+/// dirty walk does, and returns what that layer's parent passes it.
+fn path_steps(
+    parent: &LayerNode,
+    parent_children: AbsOrigin,
+    inherited_translated_content_context: bool,
+    walk: &DirtyWalk<'_>,
+    node: NodeId,
+    steps: &mut Vec<(usize, Option<NodeId>)>,
+) -> Option<ParentPass> {
+    let translated = inherited_translated_content_context || parent.translated_content_context;
+    for (index, child) in parent.children.iter().enumerate() {
+        let RenderNode::Layer(layer) = child else {
+            continue;
+        };
+        let identity = layer_identity(layer);
+        if identity == Some(node) {
+            steps.push((index, identity));
+            return Some(ParentPass::of(parent, parent_children, translated));
+        }
+        if walk.marks(identity) & DIRTY_ANCESTOR == 0 {
+            continue;
+        }
+        steps.push((index, identity));
+        let children = parent_children.children_of(layer);
+        if let Some(pass) = path_steps(layer, children, translated, walk, node, steps) {
+            return Some(pass);
+        }
+        steps.pop();
+    }
+    None
+}
+
+/// Updates the lone dirty node in `dirty` along `path` when the path leads
+/// to it: `None` when it does not, and nothing changed. Otherwise the
+/// update's report, `None` when the node's data is gone.
+fn update_along_retained_path(
+    applier: &MemoryApplier,
+    root: &mut LayerNode,
+    path: &RetainedPath,
+    dirty: &mut HashMap<NodeId, NodeUpdate>,
+    update: u64,
+) -> Option<Option<ReplaceDirtyLayersReport>> {
+    if dirty.len() != 1 || path.update + 1 != update || !leads_to(root, &path.steps) {
+        return None;
+    }
+    let kind = dirty.remove(&path.node)?;
+    Some(update_at_step(
+        applier,
+        root,
+        path,
+        &path.steps,
+        kind,
+        dirty,
+        update,
+    ))
+}
+
+/// Whether each step of `steps` from `layer` finds the layer it names.
+fn leads_to(mut layer: &LayerNode, steps: &[(usize, Option<NodeId>)]) -> bool {
+    for &(index, identity) in steps {
+        match layer.children.get(index) {
+            Some(RenderNode::Layer(child)) if layer_identity(child) == identity => layer = child,
+            _ => return false,
+        }
+    }
+    !steps.is_empty()
+}
+
+/// Goes down `steps` from `layer` to the path's layer, updates it for
+/// `kind`, and brings the facts of each layer on the way up to date.
+fn update_at_step(
+    applier: &MemoryApplier,
+    layer: &mut LayerNode,
+    path: &RetainedPath,
+    steps: &[(usize, Option<NodeId>)],
+    kind: NodeUpdate,
+    dirty: &mut HashMap<NodeId, NodeUpdate>,
+    update: u64,
+) -> Option<ReplaceDirtyLayersReport> {
+    let (&(index, _), rest) = steps.split_first()?;
+    let Some(RenderNode::Layer(child)) = layer.children.get_mut(index) else {
+        return None;
+    };
+    let hit_graph_dirty = if rest.is_empty() {
+        update_dirty_layer(applier, child, path.node, kind, dirty, path.pass, update)?.0
+    } else {
+        update_at_step(applier, child, path, rest, kind, dirty, update)?.hit_graph_dirty
+    };
+    note_updated_children(layer, update);
+    Some(ReplaceDirtyLayersReport {
+        updated: true,
+        hit_graph_dirty,
+    })
 }
 
 fn mark_dirty_ancestry(
@@ -482,6 +661,11 @@ fn replace_dirty_layers_from_applier(
 
     let child_inherited_translated_content_context =
         inherited_translated_content_context || parent.translated_content_context;
+    let pass = ParentPass::of(
+        parent,
+        parent_children,
+        child_inherited_translated_content_context,
+    );
     let mut report = ReplaceDirtyLayersReport::default();
 
     for child in &mut parent.children {
@@ -498,25 +682,21 @@ fn replace_dirty_layers_from_applier(
             continue;
         }
         if marks & DIRTY_NODE != 0
-            && let Some(kind) = identity.and_then(|id| dirty.nodes.remove(&id))
+            && let Some(node_id) = identity
+            && let Some(kind) = dirty.nodes.remove(&node_id)
         {
-            if let Some(hit_graph_dirty) = try_update_retained_layer(
+            let (hit_graph_dirty, retained) = update_dirty_layer(
                 applier,
                 child_layer,
-                dirty.nodes,
+                node_id,
                 kind,
-                false,
-                TranslateAncestorContext {
-                    inherited_motion_context_animated: parent.motion_context_animated,
-                    update,
-                    inherited_translated_content_context:
-                        child_inherited_translated_content_context,
-                    parent_content_offset: parent.content_offset,
-                    parent_abs: parent_children,
-                },
-            ) {
-                report.hit_graph_dirty |= hit_graph_dirty;
-                report.updated = true;
+                dirty.nodes,
+                pass,
+                update,
+            )?;
+            report.hit_graph_dirty |= hit_graph_dirty;
+            report.updated = true;
+            if retained {
                 let child_children = parent_children.children_of(child_layer);
                 let child_report = replace_dirty_layers_from_applier(
                     applier,
@@ -527,31 +707,7 @@ fn replace_dirty_layers_from_applier(
                     update,
                 )?;
                 report.hit_graph_dirty |= child_report.hit_graph_dirty;
-                continue;
             }
-            let node_id = layer_identity(child_layer).expect("dirty layer must have a node id");
-
-            // Nodes that leave this subtree are gone from the scene: nothing
-            // remains to update for them, and a dirty one would otherwise go
-            // unmatched and rebuild the whole scene.
-            remove_dirty_descendants(child_layer, dirty.nodes);
-            let context = LowerContext {
-                inherited_motion_context_animated: parent.motion_context_animated,
-                inherited_translated_content_context: child_inherited_translated_content_context,
-                parent_abs: Some(parent_children),
-                parent_content_offset: parent.content_offset,
-            };
-            report.hit_graph_dirty |= rebuild_tracking_hits(child_layer, |layer| {
-                release_for_rebuild(layer);
-                read_placed_node_data(applier, node_id, false, |data| {
-                    write_node_layer(applier, node_id, data, context, layer);
-                })
-                .is_some()
-            })?;
-            remove_dirty_descendants(child_layer, dirty.nodes);
-
-            child_layer.note_content_change(update);
-            report.updated = true;
             continue;
         }
 
@@ -572,15 +728,97 @@ fn replace_dirty_layers_from_applier(
     }
 
     if report.updated {
-        parent.refresh_child_facts();
-        // A layer's own sinks are not kept apart from its children's, so a
-        // child that stopped publishing leaves the flag set, which only keeps
-        // the scroll fast path off; a child that started must set it.
-        parent.has_origin_sinks |= children_have_origin_sinks(&parent.children);
-        parent.note_descendant_change(update);
+        note_updated_children(parent, update);
     }
 
     Some(report)
+}
+
+/// Brings `parent`'s facts about its children up to date after scene update
+/// `update` changed a layer beneath it.
+fn note_updated_children(parent: &mut LayerNode, update: u64) {
+    parent.refresh_child_facts();
+    // A layer's own sinks are not kept apart from its children's, so a
+    // child that stopped publishing leaves the flag set, which only keeps
+    // the scroll fast path off; a child that started must set it.
+    parent.has_origin_sinks |= children_have_origin_sinks(&parent.children);
+    parent.note_descendant_change(update);
+}
+
+/// What a layer passes the children it lays out to a scene update that
+/// changes one of them.
+#[derive(Clone, Copy)]
+pub(crate) struct ParentPass {
+    motion_context_animated: bool,
+    translated_content_context: bool,
+    content_offset: Point,
+    children: AbsOrigin,
+}
+
+impl ParentPass {
+    /// What `parent`, whose children sit at `children`, passes them, where
+    /// the layers above it set `translated_content_context`.
+    fn of(parent: &LayerNode, children: AbsOrigin, translated_content_context: bool) -> Self {
+        Self {
+            motion_context_animated: parent.motion_context_animated,
+            translated_content_context,
+            content_offset: parent.content_offset,
+            children,
+        }
+    }
+}
+
+/// Updates `layer`, the layer of the dirty node `node_id`, for the change
+/// `kind`: in place when the layer can keep what it drew, else lowered
+/// again from the node. Returns whether hit geometry changed and whether
+/// the layer was kept, whose children may hold dirty layers yet; a layer
+/// lowered again drops the dirty nodes beneath it from `dirty_nodes`.
+/// `None` when the node's data is gone.
+fn update_dirty_layer(
+    applier: &MemoryApplier,
+    layer: &mut LayerNode,
+    node_id: NodeId,
+    kind: NodeUpdate,
+    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
+    pass: ParentPass,
+    update: u64,
+) -> Option<(bool, bool)> {
+    if let Some(hit_graph_dirty) = try_update_retained_layer(
+        applier,
+        layer,
+        dirty_nodes,
+        kind,
+        false,
+        TranslateAncestorContext {
+            inherited_motion_context_animated: pass.motion_context_animated,
+            update,
+            inherited_translated_content_context: pass.translated_content_context,
+            parent_content_offset: pass.content_offset,
+            parent_abs: pass.children,
+        },
+    ) {
+        return Some((hit_graph_dirty, true));
+    }
+    // Nodes that leave this subtree are gone from the scene: nothing
+    // remains to update for them, and a dirty one would otherwise go
+    // unmatched and rebuild the whole scene.
+    remove_dirty_descendants(layer, dirty_nodes);
+    let context = LowerContext {
+        inherited_motion_context_animated: pass.motion_context_animated,
+        inherited_translated_content_context: pass.translated_content_context,
+        parent_abs: Some(pass.children),
+        parent_content_offset: pass.content_offset,
+    };
+    let hit_graph_dirty = rebuild_tracking_hits(layer, |layer| {
+        release_for_rebuild(layer);
+        read_placed_node_data(applier, node_id, false, |data| {
+            write_node_layer(applier, node_id, data, context, layer);
+        })
+        .is_some()
+    })?;
+    remove_dirty_descendants(layer, dirty_nodes);
+    layer.note_content_change(update);
+    Some((hit_graph_dirty, false))
 }
 
 fn translate_bail(reason: &str) -> bool {
