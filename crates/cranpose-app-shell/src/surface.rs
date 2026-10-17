@@ -208,7 +208,7 @@ impl<R: Renderer> RootSurface<R> {
     }
 
     pub(crate) fn renderer_warmup_due(&self, app: &ShellApp) -> bool {
-        self.renderer.needs_frame_warmup() && !app.runtime.runtime_handle().has_frame_callbacks()
+        self.renderer.needs_frame_warmup() && !app.composition.runtime().has_frame_callbacks()
     }
 
     pub(crate) fn needs_redraw_in_context(&self, app: &ShellApp) -> bool {
