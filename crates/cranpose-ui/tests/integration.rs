@@ -1,6 +1,7 @@
 mod api_surface;
 mod baseline_alignment_integration;
 mod basic_text_field_style_integration;
+mod bottom_up_layout;
 mod cjk_line_breaks;
 mod debug_and_draw_scopes;
 mod directional_layout;
