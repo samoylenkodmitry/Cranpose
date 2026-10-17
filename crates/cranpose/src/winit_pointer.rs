@@ -1,4 +1,5 @@
 use cranpose_app_shell::PointerSource;
+use cranpose_ui::PointerButton;
 use winit::event::{
     ButtonSource, MouseButton, PointerSource as WinitPointerSource, TabletToolButton,
 };
@@ -31,6 +32,19 @@ pub(crate) fn is_primary_pointer_button(button: &ButtonSource) -> bool {
         ButtonSource::Touch { .. } => true,
         ButtonSource::TabletTool { button, .. } => is_primary_tablet_button(*button),
         _ => false,
+    }
+}
+
+/// The button of the framework that a mouse button other than the left one
+/// is, or `None` for the left button, which presses as the primary pointer,
+/// and for a button the framework has no name for.
+pub(crate) fn other_mouse_button(button: &ButtonSource) -> Option<PointerButton> {
+    match button {
+        ButtonSource::Mouse(MouseButton::Right) => Some(PointerButton::Secondary),
+        ButtonSource::Mouse(MouseButton::Middle) => Some(PointerButton::Middle),
+        ButtonSource::Mouse(MouseButton::Back) => Some(PointerButton::Back),
+        ButtonSource::Mouse(MouseButton::Forward) => Some(PointerButton::Forward),
+        _ => None,
     }
 }
 

@@ -399,6 +399,19 @@ impl LayoutNodeCacheHandles {
         self.state.dirt.set(dirt);
     }
 
+    /// Clears the node's layout flag and its descendants' flags, and returns
+    /// the flags as they were, which [`Self::restore_dirt`] puts back.
+    pub(crate) fn take_layout_dirt(&self) -> LayoutDirt {
+        let dirt = self.dirt();
+        self.clear_layout_dirt();
+        dirt
+    }
+
+    /// Puts back flags [`Self::take_layout_dirt`] took.
+    pub(crate) fn restore_dirt(&self, dirt: LayoutDirt) {
+        self.set_dirt(dirt);
+    }
+
     /// Clears the node's layout flag and its descendants' flags: the pass
     /// laid it out.
     pub(crate) fn clear_layout_dirt(&self) {
@@ -550,6 +563,19 @@ impl LayoutNodeCacheHandles {
         measured: Rc<MeasuredNode>,
     ) {
         self.store_held_measurement(constraints, measured, None, true);
+    }
+
+    /// Runs `read` on the measurement the cache holds, with whether it
+    /// ignores its children's sizes; `None` while it holds none.
+    pub(crate) fn read_measurement<R>(
+        &self,
+        read: impl FnOnce(&MeasuredNode, bool) -> R,
+    ) -> Option<R> {
+        let state = self.state.cache.borrow();
+        state
+            .measurement
+            .as_ref()
+            .map(|entry| read(&entry.measured, entry.ignores_child_sizes))
     }
 
     /// Whether `measured`, the measurement the cache has, ignores its
@@ -1360,6 +1386,12 @@ impl LayoutNode {
 
     pub(crate) fn layout_runtime_state_handle(&self) -> Rc<RefCell<LayoutRuntimeState>> {
         self.layout_runtime_state.clone()
+    }
+
+    /// The node's layout runtime state, borrowed where
+    /// [`Self::layout_runtime_state_handle`] would share it.
+    pub(crate) fn layout_runtime_state(&self) -> &RefCell<LayoutRuntimeState> {
+        &self.layout_runtime_state
     }
 
     #[cfg(test)]

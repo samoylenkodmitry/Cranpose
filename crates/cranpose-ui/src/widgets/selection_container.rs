@@ -7,7 +7,7 @@ use cranpose_core::{
     CompositionLocal, CompositionLocalProvider, DisposableEffect, remember, rememberMutableStateOf,
     with_current_composer,
 };
-use cranpose_foundation::{PointerButton, modifier_element};
+use cranpose_foundation::modifier_element;
 
 use crate::{
     PointerEventKind, PointerInputScope, composable,
@@ -97,13 +97,7 @@ async fn select_with_pointer(scope: PointerInputScope, gesture: Rc<SelectionGest
                     continue;
                 }
                 match event.kind {
-                    PointerEventKind::Down => {
-                        let secondary_only = event.buttons.contains(PointerButton::Secondary)
-                            && !event.buttons.contains(PointerButton::Primary);
-                        if !secondary_only {
-                            gesture.on_down(&event);
-                        }
-                    }
+                    PointerEventKind::Down => gesture.on_down(&event),
                     PointerEventKind::Move => {
                         if gesture.on_move(&event) {
                             event.consume();
@@ -171,9 +165,9 @@ pub(crate) fn selectable_text(
             scope.on_dispose(move || registrar.unsubscribe(key))
         });
     }
-    let reporter = Modifier::from_parts(&[modifier_element(SelectableTextElement::new(
+    let reporter = Modifier::from_dyn_element(modifier_element(SelectableTextElement::new(
         Rc::clone(&geometry),
-    ))]);
+    )));
     reporter.draw_behind(move |scope| {
         geometry.set_content_size(scope.size());
         for line in registrar.highlight(key) {

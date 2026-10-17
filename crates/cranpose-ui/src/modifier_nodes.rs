@@ -1433,12 +1433,7 @@ impl ClickableNode {
                 PointerEventKind::Cancel => {
                     press_position.set(ClickPress::Cancelled);
                 }
-                PointerEventKind::Scroll
-                | PointerEventKind::Zoom
-                | PointerEventKind::RotaryScrollPre
-                | PointerEventKind::RotaryScroll
-                | PointerEventKind::Enter
-                | PointerEventKind::Exit => {}
+                _ => {}
             }
         })
     }

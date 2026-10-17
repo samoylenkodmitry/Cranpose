@@ -2349,12 +2349,7 @@ fn DraggableOverlay(
                                     PointerEventKind::Up | PointerEventKind::Cancel => {
                                         drag_offset = None;
                                     }
-                                    PointerEventKind::Scroll
-                                    | PointerEventKind::Zoom
-                                    | PointerEventKind::RotaryScrollPre
-                                    | PointerEventKind::RotaryScroll
-                                    | PointerEventKind::Enter
-                                    | PointerEventKind::Exit => {}
+                                    _ => {}
                                 }
                             }
                         })

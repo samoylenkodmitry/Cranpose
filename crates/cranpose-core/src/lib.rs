@@ -24,6 +24,7 @@ pub mod env_flags;
 mod frame_clock;
 mod hooks;
 mod launched_effect;
+mod layout_dirt_roots;
 mod node_marks;
 /// `Owned`, the handle to a value that a composition remembers.
 pub mod owned;
@@ -2216,6 +2217,7 @@ fn bubble_layout_dirty_composer<N: Node + 'static>(mut node_id: NodeId) {
     let _ = with_node_mut(node_id, |node: &mut N| {
         node.mark_needs_layout();
     });
+    with_current_composer(|composer| composer.borrow_applier().note_layout_dirt(node_id));
 
     while let Ok(Some(pid)) = with_node_mut(node_id, |node: &mut N| node.parent()) {
         let parent_id = pid;
@@ -2366,6 +2368,12 @@ pub trait Applier: Any {
     /// ([`Self::note_bubble_pass`]). Batches nest.
     fn begin_bubble_batch(&mut self) {}
 
+    /// Notes that a dirty bubble marked `id` as needing measure or layout,
+    /// or carried the dirt of `id` to its ancestors, for a layout pass that
+    /// starts from the dirty nodes. An applier that keeps no notes ignores
+    /// it.
+    fn note_layout_dirt(&mut self, _id: NodeId) {}
+
     /// Closes the batch [`Self::begin_bubble_batch`] opened.
     fn end_bubble_batch(&mut self) {}
 
@@ -2499,6 +2507,9 @@ impl DirtyBubble {
     /// Marks every ancestor of `node_id` up to the root as having a dirty
     /// descendant, leaving `node_id`'s own flags as they are.
     fn apply_to_ancestors(self, applier: &mut dyn Applier, node_id: NodeId) {
+        if self.layout || self.measure {
+            applier.note_layout_dirt(node_id);
+        }
         let parent = applier.get_mut(node_id).ok().and_then(|node| node.parent());
         self.walk(applier, parent, false);
     }
@@ -2522,7 +2533,11 @@ impl DirtyBubble {
             };
             self.mark(node, start);
             next = node.parent();
+            let started = start;
             start = start && node.is_virtual();
+            if started && !start && (self.layout || self.measure) {
+                applier.note_layout_dirt(id);
+            }
         }
     }
 
@@ -3778,6 +3793,7 @@ struct MemoryApplierState {
     structural_change_parents: Vec<NodeId>,
     virtual_node_ids: HashSet<NodeId>,
     bubble_passes: bubble_passes::BubblePasses,
+    layout_dirt_roots: layout_dirt_roots::LayoutDirtRoots,
 }
 
 /// Reusable ancestry storage for [`MemoryApplier::scene_nodes_attached_to_into`].
@@ -4543,6 +4559,14 @@ impl MemoryApplier {
         }
     }
 
+    /// Moves into `out` the nodes the layout dirty bubbles started from
+    /// since the last call, for a layout pass that starts from them, and
+    /// forgets them. `false` when there were more than the applier keeps:
+    /// `out` is then empty and the pass walks down from the root.
+    pub fn take_layout_dirt_roots(&mut self, out: &mut Vec<NodeId>) -> bool {
+        self.state.layout_dirt_roots.take_into(out)
+    }
+
     fn resolve_node_index(&self, id: NodeId) -> Option<usize> {
         self.state.stable_index.slot(id)
     }
@@ -4795,6 +4819,10 @@ impl Applier for MemoryApplier {
 
     fn begin_bubble_batch(&mut self) {
         self.state.bubble_passes.begin_batch();
+    }
+
+    fn note_layout_dirt(&mut self, id: NodeId) {
+        self.state.layout_dirt_roots.note(id);
     }
 
     fn end_bubble_batch(&mut self) {

@@ -1,3 +1,4 @@
+mod bottom_up;
 /// Re-exports of the alignment, arrangement and measurable types that layout policies use.
 pub mod core;
 pub(crate) mod flex_box;
@@ -293,6 +294,8 @@ impl<T> Default for ScratchVecPool<T> {
 pub(crate) struct FrameLayoutArena {
     tmp_child_ids: ScratchVecPool<NodeId>,
     tmp_placements: ScratchVecPool<Placement>,
+    /// The marks a pass that starts from the dirty nodes cleared.
+    cleared_marks: Vec<(NodeId, crate::widgets::nodes::LayoutDirt)>,
 }
 
 #[cfg(test)]
@@ -1422,7 +1425,7 @@ pub fn measure_layout_with_options(
 
     let measured = builder
         .state
-        .measure_node(root, normalize_constraints(constraints))?;
+        .measure_root(root, normalize_constraints(constraints))?;
     stages.reached();
 
     if let Ok(mut applier) = applier_host.try_borrow_typed() {

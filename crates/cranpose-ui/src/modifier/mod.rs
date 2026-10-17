@@ -50,8 +50,9 @@ pub(crate) use chain::{InPlaceReach, InPlaceUpdate};
 pub use chain::{ModifierChainHandle, ModifierChainInspectorNode, ModifierLocalsHandle};
 pub(crate) use coordinator_geometry::{CoordinatorGeometry, CoordinatorRect};
 pub use cranpose_foundation::{
-    AnyModifierElement, DynModifierElement, FocusState, PointerEvent, PointerEventKind,
-    PointerSource, RotaryScrollEvent, SemanticsConfiguration, modifier_element,
+    AnyModifierElement, DynModifierElement, FocusState, PointerButton, PointerButtons,
+    PointerEvent, PointerEventKind, PointerSource, RotaryScrollEvent, SemanticsConfiguration,
+    modifier_element,
 };
 use cranpose_foundation::{ModifierNodeElement, NodeCapabilities, ProgressBarRangeInfo};
 #[expect(unused_imports)]
@@ -255,24 +256,35 @@ enum Elements {
 }
 
 impl Elements {
-    fn from_slice(elements: &[DynModifierElement]) -> Self {
-        match elements {
-            [element] => Self::One(element.clone()),
-            _ => Self::Many(Rc::new(elements.iter().cloned().collect())),
+    /// These elements followed by `more`. Elements move into the joined
+    /// chain; only those another modifier also holds are copied.
+    fn joined(self, more: Self) -> Self {
+        let mut chain = match self {
+            Self::One(first) => {
+                let mut chain = ModifierElements::new();
+                chain.push(first);
+                Rc::new(chain)
+            }
+            Self::Many(chain) => chain,
+        };
+        match Rc::get_mut(&mut chain) {
+            Some(owned) => more.move_into(owned),
+            None => {
+                let mut copy: ModifierElements = chain.iter().cloned().collect();
+                more.move_into(&mut copy);
+                chain = Rc::new(copy);
+            }
         }
+        Self::Many(chain)
     }
 
-    fn extend_from(&mut self, more: &[DynModifierElement]) {
+    fn move_into(self, chain: &mut ModifierElements) {
         match self {
-            Self::Many(shared) => match Rc::get_mut(shared) {
-                Some(owned) => owned.extend(more.iter().cloned()),
-                None => *shared = Rc::new(shared.iter().chain(more).cloned().collect()),
+            Self::One(element) => chain.push(element),
+            Self::Many(shared) => match Rc::try_unwrap(shared) {
+                Ok(owned) => chain.extend(owned),
+                Err(shared) => chain.extend(shared.iter().cloned()),
             },
-            Self::One(first) => {
-                *self = Self::Many(Rc::new(
-                    std::iter::once(&*first).chain(more).cloned().collect(),
-                ));
-            }
         }
     }
 
@@ -421,7 +433,7 @@ impl Modifier {
         F: Fn() -> T + 'static,
     {
         let element = ModifierLocalProviderElement::new(key, value);
-        let modifier = Modifier::from_parts(&[modifier_element(element)]);
+        let modifier = Modifier::from_dyn_element(modifier_element(element));
         self.then(modifier)
     }
 
@@ -432,7 +444,7 @@ impl Modifier {
         F: for<'scope> Fn(&mut ModifierLocalReadScope<'scope>) + 'static,
     {
         let element = ModifierLocalConsumerElement::new(consumer);
-        let modifier = Modifier::from_parts(&[modifier_element(element)]);
+        let modifier = Modifier::from_dyn_element(modifier_element(element));
         self.then(modifier)
     }
 
@@ -509,7 +521,7 @@ impl Modifier {
         };
         let element = SemanticsElement::new(recorder, reads_live_state);
         let modifier =
-            Modifier::from_parts(&[modifier_element(element)]).with_inspector_metadata(metadata);
+            Modifier::from_dyn_element(modifier_element(element)).with_inspector_metadata(metadata);
         self.then(modifier)
     }
 
@@ -745,7 +757,7 @@ impl Modifier {
     /// can be focused programmatically.
     pub fn focus_target(self) -> Self {
         let element = FocusTargetElement::new();
-        let modifier = Modifier::from_parts(&[modifier_element(element)]);
+        let modifier = Modifier::from_dyn_element(modifier_element(element));
         self.then(modifier)
     }
 
@@ -758,7 +770,7 @@ impl Modifier {
         F: Fn(FocusState) + 'static,
     {
         let element = FocusTargetElement::with_callback(callback);
-        let modifier = Modifier::from_parts(&[modifier_element(element)]);
+        let modifier = Modifier::from_dyn_element(modifier_element(element));
         self.then(modifier)
     }
 
@@ -770,7 +782,7 @@ impl Modifier {
     /// `request_focus` moves whichever focus targets are attached there.
     pub fn focus_requester(self, requester: &FocusRequester) -> Self {
         let element = FocusRequesterElement::new(requester.clone());
-        let modifier = Modifier::from_parts(&[modifier_element(element)]);
+        let modifier = Modifier::from_dyn_element(modifier_element(element));
         self.then(modifier)
     }
 
@@ -783,7 +795,7 @@ impl Modifier {
     /// signal for itself.
     pub fn semantics_requester(self, requester: &SemanticsRequester) -> Self {
         let element = SemanticsRequesterElement::new(requester.clone());
-        let modifier = Modifier::from_parts(&[modifier_element(element)]);
+        let modifier = Modifier::from_dyn_element(modifier_element(element));
         self.then(modifier)
     }
 
@@ -885,7 +897,7 @@ impl Modifier {
         }
 
         let element = DebugChainElement { tag };
-        let modifier = Modifier::from_parts(&[modifier_element(element)]);
+        let modifier = Modifier::from_dyn_element(modifier_element(element));
         self.then(modifier)
             .with_inspector_metadata(inspector_metadata("debugChain", move |info| {
                 info.add_property("tag", tag);
@@ -898,46 +910,42 @@ impl Modifier {
     /// alone, so each link joins them in place instead of copying the chain.
     /// Clone a modifier first to keep using it; the join then copies it.
     pub fn then(self, next: Modifier) -> Modifier {
-        let Modifier {
-            kind,
-            element_count,
-            provides_composition_locals,
-        } = self;
         let ModifierKind::Single {
-            mut elements,
+            elements,
             inspector,
-        } = kind
+        } = self.kind
         else {
             return next;
         };
         let ModifierKind::Single {
             elements: next_elements,
             inspector: next_inspector,
-        } = &next.kind
+        } = next.kind
         else {
             return Modifier {
                 kind: ModifierKind::Single {
                     elements,
                     inspector,
                 },
-                element_count,
-                provides_composition_locals,
+                ..self
             };
         };
 
-        elements.extend_from(next_elements);
         let inspector = if next_inspector.is_none() {
             inspector
         } else {
-            merged_inspector(inspector_slice(&inspector), inspector_slice(next_inspector))
+            merged_inspector(
+                inspector_slice(&inspector),
+                inspector_slice(&next_inspector),
+            )
         };
         Modifier {
             kind: ModifierKind::Single {
-                elements,
+                elements: elements.joined(next_elements),
                 inspector,
             },
-            element_count: element_count + next.element_count,
-            provides_composition_locals: provides_composition_locals
+            element_count: self.element_count + next.element_count,
+            provides_composition_locals: self.provides_composition_locals
                 || next.provides_composition_locals,
         }
     }
@@ -1068,26 +1076,18 @@ impl Modifier {
     where
         E: ModifierNodeElement,
     {
-        Self::from_parts(&[modifier_element(element)])
+        Self::from_dyn_element(modifier_element(element))
     }
 
-    /// A modifier of `elements`, held in one shared allocation.
-    pub(crate) fn from_parts(elements: &[DynModifierElement]) -> Self {
-        if elements.is_empty() {
-            Self::default()
-        } else {
-            let element_count = elements.len();
-            let provides_composition_locals = elements
-                .iter()
-                .any(|element| element.provides_composition_locals());
-            Self {
-                kind: ModifierKind::Single {
-                    elements: Elements::from_slice(elements),
-                    inspector: None,
-                },
-                element_count,
-                provides_composition_locals,
-            }
+    /// A modifier of the one `element`.
+    pub(crate) fn from_dyn_element(element: DynModifierElement) -> Self {
+        Self {
+            provides_composition_locals: element.provides_composition_locals(),
+            kind: ModifierKind::Single {
+                elements: Elements::One(element),
+                inspector: None,
+            },
+            element_count: 1,
         }
     }
 

@@ -618,12 +618,7 @@ fn handle_swipe_event(controller: &Rc<SwipeToDismissController>, event: &Pointer
             controller.phase.set(SwipePhase::Idle);
             controller.active_pointer.set(None);
         }
-        PointerEventKind::Scroll
-        | PointerEventKind::Zoom
-        | PointerEventKind::RotaryScrollPre
-        | PointerEventKind::RotaryScroll
-        | PointerEventKind::Enter
-        | PointerEventKind::Exit => {}
+        _ => {}
     }
 }
 

@@ -21,7 +21,7 @@ use cranpose_render_wgpu::{WgpuRenderer, WgpuTextSystem};
 use winit::{
     application::ApplicationHandler,
     dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position},
-    event::{ButtonSource, ElementState, MouseButton, WindowEvent},
+    event::{ButtonSource, ElementState, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     icon::{Icon, RgbaIcon},
     window::{ResizeDirection, Window, WindowAttributes, WindowId as WinitWindowId, WindowLevel},
@@ -45,7 +45,8 @@ use crate::{
         present_initial_placeholder_frame_cleared_to, surface_present_required,
     },
     winit_pointer::{
-        is_primary_pointer_button, pointer_source_from_button, pointer_source_from_winit,
+        is_primary_pointer_button, other_mouse_button, pointer_source_from_button,
+        pointer_source_from_winit,
     },
 };
 
@@ -283,6 +284,42 @@ fn robot_query_should_drain_frame(app: &AppShell<WgpuRenderer>) -> bool {
 #[cfg(feature = "robot")]
 fn robot_query_visual_dirty(update_result: FrameUpdateResult, needs_redraw: bool) -> bool {
     update_result.visual_changed || needs_redraw
+}
+
+/// Presses (`true`) or releases a mouse button for the robot. The primary
+/// button also opens or closes the robot's synthetic gesture, and the
+/// recorder writes it down.
+#[cfg(feature = "robot")]
+fn robot_mouse_button(
+    app: &mut AppShell<WgpuRenderer>,
+    controller: &mut RobotController,
+    recorder: Option<&mut crate::recorder::InputRecorder>,
+    (button, pressed): (cranpose_ui::PointerButton, bool),
+) -> bool {
+    if button != cranpose_ui::PointerButton::Primary {
+        let mut surface = app.primary();
+        return if pressed {
+            surface.mouse_button_pressed(button)
+        } else {
+            surface.mouse_button_released(button)
+        };
+    }
+    let event_time = app.realtime_pointer_event_time(None);
+    if pressed {
+        controller.begin_synthetic_primary_gesture();
+        let handled = app.pointer_pressed_at_event_time(event_time);
+        if let Some(recorder) = recorder {
+            recorder.record_mouse_down();
+        }
+        handled
+    } else {
+        let handled = app.pointer_released_at_event_time(event_time);
+        controller.end_synthetic_primary_gesture();
+        if let Some(recorder) = recorder {
+            recorder.record_mouse_up();
+        }
+        handled
+    }
 }
 
 #[cfg(feature = "robot")]
@@ -3233,18 +3270,18 @@ impl App {
                     }
                 }
             }
-            WindowEvent::PointerButton {
-                state: ElementState::Pressed,
-                button: ButtonSource::Mouse(MouseButton::Middle),
-                ..
-            } => {
+            WindowEvent::PointerButton { state, button, .. } => {
                 Self::refresh_native_cursor_from_platform_pointer(
                     &self.native_window_platform_probe,
                     app,
                     native,
                 );
                 if let Some(mut surface) = native_surface(app, native) {
-                    dispatch_middle_click_paste(&mut surface, native.last_cursor_position);
+                    dispatch_other_mouse_button(
+                        &mut surface,
+                        (&button, state),
+                        native.last_cursor_position,
+                    );
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -5351,6 +5388,30 @@ fn wheel_uptime_millis() -> u64 {
         .as_millis() as u64
 }
 
+/// Sends a press or release of a mouse button other than the left one to
+/// `surface`; a middle press also pastes the primary selection, as Linux
+/// desktops do. Any other button of a pen or a touch does nothing.
+fn dispatch_other_mouse_button(
+    surface: &mut SurfaceMut<'_, WgpuRenderer>,
+    (button, state): (&ButtonSource, ElementState),
+    cursor_position: Option<(f32, f32)>,
+) {
+    let Some(button) = other_mouse_button(button) else {
+        return;
+    };
+    match state {
+        ElementState::Pressed => {
+            if button == cranpose_ui::PointerButton::Middle {
+                dispatch_middle_click_paste(surface, cursor_position);
+            }
+            surface.mouse_button_pressed(button);
+        }
+        ElementState::Released => {
+            surface.mouse_button_released(button);
+        }
+    }
+}
+
 fn dispatch_middle_click_paste(
     surface: &mut SurfaceMut<'_, WgpuRenderer>,
     cursor_position: Option<(f32, f32)>,
@@ -6076,11 +6137,7 @@ impl ApplicationHandler for App {
                     }
                 }
             }
-            WindowEvent::PointerButton {
-                state: ElementState::Pressed,
-                button: ButtonSource::Mouse(MouseButton::Middle),
-                ..
-            } => {
+            WindowEvent::PointerButton { state, button, .. } => {
                 Self::refresh_primary_cursor_from_platform_pointer(
                     &self.native_window_platform_probe,
                     window,
@@ -6088,7 +6145,11 @@ impl ApplicationHandler for App {
                     app,
                     &mut self.last_cursor_position,
                 );
-                dispatch_middle_click_paste(&mut app.primary(), self.last_cursor_position);
+                dispatch_other_mouse_button(
+                    &mut app.primary(),
+                    (&button, state),
+                    self.last_cursor_position,
+                );
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 dispatch_keyboard_input(&mut app.primary(), self.current_modifiers, event);
@@ -6371,22 +6432,22 @@ impl ApplicationHandler for App {
                         }
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
-                    RobotCommand::MouseDown => {
-                        let event_time = app.realtime_pointer_event_time(None);
-                        controller.begin_synthetic_primary_gesture();
-                        robot_visual_dirty |= app.pointer_pressed_at_event_time(event_time);
-                        if let Some(recorder) = &mut self.recorder {
-                            recorder.record_mouse_down();
-                        }
+                    RobotCommand::MouseDown(button) => {
+                        robot_visual_dirty |= robot_mouse_button(
+                            app,
+                            controller,
+                            self.recorder.as_mut(),
+                            (button, true),
+                        );
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
-                    RobotCommand::MouseUp => {
-                        let event_time = app.realtime_pointer_event_time(None);
-                        robot_visual_dirty |= app.pointer_released_at_event_time(event_time);
-                        controller.end_synthetic_primary_gesture();
-                        if let Some(recorder) = &mut self.recorder {
-                            recorder.record_mouse_up();
-                        }
+                    RobotCommand::MouseUp(button) => {
+                        robot_visual_dirty |= robot_mouse_button(
+                            app,
+                            controller,
+                            self.recorder.as_mut(),
+                            (button, false),
+                        );
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::MouseScroll { delta_x, delta_y } => {
