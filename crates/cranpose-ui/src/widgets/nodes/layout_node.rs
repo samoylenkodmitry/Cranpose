@@ -1062,6 +1062,11 @@ impl LayoutNode {
 
     /// Set this node's ID (called by applier after creation).
     pub fn set_node_id(&mut self, id: NodeId) {
+        // A redraw asked for before the node had an id went to no draw
+        // repass.
+        if self.needs_redraw.get() {
+            crate::render_state::note_retained_redraw(id);
+        }
         let previous = self.id.replace(Some(id));
         if let Some(existing) = previous
             && let Some(owner_context_id) = self.owner_context_id.take()

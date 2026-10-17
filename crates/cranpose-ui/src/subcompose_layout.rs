@@ -1308,6 +1308,11 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
     }
 
     fn set_node_id(&mut self, id: NodeId) {
+        // A redraw asked for before the node had an id went to no draw
+        // repass.
+        if self.needs_redraw.get() {
+            crate::render_state::note_retained_redraw(id);
+        }
         self.id.set(Some(id));
         self.layout_state.borrow_mut().set_node_id(id);
         {
