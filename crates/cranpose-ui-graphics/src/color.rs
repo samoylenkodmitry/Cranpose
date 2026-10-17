@@ -117,7 +117,7 @@ const LEVEL_FRACTIONS: [f32; 256] = {
 
 /// One channel snapped to the 8-bit value an sRGB colour holds.
 fn srgb_channel_8bit(channel: f32) -> f32 {
-    let level = (channel.clamp(0.0, 1.0) * 255.0).round();
+    let level = crate::whole::round(channel.clamp(0.0, 1.0) * 255.0);
     if level.is_nan() {
         return level;
     }

@@ -102,8 +102,8 @@ pub fn line_advance_width(font: &impl Font, text: &str, font_size: f32) -> f32 {
 /// glyph is returned unchanged.
 pub fn align_glyph_to_pixel_grid(mut glyph: Glyph, static_text_motion: bool) -> Glyph {
     if static_text_motion {
-        glyph.position.x = glyph.position.x.round();
-        glyph.position.y = glyph.position.y.round();
+        glyph.position.x = cranpose_ui_graphics::whole::round(glyph.position.x);
+        glyph.position.y = cranpose_ui_graphics::whole::round(glyph.position.y);
     }
     glyph
 }
