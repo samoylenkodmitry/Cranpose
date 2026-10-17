@@ -756,6 +756,9 @@ pub(crate) struct RecomposeScopeInner {
     deactivations: Cell<u64>,
     composed_once: Cell<bool>,
     pending_recompose: Cell<bool>,
+    /// The recompose callback is running: it is out of `recompose` meanwhile,
+    /// and the scope still recomposes what reads in it.
+    recomposing: Cell<bool>,
     force_reuse: Cell<bool>,
     force_recompose: Cell<bool>,
     derivation: Cell<bool>,
@@ -850,6 +853,7 @@ impl RecomposeScopeInner {
             deactivations: Cell::new(0),
             composed_once: Cell::new(false),
             pending_recompose: Cell::new(false),
+            recomposing: Cell::new(false),
             force_reuse: Cell::new(false),
             force_recompose: Cell::new(false),
             derivation: Cell::new(false),
@@ -1200,7 +1204,9 @@ impl RecomposeScope {
             return false;
         };
         self.begin_reads();
+        self.inner.recomposing.set(true);
         (callback.body)(composer);
+        self.inner.recomposing.set(false);
         self.end_reads(true);
         // The body may have stored a new callback for the scope while it ran.
         update_cell(&self.inner.recompose, |slot| {
@@ -1212,7 +1218,18 @@ impl RecomposeScope {
     }
 
     fn has_recompose_callback(&self) -> bool {
-        read_cell(&self.inner.recompose, Option::is_some)
+        self.inner.recomposing.get() || read_cell(&self.inner.recompose, Option::is_some)
+    }
+
+    /// How many scopes this one composes under.
+    pub(crate) fn depth(&self) -> usize {
+        let mut depth = 0;
+        let mut current = self.parent_scope();
+        while let Some(scope) = current {
+            depth += 1;
+            current = scope.parent_scope();
+        }
+        depth
     }
 
     fn snapshot_locals(&self, stack: &LocalStackSnapshot) {
