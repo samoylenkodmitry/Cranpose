@@ -462,10 +462,15 @@ impl Composer {
                 "new children: {new_children:?}"
             );
             if matches!(attach_mode, ParentAttachMode::DeferredSync) {
-                let _ = previous;
+                // Children composed as the parent held them need no sync of
+                // their list, only the parent's settling. An empty list still
+                // syncs: it removes what the parent took since, as a
+                // subcomposition's slot host may.
+                let kept = !previous.is_empty() && new_children == previous;
+                let expected_children = (!kept).then_some(new_children);
                 self.commands_mut().push(Command::SyncChildren {
                     parent_id: id,
-                    expected_children: new_children,
+                    expected_children,
                 });
             }
         }
