@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crate::{output_paths, robot_exit, robot_launch, robot_shot};
 
-use cranpose::Robot;
+use cranpose::{PointerButton, Robot};
 use cranpose_testing::{click_button_in_semantics, find_text_in_semantics};
 
 const STEP_IN: &str = "Step into the room";
@@ -65,9 +65,23 @@ pub(crate) fn main() {
                 );
             }
 
-            drag(&robot, (600.0, 760.0), (900.0, 760.0));
+            // The left button stays with the content: its drag across the
+            // floor leaves the camera where it is.
+            let still = button(&robot, "Pressed 1 times");
+            drag(&robot, PointerButton::Primary, (600.0, 760.0), (900.0, 760.0));
+            let after_left = button(&robot, "Pressed 1 times");
+            if (after_left.0 - still.0).abs() > 1.0 {
+                robot_exit::fail(&robot, "a left drag across the floor turned the camera");
+            }
+            // The right button turns it, as a game's mouse look does.
+            drag(&robot, PointerButton::Secondary, (600.0, 760.0), (700.0, 760.0));
+            let after_right = button(&robot, "Pressed 1 times");
+            println!("  counter at {still:?}, after a right drag at {after_right:?}");
+            if after_right.2 <= 0.0 || (after_right.0 - still.0).abs() < 20.0 {
+                robot_exit::fail(&robot, "a right drag across the floor did not turn the camera");
+            }
             save(&robot, &shots, "turned.png");
-            drag(&robot, (900.0, 760.0), (600.0, 760.0));
+            drag(&robot, PointerButton::Secondary, (700.0, 760.0), (600.0, 760.0));
 
             if !click_button_in_semantics(&robot, "Back to the screen") {
                 robot_exit::fail(&robot, "no button to leave the room");
@@ -121,9 +135,19 @@ fn button(robot: &Robot, label: &str) -> (f32, f32, f32, f32) {
     }
 }
 
-fn drag(robot: &Robot, from: (f32, f32), to: (f32, f32)) {
-    if let Err(err) = robot.drag(from.0, from.1, to.0, to.1) {
-        robot_exit::fail(robot, &format!("drag across the floor: {err}"));
+/// Drags the mouse with `button` held from `from` to `to` in ten steps.
+fn drag(robot: &Robot, button: PointerButton, from: (f32, f32), to: (f32, f32)) {
+    let mut steps = (1..=10).map(|step| {
+        let t = step as f32 / 10.0;
+        (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t)
+    });
+    let dragged = robot
+        .move_to(from.0, from.1)
+        .and_then(|()| robot.mouse_button_down(button))
+        .and_then(|()| steps.try_for_each(|(x, y)| robot.move_to(x, y)))
+        .and_then(|()| robot.mouse_button_up(button));
+    if let Err(err) = dragged {
+        robot_exit::fail(robot, &format!("{button:?} drag across the floor: {err}"));
     }
     robot_shot::settle(robot, 400);
 }

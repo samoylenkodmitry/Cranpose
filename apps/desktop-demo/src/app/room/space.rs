@@ -7,8 +7,8 @@ use cranpose_core::{mutableStateOf, remember, MutableState};
 use cranpose_ui::{
     composable,
     space::{Camera, Light, Mat4, Scene3d, Vec3},
-    FocusRequester, KeyCode, KeyEvent, KeyEventType, Point, PointerEventKind, PointerInputScope,
-    Size,
+    FocusRequester, KeyCode, KeyEvent, KeyEventType, Point, PointerButton, PointerEventKind,
+    PointerInputScope, Size,
 };
 
 pub(super) const FIELD_OF_VIEW: f32 = FRAC_PI_3;
@@ -295,22 +295,27 @@ impl RoomState {
         true
     }
 
-    /// Turns the camera with a drag, as a game's mouse look does: a drag to
-    /// the right looks right, a drag up looks up.
+    /// Turns the camera while the right button drags, as a game's mouse look
+    /// does: a drag to the right looks right, a drag up looks up. The left
+    /// button stays with the walls' content, which it clicks, scrolls and
+    /// selects. A finger has no right button, so its drag over nothing that
+    /// takes it turns the camera too.
     pub(super) async fn look(&self, scope: PointerInputScope) {
         scope
             .await_pointer_event_scope(|events| async move {
                 let mut last: Option<Point> = None;
                 loop {
                     let event = events.await_pointer_event().await;
+                    let finger = event.source.is_touch_like();
                     match event.kind {
-                        PointerEventKind::Down => {
-                            last = (!event.is_consumed() && self.entered.get())
-                                .then_some(event.global_position);
+                        PointerEventKind::ButtonDown(PointerButton::Secondary) => {
+                            last = self.entered.get().then_some(event.global_position);
+                        }
+                        PointerEventKind::Down if finger && !event.is_consumed() => {
+                            last = self.entered.get().then_some(event.global_position);
                         }
                         PointerEventKind::Move => {
                             let Some(previous) = last.filter(|_| !event.is_consumed()) else {
-                                last = None;
                                 continue;
                             };
                             let now = event.global_position;
@@ -320,7 +325,9 @@ impl RoomState {
                             );
                             last = Some(now);
                         }
-                        PointerEventKind::Up | PointerEventKind::Cancel => last = None,
+                        PointerEventKind::ButtonUp(PointerButton::Secondary)
+                        | PointerEventKind::Cancel => last = None,
+                        PointerEventKind::Up if finger => last = None,
                         _ => {}
                     }
                 }

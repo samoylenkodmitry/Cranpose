@@ -414,7 +414,8 @@ fn Controls(room: RoomState) {
             );
             Text(
                 "W A S D or the up and down arrows walk. Q and E, the left and right arrows \
-                 or a drag turn. Escape takes the keys back from a focused control.",
+                 or a drag with the right button turn. Escape takes the keys back from a \
+                 focused control.",
                 Modifier::empty().padding(6.0),
                 text_style(14.0, Color(0.60, 0.63, 0.74, 1.0)),
             );
