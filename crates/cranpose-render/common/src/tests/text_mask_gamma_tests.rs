@@ -6,17 +6,17 @@ use super::*;
 #[test]
 fn white_text_gets_the_srgb_encoded_coverage_of_a_linear_light_blend() {
     let white = TextLuminance::of_color(Color::WHITE).correction();
-    assert_eq!(white.apply(32.0 / 255.0), 99);
-    assert_eq!(white.apply(64.0 / 255.0), 137);
-    assert_eq!(white.apply(128.0 / 255.0), 188);
+    assert_eq!(white.apply(32), 99);
+    assert_eq!(white.apply(64), 137);
+    assert_eq!(white.apply(128), 188);
 }
 
 #[test]
 fn black_text_gets_the_linear_light_blend_with_its_contrast_boost() {
     let black = TextLuminance::of_color(Color::BLACK).correction();
-    assert_eq!(black.apply(32.0 / 255.0), 21);
-    assert_eq!(black.apply(128.0 / 255.0), 91);
-    assert_eq!(black.apply(192.0 / 255.0), 146);
+    assert_eq!(black.apply(32), 21);
+    assert_eq!(black.apply(128), 91);
+    assert_eq!(black.apply(192), 146);
 }
 
 #[test]
@@ -24,8 +24,8 @@ fn empty_and_full_coverage_are_kept_for_every_luminance() {
     for level in 0..=7u8 {
         let grey = f32::from(level) / 7.0;
         let correction = TextLuminance::of_color(Color(grey, grey, grey, 1.0)).correction();
-        assert_eq!(correction.apply(0.0), 0);
-        assert_eq!(correction.apply(1.0), 255);
+        assert_eq!(correction.apply(0), 0);
+        assert_eq!(correction.apply(255), 255);
     }
 }
 
@@ -58,5 +58,5 @@ fn a_gradient_brush_is_corrected_as_mid_grey() {
 #[test]
 fn unit_correction_matches_the_mask_value() {
     let white = TextLuminance::of_color(Color::WHITE).correction();
-    assert_eq!(white.apply_unit(128.0 / 255.0), 188.0 / 255.0);
+    assert_eq!(white.apply_unit(128), 188.0 / 255.0);
 }

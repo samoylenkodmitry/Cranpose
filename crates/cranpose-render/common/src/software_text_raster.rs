@@ -1386,8 +1386,9 @@ pub struct SoftwareGlyphAtlasKey {
 /// The coverage mask of one rasterized glyph.
 #[derive(Clone)]
 pub struct SoftwareGlyphAtlasMask {
-    /// Coverage from 0.0 to 1.0 row by row, `width` times `height` values.
-    pub alpha: Arc<[f32]>,
+    /// A coverage byte a pixel row by row, `width` times `height` values:
+    /// 255 covers the pixel whole.
+    pub alpha: Arc<[u8]>,
     /// Mask width in pixels.
     pub width: usize,
     /// Mask height in pixels.
@@ -1452,13 +1453,40 @@ impl SoftwareGlyphAtlasRunGlyph {
     }
 }
 
+/// A glyph's mask: a coverage byte a pixel, row by row.
 #[derive(Clone)]
 struct GlyphMask {
-    alpha: Arc<[f32]>,
+    alpha: Arc<[u8]>,
     width: usize,
     height: usize,
     origin_x: i32,
     origin_y: i32,
+}
+
+/// A glyph's mask while it is rasterized and synthesized, with unit
+/// coverage; [`Self::into_glyph_mask`] turns it into coverage bytes once.
+struct RasterMask {
+    alpha: Vec<f32>,
+    width: usize,
+    height: usize,
+    origin_x: i32,
+    origin_y: i32,
+}
+
+impl RasterMask {
+    fn into_glyph_mask(self) -> GlyphMask {
+        GlyphMask {
+            alpha: self
+                .alpha
+                .iter()
+                .map(|&coverage| crate::text_mask_gamma::unit_to_u8(coverage))
+                .collect(),
+            width: self.width,
+            height: self.height,
+            origin_x: self.origin_x,
+            origin_y: self.origin_y,
+        }
+    }
 }
 
 /// Counters of a `SoftwareGlyphRasterCache`.
@@ -1542,7 +1570,7 @@ struct GlyphMaskCacheKey {
 
 #[derive(Clone)]
 struct CachedGlyphMask {
-    alpha: Arc<[f32]>,
+    alpha: Arc<[u8]>,
     width: usize,
     height: usize,
     origin_offset_x: i32,
@@ -4615,7 +4643,7 @@ fn build_complete_glyph_mask(
     }
     let mask = build_glyph_mask(font, glyph, &outlined, bounds, raster_style)?;
     let mask = synthesize_glyph_weight(mask, weight_synthesis);
-    Some(synthesize_glyph_style(mask, style_synthesis))
+    Some(synthesize_glyph_style(mask, style_synthesis).into_glyph_mask())
 }
 
 fn complete_glyph_bounds(
@@ -4931,52 +4959,62 @@ fn draw_mask_glyph_solid_u8(
     let green = whole::round(color[1].clamp(0.0, 1.0) * 255.0) as u8;
     let blue = whole::round(color[2].clamp(0.0, 1.0) * 255.0) as u8;
     let alpha_scale = color[3].clamp(0.0, 1.0) * alpha_multiplier.clamp(0.0, 1.0);
-    if alpha_scale <= 0.0 {
+    if alpha_scale <= 0.0 || width == 0 || mask.width == 0 {
         return;
     }
     let correction = TextLuminance::of_color(Color(color[0], color[1], color[2], 1.0)).correction();
-
-    for y in 0..mask.height {
-        let py = mask.origin_y + y as i32;
-        if py < 0 || py >= height as i32 {
-            continue;
-        }
-
-        for x in 0..mask.width {
-            let px = mask.origin_x + x as i32;
-            if px < 0 || px >= width as i32 {
-                continue;
-            }
-
-            let corrected = correction.apply(mask.alpha[y * mask.width + x]);
+    // The mask columns and rows that land on the canvas.
+    let columns = canvas_span(mask.origin_x, mask.width, width);
+    let rows = canvas_span(mask.origin_y, mask.height, height);
+    let canvas_rows = canvas
+        .as_chunks_mut::<4>()
+        .0
+        .chunks_exact_mut(width as usize);
+    for (row, mask_row) in canvas_rows
+        .skip(rows.start.saturating_add_signed(mask.origin_y as isize))
+        .zip(
+            mask.alpha
+                .chunks_exact(mask.width)
+                .take(rows.end)
+                .skip(rows.start),
+        )
+    {
+        let first = columns.start.saturating_add_signed(mask.origin_x as isize);
+        let pixels = row.iter_mut().skip(first);
+        for (dst, &mask_coverage) in pixels.zip(&mask_row[columns.clone()]) {
+            let corrected = correction.apply(mask_coverage);
             if corrected == 0 {
                 continue;
             }
-
-            let coverage = crate::text_mask_gamma::unit_coverage(corrected);
-            let alpha = (coverage * alpha_scale).clamp(0.0, 1.0);
             // At full alpha the byte is the corrected coverage itself: a
             // byte over 255 multiplied back by 255 rounds to that byte.
+            let alpha =
+                || (crate::text_mask_gamma::unit_coverage(corrected) * alpha_scale).clamp(0.0, 1.0);
             let alpha_u8 = if alpha_scale == 1.0 {
                 corrected
             } else {
-                whole::round(alpha * 255.0) as u8
+                whole::round(alpha() * 255.0) as u8
             };
             if alpha_u8 == 0 {
                 continue;
             }
-            let idx = ((py as u32 * width + px as u32) * 4) as usize;
-            let dst = &mut canvas[idx..idx + 4];
             if dst[3] == 0 {
-                dst[0] = red;
-                dst[1] = green;
-                dst[2] = blue;
-                dst[3] = alpha_u8;
+                *dst = [red, green, blue, alpha_u8];
             } else {
-                blend_src_over_u8(dst, [color[0], color[1], color[2], alpha]);
+                blend_src_over_u8(dst, [color[0], color[1], color[2], alpha()]);
             }
         }
     }
+}
+
+/// The indices of a mask's `len` columns or rows, the first at `origin`
+/// on the canvas, that land in the canvas's `extent`.
+fn canvas_span(origin: i32, len: usize, extent: u32) -> std::ops::Range<usize> {
+    let start = usize::try_from(-i64::from(origin)).unwrap_or(0).min(len);
+    let end = usize::try_from(i64::from(extent) - i64::from(origin))
+        .unwrap_or(0)
+        .clamp(start, len);
+    start..end
 }
 
 fn draw_shadow_mask(
@@ -5019,7 +5057,12 @@ fn draw_shadow_mask(
                 .iter_mut()
                 .zip(source)
                 .for_each(|(target, &coverage)| *target = correction.apply_unit(coverage)),
-            None => target.copy_from_slice(source),
+            None => target
+                .iter_mut()
+                .zip(source)
+                .for_each(|(target, &coverage)| {
+                    *target = crate::text_mask_gamma::unit_coverage(coverage);
+                }),
         }
     }
 
@@ -5211,7 +5254,7 @@ fn build_glyph_mask(
     outlined: &OutlinedGlyph,
     bounds: GlyphPixelBounds,
     style: GlyphRasterStyle,
-) -> Option<GlyphMask> {
+) -> Option<RasterMask> {
     match style {
         GlyphRasterStyle::Fill => build_fill_mask(outlined, bounds),
         GlyphRasterStyle::Stroke { width_px } => {
@@ -5220,7 +5263,7 @@ fn build_glyph_mask(
     }
 }
 
-fn build_fill_mask(outlined: &OutlinedGlyph, bounds: GlyphPixelBounds) -> Option<GlyphMask> {
+fn build_fill_mask(outlined: &OutlinedGlyph, bounds: GlyphPixelBounds) -> Option<RasterMask> {
     let mask_width = bounds.width();
     let mask_height = bounds.height();
     if mask_width == 0 || mask_height == 0 {
@@ -5233,8 +5276,8 @@ fn build_fill_mask(outlined: &OutlinedGlyph, bounds: GlyphPixelBounds) -> Option
         alpha[idx] = value;
     });
 
-    Some(GlyphMask {
-        alpha: Arc::from(alpha),
+    Some(RasterMask {
+        alpha,
         width: mask_width,
         height: mask_height,
         origin_x: bounds.min_x,
@@ -5249,7 +5292,7 @@ fn build_stroke_mask(
     outlined: &OutlinedGlyph,
     bounds: GlyphPixelBounds,
     stroke_width_px: f32,
-) -> Option<GlyphMask> {
+) -> Option<RasterMask> {
     if !stroke_width_px.is_finite() || stroke_width_px <= 0.0 {
         return build_fill_mask(outlined, bounds);
     }
@@ -5291,8 +5334,8 @@ fn build_stroke_mask(
         .map(|pixel| pixel[3] as f32 / 255.0)
         .collect();
 
-    Some(GlyphMask {
-        alpha: Arc::from(alpha),
+    Some(RasterMask {
+        alpha,
         width: raster_width as usize,
         height: raster_height as usize,
         origin_x: bounds.min_x - pad,
@@ -5308,7 +5351,7 @@ fn stroke_mask_padding(width: f32) -> i32 {
     }
 }
 
-fn synthesize_glyph_weight(mask: GlyphMask, synthesis: TextWeightSynthesis) -> GlyphMask {
+fn synthesize_glyph_weight(mask: RasterMask, synthesis: TextWeightSynthesis) -> RasterMask {
     let horizontal_shift = synthetic_weight_shift_px(synthesis.embolden_px);
     if horizontal_shift == 0 || mask.width == 0 || mask.height == 0 {
         return mask;
@@ -5337,8 +5380,8 @@ fn synthesize_glyph_weight(mask: GlyphMask, synthesis: TextWeightSynthesis) -> G
         }
     }
 
-    GlyphMask {
-        alpha: Arc::from(alpha),
+    RasterMask {
+        alpha,
         width: output_width,
         height: output_height,
         origin_x: mask.origin_x,
@@ -5346,7 +5389,7 @@ fn synthesize_glyph_weight(mask: GlyphMask, synthesis: TextWeightSynthesis) -> G
     }
 }
 
-fn synthesize_glyph_style(mask: GlyphMask, synthesis: TextStyleSynthesis) -> GlyphMask {
+fn synthesize_glyph_style(mask: RasterMask, synthesis: TextStyleSynthesis) -> RasterMask {
     if synthesis.slant <= 0.0 || mask.width == 0 || mask.height == 0 {
         return mask;
     }
@@ -5385,8 +5428,8 @@ fn synthesize_glyph_style(mask: GlyphMask, synthesis: TextStyleSynthesis) -> Gly
         }
     }
 
-    GlyphMask {
-        alpha: Arc::from(alpha),
+    RasterMask {
+        alpha,
         width: output_width,
         height: mask.height,
         origin_x: mask.origin_x,
