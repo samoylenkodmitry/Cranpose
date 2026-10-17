@@ -5,7 +5,6 @@ use std::{
 
 use cranpose_core::{MutableState, NodeId};
 
-use super::*;
 use crate::{
     Box, BoxSpec, LazyColumn, LazyColumnSpec, Modifier, TestComposition, composable,
     run_test_composition,
@@ -13,7 +12,8 @@ use crate::{
 
 fn may_be_live(composition: &mut TestComposition, count: bool) -> bool {
     let mut applier = composition.applier_mut();
-    modal_node_may_be_live(&mut applier, count)
+    crate::render_state::with_current_modal_nodes(|nodes| nodes.may_be_live(&mut applier, count))
+        .unwrap_or(true)
 }
 
 fn counting_contexts() -> usize {

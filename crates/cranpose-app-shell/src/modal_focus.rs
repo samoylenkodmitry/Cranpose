@@ -10,7 +10,8 @@ where
     pub(crate) fn update_modal_focus(&mut self) {
         // Counted while semantics are on, the only time the walk runs every
         // frame; otherwise it runs only for an open popup.
-        let modal_may_be_live = cranpose_ui::modal_node_may_be_live(
+        let context = &self.app.app_context;
+        let modal_may_be_live = context.modal_node_may_be_live(
             &mut self.app.composition.applier_mut(),
             self.app.semantics_enabled,
         );
@@ -19,7 +20,7 @@ where
                 .surfaces
                 .iter()
                 .all(|surface| surface.modal_focus.is_empty())
-            && !cranpose_ui::dismissable_popup_open()
+            && !context.dismissable_popup_open()
         {
             return;
         }

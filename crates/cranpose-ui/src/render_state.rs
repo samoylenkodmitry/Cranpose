@@ -7,7 +7,7 @@ use std::{
 };
 
 use cranpose_core::{
-    NodeId, SnapshotStateObserver, collections::map::HashSet, current_runtime_handle,
+    MemoryApplier, NodeId, SnapshotStateObserver, collections::map::HashSet, current_runtime_handle,
 };
 
 pub(crate) type ModifierChainTraceCallback =
@@ -638,6 +638,23 @@ impl AppContext {
             || self.state.draw_repasses.borrow_mut().has_pending_repass()
             || self.pointer_dispatch.has_pending_repass()
             || self.focus_dispatch.has_pending_invalidation()
+    }
+
+    /// Whether a modal node may be live in this context.
+    ///
+    /// While `count` holds, the context keeps its modal nodes: the first call
+    /// reads every node of `applier` once, and later calls read only the nodes
+    /// whose semantics changed since. Without `count` nothing is kept and the
+    /// answer is always `true`, leaving the caller to walk.
+    pub fn modal_node_may_be_live(&self, applier: &mut MemoryApplier, count: bool) -> bool {
+        self.modal_nodes.may_be_live(applier, count)
+    }
+
+    /// Whether a dismissable popup is open on one of this context's hosts.
+    /// Unlike [`crate::dismissable_popup_open`], a composable that asks does
+    /// not recompose when popups open or close.
+    pub fn dismissable_popup_open(&self) -> bool {
+        self.hosted_popups.dismissable_open(false)
     }
 
     /// Moves the nodes waiting for a draw repass into `output`, as

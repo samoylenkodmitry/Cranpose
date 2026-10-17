@@ -127,12 +127,19 @@ pub fn dismiss_top_popup() -> bool {
 /// composable subscribes to every host's revision, so the reader recomposes
 /// when a popup opens or closes.
 pub fn dismissable_popup_open() -> bool {
-    crate::render_state::with_hosted_popup_registries(|hosted| {
-        hosted.registries.borrow().iter().any(|registry| {
+    crate::render_state::with_hosted_popup_registries(|hosted| hosted.dismissable_open(true))
+}
+
+impl HostedPopupRegistries {
+    /// Whether a dismissable popup is open on one of the hosts. With
+    /// `subscribe`, the reading composable recomposes when a popup opens or
+    /// closes; code outside composition has no reader to subscribe.
+    pub(crate) fn dismissable_open(&self, subscribe: bool) -> bool {
+        self.registries.borrow().iter().any(|registry| {
             let Some(registry) = registry.upgrade() else {
                 return false;
             };
-            if let Some(revision) = registry.revision.as_ref() {
+            if subscribe && let Some(revision) = registry.revision.as_ref() {
                 let _ = revision.value();
             }
             registry
@@ -141,7 +148,7 @@ pub fn dismissable_popup_open() -> bool {
                 .iter()
                 .any(|entry| entry.data.get_non_reactive().on_dismiss.is_some())
         })
-    })
+    }
 }
 
 impl PopupRegistry {
