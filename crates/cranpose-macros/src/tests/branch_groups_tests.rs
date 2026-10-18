@@ -179,3 +179,23 @@ fn release_expansion_does_not_use_hot_keys() {
     assert!(tokens.contains("branch_location_key"));
     assert!(!tokens.contains("hot_branch_key"));
 }
+
+#[test]
+fn a_closure_that_calls_nothing_opens_no_group() {
+    let mut block: Block = syn::parse_quote!({
+        LazyColumn(move |scope| {
+            scope.items(Items::new(4).key(|index| index as u64), |index| Text(index));
+        });
+    });
+    inject_branch_groups(&quote!(::cranpose_core), &mut block);
+    let tokens = block.to_token_stream().to_string();
+    assert_eq!(
+        tokens.matches("__branch_group_scope_deferred").count(),
+        2,
+        "the list content and the item content open groups, the key closure none: {tokens}"
+    );
+    assert!(
+        tokens.contains("| index | index as u64"),
+        "the key closure keeps its body: {tokens}"
+    );
+}

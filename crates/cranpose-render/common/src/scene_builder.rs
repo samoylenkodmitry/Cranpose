@@ -2016,6 +2016,13 @@ fn placed_transform(
     graphics_layer: &GraphicsLayer,
     parent_content_offset: Point,
 ) -> ProjectiveTransform {
+    // Most layers only move: one translation places them.
+    if !layer_scales_or_rotates(graphics_layer) {
+        return ProjectiveTransform::translation(
+            placement.x + graphics_layer.translation_x + parent_content_offset.x,
+            placement.y + graphics_layer.translation_y + parent_content_offset.y,
+        );
+    }
     let transform = layer_transform_to_parent(local_bounds, placement, graphics_layer);
     if parent_content_offset == Point::default() {
         transform
