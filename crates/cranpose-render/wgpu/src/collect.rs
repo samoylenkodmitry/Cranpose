@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::{
@@ -1382,11 +1382,11 @@ fn collect_seen_surfaces(
 
 /// The anchor a layer that starts moving its content as one translated
 /// block, outside any such block, snaps that content to; `None` for any
-/// other layer.
+/// other layer. The local layer is read only for such a layer.
 fn boundary_anchor(
     layer: &LayerNode,
     context: &WalkContext<'_>,
-    (layer_bounds, local_layer): (Rect, &GraphicsLayer),
+    (layer_bounds, local_layer): (Rect, &Cow<'_, GraphicsLayer>),
 ) -> Option<SnapAnchor> {
     if context.translated || !layer.translated_content_context {
         return None;

@@ -703,6 +703,11 @@ fn replace_dirty_layers_from_applier(
         if marks == 0 {
             continue;
         }
+        // A dirty layer in 3D, or one above a dirty layer, changes what lies
+        // in 3D.
+        if child_layer.graphics_layer.space.is_some() {
+            note_space_change();
+        }
         if marks & DIRTY_NODE != 0
             && let Some(node_id) = identity
             && let Some(kind) = dirty.nodes.remove(&node_id)
@@ -735,9 +740,6 @@ fn replace_dirty_layers_from_applier(
 
         if marks & DIRTY_ANCESTOR == 0 {
             continue;
-        }
-        if child_layer.graphics_layer.space.is_some() {
-            note_space_change();
         }
         let child_children = parent_children.children_of(child_layer);
         let child_report = replace_dirty_layers_from_applier(
@@ -808,9 +810,6 @@ fn update_dirty_layer(
     pass: ParentPass,
     update: u64,
 ) -> Option<(bool, bool)> {
-    if layer.graphics_layer.space.is_some() {
-        note_space_change();
-    }
     if let Some(hit_graph_dirty) = try_update_retained_layer(
         applier,
         layer,
