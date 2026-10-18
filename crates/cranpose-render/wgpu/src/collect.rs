@@ -1445,7 +1445,7 @@ fn anchor_shadows(shadows: &mut [ShadowDraw], anchor: SnapAnchor) {
 }
 
 #[derive(Clone, Copy)]
-struct SceneCounts {
+pub(crate) struct SceneCounts {
     images: usize,
     texts: usize,
     shadow_draws: usize,
@@ -1453,7 +1453,7 @@ struct SceneCounts {
     effect_layers: usize,
 }
 
-fn scene_counts(scene: &CompositorScene) -> SceneCounts {
+pub(crate) fn scene_counts(scene: &CompositorScene) -> SceneCounts {
     SceneCounts {
         images: scene.images.len(),
         texts: scene.texts.len(),
@@ -1463,7 +1463,7 @@ fn scene_counts(scene: &CompositorScene) -> SceneCounts {
     }
 }
 
-fn assign_snap_anchor_since(
+pub(crate) fn assign_snap_anchor_since(
     scene: &mut CompositorScene,
     counts: SceneCounts,
     snap_anchor: Option<SnapAnchor>,
@@ -1498,9 +1498,9 @@ fn push_primitive(
         anchor: snap_anchor,
         motion_context_animated,
     } = *content;
-    let counts = scene_counts(&out.scene);
     match &entry.node {
         PrimitiveNode::Draw(draw) => {
+            let counts = scene_counts(&out.scene);
             let clip = resolve_primitive_clip(
                 draw.clip,
                 layer_bounds,
@@ -1522,6 +1522,7 @@ fn push_primitive(
                 None,
                 motion_context_animated,
             );
+            assign_snap_anchor_since(&mut out.scene, counts, snap_anchor);
         }
         PrimitiveNode::Text(text) => {
             let text_rect = text.rect.translate(layer_bounds.x, layer_bounds.y);
@@ -1551,7 +1552,6 @@ fn push_primitive(
             );
         }
     }
-    assign_snap_anchor_since(&mut out.scene, counts, snap_anchor);
 }
 
 /// Places a recorded run: every maximal stretch of shape segments becomes
