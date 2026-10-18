@@ -91,7 +91,8 @@ use cranpose_ui_graphics::Size;
 /// ```
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SceneUpdates<'a> {
-    /// Nodes whose recorded draw content must be refreshed.
+    /// Nodes whose recorded draw content must be refreshed; a node may be
+    /// named more than once.
     pub content: &'a [cranpose_core::NodeId],
     /// Nodes whose graphics-layer properties changed without content dirt.
     pub layers: &'a [cranpose_core::NodeId],
