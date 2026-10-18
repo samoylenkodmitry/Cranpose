@@ -1432,8 +1432,13 @@ fn recycle_children_around(
             crate::layer_recycling::recycle(leaving);
         }
     };
-    container.children.drain(kept.end..).for_each(&mut recycle);
-    container.children.drain(..kept.start).for_each(recycle);
+    // Most steps keep every child.
+    if kept.end < container.children.len() {
+        container.children.drain(kept.end..).for_each(&mut recycle);
+    }
+    if kept.start > 0 {
+        container.children.drain(..kept.start).for_each(recycle);
+    }
 }
 
 /// Builds the children that enter `container`. They are built from the
