@@ -10,7 +10,7 @@ use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_render_common::{HitTestTarget, RenderScene};
 use cranpose_ui::{
     Modifier, Point,
-    space::{Camera, Mat4, Ray, Scene3d, Vec3},
+    space::{Camera, EyePose, Mat4, Ray, Scene3d, Vec3},
     widgets::{Box, BoxSpec},
 };
 
@@ -283,5 +283,67 @@ fn surfaces_the_eye_does_not_see_take_no_input() {
             .collect::<Vec<_>>(),
         ["nested"],
         "only the panel the eye sees takes the press"
+    );
+}
+
+#[test]
+fn an_eye_enters_the_space_of_a_scene_one_doorway_away() {
+    let WalkRoom {
+        mut composition,
+        eye,
+        pressed,
+        scene,
+        nested,
+    } = walk_room(Vec3::new(0.0, 0.0, -1000.0));
+    let (unknown, entered, ahead) = with_scene(&mut composition, |mut view, applier, root| {
+        let unknown = eye.enter(scene + 1_000_000, eye.pose());
+        // Where the panel behind the doorway stands 150 ahead of the eye.
+        let standing = EyePose::standing(Vec3::new(0.0, 0.0, NESTED.1 - 150.0), 0.0, 0.0);
+        let entered = eye.enter(nested, standing);
+        camera_moved(&mut view, applier, (root, scene));
+        (unknown, entered, press_middle(&view, &pressed))
+    });
+    assert!(
+        !unknown,
+        "a scene that is no space of the world is not entered"
+    );
+    assert!(entered);
+    assert_eq!(&*eye.pose().doorways, &[nested]);
+    assert_eq!(
+        ahead,
+        Some("nested"),
+        "the eye stands in the space behind the doorway"
+    );
+}
+
+#[test]
+fn an_eye_past_a_doorway_stands_where_it_walked_in_the_room_it_came_from() {
+    let WalkRoom {
+        mut composition,
+        eye,
+        scene,
+        nested,
+        ..
+    } = walk_room(Vec3::new(200.0, 0.0, -1000.0));
+    let walked_to = Vec3::new(0.0, 0.0, FAR.z + 150.0);
+    let (inside, seen_from_room) = with_scene(&mut composition, |mut view, applier, root| {
+        eye.walk(walked_to - eye.pose().position);
+        camera_moved(&mut view, applier, (root, scene));
+        (eye.pose(), eye.pose_in(scene))
+    });
+    assert_eq!(&*inside.doorways, &[nested]);
+    let Some(seen) = seen_from_room else {
+        panic!("the room the eye came from lies a doorway from it");
+    };
+    assert!(seen.doorways.is_empty());
+    assert!(
+        (seen.position - walked_to).length() < 0.5,
+        "in the room's coordinates the eye stands at {:?}, not {walked_to:?}",
+        seen.position
+    );
+    assert!(
+        (seen.forward - Vec3::new(0.0, 0.0, 1.0)).length() < 1.0e-3,
+        "{:?}",
+        seen.forward
     );
 }

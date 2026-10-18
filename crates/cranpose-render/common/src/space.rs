@@ -472,6 +472,9 @@ impl<'a> EyeView<'a> {
     /// space it stands in, the spaces one doorway from it, their solid
     /// surfaces and the doorways between them, in the eye's space.
     pub fn build_world(&self, tree: &SpaceTree<'_>, world: &mut EyeWorld) {
+        if let Some(window_scene) = tree.cells[0].layer.node_id {
+            world.set_window_scene(window_scene);
+        }
         let walked = tree.walked_to(self.cell);
         let base = world.add_space(Arc::clone(&walked), Mat4::IDENTITY);
         let mut spaces = vec![(self.cell, base, Mat4::IDENTITY)];

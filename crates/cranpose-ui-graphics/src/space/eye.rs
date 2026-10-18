@@ -172,6 +172,9 @@ impl PartialEq for WorldSink {
 /// between them, all in the coordinates of the space it stood in.
 #[derive(Debug, Default)]
 pub struct EyeWorld {
+    /// The scene node of the window's scene, whose own space an eye stands
+    /// in through no doorway.
+    window_scene: Option<usize>,
     spaces: Vec<WorldSpace>,
     solids: Vec<WorldSolid>,
     holes: Vec<Rect>,
@@ -210,10 +213,54 @@ struct WorldDoorway {
 
 impl EyeWorld {
     fn clear(&mut self) {
+        self.window_scene = None;
         self.spaces.clear();
         self.solids.clear();
         self.holes.clear();
         self.doorways.clear();
+    }
+
+    /// Names `scene` as the scene node of the window's scene, whose own
+    /// space is the one an eye stands in through no doorway.
+    pub fn set_window_scene(&mut self, scene: usize) {
+        self.window_scene = Some(scene);
+    }
+
+    /// The doorways an eye walks through from the window's scene into the
+    /// space of the scene node `scene`, when the world holds that space: the
+    /// space the eye stood in, or one a doorway from it.
+    pub fn doorways_to(&self, scene: usize) -> Option<Arc<[usize]>> {
+        self.space_of(scene)
+            .map(|space| Arc::clone(&space.doorways))
+    }
+
+    /// `pose`, of an eye in a space of the world, in the coordinates of the
+    /// space of the scene node `scene`; `None` when the world holds either
+    /// space not.
+    pub fn pose_in(&self, pose: &EyePose, scene: usize) -> Option<EyePose> {
+        let from = self
+            .spaces
+            .iter()
+            .find(|space| space.doorways == pose.doorways)?;
+        let to = self.space_of(scene)?;
+        let map = from.to_base.then(&to.from_base);
+        let mut seen = EyePose {
+            doorways: Arc::clone(&to.doorways),
+            position: map.transform_point(pose.position),
+            forward: map.transform_vector(pose.forward),
+            down: map.transform_vector(pose.down),
+        };
+        seen.square_up();
+        Some(seen)
+    }
+
+    fn space_of(&self, scene: usize) -> Option<&WorldSpace> {
+        self.spaces
+            .iter()
+            .find(|space| match space.doorways.last() {
+                Some(&last) => last == scene,
+                None => self.window_scene == Some(scene),
+            })
     }
 
     /// Adds the space an eye that walked through `doorways` stands in, whose

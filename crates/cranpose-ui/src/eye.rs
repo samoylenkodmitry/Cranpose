@@ -2,7 +2,9 @@
 //! turns as the app asks, and walks through the spaces behind the scene's
 //! doorways, stopped by solid surfaces where the renderer last placed them.
 
-use cranpose_core::{CompositionLocal, MutableState, compositionLocalOf, mutableStateOf, remember};
+use cranpose_core::{
+    CompositionLocal, MutableState, NodeId, compositionLocalOf, mutableStateOf, remember,
+};
 use cranpose_macros::composable;
 use cranpose_ui_graphics::space::{EyePlace, EyePose, Light, Scene3d, Vec3, WorldSink};
 
@@ -69,6 +71,25 @@ impl Eye {
     /// Puts the eye at `pose`, through no doorway and stopped by nothing.
     pub fn place(&self, pose: EyePose) {
         self.pose.set(pose);
+    }
+
+    /// Where the eye stands and which way it looks, in the coordinates of
+    /// the space of the scene node `scene`: the one it stands in or one a
+    /// doorway from it. `None` when no such space lies there.
+    pub fn pose_in(&self, scene: NodeId) -> Option<EyePose> {
+        self.world.current().pose_in(&self.pose.get(), scene)
+    }
+
+    /// Puts the eye at `pose`, in the coordinates of the space of the scene
+    /// node `scene`, as if it walked there: that space is the one the eye
+    /// stands in or one a doorway from it. False, and the eye stays where
+    /// it is, when no such space lies there.
+    pub fn enter(&self, scene: NodeId, pose: EyePose) -> bool {
+        let Some(doorways) = self.world.current().doorways_to(scene) else {
+            return false;
+        };
+        self.pose.set(EyePose { doorways, ..pose });
+        true
     }
 }
 
