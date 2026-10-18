@@ -3447,11 +3447,14 @@ impl LayoutRuntimeState {
             let placement =
                 placement_for_child(placements, placement_indices, index, child_state.node_id);
             let base_position = child_state.placement_position(placement);
-            if placement.is_some() {
-                child_state.place_retained(Point {
-                    x: base_position.x + measured.offset.x,
-                    y: base_position.y + measured.offset.y,
-                });
+            let position = Point {
+                x: base_position.x + measured.offset.x,
+                y: base_position.y + measured.offset.y,
+            };
+            // A policy that placed the child there in this pass, as one
+            // that places its placeables does, left nothing to place.
+            if placement.is_some() && child_state.last_position.get() != Some(position) {
+                child_state.place_retained(position);
             }
             measured_children.push(MeasuredChild::new(
                 &measured,
