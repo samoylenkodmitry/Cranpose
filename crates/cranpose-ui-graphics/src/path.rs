@@ -299,19 +299,17 @@ pub fn for_each_stroke_line(
         .flatten()
         .filter(|(first, last)| first != last)
         .map(|(&first, &last)| (last, first));
-    let edges = points
+    let mut edges = points
         .windows(2)
         .map(|pair| (pair[0], pair[1]))
         .chain(closing)
-        .filter(|(start, end)| start != end);
-    let count = edges.clone().count();
-    for (index, (start, end)) in edges.enumerate() {
-        let start_cap = if closed || index > 0 {
-            corner
-        } else {
-            stroke.cap
-        };
-        let end_cap = if closed || index + 1 < count {
+        .filter(|(start, end)| start != end)
+        .peekable();
+    let mut first = true;
+    while let Some((start, end)) = edges.next() {
+        let start_cap = if closed || !first { corner } else { stroke.cap };
+        first = false;
+        let end_cap = if closed || edges.peek().is_some() {
             corner
         } else {
             stroke.cap
