@@ -21,6 +21,7 @@ pub fn layer_uniform_scale(layer: &GraphicsLayer) -> f32 {
 }
 
 #[doc(hidden)]
+#[inline]
 pub fn layer_affine_is_identity(layer: &GraphicsLayer) -> bool {
     layer.scale == 1.0
         && layer.scale_x == 1.0
@@ -135,6 +136,7 @@ fn apply_layer_to_point(point: [f32; 2], pivot: (f32, f32), layer: &GraphicsLaye
 }
 
 /// Transforms a rectangle's four corners through scale, rotation and perspective.
+#[inline]
 pub fn apply_layer_to_quad(rect: Rect, layer_bounds: Rect, layer: &GraphicsLayer) -> [[f32; 2]; 4] {
     let quad = [
         [rect.x, rect.y],
@@ -150,7 +152,30 @@ pub fn apply_layer_to_quad(rect: Rect, layer_bounds: Rect, layer: &GraphicsLayer
 }
 
 /// Returns the axis-aligned bounds after the complete layer transform.
+#[inline]
 pub fn apply_layer_to_rect(rect: Rect, layer_bounds: Rect, layer: &GraphicsLayer) -> Rect {
+    let Rect {
+        x,
+        y,
+        width,
+        height,
+    } = rect;
+    // A layer that leaves the corners where they are bounds them as
+    // `quad_bounds` would, from the far corner, for a finite rect that
+    // does not run backwards.
+    if layer_affine_is_identity(layer)
+        && !layer_has_rotation(layer)
+        && width >= 0.0
+        && height >= 0.0
+        && crate::float::all_finite([x, y, width, height])
+    {
+        return Rect {
+            x,
+            y,
+            width: (x + width) - x,
+            height: (y + height) - y,
+        };
+    }
     quad_bounds(apply_layer_to_quad(rect, layer_bounds, layer))
 }
 
