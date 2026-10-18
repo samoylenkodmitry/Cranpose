@@ -567,6 +567,7 @@ fn drain_android_input_events(
     key_translator: &mut AndroidKeyTranslator,
     pending_inputs: &mut Vec<PendingInput>,
     primary_pointer_id: &mut Option<i32>,
+    mouse_buttons: &mut android_activity::input::ButtonState,
 ) {
     let Ok(mut iter) = app.input_events_iter() else {
         return;
@@ -574,15 +575,19 @@ fn drain_android_input_events(
 
     for _ in 0..MAX_ANDROID_INPUT_EVENTS_PER_POLL {
         let event_available = iter.next(|event| {
-            if push_mouse_button_inputs(event, android_platform, pending_inputs, primary_pointer_id)
-                || push_pending_inputs_from_android_event(
-                    event,
-                    android_platform,
-                    key_translator,
-                    pending_inputs,
-                    primary_pointer_id,
-                )
-            {
+            if push_mouse_button_inputs(
+                event,
+                android_platform,
+                pending_inputs,
+                primary_pointer_id,
+                mouse_buttons,
+            ) || push_pending_inputs_from_android_event(
+                event,
+                android_platform,
+                key_translator,
+                pending_inputs,
+                primary_pointer_id,
+            ) {
                 android_activity::InputStatus::Handled
             } else {
                 android_activity::InputStatus::Unhandled
@@ -604,13 +609,19 @@ const MAX_ANDROID_INPUT_EVENTS_PER_POLL: usize = 10;
 /// `ButtonRelease`, or at `Up` on a device that sends none. The other buttons
 /// press and release as the shell's other mouse buttons. Returns whether it
 /// took the event.
+///
+/// The button a press or release changed is the one `mouse_buttons`, the
+/// buttons the last mouse event held, gains or loses: Android's
+/// `AMotionEvent_getActionButton` arrived in API 33, and a library that
+/// calls it does not load on an older device.
 fn push_mouse_button_inputs(
     event: &android_activity::input::InputEvent<'_>,
     android_platform: &AndroidPlatform,
     pending_inputs: &mut Vec<PendingInput>,
     primary_pointer_id: &mut Option<i32>,
+    mouse_buttons: &mut android_activity::input::ButtonState,
 ) -> bool {
-    use android_activity::input::{InputEvent, MotionAction, ToolType};
+    use android_activity::input::{Button, InputEvent, MotionAction, ToolType};
 
     let InputEvent::MotionEvent(motion_event) = event else {
         return false;
@@ -624,6 +635,7 @@ fn push_mouse_button_inputs(
     let at = android_platform.pointer_position(f64::from(pointer.x()), f64::from(pointer.y()));
     let time_ms = Some(android_event_time_ms(motion_event.event_time()));
     let held = motion_event.button_state();
+    let before = std::mem::replace(mouse_buttons, held);
     match motion_event.action() {
         MotionAction::Down => held.0 != 0 && !held.primary(),
         MotionAction::Move if primary_pointer_id.is_none() => {
@@ -638,32 +650,41 @@ fn push_mouse_button_inputs(
         MotionAction::Up => primary_pointer_id.is_none(),
         action @ (MotionAction::ButtonPress | MotionAction::ButtonRelease) => {
             let pressed = action == MotionAction::ButtonPress;
-            match shell_mouse_button(motion_event.action_button()) {
-                Some(PointerButton::Primary) => match (pressed, *primary_pointer_id) {
-                    (true, None) => {
-                        *primary_pointer_id = Some(pointer.pointer_id());
-                        pending_inputs.push(PendingInput::PointerDown(
-                            at.x,
-                            at.y,
-                            time_ms,
-                            PointerSource::Mouse,
-                        ));
+            let mut changed = if pressed {
+                held.0 & !before.0
+            } else {
+                before.0 & !held.0
+            };
+            while changed != 0 {
+                let bit = 1 << changed.trailing_zeros();
+                changed &= !bit;
+                match shell_mouse_button(Button::from(bit)) {
+                    Some(PointerButton::Primary) => match (pressed, *primary_pointer_id) {
+                        (true, None) => {
+                            *primary_pointer_id = Some(pointer.pointer_id());
+                            pending_inputs.push(PendingInput::PointerDown(
+                                at.x,
+                                at.y,
+                                time_ms,
+                                PointerSource::Mouse,
+                            ));
+                        }
+                        (false, Some(_)) => {
+                            *primary_pointer_id = None;
+                            pending_inputs.push(PendingInput::PointerUp(
+                                at.x,
+                                at.y,
+                                time_ms,
+                                PointerSource::Mouse,
+                            ));
+                        }
+                        _ => {}
+                    },
+                    Some(button) => {
+                        pending_inputs.push(PendingInput::MouseButton(button, pressed, at.x, at.y));
                     }
-                    (false, Some(_)) => {
-                        *primary_pointer_id = None;
-                        pending_inputs.push(PendingInput::PointerUp(
-                            at.x,
-                            at.y,
-                            time_ms,
-                            PointerSource::Mouse,
-                        ));
-                    }
-                    _ => {}
-                },
-                Some(button) => {
-                    pending_inputs.push(PendingInput::MouseButton(button, pressed, at.x, at.y));
+                    None => {}
                 }
-                None => {}
             }
             true
         }
@@ -2349,6 +2370,7 @@ pub fn run(
 
     let mut pending_inputs: Vec<PendingInput> = Vec::new();
     let mut primary_pointer_id: Option<i32> = None;
+    let mut mouse_buttons = android_activity::input::ButtonState(0);
 
     let mut key_translator = AndroidKeyTranslator::new(app.clone());
     let mut soft_keyboard_installed = false;
@@ -2712,6 +2734,7 @@ pub fn run(
                             &mut key_translator,
                             &mut pending_inputs,
                             &mut primary_pointer_id,
+                            &mut mouse_buttons,
                         );
                     }
                     MainEvent::ConfigChanged { .. } => {
