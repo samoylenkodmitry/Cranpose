@@ -10,6 +10,7 @@ use crate::{
     accessibility::AccessibilityOptions,
     geometry::VectorPathMaskCache,
     liquid_glass::{GLASS_SPECIALIZATION_CACHE_CAPACITY, GlassCacheKey},
+    path::PathBuffers,
     path_fill::PathSlicer,
     record::ShapeRecorder,
     render_effect::ShaderSpecializationCache,
@@ -20,6 +21,7 @@ pub(crate) struct GraphicsThreadState {
     pub(crate) vector_path_masks: RefCell<VectorPathMaskCache>,
     pub(crate) shared_texts: RefCell<HashMap<u64, Rc<str>, FxBuildHasher>>,
     pub(crate) path_slicer: RefCell<PathSlicer>,
+    pub(crate) path_buffers: RefCell<PathBuffers>,
     pub(crate) glass_specializations:
         RefCell<ShaderSpecializationCache<GlassCacheKey, GLASS_SPECIALIZATION_CACHE_CAPACITY>>,
     pub(crate) no_shapes: OnceCell<Arc<ShapeRecorder>>,
@@ -34,6 +36,7 @@ impl GraphicsThreadState {
             vector_path_masks: RefCell::new(VectorPathMaskCache::new()),
             shared_texts: RefCell::new(HashMap::with_hasher(FxBuildHasher::new())),
             path_slicer: RefCell::new(PathSlicer::new()),
+            path_buffers: RefCell::new(PathBuffers::new()),
             glass_specializations: RefCell::new(ShaderSpecializationCache::new()),
             no_shapes: OnceCell::new(),
             #[cfg(test)]

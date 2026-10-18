@@ -64,6 +64,10 @@ pub(crate) fn recycle_primitives(layer: &mut LayerNode) {
         children[first_layer..end].iter().all(is_child_layer),
         "a layer's own primitives never sit between its child layers"
     );
+    // A container that draws nothing of its own has nothing to recycle.
+    if first_layer == 0 && end == children.len() {
+        return;
+    }
     crate::thread_state::with(|state| {
         let mut pool = state.layer_pool.borrow_mut();
         let mut keep = |child| match child {

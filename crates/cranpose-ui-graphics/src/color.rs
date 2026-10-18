@@ -115,13 +115,14 @@ const LEVEL_FRACTIONS: [f32; 256] = {
     fractions
 };
 
-/// One channel snapped to the 8-bit value an sRGB colour holds.
+/// One channel snapped to the 8-bit value an sRGB colour holds, by the
+/// platform's own `* 255.0f`, `+ 0.5f`, `f2i`: the saturating cast to a
+/// byte clamps as its `coerceIn(0f, 1f)` does.
 fn srgb_channel_8bit(channel: f32) -> f32 {
-    let level = crate::whole::round(channel.clamp(0.0, 1.0) * 255.0);
-    if level.is_nan() {
-        return level;
+    if channel.is_nan() {
+        return channel;
     }
-    LEVEL_FRACTIONS[level as usize]
+    LEVEL_FRACTIONS[usize::from((channel * 255.0 + 0.5) as u8)]
 }
 
 #[cfg(test)]

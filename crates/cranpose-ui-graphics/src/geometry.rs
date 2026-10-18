@@ -1994,11 +1994,9 @@ impl DrawScope for DrawScopeDefault<'_> {
         stroke: Stroke,
         blend_mode: BlendMode,
     ) {
-        let line = LineGeometry::new(start, end, stroke);
-        if line.is_degenerate() {
-            return;
-        }
-        self.recording.push_line(&line, &brush, stroke, blend_mode);
+        self.recording
+            .line_run(&brush, stroke, blend_mode)
+            .push(start, end, stroke.cap);
     }
 
     fn draw_path(&mut self, path: &Path, brush: Brush, style: DrawStyle) {
@@ -2023,16 +2021,8 @@ impl DrawScope for DrawScopeDefault<'_> {
         if !stroke.is_visible() {
             return;
         }
-        let recording = &mut self.recording;
-        let mut push = |line: LineGeometry| {
-            if !line.is_degenerate() {
-                let stroke = Stroke {
-                    cap: line.cap,
-                    ..stroke
-                };
-                recording.push_line(&line, &brush, stroke, blend_mode);
-            }
-        };
+        let mut run = self.recording.line_run(&brush, stroke, blend_mode);
+        let mut push = |line: LineGeometry| run.push(line.start, line.end, line.cap);
         for contour in path.contours() {
             let Some(dash) = dash else {
                 crate::for_each_stroke_line(&contour.points, contour.closed, stroke, &mut push);

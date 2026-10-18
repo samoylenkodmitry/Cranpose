@@ -1258,3 +1258,125 @@ fn a_recording_counts_and_bounds_its_shapes_across_splits_and_reuse() {
     assert_eq!(text_only.shape_count_in(&text_only.all_segments()), 0);
     assert_eq!(text_only.shape_bounds(), None);
 }
+
+fn zigzag(count: usize) -> crate::Path {
+    let mut path = crate::Path::new();
+    path.move_to(Point::new(0.0, 10.0));
+    for index in 1..count {
+        let y = if index % 2 == 0 { 10.0 } else { 30.0 };
+        path.line_to(Point::new(index as f32 * 4.0, y));
+    }
+    path
+}
+
+fn record_scope(draw: impl FnOnce(&mut DrawScopeDefault<'_>)) -> CommandRecording {
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(200.0, 200.0), &mut recording);
+    draw(&mut scope);
+    scope.finish();
+    recording
+}
+
+/// A stroked path's segments after its first extend their segment of
+/// records without the checks a record alone takes. What they record must
+/// be what the same segments drawn one by one record: in a segment of
+/// their own, and after an arc whose band class they share a segment with
+/// until its waste cuts a new one.
+#[test]
+fn a_stroked_path_records_what_its_segments_drawn_one_by_one_record() {
+    let stroke = Stroke {
+        width: 3.0,
+        cap: StrokeCap::Butt,
+        join: StrokeJoin::Miter,
+    };
+    let path = zigzag(40);
+    let arc = |scope: &mut DrawScopeDefault<'_>| {
+        scope.draw_arc(
+            solid(),
+            Point::new(100.0, 100.0),
+            90.0,
+            0.0,
+            3.0,
+            Stroke::new(8.0),
+        );
+    };
+    let whole = record_scope(|scope| {
+        scope.draw_path(&path, solid(), crate::DrawStyle::Stroke(stroke));
+        arc(scope);
+        scope.draw_path(&path, solid(), crate::DrawStyle::Stroke(stroke));
+    });
+    let mut lines = Vec::new();
+    for contour in path.contours() {
+        crate::for_each_stroke_line(&contour.points, contour.closed, stroke, |line| {
+            lines.push(line);
+        });
+    }
+    let draw_lines = |scope: &mut DrawScopeDefault<'_>| {
+        for line in &lines {
+            let stroke = Stroke {
+                cap: line.cap,
+                ..stroke
+            };
+            scope.draw_line(solid(), line.start, line.end, stroke);
+        }
+    };
+    let one_by_one = record_scope(|scope| {
+        draw_lines(scope);
+        arc(scope);
+        draw_lines(scope);
+    });
+    let classes: Vec<u8> = whole
+        .segments()
+        .iter()
+        .map(|segment| segment.band_class)
+        .collect();
+    assert!(
+        classes.len() == 2 && classes[0] > 0 && classes[1] == 0,
+        "the second stroke joins the arc's segment until its waste cuts a new one: {classes:?}"
+    );
+    assert!(whole.tables() == one_by_one.tables());
+    assert_eq!(whole.shape_bounds(), one_by_one.shape_bounds());
+}
+
+#[test]
+fn a_gradient_stroke_interns_its_brush_once() {
+    let recording = record_scope(|scope| {
+        scope.draw_path(
+            &zigzag(12),
+            radial(),
+            crate::DrawStyle::Stroke(Stroke::new(2.0)),
+        );
+    });
+    assert_eq!(recording.tables().shapes.len(), 11);
+    assert_eq!(recording.brushes().len(), 1);
+}
+
+/// A slanted butt end reaches less than half the width past the ends' box
+/// along the axis, and a square end more: the recording reaches exactly
+/// as far as its records do.
+#[test]
+fn a_recording_reaches_as_far_as_its_records() {
+    for cap in [StrokeCap::Butt, StrokeCap::Square, StrokeCap::Round] {
+        let recording = record_scope(|scope| {
+            let stroke = Stroke {
+                width: 6.0,
+                cap,
+                join: StrokeJoin::Round,
+            };
+            scope.draw_path(&zigzag(5), solid(), crate::DrawStyle::Stroke(stroke));
+            scope.draw_line(
+                solid(),
+                Point::new(150.0, 20.0),
+                Point::new(180.0, 60.0),
+                stroke,
+            );
+        });
+        let reach = recording
+            .tables()
+            .shapes
+            .iter()
+            .map(|record| record.coverage_rect())
+            .reduce(|reach, rect| reach.union(rect));
+        assert_eq!(recording.shape_bounds(), reach, "{cap:?}");
+    }
+}

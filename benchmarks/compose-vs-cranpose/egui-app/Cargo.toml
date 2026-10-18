@@ -18,11 +18,12 @@ crate-type = ["cdylib", "rlib"]
 log = "0.4"
 perf-data = { path = "../perf-data" }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# egui's own native shell with its default renderer (glow) and fonts, and
-# AccessKit for accessibility services, as the Android toolkits serve them.
-# AccessKit's Android adapter attaches to GameActivity's view.
-eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts", "accesskit", "android-game-activity"] }
+# On a desktop: eframe's own default renderer, wgpu, which draws through Metal
+# on macOS. Its README names wgpu the default and glow the opt-in, and Apple
+# deprecated OpenGL, which glow draws through.
+# https://github.com/emilk/egui/blob/main/crates/eframe/README.md
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]
+eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "default_fonts", "accesskit"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # The same shell in a browser, on the same renderer: glow is WebGL2 there.
@@ -32,6 +33,10 @@ wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "Location"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
+# egui's native shell on glow, which is OpenGL ES there, with AccessKit for
+# accessibility services, as the Android toolkits serve them. AccessKit's
+# Android adapter attaches to GameActivity's view.
+eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts", "accesskit", "android-game-activity"] }
 # egui-winit leaves AccessKit's Android adapter out, so Android would get the
 # adapter that drops every tree; this feature turns the real one on.
 accesskit_winit = { version = "0.34.1", default-features = false, features = ["accesskit_android"] }

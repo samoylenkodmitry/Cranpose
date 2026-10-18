@@ -7,7 +7,10 @@
 //! centres lie in its columns, so only the fill's outline is anti-aliased
 //! and no seam shows between slices.
 
-use crate::{PathFillRule, Point, Rect};
+use crate::{
+    PathFillRule, Point, Rect,
+    float::{at_least, at_most},
+};
 
 /// One vertical slice of a filled path: the area between a top and a bottom
 /// edge, each straight, over the columns from `left` to `right`.
@@ -37,8 +40,8 @@ pub struct Trapezoid {
 impl Trapezoid {
     /// The box of its corners.
     pub fn bounds(&self) -> Rect {
-        let top = self.top[0].min(self.top[1]);
-        let bottom = self.bottom[0].max(self.bottom[1]);
+        let top = at_most(self.top[0], self.top[1]);
+        let bottom = at_least(self.bottom[0], self.bottom[1]);
         Rect {
             x: self.left,
             y: top,
@@ -148,7 +151,9 @@ impl Edge {
     /// Its y at `x`, exact at its ends, so slices that meet at a vertex
     /// agree where.
     fn y_at(&self, x: f32) -> f32 {
-        if x <= self.x0 {
+        // A level edge, as a chart's base is, is that high all along: the
+        // slope term below is zero there.
+        if x <= self.x0 || self.y0 == self.y1 {
             self.y0
         } else if x >= self.x1 {
             self.y1

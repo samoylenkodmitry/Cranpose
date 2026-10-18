@@ -1186,10 +1186,9 @@ fn translated_container(
         );
         graphics_layer
     };
-    if shaped(container.local_bounds)
-        .as_ref()
-        .unwrap_or(&GraphicsLayer::DEFAULT)
-        != &*container.graphics_layer
+    if !container
+        .graphics_layer
+        .reads_as(shaped(container.local_bounds).as_ref())
     {
         return Err("container graphics layer changed");
     }
@@ -1516,8 +1515,13 @@ fn recycle_children_around(
             crate::layer_recycling::recycle(leaving);
         }
     };
-    container.children.drain(kept.end..).for_each(&mut recycle);
-    container.children.drain(..kept.start).for_each(recycle);
+    // Most steps keep every child.
+    if kept.end < container.children.len() {
+        container.children.drain(kept.end..).for_each(&mut recycle);
+    }
+    if kept.start > 0 {
+        container.children.drain(..kept.start).for_each(recycle);
+    }
 }
 
 /// Builds the children that enter `container`. They are built from the
@@ -2748,7 +2752,8 @@ impl<'a> GroupedDraws<'a> {
             paint: draws
                 .layer
                 .map(crate::layer_composition::local_content_layer_for)
-                .filter(|paint| paint.alpha != 1.0 || paint.color_filter.is_some()),
+                .filter(|paint| paint.alpha != 1.0 || paint.color_filter.is_some())
+                .map(std::borrow::Cow::into_owned),
         }
     }
 

@@ -9,8 +9,9 @@ use bytemuck::{Pod, Zeroable};
 
 use crate::{
     ArcGeometry, BlendMode, Brush, Color, CornerRadii, DrawGroup, DrawPrimitive, FxHasher,
-    GroupMarker, LineGeometry, Point, Rect, RenderHash, ShapeRecordBody, ShapeRecordCurve,
-    ShapeRecords, Stroke, StrokeCap, StrokeJoin, TAU, TileMode, Trapezoid, arc_band,
+    GroupMarker, LineFrame, LineGeometry, Point, Rect, RenderHash, ShapeRecordBody,
+    ShapeRecordCurve, ShapeRecords, Stroke, StrokeCap, StrokeJoin, TAU, TileMode, Trapezoid,
+    arc_band,
     float::{at_least, within},
     vertex_gradient,
 };
@@ -536,6 +537,46 @@ fn inset_area(width: f32, height: f32, less_width: f32, less_height: f32) -> f32
 /// Whether a record is a rounded fill whose bands cover at least half of
 /// its rect: a gradient batch tests them per fragment (see
 /// [`band_interior_area`]), and a solid one tests no interior.
+/// The rect a record's pixels reach, [`ShapeRecord::coverage_rect`], for
+/// any record but a line: its rect grown by half a stroke's width.
+fn record_coverage(body: &ShapeRecordBody) -> Rect {
+    let half_stroke = if body.flags & STROKED_BIT != 0 {
+        body.stroke_width * 0.5
+    } else {
+        0.0
+    };
+    expand_rect(row_rect(body.rect), half_stroke)
+}
+
+/// The record of the segment `line`, whose frame is `frame`, painted by
+/// the interned `brush`: the ends ride in the arc columns, and the unit
+/// direction and half length the vertex stage orients its quad by in the
+/// curve column. A line reads back nothing else, so it keeps no source
+/// arguments, which an arc keeps for its radius and angles.
+fn line_record(
+    line: &LineGeometry,
+    frame: &LineFrame,
+    (brush, color): (u32, [f32; 4]),
+    stroke_width: f32,
+    flags: u32,
+) -> (ShapeRecordBody, ShapeRecordCurve) {
+    (
+        ShapeRecordBody {
+            rect: rect_row(line.end_bounds()),
+            color,
+            stroke_width,
+            flags,
+            brush,
+            placement: 0,
+            arc_geometry: [line.start.x, line.start.y, line.end.x, line.end.y],
+        },
+        ShapeRecordCurve {
+            radii: [0.0; 4],
+            arc_normalized: [frame.direction.x, frame.direction.y, frame.half_length, 0.0],
+        },
+    )
+}
+
 fn interior_repays(body: &ShapeRecordBody, curve: &ShapeRecordCurve) -> bool {
     if record_fragment_kind(body.flags) != FRAGMENT_KIND_FILL {
         return false;
@@ -1126,7 +1167,10 @@ impl ShapeRecorder {
                 rect,
                 brush,
                 trapezoid,
-            } => self.push_trapezoids(rect, &[trapezoid], &brush, blend_mode),
+            } => {
+                self.push_trapezoids(rect, &[trapezoid], &brush, blend_mode);
+                trapezoid.bounds()
+            }
             other => return Recorded::Other(other),
         })
     }
@@ -1162,41 +1206,24 @@ impl ShapeRecorder {
         stroke: Stroke,
         blend: BlendMode,
     ) -> Rect {
-        let (handle, color) = self.intern_brush(brush);
+        let brush = self.intern_brush(brush);
         let mut flags = pack_flags(RECORD_KIND_LINE, Some(stroke), blend, StrokeCap::Butt);
         if line.is_degenerate() {
             flags |= ARC_DEGENERATE_BIT;
         }
         let frame = line.frame();
-        let ends = [line.start.x, line.start.y, line.end.x, line.end.y];
+        let (body, curve) = line_record(line, &frame, brush, stroke.width, flags);
         // A square end on a slant reaches past half the width, which is
         // all `push_shape` grows the ends' box by.
-        let bounds = line.bounds();
+        let bounds = line.bounds_in(&frame);
         self.include_bounds(bounds);
-        self.push_shape(
-            ShapeRecordBody {
-                rect: rect_row(line.end_bounds()),
-                color,
-                stroke_width: stroke.width,
-                flags,
-                brush: handle,
-                placement: 0,
-                arc_geometry: ends,
-            },
-            ShapeRecordCurve {
-                radii: [0.0; 4],
-                arc_normalized: [frame.direction.x, frame.direction.y, frame.half_length, 0.0],
-            },
-            ends,
-            blend,
-            None,
-        );
+        let shading = self.brush_shading(&body, &curve);
+        self.push_shaded(body, curve, [0.0; 4], (blend, shading), None);
         bounds
     }
 
     /// Records the slices of a path fill, each painted by `brush` resolved
-    /// against `brush_rect`, and returns the box they reach. The brush is
-    /// interned once for them all. A slice's corners ride in the arc
+    /// against `brush_rect`. The brush is interned once for them all. A slice's corners ride in the arc
     /// column; its sides and width, which is never zero, in the curve's
     /// normalised column, so no slice's row equals a band's, whose trig
     /// the GPU writes into its radii; and the brush rect in the radii.
@@ -1206,7 +1233,7 @@ impl ShapeRecorder {
         trapezoids: &[Trapezoid],
         brush: &Brush,
         blend: BlendMode,
-    ) -> Rect {
+    ) {
         let (handle, color) = self.intern_brush(brush);
         let flags = pack_flags(RECORD_KIND_LINE, None, blend, StrokeCap::Butt)
             | (TRAPEZOID_CAP << CAP_SHIFT);
@@ -1224,12 +1251,13 @@ impl ShapeRecorder {
                 arc_normalized: [0.0; 4],
             },
         );
-        let mut reach: Option<Rect> = None;
-        for trapezoid in trapezoids {
+        for (index, trapezoid) in trapezoids.iter().enumerate() {
             let bounds = trapezoid.bounds();
+            self.include_bounds(bounds);
             let open = (u32::from(trapezoid.open_left) * OPEN_LEFT_BIT)
                 | (u32::from(trapezoid.open_right) * OPEN_RIGHT_BIT);
-            self.push_shaded(
+            self.push_in_run(
+                index > 0,
                 ShapeRecordBody {
                     rect: rect_row(bounds),
                     color,
@@ -1255,11 +1283,8 @@ impl ShapeRecorder {
                 },
                 [0.0; 4],
                 (blend, shading),
-                None,
             );
-            reach = Some(reach.map_or(bounds, |reach| reach.union(bounds)));
         }
-        reach.unwrap_or(Rect::EMPTY)
     }
 
     /// Records a rect with `brush`, as an outline when `stroke` is `Some`. Returns the rect the
@@ -1437,11 +1462,15 @@ impl ShapeRecorder {
         blend: BlendMode,
         band_bucket: Option<usize>,
     ) -> Rect {
+        let coverage = record_coverage(&body);
+        self.include_bounds(coverage);
         let shading = self.brush_shading(&body, &curve);
-        self.push_shaded(body, curve, source, (blend, shading), band_bucket)
+        self.push_shaded(body, curve, source, (blend, shading), band_bucket);
+        coverage
     }
 
-    /// [`Self::push_shape`] for a record whose brush shading is known.
+    /// [`Self::push_shape`] for a record whose brush shading is known and
+    /// whose reach the caller has widened the bounds by.
     fn push_shaded(
         &mut self,
         mut body: ShapeRecordBody,
@@ -1449,14 +1478,7 @@ impl ShapeRecorder {
         source: [f32; 4],
         (blend, shading): (BlendMode, BrushShading),
         band_bucket: Option<usize>,
-    ) -> Rect {
-        let half_stroke = if body.flags & STROKED_BIT != 0 {
-            body.stroke_width * 0.5
-        } else {
-            0.0
-        };
-        let coverage = expand_rect(row_rect(body.rect), half_stroke);
-        self.include_bounds(coverage);
+    ) {
         let index = self.tables.shapes.len() as u32;
         body.flags |= shading.flag();
         let brush_bit = 1u8
@@ -1505,7 +1527,6 @@ impl ShapeRecorder {
                 bare_interiors,
             },
         );
-        coverage
     }
 
     fn extend_segment(&mut self, lane: RecordLane, index: u32, blend: BlendMode, kind_bit: u8) {
@@ -1538,6 +1559,39 @@ impl ShapeRecorder {
     /// raises every earlier record's budget, a smaller one collapses its
     /// own surplus. Accounts the waste when it does.
     #[inline]
+    /// Records a piece of a run: the segments of one stroke or the slices
+    /// of one fill, which share a brush, a blend, a shading and a fragment
+    /// kind with no interior, and so a segment key; the caller widens the
+    /// bounds by their reach. The first piece takes [`Self::push_shaded`]. A later one extends the segment the run
+    /// opened or joined with nothing to check while that segment holds no
+    /// band class; in an arc segment it takes the full check, which can
+    /// cut a new segment.
+    fn push_in_run(
+        &mut self,
+        started: bool,
+        mut body: ShapeRecordBody,
+        curve: ShapeRecordCurve,
+        source: [f32; 4],
+        (blend, shading): (BlendMode, BrushShading),
+    ) {
+        let plain = started
+            && self
+                .tables
+                .segments
+                .last()
+                .is_some_and(|segment| segment.band_class == 0);
+        if !plain {
+            self.push_shaded(body, curve, source, (blend, shading), None);
+            return;
+        }
+        body.flags |= shading.flag();
+        let tables = self.tables_mut();
+        tables.shapes.push(body, curve, source);
+        if let Some(segment) = tables.segments.last_mut() {
+            segment.count += 1;
+        }
+    }
+
     fn segment_takes_class(&mut self, band_class: u8) -> bool {
         let last = self.tables.segments.last().expect("a keyed segment exists");
         let held = ARC_BUCKET_SEGMENTS[last.band_class as usize];
@@ -2479,16 +2533,31 @@ impl<'a> CommandRecorder<'a> {
         self.note_shape();
     }
 
-    /// Records the segment `line` a draw scope stroked.
-    pub fn push_line(
-        &mut self,
-        line: &LineGeometry,
-        brush: &Brush,
+    /// Starts the segments of a stroke with `brush`, `stroke`'s width and
+    /// join, and `blend`; see [`LineRun`].
+    pub fn line_run<'r>(
+        &'r mut self,
+        brush: &'r Brush,
         stroke: Stroke,
         blend: BlendMode,
-    ) {
-        self.shapes.push_line(line, brush, stroke, blend);
-        self.note_shape();
+    ) -> LineRun<'r, 'a> {
+        LineRun {
+            flags: pack_flags(
+                RECORD_KIND_LINE,
+                Some(Stroke {
+                    cap: StrokeCap::Butt,
+                    ..stroke
+                }),
+                blend,
+                StrokeCap::Butt,
+            ),
+            recorder: self,
+            brush,
+            stroke,
+            drawn: LineGeometry::width_draws(stroke.half_width()),
+            blend,
+            interned: None,
+        }
     }
 
     /// Records the slices of a path fill a draw scope cut; see
@@ -2525,6 +2594,59 @@ impl<'a> CommandRecorder<'a> {
     /// combine recordings.
     pub fn merge_summary(&mut self, other: RecordingSummary) {
         self.content.summary.merge(other);
+    }
+}
+
+/// The segments of one stroke a draw scope records in turn, each with its
+/// own cap. The brush is interned and its shading found at the first
+/// segment, and each later one extends the segment of records the first
+/// opened or joined. [`CommandRecorder::line_run`] starts one.
+pub struct LineRun<'r, 'a> {
+    recorder: &'r mut CommandRecorder<'a>,
+    brush: &'r Brush,
+    flags: u32,
+    stroke: Stroke,
+    /// Whether the stroke's width draws anything.
+    drawn: bool,
+    blend: BlendMode,
+    /// The interned brush and its shading, from the first segment on.
+    interned: Option<((u32, [f32; 4]), BrushShading)>,
+}
+
+impl LineRun<'_, '_> {
+    /// Records the segment from `start` to `end` with `cap` at both ends.
+    /// A degenerate segment ([`LineGeometry::is_degenerate`]) draws
+    /// nothing and is left out, as Compose's `drawLine` draws nothing there.
+    pub fn push(&mut self, start: Point, end: Point, cap: StrokeCap) {
+        if !self.drawn || !LineGeometry::ends_draw(start, end, cap) {
+            return;
+        }
+        let line = LineGeometry::new(start, end, Stroke { cap, ..self.stroke });
+        let started = self.interned.is_some();
+        let (brush, shading) = match self.interned {
+            Some(interned) => interned,
+            None => {
+                let shapes = &mut *self.recorder.shapes;
+                let brush = shapes.intern_brush(self.brush);
+                let shading = shapes.brush_shading(
+                    &ShapeRecordBody {
+                        brush: brush.0,
+                        flags: self.flags,
+                        ..ShapeRecordBody::zeroed()
+                    },
+                    &ShapeRecordCurve::zeroed(),
+                );
+                self.recorder.note_shape();
+                self.interned = Some((brush, shading));
+                (brush, shading)
+            }
+        };
+        let frame = line.frame();
+        let flags = self.flags | ((cap as u32) << CAP_SHIFT);
+        let (body, curve) = line_record(&line, &frame, brush, self.stroke.width, flags);
+        let shapes = &mut *self.recorder.shapes;
+        shapes.include_bounds(line.bounds_in(&frame));
+        shapes.push_in_run(started, body, curve, [0.0; 4], (self.blend, shading));
     }
 }
 

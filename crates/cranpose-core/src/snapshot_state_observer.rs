@@ -460,6 +460,9 @@ impl SnapshotStateObserverInner {
             return;
         }
 
+        // One state names each of its scopes once; only several can name
+        // a scope twice.
+        let several = modified.len() > 1;
         let mut seen_scope_ids: HashSet<usize> = HashSet::default();
         let mut to_notify: Vec<Rc<RefCell<ScopeEntry>>> = Vec::new();
         {
@@ -470,8 +473,9 @@ impl SnapshotStateObserverInner {
                     let mut ordered_scope_ids: SmallVec<[usize; 8]> =
                         scope_ids.iter().copied().collect();
                     ordered_scope_ids.sort_unstable();
+                    to_notify.reserve(ordered_scope_ids.len());
                     for scope_id in ordered_scope_ids {
-                        if seen_scope_ids.insert(scope_id)
+                        if (!several || seen_scope_ids.insert(scope_id))
                             && let Some(entry) = indexed_scopes.get(&scope_id)
                         {
                             to_notify.push(entry.clone());
@@ -485,14 +489,14 @@ impl SnapshotStateObserverInner {
             return;
         }
 
-        for entry in to_notify {
-            let executor = self.executor.clone();
-            executor(Box::new(move || {
+        // One task notifies every scope in turn, as one task a scope would.
+        (self.executor)(Box::new(move || {
+            for entry in to_notify {
                 if let Ok(entry) = entry.try_borrow() {
                     entry.notify();
                 }
-            }));
-        }
+            }
+        }));
     }
 
     fn replace_observed_ids(&self, entry: &Rc<RefCell<ScopeEntry>>, collected: &mut ObservedIds) {

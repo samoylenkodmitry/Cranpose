@@ -189,6 +189,19 @@ impl LayerProperties {
         self.0.as_deref()
     }
 
+    /// Whether these properties read as `value`, `None` for the defaults:
+    /// a node without a layer compares nothing.
+    #[inline]
+    pub(crate) fn reads_as(&self, value: Option<&GraphicsLayer>) -> bool {
+        match (self.get(), value) {
+            (None, None) => true,
+            (stored, value) => {
+                stored.unwrap_or(&GraphicsLayer::DEFAULT)
+                    == value.unwrap_or(&GraphicsLayer::DEFAULT)
+            }
+        }
+    }
+
     pub(crate) fn replace(&mut self, value: Option<GraphicsLayer>) {
         match (&mut self.0, value) {
             (Some(current), Some(value)) => **current = value,
@@ -225,7 +238,7 @@ impl From<Option<GraphicsLayer>> for LayerProperties {
 
 impl PartialEq for LayerProperties {
     fn eq(&self, other: &Self) -> bool {
-        **self == **other
+        self.reads_as(other.get())
     }
 }
 
@@ -523,6 +536,7 @@ impl LayerNode {
     /// through an offscreen buffer for its alpha or by request, its bounds,
     /// as Compose's layer-sized buffer cuts it. Hit testing takes only
     /// [`Self::clip_rect`]: alpha hides nothing from a finger.
+    #[inline]
     pub fn visual_clip_rect(&self) -> Option<Rect> {
         self.clip_rect().or_else(|| {
             (self.isolation.group_opacity || self.isolation.explicit_offscreen)

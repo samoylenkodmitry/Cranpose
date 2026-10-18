@@ -459,3 +459,49 @@ fn a_fill_with_no_area_records_nothing() {
     assert!(fill_slices(&flat, Brush::solid(Color::WHITE)).is_empty());
     assert!(fill_slices(&Path::new(), Brush::solid(Color::WHITE)).is_empty());
 }
+
+/// A path takes the lists a dropped or reset path left on its thread: it
+/// must hold its own points only, whichever lists it took.
+#[test]
+fn a_path_built_in_a_dropped_paths_room_holds_only_its_own_points() {
+    let build = |count: usize| {
+        let mut path = Path::new();
+        path.move_to(Point::new(0.0, 0.0));
+        for index in 1..count {
+            path.line_to(Point::new(index as f32, 1.0));
+        }
+        path.close();
+        path.move_to(Point::new(50.0, 50.0));
+        path.line_to(Point::new(60.0, 50.0));
+        path
+    };
+    drop(build(200));
+    let mut path = build(3);
+    let expected = vec![
+        PathContour {
+            points: vec![
+                Point::new(0.0, 0.0),
+                Point::new(1.0, 1.0),
+                Point::new(2.0, 1.0),
+            ],
+            closed: true,
+        },
+        PathContour {
+            points: vec![Point::new(50.0, 50.0), Point::new(60.0, 50.0)],
+            closed: false,
+        },
+    ];
+    assert_eq!(path.contours(), expected.as_slice());
+    path.reset();
+    assert!(path.contours().is_empty());
+    path.move_to(Point::new(5.0, 5.0));
+    path.line_to(Point::new(6.0, 5.0));
+    assert_eq!(
+        path.contours(),
+        [PathContour {
+            points: vec![Point::new(5.0, 5.0), Point::new(6.0, 5.0)],
+            closed: false,
+        }]
+        .as_slice()
+    );
+}

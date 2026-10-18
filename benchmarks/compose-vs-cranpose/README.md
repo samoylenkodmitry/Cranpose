@@ -253,10 +253,12 @@ frameworks draw differently, by design:
   blur widths. egui's text uses its light theme, which blends glyph coverage
   as the other apps do.
 - **Accessibility:** the apps keep the tree that accessibility services read,
-  as their toolkits do by default. egui builds AccessKit's tree every frame
-  with a label for each text. Its Android adapter attaches to GameActivity's
-  view, which R8 must keep, and needs `accesskit_winit`'s `accesskit_android`
-  feature, which egui-winit leaves off. Avalonia serves its tree by default:
+  as their toolkits do by default. On Android egui builds AccessKit's tree
+  every frame with a label for each text; on a desktop it builds the tree
+  once an assistive technology asks, as the other desktop toolkits do. Its
+  Android adapter attaches to GameActivity's view, which R8 must keep, and
+  needs `accesskit_winit`'s `accesskit_android` feature, which egui-winit
+  leaves off. Avalonia serves its tree by default:
   uiautomator reads 765 nodes at tier 5. Slint's Android backend has no
   accessibility support, so the Slint app does none of this work.
 - **Release builds:**
@@ -551,8 +553,9 @@ a window of 1280 x 820 points (`perf-data`'s `DESKTOP_WINDOW`). Each app reads
 the tier from `PERF_TIER`, the frame to freeze on from `PERF_FREEZE` and the
 Roboto files from `PERF_FONTS`; Cranpose takes `--tier=N` arguments and the
 web page reads its address. `framecount/FrameCount.app` counts the frames the
-window presents through ScreenCaptureKit, as SurfaceFlinger counts a phone
-app's, and takes the pictures `--parity` compares. `ps` counts the CPU time
+window server composites for the window through ScreenCaptureKit, as
+SurfaceFlinger counts a phone app's, and takes the pictures `--parity`
+compares. `ps` counts the CPU time
 of the app and every process it started, `footprint` the memory they hold at
 the window's end and the part of it that is the GPU's (Metal's buffers and
 textures, and the surfaces the window server composites), and `macmon` the
@@ -574,6 +577,39 @@ second from the launch are kept. A leg disturbed by other processes stays in
 the run, marked, and out of the medians. Desktop numbers feed the dashboard
 only; merges are judged on the slowest phone.
 
+**What a frame is.** ScreenCaptureKit reports a frame for a window each time
+the window server composites the display again. An app's present does that, and
+so does anything else that moves on the display: a quiet window in the corner of
+macm3's television was composited 34 times a second while a Cranpose window
+animated in its middle, and 2 times a second without it. A rate counted from
+those frames is the rate of what moves on the display. FrameCount therefore
+counts a composited frame only when the window's picture differs from the
+last one's (a hash of its pixels at 1/8 scale). A hook on an app's Metal layer
+counts the drawables the app takes: for GPUI, Slint and Cranpose the counted
+frames agree with it within a frame a second, as they do for a Chrome page that
+draws every animation frame. The composites alone ran 20 to 90% above the hook
+for Slint and GPUI with nothing else moving, and five times above it with a
+Cranpose window animating.
+
+On 2026-10-18 the run of 12:35 UTC counted 53 to 56 frames a second for Flutter,
+GPUI and Slint on macm3, where each desktop run from 2026-10-11 to 06:38 UTC
+that day had counted 11 to 24. Something moved on the display during that run.
+A Cranpose window animating beside a GPUI window reproduces its numbers: 53.5
+frames a second at 27 ms of CPU a frame, against 16 at 70 ms alone, while the
+hook counted 12 drawables a second in both. The slower runs before it were
+inflated as well, by the composites that were not the app's. Each leg records
+`composited_fps` beside `fps`.
+
+Before its first leg and after its last, `desktop.py` asks FrameCount for the
+state of the display (`--display`: its mode, its scale, whether it is awake and
+the rate at which its display link ticks) and for the rate at which the window
+server composites the display for a window that never changes (`--ambient`: 2 a
+second on a quiet television). It will not measure, and exits with an error
+after a run so that nothing is published, when the display is asleep, locked,
+not 60 Hz or not 2x, when its display link ticks under 97% of its rate, or when
+the ambient rate is above 5 a second. A report keeps both states under
+`display`, and each leg the rate and the longest gap of its display's link.
+
 At tier 5 against Compose Multiplatform, SwiftUI and AppKit change 0.0% of
 tiles, Flutter 0.1%, the web page and Tauri 0.2%, Dioxus and egui 0.3%,
 Cranpose 0.35%, Avalonia 0.5%, Slint 0.7%, GPUI 0.9% and iced 1.1%. Fyne
@@ -585,7 +621,7 @@ and the panels lie over a different part of the cluster's look-alike levels.
 | --- | --- |
 | `cranpose` | `cranpose-app`'s desktop binary |
 | `compose` | `compose-desktop-app`: Compose Multiplatform on the JVM, drawing the composables `compose-app` draws, from `shared-compose` |
-| `egui`, `slint` | the Android crates' desktop binaries |
+| `egui`, `slint` | the Android crates' desktop binaries; egui draws through eframe's default renderer, wgpu, where the phone's build uses glow |
 | `iced` | `iced-app`: iced on wgpu |
 | `gpui` | `gpui-app`: Zed's GPUI as `gpui-pre` publishes it |
 | `avalonia` | `avalonia-app`'s desktop head, Native AOT |
@@ -667,7 +703,7 @@ sh benchmarks/compose-vs-cranpose/framecount/build.sh
 (cd benchmarks/compose-vs-cranpose/tauri-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/dioxus-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/xilem-app && cargo build --release)
-(cd benchmarks/compose-vs-cranpose/fyne-app && go build -o build/perf-compare-fyne .)
+(cd benchmarks/compose-vs-cranpose/fyne-app && ./build.sh)
 python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop --tier 16
 python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop-parity --parity --tier 5
 ```

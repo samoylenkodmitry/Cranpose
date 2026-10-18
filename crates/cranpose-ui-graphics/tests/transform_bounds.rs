@@ -79,3 +79,41 @@ fn turned_and_perspective_bounds_cover_every_corner() {
         corner_bounds(&perspective, rect)
     );
 }
+
+/// A plain layer returns a rect's bounds without mapping its corners: they
+/// must be the corners' bounds to the bit, as the general path finds them.
+#[test]
+fn a_plain_layer_bounds_a_rect_as_its_corners_do() {
+    use cranpose_ui_graphics::{
+        GraphicsLayer,
+        layer_transform::{apply_layer_to_quad, apply_layer_to_rect},
+        transform::quad_bounds,
+    };
+    let layer = GraphicsLayer::default();
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 400.0,
+        height: 300.0,
+    };
+    let values = [0.0, 0.1, 100.3, -7.25, 1.0e-3, 16_777_215.0, 3.0e7];
+    for &x in &values {
+        for &y in &values {
+            for &width in &[0.0, 0.1, 0.3, 12.5, 1.0e6] {
+                let rect = Rect {
+                    x,
+                    y,
+                    width,
+                    height: width * 0.5,
+                };
+                let direct = apply_layer_to_rect(rect, bounds, &layer);
+                let corners = quad_bounds(apply_layer_to_quad(rect, bounds, &layer));
+                assert_eq!(
+                    [direct.x, direct.y, direct.width, direct.height].map(f32::to_bits),
+                    [corners.x, corners.y, corners.width, corners.height].map(f32::to_bits),
+                    "{rect:?}"
+                );
+            }
+        }
+    }
+}

@@ -28,12 +28,75 @@ impl PathContour {
     /// one.
     const INITIAL_POINTS: usize = 16;
 
+    /// A contour at `point`, in the room a dropped path left on this thread
+    /// when there is some.
     fn starting_at(point: Point) -> Self {
-        let mut points = Vec::with_capacity(Self::INITIAL_POINTS);
+        let mut points =
+            crate::thread_state::with(|state| state.path_buffers.borrow_mut().points());
         points.push(point);
         Self {
             points,
             closed: false,
+        }
+    }
+}
+
+/// The point lists and contour lists dropped paths left on a thread, which
+/// the next paths built there take: a path an app builds in each draw, as
+/// Compose apps do, then allocates nothing once its lists reached its size.
+pub(crate) struct PathBuffers {
+    points: Vec<Vec<Point>>,
+    /// The room of the kept point lists, in points.
+    kept_points: usize,
+    contours: Vec<Vec<PathContour>>,
+}
+
+impl PathBuffers {
+    /// The most contour lists a thread keeps.
+    const KEPT: usize = 32;
+    /// The most room, in points, the kept point lists hold together: 32 KB,
+    /// small enough for an ESP32 build.
+    const POINT_BUDGET: usize = 4096;
+
+    pub(crate) const fn new() -> Self {
+        Self {
+            points: Vec::new(),
+            kept_points: 0,
+            contours: Vec::new(),
+        }
+    }
+
+    fn points(&mut self) -> Vec<Point> {
+        match self.points.pop() {
+            Some(points) => {
+                self.kept_points -= points.capacity();
+                points
+            }
+            None => Vec::with_capacity(PathContour::INITIAL_POINTS),
+        }
+    }
+
+    fn contours(&mut self) -> Vec<PathContour> {
+        self.contours.pop().unwrap_or_default()
+    }
+
+    /// Keeps the point lists of `contours`, which it leaves empty.
+    fn keep_points(&mut self, contours: &mut Vec<PathContour>) {
+        for PathContour { mut points, .. } in contours.drain(..) {
+            let room = points.capacity();
+            if self.kept_points + room <= Self::POINT_BUDGET {
+                points.clear();
+                self.kept_points += room;
+                self.points.push(points);
+            }
+        }
+    }
+
+    /// Keeps the point lists of `contours` and the list itself.
+    fn keep(&mut self, mut contours: Vec<PathContour>) {
+        self.keep_points(&mut contours);
+        if self.contours.len() < Self::KEPT {
+            self.contours.push(contours);
         }
     }
 }
@@ -65,13 +128,24 @@ impl Path {
 
     /// Starts a new contour at `point`.
     pub fn move_to(&mut self, point: Point) {
-        self.contours.push(PathContour::starting_at(point));
+        self.push_contour(point);
         self.pen = point;
+    }
+
+    fn push_contour(&mut self, start: Point) {
+        if self.contours.capacity() == 0 {
+            self.contours =
+                crate::thread_state::with(|state| state.path_buffers.borrow_mut().contours());
+        }
+        self.contours.push(PathContour::starting_at(start));
     }
 
     /// Adds a straight edge from the pen to `point`.
     pub fn line_to(&mut self, point: Point) {
-        self.open_contour().push(point);
+        match self.contours.last_mut() {
+            Some(contour) if !contour.closed => contour.points.push(point),
+            _ => self.open_contour().push(point),
+        }
         self.pen = point;
     }
 
@@ -103,7 +177,14 @@ impl Path {
 
     /// Removes every contour.
     pub fn reset(&mut self) {
-        self.contours.clear();
+        if !self.contours.is_empty() {
+            crate::thread_state::with(|state| {
+                state
+                    .path_buffers
+                    .borrow_mut()
+                    .keep_points(&mut self.contours);
+            });
+        }
         self.pen = Point::ZERO;
     }
 
@@ -157,10 +238,20 @@ impl Path {
     /// otherwise a new one starting at the pen.
     fn open_contour(&mut self) -> &mut Vec<Point> {
         if self.contours.last().is_none_or(|contour| contour.closed) {
-            self.contours.push(PathContour::starting_at(self.pen));
+            self.push_contour(self.pen);
         }
         let last = self.contours.len() - 1;
         &mut self.contours[last].points
+    }
+}
+
+impl Drop for Path {
+    fn drop(&mut self) {
+        if self.contours.capacity() == 0 {
+            return;
+        }
+        let contours = std::mem::take(&mut self.contours);
+        crate::thread_state::with(|state| state.path_buffers.borrow_mut().keep(contours));
     }
 }
 
@@ -299,19 +390,17 @@ pub fn for_each_stroke_line(
         .flatten()
         .filter(|(first, last)| first != last)
         .map(|(&first, &last)| (last, first));
-    let edges = points
+    let mut edges = points
         .windows(2)
         .map(|pair| (pair[0], pair[1]))
         .chain(closing)
-        .filter(|(start, end)| start != end);
-    let count = edges.clone().count();
-    for (index, (start, end)) in edges.enumerate() {
-        let start_cap = if closed || index > 0 {
-            corner
-        } else {
-            stroke.cap
-        };
-        let end_cap = if closed || index + 1 < count {
+        .filter(|(start, end)| start != end)
+        .peekable();
+    let mut first = true;
+    while let Some((start, end)) = edges.next() {
+        let start_cap = if closed || !first { corner } else { stroke.cap };
+        first = false;
+        let end_cap = if closed || edges.peek().is_some() {
             corner
         } else {
             stroke.cap

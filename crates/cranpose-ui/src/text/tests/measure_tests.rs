@@ -1649,11 +1649,10 @@ fn fit_ellipsis_places_the_cut_from_prefix_widths() {
             let (line, _) = fit_ellipsis(
                 &measurer,
                 None,
-                &source,
-                0..source.text.len(),
+                (&source, 0..source.text.len()),
                 &style,
-                Some(max_width),
-                placement,
+                (Some(max_width), placement),
+                None,
             );
             let probes = elided_measures.get();
             let expected = widest_fitting_elision(&measurer, &source, &style, max_width, placement);

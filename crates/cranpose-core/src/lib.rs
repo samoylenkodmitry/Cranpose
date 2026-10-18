@@ -74,8 +74,8 @@ pub use callbacks::{
     SharedParam, refresh_param, refresh_shared_param, store_param,
 };
 pub use composer::{
-    BranchGroupGuard, CapturedCompositionContext, ComposableGroup, Composer,
-    ScopedBranchGroupGuard, ValueSlotHandle,
+    __branch_group_scope_advance, __branch_group_scope_deferred, BranchGroupGuard,
+    CapturedCompositionContext, ComposableGroup, Composer, ScopedBranchGroupGuard, ValueSlotHandle,
 };
 pub(crate) use composer::{ComposerCore, EmittedNode, ParentAttachMode, ParentFrame};
 pub use composition::{Composition, ROOT_RENDER_REPLAY_LIMIT};
@@ -601,25 +601,6 @@ fn note_location_key(key: Key, file: &str, line: u32, column: u32) {
 
 #[cfg(not(any(test, debug_assertions)))]
 fn note_location_key(_key: Key, _file: &str, _line: u32, _column: u32) {}
-
-#[doc(hidden)]
-#[inline]
-pub fn __branch_group_scope_deferred(key: Key) -> Option<ScopedBranchGroupGuard> {
-    composer_context::with_current_core(|core| {
-        ScopedBranchGroupGuard::open(&core.branch_folds, key)
-    })
-}
-
-/// Moves a content closure's statement guard to the next statement, keyed
-/// `key`: the guard the next statement would open, without looking up the
-/// composer again. A guard opened outside composition stays empty.
-#[doc(hidden)]
-#[inline]
-pub fn __branch_group_scope_advance(guard: &mut Option<ScopedBranchGroupGuard>, key: Key) {
-    if let Some(guard) = guard {
-        guard.advance(key);
-    }
-}
 
 /// The key of the `branch`th branch guard the `#[composable]` macro wrote at
 /// a source position, as a constant.

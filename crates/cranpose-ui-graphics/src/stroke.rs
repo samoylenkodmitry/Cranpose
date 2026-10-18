@@ -17,7 +17,7 @@
 
 use crate::{
     Point, Rect,
-    float::{all_finite, at_least, within},
+    float::{all_finite, at_least, at_most, within},
 };
 
 /// Shape of the two ends of an open stroked path (an arc, today).
@@ -561,9 +561,18 @@ impl LineGeometry {
     /// or no length between butt caps, as Compose's `drawLine` draws nothing
     /// there.
     pub fn is_degenerate(&self) -> bool {
-        !all_finite([self.start.x, self.start.y, self.end.x, self.end.y])
-            || !(self.half_width > 0.0 && self.half_width.is_finite())
-            || (self.cap == StrokeCap::Butt && self.start == self.end)
+        !Self::ends_draw(self.start, self.end, self.cap) || !Self::width_draws(self.half_width)
+    }
+
+    /// Whether ends at `start` and `end` with `cap` leave a segment to
+    /// draw: both finite, and apart unless the cap reaches past them.
+    pub(crate) fn ends_draw(start: Point, end: Point, cap: StrokeCap) -> bool {
+        all_finite([start.x, start.y, end.x, end.y]) && !(cap == StrokeCap::Butt && start == end)
+    }
+
+    /// Whether a stroke `half_width` across on each side draws anything.
+    pub(crate) fn width_draws(half_width: f32) -> bool {
+        half_width > 0.0 && half_width.is_finite()
     }
 
     /// The midpoint, unit direction and half length coverage is measured
@@ -599,13 +608,13 @@ impl LineGeometry {
 
     /// The axis-aligned box of the ends, the rect the primitive carries.
     pub fn end_bounds(&self) -> Rect {
-        let min_x = self.start.x.min(self.end.x);
-        let min_y = self.start.y.min(self.end.y);
+        let min_x = at_most(self.start.x, self.end.x);
+        let min_y = at_most(self.start.y, self.end.y);
         Rect {
             x: min_x,
             y: min_y,
-            width: self.start.x.max(self.end.x) - min_x,
-            height: self.start.y.max(self.end.y) - min_y,
+            width: at_least(self.start.x, self.end.x) - min_x,
+            height: at_least(self.start.y, self.end.y) - min_y,
         }
     }
 
@@ -614,11 +623,17 @@ impl LineGeometry {
     /// end's corners reach along the segment by the cap and across it by
     /// half the width, which on a slant is more than half the width.
     pub fn reach(&self) -> Point {
+        self.reach_along(|| self.frame().direction)
+    }
+
+    /// [`Self::reach`], with the unit direction asked for only where a
+    /// butt or square end needs it.
+    fn reach_along(&self, direction: impl FnOnce() -> Point) -> Point {
         if self.cap == StrokeCap::Round {
             return Point::new(self.half_width, self.half_width);
         }
-        let frame = self.frame();
-        let (along_x, along_y) = (frame.direction.x.abs(), frame.direction.y.abs());
+        let direction = direction();
+        let (along_x, along_y) = (direction.x.abs(), direction.y.abs());
         let cap = self.cap_reach();
         Point::new(
             along_x * cap + along_y * self.half_width,
@@ -629,8 +644,16 @@ impl LineGeometry {
     /// The pixels the stroke can reach: the ends' box grown by
     /// [`Self::reach`].
     pub fn bounds(&self) -> Rect {
+        self.grown_ends(self.reach())
+    }
+
+    /// [`Self::bounds`] for a segment whose [`Self::frame`] is `frame`.
+    pub fn bounds_in(&self, frame: &LineFrame) -> Rect {
+        self.grown_ends(self.reach_along(|| frame.direction))
+    }
+
+    fn grown_ends(&self, reach: Point) -> Rect {
         let ends = self.end_bounds();
-        let reach = self.reach();
         Rect {
             x: ends.x - reach.x,
             y: ends.y - reach.y,
