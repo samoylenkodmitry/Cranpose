@@ -1573,12 +1573,15 @@ impl Renderer for CountingRenderer {
     }
 }
 
+/// The window rect and the opacity of each solid rectangle a scene paints.
+pub(super) type PaintedRects = Vec<(Rect, f32)>;
+
 /// The window rect and the opacity of every solid rectangle `root` paints.
-pub(super) fn painted_rects(root: &cranpose_render_common::graph::LayerNode) -> Vec<(Rect, f32)> {
+pub(super) fn painted_rects(root: &cranpose_render_common::graph::LayerNode) -> PaintedRects {
     fn collect(
         layer: &cranpose_render_common::graph::LayerNode,
         (parent, parent_alpha): (cranpose_render_common::graph::ProjectiveTransform, f32),
-        out: &mut Vec<(Rect, f32)>,
+        out: &mut PaintedRects,
     ) {
         let transform = layer.transform_to_parent.then(parent);
         let alpha = parent_alpha * layer.graphics_layer.get().map_or(1.0, |layer| layer.alpha);
@@ -1615,7 +1618,7 @@ pub(super) fn painted_rects(root: &cranpose_render_common::graph::LayerNode) -> 
 /// and of a scene built afresh from the same tree.
 pub(super) fn retained_and_fresh_painted_rects(
     shell: &mut AppShell<ScopedUpdateCountingRenderer>,
-) -> (Vec<(Rect, f32)>, Vec<(Rect, f32)>) {
+) -> (PaintedRects, PaintedRects) {
     let retained = painted_rects(
         &shell.surfaces[0]
             .renderer
