@@ -212,22 +212,19 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
                 &layer,
                 &mut crate::pipeline::UiTextLayoutResolver,
                 &mut LayerMotion::default(),
-                (
-                    WalkContext {
-                        offset: Point::new(0.3, 0.7),
-                        visual_clip: None,
-                        rounding: None,
-                        snap_anchor: None,
-                        translated,
-                        raster_scale: RasterScale::Exact(1.0),
-                        light: ShadowLight::for_window(100.0, 100.0, 1.0, 1.0),
-                        wants_pixel_sensitive: false,
-                        update: 0,
-                        scene: None,
-                        in_space: false,
-                    },
-                    None,
-                ),
+                WalkContext {
+                    offset: Point::new(0.3, 0.7),
+                    visual_clip: None,
+                    rounding: None,
+                    snap_anchor: None,
+                    translated,
+                    raster_scale: RasterScale::Exact(1.0),
+                    light: ShadowLight::for_window(100.0, 100.0, 1.0, 1.0),
+                    wants_pixel_sensitive: false,
+                    update: 0,
+                    in_space: false,
+                },
+                None,
                 &mut CompositorScene::new(),
                 &mut LayerSceneRecycler::default(),
             );
@@ -401,7 +398,6 @@ fn a_rounded_layer_its_parent_clip_holds_draws_in_place_whatever_the_float_sums(
         light: ShadowLight::for_window(100.0, 100.0, 1.0, 1.0),
         wants_pixel_sensitive: false,
         update: 0,
-        scene: None,
         in_space: false,
     };
     assert!(matches!(
