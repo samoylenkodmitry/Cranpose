@@ -192,6 +192,7 @@ pub fn layer_transform_to_parent(
 /// Extends an ancestor mapping from untransformed layout coordinates to window
 /// coordinates with this node's graphics layer. `origin` and `bounds` describe
 /// the node before any ancestor transforms; `bounds` is relative to `origin`.
+#[inline]
 pub fn layer_transform_to_window(
     parent: ProjectiveTransform,
     origin: Point,
