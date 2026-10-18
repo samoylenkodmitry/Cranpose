@@ -132,31 +132,19 @@ fn Scene(room: RoomState, shape: RoomShape, meshes: RoomMeshes) {
     );
 }
 
-/// The room's walls with their content, and the stages of the controls
-/// on them: flat, the north wall alone.
+/// The room's walls with their content: flat, the north wall alone.
 #[composable(no_skip)]
 fn Walls(room: RoomState, shape: RoomShape, meshes: RoomMeshes) {
-    let spatial = room.is_spatial();
-    let walls = if spatial {
+    let walls = if room.is_spatial() {
         &Wall::ALL[..]
     } else {
         &Wall::ALL[..1]
     };
-    let north = wall_controls::rememberWallControls(Wall::North, wall_controls::NORTH_CONTROLS);
-    let south = wall_controls::rememberWallControls(Wall::South, wall_controls::SOUTH_CONTROLS);
     for &wall in walls {
         let room = room.clone();
-        let plane = Arc::clone(&meshes.plane);
-        let controls = (north.clone(), south.clone());
+        let meshes = (Arc::clone(&meshes.plane), Arc::clone(&meshes.cube));
         key(wall, move || {
-            WallSurface(room, shape, (wall, controls), plane);
-        });
-    }
-    let south_stages = spatial.then_some(south);
-    for set in std::iter::once(north).chain(south_stages) {
-        let cube = Arc::clone(&meshes.cube);
-        key(set.wall(), move || {
-            wall_controls::WallStages(shape, set, cube);
+            WallSurface(room, shape, wall, meshes);
         });
     }
 }
@@ -211,11 +199,8 @@ fn RoomMotion(room: RoomState, shape: RoomShape) {
 fn WallSurface(
     room: RoomState,
     shape: RoomShape,
-    (wall, (north, south)): (
-        Wall,
-        (wall_controls::WallControlSet, wall_controls::WallControlSet),
-    ),
-    plane: Arc<Mesh>,
+    wall: Wall,
+    (plane, cube): (Arc<Mesh>, Arc<Mesh>),
 ) {
     Box(
         Modifier::empty()
@@ -228,18 +213,10 @@ fn WallSurface(
             }),
         BoxSpec::default(),
         move || match wall {
-            Wall::North => {
-                WallBackground(Color(0.09, 0.10, 0.14, 1.0));
-                Controls(room.clone(), north.head());
-                wall_controls::WallCards(shape, north.clone());
-            }
+            Wall::North => FarWall(room.clone(), shape, Arc::clone(&cube)),
             Wall::East => DemoWall(),
             Wall::West => Panel(Color(0.12, 0.10, 0.12, 1.0), TextShowcaseTab),
-            Wall::South => {
-                WallBackground(Color(0.13, 0.12, 0.10, 1.0));
-                BackWall(south.head());
-                wall_controls::WallCards(shape, south.clone());
-            }
+            Wall::South => BackWall(shape, Arc::clone(&cube)),
             Wall::Floor => Floor(),
             Wall::Ceiling => Ceiling(),
         },
@@ -619,6 +596,32 @@ fn DemoWall() {
     );
 }
 
+/// The far wall: the screen's text and buttons, and controls under them.
+#[composable(no_skip)]
+fn FarWall(room: RoomState, shape: RoomShape, cube: Arc<Mesh>) {
+    let head = rememberMutableStateOf(Size::default);
+    WallBackground(Color(0.09, 0.10, 0.14, 1.0));
+    Controls(room, head);
+    wall_controls::WallControls(
+        shape.wall_size(Wall::North),
+        head,
+        (wall_controls::NORTH_CONTROLS, cube),
+    );
+}
+
+/// The wall behind the screen's eye: a line of text, and controls under it.
+#[composable(no_skip)]
+fn BackWall(shape: RoomShape, cube: Arc<Mesh>) {
+    let head = rememberMutableStateOf(Size::default);
+    WallBackground(Color(0.13, 0.12, 0.10, 1.0));
+    BackWallText(head);
+    wall_controls::WallControls(
+        shape.wall_size(Wall::South),
+        head,
+        (wall_controls::SOUTH_CONTROLS, cube),
+    );
+}
+
 /// A wall's colour, behind its content.
 #[composable]
 fn WallBackground(color: Color) {
@@ -631,7 +634,7 @@ fn WallBackground(color: Color) {
 
 /// The back wall's text, which reports its size to `head`.
 #[composable]
-fn BackWall(head: MutableState<Size>) {
+fn BackWallText(head: MutableState<Size>) {
     Column(
         Modifier::empty().report_size_state(head).padding(48.0),
         ColumnSpec::default(),

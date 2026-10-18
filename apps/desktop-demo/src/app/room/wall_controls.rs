@@ -1,21 +1,20 @@
 //! Controls from the controls tab on the room's walls. Each control's card
 //! lies on its wall under the wall's text, and its stage stands out of the
-//! card into the room as a volume, so the room's eye sees the control solid
-//! from wherever it stands.
+//! card as a volume: a mesh surface inside the wall's content, which joins
+//! the room's scene, so the room's eye sees the control solid from wherever
+//! it stands.
 
-use std::{rc::Rc, sync::Arc};
+use std::sync::Arc;
 
-use cranpose_core::{key, rememberMutableStateOf, MutableState};
+use cranpose_core::{key, MutableState};
 use cranpose_ui::{
     composable,
     space::{Mat4, Mesh, Vec3},
     Box, BoxSpec, Modifier, Point, Size,
 };
 
-use super::space::{RoomShape, Wall};
 use crate::app::controls_ui::{
-    rememberControl, ControlHandle, ControlKind, ControlVolume, WallCard, STAGE_HEIGHT,
-    WALL_STAGE_UNITS,
+    rememberControl, ControlKind, ControlVolume, WallCard, STAGE_HEIGHT, WALL_STAGE_UNITS,
 };
 
 const CARD_WIDTH: f32 = 300.0;
@@ -38,16 +37,6 @@ pub(super) const SOUTH_CONTROLS: &[ControlKind] = &[
     ControlKind::Checkmark,
 ];
 
-/// The controls on one wall, and their state, which their cards on the
-/// wall and their stages in the room share.
-#[derive(Clone)]
-pub(super) struct WallControlSet {
-    wall: Wall,
-    /// The size of the wall's text, which the cards go under.
-    head: MutableState<Size>,
-    controls: Rc<[(ControlKind, ControlHandle)]>,
-}
-
 /// Where a control's card lies on its wall's content: its top left corner,
 /// and its scale against a card of [`CARD_WIDTH`] by [`STAGE_HEIGHT`].
 #[derive(Clone, Copy, PartialEq)]
@@ -63,6 +52,24 @@ impl CardSpot {
             width: CARD_WIDTH * self.scale,
             height: STAGE_HEIGHT * self.scale,
         }
+    }
+
+    /// Where the stage's cube stands in the wall's content space: x along
+    /// the card's width, y out of the wall, toward the room, and z down the
+    /// wall, its ground just in front of the card.
+    fn stage_place(self) -> Mat4 {
+        let card = self.card();
+        let rise = WALL_STAGE_UNITS.1 * card.width / WALL_STAGE_UNITS.0;
+        Mat4::from_axes(
+            Vec3::new(card.width, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, -rise),
+            Vec3::new(0.0, card.height, 0.0),
+            Vec3::new(
+                self.at.x + card.width * 0.5,
+                self.at.y + card.height * 0.5,
+                -(STAGE_LIFT + rise * 0.5),
+            ),
+        )
     }
 }
 
@@ -84,49 +91,29 @@ fn fit_cards(size: Size, head: f32, count: usize) -> Option<(f32, usize)> {
         .filter(|(scale, _)| *scale >= MIN_CARD_SCALE)
 }
 
-impl PartialEq for WallControlSet {
-    fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.controls, &other.controls)
+/// The controls `kinds` on a wall of `size`, in rows under the wall's text,
+/// whose size `head` holds; none when the wall has no room for them. Each
+/// stage is the unit cube `cube`.
+#[composable(no_skip)]
+pub(super) fn WallControls(
+    size: Size,
+    head: MutableState<Size>,
+    (kinds, cube): (&'static [ControlKind], Arc<Mesh>),
+) {
+    let top = head.get().height;
+    let Some((scale, per_row)) = fit_cards(size, top, kinds.len()) else {
+        return;
+    };
+    let card = CardSpot {
+        at: Point::ZERO,
+        scale,
     }
-}
-
-impl WallControlSet {
-    /// The wall the controls are on.
-    pub(super) fn wall(&self) -> Wall {
-        self.wall
-    }
-
-    /// The size of the wall's text, which the cards go under: the text
-    /// reports it.
-    pub(super) fn head(&self) -> MutableState<Size> {
-        self.head
-    }
-
-    /// Each control with its card's spot on the wall's content, in rows
-    /// under the wall's text from its left; none when the wall has no room
-    /// for them.
-    fn cards(
-        &self,
-        shape: RoomShape,
-    ) -> impl Iterator<Item = (ControlKind, &ControlHandle, CardSpot)> + '_ {
-        let size = shape.wall_size(self.wall);
-        let top = self.head.get().height;
-        let fit = fit_cards(size, top, self.controls.len());
-        let (scale, per_row) = fit.unwrap_or((0.0, 1));
-        let shown = if fit.is_some() {
-            self.controls.len()
-        } else {
-            0
-        };
-        let card = CardSpot {
-            at: Point::ZERO,
-            scale,
-        }
-        .card();
-        self.controls[..shown]
-            .iter()
-            .enumerate()
-            .map(move |(index, (kind, control))| {
+    .card();
+    Box(
+        Modifier::empty().fill_max_size(),
+        BoxSpec::default(),
+        move || {
+            for (index, &kind) in kinds.iter().enumerate() {
                 let (row, column) = (index / per_row, index % per_row);
                 let spot = CardSpot {
                     at: Point::new(
@@ -135,79 +122,18 @@ impl WallControlSet {
                     ),
                     scale,
                 };
-                (*kind, control, spot)
-            })
-    }
-}
-
-#[composable]
-pub(super) fn rememberWallControls(wall: Wall, kinds: &'static [ControlKind]) -> WallControlSet {
-    let head = rememberMutableStateOf(Size::default);
-    let controls = kinds
-        .iter()
-        .map(|&kind| (kind, key(kind, || rememberControl(kind))))
-        .collect();
-    WallControlSet {
-        wall,
-        head,
-        controls,
-    }
-}
-
-/// The cards of `set` on its wall's content.
-#[composable(no_skip)]
-pub(super) fn WallCards(shape: RoomShape, set: WallControlSet) {
-    Box(
-        Modifier::empty().fill_max_size(),
-        BoxSpec::default(),
-        move || {
-            for (kind, _, spot) in set.cards(shape) {
-                key(kind, move || {
-                    WallCard(
-                        Modifier::empty()
-                            .absolute_offset(spot.at.x, spot.at.y)
-                            .size(spot.card()),
-                    );
-                });
+                let cube = Arc::clone(&cube);
+                key(kind, move || WallControl(kind, spot, cube));
             }
         },
     );
 }
 
-/// The stages of `set`, each the unit cube `cube` standing out of its card
-/// into the room.
-#[composable(no_skip)]
-pub(super) fn WallStages(shape: RoomShape, set: WallControlSet, cube: Arc<Mesh>) {
-    let size = shape.wall_size(set.wall);
-    let on_wall = shape.wall_transform(set.wall);
-    let point =
-        |x: f32, y: f32| on_wall.transform_point(Vec3::new(x / size.width, y / size.height, 0.0));
-    let origin = point(0.0, 0.0);
-    let (Some(right), Some(down)) = (
-        (point(1.0, 0.0) - origin).normalized(),
-        (point(0.0, 1.0) - origin).normalized(),
-    ) else {
-        return;
-    };
-    // The wall shows its content upright to an eye in the room, so the room
-    // lies on the side `down` turns into `right` from.
-    let out = down.cross(right);
-    for (kind, control, spot) in set.cards(shape) {
-        let stage = spot.card();
-        let rise = WALL_STAGE_UNITS.1 * stage.width / WALL_STAGE_UNITS.0;
-        let middle = point(
-            spot.at.x + stage.width * 0.5,
-            spot.at.y + stage.height * 0.5,
-        );
-        let place = Mat4::from_axes(
-            right * stage.width,
-            out * rise,
-            down * stage.height,
-            middle + out * (STAGE_LIFT + rise * 0.5),
-        );
-        let (cube, control) = (Arc::clone(&cube), control.clone());
-        key(kind, move || {
-            ControlVolume(kind, control, (cube, place), stage);
-        });
-    }
+/// One control's card at `spot`, with its stage standing out of it.
+#[composable]
+fn WallControl(kind: ControlKind, spot: CardSpot, cube: Arc<Mesh>) {
+    let control = rememberControl(kind);
+    let at = Modifier::empty().absolute_offset(spot.at.x, spot.at.y);
+    WallCard(at.clone().size(spot.card()));
+    ControlVolume(kind, control, at, (cube, spot.stage_place(), spot.card()));
 }

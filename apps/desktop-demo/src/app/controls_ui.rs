@@ -921,19 +921,21 @@ pub(crate) fn WallCard(modifier: Modifier) {
 }
 
 /// A control's stage standing out of its card on a wall of a 3D room,
-/// seen from wherever the room's eye stands: `place` puts the unit cube
-/// where the stage stands, its x along the stage's width, its y out of the
-/// wall and its z down the wall. The stage is `size` on the card.
+/// seen from wherever the room's eye stands. It lies inside the wall's
+/// content, laid out by `modifier` where the card is, and `place` puts the
+/// unit cube in the wall's content space where the stage stands: its x
+/// along the stage's width, its y out of the wall and its z down the wall.
+/// The stage is `size` on the card.
 #[composable]
 pub(crate) fn ControlVolume(
     kind: ControlKind,
     control: ControlHandle,
-    (cube, place): (Arc<Mesh>, Mat4),
-    size: Size,
+    modifier: Modifier,
+    (cube, place, size): (Arc<Mesh>, Mat4, Size),
 ) {
     let animation = animateControl(kind, control.clone());
     Box(
-        Modifier::empty()
+        modifier
             .required_size(size)
             .mesh_surface(move || MeshSurface {
                 mesh: Arc::clone(&cube),
