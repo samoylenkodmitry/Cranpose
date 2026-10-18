@@ -548,18 +548,11 @@ where
             .then_some(scoped_layout_nodes)
             .into_iter()
             .flatten();
-        route_nodes_by_surface(
+        route_geometry_scene_nodes(
             &mut self.app,
             &mut self.surfaces,
             scoped.chain(self.geometry_scene_nodes.reshaped.iter().copied()),
-            SurfaceDirtyLane::Layout,
-            &mut self.routing_scratch,
-        );
-        route_nodes_by_surface(
-            &mut self.app,
-            &mut self.surfaces,
-            self.geometry_scene_nodes.moved.iter().copied(),
-            SurfaceDirtyLane::Moved,
+            &self.geometry_scene_nodes.moved,
             &mut self.routing_scratch,
         );
     }
