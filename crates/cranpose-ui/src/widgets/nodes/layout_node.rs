@@ -176,6 +176,8 @@ pub struct LayoutState {
     semantics_stamp: u64,
     /// The take of the moved-node list this node was last noted in.
     moved_noted_in: u64,
+    /// The take of the reshaped-node list this node was last noted in.
+    reshaped_noted_in: u64,
 }
 
 impl LayoutState {
@@ -226,7 +228,7 @@ impl LayoutState {
     pub fn set_size(&mut self, size: Size, context: &AppContext) {
         if self.size != size {
             if let Some(id) = self.node_id {
-                context.record_geometry_scene_node(id);
+                context.note_geometry_scene_node(id, &mut self.reshaped_noted_in);
             }
             self.size = size;
             self.note_semantics_change();
@@ -247,7 +249,7 @@ impl LayoutState {
         let moved = self.position != position;
         if let Some(id) = self.node_id {
             if newly_placed {
-                context.record_geometry_scene_node(id);
+                context.note_geometry_scene_node(id, &mut self.reshaped_noted_in);
             } else if moved {
                 context.record_moved_scene_node(id, placer, &mut self.moved_noted_in);
             }
@@ -1326,6 +1328,15 @@ impl LayoutNode {
     /// phase.
     pub fn set_measured_size(&self, size: Size, context: &AppContext) {
         self.layout_state.borrow_mut().set_size(size, context);
+    }
+
+    /// Notes to the scene phase of `context` that the layout pass changed
+    /// the geometry of this node, `node_id`.
+    pub(crate) fn note_geometry_change(&self, node_id: NodeId, context: &AppContext) {
+        context.note_geometry_scene_node(
+            node_id,
+            &mut self.layout_state.borrow_mut().reshaped_noted_in,
+        );
     }
 
     /// Updates the position of this node, which `placer` placed. Called

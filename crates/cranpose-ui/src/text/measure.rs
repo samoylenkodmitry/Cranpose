@@ -171,12 +171,29 @@ impl PartialEq for PreparedTextLayout {
 }
 
 /// The width of every prefix of one line of text. It answers how wide any range of
-/// characters is without measuring again.
-#[derive(Clone, Debug, PartialEq)]
+/// characters is without measuring again. Copies and suffixes share one table, so a
+/// measurer can keep a line's widths and hand them out for every layout of the line.
+#[derive(Clone, Debug)]
 pub struct TextLinePrefixWidths {
+    table: Rc<PrefixWidthTable>,
+    /// The character of the table this one starts at.
+    first: usize,
+}
+
+#[derive(Debug)]
+struct PrefixWidthTable {
     prefix_widths: Vec<f32>,
     separator_before: Vec<f32>,
     non_empty_overhang: f32,
+}
+
+impl PartialEq for TextLinePrefixWidths {
+    fn eq(&self, other: &Self) -> bool {
+        self.table.prefix_widths[self.first..] == other.table.prefix_widths[other.first..]
+            && self.table.separator_before[self.first..]
+                == other.table.separator_before[other.first..]
+            && self.table.non_empty_overhang == other.table.non_empty_overhang
+    }
 }
 
 impl TextLinePrefixWidths {
@@ -206,9 +223,12 @@ impl TextLinePrefixWidths {
             return None;
         }
         Some(Self {
-            prefix_widths,
-            separator_before,
-            non_empty_overhang,
+            table: Rc::new(PrefixWidthTable {
+                prefix_widths,
+                separator_before,
+                non_empty_overhang,
+            }),
+            first: 0,
         })
     }
 
@@ -235,16 +255,15 @@ impl TextLinePrefixWidths {
 
     /// Number of characters the table covers.
     pub fn char_count(&self) -> usize {
-        self.separator_before.len()
+        self.table.separator_before.len() - self.first
     }
 
     /// The table of the characters from index `first` on, read from this
     /// one: a range of them is as wide as the same range here.
     fn suffix(&self, first: usize) -> Option<Self> {
-        Some(Self {
-            prefix_widths: self.prefix_widths.get(first..)?.to_vec(),
-            separator_before: self.separator_before.get(first..)?.to_vec(),
-            non_empty_overhang: self.non_empty_overhang,
+        (first <= self.char_count()).then(|| Self {
+            table: Rc::clone(&self.table),
+            first: self.first + first,
         })
     }
 
@@ -258,10 +277,12 @@ impl TextLinePrefixWidths {
         if start == end {
             return Some(0.0);
         }
-        let separator = self.separator_before.get(start).copied().unwrap_or(0.0);
+        let table = &*self.table;
+        let (start, end) = (self.first + start, self.first + end);
+        let separator = table.separator_before.get(start).copied().unwrap_or(0.0);
         Some(
-            (self.prefix_widths[end] - self.prefix_widths[start] - separator).max(0.0)
-                + self.non_empty_overhang,
+            (table.prefix_widths[end] - table.prefix_widths[start] - separator).max(0.0)
+                + table.non_empty_overhang,
         )
     }
 }
