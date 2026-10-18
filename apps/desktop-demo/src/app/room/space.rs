@@ -1,9 +1,9 @@
 //! The room the Room tab shows: where its walls lie in the scene, and the
 //! eye that walks in it.
 
-use std::f32::consts::FRAC_PI_3;
+use std::{cell::Cell, f32::consts::FRAC_PI_3, rc::Rc};
 
-use cranpose_core::{mutableStateOf, remember, MutableState};
+use cranpose_core::{mutableStateOf, remember, MutableState, NodeId};
 use cranpose_ui::{
     composable,
     space::{Camera, EyePose, Light, Mat4, Scene3d, Vec3},
@@ -133,6 +133,14 @@ impl RoomShape {
         )
     }
 
+    /// The camera of a room behind a doorway, once stepped into: in the
+    /// middle of the room's south side, which the doorway is, so the whole
+    /// room lies behind the doorway.
+    pub(super) fn doorway_camera(&self) -> Camera {
+        let eye = Vec3::new(self.width * 0.5, self.height * 0.5, 0.0);
+        Camera::look_at(eye, eye + Vec3::new(0.0, 0.0, 1.0), DOWN, self.focal_length)
+    }
+
     /// Where the eye stands once it steps into the room.
     fn standing_eye(&self) -> Vec3 {
         Vec3::new(
@@ -143,27 +151,41 @@ impl RoomShape {
     }
 }
 
-/// Whether the room is entered, its eye and which movement keys are held.
+/// Whether the room is entered, the eye that walks in it and which movement
+/// keys are held.
 #[derive(Clone)]
 pub(super) struct RoomState {
     entered: MutableState<bool>,
     spatial: MutableState<bool>,
     pub(super) progress: MutableState<f32>,
-    /// The window's eye while this room is the window's scene.
+    /// The window's eye: this room's own when it is the window's scene, the
+    /// window scene's when it lies behind a doorway.
     pub(super) eye: Eye,
+    /// Whether the room lies behind a doorway of another.
+    nested: bool,
+    /// The node of the room's scene.
+    pub(super) scene_node: Rc<Cell<Option<NodeId>>>,
+    /// Where the eye stood before it stepped into a room behind a doorway.
+    came_from: MutableState<Option<EyePose>>,
     pub(super) held: MutableState<u8>,
     pub(super) focus: FocusRequester,
     /// Whether the ball of fire flies and the shape shifts.
     pub(super) motion: MutableState<bool>,
 }
 
+/// The state of a room: behind a doorway, the room walks `window_eye`, the
+/// eye of the window's scene; otherwise an eye of its own.
 #[composable]
-pub(super) fn rememberRoomState() -> RoomState {
-    remember(|| RoomState {
+pub(super) fn rememberRoomState(window_eye: Option<Eye>) -> RoomState {
+    remember(move || RoomState {
         entered: mutableStateOf(false),
         spatial: mutableStateOf(false),
         progress: mutableStateOf(0.0),
-        eye: Eye::new(EyePose::standing(Vec3::ZERO, 0.0, 0.0), EYE_RADIUS),
+        nested: window_eye.is_some(),
+        eye: window_eye
+            .unwrap_or_else(|| Eye::new(EyePose::standing(Vec3::ZERO, 0.0, 0.0), EYE_RADIUS)),
+        scene_node: Rc::default(),
+        came_from: mutableStateOf(None),
         held: mutableStateOf(0),
         focus: FocusRequester::new(),
         motion: mutableStateOf(true),
@@ -182,12 +204,30 @@ impl RoomState {
         self.spatial.get()
     }
 
-    /// Turns the flat screen into the room's north wall and steps back into
-    /// the room, to where the eye stands in it. The room takes the keyboard,
-    /// so the movement keys walk.
+    /// Whether the room lies behind a doorway of another.
+    pub(super) fn is_nested(&self) -> bool {
+        self.nested
+    }
+
+    /// Turns the flat screen into the room's north wall and steps into the
+    /// room, to where the eye stands in it. The room takes the keyboard, so
+    /// the movement keys walk. The eye steps back from the screen into this
+    /// room, or, behind a doorway, through the doorway into it.
     pub(super) fn enter(&self, shape: &RoomShape) {
-        self.eye
-            .place(EyePose::standing(shape.standing_eye(), 0.0, 0.0));
+        let standing = EyePose::standing(shape.standing_eye(), 0.0, 0.0);
+        if self.nested {
+            let before = self.eye.pose();
+            let Some(scene) = self.scene_node.get() else {
+                return;
+            };
+            if !self.eye.enter(scene, standing) {
+                return;
+            }
+            self.came_from.set(Some(before));
+            self.progress.set(1.0);
+        } else {
+            self.eye.place(standing);
+        }
         self.spatial.set(true);
         self.entered.set(true);
         self.focus.request_focus().ok();
@@ -195,9 +235,18 @@ impl RoomState {
 
     /// Walks back to the north wall until it fills the screen again: from
     /// where the eye stands in the room, or from where it steps in when it
-    /// stands in a room behind one of the walls.
+    /// stands in a room behind one of the walls. Behind a doorway, the eye
+    /// goes back to where it stood before it stepped in, while it still
+    /// stands in this room.
     pub(super) fn leave(&self, shape: &RoomShape) {
-        if !self.eye.pose().doorways.is_empty() {
+        if self.nested {
+            let came_from = self.came_from.get();
+            self.came_from.set(None);
+            let inside = self.eye.pose().doorways.last().copied() == self.scene_node.get();
+            if let Some(pose) = came_from.filter(|_| inside) {
+                self.eye.place(pose);
+            }
+        } else if !self.eye.pose().doorways.is_empty() {
             self.eye
                 .place(EyePose::standing(shape.standing_eye(), 0.0, 0.0));
         }
@@ -212,18 +261,25 @@ impl RoomState {
 
     /// The scene: in the room, through the eye; on the way between the
     /// screen and the room, through a camera part of the way from the screen
-    /// to the eye. A room behind a doorway of another keeps the screen's
-    /// camera, which stands in the doorway, and the window's eye walks in.
-    pub(super) fn scene(&self, shape: &RoomShape, nested: bool) -> Scene3d {
+    /// to the eye. Behind a doorway of another room, the scene's camera
+    /// stands in the doorway: the screen's camera for the flat screen, and
+    /// once stepped into, the camera in the room's open south side, so the
+    /// whole room lies behind the doorway; the window's eye walks in.
+    pub(super) fn scene(&self, shape: &RoomShape) -> Scene3d {
         let light = Some(Light {
             direction: Vec3::new(0.5, 0.45, 0.75),
             ambient: 0.45,
             shadows: true,
             size: 0.08,
         });
-        if nested {
+        if self.nested {
+            let camera = if self.spatial.get() {
+                shape.doorway_camera()
+            } else {
+                shape.screen_camera()
+            };
             return Scene3d {
-                camera: shape.screen_camera(),
+                camera,
                 light,
                 eye: None,
             };
@@ -243,6 +299,21 @@ impl RoomState {
             light,
             eye: None,
         }
+    }
+
+    /// The camera of the window's eye in this room's coordinates, which a
+    /// plane faces to face the eye: the scene's own camera while the eye
+    /// stands in this room's space, or on its way into it from the screen;
+    /// from a space a doorway away, the eye's pose there.
+    pub(super) fn eye_camera(&self, shape: &RoomShape) -> Camera {
+        let own = self.scene(shape).camera;
+        if !self.nested && self.eye.pose().doorways.is_empty() {
+            return own;
+        }
+        self.scene_node
+            .get()
+            .and_then(|scene| self.eye.pose_in(scene))
+            .map_or(own, |pose| pose.camera(shape.focal_length))
     }
 
     /// Takes a movement key while the room is entered.

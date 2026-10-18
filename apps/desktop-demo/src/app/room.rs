@@ -8,7 +8,7 @@ mod blob;
 mod space;
 mod wall_controls;
 
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use cranpose::liquid::prelude::{
     LiquidCheckbox, LiquidTheme, LiquidThemeSpec, LiquidToggle, SchemeMode,
@@ -62,13 +62,12 @@ struct RoomMeshes {
     torus: Option<Arc<Mesh>>,
 }
 
-/// The room, or, behind a doorway of another room, a room the window's eye
-/// walks into: it shows its walls from the start, and its screen's camera
-/// stands in the doorway.
+/// The room: a flat screen until stepped into. Behind a doorway of another
+/// room it is the same room, whose camera stands in the doorway, and the
+/// window's eye steps or walks into it.
 #[composable]
 pub fn RoomTab() {
-    let nested = local_eye().current().is_some();
-    let room = rememberRoomState();
+    let room = rememberRoomState(local_eye().current());
     let meshes = remember(|| RoomMeshes {
         plane: Arc::new(Mesh::plane()),
         cube: Arc::new(Mesh::cuboid()),
@@ -98,33 +97,33 @@ pub fn RoomTab() {
             });
             RoomMotion(room.clone(), shape);
             let (room, meshes) = (room.clone(), meshes.clone());
-            if nested {
-                Scene(room, shape, meshes, true);
+            if room.is_nested() {
+                Scene(room, shape, meshes);
                 return;
             }
-            // The rooms behind this one's doorways leave walking to its eye.
+            // The rooms behind this one's doorways walk its eye.
             let eye = room.eye.clone();
             CompositionLocalProvider(vec![local_eye().provides(Some(eye))], move || {
-                Scene(room, shape, meshes, false);
+                Scene(room, shape, meshes);
             });
         },
     );
 }
 
 /// The room's scene: flat, the north wall alone as the screen; in space,
-/// every wall and the objects in the room, through the camera. A room
-/// behind a doorway shows in space.
+/// every wall and the objects in the room, through the camera. Behind a
+/// doorway of another room, it is the same: flat until stepped into.
 #[composable(no_skip)]
-fn Scene(room: RoomState, shape: RoomShape, meshes: RoomMeshes, nested: bool) {
-    let spatial = nested || room.is_spatial();
-    let camera = room.clone();
-    Box(
+fn Scene(room: RoomState, shape: RoomShape, meshes: RoomMeshes) {
+    let spatial = room.is_spatial();
+    let (camera, node) = (room.clone(), Rc::clone(&room.scene_node));
+    let scene = Box(
         Modifier::empty()
             .fill_max_size()
-            .scene3d(move || camera.scene(&shape, nested)),
+            .scene3d(move || camera.scene(&shape)),
         BoxSpec::default(),
         move || {
-            Walls(room.clone(), (shape, spatial, nested), meshes.clone());
+            Walls(room.clone(), (shape, spatial), meshes.clone());
             let globe = Arc::clone(&meshes.globe);
             key("globe", move || Globe(shape, globe));
             let glass = Arc::clone(&meshes.globe);
@@ -147,21 +146,27 @@ fn Scene(room: RoomState, shape: RoomShape, meshes: RoomMeshes, nested: bool) {
             }
         },
     );
+    node.set(Some(scene));
 }
 
-/// The room's walls with their content: flat, the north wall alone.
+/// The room's walls with their content: flat, the north wall alone. Behind
+/// a doorway, the doorway is the room's south side, which has no wall.
 #[composable(no_skip)]
-fn Walls(room: RoomState, (shape, spatial, nested): (RoomShape, bool, bool), meshes: RoomMeshes) {
+fn Walls(room: RoomState, (shape, spatial): (RoomShape, bool), meshes: RoomMeshes) {
     let walls = if spatial {
         &Wall::ALL[..]
     } else {
         &Wall::ALL[..1]
     };
-    for &wall in walls {
+    let nested = room.is_nested();
+    for &wall in walls
+        .iter()
+        .filter(|&&wall| !(nested && wall == Wall::South))
+    {
         let room = room.clone();
         let meshes = (Arc::clone(&meshes.plane), Arc::clone(&meshes.cube));
         key(wall, move || {
-            WallSurface(room, (shape, nested), wall, meshes);
+            WallSurface(room, shape, wall, meshes);
         });
     }
 }
@@ -215,7 +220,7 @@ fn RoomMotion(room: RoomState, shape: RoomShape) {
 #[composable(no_skip)]
 fn WallSurface(
     room: RoomState,
-    (shape, nested): (RoomShape, bool),
+    shape: RoomShape,
     wall: Wall,
     (plane, cube): (Arc<Mesh>, Arc<Mesh>),
 ) {
@@ -231,7 +236,7 @@ fn WallSurface(
             }),
         BoxSpec::default(),
         move || match wall {
-            Wall::North => FarWall(room.clone(), (shape, nested), Arc::clone(&cube)),
+            Wall::North => FarWall(room.clone(), shape, Arc::clone(&cube)),
             Wall::East => DemoWall(),
             Wall::West => Panel(Color(0.12, 0.10, 0.12, 1.0), TextShowcaseTab),
             Wall::South => BackWall(shape, Arc::clone(&cube)),
@@ -486,10 +491,9 @@ fn TorusGrid(switch: TorusSwitch) {
     );
 }
 
-/// The far wall's text and buttons, which report their size to `head`. A
-/// room behind a doorway has no screen to step out of.
+/// The far wall's text and buttons, which report their size to `head`.
 #[composable(no_skip)]
-fn Controls(room: RoomState, (shape, nested): (RoomShape, bool), head: MutableState<Size>) {
+fn Controls(room: RoomState, shape: RoomShape, head: MutableState<Size>) {
     let presses = rememberMutableStateOf(|| 0u32);
     let entered = room.is_entered();
     Column(
@@ -523,26 +527,24 @@ fn Controls(room: RoomState, (shape, nested): (RoomShape, bool), head: MutableSt
                 RowSpec::default(),
                 move || {
                     let steps = room.clone();
-                    if !nested {
-                        WallButton(
-                            Color(0.25, 0.45, 0.95, 1.0),
-                            move || {
-                                if steps.is_entered() {
-                                    steps.leave(&shape);
-                                } else {
-                                    steps.enter(&shape);
-                                }
-                            },
-                            move || {
-                                if entered {
-                                    "Back to the screen"
-                                } else {
-                                    "Step into the room"
-                                }
-                                .to_string()
-                            },
-                        );
-                    }
+                    WallButton(
+                        Color(0.25, 0.45, 0.95, 1.0),
+                        move || {
+                            if steps.is_entered() {
+                                steps.leave(&shape);
+                            } else {
+                                steps.enter(&shape);
+                            }
+                        },
+                        move || {
+                            if entered {
+                                "Back to the screen"
+                            } else {
+                                "Step into the room"
+                            }
+                            .to_string()
+                        },
+                    );
                     WallButton(
                         Color(0.20, 0.22, 0.30, 1.0),
                         move || presses.set(presses.get() + 1),
@@ -621,10 +623,10 @@ fn DemoWall() {
 
 /// The far wall: the screen's text and buttons, and controls under them.
 #[composable(no_skip)]
-fn FarWall(room: RoomState, (shape, nested): (RoomShape, bool), cube: Arc<Mesh>) {
+fn FarWall(room: RoomState, shape: RoomShape, cube: Arc<Mesh>) {
     let head = rememberMutableStateOf(Size::default);
     WallBackground(Color(0.09, 0.10, 0.14, 1.0));
-    Controls(room, (shape, nested), head);
+    Controls(room, shape, head);
     wall_controls::WallControls(
         shape.wall_size(Wall::North),
         head,

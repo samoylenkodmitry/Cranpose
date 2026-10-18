@@ -6,6 +6,7 @@ use cranpose::{PointerButton, Robot, SemanticElement};
 use cranpose_testing::{click_button_in_semantics, find_text_in_semantics};
 
 const STEP_IN: &str = "Step into the room";
+const BACK: &str = "Back to the screen";
 /// Longer than the 0.9 s walk between the screen and the room.
 const WALK: Duration = Duration::from_millis(1400);
 const WINDOW_WIDTH: f32 = 1200.0;
@@ -110,7 +111,7 @@ pub(crate) fn main() {
             }
             save(&robot, &shots, "nested.png");
 
-            if !click_button_in_semantics(&robot, "Back to the screen") {
+            if !click_button_in_semantics(&robot, BACK) {
                 robot_exit::fail(&robot, "no button to leave the room");
             }
             walk(&robot);
@@ -124,6 +125,7 @@ pub(crate) fn main() {
                 );
             }
             walk_through_the_wall(&robot, &shots);
+            step_into_the_wall_room(&robot, &shots);
 
             println!("PASS: room shots in {}", shots.display());
             robot.exit().ok();
@@ -185,9 +187,8 @@ fn click_wall_toggle(robot: &Robot) {
     }
 }
 
-/// Clicks the tab `label` of the demo on the east wall: of the labels that
-/// read `label`, the one farthest right.
-fn click_wall_tab(robot: &Robot, label: &str) {
+/// Where each text that reads `label` shows.
+fn labelled(robot: &Robot, label: &str) -> Vec<(f32, f32, f32, f32)> {
     fn visit(element: &SemanticElement, label: &str, found: &mut Vec<(f32, f32, f32, f32)>) {
         if element.text.as_deref() == Some(label) {
             let bounds = element.bounds;
@@ -202,7 +203,16 @@ fn click_wall_tab(robot: &Robot, label: &str) {
         Ok(roots) => roots.iter().for_each(|root| visit(root, label, &mut found)),
         Err(err) => robot_exit::fail(robot, &format!("semantics: {err}")),
     }
-    let Some((x, y, width, height)) = found.into_iter().max_by(|a, b| a.0.total_cmp(&b.0)) else {
+    found
+}
+
+/// Clicks the tab `label` of the demo on the east wall: of the labels that
+/// read `label`, the one farthest right.
+fn click_wall_tab(robot: &Robot, label: &str) {
+    let Some((x, y, width, height)) = labelled(robot, label)
+        .into_iter()
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+    else {
         robot_exit::fail(robot, &format!("no tab {label:?}"));
     };
     println!("  the wall's tab {label:?} at ({x:.1}, {y:.1})");
@@ -210,6 +220,46 @@ fn click_wall_tab(robot: &Robot, label: &str) {
         robot_exit::fail(robot, &format!("click the wall's tab {label:?}: {err}"));
     }
     robot_shot::settle(robot, 500);
+}
+
+/// Steps the eye into the room behind the east wall with that room's own
+/// button, seen through the doorway, and back with its own: the eye stands
+/// in that room in between, and where it stood after.
+fn step_into_the_wall_room(robot: &Robot, shots: &std::path::Path) {
+    // The screen's own room is entered, so its button reads Back to the
+    // screen: the room behind the wall holds the one button to step in.
+    let [step_in] = labelled(robot, STEP_IN)[..] else {
+        robot_exit::fail(robot, "the room behind the wall shows no button of its own to step in");
+    };
+    click_center(robot, step_in);
+    walk(robot);
+    save(robot, shots, "stepped_in.png");
+    if !labelled(robot, STEP_IN).is_empty() {
+        robot_exit::fail(robot, "the room behind the wall did not step in");
+    }
+    // The room behind the wall lies in the east wall's content, which the
+    // room composes after its far wall: its button comes last.
+    let Some(back) = labelled(robot, BACK).pop() else {
+        robot_exit::fail(robot, "the room behind the wall shows no button to step back");
+    };
+    println!("  the wall room's button through the doorway at {step_in:?}, stepped in at {back:?}");
+    if (back.0 - step_in.0).abs() < 20.0 && (back.3 - step_in.3).abs() < 5.0 {
+        robot_exit::fail(
+            robot,
+            "the eye did not step into the room behind the wall: its button shows where it did",
+        );
+    }
+    click_center(robot, back);
+    walk(robot);
+    let [again] = labelled(robot, STEP_IN)[..] else {
+        robot_exit::fail(robot, "the room behind the wall did not step back to its screen");
+    };
+    if (again.0 - step_in.0).abs() > 1.0 || (again.1 - step_in.1).abs() > 1.0 {
+        robot_exit::fail(
+            robot,
+            &format!("the eye did not come back to where it stood: {step_in:?}, now {again:?}"),
+        );
+    }
 }
 
 /// Steps into the room again, opens the room of the demo on the east wall,

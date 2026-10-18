@@ -109,7 +109,7 @@ pub(super) fn FireBall(room: RoomState, shape: RoomShape, (sphere, plane): (Arc<
             .mesh_surface(move || MeshSurface {
                 mesh: Arc::clone(&plane),
                 transform: facing(
-                    room.scene(&shape, false).camera,
+                    room.eye_camera(&shape),
                     fire_center(&shape, time.get()),
                     radius * HALO_PER_RADIUS,
                 ),
