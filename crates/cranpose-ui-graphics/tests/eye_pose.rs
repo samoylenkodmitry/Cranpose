@@ -154,5 +154,9 @@ fn an_eye_behind_a_doorway_walks_back_out_through_it() {
         walked.doorways.is_empty(),
         "a step back through the doorway's rect leaves the inner space"
     );
-    assert!((walked.position.z + 100.0).abs() < 0.5, "{:?}", walked.position);
+    assert!(
+        (walked.position.z + 100.0).abs() < 0.5,
+        "{:?}",
+        walked.position
+    );
 }
