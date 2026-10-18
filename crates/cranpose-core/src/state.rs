@@ -1892,29 +1892,26 @@ impl<T: Clone + 'static> MutableState<T> {
     /// Stores `value` and notifies the scopes that read the state, if the state's equality policy
     /// sees a change. Does nothing if the state was released.
     pub fn replace(&self, value: T) {
-        let Some(runtime) = self.runtime_handle_opt() else {
-            log::debug!(
+        // The runtimes this thread finds are its own, so a write found here
+        // is on the runtime's UI thread.
+        let replaced = runtime::with_state_arena_by_id(self.runtime_id(), |arena| {
+            arena.with_typed_opt::<T, ()>(self.state_id(), |inner| {
+                if inner.state.set(value) {
+                    inner.invalidate_watchers();
+                }
+            })
+        });
+        match replaced {
+            None => log::debug!(
                 "MutableState::replace skipped: runtime {:?} dropped",
                 self.runtime_id()
-            );
-            return;
-        };
-        runtime.assert_ui_thread();
-        let replaced = runtime
-            .try_with_state_arena(|arena| {
-                arena.with_typed_opt::<T, ()>(self.state_id(), |inner| {
-                    if inner.state.set(value) {
-                        inner.invalidate_watchers();
-                    }
-                })
-            })
-            .flatten();
-        if replaced.is_none() {
-            log::debug!(
+            ),
+            Some(None) => log::debug!(
                 "MutableState::replace skipped: state cell released (slot={}, gen={})",
                 self.state_id().slot(),
                 self.state_id().generation(),
-            );
+            ),
+            Some(Some(())) => {}
         }
     }
 

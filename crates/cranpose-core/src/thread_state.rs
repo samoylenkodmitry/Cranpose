@@ -12,9 +12,7 @@ use crate::{
     runtime::{DeferredStateRelease, RuntimeHandle, RuntimeId, StateHandleLease},
     snapshot_id_set::SnapshotId,
     snapshot_pinning::PinningTable,
-    snapshot_v2::{
-        AnySnapshot, ApplyObserver, GlobalSnapshot, ObserverId, SnapshotRuntime, StateObjectId,
-    },
+    snapshot_v2::{AnySnapshot, ApplyObservers, GlobalSnapshot, SnapshotRuntime, StateObjectId},
     snapshot_weak_set::SnapshotWeakSet,
     state::{ObjectId, RecordValue},
 };
@@ -69,7 +67,7 @@ pub(crate) struct SnapshotThreadState {
     pub(crate) runtime_lock_depth: Cell<usize>,
     pub(crate) global: RefCell<Option<Rc<GlobalSnapshot>>>,
     pub(crate) current: RefCell<Option<AnySnapshot>>,
-    pub(crate) apply_observers: RefCell<FixedHashMap<ObserverId, ApplyObserver>>,
+    pub(crate) apply_observers: RefCell<ApplyObservers>,
     pub(crate) last_writes: RefCell<FixedHashMap<StateObjectId, SnapshotId>>,
     pub(crate) extra_state_objects: RefCell<SnapshotWeakSet>,
     pub(crate) last_unused_record_cleanup: Cell<SnapshotId>,
@@ -87,7 +85,7 @@ impl SnapshotThreadState {
             runtime_lock_depth: Cell::new(0),
             global: RefCell::new(None),
             current: RefCell::new(None),
-            apply_observers: RefCell::new(fixed_hash_map()),
+            apply_observers: RefCell::new(ApplyObservers::new()),
             last_writes: RefCell::new(fixed_hash_map()),
             extra_state_objects: RefCell::new(SnapshotWeakSet::new()),
             last_unused_record_cleanup: Cell::new(0),
