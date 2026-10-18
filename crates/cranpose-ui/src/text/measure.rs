@@ -1900,12 +1900,14 @@ fn split_line_ranges(text: &str) -> LineRanges {
         return smallvec::smallvec![0..0];
     }
 
+    // `\n` is one byte that no other character's encoding contains, so the
+    // bytes find it without decoding the characters.
     let mut ranges = LineRanges::new();
     let mut start = 0usize;
-    for (idx, ch) in text.char_indices() {
-        if ch == '\n' {
+    for (idx, byte) in text.bytes().enumerate() {
+        if byte == b'\n' {
             ranges.push(start..idx);
-            start = idx + ch.len_utf8();
+            start = idx + 1;
         }
     }
     ranges.push(start..text.len());
