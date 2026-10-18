@@ -335,7 +335,8 @@ pub(super) fn measure_staggered_viewport(
             .lane_of(item.index)
             .map_or(available, |lane| sizes.width(lane, 1));
         scope.ensure_cached_measurement_node_ids(
-            item.node_ids
+            item.roots
+                .node_ids
                 .iter()
                 .filter_map(|&node_id| NodeId::try_from(node_id).ok()),
             lazy_list_child_constraints(frame.is_vertical, width),

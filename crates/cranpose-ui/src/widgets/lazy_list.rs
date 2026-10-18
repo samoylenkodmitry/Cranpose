@@ -12,7 +12,7 @@ use std::{
 
 use cranpose_core::{NodeId, SlotId, collections::map::HashMap};
 use cranpose_foundation::lazy::{
-    BeyondItem, LazyItemSource, LazyListIntervalContent, LazyListMeasureConfig,
+    BeyondItem, LazyItemRoots, LazyItemSource, LazyListIntervalContent, LazyListMeasureConfig,
     LazyListMeasureResult, LazyListMeasuredItem, LazyListState, SmallNodeVec, SmallOffsetVec,
     measure_lazy_list_with_beyond_bounds_policy,
 };
@@ -289,13 +289,14 @@ fn measure_lazy_list_item(
     drop(candidate_cache);
 
     if let Some(cached_item) = cached_candidate {
-        match scope.activate_exact_retained_slot_with_known_children(slot_id, &cached_item.node_ids)
+        match scope
+            .activate_exact_retained_slot_with_known_children(slot_id, &cached_item.roots.node_ids)
         {
             Some(RetainedSlotChildren::Clean) => {
                 let cache = inputs.measured_item_cache.borrow();
                 let current_candidate = cache.candidate(&item_context);
-                if let Some(cached) =
-                    current_candidate.filter(|cached| cached.item.node_ids == cached_item.node_ids)
+                if let Some(cached) = current_candidate
+                    .filter(|cached| cached.item.roots.node_ids == cached_item.roots.node_ids)
                 {
                     scope.register_retained_measurements(&cached.retained_children);
                     drop(cache);
@@ -346,7 +347,14 @@ fn measure_lazy_list_item(
     }
 
     let Some(root_children) = subcompose_lazy_list_item(scope, index, key, inputs) else {
-        return LazyListMeasuredItem::new(index, key_slot_id, content_type, 1.0, 0.0);
+        return LazyListMeasuredItem::new(
+            index,
+            key_slot_id,
+            content_type,
+            1.0,
+            0.0,
+            Rc::default(),
+        );
     };
 
     let was_reused = scope.was_last_slot_reused().unwrap_or(false);
@@ -448,7 +456,7 @@ fn register_visible_lazy_list_child_measurements(
     scope.ensure_cached_measurement_node_ids(
         visible_items
             .iter()
-            .flat_map(|item| item.node_ids.iter())
+            .flat_map(|item| item.roots.node_ids.iter())
             .filter_map(|&node_id| NodeId::try_from(node_id).ok()),
         child_constraints,
     );
@@ -498,16 +506,18 @@ fn measure_lazy_list_children(
     }
 
     let main_axis_size = total_main_size.max(1.0);
-    let mut item = LazyListMeasuredItem::new(
+    let item = LazyListMeasuredItem::new(
         context.index,
         context.key_slot_id,
         context.content_type,
         main_axis_size,
         max_cross_size,
+        Rc::new(LazyItemRoots {
+            node_ids,
+            child_offsets,
+            child_cross_axis_sizes,
+        }),
     );
-    item.node_ids = node_ids;
-    item.child_offsets = child_offsets;
-    item.child_cross_axis_sizes = child_cross_axis_sizes;
 
     measured_item_cache.borrow_mut().insert(
         item.clone(),
@@ -519,7 +529,7 @@ fn measure_lazy_list_children(
         log::warn!(
             "[lazy-item-telemetry] index={} children={} main={:.2} cross={:.2} elapsed_ms={:.2}",
             context.index,
-            item.node_ids.len(),
+            item.roots.node_ids.len(),
             item.main_axis_size,
             item.cross_axis_size,
             elapsed.as_secs_f64() * 1000.0
@@ -818,7 +828,7 @@ impl LazyItemSource for LazyListItems<'_, '_, '_> {
             self.beyond.as_ref().is_some_and(|beyond| beyond.idle_pass) && !self.composed(index);
         let item = measure_lazy_list_item(self.scope, index, &self.inputs);
         if fresh {
-            crate::lazy_prefetch::note_prefetched_item(&item.node_ids);
+            crate::lazy_prefetch::note_prefetched_item(&item.roots.node_ids);
         }
         item
     }
@@ -1229,7 +1239,7 @@ impl LazyMeasuredItemCache {
         node_ids: &SmallNodeVec,
     ) -> Option<&CachedLazyMeasuredItem> {
         self.candidate(item)
-            .filter(|cached| cached.item.node_ids == *node_ids)
+            .filter(|cached| cached.item.roots.node_ids == *node_ids)
     }
 
     fn contains_index(&self, index: usize) -> bool {
@@ -1241,7 +1251,7 @@ impl LazyMeasuredItemCache {
         if cached.item.key != item.key_slot_id
             || cached.item.content_type != item.content_type
             || cached.cross_axis_bits != normalized_axis_bits(item.cross_axis_size)
-            || cached.retained_children.len() != cached.item.node_ids.len()
+            || cached.retained_children.len() != cached.item.roots.node_ids.len()
         {
             return None;
         }
@@ -1351,7 +1361,12 @@ fn push_lazy_list_placements(
     let config = &layout_config.measure;
 
     placements.clear();
-    placements.reserve(visible_items.iter().map(|item| item.node_ids.len()).sum());
+    placements.reserve(
+        visible_items
+            .iter()
+            .map(|item| item.roots.node_ids.len())
+            .sum(),
+    );
 
     let arrangement = if is_vertical {
         config
@@ -1425,7 +1440,13 @@ fn push_lazy_item_placements(
     } else {
         offset
     };
-    for (index, (&node_id, &offset)) in item.node_ids.iter().zip(&item.child_offsets).enumerate() {
+    for (index, (&node_id, &offset)) in item
+        .roots
+        .node_ids
+        .iter()
+        .zip(&item.roots.child_offsets)
+        .enumerate()
+    {
         let main = start + offset;
         let cell = item.child_cross_offsets.get(index).copied().unwrap_or(0.0);
         let (mut x, y) = if is_vertical {
@@ -1439,6 +1460,7 @@ fn push_lazy_item_placements(
                     - cross_end
                     - cell
                     - item
+                        .roots
                         .child_cross_axis_sizes
                         .get(index)
                         .copied()
@@ -1449,7 +1471,8 @@ fn push_lazy_item_placements(
                     .get(index)
                     .copied()
                     .unwrap_or_else(|| {
-                        item.child_offsets
+                        item.roots
+                            .child_offsets
                             .get(index + 1)
                             .copied()
                             .unwrap_or(item.main_axis_size)

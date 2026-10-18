@@ -2,6 +2,8 @@
 //!
 //! Contains the result of measuring a single item during lazy layout.
 
+use std::rc::Rc;
+
 use smallvec::SmallVec;
 
 use super::lazy_list_state::LazyListItemInfo;
@@ -37,34 +39,41 @@ pub struct LazyListMeasuredItem {
     /// Offset from the start of the list content (set during placement).
     pub offset: f32,
 
-    /// Node IDs of the composed item's children (for placing all subcomposed nodes).
-    /// Uses SmallVec to avoid heap allocation for typical items with 1-4 root nodes.
-    pub node_ids: SmallNodeVec,
+    /// What measuring the item's roots found.
+    pub roots: Rc<LazyItemRoots>,
 
-    /// Offset of each child within the item (for stacking multiple children).
-    /// Each entry corresponds to the same index in `node_ids`.
-    /// Uses SmallVec to avoid heap allocation for typical items with 1-4 root nodes.
-    pub child_offsets: SmallOffsetVec,
-    /// Measured cross-axis extent of each root, in the order of `node_ids`.
-    pub child_cross_axis_sizes: SmallOffsetVec,
-    /// Cross-axis offset of each root in the order of `node_ids`, for the
-    /// cells of a grid line; empty for a list item, whose roots start at the
-    /// cross-axis start.
+    /// Cross-axis offset of each root in the order of its node ids, for the
+    /// cells of a grid line and the lane of a staggered grid item; empty for
+    /// a list item, whose roots start at the cross-axis start.
     pub child_cross_offsets: SmallOffsetVec,
-    /// Main-axis extent of each root in the order of `node_ids`, for the
+    /// Main-axis extent of each root in the order of its node ids, for the
     /// cells of a grid line, which overlap along the main axis; empty for a
     /// list item, whose roots follow one another.
     pub child_main_sizes: SmallOffsetVec,
 }
 
+/// What measuring the roots of an item found, in the order of its roots.
+/// Every copy of the item a measure pass hands around shares it with the
+/// cache the item came from, so a copy costs a reference count.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LazyItemRoots {
+    /// Node IDs of the composed item's roots, for placing them.
+    pub node_ids: SmallNodeVec,
+    /// Offset of each root within the item, along the main axis.
+    pub child_offsets: SmallOffsetVec,
+    /// Measured cross-axis extent of each root.
+    pub child_cross_axis_sizes: SmallOffsetVec,
+}
+
 impl LazyListMeasuredItem {
-    /// Creates a new measured item.
+    /// Creates a measured item with the measured `roots`.
     pub fn new(
         index: usize,
         key: u64,
         content_type: Option<u64>,
         main_axis_size: f32,
         cross_axis_size: f32,
+        roots: Rc<LazyItemRoots>,
     ) -> Self {
         Self {
             index,
@@ -73,9 +82,7 @@ impl LazyListMeasuredItem {
             main_axis_size,
             cross_axis_size,
             offset: 0.0,
-            node_ids: SmallVec::new(),
-            child_offsets: SmallVec::new(),
-            child_cross_axis_sizes: SmallVec::new(),
+            roots,
             child_cross_offsets: SmallVec::new(),
             child_main_sizes: SmallVec::new(),
         }

@@ -6,7 +6,14 @@ use super::{
 };
 
 fn create_test_item(index: usize, size: f32) -> LazyListMeasuredItem {
-    LazyListMeasuredItem::new(index, index as u64, None, size, 100.0)
+    LazyListMeasuredItem::new(
+        index,
+        index as u64,
+        None,
+        size,
+        100.0,
+        std::rc::Rc::default(),
+    )
 }
 
 #[test]

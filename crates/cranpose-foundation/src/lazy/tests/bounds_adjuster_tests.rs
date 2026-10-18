@@ -1,7 +1,14 @@
 use super::*;
 
 fn create_test_item(index: usize, offset: f32, size: f32) -> LazyListMeasuredItem {
-    let mut item = LazyListMeasuredItem::new(index, index as u64, None, size, 100.0);
+    let mut item = LazyListMeasuredItem::new(
+        index,
+        index as u64,
+        None,
+        size,
+        100.0,
+        std::rc::Rc::default(),
+    );
     item.offset = offset;
     item
 }
