@@ -427,7 +427,7 @@ class CranposeAndroidPlugin : Plugin<Project> {
                 }
                 stagedDeclarations.mkdirs()
                 val api = cranpose.androidApiLevel.orNull
-                val linkArguments = if (debug) {
+                val linkArguments = REQUIRED_LINK_ARGUMENTS + if (debug) {
                     emptyList()
                 } else {
                     val unwindTableDiscard = File(temporaryDir, "discard-unwind-tables.ld")
@@ -534,6 +534,15 @@ class CranposeAndroidPlugin : Plugin<Project> {
             listOfNotNull("-Wl,--pack-dyn-relocs=android".takeIf { api != null && api >= PACKED_RELOCATIONS_MIN_API })
 
     private companion object {
+        /**
+         * Every symbol the library uses resolves at link time, against the
+         * platform libraries of the `minSdk` it builds for. A shared library
+         * otherwise links with undefined symbols, and one that Android added
+         * after `minSdk` stops the library loading on every older device, as
+         * `AMotionEvent_getActionButton` (API 33) did on Android 10.
+         */
+        val REQUIRED_LINK_ARGUMENTS = listOf("-Wl,-z,defs")
+
         /**
          * Linker script dropping every unwind table, the prebuilt standard
          * library's included, which a codegen flag on the final crate cannot

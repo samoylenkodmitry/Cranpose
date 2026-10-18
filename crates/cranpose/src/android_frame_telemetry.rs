@@ -283,11 +283,7 @@ fn post_vsync_callback() {
             log::warn!("[android-frame] AChoreographer_getInstance returned null");
             return;
         }
-        ndk_sys::AChoreographer_postFrameCallback64(
-            choreographer,
-            Some(on_vsync),
-            std::ptr::null_mut(),
-        );
+        crate::android_symbols::post_frame_callback(choreographer, on_vsync);
     }
 }
 
