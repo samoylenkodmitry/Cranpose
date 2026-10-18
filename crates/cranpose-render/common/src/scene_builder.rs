@@ -1510,7 +1510,7 @@ fn apply_translated_container_state(
     container.transform_to_parent = placed_transform(
         container.local_bounds,
         layout_state.position(),
-        &container.graphics_layer,
+        container.graphics_layer.get(),
         parent_content_offset,
     );
     container.content_offset = geometry.content_offset;
@@ -1724,7 +1724,7 @@ fn translate_retained_child(layer: &mut LayerNode, position: Point, content_offs
     layer.transform_to_parent = placed_transform(
         layer.local_bounds,
         position,
-        &layer.graphics_layer,
+        layer.graphics_layer.get(),
         content_offset,
     );
     layer.origin_in_parent = position;
@@ -1927,7 +1927,7 @@ fn node_layer_head(
         transform_to_parent: placed_transform(
             frame.local_bounds,
             frame.placement,
-            properties,
+            graphics_layer.as_ref(),
             context.parent_content_offset,
         ),
         content_offset: frame.content_offset,
@@ -2010,19 +2010,29 @@ fn children_have_origin_sinks(children: &[RenderNode]) -> bool {
     })
 }
 
+/// The transform that places a layer with `graphics_layer`, `None` for the
+/// default properties, at `placement` in a parent whose content is offset by
+/// `parent_content_offset`.
 fn placed_transform(
     local_bounds: Rect,
     placement: Point,
-    graphics_layer: &GraphicsLayer,
+    graphics_layer: Option<&GraphicsLayer>,
     parent_content_offset: Point,
 ) -> ProjectiveTransform {
     // Most layers only move: one translation places them.
-    if !layer_scales_or_rotates(graphics_layer) {
-        return ProjectiveTransform::translation(
-            placement.x + graphics_layer.translation_x + parent_content_offset.x,
-            placement.y + graphics_layer.translation_y + parent_content_offset.y,
-        );
-    }
+    let graphics_layer = match graphics_layer {
+        Some(layer) if layer_scales_or_rotates(layer) => layer,
+        moved => {
+            let offset = moved.map_or_else(Point::default, |layer| Point {
+                x: layer.translation_x,
+                y: layer.translation_y,
+            });
+            return ProjectiveTransform::translation(
+                placement.x + offset.x + parent_content_offset.x,
+                placement.y + offset.y + parent_content_offset.y,
+            );
+        }
+    };
     let transform = layer_transform_to_parent(local_bounds, placement, graphics_layer);
     if parent_content_offset == Point::default() {
         transform
@@ -2903,12 +2913,7 @@ fn write_wrapper(
         wraps: layer.node_id,
         local_bounds: node_rect,
         node_bounds: None,
-        transform_to_parent: placed_transform(
-            node_rect,
-            placement,
-            &GraphicsLayer::DEFAULT,
-            parent_content_offset,
-        ),
+        transform_to_parent: placed_transform(node_rect, placement, None, parent_content_offset),
         content_offset: Point::default(),
         motion_context_animated: layer.motion_context_animated,
         translated_content_context: false,

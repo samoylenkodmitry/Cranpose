@@ -30,7 +30,9 @@
 
 use std::sync::Arc;
 
-use ab_glyph::{CodepointIdIter, Font, FontArc, GlyphId, GlyphSvg, Outline, v2};
+use ab_glyph::{
+    CodepointIdIter, Font, FontArc, GlyphId, GlyphSvg, Outline, PxScale, ScaleFont, v2,
+};
 use ttf_parser::{Face, NormalizedCoordinate, Tag};
 
 use crate::{
@@ -498,6 +500,9 @@ fn class_def(gpos: &[u8], offset: usize) -> Option<ClassDef> {
 #[derive(Clone)]
 pub struct KernedFont {
     font: FontArc,
+    /// The face's ascent, descent and line gap in font units, read once:
+    /// every scaled metric divides by the ascent less the descent.
+    vertical: [f32; 3],
     kerning: Option<Arc<GposKerning>>,
     ascii: Arc<AsciiGlyphs>,
     substitutions: Option<Arc<GlyphSubstitutions>>,
@@ -509,8 +514,14 @@ impl KernedFont {
     /// other positioning or substitution.
     pub fn new(font: FontArc, kerning: Option<Arc<GposKerning>>) -> Self {
         let ascii = Arc::new(AsciiGlyphs::new());
+        let vertical = [
+            font.ascent_unscaled(),
+            font.descent_unscaled(),
+            font.line_gap_unscaled(),
+        ];
         Self {
             font,
+            vertical,
             kerning,
             variants: Arc::new(FeatureVariants::new(Arc::clone(&ascii))),
             ascii,
@@ -536,6 +547,7 @@ impl KernedFont {
         };
         Some(Self {
             font: self.font.clone(),
+            vertical: self.vertical,
             kerning: self.kerning.clone(),
             ascii,
             substitutions,
@@ -574,6 +586,27 @@ impl KernedFont {
         self.ascii.kern(self, previous, next)
     }
 
+    /// The advance of `text` as one line at `font_size` pixels, kerning
+    /// included: what [`crate::font_layout::line_advance_width`] measures,
+    /// with printable ASCII read from the face's table.
+    pub(crate) fn line_advance_width(&self, text: &str, font_size: f32) -> f32 {
+        let h_scale = self.as_scaled(PxScale::from(font_size)).h_scale_factor();
+        let mut width = 0.0;
+        let mut previous: Option<(char, GlyphId)> = None;
+        for ch in text.chars() {
+            let (glyph_id, advance) = self.glyph_advance(ch);
+            if let Some(previous) = previous {
+                let kern = self
+                    .ascii_kern(previous, (ch, glyph_id))
+                    .unwrap_or_else(|| self.kern_unscaled(previous.1, glyph_id));
+                width += kern * h_scale;
+            }
+            width += advance * h_scale;
+            previous = Some((ch, glyph_id));
+        }
+        width.max(0.0)
+    }
+
     /// Reads the GPOS pair kerning for a face instanced at `variations`.
     ///
     /// `variations` are the `(tag, user value)` pairs actually applied to the
@@ -595,15 +628,15 @@ impl Font for KernedFont {
     }
 
     fn ascent_unscaled(&self) -> f32 {
-        self.font.ascent_unscaled()
+        self.vertical[0]
     }
 
     fn descent_unscaled(&self) -> f32 {
-        self.font.descent_unscaled()
+        self.vertical[1]
     }
 
     fn line_gap_unscaled(&self) -> f32 {
-        self.font.line_gap_unscaled()
+        self.vertical[2]
     }
 
     fn italic_angle(&self) -> f32 {
