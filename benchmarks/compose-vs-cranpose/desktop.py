@@ -24,6 +24,14 @@ are kept. A leg whose app presented fewer than `SLOW_FPS` frames in each of
 `SLOW_SECONDS` seconds in a row ends there, marked `stopped`. A
 disturbed leg stays in the run, marked, out of the medians.
 
+Before the first leg and after the last, `FrameCount.app` reports the state of
+the main display and how often the window server composites it for a window
+that never changes. The run does not measure, and exits with an error once it
+has run so that nothing is published, when the display is asleep, locked, not
+60 Hz or not 2x, when something moves on it (a video, a permission prompt), or
+when its display link does not tick at its rate. `fps` counts the frames that
+changed the window's picture; `composited_fps` counts every composite.
+
   python3 desktop.py --output results/desktop --tier 12
   python3 desktop.py --output results/desktop-parity --parity --tier 5
   python3 desktop.py --output results/browser --browser DIST --tier 6
@@ -66,7 +74,9 @@ from timelines import SLOW_FPS, SLOW_SECONDS, STARTS, per_second, slow_rule
 
 HERE = Path(__file__).resolve().parent
 FONTS = HERE / 'fonts'
-FRAMECOUNT = Path.home() / 'Applications/FrameCount.app'
+# `PERF_FRAMECOUNT` names another copy of it, for trying a change to
+# `framecount/` without replacing the installed one.
+FRAMECOUNT = Path(os.environ.get('PERF_FRAMECOUNT') or Path.home() / 'Applications/FrameCount.app')
 FRAMECOUNT_SOURCE = HERE / 'framecount/FrameCount.swift'
 MACMON = shutil.which('macmon')
 CLOCK_INTERVAL_MS = 250
@@ -431,6 +441,117 @@ def current_framecount():
         subprocess.run(['sh', str(HERE / 'framecount/build.sh'), str(FRAMECOUNT.parent)], check=True)
 
 
+# The display the harness is calibrated for: the window server drives it at
+# 60 Hz, awake, with 2x windows. A display link ticks at the mode's rate while
+# the window server drives the display; the harness asks for ticks at this
+# share of it, with no gap longer than `LINK_MAX_GAP_MS`.
+EXPECTED_REFRESH_HZ = 60.0
+EXPECTED_SCALE = 2.0
+LINK_MIN_SHARE = 0.97
+LINK_MAX_GAP_MS = 60.0
+# How long `display_state` counts display link ticks.
+LINK_SECONDS = 2.0
+
+
+def display_problems(state):
+    """Why a display state from `FrameCount.app --display`, or from a leg's
+    capture, is not the state a run is calibrated for, as sentences; none when
+    it is. The main display is the one every app's window opens on."""
+    main = next((display for display in state.get('displays', []) if display.get('main')), None)
+    if main is None:
+        return ['the window server has no main display']
+    problems = []
+    if not state.get('on_console', True):
+        problems.append('the login session is not on the console')
+    if state.get('screen_locked'):
+        problems.append('the screen is locked')
+    if not main.get('active') or main.get('asleep'):
+        problems.append(f'the main display {main["id"]} is {"asleep" if main.get("asleep") else "not active"}')
+    if abs(main.get('refresh_hz', 0) - EXPECTED_REFRESH_HZ) > 0.5:
+        problems.append(f'the main display runs at {main.get("refresh_hz")} Hz, not {EXPECTED_REFRESH_HZ:.0f}')
+    if main.get('scale') != EXPECTED_SCALE:
+        problems.append(f'the main display draws windows at {main.get("scale")}x, not {EXPECTED_SCALE:.0f}x')
+    link = state.get('link', {})
+    nominal = link.get('nominal_hz', 0)
+    if nominal and link.get('hz', 0) < LINK_MIN_SHARE * nominal:
+        problems.append(f'its display link ticked {link.get("hz", 0):.1f} times a second, '
+                        f'not the {nominal:.0f} its mode asks for')
+    elif link.get('max_gap_ms', 0) > LINK_MAX_GAP_MS:
+        problems.append(f'its display link stopped for {link["max_gap_ms"]:.0f} ms')
+    if not nominal:
+        problems.append('the main display has no display link')
+    return problems
+
+
+def display_state(stage, label):
+    """The window server's displays and the ticks of the main display's link,
+    asked of `FrameCount.app` through `open`, the way a capture is."""
+    out = stage / f'display-{label}.json'
+    out.unlink(missing_ok=True)
+    subprocess.run(['open', '-W', '-n', str(FRAMECOUNT), '--args', '--display', str(out), '--link-seconds',
+                    str(LINK_SECONDS)], check=True, timeout=60)
+    if not out.exists():
+        raise RuntimeError('FrameCount wrote no display state')
+    state = json.loads(out.read_text())
+    if 'error' in state:
+        raise RuntimeError(f'FrameCount: {state["error"]}')
+    return state
+
+
+# Frames a second the window server may composite the display for while nothing
+# but a window that never changes is on it. The display's own clock and the
+# cursor leave it near 2 on macm3's television; a video, an animated wallpaper
+# or another app's window moving on the display raises it to the rate of that
+# movement.
+AMBIENT_MAX_FPS = 5.0
+AMBIENT_SECONDS = 3.0
+
+
+def ambient_fps(stage, label):
+    """How often the window server composited the main display, in
+    `AMBIENT_SECONDS`, for a window that never changes: the rate at which
+    something other than an app moves on it. Every frame an app is counted
+    from is a composite of the display, so the count is only the app's where
+    this is near zero (and the window server's share of an app's CPU is too)."""
+    out = stage / f'ambient-{label}.json'
+    out.unlink(missing_ok=True)
+    subprocess.run(['open', '-W', '-n', str(FRAMECOUNT), '--args', '--ambient', str(out), '--seconds',
+                    str(AMBIENT_SECONDS)], check=True, timeout=60)
+    if not out.exists():
+        raise RuntimeError('FrameCount wrote no ambient rate')
+    result = json.loads(out.read_text())
+    if 'error' in result:
+        raise RuntimeError(f'FrameCount: {result["error"]}')
+    return round(result['fps'], 1)
+
+
+def quiet_problem(fps):
+    """Why `fps` composites a second of a window that never changes is not
+    the quiet a run is calibrated for; None when it is."""
+    if fps > AMBIENT_MAX_FPS:
+        return (f'something moves on the display: the window server composited it {fps} times a second for '
+                f'a window that never changes, not {AMBIENT_MAX_FPS:.0f} or fewer, and would for every app\'s '
+                f'window')
+    return None
+
+
+def observe_display(stage, label):
+    """The display state with the rate at which the window server composites
+    the display for a window that never changes, and every reason that is not
+    the state a run is calibrated for."""
+    state = display_state(stage, label)
+    problems = display_problems(state)
+    state['ambient_fps'] = ambient_fps(stage, label)
+    if problem := quiet_problem(state['ambient_fps']):
+        problems.append(problem)
+    return state, problems
+
+
+def refusal(problems):
+    """What a run says when it will not measure, or will not publish."""
+    return 'the display is not in the state the gauntlet is calibrated for: ' + '; '.join(problems)
+
+
 def framecount(pid, out, *arguments):
     """Runs `FrameCount.app` on the process's window, through `open` so its
     Screen Recording permission applies."""
@@ -594,8 +715,21 @@ def measure(name, args, work, page, stage, label, earlier, profile, program=None
     cores = sum(value for pid, value in spent.items() if pid in mine) / wall + server_cores
     others = sum(value for pid, value in spent.items() if pid not in mine and pid not in server) / wall
     intervals = sorted((later - earlier) * 1000 for earlier, later in zip(times, times[1:]))
+    link = frames['link']
+    captured = (frames['stopped'] if 'stopped' in frames else launched + args.run) - frames['capture_start']
     return {'fps': round(fps, 1), 'frames': len(times), 'run_s': round(run_s, 3), 'stopped': 'stopped' in frames,
             'first_frame_s': round(times[0] - launched, 3),
+            # The times a second the window server composited the display
+            # while the window was counted, which `fps` counts only the ones
+            # that changed the window's picture of: more of them say something
+            # else moved on the display.
+            'composited_fps': round(frames['composited'] / max(captured, 1e-3), 1),
+            # The display the window was on while it was counted: its display
+            # link's ticks a second, the longest gap between two, and why
+            # that is not the state a run is calibrated for.
+            'display_id': frames['display']['id'], 'display_hz': round(link['hz'], 1),
+            'display_gap_ms': round(link['max_gap_ms']),
+            'display_problems': display_problems({'displays': [{**frames['display'], 'main': True}], 'link': link}),
             # Where FrameCount's capture began: it waits for the window, so a
             # second before this one saw no window to count.
             'capture_start_s': round(frames['capture_start'] - launched, 3),
@@ -673,10 +807,21 @@ def main():
     with tempfile.TemporaryDirectory(prefix='gauntlet-') as folder:
         stage = Path(folder)
         shutil.copytree(FONTS, stage / 'fonts')
+        # No measuring on a display that is not as the run is calibrated for.
+        began, problems = observe_display(stage, 'start')
+        if problems:
+            sys.exit(refusal(problems))
         report = run(args, apps, page, stage)
+        ended, problems = observe_display(stage, 'end')
+    # The display the apps' windows opened on, as the run began and ended: the
+    # rest of the run's numbers mean little without it.
+    report['display'] = {'start': began, 'end': ended}
     report['duration_s'] = round(time.monotonic() - started)
     (args.output / 'report.json').write_text(json.dumps(report, indent=1))
     print(json.dumps(report['scenarios'][0]['starts'] if 'scenarios' in report else report['changed_pct']))
+    if problems:
+        # The report is kept to look at; the failing exit keeps it from being published.
+        sys.exit(refusal(problems) + ' by the end of the run')
 
 
 # How long the machine's own background load is read for, before each round.
@@ -718,7 +863,7 @@ def undisturbed_leg(name, args, page, stage, label, earlier, failures, profile, 
                              'error': str(failure)[:300]})
             continue
         leg['idle_other_cores'] = round(idle, 2)
-        leg['disturbed'] = leg['other_cores'] > idle + args.max_others
+        leg['disturbed'] = leg['other_cores'] > idle + args.max_others or bool(leg.get('display_problems'))
         legs.append(leg)
         print(f'{label:16} fps {leg["fps"]:6.1f} cpu/f {leg["cpu_ms_per_frame"]} first frame '
               f'{leg["first_frame_s"]} s p99 {leg["interval_p99_ms"]} others {leg["other_cores"]}', flush=True)
