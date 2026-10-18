@@ -52,7 +52,6 @@ struct LazyItemMeasureContext {
     content_type: Option<u64>,
     is_vertical: bool,
     cross_axis_size: f32,
-    measure_start: Instant,
 }
 
 /// Specification for LazyColumn layout behavior.
@@ -265,7 +264,6 @@ fn measure_lazy_list_item(
     index: usize,
     inputs: &LazyListItemMeasureInputs<'_>,
 ) -> LazyListMeasuredItem {
-    let measure_start = Instant::now();
     let key = inputs.content.get_key(index);
     let key_slot_id = key.to_slot_id();
     let content_type = inputs.content.get_content_type(index);
@@ -276,7 +274,6 @@ fn measure_lazy_list_item(
         content_type,
         is_vertical: inputs.is_vertical,
         cross_axis_size: inputs.cross_axis_size,
-        measure_start,
     };
 
     scope.update_content_type(slot_id, content_type);
@@ -329,6 +326,7 @@ fn measure_lazy_list_item(
                     children,
                     inputs.measured_item_cache,
                     item_context,
+                    Instant::now(),
                 );
             }
             None => {
@@ -346,6 +344,9 @@ fn measure_lazy_list_item(
         }
     }
 
+    // An item the cache keeps reads no clock: only composing and measuring
+    // one costs time worth recording.
+    let measure_start = Instant::now();
     let Some(root_children) = subcompose_lazy_list_item(scope, index, key, inputs) else {
         return LazyListMeasuredItem::new(
             index,
@@ -392,6 +393,7 @@ fn measure_lazy_list_item(
         root_children,
         inputs.measured_item_cache,
         item_context,
+        measure_start,
     );
     crate::lazy_prefetch::record_lazy_item_cost(measure_start.elapsed());
     item
@@ -467,6 +469,7 @@ fn measure_lazy_list_children(
     root_children: Vec<SubcomposeChild>,
     measured_item_cache: &Rc<RefCell<LazyMeasuredItemCache>>,
     context: LazyItemMeasureContext,
+    measure_start: Instant,
 ) -> LazyListMeasuredItem {
     let child_constraints =
         lazy_list_child_constraints(context.is_vertical, context.cross_axis_size);
@@ -524,7 +527,7 @@ fn measure_lazy_list_children(
         retained_children,
         context.cross_axis_size,
     );
-    let elapsed = context.measure_start.elapsed();
+    let elapsed = measure_start.elapsed();
     if cranpose_core::env_flag!("CRANPOSE_LAZY_ITEM_TELEMETRY") {
         log::warn!(
             "[lazy-item-telemetry] index={} children={} main={:.2} cross={:.2} elapsed_ms={:.2}",

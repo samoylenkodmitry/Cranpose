@@ -19,7 +19,7 @@ pub type SmallOffsetVec = SmallVec<[f32; 4]>;
 /// A measured item in a lazy list.
 ///
 /// Contains all the information needed to place the item after measurement.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct LazyListMeasuredItem {
     /// Index in the data source.
     pub index: usize,
@@ -63,6 +63,24 @@ pub struct LazyItemRoots {
     pub child_offsets: SmallOffsetVec,
     /// Measured cross-axis extent of each root.
     pub child_cross_axis_sizes: SmallOffsetVec,
+}
+
+// A copy copies the placement offsets as slices: a list item's are empty,
+// and the derived clone of an empty `SmallVec` still walks an iterator.
+impl Clone for LazyListMeasuredItem {
+    fn clone(&self) -> Self {
+        Self {
+            index: self.index,
+            key: self.key,
+            content_type: self.content_type,
+            main_axis_size: self.main_axis_size,
+            cross_axis_size: self.cross_axis_size,
+            offset: self.offset,
+            roots: Rc::clone(&self.roots),
+            child_cross_offsets: SmallVec::from_slice(&self.child_cross_offsets),
+            child_main_sizes: SmallVec::from_slice(&self.child_main_sizes),
+        }
+    }
 }
 
 impl LazyListMeasuredItem {
