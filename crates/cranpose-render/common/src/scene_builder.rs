@@ -630,18 +630,16 @@ fn mark_dirty_ancestry(
 ) {
     ancestry.reset(applier);
     for &node in dirty.keys() {
-        ancestry.set(applier, node, ancestry.get(applier, node) | DIRTY_NODE);
+        ancestry.add(applier, node, DIRTY_NODE);
         let mut current = node;
         while let Some(parent) = applier
             .get_ref(current)
             .ok()
             .and_then(cranpose_core::Node::parent)
         {
-            let marks = ancestry.get(applier, parent);
-            if marks & DIRTY_ANCESTOR != 0 {
+            if ancestry.add(applier, parent, DIRTY_ANCESTOR) & DIRTY_ANCESTOR != 0 {
                 break;
             }
-            ancestry.set(applier, parent, marks | DIRTY_ANCESTOR);
             current = parent;
         }
     }

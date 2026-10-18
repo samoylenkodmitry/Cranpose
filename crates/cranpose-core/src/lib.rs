@@ -4649,6 +4649,7 @@ impl MemoryApplier {
         self.state.layout_dirt_roots.take_into(out)
     }
 
+    #[inline]
     fn resolve_node_index(&self, id: NodeId) -> Option<usize> {
         self.state.stable_index.slot(id)
     }
