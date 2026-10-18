@@ -3,7 +3,10 @@
 
 use std::sync::Arc;
 
-use cranpose_ui_graphics::space::{EyePose, EyeWorld, Mat4, PITCH_LIMIT, Vec3};
+use cranpose_ui_graphics::{
+    Rect, Size,
+    space::{EyePose, EyeWorld, Mat4, Mesh, PITCH_LIMIT, Vec3},
+};
 
 fn close(a: Vec3, b: Vec3) -> bool {
     (a - b).length() < 1.0e-4
@@ -72,5 +75,34 @@ fn a_doorway_into_a_turned_space_turns_the_eye_with_it() {
         ),
         "the eye looks on the way it looked, in the inner space's terms: {:?}",
         walked.forward
+    );
+}
+
+#[test]
+fn an_eye_keeps_its_radius_in_the_units_of_a_smaller_space() {
+    // The inner space's units are half the world's.
+    let mut world = EyeWorld::default();
+    world.add_space(Arc::from([]), Mat4::IDENTITY);
+    let inner_to_world = Mat4::scaling(Vec3::new(0.5, 0.5, 0.5));
+    let inner = world.add_space(Arc::from([7]), inner_to_world);
+    // A wall across the inner space at its z = 200.
+    let wall = Mat4::translation(Vec3::new(-0.5, -0.5, 0.0))
+        .then(&Mat4::scaling(Vec3::new(1000.0, 1000.0, 1.0)))
+        .then(&Mat4::translation(Vec3::new(0.0, 0.0, 200.0)))
+        .then(&inner_to_world);
+    world.add_solid(
+        (inner, Arc::new(Mesh::plane())),
+        wall,
+        (Size::new(1000.0, 1000.0), std::iter::empty::<Rect>()),
+    );
+    let start = EyePose {
+        doorways: Arc::from([7]),
+        ..EyePose::standing(Vec3::ZERO, 0.0, 0.0)
+    };
+    let walked = world.walk(&start, Vec3::new(0.0, 0.0, 1000.0), 10.0);
+    assert!(
+        (walked.position.z - 190.0).abs() < 0.5,
+        "the eye stops 10 of the inner space's units before its wall, at {}",
+        walked.position.z
     );
 }

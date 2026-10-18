@@ -183,6 +183,8 @@ struct WorldSpace {
     doorways: Arc<[usize]>,
     to_base: Mat4,
     from_base: Mat4,
+    /// How long a unit of the space is in the world's coordinates.
+    scale: f32,
 }
 
 #[derive(Debug)]
@@ -217,10 +219,16 @@ impl EyeWorld {
     /// Adds the space an eye that walked through `doorways` stands in, whose
     /// coordinates `to_base` maps into the world's, and returns its number.
     pub fn add_space(&mut self, doorways: Arc<[usize]>, to_base: Mat4) -> usize {
+        let axis = |axis: Vec3| to_base.transform_vector(axis).length();
+        let scale = (axis(Vec3::new(1.0, 0.0, 0.0))
+            * axis(Vec3::new(0.0, 1.0, 0.0))
+            * axis(Vec3::new(0.0, 0.0, 1.0)))
+        .cbrt();
         self.spaces.push(WorldSpace {
             doorways,
             from_base: to_base.inverse().unwrap_or(Mat4::IDENTITY),
             to_base,
+            scale,
         });
         self.spaces.len() - 1
     }
@@ -266,12 +274,13 @@ impl EyeWorld {
     }
 
     /// Where an eye at `from`, a ball of `radius`, ends up when it walks
-    /// `step`, in the coordinates of the space it stands in: through the
+    /// `step`, both in the units of the space it stands in: through the
     /// doorways the step passes into the spaces behind them, and pushed out
     /// of the solid surfaces of the space it walks in, along which it
-    /// slides. The step goes in pieces of at most half the radius, so it
-    /// cannot pass through a wall. An eye whose space the world does not hold
-    /// walks freely.
+    /// slides. Its ball keeps `radius` in the units of each space it walks
+    /// into. The step goes in pieces of at most half the radius in the
+    /// smallest space, so it cannot pass through a wall. An eye whose space
+    /// the world does not hold walks freely.
     pub fn walk(&self, from: &EyePose, step: Vec3, radius: f32) -> EyePose {
         let Some(start) = self
             .spaces
@@ -285,7 +294,12 @@ impl EyeWorld {
         };
         let base = &self.spaces[start];
         let step = base.to_base.transform_vector(step);
-        let pieces = (step.length() / (radius * 0.5).max(f32::EPSILON))
+        let smallest = self
+            .spaces
+            .iter()
+            .map(|space| space.scale)
+            .fold(f32::INFINITY, f32::min);
+        let pieces = (step.length() / (radius * smallest * 0.5).max(f32::EPSILON))
             .ceil()
             .clamp(1.0, MAX_PIECES);
         let piece = step * (1.0 / pieces);
@@ -305,7 +319,7 @@ impl EyeWorld {
                 space = next;
                 along = crossing;
             }
-            at = self.pushed_out(space, end, radius);
+            at = self.pushed_out(space, end, radius * self.spaces[space].scale);
         }
         let target = &self.spaces[space];
         let turn = base.to_base.then(&target.from_base);
