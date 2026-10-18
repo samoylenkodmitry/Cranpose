@@ -1,4 +1,8 @@
-use std::{any::Any, ops::Range, rc::Rc};
+use std::{
+    any::Any,
+    ops::{Range, RangeInclusive},
+    rc::Rc,
+};
 
 use cranpose_core::{MemoryApplier, NodeId, NodeMarks, collections::map::HashMap};
 use cranpose_ui::{
@@ -1188,6 +1192,7 @@ fn translated_children(
     } else {
         let old_ids = &mut scratch.old_ids;
         old_ids.clear();
+        let (mut lowest, mut highest) = (NodeId::MAX, NodeId::MIN);
         for child in &container.children {
             let RenderNode::Layer(layer) = child else {
                 return Err("child without node id");
@@ -1195,9 +1200,16 @@ fn translated_children(
             let Some(id) = layer_identity(layer) else {
                 return Err("child without node id");
             };
+            lowest = lowest.min(id);
+            highest = highest.max(id);
             old_ids.push(id);
         }
-        match_old_children(old_ids, placed_fresh, &mut scratch.old_index_by_id);
+        match_old_children(
+            old_ids,
+            lowest..=highest,
+            placed_fresh,
+            &mut scratch.old_index_by_id,
+        );
     }
     check_retained_children(container, dirty_nodes, placed_fresh).map(|()| children_unchanged)
 }
@@ -1206,15 +1218,19 @@ fn translated_children(
 /// a search reads each id once, a map hashes each of them in.
 const MATCH_SEARCHES: usize = 16;
 
-/// Notes each placed child's index among the previous children `old_ids`.
+/// Notes each placed child's index among the previous children `old_ids`,
+/// whose ids lie in `old_id_range`.
 /// Children that kept their order match in turn, as a scroll that brings
 /// rows in at one end and lets them go at the other leaves them; a child
-/// past a gap is searched for, and the match continues after it. Once the
+/// past a gap is searched for, and the match continues after it. A child
+/// whose id lies outside the range enters without a search: a node made
+/// since the previous children takes an id past all of theirs. Once the
 /// order is mixed past [`MATCH_SEARCHES`] searches, `old_index_by_id` maps
 /// the previous children for the rest. An id is a node's, so it is once
 /// among the previous children.
 fn match_old_children(
     old_ids: &[NodeId],
+    old_id_range: RangeInclusive<NodeId>,
     placed_fresh: &mut [PlacedChild],
     old_index_by_id: &mut HashMap<NodeId, usize>,
 ) {
@@ -1224,6 +1240,8 @@ fn match_old_children(
     for placed in placed_fresh {
         let old_index = if old_ids.get(cursor) == Some(&placed.id) {
             Some(cursor)
+        } else if !old_id_range.contains(&placed.id) {
+            None
         } else if searches < MATCH_SEARCHES {
             searches += 1;
             old_ids.iter().position(|&id| id == placed.id)
