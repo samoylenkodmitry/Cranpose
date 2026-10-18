@@ -19,7 +19,7 @@ use super::{
     LazyListItems, LazyListMeasureContext, LazyRowNode, LazyRowSpec, PaddingValues,
     SubcomposeMeasureScopeImpl, beyond_composition, focused_lazy_item,
     grid::{CellLayout, CellSizes, GridCells, line_span_scope},
-    lazy_list_child_constraints, request_beyond_items,
+    request_beyond_items,
 };
 use crate::{composable, modifier::Modifier};
 
@@ -330,18 +330,6 @@ pub(super) fn measure_staggered_viewport(
         &mut source,
     );
     request_beyond_items(source.items.beyond, node_id);
-    for item in &result.visible_items {
-        let width = placed
-            .lane_of(item.index)
-            .map_or(available, |lane| sizes.width(lane, 1));
-        scope.ensure_cached_measurement_node_ids(
-            item.roots
-                .node_ids
-                .iter()
-                .filter_map(|&node_id| NodeId::try_from(node_id).ok()),
-            lazy_list_child_constraints(frame.is_vertical, width),
-        );
-    }
     (result, count)
 }
 

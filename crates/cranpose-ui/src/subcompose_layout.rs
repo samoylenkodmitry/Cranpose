@@ -89,10 +89,6 @@ impl PartialEq for SubcomposeChild {
 
 pub type SubcomposePlaceable = cranpose_ui_layout::Placeable;
 
-/// Marks in its output, for each node of the batch, whether the node has a
-/// measurement for this pass: one measured or registered earlier in it, or a
-/// cached one the registrar registers now.
-type CachedMeasureBatchRegistrar<'a> = Box<dyn FnMut(&[NodeId], Constraints, &mut Vec<bool>) + 'a>;
 type RetainedMeasureLookup<'a> = Box<dyn FnMut(NodeId) -> Option<Rc<MeasuredNode>> + 'a>;
 type RetainedMeasureRegistrar<'a> = Box<dyn FnMut(&[Rc<MeasuredNode>]) + 'a>;
 
@@ -101,13 +97,10 @@ type RetainedMeasureRegistrar<'a> = Box<dyn FnMut(&[Rc<MeasuredNode>]) + 'a>;
 #[derive(Default)]
 pub(crate) struct MeasureScratch {
     placements: Vec<Placement>,
-    batch_nodes: Vec<NodeId>,
-    batch_found: Vec<bool>,
 }
 
-pub(crate) struct CachedBatchMeasureInputs<'a> {
+pub(crate) struct MeasureCallbacks<'a> {
     pub(crate) measurer: Box<dyn FnMut(NodeId, Constraints) -> SubcomposePlaceable + 'a>,
-    pub(crate) cached_measure_batch_registrar: CachedMeasureBatchRegistrar<'a>,
     pub(crate) retained_measure_lookup: RetainedMeasureLookup<'a>,
     pub(crate) retained_measure_registrar: RetainedMeasureRegistrar<'a>,
     pub(crate) error: &'a RefCell<Option<NodeError>>,
@@ -169,7 +162,6 @@ pub struct SubcomposeMeasureScopeImpl<'a> {
     state: &'a mut SubcomposeState,
     constraints: Constraints,
     measurer: Box<dyn FnMut(NodeId, Constraints) -> SubcomposePlaceable + 'a>,
-    cached_measure_batch_registrar: CachedMeasureBatchRegistrar<'a>,
     retained_measure_lookup: RetainedMeasureLookup<'a>,
     retained_measure_registrar: RetainedMeasureRegistrar<'a>,
     error: &'a RefCell<Option<NodeError>>,
@@ -217,7 +209,6 @@ struct SubcomposeMeasureScopeInit<'a> {
     state: &'a mut SubcomposeState,
     constraints: Constraints,
     measurer: Box<dyn FnMut(NodeId, Constraints) -> SubcomposePlaceable + 'a>,
-    cached_measure_batch_registrar: CachedMeasureBatchRegistrar<'a>,
     retained_measure_lookup: RetainedMeasureLookup<'a>,
     retained_measure_registrar: RetainedMeasureRegistrar<'a>,
     error: &'a RefCell<Option<NodeError>>,
@@ -238,7 +229,6 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
             state: init.state,
             constraints: init.constraints,
             measurer: init.measurer,
-            cached_measure_batch_registrar: init.cached_measure_batch_registrar,
             retained_measure_lookup: init.retained_measure_lookup,
             retained_measure_registrar: init.retained_measure_registrar,
             error: init.error,
@@ -688,39 +678,6 @@ impl SubcomposeMeasureScopeImpl<'_> {
 
         self.composer
             .nodes_need_relayout(children.iter().map(SubcomposeChild::node_id))
-    }
-
-    /// Gives each of `node_ids` a measurement for this pass under
-    /// `constraints`: a node measured or registered earlier in the pass keeps
-    /// its own, the nodes with a cached measurement register theirs in one
-    /// batch, and the rest are measured.
-    pub(crate) fn ensure_cached_measurement_node_ids<I>(
-        &mut self,
-        node_ids: I,
-        constraints: Constraints,
-    ) where
-        I: IntoIterator<Item = NodeId>,
-    {
-        if self.error.borrow().is_some() || !self.ensure_pending_commands_applied() {
-            return;
-        }
-
-        let mut nodes = std::mem::take(&mut self.scratch.batch_nodes);
-        let mut found = std::mem::take(&mut self.scratch.batch_found);
-        nodes.clear();
-        nodes.extend(node_ids);
-        if !nodes.is_empty() {
-            found.clear();
-            (self.cached_measure_batch_registrar)(&nodes, constraints, &mut found);
-            found.resize(nodes.len(), false);
-            for (&node_id, &has_measurement) in nodes.iter().zip(&found) {
-                if !has_measurement {
-                    let _ = self.measure(SubcomposeChild::new(node_id), constraints);
-                }
-            }
-        }
-        self.scratch.batch_nodes = nodes;
-        self.scratch.batch_found = found;
     }
 }
 
@@ -1474,16 +1431,15 @@ impl SubcomposeLayoutNodeHandle {
         self.inner.borrow_mut().set_debug_modifiers(enabled);
     }
 
-    pub(crate) fn measure_with_cached_batch(
+    pub(crate) fn measure_with_callbacks(
         &self,
         composer: &Composer,
         node_id: NodeId,
         constraints: Constraints,
-        callbacks: CachedBatchMeasureInputs<'_>,
+        callbacks: MeasureCallbacks<'_>,
     ) -> Result<MeasureResult, NodeError> {
-        let CachedBatchMeasureInputs {
+        let MeasureCallbacks {
             measurer,
-            cached_measure_batch_registrar,
             retained_measure_lookup,
             retained_measure_registrar,
             error,
@@ -1531,7 +1487,6 @@ impl SubcomposeLayoutNodeHandle {
                     state: &mut state,
                     constraints: constraints_copy,
                     measurer,
-                    cached_measure_batch_registrar,
                     retained_measure_lookup,
                     retained_measure_registrar,
                     error,

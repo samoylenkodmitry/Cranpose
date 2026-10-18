@@ -441,21 +441,6 @@ fn lazy_list_child_constraints(is_vertical: bool, cross_axis_size: f32) -> Const
         }
     }
 }
-fn register_visible_lazy_list_child_measurements(
-    scope: &mut SubcomposeMeasureScopeImpl<'_>,
-    visible_items: &[LazyListMeasuredItem],
-    is_vertical: bool,
-    cross_axis_size: f32,
-) {
-    let child_constraints = lazy_list_child_constraints(is_vertical, cross_axis_size);
-    scope.ensure_cached_measurement_node_ids(
-        visible_items
-            .iter()
-            .flat_map(|item| item.roots.node_ids.iter())
-            .filter_map(|&node_id| NodeId::try_from(node_id).ok()),
-        child_constraints,
-    );
-}
 
 fn measure_lazy_list_children(
     scope: &mut SubcomposeMeasureScopeImpl<'_>,
@@ -679,12 +664,6 @@ fn measure_list_viewport(
     pin_sticky_header(&mut result, content.header_indices(), |index| {
         measure_lazy_list_item(scope, index, &item_measure_inputs)
     });
-    register_visible_lazy_list_child_measurements(
-        scope,
-        &result.visible_items,
-        frame.is_vertical,
-        frame.item_cross_axis_size,
-    );
     result
 }
 

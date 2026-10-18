@@ -20,7 +20,7 @@ use std::{
 
 use cranpose_core::{
     Applier, ApplierHost, Composer, ConcreteApplierHost, MemoryApplier, Node, NodeError, NodeId,
-    Phase, RuntimeHandle, SlotTable, SlotsHost, collections::map::Entry,
+    Phase, RuntimeHandle, SlotTable, SlotsHost,
 };
 use cranpose_foundation::{
     InvalidationKind, ModifierNodeContext, NodeCapabilities, SemanticsConfiguration,
@@ -47,7 +47,7 @@ use crate::{
         ModifierNodeSlicesDebugStats, Point, Rect as GeometryRect, ResolvedModifiers, Size,
     },
     render_state::AppContext,
-    subcompose_layout::{CachedBatchMeasureInputs, SubcomposeLayoutNode},
+    subcompose_layout::{MeasureCallbacks, SubcomposeLayoutNode},
     widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles, LayoutState},
 };
 
@@ -1825,45 +1825,6 @@ impl LayoutBuilderState {
         self.measure_subcompose_node(node_id, constraints)
     }
 
-    /// The measurement `node_id` cached for `constraints` in layout cache
-    /// epoch `current_epoch`, the one the app context holds.
-    fn cached_measure_node_with_applier(
-        applier: &mut MemoryApplier,
-        node_id: NodeId,
-        constraints: Constraints,
-        current_epoch: u64,
-        context: &AppContext,
-    ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
-        let served = |cache: &LayoutNodeCacheHandles, dirty: bool| {
-            let epoch = cache.epoch();
-            if dirty || epoch == 0 || epoch != current_epoch {
-                return None;
-            }
-            cache.get_measurement(constraints)
-        };
-
-        match applier.with_node::<LayoutNode, _>(node_id, |node| {
-            let measured = served(node.cache_handles(), Node::layout_dirty(node))?;
-            node.set_measured_size(measured.size, context);
-            Some(measured)
-        }) {
-            Ok(measured) => Ok(measured),
-            Err(NodeError::TypeMismatch { .. }) => {
-                match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-                    let measured = served(node.cache_handles(), Node::layout_dirty(node))?;
-                    node.set_measured_size(measured.size, context);
-                    Some(measured)
-                }) {
-                    Ok(measured) => Ok(measured),
-                    Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),
-                    Err(err) => Err(err),
-                }
-            }
-            Err(NodeError::Missing { .. }) => Ok(None),
-            Err(err) => Err(err),
-        }
-    }
-
     fn try_measure_subcompose(
         self: &Rc<Self>,
         node_id: NodeId,
@@ -1936,11 +1897,11 @@ impl LayoutBuilderState {
         let measure_error = RefCell::new(None);
         let measured_children = node_handle.measured_children_scratch();
 
-        let measure_result = node_handle.measure_with_cached_batch(
+        let measure_result = node_handle.measure_with_callbacks(
             &composer,
             node_id,
             inner_constraints,
-            CachedBatchMeasureInputs {
+            MeasureCallbacks {
                 measurer: Box::new(|child_id: NodeId, child_constraints: Constraints| {
                     match self.measure_node(child_id, child_constraints) {
                         Ok(measured) => {
@@ -1960,47 +1921,6 @@ impl LayoutBuilderState {
                         }
                     }
                 }),
-                cached_measure_batch_registrar: Box::new(
-                    |child_ids: &[NodeId],
-                     child_constraints: Constraints,
-                     found: &mut Vec<bool>| {
-                        found.clear();
-                        found.resize(child_ids.len(), false);
-
-                        let Ok(mut applier) = self.applier.try_borrow_typed() else {
-                            return;
-                        };
-
-                        let mut measured_children = measured_children.borrow_mut();
-                        let current_epoch = crate::render_state::current_layout_cache_epoch();
-                        for (index, &child_id) in child_ids.iter().enumerate() {
-                            let Entry::Vacant(slot) = measured_children.entry(child_id) else {
-                                found[index] = true;
-                                continue;
-                            };
-                            match Self::cached_measure_node_with_applier(
-                                &mut applier,
-                                child_id,
-                                child_constraints,
-                                current_epoch,
-                                &self.context,
-                            ) {
-                                Ok(Some(measured)) => {
-                                    found[index] = true;
-                                    slot.insert(measured);
-                                }
-                                Ok(None) => {}
-                                Err(err) => {
-                                    let mut slot = measure_error.borrow_mut();
-                                    if slot.is_none() {
-                                        *slot = Some(err);
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                    },
-                ),
                 retained_measure_lookup: Box::new(|child_id| {
                     measured_children.borrow().get(&child_id).cloned()
                 }),
@@ -2807,17 +2727,6 @@ impl MeasuredNode {
         } else {
             self.size
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn leaf(node_id: NodeId, size: Size) -> Self {
-        Self::new(
-            node_id,
-            size,
-            Point::default(),
-            Point::default(),
-            Vec::new(),
-        )
     }
 
     pub(crate) fn node_id(&self) -> NodeId {
