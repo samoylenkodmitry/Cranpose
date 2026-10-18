@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use cranpose_ui_graphics::{BlendMode, CompositingStrategy, GraphicsLayer, RenderEffect};
 
 /// What a layer needs to be composited from its own offscreen buffer.
@@ -79,8 +81,9 @@ pub fn layer_for_content(
 /// `layer` only in the alpha the isolation moves to the composite step, and
 /// only that alpha and the colour filter pass to the content, so the two
 /// clones the composed form performs — one `GraphicsLayer`, one
-/// `RenderEffect` — are pure waste.
-pub fn local_content_layer_for(layer: &GraphicsLayer) -> GraphicsLayer {
+/// `RenderEffect` — are pure waste. A layer that passes its content no
+/// alpha and no filter, as most do, lends the default layer.
+pub fn local_content_layer_for(layer: &GraphicsLayer) -> Cow<'static, GraphicsLayer> {
     let alpha = if layer.compositing_strategy != CompositingStrategy::ModulateAlpha
         && layer_requires_isolation(layer)
     {
@@ -88,11 +91,14 @@ pub fn local_content_layer_for(layer: &GraphicsLayer) -> GraphicsLayer {
     } else {
         layer.alpha
     };
-    GraphicsLayer {
+    if alpha == 1.0 && layer.color_filter.is_none() {
+        return Cow::Borrowed(&GraphicsLayer::DEFAULT);
+    }
+    Cow::Owned(GraphicsLayer {
         alpha,
         color_filter: layer.color_filter.clone(),
         ..GraphicsLayer::default()
-    }
+    })
 }
 
 #[cfg(test)]

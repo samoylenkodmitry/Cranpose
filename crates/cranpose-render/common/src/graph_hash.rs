@@ -43,7 +43,7 @@ fn hash_layer_content<H: Hasher>(
     hash_optional_rect(layer.visual_clip_rect(), state);
     let local_layer = local_content_layer_for(&layer.graphics_layer);
     hash_f32_bits(local_layer.alpha, state);
-    hash_optional_color_filter(local_layer.color_filter, state);
+    hash_optional_color_filter(local_layer.color_filter.as_ref(), state);
     layer.motion_context_animated.hash(state);
     if include_translated_content_offset && layer.translated_content_context {
         hash_point(layer.translated_content_offset, state);
@@ -164,7 +164,7 @@ fn hash_optional_render_effect_to<H: Hasher>(effect: Option<&RenderEffect>, stat
     }
 }
 
-fn hash_optional_color_filter<H: Hasher>(filter: Option<ColorFilter>, state: &mut H) {
+fn hash_optional_color_filter<H: Hasher>(filter: Option<&ColorFilter>, state: &mut H) {
     match filter {
         Some(filter) => {
             1u8.hash(state);

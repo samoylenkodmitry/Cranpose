@@ -2648,7 +2648,8 @@ impl<'a> GroupedDraws<'a> {
             paint: draws
                 .layer
                 .map(crate::layer_composition::local_content_layer_for)
-                .filter(|paint| paint.alpha != 1.0 || paint.color_filter.is_some()),
+                .filter(|paint| paint.alpha != 1.0 || paint.color_filter.is_some())
+                .map(std::borrow::Cow::into_owned),
         }
     }
 
