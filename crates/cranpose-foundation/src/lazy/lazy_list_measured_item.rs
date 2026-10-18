@@ -2,7 +2,7 @@
 //!
 //! Contains the result of measuring a single item during lazy layout.
 
-use std::rc::Rc;
+use std::{any::Any, fmt, rc::Rc};
 
 use smallvec::SmallVec;
 
@@ -55,7 +55,7 @@ pub struct LazyListMeasuredItem {
 /// What measuring the roots of an item found, in the order of its roots.
 /// Every copy of the item a measure pass hands around shares it with the
 /// cache the item came from, so a copy costs a reference count.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Default)]
 pub struct LazyItemRoots {
     /// Node IDs of the composed item's roots, for placing them.
     pub node_ids: SmallNodeVec,
@@ -63,6 +63,21 @@ pub struct LazyItemRoots {
     pub child_offsets: SmallOffsetVec,
     /// Measured cross-axis extent of each root.
     pub child_cross_axis_sizes: SmallOffsetVec,
+    /// The layout's measurement of each root, in the order of `node_ids`,
+    /// which the layout places the root with. The layout's measurement type
+    /// is not this crate's, so it is kept as `dyn Any`.
+    pub measurements: SmallVec<[Rc<dyn Any>; 4]>,
+}
+
+impl fmt::Debug for LazyItemRoots {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LazyItemRoots")
+            .field("node_ids", &self.node_ids)
+            .field("child_offsets", &self.child_offsets)
+            .field("child_cross_axis_sizes", &self.child_cross_axis_sizes)
+            .field("measurements", &self.measurements.len())
+            .finish()
+    }
 }
 
 // A copy copies the placement offsets as slices: a list item's are empty,

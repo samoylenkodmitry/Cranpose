@@ -24,7 +24,7 @@ use cranpose_core::{
 };
 use cranpose_foundation::{
     InvalidationKind, ModifierNodeContext, NodeCapabilities, SemanticsConfiguration,
-    SemanticsCustomAction, SemanticsWidgetRole,
+    SemanticsCustomAction, SemanticsWidgetRole, lazy::LazyItemRoots,
 };
 use cranpose_ui_graphics::{ProjectiveTransform, layer_transform::layer_transform_to_window};
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, PlaceTarget, Placement};
@@ -1896,12 +1896,6 @@ impl LayoutBuilderState {
                 retained_measure_lookup: Box::new(|child_id| {
                     measured_children.borrow().get(&child_id).cloned()
                 }),
-                retained_measure_registrar: Box::new(|measurements| {
-                    let mut measured_children = measured_children.borrow_mut();
-                    for measured in measurements {
-                        measured_children.insert(measured.node_id(), Rc::clone(measured));
-                    }
-                }),
                 error: &measure_error,
             },
         )?;
@@ -1955,14 +1949,25 @@ impl LayoutBuilderState {
             });
         }
 
+        // A lazy policy placed its items' roots with their measurements; the
+        // other placements are looked up.
+        let placed_roots = node_handle.take_placed_roots();
+        let mut carried = PlacedRootMeasurements::new(&placed_roots);
         for placement in &placements {
-            let child = if let Some(measured) = measured_children_by_id.remove(&placement.node_id) {
+            let looked_up;
+            let child: &MeasuredNode = if let Some(measured) = carried.next_measurement() {
                 measured
             } else {
-                drop(applier.take());
-                let measured = self.measure_node(placement.node_id, inner_constraints)?;
-                applier = self.applier.try_borrow_typed().ok();
-                measured
+                looked_up =
+                    if let Some(measured) = measured_children_by_id.remove(&placement.node_id) {
+                        measured
+                    } else {
+                        drop(applier.take());
+                        let measured = self.measure_node(placement.node_id, inner_constraints)?;
+                        applier = self.applier.try_borrow_typed().ok();
+                        measured
+                    };
+                &looked_up
             };
             let policy_position = Point {
                 x: padding.left + placement.x,
@@ -1990,10 +1995,11 @@ impl LayoutBuilderState {
                 });
             }
 
-            children.push(MeasuredChild::new(&child, policy_position));
+            children.push(MeasuredChild::new(child, policy_position));
         }
         drop(applier);
 
+        node_handle.recycle_placed_roots(placed_roots);
         node_handle.recycle_placement_scratch(placements);
 
         Ok(Some(
@@ -2610,6 +2616,43 @@ impl Drop for VecPools<'_> {
     }
 }
 
+/// The measurement of each placement a lazy policy made, in order: see
+/// [`crate::subcompose_layout::SubcomposeMeasureScopeImpl::layout_with_placed_roots`].
+struct PlacedRootMeasurements<'a> {
+    items: std::slice::Iter<'a, Rc<LazyItemRoots>>,
+    item: Option<&'a LazyItemRoots>,
+    root: usize,
+}
+
+impl<'a> PlacedRootMeasurements<'a> {
+    fn new(items: &'a [Rc<LazyItemRoots>]) -> Self {
+        Self {
+            items: items.iter(),
+            item: None,
+            root: 0,
+        }
+    }
+
+    /// The measurement of the next placement; `None` for a root the item
+    /// holds none for, and once every item is placed.
+    fn next_measurement(&mut self) -> Option<&'a MeasuredNode> {
+        loop {
+            if let Some(item) = self.item
+                && self.root < item.node_ids.len()
+            {
+                let root = self.root;
+                self.root += 1;
+                return item
+                    .measurements
+                    .get(root)
+                    .and_then(|measured| measured.downcast_ref::<MeasuredNode>());
+            }
+            self.item = Some(self.items.next()?);
+            self.root = 0;
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct MeasuredNode {
     node_id: NodeId,
@@ -2664,10 +2707,6 @@ impl MeasuredNode {
         } else {
             self.size
         }
-    }
-
-    pub(crate) fn node_id(&self) -> NodeId {
-        self.node_id
     }
 
     pub(crate) fn size(&self) -> Size {

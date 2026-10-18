@@ -6,6 +6,7 @@
 #![expect(non_snake_case)]
 
 use std::{
+    any::Any,
     cell::{Cell, RefCell},
     rc::Rc,
 };
@@ -26,7 +27,6 @@ use web_time::Instant;
 use super::PaddingValues;
 use crate::{
     composable,
-    layout::MeasuredNode,
     layout_direction::LayoutDirection,
     modifier::{Modifier, Size},
     scroll::{OverscrollEffect, ScrollMotionContextKey, scroll_motion_context_for_key},
@@ -290,7 +290,6 @@ fn measure_lazy_list_item(
             .activate_exact_retained_slot_with_known_children(slot_id, &cached.item.roots.node_ids)
         {
             Some(RetainedSlotChildren::Clean) => {
-                scope.register_retained_measurements(&cached.retained_children);
                 let item = cached.item.clone();
                 drop(candidate_cache);
                 let mut cache = inputs.measured_item_cache.borrow_mut();
@@ -368,7 +367,6 @@ fn measure_lazy_list_item(
         if !scope.children_need_relayout(&root_children) {
             let cache = inputs.measured_item_cache.borrow();
             if let Some(cached) = cache.get(&item_context, &root_node_ids) {
-                scope.register_retained_measurements(&cached.retained_children);
                 let item = cached.item.clone();
                 drop(cache);
                 return item;
@@ -457,8 +455,7 @@ fn measure_lazy_list_children(
     let mut node_ids: SmallNodeVec = SmallVec::with_capacity(root_children.len());
     let mut child_offsets: SmallOffsetVec = SmallVec::new();
     let mut child_cross_axis_sizes: SmallOffsetVec = SmallVec::new();
-    let mut retained_children: SmallVec<[Rc<MeasuredNode>; 4]> =
-        SmallVec::with_capacity(root_children.len());
+    let mut measurements: SmallVec<[Rc<dyn Any>; 4]> = SmallVec::with_capacity(root_children.len());
 
     for child in root_children {
         let (placeable, retained) = scope.measure_retained(child, child_constraints);
@@ -479,7 +476,7 @@ fn measure_lazy_list_children(
         child_cross_axis_sizes.push(cross);
         node_ids.push(child.node_id() as u64);
         if let Some(retained) = retained {
-            retained_children.push(retained);
+            measurements.push(retained);
         }
 
         total_main_size += main;
@@ -497,14 +494,13 @@ fn measure_lazy_list_children(
             node_ids,
             child_offsets,
             child_cross_axis_sizes,
+            measurements,
         }),
     );
 
-    measured_item_cache.borrow_mut().insert(
-        item.clone(),
-        retained_children,
-        context.cross_axis_size,
-    );
+    measured_item_cache
+        .borrow_mut()
+        .insert(item.clone(), context.cross_axis_size);
     let elapsed = measure_start.elapsed();
     if cranpose_core::env_flag!("CRANPOSE_LAZY_ITEM_TELEMETRY") {
         log::warn!(
@@ -729,7 +725,7 @@ fn place_lazy_list(
     };
 
     let density = scope.density();
-    scope.layout_with_placement_builder(width, height, |placements| {
+    scope.layout_with_placed_roots(width, height, |placements, placed_roots| {
         push_lazy_list_placements(
             placements,
             density,
@@ -739,6 +735,13 @@ fn place_lazy_list(
             effective_viewport_size,
             context.config,
             cross_axis_size,
+        );
+        // The placements follow the items and their roots in this order.
+        placed_roots.extend(
+            result
+                .visible_items
+                .iter()
+                .map(|item| Rc::clone(&item.roots)),
         );
         let bounce = overscroll.offset();
         for placement in placements.iter_mut() {
@@ -1127,7 +1130,6 @@ struct LazyMeasuredItemCache {
 
 struct CachedLazyMeasuredItem {
     item: LazyListMeasuredItem,
-    retained_children: SmallVec<[Rc<MeasuredNode>; 4]>,
     /// The cross size the item was measured at. A grid cell's changes with
     /// its span, its column and the grid's width.
     cross_axis_bits: u32,
@@ -1226,7 +1228,7 @@ impl LazyMeasuredItemCache {
         if cached.item.key != item.key_slot_id
             || cached.item.content_type != item.content_type
             || cached.cross_axis_bits != normalized_axis_bits(item.cross_axis_size)
-            || cached.retained_children.len() != cached.item.roots.node_ids.len()
+            || cached.item.roots.measurements.len() != cached.item.roots.node_ids.len()
         {
             return None;
         }
@@ -1237,16 +1239,10 @@ impl LazyMeasuredItemCache {
         self.entries.remove(&index);
     }
 
-    fn insert(
-        &mut self,
-        item: LazyListMeasuredItem,
-        retained_children: SmallVec<[Rc<MeasuredNode>; 4]>,
-        cross_axis_size: f32,
-    ) {
+    fn insert(&mut self, item: LazyListMeasuredItem, cross_axis_size: f32) {
         let index = item.index;
         let cached = CachedLazyMeasuredItem {
             item,
-            retained_children,
             cross_axis_bits: normalized_axis_bits(cross_axis_size),
         };
         self.entries.insert(index, cached);

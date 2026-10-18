@@ -684,7 +684,14 @@ impl LazyItemSource for LazyGridLines<'_, '_, '_> {
                 );
                 child_cross_offsets.push(cross);
                 child_main_sizes.push(end - start);
+                if let Some(measured) = cell_roots.measurements.get(root) {
+                    roots.measurements.push(Rc::clone(measured));
+                }
             }
+        }
+        // A line has a measurement for each root or none.
+        if roots.measurements.len() != roots.node_ids.len() {
+            roots.measurements.clear();
         }
         let mut measured = LazyListMeasuredItem::new(
             index,
