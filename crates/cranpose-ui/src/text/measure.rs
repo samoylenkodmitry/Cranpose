@@ -238,6 +238,16 @@ impl TextLinePrefixWidths {
         self.separator_before.len()
     }
 
+    /// The table of the characters from index `first` on, read from this
+    /// one: a range of them is as wide as the same range here.
+    fn suffix(&self, first: usize) -> Option<Self> {
+        Some(Self {
+            prefix_widths: self.prefix_widths.get(first..)?.to_vec(),
+            separator_before: self.separator_before.get(first..)?.to_vec(),
+            non_empty_overhang: self.non_empty_overhang,
+        })
+    }
+
     /// Width of the characters from index `start` up to but not including `end`. Indices count
     /// characters, not bytes. Returns `None` when the range is reversed or ends past the line.
     /// An empty range has width 0.0.
@@ -1377,8 +1387,9 @@ fn prepare_layout<M: TextMeasurer + ?Sized>(
     let source_line_count = line_ranges.len();
     let mut visible_lines: DisplayLines;
     let mut wrap_hold = None;
+    let mut cut_line = None;
     if let Some(width_limit) = wrap_width {
-        (visible_lines, wrap_hold) = wrap_lines(
+        (visible_lines, wrap_hold, cut_line) = wrap_lines(
             measurer,
             text,
             line_ranges,
@@ -1401,7 +1412,7 @@ fn prepare_layout<M: TextMeasurer + ?Sized>(
         (text, style),
         opts,
         max_width,
-        (&mut visible_lines, &mut wrap_hold),
+        (&mut visible_lines, &mut wrap_hold, cut_line.as_ref()),
     );
     let overflow_ms = overflow_start.map(|start| start.elapsed().as_secs_f64() * 1000.0);
 
@@ -1862,19 +1873,17 @@ impl DisplayLine {
         &mut self,
         measurer: &M,
         node_id: Option<NodeId>,
-        source: &crate::text::AnnotatedString,
-        style: &TextStyle,
-        max_width: Option<f32>,
-        placement: EllipsisPlacement,
+        (source, style): (&crate::text::AnnotatedString, &TextStyle),
+        (max_width, placement): (Option<f32>, EllipsisPlacement),
+        cut_line: Option<&MeasuredSourceLine>,
     ) -> WrapHold {
         let (line, cut) = fit_ellipsis(
             measurer,
             node_id,
-            source,
-            self.source_range.clone(),
+            (source, self.source_range.clone()),
             style,
-            max_width,
-            placement,
+            (max_width, placement),
+            cut_line,
         );
         *self = line;
         cut
@@ -2154,10 +2163,11 @@ fn wrap_lines<M: TextMeasurer + ?Sized>(
     style: &TextStyle,
     (max_width, limit): (f32, LineLimit),
     modes: (LineBreak, Hyphens),
-) -> (DisplayLines, Option<WrapHold>) {
+) -> (DisplayLines, Option<WrapHold>, Option<MeasuredSourceLine>) {
     let source_lines = line_ranges.len();
     let mut lines = DisplayLines::with_capacity(source_lines.min(limit.lines.saturating_add(1)));
     let mut hold = Some(WrapHold::ANY);
+    let mut cut_line = None;
     for line_range in line_ranges {
         if limit.reached(lines.len()) {
             if lines.len() == limit.lines {
@@ -2165,7 +2175,7 @@ fn wrap_lines<M: TextMeasurer + ?Sized>(
             }
             break;
         }
-        wrap_line_to_width(
+        cut_line = wrap_line_to_width(
             measurer,
             text,
             line_range,
@@ -2176,7 +2186,7 @@ fn wrap_lines<M: TextMeasurer + ?Sized>(
         );
     }
     let wrapped = lines.len() != source_lines;
-    (lines, hold.filter(|_| wrapped))
+    (lines, hold.filter(|_| wrapped), cut_line)
 }
 
 /// Appends the display lines `line_range` wraps into at `max_width` to
@@ -2191,13 +2201,13 @@ fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
     (max_width, limit, hold): (f32, LineLimit, &mut Option<WrapHold>),
     (line_break, hyphens): (LineBreak, Hyphens),
     out: &mut DisplayLines,
-) {
+) -> Option<MeasuredSourceLine> {
     let line_text = &text.text[line_range.clone()];
     if line_text.is_empty() {
         out.push(DisplayLine::from_source_range(
             line_range.start..line_range.start,
         ));
-        return;
+        return None;
     }
 
     if let Some(measured_width) = measurer.measure_line_width(text, line_range.clone(), style)
@@ -2208,7 +2218,7 @@ fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
             line_range,
             measured_width,
         ));
-        return;
+        return None;
     }
 
     if matches!(line_break, LineBreak::Heading | LineBreak::Paragraph)
@@ -2224,7 +2234,7 @@ fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
         )
     {
         *hold = None;
-        return;
+        return None;
     }
 
     wrap_line_greedy(
@@ -2235,7 +2245,7 @@ fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
         (max_width, limit, hold),
         (line_break, hyphens),
         out,
-    );
+    )
 }
 
 fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
@@ -2246,10 +2256,10 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
     (max_width, limit, hold): (f32, LineLimit, &mut Option<WrapHold>),
     (line_break, hyphens): (LineBreak, Hyphens),
     out: &mut DisplayLines,
-) {
+) -> Option<MeasuredSourceLine> {
     let line_text = &text.text[line_range.clone()];
     let boundaries = cluster_boundaries(line_text);
-    let measure_context =
+    let mut measure_context =
         LineMeasureContext::new(measurer, text, &line_range, style, boundaries.len());
     if let Some(measured_width) =
         measure_context.prefix_width_for_char_range(0, boundaries.len() - 1)
@@ -2260,7 +2270,7 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
             line_range,
             measured_width,
         ));
-        return;
+        return None;
     }
     let first = out.len();
     let breaks = LineBreaks::new(line_text, &boundaries);
@@ -2271,7 +2281,13 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
             out.push(DisplayLine::from_source_range(
                 line_range.start + boundaries[start_idx]..line_range.end,
             ));
-            return;
+            // The ellipsis that cuts the last line kept reads this line's
+            // measurements instead of taking them again.
+            return Some(MeasuredSourceLine {
+                start: line_range.start,
+                prefix_widths: measure_context.prefix_widths.take(),
+                boundaries,
+            });
         }
         let mut low = start_idx + 1;
         let mut high = boundaries.len() - 1;
@@ -2333,6 +2349,38 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
         out.push(DisplayLine::from_source_range(
             line_range.start..line_range.start,
         ));
+    }
+    None
+}
+
+/// A source line the wrap measured and the line limit cut: its grapheme
+/// boundaries, from its start, and its prefix widths.
+struct MeasuredSourceLine {
+    start: usize,
+    boundaries: Vec<usize>,
+    prefix_widths: Option<TextLinePrefixWidths>,
+}
+
+impl MeasuredSourceLine {
+    /// The boundaries, from its start, and the prefix widths of `range`, a
+    /// stretch of this line from one of its boundaries to its end: the
+    /// boundaries a measure of `range` alone finds, since a boundary is a
+    /// character that does not combine with the one before it.
+    fn suffix(&self, range: &Range<usize>) -> Option<(Vec<usize>, Option<TextLinePrefixWidths>)> {
+        let offset = range.start.checked_sub(self.start)?;
+        if self.start + *self.boundaries.last()? != range.end {
+            return None;
+        }
+        let first = self.boundaries.binary_search(&offset).ok()?;
+        let boundaries = self.boundaries[first..]
+            .iter()
+            .map(|boundary| boundary - offset)
+            .collect();
+        let widths = self
+            .prefix_widths
+            .as_ref()
+            .and_then(|widths| widths.suffix(first));
+        Some((boundaries, widths))
     }
 }
 
@@ -2679,7 +2727,11 @@ fn apply_overflow<M: TextMeasurer + ?Sized>(
     (text, style): (&crate::text::AnnotatedString, &TextStyle),
     options: TextLayoutOptions,
     max_width: Option<f32>,
-    (visible_lines, hold): (&mut DisplayLines, &mut Option<WrapHold>),
+    (visible_lines, hold, cut_line): (
+        &mut DisplayLines,
+        &mut Option<WrapHold>,
+        Option<&MeasuredSourceLine>,
+    ),
 ) -> bool {
     if options.overflow == TextOverflow::Visible {
         return false;
@@ -2691,7 +2743,13 @@ fn apply_overflow<M: TextMeasurer + ?Sized>(
         visible_lines.truncate(options.max_lines);
         if let (Some(placement), Some(last_line)) = (ellipsis, visible_lines.last_mut()) {
             last_line.extend_to_paragraph_end(text);
-            let cut = last_line.ellipsize(measurer, node_id, text, style, max_width, placement);
+            let cut = last_line.ellipsize(
+                measurer,
+                node_id,
+                (text, style),
+                (max_width, placement),
+                cut_line,
+            );
             if let Some(hold) = hold {
                 hold.narrow(cut.fits, cut.pulls_up);
             }
@@ -2711,7 +2769,13 @@ fn apply_overflow<M: TextMeasurer + ?Sized>(
         if line_index + 1 == visible_len
             && let Some(placement) = ellipsis
         {
-            line.ellipsize(measurer, node_id, text, style, max_width, placement);
+            line.ellipsize(
+                measurer,
+                node_id,
+                (text, style),
+                (max_width, placement),
+                cut_line,
+            );
         }
     }
     did_overflow
@@ -2804,11 +2868,10 @@ impl EllipsisPlacement {
 fn fit_ellipsis<M: TextMeasurer + ?Sized>(
     measurer: &M,
     node_id: Option<NodeId>,
-    source: &crate::text::AnnotatedString,
-    source_range: Range<usize>,
+    (source, source_range): (&crate::text::AnnotatedString, Range<usize>),
     style: &TextStyle,
-    max_width: Option<f32>,
-    placement: EllipsisPlacement,
+    (max_width, placement): (Option<f32>, EllipsisPlacement),
+    cut_line: Option<&MeasuredSourceLine>,
 ) -> (DisplayLine, WrapHold) {
     let width_limit = max_width.unwrap_or(f32::INFINITY);
     // The line when it fits, or the width it overflows at.
@@ -2836,7 +2899,7 @@ fn fit_ellipsis<M: TextMeasurer + ?Sized>(
         }
     };
 
-    let boundaries = cluster_boundaries(&source.text[source_range.clone()]);
+    let (boundaries, known_widths) = elided_line_measures(source, &source_range, cut_line);
     let elided_line = |kept_chars: usize| {
         fitting_line(DisplayLineText::Ellipsized(placement.elide(
             source,
@@ -2861,8 +2924,8 @@ fn fit_ellipsis<M: TextMeasurer + ?Sized>(
     // string per guess; measuring the guess and the one past it confirms it,
     // and the search below only runs when shaping across the cut moved it.
     let guess = best.measured_width.and_then(|ellipsis_width| {
-        measurer
-            .measure_line_prefix_widths(source, source_range.clone(), style)
+        known_widths
+            .or_else(|| measurer.measure_line_prefix_widths(source, source_range.clone(), style))
             .filter(|widths| widths.char_count() + 1 == boundaries.len())
             .and_then(|widths| placement.estimated_kept_chars(&widths, ellipsis_width, width_limit))
     });
@@ -2885,6 +2948,20 @@ fn fit_ellipsis<M: TextMeasurer + ?Sized>(
         search.probe(kept_chars, elided_line(kept_chars));
     }
     ElisionSearch::found(search.best, search.overflow_width)
+}
+
+/// The grapheme boundaries of `range`, from its start, and its prefix
+/// widths when the wrap measured them: a line the wrap cut, `cut_line`,
+/// was measured there, and its boundaries and widths from the stretch's own
+/// start are the ones a measure of the stretch would find.
+fn elided_line_measures(
+    source: &crate::text::AnnotatedString,
+    range: &Range<usize>,
+    cut_line: Option<&MeasuredSourceLine>,
+) -> (Vec<usize>, Option<TextLinePrefixWidths>) {
+    cut_line
+        .and_then(|line| line.suffix(range))
+        .unwrap_or_else(|| (cluster_boundaries(&source.text[range.clone()]), None))
 }
 
 /// The most characters an elision was found to keep within the width, and
