@@ -156,6 +156,12 @@ struct RecordingPolicy {
     seen: Rc<RefCell<Option<Constraints>>>,
 }
 
+impl PartialEq for RecordingPolicy {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.seen, &other.seen)
+    }
+}
+
 impl MeasurePolicy for RecordingPolicy {
     fn measure(
         &self,
@@ -464,6 +470,62 @@ fn a_subcomposed_subtree_given_a_different_density_is_measured_on_that_grid()
          measured on that grid, not the host's"
     );
 
+    Ok(())
+}
+
+#[test]
+fn a_child_measured_in_a_subcompose_pass_keeps_that_measurement_when_the_pass_registers_it_again()
+-> Result<(), NodeError> {
+    use crate::subcompose_layout::SubcomposeMeasureScope;
+
+    let seen = Rc::new(RefCell::new(None));
+    let mut composition = crate::run_test_composition({
+        let seen = Rc::clone(&seen);
+        move || {
+            let seen = Rc::clone(&seen);
+            crate::widgets::SubcomposeLayout(Modifier::empty(), move |scope, constraints| {
+                let seen = Rc::clone(&seen);
+                let children = scope.subcompose(cranpose_core::SlotId::new(0), (), move || {
+                    crate::widgets::Layout(
+                        Modifier::empty(),
+                        RecordingPolicy {
+                            seen: Rc::clone(&seen),
+                        },
+                        || {},
+                    );
+                });
+                for &child in &children {
+                    crate::subcompose_layout::SubcomposeMeasureScope::measure(
+                        scope,
+                        child,
+                        Constraints::tight(10.0, 10.0),
+                    );
+                }
+                scope.ensure_cached_measurement_node_ids(
+                    children
+                        .iter()
+                        .map(crate::subcompose_layout::SubcomposeChild::node_id),
+                    Constraints::tight(20.0, 20.0),
+                );
+                let (width, height) = constraints.constrain(10.0, 10.0);
+                scope.layout(width, height, Vec::new())
+            });
+        }
+    });
+
+    let root = composition.root().expect("composition root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    measure_layout(&mut applier, root, Size::new(100.0, 100.0))?;
+    applier.clear_runtime_handle();
+    drop(applier);
+
+    assert_eq!(
+        *seen.borrow(),
+        Some(Constraints::tight(10.0, 10.0)),
+        "a child the pass measured is not measured again by a later registration"
+    );
     Ok(())
 }
 
