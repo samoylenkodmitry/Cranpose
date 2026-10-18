@@ -2104,7 +2104,6 @@ impl LayoutBuilderState {
         }
         drop(applier);
 
-        node_handle.set_active_children(children.iter().map(|child| child.node_id));
         node_handle.recycle_placement_scratch(placements);
 
         Ok(Some(
