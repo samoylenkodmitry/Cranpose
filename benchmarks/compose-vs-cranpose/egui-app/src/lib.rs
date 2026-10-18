@@ -282,9 +282,11 @@ impl Gauntlet {
         ctx.set_theme(egui::Theme::Light);
         // The device runs an accessibility service, so the Android toolkits
         // keep their accessibility trees current every frame: egui does too.
-        // A page's canvas has no accessibility tree to keep: no toolkit's
-        // browser backend builds one either.
-        #[cfg(not(target_arch = "wasm32"))]
+        // On a desktop with no assistive technology running, no toolkit
+        // builds one, and egui builds its tree only once an assistive
+        // technology asks for it. A page's canvas has no accessibility tree
+        // to keep: no toolkit's browser backend builds one either.
+        #[cfg(target_os = "android")]
         ctx.enable_accesskit();
         // Rows as tall as their content: nothing here is a button to keep
         // tall enough to touch.

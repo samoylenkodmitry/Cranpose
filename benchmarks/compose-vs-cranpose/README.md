@@ -253,10 +253,12 @@ frameworks draw differently, by design:
   blur widths. egui's text uses its light theme, which blends glyph coverage
   as the other apps do.
 - **Accessibility:** the apps keep the tree that accessibility services read,
-  as their toolkits do by default. egui builds AccessKit's tree every frame
-  with a label for each text. Its Android adapter attaches to GameActivity's
-  view, which R8 must keep, and needs `accesskit_winit`'s `accesskit_android`
-  feature, which egui-winit leaves off. Avalonia serves its tree by default:
+  as their toolkits do by default. On Android egui builds AccessKit's tree
+  every frame with a label for each text; on a desktop it builds the tree
+  once an assistive technology asks, as the other desktop toolkits do. Its
+  Android adapter attaches to GameActivity's view, which R8 must keep, and
+  needs `accesskit_winit`'s `accesskit_android` feature, which egui-winit
+  leaves off. Avalonia serves its tree by default:
   uiautomator reads 765 nodes at tier 5. Slint's Android backend has no
   accessibility support, so the Slint app does none of this work.
 - **Release builds:**
@@ -585,7 +587,7 @@ and the panels lie over a different part of the cluster's look-alike levels.
 | --- | --- |
 | `cranpose` | `cranpose-app`'s desktop binary |
 | `compose` | `compose-desktop-app`: Compose Multiplatform on the JVM, drawing the composables `compose-app` draws, from `shared-compose` |
-| `egui`, `slint` | the Android crates' desktop binaries |
+| `egui`, `slint` | the Android crates' desktop binaries; egui draws through eframe's default renderer, wgpu, where the phone's build uses glow |
 | `iced` | `iced-app`: iced on wgpu |
 | `gpui` | `gpui-app`: Zed's GPUI as `gpui-pre` publishes it |
 | `avalonia` | `avalonia-app`'s desktop head, Native AOT |
@@ -667,7 +669,7 @@ sh benchmarks/compose-vs-cranpose/framecount/build.sh
 (cd benchmarks/compose-vs-cranpose/tauri-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/dioxus-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/xilem-app && cargo build --release)
-(cd benchmarks/compose-vs-cranpose/fyne-app && go build -o build/perf-compare-fyne .)
+(cd benchmarks/compose-vs-cranpose/fyne-app && ./build.sh)
 python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop --tier 16
 python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop-parity --parity --tier 5
 ```
