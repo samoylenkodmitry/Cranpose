@@ -87,7 +87,10 @@ fn stacked_tint_modifiers_compose_in_graphics_layer() {
     let inner = Color::from_rgba_u8(128, 255, 64, 128);
     let modifier = Modifier::empty().tint(outer).tint(inner);
     let slices = collect_slices_from_modifier(&modifier);
-    let layer = slices.graphics_layer().expect("layer expected");
+    let layer = slices
+        .graphics_layer()
+        .expect("layer expected")
+        .into_owned();
 
     let filter = layer.color_filter.expect("expected composed filter");
     let source = [0.6, 0.2, 0.8, 0.5];
@@ -142,7 +145,10 @@ fn stacked_render_effects_chain_inner_then_outer() {
             ..Default::default()
         });
     let slices = collect_slices_from_modifier(&modifier);
-    let layer = slices.graphics_layer().expect("layer expected");
+    let layer = slices
+        .graphics_layer()
+        .expect("layer expected")
+        .into_owned();
 
     match layer.render_effect {
         Some(RenderEffect::Chain { first, second }) => {

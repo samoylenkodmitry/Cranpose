@@ -402,7 +402,8 @@ fn backdrop_blur_clips_backdrop_to_bounds() {
 
     let layer = slices
         .graphics_layer()
-        .expect("backdrop_blur should install a graphics layer");
+        .expect("backdrop_blur should install a graphics layer")
+        .into_owned();
     assert!(layer.clip);
     assert_eq!(layer.shape, LayerShape::Rectangle);
     match layer.backdrop_effect {
@@ -429,7 +430,8 @@ fn backdrop_gradient_blur_converts_radii_and_clips_backdrop_to_bounds() {
 
     let layer = slices
         .graphics_layer()
-        .expect("backdrop_gradient_blur should install a graphics layer");
+        .expect("backdrop_gradient_blur should install a graphics layer")
+        .into_owned();
     assert!(layer.clip);
     assert_eq!(layer.shape, LayerShape::Rectangle);
     let Some(RenderEffect::Shader { shader }) = layer.backdrop_effect else {
@@ -452,7 +454,8 @@ fn glass_material_applies_blur_tint_and_shape() {
 
     let layer = slices
         .graphics_layer()
-        .expect("glass_material should install a graphics layer");
+        .expect("glass_material should install a graphics layer")
+        .into_owned();
     assert!(layer.clip);
     assert_eq!(layer.shape, LayerShape::Rounded(shape));
     match layer.backdrop_effect {
@@ -1068,7 +1071,8 @@ fn a_transform_layer_after_a_shaped_layer_keeps_the_shape() {
         });
     let layer = collect_slices_from_modifier(&modifier)
         .graphics_layer()
-        .expect("the stacked layers merge into one");
+        .expect("the stacked layers merge into one")
+        .into_owned();
     assert!(layer.clip);
     assert_eq!(
         layer.shape, shape,
@@ -1089,7 +1093,8 @@ fn a_transform_layer_after_a_shaped_layer_keeps_the_shape() {
             }),
     )
     .graphics_layer()
-    .expect("the stacked layers merge into one");
+    .expect("the stacked layers merge into one")
+    .into_owned();
     assert_eq!(
         glass_then_scale.shape, shape,
         "the layer carrying the backdrop keeps the shape its effect covers"
@@ -1108,7 +1113,8 @@ fn a_transform_layer_after_a_shaped_layer_keeps_the_shape() {
             }),
     )
     .graphics_layer()
-    .expect("the stacked layers merge into one");
+    .expect("the stacked layers merge into one")
+    .into_owned();
     assert_eq!(
         reshaped.shape,
         LayerShape::Rounded(RoundedCornerShape::uniform(2.0)),
