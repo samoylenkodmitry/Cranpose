@@ -19,8 +19,8 @@ struct RenderState {
     draw_repasses: RefCell<DirtyNodeSet>,
     layer_property_repasses: RefCell<DirtyNodeSet>,
     modifier_slice_repasses: RefCell<DirtyNodeSet>,
-    geometry_scene_nodes: RefCell<DirtyNodeSet>,
-    moved_scene_nodes: RefCell<MovedSceneNodes>,
+    geometry_scene_nodes: RefCell<NotedSceneNodes<NodeId>>,
+    moved_scene_nodes: RefCell<NotedSceneNodes<MovedSceneNode>>,
     /// Nodes whose z index changed: their parents' layers hold the order.
     z_order_changes: RefCell<DirtyNodeSet>,
     /// Nodes whose redraw flag was set before they had an id, so no draw
@@ -202,8 +202,8 @@ impl RenderState {
             draw_repasses: RefCell::new(DirtyNodeSet::new()),
             layer_property_repasses: RefCell::new(DirtyNodeSet::new()),
             modifier_slice_repasses: RefCell::new(DirtyNodeSet::new()),
-            geometry_scene_nodes: RefCell::new(DirtyNodeSet::new()),
-            moved_scene_nodes: RefCell::new(MovedSceneNodes::new()),
+            geometry_scene_nodes: RefCell::new(NotedSceneNodes::new()),
+            moved_scene_nodes: RefCell::new(NotedSceneNodes::new()),
             z_order_changes: RefCell::new(DirtyNodeSet::new()),
             retained_redraws: RefCell::new(Vec::new()),
             render_invalidated: Cell::new(false),
@@ -734,19 +734,27 @@ impl AppContext {
         self.state
             .geometry_scene_nodes
             .borrow_mut()
-            .take_dirty_nodes_into(&mut output.reshaped);
+            .take_into(&mut output.reshaped);
         self.state
             .moved_scene_nodes
             .borrow_mut()
             .take_into(&mut output.moved);
     }
 
-    /// Notes that the layout pass changed `node_id`'s geometry.
+    /// Notes that the layout pass changed `node_id`'s geometry. A node
+    /// whose layout state is at hand notes it with
+    /// [`Self::note_geometry_scene_node`] instead, once a take.
     pub(crate) fn record_geometry_scene_node(&self, node_id: NodeId) {
+        self.state.geometry_scene_nodes.borrow_mut().push(node_id);
+    }
+
+    /// Notes that the layout pass changed `node_id`'s geometry. `noted_in`
+    /// is the node's own record of the take it was last noted in.
+    pub(crate) fn note_geometry_scene_node(&self, node_id: NodeId, noted_in: &mut u64) {
         self.state
             .geometry_scene_nodes
             .borrow_mut()
-            .schedule_repass(node_id);
+            .note(node_id, noted_in);
     }
 
     /// Notes that the layout pass moved `node_id`, which `placer` placed, and
@@ -1007,16 +1015,17 @@ struct DirtyNodeSet {
     dirty_nodes: HashSet<NodeId>,
 }
 
-/// The nodes a layout pass moved and changed nothing else of, each once a
-/// take. A node keeps the take it was last noted in, so a second note in the
-/// same take is dropped with one comparison instead of a hash.
-struct MovedSceneNodes {
-    nodes: Vec<MovedSceneNode>,
+/// The nodes a layout pass names to the scene, each once a take: a node
+/// keeps the take it was last noted in, so a second note in the same take
+/// is dropped with one comparison instead of a hash. A node pushed without
+/// that record may come twice, which the scene's routing marks absorb.
+struct NotedSceneNodes<T> {
+    nodes: Vec<T>,
     /// The take the list fills: a number no other list on the thread uses.
     take: u64,
 }
 
-impl MovedSceneNodes {
+impl<T> NotedSceneNodes<T> {
     fn new() -> Self {
         Self {
             nodes: Vec::new(),
@@ -1024,16 +1033,20 @@ impl MovedSceneNodes {
         }
     }
 
-    fn note(&mut self, moved: MovedSceneNode, noted_in: &mut u64) {
+    fn note(&mut self, node: T, noted_in: &mut u64) {
         if *noted_in != self.take {
             *noted_in = self.take;
-            self.nodes.push(moved);
+            self.nodes.push(node);
         }
+    }
+
+    fn push(&mut self, node: T) {
+        self.nodes.push(node);
     }
 
     /// Moves the nodes into `output` and keeps the storage `output` held
     /// for the next take.
-    fn take_into(&mut self, output: &mut Vec<MovedSceneNode>) {
+    fn take_into(&mut self, output: &mut Vec<T>) {
         output.clear();
         if !self.nodes.is_empty() {
             std::mem::swap(&mut self.nodes, output);

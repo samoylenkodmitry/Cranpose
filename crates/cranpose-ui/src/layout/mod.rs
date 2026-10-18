@@ -2081,7 +2081,7 @@ impl LayoutBuilderState {
             self.with_applier_result(|applier| {
                 applier.with_node::<LayoutNode, _>(node_id, |node| {
                     if runtime_state.write_node_geometry(node, &measurement) {
-                        self.context.record_geometry_scene_node(node_id);
+                        node.note_geometry_change(node_id, &self.context);
                     }
                 })
             })
@@ -2119,7 +2119,7 @@ impl LayoutBuilderState {
                     measurement.ignores_child_sizes,
                 );
                 if runtime_state.write_node_geometry(node, &measurement) {
-                    self.context.record_geometry_scene_node(node_id);
+                    node.note_geometry_change(node_id, &self.context);
                 }
                 node.clear_needs_measure();
                 node.clear_needs_layout();
