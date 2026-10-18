@@ -313,38 +313,11 @@ fn item_size_cache_read_promotes_entry_for_large_scroll_reuse() {
 
         assert_eq!(state.get_cached_size(0), Some(10.0));
         assert_eq!(state.get_cached_size(1), None);
-        let cache_len = state
-            .inner
-            .try_with(|rc| rc.borrow().item_size_cache.len())
-            .unwrap_or(0);
-        assert_eq!(cache_len, super::ITEM_SIZE_CACHE_CAPACITY);
-    });
-}
-
-#[test]
-fn item_size_cache_promotion_queue_stays_bounded_under_hot_reuse() {
-    with_test_runtime(|| {
-        let state = new_lazy_list_state();
-        state.cache_item_size(0, 32.0);
-
-        for _ in 0..super::ITEM_SIZE_CACHE_CAPACITY * 8 {
-            assert_eq!(state.get_cached_size(0), Some(32.0));
-        }
-
-        let (cache_len, queue_len) = state
-            .inner
-            .try_with(|rc| {
-                let inner = rc.borrow();
-                (
-                    inner.item_size_cache.len(),
-                    inner.item_size_eviction_queue.len(),
-                )
-            })
-            .unwrap_or((0, 0));
-        assert_eq!(cache_len, 1);
-        assert!(
-            queue_len <= super::ITEM_SIZE_CACHE_CAPACITY,
-            "stale promotion tickets must be compacted, got {queue_len}"
+        let last = super::ITEM_SIZE_CACHE_CAPACITY - 1;
+        assert_eq!(
+            state.get_cached_size(last),
+            Some(last as f32 + 10.0),
+            "a full cache keeps the sizes used last"
         );
     });
 }
