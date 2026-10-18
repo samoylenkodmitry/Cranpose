@@ -24,6 +24,9 @@ pub(crate) struct RenderThreadState {
         Cell<Option<cranpose_core::collections::map::HashMap<cranpose_core::NodeId, NodeUpdate>>>,
     pub(crate) command_recordings: RefCell<HashMap<RecorderKey, RecorderSlot, FxBuildHasher>>,
     pub(crate) recording_generation: Cell<u64>,
+    /// Whether a scene update or build placed a scene's layer since the
+    /// scene last followed its viewers, whose eyes move only then.
+    pub(crate) scene_placed: Cell<bool>,
     #[cfg(test)]
     pub(crate) lowered_layer_count: Cell<usize>,
 }
@@ -38,6 +41,7 @@ impl RenderThreadState {
             dirty_node_scratch: Cell::new(None),
             command_recordings: RefCell::new(HashMap::default()),
             recording_generation: Cell::new(0),
+            scene_placed: Cell::new(false),
             #[cfg(test)]
             lowered_layer_count: Cell::new(0),
         }

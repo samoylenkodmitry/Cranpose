@@ -535,7 +535,7 @@ impl Scene {
         else {
             return;
         };
-        crate::scene_space::follow_viewers(&mut graph);
+        follow_placed_viewers(&mut graph);
         self.install_graph_with_hits(graph);
     }
 
@@ -571,10 +571,7 @@ impl Scene {
             self.rebuild_from_applier(applier, root);
             return;
         };
-        let walked = self
-            .graph
-            .as_mut()
-            .is_some_and(crate::scene_space::follow_viewers);
+        let walked = self.graph.as_mut().is_some_and(follow_placed_viewers);
         if !refresh_hits && !report.hit_graph_dirty && !walked {
             return;
         }
@@ -642,6 +639,15 @@ impl Default for Scene {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Follows the viewers of `graph`'s scenes through the doorways their eyes
+/// passed, when the build or update that made `graph` placed a scene's
+/// layer: a flat window asks nothing of its layers. True when an eye
+/// entered or left a space.
+fn follow_placed_viewers(graph: &mut RenderGraph) -> bool {
+    crate::thread_state::with(|state| state.scene_placed.replace(false))
+        && crate::scene_space::follow_viewers(graph)
 }
 
 impl RenderScene for Scene {

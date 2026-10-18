@@ -1119,10 +1119,12 @@ fn children_scene<'a>(
 }
 
 /// The frame of the scene `layer` shows, kept out of line: a flat layer's
-/// walk stops at the check before it.
+/// walk stops at the check before it. Every placement of a scene's layer
+/// comes here, so it notes that the scene's viewers may have moved.
 #[cold]
 #[inline(never)]
 fn scene_frame(layer: &LayerNode, scene: &Scene3d, children: AbsOrigin) -> SceneFrame {
+    crate::thread_state::with(|state| state.scene_placed.set(true));
     SceneFrame {
         camera: scene.camera,
         origin: Point::new(
