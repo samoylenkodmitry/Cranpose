@@ -1410,6 +1410,17 @@ pub fn current_font_scale_curve() -> crate::font_scale::FontScaleCurve {
     with_render_state(|state| state.font_scale.get())
 }
 
+/// The current app context's density and font scale curve, read through one
+/// lookup of the context, or `None` outside a context.
+pub(crate) fn current_host_density() -> Option<(f32, crate::font_scale::FontScaleCurve)> {
+    current_app_context().map(|context| {
+        (
+            f32::from_bits(context.state.density_bits.get()),
+            context.state.font_scale.get(),
+        )
+    })
+}
+
 /// The running app's font scale curve, or `None` when it leaves every size as
 /// it is, which the caller then need not read.
 pub(crate) fn current_scaling_font_scale_curve() -> Option<crate::font_scale::FontScaleCurve> {
