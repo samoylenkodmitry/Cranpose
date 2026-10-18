@@ -236,9 +236,10 @@ impl LayoutState {
     /// Writes the placed position and marks the node placed, self-reporting
     /// to the scene phase of `context`, the node's app context, an actual
     /// move, and a placement of a node the scene does not draw: one the
-    /// running pass did not find placed. A move is reported apart, so the
-    /// scene can keep what it drew for the node.
-    pub fn place(&mut self, position: Point, context: &AppContext) {
+    /// running pass did not find placed. A move is reported apart, with
+    /// `placer`, the node whose placement put the node there, so the scene
+    /// can keep what it drew for the node.
+    pub fn place(&mut self, position: Point, placer: Option<NodeId>, context: &AppContext) {
         // A node the running pass cleared while it was placed changes
         // nothing the scene draws by being placed again.
         let newly_placed =
@@ -248,7 +249,7 @@ impl LayoutState {
             if newly_placed {
                 context.record_geometry_scene_node(id);
             } else if moved {
-                context.record_moved_scene_node(id, &mut self.moved_noted_in);
+                context.record_moved_scene_node(id, placer, &mut self.moved_noted_in);
             }
         }
         self.position = position;
@@ -1327,10 +1328,13 @@ impl LayoutNode {
         self.layout_state.borrow_mut().set_size(size, context);
     }
 
-    /// Updates the position of this node. Called during placement.
-    /// [`LayoutState::place`] self-reports actual moves to the scene phase.
-    pub fn set_position(&self, position: Point, context: &AppContext) {
-        self.layout_state.borrow_mut().place(position, context);
+    /// Updates the position of this node, which `placer` placed. Called
+    /// during placement. [`LayoutState::place`] self-reports actual moves to
+    /// the scene phase.
+    pub fn set_position(&self, position: Point, placer: Option<NodeId>, context: &AppContext) {
+        self.layout_state
+            .borrow_mut()
+            .place(position, placer, context);
     }
 
     /// Records the content offset (e.g. from padding).

@@ -749,14 +749,23 @@ impl AppContext {
             .schedule_repass(node_id);
     }
 
-    /// Notes that the layout pass moved `node_id` and changed nothing else of
-    /// it, so the scene can keep what it drew for the node. `noted_in` is the
-    /// node's own record of the take it was last noted in.
-    pub(crate) fn record_moved_scene_node(&self, node_id: NodeId, noted_in: &mut u64) {
-        self.state
-            .moved_scene_nodes
-            .borrow_mut()
-            .note(node_id, noted_in);
+    /// Notes that the layout pass moved `node_id`, which `placer` placed, and
+    /// changed nothing else of it, so the scene can keep what it drew for the
+    /// node. `noted_in` is the node's own record of the take it was last
+    /// noted in.
+    pub(crate) fn record_moved_scene_node(
+        &self,
+        node_id: NodeId,
+        placer: Option<NodeId>,
+        noted_in: &mut u64,
+    ) {
+        self.state.moved_scene_nodes.borrow_mut().note(
+            MovedSceneNode {
+                node: node_id,
+                placer,
+            },
+            noted_in,
+        );
     }
 
     /// The placement bookkeeping of this context's running layout pass.
@@ -1002,7 +1011,7 @@ struct DirtyNodeSet {
 /// take. A node keeps the take it was last noted in, so a second note in the
 /// same take is dropped with one comparison instead of a hash.
 struct MovedSceneNodes {
-    nodes: Vec<NodeId>,
+    nodes: Vec<MovedSceneNode>,
     /// The take the list fills: a number no other list on the thread uses.
     take: u64,
 }
@@ -1015,16 +1024,16 @@ impl MovedSceneNodes {
         }
     }
 
-    fn note(&mut self, node_id: NodeId, noted_in: &mut u64) {
+    fn note(&mut self, moved: MovedSceneNode, noted_in: &mut u64) {
         if *noted_in != self.take {
             *noted_in = self.take;
-            self.nodes.push(node_id);
+            self.nodes.push(moved);
         }
     }
 
     /// Moves the nodes into `output` and keeps the storage `output` held
     /// for the next take.
-    fn take_into(&mut self, output: &mut Vec<NodeId>) {
+    fn take_into(&mut self, output: &mut Vec<MovedSceneNode>) {
         output.clear();
         if !self.nodes.is_empty() {
             std::mem::swap(&mut self.nodes, output);
@@ -1328,7 +1337,17 @@ pub struct GeometrySceneNodes {
     pub reshaped: Vec<NodeId>,
     /// Nodes that moved in their parent: the scene moves what it drew for
     /// them, unless they are also reshaped or drawn again.
-    pub moved: Vec<NodeId>,
+    pub moved: Vec<MovedSceneNode>,
+}
+
+/// A node a layout pass moved, with the node whose placement put it there:
+/// its nearest ancestor that is not virtual, the parent of its layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MovedSceneNode {
+    /// The node that moved.
+    pub node: NodeId,
+    /// The node that placed it; `None` for a root.
+    pub placer: Option<NodeId>,
 }
 
 impl GeometrySceneNodes {

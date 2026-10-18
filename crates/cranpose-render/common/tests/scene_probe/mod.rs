@@ -62,7 +62,7 @@ pub fn update_scene(
         content.extend(applier.take_structural_change_parents_attached_to(root));
         content.sort_unstable();
         content.dedup();
-        let moved = geometry.moved;
+        let moved: Vec<NodeId> = geometry.moved.iter().map(|moved| moved.node).collect();
         let mut layers = Vec::new();
         cranpose_ui::take_layer_property_repass_nodes_into(&mut layers);
         assert!(

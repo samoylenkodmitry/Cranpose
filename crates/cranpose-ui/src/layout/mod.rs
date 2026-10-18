@@ -979,11 +979,13 @@ fn layout_tree_origin(root: Option<LayoutState>) -> Point {
 /// names what the pass left unplaced.
 fn finish_placement(applier: &mut MemoryApplier, root: NodeId, context: &AppContext) {
     if applier
-        .with_node::<LayoutNode, _>(root, |node| node.set_position(Point::default(), context))
+        .with_node::<LayoutNode, _>(root, |node| {
+            node.set_position(Point::default(), None, context);
+        })
         .is_err()
     {
         let _ = applier.with_node::<SubcomposeLayoutNode, _>(root, |node| {
-            node.set_position(Point::default(), context);
+            node.set_position(Point::default(), None, context);
         });
     }
     if let Some(pass) = context.placement_pass().with_unplaced_nodes() {
@@ -1979,12 +1981,12 @@ impl LayoutBuilderState {
             if let Some(applier) = applier.as_mut()
                 && applier
                     .with_node::<LayoutNode, _>(placement.node_id, |node| {
-                        node.set_position(retained_position, &self.context);
+                        node.set_position(retained_position, Some(node_id), &self.context);
                     })
                     .is_err()
             {
                 let _ = applier.with_node::<SubcomposeLayoutNode, _>(placement.node_id, |node| {
-                    node.set_position(retained_position, &self.context);
+                    node.set_position(retained_position, Some(node_id), &self.context);
                 });
             }
 
@@ -2049,7 +2051,7 @@ impl LayoutBuilderState {
         };
         self.bind_layout_children(
             &mut applier,
-            &runtime_state,
+            (node_id, &runtime_state),
             &pools.child_ids,
             ChildPass::Measure,
         )?;
@@ -2153,7 +2155,7 @@ impl LayoutBuilderState {
         };
         self.bind_layout_children(
             &mut applier,
-            &runtime_state,
+            (node_id, &runtime_state),
             &pools.child_ids,
             ChildPass::Intrinsics,
         )?;
@@ -2273,7 +2275,7 @@ impl LayoutBuilderState {
                 resized = true;
             }
             if child.placed {
-                self.place_where_it_was(previous.node_id);
+                self.place_where_it_was(cached.node_id, previous.node_id);
             }
         }
         Ok(Some(KeptChildren {
@@ -2349,20 +2351,20 @@ impl LayoutBuilderState {
         });
     }
 
-    /// Places a child of a kept node where it was: the node's policy would
-    /// place it there again.
-    fn place_where_it_was(&self, child_id: NodeId) {
+    /// Places a child of the kept node `parent` where it was: the node's
+    /// policy would place it there again.
+    fn place_where_it_was(&self, parent: NodeId, child_id: NodeId) {
         let Ok(mut applier) = self.applier.try_borrow_typed() else {
             return;
         };
         if applier
             .with_node::<LayoutNode, _>(child_id, |child| {
-                child.set_position(child.position(), &self.context);
+                child.set_position(child.position(), Some(parent), &self.context);
             })
             .is_err()
         {
             let _ = applier.with_node::<SubcomposeLayoutNode, _>(child_id, |child| {
-                child.set_position(child.layout_state().position(), &self.context);
+                child.set_position(child.layout_state().position(), Some(parent), &self.context);
             });
         }
     }
@@ -2409,12 +2411,12 @@ impl LayoutBuilderState {
     fn bind_layout_children(
         self: &Rc<Self>,
         applier: &mut MemoryApplier,
-        runtime_state: &RefCell<LayoutRuntimeState>,
+        (node_id, runtime_state): (NodeId, &RefCell<LayoutRuntimeState>),
         child_ids: &[NodeId],
         pass: ChildPass,
     ) -> Result<(), NodeError> {
         let mut runtime_state = runtime_state.borrow_mut();
-        runtime_state.bind_children(self, pass, child_ids.len());
+        runtime_state.bind_children(self, node_id, pass, child_ids.len());
         let mut bound = 0;
         for &child_id in child_ids {
             if self.bind_layout_child(applier, &mut runtime_state, bound, child_id)? {
@@ -3320,16 +3322,22 @@ impl LayoutRuntimeState {
             .map_or(&[], |children| children.measurables.as_slice())
     }
 
-    /// Binds the children's frame to `builder` for a pass over `count`
-    /// children. A node that never had one binds nothing.
-    fn bind_children(&mut self, builder: &Rc<LayoutBuilderState>, pass: ChildPass, count: usize) {
+    /// Binds the children's frame of the node `parent` to `builder` for a
+    /// pass over `count` children. A node that never had one binds nothing.
+    fn bind_children(
+        &mut self,
+        builder: &Rc<LayoutBuilderState>,
+        parent: NodeId,
+        pass: ChildPass,
+        count: usize,
+    ) {
         if count == 0 && self.children.is_none() {
             return;
         }
         self.children
             .get_or_insert_with(|| Box::new(LayoutChildren::with_capacity(count)))
             .frame
-            .bind(builder, pass);
+            .bind(builder, parent, pass);
     }
 
     fn unbind_children(&self) {
@@ -3478,6 +3486,8 @@ struct LayoutChildFrame {
     builder: RefCell<Option<Rc<LayoutBuilderState>>>,
     error: RefCell<Option<NodeError>>,
     pass: Cell<ChildPass>,
+    /// The node whose children the frame binds, which places them.
+    parent: Cell<Option<NodeId>>,
 }
 
 /// What a node binds its children for.
@@ -3493,10 +3503,11 @@ enum ChildPass {
 }
 
 impl LayoutChildFrame {
-    fn bind(&self, builder: &Rc<LayoutBuilderState>, pass: ChildPass) {
+    fn bind(&self, builder: &Rc<LayoutBuilderState>, parent: NodeId, pass: ChildPass) {
         self.error.borrow_mut().take();
         *self.builder.borrow_mut() = Some(Rc::clone(builder));
         self.pass.set(pass);
+        self.parent.set(Some(parent));
     }
 
     fn measures(&self) -> bool {
@@ -3682,7 +3693,13 @@ impl LayoutChildMeasureState {
         let placed = read_cell(&self.layout_state, |layout_state| {
             layout_state
                 .as_ref()
-                .map(|layout_state| layout_state.borrow_mut().place(position, &builder.context))
+                .map(|layout_state| {
+                    layout_state.borrow_mut().place(
+                        position,
+                        self.frame.parent.get(),
+                        &builder.context,
+                    );
+                })
                 .is_some()
         });
         if placed {
@@ -3692,7 +3709,7 @@ impl LayoutChildMeasureState {
             return;
         };
         let _ = applier.with_node::<SubcomposeLayoutNode, _>(self.node_id, |node| {
-            node.set_position(position, &builder.context);
+            node.set_position(position, self.frame.parent.get(), &builder.context);
         });
     }
 
