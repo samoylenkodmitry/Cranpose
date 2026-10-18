@@ -134,7 +134,13 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
                 .content
                 .map(|parent| layer.transform_to_parent.then(parent)),
         };
-        let content_clip = self.push_content_clip(layer, content, space.content_clip);
+        // A surface's content starts a space of its own, which the clips of
+        // the content above do not cut.
+        let above = match entered {
+            Some(_) => None,
+            None => space.content_clip,
+        };
+        let content_clip = self.push_content_clip(layer, content, above);
 
         let mut hit_clip_bounds = parent_hit_clip;
         let mut pushed_clip = false;
@@ -232,17 +238,22 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
     }
 
     /// The scene above `layer`'s children: the one `layer` shows, cut by the
-    /// clips above them, or the one above `layer`; the content fields stay
-    /// empty.
+    /// clips above them, or the one above `layer`, which also finds the
+    /// surfaces of a scene `layer` shows through one of its portals; the
+    /// content fields stay empty.
     fn children_scene(
         &self,
         layer: &LayerNode,
         (transform, hit_clip_bounds): (ProjectiveTransform, Option<Rect>),
         space: &ParentSpace,
     ) -> ParentSpace {
-        let shown = match layer.wraps {
-            Some(_) => None,
-            None => ScenePick::of(layer, transform).map(Rc::new),
+        let through_portal = space
+            .scene
+            .as_ref()
+            .is_some_and(|scene| scene.shows_through_portal(layer));
+        let shown = match (layer.wraps, through_portal) {
+            (None, false) => ScenePick::of(layer, transform).map(Rc::new),
+            _ => None,
         };
         let (scene, scene_clips) = match shown {
             Some(pick) => (Some(pick), (hit_clip_bounds, self.hit_clips.len())),

@@ -2,14 +2,14 @@
 //! rendered as an isolated layer's is, then all surfaces of the scene draw
 //! over what lies beneath the first of them, depth-tested against each
 //! other: first the surfaces that are neither glass nor glow, then the
-//! volumes, then glass over a copy of the page they left, then glow added
-//! onto it.
+//! volumes, then the spaces the scene's portals show inside their windows,
+//! then glass over a copy of the page they left, then glow added onto it.
 
 use std::{rc::Rc, sync::Arc};
 
 use cranpose_ui_graphics::{
     Rect,
-    space::{Mat4, Material, MeshSurface, Vec3},
+    space::{Mat4, Material, Vec3},
 };
 
 use super::{DeviceRect, Event, FrameExecutor, LayerPass, SurfaceRender, composites_nothing};
@@ -18,20 +18,29 @@ use crate::{
     frame_graph::{FrameCommandRecorder, UploadAllocatorId},
     offscreen::OffscreenTarget,
     scene_pass::{
-        SceneMeshBuffers, ScenePage, ScenePipeline, SurfaceShading, scene_scissor,
-        scene_surface_uniform_spec, scene_volume_uniform_spec, surface_page_bounds,
+        SceneMeshBuffers, ScenePage, ScenePipeline, SpaceShading, SurfaceShading, VolumeVariant,
+        scene_scissor, scene_surface_uniform_spec, scene_volume_uniform_spec, surface_page_bounds,
         surface_uniforms, view_depth, volume_uniforms,
     },
 };
+
+#[path = "frame_portal.rs"]
+mod portals;
+
+use self::portals::{PreparedWindow, encode_portals};
 
 /// The surfaces of a scene that draw together, in the order the phases
 /// draw.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ScenePhase {
-    /// The surfaces that are neither glass nor glow nor volumes.
+    /// The surfaces of the scene's own space that are neither glass nor
+    /// glow nor volumes.
     Opaque,
     /// Volumes, each drawn with its own shader.
     Volume,
+    /// The surfaces in the spaces the scene's portals show, which draw
+    /// inside their windows.
+    Portal,
     /// Glass, which reads a copy of the page the opaque surfaces and the
     /// volumes left.
     Glass,
@@ -40,12 +49,17 @@ enum ScenePhase {
 }
 
 impl ScenePhase {
-    fn of(material: &Material) -> Self {
-        match material {
-            Material::Glass(_) => Self::Glass,
-            Material::Glow => Self::Glow,
-            Material::Volume(_) => Self::Volume,
-            Material::Lit | Material::Unlit | Material::Emissive => Self::Opaque,
+    /// The phase `mesh` draws in; `None` for glass and glow in a portal's
+    /// space, which are left out.
+    fn of(mesh: &MeshChild) -> Option<Self> {
+        let in_portal = mesh.portal.is_some();
+        match &mesh.surface.material {
+            Material::Glass(_) | Material::Glow if in_portal => None,
+            _ if in_portal => Some(Self::Portal),
+            Material::Glass(_) => Some(Self::Glass),
+            Material::Glow => Some(Self::Glow),
+            Material::Volume(_) => Some(Self::Volume),
+            Material::Lit | Material::Unlit | Material::Emissive => Some(Self::Opaque),
         }
     }
 }
@@ -55,15 +69,19 @@ impl ScenePhase {
 enum StepPipeline {
     /// One of the scene pipelines.
     Fixed(ScenePipeline),
-    /// Each volume's own pipeline, which with `depth_only` draws only its
-    /// depth.
-    Volumes { depth_only: bool },
+    /// Each volume's own pipeline of the variant.
+    Volumes(VolumeVariant),
+    /// The portals' windows and the spaces they show.
+    Portals,
 }
 
-/// Whether `surface` casts a shadow: a volume's mesh only bounds what it
-/// shows, so casts none.
-fn casts_shadow(surface: &MeshSurface) -> bool {
-    surface.casts_shadow && !matches!(surface.material, Material::Volume(_))
+/// Whether `mesh` casts a shadow: a volume's mesh only bounds what it
+/// shows, so casts none, and a portal's space casts none into the scene.
+fn casts_shadow(mesh: &MeshChild) -> bool {
+    let surface = &mesh.surface;
+    mesh.portal.is_none()
+        && surface.casts_shadow
+        && !matches!(surface.material, Material::Volume(_))
 }
 
 /// A mesh surface whose content is rendered, waiting for its scene's pass.
@@ -165,8 +183,8 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             light.shadow_projection(
                 meshes
                     .iter()
-                    .map(|held| &held.mesh.surface)
-                    .filter(|surface| casts_shadow(surface)),
+                    .filter(|held| casts_shadow(&held.mesh))
+                    .map(|held| &held.mesh.surface),
             )
         });
         let backdrop = glass_backdrop(meshes, page);
@@ -188,23 +206,26 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             }
         }
         let shadows = light_projection.is_some() && self.draw_shadow_map(&draws, &device);
+        let windows = self.prepare_windows(&draws, (&scene, page, eye), &device);
         let opaque = StepPipeline::Fixed(if shadows {
             ScenePipeline::Shadowed
         } else {
             ScenePipeline::Plain
         });
-        let volumes = StepPipeline::Volumes { depth_only: false };
+        let volumes = StepPipeline::Volumes(VolumeVariant::Color);
+        let portals = (StepPipeline::Portals, ScenePhase::Portal);
         let glow = (StepPipeline::Fixed(ScenePipeline::Glow), ScenePhase::Glow);
-        let depth = self.renderer.depth_target(page.size);
+        let depth = self.renderer.scene_depth_target(page.size);
         let Some(backdrop) = backdrop else {
             self.encode_steps(
                 (&page_texture, &depth, shadows),
                 &[
                     (opaque, ScenePhase::Opaque),
                     (volumes, ScenePhase::Volume),
+                    portals,
                     glow,
                 ],
-                (&draws, None),
+                (&draws, &windows, None),
                 &device,
             );
             return Ok(());
@@ -213,8 +234,12 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         // of its own after the copy, over their depth drawn again.
         self.encode_steps(
             (&page_texture, &depth, shadows),
-            &[(opaque, ScenePhase::Opaque), (volumes, ScenePhase::Volume)],
-            (&draws, None),
+            &[
+                (opaque, ScenePhase::Opaque),
+                (volumes, ScenePhase::Volume),
+                portals,
+            ],
+            (&draws, &windows, None),
             &device,
         );
         if self
@@ -233,13 +258,13 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                     ScenePhase::Opaque,
                 ),
                 (
-                    StepPipeline::Volumes { depth_only: true },
+                    StepPipeline::Volumes(VolumeVariant::Depth),
                     ScenePhase::Volume,
                 ),
                 (StepPipeline::Fixed(ScenePipeline::Glass), ScenePhase::Glass),
                 glow,
             ],
-            (&draws, Some(&copy)),
+            (&draws, &windows, Some(&copy)),
             &device,
         );
         Ok(())
@@ -252,7 +277,11 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         &mut self,
         (page, depth, shadows): (&OffscreenTarget, &wgpu::TextureView, bool),
         steps: &[(StepPipeline, ScenePhase)],
-        (draws, backdrop): (&[PreparedSurface<'_>], Option<&Rc<OffscreenTarget>>),
+        (draws, windows, backdrop): (
+            &[PreparedSurface<'_>],
+            &[PreparedWindow],
+            Option<&Rc<OffscreenTarget>>,
+        ),
         device: &wgpu::Device,
     ) {
         let drawn = |phase: ScenePhase| draws.iter().filter(move |draw| draw.phase == phase);
@@ -275,9 +304,9 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 &effects.effect_linear_sampler,
             )
         });
-        let mut render_pass =
-            self.recorder
-                .begin_depth_pass("Scene Surfaces", &page.view, wgpu::LoadOp::Load, depth);
+        let mut render_pass = self
+            .recorder
+            .begin_scene_pass("Scene Surfaces", &page.view, depth);
         render_pass.set_bind_group(2, shadow_group, &[]);
         for &(kind, phase) in steps {
             // A pipeline no surface takes is not asked for, so never compiles.
@@ -290,16 +319,29 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                     Some(pipeline) => Some(pipeline),
                     None => continue,
                 },
-                StepPipeline::Volumes { .. } => None,
+                StepPipeline::Volumes(_) => None,
+                StepPipeline::Portals => {
+                    if let Some(first) = draws.first() {
+                        let texture = first.texture((device, effects));
+                        encode_portals(
+                            &mut render_pass,
+                            renderer,
+                            (draws, windows),
+                            None,
+                            (device, texture),
+                        );
+                    }
+                    continue;
+                }
             };
             if let Some(pipeline) = fixed {
                 render_pass.set_pipeline(pipeline);
             }
             for draw in phase_draws {
-                if let (StepPipeline::Volumes { depth_only }, Material::Volume(volume)) =
+                if let (StepPipeline::Volumes(variant), Material::Volume(volume)) =
                     (kind, &draw.held.mesh.surface.material)
                 {
-                    let Some(pipeline) = renderer.scene_volume_pipeline(&volume.shader, depth_only)
+                    let Some(pipeline) = renderer.scene_volume_pipeline(&volume.shader, variant)
                     else {
                         continue;
                     };
@@ -349,10 +391,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             });
         shadow_pass.set_pipeline(pipeline);
         shadow_pass.set_bind_group(2, renderer.scene_no_shadow(), &[]);
-        for draw in draws
-            .iter()
-            .filter(|draw| casts_shadow(&draw.held.mesh.surface))
-        {
+        for draw in draws.iter().filter(|draw| casts_shadow(&draw.held.mesh)) {
             draw.bind(&mut shadow_pass, (device, effects), None);
             shadow_pass.draw_indexed(0..draw.buffers.index_count, 0, 0..1);
         }
@@ -369,14 +408,25 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
     ) -> Option<PreparedSurface<'m>> {
         let scene = &held.mesh.scene;
         let surface = &held.mesh.surface;
+        let phase = ScenePhase::of(&held.mesh)?;
         let scissor = scene_scissor(scene, held.clip, page)?;
         let layout = self.renderer.scene_uniform_layout();
+        let space = match &held.mesh.portal {
+            Some(portal) => SpaceShading {
+                light: portal.light,
+                clip: portal.clip,
+            },
+            None => SpaceShading {
+                light: scene.light,
+                clip: [0.0; 4],
+            },
+        };
         let uniform = match &surface.material {
             Material::Volume(volume) => {
                 let uniforms = volume_uniforms(
                     scene,
                     (&surface.transform, &surface.mesh, volume, held.alpha),
-                    (page, eye),
+                    (page, eye, space),
                 )?;
                 let uniform = self.recorder.upload_uniform(
                     UploadAllocatorId::SceneVolume,
@@ -396,8 +446,9 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                         material,
                         alpha: held.alpha,
                         source_region: source_region(&held.surface, held.mesh.content),
-                        light_projection,
+                        light_projection: light_projection.filter(|_| held.mesh.portal.is_none()),
                         backdrop_region,
+                        space,
                     },
                     (page, eye),
                 )?;
@@ -417,7 +468,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         self.renderer.frame_stats.record_command_stats(staged);
         Some(PreparedSurface {
             held,
-            phase: ScenePhase::of(&surface.material),
+            phase,
             buffers,
             uniform,
             scissor,
@@ -434,6 +485,27 @@ struct PreparedSurface<'m> {
 }
 
 impl PreparedSurface<'_> {
+    /// Whether the surface lies in the space portal `index` shows.
+    fn shows_through(&self, index: usize) -> bool {
+        self.held
+            .mesh
+            .portal
+            .as_ref()
+            .is_some_and(|portal| portal.index == index)
+    }
+
+    /// The surface's texture, bound as the scene's shaders read it.
+    fn texture(
+        &self,
+        (device, effects): (&wgpu::Device, &crate::effect_renderer::EffectRenderer),
+    ) -> &wgpu::BindGroup {
+        self.held.surface.source.texture.get_or_create_bind_group(
+            device,
+            &effects.effect_texture_bind_group_layout,
+            &effects.effect_linear_sampler,
+        )
+    }
+
     /// Binds the surface's texture, uniforms and mesh, and the copy of the
     /// page glass reads: a surface that reads none binds its own texture in
     /// the copy's place.
@@ -443,11 +515,7 @@ impl PreparedSurface<'_> {
         (device, effects): (&wgpu::Device, &crate::effect_renderer::EffectRenderer),
         backdrop: Option<&wgpu::BindGroup>,
     ) {
-        let texture = self.held.surface.source.texture.get_or_create_bind_group(
-            device,
-            &effects.effect_texture_bind_group_layout,
-            &effects.effect_linear_sampler,
-        );
+        let texture = self.texture((device, effects));
         pass.set_bind_group(0, texture, &[]);
         pass.set_bind_group(3, backdrop.unwrap_or(texture), &[]);
         pass.set_bind_group(1, &self.uniform.bind_group, &[self.uniform.offset]);
@@ -463,7 +531,7 @@ impl PreparedSurface<'_> {
 fn glass_backdrop(meshes: &[PendingMesh], page: ScenePage) -> Option<DeviceRect> {
     let mut covered: Option<DeviceRect> = None;
     for held in meshes {
-        if !matches!(held.mesh.surface.material, Material::Glass(_)) {
+        if held.mesh.portal.is_some() || !matches!(held.mesh.surface.material, Material::Glass(_)) {
             continue;
         }
         let scene = &held.mesh.scene;

@@ -1717,6 +1717,19 @@ wall, nearer surfaces hide it, and it takes pointer input where it shows. Lay it
 out where it would lie flat on the wall: its window geometry, which
 accessibility and robot tests read, follows that flat place.
 
+A `scene3d` inside the content of such a surface is a portal: the rect its node
+takes on the surface is a doorway into its space, which lies behind the
+surface. Its camera stands in the doorway's middle, looking into the surface, a
+unit of its space to a content pixel (`Camera::doorway`), so the outer eye sees
+through the doorway what that camera sees, and from other places the space
+behind the doorway with depth. What lies behind the portal's camera is cut, and
+its own light lights its surfaces. Presses through the doorway reach the
+portal's surfaces. Portals nest `MAX_PORTAL_LEVEL` (3) deep; a deeper scene
+draws flat on its surface. Inside a portal's space, glass and glow are left out
+and nothing casts shadows. The desktop demo's Room tab shows this: the whole
+demo hangs on the wall to the screen's right, and its own Room tab opens a
+doorway there into a second room.
+
 The WGPU renderer draws scenes. The pixels renderer draws a flat mesh's
 surface in its place but has no depth buffer and no shadows, and draws a
 curved mesh's surface on the plane that touches the mesh at the content's

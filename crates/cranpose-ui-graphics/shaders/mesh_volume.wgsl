@@ -25,6 +25,9 @@ struct VolumeUniforms {
     low: vec4<f32>,
     high: vec4<f32>,
     params: array<vec4<f32>, 8>,
+    // For a volume in a portal's space, the window's plane in the mesh's
+    // coordinates: a point p lies beyond it where dot(xyz, p) + w >= 0.
+    clip: vec4<f32>,
 }
 
 // What a ray meets: its colour, premultiplied, nothing at an alpha of zero;
@@ -90,9 +93,9 @@ fn mesh_volume_vs(input: VolumeVertex) -> VolumeVaryings {
 }
 
 // Each pixel asks once, from the side of the mesh that faces away from the
-// eye, which an eye inside the mesh sees as well.
-@fragment
-fn mesh_volume_fs(input: VolumeVaryings) -> VolumeFragment {
+// eye, which an eye inside the mesh sees as well. A volume in a portal's
+// space shows only beyond its window's plane.
+fn volume_fragment(input: VolumeVaryings, clipped: bool) -> VolumeFragment {
     let eye = volume_mesh.eye.xyz;
     let offset = input.model_position - eye;
     let exit = length(offset);
@@ -102,12 +105,23 @@ fn mesh_volume_fs(input: VolumeVaryings) -> VolumeFragment {
     }
     let hit = volume(eye, direction, volume_entry(eye, direction), exit, volume_mesh.footprint.x);
     let clip = volume_mesh.clip_from_model * vec4<f32>(hit.at, 1.0);
+    let behind = dot(volume_mesh.clip.xyz, hit.at) + volume_mesh.clip.w < 0.0;
     // Nothing shows nearer than the camera's near plane.
-    if (hit.color.a < 1.0 / 255.0 || clip.z < 0.0) {
+    if (hit.color.a < 1.0 / 255.0 || clip.z < 0.0 || (clipped && behind)) {
         discard;
     }
     var output: VolumeFragment;
     output.color = hit.color * volume_mesh.footprint.y;
     output.depth = clip.z / clip.w;
     return output;
+}
+
+@fragment
+fn mesh_volume_fs(input: VolumeVaryings) -> VolumeFragment {
+    return volume_fragment(input, false);
+}
+
+@fragment
+fn mesh_volume_portal_fs(input: VolumeVaryings) -> VolumeFragment {
+    return volume_fragment(input, true);
 }

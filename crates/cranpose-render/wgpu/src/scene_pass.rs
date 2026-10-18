@@ -13,7 +13,7 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 use cranpose_ui_graphics::{
     Rect,
-    space::{Mat4, Material, Mesh, Vec3, Volume},
+    space::{Light, Mat4, Material, Mesh, Vec3, Volume},
 };
 
 use crate::{
@@ -32,6 +32,9 @@ use crate::{
 
 /// The meshes whose buffers stay on the GPU between frames.
 const KEPT_MESHES: usize = 64;
+/// The depth and stencil a scene's pass draws against: the stencil counts
+/// how many portal windows deep each pixel shows.
+pub(crate) const SCENE_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 /// The side of the shadow map, in texels.
 const SHADOW_MAP_SIZE: u32 = 1024;
 /// How far toward the light a point is taken, in the shadow map's depth,
@@ -64,6 +67,7 @@ pub(crate) struct SceneSurfaceUniforms {
     glass: [f32; 4],
     glass_tint: [f32; 4],
     backdrop_region: [f32; 4],
+    clip: [f32; 4],
 }
 
 /// The block `mesh_volume.wgsl` reads for one volume.
@@ -77,6 +81,7 @@ pub(crate) struct SceneVolumeUniforms {
     low: [f32; 4],
     high: [f32; 4],
     params: [[f32; 4]; Volume::PARAMS / 4],
+    clip: [f32; 4],
 }
 
 /// One mesh's vertices and indices on the GPU.
@@ -110,20 +115,18 @@ pub(crate) struct ScenePipelineParts {
     volume_layout: wgpu::PipelineLayout,
 }
 
-/// The pipelines of one volume shader, kept while anyone holds the shader:
-/// one draws its volumes, the other only their depth, for the pass glass
-/// draws in.
+/// The pipelines of one volume shader, kept while anyone holds the shader,
+/// one for each [`VolumeVariant`].
 pub(crate) struct VolumeShader {
     source: Weak<str>,
     module: LazyGpuResource<Option<wgpu::ShaderModule>>,
-    pipelines: [VolumePipeline; 2],
+    pipelines: [VolumePipeline; 3],
 }
 
 impl VolumeShader {
-    /// The pipeline that draws its volumes, or with `depth_only` only their
-    /// depth.
-    pub(crate) fn pipeline(&self, depth_only: bool) -> &VolumePipeline {
-        &self.pipelines[usize::from(depth_only)]
+    /// The pipeline of `variant`.
+    pub(crate) fn pipeline(&self, variant: VolumeVariant) -> &VolumePipeline {
+        &self.pipelines[variant as usize]
     }
 }
 
@@ -187,12 +190,11 @@ pub(crate) struct ShadowMap {
 /// the shadow map.
 pub(crate) struct ScenePass {
     parts: OnceCell<ScenePipelineParts>,
-    pub(crate) pipeline: FixedPipeline,
-    pub(crate) shadowed_pipeline: FixedPipeline,
-    pub(crate) shadow_pipeline: FixedPipeline,
-    pub(crate) glass_pipeline: FixedPipeline,
-    pub(crate) glow_pipeline: FixedPipeline,
-    pub(crate) depth_pipeline: FixedPipeline,
+    /// The scene pipelines, in the order of [`ScenePipeline::ALL`].
+    pipelines: [FixedPipeline; ScenePipeline::ALL.len()],
+    /// The unit square portals' windows are drawn on, made when a scene
+    /// first shows a portal.
+    window: OnceCell<Arc<Mesh>>,
     meshes: IdlePool<KeptMesh>,
     volumes: Vec<VolumeShader>,
     pub(crate) shadow_map: Option<ShadowMap>,
@@ -204,12 +206,8 @@ impl Default for ScenePass {
     fn default() -> Self {
         Self {
             parts: OnceCell::new(),
-            pipeline: FixedPipeline::new("scene/mesh-surface"),
-            shadowed_pipeline: FixedPipeline::new("scene/mesh-surface-shadowed"),
-            shadow_pipeline: FixedPipeline::new("scene/mesh-shadow"),
-            glass_pipeline: FixedPipeline::new("scene/mesh-glass"),
-            glow_pipeline: FixedPipeline::new("scene/mesh-glow"),
-            depth_pipeline: FixedPipeline::new("scene/mesh-depth"),
+            pipelines: ScenePipeline::ALL.map(|kind| FixedPipeline::new(kind.record_label())),
+            window: OnceCell::new(),
             meshes: IdlePool::default(),
             volumes: Vec::new(),
             shadow_map: None,
@@ -234,18 +232,176 @@ pub(crate) enum ScenePipeline {
     /// The depth of the surfaces that are not glass, again, in the pass that
     /// draws glass after the copy it reads.
     Depth,
+    /// A portal's window, marked in the stencil where it shows.
+    WindowMark,
+    /// The depth inside a portal's window, cleared to the far plane.
+    WindowClear,
+    /// A portal's window, its depth written again and its mark taken back.
+    WindowRestore,
+    /// Surfaces in a portal's space, inside its window and beyond its plane.
+    Portal,
 }
 
 impl ScenePipeline {
     /// Every scene pipeline.
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 10] = [
         Self::Plain,
         Self::Shadowed,
         Self::Shadow,
         Self::Glass,
         Self::Glow,
         Self::Depth,
+        Self::WindowMark,
+        Self::WindowClear,
+        Self::WindowRestore,
+        Self::Portal,
     ];
+
+    /// The label a launch records the pipeline under.
+    fn record_label(self) -> &'static str {
+        match self {
+            Self::Plain => "scene/mesh-surface",
+            Self::Shadowed => "scene/mesh-surface-shadowed",
+            Self::Shadow => "scene/mesh-shadow",
+            Self::Glass => "scene/mesh-glass",
+            Self::Glow => "scene/mesh-glow",
+            Self::Depth => "scene/mesh-depth",
+            Self::WindowMark => "scene/window-mark",
+            Self::WindowClear => "scene/window-clear",
+            Self::WindowRestore => "scene/window-restore",
+            Self::Portal => "scene/mesh-portal",
+        }
+    }
+
+    fn spec(self) -> PipelineSpec {
+        let (label, entry_points) = match self {
+            Self::Plain => (
+                "Scene Surface Pipeline",
+                ("mesh_surface_vs", "mesh_surface_fs"),
+            ),
+            Self::Shadowed => (
+                "Scene Shadowed Surface Pipeline",
+                ("mesh_surface_vs", "mesh_surface_shadowed_fs"),
+            ),
+            Self::Shadow => (
+                "Scene Shadow Pipeline",
+                ("mesh_shadow_vs", "mesh_shadow_fs"),
+            ),
+            Self::Glass => ("Scene Glass Pipeline", ("mesh_surface_vs", "mesh_glass_fs")),
+            Self::Glow => (
+                "Scene Glow Pipeline",
+                ("mesh_surface_vs", "mesh_surface_fs"),
+            ),
+            Self::Depth => ("Scene Depth Pipeline", ("mesh_surface_vs", "mesh_depth_fs")),
+            Self::WindowMark => (
+                "Scene Window Mark Pipeline",
+                ("mesh_surface_vs", "mesh_depth_fs"),
+            ),
+            Self::WindowClear => (
+                "Scene Window Clear Pipeline",
+                ("mesh_surface_vs", "mesh_window_far_fs"),
+            ),
+            Self::WindowRestore => (
+                "Scene Window Restore Pipeline",
+                ("mesh_surface_vs", "mesh_depth_fs"),
+            ),
+            Self::Portal => (
+                "Scene Portal Surface Pipeline",
+                ("mesh_surface_vs", "mesh_portal_surface_fs"),
+            ),
+        };
+        let (color, depth, stencil) = match self {
+            Self::Plain | Self::Shadowed | Self::Glass => {
+                (Some(Blend::Over), Depth::Tested, Stencil::Ignored)
+            }
+            Self::Shadow => (None, Depth::Tested, Stencil::Ignored),
+            Self::Glow => (Some(Blend::Add), Depth::Read, Stencil::Ignored),
+            Self::Depth => (None, Depth::Tested, Stencil::Ignored),
+            Self::WindowMark => (None, Depth::Read, Stencil::Mark),
+            Self::WindowClear | Self::WindowRestore => (
+                None,
+                Depth::Overwrite,
+                if self == Self::WindowClear {
+                    Stencil::Inside
+                } else {
+                    Stencil::Release
+                },
+            ),
+            Self::Portal => (Some(Blend::Over), Depth::Tested, Stencil::Inside),
+        };
+        PipelineSpec {
+            label,
+            entry_points,
+            color,
+            depth,
+            stencil,
+        }
+    }
+}
+
+/// How a scene pipeline draws: its entry points, how it blends colour, if it
+/// writes any, and how it uses depth and the stencil.
+struct PipelineSpec {
+    label: &'static str,
+    entry_points: (&'static str, &'static str),
+    color: Option<Blend>,
+    depth: Depth,
+    stencil: Stencil,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Blend {
+    /// Premultiplied colour over the page.
+    Over,
+    /// Premultiplied colour added onto the page, which keeps its alpha.
+    Add,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Depth {
+    /// Drawn where nearer than what the page holds, and written.
+    Tested,
+    /// Drawn where no farther than what the page holds, and not written.
+    Read,
+    /// Drawn everywhere the stencil lets it, and written.
+    Overwrite,
+}
+
+/// How a scene pipeline uses the stencil, which counts how many windows
+/// deep a pixel shows, against the reference a draw sets.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Stencil {
+    /// Not at all.
+    Ignored,
+    /// Where it equals the reference, it counts one deeper.
+    Mark,
+    /// Drawn only where it equals the reference.
+    Inside,
+    /// Where it equals the reference, it counts one shallower.
+    Release,
+}
+
+impl Stencil {
+    fn state(self) -> wgpu::StencilState {
+        let pass_op = match self {
+            Self::Ignored => return wgpu::StencilState::default(),
+            Self::Mark => wgpu::StencilOperation::IncrementClamp,
+            Self::Inside => wgpu::StencilOperation::Keep,
+            Self::Release => wgpu::StencilOperation::DecrementClamp,
+        };
+        let face = wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Equal,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op,
+        };
+        wgpu::StencilState {
+            front: face,
+            back: face,
+            read_mask: 0xff,
+            write_mask: if self == Self::Inside { 0 } else { 0xff },
+        }
+    }
 }
 
 /// Where a scene's 3D pass draws: a page's pixels per logical pixel, the
@@ -270,9 +426,30 @@ pub(crate) struct SurfaceShading<'m> {
     pub(crate) light_projection: Option<Mat4>,
     /// The page pixels the copy glass reads starts at, and its size.
     pub(crate) backdrop_region: [f32; 4],
+    /// The light and the window of the space the surface is in.
+    pub(crate) space: SpaceShading,
+}
+
+/// The light on a space's surfaces, in the scene, and for a portal's space
+/// the plane of its window, `(normal, offset)`, positive beyond it; all
+/// zero for the scene's own space.
+#[derive(Clone, Copy)]
+pub(crate) struct SpaceShading {
+    pub(crate) light: Option<Light>,
+    pub(crate) clip: [f32; 4],
 }
 
 impl ScenePass {
+    /// The fixed pipeline of `kind`.
+    pub(crate) fn pipeline(&self, kind: ScenePipeline) -> &FixedPipeline {
+        &self.pipelines[kind as usize]
+    }
+
+    /// The unit square portals' windows are drawn on.
+    pub(crate) fn window_mesh(&self) -> &Arc<Mesh> {
+        self.window.get_or_init(|| Arc::new(Mesh::plane()))
+    }
+
     /// The shader, layouts and samplers, made on the first call;
     /// `texture_layout` binds the surface's texture.
     pub(crate) fn parts(
@@ -364,6 +541,7 @@ impl ScenePass {
                 pipelines: [
                     VolumePipeline::new("scene/volume"),
                     VolumePipeline::new("scene/volume-depth"),
+                    VolumePipeline::new("scene/volume-portal"),
                 ],
             });
         }
@@ -592,11 +770,11 @@ pub(crate) fn scene_volume_uniform_spec() -> UploadAllocatorSpec {
     )
 }
 
-/// The scene's light for a shader: the direction it travels, of length one,
+/// A space's light for a shader: the direction it travels, of length one,
 /// through `into`, and its ambient share; an ambient share below zero for a
-/// scene without light.
-fn light_uniform(scene: &SceneDraw, into: impl Fn(Vec3) -> Vec3) -> [f32; 4] {
-    match scene.light {
+/// space without light.
+fn light_uniform(light: Option<Light>, into: impl Fn(Vec3) -> Vec3) -> [f32; 4] {
+    match light {
         Some(light) => {
             let direction = into(light.direction).normalized().unwrap_or(Vec3::ZERO);
             [
@@ -616,7 +794,7 @@ fn light_uniform(scene: &SceneDraw, into: impl Fn(Vec3) -> Vec3) -> [f32; 4] {
 pub(crate) fn volume_uniforms(
     scene: &SceneDraw,
     (transform, mesh, volume, alpha): (&Mat4, &Mesh, &Volume, f32),
-    (page, eye): (ScenePage, Vec3),
+    (page, eye, space): (ScenePage, Vec3, SpaceShading),
 ) -> Option<SceneVolumeUniforms> {
     let model_from_scene = transform.inverse()?;
     let point = |point: Vec3| [point.x, point.y, point.z, 1.0];
@@ -627,7 +805,7 @@ pub(crate) fn volume_uniforms(
             .transpose()
             .rows(),
         eye: point(model_from_scene.transform_point(eye)),
-        light: light_uniform(scene, |direction| {
+        light: light_uniform(space.light, |direction| {
             model_from_scene.transform_vector(direction)
         }),
         footprint: [
@@ -639,7 +817,15 @@ pub(crate) fn volume_uniforms(
         low: point(low),
         high: point(high),
         params: bytemuck::cast(volume.params),
+        clip: plane_in_model(space.clip, transform),
     })
+}
+
+/// The plane `plane` of the scene, in the coordinates of a mesh `transform`
+/// places in the scene.
+fn plane_in_model(plane: [f32; 4], transform: &Mat4) -> [f32; 4] {
+    let rows = transform.rows();
+    std::array::from_fn(|column| (0..4).map(|row| plane[row] * rows[row][column]).sum())
 }
 
 /// The uniforms of one surface of `scene` drawn on `page`, whose eye is at
@@ -651,7 +837,7 @@ pub(crate) fn surface_uniforms(
 ) -> Option<SceneSurfaceUniforms> {
     let inverse = surface.transform.inverse()?.rows();
     let normal_row = |row: usize| [inverse[0][row], inverse[1][row], inverse[2][row], 0.0];
-    let light = light_uniform(scene, |direction| direction);
+    let light = light_uniform(surface.space.light, |direction| direction);
     let columns = |matrix: Mat4| matrix.transpose().rows();
     let clip_from_scene = clip_from_scene(scene, page);
     let (mode, glass) = match surface.material {
@@ -691,6 +877,7 @@ pub(crate) fn surface_uniforms(
         ],
         glass_tint,
         backdrop_region: surface.backdrop_region,
+        clip: surface.space.clip,
     })
 }
 
@@ -837,67 +1024,57 @@ pub(crate) fn scene_pipeline_job(
     let shader = parts.shader.clone();
     move || {
         let module = shader.module();
-        let (vertex, fragment, label) = match kind {
-            ScenePipeline::Plain => (
-                "mesh_surface_vs",
-                "mesh_surface_fs",
-                "Scene Surface Pipeline",
-            ),
-            ScenePipeline::Shadowed => (
-                "mesh_surface_vs",
-                "mesh_surface_shadowed_fs",
-                "Scene Shadowed Surface Pipeline",
-            ),
-            ScenePipeline::Shadow => ("mesh_shadow_vs", "mesh_shadow_fs", "Scene Shadow Pipeline"),
-            ScenePipeline::Glass => ("mesh_surface_vs", "mesh_glass_fs", "Scene Glass Pipeline"),
-            ScenePipeline::Glow => ("mesh_surface_vs", "mesh_surface_fs", "Scene Glow Pipeline"),
-            ScenePipeline::Depth => ("mesh_surface_vs", "mesh_depth_fs", "Scene Depth Pipeline"),
-        };
-        let blend = match kind {
-            // Premultiplied colour added onto the page, which keeps its alpha.
-            ScenePipeline::Glow => wgpu::BlendState {
-                color: wgpu::BlendComponent {
-                    src_factor: wgpu::BlendFactor::One,
-                    dst_factor: wgpu::BlendFactor::One,
-                    operation: wgpu::BlendOperation::Add,
-                },
-                alpha: wgpu::BlendComponent {
-                    src_factor: wgpu::BlendFactor::Zero,
-                    dst_factor: wgpu::BlendFactor::One,
-                    operation: wgpu::BlendOperation::Add,
-                },
-            },
-            _ => wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
-        };
-        let color_target = color_target(format, blend, kind != ScenePipeline::Depth);
-        let (targets, bias): (&[Option<wgpu::ColorTargetState>], _) = match kind {
-            ScenePipeline::Shadow => (
-                &[],
-                wgpu::DepthBiasState {
-                    constant: 2,
-                    slope_scale: 2.0,
-                    clamp: 0.0,
-                },
-            ),
-            _ => (&color_target, wgpu::DepthBiasState::default()),
-        };
+        let spec = kind.spec();
+        let color_target = color_target(format, spec.color);
+        let shadow = kind == ScenePipeline::Shadow;
+        let targets: &[Option<wgpu::ColorTargetState>] = if shadow { &[] } else { &color_target };
         create_scene_pipeline(
             &device,
             cache.as_ref(),
-            label,
-            (shader.layout(), module, (vertex, fragment)),
-            (targets, kind != ScenePipeline::Glow, bias),
+            spec.label,
+            (shader.layout(), module, spec.entry_points),
+            (targets, depth_state(&spec, shadow)),
         )
     }
 }
 
-/// The build of one volume shader's pipeline for targets of `format`,
-/// which with `depth_only` draws only the volumes' depth; `None` when the
-/// shader does not build or nobody holds it any more.
+/// The depth and stencil a pipeline of `spec` uses: the shadow map's for
+/// the shadow pass, biased so a caster does not shadow itself, and the
+/// scene's otherwise.
+fn depth_state(spec: &PipelineSpec, shadow: bool) -> wgpu::DepthStencilState {
+    let (compare, write) = match spec.depth {
+        Depth::Tested => (wgpu::CompareFunction::Less, true),
+        Depth::Read => (wgpu::CompareFunction::LessEqual, false),
+        Depth::Overwrite => (wgpu::CompareFunction::Always, true),
+    };
+    wgpu::DepthStencilState {
+        format: if shadow {
+            DEPTH_FORMAT
+        } else {
+            SCENE_DEPTH_FORMAT
+        },
+        depth_write_enabled: Some(write),
+        depth_compare: Some(compare),
+        stencil: spec.stencil.state(),
+        bias: if shadow {
+            wgpu::DepthBiasState {
+                constant: 2,
+                slope_scale: 2.0,
+                clamp: 0.0,
+            }
+        } else {
+            wgpu::DepthBiasState::default()
+        },
+    }
+}
+
+/// The build of one volume shader's pipeline for targets of `format`, of
+/// `variant`; `None` when the shader does not build or nobody holds it any
+/// more.
 pub(crate) fn volume_pipeline_job(
     device: &Arc<wgpu::Device>,
     cache: Option<wgpu::PipelineCache>,
-    (format, backend, depth_only): (wgpu::TextureFormat, wgpu::Backend, bool),
+    (format, backend, variant): (wgpu::TextureFormat, wgpu::Backend, VolumeVariant),
     (parts, kept): (&ScenePipelineParts, &VolumeShader),
 ) -> impl FnOnce() -> Option<wgpu::RenderPipeline> + CompilerSend + 'static {
     let device = Arc::clone(device);
@@ -911,40 +1088,85 @@ pub(crate) fn volume_pipeline_job(
                 create_volume_shader_module(&device, &source, backend)
             })
             .as_ref()?;
-        let label = if depth_only {
-            "Scene Volume Depth Pipeline"
-        } else {
-            "Scene Volume Pipeline"
-        };
+        let spec = variant.spec();
         Some(create_scene_pipeline(
             &device,
             cache.as_ref(),
-            label,
-            (&layout, module, ("mesh_volume_vs", "mesh_volume_fs")),
-            (
-                &color_target(
-                    format,
-                    wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
-                    !depth_only,
-                ),
-                true,
-                wgpu::DepthBiasState::default(),
-            ),
+            spec.label,
+            (&layout, module, spec.entry_points),
+            (&color_target(format, spec.color), depth_state(&spec, false)),
         ))
     }
 }
 
-/// The colour target of a scene pipeline, which writes colour unless
-/// `writes` is false.
+/// Which of a volume shader's pipelines a draw takes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VolumeVariant {
+    /// Draws the volumes of the scene's own space.
+    Color,
+    /// Draws only their depth, for the pass glass draws in.
+    Depth,
+    /// Draws volumes in a portal's space, inside its window.
+    Portal,
+}
+
+impl VolumeVariant {
+    fn spec(self) -> PipelineSpec {
+        let (label, fragment, color, stencil) = match self {
+            Self::Color => (
+                "Scene Volume Pipeline",
+                "mesh_volume_fs",
+                Some(Blend::Over),
+                Stencil::Ignored,
+            ),
+            Self::Depth => (
+                "Scene Volume Depth Pipeline",
+                "mesh_volume_fs",
+                None,
+                Stencil::Ignored,
+            ),
+            Self::Portal => (
+                "Scene Portal Volume Pipeline",
+                "mesh_volume_portal_fs",
+                Some(Blend::Over),
+                Stencil::Inside,
+            ),
+        };
+        PipelineSpec {
+            label,
+            entry_points: ("mesh_volume_vs", fragment),
+            color,
+            depth: Depth::Tested,
+            stencil,
+        }
+    }
+}
+
+/// The colour target of a scene pipeline, which blends colour as `blend`
+/// does, and writes none without one.
 fn color_target(
     format: wgpu::TextureFormat,
-    blend: wgpu::BlendState,
-    writes: bool,
+    blend: Option<Blend>,
 ) -> [Option<wgpu::ColorTargetState>; 1] {
+    let added = wgpu::BlendState {
+        color: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        },
+        alpha: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Zero,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        },
+    };
     [Some(wgpu::ColorTargetState {
         format,
-        blend: Some(blend),
-        write_mask: if writes {
+        blend: Some(match blend {
+            Some(Blend::Add) => added,
+            _ => wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+        }),
+        write_mask: if blend.is_some() {
             wgpu::ColorWrites::ALL
         } else {
             wgpu::ColorWrites::empty()
@@ -952,8 +1174,8 @@ fn color_target(
     })]
 }
 
-/// A pipeline that draws the scene's meshes, depth tested, from `module`'s
-/// `entry_points` onto `targets`.
+/// A pipeline that draws the scene's meshes from `module`'s `entry_points`
+/// onto `targets`, against `depth_stencil`.
 fn create_scene_pipeline(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
@@ -963,11 +1185,7 @@ fn create_scene_pipeline(
         &wgpu::ShaderModule,
         (&'static str, &'static str),
     ),
-    (targets, depth_write, bias): (
-        &[Option<wgpu::ColorTargetState>],
-        bool,
-        wgpu::DepthBiasState,
-    ),
+    (targets, depth_stencil): (&[Option<wgpu::ColorTargetState>], wgpu::DepthStencilState),
 ) -> wgpu::RenderPipeline {
     create_render_pipeline_logged(
         device,
@@ -1005,13 +1223,7 @@ fn create_scene_pipeline(
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
             },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(depth_write),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: wgpu::StencilState::default(),
-                bias,
-            }),
+            depth_stencil: Some(depth_stencil),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
             cache: None,

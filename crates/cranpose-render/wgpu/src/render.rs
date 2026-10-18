@@ -1205,6 +1205,32 @@ pub(crate) fn create_fullscreen_strip_pipeline(
     )
 }
 
+/// A depth target of `format` and `size` a pass draws against and drops,
+/// which a tiled GPU keeps in its tile memory.
+fn transient_depth_target(
+    device: &wgpu::Device,
+    (label, format): (&'static str, wgpu::TextureFormat),
+    size: (u32, u32),
+) -> wgpu::TextureView {
+    device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TRANSIENT_ATTACHMENT,
+            view_formats: &[],
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default())
+}
+
 pub(crate) fn create_render_pipeline_logged<'a>(
     device: &wgpu::Device,
     cache: Option<&'a wgpu::PipelineCache>,
@@ -3420,6 +3446,8 @@ pub struct GpuRenderer {
     /// interiors down first, dropped once no frame has used them for
     /// [`crate::idle_pool::IDLE_FRAMES`].
     depth_targets: crate::idle_pool::IdlePool<((u32, u32), wgpu::TextureView)>,
+    /// The depth and stencil targets scenes' passes drew against, by size.
+    scene_depth_targets: crate::idle_pool::IdlePool<((u32, u32), wgpu::TextureView)>,
     /// The pipeline and mesh buffers of the 3D scenes; nothing in it is made
     /// until a scene draws.
     pub(crate) scene_pass: crate::scene_pass::ScenePass,
@@ -3813,6 +3841,7 @@ impl GpuRenderer {
             glyph_atlas_shader,
             rrect_shadow_shader,
             depth_targets: crate::idle_pool::IdlePool::default(),
+            scene_depth_targets: crate::idle_pool::IdlePool::default(),
             scene_pass: crate::scene_pass::ScenePass::default(),
             depth_gate,
             surface_atlas_sizes: crate::frame::SurfaceAtlasSizes::for_backend(adapter_backend),
@@ -4098,14 +4127,7 @@ impl GpuRenderer {
     }
 
     fn scene_pipeline_resource(&self, kind: crate::scene_pass::ScenePipeline) -> &FixedPipeline {
-        match kind {
-            crate::scene_pass::ScenePipeline::Plain => &self.scene_pass.pipeline,
-            crate::scene_pass::ScenePipeline::Shadowed => &self.scene_pass.shadowed_pipeline,
-            crate::scene_pass::ScenePipeline::Shadow => &self.scene_pass.shadow_pipeline,
-            crate::scene_pass::ScenePipeline::Glass => &self.scene_pass.glass_pipeline,
-            crate::scene_pass::ScenePipeline::Glow => &self.scene_pass.glow_pipeline,
-            crate::scene_pass::ScenePipeline::Depth => &self.scene_pass.depth_pipeline,
-        }
+        self.scene_pass.pipeline(kind)
     }
 
     /// A scene pipeline for a scene's pass, or `None` while it compiles:
@@ -4120,17 +4142,16 @@ impl GpuRenderer {
         })
     }
 
-    /// The pipeline of a volume shader a frame noted, or with `depth_only`
-    /// the one that draws only its volumes' depth; `None` while it compiles,
-    /// when the frame after it lands draws the volumes, or when the shader
-    /// does not build.
+    /// The pipeline of `variant` of a volume shader a frame noted; `None`
+    /// while it compiles, when the frame after it lands draws the volumes,
+    /// or when the shader does not build.
     pub(crate) fn scene_volume_pipeline(
         &self,
         shader: &Arc<str>,
-        depth_only: bool,
+        variant: crate::scene_pass::VolumeVariant,
     ) -> Option<&wgpu::RenderPipeline> {
         let kept = self.scene_pass.volume(shader)?;
-        let ready = kept.pipeline(depth_only).when_ready(
+        let ready = kept.pipeline(variant).when_ready(
             (
                 &self.recorder,
                 &self.pipeline_compiler,
@@ -4140,7 +4161,7 @@ impl GpuRenderer {
                 crate::scene_pass::volume_pipeline_job(
                     &self.device,
                     self.pipeline_cache.clone(),
-                    (self.composition_format, self.adapter_backend, depth_only),
+                    (self.composition_format, self.adapter_backend, variant),
                     (self.scene_pipeline_parts(), kept),
                 )
             },
@@ -4586,6 +4607,26 @@ impl GpuRenderer {
 
     /// The transient depth buffer for a target of `size`, created on first
     /// use; the few sizes recent frames used are kept.
+    /// The depth and stencil a scene's pass draws against at `size`, kept
+    /// for the next frames of the same size.
+    pub(crate) fn scene_depth_target(&mut self, size: (u32, u32)) -> wgpu::TextureView {
+        const KEPT_SCENE_TARGETS: usize = 2;
+        let view = match self.scene_depth_targets.take(|(kept, _)| *kept == size) {
+            Some((_, view)) => view,
+            None => transient_depth_target(
+                &self.device,
+                (
+                    "Scene depth and stencil",
+                    crate::scene_pass::SCENE_DEPTH_FORMAT,
+                ),
+                size,
+            ),
+        };
+        self.scene_depth_targets
+            .put((size, view.clone()), KEPT_SCENE_TARGETS, u64::MAX, |_| 0);
+        view
+    }
+
     pub(crate) fn depth_target(&mut self, size: (u32, u32)) -> wgpu::TextureView {
         const KEPT_DEPTH_TARGETS: usize = 4;
         let view = match self.depth_targets.take(|(kept, _)| *kept == size) {
@@ -4598,22 +4639,7 @@ impl GpuRenderer {
     }
 
     fn create_depth_target(&self, size: (u32, u32)) -> wgpu::TextureView {
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Opaque interior depth"),
-            size: wgpu::Extent3d {
-                width: size.0,
-                height: size.1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TRANSIENT_ATTACHMENT,
-            view_formats: &[],
-        });
-        texture.create_view(&wgpu::TextureViewDescriptor::default())
+        transient_depth_target(&self.device, ("Opaque interior depth", DEPTH_FORMAT), size)
     }
 
     /// The binding a draw of `image` sampled by `sampling` takes, uploading

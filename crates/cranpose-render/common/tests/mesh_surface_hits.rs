@@ -279,15 +279,21 @@ const INNER_AT: Vec3 = Vec3::new(450.0, 260.0, -200.0);
 /// at.
 type Presses = Rc<RefCell<Vec<(&'static str, Point)>>>;
 
-/// A wall facing the eye with an inner panel inside its content that stands
-/// out of it; each records the content points it is pressed at.
-fn wall_with_inner_panel() -> (Scene, Presses) {
+/// Makes a node a pressable mesh surface on the unit plane, from its name,
+/// its content's size and its transform.
+type Pressable = Rc<dyn Fn((&'static str, Size, Mat4)) -> Modifier>;
+
+/// A wall facing the eye, its content's middle at `FAR` and a content pixel
+/// to a scene pixel, whose content `inside` composes; each surface records
+/// the content points it is pressed at.
+fn wall_scene(inside: impl Fn(&Pressable) + 'static) -> (Scene, Presses) {
     let pressed: Presses = Rc::default();
     let sink = Rc::clone(&pressed);
+    let inside = Rc::new(inside);
     let mut composition = cranpose_ui::run_test_composition(move || {
         let plane = Arc::new(Mesh::plane());
         let sink = Rc::clone(&sink);
-        let surface = move |(name, size, transform): (&'static str, Size, Mat4)| {
+        let surface: Pressable = Rc::new(move |(name, size, transform)| {
             let plane = Arc::clone(&plane);
             let sink = Rc::clone(&sink);
             Modifier::empty()
@@ -299,7 +305,7 @@ fn wall_with_inner_panel() -> (Scene, Presses) {
                     casts_shadow: false,
                 })
                 .clickable(move |point| sink.borrow_mut().push((name, point)))
-        };
+        });
         let wall = surface((
             "wall",
             WALL,
@@ -307,12 +313,7 @@ fn wall_with_inner_panel() -> (Scene, Presses) {
                 .then(&Mat4::scaling(Vec3::new(WALL.width, WALL.height, 1.0)))
                 .then(&Mat4::translation(FAR)),
         ));
-        let inner = surface((
-            "inner",
-            INNER,
-            Mat4::scaling(Vec3::new(INNER.width, INNER.height, 1.0))
-                .then(&Mat4::translation(INNER_AT)),
-        ));
+        let inside = Rc::clone(&inside);
         Box(
             Modifier::empty().fill_max_size().scene3d(|| Scene3d {
                 camera: camera(),
@@ -320,17 +321,8 @@ fn wall_with_inner_panel() -> (Scene, Presses) {
             }),
             BoxSpec::default(),
             move || {
-                let inner = inner.clone();
-                Box(wall.clone(), BoxSpec::default(), move || {
-                    // Laid out where it would lie flat on the wall.
-                    Box(
-                        Modifier::empty()
-                            .absolute_offset(INNER_AT.x, INNER_AT.y)
-                            .then(inner.clone()),
-                        BoxSpec::default(),
-                        || {},
-                    );
-                });
+                let (inside, surface) = (Rc::clone(&inside), Rc::clone(&surface));
+                Box(wall.clone(), BoxSpec::default(), move || inside(&surface));
             },
         );
     });
@@ -343,6 +335,26 @@ fn wall_with_inner_panel() -> (Scene, Presses) {
     scene.rebuild_from_applier(&applier, root);
     applier.clear_runtime_handle();
     (scene, pressed)
+}
+
+/// A wall with an inner panel inside its content that stands out of it,
+/// laid out where it would lie flat on the wall.
+fn wall_with_inner_panel() -> (Scene, Presses) {
+    wall_scene(|surface| {
+        let inner = surface((
+            "inner",
+            INNER,
+            Mat4::scaling(Vec3::new(INNER.width, INNER.height, 1.0))
+                .then(&Mat4::translation(INNER_AT)),
+        ));
+        Box(
+            Modifier::empty()
+                .absolute_offset(INNER_AT.x, INNER_AT.y)
+                .then(inner),
+            BoxSpec::default(),
+            || {},
+        );
+    })
 }
 
 /// Where the eye sees the wall's content point `(x, y)` lifted `z` toward
@@ -401,5 +413,86 @@ fn the_wall_takes_a_press_where_the_inner_surface_would_lie_flat() {
     assert!(
         (local.x - on_wall.x).abs() < 0.5 && (local.y - on_wall.y).abs() < 0.5,
         "the press lands on the wall's content at {local:?}, not {on_wall:?}"
+    );
+}
+
+/// The window, a rect of the wall's content, its middle at the wall's.
+const WINDOW: (f32, f32, f32, f32) = (200.0, 100.0, 200.0, 200.0);
+/// The focal length of the scene behind the window, whose camera stands
+/// that far in front of its origin, in the doorway, and how far behind the
+/// origin its panel stands.
+const NESTED: (f32, f32) = (200.0, 100.0);
+
+/// A wall with a window into a nested scene, which holds a pressable panel
+/// behind the window.
+fn wall_with_window() -> (Scene, Presses) {
+    wall_scene(|surface| {
+        let panel = surface((
+            "nested",
+            INNER,
+            Mat4::scaling(Vec3::new(INNER.width, INNER.height, 1.0)).then(&Mat4::translation(
+                Vec3::new(-INNER.width * 0.5, -INNER.height * 0.5, NESTED.1),
+            )),
+        ));
+        let (x, y, width, height) = WINDOW;
+        Box(
+            Modifier::empty()
+                .absolute_offset(x, y)
+                .size(Size { width, height })
+                .scene3d(|| Scene3d {
+                    camera: Camera::look_at(
+                        Vec3::new(0.0, 0.0, -NESTED.0),
+                        Vec3::ZERO,
+                        Vec3::new(0.0, 1.0, 0.0),
+                        NESTED.0,
+                    ),
+                    light: None,
+                }),
+            BoxSpec::default(),
+            move || {
+                Box(panel.clone(), BoxSpec::default(), || {});
+            },
+        );
+    })
+}
+
+#[test]
+fn a_press_through_a_window_reaches_the_space_behind_it() {
+    let (scene, pressed) = wall_with_window();
+    // The nested camera stands on the wall, so the panel, its middle on the
+    // camera's axis, stands NESTED.0 + NESTED.1 behind the wall's middle.
+    let content = Point::new(30.0, 20.0);
+    press_at(
+        &scene,
+        wall_content_shown(
+            WALL.width * 0.5 - INNER.width * 0.5 + content.x,
+            WALL.height * 0.5 - INNER.height * 0.5 + content.y,
+            NESTED.0 + NESTED.1,
+        ),
+    );
+    let pressed = pressed.borrow();
+    let Some(&(name, local)) = pressed.first() else {
+        panic!("the press reached nothing");
+    };
+    assert_eq!(name, "nested");
+    assert!(
+        (local.x - content.x).abs() < 0.5 && (local.y - content.y).abs() < 0.5,
+        "the press lands on the panel behind the window at {local:?}, not {content:?}"
+    );
+}
+
+#[test]
+fn a_press_through_a_window_where_its_space_shows_nothing_reaches_the_wall() {
+    let (scene, pressed) = wall_with_window();
+    let corner = Point::new(WINDOW.0 + 10.0, WINDOW.1 + 10.0);
+    press_at(&scene, wall_content_shown(corner.x, corner.y, 0.0));
+    let pressed = pressed.borrow();
+    let Some(&(name, local)) = pressed.first() else {
+        panic!("the press reached nothing");
+    };
+    assert_eq!(name, "wall");
+    assert!(
+        (local.x - corner.x).abs() < 0.5 && (local.y - corner.y).abs() < 0.5,
+        "the press lands on the wall's content at {local:?}, not {corner:?}"
     );
 }

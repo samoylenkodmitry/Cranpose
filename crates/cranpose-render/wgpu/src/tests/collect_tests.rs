@@ -224,7 +224,7 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
                         wants_pixel_sensitive: false,
                         update: 0,
                         scene: None,
-                        joins: false,
+                        joins: None,
                     },
                     None,
                 ),
@@ -402,7 +402,7 @@ fn a_rounded_layer_its_parent_clip_holds_draws_in_place_whatever_the_float_sums(
         wants_pixel_sensitive: false,
         update: 0,
         scene: None,
-        joins: false,
+        joins: None,
     };
     assert!(matches!(
         placement_in(&bar, &panel),

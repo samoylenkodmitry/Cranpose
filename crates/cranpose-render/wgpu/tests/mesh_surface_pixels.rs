@@ -551,6 +551,17 @@ fn a_volume_whose_shader_does_not_build_is_left_out() {
     );
 }
 
+/// A blue wall far away, 1024 by 512 scene pixels at a depth of 600 with
+/// content of 256 by 128, whose content holds what the node holds.
+fn blue_wall(plane: &Arc<Mesh>) -> Modifier {
+    surface(
+        plane,
+        panel((1024.0, 512.0), Vec3::new(0.0, 0.0, 600.0)),
+        (Material::Unlit, false),
+    )
+    .background(Color(0.0, 0.0, 1.0, 1.0))
+}
+
 /// A blue wall far away, a green ball in front of it, and a red panel inside
 /// the wall's content that stands out of the wall in front of the ball. The
 /// wall's 256 content pixels span 1024 scene pixels, so a content pixel of
@@ -571,27 +582,18 @@ fn JoinedScene() {
                 .then(&Mat4::translation(Vec3::new(96.0, 48.0, -100.0))),
             (Material::Unlit, false),
         );
-        Box(
-            surface(
-                &plane,
-                panel((1024.0, 512.0), Vec3::new(0.0, 0.0, 600.0)),
-                (Material::Unlit, false),
-            )
-            .background(Color(0.0, 0.0, 1.0, 1.0)),
-            BoxSpec::default(),
-            move || {
-                // Laid out where it would lie flat on the wall, behind the
-                // ball.
-                Box(
-                    Modifier::empty()
-                        .absolute_offset(96.0, 48.0)
-                        .then(inner.clone())
-                        .background(Color(1.0, 0.0, 0.0, 1.0)),
-                    BoxSpec::default(),
-                    || {},
-                );
-            },
-        );
+        Box(blue_wall(&plane), BoxSpec::default(), move || {
+            // Laid out where it would lie flat on the wall, behind the
+            // ball.
+            Box(
+                Modifier::empty()
+                    .absolute_offset(96.0, 48.0)
+                    .then(inner.clone())
+                    .background(Color(1.0, 0.0, 0.0, 1.0)),
+                BoxSpec::default(),
+                || {},
+            );
+        });
     });
 }
 
@@ -616,5 +618,93 @@ fn a_surface_inside_another_stands_out_of_it_in_the_scene() {
     assert!(
         wall[2] > 200 && wall[0] < 40,
         "the wall shows beside the ball: {wall:?}"
+    );
+}
+
+/// The nested scene's focal length. Its camera stands this far in front of
+/// the nested space's origin, in the doorway on the wall.
+const NESTED_FOCAL: f32 = 200.0;
+
+/// A ball of `radius` at `center` in the nested scene's space.
+fn nested_ball(center: Vec3, radius: f32) -> Mat4 {
+    Mat4::scaling(Vec3::new(radius, radius, radius)).then(&Mat4::translation(center))
+}
+
+/// A blue wall far away with a doorway in the middle of its content into a
+/// nested scene, which holds a red ball the doorway looks at, a green one
+/// behind the nested camera, and a yellow one behind the wall below the
+/// doorway. The wall's content pixel is four scene pixels, so a unit of the
+/// nested space is four, and the nested point p lies at the scene point
+/// (4 p.x, 4 p.y, 1400 + 4 p.z).
+#[composable]
+fn PortalScene() {
+    let (plane, sphere) = meshes();
+    Scene(0.0, move || {
+        let sphere = Arc::clone(&sphere);
+        Box(blue_wall(&plane), BoxSpec::default(), move || {
+            let sphere = Arc::clone(&sphere);
+            Box(
+                Modifier::empty()
+                    .absolute_offset(64.0, 32.0)
+                    .size(Size {
+                        width: 128.0,
+                        height: 64.0,
+                    })
+                    .scene3d(|| Scene3d {
+                        camera: Camera::look_at(
+                            Vec3::new(0.0, 0.0, -NESTED_FOCAL),
+                            Vec3::ZERO,
+                            Vec3::new(0.0, 1.0, 0.0),
+                            NESTED_FOCAL,
+                        ),
+                        light: None,
+                    }),
+                BoxSpec::default(),
+                move || {
+                    for (center, radius, color) in [
+                        (Vec3::new(0.0, 0.0, 100.0), 20.0, Color(1.0, 0.0, 0.0, 1.0)),
+                        (Vec3::new(0.0, 0.0, -300.0), 15.0, Color(0.0, 1.0, 0.0, 1.0)),
+                        (
+                            Vec3::new(0.0, 80.0, -150.0),
+                            15.0,
+                            Color(1.0, 1.0, 0.0, 1.0),
+                        ),
+                    ] {
+                        Surface(
+                            Arc::clone(&sphere),
+                            nested_ball(center, radius),
+                            (Material::Unlit, false, color),
+                        );
+                    }
+                },
+            );
+        });
+    });
+}
+
+#[test]
+fn a_scene_inside_a_wall_shows_its_space_behind_the_wall_through_its_doorway() {
+    let Some(frame) = capture(PortalScene) else {
+        return;
+    };
+    // The red ball's front lies at 1400 + 4 * 80. The green ball lies at
+    // 200, in front of the wall, behind the nested camera.
+    let through = pixel_at(&frame, Vec3::new(0.0, 0.0, 1720.0));
+    assert!(
+        through[0] > 200 && through[1] < 40 && through[2] < 40,
+        "the red ball shows through the doorway, and the green one behind the nested camera is \
+         cut: {through:?}"
+    );
+    let wall = pixel_at(&frame, Vec3::new(-400.0, 0.0, 600.0));
+    assert!(
+        wall[2] > 200 && wall[0] < 40,
+        "the wall shows beside the window: {wall:?}"
+    );
+    // The yellow ball lies behind the wall below its bottom edge, where the
+    // eye sees past the wall but not through the doorway.
+    let below = pixel_at(&frame, Vec3::new(0.0, 320.0, 800.0));
+    assert!(
+        below[0] < 40 && below[1] < 40,
+        "the space behind the doorway shows only through it: {below:?}"
     );
 }

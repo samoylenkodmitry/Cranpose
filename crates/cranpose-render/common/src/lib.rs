@@ -50,6 +50,7 @@ pub mod render_contract;
 pub mod scene_builder;
 /// Which mesh surface of a 3D scene a window point shows.
 pub mod scene_pick;
+pub mod scene_space;
 pub mod shape_sdf;
 /// CPU text rasterization: fonts, glyph layout and glyph masks.
 pub mod software_text_raster;

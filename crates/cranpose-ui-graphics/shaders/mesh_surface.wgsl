@@ -1,7 +1,9 @@
 // Draws a composable's surface on a mesh in a 3D scene, with a depth test
 // against the scene's other surfaces, and the depth of its shadow casters
 // as the scene's light sees them. Glass reads the scene behind it from a
-// copy the pass takes after the surfaces that are not glass.
+// copy the pass takes after the surfaces that are not glass. A portal's
+// space draws inside its window, which the stencil marks, beyond the
+// window's plane.
 
 struct MeshUniforms {
     clip_from_model: mat4x4<f32>,
@@ -40,6 +42,9 @@ struct MeshUniforms {
     glass_tint: vec4<f32>,
     // xy = the page pixel the backdrop copy starts at; zw = its size.
     backdrop_region: vec4<f32>,
+    // For a surface in a portal's space, the window's plane: a scene point
+    // p lies beyond it where dot(xyz, p) + w >= 0.
+    clip: vec4<f32>,
 }
 
 struct VertexInput {
@@ -129,6 +134,33 @@ fn mesh_surface_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
     return shaded(color, shade(input, 1.0));
+}
+
+// A surface in a portal's space, which shows only beyond its window's
+// plane.
+@fragment
+fn mesh_portal_surface_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    if (dot(mesh.clip.xyz, input.scene_position) + mesh.clip.w < 0.0) {
+        discard;
+    }
+    let color = content_color(input.uv);
+    if (color.a < 1.0 / 255.0) {
+        discard;
+    }
+    return shaded(color, shade(input, 1.0));
+}
+
+struct FarDepth {
+    @builtin(frag_depth) depth: f32,
+}
+
+// A portal's window at the far plane, so its space draws over the surface
+// the window lies on.
+@fragment
+fn mesh_window_far_fs() -> FarDepth {
+    var output: FarDepth;
+    output.depth = 1.0;
+    return output;
 }
 
 // Sixteen points spread over the unit disc, which the shadow taps take.

@@ -4,7 +4,7 @@ use super::{
     math::{Mat4, Vec3},
     mesh::{Mesh, MeshHit},
 };
-use crate::{Color, Point, Size, transform::ProjectiveTransform};
+use crate::{Color, Point, Rect, Size, transform::ProjectiveTransform};
 
 /// How much nearer than its focal length a camera sees: points closer to the
 /// eye than `focal_length * NEAR_PLANE` are cut away. It is the w at which
@@ -74,6 +74,20 @@ impl Camera {
                 size.height * 0.5 + seen.y * scale,
             )
         })
+    }
+
+    /// The map from the scene this camera sees into the content space of a
+    /// surface (see [`MeshSurface::content_to_scene`]) on which `window`, a
+    /// rect of its content, is a doorway into the scene: the camera stands
+    /// in the doorway's middle on the content's plane, looking into the
+    /// surface, with its x and y along the content's, a scene unit to a
+    /// content pixel. What the camera sees lies behind the surface.
+    pub fn doorway(&self, window: Rect) -> Mat4 {
+        self.view.then(&Mat4::translation(Vec3::new(
+            window.x + window.width * 0.5,
+            window.y + window.height * 0.5,
+            0.0,
+        )))
     }
 
     /// The ray from the eye through `point` of bounds of `size`, in scene
@@ -200,13 +214,25 @@ impl Light {
 
 /// A scene's camera and light, which a `scene3d` modifier shows its
 /// children's mesh surfaces through.
+///
+/// A scene inside the content of a mesh surface of another scene is a
+/// portal: the rect its node takes on the surface's content is a doorway
+/// into its space, which lies behind the surface, and the outer scene shows
+/// that space through the doorway from wherever the outer scene's eye
+/// stands. Its camera stands in the doorway (see [`Camera::doorway`]); what
+/// lies behind the camera is cut. Portals nest up to [`MAX_PORTAL_LEVEL`]
+/// deep; a scene deeper than that draws flat on its surface.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Scene3d {
-    /// The camera the scene is seen through.
+    /// The camera the scene is seen through; for a portal, the one that
+    /// stands in its doorway.
     pub camera: Camera,
     /// The light on the scene's lit surfaces, or `None` for none.
     pub light: Option<Light>,
 }
+
+/// How many portals deep a scene shows the spaces inside its surfaces.
+pub const MAX_PORTAL_LEVEL: u8 = 3;
 
 /// A composable's content drawn on a mesh placed in a scene.
 #[derive(Clone, Debug, PartialEq)]

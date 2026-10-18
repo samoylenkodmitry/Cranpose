@@ -1027,6 +1027,39 @@ pub(crate) trait FrameCommandRecorder {
             ..Default::default()
         })
     }
+    /// A pass onto `view`, which keeps what it holds, against the scene's
+    /// depth and stencil `depth`, both cleared and dropped after.
+    fn begin_scene_pass<'p>(
+        &'p mut self,
+        label: &'static str,
+        view: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+    ) -> wgpu::RenderPass<'p> {
+        self.begin_timed_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(label),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Discard,
+                }),
+                stencil_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(0),
+                    store: wgpu::StoreOp::Discard,
+                }),
+            }),
+            ..Default::default()
+        })
+    }
     fn upload_uniform(
         &mut self,
         id: UploadAllocatorId,
