@@ -72,8 +72,10 @@ struct ShadowOutput {
 @group(2) @binding(0) var shadow_map: texture_depth_2d;
 @group(2) @binding(1) var shadow_sampler: sampler_comparison;
 // The shadow map again, read as the depth of the nearest texel: GLSL
-// samples a texture with one sampler.
-@group(2) @binding(2) var shadow_depth: texture_depth_2d;
+// samples a texture with one sampler, and reads a depth texture's depth
+// only through a plain float sampler, which `texture_depth_2d` with a
+// plain sampler is not.
+@group(2) @binding(2) var shadow_depth: texture_2d<f32>;
 @group(2) @binding(3) var shadow_depth_sampler: sampler;
 // The page behind the scene's glass, as the surfaces that are not glass
 // left it.
@@ -201,7 +203,7 @@ fn shadow_visibility(position: vec3<f32>) -> f32 {
     var blockers = 0.0;
     var blocker_depth = 0.0;
     for (var index = 0u; index < 16u; index++) {
-        let found = textureSampleLevel(shadow_depth, shadow_depth_sampler, uv + disc_point(index) * search, 0);
+        let found = textureSampleLevel(shadow_depth, shadow_depth_sampler, uv + disc_point(index) * search, 0.0).r;
         if (found < depth) {
             blockers += 1.0;
             blocker_depth += found;

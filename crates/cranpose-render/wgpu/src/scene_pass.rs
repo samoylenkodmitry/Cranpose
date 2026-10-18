@@ -590,14 +590,14 @@ fn pipeline_parts(
     let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Scene Shadow Map Bind Group Layout"),
         entries: &[
-            shadow_map_entry(0),
+            shadow_map_entry(0, wgpu::TextureSampleType::Depth),
             wgpu::BindGroupLayoutEntry {
                 binding: 1,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
                 count: None,
             },
-            shadow_map_entry(2),
+            shadow_map_entry(2, wgpu::TextureSampleType::Float { filterable: false }),
             wgpu::BindGroupLayoutEntry {
                 binding: 3,
                 visibility: wgpu::ShaderStages::FRAGMENT,
@@ -652,13 +652,17 @@ fn pipeline_parts(
     }
 }
 
-/// A shadow map binding of the scene's shadow bind group.
-fn shadow_map_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+/// A shadow map binding of the scene's shadow bind group, which the shader
+/// reads as `sample_type`.
+fn shadow_map_entry(
+    binding: u32,
+    sample_type: wgpu::TextureSampleType,
+) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::FRAGMENT,
         ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Depth,
+            sample_type,
             view_dimension: wgpu::TextureViewDimension::D2,
             multisampled: false,
         },
