@@ -5,11 +5,13 @@ use crate::{
 };
 
 #[doc(hidden)]
+#[inline]
 pub fn layer_scale_x(layer: &GraphicsLayer) -> f32 {
     layer.scale * layer.scale_x
 }
 
 #[doc(hidden)]
+#[inline]
 pub fn layer_scale_y(layer: &GraphicsLayer) -> f32 {
     layer.scale * layer.scale_y
 }
@@ -71,10 +73,12 @@ fn layer_rotation_pivot(layer_bounds: Rect, layer: &GraphicsLayer) -> (f32, f32)
 }
 
 #[doc(hidden)]
+#[inline]
 pub fn layer_scales_or_rotates(layer: &GraphicsLayer) -> bool {
     layer_scale_x(layer) != 1.0 || layer_scale_y(layer) != 1.0 || layer_has_rotation(layer)
 }
 
+#[inline]
 fn layer_has_rotation(layer: &GraphicsLayer) -> bool {
     layer.rotation_x.abs() > f32::EPSILON
         || layer.rotation_y.abs() > f32::EPSILON

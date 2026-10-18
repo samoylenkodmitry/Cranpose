@@ -4388,11 +4388,29 @@ fn byte_offset_for_char_index(text: &str, char_index: usize) -> usize {
         .unwrap_or(text.len())
 }
 
+/// A face [`measure_text_impl`] measures lines in.
+trait LineAdvance: Font {
+    /// The advance of `text` as one line at `font_size` pixels.
+    fn line_width(&self, text: &str, font_size: f32) -> f32;
+}
+
+impl LineAdvance for FontArc {
+    fn line_width(&self, text: &str, font_size: f32) -> f32 {
+        line_advance_width(self, text, font_size)
+    }
+}
+
+impl LineAdvance for KernedFont {
+    fn line_width(&self, text: &str, font_size: f32) -> f32 {
+        self.line_advance_width(text, font_size)
+    }
+}
+
 fn measure_text_impl(
     text: &str,
     style: &TextStyle,
     font_size: f32,
-    font_ref: RasterFontRef<'_, impl Font>,
+    font_ref: RasterFontRef<'_, impl LineAdvance>,
 ) -> TextMetrics {
     let font = font_ref.font;
     let glyph_font_size = font_size * font_ref.ab_glyph_scale_factor;
@@ -4411,7 +4429,7 @@ fn measure_text_impl(
     let mut line_count = 0usize;
     for line in text.split('\n') {
         line_count += 1;
-        let line_width = line_advance_width(font, line, glyph_font_size);
+        let line_width = font.line_width(line, glyph_font_size);
         let char_spacing = run_tracking(line.chars().count(), letter_spacing);
         let line_width = (weight_synthesis.apply_width(line_width) + char_spacing).max(0.0);
         let line_width = if line.is_empty() {

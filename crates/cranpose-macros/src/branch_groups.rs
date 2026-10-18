@@ -881,16 +881,24 @@ impl BranchGroupInjector<'_> {
     }
 
     fn wrap_closure(&mut self, closure: &mut syn::ExprClosure) {
+        // A body that calls nothing composes nothing, so it keeps no group: a
+        // key or a size closure then runs without a composer lookup. Its hot
+        // path is still allocated, so a call added later renames no sibling.
+        let calls = expr_calls(&closure.body);
         let previous = std::mem::replace(&mut self.in_content_closure, true);
         let hot = self.hot.open("closure", "");
-        self.visit_expr_mut(&mut closure.body);
+        if calls {
+            self.visit_expr_mut(&mut closure.body);
+        }
         self.hot.close(&hot);
-        let guard = self.branch_guard_stmt(closure.span(), hot);
-        let original = closure.body.clone();
-        closure.body = syn::parse_quote! {{
-            #guard
-            #original
-        }};
+        if calls {
+            let guard = self.branch_guard_stmt(closure.span(), hot);
+            let original = closure.body.clone();
+            closure.body = syn::parse_quote! {{
+                #guard
+                #original
+            }};
+        }
         self.in_content_closure = previous;
     }
 }
@@ -1134,6 +1142,34 @@ fn block_contains_await(block: &Block) -> bool {
 
 fn expr_contains_await(expr: &Expr) -> bool {
     let mut scan = AwaitScan { found: false };
+    scan.visit_expr(expr);
+    scan.found
+}
+
+/// Whether `expr` calls a function, a method or a macro anywhere in it,
+/// nested closures included.
+fn expr_calls(expr: &Expr) -> bool {
+    struct CallScan {
+        found: bool,
+    }
+    impl<'ast> Visit<'ast> for CallScan {
+        fn visit_expr(&mut self, expr: &'ast Expr) {
+            if self.found {
+                return;
+            }
+            match expr {
+                Expr::Call(_) | Expr::MethodCall(_) => self.found = true,
+                _ => syn::visit::visit_expr(self, expr),
+            }
+        }
+
+        fn visit_macro(&mut self, _mac: &'ast syn::Macro) {
+            self.found = true;
+        }
+
+        fn visit_item(&mut self, _item: &'ast syn::Item) {}
+    }
+    let mut scan = CallScan { found: false };
     scan.visit_expr(expr);
     scan.found
 }

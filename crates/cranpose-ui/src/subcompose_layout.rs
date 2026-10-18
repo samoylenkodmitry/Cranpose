@@ -1592,26 +1592,29 @@ impl SubcomposeLayoutNodeInner {
     where
         I: IntoIterator<Item = NodeId>,
     {
-        let mut changed = false;
-        let mut count = 0usize;
-        for child in children {
-            match self.last_placements.get(count) {
-                Some(&placed) if placed == child => {}
-                Some(_) => {
-                    Rc::make_mut(&mut self.last_placements)[count] = child;
-                    changed = true;
-                }
-                None => {
-                    Rc::make_mut(&mut self.last_placements).push(child);
-                    changed = true;
-                }
+        let mut children = children.into_iter();
+        let mut kept = 0usize;
+        let mut first_change = None;
+        for child in children.by_ref() {
+            if self.last_placements.get(kept) != Some(&child) {
+                first_change = Some(child);
+                break;
             }
-            count += 1;
+            kept += 1;
         }
-        if self.last_placements.len() > count {
-            Rc::make_mut(&mut self.last_placements).truncate(count);
-            changed = true;
-        }
+        let changed = if let Some(child) = first_change {
+            // From the first child that differs on, the list is written anew.
+            let placements = Rc::make_mut(&mut self.last_placements);
+            placements.truncate(kept);
+            placements.push(child);
+            placements.extend(children);
+            true
+        } else if self.last_placements.len() > kept {
+            Rc::make_mut(&mut self.last_placements).truncate(kept);
+            true
+        } else {
+            false
+        };
         if changed && let Some(id) = self.node_id {
             crate::render_state::record_geometry_scene_node(id);
         }
