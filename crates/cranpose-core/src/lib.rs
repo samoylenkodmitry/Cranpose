@@ -4698,22 +4698,32 @@ impl MemoryApplier {
 
     /// Borrows a live node without requiring exclusive access to the tree.
     /// Returns [`NodeError::Missing`] when `id` does not name a live node.
+    #[inline]
     pub fn get_ref(&self, id: NodeId) -> Result<&dyn Node, NodeError> {
-        if let Some(physical_id) = self.resolve_node_index(id) {
-            let slot = self
+        match self.resolve_node_index(id) {
+            Some(physical_id) => self
                 .state
                 .nodes
                 .get(physical_id)
-                .ok_or(NodeError::Missing { id })?
-                .as_deref()
-                .ok_or(NodeError::Missing { id })?;
-            return Ok(slot);
+                .and_then(Option::as_deref)
+                .ok_or(NodeError::Missing { id }),
+            None => self.high_id_node(id),
         }
+    }
 
+    fn high_id_node(&self, id: NodeId) -> Result<&dyn Node, NodeError> {
         self.state
             .high_id_nodes
             .get(&id)
             .map(AsRef::as_ref)
+            .ok_or(NodeError::Missing { id })
+    }
+
+    fn high_id_node_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError> {
+        self.state
+            .high_id_nodes
+            .get_mut(&id)
+            .map(std::convert::AsMut::as_mut)
             .ok_or(NodeError::Missing { id })
     }
 
@@ -4880,22 +4890,17 @@ impl Applier for MemoryApplier {
         self.state.stable_index.generation(id)
     }
 
+    #[inline]
     fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError> {
-        if let Some(physical_id) = self.resolve_node_index(id) {
-            let slot = self
+        match self.resolve_node_index(id) {
+            Some(physical_id) => self
                 .state
                 .nodes
                 .get_mut(physical_id)
-                .ok_or(NodeError::Missing { id })?
-                .as_deref_mut()
-                .ok_or(NodeError::Missing { id })?;
-            return Ok(slot);
+                .and_then(Option::as_deref_mut)
+                .ok_or(NodeError::Missing { id }),
+            None => self.high_id_node_mut(id),
         }
-        self.state
-            .high_id_nodes
-            .get_mut(&id)
-            .map(std::convert::AsMut::as_mut)
-            .ok_or(NodeError::Missing { id })
     }
 
     fn remove(&mut self, id: NodeId) -> Result<(), NodeError> {
