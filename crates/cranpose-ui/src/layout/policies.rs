@@ -799,13 +799,13 @@ impl MeasurePolicy for FlexMeasurePolicy {
         let (min_main, max_main, min_cross, max_cross) = self.get_axis_constraints(constraints);
         let spacing = self.get_spacing();
 
-        let mut children: SmallVec<[FlexChild; 8]> = measurables
-            .iter()
-            .map(|child| FlexChild {
-                data: child.parent_data(),
-                placeable: None,
-            })
-            .collect();
+        // Filled in place: a collected list of eight inline children is a
+        // 776-byte value moved out of `collect`.
+        let mut children: SmallVec<[FlexChild; 8]> = SmallVec::new();
+        children.extend(measurables.iter().map(|child| FlexChild {
+            data: child.parent_data(),
+            placeable: None,
+        }));
         let (fixed_space, mut max_cross_size) =
             self.measure_fixed_children(measurables, &mut children, (max_main, max_cross), spacing);
 
