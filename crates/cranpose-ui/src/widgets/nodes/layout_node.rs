@@ -174,6 +174,8 @@ pub struct LayoutState {
     cleared_in_pass: u64,
     content_offset: Point,
     semantics_stamp: u64,
+    /// The take of the moved-node list this node was last noted in.
+    moved_noted_in: u64,
 }
 
 impl LayoutState {
@@ -246,7 +248,7 @@ impl LayoutState {
             if newly_placed {
                 context.record_geometry_scene_node(id);
             } else if moved {
-                context.record_moved_scene_node(id);
+                context.record_moved_scene_node(id, &mut self.moved_noted_in);
             }
         }
         self.position = position;

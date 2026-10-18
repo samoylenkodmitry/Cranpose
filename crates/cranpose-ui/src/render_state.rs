@@ -20,7 +20,7 @@ struct RenderState {
     layer_property_repasses: RefCell<DirtyNodeSet>,
     modifier_slice_repasses: RefCell<DirtyNodeSet>,
     geometry_scene_nodes: RefCell<DirtyNodeSet>,
-    moved_scene_nodes: RefCell<DirtyNodeSet>,
+    moved_scene_nodes: RefCell<MovedSceneNodes>,
     /// Nodes whose z index changed: their parents' layers hold the order.
     z_order_changes: RefCell<DirtyNodeSet>,
     /// Nodes whose redraw flag was set before they had an id, so no draw
@@ -203,7 +203,7 @@ impl RenderState {
             layer_property_repasses: RefCell::new(DirtyNodeSet::new()),
             modifier_slice_repasses: RefCell::new(DirtyNodeSet::new()),
             geometry_scene_nodes: RefCell::new(DirtyNodeSet::new()),
-            moved_scene_nodes: RefCell::new(DirtyNodeSet::new()),
+            moved_scene_nodes: RefCell::new(MovedSceneNodes::new()),
             z_order_changes: RefCell::new(DirtyNodeSet::new()),
             retained_redraws: RefCell::new(Vec::new()),
             render_invalidated: Cell::new(false),
@@ -742,7 +742,7 @@ impl AppContext {
         self.state
             .moved_scene_nodes
             .borrow_mut()
-            .take_dirty_nodes_into(&mut output.moved);
+            .take_into(&mut output.moved);
     }
 
     /// Notes that the layout pass changed `node_id`'s geometry.
@@ -754,12 +754,13 @@ impl AppContext {
     }
 
     /// Notes that the layout pass moved `node_id` and changed nothing else of
-    /// it, so the scene can keep what it drew for the node.
-    pub(crate) fn record_moved_scene_node(&self, node_id: NodeId) {
+    /// it, so the scene can keep what it drew for the node. `noted_in` is the
+    /// node's own record of the take it was last noted in.
+    pub(crate) fn record_moved_scene_node(&self, node_id: NodeId, noted_in: &mut u64) {
         self.state
             .moved_scene_nodes
             .borrow_mut()
-            .schedule_repass(node_id);
+            .note(node_id, noted_in);
     }
 
     /// The placement bookkeeping of this context's running layout pass.
@@ -999,6 +1000,49 @@ fn with_draw_observer<R>(f: impl FnOnce(&SnapshotStateObserver) -> R) -> R {
 
 struct DirtyNodeSet {
     dirty_nodes: HashSet<NodeId>,
+}
+
+/// The nodes a layout pass moved and changed nothing else of, each once a
+/// take. A node keeps the take it was last noted in, so a second note in the
+/// same take is dropped with one comparison instead of a hash.
+struct MovedSceneNodes {
+    nodes: Vec<NodeId>,
+    /// The take the list fills: a number no other list on the thread uses.
+    take: u64,
+}
+
+impl MovedSceneNodes {
+    fn new() -> Self {
+        Self {
+            nodes: Vec::new(),
+            take: next_moved_scene_node_take(),
+        }
+    }
+
+    fn note(&mut self, node_id: NodeId, noted_in: &mut u64) {
+        if *noted_in != self.take {
+            *noted_in = self.take;
+            self.nodes.push(node_id);
+        }
+    }
+
+    /// Moves the nodes into `output` and keeps the storage `output` held
+    /// for the next take.
+    fn take_into(&mut self, output: &mut Vec<NodeId>) {
+        output.clear();
+        if !self.nodes.is_empty() {
+            std::mem::swap(&mut self.nodes, output);
+            self.take = next_moved_scene_node_take();
+        }
+    }
+}
+
+fn next_moved_scene_node_take() -> u64 {
+    crate::thread_state::cells(|cells| {
+        let take = cells.moved_scene_node_takes.get() + 1;
+        cells.moved_scene_node_takes.set(take);
+        take
+    })
 }
 
 impl DirtyNodeSet {

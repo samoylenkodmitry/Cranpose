@@ -578,6 +578,30 @@ fn a_node_its_pass_clears_and_places_where_it_was_reports_nothing() {
 }
 
 #[test]
+fn a_node_moved_again_before_a_take_is_reported_once_and_again_after_it() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let context = crate::render_state::require_current_app_context("a test");
+    let mut first = state_of(7);
+    let mut second = state_of(8);
+    first.place(origin(), &context);
+    second.place(origin(), &context);
+    let _ = crate::take_geometry_scene_nodes();
+
+    for y in [6.0, 12.0, 18.0] {
+        first.place(Point { x: 0.0, y }, &context);
+    }
+    second.place(Point { x: 0.0, y: 6.0 }, &context);
+    assert_eq!(crate::take_geometry_scene_nodes().moved, vec![7, 8]);
+
+    first.place(Point { x: 0.0, y: 24.0 }, &context);
+    assert_eq!(
+        crate::take_geometry_scene_nodes().moved,
+        vec![7],
+        "a take starts the next list afresh"
+    );
+}
+
+#[test]
 fn a_node_its_pass_clears_and_never_places_is_left_unplaced() {
     let _app_context = crate::render_state::app_context_test_scope();
     let context = crate::render_state::require_current_app_context("a test");
