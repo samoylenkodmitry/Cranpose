@@ -1779,7 +1779,9 @@ out again. A surface with `solid` set stops the eye a ball of `radius` short of
 it, and the eye slides along it, except through the holes that doorways cut.
 Each time the renderer places the scene, it leaves the eye the solid surfaces
 and doorways near it, so a wall the app moves stops the eye where it is drawn.
-`eye.place(pose)` puts the eye at any pose of the scene's own space.
+`eye.place(pose)` puts the eye at `pose` without a walk; the pose's `doorways`,
+the scene nodes of the doorways walked through, name the space it stands in,
+and `EyePose::standing` gives none, the scene's own space.
 
 The scene draws from the space the eye stands in: the surfaces around the eye,
 and the spaces it came from through their doorways, cut at each doorway's
