@@ -16,14 +16,28 @@ fn test_lazy_row_spec_default() {
     assert_eq!(spec.beyond_bounds_item_count, 2);
 }
 
+/// A 20 by 50 item at `index`, placed at `offset`, with roots `node_ids` at
+/// `child_offsets`.
+fn placed_item(
+    index: usize,
+    offset: f32,
+    node_ids: &[u64],
+    child_offsets: &[f32],
+) -> LazyListMeasuredItem {
+    let roots = LazyItemRoots {
+        node_ids: SmallVec::from_slice(node_ids),
+        child_offsets: SmallVec::from_slice(child_offsets),
+        child_cross_axis_sizes: SmallVec::new(),
+    };
+    let mut item =
+        LazyListMeasuredItem::new(index, 10 + index as u64, None, 20.0, 50.0, Rc::new(roots));
+    item.offset = offset;
+    item
+}
+
 #[test]
 fn lazy_list_placements_reuse_output_storage() {
-    let mut item = LazyListMeasuredItem::new(0, 10, None, 20.0, 50.0);
-    item.offset = 7.0;
-    item.node_ids.push(101);
-    item.node_ids.push(102);
-    item.child_offsets.push(0.0);
-    item.child_offsets.push(5.0);
+    let item = placed_item(0, 7.0, &[101, 102], &[0.0, 5.0]);
     let config = LazyListLayoutConfig {
         measure: LazyListMeasureConfig {
             is_vertical: true,
@@ -54,15 +68,8 @@ fn lazy_list_placements_reuse_output_storage() {
 
 #[test]
 fn lazy_list_placements_retain_offscreen_measured_items_for_renderer_prewarm() {
-    let mut hidden = LazyListMeasuredItem::new(0, 10, None, 20.0, 50.0);
-    hidden.offset = -40.0;
-    hidden.node_ids.push(101);
-    hidden.child_offsets.push(0.0);
-
-    let mut partial = LazyListMeasuredItem::new(1, 11, None, 20.0, 50.0);
-    partial.offset = -5.0;
-    partial.node_ids.push(102);
-    partial.child_offsets.push(0.0);
+    let hidden = placed_item(0, -40.0, &[101], &[0.0]);
+    let partial = placed_item(1, -5.0, &[102], &[0.0]);
 
     let config = LazyListLayoutConfig {
         measure: LazyListMeasureConfig {
@@ -155,7 +162,7 @@ fn measured_item_cache_keeps_only_items_whose_slots_are_retained() {
     let mut cache = LazyMeasuredItemCache::default();
     for key in 1..=6u64 {
         cache.insert(
-            LazyListMeasuredItem::new(key as usize, key, None, 10.0, 10.0),
+            LazyListMeasuredItem::new(key as usize, key, None, 10.0, 10.0, Rc::default()),
             SmallVec::new(),
             10.0,
         );

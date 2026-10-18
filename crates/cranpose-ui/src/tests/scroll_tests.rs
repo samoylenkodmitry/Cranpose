@@ -1569,6 +1569,7 @@ fn drags_over_fully_realized_lazy_list_scroll_the_outer_container() {
                     None,
                     if index == 10 { 800.0 } else { 50.0 },
                     320.0,
+                    std::rc::Rc::default(),
                 )
             },
         );

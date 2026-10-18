@@ -323,7 +323,7 @@ impl Window<'_> {
     fn show(&self, item: &mut LazyListMeasuredItem, slot: Slot) {
         let cross = slot.lane().map_or(0.0, |lane| self.lane_offsets[lane]);
         item.offset = slot.start;
-        item.child_cross_offsets = smallvec![cross; item.node_ids.len()];
+        item.child_cross_offsets = smallvec![cross; item.roots.node_ids.len()];
     }
 }
 
