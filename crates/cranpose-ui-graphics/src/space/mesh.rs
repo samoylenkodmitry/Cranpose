@@ -1,11 +1,10 @@
 use std::{
     f32::consts::PI,
     fmt,
-    sync::{
-        OnceLock,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{OnceLock, atomic::Ordering},
 };
+
+use portable_atomic::AtomicU64;
 
 use super::math::Vec3;
 
