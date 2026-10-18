@@ -278,40 +278,31 @@ fn measure_lazy_list_item(
 
     scope.update_content_type(slot_id, content_type);
 
+    // The cache stays borrowed while the slot activates: activating it runs
+    // no composition and reads no lazy list cache, so the candidate found
+    // here is still the cache's when the slot turns out clean.
     let candidate_cache = inputs.measured_item_cache.borrow();
-    let cached_candidate = candidate_cache
-        .candidate(&item_context)
-        .map(|cached| cached.item.clone());
-    let stale_candidate = cached_candidate.is_none() && candidate_cache.contains_index(index);
-    drop(candidate_cache);
+    let candidate = candidate_cache.candidate(&item_context);
+    let stale_candidate = candidate.is_none() && candidate_cache.contains_index(index);
 
-    if let Some(cached_item) = cached_candidate {
+    if let Some(cached) = candidate {
         match scope
-            .activate_exact_retained_slot_with_known_children(slot_id, &cached_item.roots.node_ids)
+            .activate_exact_retained_slot_with_known_children(slot_id, &cached.item.roots.node_ids)
         {
             Some(RetainedSlotChildren::Clean) => {
-                let cache = inputs.measured_item_cache.borrow();
-                let current_candidate = cache.candidate(&item_context);
-                if let Some(cached) = current_candidate
-                    .filter(|cached| cached.item.roots.node_ids == cached_item.roots.node_ids)
-                {
-                    scope.register_retained_measurements(&cached.retained_children);
-                    drop(cache);
-                    let mut cache = inputs.measured_item_cache.borrow_mut();
-                    cache.record_candidate_hit();
-                    cache.record_exact_reuse();
-                    return cached_item;
-                }
-                drop(cache);
-
+                scope.register_retained_measurements(&cached.retained_children);
+                let item = cached.item.clone();
+                drop(candidate_cache);
                 let mut cache = inputs.measured_item_cache.borrow_mut();
                 cache.record_candidate_hit();
-                cache.record_exact_miss();
+                cache.record_exact_reuse();
+                return item;
             }
             Some(RetainedSlotChildren::Remeasure {
                 children,
                 children_match,
             }) => {
+                drop(candidate_cache);
                 let mut cache = inputs.measured_item_cache.borrow_mut();
                 cache.record_candidate_hit();
                 cache.remove(index);
@@ -330,6 +321,7 @@ fn measure_lazy_list_item(
                 );
             }
             None => {
+                drop(candidate_cache);
                 let mut cache = inputs.measured_item_cache.borrow_mut();
                 cache.record_candidate_hit();
                 cache.record_exact_miss();
@@ -337,6 +329,7 @@ fn measure_lazy_list_item(
             }
         }
     } else {
+        drop(candidate_cache);
         let mut cache = inputs.measured_item_cache.borrow_mut();
         cache.record_candidate_miss();
         if stale_candidate {

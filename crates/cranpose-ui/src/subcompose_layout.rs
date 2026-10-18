@@ -487,11 +487,11 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         let mut children_match = true;
         let mut needs_relayout = false;
         for &virtual_node_id in activation.nodes {
-            let children = self.composer.get_node_children(virtual_node_id);
-            for &child in &children {
-                children_match &= expected.next() == Some(child as u64);
-            }
-            needs_relayout |= self.composer.nodes_need_relayout(children.iter().copied());
+            self.composer
+                .visit_node_children(virtual_node_id, |child, child_needs_relayout| {
+                    children_match &= expected.next() == Some(child as u64);
+                    needs_relayout |= child_needs_relayout;
+                });
         }
         children_match &= expected.next().is_none();
         if children_match && !needs_relayout {

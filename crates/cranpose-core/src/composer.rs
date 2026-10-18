@@ -1471,6 +1471,23 @@ impl Composer {
         }
     }
 
+    /// Runs `visit` on each child of `node_id`, in order, with whether the
+    /// child needs measurement or placement before its cached layout can be
+    /// reused: the walk [`Self::get_node_children`] and
+    /// [`Self::nodes_need_relayout`] make together, under one borrow of the
+    /// applier.
+    pub fn visit_node_children(&self, node_id: NodeId, mut visit: impl FnMut(NodeId, bool)) {
+        let mut applier = self.borrow_applier();
+        let mut children = SmallVec::<[NodeId; 8]>::new();
+        if let Ok(node) = applier.get_mut(node_id) {
+            node.collect_children_into(&mut children);
+        }
+        for child in children {
+            let needs_relayout = applier.get_mut(child).is_ok_and(|node| node.layout_dirty());
+            visit(child, needs_relayout);
+        }
+    }
+
     /// Whether any node needs measurement or placement before its cached layout can be reused.
     ///
     /// ```no_run
