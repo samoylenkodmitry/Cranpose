@@ -135,6 +135,11 @@ jobs:
       - name: Measure the desktop apps
         if: steps.published.outputs.measured != 'yes'
         # Outside the job's shared lock: a measurement empties the machine.
+        # desktop.py also asks the display for its state and for how often
+        # the window server composites it with nothing but a quiet window on
+        # it; a display that is asleep or not at 60 Hz, or that something
+        # moves on (a video, a permission prompt), ends the step with an error
+        # before it measures, or after it ran, and nothing is published.
         shell: bash --noprofile --norc -eo pipefail {0}
         run: |
           scripts/ci/with_host_lock.sh --exclusive python3 benchmarks/compose-vs-cranpose/desktop.py \
