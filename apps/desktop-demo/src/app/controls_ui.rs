@@ -861,8 +861,18 @@ fn stage_input(kind: ControlKind, control: &ControlHandle, view: StageView) -> M
     })
 }
 
-/// The card of one control, its stage drawn by `stage` over the control's
-/// name and value.
+/// A card's background, under `modifier`.
+fn card_background(modifier: Modifier, dark: bool) -> Modifier {
+    let background = card_color(dark);
+    modifier
+        .rounded_corners(CARD_RADIUS)
+        .draw_behind(move |scope| {
+            scope.draw_round_rect(Brush::solid(background), CornerRadii::uniform(CARD_RADIUS));
+        })
+}
+
+/// The card of one control: its stage, drawn by `stage`, over the
+/// control's name and value.
 #[composable]
 fn CardFrame(
     kind: ControlKind,
@@ -870,13 +880,8 @@ fn CardFrame(
     modifier: Modifier,
     stage: Modifier,
 ) {
-    let background = card_color(dark);
     Column(
-        modifier
-            .rounded_corners(CARD_RADIUS)
-            .draw_behind(move |scope| {
-                scope.draw_round_rect(Brush::solid(background), CornerRadii::uniform(CARD_RADIUS));
-            }),
+        card_background(modifier, dark),
         ColumnSpec::default(),
         move || {
             Box(
@@ -908,29 +913,25 @@ fn ControlCard(kind: ControlKind, dark: bool, modifier: Modifier) {
     CardFrame(kind, (control, dark), modifier, stage);
 }
 
-/// A control's card on a wall of a 3D room, its stage left for
-/// [`ControlVolume`] to stand out of it.
+/// A control's card on a wall of a 3D room, for [`ControlVolume`] to stand
+/// out of: the control shows its state itself.
 #[composable]
-pub(crate) fn WallCard(kind: ControlKind, control: ControlHandle, modifier: Modifier) {
-    CardFrame(kind, (control, true), modifier, Modifier::empty());
+pub(crate) fn WallCard(modifier: Modifier) {
+    Box(card_background(modifier, true), BoxSpec::default(), || {});
 }
 
 /// A control's stage standing out of its card on a wall of a 3D room,
 /// seen from wherever the room's eye stands: `place` puts the unit cube
 /// where the stage stands, its x along the stage's width, its y out of the
-/// wall and its z down the wall. The stage takes `width` of the card.
+/// wall and its z down the wall. The stage is `size` on the card.
 #[composable]
 pub(crate) fn ControlVolume(
     kind: ControlKind,
     control: ControlHandle,
     (cube, place): (Arc<Mesh>, Mat4),
-    width: f32,
+    size: Size,
 ) {
     let animation = animateControl(kind, control.clone());
-    let size = Size {
-        width,
-        height: STAGE_HEIGHT,
-    };
     Box(
         Modifier::empty()
             .required_size(size)

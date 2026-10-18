@@ -36,6 +36,8 @@ pub(crate) fn main() {
                     "a click on the globe's button, where it shows on the sphere, missed it",
                 );
             }
+            click_wall_toggle(&robot);
+            save(&robot, &shots, "toggle.png");
             let flat = step_in_button(&robot);
 
             if !click_button_in_semantics(&robot, STEP_IN) {
@@ -49,8 +51,7 @@ pub(crate) fn main() {
                 robot_exit::fail(&robot, "no button to stop the motion in the room");
             }
             robot_shot::settle(&robot, 300);
-            click_shape_and_toggle(&robot);
-            save(&robot, &shots, "toggle.png");
+            click_shape(&robot);
 
             let counter = button(&robot, "Pressed 0 times");
             // E turns the camera while it is held, Q turns it back.
@@ -141,9 +142,8 @@ fn walk(robot: &Robot) {
 }
 
 /// Clicks the button on the shape from a distance field, where it shows on
-/// the shape, and the toggle on the far wall, which stands out of its card
-/// as a volume, where its stage shows.
-fn click_shape_and_toggle(robot: &Robot) {
+/// the shape.
+fn click_shape(robot: &Robot) {
     if !click_button_in_semantics(robot, "Clicked 0 times") {
         robot_exit::fail(robot, "the shape's button is missing");
     }
@@ -151,6 +151,11 @@ fn click_shape_and_toggle(robot: &Robot) {
     if find_text_in_semantics(robot, "Clicked 1 times").is_none() {
         robot_exit::fail(robot, "a click on the shape's button, where it shows, missed it");
     }
+}
+
+/// Clicks the toggle under the flat screen's buttons, which stands out of
+/// its card as a volume, where its stage shows.
+fn click_wall_toggle(robot: &Robot) {
     let (before, (x, y, width, height)) = robot_controls_grid::card(robot, "Toggle");
     if let Err(err) = robot.click(x + width * 0.5, y + height * 0.5) {
         robot_exit::fail(robot, &format!("click the toggle: {err}"));

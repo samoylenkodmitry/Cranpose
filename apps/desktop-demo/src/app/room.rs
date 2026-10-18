@@ -147,13 +147,9 @@ fn Walls(room: RoomState, shape: RoomShape, meshes: RoomMeshes) {
     for &wall in walls {
         let room = room.clone();
         let plane = Arc::clone(&meshes.plane);
-        let cards = match wall {
-            Wall::North => Some(north.clone()),
-            Wall::South => Some(south.clone()),
-            _ => None,
-        };
+        let controls = (north.clone(), south.clone());
         key(wall, move || {
-            WallSurface(room, shape, (wall, cards), plane);
+            WallSurface(room, shape, (wall, controls), plane);
         });
     }
     let south_stages = spatial.then_some(south);
@@ -215,7 +211,10 @@ fn RoomMotion(room: RoomState, shape: RoomShape) {
 fn WallSurface(
     room: RoomState,
     shape: RoomShape,
-    (wall, cards): (Wall, Option<wall_controls::WallControlSet>),
+    (wall, (north, south)): (
+        Wall,
+        (wall_controls::WallControlSet, wall_controls::WallControlSet),
+    ),
     plane: Arc<Mesh>,
 ) {
     Box(
@@ -228,18 +227,21 @@ fn WallSurface(
                 casts_shadow: false,
             }),
         BoxSpec::default(),
-        move || {
-            match wall {
-                Wall::North => Controls(room.clone()),
-                Wall::East => DemoWall(),
-                Wall::West => Panel(Color(0.12, 0.10, 0.12, 1.0), TextShowcaseTab),
-                Wall::South => BackWall(),
-                Wall::Floor => Floor(),
-                Wall::Ceiling => Ceiling(),
+        move || match wall {
+            Wall::North => {
+                WallBackground(Color(0.09, 0.10, 0.14, 1.0));
+                Controls(room.clone(), north.head());
+                wall_controls::WallCards(shape, north.clone());
             }
-            if let Some(cards) = cards.clone() {
-                wall_controls::WallCards(shape, cards);
+            Wall::East => DemoWall(),
+            Wall::West => Panel(Color(0.12, 0.10, 0.12, 1.0), TextShowcaseTab),
+            Wall::South => {
+                WallBackground(Color(0.13, 0.12, 0.10, 1.0));
+                BackWall(south.head());
+                wall_controls::WallCards(shape, south.clone());
             }
+            Wall::Floor => Floor(),
+            Wall::Ceiling => Ceiling(),
         },
     );
 }
@@ -487,15 +489,13 @@ fn TorusGrid(switch: TorusSwitch) {
     );
 }
 
+/// The far wall's text and buttons, which report their size to `head`.
 #[composable(no_skip)]
-fn Controls(room: RoomState) {
+fn Controls(room: RoomState, head: MutableState<Size>) {
     let presses = rememberMutableStateOf(|| 0u32);
     let entered = room.is_entered();
     Column(
-        Modifier::empty()
-            .fill_max_size()
-            .background(Color(0.09, 0.10, 0.14, 1.0))
-            .padding(40.0),
+        Modifier::empty().report_size_state(head).padding(40.0),
         ColumnSpec::default(),
         move || {
             Text(
@@ -619,13 +619,21 @@ fn DemoWall() {
     );
 }
 
+/// A wall's colour, behind its content.
 #[composable]
-fn BackWall() {
+fn WallBackground(color: Color) {
+    Box(
+        Modifier::empty().fill_max_size().background(color),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+/// The back wall's text, which reports its size to `head`.
+#[composable]
+fn BackWall(head: MutableState<Size>) {
     Column(
-        Modifier::empty()
-            .fill_max_size()
-            .background(Color(0.13, 0.12, 0.10, 1.0))
-            .padding(48.0),
+        Modifier::empty().report_size_state(head).padding(48.0),
         ColumnSpec::default(),
         || {
             Text(
