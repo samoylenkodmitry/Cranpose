@@ -20,7 +20,7 @@ use std::{
 
 use cranpose_core::{
     Applier, ApplierHost, Composer, ConcreteApplierHost, MemoryApplier, Node, NodeError, NodeId,
-    Phase, RuntimeHandle, SlotTable, SlotsHost,
+    Phase, RuntimeHandle, SlotTable, SlotsHost, collections::map::Entry,
 };
 use cranpose_foundation::{
     InvalidationKind, ModifierNodeContext, NodeCapabilities, SemanticsConfiguration,
@@ -1963,9 +1963,9 @@ impl LayoutBuilderState {
                 cached_measure_batch_registrar: Box::new(
                     |child_ids: &[NodeId],
                      child_constraints: Constraints,
-                     out: &mut Vec<Option<Size>>| {
-                        out.clear();
-                        out.resize(child_ids.len(), None);
+                     found: &mut Vec<bool>| {
+                        found.clear();
+                        found.resize(child_ids.len(), false);
 
                         let Ok(mut applier) = self.applier.try_borrow_typed() else {
                             return;
@@ -1974,6 +1974,10 @@ impl LayoutBuilderState {
                         let mut measured_children = measured_children.borrow_mut();
                         let current_epoch = crate::render_state::current_layout_cache_epoch();
                         for (index, &child_id) in child_ids.iter().enumerate() {
+                            let Entry::Vacant(slot) = measured_children.entry(child_id) else {
+                                found[index] = true;
+                                continue;
+                            };
                             match Self::cached_measure_node_with_applier(
                                 &mut applier,
                                 child_id,
@@ -1982,8 +1986,8 @@ impl LayoutBuilderState {
                                 &self.context,
                             ) {
                                 Ok(Some(measured)) => {
-                                    out[index] = Some(measured.size);
-                                    measured_children.insert(child_id, Rc::clone(&measured));
+                                    found[index] = true;
+                                    slot.insert(measured);
                                 }
                                 Ok(None) => {}
                                 Err(err) => {

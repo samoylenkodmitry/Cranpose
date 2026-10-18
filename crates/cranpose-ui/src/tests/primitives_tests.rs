@@ -17,7 +17,7 @@ use crate::{
     modifier::{Modifier, Size},
     renderer::{HeadlessRenderer, RenderOp},
     run_test_composition,
-    subcompose_layout::{Constraints, SubcomposeLayoutNode},
+    subcompose_layout::{CachedBatchMeasureInputs, Constraints, SubcomposeLayoutNode},
     text::TextStyle,
     widgets::{
         BoxWithConstraints, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec, Spacer,
@@ -104,16 +104,21 @@ fn run_subcompose_measure(
     let measurer = Box::new(|child_id: NodeId, _constraints: Constraints| {
         cranpose_ui_layout::Placeable::value(0.0, 0.0, child_id)
     });
-    let cached_measure_registrar = Box::new(|_child_id: NodeId, _constraints: Constraints| None);
     let error = Rc::new(RefCell::new(None));
     node_handle
-        .measure(
+        .measure_with_cached_batch(
             &composer,
             node_id,
             constraints,
-            measurer,
-            cached_measure_registrar,
-            &error,
+            CachedBatchMeasureInputs {
+                measurer,
+                cached_measure_batch_registrar: Box::new(|_node_ids, _constraints, found| {
+                    found.clear();
+                }),
+                retained_measure_lookup: Box::new(|_| None),
+                retained_measure_registrar: Box::new(|_| {}),
+                error: &error,
+            },
         )
         .expect("measure succeeds");
     assert!(
@@ -207,15 +212,20 @@ fn capture_subcompose_child_constraints(
         captured_handle.borrow_mut().push(child_constraints);
         cranpose_ui_layout::Placeable::value(0.0, 0.0, child_id)
     });
-    let cached_measure_registrar = Box::new(|_child_id: NodeId, _constraints: Constraints| None);
     node_handle
-        .measure(
+        .measure_with_cached_batch(
             &composer,
             root,
             constraints,
-            measurer,
-            cached_measure_registrar,
-            &error,
+            CachedBatchMeasureInputs {
+                measurer,
+                cached_measure_batch_registrar: Box::new(|_node_ids, _constraints, found| {
+                    found.clear();
+                }),
+                retained_measure_lookup: Box::new(|_| None),
+                retained_measure_registrar: Box::new(|_| {}),
+                error: &error,
+            },
         )
         .expect("measure succeeds");
     assert!(

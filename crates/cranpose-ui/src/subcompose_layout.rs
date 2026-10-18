@@ -89,10 +89,21 @@ impl PartialEq for SubcomposeChild {
 
 pub type SubcomposePlaceable = cranpose_ui_layout::Placeable;
 
-type CachedMeasureBatchRegistrar<'a> =
-    Box<dyn FnMut(&[NodeId], Constraints, &mut Vec<Option<Size>>) + 'a>;
+/// Marks in its output, for each node of the batch, whether the node has a
+/// measurement for this pass: one measured or registered earlier in it, or a
+/// cached one the registrar registers now.
+type CachedMeasureBatchRegistrar<'a> = Box<dyn FnMut(&[NodeId], Constraints, &mut Vec<bool>) + 'a>;
 type RetainedMeasureLookup<'a> = Box<dyn FnMut(NodeId) -> Option<Rc<MeasuredNode>> + 'a>;
 type RetainedMeasureRegistrar<'a> = Box<dyn FnMut(&[Rc<MeasuredNode>]) + 'a>;
+
+/// The buffers a measure pass of a subcompose node fills, kept on the node
+/// between passes.
+#[derive(Default)]
+pub(crate) struct MeasureScratch {
+    placements: Vec<Placement>,
+    batch_nodes: Vec<NodeId>,
+    batch_found: Vec<bool>,
+}
 
 pub(crate) struct CachedBatchMeasureInputs<'a> {
     pub(crate) measurer: Box<dyn FnMut(NodeId, Constraints) -> SubcomposePlaceable + 'a>,
@@ -164,11 +175,7 @@ pub struct SubcomposeMeasureScopeImpl<'a> {
     error: &'a RefCell<Option<NodeError>>,
     parent_handle: SubcomposeLayoutNodeHandle,
     root_id: NodeId,
-    placement_scratch: Vec<Placement>,
-    cached_measure_node_scratch: Vec<NodeId>,
-    cached_measure_size_scratch: Vec<Option<Size>>,
-    cached_measure_missing_scratch: Vec<NodeId>,
-    registered_measurement_node_ids: Vec<NodeId>,
+    scratch: MeasureScratch,
     pending_commands_applied: bool,
     #[cfg(debug_assertions)]
     shadow_stash: Option<(Vec<NodeId>, Vec<NodeId>)>,
@@ -199,7 +206,7 @@ struct SubcomposeMeasureScopeInit<'a> {
     error: &'a RefCell<Option<NodeError>>,
     parent_handle: SubcomposeLayoutNodeHandle,
     root_id: NodeId,
-    placement_scratch: Vec<Placement>,
+    scratch: MeasureScratch,
 }
 
 impl<'a> SubcomposeMeasureScopeImpl<'a> {
@@ -220,25 +227,15 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
             error: init.error,
             parent_handle: init.parent_handle,
             root_id: init.root_id,
-            placement_scratch: init.placement_scratch,
-            cached_measure_node_scratch: Vec::new(),
-            cached_measure_size_scratch: Vec::new(),
-            cached_measure_missing_scratch: Vec::new(),
-            registered_measurement_node_ids: Vec::new(),
+            scratch: init.scratch,
             pending_commands_applied: false,
             #[cfg(debug_assertions)]
             shadow_stash: None,
         }
     }
 
-    fn register_measurement_node_id(&mut self, node_id: NodeId) {
-        if !self.registered_measurement_node_ids.contains(&node_id) {
-            self.registered_measurement_node_ids.push(node_id);
-        }
-    }
-
-    fn into_placement_scratch(self) -> Vec<Placement> {
-        self.placement_scratch
+    fn into_scratch(self) -> MeasureScratch {
+        self.scratch
     }
 
     pub(crate) fn layout_with_placement_builder(
@@ -247,11 +244,11 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         height: f32,
         build: impl FnOnce(&mut Vec<Placement>),
     ) -> MeasureResult {
-        self.placement_scratch.clear();
-        build(&mut self.placement_scratch);
+        self.scratch.placements.clear();
+        build(&mut self.scratch.placements);
         MeasureResult::new(
             Size { width, height },
-            std::mem::take(&mut self.placement_scratch),
+            std::mem::take(&mut self.scratch.placements),
         )
     }
 
@@ -546,7 +543,6 @@ impl SubcomposeMeasureScope for SubcomposeMeasureScopeImpl<'_> {
         }
 
         let placeable = (self.measurer)(child.node_id, constraints);
-        self.register_measurement_node_id(child.node_id);
         if let Some(start) = telemetry_start {
             log::warn!(
                 "[subcompose-telemetry] child={} measure_ms={:.2} size=({:.2},{:.2})",
@@ -650,14 +646,9 @@ impl SubcomposeMeasureScopeImpl<'_> {
     }
 
     pub(crate) fn register_retained_measurements(&mut self, measurements: &[Rc<MeasuredNode>]) {
-        if measurements.is_empty() {
-            return;
+        if !measurements.is_empty() {
+            (self.retained_measure_registrar)(measurements);
         }
-
-        for measured in measurements {
-            self.register_measurement_node_id(measured.node_id());
-        }
-        (self.retained_measure_registrar)(measurements);
     }
 
     pub(crate) fn children_need_relayout(&mut self, children: &[SubcomposeChild]) -> bool {
@@ -669,56 +660,37 @@ impl SubcomposeMeasureScopeImpl<'_> {
             .nodes_need_relayout(children.iter().map(SubcomposeChild::node_id))
     }
 
+    /// Gives each of `node_ids` a measurement for this pass under
+    /// `constraints`: a node measured or registered earlier in the pass keeps
+    /// its own, the nodes with a cached measurement register theirs in one
+    /// batch, and the rest are measured.
     pub(crate) fn ensure_cached_measurement_node_ids<I>(
         &mut self,
         node_ids: I,
         constraints: Constraints,
-    ) -> usize
-    where
+    ) where
         I: IntoIterator<Item = NodeId>,
     {
         if self.error.borrow().is_some() || !self.ensure_pending_commands_applied() {
-            return 0;
+            return;
         }
 
-        self.cached_measure_node_scratch.clear();
-        self.cached_measure_node_scratch.extend(
-            node_ids
-                .into_iter()
-                .filter(|node_id| !self.registered_measurement_node_ids.contains(node_id)),
-        );
-        if self.cached_measure_node_scratch.is_empty() {
-            return 0;
-        }
-
-        self.cached_measure_size_scratch.clear();
-        (self.cached_measure_batch_registrar)(
-            &self.cached_measure_node_scratch,
-            constraints,
-            &mut self.cached_measure_size_scratch,
-        );
-        self.cached_measure_size_scratch
-            .resize(self.cached_measure_node_scratch.len(), None);
-
-        let mut cached_count = 0;
-        self.cached_measure_missing_scratch.clear();
-        for index in 0..self.cached_measure_node_scratch.len() {
-            let node_id = self.cached_measure_node_scratch[index];
-            if self.cached_measure_size_scratch[index].is_some() {
-                cached_count += 1;
-                self.register_measurement_node_id(node_id);
-            } else {
-                self.cached_measure_missing_scratch.push(node_id);
+        let mut nodes = std::mem::take(&mut self.scratch.batch_nodes);
+        let mut found = std::mem::take(&mut self.scratch.batch_found);
+        nodes.clear();
+        nodes.extend(node_ids);
+        if !nodes.is_empty() {
+            found.clear();
+            (self.cached_measure_batch_registrar)(&nodes, constraints, &mut found);
+            found.resize(nodes.len(), false);
+            for (&node_id, &has_measurement) in nodes.iter().zip(&found) {
+                if !has_measurement {
+                    let _ = self.measure(SubcomposeChild::new(node_id), constraints);
+                }
             }
         }
-
-        let mut missing = std::mem::take(&mut self.cached_measure_missing_scratch);
-        for node_id in missing.drain(..) {
-            let _ = self.measure(SubcomposeChild::new(node_id), constraints);
-        }
-        self.cached_measure_missing_scratch = missing;
-
-        cached_count
+        self.scratch.batch_nodes = nodes;
+        self.scratch.batch_found = found;
     }
 }
 
@@ -1472,37 +1444,6 @@ impl SubcomposeLayoutNodeHandle {
         self.inner.borrow_mut().set_debug_modifiers(enabled);
     }
 
-    pub fn measure<'a>(
-        &self,
-        composer: &Composer,
-        node_id: NodeId,
-        constraints: Constraints,
-        measurer: Box<dyn FnMut(NodeId, Constraints) -> SubcomposePlaceable + 'a>,
-        mut cached_measure_registrar: Box<dyn FnMut(NodeId, Constraints) -> Option<Size> + 'a>,
-        error: &'a RefCell<Option<NodeError>>,
-    ) -> Result<MeasureResult, NodeError> {
-        self.measure_with_cached_batch(
-            composer,
-            node_id,
-            constraints,
-            CachedBatchMeasureInputs {
-                measurer,
-                cached_measure_batch_registrar: Box::new(
-                    move |node_ids, child_constraints, out| {
-                        out.clear();
-                        out.reserve(node_ids.len());
-                        for &child_id in node_ids {
-                            out.push(cached_measure_registrar(child_id, child_constraints));
-                        }
-                    },
-                ),
-                retained_measure_lookup: Box::new(|_| None),
-                retained_measure_registrar: Box::new(|_| {}),
-                error,
-            },
-        )
-    }
-
     pub(crate) fn measure_with_cached_batch(
         &self,
         composer: &Composer,
@@ -1517,19 +1458,19 @@ impl SubcomposeLayoutNodeHandle {
             retained_measure_registrar,
             error,
         } = callbacks;
-        let (policy, mut state, slots_host, placement_scratch, captured_context, density) = {
+        let (policy, mut state, slots_host, scratch, captured_context, density) = {
             let mut inner = self.inner.borrow_mut();
             let policy = Rc::clone(&inner.measure_policy);
             let state = std::mem::take(&mut inner.state);
             let slots_host = Rc::clone(&inner.slots);
-            let placement_scratch = std::mem::take(&mut inner.placement_scratch);
+            let scratch = std::mem::take(&mut inner.measure_scratch);
             let captured_context = inner.captured_context.clone();
             let density = inner.density;
             (
                 policy,
                 state,
                 slots_host,
-                placement_scratch,
+                scratch,
                 captured_context,
                 density,
             )
@@ -1549,7 +1490,7 @@ impl SubcomposeLayoutNodeHandle {
             fallback_context = composer.capture_composition_context();
             &fallback_context
         };
-        let ((result, placement_scratch), _) = composer.subcompose_slot_with_context(
+        let ((result, scratch), _) = composer.subcompose_slot_with_context(
             &slots_host,
             Some(node_id),
             context,
@@ -1566,10 +1507,10 @@ impl SubcomposeLayoutNodeHandle {
                     error,
                     parent_handle: self.clone(),
                     root_id: node_id,
-                    placement_scratch,
+                    scratch,
                 });
                 let result = (policy)(&mut scope, constraints_copy);
-                (result, scope.into_placement_scratch())
+                (result, scope.into_scratch())
             },
         )?;
 
@@ -1583,7 +1524,7 @@ impl SubcomposeLayoutNodeHandle {
         {
             let mut inner = self.inner.borrow_mut();
             inner.state = state;
-            inner.placement_scratch = placement_scratch;
+            inner.measure_scratch = scratch;
 
             inner.replace_placed_children(
                 result.placements.iter().map(|placement| placement.node_id),
@@ -1597,8 +1538,8 @@ impl SubcomposeLayoutNodeHandle {
     pub(crate) fn recycle_placement_scratch(&self, mut placements: Vec<Placement>) {
         placements.clear();
         let mut inner = self.inner.borrow_mut();
-        if placements.capacity() > inner.placement_scratch.capacity() {
-            inner.placement_scratch = placements;
+        if placements.capacity() > inner.measure_scratch.placements.capacity() {
+            inner.measure_scratch.placements = placements;
         }
     }
 
@@ -1621,7 +1562,7 @@ struct SubcomposeLayoutNodeInner {
     debug_modifiers: bool,
     node_id: Option<NodeId>,
     last_placements: Rc<Vec<NodeId>>,
-    placement_scratch: Vec<Placement>,
+    measure_scratch: MeasureScratch,
     measured_children_scratch: Rc<RefCell<HashMap<NodeId, Rc<MeasuredNode>>>>,
     captured_context: Option<cranpose_core::CapturedCompositionContext>,
     density: crate::density::Density,
@@ -1679,7 +1620,7 @@ impl SubcomposeLayoutNodeInner {
             debug_modifiers: false,
             node_id: None,
             last_placements: Rc::new(Vec::new()),
-            placement_scratch: Vec::new(),
+            measure_scratch: MeasureScratch::default(),
             measured_children_scratch: Rc::new(RefCell::new(HashMap::default())),
             captured_context: None,
             density: crate::density::Density::default(),
