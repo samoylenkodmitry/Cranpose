@@ -27,6 +27,7 @@ use web_time::Instant;
 use super::PaddingValues;
 use crate::{
     composable,
+    layout::MeasuredNode,
     layout_direction::LayoutDirection,
     modifier::{Modifier, Size},
     scroll::{OverscrollEffect, ScrollMotionContextKey, scroll_motion_context_for_key},
@@ -259,6 +260,18 @@ struct LazyListItemMeasureInputs<'a> {
     measured_item_cache: &'a Rc<RefCell<LazyMeasuredItemCache>>,
 }
 
+/// The measurements of all an item's roots, in the order of its roots: what
+/// [`LazyItemRoots::measurements`] holds as `dyn Any`.
+pub(crate) type RootMeasurements = SmallVec<[Rc<MeasuredNode>; 4]>;
+
+/// The measurement of each of `roots`, when the item holds one for each.
+pub(crate) fn root_measurements(roots: &LazyItemRoots) -> Option<&RootMeasurements> {
+    roots
+        .measurements
+        .as_ref()?
+        .downcast_ref::<RootMeasurements>()
+}
+
 fn measure_lazy_list_item(
     scope: &mut SubcomposeMeasureScopeImpl<'_>,
     index: usize,
@@ -455,7 +468,8 @@ fn measure_lazy_list_children(
     let mut node_ids: SmallNodeVec = SmallVec::with_capacity(root_children.len());
     let mut child_offsets: SmallOffsetVec = SmallVec::new();
     let mut child_cross_axis_sizes: SmallOffsetVec = SmallVec::new();
-    let mut measurements: SmallVec<[Rc<dyn Any>; 4]> = SmallVec::with_capacity(root_children.len());
+    let roots = root_children.len();
+    let mut measurements = RootMeasurements::with_capacity(roots);
 
     for child in root_children {
         let (placeable, retained) = scope.measure_retained(child, child_constraints);
@@ -494,7 +508,8 @@ fn measure_lazy_list_children(
             node_ids,
             child_offsets,
             child_cross_axis_sizes,
-            measurements,
+            measurements: (measurements.len() == roots)
+                .then(|| Rc::new(measurements) as Rc<dyn Any>),
         }),
     );
 
@@ -1228,7 +1243,7 @@ impl LazyMeasuredItemCache {
         if cached.item.key != item.key_slot_id
             || cached.item.content_type != item.content_type
             || cached.cross_axis_bits != normalized_axis_bits(item.cross_axis_size)
-            || cached.item.roots.measurements.len() != cached.item.roots.node_ids.len()
+            || cached.item.roots.measurements.is_none()
         {
             return None;
         }

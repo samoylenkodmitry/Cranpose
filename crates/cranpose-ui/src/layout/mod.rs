@@ -2640,36 +2640,37 @@ impl Drop for VecPools<'_> {
 /// [`crate::subcompose_layout::SubcomposeMeasureScopeImpl::layout_with_placed_roots`].
 struct PlacedRootMeasurements<'a> {
     items: std::slice::Iter<'a, Rc<LazyItemRoots>>,
-    item: Option<&'a LazyItemRoots>,
+    /// The measurements of the item being placed, one a root; empty for an
+    /// item that holds none.
+    measured: &'a [Rc<MeasuredNode>],
+    /// The item's next root, and how many roots it has.
     root: usize,
+    roots: usize,
 }
 
 impl<'a> PlacedRootMeasurements<'a> {
     fn new(items: &'a [Rc<LazyItemRoots>]) -> Self {
         Self {
             items: items.iter(),
-            item: None,
+            measured: &[],
             root: 0,
+            roots: 0,
         }
     }
 
     /// The measurement of the next placement; `None` for a root the item
     /// holds none for, and once every item is placed.
     fn next_measurement(&mut self) -> Option<&'a MeasuredNode> {
-        loop {
-            if let Some(item) = self.item
-                && self.root < item.node_ids.len()
-            {
-                let root = self.root;
-                self.root += 1;
-                return item
-                    .measurements
-                    .get(root)
-                    .and_then(|measured| measured.downcast_ref::<MeasuredNode>());
-            }
-            self.item = Some(self.items.next()?);
+        while self.root == self.roots {
+            let item = self.items.next()?;
+            self.measured = crate::widgets::lazy_list::root_measurements(item)
+                .map_or(&[], smallvec::SmallVec::as_slice);
             self.root = 0;
+            self.roots = item.node_ids.len();
         }
+        let measured = self.measured.get(self.root);
+        self.root += 1;
+        measured.map(|measured| &**measured)
     }
 }
 

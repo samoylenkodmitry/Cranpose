@@ -1,4 +1,9 @@
-use std::{any::Any, ops::Range, rc::Rc, sync::Arc};
+use std::{
+    any::Any,
+    ops::{Range, RangeInclusive},
+    rc::Rc,
+    sync::Arc,
+};
 
 use cranpose_core::{MemoryApplier, NodeId, NodeMarks, collections::map::HashMap};
 use cranpose_ui::{
@@ -1380,16 +1385,31 @@ struct PlacedChild {
     keeps_layer: bool,
 }
 
+/// How a translated container's placed children stand to its previous ones.
+enum ChildOrder {
+    /// The kept children lie together and in their order, at `kept` among
+    /// the previous children, and the entering ones come before or after
+    /// them: `entering_before` of the placed children, then the kept ones,
+    /// then the rest. A scroll leaves its children so, and so do unchanged
+    /// children.
+    Shifted {
+        kept: Range<usize>,
+        entering_before: usize,
+    },
+    /// The kept children changed their order, or children enter between
+    /// them.
+    Mixed,
+}
+
 /// Fills `scratch` with `container`'s placed children, each with its index
-/// among the previous ones, and returns whether they are the same children
-/// in the same order.
+/// among the previous ones, and returns how they stand to those.
 fn translated_children(
     applier: &MemoryApplier,
     container: &LayerNode,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     fresh_children: &[NodeId],
     scratch: &mut TranslateScratch,
-) -> Result<bool, &'static str> {
+) -> Result<ChildOrder, &'static str> {
     let placed_fresh = &mut scratch.placed_fresh;
     placed_fresh.clear();
     for &id in fresh_children {
@@ -1411,13 +1431,18 @@ fn translated_children(
             .all(|(child, placed)| {
                 matches!(child, RenderNode::Layer(layer) if layer_identity(layer) == Some(placed.id))
             });
-    if children_unchanged {
+    let order = if children_unchanged {
         for (index, placed) in placed_fresh.iter_mut().enumerate() {
             placed.old_index = Some(index);
+        }
+        ChildOrder::Shifted {
+            kept: 0..placed_fresh.len(),
+            entering_before: 0,
         }
     } else {
         let old_ids = &mut scratch.old_ids;
         old_ids.clear();
+        let (mut lowest, mut highest) = (NodeId::MAX, NodeId::MIN);
         for child in &container.children {
             let RenderNode::Layer(layer) = child else {
                 return Err("child without node id");
@@ -1425,35 +1450,53 @@ fn translated_children(
             let Some(id) = layer_identity(layer) else {
                 return Err("child without node id");
             };
+            lowest = lowest.min(id);
+            highest = highest.max(id);
             old_ids.push(id);
         }
-        match_old_children(old_ids, placed_fresh, &mut scratch.old_index_by_id);
-    }
-    check_retained_children(container, dirty_nodes, placed_fresh).map(|()| children_unchanged)
+        match_old_children(
+            old_ids,
+            lowest..=highest,
+            placed_fresh,
+            &mut scratch.old_index_by_id,
+        )
+    };
+    check_retained_children(container, dirty_nodes, placed_fresh).map(|()| order)
 }
 
 /// The searches of the previous children a match makes before it maps them:
 /// a search reads each id once, a map hashes each of them in.
 const MATCH_SEARCHES: usize = 16;
 
-/// Notes each placed child's index among the previous children `old_ids`.
+/// Notes each placed child's index among the previous children `old_ids`,
+/// whose ids lie in `old_id_range`.
 /// Children that kept their order match in turn, as a scroll that brings
 /// rows in at one end and lets them go at the other leaves them; a child
-/// past a gap is searched for, and the match continues after it. Once the
+/// past a gap is searched for, and the match continues after it. A child
+/// whose id lies outside the range enters without a search: a node made
+/// since the previous children takes an id past all of theirs. Once the
 /// order is mixed past [`MATCH_SEARCHES`] searches, `old_index_by_id` maps
 /// the previous children for the rest. An id is a node's, so it is once
-/// among the previous children.
+/// among the previous children. Returns how the placed children stand to
+/// the previous ones.
 fn match_old_children(
     old_ids: &[NodeId],
+    old_id_range: RangeInclusive<NodeId>,
     placed_fresh: &mut [PlacedChild],
     old_index_by_id: &mut HashMap<NodeId, usize>,
-) {
+) -> ChildOrder {
     let mut cursor = 0;
     let mut searches = 0;
     let mut mapped = false;
+    let mut kept: Option<Range<usize>> = None;
+    let mut entering_before = 0;
+    let mut entering_after = 0;
+    let mut shifted = true;
     for placed in placed_fresh {
         let old_index = if old_ids.get(cursor) == Some(&placed.id) {
             Some(cursor)
+        } else if !old_id_range.contains(&placed.id) {
+            None
         } else if searches < MATCH_SEARCHES {
             searches += 1;
             old_ids.iter().position(|&id| id == placed.id)
@@ -1465,10 +1508,27 @@ fn match_old_children(
             }
             old_index_by_id.get(&placed.id).copied()
         };
+        match (old_index, kept.as_mut()) {
+            (Some(index), Some(kept)) => {
+                shifted &= entering_after == 0 && index == kept.end;
+                kept.end = index + 1;
+            }
+            (Some(index), None) => kept = Some(index..index + 1),
+            (None, Some(_)) => entering_after += 1,
+            (None, None) => entering_before += 1,
+        }
         if let Some(index) = old_index {
             cursor = index + 1;
         }
         placed.old_index = old_index;
+    }
+    if shifted {
+        ChildOrder::Shifted {
+            kept: kept.unwrap_or(0..0),
+            entering_before,
+        }
+    } else {
+        ChildOrder::Mixed
     }
 }
 
@@ -1590,6 +1650,24 @@ fn recycle_leaving_children(
     }
 }
 
+/// Recycles the children that leave `container` around the `kept` ones,
+/// which stay where they lie, already in their new order. Their nodes
+/// leave the dirty set with them, as in [`recycle_leaving_children`].
+fn recycle_children_around(
+    container: &mut LayerNode,
+    kept: Range<usize>,
+    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
+) {
+    let mut recycle = |leaving| {
+        if let RenderNode::Layer(leaving) = leaving {
+            forget_dirty_subtree(&leaving, dirty_nodes);
+            crate::layer_recycling::recycle(leaving);
+        }
+    };
+    container.children.drain(kept.end..).for_each(&mut recycle);
+    container.children.drain(..kept.start).for_each(recycle);
+}
+
 /// Builds the children that enter `container`. They are built from the
 /// applier's current state, so their nodes leave the dirty set: the walk
 /// beneath would otherwise build each of them a second time.
@@ -1685,18 +1763,21 @@ fn reconcile_translated_children(
     container: &mut LayerNode,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     scratch: &mut TranslateScratch,
-    children_unchanged: bool,
+    order: ChildOrder,
     geometry: TranslateGeometry,
 ) {
-    if children_unchanged {
-        for (child, placed) in container.children.iter_mut().zip(&scratch.placed_fresh) {
-            let RenderNode::Layer(layer) = child else {
-                unreachable!("retained child identities were checked");
-            };
-            if placed.keeps_layer {
-                move_kept_child(applier, layer, placed.geometry.position, geometry);
-            }
-        }
+    if let ChildOrder::Shifted {
+        entering_before, ..
+    } = order
+    {
+        reconcile_shifted_children(
+            applier,
+            container,
+            dirty_nodes,
+            scratch,
+            entering_before,
+            geometry,
+        );
         return;
     }
     let mut entering = scratch.entering.drain(..).peekable();
@@ -1713,6 +1794,57 @@ fn reconcile_translated_children(
             container.children.push(RenderNode::Layer(lowered));
         }
     }
+}
+
+/// Moves the kept children, which lie in `container` in their new order, to
+/// their placements, and puts the entering children before and after them:
+/// those of the first `entering_before` placed children before.
+fn reconcile_shifted_children(
+    applier: &MemoryApplier,
+    container: &mut LayerNode,
+    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
+    scratch: &mut TranslateScratch,
+    entering_before: usize,
+    geometry: TranslateGeometry,
+) {
+    let TranslateScratch {
+        placed_fresh,
+        entering,
+        ..
+    } = scratch;
+    for (child, placed) in container
+        .children
+        .iter_mut()
+        .zip(&placed_fresh[entering_before..])
+    {
+        let RenderNode::Layer(layer) = child else {
+            unreachable!("retained child identities were checked");
+        };
+        if placed.keeps_layer {
+            move_kept_child(applier, layer, placed.geometry.position, geometry);
+        }
+    }
+    if entering.is_empty() {
+        return;
+    }
+    // The children built for the step lie in their placed order, and those
+    // placed before the kept ones come first.
+    let mut built = entering.iter().peekable();
+    let built_before = placed_fresh[..entering_before]
+        .iter()
+        .filter(|placed| built.next_if(|(id, _)| *id == placed.id).is_some())
+        .count();
+    for (id, lowered) in entering.iter() {
+        dirty_nodes.remove(id);
+        remove_dirty_descendants(lowered, dirty_nodes);
+    }
+    let layer = |(_, lowered): (NodeId, Box<LayerNode>)| RenderNode::Layer(lowered);
+    if built_before > 0 {
+        container
+            .children
+            .splice(0..0, entering.drain(..built_before).map(layer));
+    }
+    container.children.extend(entering.drain(..).map(layer));
 }
 
 /// Runs `f` on the thread's translate scratch where it lies, or on a new one
@@ -1770,8 +1902,7 @@ fn translate_layer_from_data(
     // building the container anew lowered every child layer beneath it too.
     crate::layer_recycling::recycle_primitives(container);
     let translated = with_translate_scratch(|scratch| {
-        let children_unchanged =
-            translated_children(applier, container, dirty_nodes, fresh_children, scratch)?;
+        let order = translated_children(applier, container, dirty_nodes, fresh_children, scratch)?;
         let geometry = TranslateGeometry::new(
             &layout_state,
             &container.graphics_layer,
@@ -1780,17 +1911,20 @@ fn translate_layer_from_data(
         );
         let child_inherited_translated_content_context =
             inherited_translated_content_context || container.translated_content_context;
-        if !children_unchanged {
-            recycle_leaving_children(container, scratch, dirty_nodes);
-            build_entering_children(
-                applier,
-                container,
-                scratch,
-                dirty_nodes,
-                geometry,
-                (child_inherited_translated_content_context, update),
-            );
+        match &order {
+            ChildOrder::Shifted { kept, .. } => {
+                recycle_children_around(container, kept.clone(), dirty_nodes);
+            }
+            ChildOrder::Mixed => recycle_leaving_children(container, scratch, dirty_nodes),
         }
+        build_entering_children(
+            applier,
+            container,
+            scratch,
+            dirty_nodes,
+            geometry,
+            (child_inherited_translated_content_context, update),
+        );
 
         apply_translated_container_state(
             container,
@@ -1800,14 +1934,7 @@ fn translate_layer_from_data(
             geometry,
         );
 
-        reconcile_translated_children(
-            applier,
-            container,
-            dirty_nodes,
-            scratch,
-            children_unchanged,
-            geometry,
-        );
+        reconcile_translated_children(applier, container, dirty_nodes, scratch, order, geometry);
         Ok(())
     });
     if let Err(reason) = translated {
