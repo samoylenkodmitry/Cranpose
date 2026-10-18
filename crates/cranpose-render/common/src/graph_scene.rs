@@ -342,6 +342,49 @@ struct HitBuffers {
     capture_path: Vec<NodeId>,
 }
 
+/// The hit targets of a [`Scene`], borrowed apart from its graph, so a walk
+/// of the graph pushes targets while it reads the graph in place.
+pub(crate) struct HitTargets<'a> {
+    hits: &'a mut Vec<HitRegion>,
+    buffers: &'a mut Vec<HitBuffers>,
+    next_z: &'a mut usize,
+    node_index: &'a mut HashMap<NodeId, usize>,
+    diagnostics: &'a Rc<RenderDiagnostics>,
+}
+
+impl HitTargets<'_> {
+    /// Adds an interactive target in draw order (see [`Scene::push_hit`]).
+    pub(crate) fn push(
+        &mut self,
+        node_id: NodeId,
+        capture_path: &[NodeId],
+        geometry: HitGeometry<'_>,
+        target: HitTargetSpec<'_>,
+    ) {
+        let HitTargetSpec { shape, handlers } = target;
+        if handlers.pointer_inputs().is_empty() && handlers.pointer_icon().is_none() {
+            return;
+        }
+        let mut buffers = self.buffers.pop().unwrap_or_default();
+        buffers.capture_path.extend_from_slice(capture_path);
+
+        let z_index = *self.next_z;
+        *self.next_z += 1;
+        let hit_index = self.hits.len();
+        self.hits.push(HitRegion::with_diagnostics(HitRegionInit {
+            node_id,
+            capture_path: buffers.capture_path,
+            geometry,
+            clip_buffer: buffers.hit_clips,
+            shape,
+            handlers: Rc::clone(handlers),
+            z_index,
+            diagnostics: Rc::clone(self.diagnostics),
+        }));
+        self.node_index.insert(node_id, hit_index);
+    }
+}
+
 /// The retained render graph of a window together with the hit targets built from it.
 pub struct Scene {
     /// The retained render graph, or `None` before the first build.
@@ -384,17 +427,36 @@ impl Scene {
         else {
             return;
         };
-        self.install_graph_with_hits(graph);
+        self.graph = Some(graph);
+        self.collect_hits();
     }
 
-    fn install_graph_with_hits(&mut self, graph: RenderGraph) {
+    /// Pushes the hit targets of the scene's graph, which stays in place.
+    fn collect_hits(&mut self) {
+        let Self {
+            graph: Some(graph),
+            hits,
+            hit_buffers,
+            next_hit_z,
+            node_index,
+            diagnostics,
+        } = self
+        else {
+            return;
+        };
+        let mut targets = HitTargets {
+            hits,
+            buffers: hit_buffers,
+            next_z: next_hit_z,
+            node_index,
+            diagnostics,
+        };
         crate::hit_graph::collect_hits_from_graph(
             &graph.root,
             ProjectiveTransform::identity(),
-            self,
+            &mut targets,
             None,
         );
-        self.replace_graph(graph);
     }
 
     /// Applies content and layer-property changes to the retained graph.
@@ -423,9 +485,7 @@ impl Scene {
             return;
         }
         self.clear_hits();
-        if let Some(graph) = self.graph.take() {
-            self.install_graph_with_hits(graph);
-        }
+        self.collect_hits();
     }
 
     /// Adds an interactive target in draw order, ignoring targets that neither
@@ -437,27 +497,14 @@ impl Scene {
         geometry: HitGeometry<'_>,
         target: HitTargetSpec<'_>,
     ) {
-        let HitTargetSpec { shape, handlers } = target;
-        if handlers.pointer_inputs().is_empty() && handlers.pointer_icon().is_none() {
-            return;
+        HitTargets {
+            hits: &mut self.hits,
+            buffers: &mut self.hit_buffers,
+            next_z: &mut self.next_hit_z,
+            node_index: &mut self.node_index,
+            diagnostics: &self.diagnostics,
         }
-        let mut buffers = self.hit_buffers.pop().unwrap_or_default();
-        buffers.capture_path.extend_from_slice(capture_path);
-
-        let z_index = self.next_hit_z;
-        self.next_hit_z += 1;
-        let hit_index = self.hits.len();
-        self.hits.push(HitRegion::with_diagnostics(HitRegionInit {
-            node_id,
-            capture_path: buffers.capture_path,
-            geometry,
-            clip_buffer: buffers.hit_clips,
-            shape,
-            handlers: Rc::clone(handlers),
-            z_index,
-            diagnostics: Rc::clone(&self.diagnostics),
-        }));
-        self.node_index.insert(node_id, hit_index);
+        .push(node_id, capture_path, geometry, target);
     }
 
     /// Removes all hit targets and releases their handlers while retaining vector capacity.
