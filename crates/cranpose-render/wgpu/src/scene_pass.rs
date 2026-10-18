@@ -82,6 +82,7 @@ pub(crate) struct SceneVolumeUniforms {
     high: [f32; 4],
     params: [[f32; 4]; Volume::PARAMS / 4],
     clip: [f32; 4],
+    source_region: [f32; 4],
 }
 
 /// One mesh's vertices and indices on the GPU.
@@ -812,7 +813,8 @@ fn light_uniform(light: Option<Light>, into: impl Fn(Vec3) -> Vec3) -> [f32; 4] 
 /// transform flattens space.
 pub(crate) fn volume_uniforms(
     scene: &SceneDraw,
-    (transform, mesh, volume, alpha): (&Mat4, &Mesh, &Volume, f32),
+    (transform, mesh, volume): (&Mat4, &Mesh, &Volume),
+    (alpha, source_region): (f32, [f32; 4]),
     (page, eye, space): (ScenePage, Vec3, SpaceShading),
 ) -> Option<SceneVolumeUniforms> {
     let model_from_scene = transform.inverse()?;
@@ -837,6 +839,7 @@ pub(crate) fn volume_uniforms(
         high: point(high),
         params: bytemuck::cast(volume.params),
         clip: plane_in_model(space.clip, transform),
+        source_region,
     })
 }
 

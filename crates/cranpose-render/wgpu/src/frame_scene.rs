@@ -428,7 +428,8 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             Material::Volume(volume) => {
                 let uniforms = volume_uniforms(
                     scene,
-                    (&surface.transform, &surface.mesh, volume, held.alpha),
+                    (&surface.transform, &surface.mesh, volume),
+                    (held.alpha, source_region(&held.surface, held.mesh.content)),
                     (page, eye, space),
                 )?;
                 let uniform = self.recorder.upload_uniform(

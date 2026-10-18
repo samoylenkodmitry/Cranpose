@@ -28,6 +28,9 @@ struct VolumeUniforms {
     // For a volume in a portal's space, the window's plane in the mesh's
     // coordinates: a point p lies beyond it where dot(xyz, p) + w >= 0.
     clip: vec4<f32>,
+    // Where the surface's content lies in the texture it shares, in texels:
+    // xy = its top left, zw = its size.
+    source_region: vec4<f32>,
 }
 
 // What a ray meets: its colour, premultiplied, nothing at an alpha of zero;
@@ -62,9 +65,16 @@ fn volume_param(index: u32) -> f32 {
     return volume_mesh.params[index / 4u][index % 4u];
 }
 
-// The surface's content at `uv`, from (0, 0) at its top left to (1, 1).
+// The surface's content at `uv`, from (0, 0) at its top left to (1, 1),
+// read half a texel in from its edge so a surface that shares its texture
+// never reads a neighbour's texels.
 fn volume_content(uv: vec2<f32>) -> vec4<f32> {
-    return textureSampleLevel(volume_texture, volume_sampler, uv, 0.0);
+    let size = vec2<f32>(textureDimensions(volume_texture));
+    let region = volume_mesh.source_region;
+    let first = region.xy + vec2<f32>(0.5);
+    let last = region.xy + region.zw - vec2<f32>(0.5);
+    let texel = clamp(region.xy + uv * region.zw, first, last);
+    return textureSampleLevel(volume_texture, volume_sampler, texel / size, 0.0);
 }
 
 // The direction the scene's light travels and its ambient share, in the
