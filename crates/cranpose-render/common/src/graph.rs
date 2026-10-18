@@ -515,6 +515,7 @@ impl LayerNode {
     /// through an offscreen buffer for its alpha or by request, its bounds,
     /// as Compose's layer-sized buffer cuts it. Hit testing takes only
     /// [`Self::clip_rect`]: alpha hides nothing from a finger.
+    #[inline]
     pub fn visual_clip_rect(&self) -> Option<Rect> {
         self.clip_rect().or_else(|| {
             (self.isolation.group_opacity || self.isolation.explicit_offscreen)

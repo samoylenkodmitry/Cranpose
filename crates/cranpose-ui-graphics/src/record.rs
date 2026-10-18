@@ -551,7 +551,8 @@ fn record_coverage(body: &ShapeRecordBody) -> Rect {
 /// The record of the segment `line`, whose frame is `frame`, painted by
 /// the interned `brush`: the ends ride in the arc columns, and the unit
 /// direction and half length the vertex stage orients its quad by in the
-/// curve column.
+/// curve column. A line reads back nothing else, so it keeps no source
+/// arguments, which an arc keeps for its radius and angles.
 fn line_record(
     line: &LineGeometry,
     frame: &LineFrame,
@@ -1217,7 +1218,7 @@ impl ShapeRecorder {
         let bounds = line.bounds_in(&frame);
         self.include_bounds(bounds);
         let shading = self.brush_shading(&body, &curve);
-        self.push_shaded(body, curve, body.arc_geometry, (blend, shading), None);
+        self.push_shaded(body, curve, [0.0; 4], (blend, shading), None);
         bounds
     }
 
@@ -2645,13 +2646,7 @@ impl LineRun<'_, '_> {
         let (body, curve) = line_record(&line, &frame, brush, self.stroke.width, flags);
         let shapes = &mut *self.recorder.shapes;
         shapes.include_bounds(line.bounds_in(&frame));
-        shapes.push_in_run(
-            started,
-            body,
-            curve,
-            body.arc_geometry,
-            (self.blend, shading),
-        );
+        shapes.push_in_run(started, body, curve, [0.0; 4], (self.blend, shading));
     }
 }
 

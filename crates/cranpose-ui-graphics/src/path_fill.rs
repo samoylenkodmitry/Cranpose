@@ -151,7 +151,9 @@ impl Edge {
     /// Its y at `x`, exact at its ends, so slices that meet at a vertex
     /// agree where.
     fn y_at(&self, x: f32) -> f32 {
-        if x <= self.x0 {
+        // A level edge, as a chart's base is, is that high all along: the
+        // slope term below is zero there.
+        if x <= self.x0 || self.y0 == self.y1 {
             self.y0
         } else if x >= self.x1 {
             self.y1
