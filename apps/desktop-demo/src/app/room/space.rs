@@ -1,13 +1,13 @@
 //! The room the Room tab shows: where its walls lie in the scene, and the
-//! camera that walks in it.
+//! eye that walks in it.
 
-use std::f32::consts::{FRAC_PI_3, PI, TAU};
+use std::f32::consts::FRAC_PI_3;
 
 use cranpose_core::{mutableStateOf, remember, MutableState};
 use cranpose_ui::{
     composable,
-    space::{Camera, Light, Mat4, Scene3d, Vec3},
-    FocusRequester, KeyCode, KeyEvent, KeyEventType, Point, PointerButton, PointerEventKind,
+    space::{Camera, EyePose, Light, Mat4, Scene3d, Vec3},
+    Eye, FocusRequester, KeyCode, KeyEvent, KeyEventType, Point, PointerButton, PointerEventKind,
     PointerInputScope, Size,
 };
 
@@ -19,7 +19,8 @@ const STANDING_DEPTH_SHARE: f32 = 0.2;
 const WALK_SPEED: f32 = 900.0;
 const TURN_SPEED: f32 = 1.8;
 const LOOK_PER_PIXEL: f32 = 0.005;
-const PITCH_LIMIT: f32 = 1.2;
+/// How close the eye comes to a wall it walks into.
+const EYE_RADIUS: f32 = 60.0;
 const DOWN: Vec3 = Vec3::new(0.0, 1.0, 0.0);
 
 const FORWARD: u8 = 1;
@@ -115,6 +116,13 @@ impl RoomShape {
         )
     }
 
+    /// The camera that shows the north wall at its own size, filling the
+    /// viewport: the flat screen.
+    pub(super) fn screen_camera(&self) -> Camera {
+        let eye = self.screen_eye();
+        Camera::look_at(eye, eye + Vec3::new(0.0, 0.0, 1.0), DOWN, self.focal_length)
+    }
+
     /// Where the eye stands to show the north wall at its own size, filling
     /// the viewport: the flat screen.
     fn screen_eye(&self) -> Vec3 {
@@ -135,21 +143,14 @@ impl RoomShape {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-struct Pose {
-    position: Option<Vec3>,
-    yaw: f32,
-    pitch: f32,
-}
-
-/// Whether the room is entered, where its camera stands and which movement
-/// keys are held.
+/// Whether the room is entered, its eye and which movement keys are held.
 #[derive(Clone)]
 pub(super) struct RoomState {
     entered: MutableState<bool>,
     spatial: MutableState<bool>,
     pub(super) progress: MutableState<f32>,
-    pose: MutableState<Pose>,
+    /// The window's eye while this room is the window's scene.
+    pub(super) eye: Eye,
     pub(super) held: MutableState<u8>,
     pub(super) focus: FocusRequester,
     /// Whether the ball of fire flies and the shape shifts.
@@ -162,7 +163,7 @@ pub(super) fn rememberRoomState() -> RoomState {
         entered: mutableStateOf(false),
         spatial: mutableStateOf(false),
         progress: mutableStateOf(0.0),
-        pose: mutableStateOf(Pose::default()),
+        eye: Eye::new(EyePose::standing(Vec3::ZERO, 0.0, 0.0), EYE_RADIUS),
         held: mutableStateOf(0),
         focus: FocusRequester::new(),
         motion: mutableStateOf(true),
@@ -182,15 +183,24 @@ impl RoomState {
     }
 
     /// Turns the flat screen into the room's north wall and steps back into
-    /// the room. The room takes the keyboard, so the movement keys walk.
-    pub(super) fn enter(&self) {
+    /// the room, to where the eye stands in it. The room takes the keyboard,
+    /// so the movement keys walk.
+    pub(super) fn enter(&self, shape: &RoomShape) {
+        self.eye
+            .place(EyePose::standing(shape.standing_eye(), 0.0, 0.0));
         self.spatial.set(true);
         self.entered.set(true);
         self.focus.request_focus().ok();
     }
 
-    /// Walks back to the north wall until it fills the screen again.
-    pub(super) fn leave(&self) {
+    /// Walks back to the north wall until it fills the screen again: from
+    /// where the eye stands in the room, or from where it steps in when it
+    /// stands in a room behind one of the walls.
+    pub(super) fn leave(&self, shape: &RoomShape) {
+        if !self.eye.pose().doorways.is_empty() {
+            self.eye
+                .place(EyePose::standing(shape.standing_eye(), 0.0, 0.0));
+        }
         self.entered.set(false);
         self.held.set(0);
     }
@@ -200,32 +210,39 @@ impl RoomState {
         self.spatial.set(false);
     }
 
-    /// The scene through the camera, part of the way from the screen to
-    /// where it stands.
-    pub(super) fn scene(&self, shape: &RoomShape) -> Scene3d {
-        let pose = self.pose.get();
-        let standing = pose.position.unwrap_or_else(|| shape.standing_eye());
-        let t = self.progress.get();
-        let t = t * t * (3.0 - 2.0 * t);
-        let eye = shape.screen_eye().lerp(standing, t);
-        let yaw = ((pose.yaw + PI).rem_euclid(TAU) - PI) * t;
-        let pitch = pose.pitch * t;
-        Scene3d {
-            camera: Camera::look_at(eye, eye + facing(yaw, pitch), DOWN, shape.focal_length),
-            light: Some(Light {
-                direction: Vec3::new(0.5, 0.45, 0.75),
-                ambient: 0.45,
-                shadows: true,
-                size: 0.08,
-            }),
-        }
-    }
-
-    fn turn(&self, yaw: f32, pitch: f32) {
-        self.pose.update(|pose| {
-            pose.yaw += yaw;
-            pose.pitch = (pose.pitch + pitch).clamp(-PITCH_LIMIT, PITCH_LIMIT);
+    /// The scene: in the room, through the eye; on the way between the
+    /// screen and the room, through a camera part of the way from the screen
+    /// to the eye. A room behind a doorway of another keeps the screen's
+    /// camera, which stands in the doorway, and the window's eye walks in.
+    pub(super) fn scene(&self, shape: &RoomShape, nested: bool) -> Scene3d {
+        let light = Some(Light {
+            direction: Vec3::new(0.5, 0.45, 0.75),
+            ambient: 0.45,
+            shadows: true,
+            size: 0.08,
         });
+        if nested {
+            return Scene3d {
+                camera: shape.screen_camera(),
+                light,
+                eye: None,
+            };
+        }
+        let t = self.progress.get();
+        if t >= 1.0 {
+            return self.eye.scene(shape.focal_length, light);
+        }
+        let pose = self.eye.pose();
+        let t = t * t * (3.0 - 2.0 * t);
+        let at = shape.screen_eye().lerp(pose.position, t);
+        let ahead = Vec3::new(0.0, 0.0, 1.0);
+        let forward = ahead.lerp(pose.forward, t).normalized().unwrap_or(ahead);
+        let down = DOWN.lerp(pose.down, t).normalized().unwrap_or(DOWN);
+        Scene3d {
+            camera: Camera::look_at(at, at + forward, down, shape.focal_length),
+            light,
+            eye: None,
+        }
     }
 
     /// Takes a movement key while the room is entered.
@@ -259,9 +276,10 @@ impl RoomState {
         true
     }
 
-    /// Moves the camera by the held keys over `seconds`; false when no key
-    /// is held.
-    pub(super) fn walk(&self, shape: &RoomShape, seconds: f32) -> bool {
+    /// Moves the eye by the held keys over `seconds`; false when no key is
+    /// held. The walls stop it, but for a doorway in one, which leads into
+    /// the room behind it.
+    pub(super) fn walk(&self, seconds: f32) -> bool {
         let held = self.held.get();
         if held == 0 {
             return false;
@@ -269,17 +287,12 @@ impl RoomState {
         let axis = |positive: u8, negative: u8| {
             f32::from(u8::from(held & positive != 0)) - f32::from(u8::from(held & negative != 0))
         };
-        self.turn(axis(TURN_RIGHT, TURN_LEFT) * TURN_SPEED * seconds, 0.0);
-        let pose = self.pose.get();
-        let ahead = facing(pose.yaw, 0.0);
-        let right = DOWN.cross(ahead);
-        let position = pose.position.unwrap_or_else(|| shape.standing_eye());
-        let step =
-            (ahead * axis(FORWARD, BACK) + right * axis(RIGHT, LEFT)) * (WALK_SPEED * seconds);
-        // The walls do not stop the eye: a doorway in one, a scene on the
-        // wall's content, leads into the space behind it.
-        let position = position + step;
-        self.pose.update(|pose| pose.position = Some(position));
+        self.eye
+            .turn(axis(TURN_RIGHT, TURN_LEFT) * TURN_SPEED * seconds, 0.0);
+        let (ahead, right) = self.eye.pose().walking_axes();
+        self.eye.walk(
+            (ahead * axis(FORWARD, BACK) + right * axis(RIGHT, LEFT)) * (WALK_SPEED * seconds),
+        );
         true
     }
 
@@ -307,7 +320,7 @@ impl RoomState {
                                 continue;
                             };
                             let now = event.global_position;
-                            self.turn(
+                            self.eye.turn(
                                 (now.x - previous.x) * LOOK_PER_PIXEL,
                                 (previous.y - now.y) * LOOK_PER_PIXEL,
                             );
@@ -322,11 +335,4 @@ impl RoomState {
             })
             .await;
     }
-}
-
-/// The direction of a camera turned `yaw` to the right and `pitch` up.
-fn facing(yaw: f32, pitch: f32) -> Vec3 {
-    let (sin_yaw, cos_yaw) = yaw.sin_cos();
-    let (sin_pitch, cos_pitch) = pitch.sin_cos();
-    Vec3::new(sin_yaw * cos_pitch, -sin_pitch, cos_yaw * cos_pitch)
 }

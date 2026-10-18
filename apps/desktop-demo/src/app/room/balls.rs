@@ -56,6 +56,7 @@ pub(super) fn GlassBall(shape: RoomShape, mesh: Arc<Mesh>) {
                     .then(&Mat4::translation(center)),
                 material: Material::Glass(Glass::clear(2.0 * radius)),
                 casts_shadow: false,
+                solid: true,
             }),
         BoxSpec {
             content_alignment: Alignment::CENTER,
@@ -97,6 +98,7 @@ pub(super) fn FireBall(room: RoomState, shape: RoomShape, (sphere, plane): (Arc<
                     .then(&Mat4::translation(fire_center(&shape, time.get()))),
                 material: Material::Emissive,
                 casts_shadow: false,
+                solid: false,
             }),
         BoxSpec::default(),
         move || Flames(time),
@@ -107,12 +109,13 @@ pub(super) fn FireBall(room: RoomState, shape: RoomShape, (sphere, plane): (Arc<
             .mesh_surface(move || MeshSurface {
                 mesh: Arc::clone(&plane),
                 transform: facing(
-                    room.scene(&shape).camera,
+                    room.scene(&shape, false).camera,
                     fire_center(&shape, time.get()),
                     radius * HALO_PER_RADIUS,
                 ),
                 material: Material::Glow,
                 casts_shadow: false,
+                solid: false,
             })
             .draw_behind(|scope| {
                 let size = scope.size();

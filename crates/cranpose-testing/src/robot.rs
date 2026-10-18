@@ -483,13 +483,12 @@ impl TestRenderer {
         }
     }
 
-    fn install_graph(&mut self, mut graph: RenderGraph) {
-        cranpose_render_common::scene_space::follow_viewers(&mut graph);
+    fn install_graph(&mut self, graph: RenderGraph) {
         cranpose_render_common::hit_graph::collect_hits_from_graph(
             &graph.root,
             cranpose_render_common::graph::ProjectiveTransform::identity(),
             &mut self.scene,
-            (None, &graph.viewers),
+            None,
         );
         self.scene.replace_graph(graph);
     }

@@ -27,7 +27,7 @@ fn scene_for(rule: &mut ComposeTestRule) -> Scene {
         &graph.root,
         ProjectiveTransform::identity(),
         &mut scene,
-        (None, &graph.viewers),
+        None,
     );
     scene
 }

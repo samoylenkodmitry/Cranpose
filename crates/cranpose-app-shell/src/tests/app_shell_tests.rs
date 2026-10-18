@@ -1784,7 +1784,7 @@ fn collect_graph_hits(
         layer,
         parent_transform,
         scene,
-        (parent_hit_clip, &[]),
+        parent_hit_clip,
     );
 }
 

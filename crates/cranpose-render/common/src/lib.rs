@@ -50,10 +50,12 @@ pub mod render_contract;
 pub mod scene_builder;
 /// Which mesh surface of a 3D scene a window point shows.
 pub mod scene_pick;
-pub mod scene_space;
 pub mod shape_sdf;
 /// CPU text rasterization: fonts, glyph layout and glyph masks.
 pub mod software_text_raster;
+/// Where a window's scenes put their 3D layers: frames, spaces, doorways
+/// and what the eye sees.
+pub mod space;
 /// Colors, brushes and corner radii resolved against the properties of a graphics layer.
 pub mod style_shared;
 mod text_cache_key;
@@ -194,6 +196,27 @@ pub trait RenderScene {
     ///
     /// Returns None if the node no longer exists in the scene (e.g., removed during gesture).
     fn find_target(&self, node_id: cranpose_core::NodeId) -> Option<Self::HitTarget>;
+
+    /// The hit targets on the mesh surfaces of the scene the node `scene`
+    /// shows that `ray` reaches, in the space the scene's eye stands in,
+    /// ordered by z-index (top-to-bottom): a controller's, a hand's or a
+    /// gaze's, which need not start at the eye.
+    fn hit_test_ray(
+        &self,
+        _scene: cranpose_core::NodeId,
+        _ray: cranpose_ui_graphics::space::Ray,
+    ) -> Vec<Self::HitTarget> {
+        Vec::new()
+    }
+
+    /// Visits each mesh surface the eyes of the window's scenes see, by its
+    /// node, with the map from its content to the window as the eye shows
+    /// it, through the doorways it lies behind: where the nodes on it show.
+    fn surface_windows(
+        &self,
+        _visit: &mut dyn FnMut(cranpose_core::NodeId, cranpose_ui_graphics::ProjectiveTransform),
+    ) {
+    }
 
     /// Where the hit target of `node_id` shows in the window when it lies on
     /// a mesh surface of a 3D scene: its bounds as the scene's camera shows

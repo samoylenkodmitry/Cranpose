@@ -60,6 +60,7 @@ pub(super) fn Blob(room: RoomState, shape: RoomShape) {
                     .then(&Mat4::translation(center)),
                 material: Material::Lit,
                 casts_shadow: true,
+                solid: true,
             })
             .draw_behind(|scope| {
                 let size = scope.size();

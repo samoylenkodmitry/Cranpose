@@ -276,9 +276,9 @@ pub struct LayerNode {
     /// Whether this layer or a layer beneath it has a hit test node. Scene building keeps it
     /// current.
     pub has_hit_targets: bool,
-    /// [`Self::has_surfaces`], worked out the first time a scene's walk
-    /// asks and forgotten when the layer or its children change.
-    pub surfaces: Cell<Option<bool>>,
+    /// [`Self::has_space`], worked out the first time a walk asks and
+    /// forgotten when the layer or its children change.
+    pub space: Cell<Option<bool>>,
     /// Whether this subtree publishes live window origins (a text field's
     /// popup anchor, a scroll container's viewport rect). Those sinks are
     /// written during a full lowering, so the scroll fast path may translate
@@ -377,7 +377,7 @@ impl Default for LayerNode {
             clip_to_bounds: false,
             hit_test: None,
             has_hit_targets: false,
-            surfaces: Cell::new(None),
+            space: Cell::new(None),
             has_origin_sinks: false,
             contained: Cell::new(None),
             isolation: IsolationReasons::default(),
@@ -468,23 +468,22 @@ impl LayerNode {
                 RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
             });
         self.contained.set(None);
-        self.surfaces.set(None);
+        self.space.set(None);
     }
 
-    /// Whether this layer or a layer beneath it is a mesh surface, so a
-    /// scene's walk for the surfaces inside a surface's content skips the
-    /// subtrees without one.
-    pub fn has_surfaces(&self) -> bool {
-        if let Some(known) = self.surfaces.get() {
+    /// Whether this layer or a layer beneath it is a scene, a mesh surface
+    /// or a 3D transform, so a walk for what lies in 3D skips the subtrees
+    /// without one.
+    pub fn has_space(&self) -> bool {
+        if let Some(known) = self.space.get() {
             return known;
         }
-        let found = cranpose_ui_graphics::layer_transform::layer_surface(&self.graphics_layer)
-            .is_some()
+        let found = self.graphics_layer.space.is_some()
             || self.children.iter().any(|child| match child {
-                RenderNode::Layer(child_layer) => child_layer.has_surfaces(),
+                RenderNode::Layer(child_layer) => child_layer.has_space(),
                 RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
             });
-        self.surfaces.set(Some(found));
+        self.space.set(Some(found));
         found
     }
 
@@ -785,9 +784,6 @@ pub struct RenderGraph {
     pub root: LayerNode,
     /// How many scene updates the graph took: the number of the latest.
     pub update: u64,
-    /// Where the eyes of the scenes the window shows stand among their
-    /// portals' spaces, kept up by [`crate::scene_space::follow_viewers`].
-    pub viewers: Vec<crate::scene_space::Viewer>,
     /// The way to the layer the last scene updates changed alone, for the
     /// next update that changes it alone.
     pub(crate) retained_path: Option<crate::scene_builder::RetainedPath>,
@@ -799,16 +795,8 @@ impl RenderGraph {
         Self {
             root,
             update: 0,
-            viewers: Vec::new(),
             retained_path: None,
         }
-    }
-
-    /// The doorways the viewer of the scene of `scene` walked through.
-    pub fn viewer_path(&self, scene: Option<NodeId>) -> &[NodeId] {
-        scene
-            .and_then(|scene| self.viewers.iter().find(|viewer| viewer.scene == scene))
-            .map_or(&[], |viewer| viewer.path.as_slice())
     }
 
     /// Number of nodes in the graph. A layer counts once and each primitive of a draw run counts on

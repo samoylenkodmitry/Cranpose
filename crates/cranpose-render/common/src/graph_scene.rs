@@ -10,7 +10,7 @@ use cranpose_core::{
 };
 use cranpose_foundation::{MINIMUM_TOUCH_TARGET_SIZE, PointerEvent, PointerEventKind};
 use cranpose_ui::{LayoutNode, ModifierNodeSlices, SubcomposeLayoutNode};
-use cranpose_ui_graphics::{Point, PointerIcon, Rect, RoundedCornerShape};
+use cranpose_ui_graphics::{Point, PointerIcon, Rect, RoundedCornerShape, space::Ray};
 
 use crate::{
     HitTestTarget, RenderScene, SceneUpdates,
@@ -229,7 +229,22 @@ impl SurfaceRegion {
         {
             return None;
         }
-        let content = target.pick.content_point(window, target.index)?;
+        self.local_in(target.pick.content_point(window, target.index)?)
+    }
+
+    /// The local point `ray`, in the space the scene's eye stands in, meets
+    /// on the target, when the target's surface is the nearest along it and
+    /// no clip within the surface cuts the point.
+    fn local_point_along(&self, ray: Ray) -> Option<Point> {
+        let (index, hit) = self.target.pick.nearest_along(ray)?;
+        (index == self.target.index)
+            .then(|| self.local_in(hit.point))
+            .flatten()
+    }
+
+    /// The local point of content point `content`, unless a clip within
+    /// the surface cuts it.
+    fn local_in(&self, content: Point) -> Option<Point> {
         if self
             .clip_bounds
             .is_some_and(|clip| !clip.contains(content.x, content.y))
@@ -243,11 +258,16 @@ impl SurfaceRegion {
         self.content_to_local.map_point_in_front(content)
     }
 
-    /// The local point under the window point for a gesture the target
-    /// holds, which may leave the surface.
-    fn drag_point(&self, window: Point) -> Option<Point> {
+    /// The local point under the window point, or along the event's ray,
+    /// for a gesture the target holds, which may leave the surface.
+    fn drag_point(&self, event: &PointerEvent) -> Option<Point> {
         let target = &self.target;
-        let content = target.pick.drag_point(window, target.index)?;
+        let content = match event.ray {
+            Some(ray) => target.pick.drag_point_along(ray, target.index)?,
+            None => target
+                .pick
+                .drag_point(event.global_position, target.index)?,
+        };
         Some(self.content_to_local.map_point(content))
     }
 }
@@ -418,7 +438,7 @@ impl HitRegion {
     fn localize_event(&self, event: &PointerEvent) -> PointerEvent {
         let local = match &self.surface {
             Some(surface) => surface
-                .drag_point(event.global_position)
+                .drag_point(event)
                 .unwrap_or_else(|| self.world_to_local.map_point(event.global_position)),
             None => self.world_to_local.map_point(event.global_position),
         };
@@ -530,12 +550,12 @@ impl Scene {
     pub fn rebuild_from_applier(&mut self, applier: &MemoryApplier, root: NodeId) {
         let previous = self.graph.take();
         self.clear_hits();
-        let Some(mut graph) =
+        let Some(graph) =
             crate::scene_builder::rebuild_graph_from_applier(applier, root, 1.0, previous)
         else {
             return;
         };
-        follow_placed_viewers(&mut graph);
+        crate::scene_builder::publish_space(applier, &graph);
         self.install_graph_with_hits(graph);
     }
 
@@ -544,7 +564,7 @@ impl Scene {
             &graph.root,
             ProjectiveTransform::identity(),
             self,
-            (None, &graph.viewers),
+            None,
         );
         self.replace_graph(graph);
     }
@@ -571,8 +591,10 @@ impl Scene {
             self.rebuild_from_applier(applier, root);
             return;
         };
-        let walked = self.graph.as_mut().is_some_and(follow_placed_viewers);
-        if !refresh_hits && !report.hit_graph_dirty && !walked {
+        if let Some(graph) = &self.graph {
+            crate::scene_builder::publish_space(applier, graph);
+        }
+        if !refresh_hits && !report.hit_graph_dirty {
             return;
         }
         self.clear_hits();
@@ -641,15 +663,6 @@ impl Default for Scene {
     }
 }
 
-/// Follows the viewers of `graph`'s scenes through the doorways their eyes
-/// passed, when the build or update that made `graph` placed a scene's
-/// layer: a flat window asks nothing of its layers. True when an eye
-/// entered or left a space.
-fn follow_placed_viewers(graph: &mut RenderGraph) -> bool {
-    crate::thread_state::with(|state| state.scene_placed.replace(false))
-        && crate::scene_space::follow_viewers(graph)
-}
-
 impl RenderScene for Scene {
     type HitTarget = HitRegion;
 
@@ -689,6 +702,39 @@ impl RenderScene for Scene {
             .get(&node_id)
             .and_then(|&index| self.hits.get(index))
             .cloned()
+    }
+
+    fn hit_test_ray(&self, scene: NodeId, ray: Ray) -> Vec<Self::HitTarget> {
+        let mut hit: Vec<&HitRegion> = self
+            .hits
+            .iter()
+            .filter(|hit| {
+                hit.surface.as_ref().is_some_and(|surface| {
+                    surface.target.pick.scene() == Some(scene)
+                        && surface
+                            .local_point_along(ray)
+                            .is_some_and(|local| hit.contains_local(local))
+                })
+            })
+            .collect();
+        hit.sort_by_key(|hit| Reverse(hit.z_index));
+        hit.into_iter().cloned().collect()
+    }
+
+    fn surface_windows(&self, visit: &mut dyn FnMut(NodeId, ProjectiveTransform)) {
+        let Some(graph) = &self.graph else {
+            return;
+        };
+        let root = ProjectiveTransform::identity();
+        crate::space::for_each_window_eye(&graph.root, root, &mut |_, view, to_window| {
+            for seen in &view.surfaces {
+                if let (Some(node_id), Some(content)) =
+                    (seen.layer.node_id, view.content_to_window(seen, to_window))
+                {
+                    visit(node_id, content);
+                }
+            }
+        });
     }
 
     fn surface_window_bounds(&self, node_id: NodeId) -> Option<Rect> {

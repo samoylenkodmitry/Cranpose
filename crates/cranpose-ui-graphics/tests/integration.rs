@@ -1,4 +1,5 @@
 mod arc_recording_speed;
+mod eye_pose;
 mod glass_placeholder;
 mod mesh_space;
 mod path_fill_slices;

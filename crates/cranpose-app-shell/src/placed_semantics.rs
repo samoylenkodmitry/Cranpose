@@ -204,7 +204,7 @@ pub fn placed_semantics_from_applier(
             &graph.root,
             ProjectiveTransform::identity(),
             &mut sink,
-            (None, &graph.viewers),
+            None,
         );
     }
 

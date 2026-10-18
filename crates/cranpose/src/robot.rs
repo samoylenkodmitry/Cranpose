@@ -6,9 +6,7 @@ use std::{
 
 use cranpose_app_shell::{AppShell, KeyCode, PointerSource, RuntimeLeakDebugStats};
 use cranpose_render_common::{
-    RenderScene, Renderer,
-    graph::ProjectiveTransform,
-    layer_transform::{SceneFrame, node_transform_to_window},
+    RenderScene, Renderer, graph::ProjectiveTransform, layer_transform::layer_transform_to_window,
 };
 #[cfg(feature = "renderer-wgpu")]
 use cranpose_render_wgpu::{DebugCpuAllocationStats, RenderStatsSnapshot};
@@ -1866,9 +1864,17 @@ where
     R: Renderer,
     R::Error: std::fmt::Debug,
 {
+    let mut surfaces = HashMap::new();
+    app.scene().surface_windows(&mut |node_id, content| {
+        surfaces.insert(node_id, content);
+    });
     let mut bounds = HashMap::new();
     app.debug_enter_app_context(|| {
-        collect_semantic_bounds(root, (ProjectiveTransform::identity(), None), &mut bounds);
+        collect_semantic_bounds(
+            root,
+            (ProjectiveTransform::identity(), &surfaces),
+            &mut bounds,
+        );
     });
     let scene = app.scene();
     for (&node_id, rect) in &mut bounds {
@@ -1884,12 +1890,16 @@ where
     bounds
 }
 
-/// Records where each node of `layout_box`'s subtree shows in the window:
-/// `parent` maps the parent's children to the window, through the scene the
-/// parent shows, if any.
+/// Records where each node of `layout_box`'s subtree shows in the window,
+/// through the graphics layers above it: `parent` maps the parent's
+/// children to the window, and `surfaces` holds the map from the content of
+/// each mesh surface the window's eyes see to the window.
 fn collect_semantic_bounds(
     layout_box: &cranpose_ui::LayoutBox,
-    parent: (ProjectiveTransform, Option<&SceneFrame>),
+    (parent, surfaces): (
+        ProjectiveTransform,
+        &HashMap<cranpose_core::NodeId, ProjectiveTransform>,
+    ),
     bounds: &mut HashMap<cranpose_core::NodeId, SemanticRect>,
 ) {
     let laid_out = bounds_from_layout_box(layout_box);
@@ -1906,15 +1916,12 @@ fn collect_semantic_bounds(
     let origin = cranpose_ui::Point::new(rect.x, rect.y);
     let slices = &layout_box.node_data.modifier_slices;
     let layer = slices.graphics_layer();
-    let window = layer.as_ref().map_or(parent.0, |layer| {
-        node_transform_to_window(
-            parent.0,
-            parent.1,
-            (origin, size),
-            slices.layer_bounds(size),
-            layer,
-        )
-    });
+    let window = match surfaces.get(&layout_box.node_id) {
+        Some(content) => ProjectiveTransform::translation(-origin.x, -origin.y).then(*content),
+        None => layer.as_ref().map_or(parent, |layer| {
+            layer_transform_to_window(parent, origin, slices.layer_bounds(size), layer)
+        }),
+    };
     let shown = window.bounds_for_rect(rect);
     bounds.insert(
         layout_box.node_id,
@@ -1925,11 +1932,8 @@ fn collect_semantic_bounds(
             height: shown.height,
         },
     );
-    let scene = layer
-        .as_ref()
-        .and_then(|layer| SceneFrame::of(layer, origin, size));
     for child in &layout_box.children {
-        collect_semantic_bounds(child, (window, scene.as_ref()), bounds);
+        collect_semantic_bounds(child, (window, surfaces), bounds);
     }
 }
 

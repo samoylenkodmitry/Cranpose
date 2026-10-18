@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use super::{
+    eye::EyePlace,
     math::{Mat4, Vec3},
     mesh::{Mesh, MeshHit},
 };
@@ -76,12 +77,11 @@ impl Camera {
         })
     }
 
-    /// The map from the scene this camera sees into the content space of a
-    /// surface (see [`MeshSurface::content_to_scene`]) on which `window`, a
-    /// rect of its content, is a doorway into the scene: the camera stands
-    /// in the doorway's middle on the content's plane, looking into the
-    /// surface, with its x and y along the content's, a scene unit to a
-    /// content pixel. What the camera sees lies behind the surface.
+    /// The map from the scene this camera sees into the frame in which
+    /// `window`, a rect on the frame's plane, is a doorway into the scene:
+    /// the camera stands in the doorway's middle, looking along the frame's
+    /// z, with its x and y along the frame's, a scene unit to a frame unit.
+    /// What the camera sees lies behind the doorway.
     pub fn doorway(&self, window: Rect) -> Mat4 {
         self.view.then(&Mat4::translation(Vec3::new(
             window.x + window.width * 0.5,
@@ -174,23 +174,8 @@ impl Light {
         let mut low = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
         let mut high = -low;
         for caster in casters {
-            let (mesh_low, mesh_high) = caster.mesh.bounds();
-            let to_light = caster.transform.then(&view);
-            for corner in 0..8 {
-                let pick =
-                    |bit: u32, low: f32, high: f32| if corner & bit == 0 { low } else { high };
-                let point = to_light.transform_point(Vec3::new(
-                    pick(1, mesh_low.x, mesh_high.x),
-                    pick(2, mesh_low.y, mesh_high.y),
-                    pick(4, mesh_low.z, mesh_high.z),
-                ));
-                low = Vec3::new(low.x.min(point.x), low.y.min(point.y), low.z.min(point.z));
-                high = Vec3::new(
-                    high.x.max(point.x),
-                    high.y.max(point.y),
-                    high.z.max(point.z),
-                );
-            }
+            let (caster_low, caster_high) = caster.mesh.bounds_in(&caster.transform.then(&view));
+            (low, high) = (low.min(caster_low), high.max(caster_high));
         }
         let extent = high - low;
         if !(extent.x.is_finite() && extent.y.is_finite() && extent.z.is_finite()) {
@@ -215,24 +200,26 @@ impl Light {
 /// A scene's camera and light, which a `scene3d` modifier shows its
 /// children's mesh surfaces through.
 ///
-/// A scene inside the content of a mesh surface of another scene is a
-/// portal: the rect its node takes on the surface's content is a doorway
-/// into its space, which lies behind the surface, and the outer scene shows
-/// that space through the doorway from wherever the outer scene's eye
-/// stands. Its camera stands in the doorway (see [`Camera::doorway`]); what
-/// lies behind the camera is cut. Portals nest up to [`MAX_PORTAL_LEVEL`]
-/// deep; a scene deeper than that draws flat on its surface.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// A scene inside another scene's space is a doorway into a space of its
+/// own: the rect its node takes in its frame opens onto that space, which
+/// lies behind it, placed so the doorway stands where the inner scene's
+/// camera stands (see [`Camera::doorway`]). The window's eye sees through
+/// doorways from the space it stands in, as deep as they show on screen,
+/// and walks through them (see [`EyePlace`]).
+#[derive(Clone, Debug, PartialEq)]
 pub struct Scene3d {
-    /// The camera the scene is seen through; for a portal, the one that
-    /// stands in its doorway.
+    /// The camera the scene is seen through. For a scene behind a doorway,
+    /// the one that stands in the doorway; for the window's scene with an
+    /// [`eye`](Self::eye), the eye's, in the space the eye stands in.
     pub camera: Camera,
     /// The light on the scene's lit surfaces, or `None` for none.
     pub light: Option<Light>,
+    /// For the window's scene, where its eye stands among the spaces behind
+    /// the scene's doorways and where the renderer leaves what the eye can
+    /// bump into; `None` for a camera in the scene's own space that walks
+    /// through nothing. A scene behind a doorway leaves it out.
+    pub eye: Option<EyePlace>,
 }
-
-/// How many portals deep a scene shows the spaces inside its surfaces.
-pub const MAX_PORTAL_LEVEL: u8 = 3;
 
 /// A composable's content drawn on a mesh placed in a scene.
 #[derive(Clone, Debug, PartialEq)]
@@ -246,6 +233,10 @@ pub struct MeshSurface {
     /// Whether the surface casts a shadow from the scene's light. Every lit
     /// and unlit surface takes the shadows that fall on it.
     pub casts_shadow: bool,
+    /// Whether an eye that walks into the surface (see
+    /// [`EyeWorld::walk`](super::EyeWorld::walk)) stops there. A doorway in
+    /// the surface's content lets it through.
+    pub solid: bool,
 }
 
 /// How a surface's content meets the scene's light and what lies behind
@@ -477,11 +468,21 @@ fn content_point([u, v]: [f32; 2], size: Size) -> Point {
 }
 
 /// Where a layer sits in 3D, as its graphics layer carries it.
+///
+/// Inside a scene, every layer takes a frame from its parent's: its place
+/// in its parent's layout, turned into 3D on the parent's plane, with z
+/// away from the side the content shows to. A layer that carries a space
+/// changes the frame its descendants take.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayerSpace {
-    /// The layer shows a scene: its children's mesh surfaces are drawn
-    /// through the scene's camera.
+    /// The layer shows a scene: its children's frames are the scene's
+    /// space. Inside another scene, the layer's rect is a doorway into it.
     Scene(Scene3d),
-    /// The layer's content is drawn on a mesh in its parent's scene.
+    /// The layer's content is drawn on a mesh placed in the layer's frame,
+    /// and its children's frames lie in that content.
     Surface(MeshSurface),
+    /// Moves the frames of the layer's descendants in its own frame, as a
+    /// group of 3D objects moves together. The layer's own draws stay where
+    /// they would be without it.
+    Transform(Mat4),
 }

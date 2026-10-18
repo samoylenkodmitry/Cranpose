@@ -61,6 +61,24 @@ impl Vec3 {
     pub fn lerp(self, other: Self, t: f32) -> Self {
         self + (other - self) * t
     }
+
+    /// The lower of each coordinate of `self` and `other`.
+    pub fn min(self, other: Self) -> Self {
+        Self::new(
+            self.x.min(other.x),
+            self.y.min(other.y),
+            self.z.min(other.z),
+        )
+    }
+
+    /// The higher of each coordinate of `self` and `other`.
+    pub fn max(self, other: Self) -> Self {
+        Self::new(
+            self.x.max(other.x),
+            self.y.max(other.y),
+            self.z.max(other.z),
+        )
+    }
 }
 
 impl Add for Vec3 {

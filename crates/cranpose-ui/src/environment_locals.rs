@@ -24,6 +24,7 @@ pub(crate) struct EnvironmentLocals {
     pub(crate) selection_registrar:
         OnceCell<CompositionLocal<Option<crate::selection_container::SelectionRegistrar>>>,
     pub(crate) on_light_surface: OnceCell<CompositionLocal<bool>>,
+    pub(crate) eye: OnceCell<CompositionLocal<Option<crate::Eye>>>,
     pub(crate) popup_registry: OnceCell<StaticCompositionLocal<crate::widgets::PopupRegistry>>,
     pub(crate) popup_viewport:
         OnceCell<StaticCompositionLocal<OwnedMutableState<cranpose_ui_graphics::Size>>>,
@@ -55,6 +56,7 @@ impl EnvironmentLocals {
             shared_entry: OnceCell::new(),
             selection_registrar: OnceCell::new(),
             on_light_surface: OnceCell::new(),
+            eye: OnceCell::new(),
             popup_registry: OnceCell::new(),
             popup_viewport: OnceCell::new(),
             #[cfg(feature = "localization")]

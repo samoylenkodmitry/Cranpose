@@ -5,7 +5,7 @@ use cranpose_ui_graphics::{
     GradientCutMaskSpec, GradientFadeMaskSpec, LayerShape, Px, RenderEffect, RoundedCornerShape,
     RuntimeShader, TransformOrigin, gradient_blur_effect, gradient_cut_mask_effect,
     gradient_fade_dst_out_effect, rounded_alpha_mask_effect,
-    space::{LayerSpace, MeshSurface, Scene3d},
+    space::{LayerSpace, Mat4, MeshSurface, Scene3d},
 };
 
 use super::{GraphicsLayer, Modifier, inspector_metadata};
@@ -85,13 +85,26 @@ impl Modifier {
 
     /// Shows a 3D scene in this node's bounds.
     ///
-    /// Each child that has a [`mesh_surface`](Self::mesh_surface) has its
-    /// content drawn on its mesh in the scene, seen through the scene's
-    /// camera, and nearer surfaces hide farther ones. The camera looks
-    /// through the middle of the node's bounds, and the scene is cut to
-    /// them. The node's own draws and its other children stay flat: those
-    /// that come before the first surface are drawn under the scene, the
-    /// rest over it.
+    /// Every node inside the scene takes a 3D frame from its parent's: its
+    /// place in its parent's layout, on the parent's plane, with x right, y
+    /// down and z away from the side the content shows to, a unit to a
+    /// logical pixel. The scene's own frame is its space, which the camera
+    /// looks into through the middle of the node's bounds; a camera one
+    /// focal length in front of the plane z = 0 shows the scene's children
+    /// at their own size, where layout put them. A child with a
+    /// [`mesh_surface`](Self::mesh_surface) draws its content on its mesh in
+    /// its frame, and nearer surfaces hide farther ones; a
+    /// [`transform3d`](Self::transform3d) moves the frames beneath it. The
+    /// scene is cut to the node's bounds, and the node's own draws and its
+    /// children's flat draws stay flat: those that come before the first
+    /// child in 3D are drawn under the scene, the rest over it.
+    ///
+    /// A `scene3d` inside the scene is a doorway: its node's rect, in its
+    /// frame, opens onto a space of its own, which lies behind it, placed so
+    /// the inner scene's camera stands in the doorway's middle (see
+    /// [`Camera::doorway`](cranpose_ui_graphics::space::Camera::doorway)).
+    /// The window's eye sees through each doorway that shows on screen, as
+    /// deep as they show, and walks through them (see [`Eye`](crate::Eye)).
     ///
     /// The closure runs when the scene is drawn, as a lazy
     /// [`graphics_layer`](Self::graphics_layer)'s does, so a camera that
@@ -112,6 +125,7 @@ impl Modifier {
     /// let scene = Modifier::empty().scene3d(move || Scene3d {
     ///     camera,
     ///     light: None,
+    ///     eye: None,
     /// });
     /// let sphere = Arc::new(Mesh::sphere(48, 24));
     /// let globe = Modifier::empty().mesh_surface(move || MeshSurface {
@@ -119,6 +133,7 @@ impl Modifier {
     ///     transform: Mat4::scaling(Vec3::new(200.0, 200.0, 200.0)),
     ///     material: Material::Lit,
     ///     casts_shadow: true,
+    ///     solid: true,
     /// });
     /// # let _ = (scene, globe);
     /// ```
@@ -130,22 +145,19 @@ impl Modifier {
         })
     }
 
-    /// Draws this node's content on a mesh in its parent's
-    /// [`scene3d`](Self::scene3d).
+    /// Draws this node's content on a mesh in its scene, placed in the
+    /// node's 3D frame (see [`scene3d`](Self::scene3d)).
     ///
     /// The node's size is the size of the content laid on the mesh: content
     /// point `(x, y)` shows where the mesh's texture coordinate is
     /// `(x / width, y / height)`. The surface's transform places the mesh in
-    /// the scene, in place of the node's place in its parent's layout. The
+    /// the node's frame, which starts where layout placed the node. The
     /// content stays live and takes pointer input where it shows on the
-    /// mesh.
-    ///
-    /// A node inside the content of another mesh surface joins that
-    /// surface's scene: its transform places the mesh in the other surface's
-    /// content space, x and y in its content's pixels and z into it (see
-    /// [`MeshSurface::content_to_scene`]). So a control can stand out of a
-    /// wall it sits on. Any other node whose parent shows no scene draws its
-    /// content flat.
+    /// mesh. The frames of the node's children lie in its content: x and y
+    /// in its content's pixels, z into it (see
+    /// [`MeshSurface::content_to_scene`](cranpose_ui_graphics::space::MeshSurface::content_to_scene)),
+    /// so a control can stand out of the wall it sits on, where layout put
+    /// it on the wall. A node outside every scene draws its content flat.
     ///
     /// The closure runs when the scene is drawn, as a lazy
     /// [`graphics_layer`](Self::graphics_layer)'s does.
@@ -153,6 +165,22 @@ impl Modifier {
         self.graphics_layer(move || GraphicsLayer {
             space: Some(Arc::new(LayerSpace::Surface(surface()))),
             clip: true,
+            ..GraphicsLayer::DEFAULT
+        })
+    }
+
+    /// Moves the 3D frames beneath this node by `transform`, in the node's
+    /// own frame, as a group of 3D objects moves together: the mesh surfaces
+    /// and doorways under it follow. The node's own draws and the flat draws
+    /// beneath it stay where they would be without it, and outside a scene
+    /// it changes nothing.
+    ///
+    /// The closure runs when the scene is drawn, as a lazy
+    /// [`graphics_layer`](Self::graphics_layer)'s does, so a group that
+    /// follows a state read in it moves without recomposition.
+    pub fn transform3d(self, transform: impl Fn() -> Mat4 + 'static) -> Self {
+        self.graphics_layer(move || GraphicsLayer {
+            space: Some(Arc::new(LayerSpace::Transform(transform()))),
             ..GraphicsLayer::DEFAULT
         })
     }

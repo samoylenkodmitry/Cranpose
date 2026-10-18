@@ -11,18 +11,14 @@ use cranpose_render_common::{
         layer_composite_params, layer_requires_isolation, local_content_layer_for,
     },
     layer_shadow::ShadowLight,
-    layer_transform::{
-        apply_layer_affine_to_rect, layer_scene, layer_surface, layer_uniform_scale,
-    },
+    layer_transform::{apply_layer_affine_to_rect, layer_uniform_scale},
     primitive_emit::{PrimitiveClipSpace, resolve_clip, resolve_primitive_clip},
-    scene_space::{
-        SceneItem, Viewer, WalkedDoorway, for_each_joined_item, portal_limit, viewer_doorways,
-    },
+    space::{EyeView, SeenDoor, SpaceTree, node_size},
 };
 use cranpose_ui_graphics::{
     BlendMode, CompositingStrategy, DrawPrimitive, GraphicsLayer, LayerShape, Point, RecordLane,
     Rect, RenderEffect, ShadowPrimitive, expand_rect, primitive_coverage_rect,
-    space::{Camera, Light, MAX_PORTAL_LEVEL, Mat4, MeshSurface},
+    space::{Camera, Light, MeshSurface},
 };
 
 use crate::{
@@ -192,66 +188,50 @@ pub(crate) struct ChildLayer {
     pub(crate) mesh: Option<Arc<MeshChild>>,
 }
 
-/// A scene that a layer shows, as the 3D pass of its surfaces draws it.
+/// A scene the window shows, as the 3D pass of its surfaces draws it, all in
+/// the space its eye stands in.
 pub(crate) struct SceneDraw {
     pub(crate) camera: Camera,
+    /// The light of the space the eye stands in.
     pub(crate) light: Option<Light>,
     /// The scene node's rect in the coordinates its parent's content is
     /// collected in. The camera looks through its middle.
     pub(crate) rect: Rect,
     /// What cuts the scene, in the same coordinates.
     pub(crate) clip: Option<Rect>,
-    /// The doorways the scene's viewer walked through, from the scene's own
-    /// space inward: the viewer stands in the space of the last.
-    pub(crate) walked: Vec<WalkedDoorway>,
-    /// How many portals deep the scene shows its surfaces' spaces.
-    pub(crate) portal_limit: u8,
+    /// The spaces the eye sees: its own first, each before the spaces seen
+    /// through it.
+    pub(crate) seen: Vec<SeenDraw>,
 }
 
-impl SceneDraw {
-    /// The portal whose space the viewer stands in; `None` for the scene's
+/// A space a scene's eye sees, as its pass draws it.
+pub(crate) struct SeenDraw {
+    /// The seen space whose doorway it shows through; `None` for the eye's
     /// own.
-    pub(crate) fn viewer(&self) -> Option<usize> {
-        self.walked.last().map(|door| door.index)
-    }
+    pub(crate) through: Option<usize>,
+    /// The space's light, in the eye's space.
+    pub(crate) light: Option<Light>,
+    /// The doorway it shows through; `None` for the eye's own space.
+    pub(crate) door: Option<SeenDoor>,
 }
 
-/// A mesh surface child of a scene.
+/// A mesh surface the eye of a scene sees.
 pub(crate) struct MeshChild {
     pub(crate) scene: Arc<SceneDraw>,
+    /// The surface, its mesh placed in the space the eye stands in.
     pub(crate) surface: MeshSurface,
     /// The surface node's own rect, which the mesh's texture coordinates
     /// span.
     pub(crate) content: Rect,
-    /// The portal whose space the surface is in; `None` for the scene's own.
-    pub(crate) portal: Option<Arc<PortalDraw>>,
+    /// The seen space the surface lies in, by its number in the scene's.
+    pub(crate) seen: usize,
 }
 
-/// A portal's window, as its scene's pass draws its space through it.
-pub(crate) struct PortalDraw {
-    /// The portal's number in its scene.
-    pub(crate) index: usize,
-    /// The portal whose space holds this one's window; `None` for one on a
-    /// surface of the scene's own space.
-    pub(crate) parent: Option<Arc<PortalDraw>>,
-    /// How many windows deep the space shows: 1 for a window on a surface of
-    /// the scene's own space.
-    pub(crate) level: u8,
-    /// Places the unit square onto the window, in the scene.
-    pub(crate) window_to_scene: Mat4,
-    /// The window's plane in the scene, positive beyond it.
-    pub(crate) clip: [f32; 4],
-    /// The light of the portal's space, in the scene.
-    pub(crate) light: Option<Light>,
-}
-
-/// A surface its scene collects from inside another's content: its surface
-/// placed in the scene, how many portals deep its space lies, and the portal
-/// that shows that space.
+/// Where a scene places a surface it collects: its surface placed in the
+/// space the eye stands in, and the seen space it lies in.
 struct Placed {
     surface: MeshSurface,
-    level: u8,
-    portal: Option<Arc<PortalDraw>>,
+    seen: usize,
 }
 
 impl ChildLayer {
@@ -278,20 +258,12 @@ struct WalkContext<'s> {
     /// The graph's latest scene update, which tells an isolated layer whose
     /// content changes every frame from one a raster cache can keep.
     update: u64,
-    /// The scene that places the mesh surfaces among the layers collected
-    /// under this context.
+    /// The scene a surface collected under this context is drawn by.
     scene: Option<&'s Arc<SceneDraw>>,
-    /// For a walk that collects the content of a scene's mesh surface, how
-    /// many portals deep the surface's space lies. A mesh surface found here
-    /// joins the scene, which collects it, so the walk leaves it out; so
-    /// does a scene within `portal_limit`, a portal of the scene, whose
-    /// surfaces the scene collects too.
-    joins: Option<u8>,
-    /// How many portals deep the scene above shows its surfaces' spaces.
-    portal_limit: u8,
-    /// Where the eyes of the scenes the window shows stand among their
-    /// portals' spaces.
-    viewers: &'s [Viewer],
+    /// Whether the walk lies in a scene's space, whose scene collects the
+    /// layers there that are scenes, surfaces or 3D transforms: the walk
+    /// leaves them out.
+    in_space: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -743,9 +715,6 @@ fn rounding_within(layer_clip: Option<Rect>, context: &WalkContext<'_>) -> Optio
 /// whatever rect clips above cut from it, but never inside another rounded
 /// clip, whose radius a placement could not carry beside its own.
 fn placement_in(child: &LayerNode, context: &WalkContext<'_>) -> Placement {
-    if context.scene.is_some() && layer_surface(&child.graphics_layer).is_some() {
-        return Placement::Isolated;
-    }
     match child_placement(child, context.raster_scale) {
         Placement::DirectRounded(..) if context.rounding.is_some() => Placement::Isolated,
         placement => placement,
@@ -921,7 +890,8 @@ fn takes_rounded_clip(primitive: &DrawPrimitive) -> bool {
 }
 
 pub(crate) fn collect_root(
-    (root, update, viewers): (&LayerNode, u64, &[Viewer]),
+    root: &LayerNode,
+    update: u64,
     text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
     capacity: SceneCapacityHint,
@@ -945,9 +915,7 @@ pub(crate) fn collect_root(
         wants_pixel_sensitive: false,
         update,
         scene: None,
-        joins: None,
-        portal_limit: MAX_PORTAL_LEVEL,
-        viewers,
+        in_space: false,
     };
     collect_child(root, text_layout, motion, context, &mut out, recycler);
     out.scene.flush_loose();
@@ -963,7 +931,8 @@ pub(crate) fn collect_overlay(
     recycler: &mut LayerSceneRecycler,
 ) -> LayerScene {
     collect_root(
-        (root, 0, &[]),
+        root,
+        0,
         text_layout,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
@@ -1047,7 +1016,6 @@ fn isolated_child(
     parent_scene: &mut CompositorScene,
     recycler: &mut LayerSceneRecycler,
 ) -> (ChildLayer, bool) {
-    let level = placed.as_ref().map_or(0, |placed| placed.level);
     let mesh = mesh_child(layer, &context, placed);
     let local_layer = local_content_layer_for(&layer.graphics_layer);
     let content_hash = content_key(layer, context.update);
@@ -1074,12 +1042,7 @@ fn isolated_child(
             || (!context.translated && context.snap_anchor.is_none()),
         update: context.update,
         scene: None,
-        joins: match mesh {
-            Some(_) => Some(level),
-            None => context.joins,
-        },
-        portal_limit: context.portal_limit,
-        viewers: context.viewers,
+        in_space: context.in_space || mesh.is_some(),
     };
     let mut content = recycler.take(SceneCapacityHint::default());
     let has_pixel_sensitive_subtree = collect_into(
@@ -1143,53 +1106,52 @@ fn isolated_child(
     )
 }
 
-/// The scene `layer` shows, as its surface children are drawn through it;
-/// `None` when it shows none.
-fn scene_draw(
-    layer: &LayerNode,
+/// The scene `layer` shows to the window, as the eye of the scene sees it;
+/// `None` when it shows none. Kept out of line: a flat layer's walk stops
+/// at the check before it.
+#[cold]
+#[inline(never)]
+fn window_scene<'a>(
+    layer: &'a LayerNode,
     context: &WalkContext<'_>,
     visual_clip: Option<Rect>,
-) -> Option<Arc<SceneDraw>> {
-    let scene = layer_scene(&layer.graphics_layer)?;
-    // A portal's scene above draws its surfaces.
-    if portal_level(layer, context).is_some() {
-        return None;
-    }
-    let path = context
-        .viewers
-        .iter()
-        .find(|viewer| Some(viewer.scene) == layer.node_id)
-        .map_or(&[][..], |viewer| viewer.path.as_slice());
-    Some(Arc::new(SceneDraw {
-        camera: scene.camera,
-        light: scene.light,
+) -> Option<(Arc<SceneDraw>, EyeView<'a>)> {
+    let tree = SpaceTree::of(layer)?;
+    let view = EyeView::of(&tree, node_size(layer));
+    let scene = SceneDraw {
+        camera: view.camera,
+        light: view.seen[0].light,
         rect: layer
             .node_rect()
             .translate(context.offset.x, context.offset.y),
         clip: visual_clip,
-        walked: viewer_doorways(layer, path),
-        portal_limit: portal_limit(path.len()),
-    }))
+        seen: view
+            .seen
+            .iter()
+            .map(|seen| SeenDraw {
+                through: seen.through,
+                light: seen.light,
+                door: seen.door,
+            })
+            .collect(),
+    };
+    Some((Arc::new(scene), view))
 }
 
-/// What draws `layer` on its mesh when it is a mesh surface of the scene
-/// that `context` collects in: its own surface, or `placed`, for one the
-/// scene collects from inside another's content.
+/// What draws `layer` on its mesh in the scene `context` collects for:
+/// `placed`, where the scene's eye sees it.
 fn mesh_child(
     layer: &LayerNode,
     context: &WalkContext<'_>,
     placed: Option<Placed>,
 ) -> Option<Arc<MeshChild>> {
     let scene = context.scene?;
-    let (surface, portal) = match placed {
-        Some(placed) => (placed.surface, placed.portal),
-        None => (layer_surface(&layer.graphics_layer)?.clone(), None),
-    };
+    let placed = placed?;
     Some(Arc::new(MeshChild {
         scene: Arc::clone(scene),
-        surface,
+        surface: placed.surface,
         content: layer.node_rect(),
-        portal,
+        seen: placed.seen,
     }))
 }
 
@@ -1313,8 +1275,11 @@ fn collect_into(
         anchor: layer_anchor,
         motion_context_animated: layer.motion_context_animated || translated,
     };
-    let scene = scene_draw(layer, &context, visual_clip);
-    let (children_scene, joins) = children_scene(layer, &context, scene.as_ref());
+    // Only a scene outside every other scene's space shows to the window;
+    // one inside is a doorway its window scene draws.
+    let scene = (layer.graphics_layer.space.is_some() && !context.in_space)
+        .then(|| window_scene(layer, &context, visual_clip))
+        .flatten();
     let child_context = WalkContext {
         offset: context.offset,
         visual_clip,
@@ -1325,34 +1290,68 @@ fn collect_into(
         light: context.light,
         wants_pixel_sensitive: context.wants_pixel_sensitive,
         update: context.update,
-        scene: children_scene,
-        joins,
-        portal_limit: scene
-            .as_ref()
-            .map_or(context.portal_limit, |scene| scene.portal_limit),
-        viewers: context.viewers,
+        scene: None,
+        in_space: context.in_space || scene.is_some(),
     };
     let mut has_pixel_sensitive_subtree = false;
+    // The scene's surfaces draw together where its first child in 3D comes:
+    // flat children before it lie under them, the rest over them.
+    let mut pending = scene.as_ref();
     for_each_in_draw_order(&layer.children, |child| {
         has_pixel_sensitive_subtree |= match child {
-            RenderNode::Layer(child_layer) => collect_child(
-                child_layer,
-                text_layout,
-                motion,
-                child_context,
-                out,
-                recycler,
-            ),
+            RenderNode::Layer(child_layer) => {
+                if let Some((draw, view)) = pending.filter(|_| child_layer.has_space()) {
+                    let context = WalkContext {
+                        scene: Some(draw),
+                        ..child_context
+                    };
+                    collect_seen_surfaces(view, text_layout, motion, context, out, recycler);
+                    pending = None;
+                }
+                collect_child(
+                    child_layer,
+                    text_layout,
+                    motion,
+                    child_context,
+                    out,
+                    recycler,
+                )
+            }
             _ => {
                 push_content(out, text_layout, child, &content);
                 node_is_pixel_sensitive(child)
             }
         };
     });
-    if scene.is_some() {
-        collect_joined_surfaces(layer, text_layout, motion, child_context, out, recycler);
-    }
     has_pixel_sensitive_subtree
+}
+
+/// Collects each surface the eye of a scene sees, for its 3D pass, placed
+/// where the eye sees it.
+#[cold]
+#[inline(never)]
+fn collect_seen_surfaces(
+    view: &EyeView<'_>,
+    text_layout: &mut impl TextLayoutResolver,
+    motion: &mut LayerMotion,
+    context: WalkContext<'_>,
+    out: &mut LayerScene,
+    recycler: &mut LayerSceneRecycler,
+) {
+    for seen in &view.surfaces {
+        let placed = Placed {
+            surface: seen.surface.clone(),
+            seen: seen.seen,
+        };
+        collect_isolated_child(
+            seen.layer,
+            text_layout,
+            motion,
+            (context, Some(placed)),
+            out,
+            recycler,
+        );
+    }
 }
 
 /// The anchor a layer that starts moving its content as one translated
@@ -1373,40 +1372,6 @@ fn boundary_anchor(
         ),
         local_layer,
     )
-}
-
-/// The scene the children of `layer` are collected in, and how many portals
-/// deep a mesh surface among them that joins a scene above lies: the
-/// wrapper of a node's outer draws keeps its parent's, a layer that shows
-/// `shown` collects the surfaces that join it itself, and a portal's
-/// surfaces lie one portal deeper than the surface it is on.
-fn children_scene<'s>(
-    layer: &LayerNode,
-    context: &WalkContext<'s>,
-    shown: Option<&'s Arc<SceneDraw>>,
-) -> (Option<&'s Arc<SceneDraw>>, Option<u8>) {
-    match (layer.wraps, shown) {
-        (Some(_), _) => (context.scene, context.joins),
-        (None, Some(shown)) => (Some(shown), None),
-        (None, None) => (None, portal_level(layer, context).or(context.joins)),
-    }
-}
-
-/// How many portals deep `layer`'s space lies when it shows a scene inside
-/// a scene's surface's content, within the depth the scene above shows: a
-/// portal of that scene.
-fn portal_level(layer: &LayerNode, context: &WalkContext<'_>) -> Option<u8> {
-    let level = context.joins?;
-    (level < context.portal_limit && layer_scene(&layer.graphics_layer).is_some())
-        .then_some(level + 1)
-}
-
-/// Whether `child` is a mesh surface that joins the scene above from inside
-/// the content the walk collects, so the scene collects it.
-fn joins_scene(child: &LayerNode, context: &WalkContext<'_>) -> bool {
-    context.joins.is_some()
-        && context.scene.is_none()
-        && layer_surface(&child.graphics_layer).is_some()
 }
 
 /// Where a layer's own primitives land: the layer's bounds and local
@@ -1435,53 +1400,6 @@ fn push_content(
     }
 }
 
-/// Collects the mesh surfaces that join the scene `scene_layer` shows from
-/// inside its surfaces' content, and the surfaces of the spaces its portals
-/// show, as the scene's children: each draws in the scene's 3D pass, placed
-/// through the surface or the window it lies behind.
-#[cold]
-#[inline(never)]
-fn collect_joined_surfaces(
-    scene_layer: &LayerNode,
-    text_layout: &mut impl TextLayoutResolver,
-    motion: &mut LayerMotion,
-    context: WalkContext<'_>,
-    out: &mut LayerScene,
-    recycler: &mut LayerSceneRecycler,
-) {
-    let mut portals: Vec<Arc<PortalDraw>> = Vec::new();
-    for_each_joined_item(scene_layer, context.portal_limit, &mut |item| match item {
-        SceneItem::Portal(portal) => portals.push(Arc::new(PortalDraw {
-            index: portal.index,
-            parent: portal.parent.and_then(|index| portals.get(index)).cloned(),
-            level: portal.level,
-            window_to_scene: portal.window_to_scene,
-            clip: portal.clip,
-            light: portal.light,
-        })),
-        SceneItem::Surface {
-            layer,
-            surface,
-            portal,
-        } => {
-            let portal = portal.and_then(|index| portals.get(index)).cloned();
-            let placed = Placed {
-                surface,
-                level: portal.as_ref().map_or(0, |portal| portal.level),
-                portal,
-            };
-            collect_isolated_child(
-                layer,
-                text_layout,
-                motion,
-                (context, Some(placed)),
-                out,
-                recycler,
-            );
-        }
-    });
-}
-
 fn collect_child(
     child: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
@@ -1490,7 +1408,8 @@ fn collect_child(
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
 ) -> bool {
-    if joins_scene(child, &context) {
+    // A scene collects what lies in 3D in its space, as its eye sees it.
+    if context.in_space && child.graphics_layer.space.is_some() {
         return false;
     }
     let composite = layer_composite_params(&child.graphics_layer);

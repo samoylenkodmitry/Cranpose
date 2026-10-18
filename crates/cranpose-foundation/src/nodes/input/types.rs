@@ -3,7 +3,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_ui_graphics::Point;
+use cranpose_ui_graphics::{Point, space::Ray};
 
 use super::rotary::RotaryScrollEvent;
 
@@ -290,6 +290,12 @@ pub struct PointerEvent {
     /// "nothing held" or it silently drops the gesture on the platforms that
     /// cannot yet report it instead of visibly doing nothing.
     pub modifiers: Option<Modifiers>,
+    /// For a pointer that points along a ray in a 3D scene from somewhere
+    /// other than the window's eye (a controller, a hand, a gaze), the ray,
+    /// in the space the scene's eye stands in. A target on a mesh surface
+    /// finds the event's position where the ray meets the surface, in place
+    /// of where `global_position` shows. `None` for a pointer on the window.
+    pub ray: Option<Ray>,
     consumed: Rc<Cell<bool>>,
     deferred_post_dispatch: DeferredPostDispatch,
 }
@@ -326,6 +332,7 @@ impl PointerEvent {
             zoom_delta: 1.0,
             source: PointerSource::Unknown,
             modifiers: None,
+            ray: None,
             consumed: Rc::new(Cell::new(false)),
             deferred_post_dispatch: DeferredPostDispatch {
                 action: Rc::new(RefCell::new(None)),
@@ -336,6 +343,13 @@ impl PointerEvent {
     /// Set the pointer id for this event (`0` is the primary pointer).
     pub fn with_id(mut self, id: PointerId) -> Self {
         self.id = id;
+        self
+    }
+
+    /// Set the ray a pointer in a 3D scene points along (see
+    /// [`PointerEvent::ray`]).
+    pub fn with_ray(mut self, ray: Ray) -> Self {
+        self.ray = Some(ray);
         self
     }
 
@@ -496,6 +510,7 @@ impl PointerEvent {
             zoom_delta: self.zoom_delta,
             source: self.source,
             modifiers: self.modifiers,
+            ray: self.ray,
             consumed: self.consumed.clone(),
             deferred_post_dispatch: self.deferred_post_dispatch.clone(),
         }

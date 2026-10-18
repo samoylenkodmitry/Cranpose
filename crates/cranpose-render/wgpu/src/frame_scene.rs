@@ -50,10 +50,10 @@ enum ScenePhase {
 
 impl ScenePhase {
     /// The phase `mesh` draws in: its material's in the space the scene's
-    /// viewer stands in, and through a doorway in any other; `None` for
-    /// glass and glow seen through a doorway, which are left out.
+    /// eye stands in, and through a doorway in any other; `None` for glass
+    /// and glow seen through a doorway, which are left out.
     fn of(mesh: &MeshChild) -> Option<Self> {
-        let through_doorway = space_of(mesh) != mesh.scene.viewer();
+        let through_doorway = mesh.seen != 0;
         match &mesh.surface.material {
             Material::Glass(_) | Material::Glow if through_doorway => None,
             _ if through_doorway => Some(Self::Portal),
@@ -77,59 +77,20 @@ enum StepPipeline {
 }
 
 /// Whether `mesh` casts a shadow: a volume's mesh only bounds what it
-/// shows, so casts none, and a portal's space casts none into the scene.
+/// shows, so casts none, and a space seen through a doorway casts none into
+/// the eye's.
 fn casts_shadow(mesh: &MeshChild) -> bool {
     let surface = &mesh.surface;
-    mesh.portal.is_none()
-        && surface.casts_shadow
-        && !matches!(surface.material, Material::Volume(_))
+    mesh.seen == 0 && surface.casts_shadow && !matches!(surface.material, Material::Volume(_))
 }
 
-/// How far past a doorway's plane, against its distance from the scene's
-/// origin, the cut lies for a space seen back through the doorway.
-const BACK_THROUGH_DOORWAY: f32 = 1.0e-4;
-
-/// The portal whose space `mesh` lies in; `None` for the scene's own.
-fn space_of(mesh: &MeshChild) -> Option<usize> {
-    mesh.portal.as_ref().map(|portal| portal.index)
-}
-
-/// The light and the cut of the space `mesh` lies in, as the scene's viewer
-/// sees it: a space other than the viewer's shows only on the far side of
-/// the doorway the viewer sees it through, which is the doorway the viewer
-/// walked through out of it for a space the viewer came from.
+/// The light and the cut of the space `mesh` lies in, as the scene's eye
+/// sees it: a space seen through a doorway shows only past the doorway.
 fn space_shading(mesh: &MeshChild) -> SpaceShading {
-    let light = mesh
-        .portal
-        .as_ref()
-        .map_or(mesh.scene.light, |portal| portal.light);
-    let space = space_of(mesh);
-    let walked = &mesh.scene.walked;
-    if space == mesh.scene.viewer() {
-        return SpaceShading {
-            light,
-            clip: [0.0; 4],
-        };
-    }
-    // Back through a doorway, the cut lies a hair past its plane, so the
-    // surface the doorway opens in, which lies on the plane, shows a hole.
-    let left = walked.iter().enumerate().find_map(|(index, door)| {
-        let entered_from = index.checked_sub(1).map(|before| walked[before].index);
-        (entered_from == space).then(|| {
-            let [x, y, z, offset] = door.plane.map(|value| -value);
-            [
-                x,
-                y,
-                z,
-                offset - BACK_THROUGH_DOORWAY * offset.abs().max(1.0),
-            ]
-        })
-    });
+    let space = &mesh.scene.seen[mesh.seen];
     SpaceShading {
-        light,
-        clip: left
-            .or_else(|| mesh.portal.as_ref().map(|portal| portal.clip))
-            .unwrap_or([0.0; 4]),
+        light: space.light,
+        clip: space.door.map_or([0.0; 4], |door| door.clip),
     }
 }
 
@@ -228,9 +189,8 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             offset: pass.page.offset,
             size: (page_texture.width, page_texture.height),
         };
-        // Only the scene's own space casts shadows, onto itself.
-        let own_space = scene.viewer().is_none();
-        let shadowing = scene.light.filter(|light| light.shadows && own_space);
+        // The space the eye stands in casts shadows, onto itself.
+        let shadowing = scene.light.filter(|light| light.shadows);
         let light_projection = shadowing.and_then(|light| {
             light.shadow_projection(
                 meshes
@@ -375,12 +335,11 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 StepPipeline::Portals => {
                     if let Some(first) = draws.first() {
                         let texture = first.texture((device, effects));
-                        let viewer = first.held.mesh.scene.viewer();
                         encode_portals(
                             &mut render_pass,
                             renderer,
                             (draws, windows),
-                            ((viewer, None), 0),
+                            (0, 0),
                             (device, texture),
                         );
                     }
@@ -490,7 +449,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                         material,
                         alpha: held.alpha,
                         source_region: source_region(&held.surface, held.mesh.content),
-                        light_projection: light_projection.filter(|_| held.mesh.portal.is_none()),
+                        light_projection: light_projection.filter(|_| held.mesh.seen == 0),
                         backdrop_region,
                         space,
                     },
@@ -529,10 +488,9 @@ struct PreparedSurface<'m> {
 }
 
 impl PreparedSurface<'_> {
-    /// The portal whose space the surface lies in; `None` for the scene's
-    /// own.
-    fn space(&self) -> Option<usize> {
-        space_of(&self.held.mesh)
+    /// The seen space the surface lies in.
+    fn seen(&self) -> usize {
+        self.held.mesh.seen
     }
 
     /// The surface's texture, bound as the scene's shaders read it.
@@ -572,7 +530,7 @@ impl PreparedSurface<'_> {
 fn glass_backdrop(meshes: &[PendingMesh], page: ScenePage) -> Option<DeviceRect> {
     let mut covered: Option<DeviceRect> = None;
     for held in meshes {
-        let in_view = space_of(&held.mesh) == held.mesh.scene.viewer();
+        let in_view = held.mesh.seen == 0;
         if !in_view || !matches!(held.mesh.surface.material, Material::Glass(_)) {
             continue;
         }

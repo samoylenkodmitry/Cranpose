@@ -6,7 +6,7 @@ use std::{
 
 use portable_atomic::AtomicU64;
 
-use super::math::Vec3;
+use super::math::{Mat4, Vec3};
 
 static NEXT_MESH_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -47,6 +47,17 @@ pub struct MeshHit {
     /// The index of the triangle that the ray meets.
     pub triangle: u32,
     /// The texture coordinate at the hit.
+    pub uv: [f32; 2],
+}
+
+/// The point of a placed mesh nearest some point.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MeshContact {
+    /// The nearest point.
+    pub point: Vec3,
+    /// How far it lies from the point asked about.
+    pub distance: f32,
+    /// The texture coordinate there.
     pub uv: [f32; 2],
 }
 
@@ -304,18 +315,59 @@ impl Mesh {
         })
     }
 
+    /// The point of the mesh, placed by `transform`, nearest `point`, with
+    /// the texture coordinate there; `None` for a mesh without triangles.
+    pub fn nearest(&self, point: Vec3, transform: &Mat4) -> Option<MeshContact> {
+        let mut nearest: Option<MeshContact> = None;
+        for triangle in 0..self.triangle_count() {
+            let corners = self
+                .corners(triangle)
+                .map(|corner| transform.transform_point(corner));
+            let (at, weights) = nearest_on_triangle(point, corners);
+            let distance = (point - at).length();
+            if nearest.is_some_and(|known| known.distance <= distance) {
+                continue;
+            }
+            nearest = Some(MeshContact {
+                point: at,
+                distance,
+                uv: self.uv_at(triangle, weights),
+            });
+        }
+        nearest
+    }
+
     /// The smallest box along the axes that holds every vertex: its lowest
     /// and highest corners.
     pub fn bounds(&self) -> (Vec3, Vec3) {
         *self.bounds.get_or_init(|| {
             let mut low = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
             let mut high = -low;
-            for &[x, y, z] in &self.positions {
-                low = Vec3::new(low.x.min(x), low.y.min(y), low.z.min(z));
-                high = Vec3::new(high.x.max(x), high.y.max(y), high.z.max(z));
+            for &position in &self.positions {
+                let point = Vec3::from_array(position);
+                (low, high) = (low.min(point), high.max(point));
             }
             (low, high)
         })
+    }
+
+    /// The smallest box along the axes that holds the corners of
+    /// [`Self::bounds`] that `transform` maps: its lowest and highest
+    /// corners.
+    pub fn bounds_in(&self, transform: &Mat4) -> (Vec3, Vec3) {
+        let (mesh_low, mesh_high) = self.bounds();
+        let mut low = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+        let mut high = -low;
+        for corner in 0..8 {
+            let pick = |bit: u32, low: f32, high: f32| if corner & bit == 0 { low } else { high };
+            let point = transform.transform_point(Vec3::new(
+                pick(1, mesh_low.x, mesh_high.x),
+                pick(2, mesh_low.y, mesh_high.y),
+                pick(4, mesh_low.z, mesh_high.z),
+            ));
+            (low, high) = (low.min(point), high.max(point));
+        }
+        (low, high)
     }
 
     /// The plane that carries texture coordinates onto the mesh, worked out
@@ -486,6 +538,46 @@ fn ray_triangle(origin: Vec3, direction: Vec3, [a, b, c]: [Vec3; 3]) -> Option<(
     }
     let distance = edge_c.dot(q) * inverse;
     (distance > 0.0).then_some((distance, [1.0 - wb - wc, wb, wc]))
+}
+
+/// The point of the triangle nearest `point`, and the weights of its corners
+/// there, by the regions of the triangle's corners and edges (Ericson, Real-
+/// Time Collision Detection, 5.1.5).
+fn nearest_on_triangle(point: Vec3, [a, b, c]: [Vec3; 3]) -> (Vec3, [f32; 3]) {
+    let (ab, ac) = (b - a, c - a);
+    let (d1, d2) = (ab.dot(point - a), ac.dot(point - a));
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return (a, [1.0, 0.0, 0.0]);
+    }
+    let (d3, d4) = (ab.dot(point - b), ac.dot(point - b));
+    if d3 >= 0.0 && d4 <= d3 {
+        return (b, [0.0, 1.0, 0.0]);
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        let v = d1 / (d1 - d3);
+        return (a + ab * v, [1.0 - v, v, 0.0]);
+    }
+    let (d5, d6) = (ab.dot(point - c), ac.dot(point - c));
+    if d6 >= 0.0 && d5 <= d6 {
+        return (c, [0.0, 0.0, 1.0]);
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        let w = d2 / (d2 - d6);
+        return (a + ac * w, [1.0 - w, 0.0, w]);
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && d4 - d3 >= 0.0 && d5 - d6 >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return (b + (c - b) * w, [0.0, 1.0 - w, w]);
+    }
+    let total = va + vb + vc;
+    if !total.is_normal() {
+        return (a, [1.0, 0.0, 0.0]);
+    }
+    let (v, w) = (vb / total, vc / total);
+    (a + ab * v + ac * w, [1.0 - v - w, v, w])
 }
 
 /// The weights of the triangle's corners at `point`, which lies in its

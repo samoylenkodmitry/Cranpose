@@ -54,9 +54,10 @@ impl CardSpot {
         }
     }
 
-    /// Where the stage's cube stands in the wall's content space: x along
-    /// the card's width, y out of the wall, toward the room, and z down the
-    /// wall, its ground just in front of the card.
+    /// Where the stage's cube stands in the frame of the card's node, which
+    /// layout placed on the wall: x along the card's width, y out of the
+    /// wall, toward the room, and z down the wall, its ground just in front
+    /// of the card.
     fn stage_place(self) -> Mat4 {
         let card = self.card();
         let rise = WALL_STAGE_UNITS.1 * card.width / WALL_STAGE_UNITS.0;
@@ -65,8 +66,8 @@ impl CardSpot {
             Vec3::new(0.0, 0.0, -rise),
             Vec3::new(0.0, card.height, 0.0),
             Vec3::new(
-                self.at.x + card.width * 0.5,
-                self.at.y + card.height * 0.5,
+                card.width * 0.5,
+                card.height * 0.5,
                 -(STAGE_LIFT + rise * 0.5),
             ),
         )

@@ -183,7 +183,7 @@ fn tappable_list_scene(count: usize) -> (Scene, Vec<usize>, Rc<RefCell<Vec<usize
         &graph.root,
         ProjectiveTransform::identity(),
         &mut scene,
-        (None, &graph.viewers),
+        None,
     );
     let ids = scene
         .hits

@@ -41,6 +41,7 @@ pub mod density;
 pub mod draggable;
 mod draw;
 mod environment_locals;
+mod eye;
 pub mod fling_animation;
 mod focus_dispatch;
 /// Moving focus between focus targets, as `LocalFocusManager` does in Compose.
@@ -147,6 +148,7 @@ pub use draggable::{
 pub use draw::{
     DrawCacheBuilder, DrawCommand, DrawCommandFn, command_draw_scope, execute_draw_commands,
 };
+pub use eye::{Eye, local_eye, rememberEye};
 pub use focus_dispatch::{
     active_focus_target, clear_focus_invalidations, has_pending_focus_invalidations,
     keyboard_focus_visible, process_focus_invalidations, schedule_focus_invalidation,

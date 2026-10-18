@@ -304,7 +304,7 @@ fn collect_hits_from_graph_only_populates_hit_regions() {
         &layer,
         cranpose_render_common::graph::ProjectiveTransform::identity(),
         &mut scene,
-        (None, &[]),
+        None,
     );
 
     assert_eq!(scene.hits.len(), 1);

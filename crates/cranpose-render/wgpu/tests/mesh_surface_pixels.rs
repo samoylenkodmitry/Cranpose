@@ -7,7 +7,9 @@ use cranpose_core::{MutableState, remember, rememberMutableStateOf};
 use cranpose_macros::composable;
 use cranpose_ui::{
     Color, Modifier, Size,
-    space::{Camera, Glass, Light, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3, Volume},
+    space::{
+        Camera, EyePose, Glass, Light, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3, Volume,
+    },
     widgets::{Box, BoxSpec, Row, RowSpec},
 };
 
@@ -69,6 +71,7 @@ fn surface(
             transform,
             material: material.clone(),
             casts_shadow,
+            solid: true,
         })
 }
 
@@ -129,6 +132,7 @@ fn Scene(light_size: f32, content: impl FnMut() + 'static) {
                     shadows: true,
                     size: light_size,
                 }),
+                eye: None,
             }),
         BoxSpec::default(),
         content,
@@ -364,7 +368,7 @@ fn a_glass_ball_shows_the_scene_behind_it_bent_and_glow_adds_to_it() {
 
 thread_local! {
     static SHAPE: RefCell<Option<MutableState<Arc<Mesh>>>> = const { RefCell::new(None) };
-    static WALKER: RefCell<Option<MutableState<Camera>>> = const { RefCell::new(None) };
+    static WALKER: RefCell<Option<cranpose_ui::Eye>> = const { RefCell::new(None) };
 }
 
 /// A sphere of `radius` from its signed distance field.
@@ -577,10 +581,11 @@ fn JoinedScene() {
                 .then(&Mat4::translation(Vec3::new(0.0, 0.0, 400.0))),
             (Material::Unlit, false, Color(0.0, 1.0, 0.0, 1.0)),
         );
+        // Placed in its own frame, where layout put it on the wall.
         let inner = surface(
             &plane,
             Mat4::scaling(Vec3::new(64.0, 32.0, 1.0))
-                .then(&Mat4::translation(Vec3::new(96.0, 48.0, -100.0))),
+                .then(&Mat4::translation(Vec3::new(0.0, 0.0, -100.0))),
             (Material::Unlit, false),
         );
         Box(blue_wall(&plane), BoxSpec::default(), move || {
@@ -683,6 +688,7 @@ fn doorway(content: impl FnMut() + 'static) {
                     NESTED_FOCAL,
                 ),
                 light: None,
+                eye: None,
             }),
         BoxSpec::default(),
         content,
@@ -736,15 +742,18 @@ fn pixel_seen(frame: &cranpose_render_wgpu::CapturedFrame, camera: Camera, point
     std::array::from_fn(|channel| frame.pixels[index + channel])
 }
 
+/// Where the walk test's eye starts: past the room's green panel, before
+/// the wall.
+const WALK_START: Vec3 = Vec3::new(0.0, 0.0, 500.0);
+
 /// The doorway scene of [`PortalScene`] with only its red ball behind the
 /// doorway, a green panel in the room in front of the wall, and an eye the
 /// test walks.
 #[composable]
 fn WalkScene() {
     let (plane, sphere) = meshes();
-    let camera =
-        rememberMutableStateOf(|| walker(Vec3::new(0.0, 0.0, EYE_Z), Vec3::new(0.0, 0.0, 1.0)));
-    WALKER.with(|slot| *slot.borrow_mut() = Some(camera));
+    let eye = cranpose_ui::rememberEye(|| EyePose::standing(WALK_START, 0.0, 0.0), 10.0);
+    WALKER.with(|slot| *slot.borrow_mut() = Some(eye.clone()));
     Box(
         Modifier::empty()
             .size(Size {
@@ -752,10 +761,7 @@ fn WalkScene() {
                 height: FRAME_HEIGHT as f32,
             })
             .background(Color::BLACK)
-            .scene3d(move || Scene3d {
-                camera: camera.get(),
-                light: None,
-            }),
+            .scene3d(move || eye.scene(FOCAL_LENGTH, None)),
         BoxSpec::default(),
         move || {
             Surface(
@@ -790,13 +796,18 @@ fn an_eye_that_walks_through_a_doorway_sees_the_space_behind_it_and_the_room_bac
         return;
     };
     support::warm_shell_frame(&mut shell, FRAME_WIDTH, FRAME_HEIGHT);
-    let camera = WALKER.with(|slot| slot.borrow().expect("the scene composed"));
+    let eye = WALKER.with(|slot| slot.borrow().clone().expect("the scene composed"));
     // The eye walks through the doorway's middle, on the wall at 600, into
     // the space behind it, where it stands short of the red ball's front at
     // 1720.
     let inside = Vec3::new(0.0, 0.0, 1500.0);
+    eye.walk(inside - WALK_START);
+    assert_eq!(
+        eye.pose().doorways.len(),
+        1,
+        "the eye stands in the space behind the doorway"
+    );
     let ahead = walker(inside, Vec3::new(0.0, 0.0, 1.0));
-    camera.set(ahead);
     support::update_and_capture(&mut shell, FRAME_WIDTH, FRAME_HEIGHT);
     let (_, frame) = support::update_and_capture(&mut shell, FRAME_WIDTH, FRAME_HEIGHT);
     let front = pixel_seen(&frame, ahead, Vec3::new(0.0, 0.0, 1720.0));
@@ -805,7 +816,7 @@ fn an_eye_that_walks_through_a_doorway_sees_the_space_behind_it_and_the_room_bac
         "past the doorway the eye sees the red ball in the space behind it: {front:?}"
     );
     let back = walker(inside, Vec3::new(0.0, 0.0, -1.0));
-    camera.set(back);
+    eye.turn(std::f32::consts::PI, 0.0);
     support::update_and_capture(&mut shell, FRAME_WIDTH, FRAME_HEIGHT);
     let (_, frame) = support::update_and_capture(&mut shell, FRAME_WIDTH, FRAME_HEIGHT);
     let room = pixel_seen(&frame, back, Vec3::new(0.0, 0.0, -200.0));
@@ -817,5 +828,57 @@ fn an_eye_that_walks_through_a_doorway_sees_the_space_behind_it_and_the_room_bac
     assert!(
         beside[2] < 40,
         "beside the doorway the wall of the room the eye left does not show: {beside:?}"
+    );
+}
+
+/// The doorway of [`PortalScene`], and behind it, `depth` times, a wall
+/// across the nested space with a doorway of its own, a nested unit to a
+/// content pixel, and at the end a red ball the last doorway looks at.
+fn deep_doorway(plane: Arc<Mesh>, sphere: Arc<Mesh>, depth: usize) {
+    doorway(move || {
+        if depth == 0 {
+            Surface(
+                Arc::clone(&sphere),
+                nested_ball(Vec3::new(0.0, 0.0, 100.0), 20.0),
+                (Material::Unlit, false, Color(1.0, 0.0, 0.0, 1.0)),
+            );
+            return;
+        }
+        let wall = surface(
+            &plane,
+            panel((256.0, 128.0), Vec3::new(0.0, 0.0, 100.0)),
+            (Material::Unlit, false),
+        )
+        .background(Color(0.0, 0.0, 1.0, 1.0));
+        let (plane, sphere) = (Arc::clone(&plane), Arc::clone(&sphere));
+        Box(wall, BoxSpec::default(), move || {
+            deep_doorway(Arc::clone(&plane), Arc::clone(&sphere), depth - 1);
+        });
+    });
+}
+
+/// A blue wall with five doorways one inside another behind it, and a red
+/// ball behind the last.
+#[composable]
+fn DeepScene() {
+    let (plane, sphere) = meshes();
+    Scene(0.0, move || {
+        let (inner_plane, sphere) = (Arc::clone(&plane), Arc::clone(&sphere));
+        Box(blue_wall(&plane), BoxSpec::default(), move || {
+            deep_doorway(Arc::clone(&inner_plane), Arc::clone(&sphere), 4);
+        });
+    });
+}
+
+#[test]
+fn doorways_inside_doorways_show_as_deep_as_they_open_on_screen() {
+    let Some(frame) = capture(DeepScene) else {
+        return;
+    };
+    let index = ((FRAME_HEIGHT / 2 * frame.width + FRAME_WIDTH / 2) * 4) as usize;
+    let middle: [u8; 4] = std::array::from_fn(|channel| frame.pixels[index + channel]);
+    assert!(
+        middle[0] > 200 && middle[1] < 40 && middle[2] < 40,
+        "the red ball behind the fifth doorway shows through all five: {middle:?}"
     );
 }

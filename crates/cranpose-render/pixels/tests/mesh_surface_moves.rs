@@ -50,6 +50,7 @@ fn a_surface_that_moves_again_and_again_draws_where_the_camera_shows_it() {
                         FOCAL_LENGTH,
                     ),
                     light: None,
+                    eye: None,
                 }),
             BoxSpec::default(),
             move || {
@@ -62,6 +63,7 @@ fn a_surface_that_moves_again_and_again_draws_where_the_camera_shows_it() {
                             transform: panel_at(x.get()),
                             material: Material::Unlit,
                             casts_shadow: false,
+                            solid: true,
                         }),
                     BoxSpec::default(),
                     || {

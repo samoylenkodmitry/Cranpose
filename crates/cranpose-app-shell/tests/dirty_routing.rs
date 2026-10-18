@@ -60,7 +60,7 @@ impl Renderer for HitRenderer {
             &graph.root,
             graph::ProjectiveTransform::identity(),
             &mut self.scene,
-            (None, &graph.viewers),
+            None,
         );
         self.scene.replace_graph(graph);
         Ok(())
@@ -80,7 +80,7 @@ impl Renderer for HitRenderer {
                 &graph.root,
                 graph::ProjectiveTransform::identity(),
                 &mut self.scene,
-                (None, &graph.viewers),
+                None,
             );
             self.scene.replace_graph(graph);
         }

@@ -942,6 +942,7 @@ pub(crate) fn ControlVolume(
                 transform: place,
                 material: stage_volume(&animation.uniforms(kind, true, card_color(true)), size),
                 casts_shadow: false,
+                solid: true,
             })
             .then(stage_input(kind, &control, StageView::Above)),
         BoxSpec::default(),

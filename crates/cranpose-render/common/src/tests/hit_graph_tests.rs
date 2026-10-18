@@ -58,12 +58,7 @@ fn capture_pointer(layer: &mut LayerNode) {
 /// and no clip above it.
 fn hits_of(layer: &LayerNode) -> Vec<RecordedHit> {
     let mut sink = TestSink::default();
-    collect_hits_from_graph(
-        layer,
-        ProjectiveTransform::identity(),
-        &mut sink,
-        (None, &[]),
-    );
+    collect_hits_from_graph(layer, ProjectiveTransform::identity(), &mut sink, None);
     sink.hits
 }
 
@@ -178,8 +173,8 @@ fn capture_paths_do_not_leak_between_siblings_or_traversals() {
     root.children
         .push(RenderNode::Layer(Box::new(test_layer(13, identity))));
     let mut sink = TestSink::default();
-    collect_hits_from_graph(&root, identity, &mut sink, (None, &[]));
-    collect_hits_from_graph(&test_layer(14, identity), identity, &mut sink, (None, &[]));
+    collect_hits_from_graph(&root, identity, &mut sink, None);
+    collect_hits_from_graph(&test_layer(14, identity), identity, &mut sink, None);
     let mut expected: Vec<Vec<_>> = (1..=12)
         .map(|node_id| (1..=node_id).rev().collect())
         .collect();
