@@ -1083,33 +1083,61 @@ impl Drop for BranchGroupGuard<'_> {
 
 /// A [`BranchGroupGuard`] for code that reaches the composer through the
 /// thread's current one, as a content closure does.
+///
+/// A content closure also runs outside composition, as a draw or layout
+/// closure does, where its guards open nothing: such a guard drops with one
+/// inline test, and only an open one calls out to close its group.
 #[doc(hidden)]
 pub struct ScopedBranchGroupGuard {
+    /// The folds and the token of the open group; none outside composition.
+    /// [`Drop::drop`] takes and closes it, so the field has no drop of its own.
+    open: std::mem::ManuallyDrop<Option<ScopedBranchGroup>>,
+}
+
+/// The group a [`ScopedBranchGroupGuard`] holds open.
+struct ScopedBranchGroup {
     folds: Rc<crate::slot::BranchFolds>,
     token: crate::slot::FoldToken,
 }
 
-impl ScopedBranchGroupGuard {
-    #[inline]
-    pub(crate) fn open(folds: &Rc<crate::slot::BranchFolds>, key: Key) -> Self {
-        Self {
-            token: folds.push(key),
-            folds: Rc::clone(folds),
-        }
+/// Opens a group keyed `key` in the current composer's folds; outside
+/// composition, a guard that opened nothing.
+#[doc(hidden)]
+#[inline]
+pub fn __branch_group_scope_deferred(key: Key) -> ScopedBranchGroupGuard {
+    let open = crate::composer_context::with_current_core(|core| ScopedBranchGroup {
+        token: core.branch_folds.push(key),
+        folds: Rc::clone(&core.branch_folds),
+    });
+    ScopedBranchGroupGuard {
+        open: std::mem::ManuallyDrop::new(open),
     }
+}
 
-    /// [`BranchGroupGuard::advance`] for a content closure's guard.
-    #[inline]
-    pub(crate) fn advance(&mut self, key: Key) {
-        self.folds.advance(&mut self.token, key);
+/// Moves a content closure's statement guard to the next statement, keyed
+/// `key`: the guard the next statement would open, without looking up the
+/// composer again, as [`BranchGroupGuard::advance`] does. A guard opened
+/// outside composition stays empty.
+#[doc(hidden)]
+#[inline]
+pub fn __branch_group_scope_advance(guard: &mut ScopedBranchGroupGuard, key: Key) {
+    if let Some(group) = guard.open.as_mut() {
+        group.folds.advance(&mut group.token, key);
     }
 }
 
 impl Drop for ScopedBranchGroupGuard {
-    #[inline]
+    #[inline(always)]
     fn drop(&mut self) {
-        self.folds.close(self.token);
+        if let Some(group) = self.open.take() {
+            close_scoped_branch_group(group);
+        }
     }
+}
+
+#[inline(never)]
+fn close_scoped_branch_group(group: ScopedBranchGroup) {
+    group.folds.close(group.token);
 }
 
 /// A group a composable call opened; [`ComposableGroup::close`] ends it

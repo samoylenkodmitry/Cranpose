@@ -1043,6 +1043,7 @@ struct KernMetricsKey {
     glyph_id: u32,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct SoftwareTextGlyphMetricsStats {
     glyph_hits: u64,
@@ -1051,9 +1052,19 @@ struct SoftwareTextGlyphMetricsStats {
     kern_misses: u64,
 }
 
+/// A lookup of [`SoftwareTextGlyphMetricsCache`], which tests count.
+#[derive(Clone, Copy)]
+enum MetricsLookup {
+    GlyphHit,
+    GlyphMiss,
+    KernHit,
+    KernMiss,
+}
+
 struct SoftwareTextGlyphMetricsCache {
     glyphs: DirectMappedCache<GlyphMetricsKey, CachedGlyphMetrics>,
     kerns: DirectMappedCache<KernMetricsKey, f32>,
+    #[cfg(test)]
     stats: SoftwareTextGlyphMetricsStats,
 }
 
@@ -1062,6 +1073,7 @@ impl SoftwareTextGlyphMetricsCache {
         Self {
             glyphs: DirectMappedCache::with_slots_log2(SOFTWARE_TEXT_GLYPH_METRICS_SLOTS_LOG2),
             kerns: DirectMappedCache::with_slots_log2(SOFTWARE_TEXT_KERN_METRICS_SLOTS_LOG2),
+            #[cfg(test)]
             stats: SoftwareTextGlyphMetricsStats::default(),
         }
     }
@@ -1071,6 +1083,26 @@ impl SoftwareTextGlyphMetricsCache {
         self.stats
     }
 
+    /// Counts `lookup` for the tests that read the stats; a build without
+    /// tests counts nothing per character.
+    #[inline(always)]
+    fn count(&mut self, lookup: MetricsLookup) {
+        #[cfg(test)]
+        {
+            let stats = &mut self.stats;
+            let count = match lookup {
+                MetricsLookup::GlyphHit => &mut stats.glyph_hits,
+                MetricsLookup::GlyphMiss => &mut stats.glyph_misses,
+                MetricsLookup::KernHit => &mut stats.kern_hits,
+                MetricsLookup::KernMiss => &mut stats.kern_misses,
+            };
+            *count = count.saturating_add(1);
+        }
+        #[cfg(not(test))]
+        let _ = lookup;
+    }
+
+    #[inline]
     fn glyph_metrics<F, S>(
         &mut self,
         font: &SoftwareTextFont,
@@ -1084,18 +1116,34 @@ impl SoftwareTextGlyphMetricsCache {
         // The face's ASCII table answers, and the font was read at most
         // once for it, so it counts as a hit.
         if let Some((glyph_id, advance)) = font.font.ascii_glyph(ch) {
-            self.stats.glyph_hits = self.stats.glyph_hits.saturating_add(1);
+            self.count(MetricsLookup::GlyphHit);
             return CachedGlyphMetrics {
                 glyph_id,
                 advance_unscaled: advance.max(0.0),
             };
         }
+        self.cached_glyph_metrics(font, scaled_font, ch)
+    }
+
+    /// [`Self::glyph_metrics`] for a character the face's ASCII table
+    /// leaves out.
+    #[inline(never)]
+    fn cached_glyph_metrics<F, S>(
+        &mut self,
+        font: &SoftwareTextFont,
+        scaled_font: &S,
+        ch: char,
+    ) -> CachedGlyphMetrics
+    where
+        F: Font,
+        S: ScaleFont<F>,
+    {
         let key = GlyphMetricsKey {
             font_hash: font.glyph_map_hash,
             ch,
         };
         if let Some(metrics) = self.glyphs.get(&key) {
-            self.stats.glyph_hits = self.stats.glyph_hits.saturating_add(1);
+            self.count(MetricsLookup::GlyphHit);
             return metrics;
         }
 
@@ -1105,7 +1153,7 @@ impl SoftwareTextGlyphMetricsCache {
             advance_unscaled: scaled_font.font().h_advance_unscaled(glyph_id).max(0.0),
         };
         self.glyphs.insert(key, metrics);
-        self.stats.glyph_misses = self.stats.glyph_misses.saturating_add(1);
+        self.count(MetricsLookup::GlyphMiss);
         metrics
     }
 
@@ -1121,7 +1169,7 @@ impl SoftwareTextGlyphMetricsCache {
         S: ScaleFont<F>,
     {
         if let Some(kern) = font.font.ascii_kern(previous, next) {
-            self.stats.kern_hits = self.stats.kern_hits.saturating_add(1);
+            self.count(MetricsLookup::KernHit);
             return kern;
         }
         let ((_, previous_id), (_, glyph_id)) = (previous, next);
@@ -1131,13 +1179,13 @@ impl SoftwareTextGlyphMetricsCache {
             glyph_id: glyph_id.0.into(),
         };
         if let Some(kern) = self.kerns.get(&key) {
-            self.stats.kern_hits = self.stats.kern_hits.saturating_add(1);
+            self.count(MetricsLookup::KernHit);
             return kern;
         }
 
         let kern = scaled_font.font().kern_unscaled(previous_id, glyph_id);
         self.kerns.insert(key, kern);
-        self.stats.kern_misses = self.stats.kern_misses.saturating_add(1);
+        self.count(MetricsLookup::KernMiss);
         kern
     }
 }

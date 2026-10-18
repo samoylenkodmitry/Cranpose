@@ -169,12 +169,13 @@ impl SurfaceDirt {
             moved: moved_nodes,
         } = layout;
         let structural_dirty = !structural_parents.is_empty();
+        // A node in two of the lists stays in both: the scene keys its
+        // updates by node, so sorting every id to drop the second copy would
+        // do that work twice.
         partial_dirty_nodes.clear();
         partial_dirty_nodes.extend(draw_dirty_nodes.iter().copied());
         partial_dirty_nodes.extend(layout_dirty_nodes.iter().copied());
         partial_dirty_nodes.extend(structural_parents.iter().copied());
-        partial_dirty_nodes.sort_unstable();
-        partial_dirty_nodes.dedup();
 
         // Moved nodes are not part of the partial list: the scene moves them.
         let layout_changed = !layout_dirty_nodes.is_empty() || !moved_nodes.is_empty();

@@ -485,14 +485,14 @@ impl SnapshotStateObserverInner {
             return;
         }
 
-        for entry in to_notify {
-            let executor = self.executor.clone();
-            executor(Box::new(move || {
+        // One task notifies every scope in turn, as one task a scope would.
+        (self.executor)(Box::new(move || {
+            for entry in to_notify {
                 if let Ok(entry) = entry.try_borrow() {
                     entry.notify();
                 }
-            }));
-        }
+            }
+        }));
     }
 
     fn replace_observed_ids(&self, entry: &Rc<RefCell<ScopeEntry>>, collected: &mut ObservedIds) {

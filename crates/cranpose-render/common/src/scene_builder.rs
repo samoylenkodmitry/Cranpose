@@ -1103,10 +1103,9 @@ fn translated_container(
         );
         graphics_layer
     };
-    if shaped(container.local_bounds)
-        .as_ref()
-        .unwrap_or(&GraphicsLayer::DEFAULT)
-        != &*container.graphics_layer
+    if !container
+        .graphics_layer
+        .reads_as(shaped(container.local_bounds).as_ref())
     {
         return Err("container graphics layer changed");
     }
