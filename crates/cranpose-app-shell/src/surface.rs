@@ -512,6 +512,10 @@ pub(crate) fn route_geometry_scene_nodes<R: Renderer>(
     moved: &[NodeId],
     scratch: &mut SurfaceRoutingScratch,
 ) {
+    if moved.is_empty() {
+        route_nodes_by_surface(app, surfaces, laid_out, SurfaceDirtyLane::Layout, scratch);
+        return;
+    }
     scratch.laid_out_starts.clear();
     scratch.laid_out_starts.extend(
         surfaces
@@ -519,9 +523,6 @@ pub(crate) fn route_geometry_scene_nodes<R: Renderer>(
             .map(|surface| surface.scoped_layout_scene_nodes.len()),
     );
     route_nodes_by_surface(app, surfaces, laid_out, SurfaceDirtyLane::Layout, scratch);
-    if moved.is_empty() {
-        return;
-    }
     let mut routed = std::mem::take(&mut scratch.moved);
     routed.clear();
     {
