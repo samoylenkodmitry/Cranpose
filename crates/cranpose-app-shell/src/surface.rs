@@ -12,11 +12,11 @@
 
 use std::{cell::RefCell, fmt::Debug, rc::Rc};
 
-use cranpose_core::{MemoryApplier, NodeId, NodeMarks, collections::map::HashSet};
+use cranpose_core::{MemoryApplier, NodeId, collections::map::HashSet};
 use cranpose_foundation::{PointerButtons, PointerSource, RotaryScrollEvent};
 use cranpose_render_common::Renderer;
 use cranpose_ui::{
-    LayoutNode, LayoutTree, PlatformTextInputHandler, SemanticsTree,
+    LayoutNode, LayoutTree, MovedSceneNode, PlatformTextInputHandler, SemanticsTree,
     pointer_icon_session::PointerIconState,
 };
 use cranpose_ui_graphics::{Point, PointerIcon, Size};
@@ -502,14 +502,14 @@ pub(crate) fn route_nodes_by_surface<R: Renderer>(
 
 /// Routes the nodes a layout pass laid out again, `laid_out`, and the nodes
 /// it only moved. A moved node is left out when the scene update of its
-/// surface lays out its layer's parent again: that update places every
-/// child of the parent's layer anew, so the node's own record would be found
-/// and settled there and nowhere else.
+/// surface lays out its placer again: that update places every child of the
+/// placer's layer anew, so the node's own record would be found and settled
+/// there and nowhere else.
 pub(crate) fn route_geometry_scene_nodes<R: Renderer>(
     app: &mut ShellApp,
     surfaces: &mut [RootSurface<R>],
     laid_out: impl IntoIterator<Item = NodeId>,
-    moved: &[NodeId],
+    moved: &[MovedSceneNode],
     scratch: &mut SurfaceRoutingScratch,
 ) {
     if moved.is_empty() {
@@ -535,12 +535,22 @@ pub(crate) fn route_geometry_scene_nodes<R: Renderer>(
         }
         let marks = &scratch.laid_out;
         let window_roots = !app.app_context.window_roots().is_empty();
-        routed.extend(
-            moved
-                .iter()
-                .copied()
-                .filter(|&node| !placed_by_laid_out_parent(&applier, marks, node, window_roots)),
-        );
+        // The children one node placed come together: their placer is
+        // looked up once.
+        let mut last_placer = None;
+        for &moved in moved {
+            let placed_again = moved.placer.is_some_and(|placer| match last_placer {
+                Some((last, laid_out)) if last == placer => laid_out,
+                _ => {
+                    let laid_out = marks.get(&applier, placer) != 0;
+                    last_placer = Some((placer, laid_out));
+                    laid_out
+                }
+            });
+            if !placed_again || window_roots && is_window_root(&applier, moved.node) {
+                routed.push(moved.node);
+            }
+        }
     }
     route_nodes_by_surface(
         app,
@@ -552,38 +562,13 @@ pub(crate) fn route_geometry_scene_nodes<R: Renderer>(
     scratch.moved = routed;
 }
 
-/// Whether the parent of `node`'s layer, its nearest ancestor that is not
-/// virtual, is marked in `laid_out`, and `node` goes to the same surface: it
-/// is no window root of its own where `window_roots` are attached.
-fn placed_by_laid_out_parent(
-    applier: &MemoryApplier,
-    laid_out: &NodeMarks,
-    node: NodeId,
-    window_roots: bool,
-) -> bool {
-    let Ok(child) = applier.get_ref(node) else {
-        return false;
-    };
-    if window_roots {
-        let child: &dyn std::any::Any = child;
-        if child
-            .downcast_ref::<LayoutNode>()
+/// Whether `node` is a window root, which goes to a surface of its own.
+fn is_window_root(applier: &MemoryApplier, node: NodeId) -> bool {
+    applier.get_ref(node).is_ok_and(|node| {
+        let node: &dyn std::any::Any = node;
+        node.downcast_ref::<LayoutNode>()
             .is_some_and(LayoutNode::is_window_root)
-        {
-            return false;
-        }
-    }
-    let mut parent = child.parent();
-    while let Some(id) = parent {
-        let Ok(node) = applier.get_ref(id) else {
-            return false;
-        };
-        if !node.is_virtual() {
-            return laid_out.get(applier, id) != 0;
-        }
-        parent = node.parent();
-    }
-    false
+    })
 }
 
 /// One surface borrowed together with its shell: the handle a platform

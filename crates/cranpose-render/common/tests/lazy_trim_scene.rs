@@ -76,7 +76,10 @@ fn scoped_scene_nodes(applier: &mut MemoryApplier, root: NodeId) -> (Vec<NodeId>
     let mut nodes = Vec::new();
     let mut moved = Vec::new();
     attached(geometry.reshaped, &mut nodes);
-    attached(geometry.moved, &mut moved);
+    attached(
+        geometry.moved.iter().map(|moved| moved.node).collect(),
+        &mut moved,
+    );
     for node in applier.take_structural_change_parents_attached_to(root) {
         if !nodes.contains(&node) {
             nodes.push(node);

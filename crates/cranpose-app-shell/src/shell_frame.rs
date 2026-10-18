@@ -144,13 +144,19 @@ struct ScopedVisualNodes {
     layers: Vec<NodeId>,
 }
 
+/// The nodes a surface's layout lanes hold: laid out again, and only moved.
+struct ScopedLayoutNodes {
+    reshaped: Vec<NodeId>,
+    moved: Vec<NodeId>,
+}
+
 impl SurfaceDirt {
     fn classify(
         frame: &FrameDirt,
         scene_dirty: bool,
         draw_repass_pending: bool,
         visual_nodes: ScopedVisualNodes,
-        layout: cranpose_ui::GeometrySceneNodes,
+        layout: ScopedLayoutNodes,
         structural_parents: Vec<NodeId>,
         mut partial_dirty_nodes: Vec<NodeId>,
     ) -> Self {
@@ -158,7 +164,7 @@ impl SurfaceDirt {
             draw: draw_dirty_nodes,
             layers: layer_property_nodes,
         } = visual_nodes;
-        let cranpose_ui::GeometrySceneNodes {
+        let ScopedLayoutNodes {
             reshaped: layout_dirty_nodes,
             moved: moved_nodes,
         } = layout;
@@ -815,7 +821,7 @@ where
     if frame.render_dirty && !frame.layer_properties_pending && !draw_repass_pending {
         draw_dirty_nodes = refresh_retained_redraw_nodes(app, surface, draw_dirty_nodes);
     }
-    let layout = cranpose_ui::GeometrySceneNodes {
+    let layout = ScopedLayoutNodes {
         reshaped: std::mem::take(&mut surface.scoped_layout_scene_nodes),
         moved: std::mem::take(&mut surface.scoped_moved_scene_nodes),
     };

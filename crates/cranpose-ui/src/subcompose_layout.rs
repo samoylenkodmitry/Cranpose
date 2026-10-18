@@ -930,10 +930,13 @@ impl SubcomposeLayoutNode {
         &self.cache_handles
     }
 
-    /// Updates the position of this node. Called during placement.
-    /// [`LayoutState::place`] self-reports actual moves to the scene phase.
-    pub fn set_position(&self, position: Point, context: &AppContext) {
-        self.layout_state.borrow_mut().place(position, context);
+    /// Updates the position of this node, which `placer` placed. Called
+    /// during placement. [`LayoutState::place`] self-reports actual moves to
+    /// the scene phase.
+    pub fn set_position(&self, position: Point, placer: Option<NodeId>, context: &AppContext) {
+        self.layout_state
+            .borrow_mut()
+            .place(position, placer, context);
     }
 
     /// Updates the measured size of this node. Called during measurement.
