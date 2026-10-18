@@ -24,13 +24,19 @@ use crate::{
 /// not hide it.
 const WINDOW_LIFT: f32 = 0.5;
 
+/// The doorways of a scene, ready to draw, and the buffers of the unit
+/// square they draw on.
+pub(super) struct PreparedWindows {
+    buffers: SceneMeshBuffers,
+    windows: Vec<PreparedWindow>,
+}
+
 /// A doorway, ready to draw: the seen space behind it and the one it opens
-/// from, its uniforms, the unit square's buffers and its opening's scissor.
-pub(super) struct PreparedWindow {
+/// from, its uniforms and its opening's scissor.
+struct PreparedWindow {
     seen: usize,
     through: usize,
     uniform: UniformUpload,
-    buffers: SceneMeshBuffers,
     scissor: (u32, u32, u32, u32),
 }
 
@@ -42,7 +48,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         draws: &[PreparedSurface<'_>],
         (scene, page, eye): (&crate::collect::SceneDraw, ScenePage, Vec3),
         device: &wgpu::Device,
-    ) -> Vec<PreparedWindow> {
+    ) -> Option<PreparedWindows> {
         // A doorway draws when a surface lies behind it, or behind one seen
         // through it; the eye sees parents before what lies behind them.
         let mut needed = vec![false; scene.seen.len()];
@@ -55,13 +61,12 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             }
         }
         if !needed.iter().skip(1).any(|needed| *needed) {
-            return Vec::new();
+            return None;
         }
-        let window_mesh = std::sync::Arc::clone(self.renderer.scene_pass.window_mesh());
         let (buffers, staged) = self
             .renderer
             .scene_pass
-            .mesh_buffers((device, &mut *self.recorder), &window_mesh);
+            .window_buffers((device, &mut *self.recorder));
         self.renderer.frame_stats.record_command_stats(staged);
         let mut windows = Vec::new();
         for (index, seen) in scene.seen.iter().enumerate() {
@@ -103,11 +108,10 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 seen: index,
                 through,
                 uniform,
-                buffers: buffers.clone(),
                 scissor,
             });
         }
-        windows
+        Some(PreparedWindows { buffers, windows })
     }
 }
 
@@ -118,7 +122,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
 pub(super) fn encode_portals(
     pass: &mut wgpu::RenderPass<'_>,
     renderer: &GpuRenderer,
-    (draws, windows): (&[PreparedSurface<'_>], &[PreparedWindow]),
+    (draws, windows): (&[PreparedSurface<'_>], &PreparedWindows),
     (from, depth): (usize, u32),
     (device, texture): (&wgpu::Device, &wgpu::BindGroup),
 ) {
@@ -133,9 +137,14 @@ pub(super) fn encode_portals(
         return;
     };
     let effects = &renderer.effect_renderer;
-    for window in windows.iter().filter(|window| window.through == from) {
-        window.draw(pass, (mark, depth), texture);
-        window.draw(pass, (clear, depth + 1), texture);
+    let buffers = &windows.buffers;
+    for window in windows
+        .windows
+        .iter()
+        .filter(|window| window.through == from)
+    {
+        window.draw(pass, (mark, depth), (texture, buffers));
+        window.draw(pass, (clear, depth + 1), (texture, buffers));
         for draw in draws.iter().filter(|draw| draw.seen() == window.seen) {
             let pipeline = match &draw.held.mesh.surface.material {
                 Material::Volume(volume) => {
@@ -161,7 +170,7 @@ pub(super) fn encode_portals(
             (window.seen, depth + 1),
             (device, texture),
         );
-        window.draw(pass, (restore, depth + 1), texture);
+        window.draw(pass, (restore, depth + 1), (texture, buffers));
     }
 }
 
@@ -177,13 +186,13 @@ fn within(
 }
 
 impl PreparedWindow {
-    /// Draws the doorway's square with `pipeline` against the stencil
-    /// `reference`.
+    /// Draws the doorway's square, whose buffers are `buffers`, with
+    /// `pipeline` against the stencil `reference`.
     fn draw(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         (pipeline, reference): (&wgpu::RenderPipeline, u32),
-        texture: &wgpu::BindGroup,
+        (texture, buffers): (&wgpu::BindGroup, &SceneMeshBuffers),
     ) {
         pass.set_pipeline(pipeline);
         pass.set_stencil_reference(reference);
@@ -192,8 +201,8 @@ impl PreparedWindow {
         pass.set_bind_group(0, texture, &[]);
         pass.set_bind_group(3, texture, &[]);
         pass.set_bind_group(1, &self.uniform.bind_group, &[self.uniform.offset]);
-        pass.set_vertex_buffer(0, self.buffers.vertices.slice(..));
-        pass.set_index_buffer(self.buffers.indices.slice(..), wgpu::IndexFormat::Uint32);
-        pass.draw_indexed(0..self.buffers.index_count, 0, 0..1);
+        pass.set_vertex_buffer(0, buffers.vertices.slice(..));
+        pass.set_index_buffer(buffers.indices.slice(..), wgpu::IndexFormat::Uint32);
+        pass.draw_indexed(0..buffers.index_count, 0, 0..1);
     }
 }

@@ -27,7 +27,7 @@ use crate::{
 #[path = "frame_portal.rs"]
 mod portals;
 
-use self::portals::{PreparedWindow, encode_portals};
+use self::portals::{PreparedWindows, encode_portals};
 
 /// The surfaces of a scene that draw together, in the order the phases
 /// draw.
@@ -237,7 +237,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                     portals,
                     glow,
                 ],
-                (&draws, &windows, None),
+                (&draws, windows.as_ref(), None),
                 &device,
             );
             return Ok(());
@@ -251,7 +251,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 (volumes, ScenePhase::Volume),
                 portals,
             ],
-            (&draws, &windows, None),
+            (&draws, windows.as_ref(), None),
             &device,
         );
         if self
@@ -276,7 +276,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 (StepPipeline::Fixed(ScenePipeline::Glass), ScenePhase::Glass),
                 glow,
             ],
-            (&draws, &windows, Some(&copy)),
+            (&draws, windows.as_ref(), Some(&copy)),
             &device,
         );
         Ok(())
@@ -291,7 +291,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         steps: &[(StepPipeline, ScenePhase)],
         (draws, windows, backdrop): (
             &[PreparedSurface<'_>],
-            &[PreparedWindow],
+            Option<&PreparedWindows>,
             Option<&Rc<OffscreenTarget>>,
         ),
         device: &wgpu::Device,
@@ -333,7 +333,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 },
                 StepPipeline::Volumes(_) => None,
                 StepPipeline::Portals => {
-                    if let Some(first) = draws.first() {
+                    if let (Some(first), Some(windows)) = (draws.first(), windows) {
                         let texture = first.texture((device, effects));
                         encode_portals(
                             &mut render_pass,

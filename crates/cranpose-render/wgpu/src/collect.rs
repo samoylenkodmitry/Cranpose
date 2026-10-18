@@ -1296,17 +1296,16 @@ fn collect_into(
     let mut has_pixel_sensitive_subtree = false;
     // The scene's surfaces draw together where its first child in 3D comes:
     // flat children before it lie under them, the rest over them.
-    let mut pending = scene.as_ref();
+    let mut pending = scene;
     for_each_in_draw_order(&layer.children, |child| {
         has_pixel_sensitive_subtree |= match child {
             RenderNode::Layer(child_layer) => {
-                if let Some((draw, view)) = pending.filter(|_| child_layer.has_space()) {
+                if let Some((draw, view)) = pending.take_if(|_| child_layer.has_space()) {
                     let context = WalkContext {
-                        scene: Some(draw),
+                        scene: Some(&draw),
                         ..child_context
                     };
                     collect_seen_surfaces(view, text_layout, motion, context, out, recycler);
-                    pending = None;
                 }
                 collect_child(
                     child_layer,
@@ -1331,16 +1330,16 @@ fn collect_into(
 #[cold]
 #[inline(never)]
 fn collect_seen_surfaces(
-    view: &EyeView<'_>,
+    view: EyeView<'_>,
     text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
     context: WalkContext<'_>,
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
 ) {
-    for seen in &view.surfaces {
+    for seen in view.surfaces {
         let placed = Placed {
-            surface: seen.surface.clone(),
+            surface: seen.surface,
             seen: seen.seen,
         };
         collect_isolated_child(

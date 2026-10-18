@@ -78,18 +78,13 @@ impl ScenePick {
     /// the layer to the window; `None` when the layer shows no scene. Its
     /// surfaces are those the window's eye sees.
     pub fn of(layer: &LayerNode, to_window: ProjectiveTransform) -> Option<Self> {
+        let window_to_scene = to_window.inverse()?;
         let tree = SpaceTree::of(layer)?;
         let view = EyeView::of(&tree, node_size(layer));
-        let surfaces = view
-            .surfaces
+        let seen_scenes = view
+            .seen
             .iter()
-            .map(|seen| PickSurface {
-                node_id: seen.layer.node_id,
-                surface: seen.surface.clone(),
-                size: seen.size,
-                seen: seen.seen,
-                held: Cell::new(None),
-            })
+            .filter_map(|seen| tree.cells[seen.cell].layer.node_id)
             .collect();
         let seen = view
             .seen
@@ -102,11 +97,22 @@ impl ScenePick {
                     .unwrap_or(Mat4::IDENTITY),
             })
             .collect();
+        let surfaces = view
+            .surfaces
+            .into_iter()
+            .map(|seen| PickSurface {
+                node_id: seen.layer.node_id,
+                surface: seen.surface,
+                size: seen.size,
+                seen: seen.seen,
+                held: Cell::new(None),
+            })
+            .collect();
         Some(Self {
             scene: layer.node_id,
             camera: view.camera,
             size: view.size,
-            window_to_scene: to_window.inverse()?,
+            window_to_scene,
             scene_to_window: to_window,
             surfaces,
             seen,
@@ -115,11 +121,7 @@ impl ScenePick {
                 .iter()
                 .filter_map(|cell| cell.layer.node_id)
                 .collect(),
-            seen_scenes: view
-                .seen
-                .iter()
-                .filter_map(|seen| tree.cells[seen.cell].layer.node_id)
-                .collect(),
+            seen_scenes,
             last: Cell::new(None),
         })
     }

@@ -445,9 +445,14 @@ impl ScenePass {
         &self.pipelines[kind as usize]
     }
 
-    /// The unit square portals' windows are drawn on.
-    pub(crate) fn window_mesh(&self) -> &Arc<Mesh> {
-        self.window.get_or_init(|| Arc::new(Mesh::plane()))
+    /// The buffers of the unit square doorways are drawn on, as
+    /// [`Self::mesh_buffers`] gives them.
+    pub(crate) fn window_buffers(
+        &mut self,
+        gpu: (&wgpu::Device, &mut impl FrameCommandRecorder),
+    ) -> (SceneMeshBuffers, FrameCommandStats) {
+        let mesh = self.window.get_or_init(|| Arc::new(Mesh::plane()));
+        kept_mesh_buffers(&mut self.meshes, gpu, mesh)
     }
 
     /// The shader, layouts and samplers, made on the first call;
@@ -477,59 +482,10 @@ impl ScenePass {
     /// where they fit; and what the staging wrote.
     pub(crate) fn mesh_buffers(
         &mut self,
-        (device, recorder): (&wgpu::Device, &mut impl FrameCommandRecorder),
+        gpu: (&wgpu::Device, &mut impl FrameCommandRecorder),
         mesh: &Arc<Mesh>,
     ) -> (SceneMeshBuffers, FrameCommandStats) {
-        let id = mesh.id();
-        let mut stats = FrameCommandStats::default();
-        let buffers = match self.meshes.take(|kept| kept.id == id) {
-            Some(kept) => kept.buffers,
-            None => {
-                let vertices = scene_vertices(mesh);
-                let vertices: &[u8] = bytemuck::cast_slice(&vertices);
-                let indices: &[u8] = bytemuck::cast_slice(mesh.indices());
-                let freed = self.meshes.take(|kept| {
-                    kept.mesh.strong_count() == 0
-                        && kept.buffers.vertices.size() >= vertices.len() as u64
-                        && kept.buffers.indices.size() >= indices.len() as u64
-                });
-                let (vertex_buffer, index_buffer) = match freed {
-                    Some(kept) => (kept.buffers.vertices, kept.buffers.indices),
-                    None => (
-                        mesh_buffer(
-                            device,
-                            "Scene Mesh Vertices",
-                            wgpu::BufferUsages::VERTEX,
-                            vertices,
-                        ),
-                        mesh_buffer(
-                            device,
-                            "Scene Mesh Indices",
-                            wgpu::BufferUsages::INDEX,
-                            indices,
-                        ),
-                    ),
-                };
-                stats += recorder.stage_buffer_copy(device, &vertex_buffer, 0, vertices);
-                stats += recorder.stage_buffer_copy(device, &index_buffer, 0, indices);
-                SceneMeshBuffers {
-                    vertices: vertex_buffer,
-                    indices: index_buffer,
-                    index_count: mesh.indices().len() as u32,
-                }
-            }
-        };
-        self.meshes.put(
-            KeptMesh {
-                id,
-                mesh: Arc::downgrade(mesh),
-                buffers: buffers.clone(),
-            },
-            KEPT_MESHES,
-            u64::MAX,
-            |_| 0,
-        );
-        (buffers, stats)
+        kept_mesh_buffers(&mut self.meshes, gpu, mesh)
     }
 
     /// Keeps the pipelines of `shader`, whose volumes a frame draws.
@@ -567,6 +523,65 @@ impl ScenePass {
             self.shadow_map = None;
         }
     }
+}
+
+/// The buffers of `mesh` among `meshes`, staged through `recorder` the
+/// first time a frame draws it (see [`ScenePass::mesh_buffers`]).
+fn kept_mesh_buffers(
+    meshes: &mut IdlePool<KeptMesh>,
+    (device, recorder): (&wgpu::Device, &mut impl FrameCommandRecorder),
+    mesh: &Arc<Mesh>,
+) -> (SceneMeshBuffers, FrameCommandStats) {
+    let id = mesh.id();
+    let mut stats = FrameCommandStats::default();
+    let buffers = match meshes.take(|kept| kept.id == id) {
+        Some(kept) => kept.buffers,
+        None => {
+            let vertices = scene_vertices(mesh);
+            let vertices: &[u8] = bytemuck::cast_slice(&vertices);
+            let indices: &[u8] = bytemuck::cast_slice(mesh.indices());
+            let freed = meshes.take(|kept| {
+                kept.mesh.strong_count() == 0
+                    && kept.buffers.vertices.size() >= vertices.len() as u64
+                    && kept.buffers.indices.size() >= indices.len() as u64
+            });
+            let (vertex_buffer, index_buffer) = match freed {
+                Some(kept) => (kept.buffers.vertices, kept.buffers.indices),
+                None => (
+                    mesh_buffer(
+                        device,
+                        "Scene Mesh Vertices",
+                        wgpu::BufferUsages::VERTEX,
+                        vertices,
+                    ),
+                    mesh_buffer(
+                        device,
+                        "Scene Mesh Indices",
+                        wgpu::BufferUsages::INDEX,
+                        indices,
+                    ),
+                ),
+            };
+            stats += recorder.stage_buffer_copy(device, &vertex_buffer, 0, vertices);
+            stats += recorder.stage_buffer_copy(device, &index_buffer, 0, indices);
+            SceneMeshBuffers {
+                vertices: vertex_buffer,
+                indices: index_buffer,
+                index_count: mesh.indices().len() as u32,
+            }
+        }
+    };
+    meshes.put(
+        KeptMesh {
+            id,
+            mesh: Arc::downgrade(mesh),
+            buffers: buffers.clone(),
+        },
+        KEPT_MESHES,
+        u64::MAX,
+        |_| 0,
+    );
+    (buffers, stats)
 }
 
 fn pipeline_parts(
