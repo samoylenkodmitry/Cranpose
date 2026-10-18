@@ -260,14 +260,10 @@ impl PathSlicer {
     /// to right with no sorting. They are the slices the sweep in
     /// [`Self::slice`] makes of the contour.
     fn slice_monotone(&mut self, points: &[Point]) -> ChainSlicing {
-        if points
-            .iter()
-            .any(|point| !(point.x.is_finite() && point.y.is_finite()))
-        {
-            return ChainSlicing::Unsliceable;
-        }
-        let Some((leftmost, rightmost)) = horizontal_extremes(points) else {
-            return ChainSlicing::NotMonotone;
+        let (leftmost, rightmost) = match horizontal_extremes(points) {
+            Extremes::Found(leftmost, rightmost) => (leftmost, rightmost),
+            Extremes::NotFinite => return ChainSlicing::Unsliceable,
+            Extremes::Upright => return ChainSlicing::NotMonotone,
         };
         if !chain_edges(points, leftmost, rightmost, 1, &mut self.edges)
             || !chain_edges(points, leftmost, rightmost, -1, &mut self.active)
@@ -427,20 +423,42 @@ enum ChainSlicing {
     NotMonotone,
 }
 
-/// The first of the leftmost vertices and the first of the rightmost ones.
-/// `None` when every vertex lies on one upright line.
-fn horizontal_extremes(points: &[Point]) -> Option<(usize, usize)> {
-    let mut leftmost = 0;
-    let mut rightmost = 0;
+/// Where a contour's leftmost and rightmost vertices are.
+enum Extremes {
+    /// The first of the leftmost vertices and the first of the rightmost
+    /// ones.
+    Found(usize, usize),
+    /// A coordinate is not finite.
+    NotFinite,
+    /// Every vertex lies on one upright line.
+    Upright,
+}
+
+/// The extremes of `points`, found in the pass that checks they are
+/// finite.
+fn horizontal_extremes(points: &[Point]) -> Extremes {
+    let Some(first) = points.first() else {
+        return Extremes::Upright;
+    };
+    let (mut leftmost, mut rightmost) = (0, 0);
+    let (mut left, mut right) = (first.x, first.x);
+    let mut finite = true;
     for (index, point) in points.iter().enumerate() {
-        if point.x < points[leftmost].x {
-            leftmost = index;
+        finite &= point.x.is_finite() & point.y.is_finite();
+        if point.x < left {
+            (leftmost, left) = (index, point.x);
         }
-        if point.x > points[rightmost].x {
-            rightmost = index;
+        if point.x > right {
+            (rightmost, right) = (index, point.x);
         }
     }
-    (leftmost != rightmost).then_some((leftmost, rightmost))
+    if !finite {
+        Extremes::NotFinite
+    } else if leftmost == rightmost {
+        Extremes::Upright
+    } else {
+        Extremes::Found(leftmost, rightmost)
+    }
 }
 
 /// The edges from vertex `from` to vertex `to`, stepping `step` through
@@ -455,11 +473,16 @@ fn chain_edges(
     edges: &mut Vec<Edge>,
 ) -> bool {
     edges.clear();
-    let count = points.len();
+    let last = points.len() - 1;
     let mut index = from;
     let mut upright_after_edge = false;
     while index != to {
-        let next = index.wrapping_add_signed(step).wrapping_add(count) % count;
+        let next = match (step > 0, index) {
+            (true, index) if index == last => 0,
+            (true, index) => index + 1,
+            (false, 0) => last,
+            (false, index) => index - 1,
+        };
         let (a, b) = (points[index], points[next]);
         if a.x > b.x {
             return false;
