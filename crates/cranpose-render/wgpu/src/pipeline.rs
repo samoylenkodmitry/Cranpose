@@ -1155,7 +1155,7 @@ fn push_text_draw<S: TextStyleDrawSink>(
 
 /// Pushes a text's draws: its glyphs in the paint's colour when the paint
 /// is plain, without reading the style, and every draw its style asks for
-/// otherwise.
+/// otherwise; each anchored to `snap_anchor`.
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn push_text_style_draws(
     scene: &mut CompositorScene,
@@ -1179,6 +1179,7 @@ pub(crate) fn push_text_style_draws(
             y: text_rect.y + paint.baseline_shift,
             ..text_rect
         };
+        let texts = scene.texts.len();
         push_text_draw(
             scene,
             node_id,
@@ -1191,8 +1192,15 @@ pub(crate) fn push_text_style_draws(
             options,
             text_clip,
         );
+        // A plain text pushes its glyphs and nothing else.
+        if let Some(anchor) = snap_anchor {
+            for text in &mut scene.texts[texts..] {
+                text.snap_anchor = Some(anchor);
+            }
+        }
         return;
     }
+    let counts = crate::collect::scene_counts(scene);
     emit_text_style_draws(
         scene,
         text_layout,
@@ -1207,6 +1215,7 @@ pub(crate) fn push_text_style_draws(
         text_clip,
         snap_anchor,
     );
+    crate::collect::assign_snap_anchor_since(scene, counts, snap_anchor);
 }
 
 #[cfg(test)]

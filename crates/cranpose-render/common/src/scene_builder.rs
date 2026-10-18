@@ -2414,10 +2414,16 @@ fn read_node_data<R>(
 /// equal ones, as Compose's `zSortedChildren`. `None` while the composition
 /// order already is that order, which it always is while no `z_index`
 /// modifier exists.
+#[inline]
 fn z_ordered_children(applier: &MemoryApplier, children: &[NodeId]) -> Option<Vec<NodeId>> {
     if children.len() < 2 || !cranpose_ui::z_index_in_use() {
         return None;
     }
+    z_sorted_children(applier, children)
+}
+
+#[inline(never)]
+fn z_sorted_children(applier: &MemoryApplier, children: &[NodeId]) -> Option<Vec<NodeId>> {
     let mut previous = f32::NEG_INFINITY;
     let in_order = children.iter().all(|&child| {
         let z_index = node_z_index(applier, child);
@@ -3207,12 +3213,19 @@ fn shaped_graphics_layer(
 ) -> Option<Cow<'_, GraphicsLayer>> {
     match clip_corners(slices.clip_to_bounds(), slices.corner_shape(), local_bounds) {
         None => slices.graphics_layer(),
-        Some(corners) => {
-            let mut graphics_layer = slices.graphics_layer();
-            round_clip(&mut graphics_layer, corners, local_bounds);
-            graphics_layer
-        }
+        Some(corners) => rounded_graphics_layer(slices, corners, local_bounds),
     }
+}
+
+#[inline(never)]
+fn rounded_graphics_layer(
+    slices: &ModifierNodeSlices,
+    corners: (RoundedCornerShape, CornerRadii),
+    local_bounds: Rect,
+) -> Option<Cow<'_, GraphicsLayer>> {
+    let mut graphics_layer = slices.graphics_layer();
+    round_clip(&mut graphics_layer, corners, local_bounds);
+    graphics_layer
 }
 
 /// Shapes the clip of `graphics_layer`, a layer's own, to the corner shape

@@ -3332,6 +3332,26 @@ impl LayoutChildren {
             frame: Rc::default(),
         }
     }
+
+    /// Puts the state of `child_id` at `position`: the one it had further
+    /// on, or a new one.
+    #[inline(never)]
+    fn bind_at(&mut self, position: usize, child_id: NodeId) {
+        let from = match self.ids[position..].iter().position(|&id| id == child_id) {
+            Some(offset) => position + offset,
+            None => {
+                let state = LayoutChildMeasureState::new(child_id, Rc::clone(&self.frame));
+                self.ids.push(child_id);
+                self.states.push(Rc::clone(&state));
+                self.measurables
+                    .push(Box::new(LayoutChildMeasurable::new(state)));
+                self.ids.len() - 1
+            }
+        };
+        self.ids.swap(position, from);
+        self.states.swap(position, from);
+        self.measurables.swap(position, from);
+    }
 }
 
 impl LayoutRuntimeState {
@@ -3394,30 +3414,14 @@ impl LayoutRuntimeState {
     }
 
     /// The state of the child at `position`, for a pass `bind_children`
-    /// bound.
+    /// bound. Inlined: the child is nearly always where it was.
+    #[inline]
     fn child_state_at(&mut self, position: usize, child_id: NodeId) -> &LayoutChildMeasureState {
         let children = self
             .children
             .get_or_insert_with(|| Box::new(LayoutChildren::with_capacity(position + 1)));
         if children.ids.get(position) != Some(&child_id) {
-            let from = match children.ids[position..]
-                .iter()
-                .position(|&id| id == child_id)
-            {
-                Some(offset) => position + offset,
-                None => {
-                    let state = LayoutChildMeasureState::new(child_id, Rc::clone(&children.frame));
-                    children.ids.push(child_id);
-                    children.states.push(Rc::clone(&state));
-                    children
-                        .measurables
-                        .push(Box::new(LayoutChildMeasurable::new(state)));
-                    children.ids.len() - 1
-                }
-            };
-            children.ids.swap(position, from);
-            children.states.swap(position, from);
-            children.measurables.swap(position, from);
+            children.bind_at(position, child_id);
         }
         &children.states[position]
     }
