@@ -71,7 +71,10 @@ impl Path {
 
     /// Adds a straight edge from the pen to `point`.
     pub fn line_to(&mut self, point: Point) {
-        self.open_contour().push(point);
+        match self.contours.last_mut() {
+            Some(contour) if !contour.closed => contour.points.push(point),
+            _ => self.open_contour().push(point),
+        }
         self.pen = point;
     }
 

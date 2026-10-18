@@ -17,7 +17,7 @@
 
 use crate::{
     Point, Rect,
-    float::{all_finite, at_least, within},
+    float::{all_finite, at_least, at_most, within},
 };
 
 /// Shape of the two ends of an open stroked path (an arc, today).
@@ -608,13 +608,13 @@ impl LineGeometry {
 
     /// The axis-aligned box of the ends, the rect the primitive carries.
     pub fn end_bounds(&self) -> Rect {
-        let min_x = self.start.x.min(self.end.x);
-        let min_y = self.start.y.min(self.end.y);
+        let min_x = at_most(self.start.x, self.end.x);
+        let min_y = at_most(self.start.y, self.end.y);
         Rect {
             x: min_x,
             y: min_y,
-            width: self.start.x.max(self.end.x) - min_x,
-            height: self.start.y.max(self.end.y) - min_y,
+            width: at_least(self.start.x, self.end.x) - min_x,
+            height: at_least(self.start.y, self.end.y) - min_y,
         }
     }
 
