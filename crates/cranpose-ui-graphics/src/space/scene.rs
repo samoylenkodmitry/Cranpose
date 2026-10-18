@@ -379,6 +379,39 @@ impl MeshSurface {
         ]))
     }
 
+    /// The map from the content space of a composable of `size` on the mesh
+    /// into the scene: x and y in the content's pixels from its top left, z
+    /// into the surface, away from the side it shows its content to, a unit
+    /// as long as a content pixel. A mesh surface inside this content is
+    /// placed in that space. It is exact for a flat mesh; for a curved one it
+    /// follows the plane that touches the mesh at the content's middle.
+    /// `None` for content of no size, or for a mesh with no texture plane.
+    pub fn content_to_scene(&self, size: Size) -> Option<Mat4> {
+        if !(size.width > 0.0 && size.height > 0.0) {
+            return None;
+        }
+        let plane = self.mesh.texture_plane()?;
+        let right = self.transform.transform_vector(plane.u_axis) * (1.0 / size.width);
+        let down = self.transform.transform_vector(plane.v_axis) * (1.0 / size.height);
+        let into = right.cross(down).normalized()? * (right.length() * down.length()).sqrt();
+        Some(Mat4::from_axes(
+            right,
+            down,
+            into,
+            self.transform.transform_point(plane.origin),
+        ))
+    }
+
+    /// This surface with its transform followed by `to_scene`: a surface
+    /// inside another's content, placed in the scene through the other's
+    /// [`content_to_scene`](Self::content_to_scene).
+    pub fn placed_by(&self, to_scene: &Mat4) -> Self {
+        Self {
+            transform: self.transform.then(to_scene),
+            ..self.clone()
+        }
+    }
+
     /// Where the content point `point` of a composable of `size` lies in the
     /// scene.
     pub fn point_at(&self, point: Point, size: Size) -> Option<Vec3> {

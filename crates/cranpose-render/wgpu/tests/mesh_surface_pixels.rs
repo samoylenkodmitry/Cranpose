@@ -550,3 +550,71 @@ fn a_volume_whose_shader_does_not_build_is_left_out() {
         "the wall shows where the ball would be: {front:?}"
     );
 }
+
+/// A blue wall far away, a green ball in front of it, and a red panel inside
+/// the wall's content that stands out of the wall in front of the ball. The
+/// wall's 256 content pixels span 1024 scene pixels, so a content pixel of
+/// the wall is four scene pixels in each direction, depth included.
+#[composable]
+fn JoinedScene() {
+    let (plane, sphere) = meshes();
+    Scene(0.0, move || {
+        Surface(
+            Arc::clone(&sphere),
+            Mat4::scaling(Vec3::new(100.0, 100.0, 100.0))
+                .then(&Mat4::translation(Vec3::new(0.0, 0.0, 400.0))),
+            (Material::Unlit, false, Color(0.0, 1.0, 0.0, 1.0)),
+        );
+        let inner = surface(
+            &plane,
+            Mat4::scaling(Vec3::new(64.0, 32.0, 1.0))
+                .then(&Mat4::translation(Vec3::new(96.0, 48.0, -100.0))),
+            (Material::Unlit, false),
+        );
+        Box(
+            surface(
+                &plane,
+                panel((1024.0, 512.0), Vec3::new(0.0, 0.0, 600.0)),
+                (Material::Unlit, false),
+            )
+            .background(Color(0.0, 0.0, 1.0, 1.0)),
+            BoxSpec::default(),
+            move || {
+                // Laid out where it would lie flat on the wall, behind the
+                // ball.
+                Box(
+                    Modifier::empty()
+                        .absolute_offset(96.0, 48.0)
+                        .then(inner.clone())
+                        .background(Color(1.0, 0.0, 0.0, 1.0)),
+                    BoxSpec::default(),
+                    || {},
+                );
+            },
+        );
+    });
+}
+
+#[test]
+fn a_surface_inside_another_stands_out_of_it_in_the_scene() {
+    let Some(frame) = capture(JoinedScene) else {
+        return;
+    };
+    // The panel lies at a depth of 600 - 4 * 100 = 200, nearer than the
+    // ball's front at 300.
+    let middle = pixel_at(&frame, Vec3::new(0.0, 0.0, 200.0));
+    assert!(
+        middle[0] > 200 && middle[1] < 40 && middle[2] < 40,
+        "the red panel stands in front of the ball: {middle:?}"
+    );
+    let above = pixel_at(&frame, Vec3::new(0.0, -85.0, 347.0));
+    assert!(
+        above[1] > 200 && above[0] < 40,
+        "the ball shows above the panel: {above:?}"
+    );
+    let wall = pixel_at(&frame, Vec3::new(-400.0, 0.0, 600.0));
+    assert!(
+        wall[2] > 200 && wall[0] < 40,
+        "the wall shows beside the ball: {wall:?}"
+    );
+}

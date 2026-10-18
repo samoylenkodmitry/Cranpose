@@ -1709,6 +1709,14 @@ a flat screen: put the 2D UI on such a plane, and 3D objects in front of it.
 The desktop demo's Room tab shows a globe in front of such a screen, then
 walks into a room of walls, the globe and an imported torus.
 
+A mesh surface inside the content of another mesh surface joins the same
+scene. Its transform places it in the other surface's content space: x and y in
+that content's pixels, z into the surface, a unit as long as a content pixel
+(`MeshSurface::content_to_scene`). So a control on a wall can stand out of the
+wall, nearer surfaces hide it, and it takes pointer input where it shows. Lay it
+out where it would lie flat on the wall: its window geometry, which
+accessibility and robot tests read, follows that flat place.
+
 The WGPU renderer draws scenes. The pixels renderer draws a flat mesh's
 surface in its place but has no depth buffer and no shadows, and draws a
 curved mesh's surface on the plane that touches the mesh at the content's

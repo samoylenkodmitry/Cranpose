@@ -4,7 +4,7 @@ use cranpose_core::NodeId;
 use cranpose_ui_graphics::{
     Point, Size,
     layer_transform::{layer_scene, layer_surface},
-    space::{Camera, MeshSurface, SurfaceHit},
+    space::{Camera, Mat4, MeshSurface, SurfaceHit},
 };
 
 use crate::graph::{LayerNode, ProjectiveTransform, RenderNode};
@@ -37,31 +37,20 @@ impl ScenePick {
     /// The pick of the scene that `layer` shows, with `to_window` mapping
     /// the layer to the window; `None` when the layer shows no scene. Its
     /// surfaces are the layer's children that are mesh surfaces, also those
-    /// a wrapper of outer draws holds.
+    /// a wrapper of outer draws holds, and the surfaces that join the scene
+    /// from inside their content.
     pub fn of(layer: &LayerNode, to_window: ProjectiveTransform) -> Option<Self> {
         let scene = layer_scene(&layer.graphics_layer)?;
         let node_rect = layer.node_rect();
-        let surfaces = layer
-            .children
-            .iter()
-            .filter_map(|child| match child {
-                RenderNode::Layer(child) => surface_layer(child),
-                RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
-            })
-            .filter_map(|surface_layer| {
-                let surface = layer_surface(&surface_layer.graphics_layer)?;
-                let rect = surface_layer.node_rect();
-                Some(PickSurface {
-                    node_id: surface_layer.node_id,
-                    surface: surface.clone(),
-                    size: Size {
-                        width: rect.width,
-                        height: rect.height,
-                    },
-                    held: Cell::new(None),
-                })
-            })
-            .collect();
+        let mut surfaces = Vec::new();
+        for_each_scene_surface(layer, &mut |surface_layer, surface| {
+            surfaces.push(PickSurface {
+                node_id: surface_layer.node_id,
+                surface,
+                size: node_size(surface_layer),
+                held: Cell::new(None),
+            });
+        });
         Some(Self {
             camera: scene.camera,
             size: Size {
@@ -132,6 +121,103 @@ impl ScenePick {
         }
         self.last.set(Some((window, nearest)));
         nearest
+    }
+}
+
+/// Visits each mesh surface of the scene `scene_layer` shows, in draw order,
+/// with its place in the scene: each surface child, and after each the
+/// surfaces that join the scene from inside its content.
+pub fn for_each_scene_surface(
+    scene_layer: &LayerNode,
+    visit: &mut impl FnMut(&LayerNode, MeshSurface),
+) {
+    walk_scene_surfaces(scene_layer, true, visit);
+}
+
+/// Visits the mesh surfaces that join the scene `scene_layer` shows from
+/// inside the content of its surface children, in draw order, with their
+/// places in the scene.
+pub fn for_each_joined_surface(
+    scene_layer: &LayerNode,
+    visit: &mut impl FnMut(&LayerNode, MeshSurface),
+) {
+    walk_scene_surfaces(scene_layer, false, visit);
+}
+
+fn walk_scene_surfaces(
+    scene_layer: &LayerNode,
+    direct: bool,
+    visit: &mut impl FnMut(&LayerNode, MeshSurface),
+) {
+    for child in &scene_layer.children {
+        let RenderNode::Layer(child) = child else {
+            continue;
+        };
+        let Some(surface_layer) = surface_layer(child) else {
+            continue;
+        };
+        let Some(surface) = layer_surface(&surface_layer.graphics_layer) else {
+            continue;
+        };
+        let inner = joined_space(surface_layer, surface);
+        if direct {
+            visit(surface_layer, surface.clone());
+        }
+        if let Some(inner) = inner {
+            visit_joined_under(surface_layer, &inner, visit);
+        }
+    }
+}
+
+/// The space the mesh surfaces inside the content of `surface_layer`, whose
+/// surface is `surface`, are placed in; `None` when it holds none.
+fn joined_space(surface_layer: &LayerNode, surface: &MeshSurface) -> Option<Mat4> {
+    let holds_surfaces = surface_layer
+        .children
+        .iter()
+        .any(|child| matches!(child, RenderNode::Layer(child) if child.has_surfaces()));
+    if !holds_surfaces {
+        return None;
+    }
+    surface.content_to_scene(node_size(surface_layer))
+}
+
+/// Visits the mesh surfaces under `layer` that join the scene, placed
+/// through `to_scene`; a scene inside keeps the surfaces inside it.
+fn visit_joined_under(
+    layer: &LayerNode,
+    to_scene: &Mat4,
+    visit: &mut impl FnMut(&LayerNode, MeshSurface),
+) {
+    for child in &layer.children {
+        let RenderNode::Layer(child) = child else {
+            continue;
+        };
+        if !child.has_surfaces() || layer_scene(&child.graphics_layer).is_some() {
+            continue;
+        }
+        let joined = surface_layer(child).and_then(|surface_layer| {
+            layer_surface(&surface_layer.graphics_layer).map(|surface| (surface_layer, surface))
+        });
+        match joined {
+            Some((surface_layer, surface)) => {
+                let placed = surface.placed_by(to_scene);
+                let inner = joined_space(surface_layer, &placed);
+                visit(surface_layer, placed);
+                if let Some(inner) = inner {
+                    visit_joined_under(surface_layer, &inner, visit);
+                }
+            }
+            None => visit_joined_under(child, to_scene, visit),
+        }
+    }
+}
+
+fn node_size(layer: &LayerNode) -> Size {
+    let rect = layer.node_rect();
+    Size {
+        width: rect.width,
+        height: rect.height,
     }
 }
 

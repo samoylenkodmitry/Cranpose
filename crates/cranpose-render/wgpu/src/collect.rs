@@ -15,6 +15,7 @@ use cranpose_render_common::{
         apply_layer_affine_to_rect, layer_scene, layer_surface, layer_uniform_scale,
     },
     primitive_emit::{PrimitiveClipSpace, resolve_clip, resolve_primitive_clip},
+    scene_pick::for_each_joined_surface,
 };
 use cranpose_ui_graphics::{
     BlendMode, CompositingStrategy, DrawPrimitive, GraphicsLayer, LayerShape, Point, RecordLane,
@@ -236,6 +237,10 @@ struct WalkContext<'s> {
     /// The scene that places the mesh surfaces among the layers collected
     /// under this context.
     scene: Option<&'s Arc<SceneDraw>>,
+    /// Whether this walk collects the content of a scene's mesh surface: a
+    /// mesh surface found here joins the scene, which collects it, so the
+    /// walk leaves it out.
+    joins: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -890,6 +895,7 @@ pub(crate) fn collect_root(
         wants_pixel_sensitive: false,
         update,
         scene: None,
+        joins: false,
     };
     collect_child(root, text_layout, motion, context, &mut out, recycler);
     out.scene.flush_loose();
@@ -986,10 +992,11 @@ fn isolated_child(
     layer: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
-    context: WalkContext<'_>,
+    (context, placed): (WalkContext<'_>, Option<MeshSurface>),
     parent_scene: &mut CompositorScene,
     recycler: &mut LayerSceneRecycler,
 ) -> (ChildLayer, bool) {
+    let mesh = mesh_child(layer, &context, placed);
     let local_layer = local_content_layer_for(&layer.graphics_layer);
     let content_hash = content_key(layer, context.update);
     let nominal_scale = layer_uniform_scale(&layer.graphics_layer);
@@ -1015,6 +1022,7 @@ fn isolated_child(
             || (!context.translated && context.snap_anchor.is_none()),
         update: context.update,
         scene: None,
+        joins: context.joins || mesh.is_some(),
     };
     let mut content = recycler.take(SceneCapacityHint::default());
     let has_pixel_sensitive_subtree = collect_into(
@@ -1052,7 +1060,6 @@ fn isolated_child(
         nominal_scale
     };
     motion.record_scale(layer.node_id, surface_scale, content_hash);
-    let mesh = mesh_child(layer, &context);
     let in_place = mesh.is_none() && can_draw_in_place(layer, transform, surface_scale, &content);
     (
         ChildLayer {
@@ -1098,13 +1105,22 @@ fn scene_draw(
 }
 
 /// What draws `layer` on its mesh when it is a mesh surface of the scene
-/// that `context` collects in.
-fn mesh_child(layer: &LayerNode, context: &WalkContext<'_>) -> Option<Arc<MeshChild>> {
+/// that `context` collects in: its own surface, or `placed`, its surface
+/// placed in the scene, for one that joins the scene from inside another's
+/// content.
+fn mesh_child(
+    layer: &LayerNode,
+    context: &WalkContext<'_>,
+    placed: Option<MeshSurface>,
+) -> Option<Arc<MeshChild>> {
     let scene = context.scene?;
-    let surface = layer_surface(&layer.graphics_layer)?;
+    let surface = match placed {
+        Some(surface) => surface,
+        None => layer_surface(&layer.graphics_layer)?.clone(),
+    };
     Some(Arc::new(MeshChild {
         scene: Arc::clone(scene),
-        surface: surface.clone(),
+        surface,
         content: layer.node_rect(),
     }))
 }
@@ -1209,18 +1225,7 @@ fn collect_into(
     let rounding = rounding_within(layer_clip, &context);
     let translated = context.translated || layer.translated_content_context;
     let allow_rigid_snap = translated || !layer.motion_context_animated;
-    let boundary_anchor =
-        if !context.translated && layer.translated_content_context && allow_rigid_snap {
-            rigid_snap_anchor(
-                layer_bounds.translate(
-                    layer.translated_content_offset.x,
-                    layer.translated_content_offset.y,
-                ),
-                &local_layer,
-            )
-        } else {
-            None
-        };
+    let boundary_anchor = boundary_anchor(layer, &context, (layer_bounds, &local_layer));
     let translated_anchor = context.snap_anchor.or(boundary_anchor);
     let layer_anchor = translated_anchor.or_else(|| {
         (allow_rigid_snap && layer_needs_rigid_snap(layer, translated))
@@ -1241,6 +1246,7 @@ fn collect_into(
         motion_context_animated: layer.motion_context_animated || translated,
     };
     let scene = scene_draw(layer, &context, visual_clip);
+    let (children_scene, joins) = children_scene(layer, &context, scene.as_ref());
     let child_context = WalkContext {
         offset: context.offset,
         visual_clip,
@@ -1251,10 +1257,8 @@ fn collect_into(
         light: context.light,
         wants_pixel_sensitive: context.wants_pixel_sensitive,
         update: context.update,
-        scene: match layer.wraps {
-            Some(_) => context.scene,
-            None => scene.as_ref(),
-        },
+        scene: children_scene,
+        joins,
     };
     let mut has_pixel_sensitive_subtree = false;
     for_each_in_draw_order(&layer.children, |child| {
@@ -1273,7 +1277,52 @@ fn collect_into(
             }
         };
     });
+    if scene.is_some() {
+        collect_joined_surfaces(layer, text_layout, motion, child_context, out, recycler);
+    }
     has_pixel_sensitive_subtree
+}
+
+/// The anchor a layer that starts moving its content as one translated
+/// block, outside any such block, snaps that content to; `None` for any
+/// other layer.
+fn boundary_anchor(
+    layer: &LayerNode,
+    context: &WalkContext<'_>,
+    (layer_bounds, local_layer): (Rect, &GraphicsLayer),
+) -> Option<SnapAnchor> {
+    if context.translated || !layer.translated_content_context {
+        return None;
+    }
+    rigid_snap_anchor(
+        layer_bounds.translate(
+            layer.translated_content_offset.x,
+            layer.translated_content_offset.y,
+        ),
+        local_layer,
+    )
+}
+
+/// The scene the children of `layer` are collected in, and whether a mesh
+/// surface among them joins a scene above: the wrapper of a node's outer
+/// draws keeps its parent's, and a layer that shows `shown` collects the
+/// surfaces that join it itself.
+fn children_scene<'s>(
+    layer: &LayerNode,
+    context: &WalkContext<'s>,
+    shown: Option<&'s Arc<SceneDraw>>,
+) -> (Option<&'s Arc<SceneDraw>>, bool) {
+    match (layer.wraps, shown) {
+        (Some(_), _) => (context.scene, context.joins),
+        (None, Some(shown)) => (Some(shown), false),
+        (None, None) => (None, context.joins),
+    }
+}
+
+/// Whether `child` is a mesh surface that joins the scene above from inside
+/// the content the walk collects, so the scene collects it.
+fn joins_scene(child: &LayerNode, context: &WalkContext<'_>) -> bool {
+    context.joins && context.scene.is_none() && layer_surface(&child.graphics_layer).is_some()
 }
 
 /// Where a layer's own primitives land: the layer's bounds and local
@@ -1302,6 +1351,31 @@ fn push_content(
     }
 }
 
+/// Collects the mesh surfaces that join the scene `scene_layer` shows from
+/// inside its surfaces' content, as the scene's children: each draws in the
+/// scene's 3D pass, placed through the surface it lies in.
+#[cold]
+#[inline(never)]
+fn collect_joined_surfaces(
+    scene_layer: &LayerNode,
+    text_layout: &mut impl TextLayoutResolver,
+    motion: &mut LayerMotion,
+    context: WalkContext<'_>,
+    out: &mut LayerScene,
+    recycler: &mut LayerSceneRecycler,
+) {
+    for_each_joined_surface(scene_layer, &mut |surface_layer, placed| {
+        collect_isolated_child(
+            surface_layer,
+            text_layout,
+            motion,
+            (context, Some(placed)),
+            out,
+            recycler,
+        );
+    });
+}
+
 fn collect_child(
     child: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
@@ -1310,6 +1384,9 @@ fn collect_child(
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
 ) -> bool {
+    if joins_scene(child, &context) {
+        return false;
+    }
     let composite = layer_composite_params(&child.graphics_layer);
     if composite.is_some_and(|(alpha, blend)| alpha == 0.0 && blend == BlendMode::SrcOver) {
         return context.wants_pixel_sensitive && layer_has_pixel_sensitive_subtree(child);
@@ -1318,7 +1395,14 @@ fn collect_child(
         Placement::Direct(translation) => (translation, None),
         Placement::DirectRounded(translation, radius) => (translation, Some(radius)),
         Placement::Isolated => {
-            return collect_isolated_child(child, text_layout, motion, context, out, recycler);
+            return collect_isolated_child(
+                child,
+                text_layout,
+                motion,
+                (context, None),
+                out,
+                recycler,
+            );
         }
     };
     let child_offset = Point::new(
@@ -1405,7 +1489,7 @@ fn collect_isolated_child(
     child: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
-    context: WalkContext<'_>,
+    (context, placed): (WalkContext<'_>, Option<MeshSurface>),
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
 ) -> bool {
@@ -1435,7 +1519,7 @@ fn collect_isolated_child(
         child,
         text_layout,
         motion,
-        context,
+        (context, placed),
         &mut out.scene,
         recycler,
     );

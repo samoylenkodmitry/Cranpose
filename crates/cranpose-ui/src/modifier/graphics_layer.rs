@@ -138,7 +138,14 @@ impl Modifier {
     /// `(x / width, y / height)`. The surface's transform places the mesh in
     /// the scene, in place of the node's place in its parent's layout. The
     /// content stays live and takes pointer input where it shows on the
-    /// mesh. A node whose parent shows no scene draws its content flat.
+    /// mesh.
+    ///
+    /// A node inside the content of another mesh surface joins that
+    /// surface's scene: its transform places the mesh in the other surface's
+    /// content space, x and y in its content's pixels and z into it (see
+    /// [`MeshSurface::content_to_scene`]). So a control can stand out of a
+    /// wall it sits on. Any other node whose parent shows no scene draws its
+    /// content flat.
     ///
     /// The closure runs when the scene is drawn, as a lazy
     /// [`graphics_layer`](Self::graphics_layer)'s does.

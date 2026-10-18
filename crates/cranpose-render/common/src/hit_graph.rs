@@ -88,12 +88,15 @@ struct SurfaceWalk {
     clips: Vec<HitClip>,
 }
 
-/// What a layer's parent places it in: the scene the parent shows, and
+/// What a layer's parent places it in: the scene above it, with the clip
+/// bounds and the number of window clips that cut the scene's surfaces, and
 /// inside a mesh surface, the map from the parent to the surface's content
-/// with the content clip above.
+/// with the content clip above. A surface that joins the scene from inside
+/// another's content is cut only where the scene's surfaces are.
 #[derive(Default)]
 struct ParentSpace {
     scene: Option<Rc<ScenePick>>,
+    scene_clips: (Option<Rect>, usize),
     content: Option<ProjectiveTransform>,
     content_clip: Option<Rect>,
 }
@@ -124,7 +127,7 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
             return;
         };
 
-        let entered = self.enter_surface(layer, space, parent_hit_clip);
+        let entered = self.enter_surface(layer, space);
         let content = match entered {
             Some(_) => Some(ProjectiveTransform::identity()),
             None => space
@@ -174,12 +177,9 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
         }
 
         let children_space = ParentSpace {
-            scene: match layer.wraps {
-                Some(_) => space.scene.clone(),
-                None => ScenePick::of(layer, transform).map(Rc::new),
-            },
             content,
             content_clip: content_clip.bounds,
+            ..self.children_scene(layer, (transform, hit_clip_bounds), space)
         };
         for child in &layer.children {
             if let RenderNode::Layer(child_layer) = child {
@@ -231,21 +231,46 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
         );
     }
 
-    /// Starts the surface `layer` is, when its parent's scene draws it,
-    /// cut by the clips above it; returns the surface walk it replaces.
+    /// The scene above `layer`'s children: the one `layer` shows, cut by the
+    /// clips above them, or the one above `layer`; the content fields stay
+    /// empty.
+    fn children_scene(
+        &self,
+        layer: &LayerNode,
+        (transform, hit_clip_bounds): (ProjectiveTransform, Option<Rect>),
+        space: &ParentSpace,
+    ) -> ParentSpace {
+        let shown = match layer.wraps {
+            Some(_) => None,
+            None => ScenePick::of(layer, transform).map(Rc::new),
+        };
+        let (scene, scene_clips) = match shown {
+            Some(pick) => (Some(pick), (hit_clip_bounds, self.hit_clips.len())),
+            None => (space.scene.clone(), space.scene_clips),
+        };
+        ParentSpace {
+            scene,
+            scene_clips,
+            ..ParentSpace::default()
+        }
+    }
+
+    /// Starts the surface `layer` is, when the scene above draws it, cut by
+    /// the clips that cut the scene's surfaces; returns the surface walk it
+    /// replaces.
     fn enter_surface(
         &mut self,
         layer: &LayerNode,
         space: &ParentSpace,
-        parent_hit_clip: Option<Rect>,
     ) -> Option<Option<SurfaceWalk>> {
         let pick = space.scene.as_ref()?;
         let index = pick.index_of(layer)?;
+        let (outer_clip_bounds, outer_clip_count) = space.scene_clips;
         let target = Rc::new(SurfaceTarget {
             pick: Rc::clone(pick),
             index,
-            outer_clip_bounds: parent_hit_clip,
-            outer_clips: self.hit_clips.clone(),
+            outer_clip_bounds,
+            outer_clips: self.hit_clips[..outer_clip_count.min(self.hit_clips.len())].to_vec(),
         });
         Some(self.surface.replace(SurfaceWalk {
             target,

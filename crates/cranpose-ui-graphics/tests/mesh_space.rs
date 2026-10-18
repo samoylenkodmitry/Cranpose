@@ -302,3 +302,33 @@ fn a_field_without_a_surface_in_its_box_gives_no_mesh() {
     );
     assert_eq!(empty.err(), Some(MeshError::Empty));
 }
+
+#[test]
+fn a_surface_content_space_lies_on_its_mesh_with_depth_into_it() {
+    let wall = wall();
+    let to_scene = wall
+        .content_to_scene(CONTENT)
+        .expect("a plane has a content space");
+    let content = Point::new(130.0, 70.0);
+    let on_mesh = wall.point_at(content, CONTENT).expect("on the wall");
+    let mapped = to_scene.transform_point(Vec3::new(content.x, content.y, 0.0));
+    assert!(
+        (mapped - on_mesh).length() < 1e-3,
+        "content point {content:?} maps to {mapped:?}, not {on_mesh:?}"
+    );
+    // The wall is a content pixel to a scene pixel, so 50 units of depth go
+    // 50 scene pixels into it, away from the side the camera sees it from.
+    let deeper = to_scene.transform_point(Vec3::new(content.x, content.y, 50.0));
+    assert!(((deeper - mapped).length() - 50.0).abs() < 1e-3);
+    let eye = camera().eye();
+    assert!(
+        (deeper - eye).length() > (mapped - eye).length(),
+        "depth goes into the wall, away from the eye"
+    );
+    let raised = wall.placed_by(&to_scene);
+    assert_eq!(
+        raised.transform,
+        wall.transform.then(&to_scene),
+        "a surface placed by the space takes its transform after its own"
+    );
+}

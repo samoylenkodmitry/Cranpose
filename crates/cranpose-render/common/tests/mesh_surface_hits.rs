@@ -262,3 +262,144 @@ fn a_camera_that_moves_moves_where_its_surfaces_take_input() {
         "the panel no longer takes input where the camera showed it before"
     );
 }
+
+const WALL: Size = Size {
+    width: 600.0,
+    height: 400.0,
+};
+const INNER: Size = Size {
+    width: 100.0,
+    height: 80.0,
+};
+/// Where the inner panel's top left corner lies on the wall's content, and
+/// how far it stands out of the wall, toward the eye.
+const INNER_AT: Vec3 = Vec3::new(450.0, 260.0, -200.0);
+
+/// The surfaces pressed, by name, and the content points they were pressed
+/// at.
+type Presses = Rc<RefCell<Vec<(&'static str, Point)>>>;
+
+/// A wall facing the eye with an inner panel inside its content that stands
+/// out of it; each records the content points it is pressed at.
+fn wall_with_inner_panel() -> (Scene, Presses) {
+    let pressed: Presses = Rc::default();
+    let sink = Rc::clone(&pressed);
+    let mut composition = cranpose_ui::run_test_composition(move || {
+        let plane = Arc::new(Mesh::plane());
+        let sink = Rc::clone(&sink);
+        let surface = move |(name, size, transform): (&'static str, Size, Mat4)| {
+            let plane = Arc::clone(&plane);
+            let sink = Rc::clone(&sink);
+            Modifier::empty()
+                .required_size(size)
+                .mesh_surface(move || MeshSurface {
+                    mesh: Arc::clone(&plane),
+                    transform,
+                    material: Material::Unlit,
+                    casts_shadow: false,
+                })
+                .clickable(move |point| sink.borrow_mut().push((name, point)))
+        };
+        let wall = surface((
+            "wall",
+            WALL,
+            Mat4::translation(Vec3::new(-0.5, -0.5, 0.0))
+                .then(&Mat4::scaling(Vec3::new(WALL.width, WALL.height, 1.0)))
+                .then(&Mat4::translation(FAR)),
+        ));
+        let inner = surface((
+            "inner",
+            INNER,
+            Mat4::scaling(Vec3::new(INNER.width, INNER.height, 1.0))
+                .then(&Mat4::translation(INNER_AT)),
+        ));
+        Box(
+            Modifier::empty().fill_max_size().scene3d(|| Scene3d {
+                camera: camera(),
+                light: None,
+            }),
+            BoxSpec::default(),
+            move || {
+                let inner = inner.clone();
+                Box(wall.clone(), BoxSpec::default(), move || {
+                    // Laid out where it would lie flat on the wall.
+                    Box(
+                        Modifier::empty()
+                            .absolute_offset(INNER_AT.x, INNER_AT.y)
+                            .then(inner.clone()),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                });
+            },
+        );
+    });
+    let root = composition.root().expect("a root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    applier.compute_layout(root, VIEWPORT).expect("layout");
+    let mut scene = Scene::default();
+    scene.rebuild_from_applier(&applier, root);
+    applier.clear_runtime_handle();
+    (scene, pressed)
+}
+
+/// Where the eye sees the wall's content point `(x, y)` lifted `z` toward
+/// it: the wall's content pixel is a scene pixel, and its middle lies at
+/// `FAR`.
+fn wall_content_shown(x: f32, y: f32, z: f32) -> Point {
+    let scene = Vec3::new(
+        FAR.x + x - WALL.width * 0.5,
+        FAR.y + y - WALL.height * 0.5,
+        FAR.z + z,
+    );
+    camera()
+        .project(scene, VIEWPORT)
+        .expect("in front of the eye")
+}
+
+fn press_at(scene: &Scene, at: Point) {
+    if let Some(target) = scene.hit_test(at.x, at.y).into_iter().next() {
+        for kind in [PointerEventKind::Down, PointerEventKind::Up] {
+            target.dispatch(PointerEvent::new(kind, at, at));
+        }
+    }
+}
+
+#[test]
+fn a_surface_inside_another_takes_a_press_where_it_stands_out() {
+    let (scene, pressed) = wall_with_inner_panel();
+    let content = Point::new(50.0, 40.0);
+    press_at(
+        &scene,
+        wall_content_shown(INNER_AT.x + content.x, INNER_AT.y + content.y, INNER_AT.z),
+    );
+    let pressed = pressed.borrow();
+    let Some(&(name, local)) = pressed.first() else {
+        panic!("the press reached nothing");
+    };
+    assert_eq!(name, "inner");
+    assert!(
+        (local.x - content.x).abs() < 0.5 && (local.y - content.y).abs() < 0.5,
+        "the press lands on the inner panel's content at {local:?}, not {content:?}"
+    );
+}
+
+#[test]
+fn the_wall_takes_a_press_where_the_inner_surface_would_lie_flat() {
+    let (scene, pressed) = wall_with_inner_panel();
+    // The inner panel stands out of the wall, so the eye sees it away from
+    // the place it would take on the wall's content.
+    let on_wall = Point::new(INNER_AT.x + 5.0, INNER_AT.y + 5.0);
+    press_at(&scene, wall_content_shown(on_wall.x, on_wall.y, 0.0));
+    let pressed = pressed.borrow();
+    let Some(&(name, local)) = pressed.first() else {
+        panic!("the press reached nothing");
+    };
+    assert_eq!(name, "wall");
+    assert!(
+        (local.x - on_wall.x).abs() < 0.5 && (local.y - on_wall.y).abs() < 0.5,
+        "the press lands on the wall's content at {local:?}, not {on_wall:?}"
+    );
+}

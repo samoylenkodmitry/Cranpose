@@ -1778,6 +1778,7 @@ fn assign_layer(layer: &mut LayerNode, head: LayerHead) {
         clip_to_bounds,
         hit_test,
         has_hit_targets,
+        surfaces,
         has_origin_sinks,
         contained,
         isolation,
@@ -1806,6 +1807,7 @@ fn assign_layer(layer: &mut LayerNode, head: LayerHead) {
     *clip_to_bounds = head.clip_to_bounds;
     *hit_test = head.hit_test;
     *has_hit_targets = false;
+    surfaces.set(None);
     *has_origin_sinks = head.has_origin_sinks || children_have_origin_sinks(children);
     contained.set(None);
     *isolation = head.isolation;
