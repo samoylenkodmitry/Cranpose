@@ -1,4 +1,4 @@
-use std::{cell::Ref, fmt, mem::size_of, ops::Deref, rc::Rc};
+use std::{borrow::Cow, cell::Ref, fmt, mem::size_of, ops::Deref, rc::Rc};
 
 use cranpose_foundation::{ModifierNodeChain, NodeCapabilities, PointerEvent, PointerEventKind};
 use cranpose_ui_graphics::{
@@ -539,15 +539,17 @@ impl ModifierNodeSlices {
     }
 
     /// Returns the graphics layer that the layer modifiers of the chain combine into, or `None`
-    /// when the chain has none.
-    pub fn graphics_layer(&self) -> Option<GraphicsLayer> {
+    /// when the chain has none: lent when the chain holds it, built when a layer block computes
+    /// it.
+    #[inline]
+    pub fn graphics_layer(&self) -> Option<Cow<'_, GraphicsLayer>> {
         if let Some(resolve) = self
             .rare()
             .and_then(|rare| rare.graphics_layer_resolver.as_ref())
         {
-            Some(resolve())
+            Some(Cow::Owned(resolve()))
         } else {
-            self.graphics_layer.as_deref().cloned()
+            self.graphics_layer.as_deref().map(Cow::Borrowed)
         }
     }
 
