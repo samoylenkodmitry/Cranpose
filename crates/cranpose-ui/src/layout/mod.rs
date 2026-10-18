@@ -2054,7 +2054,10 @@ impl LayoutBuilderState {
         let mut alignment_lines = AlignmentLines::default();
         let mut measured_children_by_id = measured_children.borrow_mut();
 
-        if let Ok(mut applier) = self.applier.try_borrow_typed() {
+        // One borrow of the applier places every child; measuring a child
+        // the pass did not measure borrows it on its own.
+        let mut applier = self.applier.try_borrow_typed().ok();
+        if let Some(applier) = applier.as_mut() {
             let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |parent_node| {
                 parent_node.set_measured_size(Size { width, height }, &self.context);
                 parent_node.clear_needs_measure();
@@ -2066,7 +2069,10 @@ impl LayoutBuilderState {
             let child = if let Some(measured) = measured_children_by_id.remove(&placement.node_id) {
                 measured
             } else {
-                self.measure_node(placement.node_id, inner_constraints)?
+                drop(applier.take());
+                let measured = self.measure_node(placement.node_id, inner_constraints)?;
+                applier = self.applier.try_borrow_typed().ok();
+                measured
             };
             let policy_position = Point {
                 x: padding.left + placement.x,
@@ -2082,7 +2088,7 @@ impl LayoutBuilderState {
                     .translated(policy_position.y),
             );
 
-            if let Ok(mut applier) = self.applier.try_borrow_typed()
+            if let Some(applier) = applier.as_mut()
                 && applier
                     .with_node::<LayoutNode, _>(placement.node_id, |node| {
                         node.set_position(retained_position, &self.context);
@@ -2096,6 +2102,7 @@ impl LayoutBuilderState {
 
             children.push(MeasuredChild::new(&child, policy_position));
         }
+        drop(applier);
 
         node_handle.set_active_children(children.iter().map(|child| child.node_id));
         node_handle.recycle_placement_scratch(placements);
