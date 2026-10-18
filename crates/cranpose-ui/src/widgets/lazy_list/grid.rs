@@ -4,6 +4,7 @@
 //! and a sticky header takes a whole line.
 
 use std::{
+    any::Any,
     cell::RefCell,
     rc::{Rc, Weak},
 };
@@ -19,8 +20,8 @@ use cranpose_ui_layout::{LinearArrangement, MeasureScope as _};
 use super::{
     LazyColumnNode, LazyColumnSpec, LazyFrame, LazyListContentHandle, LazyListItemMeasureInputs,
     LazyListItems, LazyListMeasureContext, LazyRowNode, LazyRowSpec, PaddingValues,
-    SubcomposeMeasureScopeImpl, beyond_composition, focused_lazy_item, pin_sticky_header,
-    place_focused_lazy_item, request_beyond_items,
+    RootMeasurements, SubcomposeMeasureScopeImpl, beyond_composition, focused_lazy_item,
+    pin_sticky_header, place_focused_lazy_item, request_beyond_items, root_measurements,
 };
 use crate::{composable, modifier::Modifier};
 
@@ -657,6 +658,8 @@ impl LazyItemSource for LazyGridLines<'_, '_, '_> {
         }
         let key = content.get_key(line.first).to_slot_id();
         let mut roots = LazyItemRoots::default();
+        let mut measurements = RootMeasurements::new();
+        let mut measured_cells = true;
         let mut child_cross_offsets = SmallOffsetVec::new();
         let mut child_main_sizes = SmallOffsetVec::new();
         let (mut main_axis_size, mut cross_axis_size) = (0.0_f32, 0.0);
@@ -666,6 +669,10 @@ impl LazyItemSource for LazyGridLines<'_, '_, '_> {
             main_axis_size = main_axis_size.max(item.main_axis_size);
             cross_axis_size = cross + item.cross_axis_size;
             let cell_roots = &item.roots;
+            match root_measurements(cell_roots) {
+                Some(cell_measurements) => measurements.extend(cell_measurements.iter().cloned()),
+                None => measured_cells = false,
+            }
             for (root, &node_id) in cell_roots.node_ids.iter().enumerate() {
                 let start = cell_roots.child_offsets.get(root).copied().unwrap_or(0.0);
                 let end = cell_roots
@@ -684,15 +691,10 @@ impl LazyItemSource for LazyGridLines<'_, '_, '_> {
                 );
                 child_cross_offsets.push(cross);
                 child_main_sizes.push(end - start);
-                if let Some(measured) = cell_roots.measurements.get(root) {
-                    roots.measurements.push(Rc::clone(measured));
-                }
             }
         }
         // A line has a measurement for each root or none.
-        if roots.measurements.len() != roots.node_ids.len() {
-            roots.measurements.clear();
-        }
+        roots.measurements = measured_cells.then(|| Rc::new(measurements) as Rc<dyn Any>);
         let mut measured = LazyListMeasuredItem::new(
             index,
             key,

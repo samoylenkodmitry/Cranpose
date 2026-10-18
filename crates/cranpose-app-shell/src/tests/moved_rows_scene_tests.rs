@@ -179,19 +179,7 @@ fn KeyedRowsThatReverse() {
         move || {
             let flipped = reversed.value();
             for slot in 0..KEYED_ROWS {
-                let row = if flipped { KEYED_ROWS - 1 - slot } else { slot };
-                cranpose_core::with_key(&row, || {
-                    let shade = row as f32 / KEYED_ROWS as f32;
-                    Box(
-                        Modifier::empty()
-                            .fill_max_width()
-                            .height(ROW_HEIGHT)
-                            .graphics_layer(|| GraphicsLayer::default())
-                            .background(Color(shade, 0.5, 1.0 - shade, 1.0)),
-                        BoxSpec::default(),
-                        || {},
-                    );
-                });
+                keyed_row(if flipped { KEYED_ROWS - 1 - slot } else { slot });
             }
         },
     );
@@ -237,4 +225,102 @@ fn reordered_rows_of_a_scrolled_column_reach_the_scene_in_their_new_order() {
         Some(-30.0),
         "the first row drawn is the last one, scrolled"
     );
+}
+
+/// Where the column of [`KeyedRowsWithAMiddle`] differs in the middle.
+#[derive(Clone, Copy, PartialEq)]
+enum Middle {
+    AsComposed,
+    RowAdded,
+    RowRemoved,
+}
+
+const MIDDLE_ROW: usize = KEYED_ROWS / 2;
+
+thread_local! {
+    static MIDDLE: Cell<Option<MutableState<Middle>>> = const { Cell::new(None) };
+}
+
+/// A scrolling column of keyed rows, each its own layer, where a state adds a
+/// row in the middle or removes the middle row.
+#[composable]
+fn KeyedRowsWithAMiddle() {
+    let middle = rememberMutableStateOf(|| Middle::AsComposed);
+    let scroll = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
+    MIDDLE.with(|slot| slot.set(Some(middle)));
+    COLUMN_SCROLL.with(|slot| slot.set(Some(scroll)));
+    Column(
+        Modifier::empty()
+            .fill_max_size()
+            .vertical_scroll(scroll, false),
+        ColumnSpec::default(),
+        move || {
+            let middle = middle.value();
+            let rows =
+                (0..KEYED_ROWS).filter(|&row| row != MIDDLE_ROW || middle != Middle::RowRemoved);
+            for row in rows {
+                if row == MIDDLE_ROW && middle == Middle::RowAdded {
+                    keyed_row(KEYED_ROWS);
+                }
+                keyed_row(row);
+            }
+        },
+    );
+}
+
+/// A row of its own shade and layer, keyed by `row`.
+fn keyed_row(row: usize) {
+    cranpose_core::with_key(&row, || {
+        let shade = row as f32 / (KEYED_ROWS + 1) as f32;
+        Box(
+            Modifier::empty()
+                .fill_max_width()
+                .height(ROW_HEIGHT)
+                .graphics_layer(GraphicsLayer::default)
+                .background(Color(shade, 0.5, 1.0 - shade, 1.0)),
+            BoxSpec::default(),
+            || {},
+        );
+    });
+}
+
+/// A row enters between the kept rows of a scrolling column, then two rows
+/// leave from between them: the kept rows keep their order with a gap, and
+/// the scene draws what a fresh scene draws.
+#[test]
+fn rows_that_enter_and_leave_between_kept_rows_reach_the_scene() {
+    let _guard = test_guard();
+    let rebuilds = Rc::new(Cell::new(0));
+    let mut shell = AppShell::new_with_size(
+        ScopedUpdateCountingRenderer::new(
+            Rc::clone(&rebuilds),
+            Rc::new(Cell::new(0)),
+            Rc::new(RefCell::new(Vec::new())),
+        ),
+        location_key(file!(), line!(), column!()),
+        KeyedRowsWithAMiddle,
+        (240, 400),
+        (240.0, 400.0),
+    );
+    shell.update();
+    shell.update();
+    let middle = MIDDLE.with(Cell::get).expect("the column composed");
+    let scroll = COLUMN_SCROLL.with(Cell::get).expect("the column composed");
+
+    for (step, change) in [Middle::RowAdded, Middle::RowRemoved]
+        .into_iter()
+        .enumerate()
+    {
+        rebuilds.set(0);
+        middle.set_value(change);
+        assert!(scroll.dispatch_raw_delta(20.0) > 0.0);
+        shell.update();
+
+        let (retained, fresh) = retained_and_fresh_painted_rects(&mut shell);
+        assert_eq!(rebuilds.get(), 0, "step {step} updates the scene in place");
+        assert_eq!(
+            retained, fresh,
+            "step {step} draws the rows where a fresh scene draws them"
+        );
+    }
 }

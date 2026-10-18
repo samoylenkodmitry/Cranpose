@@ -63,10 +63,11 @@ pub struct LazyItemRoots {
     pub child_offsets: SmallOffsetVec,
     /// Measured cross-axis extent of each root.
     pub child_cross_axis_sizes: SmallOffsetVec,
-    /// The layout's measurement of each root, in the order of `node_ids`,
-    /// which the layout places the root with. The layout's measurement type
-    /// is not this crate's, so it is kept as `dyn Any`.
-    pub measurements: SmallVec<[Rc<dyn Any>; 4]>,
+    /// The layout's measurements of the roots, in the order of `node_ids`,
+    /// which the layout places them with; `None` unless it has one for each
+    /// root. The layout's measurement type is not this crate's, so the list
+    /// is kept as `dyn Any`, which the layout reads once for all the roots.
+    pub measurements: Option<Rc<dyn Any>>,
 }
 
 impl fmt::Debug for LazyItemRoots {
@@ -75,7 +76,7 @@ impl fmt::Debug for LazyItemRoots {
             .field("node_ids", &self.node_ids)
             .field("child_offsets", &self.child_offsets)
             .field("child_cross_axis_sizes", &self.child_cross_axis_sizes)
-            .field("measurements", &self.measurements.len())
+            .field("measurements", &self.measurements.is_some())
             .finish()
     }
 }
