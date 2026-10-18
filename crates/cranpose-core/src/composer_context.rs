@@ -11,6 +11,7 @@ use crate::{Composer, ComposerCore, thread_state};
 static INSTALLED_COMPOSERS: AtomicUsize = AtomicUsize::new(0);
 
 /// Whether any thread may have a composer: `false` means this one has none.
+#[inline]
 fn any_composer_installed() -> bool {
     INSTALLED_COMPOSERS.load(Ordering::Relaxed) != 0
 }
@@ -92,10 +93,20 @@ pub fn __current_composer() -> Composer {
     })
 }
 
+/// Runs `f` with the current thread's composer core, `None` without one.
+/// The check that no thread has one is inlined where it is asked: a draw
+/// closure's guards run it many times a draw, and a function holding the
+/// lookup too saved its registers before it checked.
+#[inline]
 pub(crate) fn with_current_core<R>(f: impl FnOnce(&ComposerCore) -> R) -> Option<R> {
     if !any_composer_installed() {
         return None;
     }
+    with_installed_core(f)
+}
+
+#[inline(never)]
+fn with_installed_core<R>(f: impl FnOnce(&ComposerCore) -> R) -> Option<R> {
     thread_state::try_runtimes(|state| state.current_composer.borrow().as_deref().map(f)).flatten()
 }
 
