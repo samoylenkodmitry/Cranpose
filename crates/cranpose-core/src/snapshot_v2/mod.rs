@@ -22,7 +22,6 @@
 
 use std::{
     cell::{Cell, RefCell},
-    hash::{Hash, Hasher},
     rc::{Rc, Weak},
 };
 
@@ -565,9 +564,43 @@ impl PartialEq for ObserverId {
 
 impl Eq for ObserverId {}
 
-impl Hash for ObserverId {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        Rc::as_ptr(&self.0).hash(state);
+/// The apply observers of a thread in the order they registered, and the
+/// list a notification runs, kept until an observer registers or leaves.
+pub(crate) struct ApplyObservers {
+    entries: Vec<(ObserverId, ApplyObserver)>,
+    running: Option<Rc<[ApplyObserver]>>,
+}
+
+impl ApplyObservers {
+    pub(crate) const fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            running: None,
+        }
+    }
+
+    fn insert(&mut self, id: ObserverId, observer: ApplyObserver) {
+        self.entries.push((id, observer));
+        self.running = None;
+    }
+
+    fn remove(&mut self, id: &ObserverId) {
+        if let Some(at) = self.entries.iter().position(|(entry, _)| entry == id) {
+            self.entries.remove(at);
+            self.running = None;
+        }
+    }
+
+    /// The observers a notification runs, apart from the registry: an
+    /// observer may register or drop observers while it runs.
+    fn running(&mut self) -> Rc<[ApplyObserver]> {
+        let entries = &self.entries;
+        Rc::clone(self.running.get_or_insert_with(|| {
+            entries
+                .iter()
+                .map(|(_, observer)| Rc::clone(observer))
+                .collect()
+        }))
     }
 }
 
@@ -606,8 +639,8 @@ pub fn debug_snapshot_v2_stats() -> SnapshotV2DebugStats {
             capacity: extra_state_objects_cap,
         } = state.extra_state_objects.borrow().debug_stats();
         SnapshotV2DebugStats {
-            apply_observers_len: observers.len(),
-            apply_observers_cap: observers.capacity(),
+            apply_observers_len: observers.entries.len(),
+            apply_observers_cap: observers.entries.capacity(),
             last_writes_len: writes.len(),
             last_writes_cap: writes.capacity(),
             extra_state_objects_len,
@@ -663,13 +696,9 @@ impl Drop for ObserverHandle {
 }
 
 pub(crate) fn notify_apply_observers(modified: &[Rc<dyn StateObject>], snapshot_id: SnapshotId) {
-    // Called from a copy, since an observer may register or drop observers;
-    // there are few, so the copy stays inline.
-    let observers: smallvec::SmallVec<[ApplyObserver; 4]> =
-        crate::thread_state::snapshots(|state| {
-            state.apply_observers.borrow().values().cloned().collect()
-        });
-    for observer in observers {
+    let observers =
+        crate::thread_state::snapshots(|state| state.apply_observers.borrow_mut().running());
+    for observer in observers.iter() {
         observer(modified, snapshot_id);
     }
 }
