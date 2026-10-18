@@ -34,6 +34,7 @@ mod retention;
 /// The runtime in which a composition runs: state cells, UI tasks, frame callbacks and the queue of
 /// invalidated scopes.
 pub mod runtime;
+mod runtime_cell;
 mod slot;
 /// A min-heap of snapshot ids that supports removal by handle.
 pub mod snapshot_double_index_heap;
@@ -119,6 +120,7 @@ pub use runtime::{
     DefaultScheduler, Runtime, RuntimeHandle, StateId, TaskHandle, UiDispatcher,
     current_runtime_handle, label_next_ui_task, schedule_frame, schedule_node_update,
 };
+pub use runtime_cell::RuntimeCell;
 pub use slot::{
     SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup, SlotDebugScope,
     SlotDebugSnapshot, SlotRetentionDebugStats, SlotTable, SlotTableDebugStats,

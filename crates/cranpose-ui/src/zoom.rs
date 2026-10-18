@@ -47,7 +47,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{MutableState, OwnedMutableState};
+use cranpose_core::{OwnedMutableState, RuntimeCell};
 use cranpose_foundation::{
     DRAG_THRESHOLD,
     nodes::input::gestures::{TransformGesture, TransformGestureEvent},
@@ -74,7 +74,7 @@ fn distance(a: Point, b: Point) -> f32 {
 /// Cloning shares the same underlying state (like `ScrollState`).
 #[derive(Clone, Copy)]
 pub struct ZoomState {
-    inner: MutableState<Rc<ZoomStateInner>>,
+    inner: RuntimeCell<ZoomStateInner>,
 }
 
 struct ZoomStateInner {
@@ -106,8 +106,8 @@ impl ZoomState {
         let runtime = cranpose_core::current_runtime_handle()
             .expect("ZoomState::with_scale_range requires an active runtime");
         Self {
-            inner: MutableState::with_runtime(
-                Rc::new(ZoomStateInner {
+            inner: RuntimeCell::with_runtime(
+                ZoomStateInner {
                     scale: OwnedMutableState::with_runtime(
                         1.0f32.clamp(min_scale, max_scale),
                         runtime.clone(),
@@ -116,20 +116,20 @@ impl ZoomState {
                     offset_y: OwnedMutableState::with_runtime(0.0f32, runtime.clone()),
                     min_scale: Cell::new(min_scale),
                     max_scale: Cell::new(max_scale),
-                }),
+                },
                 runtime,
             ),
         }
     }
 
     fn inner(&self) -> Rc<ZoomStateInner> {
-        self.inner.get_non_reactive()
+        self.inner.get()
     }
 
     /// Stable identity of this state (shared across clones).
     pub fn id(&self) -> u64 {
         let mut hasher = cranpose_core::hash::default::new();
-        self.inner.runtime_state_id().hash(&mut hasher);
+        self.inner.hash(&mut hasher);
         hasher.finish()
     }
 
