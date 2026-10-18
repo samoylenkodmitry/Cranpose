@@ -253,10 +253,12 @@ frameworks draw differently, by design:
   blur widths. egui's text uses its light theme, which blends glyph coverage
   as the other apps do.
 - **Accessibility:** the apps keep the tree that accessibility services read,
-  as their toolkits do by default. egui builds AccessKit's tree every frame
-  with a label for each text. Its Android adapter attaches to GameActivity's
-  view, which R8 must keep, and needs `accesskit_winit`'s `accesskit_android`
-  feature, which egui-winit leaves off. Avalonia serves its tree by default:
+  as their toolkits do by default. On Android egui builds AccessKit's tree
+  every frame with a label for each text; on a desktop it builds the tree
+  once an assistive technology asks, as the other desktop toolkits do. Its
+  Android adapter attaches to GameActivity's view, which R8 must keep, and
+  needs `accesskit_winit`'s `accesskit_android` feature, which egui-winit
+  leaves off. Avalonia serves its tree by default:
   uiautomator reads 765 nodes at tier 5. Slint's Android backend has no
   accessibility support, so the Slint app does none of this work.
 - **Release builds:**
