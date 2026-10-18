@@ -12,6 +12,10 @@ impl Applier for RemoveFailingApplier {
         Err(NodeError::Missing { id })
     }
 
+    fn get_ref(&self, id: NodeId) -> Result<&dyn Node, NodeError> {
+        Err(NodeError::Missing { id })
+    }
+
     fn remove(&mut self, id: NodeId) -> Result<(), NodeError> {
         Err(NodeError::MissingContext {
             id,

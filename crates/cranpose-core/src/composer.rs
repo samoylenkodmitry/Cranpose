@@ -1604,15 +1604,14 @@ impl Composer {
     /// [`Self::nodes_need_relayout`] make together, under one borrow of the
     /// applier.
     pub fn visit_node_children(&self, node_id: NodeId, mut visit: impl FnMut(NodeId, bool)) {
-        let mut applier = self.borrow_applier();
-        let mut children = SmallVec::<[NodeId; 8]>::new();
-        if let Ok(node) = applier.get_mut(node_id) {
-            node.collect_children_into(&mut children);
-        }
-        for child in children {
-            let needs_relayout = applier.get_mut(child).is_ok_and(|node| node.layout_dirty());
+        let applier = self.borrow_applier();
+        let Ok(node) = applier.get_ref(node_id) else {
+            return;
+        };
+        node.for_each_child(&mut |child| {
+            let needs_relayout = applier.get_ref(child).is_ok_and(Node::layout_dirty);
             visit(child, needs_relayout);
-        }
+        });
     }
 
     /// Whether any node needs measurement or placement before its cached layout can be reused.
@@ -1624,12 +1623,10 @@ impl Composer {
     /// # }
     /// ```
     pub fn nodes_need_relayout(&self, node_ids: impl IntoIterator<Item = NodeId>) -> bool {
-        let mut applier = self.borrow_applier();
-        node_ids.into_iter().any(|node_id| {
-            applier
-                .get_mut(node_id)
-                .is_ok_and(|node| node.layout_dirty())
-        })
+        let applier = self.borrow_applier();
+        node_ids
+            .into_iter()
+            .any(|node_id| applier.get_ref(node_id).is_ok_and(Node::layout_dirty))
     }
 
     /// Clears all children of a node in the Applier.

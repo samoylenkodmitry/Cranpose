@@ -1508,6 +1508,12 @@ impl Node for LayoutNode {
         out.extend_from_slice(&self.children);
     }
 
+    fn for_each_child(&self, f: &mut dyn FnMut(NodeId)) {
+        for &child in &self.children {
+            f(child);
+        }
+    }
+
     fn owned_child_index(&self, child: NodeId) -> Option<usize> {
         self.children.iter().position(|&id| id == child)
     }

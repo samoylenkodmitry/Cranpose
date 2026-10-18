@@ -2035,6 +2035,16 @@ pub trait Node: Any {
     fn collect_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
         out.clear();
     }
+    /// Runs `f` on each child id in the order [`Node::collect_children_into`]
+    /// lists them. A node that holds its list in place overrides this to
+    /// visit it without a copy.
+    fn for_each_child(&self, f: &mut dyn FnMut(NodeId)) {
+        let mut children = SmallVec::<[NodeId; 8]>::new();
+        self.collect_children_into(&mut children);
+        for child in children {
+            f(child);
+        }
+    }
     /// Copies the ids of the children this node owns, in order, into `out`. A node whose
     /// `collect_children_into` leaves some children out overrides this to list them all. The
     /// default calls `collect_children_into`.
@@ -2429,6 +2439,8 @@ pub trait Applier: Any {
     fn create(&mut self, node: Box<dyn Node>) -> NodeId;
     /// Returns the node `id` for change, or an error if there is none.
     fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError>;
+    /// Returns the node `id` to read, or an error if there is none.
+    fn get_ref(&self, id: NodeId) -> Result<&dyn Node, NodeError>;
     /// Removes the node `id` and the nodes below it.
     fn remove(&mut self, id: NodeId) -> Result<(), NodeError>;
 
@@ -4925,6 +4937,10 @@ impl Applier for MemoryApplier {
             return None;
         }
         self.state.nodes.get_mut(index)?.as_deref_mut()
+    }
+
+    fn get_ref(&self, id: NodeId) -> Result<&dyn Node, NodeError> {
+        MemoryApplier::get_ref(self, id)
     }
 
     fn create_virtual(&mut self, node: Box<dyn Node>) -> NodeId {

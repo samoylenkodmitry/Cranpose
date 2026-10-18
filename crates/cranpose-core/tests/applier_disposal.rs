@@ -177,6 +177,10 @@ impl Applier for RetryApplier {
     fn create_virtual(&mut self, node: Box<dyn Node>) -> NodeId {
         self.inner.create_virtual(node)
     }
+
+    fn get_ref(&self, id: NodeId) -> Result<&dyn Node, NodeError> {
+        self.inner.get_ref(id)
+    }
 }
 
 struct RememberedResource(Rc<Cell<usize>>);
