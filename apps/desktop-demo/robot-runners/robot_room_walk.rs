@@ -8,11 +8,16 @@ use cranpose_testing::{click_button_in_semantics, find_text_in_semantics};
 const STEP_IN: &str = "Step into the room";
 /// Longer than the 0.9 s walk between the screen and the room.
 const WALK: Duration = Duration::from_millis(1400);
-/// How long E turns the eye a quarter turn, at 1.8 radians a second.
-const QUARTER_TURN: Duration = Duration::from_millis(870);
-/// How long W walks the eye from where it stands in the room through the
-/// wall to its right, at 900 pixels a second.
-const THROUGH_THE_WALL: Duration = Duration::from_millis(850);
+const WINDOW_WIDTH: f32 = 1200.0;
+const WINDOW_MIDDLE: f32 = WINDOW_WIDTH * 0.5;
+/// The counter on the far wall of the room inside the east wall's demo:
+/// the counter of the screen's own room reads one press by then.
+const NESTED_COUNTER: &str = "Pressed 0 times";
+/// How much larger the nested room's counter shows once the eye walked
+/// from where it turned to it through the east wall's doorway.
+const PAST_THE_DOORWAY: f32 = 3.0;
+/// How long a key may be held for the eye to turn or walk where it should.
+const LONGEST_HOLD: Duration = Duration::from_secs(8);
 
 pub(crate) fn main() {
     let _ = env_logger::try_init();
@@ -23,7 +28,7 @@ pub(crate) fn main() {
         robot_exit::fail_without_shutdown(&format!("{}: {err}", shots.display()));
     }
 
-    robot_launch::launch("Robot Room Walk", 1200, 800)
+    robot_launch::launch("Robot Room Walk", WINDOW_WIDTH as u32, 800)
         .with_robot_app_hook(robot_launch::set_tab_hook)
         .with_test_driver(move |robot| {
             robot_launch::switch_tab(&robot, "room");
@@ -132,15 +137,6 @@ fn hold_key(robot: &Robot, key: &str) {
     robot_shot::settle(robot, 100);
 }
 
-/// Holds `key` for `held`, while the room behind the wall's doorway, whose
-/// globe spins, keeps the app from going idle.
-fn hold_key_for(robot: &Robot, key: &str, held: Duration) {
-    press_for(robot, key, held);
-    if let Err(err) = robot.pump_frames(3) {
-        robot_exit::fail(robot, &format!("pump frames: {err}"));
-    }
-}
-
 fn press_for(robot: &Robot, key: &str, held: Duration) {
     if let Err(err) = robot.send_key(key) {
         robot_exit::fail(robot, &format!("key {key}: {err}"));
@@ -217,34 +213,73 @@ fn click_wall_tab(robot: &Robot, label: &str) {
 }
 
 /// Steps into the room again, opens the room of the demo on the east wall,
-/// which the flat screen does not keep, and walks the eye through that
-/// doorway: the globe of the room behind the wall comes close, and a click
-/// on its button stops it.
+/// which the flat screen does not keep, turns the eye to that room's
+/// counter and walks it through the doorway to the counter, which a click
+/// then presses.
 fn walk_through_the_wall(robot: &Robot, shots: &std::path::Path) {
     if !click_button_in_semantics(robot, STEP_IN) {
         robot_exit::fail(robot, "no button to step into the room again");
     }
     walk(robot);
     click_wall_tab(robot, "Room");
-    hold_key_for(robot, "e", QUARTER_TURN);
-    hold_key_for(robot, "w", THROUGH_THE_WALL);
+    // E turns the eye right, so what it shows moves left. Held keys are
+    // checked frame by frame: a busy host draws fewer, longer frames, and
+    // the room walks a frame at most a tenth of a second.
+    let turned = hold_key_until(robot, "e", |(x, _, width, _)| {
+        x + width * 0.5 <= WINDOW_MIDDLE + 40.0
+    });
+    let walked = hold_key_until(robot, "w", |(_, _, _, height)| {
+        height >= turned.3 * PAST_THE_DOORWAY
+    });
+    println!("  the counter behind the wall at {turned:?}, walked up to it at {walked:?}");
     save(robot, shots, "walked.png");
-    // The screen's globe was stopped first, so only the globe behind the
-    // wall still offers to stop.
-    let globe = button(robot, "Stop the spin");
-    println!("  the globe's button behind the wall at {globe:?}");
-    click_center(robot, globe);
+    click_center(robot, walked);
     if let Err(err) = robot.pump_frames(3) {
         robot_exit::fail(robot, &format!("pump frames: {err}"));
     }
-    if find_text_in_semantics(robot, "Stop the spin").is_some() {
+    if find_text_in_semantics(robot, NESTED_COUNTER).is_some() {
         robot_exit::fail(
             robot,
-            "a click on the globe's button in the room behind the wall missed it",
+            "a click on the counter of the room behind the wall, past its doorway, missed it",
         );
     }
-    hold_key_for(robot, "s", THROUGH_THE_WALL);
+    press_for(robot, "s", Duration::from_millis(500));
     save(robot, shots, "walked_back.png");
+}
+
+/// Holds `key` until the nested room's counter shows where `reached` holds,
+/// and returns where it shows then; fails after `LONGEST_HOLD`.
+fn hold_key_until(
+    robot: &Robot,
+    key: &str,
+    reached: impl Fn((f32, f32, f32, f32)) -> bool,
+) -> (f32, f32, f32, f32) {
+    if let Err(err) = robot.send_key(key) {
+        robot_exit::fail(robot, &format!("key {key}: {err}"));
+    }
+    let start = std::time::Instant::now();
+    // Each query draws a frame first.
+    let shown = loop {
+        let bounds = robot.find_button_bounds_exact(NESTED_COUNTER).ok().flatten();
+        let on_screen = bounds.filter(|&(x, _, width, height)| {
+            width > 0.0 && height > 0.0 && x >= 0.0 && x + width <= WINDOW_WIDTH
+        });
+        if let Some(bounds) = on_screen.filter(|&bounds| reached(bounds)) {
+            break Some(bounds);
+        }
+        if start.elapsed() > LONGEST_HOLD {
+            break None;
+        }
+    };
+    if let Err(err) = robot.release_key(key) {
+        robot_exit::fail(robot, &format!("releasing {key}: {err}"));
+    }
+    shown.unwrap_or_else(|| {
+        robot_exit::fail(
+            robot,
+            &format!("holding {key} did not bring the counter behind the wall where it should show"),
+        )
+    })
 }
 
 fn click_center(robot: &Robot, (x, y, width, height): (f32, f32, f32, f32)) {
