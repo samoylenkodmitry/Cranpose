@@ -232,12 +232,37 @@ fn drag_turns_the_dial_and_records_the_new_angle() {
     let state = ControlState::initial(ControlKind::VolumeDial);
     let tracking = DragTracking {
         active: true,
-        angle: 0.0,
+        angle: Some(0.0),
     };
     let (next, tracked) = drag_state(ControlKind::VolumeDial, state, tracking, below, DESIGN);
     assert!(next.value > state.value);
-    assert!((tracked.angle - PI * 0.5).abs() < 1e-4);
+    assert!(tracked
+        .angle
+        .is_some_and(|angle| (angle - PI * 0.5).abs() < 1e-4));
     assert!(tracked.active);
+}
+
+#[test]
+fn a_dial_pressed_by_its_pivot_turns_only_from_where_the_pointer_leaves_it() {
+    let pivot = project([0.0, DIAL_PIVOT_Y, 0.0], STAGE, StageView::Design);
+    let below = Point {
+        x: pivot.x,
+        y: pivot.y + 60.0,
+    };
+    let state = ControlState::initial(ControlKind::VolumeDial);
+    // The press lands in the dead zone about the pivot: no angle yet.
+    let tracking = DragTracking {
+        active: true,
+        angle: None,
+    };
+    let (next, tracked) = drag_state(ControlKind::VolumeDial, state, tracking, below, DESIGN);
+    assert_eq!(
+        next, state,
+        "the first angle out of the dead zone starts the turn, not a turn from angle zero"
+    );
+    assert!(tracked
+        .angle
+        .is_some_and(|angle| (angle - PI * 0.5).abs() < 1e-4));
 }
 
 #[test]
@@ -245,7 +270,7 @@ fn drag_leaves_switches_untouched() {
     let state = ControlState::initial(ControlKind::Checkmark);
     let tracking = DragTracking {
         active: true,
-        angle: 0.2,
+        angle: Some(0.2),
     };
     let (next, tracked) = drag_state(
         ControlKind::Checkmark,
@@ -255,7 +280,7 @@ fn drag_leaves_switches_untouched() {
         DESIGN,
     );
     assert_eq!(next, state);
-    assert_eq!(tracked.angle, 0.2);
+    assert_eq!(tracked.angle, Some(0.2));
 }
 
 #[test]

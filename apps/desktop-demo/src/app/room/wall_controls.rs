@@ -1,32 +1,20 @@
 //! Controls from the controls tab on the room's walls. Each control's card
-//! lies on its wall under the wall's text, and its stage stands out of the
-//! card as a volume: a mesh surface inside the wall's content, which joins
-//! the room's scene, so the room's eye sees the control solid from wherever
-//! it stands.
-
-use std::sync::Arc;
+//! lies on its wall under the wall's text, and the control's parts stand
+//! out of the card as meshes inside the wall's content, which join the
+//! room's scene: lit, casting their shadows and solid.
 
 use cranpose_core::{key, MutableState};
-use cranpose_ui::{
-    composable,
-    space::{Mat4, Mesh, Vec3},
-    Box, BoxSpec, Modifier, Point, Size,
-};
+use cranpose_ui::{composable, Box, BoxSpec, Modifier, Point, Size};
 
 use crate::app::controls_ui::{
-    rememberControl, ControlKind, ControlVolume, WallCard, STAGE_HEIGHT, WALL_STAGE_UNITS,
+    rememberControl, ControlKind, ControlModel, STAGE_HEIGHT, WALL_CARD_WIDTH as CARD_WIDTH,
 };
 
-const CARD_WIDTH: f32 = 300.0;
 const CARD_GAP: f32 = 30.0;
 const WALL_MARGIN: f32 = 48.0;
 /// The smallest a card shrinks to fit its wall; a wall with less room shows
 /// no cards.
 const MIN_CARD_SCALE: f32 = 0.3;
-/// How far in front of its wall a stage's ground lies, so the wall does not
-/// show through it.
-const STAGE_LIFT: f32 = 1.0;
-
 /// The controls on the far wall, under its screen.
 pub(super) const NORTH_CONTROLS: &[ControlKind] = &[ControlKind::VolumeDial, ControlKind::Toggle];
 /// The controls on the wall behind the screen's eye.
@@ -53,25 +41,6 @@ impl CardSpot {
             height: STAGE_HEIGHT * self.scale,
         }
     }
-
-    /// Where the stage's cube stands in the frame of the card's node, which
-    /// layout placed on the wall: x along the card's width, y out of the
-    /// wall, toward the room, and z down the wall, its ground just in front
-    /// of the card.
-    fn stage_place(self) -> Mat4 {
-        let card = self.card();
-        let rise = WALL_STAGE_UNITS.1 * card.width / WALL_STAGE_UNITS.0;
-        Mat4::from_axes(
-            Vec3::new(card.width, 0.0, 0.0),
-            Vec3::new(0.0, 0.0, -rise),
-            Vec3::new(0.0, card.height, 0.0),
-            Vec3::new(
-                card.width * 0.5,
-                card.height * 0.5,
-                -(STAGE_LIFT + rise * 0.5),
-            ),
-        )
-    }
 }
 
 /// The largest scale, at most one, at which `count` cards fit in rows on a
@@ -93,14 +62,9 @@ fn fit_cards(size: Size, head: f32, count: usize) -> Option<(f32, usize)> {
 }
 
 /// The controls `kinds` on a wall of `size`, in rows under the wall's text,
-/// whose size `head` holds; none when the wall has no room for them. Each
-/// stage is the unit cube `cube`.
+/// whose size `head` holds; none when the wall has no room for them.
 #[composable(no_skip)]
-pub(super) fn WallControls(
-    size: Size,
-    head: MutableState<Size>,
-    (kinds, cube): (&'static [ControlKind], Arc<Mesh>),
-) {
+pub(super) fn WallControls(size: Size, head: MutableState<Size>, kinds: &'static [ControlKind]) {
     let top = head.get().height;
     let Some((scale, per_row)) = fit_cards(size, top, kinds.len()) else {
         return;
@@ -123,18 +87,16 @@ pub(super) fn WallControls(
                     ),
                     scale,
                 };
-                let cube = Arc::clone(&cube);
-                key(kind, move || WallControl(kind, spot, cube));
+                key(kind, move || WallControl(kind, spot));
             }
         },
     );
 }
 
-/// One control's card at `spot`, with its stage standing out of it.
+/// One control's card at `spot`, with the control standing out of it.
 #[composable]
-fn WallControl(kind: ControlKind, spot: CardSpot, cube: Arc<Mesh>) {
+fn WallControl(kind: ControlKind, spot: CardSpot) {
     let control = rememberControl(kind);
     let at = Modifier::empty().absolute_offset(spot.at.x, spot.at.y);
-    WallCard(at.clone().size(spot.card()));
-    ControlVolume(kind, control, at, (cube, spot.stage_place(), spot.card()));
+    ControlModel(kind, control, at, spot.card());
 }

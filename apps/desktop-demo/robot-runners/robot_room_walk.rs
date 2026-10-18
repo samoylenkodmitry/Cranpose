@@ -48,6 +48,7 @@ pub(crate) fn main() {
                 );
             }
             click_wall_toggle(&robot);
+            drag_wall_dial(&robot);
             save(&robot, &shots, "toggle.png");
             let flat = step_in_button(&robot);
 
@@ -184,6 +185,27 @@ fn click_wall_toggle(robot: &Robot) {
             robot,
             "a click on the toggle's stage, where it stands out of the wall, missed it",
         );
+    }
+}
+
+/// Turns the far wall's dial clockwise with a drag over its knob, which
+/// stands out of the card as a mesh, and checks that its reading rises.
+fn drag_wall_dial(robot: &Robot) {
+    let (before, (x, y, width, height)) = robot_controls_grid::card(robot, "Volume dial");
+    let (middle_x, middle_y) = (x + width * 0.5, y + height * 0.5);
+    let reach = height * 0.18;
+    drag(
+        robot,
+        PointerButton::Primary,
+        (middle_x - reach, middle_y),
+        (middle_x, middle_y - reach),
+    );
+    robot_shot::settle(robot, 300);
+    let (after, _) = robot_controls_grid::card(robot, "Volume dial");
+    println!("  the far wall's dial read {before}, then {after}");
+    let percent = |reading: &str| reading.trim_end_matches(" %").parse::<i32>().ok();
+    if !matches!((percent(&before), percent(&after)), (Some(before), Some(after)) if after > before) {
+        robot_exit::fail(robot, "a clockwise drag over the dial's knob did not turn it up");
     }
 }
 

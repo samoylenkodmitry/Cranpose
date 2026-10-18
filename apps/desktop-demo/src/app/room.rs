@@ -57,7 +57,6 @@ fn text_style(size: f32, color: Color) -> TextStyle {
 #[derive(Clone)]
 struct RoomMeshes {
     plane: Arc<Mesh>,
-    cube: Arc<Mesh>,
     globe: Arc<Mesh>,
     torus: Option<Arc<Mesh>>,
 }
@@ -70,7 +69,6 @@ pub fn RoomTab() {
     let room = rememberRoomState(local_eye().current());
     let meshes = remember(|| RoomMeshes {
         plane: Arc::new(Mesh::plane()),
-        cube: Arc::new(Mesh::cuboid()),
         globe: Arc::new(Mesh::sphere(48, 24)),
         torus: Mesh::from_obj(TORUS_OBJ).ok().map(Arc::new),
     })
@@ -164,9 +162,9 @@ fn Walls(room: RoomState, (shape, spatial): (RoomShape, bool), meshes: RoomMeshe
         .filter(|&&wall| !(nested && wall == Wall::South))
     {
         let room = room.clone();
-        let meshes = (Arc::clone(&meshes.plane), Arc::clone(&meshes.cube));
+        let plane = Arc::clone(&meshes.plane);
         key(wall, move || {
-            WallSurface(room, shape, wall, meshes);
+            WallSurface(room, shape, wall, plane);
         });
     }
 }
@@ -218,12 +216,7 @@ fn RoomMotion(room: RoomState, shape: RoomShape) {
 }
 
 #[composable(no_skip)]
-fn WallSurface(
-    room: RoomState,
-    shape: RoomShape,
-    wall: Wall,
-    (plane, cube): (Arc<Mesh>, Arc<Mesh>),
-) {
+fn WallSurface(room: RoomState, shape: RoomShape, wall: Wall, plane: Arc<Mesh>) {
     Box(
         Modifier::empty()
             .required_size(shape.wall_size(wall))
@@ -236,10 +229,10 @@ fn WallSurface(
             }),
         BoxSpec::default(),
         move || match wall {
-            Wall::North => FarWall(room.clone(), shape, Arc::clone(&cube)),
+            Wall::North => FarWall(room.clone(), shape),
             Wall::East => DemoWall(),
             Wall::West => Panel(Color(0.12, 0.10, 0.12, 1.0), TextShowcaseTab),
-            Wall::South => BackWall(shape, Arc::clone(&cube)),
+            Wall::South => BackWall(shape),
             Wall::Floor => Floor(),
             Wall::Ceiling => Ceiling(),
         },
@@ -623,27 +616,27 @@ fn DemoWall() {
 
 /// The far wall: the screen's text and buttons, and controls under them.
 #[composable(no_skip)]
-fn FarWall(room: RoomState, shape: RoomShape, cube: Arc<Mesh>) {
+fn FarWall(room: RoomState, shape: RoomShape) {
     let head = rememberMutableStateOf(Size::default);
     WallBackground(Color(0.09, 0.10, 0.14, 1.0));
     Controls(room, shape, head);
     wall_controls::WallControls(
         shape.wall_size(Wall::North),
         head,
-        (wall_controls::NORTH_CONTROLS, cube),
+        wall_controls::NORTH_CONTROLS,
     );
 }
 
 /// The wall behind the screen's eye: a line of text, and controls under it.
 #[composable(no_skip)]
-fn BackWall(shape: RoomShape, cube: Arc<Mesh>) {
+fn BackWall(shape: RoomShape) {
     let head = rememberMutableStateOf(Size::default);
     WallBackground(Color(0.13, 0.12, 0.10, 1.0));
     BackWallText(head);
     wall_controls::WallControls(
         shape.wall_size(Wall::South),
         head,
-        (wall_controls::SOUTH_CONTROLS, cube),
+        wall_controls::SOUTH_CONTROLS,
     );
 }
 
