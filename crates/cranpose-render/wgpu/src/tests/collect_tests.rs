@@ -80,6 +80,16 @@ fn phase_draw(x: f32, phase: PrimitivePhase, recorded: bool) -> RenderNode {
     }
 }
 
+fn walk_settings() -> WalkSettings {
+    WalkSettings {
+        raster_scale: RasterScale::Exact(1.0),
+        light: ShadowLight::for_window(100.0, 100.0, 1.0, 1.0),
+        wants_pixel_sensitive: false,
+        update: 0,
+        in_space: false,
+    }
+}
+
 #[test]
 fn deferred_draws_keep_their_order_after_interleaved_children() {
     let before = PrimitivePhase::BeforeChildren;
@@ -218,11 +228,7 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
                     rounding: None,
                     snap_anchor: None,
                     translated,
-                    raster_scale: RasterScale::Exact(1.0),
-                    light: ShadowLight::for_window(100.0, 100.0, 1.0, 1.0),
-                    wants_pixel_sensitive: false,
-                    update: 0,
-                    in_space: false,
+                    settings: &walk_settings(),
                 },
                 None,
                 &mut CompositorScene::new(),
@@ -394,11 +400,7 @@ fn a_rounded_layer_its_parent_clip_holds_draws_in_place_whatever_the_float_sums(
         rounding: None,
         snap_anchor: None,
         translated: false,
-        raster_scale: RasterScale::Exact(1.0),
-        light: ShadowLight::for_window(100.0, 100.0, 1.0, 1.0),
-        wants_pixel_sensitive: false,
-        update: 0,
-        in_space: false,
+        settings: &walk_settings(),
     };
     assert!(matches!(
         placement_in(&bar, &panel),
