@@ -6,7 +6,9 @@ use smallvec::SmallVec;
 
 use crate::{
     graph::{HitTestNode, LayerNode, ProjectiveTransform, RenderNode, quad_bounds},
-    graph_scene::{HitClip, HitGeometry, HitTargetSpec, Scene, SurfaceGeometry, SurfaceTarget},
+    graph_scene::{
+        HitClip, HitGeometry, HitTargetSpec, HitTargets, Scene, SurfaceGeometry, SurfaceTarget,
+    },
     primitive_emit::resolve_clip,
     scene_pick::ScenePick,
 };
@@ -32,16 +34,28 @@ impl HitGraphSink for Scene {
         geometry: HitGeometry<'_>,
         hit: &HitTestNode,
     ) {
-        Scene::push_hit(
-            self,
-            node_id,
-            capture_path,
-            geometry,
-            HitTargetSpec {
-                shape: None,
-                handlers: &hit.handlers,
-            },
-        );
+        Scene::push_hit(self, node_id, capture_path, geometry, hit_spec(hit));
+    }
+}
+
+impl HitGraphSink for HitTargets<'_> {
+    fn push_hit(
+        &mut self,
+        node_id: NodeId,
+        capture_path: &[NodeId],
+        geometry: HitGeometry<'_>,
+        hit: &HitTestNode,
+    ) {
+        self.push(node_id, capture_path, geometry, hit_spec(hit));
+    }
+}
+
+/// What a graph's hit test node pushes as a target: its handlers, with no
+/// shape of its own.
+fn hit_spec(hit: &HitTestNode) -> HitTargetSpec<'_> {
+    HitTargetSpec {
+        shape: None,
+        handlers: &hit.handlers,
     }
 }
 
