@@ -1452,13 +1452,7 @@ fn nested_measurement_returns_multiple_scratch_vecs_to_pool() -> Result<(), Node
     let context = crate::render_state::require_current_app_context("a layout test");
     let guard = ApplierSlotGuard::new(&mut applier, &context);
     let applier_host = guard.host();
-    let slots_handle = guard.slots_handle();
-    let builder = LayoutBuilder::new_with_epoch(
-        Rc::clone(applier_host),
-        1,
-        Rc::clone(slots_handle),
-        &context,
-    );
+    let builder = LayoutBuilder::new_with_epoch(Rc::clone(applier_host), 1, &context);
 
     builder.state.measure_node(
         root_id,
@@ -2181,12 +2175,8 @@ fn parent_data_uses_resolved_layout_properties() {
     );
     let node_id = applier.create(Box::new(layout_node));
     let context = crate::render_state::require_current_app_context("a layout test");
-    let builder = LayoutBuilder::new_with_epoch(
-        Rc::new(ConcreteApplierHost::new(applier)),
-        1,
-        Rc::new(RefCell::new(SlotTable::default())),
-        &context,
-    );
+    let builder =
+        LayoutBuilder::new_with_epoch(Rc::new(ConcreteApplierHost::new(applier)), 1, &context);
     let frame = Rc::new(LayoutChildFrame::default());
     let state = LayoutChildMeasureState::new(node_id, Rc::clone(&frame));
     builder

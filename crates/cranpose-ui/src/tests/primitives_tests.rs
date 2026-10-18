@@ -3,10 +3,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{
-    self, Applier, Composer, Composition, ConcreteApplierHost, MemoryApplier, NodeId, Phase,
-    SlotTable, SlotsHost, location_key,
-};
+use cranpose_core::{self, Applier, Composition, MemoryApplier, NodeId, location_key};
 use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
 use cranpose_ui_layout::{HorizontalAlignment, LinearArrangement, VerticalAlignment};
 
@@ -17,7 +14,7 @@ use crate::{
     modifier::{Modifier, Size},
     renderer::{HeadlessRenderer, RenderOp},
     run_test_composition,
-    subcompose_layout::{Constraints, MeasureCallbacks, SubcomposeLayoutNode},
+    subcompose_layout::{Constraints, tests::measure_subcompose_with},
     text::TextStyle,
     widgets::{
         BoxWithConstraints, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec, Spacer,
@@ -41,89 +38,6 @@ impl CapturedLazyListSlot {
             node_id: Rc::new(RefCell::new(None)),
         }
     }
-}
-
-fn prepare_measure_composer(
-    slots: &mut SlotTable,
-    applier: &mut MemoryApplier,
-    handle: &cranpose_core::RuntimeHandle,
-    root: Option<NodeId>,
-) -> (
-    Composer,
-    Rc<SlotsHost>,
-    Rc<ConcreteApplierHost<MemoryApplier>>,
-) {
-    let slots_host = Rc::new(SlotsHost::new(std::mem::take(slots)));
-    let applier_host = Rc::new(ConcreteApplierHost::new(std::mem::replace(
-        applier,
-        MemoryApplier::new(),
-    )));
-    let composer = Composer::new(
-        Rc::clone(&slots_host),
-        applier_host.clone(),
-        handle.clone(),
-        root,
-    );
-    (composer, slots_host, applier_host)
-}
-
-fn restore_measure_composer(
-    slots: &mut SlotTable,
-    applier: &mut MemoryApplier,
-    slots_host: Rc<SlotsHost>,
-    applier_host: Rc<ConcreteApplierHost<MemoryApplier>>,
-) {
-    *slots = slots_host
-        .into_table()
-        .expect("restore primitive test slots");
-    *applier = Rc::try_unwrap(applier_host)
-        .unwrap_or_else(|_| panic!("applier host still has outstanding references"))
-        .try_into_inner()
-        .unwrap_or_else(|(_, error)| panic!("applier disposal failed: {error}"));
-}
-
-fn run_subcompose_measure(
-    slots: &mut SlotTable,
-    applier: &mut MemoryApplier,
-    handle: &cranpose_core::RuntimeHandle,
-    node_id: NodeId,
-    constraints: Constraints,
-) {
-    let (composer, slots_host, applier_host) =
-        prepare_measure_composer(slots, applier, handle, Some(node_id));
-    composer.enter_phase(Phase::Measure);
-    let node_handle = {
-        let mut applier_ref = applier_host.borrow_typed();
-        let node = applier_ref.get_mut(node_id).expect("node available");
-        let typed = node
-            .as_any_mut()
-            .downcast_mut::<SubcomposeLayoutNode>()
-            .expect("subcompose layout node");
-        typed.handle()
-    };
-    let measurer = Box::new(|child_id: NodeId, _constraints: Constraints| {
-        cranpose_ui_layout::Placeable::value(0.0, 0.0, child_id)
-    });
-    let error = Rc::new(RefCell::new(None));
-    node_handle
-        .measure_with_callbacks(
-            &composer,
-            node_id,
-            constraints,
-            MeasureCallbacks {
-                measurer,
-                retained_measure_lookup: Box::new(|_| None),
-                retained_measure_registrar: Box::new(|_| {}),
-                error: &error,
-            },
-        )
-        .expect("measure succeeds");
-    assert!(
-        error.borrow().is_none(),
-        "unexpected subcompose measure error"
-    );
-    drop(composer);
-    restore_measure_composer(slots, applier, slots_host, applier_host);
 }
 
 #[test]
@@ -170,66 +84,40 @@ fn column_with_alignment_updates_node_fields() {
 
 fn measure_subcompose_node(
     composition: &mut Composition<MemoryApplier>,
-    slots: &mut SlotTable,
     handle: &cranpose_core::RuntimeHandle,
     root: NodeId,
     constraints: Constraints,
 ) {
     let mut applier_guard = composition.applier_mut();
-    let mut temp_applier = std::mem::take(&mut *applier_guard);
-    run_subcompose_measure(slots, &mut temp_applier, handle, root, constraints);
-    *applier_guard = temp_applier;
+    measure_subcompose_with(
+        &mut applier_guard,
+        handle,
+        root,
+        constraints,
+        Box::new(|child_id, _constraints| cranpose_ui_layout::Placeable::value(0.0, 0.0, child_id)),
+    );
 }
 
 fn capture_subcompose_child_constraints(
     composition: &mut Composition<MemoryApplier>,
-    slots: &mut SlotTable,
     handle: &cranpose_core::RuntimeHandle,
     root: NodeId,
     constraints: Constraints,
 ) -> Vec<Constraints> {
-    let mut applier_guard = composition.applier_mut();
-    let mut temp_applier = std::mem::take(&mut *applier_guard);
-    let (composer, slots_host, applier_host) =
-        prepare_measure_composer(slots, &mut temp_applier, handle, Some(root));
-    composer.enter_phase(Phase::Measure);
-    let node_handle = {
-        let mut applier_ref = applier_host.borrow_typed();
-        let node = applier_ref.get_mut(root).expect("node available");
-        let typed = node
-            .as_any_mut()
-            .downcast_mut::<SubcomposeLayoutNode>()
-            .expect("subcompose layout node");
-        typed.handle()
-    };
     let captured = Rc::new(RefCell::new(Vec::new()));
     let captured_handle = Rc::clone(&captured);
-    let error = Rc::new(RefCell::new(None));
-    let measurer = Box::new(move |child_id: NodeId, child_constraints: Constraints| {
-        captured_handle.borrow_mut().push(child_constraints);
-        cranpose_ui_layout::Placeable::value(0.0, 0.0, child_id)
-    });
-    node_handle
-        .measure_with_callbacks(
-            &composer,
-            root,
-            constraints,
-            MeasureCallbacks {
-                measurer,
-                retained_measure_lookup: Box::new(|_| None),
-                retained_measure_registrar: Box::new(|_| {}),
-                error: &error,
-            },
-        )
-        .expect("measure succeeds");
-    assert!(
-        error.borrow().is_none(),
-        "unexpected subcompose measure error"
+    let mut applier_guard = composition.applier_mut();
+    measure_subcompose_with(
+        &mut applier_guard,
+        handle,
+        root,
+        constraints,
+        Box::new(move |child_id, child_constraints| {
+            captured_handle.borrow_mut().push(child_constraints);
+            cranpose_ui_layout::Placeable::value(0.0, 0.0, child_id)
+        }),
     );
-    drop(composer);
-    restore_measure_composer(slots, &mut temp_applier, slots_host, applier_host);
-    *applier_guard = temp_applier;
-
+    drop(applier_guard);
     captured.borrow().clone()
 }
 
@@ -728,11 +616,9 @@ fn box_with_constraints_composes_different_content() {
 
     let root = composition.root().expect("root node");
     let handle = composition.runtime_handle();
-    let mut slots = SlotTable::default();
 
     measure_subcompose_node(
         &mut composition,
-        &mut slots,
         &handle,
         root,
         Constraints::tight(200.0, 100.0),
@@ -742,7 +628,6 @@ fn box_with_constraints_composes_different_content() {
 
     measure_subcompose_node(
         &mut composition,
-        &mut slots,
         &handle,
         root,
         Constraints::tight(80.0, 50.0),
@@ -818,11 +703,10 @@ fn box_with_constraints_reacts_to_constraint_changes() {
 
     let root = composition.root().expect("root node");
     let handle = composition.runtime_handle();
-    let mut slots = SlotTable::default();
 
     for width in [120.0, 60.0] {
         let constraints = Constraints::tight(width, 40.0);
-        measure_subcompose_node(&mut composition, &mut slots, &handle, root, constraints);
+        measure_subcompose_node(&mut composition, &handle, root, constraints);
     }
 
     assert_eq!(invocations.get(), 2);
@@ -905,10 +789,8 @@ fn box_with_constraints_measures_children_with_finite_constraints() {
 
     let root = composition.root().expect("root node");
     let handle = composition.runtime_handle();
-    let mut slots = SlotTable::default();
     let captured = capture_subcompose_child_constraints(
         &mut composition,
-        &mut slots,
         &handle,
         root,
         Constraints::tight(120.0, 80.0),
