@@ -141,6 +141,7 @@ impl Path {
     }
 
     /// Adds a straight edge from the pen to `point`.
+    #[inline]
     pub fn line_to(&mut self, point: Point) {
         match self.contours.last_mut() {
             Some(contour) if !contour.closed => contour.points.push(point),
