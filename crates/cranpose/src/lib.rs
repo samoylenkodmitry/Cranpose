@@ -157,6 +157,8 @@ mod android_purchases;
 mod android_services;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_surface;
+#[cfg(target_os = "android")]
+mod android_symbols;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_text_input;
 #[cfg(all(feature = "android", target_os = "android"))]

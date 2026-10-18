@@ -139,15 +139,7 @@ fn available_memory_bytes() -> Option<u64> {
 fn release_free_memory() -> bool {
     #[cfg(target_os = "android")]
     {
-        const M_PURGE: libc::c_int = -101;
-        unsafe extern "C" {
-            fn mallopt(param: libc::c_int, value: libc::c_int) -> libc::c_int;
-        }
-        // SAFETY: two integers in, one out. `M_PURGE` asks the allocator to
-        // release its own free pages; it frees nothing the caller holds a
-        // pointer to, and an unrecognized parameter is a no-op returning zero.
-        unsafe { mallopt(M_PURGE, 0) };
-        true
+        crate::android_symbols::purge_free_memory()
     }
     #[cfg(not(target_os = "android"))]
     {
