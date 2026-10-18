@@ -8,7 +8,9 @@ here=$(cd "$(dirname "$0")" && pwd)
 app=${1:-$HOME/Applications}/FrameCount.app
 mkdir -p "$app/Contents/MacOS"
 cp "$here/Info.plist" "$app/Contents/Info.plist"
-xcrun swiftc -O -o "$app/Contents/MacOS/FrameCount" "$here/FrameCount.swift"
+# CVDisplayLink is deprecated since macOS 15 and still ticks as the display
+# does, which its replacements do inside a run loop only.
+xcrun swiftc -O -suppress-warnings -o "$app/Contents/MacOS/FrameCount" "$here/FrameCount.swift"
 mkdir -p "$app/Contents/Resources"
 shasum -a 256 "$here/FrameCount.swift" | cut -d' ' -f1 > "$app/Contents/Resources/source-sha256"
 codesign --force --sign - \
