@@ -116,10 +116,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                                         let travelled =
                                             (event.position.x - down_x).abs() > TAP_SLOP;
                                         let next = if travelled {
-                                            drag_progress
-                                                .get()
-                                                .map(|p| p >= 0.5)
-                                                .unwrap_or(!checked)
+                                            drag_progress.get().map_or(!checked, |p| p >= 0.5)
                                         } else {
                                             !checked
                                         };
