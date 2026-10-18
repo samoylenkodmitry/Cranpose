@@ -515,7 +515,7 @@ fn child_layer(transform: ProjectiveTransform, content: LayerScene) -> ChildLaye
         content_hash: 0,
         cache_policy: CachePolicy::None,
         in_place: false,
-        content,
+        content: Box::new(content),
         mesh: None,
     }
 }

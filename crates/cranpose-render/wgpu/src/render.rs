@@ -5014,7 +5014,7 @@ impl GpuRenderer {
             || packet
                 .overlay
                 .as_ref()
-                .is_some_and(LayerScene::contains_backdrop);
+                .is_some_and(|overlay| overlay.contains_backdrop());
         let frame_root = self.frame_root(
             output_mode,
             output_view,
@@ -5463,7 +5463,7 @@ impl GpuRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         let (result, submitted) = self.execute_frame_graph(
             &root,
-            overlay.as_ref(),
+            overlay.as_deref(),
             &page,
             root_scale,
             clear,
@@ -5481,7 +5481,7 @@ impl GpuRenderer {
                 let result = self.encode_frame(
                     &mut frame_encoder,
                     &root,
-                    overlay.as_ref(),
+                    overlay.as_deref(),
                     Rc::clone(&page),
                     root_scale,
                     clear,

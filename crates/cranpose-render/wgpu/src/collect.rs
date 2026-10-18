@@ -99,23 +99,30 @@ pub(crate) struct LayerScene {
     has_backdrop: bool,
 }
 
+/// The layer scenes of returned packets, kept with their buffers for the
+/// next collect. Boxed, as a layer's content is: a scene is some 540 bytes,
+/// which every recycle, take and child push moved inline.
 #[derive(Default)]
 pub(crate) struct LayerSceneRecycler {
-    scenes: Vec<LayerScene>,
+    #[expect(clippy::vec_box)]
+    scenes: Vec<Box<LayerScene>>,
 }
 
 impl LayerSceneRecycler {
-    pub(crate) fn take(&mut self, capacity: SceneCapacityHint) -> LayerScene {
+    pub(crate) fn take(&mut self, capacity: SceneCapacityHint) -> Box<LayerScene> {
         match self.scenes.pop() {
             Some(mut scene) => {
                 scene.has_backdrop = false;
                 scene
             }
-            None => LayerScene::new(CompositorScene::with_capacity(capacity), Vec::new()),
+            None => Box::new(LayerScene::new(
+                CompositorScene::with_capacity(capacity),
+                Vec::new(),
+            )),
         }
     }
 
-    pub(crate) fn recycle(&mut self, mut scene: LayerScene) {
+    pub(crate) fn recycle(&mut self, mut scene: Box<LayerScene>) {
         while let Some(child) = scene.children.pop() {
             self.recycle(child.content);
         }
@@ -182,7 +189,7 @@ pub(crate) struct ChildLayer {
     pub(crate) content_hash: u64,
     pub(crate) cache_policy: CachePolicy,
     pub(crate) in_place: bool,
-    pub(crate) content: LayerScene,
+    pub(crate) content: Box<LayerScene>,
     /// For a mesh surface in a scene: the mesh its surface is drawn on in
     /// the scene's 3D pass, in place of a composite.
     pub(crate) mesh: Option<Arc<MeshChild>>,
@@ -898,7 +905,7 @@ pub(crate) fn collect_root(
     capacity: SceneCapacityHint,
     root_scale: f32,
     recycler: &mut LayerSceneRecycler,
-) -> LayerScene {
+) -> Box<LayerScene> {
     let mut out = recycler.take(capacity);
     let settings = WalkSettings {
         raster_scale: RasterScale::Exact(root_scale),
@@ -932,7 +939,7 @@ pub(crate) fn collect_overlay(
     text_layout: &mut impl TextLayoutResolver,
     root_scale: f32,
     recycler: &mut LayerSceneRecycler,
-) -> LayerScene {
+) -> Box<LayerScene> {
     collect_root(
         root,
         0,

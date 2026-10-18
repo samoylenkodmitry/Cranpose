@@ -57,7 +57,6 @@ pub(crate) enum PresentControl {
     Shutdown,
 }
 
-#[expect(clippy::large_enum_variant)]
 pub(crate) enum PresentMsg {
     Control(PresentControl),
     Packet(FramePacket),
