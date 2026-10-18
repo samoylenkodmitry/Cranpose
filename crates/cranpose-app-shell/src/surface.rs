@@ -422,18 +422,17 @@ fn append_surface_dirty_node(
     lane: SurfaceDirtyLane,
     seen: &mut HashSet<(usize, NodeId)>,
 ) {
+    // The scene update drops repeats of reshaped and moved nodes: the
+    // reshaped ones go into a sorted partial list, the moved ones into its
+    // dirty map. Both lists are taken by the frame that sees them.
     match lane {
         SurfaceDirtyLane::Layout => {
             surface.scene_dirty = true;
-            if seen.insert((surface_index, node)) {
-                surface.scoped_layout_scene_nodes.push(node);
-            }
+            surface.scoped_layout_scene_nodes.push(node);
         }
         SurfaceDirtyLane::Moved => {
             surface.scene_dirty = true;
-            if seen.insert((surface_index, node)) {
-                surface.scoped_moved_scene_nodes.push(node);
-            }
+            surface.scoped_moved_scene_nodes.push(node);
         }
         SurfaceDirtyLane::Draw => surface.scoped_draw_nodes.push(node),
         SurfaceDirtyLane::LayerProperties => surface.scoped_layer_property_nodes.push(node),
@@ -442,18 +441,6 @@ fn append_surface_dirty_node(
                 surface.structural_scene_nodes.push(node);
             }
         }
-    }
-}
-
-/// The nodes `lane` already queued on `surface`, which routing must not
-/// queue twice.
-fn queued_scene_nodes<R: Renderer>(surface: &RootSurface<R>, lane: SurfaceDirtyLane) -> &[NodeId] {
-    match lane {
-        SurfaceDirtyLane::Layout => &surface.scoped_layout_scene_nodes,
-        SurfaceDirtyLane::Moved => &surface.scoped_moved_scene_nodes,
-        SurfaceDirtyLane::Draw
-        | SurfaceDirtyLane::LayerProperties
-        | SurfaceDirtyLane::Structural => &[],
     }
 }
 
@@ -481,13 +468,6 @@ pub(crate) fn route_nodes_by_surface<R: Renderer>(
         return;
     }
     scratch.seen.clear();
-    for (index, surface) in surfaces.iter().enumerate() {
-        scratch.seen.extend(
-            queued_scene_nodes(surface, lane)
-                .iter()
-                .map(|node| (index, *node)),
-        );
-    }
     if app.app_context.window_roots().is_empty() {
         scratch.owners.clear();
         if let Some(index) = surfaces
