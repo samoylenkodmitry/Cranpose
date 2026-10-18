@@ -98,7 +98,7 @@ use std::{
 };
 
 use cranpose_core::{
-    MutableState, NodeId, SlotId, internal::FrameCallbackRegistration, remember,
+    MutableState, NodeId, RuntimeCell, SlotId, internal::FrameCallbackRegistration, remember,
     rememberMutableStateOf,
 };
 use cranpose_foundation::{
@@ -250,7 +250,7 @@ impl WearScalingLayoutInfo {
 #[derive(Clone, Copy)]
 pub struct WearScalingListState {
     anchor: MutableState<CentreAnchor>,
-    inner: MutableState<Rc<WearScalingListInner>>,
+    inner: RuntimeCell<WearScalingListInner>,
 }
 
 struct WearScalingListInner {
@@ -429,12 +429,12 @@ impl ItemHeights {
 
 impl WearScalingListState {
     fn inner(&self) -> Rc<WearScalingListInner> {
-        self.inner.get_non_reactive()
+        self.inner.get()
     }
 
     fn id(&self) -> u64 {
         let mut hasher = cranpose_core::hash::default::new();
-        self.inner.runtime_state_id().hash(&mut hasher);
+        self.inner.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -745,8 +745,8 @@ pub fn rememberWearScalingListState(initial: CentreAnchor) -> WearScalingListSta
     let inner = remember(|| {
         let runtime = cranpose_core::current_runtime_handle()
             .expect("rememberWearScalingListState requires an active runtime");
-        MutableState::with_runtime(
-            Rc::new(WearScalingListInner {
+        RuntimeCell::with_runtime(
+            WearScalingListInner {
                 layout: Rc::new(RefCell::new(WearScalingLayoutInfo::default())),
                 items: Rc::new(RefCell::new(Vec::new())),
                 heights: Rc::new(RefCell::new(ItemHeights::default())),
@@ -756,7 +756,7 @@ pub fn rememberWearScalingListState(initial: CentreAnchor) -> WearScalingListSta
                     WearScalingListSummary::default(),
                     runtime.clone(),
                 ),
-            }),
+            },
             runtime,
         )
     })

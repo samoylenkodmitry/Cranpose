@@ -144,40 +144,43 @@ impl StateArena {
         self.alloc_with_policy(value, runtime, Rc::new(NeverEqual))
     }
 
+    /// A free cell's id, for a new value to take.
+    fn claim_slot(&self) -> StateId {
+        let mut inner = self.inner.borrow_mut();
+        loop {
+            let Some(slot) = inner.free.pop() else {
+                let slot = inner.cells.len() as u32;
+                inner.cells.push(StateArenaSlot {
+                    generation: 0,
+                    cell: None,
+                    watcher_cell: None,
+                    lease: None,
+                });
+                return StateId::new(slot, 0);
+            };
+
+            let Some(entry) = inner.cells.get_mut(slot as usize) else {
+                continue;
+            };
+            if entry.cell.is_some() {
+                continue;
+            }
+
+            entry.watcher_cell = None;
+            entry.lease = None;
+            entry.generation = entry.generation.wrapping_add(1);
+            return StateId::new(slot, entry.generation);
+        }
+    }
+
     pub(crate) fn alloc_with_policy<T: Clone + 'static>(
         &self,
         value: T,
         runtime: RuntimeHandle,
         policy: Rc<dyn MutationPolicy<T>>,
     ) -> StateId {
-        let (slot, generation) = {
-            let mut inner = self.inner.borrow_mut();
-            loop {
-                let Some(slot) = inner.free.pop() else {
-                    let slot = inner.cells.len() as u32;
-                    inner.cells.push(StateArenaSlot {
-                        generation: 0,
-                        cell: None,
-                        watcher_cell: None,
-                        lease: None,
-                    });
-                    break (slot, 0);
-                };
-
-                let Some(entry) = inner.cells.get_mut(slot as usize) else {
-                    continue;
-                };
-                if entry.cell.is_some() {
-                    continue;
-                }
-
-                entry.watcher_cell = None;
-                entry.lease = None;
-                entry.generation = entry.generation.wrapping_add(1);
-                break (slot, entry.generation);
-            }
-        };
-        let id = StateId::new(slot, generation);
+        let id = self.claim_slot();
+        let slot = id.slot();
         let inner = MutableStateInner::new_with_policy(value, runtime, policy);
         inner.install_snapshot_observer(id);
         let typed_cell = Rc::new(TypedStateCell { inner });
@@ -188,6 +191,20 @@ impl StateArena {
         slot_entry.cell = Some(cell);
         slot_entry.watcher_cell = Some(watcher_cell);
         id
+    }
+
+    /// Stores `value` in a cell of its own, which keeps no snapshot records
+    /// and no readers: see [`crate::RuntimeCell`].
+    pub(crate) fn alloc_plain<T: 'static>(&self, value: T) -> StateId {
+        let id = self.claim_slot();
+        let cell: Rc<dyn Any> = Rc::new(value);
+        self.inner.borrow_mut().cells[id.slot_index()].cell = Some(cell);
+        id
+    }
+
+    /// The value [`Self::alloc_plain`] stored for `id`, while it lives.
+    pub(crate) fn plain<T: 'static>(&self, id: StateId) -> Option<Rc<T>> {
+        Rc::downcast::<T>(self.get_cell_opt(id)?).ok()
     }
 
     fn get_cell_opt(&self, id: StateId) -> Option<Rc<dyn Any>> {
@@ -1400,6 +1417,19 @@ impl RuntimeHandle {
         lease
     }
 
+    /// Stores `value` in a new plain cell, whose lease goes to the value
+    /// being remembered, or else to the runtime; returns the cell's id.
+    pub(crate) fn alloc_owned_plain<T: 'static>(&self, value: T) -> StateId {
+        let id = self.with_state_arena(|arena| arena.alloc_plain(value));
+        let lease = Rc::new(StateHandleLease {
+            id,
+            runtime: self.clone(),
+        });
+        self.with_state_arena(|arena| arena.register_lease(id, &lease));
+        self.hand_to_owner(&lease);
+        id
+    }
+
     pub(crate) fn alloc_persistent_state<T: Clone + 'static>(
         &self,
         value: T,
@@ -1416,15 +1446,21 @@ impl RuntimeHandle {
     }
 
     fn hand_out<T: Clone + 'static>(&self, lease: Rc<StateHandleLease>) -> crate::MutableState<T> {
-        if !hand_to_current_owner(&lease)
+        self.hand_to_owner(&lease);
+        crate::MutableState::from_lease(&lease)
+    }
+
+    /// Hands `lease` to the value being remembered, or else to the runtime,
+    /// which keeps it as long as it lives.
+    fn hand_to_owner(&self, lease: &Rc<StateHandleLease>) {
+        if !hand_to_current_owner(lease)
             && let Some(inner) = self.inner.upgrade()
         {
             inner
                 .external_state_owners
                 .borrow_mut()
-                .insert(lease.id(), Rc::clone(&lease));
+                .insert(lease.id(), Rc::clone(lease));
         }
-        crate::MutableState::from_lease(&lease)
     }
 
     pub(crate) fn retain_state_lease(&self, id: StateId) -> Option<Rc<StateHandleLease>> {
