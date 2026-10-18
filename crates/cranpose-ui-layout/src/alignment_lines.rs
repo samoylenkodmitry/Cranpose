@@ -37,6 +37,10 @@ impl AlignmentLines {
 
     /// Inherits the first and last lines of another placed child.
     pub fn merge(&mut self, other: Self) {
+        // Most children provide no lines; their merge changes nothing.
+        if other.first.is_nan() && other.last.is_nan() {
+            return;
+        }
         self.first = self.first.min(other.first);
         self.last = self.last.max(other.last);
     }

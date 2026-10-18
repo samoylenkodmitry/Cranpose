@@ -867,12 +867,12 @@ fn move_retained_layer(
     layer: &mut LayerNode,
     ancestors: TranslateAncestorContext,
 ) -> Option<bool> {
-    let state = placed_child_layout_state(applier, layer_identity(layer)?)?;
-    if Rect::from_size(state.size()) != layer.node_rect() {
+    let placed = placed_child_geometry(applier, layer_identity(layer)?)?;
+    if Rect::from_size(placed.size) != layer.node_rect() {
         return None;
     }
     let previous = HitGraphState::of(layer);
-    translate_retained_child(layer, &state, ancestors.parent_content_offset);
+    translate_retained_child(layer, placed.position, ancestors.parent_content_offset);
     if layer.has_origin_sinks {
         publish_retained_window_geometry(applier, layer, ancestors.parent_abs);
     }
@@ -1140,7 +1140,7 @@ pub(crate) struct TranslateScratch {
 /// A placed child of a container a scroll step translates.
 struct PlacedChild {
     id: NodeId,
-    state: cranpose_ui::widgets::LayoutState,
+    geometry: PlacedGeometry,
     /// The child's index among the container's previous children; `None`
     /// for a child that enters.
     old_index: Option<usize>,
@@ -1163,12 +1163,12 @@ fn translated_children(
     let placed_fresh = &mut scratch.placed_fresh;
     placed_fresh.clear();
     for &id in fresh_children {
-        let Some(state) = placed_child_layout_state(applier, id) else {
+        let Some(geometry) = placed_child_geometry(applier, id) else {
             continue;
         };
         placed_fresh.push(PlacedChild {
             id,
-            state,
+            geometry,
             old_index: None,
             keeps_layer: false,
         });
@@ -1258,7 +1258,7 @@ fn check_retained_children(
         let RenderNode::Layer(layer) = &container.children[old_index] else {
             return Err("retained child slot is not a layer");
         };
-        let fits = Rect::from_size(placed.state.size()) == layer.node_rect();
+        let fits = Rect::from_size(placed.geometry.size) == layer.node_rect();
         placed.keeps_layer = match dirty_nodes.get_mut(&placed.id) {
             None if !fits => return Err("child resized"),
             None => true,
@@ -1464,7 +1464,7 @@ fn reconcile_translated_children(
                 unreachable!("retained child identities were checked");
             };
             if placed.keeps_layer {
-                move_kept_child(applier, layer, &placed.state, geometry);
+                move_kept_child(applier, layer, placed.geometry.position, geometry);
             }
         }
         return;
@@ -1473,7 +1473,7 @@ fn reconcile_translated_children(
     for (placed, kept) in scratch.placed_fresh.iter().zip(scratch.kept.drain(..)) {
         if let Some(mut layer) = kept {
             if placed.keeps_layer {
-                move_kept_child(applier, &mut layer, &placed.state, geometry);
+                move_kept_child(applier, &mut layer, placed.geometry.position, geometry);
             }
             container.children.push(RenderNode::Layer(layer));
         } else if let Some((_, lowered)) = entering.next_if(|(id, _)| *id == placed.id) {
@@ -1594,18 +1594,14 @@ fn translate_layer_from_data(
     true
 }
 
-fn translate_retained_child(
-    layer: &mut LayerNode,
-    state: &cranpose_ui::widgets::LayoutState,
-    content_offset: Point,
-) {
+fn translate_retained_child(layer: &mut LayerNode, position: Point, content_offset: Point) {
     layer.transform_to_parent = placed_transform(
         layer.local_bounds,
-        state.position(),
+        position,
         &layer.graphics_layer,
         content_offset,
     );
-    layer.origin_in_parent = state.position();
+    layer.origin_in_parent = position;
 }
 
 /// Moves a child a translated container keeps to its placement in the
@@ -1614,10 +1610,10 @@ fn translate_retained_child(
 fn move_kept_child(
     applier: &MemoryApplier,
     layer: &mut LayerNode,
-    state: &cranpose_ui::widgets::LayoutState,
+    position: Point,
     geometry: TranslateGeometry,
 ) {
-    translate_retained_child(layer, state, geometry.content_offset);
+    translate_retained_child(layer, position, geometry.content_offset);
     if layer.has_origin_sinks {
         publish_retained_window_geometry(applier, layer, geometry.child_abs());
     }
@@ -2112,20 +2108,33 @@ fn lower_child(
     })
 }
 
-fn placed_child_layout_state(
-    applier: &MemoryApplier,
-    node_id: NodeId,
-) -> Option<cranpose_ui::widgets::LayoutState> {
+/// Where a placed child sits in its parent and how large it is.
+#[derive(Clone, Copy)]
+struct PlacedGeometry {
+    position: Point,
+    size: Size,
+}
+
+impl PlacedGeometry {
+    fn of_placed(state: &cranpose_ui::widgets::LayoutState) -> Option<Self> {
+        state.is_placed().then(|| Self {
+            position: state.position(),
+            size: state.size(),
+        })
+    }
+}
+
+/// The geometry of the placed child `node_id`; `None` for a child that is
+/// not placed or is a window root, drawn in a surface of its own.
+fn placed_child_geometry(applier: &MemoryApplier, node_id: NodeId) -> Option<PlacedGeometry> {
     let node: &dyn Any = applier.get_ref(node_id).ok()?;
-    let state = if let Some(node) = node.downcast_ref::<LayoutNode>() {
+    if let Some(node) = node.downcast_ref::<LayoutNode>() {
         if node.is_window_root() {
             return None;
         }
-        node.layout_state()
-    } else {
-        node.downcast_ref::<SubcomposeLayoutNode>()?.layout_state()
-    };
-    state.is_placed().then_some(state)
+        return PlacedGeometry::of_placed(&node.layout_state_handle().borrow());
+    }
+    PlacedGeometry::of_placed(&node.downcast_ref::<SubcomposeLayoutNode>()?.layout_state())
 }
 
 fn read_node_data<R>(

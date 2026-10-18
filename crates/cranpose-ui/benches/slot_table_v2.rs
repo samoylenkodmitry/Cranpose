@@ -520,7 +520,7 @@ impl AnimationFrameFixture {
 impl SubcomposeScrollFixture {
     fn new() -> Self {
         Self {
-            state: SubcomposeState::new(Box::new(ContentTypeReusePolicy::new())),
+            state: SubcomposeState::new(Box::new(ContentTypeReusePolicy)),
             next_node_id: 1,
             offset: 0,
         }

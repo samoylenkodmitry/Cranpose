@@ -28,6 +28,7 @@ fn placed_item(
         node_ids: SmallVec::from_slice(node_ids),
         child_offsets: SmallVec::from_slice(child_offsets),
         child_cross_axis_sizes: SmallVec::new(),
+        measurements: SmallVec::new(),
     };
     let mut item =
         LazyListMeasuredItem::new(index, 10 + index as u64, None, 20.0, 50.0, Rc::new(roots));
@@ -163,7 +164,6 @@ fn measured_item_cache_keeps_only_items_whose_slots_are_retained() {
     for key in 1..=6u64 {
         cache.insert(
             LazyListMeasuredItem::new(key as usize, key, None, 10.0, 10.0, Rc::default()),
-            SmallVec::new(),
             10.0,
         );
     }

@@ -9,7 +9,7 @@
 //!   - `stats` (items_in_use, items_in_pool)
 //! - Non-reactive internals (caches, callbacks, scroll window, diagnostic counters) are in inner state
 
-use std::{cell::RefCell, cmp::Reverse, collections::BinaryHeap, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::{MutableState, NodeId, RuntimeCell, StateId, collections::map::HashMap};
 use cranpose_macros::composable;
@@ -298,7 +298,6 @@ struct LazyListStateInner {
     reuse_count: usize,
 
     item_size_cache: HashMap<usize, CachedItemSize>,
-    item_size_eviction_queue: BinaryHeap<Reverse<(u64, usize)>>,
     item_size_clock: u64,
 
     average_item_size: f32,
@@ -395,7 +394,6 @@ impl LazyListState {
                 total_composed: 0,
                 reuse_count: 0,
                 item_size_cache: HashMap::default(),
-                item_size_eviction_queue: BinaryHeap::new(),
                 item_size_clock: 0,
                 average_item_size: super::DEFAULT_ITEM_SIZE_ESTIMATE,
                 total_measured_items: 0,
@@ -878,66 +876,31 @@ impl LazyListState {
     }
 
     fn insert_item_size(inner: &mut LazyListStateInner, index: usize, size: f32) -> bool {
-        use std::collections::hash_map::Entry;
-
         let tick = Self::next_item_size_cache_tick(inner);
-        if let Entry::Occupied(mut entry) = inner.item_size_cache.entry(index) {
-            entry.insert(CachedItemSize {
-                size,
-                last_used: tick,
-            });
-            Self::push_item_size_cache_ticket(inner, tick, index);
+        let item = CachedItemSize {
+            size,
+            last_used: tick,
+        };
+        if let Some(cached) = inner.item_size_cache.get_mut(&index) {
+            *cached = item;
             return false;
         }
-
         if inner.item_size_cache.len() >= ITEM_SIZE_CACHE_CAPACITY {
-            Self::evict_one_item_size(inner);
+            Self::evict_stale_item_sizes(inner, tick);
         }
-
-        inner.item_size_cache.insert(
-            index,
-            CachedItemSize {
-                size,
-                last_used: tick,
-            },
-        );
-        Self::push_item_size_cache_ticket(inner, tick, index);
+        inner.item_size_cache.insert(index, item);
         true
     }
 
-    fn push_item_size_cache_ticket(inner: &mut LazyListStateInner, last_used: u64, index: usize) {
+    /// Forgets the sizes that no read or write used in the last half of the
+    /// cache's capacity of uses. Every use takes the next tick, so at most
+    /// half the entries were used that recently: a full cache frees half its
+    /// room in one pass, and the oldest sizes go first.
+    fn evict_stale_item_sizes(inner: &mut LazyListStateInner, tick: u64) {
+        let oldest_kept = tick.saturating_sub((ITEM_SIZE_CACHE_CAPACITY / 2) as u64);
         inner
-            .item_size_eviction_queue
-            .push(Reverse((last_used, index)));
-        let compact_limit = inner
             .item_size_cache
-            .len()
-            .saturating_mul(4)
-            .max(ITEM_SIZE_CACHE_CAPACITY);
-        if inner.item_size_eviction_queue.len() > compact_limit {
-            Self::rebuild_item_size_eviction_queue(inner);
-        }
-    }
-
-    fn rebuild_item_size_eviction_queue(inner: &mut LazyListStateInner) {
-        inner.item_size_eviction_queue = inner
-            .item_size_cache
-            .iter()
-            .map(|(index, item)| Reverse((item.last_used, *index)))
-            .collect();
-    }
-
-    fn evict_one_item_size(inner: &mut LazyListStateInner) {
-        while let Some(Reverse((last_used, index))) = inner.item_size_eviction_queue.pop() {
-            let Some(current) = inner.item_size_cache.get(&index) else {
-                continue;
-            };
-            if current.last_used != last_used {
-                continue;
-            }
-            inner.item_size_cache.remove(&index);
-            return;
-        }
+            .retain(|_, item| item.last_used > oldest_kept);
     }
 
     /// Caches the measured size of an item for scroll estimation.
@@ -976,9 +939,7 @@ impl LazyListState {
                 let tick = Self::next_item_size_cache_tick(&mut inner);
                 let item = inner.item_size_cache.get_mut(&index)?;
                 item.last_used = tick;
-                let size = item.size;
-                Self::push_item_size_cache_ticket(&mut inner, tick, index);
-                Some(size)
+                Some(item.size)
             })
             .flatten()
     }

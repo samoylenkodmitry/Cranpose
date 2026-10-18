@@ -99,7 +99,6 @@ pub(crate) fn measure_subcompose_with(
             MeasureCallbacks {
                 measurer,
                 retained_measure_lookup: Box::new(|_| None),
-                retained_measure_registrar: Box::new(|_| {}),
                 error: &error,
             },
         )
@@ -163,7 +162,6 @@ fn density_and_font_scale_do_not_require_an_active_composer() {
         constraints: Constraints::tight(0.0, 0.0),
         measurer: Box::new(|child_id, _constraints| SubcomposePlaceable::value(0.0, 0.0, child_id)),
         retained_measure_lookup: Box::new(|_| None),
-        retained_measure_registrar: Box::new(|_| {}),
         error: &error,
         parent_handle,
         root_id,

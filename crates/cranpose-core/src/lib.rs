@@ -1617,6 +1617,7 @@ impl std::error::Error for NodeError {}
 
 pub use subcompose::{
     ContentTypeReusePolicy, DefaultSlotReusePolicy, SlotId, SlotReusePolicy, SubcomposeState,
+    TypedSlot,
 };
 
 /// The stage of a frame in which a composer is used.
@@ -2034,6 +2035,16 @@ pub trait Node: Any {
     fn collect_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
         out.clear();
     }
+    /// Runs `f` on each child id in the order [`Node::collect_children_into`]
+    /// lists them. A node that holds its list in place overrides this to
+    /// visit it without a copy.
+    fn for_each_child(&self, f: &mut dyn FnMut(NodeId)) {
+        let mut children = SmallVec::<[NodeId; 8]>::new();
+        self.collect_children_into(&mut children);
+        for child in children {
+            f(child);
+        }
+    }
     /// Copies the ids of the children this node owns, in order, into `out`. A node whose
     /// `collect_children_into` leaves some children out overrides this to list them all. The
     /// default calls `collect_children_into`.
@@ -2428,6 +2439,8 @@ pub trait Applier: Any {
     fn create(&mut self, node: Box<dyn Node>) -> NodeId;
     /// Returns the node `id` for change, or an error if there is none.
     fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError>;
+    /// Returns the node `id` to read, or an error if there is none.
+    fn get_ref(&self, id: NodeId) -> Result<&dyn Node, NodeError>;
     /// Removes the node `id` and the nodes below it.
     fn remove(&mut self, id: NodeId) -> Result<(), NodeError>;
 
@@ -2479,14 +2492,9 @@ pub trait Applier: Any {
     /// preventing stale slot entries from matching recycled nodes.
     fn node_generation(&self, id: NodeId) -> u32;
 
-    /// Inserts a node with a pre-assigned ID.
-    ///
-    /// This is used for virtual nodes whose IDs are allocated separately
-    /// (e.g., via allocate_virtual_node_id()). Unlike `create()` which assigns
-    /// a new ID, this method uses the provided ID.
-    ///
-    /// Returns Ok(()) if successful, or an error if the ID is already in use.
-    fn insert_with_id(&mut self, id: NodeId, node: Box<dyn Node>) -> Result<(), NodeError>;
+    /// Stores `node` as a virtual node, one that lays out nothing itself
+    /// while its parent lays out its children, and returns its new id.
+    fn create_virtual(&mut self, node: Box<dyn Node>) -> NodeId;
 
     /// Reinserts a recycled node at its retained stable ID, or creates a fresh ID if that
     /// retained ID is no longer available.
@@ -4690,22 +4698,32 @@ impl MemoryApplier {
 
     /// Borrows a live node without requiring exclusive access to the tree.
     /// Returns [`NodeError::Missing`] when `id` does not name a live node.
+    #[inline]
     pub fn get_ref(&self, id: NodeId) -> Result<&dyn Node, NodeError> {
-        if let Some(physical_id) = self.resolve_node_index(id) {
-            let slot = self
+        match self.resolve_node_index(id) {
+            Some(physical_id) => self
                 .state
                 .nodes
                 .get(physical_id)
-                .ok_or(NodeError::Missing { id })?
-                .as_deref()
-                .ok_or(NodeError::Missing { id })?;
-            return Ok(slot);
+                .and_then(Option::as_deref)
+                .ok_or(NodeError::Missing { id }),
+            None => self.high_id_node(id),
         }
+    }
 
+    fn high_id_node(&self, id: NodeId) -> Result<&dyn Node, NodeError> {
         self.state
             .high_id_nodes
             .get(&id)
             .map(AsRef::as_ref)
+            .ok_or(NodeError::Missing { id })
+    }
+
+    fn high_id_node_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError> {
+        self.state
+            .high_id_nodes
+            .get_mut(&id)
+            .map(std::convert::AsMut::as_mut)
             .ok_or(NodeError::Missing { id })
     }
 
@@ -4872,22 +4890,17 @@ impl Applier for MemoryApplier {
         self.state.stable_index.generation(id)
     }
 
+    #[inline]
     fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError> {
-        if let Some(physical_id) = self.resolve_node_index(id) {
-            let slot = self
+        match self.resolve_node_index(id) {
+            Some(physical_id) => self
                 .state
                 .nodes
                 .get_mut(physical_id)
-                .ok_or(NodeError::Missing { id })?
-                .as_deref_mut()
-                .ok_or(NodeError::Missing { id })?;
-            return Ok(slot);
+                .and_then(Option::as_deref_mut)
+                .ok_or(NodeError::Missing { id }),
+            None => self.high_id_node_mut(id),
         }
-        self.state
-            .high_id_nodes
-            .get_mut(&id)
-            .map(std::convert::AsMut::as_mut)
-            .ok_or(NodeError::Missing { id })
     }
 
     fn remove(&mut self, id: NodeId) -> Result<(), NodeError> {
@@ -4931,13 +4944,14 @@ impl Applier for MemoryApplier {
         self.state.nodes.get_mut(index)?.as_deref_mut()
     }
 
-    fn insert_with_id(&mut self, id: NodeId, node: Box<dyn Node>) -> Result<(), NodeError> {
-        if self.contains_node_id(id) {
-            return Err(NodeError::AlreadyExists { id });
-        }
-        self.insert_available_with_id(id, node);
+    fn get_ref(&self, id: NodeId) -> Result<&dyn Node, NodeError> {
+        MemoryApplier::get_ref(self, id)
+    }
+
+    fn create_virtual(&mut self, node: Box<dyn Node>) -> NodeId {
+        let id = self.create(node);
         self.state.virtual_node_ids.insert(id);
-        Ok(())
+        id
     }
 
     fn insert_recycled_node_or_create(
