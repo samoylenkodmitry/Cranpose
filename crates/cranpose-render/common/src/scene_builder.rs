@@ -1124,6 +1124,8 @@ fn translated_container(
 pub(crate) struct TranslateScratch {
     /// The placed children, in their new order.
     placed_fresh: Vec<PlacedChild>,
+    /// The ids of the container's previous children, in their order.
+    old_ids: Vec<NodeId>,
     old_index_by_id: HashMap<NodeId, usize>,
     /// The container's previous children by their index, until each is
     /// kept or recycled.
@@ -1184,22 +1186,60 @@ fn translated_children(
             placed.old_index = Some(index);
         }
     } else {
-        let old_index_by_id = &mut scratch.old_index_by_id;
-        old_index_by_id.clear();
-        for (index, child) in container.children.iter().enumerate() {
+        let old_ids = &mut scratch.old_ids;
+        old_ids.clear();
+        for child in &container.children {
             let RenderNode::Layer(layer) = child else {
                 return Err("child without node id");
             };
             let Some(id) = layer_identity(layer) else {
                 return Err("child without node id");
             };
-            old_index_by_id.insert(id, index);
+            old_ids.push(id);
         }
-        for placed in placed_fresh.iter_mut() {
-            placed.old_index = old_index_by_id.get(&placed.id).copied();
-        }
+        match_old_children(old_ids, placed_fresh, &mut scratch.old_index_by_id);
     }
     check_retained_children(container, dirty_nodes, placed_fresh).map(|()| children_unchanged)
+}
+
+/// The searches of the previous children a match makes before it maps them:
+/// a search reads each id once, a map hashes each of them in.
+const MATCH_SEARCHES: usize = 16;
+
+/// Notes each placed child's index among the previous children `old_ids`.
+/// Children that kept their order match in turn, as a scroll that brings
+/// rows in at one end and lets them go at the other leaves them; a child
+/// past a gap is searched for, and the match continues after it. Once the
+/// order is mixed past [`MATCH_SEARCHES`] searches, `old_index_by_id` maps
+/// the previous children for the rest. An id is a node's, so it is once
+/// among the previous children.
+fn match_old_children(
+    old_ids: &[NodeId],
+    placed_fresh: &mut [PlacedChild],
+    old_index_by_id: &mut HashMap<NodeId, usize>,
+) {
+    let mut cursor = 0;
+    let mut searches = 0;
+    let mut mapped = false;
+    for placed in placed_fresh {
+        let old_index = if old_ids.get(cursor) == Some(&placed.id) {
+            Some(cursor)
+        } else if searches < MATCH_SEARCHES {
+            searches += 1;
+            old_ids.iter().position(|&id| id == placed.id)
+        } else {
+            if !mapped {
+                old_index_by_id.clear();
+                old_index_by_id.extend(old_ids.iter().enumerate().map(|(index, &id)| (id, index)));
+                mapped = true;
+            }
+            old_index_by_id.get(&placed.id).copied()
+        };
+        if let Some(index) = old_index {
+            cursor = index + 1;
+        }
+        placed.old_index = old_index;
+    }
 }
 
 /// Checks that every child kept as it is still fits its layer, and notes
