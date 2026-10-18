@@ -1715,7 +1715,9 @@ that content's pixels, z into the surface, a unit as long as a content pixel
 (`MeshSurface::content_to_scene`). So a control on a wall can stand out of the
 wall, nearer surfaces hide it, and it takes pointer input where it shows. Lay it
 out where it would lie flat on the wall: its window geometry, which
-accessibility and robot tests read, follows that flat place.
+accessibility reads, follows that flat place. Robot tests find a control on a
+mesh surface where the scene's camera shows it
+(`RenderScene::surface_window_bounds`).
 
 A `scene3d` inside the content of such a surface is a portal: the rect its node
 takes on the surface is a doorway into its space, which lies behind the
@@ -1729,6 +1731,20 @@ draws flat on its surface. Inside a portal's space, glass and glow are left out
 and nothing casts shadows. The desktop demo's Room tab shows this: the whole
 demo hangs on the wall to the screen's right, and its own Room tab opens a
 doorway there into a second room.
+
+The eye walks through doorways. When the camera's eye moves between two frames
+from the near side of a doorway to the far side, through the doorway's rect,
+it stands in the portal's space from then on, and walking back out takes it
+back. The scene then draws from that space: the portal's surfaces around the
+eye, and the space it came from only through the doorway, cut at the doorway's
+plane. Presses start from the eye's space as well. Each doorway walked through
+lets the eye see `MAX_PORTAL_LEVEL` more portals deep, so an eye that goes from
+doorway to doorway reaches every room the composition nests. Each space keeps
+its own light; shadows show only while the eye stands in the scene's own space.
+A surface does not stop the eye: the app decides where its camera may go. In
+the demo's room, open the Room tab on the right wall, turn to it with E and
+walk in with W. The second room's Step into the room button opens its walls,
+and its own right wall holds the demo again.
 
 The WGPU renderer draws scenes. The pixels renderer draws a flat mesh's
 surface in its place but has no depth buffer and no shadows, and draws a

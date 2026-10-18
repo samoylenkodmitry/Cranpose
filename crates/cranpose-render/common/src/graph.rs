@@ -785,12 +785,26 @@ pub struct RenderGraph {
     pub root: LayerNode,
     /// How many scene updates the graph took: the number of the latest.
     pub update: u64,
+    /// Where the eyes of the scenes the window shows stand among their
+    /// portals' spaces, kept up by [`crate::scene_space::follow_viewers`].
+    pub viewers: Vec<crate::scene_space::Viewer>,
 }
 
 impl RenderGraph {
     /// Creates a graph around `root` at update zero.
     pub fn new(root: LayerNode) -> Self {
-        Self { root, update: 0 }
+        Self {
+            root,
+            update: 0,
+            viewers: Vec::new(),
+        }
+    }
+
+    /// The doorways the viewer of the scene of `scene` walked through.
+    pub fn viewer_path(&self, scene: Option<NodeId>) -> &[NodeId] {
+        scene
+            .and_then(|scene| self.viewers.iter().find(|viewer| viewer.scene == scene))
+            .map_or(&[], |viewer| viewer.path.as_slice())
     }
 
     /// Number of nodes in the graph. A layer counts once and each primitive of a draw run counts on

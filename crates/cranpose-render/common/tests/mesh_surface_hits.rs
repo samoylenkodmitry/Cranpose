@@ -1,11 +1,12 @@
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
+use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_render_common::{
     HitTestTarget, RenderScene, graph_scene::Scene, scene_builder::build_graph_from_applier,
 };
 use cranpose_ui::{
-    LayoutEngine, Modifier, Point, Size,
+    LayoutEngine, Modifier, Point, Rect, Size,
     space::{Camera, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3},
     widgets::{Box, BoxSpec},
 };
@@ -107,7 +108,7 @@ fn probe() -> Probe {
         &graph.root,
         cranpose_render_common::graph::ProjectiveTransform::identity(),
         &mut scene,
-        None,
+        (None, &graph.viewers),
     );
     scene.replace_graph(graph);
     let mut panels = scene
@@ -216,15 +217,7 @@ fn a_camera_that_moves_moves_where_its_surfaces_take_input() {
         );
         node.set(Some(id));
     });
-    let root = composition.root().expect("a root");
     let scene_id = scene_node.get().expect("the scene node");
-    let handle = composition.runtime_handle();
-    let mut applier = composition.applier_mut();
-    applier.set_runtime_handle(handle);
-    applier.compute_layout(root, VIEWPORT).expect("layout");
-    let mut scene = Scene::default();
-    scene.rebuild_from_applier(&applier, root);
-
     let near_left_edge = Point::new(10.0, 100.0);
     let project = |eye: f32| {
         let point = panel_transform(FAR, 0.0).transform_point(Vec3::new(
@@ -237,11 +230,52 @@ fn a_camera_that_moves_moves_where_its_surfaces_take_input() {
             .expect("in front of the eye")
     };
     let before = project(0.0);
-    assert_eq!(scene.hit_test(before.x, before.y).len(), 1);
+    let after = project(300.0);
+    let (at_start, moved_to, moved_from) =
+        with_scene(&mut composition, |mut scene, applier, root| {
+            let at_start = scene.hit_test(before.x, before.y).len();
+            eye_x.set(300.0);
+            camera_moved(&mut scene, applier, (root, scene_id));
+            (
+                at_start,
+                scene.hit_test(after.x, after.y).len(),
+                scene.hit_test(before.x, before.y).len(),
+            )
+        });
+    assert_eq!(at_start, 1);
+    assert_eq!(
+        moved_to, 1,
+        "the panel takes input where the moved camera shows it"
+    );
+    assert_eq!(
+        moved_from, 0,
+        "the panel no longer takes input where the camera showed it before"
+    );
+}
 
-    eye_x.set(300.0);
+/// Lays out `composition` in the viewport and builds its scene; `body` gets
+/// the scene, the applier it was built from and the root.
+fn with_scene<T>(
+    composition: &mut cranpose_ui::TestComposition,
+    body: impl FnOnce(Scene, &MemoryApplier, NodeId) -> T,
+) -> T {
+    let root = composition.root().expect("a root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    applier.compute_layout(root, VIEWPORT).expect("layout");
+    let mut scene = Scene::default();
+    scene.rebuild_from_applier(&applier, root);
+    let result = body(scene, &applier, root);
+    applier.clear_runtime_handle();
+    result
+}
+
+/// Builds again the layers of the scene node `scene_id` after its camera
+/// moved.
+fn camera_moved(scene: &mut Scene, applier: &MemoryApplier, (root, scene_id): (NodeId, NodeId)) {
     scene.update_from_applier(
-        &applier,
+        applier,
         root,
         cranpose_render_common::SceneUpdates {
             content: &[],
@@ -249,17 +283,6 @@ fn a_camera_that_moves_moves_where_its_surfaces_take_input() {
             moved: &[],
         },
         false,
-    );
-    applier.clear_runtime_handle();
-    let after = project(300.0);
-    assert_eq!(
-        scene.hit_test(after.x, after.y).len(),
-        1,
-        "the panel takes input where the moved camera shows it"
-    );
-    assert!(
-        scene.hit_test(before.x, before.y).is_empty(),
-        "the panel no longer takes input where the camera showed it before"
     );
 }
 
@@ -291,21 +314,7 @@ fn wall_scene(inside: impl Fn(&Pressable) + 'static) -> (Scene, Presses) {
     let sink = Rc::clone(&pressed);
     let inside = Rc::new(inside);
     let mut composition = cranpose_ui::run_test_composition(move || {
-        let plane = Arc::new(Mesh::plane());
-        let sink = Rc::clone(&sink);
-        let surface: Pressable = Rc::new(move |(name, size, transform)| {
-            let plane = Arc::clone(&plane);
-            let sink = Rc::clone(&sink);
-            Modifier::empty()
-                .required_size(size)
-                .mesh_surface(move || MeshSurface {
-                    mesh: Arc::clone(&plane),
-                    transform,
-                    material: Material::Unlit,
-                    casts_shadow: false,
-                })
-                .clickable(move |point| sink.borrow_mut().push((name, point)))
-        });
+        let surface = pressable(Rc::clone(&sink));
         let wall = surface((
             "wall",
             WALL,
@@ -326,15 +335,26 @@ fn wall_scene(inside: impl Fn(&Pressable) + 'static) -> (Scene, Presses) {
             },
         );
     });
-    let root = composition.root().expect("a root");
-    let handle = composition.runtime_handle();
-    let mut applier = composition.applier_mut();
-    applier.set_runtime_handle(handle);
-    applier.compute_layout(root, VIEWPORT).expect("layout");
-    let mut scene = Scene::default();
-    scene.rebuild_from_applier(&applier, root);
-    applier.clear_runtime_handle();
-    (scene, pressed)
+    (with_scene(&mut composition, |scene, _, _| scene), pressed)
+}
+
+/// Makes nodes pressable mesh surfaces on the unit plane, which record in
+/// `sink` the content points they are pressed at.
+fn pressable(sink: Presses) -> Pressable {
+    let plane = Arc::new(Mesh::plane());
+    Rc::new(move |(name, size, transform)| {
+        let plane = Arc::clone(&plane);
+        let sink = Rc::clone(&sink);
+        Modifier::empty()
+            .required_size(size)
+            .mesh_surface(move || MeshSurface {
+                mesh: Arc::clone(&plane),
+                transform,
+                material: Material::Unlit,
+                casts_shadow: false,
+            })
+            .clickable(move |point| sink.borrow_mut().push((name, point)))
+    })
 }
 
 /// A wall with an inner panel inside its content that stands out of it,
@@ -426,34 +446,7 @@ const NESTED: (f32, f32) = (200.0, 100.0);
 /// A wall with a window into a nested scene, which holds a pressable panel
 /// behind the window.
 fn wall_with_window() -> (Scene, Presses) {
-    wall_scene(|surface| {
-        let panel = surface((
-            "nested",
-            INNER,
-            Mat4::scaling(Vec3::new(INNER.width, INNER.height, 1.0)).then(&Mat4::translation(
-                Vec3::new(-INNER.width * 0.5, -INNER.height * 0.5, NESTED.1),
-            )),
-        ));
-        let (x, y, width, height) = WINDOW;
-        Box(
-            Modifier::empty()
-                .absolute_offset(x, y)
-                .size(Size { width, height })
-                .scene3d(|| Scene3d {
-                    camera: Camera::look_at(
-                        Vec3::new(0.0, 0.0, -NESTED.0),
-                        Vec3::ZERO,
-                        Vec3::new(0.0, 1.0, 0.0),
-                        NESTED.0,
-                    ),
-                    light: None,
-                }),
-            BoxSpec::default(),
-            move || {
-                Box(panel.clone(), BoxSpec::default(), || {});
-            },
-        );
-    })
+    wall_scene(window_into_nested)
 }
 
 #[test]
@@ -494,5 +487,165 @@ fn a_press_through_a_window_where_its_space_shows_nothing_reaches_the_wall() {
     assert!(
         (local.x - corner.x).abs() < 0.5 && (local.y - corner.y).abs() < 0.5,
         "the press lands on the wall's content at {local:?}, not {corner:?}"
+    );
+}
+
+/// A camera at `eye` looking along `ahead`.
+fn camera_looking(eye: Vec3, ahead: Vec3) -> Camera {
+    Camera::look_at(eye, eye + ahead, Vec3::new(0.0, 1.0, 0.0), FOCAL_LENGTH)
+}
+
+/// The nested scene behind the wall's doorway, which holds the pressable
+/// panel `NESTED.0 + NESTED.1` behind the wall.
+fn window_into_nested(surface: &Pressable) {
+    let panel = surface((
+        "nested",
+        INNER,
+        Mat4::scaling(Vec3::new(INNER.width, INNER.height, 1.0)).then(&Mat4::translation(
+            Vec3::new(-INNER.width * 0.5, -INNER.height * 0.5, NESTED.1),
+        )),
+    ));
+    let (x, y, width, height) = WINDOW;
+    Box(
+        Modifier::empty()
+            .absolute_offset(x, y)
+            .size(Size { width, height })
+            .scene3d(|| Scene3d {
+                camera: Camera::look_at(
+                    Vec3::new(0.0, 0.0, -NESTED.0),
+                    Vec3::ZERO,
+                    Vec3::new(0.0, 1.0, 0.0),
+                    NESTED.0,
+                ),
+                light: None,
+            }),
+        BoxSpec::default(),
+        move || {
+            Box(panel.clone(), BoxSpec::default(), || {});
+        },
+    );
+}
+
+/// The name of the surface a press at the middle of the viewport reaches.
+fn press_middle(scene: &Scene, pressed: &Presses) -> Option<&'static str> {
+    pressed.borrow_mut().clear();
+    press_at(
+        scene,
+        Point::new(VIEWPORT.width * 0.5, VIEWPORT.height * 0.5),
+    );
+    pressed.borrow().first().map(|(name, _)| *name)
+}
+
+#[test]
+fn an_eye_that_walks_through_a_doorway_sees_the_space_behind_it_and_back_through_it() {
+    let camera = Rc::new(std::cell::Cell::new(camera_looking(
+        Vec3::new(0.0, 0.0, -1000.0),
+        Vec3::new(0.0, 0.0, 1.0),
+    )));
+    let pressed: Presses = Rc::default();
+    let scene_node = Rc::new(std::cell::Cell::new(None));
+    let (eye, node, sink) = (
+        Rc::clone(&camera),
+        Rc::clone(&scene_node),
+        Rc::clone(&pressed),
+    );
+    let mut composition = cranpose_ui::run_test_composition(move || {
+        let surface = pressable(Rc::clone(&sink));
+        let eye = Rc::clone(&eye);
+        let id = Box(
+            Modifier::empty().fill_max_size().scene3d(move || Scene3d {
+                camera: eye.get(),
+                light: None,
+            }),
+            BoxSpec::default(),
+            move || {
+                // A panel in the room, between the eye's start and the wall.
+                let front = surface((
+                    "front",
+                    INNER,
+                    Mat4::translation(Vec3::new(-0.5, -0.5, 0.0))
+                        .then(&Mat4::scaling(Vec3::new(INNER.width, INNER.height, 1.0)))
+                        .then(&Mat4::translation(Vec3::new(0.0, 0.0, -500.0))),
+                ));
+                Box(front, BoxSpec::default(), || {});
+                let wall = surface((
+                    "wall",
+                    WALL,
+                    Mat4::translation(Vec3::new(-0.5, -0.5, 0.0))
+                        .then(&Mat4::scaling(Vec3::new(WALL.width, WALL.height, 1.0)))
+                        .then(&Mat4::translation(FAR)),
+                ));
+                let surface = Rc::clone(&surface);
+                Box(wall, BoxSpec::default(), move || {
+                    window_into_nested(&surface);
+                });
+            },
+        );
+        node.set(Some(id));
+    });
+    let scene_id = scene_node.get().expect("the scene node");
+    let middle = Point::new(VIEWPORT.width * 0.5, VIEWPORT.height * 0.5);
+    let (ahead, shown, back) = with_scene(&mut composition, |mut scene, applier, root| {
+        let mut move_camera = |to: Camera| {
+            camera.set(to);
+            camera_moved(&mut scene, applier, (root, scene_id));
+        };
+        // The panel in the room hides the doorway's middle from the start,
+        // so the eye starts beside it, to the right, and walks through the
+        // doorway's middle, past the wall.
+        move_camera(camera_looking(
+            Vec3::new(200.0, 0.0, -1000.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        ));
+        move_camera(camera_looking(
+            Vec3::new(0.0, 0.0, FAR.z + 150.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        ));
+        let ahead = press_middle(&scene, &pressed);
+        let shown = scene
+            .hit_test(middle.x, middle.y)
+            .first()
+            .and_then(|target| scene.surface_window_bounds(target.node_id()));
+        // Turned around, the eye looks back through the doorway into the
+        // room.
+        camera.set(camera_looking(
+            Vec3::new(0.0, 0.0, FAR.z + 150.0),
+            Vec3::new(0.0, 0.0, -1.0),
+        ));
+        camera_moved(&mut scene, applier, (root, scene_id));
+        (ahead, shown, press_middle(&scene, &pressed))
+    });
+    assert_eq!(
+        ahead,
+        Some("nested"),
+        "past the doorway the eye stands in the space behind it"
+    );
+    assert_eq!(
+        back,
+        Some("front"),
+        "the room the eye came from shows back through the doorway"
+    );
+    // The panel's middle lies on the eye's axis, 150 ahead of it, and the
+    // wall it shows through lies behind the eye.
+    let scale = FOCAL_LENGTH / 150.0;
+    let (width, height) = (INNER.width * scale, INNER.height * scale);
+    let expected = Rect {
+        x: middle.x - width * 0.5,
+        y: middle.y - height * 0.5,
+        width,
+        height,
+    };
+    let Some(shown) = shown else {
+        panic!("the panel behind the doorway shows nowhere in the window");
+    };
+    let apart = [
+        shown.x - expected.x,
+        shown.y - expected.y,
+        shown.width - expected.width,
+        shown.height - expected.height,
+    ];
+    assert!(
+        apart.iter().all(|apart| apart.abs() < 0.5),
+        "the panel behind the doorway shows at {shown:?}, not {expected:?}"
     );
 }

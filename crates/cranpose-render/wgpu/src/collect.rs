@@ -15,7 +15,9 @@ use cranpose_render_common::{
         apply_layer_affine_to_rect, layer_scene, layer_surface, layer_uniform_scale,
     },
     primitive_emit::{PrimitiveClipSpace, resolve_clip, resolve_primitive_clip},
-    scene_space::{SceneItem, for_each_joined_item},
+    scene_space::{
+        SceneItem, Viewer, WalkedDoorway, for_each_joined_item, portal_limit, viewer_doorways,
+    },
 };
 use cranpose_ui_graphics::{
     BlendMode, CompositingStrategy, DrawPrimitive, GraphicsLayer, LayerShape, Point, RecordLane,
@@ -199,6 +201,19 @@ pub(crate) struct SceneDraw {
     pub(crate) rect: Rect,
     /// What cuts the scene, in the same coordinates.
     pub(crate) clip: Option<Rect>,
+    /// The doorways the scene's viewer walked through, from the scene's own
+    /// space inward: the viewer stands in the space of the last.
+    pub(crate) walked: Vec<WalkedDoorway>,
+    /// How many portals deep the scene shows its surfaces' spaces.
+    pub(crate) portal_limit: u8,
+}
+
+impl SceneDraw {
+    /// The portal whose space the viewer stands in; `None` for the scene's
+    /// own.
+    pub(crate) fn viewer(&self) -> Option<usize> {
+        self.walked.last().map(|door| door.index)
+    }
 }
 
 /// A mesh surface child of a scene.
@@ -269,9 +284,14 @@ struct WalkContext<'s> {
     /// For a walk that collects the content of a scene's mesh surface, how
     /// many portals deep the surface's space lies. A mesh surface found here
     /// joins the scene, which collects it, so the walk leaves it out; so
-    /// does a scene within [`MAX_PORTAL_LEVEL`], a portal of the scene,
-    /// whose surfaces the scene collects too.
+    /// does a scene within `portal_limit`, a portal of the scene, whose
+    /// surfaces the scene collects too.
     joins: Option<u8>,
+    /// How many portals deep the scene above shows its surfaces' spaces.
+    portal_limit: u8,
+    /// Where the eyes of the scenes the window shows stand among their
+    /// portals' spaces.
+    viewers: &'s [Viewer],
 }
 
 #[derive(Clone, Copy)]
@@ -901,8 +921,7 @@ fn takes_rounded_clip(primitive: &DrawPrimitive) -> bool {
 }
 
 pub(crate) fn collect_root(
-    root: &LayerNode,
-    update: u64,
+    (root, update, viewers): (&LayerNode, u64, &[Viewer]),
     text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
     capacity: SceneCapacityHint,
@@ -927,6 +946,8 @@ pub(crate) fn collect_root(
         update,
         scene: None,
         joins: None,
+        portal_limit: MAX_PORTAL_LEVEL,
+        viewers,
     };
     collect_child(root, text_layout, motion, context, &mut out, recycler);
     out.scene.flush_loose();
@@ -942,8 +963,7 @@ pub(crate) fn collect_overlay(
     recycler: &mut LayerSceneRecycler,
 ) -> LayerScene {
     collect_root(
-        root,
-        0,
+        (root, 0, &[]),
         text_layout,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
@@ -1058,6 +1078,8 @@ fn isolated_child(
             Some(_) => Some(level),
             None => context.joins,
         },
+        portal_limit: context.portal_limit,
+        viewers: context.viewers,
     };
     let mut content = recycler.take(SceneCapacityHint::default());
     let has_pixel_sensitive_subtree = collect_into(
@@ -1133,6 +1155,11 @@ fn scene_draw(
     if portal_level(layer, context).is_some() {
         return None;
     }
+    let path = context
+        .viewers
+        .iter()
+        .find(|viewer| Some(viewer.scene) == layer.node_id)
+        .map_or(&[][..], |viewer| viewer.path.as_slice());
     Some(Arc::new(SceneDraw {
         camera: scene.camera,
         light: scene.light,
@@ -1140,6 +1167,8 @@ fn scene_draw(
             .node_rect()
             .translate(context.offset.x, context.offset.y),
         clip: visual_clip,
+        walked: viewer_doorways(layer, path),
+        portal_limit: portal_limit(path.len()),
     }))
 }
 
@@ -1298,6 +1327,10 @@ fn collect_into(
         update: context.update,
         scene: children_scene,
         joins,
+        portal_limit: scene
+            .as_ref()
+            .map_or(context.portal_limit, |scene| scene.portal_limit),
+        viewers: context.viewers,
     };
     let mut has_pixel_sensitive_subtree = false;
     for_each_in_draw_order(&layer.children, |child| {
@@ -1360,11 +1393,12 @@ fn children_scene<'s>(
 }
 
 /// How many portals deep `layer`'s space lies when it shows a scene inside
-/// a scene's surface's content, within [`MAX_PORTAL_LEVEL`]: a portal of the
-/// scene above.
+/// a scene's surface's content, within the depth the scene above shows: a
+/// portal of that scene.
 fn portal_level(layer: &LayerNode, context: &WalkContext<'_>) -> Option<u8> {
     let level = context.joins?;
-    (level < MAX_PORTAL_LEVEL && layer_scene(&layer.graphics_layer).is_some()).then_some(level + 1)
+    (level < context.portal_limit && layer_scene(&layer.graphics_layer).is_some())
+        .then_some(level + 1)
 }
 
 /// Whether `child` is a mesh surface that joins the scene above from inside
@@ -1416,7 +1450,7 @@ fn collect_joined_surfaces(
     recycler: &mut LayerSceneRecycler,
 ) {
     let mut portals: Vec<Arc<PortalDraw>> = Vec::new();
-    for_each_joined_item(scene_layer, &mut |item| match item {
+    for_each_joined_item(scene_layer, context.portal_limit, &mut |item| match item {
         SceneItem::Portal(portal) => portals.push(Arc::new(PortalDraw {
             index: portal.index,
             parent: portal.parent.and_then(|index| portals.get(index)).cloned(),

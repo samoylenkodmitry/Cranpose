@@ -6,7 +6,7 @@ use std::{
 
 use cranpose_app_shell::{AppShell, KeyCode, PointerSource, RuntimeLeakDebugStats};
 use cranpose_render_common::{
-    Renderer,
+    RenderScene, Renderer,
     graph::ProjectiveTransform,
     layer_transform::{SceneFrame, node_transform_to_window},
 };
@@ -1567,8 +1567,7 @@ where
     let Some(semantic_root) = app.semantics_tree().map(|tree| tree.root().clone()) else {
         return Vec::new();
     };
-    let bounds_by_node =
-        app.debug_enter_app_context(|| build_semantic_bounds_index(layout_tree.root()));
+    let bounds_by_node = semantic_bounds_index(app, layout_tree.root());
     let mut bounds_for = |node_id| semantic_rect_for_node(&bounds_by_node, node_id);
     vec![semantic_element_from_semantics_node(
         &semantic_root,
@@ -1680,8 +1679,7 @@ where
 {
     let layout_tree = app.layout_tree()?.clone();
     let root = app.semantics_tree()?.root().clone();
-    let bounds_by_node =
-        app.debug_enter_app_context(|| build_semantic_bounds_index(layout_tree.root()));
+    let bounds_by_node = semantic_bounds_index(app, layout_tree.root());
     let result = finder(&bounds_by_node, &root, query, match_kind);
     log::trace!(
         target: "cranpose::input",
@@ -1856,11 +1854,33 @@ fn semantics_node_clickable(sem_node: &SemanticsNode) -> bool {
         .any(|action| matches!(action, SemanticsAction::Click { .. }))
 }
 
-fn build_semantic_bounds_index(
+/// Where each node of `root`'s tree shows in the window: as layout and the
+/// layers place it, and for a hit target on a mesh surface as the scene's
+/// camera shows it, which the layout walk does not follow through a
+/// doorway.
+fn semantic_bounds_index<R>(
+    app: &mut AppShell<R>,
     root: &cranpose_ui::LayoutBox,
-) -> HashMap<cranpose_core::NodeId, SemanticRect> {
+) -> HashMap<cranpose_core::NodeId, SemanticRect>
+where
+    R: Renderer,
+    R::Error: std::fmt::Debug,
+{
     let mut bounds = HashMap::new();
-    collect_semantic_bounds(root, (ProjectiveTransform::identity(), None), &mut bounds);
+    app.debug_enter_app_context(|| {
+        collect_semantic_bounds(root, (ProjectiveTransform::identity(), None), &mut bounds);
+    });
+    let scene = app.scene();
+    for (&node_id, rect) in &mut bounds {
+        if let Some(shown) = scene.surface_window_bounds(node_id) {
+            *rect = SemanticRect {
+                x: shown.x,
+                y: shown.y,
+                width: shown.width,
+                height: shown.height,
+            };
+        }
+    }
     bounds
 }
 

@@ -20,7 +20,6 @@ const WALK_SPEED: f32 = 900.0;
 const TURN_SPEED: f32 = 1.8;
 const LOOK_PER_PIXEL: f32 = 0.005;
 const PITCH_LIMIT: f32 = 1.2;
-const WALL_MARGIN: f32 = 80.0;
 const DOWN: Vec3 = Vec3::new(0.0, 1.0, 0.0);
 
 const FORWARD: u8 = 1;
@@ -134,19 +133,6 @@ impl RoomShape {
             self.depth * STANDING_DEPTH_SHARE,
         )
     }
-
-    /// `position` moved inside the room, at least `margin` from each wall.
-    fn keep_inside(&self, position: Vec3, margin: f32) -> Vec3 {
-        let clamp = |value: f32, extent: f32| {
-            let margin = margin.min(extent * 0.5);
-            value.clamp(margin, extent - margin)
-        };
-        Vec3::new(
-            clamp(position.x, self.width),
-            position.y,
-            clamp(position.z, self.depth),
-        )
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -218,10 +204,7 @@ impl RoomState {
     /// where it stands.
     pub(super) fn scene(&self, shape: &RoomShape) -> Scene3d {
         let pose = self.pose.get();
-        let standing = shape.keep_inside(
-            pose.position.unwrap_or_else(|| shape.standing_eye()),
-            WALL_MARGIN,
-        );
+        let standing = pose.position.unwrap_or_else(|| shape.standing_eye());
         let t = self.progress.get();
         let t = t * t * (3.0 - 2.0 * t);
         let eye = shape.screen_eye().lerp(standing, t);
@@ -293,7 +276,9 @@ impl RoomState {
         let position = pose.position.unwrap_or_else(|| shape.standing_eye());
         let step =
             (ahead * axis(FORWARD, BACK) + right * axis(RIGHT, LEFT)) * (WALK_SPEED * seconds);
-        let position = shape.keep_inside(position + step, WALL_MARGIN);
+        // The walls do not stop the eye: a doorway in one, a scene on the
+        // wall's content, leads into the space behind it.
+        let position = position + step;
         self.pose.update(|pose| pose.position = Some(position));
         true
     }

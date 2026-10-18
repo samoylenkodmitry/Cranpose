@@ -49,13 +49,14 @@ enum ScenePhase {
 }
 
 impl ScenePhase {
-    /// The phase `mesh` draws in; `None` for glass and glow in a portal's
-    /// space, which are left out.
+    /// The phase `mesh` draws in: its material's in the space the scene's
+    /// viewer stands in, and through a doorway in any other; `None` for
+    /// glass and glow seen through a doorway, which are left out.
     fn of(mesh: &MeshChild) -> Option<Self> {
-        let in_portal = mesh.portal.is_some();
+        let through_doorway = space_of(mesh) != mesh.scene.viewer();
         match &mesh.surface.material {
-            Material::Glass(_) | Material::Glow if in_portal => None,
-            _ if in_portal => Some(Self::Portal),
+            Material::Glass(_) | Material::Glow if through_doorway => None,
+            _ if through_doorway => Some(Self::Portal),
             Material::Glass(_) => Some(Self::Glass),
             Material::Glow => Some(Self::Glow),
             Material::Volume(_) => Some(Self::Volume),
@@ -82,6 +83,54 @@ fn casts_shadow(mesh: &MeshChild) -> bool {
     mesh.portal.is_none()
         && surface.casts_shadow
         && !matches!(surface.material, Material::Volume(_))
+}
+
+/// How far past a doorway's plane, against its distance from the scene's
+/// origin, the cut lies for a space seen back through the doorway.
+const BACK_THROUGH_DOORWAY: f32 = 1.0e-4;
+
+/// The portal whose space `mesh` lies in; `None` for the scene's own.
+fn space_of(mesh: &MeshChild) -> Option<usize> {
+    mesh.portal.as_ref().map(|portal| portal.index)
+}
+
+/// The light and the cut of the space `mesh` lies in, as the scene's viewer
+/// sees it: a space other than the viewer's shows only on the far side of
+/// the doorway the viewer sees it through, which is the doorway the viewer
+/// walked through out of it for a space the viewer came from.
+fn space_shading(mesh: &MeshChild) -> SpaceShading {
+    let light = mesh
+        .portal
+        .as_ref()
+        .map_or(mesh.scene.light, |portal| portal.light);
+    let space = space_of(mesh);
+    let walked = &mesh.scene.walked;
+    if space == mesh.scene.viewer() {
+        return SpaceShading {
+            light,
+            clip: [0.0; 4],
+        };
+    }
+    // Back through a doorway, the cut lies a hair past its plane, so the
+    // surface the doorway opens in, which lies on the plane, shows a hole.
+    let left = walked.iter().enumerate().find_map(|(index, door)| {
+        let entered_from = index.checked_sub(1).map(|before| walked[before].index);
+        (entered_from == space).then(|| {
+            let [x, y, z, offset] = door.plane.map(|value| -value);
+            [
+                x,
+                y,
+                z,
+                offset - BACK_THROUGH_DOORWAY * offset.abs().max(1.0),
+            ]
+        })
+    });
+    SpaceShading {
+        light,
+        clip: left
+            .or_else(|| mesh.portal.as_ref().map(|portal| portal.clip))
+            .unwrap_or([0.0; 4]),
+    }
 }
 
 /// A mesh surface whose content is rendered, waiting for its scene's pass.
@@ -179,7 +228,10 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             offset: pass.page.offset,
             size: (page_texture.width, page_texture.height),
         };
-        let light_projection = scene.light.filter(|light| light.shadows).and_then(|light| {
+        // Only the scene's own space casts shadows, onto itself.
+        let own_space = scene.viewer().is_none();
+        let shadowing = scene.light.filter(|light| light.shadows && own_space);
+        let light_projection = shadowing.and_then(|light| {
             light.shadow_projection(
                 meshes
                     .iter()
@@ -323,11 +375,12 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 StepPipeline::Portals => {
                     if let Some(first) = draws.first() {
                         let texture = first.texture((device, effects));
+                        let viewer = first.held.mesh.scene.viewer();
                         encode_portals(
                             &mut render_pass,
                             renderer,
                             (draws, windows),
-                            None,
+                            ((viewer, None), 0),
                             (device, texture),
                         );
                     }
@@ -411,16 +464,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         let phase = ScenePhase::of(&held.mesh)?;
         let scissor = scene_scissor(scene, held.clip, page)?;
         let layout = self.renderer.scene_uniform_layout();
-        let space = match &held.mesh.portal {
-            Some(portal) => SpaceShading {
-                light: portal.light,
-                clip: portal.clip,
-            },
-            None => SpaceShading {
-                light: scene.light,
-                clip: [0.0; 4],
-            },
-        };
+        let space = space_shading(&held.mesh);
         let uniform = match &surface.material {
             Material::Volume(volume) => {
                 let uniforms = volume_uniforms(
@@ -485,13 +529,10 @@ struct PreparedSurface<'m> {
 }
 
 impl PreparedSurface<'_> {
-    /// Whether the surface lies in the space portal `index` shows.
-    fn shows_through(&self, index: usize) -> bool {
-        self.held
-            .mesh
-            .portal
-            .as_ref()
-            .is_some_and(|portal| portal.index == index)
+    /// The portal whose space the surface lies in; `None` for the scene's
+    /// own.
+    fn space(&self) -> Option<usize> {
+        space_of(&self.held.mesh)
     }
 
     /// The surface's texture, bound as the scene's shaders read it.
@@ -531,7 +572,8 @@ impl PreparedSurface<'_> {
 fn glass_backdrop(meshes: &[PendingMesh], page: ScenePage) -> Option<DeviceRect> {
     let mut covered: Option<DeviceRect> = None;
     for held in meshes {
-        if held.mesh.portal.is_some() || !matches!(held.mesh.surface.material, Material::Glass(_)) {
+        let in_view = space_of(&held.mesh) == held.mesh.scene.viewer();
+        if !in_view || !matches!(held.mesh.surface.material, Material::Glass(_)) {
             continue;
         }
         let scene = &held.mesh.scene;

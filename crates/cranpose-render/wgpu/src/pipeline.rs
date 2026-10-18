@@ -124,7 +124,7 @@ pub(crate) fn render_layout_tree_with_scale(root: &LayoutBox, scene: &mut Scene,
         &graph.root,
         cranpose_render_common::graph::ProjectiveTransform::identity(),
         scene,
-        None,
+        (None, &graph.viewers),
     );
     scene.replace_graph(graph);
 }

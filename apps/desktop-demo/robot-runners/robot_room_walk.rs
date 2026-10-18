@@ -8,6 +8,11 @@ use cranpose_testing::{click_button_in_semantics, find_text_in_semantics};
 const STEP_IN: &str = "Step into the room";
 /// Longer than the 0.9 s walk between the screen and the room.
 const WALK: Duration = Duration::from_millis(1400);
+/// How long E turns the eye a quarter turn, at 1.8 radians a second.
+const QUARTER_TURN: Duration = Duration::from_millis(870);
+/// How long W walks the eye from where it stands in the room through the
+/// wall to its right, at 900 pixels a second.
+const THROUGH_THE_WALL: Duration = Duration::from_millis(850);
 
 pub(crate) fn main() {
     let _ = env_logger::try_init();
@@ -99,7 +104,6 @@ pub(crate) fn main() {
                 robot_exit::fail(&robot, "the demo on the wall did not open its room");
             }
             save(&robot, &shots, "nested.png");
-            click_wall_tab(&robot, "Cranpose Guide");
 
             if !click_button_in_semantics(&robot, "Back to the screen") {
                 robot_exit::fail(&robot, "no button to leave the room");
@@ -114,6 +118,7 @@ pub(crate) fn main() {
                     &format!("the screen did not come back: its button moved from {flat:?} to {back:?}"),
                 );
             }
+            walk_through_the_wall(&robot, &shots);
 
             println!("PASS: room shots in {}", shots.display());
             robot.exit().ok();
@@ -121,16 +126,29 @@ pub(crate) fn main() {
         .run(robot_launch::counter_demo);
 }
 
-/// Holds `key` for a tenth of a second.
+/// Holds `key` for a tenth of a second, and waits for the app to settle.
 fn hold_key(robot: &Robot, key: &str) {
+    press_for(robot, key, Duration::from_millis(100));
+    robot_shot::settle(robot, 100);
+}
+
+/// Holds `key` for `held`, while the room behind the wall's doorway, whose
+/// globe spins, keeps the app from going idle.
+fn hold_key_for(robot: &Robot, key: &str, held: Duration) {
+    press_for(robot, key, held);
+    if let Err(err) = robot.pump_frames(3) {
+        robot_exit::fail(robot, &format!("pump frames: {err}"));
+    }
+}
+
+fn press_for(robot: &Robot, key: &str, held: Duration) {
     if let Err(err) = robot.send_key(key) {
         robot_exit::fail(robot, &format!("key {key}: {err}"));
     }
-    std::thread::sleep(Duration::from_millis(100));
+    std::thread::sleep(held);
     if let Err(err) = robot.release_key(key) {
         robot_exit::fail(robot, &format!("releasing {key}: {err}"));
     }
-    robot_shot::settle(robot, 100);
 }
 
 /// Lets the camera walk between the screen and the room.
@@ -196,6 +214,43 @@ fn click_wall_tab(robot: &Robot, label: &str) {
         robot_exit::fail(robot, &format!("click the wall's tab {label:?}: {err}"));
     }
     robot_shot::settle(robot, 500);
+}
+
+/// Steps into the room again, opens the room of the demo on the east wall,
+/// which the flat screen does not keep, and walks the eye through that
+/// doorway: the globe of the room behind the wall comes close, and a click
+/// on its button stops it.
+fn walk_through_the_wall(robot: &Robot, shots: &std::path::Path) {
+    if !click_button_in_semantics(robot, STEP_IN) {
+        robot_exit::fail(robot, "no button to step into the room again");
+    }
+    walk(robot);
+    click_wall_tab(robot, "Room");
+    hold_key_for(robot, "e", QUARTER_TURN);
+    hold_key_for(robot, "w", THROUGH_THE_WALL);
+    save(robot, shots, "walked.png");
+    // The screen's globe was stopped first, so only the globe behind the
+    // wall still offers to stop.
+    let globe = button(robot, "Stop the spin");
+    println!("  the globe's button behind the wall at {globe:?}");
+    click_center(robot, globe);
+    if let Err(err) = robot.pump_frames(3) {
+        robot_exit::fail(robot, &format!("pump frames: {err}"));
+    }
+    if find_text_in_semantics(robot, "Stop the spin").is_some() {
+        robot_exit::fail(
+            robot,
+            "a click on the globe's button in the room behind the wall missed it",
+        );
+    }
+    hold_key_for(robot, "s", THROUGH_THE_WALL);
+    save(robot, shots, "walked_back.png");
+}
+
+fn click_center(robot: &Robot, (x, y, width, height): (f32, f32, f32, f32)) {
+    if let Err(err) = robot.click(x + width * 0.5, y + height * 0.5) {
+        robot_exit::fail(robot, &format!("click at ({x:.1}, {y:.1}): {err}"));
+    }
 }
 
 fn step_in_button(robot: &Robot) -> (f32, f32, f32, f32) {

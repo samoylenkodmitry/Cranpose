@@ -423,7 +423,12 @@ fn push_layer_shadow(
 
 pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
     let graph = cranpose_render_common::scene_builder::build_graph_from_layout_tree(root, 1.0);
-    collect_hits_from_graph(&graph.root, ProjectiveTransform::identity(), scene, None);
+    collect_hits_from_graph(
+        &graph.root,
+        ProjectiveTransform::identity(),
+        scene,
+        (None, &graph.viewers),
+    );
     scene.replace_graph(graph);
 }
 

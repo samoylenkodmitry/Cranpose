@@ -83,6 +83,43 @@ pub struct SurfaceTarget {
     pub outer_clips: Vec<HitClip>,
 }
 
+/// How many parts a target's rect splits into along each side for its
+/// bounds in the window: on a curved surface the corners alone miss the
+/// bulge between them.
+const WINDOW_BOUNDS_STEPS: u16 = 2;
+
+impl SurfaceTarget {
+    /// Where `local`, a rect of a target's own space into which
+    /// `content_to_local` maps the surface's content, shows in the window:
+    /// the bounds of a grid of its points in front of the eye; `None` when
+    /// none is.
+    pub fn window_bounds(
+        &self,
+        content_to_local: &ProjectiveTransform,
+        local: Rect,
+    ) -> Option<Rect> {
+        let local_to_content = content_to_local.inverse()?;
+        let steps = f32::from(WINDOW_BOUNDS_STEPS);
+        let grid = (0..=WINDOW_BOUNDS_STEPS)
+            .flat_map(|row| (0..=WINDOW_BOUNDS_STEPS).map(move |column| (row, column)));
+        grid.filter_map(|(row, column)| {
+            let point = Point::new(
+                local.x + local.width * f32::from(column) / steps,
+                local.y + local.height * f32::from(row) / steps,
+            );
+            let content = local_to_content.map_point(point);
+            self.pick.window_point(self.index, content)
+        })
+        .map(|point| Rect {
+            x: point.x,
+            y: point.y,
+            width: 0.0,
+            height: 0.0,
+        })
+        .reduce(|bounds, point| bounds.union(point))
+    }
+}
+
 /// Where a hit target on a mesh surface lies on the surface's content.
 #[derive(Clone, Copy)]
 pub struct SurfaceGeometry<'a> {
@@ -95,6 +132,13 @@ pub struct SurfaceGeometry<'a> {
     pub clip_bounds: Option<Rect>,
     /// The clips within the surface, as quads in content space.
     pub clips: &'a [HitClip],
+}
+
+impl SurfaceGeometry<'_> {
+    /// Where `local`, a rect of the target's own space, shows in the window.
+    pub fn window_bounds(&self, local: Rect) -> Option<Rect> {
+        self.target.window_bounds(&self.content_to_local, local)
+    }
 }
 
 /// Geometry for a hit target, borrowing the clip chain until the sink records it.
@@ -486,11 +530,12 @@ impl Scene {
     pub fn rebuild_from_applier(&mut self, applier: &MemoryApplier, root: NodeId) {
         let previous = self.graph.take();
         self.clear_hits();
-        let Some(graph) =
+        let Some(mut graph) =
             crate::scene_builder::rebuild_graph_from_applier(applier, root, 1.0, previous)
         else {
             return;
         };
+        crate::scene_space::follow_viewers(&mut graph);
         self.install_graph_with_hits(graph);
     }
 
@@ -499,7 +544,7 @@ impl Scene {
             &graph.root,
             ProjectiveTransform::identity(),
             self,
-            None,
+            (None, &graph.viewers),
         );
         self.replace_graph(graph);
     }
@@ -526,7 +571,11 @@ impl Scene {
             self.rebuild_from_applier(applier, root);
             return;
         };
-        if !refresh_hits && !report.hit_graph_dirty {
+        let walked = self
+            .graph
+            .as_mut()
+            .is_some_and(crate::scene_space::follow_viewers);
+        if !refresh_hits && !report.hit_graph_dirty && !walked {
             return;
         }
         self.clear_hits();
@@ -634,6 +683,14 @@ impl RenderScene for Scene {
             .get(&node_id)
             .and_then(|&index| self.hits.get(index))
             .cloned()
+    }
+
+    fn surface_window_bounds(&self, node_id: NodeId) -> Option<Rect> {
+        let hit = self.hits.get(*self.node_index.get(&node_id)?)?;
+        let surface = hit.surface.as_ref()?;
+        surface
+            .target
+            .window_bounds(&surface.content_to_local, hit.local_bounds)
     }
 
     fn collect_retained_visual_observation_nodes(&self, nodes: &mut HashSet<NodeId>) -> bool {

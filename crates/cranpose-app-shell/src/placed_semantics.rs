@@ -204,7 +204,7 @@ pub fn placed_semantics_from_applier(
             &graph.root,
             ProjectiveTransform::identity(),
             &mut sink,
-            None,
+            (None, &graph.viewers),
         );
     }
 
@@ -230,7 +230,14 @@ impl HitGraphSink for TouchBoundsSink<'_> {
         geometry: HitGeometry<'_>,
         _hit: &HitTestNode,
     ) {
-        self.bounds.entry(node_id).or_insert(geometry.rect);
+        // On a mesh surface the window fields hold a flat stand-in; the
+        // scene's camera shows the target elsewhere.
+        self.bounds.entry(node_id).or_insert_with(|| {
+            geometry
+                .surface
+                .and_then(|surface| surface.window_bounds(geometry.local_bounds))
+                .unwrap_or(geometry.rect)
+        });
     }
 }
 

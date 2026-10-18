@@ -195,6 +195,17 @@ pub trait RenderScene {
     /// Returns None if the node no longer exists in the scene (e.g., removed during gesture).
     fn find_target(&self, node_id: cranpose_core::NodeId) -> Option<Self::HitTarget>;
 
+    /// Where the hit target of `node_id` shows in the window when it lies on
+    /// a mesh surface of a 3D scene: its bounds as the scene's camera shows
+    /// them, also through a doorway and for an eye that walked through one.
+    /// `None` for a flat target, a target behind the eye or no target.
+    fn surface_window_bounds(
+        &self,
+        _node_id: cranpose_core::NodeId,
+    ) -> Option<cranpose_ui_graphics::Rect> {
+        None
+    }
+
     /// Replaces the set with retained visual observation owners, preserving its capacity.
     /// Returns whether the scene provides this information.
     fn collect_retained_visual_observation_nodes(

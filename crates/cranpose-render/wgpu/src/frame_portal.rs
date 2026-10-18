@@ -106,14 +106,16 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
     }
 }
 
-/// Draws the windows on the surfaces of the space of `parent`, and the
-/// spaces they show; `texture` binds in the textures' place, which the
-/// window draws do not read.
+/// Draws the spaces the doorways of space `from` lead to, other than the
+/// one `came_through`, inside those doorways, `depth` doorways deep from the
+/// viewer's space: the doorways ahead into the spaces of portals on its
+/// surfaces, and its own doorway back into the space it lies in. `texture`
+/// binds in the textures' place, which the doorway draws do not read.
 pub(super) fn encode_portals(
     pass: &mut wgpu::RenderPass<'_>,
     renderer: &GpuRenderer,
     (draws, windows): (&[PreparedSurface<'_>], &[PreparedWindow]),
-    parent: Option<usize>,
+    ((from, came_through), depth): ((Option<usize>, Option<usize>), u32),
     (device, texture): (&wgpu::Device, &wgpu::BindGroup),
 ) {
     let pipelines = [
@@ -127,16 +129,22 @@ pub(super) fn encode_portals(
         return;
     };
     let effects = &renderer.effect_renderer;
-    for window in windows
-        .iter()
-        .filter(|window| window.portal.parent.as_ref().map(|shown| shown.index) == parent)
-    {
-        let level = u32::from(window.portal.level);
+    for window in windows {
         let index = window.portal.index;
-        window.draw(pass, (mark, level - 1), texture);
-        window.draw(pass, (clear, level), texture);
-        pass.set_pipeline(surface);
-        for draw in draws.iter().filter(|draw| draw.shows_through(index)) {
+        let parent = window.portal.parent.as_ref().map(|shown| shown.index);
+        let into = if parent == from && Some(index) != from {
+            Some(index)
+        } else if Some(index) == from {
+            parent
+        } else {
+            continue;
+        };
+        if came_through == Some(index) {
+            continue;
+        }
+        window.draw(pass, (mark, depth), texture);
+        window.draw(pass, (clear, depth + 1), texture);
+        for draw in draws.iter().filter(|draw| draw.space() == into) {
             let pipeline = match &draw.held.mesh.surface.material {
                 Material::Volume(volume) => {
                     match renderer.scene_volume_pipeline(&volume.shader, VolumeVariant::Portal) {
@@ -156,10 +164,10 @@ pub(super) fn encode_portals(
             pass,
             renderer,
             (draws, windows),
-            Some(index),
+            ((into, Some(index)), depth + 1),
             (device, texture),
         );
-        window.draw(pass, (restore, level), texture);
+        window.draw(pass, (restore, depth + 1), texture);
     }
 }
 
