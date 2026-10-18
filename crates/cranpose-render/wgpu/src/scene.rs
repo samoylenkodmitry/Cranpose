@@ -598,11 +598,19 @@ impl CompositorScene {
         }
     }
 
-    /// Closes the open loose run into a run draw at the next z.
+    /// Closes the open loose run into a run draw at the next z. Asked
+    /// before every run and layer, mostly with none open; the check is
+    /// inlined, as a function that also builds the run saves its registers
+    /// before it checks.
+    #[inline]
     pub fn flush_loose(&mut self) {
-        if self.loose.recorder.is_empty() {
-            return;
+        if !self.loose.recorder.is_empty() {
+            self.push_loose_run();
         }
+    }
+
+    #[inline(never)]
+    fn push_loose_run(&mut self) {
         let Some(run) = RunDraw::whole(
             Arc::new(std::mem::take(&mut self.loose.recorder)),
             self.loose.placement.clone(),
