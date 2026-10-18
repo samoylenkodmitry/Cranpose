@@ -1166,7 +1166,10 @@ impl ShapeRecorder {
                 rect,
                 brush,
                 trapezoid,
-            } => self.push_trapezoids(rect, &[trapezoid], &brush, blend_mode),
+            } => {
+                self.push_trapezoids(rect, &[trapezoid], &brush, blend_mode);
+                trapezoid.bounds()
+            }
             other => return Recorded::Other(other),
         })
     }
@@ -1219,8 +1222,7 @@ impl ShapeRecorder {
     }
 
     /// Records the slices of a path fill, each painted by `brush` resolved
-    /// against `brush_rect`, and returns the box they reach. The brush is
-    /// interned once for them all. A slice's corners ride in the arc
+    /// against `brush_rect`. The brush is interned once for them all. A slice's corners ride in the arc
     /// column; its sides and width, which is never zero, in the curve's
     /// normalised column, so no slice's row equals a band's, whose trig
     /// the GPU writes into its radii; and the brush rect in the radii.
@@ -1230,7 +1232,7 @@ impl ShapeRecorder {
         trapezoids: &[Trapezoid],
         brush: &Brush,
         blend: BlendMode,
-    ) -> Rect {
+    ) {
         let (handle, color) = self.intern_brush(brush);
         let flags = pack_flags(RECORD_KIND_LINE, None, blend, StrokeCap::Butt)
             | (TRAPEZOID_CAP << CAP_SHIFT);
@@ -1248,13 +1250,13 @@ impl ShapeRecorder {
                 arc_normalized: [0.0; 4],
             },
         );
-        let mut reach: Option<Rect> = None;
-        for trapezoid in trapezoids {
+        for (index, trapezoid) in trapezoids.iter().enumerate() {
             let bounds = trapezoid.bounds();
+            self.include_bounds(bounds);
             let open = (u32::from(trapezoid.open_left) * OPEN_LEFT_BIT)
                 | (u32::from(trapezoid.open_right) * OPEN_RIGHT_BIT);
             self.push_in_run(
-                reach.is_some(),
+                index > 0,
                 ShapeRecordBody {
                     rect: rect_row(bounds),
                     color,
@@ -1281,13 +1283,7 @@ impl ShapeRecorder {
                 [0.0; 4],
                 (blend, shading),
             );
-            reach = Some(reach.map_or(bounds, |reach| reach.union(bounds)));
         }
-        let Some(reach) = reach else {
-            return Rect::EMPTY;
-        };
-        self.include_bounds(reach);
-        reach
     }
 
     /// Records a rect with `brush`, as an outline when `stroke` is `Some`. Returns the rect the

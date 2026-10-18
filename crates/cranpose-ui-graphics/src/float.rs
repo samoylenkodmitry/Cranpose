@@ -14,6 +14,13 @@ pub(crate) fn at_least(value: f32, floor: f32) -> f32 {
     if value > floor { value } else { floor }
 }
 
+/// `value.min(ceiling)` for a `ceiling` that is not NaN: a NaN `value`
+/// gives `ceiling`, as `f32::min` does.
+#[inline(always)]
+pub(crate) fn at_most(value: f32, ceiling: f32) -> f32 {
+    if value < ceiling { value } else { ceiling }
+}
+
 /// `value.clamp(low, high)` for bounds that are not NaN with
 /// `low <= high`: a NaN `value` stays NaN, as `f32::clamp` keeps it.
 #[inline(always)]
