@@ -16,6 +16,7 @@ pub struct LayerIsolation {
 
 /// Whether `layer` must be drawn into an offscreen buffer first, given its compositing strategy,
 /// effect, blend mode and alpha.
+#[inline]
 pub fn layer_requires_isolation(layer: &GraphicsLayer) -> bool {
     let has_effect = layer.render_effect.is_some();
     let has_layer_blend = layer.blend_mode != BlendMode::SrcOver;
@@ -59,6 +60,7 @@ pub fn effective_layer_isolation(layer: &GraphicsLayer) -> Option<LayerIsolation
 /// The composite alpha and blend mode an isolated layer contributes at its
 /// parent, for callers that never read the isolation's render effect and would
 /// otherwise deep-clone it once per layer per frame.
+#[inline]
 pub fn layer_composite_params(layer: &GraphicsLayer) -> Option<(f32, BlendMode)> {
     layer_requires_isolation(layer).then(|| (isolation_composite_alpha(layer), layer.blend_mode))
 }
@@ -83,6 +85,7 @@ pub fn layer_for_content(
 /// clones the composed form performs — one `GraphicsLayer`, one
 /// `RenderEffect` — are pure waste. A layer that passes its content no
 /// alpha and no filter, as most do, lends the default layer.
+#[inline]
 pub fn local_content_layer_for(layer: &GraphicsLayer) -> Cow<'static, GraphicsLayer> {
     let alpha = if layer.compositing_strategy != CompositingStrategy::ModulateAlpha
         && layer_requires_isolation(layer)
