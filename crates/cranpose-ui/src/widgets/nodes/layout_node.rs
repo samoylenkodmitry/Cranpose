@@ -278,6 +278,7 @@ impl LayoutState {
         !self.is_placed && self.cleared_in_pass == pass
     }
 
+    #[inline]
     pub(crate) fn note_semantics_change(&mut self) {
         if let Some(id) = self.node_id {
             crate::semantics_layout_log::record_layout_change(id, &mut self.semantics_stamp);

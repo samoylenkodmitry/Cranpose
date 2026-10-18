@@ -84,10 +84,17 @@ impl Drop for SemanticsLayoutLog {
     }
 }
 
+/// Notes that layout changed `node`, for the semantics logs that are armed.
+/// The check that none is armed is inlined where a layout state changes.
+#[inline]
 pub(crate) fn record_layout_change(node: NodeId, stamp: &mut u64) {
-    if ARMED_LOGS.load(Ordering::Relaxed) == 0 {
-        return;
+    if ARMED_LOGS.load(Ordering::Relaxed) != 0 {
+        record_armed_layout_change(node, stamp);
     }
+}
+
+#[inline(never)]
+fn record_armed_layout_change(node: NodeId, stamp: &mut u64) {
     crate::render_state::with_current_semantics_layout_log(|log| log.record(node, stamp));
 }
 
