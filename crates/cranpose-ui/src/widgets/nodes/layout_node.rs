@@ -1168,6 +1168,11 @@ impl LayoutNode {
     /// Set this node's parent (called when node is added as child).
     /// Sets both folded_parent (direct) and parent (first non-virtual ancestor for bubbling).
     pub fn set_parent(&self, parent: NodeId) {
+        // The registry holds the parent the node has; the same one again
+        // changes nothing.
+        if self.parent.get() == Some(parent) && self.folded_parent.get() == Some(parent) {
+            return;
+        }
         self.folded_parent.set(Some(parent));
         self.parent.set(Some(parent));
         self.refresh_registry_state();

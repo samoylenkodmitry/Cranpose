@@ -422,11 +422,11 @@ fn keep_lazy_list_item(
     inputs: &LazyListItemMeasureInputs<'_>,
 ) {
     let key = inputs.content.get_key(index);
-    scope.update_content_type(
-        SlotId(key.to_slot_id()),
-        inputs.content.get_content_type(index),
-    );
-    let _ = subcompose_lazy_list_item(scope, index, key, inputs);
+    let slot_id = SlotId(key.to_slot_id());
+    scope.update_content_type(slot_id, inputs.content.get_content_type(index));
+    if !scope.keep_clean_retained_slot(slot_id, &()) {
+        let _ = subcompose_lazy_list_item(scope, index, key, inputs);
+    }
 }
 
 fn lazy_list_child_constraints(is_vertical: bool, cross_axis_size: f32) -> Constraints {
