@@ -155,3 +155,86 @@ fn scrolled_rows_reach_the_scene_through_their_lists_update() {
         assert_eq!(window_origin(&window), scoped_origin);
     }
 }
+
+const KEYED_ROWS: usize = 24;
+
+thread_local! {
+    static REVERSED: Cell<Option<MutableState<bool>>> = const { Cell::new(None) };
+    static COLUMN_SCROLL: Cell<Option<ScrollState>> = const { Cell::new(None) };
+}
+
+/// A scrolling column of keyed rows, each its own shade, in an order a state
+/// reverses.
+#[composable]
+fn KeyedRowsThatReverse() {
+    let reversed = rememberMutableStateOf(|| false);
+    let scroll = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
+    REVERSED.with(|slot| slot.set(Some(reversed)));
+    COLUMN_SCROLL.with(|slot| slot.set(Some(scroll)));
+    Column(
+        Modifier::empty()
+            .fill_max_size()
+            .vertical_scroll(scroll, false),
+        ColumnSpec::default(),
+        move || {
+            let flipped = reversed.value();
+            for slot in 0..KEYED_ROWS {
+                let row = if flipped { KEYED_ROWS - 1 - slot } else { slot };
+                cranpose_core::with_key(&row, || {
+                    let shade = row as f32 / KEYED_ROWS as f32;
+                    Box(
+                        Modifier::empty()
+                            .fill_max_width()
+                            .height(ROW_HEIGHT)
+                            .graphics_layer(|| GraphicsLayer::default())
+                            .background(Color(shade, 0.5, 1.0 - shade, 1.0)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                });
+            }
+        },
+    );
+}
+
+/// The column's rows come back in the reverse order while it scrolls: the
+/// scene matches each row with the layer it drew before, past the point
+/// where the order is too mixed to match in turn, and draws what a fresh
+/// scene draws.
+#[test]
+fn reordered_rows_of_a_scrolled_column_reach_the_scene_in_their_new_order() {
+    let _guard = test_guard();
+    let rebuilds = Rc::new(Cell::new(0));
+    let mut shell = AppShell::new_with_size(
+        ScopedUpdateCountingRenderer::new(
+            Rc::clone(&rebuilds),
+            Rc::new(Cell::new(0)),
+            Rc::new(RefCell::new(Vec::new())),
+        ),
+        location_key(file!(), line!(), column!()),
+        KeyedRowsThatReverse,
+        (240, 400),
+        (240.0, 400.0),
+    );
+    shell.update();
+    shell.update();
+    let reversed = REVERSED.with(Cell::get).expect("the column composed");
+    let scroll = COLUMN_SCROLL.with(Cell::get).expect("the column composed");
+
+    rebuilds.set(0);
+    reversed.set_value(true);
+    assert!(scroll.dispatch_raw_delta(30.0) > 0.0);
+    shell.update();
+
+    let (retained, fresh) = retained_and_fresh_painted_rects(&mut shell);
+    assert_eq!(rebuilds.get(), 0, "the frame updates the scene in place");
+    assert_eq!(
+        retained, fresh,
+        "the scene draws the rows where a fresh scene draws them"
+    );
+    assert_eq!(
+        retained.first().map(|(rect, _)| rect.y),
+        Some(-30.0),
+        "the first row drawn is the last one, scrolled"
+    );
+}
