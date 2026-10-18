@@ -10,6 +10,7 @@ use cranpose_core::{
 use cranpose_ui::{
     AppContext, LayoutEngine, MeasureResult, Modifier, Placement, Size, SubcomposeMeasureScope,
 };
+use smallvec::SmallVec;
 
 const INITIAL_SLOTS: usize = 24;
 const PROBE_RESOURCE_BYTES: usize = 4096;
@@ -318,6 +319,56 @@ fn evicting_subcompose_slots_releases_their_node_owned_resources() {
         }
         assert_eq!(observed_disposed_slots, dropped.get());
     }
+}
+
+/// The slot hosts the subcompose node at the composition's root lists, each
+/// checked to be alive and to name that node as its parent.
+fn owned_slot_hosts(composition: &mut Composition<MemoryApplier>) -> SmallVec<[NodeId; 8]> {
+    let root = composition.root().expect("subcompose root");
+    let mut applier = composition.applier_mut();
+    let mut hosts = SmallVec::new();
+    applier
+        .get_mut(root)
+        .expect("subcompose node")
+        .collect_owned_children_into(&mut hosts);
+    for (index, host) in hosts.iter().enumerate() {
+        assert!(
+            !hosts[..index].contains(host),
+            "slot host #{host} is listed twice"
+        );
+        let parent = applier.get_mut(*host).expect("listed slot host").parent();
+        assert_eq!(parent, Some(root), "slot host #{host} names another parent");
+    }
+    hosts
+}
+
+#[test]
+fn a_pass_composing_fewer_slots_keeps_the_other_hosts_until_they_are_evicted() {
+    let context = AppContext::new();
+    let mut composition = Composition::new(MemoryApplier::new());
+    let dropped = Rc::new(Cell::new(0));
+    let forgotten = Rc::new(Cell::new(0));
+    let slot_lifecycles = Rc::new(RefCell::new(Vec::new()));
+    for slot_count in [INITIAL_SLOTS, INITIAL_SLOTS, 4, 0] {
+        render_layout(
+            &context,
+            &mut composition,
+            slot_count,
+            None,
+            Rc::clone(&dropped),
+            Rc::clone(&forgotten),
+            Rc::clone(&slot_lifecycles),
+        );
+        assert_eq!(
+            owned_slot_hosts(&mut composition).len(),
+            INITIAL_SLOTS - dropped.get(),
+            "after a pass of {slot_count} slots the node lists every slot host it keeps"
+        );
+    }
+    assert!(
+        dropped.get() > 0,
+        "the bounded reuse pool evicts some hosts"
+    );
 }
 
 fn assert_nested_host_disposal_releases_retained_movable(remove_outer_layout: bool) {

@@ -2019,6 +2019,13 @@ pub trait Node: Any {
     fn move_child(&mut self, _from: usize, _to: usize) {}
     /// Replaces the child list with `children`, in order.
     fn update_children(&mut self, _children: &[NodeId]) {}
+    /// Whether the node adds and drops its children itself, as a
+    /// subcomposition host does with its slot hosts: the child sync a
+    /// composition pass ends with then leaves its list alone. The default
+    /// keeps the list the passes compose.
+    fn keeps_own_children(&self) -> bool {
+        false
+    }
     /// Copies child IDs into the provided scratch buffer without allocating a
     /// fresh container for every traversal. A node without children leaves
     /// the buffer empty.
@@ -3800,6 +3807,12 @@ fn sync_or_settle_children(
     expected_children: Option<&[NodeId]>,
     deferred_cleanup: &mut DeferredChildCleanupQueue,
 ) -> Result<(), NodeError> {
+    if applier
+        .get_mut(parent_id)
+        .is_ok_and(|parent| parent.keeps_own_children())
+    {
+        return Ok(());
+    }
     match expected_children {
         Some(expected_children) => {
             sync_children(applier, parent_id, expected_children, deferred_cleanup)

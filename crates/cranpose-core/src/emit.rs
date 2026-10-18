@@ -417,7 +417,6 @@ impl Composer {
             id,
             previous,
             new_children: ChildList::new(),
-            new_children_membership: None,
             attach_mode,
             synthetic_root: false,
         });
@@ -447,7 +446,6 @@ impl Composer {
                 id,
                 previous,
                 new_children,
-                new_children_membership: _new_children_membership,
                 attach_mode,
                 synthetic_root: _synthetic_root,
             } = frame;

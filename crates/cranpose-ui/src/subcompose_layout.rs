@@ -316,8 +316,6 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
                 (id, false)
             };
 
-        self.composer.record_subcompose_child(virtual_node_id);
-
         drop(inner);
 
         let children = self.compose_into_slot(slot_id, virtual_node_id, content);
@@ -392,7 +390,6 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         let virtual_node_ids = self.state.activate_current_active_slot(slot_id)?;
 
         for &virtual_node_id in virtual_node_ids {
-            self.composer.record_subcompose_child(virtual_node_id);
             let _ = self
                 .composer
                 .with_node_mut::<LayoutNode, _>(virtual_node_id, |node| {
@@ -450,7 +447,6 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
 
         let activation = self.state.activate_exact_slot(slot_id)?;
         for &virtual_node_id in activation.nodes {
-            self.composer.record_subcompose_child(virtual_node_id);
             if activation.was_recycled {
                 let _ = self
                     .composer
@@ -1288,6 +1284,13 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
         let mut inner = self.inner.borrow_mut();
         inner.children.clear();
         inner.children.extend_from_slice(children);
+    }
+
+    /// The node adds a slot host when a slot is first composed and drops it
+    /// when the slot is disposed; a measure pass, which composes only the
+    /// slots it needs, does not list the rest.
+    fn keeps_own_children(&self) -> bool {
+        true
     }
 
     fn collect_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
