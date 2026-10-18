@@ -17,7 +17,7 @@ use crate::{
     modifier::{Modifier, Size},
     renderer::{HeadlessRenderer, RenderOp},
     run_test_composition,
-    subcompose_layout::{CachedBatchMeasureInputs, Constraints, SubcomposeLayoutNode},
+    subcompose_layout::{Constraints, MeasureCallbacks, SubcomposeLayoutNode},
     text::TextStyle,
     widgets::{
         BoxWithConstraints, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec, Spacer,
@@ -106,15 +106,12 @@ fn run_subcompose_measure(
     });
     let error = Rc::new(RefCell::new(None));
     node_handle
-        .measure_with_cached_batch(
+        .measure_with_callbacks(
             &composer,
             node_id,
             constraints,
-            CachedBatchMeasureInputs {
+            MeasureCallbacks {
                 measurer,
-                cached_measure_batch_registrar: Box::new(|_node_ids, _constraints, found| {
-                    found.clear();
-                }),
                 retained_measure_lookup: Box::new(|_| None),
                 retained_measure_registrar: Box::new(|_| {}),
                 error: &error,
@@ -213,15 +210,12 @@ fn capture_subcompose_child_constraints(
         cranpose_ui_layout::Placeable::value(0.0, 0.0, child_id)
     });
     node_handle
-        .measure_with_cached_batch(
+        .measure_with_callbacks(
             &composer,
             root,
             constraints,
-            CachedBatchMeasureInputs {
+            MeasureCallbacks {
                 measurer,
-                cached_measure_batch_registrar: Box::new(|_node_ids, _constraints, found| {
-                    found.clear();
-                }),
                 retained_measure_lookup: Box::new(|_| None),
                 retained_measure_registrar: Box::new(|_| {}),
                 error: &error,

@@ -19,8 +19,8 @@ use cranpose_ui_layout::{LinearArrangement, MeasureScope as _};
 use super::{
     LazyColumnNode, LazyColumnSpec, LazyFrame, LazyListContentHandle, LazyListItemMeasureInputs,
     LazyListItems, LazyListMeasureContext, LazyRowNode, LazyRowSpec, PaddingValues,
-    SubcomposeMeasureScopeImpl, beyond_composition, focused_lazy_item, lazy_list_child_constraints,
-    pin_sticky_header, place_focused_lazy_item, request_beyond_items,
+    SubcomposeMeasureScopeImpl, beyond_composition, focused_lazy_item, pin_sticky_header,
+    place_focused_lazy_item, request_beyond_items,
 };
 use crate::{composable, modifier::Modifier};
 
@@ -813,47 +813,7 @@ pub(super) fn measure_grid_viewport(
     if !lines.headers.is_empty() {
         pin_sticky_header(&mut result, &lines.headers, |line| source.measure(line));
     }
-    register_grid_measurements(scope, &result, &lines, content, frame, sizes);
     (result, line_count)
-}
-
-/// Registers the measurements of the placed cells at their widths and of
-/// the headers at the full width.
-fn register_grid_measurements(
-    scope: &mut SubcomposeMeasureScopeImpl<'_>,
-    result: &LazyListMeasureResult,
-    lines: &GridLines,
-    content: &LazyListIntervalContent,
-    frame: &LazyFrame,
-    sizes: CellSizes,
-) {
-    fn node_ids(ids: &[u64]) -> impl Iterator<Item = NodeId> + '_ {
-        ids.iter()
-            .filter_map(|&node_id| NodeId::try_from(node_id).ok())
-    }
-    for measured in &result.visible_items {
-        let line = lines.line(measured.index);
-        if line.header {
-            scope.ensure_cached_measurement_node_ids(
-                node_ids(&measured.roots.node_ids),
-                lazy_list_child_constraints(frame.is_vertical, frame.item_cross_axis_size),
-            );
-            continue;
-        }
-        let mut root = 0;
-        for cell in lines.cells(line, content) {
-            let cross = sizes.offset(cell.column);
-            let roots = measured.child_cross_offsets[root..]
-                .iter()
-                .take_while(|&&offset| offset == cross)
-                .count();
-            scope.ensure_cached_measurement_node_ids(
-                node_ids(&measured.roots.node_ids[root..root + roots]),
-                lazy_list_child_constraints(frame.is_vertical, sizes.width(cell.column, cell.span)),
-            );
-            root += roots;
-        }
-    }
 }
 
 /// Tells a screen reader a grid's lines and the cells across them, where a

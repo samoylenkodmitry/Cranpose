@@ -588,10 +588,6 @@ pub(crate) fn invalidate_layout_cache_epoch() {
     require_current_app_context("layout cache epoch access").invalidate_layout_caches();
 }
 
-pub(crate) fn current_layout_cache_epoch() -> u64 {
-    require_current_app_context("layout cache epoch access").current_layout_cache_epoch()
-}
-
 pub(crate) fn record_last_fling_velocity(velocity: f32) {
     if let Some(context) = current_app_context() {
         context.last_fling_velocity_bits.set(velocity.to_bits());
