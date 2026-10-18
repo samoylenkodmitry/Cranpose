@@ -15,7 +15,7 @@ use crate::{
     ProvidedValue, RecomposeOptions, RecomposeScope, RecomposeScopeInner, RecycledNode,
     RetentionMode, RetentionPolicy, RuntimeHandle, ScopeId, SlotId, SlotPassOutcome, SlotTable,
     SlotsHost, SnapshotStateList, SnapshotStateMap, StaticCompositionLocal, SubcomposeState,
-    collections::map::{HashMap, HashSet},
+    collections::map::HashMap,
     composer_context, explicit_group_key_seed,
     retention::{RetainKey, RetentionManager},
     runtime,
@@ -642,7 +642,6 @@ pub(crate) struct ParentFrame {
     pub(crate) id: NodeId,
     pub(crate) previous: ChildList,
     pub(crate) new_children: ChildList,
-    pub(crate) new_children_membership: Option<HashSet<NodeId>>,
     pub(crate) attach_mode: ParentAttachMode,
     pub(crate) synthetic_root: bool,
 }
@@ -652,8 +651,6 @@ pub(crate) enum InitialParentFrame {
     SyntheticRoot,
     RealParent,
 }
-
-const LARGE_DEFERRED_CHILD_TRACKING_THRESHOLD: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ParentAttachMode {
@@ -918,7 +915,6 @@ fn push_root_frame(
             id: root_id,
             previous: ChildList::new(),
             new_children: ChildList::new(),
-            new_children_membership: None,
             attach_mode: ParentAttachMode::DeferredSync,
             synthetic_root: matches!(initial_parent_frame, InitialParentFrame::SyntheticRoot),
         });
@@ -1490,38 +1486,6 @@ impl Composer {
                 .get_mut(node_id)
                 .is_ok_and(|node| node.layout_dirty())
         })
-    }
-
-    /// Records a child node in the current parent frame's expected children list.
-    ///
-    /// Used by SubcomposeLayout's `perform_subcompose` to register virtual nodes
-    /// with the outer composer's parent frame. This ensures that the `pop_parent`
-    /// call at the end of `subcompose_slot` generates a correct `SyncChildren`
-    /// command that preserves (rather than removes) the virtual nodes.
-    ///
-    /// Without this, `pop_parent` would generate `SyncChildren { expected: [] }`,
-    /// which removes all virtual nodes and their subtrees from the applier.
-    pub fn record_subcompose_child(&self, child_id: NodeId) {
-        let mut parent_stack = self.parent_stack();
-        if let Some(frame) = parent_stack.last_mut()
-            && matches!(frame.attach_mode, ParentAttachMode::DeferredSync)
-        {
-            if let Some(membership) = frame.new_children_membership.as_mut() {
-                if membership.insert(child_id) {
-                    frame.new_children.push(child_id);
-                }
-            } else if frame.new_children.len() >= LARGE_DEFERRED_CHILD_TRACKING_THRESHOLD {
-                let mut membership = HashSet::default();
-                membership.reserve(frame.new_children.len() + 1);
-                membership.extend(frame.new_children.iter().copied());
-                if membership.insert(child_id) {
-                    frame.new_children.push(child_id);
-                }
-                frame.new_children_membership = Some(membership);
-            } else if !frame.new_children.contains(&child_id) {
-                frame.new_children.push(child_id);
-            }
-        }
     }
 
     /// Clears all children of a node in the Applier.
