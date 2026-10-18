@@ -28,7 +28,7 @@ fn placed_item(
         node_ids: SmallVec::from_slice(node_ids),
         child_offsets: SmallVec::from_slice(child_offsets),
         child_cross_axis_sizes: SmallVec::new(),
-        measurements: SmallVec::new(),
+        measurements: None,
     };
     let mut item =
         LazyListMeasuredItem::new(index, 10 + index as u64, None, 20.0, 50.0, Rc::new(roots));
