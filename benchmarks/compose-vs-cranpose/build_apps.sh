@@ -206,7 +206,7 @@ desktop)
     build avalonia avalonia-app/bin/Release/net10.0/osx-arm64/publish avalonia-app shared-cs -- \
         attempt avalonia bash -c "cd '$here/avalonia-app' && dotnet publish -c Release -f net10.0 -p:TargetFrameworks=net10.0 -r osx-arm64"
     build fyne fyne-app/build/perf-compare-fyne fyne-app -- \
-        attempt fyne bash -c "cd '$here/fyne-app' && go build -o build/perf-compare-fyne ."
+        attempt fyne "$here/fyne-app/build.sh"
     build swiftui swiftui-app/build/PerfSwiftUI.app swiftui-app shared-swift -- "$here/swiftui-app/build.sh"
     build appkit appkit-app/build/PerfAppKit.app appkit-app shared-swift -- "$here/appkit-app/build.sh"
     build flutter flutter-app/build/macos/Build/Products/Release/perf_flutter.app flutter-app -- \

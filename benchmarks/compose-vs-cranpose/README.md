@@ -667,7 +667,7 @@ sh benchmarks/compose-vs-cranpose/framecount/build.sh
 (cd benchmarks/compose-vs-cranpose/tauri-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/dioxus-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/xilem-app && cargo build --release)
-(cd benchmarks/compose-vs-cranpose/fyne-app && go build -o build/perf-compare-fyne .)
+(cd benchmarks/compose-vs-cranpose/fyne-app && ./build.sh)
 python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop --tier 16
 python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop-parity --parity --tier 5
 ```
