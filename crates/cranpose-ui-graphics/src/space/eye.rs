@@ -319,7 +319,8 @@ impl EyeWorld {
                 space = next;
                 along = crossing;
             }
-            at = self.pushed_out(space, end, radius * self.spaces[space].scale);
+            let reach = radius * self.spaces[space].scale;
+            at = self.kept_behind_doorways(space, self.pushed_out(space, end, reach), reach);
         }
         let target = &self.spaces[space];
         let turn = base.to_base.then(&target.from_base);
@@ -331,6 +332,24 @@ impl EyeWorld {
         };
         pose.square_up();
         pose
+    }
+
+    /// `at` kept a ball of `radius` behind the planes of the doorways into
+    /// `space`, but where it stands within a doorway's rect: a space lies
+    /// behind the doorways it is entered by, and only through them does the
+    /// eye leave it.
+    fn kept_behind_doorways(&self, space: usize, mut at: Vec3, radius: f32) -> Vec3 {
+        for door in self.doorways.iter().filter(|door| door.inner == space) {
+            let [x, y, z, offset] = door.plane;
+            let normal = Vec3::new(x, y, z);
+            let behind = normal.dot(at) + offset;
+            let on_door = door.to_door.transform_point(at);
+            let within = (0.0..=1.0).contains(&on_door.x) && (0.0..=1.0).contains(&on_door.y);
+            if behind < radius && !within {
+                at = at + normal * (radius - behind);
+            }
+        }
+        at
     }
 
     /// `at` pushed out of the solids of `space` it lies within `radius` of.

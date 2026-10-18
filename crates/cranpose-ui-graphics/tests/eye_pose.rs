@@ -106,3 +106,53 @@ fn an_eye_keeps_its_radius_in_the_units_of_a_smaller_space() {
         walked.position.z
     );
 }
+
+/// A world of a room and the space behind a doorway in it: the unit square
+/// scaled to 200 by 200, its middle at the origin, on the plane z = 100,
+/// with the inner space beyond it along z, in the same coordinates.
+fn doorway_world() -> EyeWorld {
+    let mut world = EyeWorld::default();
+    let outer = world.add_space(Arc::from([]), Mat4::IDENTITY);
+    let inner = world.add_space(Arc::from([7]), Mat4::IDENTITY);
+    let door = Mat4::from_axes(
+        Vec3::new(200.0, 0.0, 0.0),
+        Vec3::new(0.0, 200.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(-100.0, -100.0, 100.0),
+    );
+    world.add_doorway((outer, inner), door);
+    world
+}
+
+#[test]
+fn an_eye_behind_a_doorway_stays_behind_its_plane_beside_it() {
+    let world = doorway_world();
+    // In the inner space, beside the doorway's rect, walking back across
+    // the doorway's plane.
+    let start = EyePose {
+        doorways: Arc::from([7]),
+        ..EyePose::standing(Vec3::new(400.0, 0.0, 300.0), 0.0, 0.0)
+    };
+    let walked = world.walk(&start, Vec3::new(0.0, 0.0, -400.0), 10.0);
+    assert_eq!(&*walked.doorways, &[7], "the eye stays in the inner space");
+    assert!(
+        (walked.position.z - 110.0).abs() < 0.5,
+        "the eye stops its radius behind the doorway's plane, at {}",
+        walked.position.z
+    );
+}
+
+#[test]
+fn an_eye_behind_a_doorway_walks_back_out_through_it() {
+    let world = doorway_world();
+    let start = EyePose {
+        doorways: Arc::from([7]),
+        ..EyePose::standing(Vec3::new(0.0, 0.0, 300.0), 0.0, 0.0)
+    };
+    let walked = world.walk(&start, Vec3::new(0.0, 0.0, -400.0), 10.0);
+    assert!(
+        walked.doorways.is_empty(),
+        "a step back through the doorway's rect leaves the inner space"
+    );
+    assert!((walked.position.z + 100.0).abs() < 0.5, "{:?}", walked.position);
+}
