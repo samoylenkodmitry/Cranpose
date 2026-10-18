@@ -1125,7 +1125,7 @@ fn translated_container(
 #[derive(Default)]
 pub(crate) struct TranslateScratch {
     /// The placed children, in their new order.
-    placed_fresh: Vec<(NodeId, cranpose_ui::widgets::LayoutState)>,
+    placed_fresh: Vec<PlacedChild>,
     old_index_by_id: HashMap<NodeId, usize>,
     /// The container's previous children by their index, until each is
     /// kept or recycled.
@@ -1137,9 +1137,22 @@ pub(crate) struct TranslateScratch {
     entering: Vec<(NodeId, Box<LayerNode>)>,
 }
 
-/// Fills `scratch` with `container`'s placed children and the index of its
-/// previous ones, and returns whether they are the same children in the
-/// same order.
+/// A placed child of a container a scroll step translates.
+struct PlacedChild {
+    id: NodeId,
+    state: cranpose_ui::widgets::LayoutState,
+    /// The child's index among the container's previous children; `None`
+    /// for a child that enters.
+    old_index: Option<usize>,
+    /// Whether the child keeps its layer as it is and only follows its
+    /// placement: it was not dirty, or it only moved, which this step
+    /// settles.
+    keeps_layer: bool,
+}
+
+/// Fills `scratch` with `container`'s placed children, each with its index
+/// among the previous ones, and returns whether they are the same children
+/// in the same order.
 fn translated_children(
     applier: &MemoryApplier,
     container: &LayerNode,
@@ -1149,23 +1162,32 @@ fn translated_children(
 ) -> Result<bool, &'static str> {
     let placed_fresh = &mut scratch.placed_fresh;
     placed_fresh.clear();
-    for child_id in fresh_children {
-        let Some(state) = placed_child_layout_state(applier, *child_id) else {
+    for &id in fresh_children {
+        let Some(state) = placed_child_layout_state(applier, id) else {
             continue;
         };
-        placed_fresh.push((*child_id, state));
+        placed_fresh.push(PlacedChild {
+            id,
+            state,
+            old_index: None,
+            keeps_layer: false,
+        });
     }
     let children_unchanged = container.children.len() == placed_fresh.len()
         && container
-        .children
-        .iter()
-        .zip(placed_fresh.iter())
-        .all(|(child, (id, _))| {
-            matches!(child, RenderNode::Layer(layer) if layer_identity(layer) == Some(*id))
-        });
-    let old_index_by_id = &mut scratch.old_index_by_id;
-    old_index_by_id.clear();
-    if !children_unchanged {
+            .children
+            .iter()
+            .zip(placed_fresh.iter())
+            .all(|(child, placed)| {
+                matches!(child, RenderNode::Layer(layer) if layer_identity(layer) == Some(placed.id))
+            });
+    if children_unchanged {
+        for (index, placed) in placed_fresh.iter_mut().enumerate() {
+            placed.old_index = Some(index);
+        }
+    } else {
+        let old_index_by_id = &mut scratch.old_index_by_id;
+        old_index_by_id.clear();
         for (index, child) in container.children.iter().enumerate() {
             let RenderNode::Layer(layer) = child else {
                 return Err("child without node id");
@@ -1175,51 +1197,47 @@ fn translated_children(
             };
             old_index_by_id.insert(id, index);
         }
+        for placed in placed_fresh.iter_mut() {
+            placed.old_index = old_index_by_id.get(&placed.id).copied();
+        }
     }
-    check_retained_children(
-        container,
-        dirty_nodes,
-        &scratch.placed_fresh,
-        children_unchanged,
-        &scratch.old_index_by_id,
-    )?;
-    Ok(children_unchanged)
+    check_retained_children(container, dirty_nodes, placed_fresh).map(|()| children_unchanged)
 }
 
-/// Checks that every child kept as it is still fits its layer. A moved child
-/// that no longer fits is drawn again: it becomes a content update.
+/// Checks that every child kept as it is still fits its layer, and notes
+/// which children keep their layers. A moved child that no longer fits is
+/// drawn again: it becomes a content update. A moved child that fits leaves
+/// the dirty set, which this step settles.
 fn check_retained_children(
     container: &LayerNode,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
-    placed_fresh: &[(NodeId, cranpose_ui::widgets::LayoutState)],
-    children_unchanged: bool,
-    old_index_by_id: &HashMap<NodeId, usize>,
+    placed_fresh: &mut [PlacedChild],
 ) -> Result<(), &'static str> {
-    for (fresh_index, (child_id, state)) in placed_fresh.iter().enumerate() {
-        let old_index = if children_unchanged {
-            fresh_index
-        } else if let Some(index) = old_index_by_id.get(child_id) {
-            *index
-        } else {
+    for placed in placed_fresh {
+        let Some(old_index) = placed.old_index else {
             continue;
         };
         let RenderNode::Layer(layer) = &container.children[old_index] else {
             return Err("retained child slot is not a layer");
         };
-        let fits = !layer.has_origin_sinks && Rect::from_size(state.size()) == layer.node_rect();
-        match dirty_nodes.get_mut(child_id) {
-            Some(NodeUpdate::Content | NodeUpdate::Layer) => {}
-            Some(kind @ (NodeUpdate::Moved | NodeUpdate::MovedLayer)) => {
-                if !fits {
-                    *kind = NodeUpdate::Content;
-                }
-            }
+        let fits =
+            !layer.has_origin_sinks && Rect::from_size(placed.state.size()) == layer.node_rect();
+        placed.keeps_layer = match dirty_nodes.get_mut(&placed.id) {
             None if layer.has_origin_sinks => {
                 return Err("child subtree publishes window origins");
             }
             None if !fits => return Err("child resized"),
-            None => {}
-        }
+            None => true,
+            Some(kind @ (NodeUpdate::Moved | NodeUpdate::MovedLayer)) if !fits => {
+                *kind = NodeUpdate::Content;
+                false
+            }
+            Some(NodeUpdate::Moved) => {
+                dirty_nodes.remove(&placed.id);
+                true
+            }
+            Some(NodeUpdate::Content | NodeUpdate::Layer | NodeUpdate::MovedLayer) => false,
+        };
     }
     Ok(())
 }
@@ -1283,7 +1301,6 @@ fn recycle_leaving_children(
 ) {
     let TranslateScratch {
         placed_fresh,
-        old_index_by_id,
         retained,
         kept,
         ..
@@ -1294,11 +1311,11 @@ fn recycle_leaving_children(
         RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
     }));
     kept.clear();
-    kept.extend(placed_fresh.iter().map(|(child_id, _)| {
-        old_index_by_id
-            .get(child_id)
-            .and_then(|index| retained[*index].take())
-    }));
+    kept.extend(
+        placed_fresh
+            .iter()
+            .map(|placed| placed.old_index.and_then(|index| retained[index].take())),
+    );
     for leaving in retained.drain(..).flatten() {
         forget_dirty_subtree(&leaving, dirty_nodes);
         crate::layer_recycling::recycle(leaving);
@@ -1319,10 +1336,11 @@ fn build_entering_children(
     let (child_inherited_translated_content_context, update) = inherited;
     let entering = &mut scratch.entering;
     entering.clear();
-    for (child_id, _) in &scratch.placed_fresh {
-        if scratch.old_index_by_id.contains_key(child_id) {
+    for placed in &scratch.placed_fresh {
+        if placed.old_index.is_some() {
             continue;
         }
+        let child_id = &placed.id;
         let context = LowerContext {
             inherited_motion_context_animated: container.motion_context_animated,
             inherited_translated_content_context: child_inherited_translated_content_context,
@@ -1402,25 +1420,25 @@ fn reconcile_translated_children(
     geometry: TranslateGeometry,
 ) {
     if children_unchanged {
-        for (child, (child_id, state)) in container.children.iter_mut().zip(&scratch.placed_fresh) {
+        for (child, placed) in container.children.iter_mut().zip(&scratch.placed_fresh) {
             let RenderNode::Layer(layer) = child else {
                 unreachable!("retained child identities were checked");
             };
-            if keeps_retained_child(dirty_nodes, *child_id) {
-                translate_retained_child(layer, state, geometry.content_offset);
+            if placed.keeps_layer {
+                translate_retained_child(layer, &placed.state, geometry.content_offset);
             }
         }
         return;
     }
     let mut entering = scratch.entering.drain(..).peekable();
-    for ((child_id, state), kept) in scratch.placed_fresh.iter().zip(scratch.kept.drain(..)) {
+    for (placed, kept) in scratch.placed_fresh.iter().zip(scratch.kept.drain(..)) {
         if let Some(mut layer) = kept {
-            if keeps_retained_child(dirty_nodes, *child_id) {
-                translate_retained_child(&mut layer, state, geometry.content_offset);
+            if placed.keeps_layer {
+                translate_retained_child(&mut layer, &placed.state, geometry.content_offset);
             }
             container.children.push(RenderNode::Layer(layer));
-        } else if let Some((_, lowered)) = entering.next_if(|(id, _)| id == child_id) {
-            dirty_nodes.remove(child_id);
+        } else if let Some((_, lowered)) = entering.next_if(|(id, _)| *id == placed.id) {
+            dirty_nodes.remove(&placed.id);
             remove_dirty_descendants(&lowered, dirty_nodes);
 
             container.children.push(RenderNode::Layer(lowered));
@@ -1534,20 +1552,6 @@ fn translate_layer_from_data(
     container.note_content_change(update);
 
     true
-}
-
-/// Whether a retained child keeps its layer as it is and only follows its
-/// placement: it is not dirty, or it only moved, which this placement
-/// settles.
-fn keeps_retained_child(dirty_nodes: &mut HashMap<NodeId, NodeUpdate>, child_id: NodeId) -> bool {
-    match dirty_nodes.get(&child_id) {
-        None => true,
-        Some(NodeUpdate::Moved) => {
-            dirty_nodes.remove(&child_id);
-            true
-        }
-        Some(NodeUpdate::Content | NodeUpdate::Layer | NodeUpdate::MovedLayer) => false,
-    }
 }
 
 fn translate_retained_child(
