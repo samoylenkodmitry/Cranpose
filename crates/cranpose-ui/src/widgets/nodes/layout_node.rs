@@ -622,7 +622,7 @@ impl LayoutNodeCacheHandles {
 struct NodeIdCell(Cell<NodeId>);
 
 /// The id a [`NodeIdCell`] holds for none: no node gets it, as ids index
-/// the applier's nodes and virtual ids count up from `VIRTUAL_NODE_ID_START`.
+/// the applier's nodes.
 const NO_NODE_ID: NodeId = NodeId::MAX;
 
 impl NodeIdCell {
@@ -1618,7 +1618,6 @@ impl Drop for LayoutNode {
 }
 
 const MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY: usize = 128;
-const VIRTUAL_NODE_ID_START: NodeId = 0xC0000000;
 
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1635,14 +1634,12 @@ struct LayoutNodeRegistryEntry {
 
 pub(crate) struct LayoutNodeRegistryState {
     entries: RefCell<HashMap<NodeId, LayoutNodeRegistryEntry>>,
-    virtual_node_id_counter: Cell<NodeId>,
 }
 
 impl LayoutNodeRegistryState {
     pub(crate) fn new() -> Self {
         Self {
             entries: RefCell::new(HashMap::default()),
-            virtual_node_id_counter: Cell::new(VIRTUAL_NODE_ID_START),
         }
     }
 
@@ -1701,12 +1698,6 @@ impl LayoutNodeRegistryState {
         }
     }
 
-    fn allocate_virtual_node_id(&self) -> NodeId {
-        let id = self.virtual_node_id_counter.get();
-        self.virtual_node_id_counter.set(id.wrapping_add(1));
-        id
-    }
-
     fn resolve_modifier_local_from_parent_chain(
         &self,
         start: Option<NodeId>,
@@ -1760,12 +1751,6 @@ pub(crate) fn unregister_layout_node(
 #[cfg(test)]
 fn layout_node_registry_stats() -> LayoutNodeRegistryDebugStats {
     crate::render_state::with_layout_node_registry(LayoutNodeRegistryState::stats)
-}
-
-pub(crate) fn allocate_virtual_node_id() -> NodeId {
-    crate::render_state::with_layout_node_registry(
-        LayoutNodeRegistryState::allocate_virtual_node_id,
-    )
 }
 
 fn resolve_modifier_local_from_parent_chain(

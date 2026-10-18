@@ -1211,9 +1211,12 @@ fn recycled_nodes_reuse_stable_ids_without_growing_stable_id_arena() {
     assert_eq!(applier.node_generation(stable_id), 1);
 
     let (reused_id, node, warm_origin) = recycled.into_parts();
-    applier
-        .insert_with_id(reused_id, node)
-        .expect("reinsert recycled stable id");
+    assert!(
+        applier
+            .insert_recycled_node_or_create(reused_id, node)
+            .stable_id_reused,
+        "reinsert recycled stable id"
+    );
     applier.set_recycled_node_origin(reused_id, warm_origin);
 
     let stats = applier.debug_stats();
@@ -1224,7 +1227,7 @@ fn recycled_nodes_reuse_stable_ids_without_growing_stable_id_arena() {
 }
 
 #[test]
-fn insert_with_id_preserves_stable_id_when_reusing_dense_physical_slot() {
+fn a_reinserted_stable_id_survives_compaction_in_a_reused_physical_slot() {
     let mut applier = test_applier();
     let first = applier.create(Box::new(TestDummyNode));
     let reused_physical = applier.create(Box::new(TestDummyNode));
@@ -1234,9 +1237,12 @@ fn insert_with_id_preserves_stable_id_when_reusing_dense_physical_slot() {
     applier
         .remove(reused_physical)
         .expect("remove node to open a dense physical slot");
-    applier
-        .insert_with_id(inserted_stable_id, Box::new(TestDummyNode))
-        .expect("insert explicit stable id into freed physical slot");
+    assert!(
+        applier
+            .insert_recycled_node_or_create(inserted_stable_id, Box::new(TestDummyNode))
+            .stable_id_reused,
+        "insert explicit stable id into freed physical slot"
+    );
     applier
         .remove(first)
         .expect("remove first node before compaction");
@@ -1282,9 +1288,12 @@ fn warm_recycled_nodes_can_be_reused_again_in_the_same_frame() {
         .take_recycled_node(std::any::TypeId::of::<RecyclableTestNode>())
         .expect("warm recyclable node");
     let (reused_id, node, warm_origin) = recycled.into_parts();
-    applier
-        .insert_with_id(reused_id, node)
-        .expect("reinsert warm recyclable node");
+    assert!(
+        applier
+            .insert_recycled_node_or_create(reused_id, node)
+            .stable_id_reused,
+        "reinsert warm recyclable node"
+    );
     applier.set_recycled_node_origin(reused_id, warm_origin);
 
     applier
@@ -1455,9 +1464,12 @@ fn clear_recycled_nodes_rebuilds_warm_pool_from_compact_prototype() {
         .take_recycled_node(key)
         .expect("seeded shell should be immediately available");
     let (reused_id, node, warm_origin) = recycled.into_parts();
-    applier
-        .insert_with_id(reused_id, node)
-        .expect("consumed warm shell should become the live cohort member");
+    assert!(
+        applier
+            .insert_recycled_node_or_create(reused_id, node)
+            .stable_id_reused,
+        "consumed warm shell should become the live cohort member"
+    );
     applier.set_recycled_node_origin(reused_id, warm_origin);
 
     for _ in 0..3 {
@@ -1501,9 +1513,12 @@ fn large_recycle_pools_converge_to_standing_reserve_on_first_demand() {
         .take_recycled_node(key)
         .expect("seeded shell should be immediately available");
     let (reused_id, node, warm_origin) = recycled.into_parts();
-    applier
-        .insert_with_id(reused_id, node)
-        .expect("consumed shell should remain live");
+    assert!(
+        applier
+            .insert_recycled_node_or_create(reused_id, node)
+            .stable_id_reused,
+        "consumed shell should remain live"
+    );
     applier.set_recycled_node_origin(reused_id, warm_origin);
 
     applier.record_fresh_recyclable_creation(key);
@@ -1542,9 +1557,12 @@ fn clear_recycled_nodes_releases_excess_warm_id_capacity() {
     for _ in 0..4096 {
         if let Some(recycled) = applier.take_recycled_node(key) {
             let (id, node, warm_origin) = recycled.into_parts();
-            applier
-                .insert_with_id(id, node)
-                .expect("reinsert recycled node");
+            assert!(
+                applier
+                    .insert_recycled_node_or_create(id, node)
+                    .stable_id_reused,
+                "reinsert recycled node"
+            );
             applier.set_recycled_node_origin(id, warm_origin);
             live_ids.push(id);
         } else {
@@ -2243,10 +2261,7 @@ fn a_batch_of_scene_nodes_resolves_like_one_node_at_a_time() {
     let sibling = applier.create(Box::new(RecordingNode::default()));
     let detached = applier.create(Box::new(RecordingNode::default()));
     let under_detached = applier.create(Box::new(RecordingNode::default()));
-    let virtual_id = 1_000_000;
-    applier
-        .insert_with_id(virtual_id, Box::new(RecordingNode::default()))
-        .expect("a virtual node");
+    let virtual_id = applier.create_virtual(Box::new(RecordingNode::default()));
     for (parent, child) in [
         (root, branch),
         (branch, leaf),

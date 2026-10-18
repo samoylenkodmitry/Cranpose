@@ -174,8 +174,8 @@ impl Applier for RetryApplier {
         self.inner.node_generation(id)
     }
 
-    fn insert_with_id(&mut self, id: NodeId, node: Box<dyn Node>) -> Result<(), NodeError> {
-        self.inner.insert_with_id(id, node)
+    fn create_virtual(&mut self, node: Box<dyn Node>) -> NodeId {
+        self.inner.create_virtual(node)
     }
 }
 

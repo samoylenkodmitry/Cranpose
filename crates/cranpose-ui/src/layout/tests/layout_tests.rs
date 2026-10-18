@@ -2313,7 +2313,11 @@ fn recycled_node_generation_reaches_every_semantics_snapshot() -> Result<(), Nod
     let node_id = applier.create(Box::new(make_node()));
     measure_layout(&mut applier, node_id, Size::new(100.0, 100.0))?;
     applier.remove(node_id)?;
-    applier.insert_with_id(node_id, Box::new(make_node()))?;
+    assert!(
+        applier
+            .insert_recycled_node_or_create(node_id, Box::new(make_node()))
+            .stable_id_reused
+    );
     let generation = applier.node_generation(node_id);
     assert_ne!(generation, 0);
     let measurements = measure_layout(&mut applier, node_id, Size::new(100.0, 100.0))?;

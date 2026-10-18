@@ -1514,19 +1514,17 @@ impl Composer {
         }
     }
 
-    /// Registers a virtual node in the Applier.
+    /// Stores a virtual node in the Applier and returns its id.
     ///
     /// Assigns the node's ID so its layout registry and invalidation metadata
     /// belong to the node stored in the applier.
-    pub fn register_virtual_node(
-        &self,
-        node_id: NodeId,
-        node: Box<dyn Node>,
-    ) -> Result<(), NodeError> {
+    pub fn create_virtual_node(&self, node: Box<dyn Node>) -> NodeId {
         let mut applier = self.borrow_applier();
-        applier.insert_with_id(node_id, node)?;
-        applier.get_mut(node_id)?.set_node_id(node_id);
-        Ok(())
+        let node_id = applier.create_virtual(node);
+        if let Ok(node) = applier.get_mut(node_id) {
+            node.set_node_id(node_id);
+        }
+        node_id
     }
 
     /// Detaches and disposes subcomposition roots evicted from their reuse pool.

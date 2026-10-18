@@ -23,8 +23,8 @@ impl Applier for RemoveFailingApplier {
         0
     }
 
-    fn insert_with_id(&mut self, _id: NodeId, _node: Box<dyn Node>) -> Result<(), NodeError> {
-        Ok(())
+    fn create_virtual(&mut self, _node: Box<dyn Node>) -> NodeId {
+        unreachable!("disposal propagation test does not create nodes")
     }
 }
 

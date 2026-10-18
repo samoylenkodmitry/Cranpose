@@ -2479,14 +2479,9 @@ pub trait Applier: Any {
     /// preventing stale slot entries from matching recycled nodes.
     fn node_generation(&self, id: NodeId) -> u32;
 
-    /// Inserts a node with a pre-assigned ID.
-    ///
-    /// This is used for virtual nodes whose IDs are allocated separately
-    /// (e.g., via allocate_virtual_node_id()). Unlike `create()` which assigns
-    /// a new ID, this method uses the provided ID.
-    ///
-    /// Returns Ok(()) if successful, or an error if the ID is already in use.
-    fn insert_with_id(&mut self, id: NodeId, node: Box<dyn Node>) -> Result<(), NodeError>;
+    /// Stores `node` as a virtual node, one that lays out nothing itself
+    /// while its parent lays out its children, and returns its new id.
+    fn create_virtual(&mut self, node: Box<dyn Node>) -> NodeId;
 
     /// Reinserts a recycled node at its retained stable ID, or creates a fresh ID if that
     /// retained ID is no longer available.
@@ -4931,13 +4926,10 @@ impl Applier for MemoryApplier {
         self.state.nodes.get_mut(index)?.as_deref_mut()
     }
 
-    fn insert_with_id(&mut self, id: NodeId, node: Box<dyn Node>) -> Result<(), NodeError> {
-        if self.contains_node_id(id) {
-            return Err(NodeError::AlreadyExists { id });
-        }
-        self.insert_available_with_id(id, node);
+    fn create_virtual(&mut self, node: Box<dyn Node>) -> NodeId {
+        let id = self.create(node);
         self.state.virtual_node_ids.insert(id);
-        Ok(())
+        id
     }
 
     fn insert_recycled_node_or_create(

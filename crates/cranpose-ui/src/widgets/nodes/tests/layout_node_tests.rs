@@ -107,7 +107,7 @@ fn modifier_slices_cache_preserves_live_snapshot_isolation() {
 fn a_changed_modifier_collects_its_slices_once_when_they_are_read() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut node = fresh_node();
-    node.set_node_id(allocate_virtual_node_id());
+    node.set_node_id(7);
     node.set_modifier(Modifier::empty().background(crate::modifier::Color::WHITE));
     assert!(
         node.modifier_slices_dirty.get(),
@@ -149,8 +149,7 @@ fn layout_node_registry_retains_warm_capacity_after_large_cleanup() {
     let app_context = crate::render_state::AppContext::new_with_density(1.0);
     app_context.enter(|| {
         let nodes: Vec<_> = (0..2048)
-            .map(|_| {
-                let id = allocate_virtual_node_id();
+            .map(|id| {
                 let node = fresh_node();
                 let owner_context_id = register_layout_node(id, &node);
                 (id, owner_context_id, node)
@@ -181,12 +180,7 @@ fn layout_node_registry_is_scoped_by_app_context() {
     let first = crate::render_state::AppContext::new_with_density(1.0);
     let second = crate::render_state::AppContext::new_with_density(1.0);
 
-    let first_id = first.enter(allocate_virtual_node_id);
-    let second_id = second.enter(allocate_virtual_node_id);
-
-    assert_eq!(first_id, VIRTUAL_NODE_ID_START);
-    assert_eq!(second_id, VIRTUAL_NODE_ID_START);
-
+    let first_id = 100;
     let virtual_node = LayoutNode::new_virtual();
     let regular_node = fresh_node();
 
@@ -198,7 +192,6 @@ fn layout_node_registry_is_scoped_by_app_context() {
 
     second.enter(|| {
         assert_eq!(layout_node_registry_stats().len, 0);
-        assert_eq!(allocate_virtual_node_id(), VIRTUAL_NODE_ID_START + 1);
     });
 
     first.enter(|| {

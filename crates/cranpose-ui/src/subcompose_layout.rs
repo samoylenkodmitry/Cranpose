@@ -19,9 +19,7 @@ use crate::{
     layout::MeasuredNode,
     modifier::{Modifier, ModifierChainHandle, ModifierNodeSlices, Point, ResolvedModifiers, Size},
     render_state::AppContext,
-    widgets::nodes::{
-        DescendantDirt, LayoutNode, LayoutNodeCacheHandles, LayoutState, allocate_virtual_node_id,
-    },
+    widgets::nodes::{DescendantDirt, LayoutNode, LayoutNodeCacheHandles, LayoutState},
 };
 
 fn subcompose_telemetry_enabled() -> bool {
@@ -329,11 +327,9 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
             if let Some((node_id, rebound)) = self.state.take_node_from_reusables(slot_id) {
                 (node_id, rebound)
             } else {
-                let id = allocate_virtual_node_id();
-                let node = LayoutNode::new_virtual();
-                if let Err(e) = self.composer.register_virtual_node(id, Box::new(node)) {
-                    eprintln!("[Subcompose] Failed to register virtual node {id}: {e:?}");
-                }
+                let id = self
+                    .composer
+                    .create_virtual_node(Box::new(LayoutNode::new_virtual()));
                 inner.children.push(id);
                 (id, false)
             };
