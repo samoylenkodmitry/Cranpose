@@ -4,8 +4,8 @@ use std::{
 };
 
 use cranpose_core::{
-    Composer, NodeError, NodeId, Phase, SlotId, SlotTable, SlotsHost, SubcomposeState,
-    collections::map::HashMap,
+    ApplierHost, CapturedCompositionContext, Composer, NodeError, NodeId, RuntimeHandle, SlotId,
+    SlotTable, SlotsHost, SubcomposeState, collections::map::HashMap,
 };
 use cranpose_foundation::{
     InvalidationKind, ModifierInvalidation, ModifierInvalidations, NodeCapabilities,
@@ -1433,7 +1433,8 @@ impl SubcomposeLayoutNodeHandle {
 
     pub(crate) fn measure_with_callbacks(
         &self,
-        composer: &Composer,
+        applier: &Rc<dyn ApplierHost>,
+        runtime: &RuntimeHandle,
         node_id: NodeId,
         constraints: Constraints,
         callbacks: MeasureCallbacks<'_>,
@@ -1463,22 +1464,19 @@ impl SubcomposeLayoutNodeHandle {
         };
         state.begin_pass();
 
-        let previous = composer.phase();
-        if !matches!(previous, Phase::Measure | Phase::Layout) {
-            composer.enter_phase(Phase::Measure);
-        }
-
         let constraints_copy = constraints;
         let fallback_context;
         let context = if let Some(context) = captured_context.as_ref() {
             context
         } else {
-            fallback_context = composer.capture_composition_context();
+            fallback_context = CapturedCompositionContext::default();
             &fallback_context
         };
-        let ((result, scratch), _) = composer.subcompose_slot_with_context(
+        let ((result, scratch), _) = Composer::subcompose_measure_slot(
+            applier,
+            runtime,
             &slots_host,
-            Some(node_id),
+            node_id,
             context,
             |inner_composer| {
                 let mut scope = SubcomposeMeasureScopeImpl::new(SubcomposeMeasureScopeInit {
@@ -1500,11 +1498,7 @@ impl SubcomposeLayoutNodeHandle {
         )?;
 
         let disposed = state.finish_pass();
-        let disposal = composer.dispose_subcomposed_nodes(disposed);
-
-        if previous != composer.phase() {
-            composer.enter_phase(previous);
-        }
+        let disposal = Composer::dispose_measure_subcomposed_nodes(applier, disposed);
 
         {
             let mut inner = self.inner.borrow_mut();
@@ -1641,4 +1635,4 @@ impl SubcomposeLayoutNodeInner {
 
 #[cfg(test)]
 #[path = "tests/subcompose_layout_tests.rs"]
-mod tests;
+pub(crate) mod tests;

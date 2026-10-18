@@ -19,8 +19,8 @@ use std::{
 };
 
 use cranpose_core::{
-    Applier, ApplierHost, Composer, ConcreteApplierHost, MemoryApplier, Node, NodeError, NodeId,
-    Phase, RuntimeHandle, SlotTable, SlotsHost,
+    Applier, ApplierHost, ConcreteApplierHost, MemoryApplier, Node, NodeError, NodeId,
+    RuntimeHandle,
 };
 use cranpose_foundation::{
     InvalidationKind, ModifierNodeContext, NodeCapabilities, SemanticsConfiguration,
@@ -195,32 +195,22 @@ impl Default for LayoutHost {
 struct ApplierSlotGuard<'a> {
     target: &'a mut MemoryApplier,
     lent: LayoutHost,
-    slots: Rc<RefCell<SlotTable>>,
     context: &'a AppContext,
 }
 
 impl<'a> ApplierSlotGuard<'a> {
     fn new(target: &'a mut MemoryApplier, context: &'a AppContext) -> Self {
         let lent = context.take_layout_host();
-        let slots = {
-            let mut applier_ref = lent.host.borrow_typed();
-            std::mem::swap(target, &mut *applier_ref);
-            applier_ref.slots_handle()
-        };
+        std::mem::swap(target, &mut *lent.host.borrow_typed());
         Self {
             target,
             lent,
-            slots,
             context,
         }
     }
 
     fn host(&self) -> &Rc<ConcreteApplierHost<MemoryApplier>> {
         &self.lent.host
-    }
-
-    fn slots_handle(&self) -> &Rc<RefCell<SlotTable>> {
-        &self.slots
     }
 }
 
@@ -1392,15 +1382,9 @@ pub fn measure_layout_with_options(
 
     let guard = ApplierSlotGuard::new(applier, &context);
     let applier_host = guard.host();
-    let slots_handle = guard.slots_handle();
     stages.reached();
 
-    let builder = LayoutBuilder::new_with_epoch(
-        Rc::clone(applier_host),
-        epoch,
-        Rc::clone(slots_handle),
-        &context,
-    );
+    let builder = LayoutBuilder::new_with_epoch(Rc::clone(applier_host), epoch, &context);
     stages.reached();
 
     let measured = builder
@@ -1489,14 +1473,12 @@ impl<'a> LayoutBuilder<'a> {
     fn new_with_epoch(
         applier: Rc<ConcreteApplierHost<MemoryApplier>>,
         epoch: u64,
-        slots: Rc<RefCell<SlotTable>>,
         context: &'a Rc<AppContext>,
     ) -> Self {
         Self {
             state: Rc::new(LayoutBuilderState::new_with_epoch(
                 applier,
                 epoch,
-                slots,
                 Rc::clone(context),
             )),
             context,
@@ -1520,7 +1502,6 @@ impl Drop for LayoutBuilder<'_> {
 struct LayoutBuilderState {
     applier: Rc<ConcreteApplierHost<MemoryApplier>>,
     runtime_handle: RefCell<Option<RuntimeHandle>>,
-    slots: Rc<RefCell<SlotTable>>,
     cache_epoch: u64,
     cache_floor: u64,
     frame_arena: RefCell<FrameLayoutArena>,
@@ -1629,7 +1610,6 @@ impl LayoutBuilderState {
     fn new_with_epoch(
         applier: Rc<ConcreteApplierHost<MemoryApplier>>,
         epoch: u64,
-        slots: Rc<RefCell<SlotTable>>,
         context: Rc<AppContext>,
     ) -> Self {
         let runtime_handle = applier.borrow_typed().runtime_handle();
@@ -1637,7 +1617,6 @@ impl LayoutBuilderState {
         Self {
             applier,
             runtime_handle: RefCell::new(runtime_handle),
-            slots,
             cache_epoch: epoch,
             cache_floor: context.layout_cache_floor(),
             frame_arena: RefCell::new(context.take_layout_frame_arena()),
@@ -1883,22 +1862,13 @@ impl LayoutBuilderState {
             inner_constraints.min_height = inner_constraints.min_height.min(constrained_height);
         }
 
-        let mut slots_guard = SlotsGuard::take(&self.slots);
-        let slots_host = slots_guard.host();
-        let applier_host_dyn: Rc<dyn ApplierHost> = Rc::clone(&self.applier) as Rc<dyn ApplierHost>;
-        let composer = Composer::new(
-            Rc::clone(&slots_host),
-            applier_host_dyn,
-            runtime_handle,
-            Some(node_id),
-        );
-        composer.enter_phase(Phase::Measure);
-
+        let applier_host: Rc<dyn ApplierHost> = Rc::clone(&self.applier) as Rc<dyn ApplierHost>;
         let measure_error = RefCell::new(None);
         let measured_children = node_handle.measured_children_scratch();
 
         let measure_result = node_handle.measure_with_callbacks(
-            &composer,
+            &applier_host,
+            &runtime_handle,
             node_id,
             inner_constraints,
             MeasureCallbacks {
@@ -1933,8 +1903,6 @@ impl LayoutBuilderState {
                 error: &measure_error,
             },
         )?;
-        drop(composer);
-        slots_guard.restore(slots_host.into_table()?);
 
         if let Some(err) = measure_error.borrow_mut().take() {
             return Err(err);
@@ -2637,39 +2605,6 @@ impl Drop for VecPools<'_> {
         pools
             .tmp_placements
             .release(std::mem::take(&mut self.placements));
-    }
-}
-
-struct SlotsGuard<'a> {
-    table: &'a RefCell<SlotTable>,
-    slots: Option<SlotTable>,
-}
-
-impl<'a> SlotsGuard<'a> {
-    fn take(table: &'a RefCell<SlotTable>) -> Self {
-        let slots = std::mem::take(&mut *table.borrow_mut());
-        Self {
-            table,
-            slots: Some(slots),
-        }
-    }
-
-    fn host(&mut self) -> Rc<SlotsHost> {
-        let slots = self.slots.take().unwrap_or_default();
-        Rc::new(SlotsHost::new(slots))
-    }
-
-    fn restore(&mut self, slots: SlotTable) {
-        debug_assert!(self.slots.is_none());
-        self.slots = Some(slots);
-    }
-}
-
-impl Drop for SlotsGuard<'_> {
-    fn drop(&mut self) {
-        if let Some(slots) = self.slots.take() {
-            *self.table.borrow_mut() = slots;
-        }
     }
 }
 

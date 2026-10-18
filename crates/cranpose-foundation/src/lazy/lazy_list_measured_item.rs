@@ -77,9 +77,19 @@ impl Clone for LazyListMeasuredItem {
             cross_axis_size: self.cross_axis_size,
             offset: self.offset,
             roots: Rc::clone(&self.roots),
-            child_cross_offsets: SmallVec::from_slice(&self.child_cross_offsets),
-            child_main_sizes: SmallVec::from_slice(&self.child_main_sizes),
+            child_cross_offsets: copy_offsets(&self.child_cross_offsets),
+            child_main_sizes: copy_offsets(&self.child_main_sizes),
         }
+    }
+}
+
+/// A copy of `offsets`. A list item's are empty, and copying an empty slice
+/// still calls `memcpy`.
+fn copy_offsets(offsets: &SmallOffsetVec) -> SmallOffsetVec {
+    if offsets.is_empty() {
+        SmallOffsetVec::new()
+    } else {
+        SmallVec::from_slice(offsets)
     }
 }
 

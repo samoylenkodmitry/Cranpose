@@ -3864,7 +3864,6 @@ struct MemoryApplierState {
     high_id_generations: HashMap<NodeId, u32>,
     next_stable_id: NodeId,
     layout_runtime: Option<RuntimeHandle>,
-    slots: Rc<RefCell<SlotTable>>,
     recycled_nodes: HashMap<TypeId, Vec<RecycledNode>>,
     returning_recycled_nodes: HashMap<TypeId, Vec<RecycledNode>>,
     cold_recycled_nodes: HashMap<TypeId, Vec<RecycledNode>>,
@@ -4009,12 +4008,6 @@ impl MemoryApplier {
     /// Creates an applier with no nodes.
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// The slot table that composition during layout writes to, shared with
-    /// the layout pass that lends this applier.
-    pub fn slots_handle(&self) -> Rc<RefCell<SlotTable>> {
-        Rc::clone(&self.state.slots)
     }
 
     /// Resolves a scene-scope candidate the way structural records are
