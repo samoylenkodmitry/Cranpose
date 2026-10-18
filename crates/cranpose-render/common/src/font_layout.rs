@@ -81,17 +81,18 @@ pub fn layout_line_glyphs(
 
 /// Returns the advance width of `text` as one line at `font_size` pixels, including kerning.
 pub fn line_advance_width(font: &impl Font, text: &str, font_size: f32) -> f32 {
-    let scale = PxScale::from(font_size);
-    let scaled_font = font.as_scaled(scale);
+    // The scale reads the face's ascender and descender: once a line, not
+    // once a glyph.
+    let h_scale = font.as_scaled(PxScale::from(font_size)).h_scale_factor();
     let mut width = 0.0;
     let mut previous = None;
 
     for ch in text.chars() {
-        let glyph_id = scaled_font.glyph_id(ch);
+        let glyph_id = font.glyph_id(ch);
         if let Some(previous_id) = previous {
-            width += scaled_font.kern(previous_id, glyph_id);
+            width += font.kern_unscaled(previous_id, glyph_id) * h_scale;
         }
-        width += scaled_font.h_advance(glyph_id);
+        width += font.h_advance_unscaled(glyph_id) * h_scale;
         previous = Some(glyph_id);
     }
 

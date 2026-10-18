@@ -30,7 +30,9 @@
 
 use std::sync::Arc;
 
-use ab_glyph::{CodepointIdIter, Font, FontArc, GlyphId, GlyphSvg, Outline, v2};
+use ab_glyph::{
+    CodepointIdIter, Font, FontArc, GlyphId, GlyphSvg, Outline, PxScale, ScaleFont, v2,
+};
 use ttf_parser::{Face, NormalizedCoordinate, Tag};
 
 use crate::{
@@ -572,6 +574,27 @@ impl KernedFont {
         next: (char, GlyphId),
     ) -> Option<f32> {
         self.ascii.kern(self, previous, next)
+    }
+
+    /// The advance of `text` as one line at `font_size` pixels, kerning
+    /// included: what [`crate::font_layout::line_advance_width`] measures,
+    /// with printable ASCII read from the face's table.
+    pub(crate) fn line_advance_width(&self, text: &str, font_size: f32) -> f32 {
+        let h_scale = self.as_scaled(PxScale::from(font_size)).h_scale_factor();
+        let mut width = 0.0;
+        let mut previous: Option<(char, GlyphId)> = None;
+        for ch in text.chars() {
+            let (glyph_id, advance) = self.glyph_advance(ch);
+            if let Some(previous) = previous {
+                let kern = self
+                    .ascii_kern(previous, (ch, glyph_id))
+                    .unwrap_or_else(|| self.kern_unscaled(previous.1, glyph_id));
+                width += kern * h_scale;
+            }
+            width += advance * h_scale;
+            previous = Some((ch, glyph_id));
+        }
+        width.max(0.0)
     }
 
     /// Reads the GPOS pair kerning for a face instanced at `variations`.
