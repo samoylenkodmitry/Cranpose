@@ -5,7 +5,9 @@
 //!
 //! Based on JC's `LazyLayoutIntervalContent` pattern.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
+
+use cranpose_core::collections::map::HashMap;
 
 /// Key type for lazy list items.
 ///

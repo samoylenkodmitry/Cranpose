@@ -7,7 +7,7 @@ use std::{
 };
 
 use cranpose_core::{
-    MutableState, OwnedMutableState, RuntimeHandle, State, collections::map::HashSet, remember,
+    OwnedMutableState, RuntimeCell, RuntimeHandle, State, collections::map::HashSet, remember,
     with_current_composer,
 };
 use cranpose_foundation::{
@@ -23,7 +23,7 @@ use crate::{
 /// Records the press and hover interactions of the nodes bound to it, and exposes them as state.
 #[derive(Clone, Copy)]
 pub struct MutableInteractionSource {
-    inner: MutableState<Rc<MutableInteractionSourceInner>>,
+    inner: RuntimeCell<MutableInteractionSourceInner>,
 }
 
 struct MutableInteractionSourceInner {
@@ -109,28 +109,28 @@ impl MutableInteractionSource {
     /// Creates a source bound to `runtime`, for use outside composition.
     pub fn with_runtime(runtime: RuntimeHandle) -> Self {
         Self {
-            inner: MutableState::with_runtime(
-                Rc::new(MutableInteractionSourceInner {
+            inner: RuntimeCell::with_runtime(
+                MutableInteractionSourceInner {
                     next_id: RefCell::new(1),
                     active_presses: RefCell::new(HashSet::default()),
                     active_hovers: RefCell::new(HashSet::default()),
                     pressed: OwnedMutableState::with_runtime(false, runtime.clone()),
                     hovered: OwnedMutableState::with_runtime(false, runtime.clone()),
                     last_interaction: OwnedMutableState::with_runtime(None, runtime.clone()),
-                }),
+                },
                 runtime,
             ),
         }
     }
 
     fn inner(&self) -> Rc<MutableInteractionSourceInner> {
-        self.inner.get_non_reactive()
+        self.inner.get()
     }
 
     /// Returns an id that is stable for this source and differs from the ids of other sources.
     pub fn id(&self) -> u64 {
         let mut hasher = cranpose_core::hash::default::new();
-        self.inner.runtime_state_id().hash(&mut hasher);
+        self.inner.hash(&mut hasher);
         hasher.finish()
     }
 

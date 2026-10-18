@@ -19,12 +19,12 @@ use std::{
 };
 
 use cranpose_core::{
-    Applier, ApplierHost, Composer, ConcreteApplierHost, MemoryApplier, Node, NodeError, NodeId,
-    Phase, RuntimeHandle, SlotTable, SlotsHost,
+    Applier, ApplierHost, ConcreteApplierHost, MemoryApplier, Node, NodeError, NodeId,
+    RuntimeHandle,
 };
 use cranpose_foundation::{
     InvalidationKind, ModifierNodeContext, NodeCapabilities, SemanticsConfiguration,
-    SemanticsCustomAction, SemanticsWidgetRole,
+    SemanticsCustomAction, SemanticsWidgetRole, lazy::LazyItemRoots,
 };
 use cranpose_ui_graphics::{
     ProjectiveTransform,
@@ -50,7 +50,7 @@ use crate::{
         ModifierNodeSlicesDebugStats, Point, Rect as GeometryRect, ResolvedModifiers, Size,
     },
     render_state::AppContext,
-    subcompose_layout::{CachedBatchMeasureInputs, SubcomposeLayoutNode},
+    subcompose_layout::{MeasureCallbacks, SubcomposeLayoutNode},
     widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles, LayoutState},
 };
 
@@ -198,32 +198,22 @@ impl Default for LayoutHost {
 struct ApplierSlotGuard<'a> {
     target: &'a mut MemoryApplier,
     lent: LayoutHost,
-    slots: Rc<RefCell<SlotTable>>,
     context: &'a AppContext,
 }
 
 impl<'a> ApplierSlotGuard<'a> {
     fn new(target: &'a mut MemoryApplier, context: &'a AppContext) -> Self {
         let lent = context.take_layout_host();
-        let slots = {
-            let mut applier_ref = lent.host.borrow_typed();
-            std::mem::swap(target, &mut *applier_ref);
-            applier_ref.slots_handle()
-        };
+        std::mem::swap(target, &mut *lent.host.borrow_typed());
         Self {
             target,
             lent,
-            slots,
             context,
         }
     }
 
     fn host(&self) -> &Rc<ConcreteApplierHost<MemoryApplier>> {
         &self.lent.host
-    }
-
-    fn slots_handle(&self) -> &Rc<RefCell<SlotTable>> {
-        &self.slots
     }
 }
 
@@ -995,11 +985,13 @@ fn layout_tree_origin(root: Option<LayoutState>) -> Point {
 /// names what the pass left unplaced.
 fn finish_placement(applier: &mut MemoryApplier, root: NodeId, context: &AppContext) {
     if applier
-        .with_node::<LayoutNode, _>(root, |node| node.set_position(Point::default(), context))
+        .with_node::<LayoutNode, _>(root, |node| {
+            node.set_position(Point::default(), None, context);
+        })
         .is_err()
     {
         let _ = applier.with_node::<SubcomposeLayoutNode, _>(root, |node| {
-            node.set_position(Point::default(), context);
+            node.set_position(Point::default(), None, context);
         });
     }
     if let Some(pass) = context.placement_pass().with_unplaced_nodes() {
@@ -1412,15 +1404,9 @@ pub fn measure_layout_with_options(
 
     let guard = ApplierSlotGuard::new(applier, &context);
     let applier_host = guard.host();
-    let slots_handle = guard.slots_handle();
     stages.reached();
 
-    let builder = LayoutBuilder::new_with_epoch(
-        Rc::clone(applier_host),
-        epoch,
-        Rc::clone(slots_handle),
-        &context,
-    );
+    let builder = LayoutBuilder::new_with_epoch(Rc::clone(applier_host), epoch, &context);
     stages.reached();
 
     let measured = builder
@@ -1509,14 +1495,12 @@ impl<'a> LayoutBuilder<'a> {
     fn new_with_epoch(
         applier: Rc<ConcreteApplierHost<MemoryApplier>>,
         epoch: u64,
-        slots: Rc<RefCell<SlotTable>>,
         context: &'a Rc<AppContext>,
     ) -> Self {
         Self {
             state: Rc::new(LayoutBuilderState::new_with_epoch(
                 applier,
                 epoch,
-                slots,
                 Rc::clone(context),
             )),
             context,
@@ -1540,7 +1524,6 @@ impl Drop for LayoutBuilder<'_> {
 struct LayoutBuilderState {
     applier: Rc<ConcreteApplierHost<MemoryApplier>>,
     runtime_handle: RefCell<Option<RuntimeHandle>>,
-    slots: Rc<RefCell<SlotTable>>,
     cache_epoch: u64,
     cache_floor: u64,
     frame_arena: RefCell<FrameLayoutArena>,
@@ -1649,7 +1632,6 @@ impl LayoutBuilderState {
     fn new_with_epoch(
         applier: Rc<ConcreteApplierHost<MemoryApplier>>,
         epoch: u64,
-        slots: Rc<RefCell<SlotTable>>,
         context: Rc<AppContext>,
     ) -> Self {
         let runtime_handle = applier.borrow_typed().runtime_handle();
@@ -1657,7 +1639,6 @@ impl LayoutBuilderState {
         Self {
             applier,
             runtime_handle: RefCell::new(runtime_handle),
-            slots,
             cache_epoch: epoch,
             cache_floor: context.layout_cache_floor(),
             frame_arena: RefCell::new(context.take_layout_frame_arena()),
@@ -1845,45 +1826,6 @@ impl LayoutBuilderState {
         self.measure_subcompose_node(node_id, constraints)
     }
 
-    /// The measurement `node_id` cached for `constraints` in layout cache
-    /// epoch `current_epoch`, the one the app context holds.
-    fn cached_measure_node_with_applier(
-        applier: &mut MemoryApplier,
-        node_id: NodeId,
-        constraints: Constraints,
-        current_epoch: u64,
-        context: &AppContext,
-    ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
-        let served = |cache: &LayoutNodeCacheHandles, dirty: bool| {
-            let epoch = cache.epoch();
-            if dirty || epoch == 0 || epoch != current_epoch {
-                return None;
-            }
-            cache.get_measurement(constraints)
-        };
-
-        match applier.with_node::<LayoutNode, _>(node_id, |node| {
-            let measured = served(node.cache_handles(), Node::layout_dirty(node))?;
-            node.set_measured_size(measured.size, context);
-            Some(measured)
-        }) {
-            Ok(measured) => Ok(measured),
-            Err(NodeError::TypeMismatch { .. }) => {
-                match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-                    let measured = served(node.cache_handles(), Node::layout_dirty(node))?;
-                    node.set_measured_size(measured.size, context);
-                    Some(measured)
-                }) {
-                    Ok(measured) => Ok(measured),
-                    Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),
-                    Err(err) => Err(err),
-                }
-            }
-            Err(NodeError::Missing { .. }) => Ok(None),
-            Err(err) => Err(err),
-        }
-    }
-
     fn try_measure_subcompose(
         self: &Rc<Self>,
         node_id: NodeId,
@@ -1942,25 +1884,16 @@ impl LayoutBuilderState {
             inner_constraints.min_height = inner_constraints.min_height.min(constrained_height);
         }
 
-        let mut slots_guard = SlotsGuard::take(&self.slots);
-        let slots_host = slots_guard.host();
-        let applier_host_dyn: Rc<dyn ApplierHost> = Rc::clone(&self.applier) as Rc<dyn ApplierHost>;
-        let composer = Composer::new(
-            Rc::clone(&slots_host),
-            applier_host_dyn,
-            runtime_handle,
-            Some(node_id),
-        );
-        composer.enter_phase(Phase::Measure);
-
+        let applier_host: Rc<dyn ApplierHost> = Rc::clone(&self.applier) as Rc<dyn ApplierHost>;
         let measure_error = RefCell::new(None);
         let measured_children = node_handle.measured_children_scratch();
 
-        let measure_result = node_handle.measure_with_cached_batch(
-            &composer,
+        let measure_result = node_handle.measure_with_callbacks(
+            &applier_host,
+            &runtime_handle,
             node_id,
             inner_constraints,
-            CachedBatchMeasureInputs {
+            MeasureCallbacks {
                 measurer: Box::new(|child_id: NodeId, child_constraints: Constraints| {
                     match self.measure_node(child_id, child_constraints) {
                         Ok(measured) => {
@@ -1980,57 +1913,12 @@ impl LayoutBuilderState {
                         }
                     }
                 }),
-                cached_measure_batch_registrar: Box::new(
-                    |child_ids: &[NodeId],
-                     child_constraints: Constraints,
-                     out: &mut Vec<Option<Size>>| {
-                        out.clear();
-                        out.resize(child_ids.len(), None);
-
-                        let Ok(mut applier) = self.applier.try_borrow_typed() else {
-                            return;
-                        };
-
-                        let mut measured_children = measured_children.borrow_mut();
-                        let current_epoch = crate::render_state::current_layout_cache_epoch();
-                        for (index, &child_id) in child_ids.iter().enumerate() {
-                            match Self::cached_measure_node_with_applier(
-                                &mut applier,
-                                child_id,
-                                child_constraints,
-                                current_epoch,
-                                &self.context,
-                            ) {
-                                Ok(Some(measured)) => {
-                                    out[index] = Some(measured.size);
-                                    measured_children.insert(child_id, Rc::clone(&measured));
-                                }
-                                Ok(None) => {}
-                                Err(err) => {
-                                    let mut slot = measure_error.borrow_mut();
-                                    if slot.is_none() {
-                                        *slot = Some(err);
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                    },
-                ),
                 retained_measure_lookup: Box::new(|child_id| {
                     measured_children.borrow().get(&child_id).cloned()
-                }),
-                retained_measure_registrar: Box::new(|measurements| {
-                    let mut measured_children = measured_children.borrow_mut();
-                    for measured in measurements {
-                        measured_children.insert(measured.node_id(), Rc::clone(measured));
-                    }
                 }),
                 error: &measure_error,
             },
         )?;
-        drop(composer);
-        slots_guard.restore(slots_host.into_table()?);
 
         if let Some(err) = measure_error.borrow_mut().take() {
             return Err(err);
@@ -2070,7 +1958,10 @@ impl LayoutBuilderState {
         let mut alignment_lines = AlignmentLines::default();
         let mut measured_children_by_id = measured_children.borrow_mut();
 
-        if let Ok(mut applier) = self.applier.try_borrow_typed() {
+        // One borrow of the applier places every child; measuring a child
+        // the pass did not measure borrows it on its own.
+        let mut applier = self.applier.try_borrow_typed().ok();
+        if let Some(applier) = applier.as_mut() {
             let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |parent_node| {
                 parent_node.set_measured_size(Size { width, height }, &self.context);
                 parent_node.clear_needs_measure();
@@ -2078,11 +1969,25 @@ impl LayoutBuilderState {
             });
         }
 
+        // A lazy policy placed its items' roots with their measurements; the
+        // other placements are looked up.
+        let placed_roots = node_handle.take_placed_roots();
+        let mut carried = PlacedRootMeasurements::new(&placed_roots);
         for placement in &placements {
-            let child = if let Some(measured) = measured_children_by_id.remove(&placement.node_id) {
+            let looked_up;
+            let child: &MeasuredNode = if let Some(measured) = carried.next_measurement() {
                 measured
             } else {
-                self.measure_node(placement.node_id, inner_constraints)?
+                looked_up =
+                    if let Some(measured) = measured_children_by_id.remove(&placement.node_id) {
+                        measured
+                    } else {
+                        drop(applier.take());
+                        let measured = self.measure_node(placement.node_id, inner_constraints)?;
+                        applier = self.applier.try_borrow_typed().ok();
+                        measured
+                    };
+                &looked_up
             };
             let policy_position = Point {
                 x: padding.left + placement.x,
@@ -2098,22 +2003,23 @@ impl LayoutBuilderState {
                     .translated(policy_position.y),
             );
 
-            if let Ok(mut applier) = self.applier.try_borrow_typed()
+            if let Some(applier) = applier.as_mut()
                 && applier
                     .with_node::<LayoutNode, _>(placement.node_id, |node| {
-                        node.set_position(retained_position, &self.context);
+                        node.set_position(retained_position, Some(node_id), &self.context);
                     })
                     .is_err()
             {
                 let _ = applier.with_node::<SubcomposeLayoutNode, _>(placement.node_id, |node| {
-                    node.set_position(retained_position, &self.context);
+                    node.set_position(retained_position, Some(node_id), &self.context);
                 });
             }
 
-            children.push(MeasuredChild::new(&child, policy_position));
+            children.push(MeasuredChild::new(child, policy_position));
         }
+        drop(applier);
 
-        node_handle.set_active_children(children.iter().map(|child| child.node_id));
+        node_handle.recycle_placed_roots(placed_roots);
         node_handle.recycle_placement_scratch(placements);
 
         Ok(Some(
@@ -2171,7 +2077,7 @@ impl LayoutBuilderState {
         };
         self.bind_layout_children(
             &mut applier,
-            &runtime_state,
+            (node_id, &runtime_state),
             &pools.child_ids,
             ChildPass::Measure,
         )?;
@@ -2275,7 +2181,7 @@ impl LayoutBuilderState {
         };
         self.bind_layout_children(
             &mut applier,
-            &runtime_state,
+            (node_id, &runtime_state),
             &pools.child_ids,
             ChildPass::Intrinsics,
         )?;
@@ -2395,7 +2301,7 @@ impl LayoutBuilderState {
                 resized = true;
             }
             if child.placed {
-                self.place_where_it_was(previous.node_id);
+                self.place_where_it_was(cached.node_id, previous.node_id);
             }
         }
         Ok(Some(KeptChildren {
@@ -2471,20 +2377,20 @@ impl LayoutBuilderState {
         });
     }
 
-    /// Places a child of a kept node where it was: the node's policy would
-    /// place it there again.
-    fn place_where_it_was(&self, child_id: NodeId) {
+    /// Places a child of the kept node `parent` where it was: the node's
+    /// policy would place it there again.
+    fn place_where_it_was(&self, parent: NodeId, child_id: NodeId) {
         let Ok(mut applier) = self.applier.try_borrow_typed() else {
             return;
         };
         if applier
             .with_node::<LayoutNode, _>(child_id, |child| {
-                child.set_position(child.position(), &self.context);
+                child.set_position(child.position(), Some(parent), &self.context);
             })
             .is_err()
         {
             let _ = applier.with_node::<SubcomposeLayoutNode, _>(child_id, |child| {
-                child.set_position(child.layout_state().position(), &self.context);
+                child.set_position(child.layout_state().position(), Some(parent), &self.context);
             });
         }
     }
@@ -2531,12 +2437,12 @@ impl LayoutBuilderState {
     fn bind_layout_children(
         self: &Rc<Self>,
         applier: &mut MemoryApplier,
-        runtime_state: &RefCell<LayoutRuntimeState>,
+        (node_id, runtime_state): (NodeId, &RefCell<LayoutRuntimeState>),
         child_ids: &[NodeId],
         pass: ChildPass,
     ) -> Result<(), NodeError> {
         let mut runtime_state = runtime_state.borrow_mut();
-        runtime_state.bind_children(self, pass, child_ids.len());
+        runtime_state.bind_children(self, node_id, pass, child_ids.len());
         let mut bound = 0;
         for &child_id in child_ids {
             if self.bind_layout_child(applier, &mut runtime_state, bound, child_id)? {
@@ -2730,35 +2636,39 @@ impl Drop for VecPools<'_> {
     }
 }
 
-struct SlotsGuard<'a> {
-    table: &'a RefCell<SlotTable>,
-    slots: Option<SlotTable>,
+/// The measurement of each placement a lazy policy made, in order: see
+/// [`crate::subcompose_layout::SubcomposeMeasureScopeImpl::layout_with_placed_roots`].
+struct PlacedRootMeasurements<'a> {
+    items: std::slice::Iter<'a, Rc<LazyItemRoots>>,
+    item: Option<&'a LazyItemRoots>,
+    root: usize,
 }
 
-impl<'a> SlotsGuard<'a> {
-    fn take(table: &'a RefCell<SlotTable>) -> Self {
-        let slots = std::mem::take(&mut *table.borrow_mut());
+impl<'a> PlacedRootMeasurements<'a> {
+    fn new(items: &'a [Rc<LazyItemRoots>]) -> Self {
         Self {
-            table,
-            slots: Some(slots),
+            items: items.iter(),
+            item: None,
+            root: 0,
         }
     }
 
-    fn host(&mut self) -> Rc<SlotsHost> {
-        let slots = self.slots.take().unwrap_or_default();
-        Rc::new(SlotsHost::new(slots))
-    }
-
-    fn restore(&mut self, slots: SlotTable) {
-        debug_assert!(self.slots.is_none());
-        self.slots = Some(slots);
-    }
-}
-
-impl Drop for SlotsGuard<'_> {
-    fn drop(&mut self) {
-        if let Some(slots) = self.slots.take() {
-            *self.table.borrow_mut() = slots;
+    /// The measurement of the next placement; `None` for a root the item
+    /// holds none for, and once every item is placed.
+    fn next_measurement(&mut self) -> Option<&'a MeasuredNode> {
+        loop {
+            if let Some(item) = self.item
+                && self.root < item.node_ids.len()
+            {
+                let root = self.root;
+                self.root += 1;
+                return item
+                    .measurements
+                    .get(root)
+                    .and_then(|measured| measured.downcast_ref::<MeasuredNode>());
+            }
+            self.item = Some(self.items.next()?);
+            self.root = 0;
         }
     }
 }
@@ -2817,21 +2727,6 @@ impl MeasuredNode {
         } else {
             self.size
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn leaf(node_id: NodeId, size: Size) -> Self {
-        Self::new(
-            node_id,
-            size,
-            Point::default(),
-            Point::default(),
-            Vec::new(),
-        )
-    }
-
-    pub(crate) fn node_id(&self) -> NodeId {
-        self.node_id
     }
 
     pub(crate) fn size(&self) -> Size {
@@ -3486,16 +3381,22 @@ impl LayoutRuntimeState {
             .map_or(&[], |children| children.measurables.as_slice())
     }
 
-    /// Binds the children's frame to `builder` for a pass over `count`
-    /// children. A node that never had one binds nothing.
-    fn bind_children(&mut self, builder: &Rc<LayoutBuilderState>, pass: ChildPass, count: usize) {
+    /// Binds the children's frame of the node `parent` to `builder` for a
+    /// pass over `count` children. A node that never had one binds nothing.
+    fn bind_children(
+        &mut self,
+        builder: &Rc<LayoutBuilderState>,
+        parent: NodeId,
+        pass: ChildPass,
+        count: usize,
+    ) {
         if count == 0 && self.children.is_none() {
             return;
         }
         self.children
             .get_or_insert_with(|| Box::new(LayoutChildren::with_capacity(count)))
             .frame
-            .bind(builder, pass);
+            .bind(builder, parent, pass);
     }
 
     fn unbind_children(&self) {
@@ -3644,6 +3545,8 @@ struct LayoutChildFrame {
     builder: RefCell<Option<Rc<LayoutBuilderState>>>,
     error: RefCell<Option<NodeError>>,
     pass: Cell<ChildPass>,
+    /// The node whose children the frame binds, which places them.
+    parent: Cell<Option<NodeId>>,
 }
 
 /// What a node binds its children for.
@@ -3659,10 +3562,11 @@ enum ChildPass {
 }
 
 impl LayoutChildFrame {
-    fn bind(&self, builder: &Rc<LayoutBuilderState>, pass: ChildPass) {
+    fn bind(&self, builder: &Rc<LayoutBuilderState>, parent: NodeId, pass: ChildPass) {
         self.error.borrow_mut().take();
         *self.builder.borrow_mut() = Some(Rc::clone(builder));
         self.pass.set(pass);
+        self.parent.set(Some(parent));
     }
 
     fn measures(&self) -> bool {
@@ -3848,7 +3752,13 @@ impl LayoutChildMeasureState {
         let placed = read_cell(&self.layout_state, |layout_state| {
             layout_state
                 .as_ref()
-                .map(|layout_state| layout_state.borrow_mut().place(position, &builder.context))
+                .map(|layout_state| {
+                    layout_state.borrow_mut().place(
+                        position,
+                        self.frame.parent.get(),
+                        &builder.context,
+                    );
+                })
                 .is_some()
         });
         if placed {
@@ -3858,7 +3768,7 @@ impl LayoutChildMeasureState {
             return;
         };
         let _ = applier.with_node::<SubcomposeLayoutNode, _>(self.node_id, |node| {
-            node.set_position(position, &builder.context);
+            node.set_position(position, self.frame.parent.get(), &builder.context);
         });
     }
 

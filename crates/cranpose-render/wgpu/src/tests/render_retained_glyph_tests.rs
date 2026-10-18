@@ -875,7 +875,7 @@ fn solid_glyph(id: u32, side: usize) -> SoftwareGlyphAtlasGlyph {
             slant_bits: 0,
         },
         mask: SoftwareGlyphAtlasMask {
-            alpha: vec![1.0; side * side].into(),
+            alpha: vec![255u8; side * side].into(),
             width: side,
             height: side,
         },

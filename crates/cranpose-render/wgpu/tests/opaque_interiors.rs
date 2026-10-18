@@ -605,7 +605,8 @@ fn turned_cells_among_flat_ones_add_no_draws_and_leave_the_flat_pixels_alone() {
 
 fn cleared_page(draw: impl Fn(&mut DrawScopeDefault, f32)) -> RenderGraph {
     let size = FRAME as f32;
-    let mut scope = DrawScopeDefault::new(Size::new(size, size));
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(size, size), &mut recording);
     scope.draw_rect(Brush::solid(Color::from_rgb_u8(20, 24, 40)));
     draw(&mut scope, size);
     RenderGraph::new(shared_test_support::layer_node(

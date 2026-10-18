@@ -36,6 +36,7 @@ impl NodeMarks {
     }
 
     /// The mark of `id`: `0` while it has none.
+    #[inline]
     pub fn get(&self, applier: &MemoryApplier, id: NodeId) -> u8 {
         match applier.resolve_node_index(id) {
             Some(slot) => self.dense.get(slot).copied().unwrap_or(0),
@@ -43,7 +44,40 @@ impl NodeMarks {
         }
     }
 
+    /// Adds the bits of `mark` to `id`'s mark, finding its storage once,
+    /// and returns the mark it had.
+    ///
+    /// ```
+    /// use cranpose_core::{MemoryApplier, NodeMarks};
+    ///
+    /// let applier = MemoryApplier::new();
+    /// let mut marks = NodeMarks::default();
+    /// marks.reset(&applier);
+    /// assert_eq!(marks.add(&applier, 7, 1), 0);
+    /// assert_eq!(marks.add(&applier, 7, 2), 1);
+    /// assert_eq!(marks.get(&applier, 7), 3);
+    /// ```
+    #[inline]
+    pub fn add(&mut self, applier: &MemoryApplier, id: NodeId, mark: u8) -> u8 {
+        let Some(slot) = applier.resolve_node_index(id) else {
+            let entry = self.elsewhere.entry(id).or_insert(0);
+            let had = *entry;
+            *entry |= mark;
+            return had;
+        };
+        if slot >= self.dense.len() {
+            self.dense.resize(slot + 1, 0);
+        }
+        let Some(entry) = self.dense.get_mut(slot) else {
+            return 0;
+        };
+        let had = *entry;
+        *entry |= mark;
+        had
+    }
+
     /// Marks `id` with `mark`.
+    #[inline]
     pub fn set(&mut self, applier: &MemoryApplier, id: NodeId, mark: u8) {
         let Some(slot) = applier.resolve_node_index(id) else {
             self.elsewhere.insert(id, mark);

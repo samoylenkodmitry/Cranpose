@@ -195,7 +195,7 @@ pub fn ownedMutableStateOfNeverEqual<T: Clone + 'static>(initial: T) -> OwnedMut
     OwnedMutableState::with_runtime(initial, current_runtime("ownedMutableStateOfNeverEqual"))
 }
 
-fn current_runtime(what: &str) -> runtime::RuntimeHandle {
+pub(crate) fn current_runtime(what: &str) -> runtime::RuntimeHandle {
     composer_context::try_with_composer(super::composer::Composer::runtime_handle)
         .or_else(runtime::current_runtime_handle)
         .unwrap_or_else(|| {

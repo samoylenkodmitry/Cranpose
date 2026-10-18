@@ -934,44 +934,52 @@ impl RoundedFill {
         }
     }
 
-    /// [`point_in_resolved_rounded_rect`] for a point of a row within the
-    /// rect's height, from the corners worked out once: each test computes
-    /// what that function computes, in the same order. Out of line, so the
-    /// row loop around a fill stays small enough to keep inline.
-    #[inline(never)]
-    fn contains(&self, x: f32, y: f32) -> bool {
-        let rect = self.rect;
-        let (top_left, top_right) = (self.top_left, self.top_right);
-        let (bottom_right, bottom_left) = (self.bottom_right, self.bottom_left);
-        x >= rect.x
-            && x <= rect.x + rect.width
+    /// Whether a point of a row within the rect's height passes the left
+    /// half of [`point_in_resolved_rounded_rect`]: the left side and the
+    /// left corners, tested as that function tests them. Moving right, a
+    /// point that passes keeps passing.
+    fn clear_of_left(&self, x: f32, y: f32) -> bool {
+        let (top_left, bottom_left) = (self.top_left, self.bottom_left);
+        x >= self.rect.x
             && !(x < top_left.centre_x && y < top_left.centre_y && top_left.excludes(x, y))
+            && !(x < bottom_left.centre_x && y > bottom_left.centre_y && bottom_left.excludes(x, y))
+    }
+
+    /// The right half of the test, as [`Self::clear_of_left`]: moving
+    /// left, a point that passes keeps passing.
+    fn clear_of_right(&self, x: f32, y: f32) -> bool {
+        let (top_right, bottom_right) = (self.top_right, self.bottom_right);
+        x <= self.rect.x + self.rect.width
             && !(x > top_right.centre_x && y < top_right.centre_y && top_right.excludes(x, y))
             && !(x > bottom_right.centre_x
                 && y > bottom_right.centre_y
                 && bottom_right.excludes(x, y))
-            && !(x < bottom_left.centre_x && y > bottom_left.centre_y && bottom_left.excludes(x, y))
     }
 
     /// The pixels of the row centred at `y` whose centres lie in the rounded
     /// rect, within `min_x..max_x`. The shape is convex, so they form one
-    /// run; its ends lie at most a corner radius in from the rect's sides.
+    /// run: it starts at the first pixel clear of the left half and ends
+    /// after the last one clear of the right half, and a pixel between
+    /// passes both. When the first pixel clear of the left fails the right
+    /// half, so does every pixel after it, and the run is empty. Out of
+    /// line, so the row loop around a fill stays small enough to keep
+    /// inline.
+    #[inline(never)]
     fn run(&self, y: f32, min_x: i32, max_x: i32) -> (i32, i32) {
         let rect = self.rect;
         if !(y >= rect.y && y <= rect.y + rect.height) {
             return NO_RUN;
         }
-        let inside = |x: i32| self.contains(x as f32 + 0.5, y);
         let flat = |x: i32| (self.flat_left..=self.flat_right).contains(&(x as f32 + 0.5));
         let mut start = min_x;
         if !(start < max_x && flat(start)) {
-            while start < max_x && !inside(start) {
+            while start < max_x && !self.clear_of_left(start as f32 + 0.5, y) {
                 start += 1;
             }
         }
         let mut end = max_x;
         if !(end > start && flat(end - 1)) {
-            while end > start && !inside(end - 1) {
+            while end > start && !self.clear_of_right((end - 1) as f32 + 0.5, y) {
                 end -= 1;
             }
         }

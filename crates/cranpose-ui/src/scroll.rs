@@ -14,7 +14,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use cranpose_core::{MutableState, NodeId, collections::map::HashMap};
+use cranpose_core::{MutableState, NodeId, RuntimeCell, collections::map::HashMap};
 use cranpose_foundation::{
     Constraints, DelegatableNode, LayoutModifierNode, Measurable, ModifierNode,
     ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState,
@@ -72,7 +72,7 @@ impl InvalidationCallbacks {
 pub struct ScrollState {
     value: MutableState<f32>,
     in_progress: MutableState<bool>,
-    inner: MutableState<Rc<ScrollStateInner>>,
+    inner: RuntimeCell<ScrollStateInner>,
 }
 
 pub(crate) struct ScrollStateInner {
@@ -295,21 +295,21 @@ impl ScrollState {
         Self {
             value: MutableState::with_runtime(initial, runtime.clone()),
             in_progress: MutableState::with_runtime(false, runtime.clone()),
-            inner: MutableState::with_runtime(
-                Rc::new(ScrollStateInner {
+            inner: RuntimeCell::with_runtime(
+                ScrollStateInner {
                     max_value: RefCell::new(0.0),
                     viewport_extent: RefCell::new(0.0),
                     invalidate_callbacks: InvalidationCallbacks::new(),
                     pending_invalidation: Cell::new(false),
                     settle_policy: RefCell::new(None),
-                }),
+                },
                 runtime,
             ),
         }
     }
 
     fn inner(&self) -> Rc<ScrollStateInner> {
-        self.inner.get_non_reactive()
+        self.inner.get()
     }
 
     /// Installs (or clears) the settle policy consulted when interactions end.
@@ -338,7 +338,7 @@ impl ScrollState {
     /// Get the unique ID of this ScrollState
     pub fn id(&self) -> u64 {
         let mut hasher = cranpose_core::hash::default::new();
-        self.inner.runtime_state_id().hash(&mut hasher);
+        self.inner.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -697,7 +697,7 @@ impl Eq for ScrollElement {}
 
 impl Hash for ScrollElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.state.inner.runtime_state_id().hash(state);
+        self.state.inner.hash(state);
         self.is_vertical.hash(state);
         self.reverse_scrolling.hash(state);
     }

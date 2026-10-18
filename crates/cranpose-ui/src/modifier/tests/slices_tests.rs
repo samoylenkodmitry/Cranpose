@@ -39,7 +39,8 @@ fn local_pointer_dispatch_preserves_consumption_and_terminal_delivery() {
 
 fn recorded(command: &DrawCommand, size: Size) -> Vec<DrawPrimitive> {
     use cranpose_ui_graphics::DrawScope as _;
-    let mut scope = crate::draw::command_draw_scope(size);
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = crate::draw::command_draw_scope(size, &mut recording);
     match command {
         DrawCommand::Behind(draw) | DrawCommand::WithContent(draw) | DrawCommand::Overlay(draw) => {
             draw(&mut scope);

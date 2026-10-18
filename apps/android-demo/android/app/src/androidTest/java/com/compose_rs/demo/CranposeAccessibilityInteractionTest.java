@@ -86,8 +86,12 @@ public final class CranposeAccessibilityInteractionTest {
             assertTrue(awaitNode(automation, "Express").isChecked());
             assertFalse(awaitNode(automation, "Standard").isChecked());
             assertTrue(awaitNode(automation, "Standard").performAction(AccessibilityNodeInfo.ACTION_CLICK));
+            // The host refreshes each radio from its own change event: wait
+            // until both read the new choice, not only the one clicked.
             long radioDeadline = SystemClock.uptimeMillis() + 5000;
-            while (!awaitNode(automation, "Standard").isChecked() && SystemClock.uptimeMillis() < radioDeadline) {
+            while ((!awaitNode(automation, "Standard").isChecked()
+                    || awaitNode(automation, "Express").isChecked())
+                    && SystemClock.uptimeMillis() < radioDeadline) {
                 SystemClock.sleep(50);
             }
             assertTrue(awaitNode(automation, "Standard").isChecked());

@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::{ops::Range, rc::Rc};
 
 use cranpose_ui::{Brush, DrawCommand, DrawCommandFn};
 use cranpose_ui_graphics::{
@@ -245,41 +245,62 @@ pub fn primitives_for_placement(
     placement: DrawPlacement,
     size: Size,
 ) -> Vec<DrawPrimitive> {
-    recording_for_placement_reusing(command, placement, size, CommandRecording::default)
-        .map(|(recording, segments)| recording.primitives(segments).collect())
-        .unwrap_or_default()
+    let Some((func, split)) = placement_func(command, placement) else {
+        return Vec::new();
+    };
+    let mut recording = CommandRecording::default();
+    let segments = record_with(func, split, size, &mut recording);
+    recording.primitives(segments).collect()
 }
 
-/// Records `command` into `storage`, a recording the caller kept from an
-/// earlier frame so its buffers keep the capacity they earned, and names
-/// the segments `placement` draws: everything for a behind or overlay
-/// command, the part before or after the last content marker for a
+/// Records `command` into the recording `storage` gives, one the caller
+/// kept from an earlier frame so its buffers keep the capacity they earned,
+/// and names the segments `placement` draws: everything for a behind or
+/// overlay command, the part before or after the last content marker for a
 /// with-content command. `None` when the command has no `placement` half,
-/// in which case storage is not acquired and nothing is recorded.
+/// in which case storage is not acquired and nothing is recorded. The
+/// recording is drawn in place: only one another handle still shares is
+/// copied first.
 pub fn recording_for_placement_reusing(
     command: &DrawCommand,
     placement: DrawPlacement,
     size: Size,
-    storage: impl FnOnce() -> CommandRecording,
-) -> Option<(CommandRecording, Range<u32>)> {
-    let record = move |func: &DrawCommandFn| {
-        let mut scope = cranpose_ui::command_draw_scope_reusing(size, storage());
-        func(&mut scope);
-        scope.finish()
-    };
+    storage: impl FnOnce() -> Rc<CommandRecording>,
+) -> Option<(Rc<CommandRecording>, Range<u32>)> {
+    let (func, split) = placement_func(command, placement)?;
+    let mut shared = storage();
+    let segments = record_with(func, split, size, Rc::make_mut(&mut shared));
+    Some((shared, segments))
+}
+
+/// The closure `command` draws `placement` with, and for a with-content
+/// command whether `placement` takes the part before its content.
+fn placement_func(
+    command: &DrawCommand,
+    placement: DrawPlacement,
+) -> Option<(&DrawCommandFn, Option<bool>)> {
     match (placement, command) {
         (DrawPlacement::Behind, DrawCommand::Behind(func))
-        | (DrawPlacement::Overlay, DrawCommand::Overlay(func)) => {
-            let recording = record(func);
-            let segments = recording.all_segments();
-            Some((recording, segments))
-        }
+        | (DrawPlacement::Overlay, DrawCommand::Overlay(func)) => Some((func, None)),
         (_, DrawCommand::WithContent(func)) => {
-            let recording = record(func);
-            let segments = recording.content_split(placement == DrawPlacement::Behind);
-            Some((recording, segments))
+            Some((func, Some(placement == DrawPlacement::Behind)))
         }
         _ => None,
+    }
+}
+
+fn record_with(
+    func: &DrawCommandFn,
+    split: Option<bool>,
+    size: Size,
+    recording: &mut CommandRecording,
+) -> Range<u32> {
+    let mut scope = cranpose_ui::command_draw_scope(size, recording);
+    func(&mut scope);
+    scope.finish();
+    match split {
+        None => recording.all_segments(),
+        Some(behind) => recording.content_split(behind),
     }
 }
 

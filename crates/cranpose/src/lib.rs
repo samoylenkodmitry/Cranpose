@@ -157,6 +157,8 @@ mod android_purchases;
 mod android_services;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_surface;
+#[cfg(target_os = "android")]
+mod android_symbols;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_text_input;
 #[cfg(all(feature = "android", target_os = "android"))]
@@ -434,13 +436,13 @@ pub fn FrameEffect<K: PartialEq + 'static>(
 
 #[doc(hidden)]
 pub use cranpose_core::{
-    __branch_group_scope_advance, __branch_group_scope_deferred, __current_composer,
+    __branch_group_scope_advance, __branch_group_scope_deferred, __constant, __current_composer,
     __source_scope, CallbackHolder, ComposableGroup, Composer, Key, ParamReturnState, ParamState,
     RecomposeScope, ReturnSlot, ValueSlotHandle, branch_location_key,
     cached_composable_definition_key, caller_location_key, composable_definition_key,
-    composable_identity_key, const_location_key, debug_label_current_scope, hot_branch_key,
-    hot_definition_key, hot_origin, location_key, noted_location_key, refresh_param,
-    refresh_shared_param, store_param, with_current_composer,
+    composable_identity_key, const_location_key, constant_value_key, debug_label_current_scope,
+    hot_branch_key, hot_definition_key, hot_origin, location_key, noted_location_key,
+    refresh_param, refresh_shared_param, store_param, with_current_composer,
 };
 
 #[cfg(all(

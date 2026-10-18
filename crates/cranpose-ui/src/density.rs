@@ -21,10 +21,7 @@
 use cranpose_core::{CompositionLocalProvider, StaticCompositionLocal, staticCompositionLocalOf};
 use cranpose_ui_layout::{ceil_to_px, round_to_px};
 
-use crate::{
-    font_scale::FontScaleCurve,
-    render_state::{current_density, current_font_scale_curve},
-};
+use crate::font_scale::FontScaleCurve;
 
 /// The device pixel grid a layout measures against: how many device pixels
 /// a layout point is worth, and how the platform converts a text size.
@@ -48,11 +45,10 @@ impl Density {
     /// read the density -- use [`density`] for that, so a subtree provided its
     /// own grid is honoured.
     pub fn from_host() -> Self {
-        if crate::render_state::has_current_app_context() {
-            Self::with_curve(current_density(), current_font_scale_curve())
-        } else {
-            Self::default()
-        }
+        crate::render_state::current_host_density()
+            .map_or_else(Self::default, |(density, curve)| {
+                Self::with_curve(density, curve)
+            })
     }
 
     /// A grid stated outright, for a test or a golden. The setting is taken as

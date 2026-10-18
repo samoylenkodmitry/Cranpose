@@ -24,16 +24,11 @@ pub enum DrawCommand {
 }
 
 /// The scope every framework-run draw command records into: sized by the
-/// consumer, measuring text with the app's fonts.
-pub fn command_draw_scope(size: Size) -> DrawScopeDefault {
-    DrawScopeDefault::with_text_measurer(size, AppContextTextMeasurer::shared())
-}
-
-/// [`command_draw_scope`] recording into storage the consumer already owns —
-/// the retained-recorder path where a command's buffer keeps its capacity
-/// across frames.
-pub fn command_draw_scope_reusing(size: Size, storage: CommandRecording) -> DrawScopeDefault {
-    DrawScopeDefault::with_text_measurer_reusing(size, AppContextTextMeasurer::shared(), storage)
+/// consumer, measuring text with the app's fonts, recording into `recording`
+/// in place. A recording kept from an earlier frame keeps the capacity its
+/// buffers earned.
+pub fn command_draw_scope(size: Size, recording: &mut CommandRecording) -> DrawScopeDefault<'_> {
+    DrawScopeDefault::with_text_measurer(size, AppContextTextMeasurer::shared(), recording)
 }
 
 /// Collects the draw commands that a `Modifier::draw_with_cache` block records.
@@ -64,10 +59,11 @@ impl DrawCacheBuilder {
 /// Runs every command at `size` and returns the primitives they record, in command order.
 pub fn execute_draw_commands(commands: &[DrawCommand], size: Size) -> Vec<DrawPrimitive> {
     let mut primitives = Vec::new();
+    let mut recording = CommandRecording::default();
     for command in commands {
         match command {
             DrawCommand::Behind(f) | DrawCommand::WithContent(f) | DrawCommand::Overlay(f) => {
-                let mut scope = command_draw_scope(size);
+                let mut scope = command_draw_scope(size, &mut recording);
                 f(&mut scope);
                 primitives.extend(scope.into_primitives());
             }

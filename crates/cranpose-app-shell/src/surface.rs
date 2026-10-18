@@ -12,11 +12,12 @@
 
 use std::{cell::RefCell, fmt::Debug, rc::Rc};
 
-use cranpose_core::{NodeId, collections::map::HashSet};
+use cranpose_core::{MemoryApplier, NodeId, collections::map::HashSet};
 use cranpose_foundation::{PointerButtons, PointerSource, RotaryScrollEvent};
 use cranpose_render_common::Renderer;
 use cranpose_ui::{
-    LayoutTree, PlatformTextInputHandler, SemanticsTree, pointer_icon_session::PointerIconState,
+    LayoutNode, LayoutTree, MovedSceneNode, PlatformTextInputHandler, SemanticsTree,
+    pointer_icon_session::PointerIconState,
 };
 use cranpose_ui_graphics::{Point, PointerIcon, Size};
 use web_time::Instant;
@@ -422,18 +423,17 @@ fn append_surface_dirty_node(
     lane: SurfaceDirtyLane,
     seen: &mut HashSet<(usize, NodeId)>,
 ) {
+    // The scene update drops repeats of reshaped and moved nodes: the
+    // reshaped ones go into a sorted partial list, the moved ones into its
+    // dirty map. Both lists are taken by the frame that sees them.
     match lane {
         SurfaceDirtyLane::Layout => {
             surface.scene_dirty = true;
-            if seen.insert((surface_index, node)) {
-                surface.scoped_layout_scene_nodes.push(node);
-            }
+            surface.scoped_layout_scene_nodes.push(node);
         }
         SurfaceDirtyLane::Moved => {
             surface.scene_dirty = true;
-            if seen.insert((surface_index, node)) {
-                surface.scoped_moved_scene_nodes.push(node);
-            }
+            surface.scoped_moved_scene_nodes.push(node);
         }
         SurfaceDirtyLane::Draw => surface.scoped_draw_nodes.push(node),
         SurfaceDirtyLane::LayerProperties => surface.scoped_layer_property_nodes.push(node),
@@ -442,18 +442,6 @@ fn append_surface_dirty_node(
                 surface.structural_scene_nodes.push(node);
             }
         }
-    }
-}
-
-/// The nodes `lane` already queued on `surface`, which routing must not
-/// queue twice.
-fn queued_scene_nodes<R: Renderer>(surface: &RootSurface<R>, lane: SurfaceDirtyLane) -> &[NodeId] {
-    match lane {
-        SurfaceDirtyLane::Layout => &surface.scoped_layout_scene_nodes,
-        SurfaceDirtyLane::Moved => &surface.scoped_moved_scene_nodes,
-        SurfaceDirtyLane::Draw
-        | SurfaceDirtyLane::LayerProperties
-        | SurfaceDirtyLane::Structural => &[],
     }
 }
 
@@ -481,13 +469,6 @@ pub(crate) fn route_nodes_by_surface<R: Renderer>(
         return;
     }
     scratch.seen.clear();
-    for (index, surface) in surfaces.iter().enumerate() {
-        scratch.seen.extend(
-            queued_scene_nodes(surface, lane)
-                .iter()
-                .map(|node| (index, *node)),
-        );
-    }
     if app.app_context.window_roots().is_empty() {
         scratch.owners.clear();
         if let Some(index) = surfaces
@@ -517,6 +498,77 @@ pub(crate) fn route_nodes_by_surface<R: Renderer>(
             append_surface_dirty_node(surface, index, node, lane, &mut scratch.seen);
         }
     }
+}
+
+/// Routes the nodes a layout pass laid out again, `laid_out`, and the nodes
+/// it only moved. A moved node is left out when the scene update of its
+/// surface lays out its placer again: that update places every child of the
+/// placer's layer anew, so the node's own record would be found and settled
+/// there and nowhere else.
+pub(crate) fn route_geometry_scene_nodes<R: Renderer>(
+    app: &mut ShellApp,
+    surfaces: &mut [RootSurface<R>],
+    laid_out: impl IntoIterator<Item = NodeId>,
+    moved: &[MovedSceneNode],
+    scratch: &mut SurfaceRoutingScratch,
+) {
+    if moved.is_empty() {
+        route_nodes_by_surface(app, surfaces, laid_out, SurfaceDirtyLane::Layout, scratch);
+        return;
+    }
+    scratch.laid_out_starts.clear();
+    scratch.laid_out_starts.extend(
+        surfaces
+            .iter()
+            .map(|surface| surface.scoped_layout_scene_nodes.len()),
+    );
+    route_nodes_by_surface(app, surfaces, laid_out, SurfaceDirtyLane::Layout, scratch);
+    let mut routed = std::mem::take(&mut scratch.moved);
+    routed.clear();
+    {
+        let applier = app.composition.applier_mut();
+        scratch.laid_out.reset(&applier);
+        for (surface, &start) in surfaces.iter().zip(&scratch.laid_out_starts) {
+            for &node in &surface.scoped_layout_scene_nodes[start..] {
+                scratch.laid_out.set(&applier, node, 1);
+            }
+        }
+        let marks = &scratch.laid_out;
+        let window_roots = !app.app_context.window_roots().is_empty();
+        // The children one node placed come together: their placer is
+        // looked up once.
+        let mut last_placer = None;
+        for &moved in moved {
+            let placed_again = moved.placer.is_some_and(|placer| match last_placer {
+                Some((last, laid_out)) if last == placer => laid_out,
+                _ => {
+                    let laid_out = marks.get(&applier, placer) != 0;
+                    last_placer = Some((placer, laid_out));
+                    laid_out
+                }
+            });
+            if !placed_again || window_roots && is_window_root(&applier, moved.node) {
+                routed.push(moved.node);
+            }
+        }
+    }
+    route_nodes_by_surface(
+        app,
+        surfaces,
+        routed.iter().copied(),
+        SurfaceDirtyLane::Moved,
+        scratch,
+    );
+    scratch.moved = routed;
+}
+
+/// Whether `node` is a window root, which goes to a surface of its own.
+fn is_window_root(applier: &MemoryApplier, node: NodeId) -> bool {
+    applier.get_ref(node).is_ok_and(|node| {
+        let node: &dyn std::any::Any = node;
+        node.downcast_ref::<LayoutNode>()
+            .is_some_and(LayoutNode::is_window_root)
+    })
 }
 
 /// One surface borrowed together with its shell: the handle a platform

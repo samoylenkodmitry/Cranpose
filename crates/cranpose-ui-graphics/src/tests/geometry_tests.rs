@@ -14,12 +14,13 @@ fn recorded_iterators_preserve_shapes_content_and_shadows() {
         blur_radius: 4.0,
         blend_mode: BlendMode::SrcOver,
     });
-    let mut scope = DrawScopeDefault::new(Size::new(24.0, 24.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(24.0, 24.0), &mut recording);
     scope.push_recorded(None);
     scope.push_recorded(Some(shadow.clone()));
     scope.push_recorded([DrawPrimitive::Content, shape.clone()]);
     scope.push_recorded(std::iter::empty());
-    let recording = scope.finish();
+    scope.finish();
     assert_eq!(recording.content_markers(), 1);
     assert_eq!(
         recording.into_primitives_with_markers(),
@@ -61,12 +62,15 @@ fn compact_recording_materializes_in_recorded_order() {
         scope.push_recorded(batch.clone());
     };
 
-    let mut compact = DrawScopeDefault::new(size);
+    let mut compact_recording = CommandRecording::default();
+    let mut compact = DrawScopeDefault::new(size, &mut compact_recording);
     record(&mut compact);
-    let finished = compact.finish();
+    compact.finish();
+    let finished = compact_recording;
 
     let arc_via_ordinary = |brush: Brush, radius: f32, start: f32, sweep: f32| {
-        let mut scope = DrawScopeDefault::new(size);
+        let mut recording = CommandRecording::default();
+        let mut scope = DrawScopeDefault::new(size, &mut recording);
         scope.draw_arc(brush, center, radius, start, sweep, stroke);
         scope.into_primitives().remove(0)
     };
@@ -103,7 +107,8 @@ fn compact_recording_materializes_in_recorded_order() {
         },
         DrawPrimitive::Content,
         {
-            let mut scope = DrawScopeDefault::new(size);
+            let mut recording = CommandRecording::default();
+            let mut scope = DrawScopeDefault::new(size, &mut recording);
             scope.draw_annular_sector(gradient.clone(), center, 10.0, 20.0, 0.0, 2.0);
             scope.into_primitives().remove(0)
         },
@@ -162,7 +167,8 @@ fn unwrap_image(primitive: &DrawPrimitive) -> &DrawPrimitive {
 
 #[test]
 fn draw_svg_path_emits_supersampled_image_over_path_bounds() {
-    let mut scope = DrawScopeDefault::new(Size::new(32.0, 32.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(32.0, 32.0), &mut recording);
     scope.draw_svg_path("M 4 4 H 20 V 20 H 4 Z", Brush::solid(Color::RED));
 
     let primitives = scope.into_primitives();
@@ -192,7 +198,8 @@ fn draw_svg_path_emits_supersampled_image_over_path_bounds() {
 
 #[test]
 fn draw_svg_path_ignores_invalid_data() {
-    let mut scope = DrawScopeDefault::new(Size::new(16.0, 16.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(16.0, 16.0), &mut recording);
     scope.draw_svg_path("definitely not a path", Brush::solid(Color::WHITE));
     assert!(scope.into_primitives().is_empty());
 }
@@ -203,7 +210,8 @@ fn vector_mask_pixels_preserve_quantized_color_and_coverage() {
         .expect("curved path");
     for alpha in [0.003, 0.371, 0.5, 1.0] {
         let color = Color::rgba(0.123, 0.456, 0.789, alpha);
-        let mut scope = DrawScopeDefault::new(Size::new(32.0, 32.0));
+        let mut recording = CommandRecording::default();
+        let mut scope = DrawScopeDefault::new(Size::new(32.0, 32.0), &mut recording);
         scope.draw_vector_path(&path, Brush::solid(color));
         let primitives = scope.into_primitives();
         let DrawPrimitive::Image { image, rect, .. } = &primitives[0] else {
@@ -233,7 +241,8 @@ fn draw_vector_path_paints_every_color_of_a_gradient() {
     let red = Color::rgba(1.0, 0.0, 0.0, 1.0);
     let clear_blue = Color::rgba(0.0, 0.0, 1.0, 0.0);
     let raster_of = |size: Size| {
-        let mut scope = DrawScopeDefault::new(size);
+        let mut recording = CommandRecording::default();
+        let mut scope = DrawScopeDefault::new(size, &mut recording);
         scope.draw_vector_path(
             &path,
             Brush::vertical_gradient_default(vec![red, clear_blue]),
@@ -270,7 +279,8 @@ fn draw_vector_path_paints_every_color_of_a_gradient() {
 #[test]
 fn draw_vector_path_applies_brush_alpha() {
     let path = crate::VectorPath::parse("M 0 0 H 8 V 8 H 0 Z").expect("valid path");
-    let mut scope = DrawScopeDefault::new(Size::new(16.0, 16.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(16.0, 16.0), &mut recording);
     scope.draw_vector_path(&path, Brush::solid(Color::rgba(0.0, 0.0, 1.0, 0.5)));
 
     let primitives = scope.into_primitives();
@@ -292,7 +302,8 @@ fn draw_vector_path_applies_brush_alpha() {
 fn the_same_path_and_color_reuse_one_raster() {
     let path = crate::VectorPath::parse("M 0 0 H 7 V 7 H 0 Z").expect("valid path");
     let raster_of = |brush: Brush| {
-        let mut scope = DrawScopeDefault::new(Size::new(16.0, 16.0));
+        let mut recording = CommandRecording::default();
+        let mut scope = DrawScopeDefault::new(Size::new(16.0, 16.0), &mut recording);
         scope.draw_vector_path(&path, brush);
         let primitives = scope.into_primitives();
         let DrawPrimitive::Image { image, .. } = &primitives[0] else {
@@ -309,7 +320,8 @@ fn the_same_path_and_color_reuse_one_raster() {
     assert_ne!(first.id(), other_color.id());
 
     let wider = crate::VectorPath::parse("M 0 0 H 9 V 7 H 0 Z").expect("valid path");
-    let mut scope = DrawScopeDefault::new(Size::new(16.0, 16.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(16.0, 16.0), &mut recording);
     scope.draw_vector_path(&wider, Brush::solid(Color::rgba(0.0, 0.0, 1.0, 1.0)));
     let primitives = scope.into_primitives();
     let DrawPrimitive::Image { image, .. } = &primitives[0] else {
@@ -346,7 +358,8 @@ fn vector_mask_cache_accounts_for_stored_bytes_on_insert_and_eviction() {
 
 #[test]
 fn draw_content_inserts_content_marker() {
-    let mut scope = DrawScopeDefault::new(Size::new(8.0, 8.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(8.0, 8.0), &mut recording);
     scope.draw_rect(Brush::solid(Color::WHITE));
     scope.draw_content();
     scope.draw_rect_blend(Brush::solid(Color::BLACK), BlendMode::DstOut);
@@ -413,7 +426,8 @@ fn a_text_block_is_placed_by_its_alignment_inside_the_rect() {
 
 #[test]
 fn draw_rect_blend_wraps_non_default_modes() {
-    let mut scope = DrawScopeDefault::new(Size::new(10.0, 10.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(10.0, 10.0), &mut recording);
     scope.draw_rect_blend(Brush::solid(Color::RED), BlendMode::DstOut);
 
     let primitives = scope.into_primitives();
@@ -432,7 +446,8 @@ fn draw_rect_blend_wraps_non_default_modes() {
 
 #[test]
 fn draw_circle_records_centered_round_rect() {
-    let mut scope = DrawScopeDefault::new(Size::new(40.0, 40.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(40.0, 40.0), &mut recording);
     scope.draw_circle(Brush::solid(Color::BLUE), Point::new(12.0, 16.0), 5.0);
 
     let primitives = scope.into_primitives();
@@ -456,7 +471,8 @@ fn draw_circle_records_centered_round_rect() {
 
 #[test]
 fn draw_circle_blend_wraps_non_default_modes() {
-    let mut scope = DrawScopeDefault::new(Size::new(10.0, 10.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(10.0, 10.0), &mut recording);
     scope.draw_circle_blend(
         Brush::solid(Color::RED),
         Point::new(5.0, 5.0),
@@ -538,7 +554,8 @@ fn rect_union_encloses_both_inputs() {
 
 #[test]
 fn draw_image_uses_scope_size_as_default_rect() {
-    let mut scope = DrawScopeDefault::new(Size::new(40.0, 24.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(40.0, 24.0), &mut recording);
     let image = ImageBitmap::from_rgba8(2, 2, vec![255; 16]).expect("image");
     scope.draw_image(image.clone());
     let primitives = scope.into_primitives();
@@ -565,7 +582,8 @@ fn draw_image_uses_scope_size_as_default_rect() {
 
 #[test]
 fn draw_image_src_stores_src_rect() {
-    let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0), &mut recording);
     let image = ImageBitmap::from_rgba8(64, 64, vec![255; 64 * 64 * 4]).expect("image");
     let src = Rect {
         x: 10.0,
@@ -603,7 +621,8 @@ fn draw_image_src_stores_src_rect() {
 
 #[test]
 fn draw_image_at_sampled_records_requested_sampling() {
-    let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0), &mut recording);
     let image = ImageBitmap::from_rgba8(8, 8, vec![255; 8 * 8 * 4]).expect("image");
     let dst = Rect {
         x: 2.0,
@@ -637,7 +656,8 @@ fn draw_image_at_sampled_records_requested_sampling() {
 
 #[test]
 fn draw_image_src_sampled_records_requested_sampling() {
-    let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0), &mut recording);
     let image = ImageBitmap::from_rgba8(64, 64, vec![255; 64 * 64 * 4]).expect("image");
     let src = Rect {
         x: 4.0,
@@ -677,7 +697,8 @@ fn draw_image_src_sampled_records_requested_sampling() {
 
 #[test]
 fn draw_image_at_clamps_alpha() {
-    let mut scope = DrawScopeDefault::new(Size::new(10.0, 10.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(10.0, 10.0), &mut recording);
     let image = ImageBitmap::from_rgba8(1, 1, vec![255, 255, 255, 255]).expect("image");
     scope.draw_image_at(
         Rect::from_origin_size(Point::new(2.0, 3.0), Size::new(5.0, 6.0)),
@@ -758,13 +779,14 @@ fn approx(a: f32, b: f32) -> bool {
     (a - b).abs() < 0.25
 }
 
-fn scope(size: f32) -> DrawScopeDefault {
-    DrawScopeDefault::new(Size::new(size, size))
+fn scope(size: f32, recording: &mut CommandRecording) -> DrawScopeDefault<'_> {
+    DrawScopeDefault::new(Size::new(size, size), recording)
 }
 
 #[test]
 fn draw_rect_stroked_records_scope_rect_and_stroke() {
-    let mut scope = scope(20.0);
+    let mut recording = CommandRecording::default();
+    let mut scope = scope(20.0, &mut recording);
     scope.draw_rect_stroked(
         Brush::solid(Color::RED),
         Stroke::new(3.0).with_join(StrokeJoin::Bevel),
@@ -788,7 +810,8 @@ fn draw_rect_stroked_records_scope_rect_and_stroke() {
 
 #[test]
 fn draw_rect_at_stroked_records_requested_rect() {
-    let mut scope = scope(50.0);
+    let mut recording = CommandRecording::default();
+    let mut scope = scope(50.0, &mut recording);
     let rect = Rect {
         x: 4.0,
         y: 6.0,
@@ -811,7 +834,8 @@ fn draw_rect_at_stroked_records_requested_rect() {
 
 #[test]
 fn draw_round_rect_stroked_keeps_radii_and_stroke() {
-    let mut scope = scope(30.0);
+    let mut recording = CommandRecording::default();
+    let mut scope = scope(30.0, &mut recording);
     scope.draw_round_rect_stroked(
         Brush::solid(Color::GREEN),
         CornerRadii::uniform(5.0),
@@ -835,7 +859,8 @@ fn draw_round_rect_stroked_keeps_radii_and_stroke() {
 
 #[test]
 fn draw_round_rect_at_stroked_records_requested_rect() {
-    let mut scope = scope(60.0);
+    let mut recording = CommandRecording::default();
+    let mut scope = scope(60.0, &mut recording);
     let rect = Rect {
         x: 1.0,
         y: 2.0,
@@ -865,7 +890,8 @@ fn draw_round_rect_at_stroked_records_requested_rect() {
 
 #[test]
 fn draw_circle_stroked_lowers_to_stroked_round_rect() {
-    let mut scope = scope(40.0);
+    let mut recording = CommandRecording::default();
+    let mut scope = scope(40.0, &mut recording);
     scope.draw_circle_stroked(
         Brush::solid(Color::BLUE),
         Point::new(12.0, 16.0),
@@ -897,7 +923,8 @@ fn draw_circle_stroked_lowers_to_stroked_round_rect() {
 
 #[test]
 fn draw_arc_records_arc_primitive_with_tight_bounds() {
-    let mut scope = scope(200.0);
+    let mut recording = CommandRecording::default();
+    let mut scope = scope(200.0, &mut recording);
     scope.draw_arc(
         Brush::solid(Color::RED),
         Point::new(100.0, 100.0),
@@ -936,7 +963,8 @@ fn draw_arc_records_arc_primitive_with_tight_bounds() {
 
 #[test]
 fn draw_arc_bounds_cover_a_quadrant_spanning_sweep() {
-    let mut scope = scope(200.0);
+    let mut recording = CommandRecording::default();
+    let mut scope = scope(200.0, &mut recording);
     scope.draw_arc(
         Brush::solid(Color::RED),
         Point::new(100.0, 100.0),
@@ -956,7 +984,8 @@ fn draw_arc_bounds_cover_a_quadrant_spanning_sweep() {
 
 #[test]
 fn draw_annular_sector_records_inner_radius_and_no_stroke() {
-    let mut scope = scope(200.0);
+    let mut recording = CommandRecording::default();
+    let mut scope = scope(200.0, &mut recording);
     scope.draw_annular_sector(
         Brush::solid(Color::WHITE),
         Point::new(100.0, 100.0),
@@ -991,7 +1020,8 @@ fn draw_annular_sector_records_inner_radius_and_no_stroke() {
 
 #[test]
 fn draw_arc_blend_wraps_non_default_modes() {
-    let mut scope = scope(100.0);
+    let mut recording = CommandRecording::default();
+    let mut scope = scope(100.0, &mut recording);
     scope.draw_arc_blend(
         Brush::solid(Color::RED),
         Point::new(50.0, 50.0),
@@ -1015,7 +1045,8 @@ fn draw_arc_blend_wraps_non_default_modes() {
 
 #[test]
 fn draw_annular_sector_blend_wraps_non_default_modes() {
-    let mut scope = scope(100.0);
+    let mut recording = CommandRecording::default();
+    let mut scope = scope(100.0, &mut recording);
     scope.draw_annular_sector_blend(
         Brush::solid(Color::RED),
         Point::new(50.0, 50.0),
@@ -1036,7 +1067,8 @@ fn draw_annular_sector_blend_wraps_non_default_modes() {
 
 #[test]
 fn stroked_blend_variants_wrap_non_default_modes() {
-    let mut scope = scope(20.0);
+    let mut recording = CommandRecording::default();
+    let mut scope = scope(20.0, &mut recording);
     scope.draw_rect_stroked_blend(
         Brush::solid(Color::RED),
         Stroke::new(2.0),
@@ -1073,7 +1105,8 @@ fn stroked_blend_variants_wrap_non_default_modes() {
 
 #[test]
 fn negative_sweeps_and_overlong_sweeps_produce_finite_bounds() {
-    let mut scope = scope(200.0);
+    let mut recording = CommandRecording::default();
+    let mut scope = scope(200.0, &mut recording);
     scope.draw_arc(
         Brush::solid(Color::RED),
         Point::new(100.0, 100.0),
@@ -1110,7 +1143,8 @@ fn negative_sweeps_and_overlong_sweeps_produce_finite_bounds() {
 
 #[test]
 fn degenerate_stroke_and_arc_inputs_emit_nothing_and_never_panic() {
-    let mut scope = scope(50.0);
+    let mut recording = CommandRecording::default();
+    let mut scope = scope(50.0, &mut recording);
     let brush = Brush::solid(Color::RED);
     let center = Point::new(25.0, 25.0);
 
@@ -1146,7 +1180,8 @@ fn degenerate_stroke_and_arc_inputs_emit_nothing_and_never_panic() {
 
 #[test]
 fn zero_radius_arc_with_positive_width_stays_finite() {
-    let mut scope = scope(50.0);
+    let mut recording = CommandRecording::default();
+    let mut scope = scope(50.0, &mut recording);
     scope.draw_arc(
         Brush::solid(Color::RED),
         Point::new(25.0, 25.0),
@@ -1199,10 +1234,13 @@ impl DrawTextMeasurer for FixedAdvanceTextMeasurer {
     }
 }
 
-fn text_scope(size: Size) -> (DrawScopeDefault, Rc<FixedAdvanceTextMeasurer>) {
+fn text_scope(
+    size: Size,
+    recording: &mut CommandRecording,
+) -> (DrawScopeDefault<'_>, Rc<FixedAdvanceTextMeasurer>) {
     let measurer = FixedAdvanceTextMeasurer::shared(10.0, 20.0);
     (
-        DrawScopeDefault::with_text_measurer(size, measurer.clone()),
+        DrawScopeDefault::with_text_measurer(size, measurer.clone(), recording),
         measurer,
     )
 }
@@ -1216,7 +1254,8 @@ fn unwrap_text(primitive: &DrawPrimitive) -> &TextPrimitive {
 
 #[test]
 fn drawn_text_occupies_exactly_the_box_measure_text_reported() {
-    let (mut scope, _) = text_scope(Size::new(200.0, 100.0));
+    let mut recording = CommandRecording::default();
+    let (mut scope, _) = text_scope(Size::new(200.0, 100.0), &mut recording);
     let style = DrawTextStyle::new(16.0);
     let measured = scope.measure_text("ABCD", &style);
 
@@ -1258,7 +1297,8 @@ fn text_alignment_positions_the_measured_block_inside_the_box() {
         (TextAlign::Right, TextVerticalAlign::Bottom, 280.0, 110.0),
     ];
     for (align, vertical_align, expected_x, expected_y) in cases {
-        let (mut scope, _) = text_scope(Size::new(400.0, 400.0));
+        let mut recording = CommandRecording::default();
+        let (mut scope, _) = text_scope(Size::new(400.0, 400.0), &mut recording);
         let style = DrawTextStyle::new(16.0)
             .with_align(align)
             .with_vertical_align(vertical_align);
@@ -1276,7 +1316,8 @@ fn text_alignment_positions_the_measured_block_inside_the_box() {
 
 #[test]
 fn baseline_aligned_text_hangs_above_the_box_edge() {
-    let (mut scope, _) = text_scope(Size::new(200.0, 200.0));
+    let mut recording = CommandRecording::default();
+    let (mut scope, _) = text_scope(Size::new(200.0, 200.0), &mut recording);
     let style = DrawTextStyle::new(16.0).with_vertical_align(TextVerticalAlign::Baseline);
     let measured = scope.measure_text("Ag", &style);
     scope.draw_text_at(
@@ -1301,7 +1342,8 @@ fn baseline_aligned_text_hangs_above_the_box_edge() {
 
 #[test]
 fn draw_text_fills_the_whole_scope_rect() {
-    let (mut scope, _) = text_scope(Size::new(120.0, 60.0));
+    let mut recording = CommandRecording::default();
+    let (mut scope, _) = text_scope(Size::new(120.0, 60.0), &mut recording);
     let style = DrawTextStyle::new(16.0)
         .with_align(TextAlign::Right)
         .with_vertical_align(TextVerticalAlign::Bottom);
@@ -1317,7 +1359,8 @@ fn draw_text_fills_the_whole_scope_rect() {
 
 #[test]
 fn draw_text_from_ignores_alignment_and_anchors_the_top_left() {
-    let (mut scope, _) = text_scope(Size::new(400.0, 400.0));
+    let mut recording = CommandRecording::default();
+    let (mut scope, _) = text_scope(Size::new(400.0, 400.0), &mut recording);
     let style = DrawTextStyle::new(16.0)
         .with_align(TextAlign::Center)
         .with_vertical_align(TextVerticalAlign::Bottom);
@@ -1338,7 +1381,8 @@ fn draw_text_from_ignores_alignment_and_anchors_the_top_left() {
 
 #[test]
 fn multiline_text_measures_the_widest_line_and_stacks_the_lines() {
-    let (mut scope, _) = text_scope(Size::new(400.0, 400.0));
+    let mut recording = CommandRecording::default();
+    let (mut scope, _) = text_scope(Size::new(400.0, 400.0), &mut recording);
     let style = DrawTextStyle::new(16.0);
     scope.draw_text_from(Point::ZERO, Brush::solid(Color::WHITE), "AB\nABCDE", &style);
     let primitives = scope.into_primitives();
@@ -1349,7 +1393,8 @@ fn multiline_text_measures_the_widest_line_and_stacks_the_lines() {
 
 #[test]
 fn empty_text_draws_nothing_and_never_measures() {
-    let (mut scope, measurer) = text_scope(Size::new(100.0, 100.0));
+    let mut recording = CommandRecording::default();
+    let (mut scope, measurer) = text_scope(Size::new(100.0, 100.0), &mut recording);
     scope.draw_text(Brush::solid(Color::WHITE), "", &DrawTextStyle::new(16.0));
     scope.draw_text_at(
         Rect::from_size(Size::new(10.0, 10.0)),
@@ -1373,7 +1418,8 @@ fn empty_text_draws_nothing_and_never_measures() {
 
 #[test]
 fn invisible_text_draws_nothing() {
-    let (mut scope, _) = text_scope(Size::new(100.0, 100.0));
+    let mut recording = CommandRecording::default();
+    let (mut scope, _) = text_scope(Size::new(100.0, 100.0), &mut recording);
     let style = DrawTextStyle::new(16.0);
     scope.draw_text(Brush::solid(Color(1.0, 1.0, 1.0, 0.0)), "AB", &style);
     scope.draw_text(
@@ -1392,7 +1438,8 @@ fn invisible_text_draws_nothing() {
 
 #[test]
 fn text_keeps_its_gradient_brush() {
-    let (mut scope, _) = text_scope(Size::new(100.0, 100.0));
+    let mut recording = CommandRecording::default();
+    let (mut scope, _) = text_scope(Size::new(100.0, 100.0), &mut recording);
     let gradient = Brush::linear_gradient(vec![Color::RED, Color::BLUE]);
     scope.draw_text(gradient.clone(), "AB", &DrawTextStyle::new(16.0));
     let primitives = scope.into_primitives();
@@ -1401,7 +1448,8 @@ fn text_keeps_its_gradient_brush() {
 
 #[test]
 fn a_scope_without_a_measurer_falls_back_to_the_font_free_estimate() {
-    let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0), &mut recording);
     let style = DrawTextStyle::new(16.0);
     assert_eq!(
         scope.measure_text("ABC", &style),
@@ -1427,9 +1475,11 @@ fn degenerate_text_geometry_emits_nothing_and_never_panics() {
         }
     }
 
+    let mut recording = CommandRecording::default();
     let mut scope = DrawScopeDefault::with_text_measurer(
         Size::new(50.0, 50.0),
         Rc::new(DegenerateTextMeasurer),
+        &mut recording,
     );
     scope.draw_text(Brush::solid(Color::WHITE), "AB", &DrawTextStyle::new(16.0));
     scope.draw_text_at(
@@ -1451,7 +1501,8 @@ fn degenerate_text_geometry_emits_nothing_and_never_panics() {
 
 #[test]
 fn text_style_survives_lowering_into_the_primitive() {
-    let (mut scope, _) = text_scope(Size::new(100.0, 100.0));
+    let mut recording = CommandRecording::default();
+    let (mut scope, _) = text_scope(Size::new(100.0, 100.0), &mut recording);
     let style = DrawTextStyle::new(21.0)
         .with_font_family("Fira Sans")
         .with_weight(FontWeight::BOLD)
@@ -1606,7 +1657,8 @@ fn a_translated_primitive_moves_every_position_it_carries() {
 
 #[test]
 fn an_inset_scope_draws_inside_the_insets_and_keeps_content_markers() {
-    let mut scope = DrawScopeDefault::new(Size::new(20.0, 10.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(20.0, 10.0), &mut recording);
     let mut seen = None;
     scope.draw_inset(EdgeInsets::from_components(1.0, 2.0, 3.0, 4.0), |inner| {
         seen = Some(inner.size());

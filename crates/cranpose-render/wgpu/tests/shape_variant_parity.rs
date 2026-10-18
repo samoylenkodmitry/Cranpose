@@ -2,7 +2,7 @@ use cranpose_render_common::graph::{
     DrawPrimitiveNode, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
     RenderGraph, RenderNode,
 };
-use cranpose_ui_graphics::{DrawScope, DrawScopeDefault, Rect};
+use cranpose_ui_graphics::{CommandRecording, DrawScope, DrawScopeDefault, Rect};
 use support::{
     SIZE, record_gradient_fill_scene, record_mixed_scene, record_solid_fill_scene,
     record_solid_scene,
@@ -11,8 +11,11 @@ use support::{
 use crate::support;
 
 fn graph_for(record: fn(&mut DrawScopeDefault), clip: Option<Rect>) -> RenderGraph {
-    let mut scope =
-        DrawScopeDefault::new(cranpose_ui_graphics::Size::new(SIZE as f32, SIZE as f32));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(
+        cranpose_ui_graphics::Size::new(SIZE as f32, SIZE as f32),
+        &mut recording,
+    );
     record(&mut scope);
     let bounds = Rect {
         x: 0.0,

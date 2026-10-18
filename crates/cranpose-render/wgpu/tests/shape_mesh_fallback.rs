@@ -21,7 +21,8 @@ const ROOT_SCALE: f32 = 1.25;
 /// A clipped layer, smaller than the frame, whose draw run holds the shapes
 /// `record` draws: the clip cuts some of them.
 fn graph(record: impl FnOnce(&mut DrawScopeDefault)) -> RenderGraph {
-    let mut scope = DrawScopeDefault::new(Size::new(SIZE as f32, SIZE as f32));
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(SIZE as f32, SIZE as f32), &mut recording);
     record(&mut scope);
     RenderGraph::new(LayerNode {
         cache_policy: CachePolicy::None,

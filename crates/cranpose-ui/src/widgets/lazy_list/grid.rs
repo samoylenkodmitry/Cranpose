@@ -10,8 +10,8 @@ use std::{
 
 use cranpose_core::NodeId;
 use cranpose_foundation::lazy::{
-    BeyondItem, LazyGridItemSpanScope, LazyItemSource, LazyListIntervalContent,
-    LazyListMeasureResult, LazyListMeasuredItem, LazyListState,
+    BeyondItem, LazyGridItemSpanScope, LazyItemRoots, LazyItemSource, LazyListIntervalContent,
+    LazyListMeasureResult, LazyListMeasuredItem, LazyListState, SmallOffsetVec,
     measure_lazy_list_with_beyond_bounds_policy, rememberLazyListStateWithPosition,
 };
 use cranpose_ui_layout::{LinearArrangement, MeasureScope as _};
@@ -19,8 +19,8 @@ use cranpose_ui_layout::{LinearArrangement, MeasureScope as _};
 use super::{
     LazyColumnNode, LazyColumnSpec, LazyFrame, LazyListContentHandle, LazyListItemMeasureInputs,
     LazyListItems, LazyListMeasureContext, LazyRowNode, LazyRowSpec, PaddingValues,
-    SubcomposeMeasureScopeImpl, beyond_composition, focused_lazy_item, lazy_list_child_constraints,
-    pin_sticky_header, place_focused_lazy_item, request_beyond_items,
+    SubcomposeMeasureScopeImpl, beyond_composition, focused_lazy_item, pin_sticky_header,
+    place_focused_lazy_item, request_beyond_items,
 };
 use crate::{composable, modifier::Modifier};
 
@@ -656,32 +656,53 @@ impl LazyItemSource for LazyGridLines<'_, '_, '_> {
             return header;
         }
         let key = content.get_key(line.first).to_slot_id();
-        let mut measured = LazyListMeasuredItem::new(index, key, None, 0.0, 0.0);
+        let mut roots = LazyItemRoots::default();
+        let mut child_cross_offsets = SmallOffsetVec::new();
+        let mut child_main_sizes = SmallOffsetVec::new();
+        let (mut main_axis_size, mut cross_axis_size) = (0.0_f32, 0.0);
         for cell in lines.cells(line, content) {
             let cross = self.sizes.offset(cell.column);
             let item = self.measure_at(self.cell_width(line, cell), cell.item);
-            measured.main_axis_size = measured.main_axis_size.max(item.main_axis_size);
-            measured.cross_axis_size = cross + item.cross_axis_size;
-            for (root, &node_id) in item.node_ids.iter().enumerate() {
-                let start = item.child_offsets.get(root).copied().unwrap_or(0.0);
-                let end = item
+            main_axis_size = main_axis_size.max(item.main_axis_size);
+            cross_axis_size = cross + item.cross_axis_size;
+            let cell_roots = &item.roots;
+            for (root, &node_id) in cell_roots.node_ids.iter().enumerate() {
+                let start = cell_roots.child_offsets.get(root).copied().unwrap_or(0.0);
+                let end = cell_roots
                     .child_offsets
                     .get(root + 1)
                     .copied()
                     .unwrap_or(item.main_axis_size);
-                measured.node_ids.push(node_id);
-                measured.child_offsets.push(start);
-                measured.child_cross_axis_sizes.push(
-                    item.child_cross_axis_sizes
+                roots.node_ids.push(node_id);
+                roots.child_offsets.push(start);
+                roots.child_cross_axis_sizes.push(
+                    cell_roots
+                        .child_cross_axis_sizes
                         .get(root)
                         .copied()
                         .unwrap_or(item.cross_axis_size),
                 );
-                measured.child_cross_offsets.push(cross);
-                measured.child_main_sizes.push(end - start);
+                child_cross_offsets.push(cross);
+                child_main_sizes.push(end - start);
+                if let Some(measured) = cell_roots.measurements.get(root) {
+                    roots.measurements.push(Rc::clone(measured));
+                }
             }
         }
-        measured.main_axis_size = measured.main_axis_size.max(1.0);
+        // A line has a measurement for each root or none.
+        if roots.measurements.len() != roots.node_ids.len() {
+            roots.measurements.clear();
+        }
+        let mut measured = LazyListMeasuredItem::new(
+            index,
+            key,
+            None,
+            main_axis_size.max(1.0),
+            cross_axis_size,
+            Rc::new(roots),
+        );
+        measured.child_cross_offsets = child_cross_offsets;
+        measured.child_main_sizes = child_main_sizes;
         measured
     }
 
@@ -799,47 +820,7 @@ pub(super) fn measure_grid_viewport(
     if !lines.headers.is_empty() {
         pin_sticky_header(&mut result, &lines.headers, |line| source.measure(line));
     }
-    register_grid_measurements(scope, &result, &lines, content, frame, sizes);
     (result, line_count)
-}
-
-/// Registers the measurements of the placed cells at their widths and of
-/// the headers at the full width.
-fn register_grid_measurements(
-    scope: &mut SubcomposeMeasureScopeImpl<'_>,
-    result: &LazyListMeasureResult,
-    lines: &GridLines,
-    content: &LazyListIntervalContent,
-    frame: &LazyFrame,
-    sizes: CellSizes,
-) {
-    fn node_ids(ids: &[u64]) -> impl Iterator<Item = NodeId> + '_ {
-        ids.iter()
-            .filter_map(|&node_id| NodeId::try_from(node_id).ok())
-    }
-    for measured in &result.visible_items {
-        let line = lines.line(measured.index);
-        if line.header {
-            scope.ensure_cached_measurement_node_ids(
-                node_ids(&measured.node_ids),
-                lazy_list_child_constraints(frame.is_vertical, frame.item_cross_axis_size),
-            );
-            continue;
-        }
-        let mut root = 0;
-        for cell in lines.cells(line, content) {
-            let cross = sizes.offset(cell.column);
-            let roots = measured.child_cross_offsets[root..]
-                .iter()
-                .take_while(|&&offset| offset == cross)
-                .count();
-            scope.ensure_cached_measurement_node_ids(
-                node_ids(&measured.node_ids[root..root + roots]),
-                lazy_list_child_constraints(frame.is_vertical, sizes.width(cell.column, cell.span)),
-            );
-            root += roots;
-        }
-    }
 }
 
 /// Tells a screen reader a grid's lines and the cells across them, where a

@@ -10,7 +10,9 @@ const SIDE: u32 = 160;
 const UNIFORM_FLOATS: usize = 60;
 
 fn arcs() -> CommandRecording {
-    let mut scope = DrawScopeDefault::new(Size::new(SIDE as f32, SIDE as f32));
+    let mut scope_recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope =
+        DrawScopeDefault::new(Size::new(SIDE as f32, SIDE as f32), &mut scope_recording);
     scope.draw_rect_at(
         Rect {
             x: 30.25,
@@ -34,7 +36,8 @@ fn arcs() -> CommandRecording {
             }
         }
     }
-    let recording = scope.finish();
+    scope.finish();
+    let recording = scope_recording;
     assert!(
         recording
             .shapes()
@@ -311,7 +314,9 @@ fn reference_source() -> String {
 }
 
 fn boundary_arcs() -> CommandRecording {
-    let mut scope = DrawScopeDefault::new(Size::new(SIDE as f32, SIDE as f32));
+    let mut scope_recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope =
+        DrawScopeDefault::new(Size::new(SIDE as f32, SIDE as f32), &mut scope_recording);
     for (row, cap) in [StrokeCap::Butt, StrokeCap::Round, StrokeCap::Square]
         .into_iter()
         .enumerate()
@@ -332,7 +337,8 @@ fn boundary_arcs() -> CommandRecording {
             }
         }
     }
-    scope.finish()
+    scope.finish();
+    scope_recording
 }
 
 #[test]
@@ -362,7 +368,8 @@ fn arc_coverage_matches_the_frozen_distance_function() {
 fn tiny_arcs() -> CommandRecording {
     const GRID: usize = 24;
     let canvas = SIDE as f32 * 20.0;
-    let mut scope = DrawScopeDefault::new(Size::new(canvas, canvas));
+    let mut scope_recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(canvas, canvas), &mut scope_recording);
     for index in 0..GRID * GRID {
         let (row, column) = (index / GRID, index % GRID);
         scope.draw_arc(
@@ -380,7 +387,8 @@ fn tiny_arcs() -> CommandRecording {
                 .with_cap([StrokeCap::Butt, StrokeCap::Round, StrokeCap::Square][index % 3]),
         );
     }
-    let recording = scope.finish();
+    scope.finish();
+    let recording = scope_recording;
     assert!(
         recording
             .shapes()

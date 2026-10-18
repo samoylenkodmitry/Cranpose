@@ -87,7 +87,8 @@ fn mixed_shapes(scope: &mut DrawScopeDefault, center: Point, count: usize, (phas
 }
 
 fn run(center: Point, count: usize, frame: Frame, command: Option<DrawCommandId>) -> RenderNode {
-    let mut scope = DrawScopeDefault::new(Size::new(SIZE, SIZE));
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(SIZE, SIZE), &mut recording);
     mixed_shapes(&mut scope, center, count, frame);
     RenderNode::DrawRun(DrawRunNode::for_command(
         PrimitivePhase::BeforeChildren,

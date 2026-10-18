@@ -2,6 +2,8 @@
 //!
 //! Contains the result of measuring a single item during lazy layout.
 
+use std::{any::Any, fmt, rc::Rc};
+
 use smallvec::SmallVec;
 
 use super::lazy_list_state::LazyListItemInfo;
@@ -17,7 +19,7 @@ pub type SmallOffsetVec = SmallVec<[f32; 4]>;
 /// A measured item in a lazy list.
 ///
 /// Contains all the information needed to place the item after measurement.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct LazyListMeasuredItem {
     /// Index in the data source.
     pub index: usize,
@@ -37,34 +39,84 @@ pub struct LazyListMeasuredItem {
     /// Offset from the start of the list content (set during placement).
     pub offset: f32,
 
-    /// Node IDs of the composed item's children (for placing all subcomposed nodes).
-    /// Uses SmallVec to avoid heap allocation for typical items with 1-4 root nodes.
-    pub node_ids: SmallNodeVec,
+    /// What measuring the item's roots found.
+    pub roots: Rc<LazyItemRoots>,
 
-    /// Offset of each child within the item (for stacking multiple children).
-    /// Each entry corresponds to the same index in `node_ids`.
-    /// Uses SmallVec to avoid heap allocation for typical items with 1-4 root nodes.
-    pub child_offsets: SmallOffsetVec,
-    /// Measured cross-axis extent of each root, in the order of `node_ids`.
-    pub child_cross_axis_sizes: SmallOffsetVec,
-    /// Cross-axis offset of each root in the order of `node_ids`, for the
-    /// cells of a grid line; empty for a list item, whose roots start at the
-    /// cross-axis start.
+    /// Cross-axis offset of each root in the order of its node ids, for the
+    /// cells of a grid line and the lane of a staggered grid item; empty for
+    /// a list item, whose roots start at the cross-axis start.
     pub child_cross_offsets: SmallOffsetVec,
-    /// Main-axis extent of each root in the order of `node_ids`, for the
+    /// Main-axis extent of each root in the order of its node ids, for the
     /// cells of a grid line, which overlap along the main axis; empty for a
     /// list item, whose roots follow one another.
     pub child_main_sizes: SmallOffsetVec,
 }
 
+/// What measuring the roots of an item found, in the order of its roots.
+/// Every copy of the item a measure pass hands around shares it with the
+/// cache the item came from, so a copy costs a reference count.
+#[derive(Clone, Default)]
+pub struct LazyItemRoots {
+    /// Node IDs of the composed item's roots, for placing them.
+    pub node_ids: SmallNodeVec,
+    /// Offset of each root within the item, along the main axis.
+    pub child_offsets: SmallOffsetVec,
+    /// Measured cross-axis extent of each root.
+    pub child_cross_axis_sizes: SmallOffsetVec,
+    /// The layout's measurement of each root, in the order of `node_ids`,
+    /// which the layout places the root with. The layout's measurement type
+    /// is not this crate's, so it is kept as `dyn Any`.
+    pub measurements: SmallVec<[Rc<dyn Any>; 4]>,
+}
+
+impl fmt::Debug for LazyItemRoots {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LazyItemRoots")
+            .field("node_ids", &self.node_ids)
+            .field("child_offsets", &self.child_offsets)
+            .field("child_cross_axis_sizes", &self.child_cross_axis_sizes)
+            .field("measurements", &self.measurements.len())
+            .finish()
+    }
+}
+
+// A copy copies the placement offsets as slices: a list item's are empty,
+// and the derived clone of an empty `SmallVec` still walks an iterator.
+impl Clone for LazyListMeasuredItem {
+    fn clone(&self) -> Self {
+        Self {
+            index: self.index,
+            key: self.key,
+            content_type: self.content_type,
+            main_axis_size: self.main_axis_size,
+            cross_axis_size: self.cross_axis_size,
+            offset: self.offset,
+            roots: Rc::clone(&self.roots),
+            child_cross_offsets: copy_offsets(&self.child_cross_offsets),
+            child_main_sizes: copy_offsets(&self.child_main_sizes),
+        }
+    }
+}
+
+/// A copy of `offsets`. A list item's are empty, and copying an empty slice
+/// still calls `memcpy`.
+fn copy_offsets(offsets: &SmallOffsetVec) -> SmallOffsetVec {
+    if offsets.is_empty() {
+        SmallOffsetVec::new()
+    } else {
+        SmallVec::from_slice(offsets)
+    }
+}
+
 impl LazyListMeasuredItem {
-    /// Creates a new measured item.
+    /// Creates a measured item with the measured `roots`.
     pub fn new(
         index: usize,
         key: u64,
         content_type: Option<u64>,
         main_axis_size: f32,
         cross_axis_size: f32,
+        roots: Rc<LazyItemRoots>,
     ) -> Self {
         Self {
             index,
@@ -73,9 +125,7 @@ impl LazyListMeasuredItem {
             main_axis_size,
             cross_axis_size,
             offset: 0.0,
-            node_ids: SmallVec::new(),
-            child_offsets: SmallVec::new(),
-            child_cross_axis_sizes: SmallVec::new(),
+            roots,
             child_cross_offsets: SmallVec::new(),
             child_main_sizes: SmallVec::new(),
         }

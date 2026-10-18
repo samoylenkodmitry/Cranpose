@@ -5,7 +5,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::MutableState;
+use cranpose_core::{MutableState, RuntimeCell};
 
 use super::{InputTransformation, TextFieldBuffer, TextRange};
 
@@ -149,7 +149,7 @@ impl Drop for EditGuard<'_> {
 pub struct TextFieldState {
     /// Internal state for editing machinery.
     /// Public for cross-crate pointer-based identity comparison (Hash).
-    pub inner: MutableState<Rc<RefCell<TextFieldStateInner>>>,
+    pub inner: RuntimeCell<RefCell<TextFieldStateInner>>,
 
     value: MutableState<TextFieldValue>,
 }
@@ -172,8 +172,8 @@ impl TextFieldState {
         let runtime = cranpose_core::current_runtime_handle()
             .expect("TextFieldState::new requires an active runtime");
         Self {
-            inner: MutableState::with_runtime(
-                Rc::new(RefCell::new(TextFieldStateInner {
+            inner: RuntimeCell::with_runtime(
+                RefCell::new(TextFieldStateInner {
                     is_editing: false,
                     listeners: Vec::new(),
                     undo_stack: VecDeque::new(),
@@ -182,7 +182,7 @@ impl TextFieldState {
                     text_revision: Cell::new(0),
                     last_edit_time: Cell::new(None),
                     pending_undo_snapshot: RefCell::new(None),
-                })),
+                }),
                 runtime.clone(),
             ),
             value: MutableState::with_runtime(initial_value, runtime),
@@ -195,8 +195,8 @@ impl TextFieldState {
         let runtime = cranpose_core::current_runtime_handle()
             .expect("TextFieldState::with_selection requires an active runtime");
         Self {
-            inner: MutableState::with_runtime(
-                Rc::new(RefCell::new(TextFieldStateInner {
+            inner: RuntimeCell::with_runtime(
+                RefCell::new(TextFieldStateInner {
                     is_editing: false,
                     listeners: Vec::new(),
                     undo_stack: VecDeque::new(),
@@ -205,7 +205,7 @@ impl TextFieldState {
                     text_revision: Cell::new(0),
                     last_edit_time: Cell::new(None),
                     pending_undo_snapshot: RefCell::new(None),
-                })),
+                }),
                 runtime.clone(),
             ),
             value: MutableState::with_runtime(initial_value, runtime),
@@ -213,13 +213,13 @@ impl TextFieldState {
     }
 
     fn inner(&self) -> Rc<RefCell<TextFieldStateInner>> {
-        self.inner.get_non_reactive()
+        self.inner.get()
     }
 
     /// Identifies this state. Clones of the state report the same id.
     pub fn id(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.inner.runtime_state_id().hash(&mut hasher);
+        self.inner.hash(&mut hasher);
         hasher.finish()
     }
 

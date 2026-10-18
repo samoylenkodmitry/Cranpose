@@ -56,13 +56,14 @@ impl TextLuminance {
 pub struct MaskGammaCorrection(&'static CorrectionTable);
 
 impl MaskGammaCorrection {
-    /// The 8-bit mask value to blend in place of `coverage`.
-    pub fn apply(self, coverage: f32) -> u8 {
-        self.0[usize::from(unit_to_u8(coverage))]
+    /// The 8-bit mask value to blend in place of `coverage`, a mask's
+    /// coverage byte.
+    pub fn apply(self, coverage: u8) -> u8 {
+        self.0[usize::from(coverage)]
     }
 
     /// [`Self::apply`] as a unit coverage.
-    pub fn apply_unit(self, coverage: f32) -> f32 {
+    pub fn apply_unit(self, coverage: u8) -> f32 {
         unit_coverage(self.apply(coverage))
     }
 }
@@ -84,9 +85,10 @@ static UNIT_COVERAGE: [f32; 256] = {
     table
 };
 
-fn unit_to_u8(value: f32) -> u8 {
-    // Each glyph pixel takes one: without a float rounding instruction the
-    // method is a library call.
+/// `value`, a unit coverage or channel, as a byte.
+pub(crate) fn unit_to_u8(value: f32) -> u8 {
+    // Each pixel of a new glyph mask takes one: without a float rounding
+    // instruction the method is a library call.
     cranpose_ui_graphics::whole::round(value.clamp(0.0, 1.0) * 255.0) as u8
 }
 

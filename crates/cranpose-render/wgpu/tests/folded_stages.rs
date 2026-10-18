@@ -17,7 +17,8 @@ use crate::{
 const NO_SHADER_FOLD: &str = "CRANPOSE_NO_SHADER_FOLD";
 
 fn shapes() -> RenderNode {
-    let mut scope = DrawScopeDefault::new(Size::new(SIZE as f32, SIZE as f32));
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(SIZE as f32, SIZE as f32), &mut recording);
     record_mixed_scene(&mut scope);
     RenderNode::DrawRun(DrawRunNode::new(
         PrimitivePhase::BeforeChildren,

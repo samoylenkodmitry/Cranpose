@@ -156,6 +156,12 @@ struct RecordingPolicy {
     seen: Rc<RefCell<Option<Constraints>>>,
 }
 
+impl PartialEq for RecordingPolicy {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.seen, &other.seen)
+    }
+}
+
 impl MeasurePolicy for RecordingPolicy {
     fn measure(
         &self,
@@ -1446,13 +1452,7 @@ fn nested_measurement_returns_multiple_scratch_vecs_to_pool() -> Result<(), Node
     let context = crate::render_state::require_current_app_context("a layout test");
     let guard = ApplierSlotGuard::new(&mut applier, &context);
     let applier_host = guard.host();
-    let slots_handle = guard.slots_handle();
-    let builder = LayoutBuilder::new_with_epoch(
-        Rc::clone(applier_host),
-        1,
-        Rc::clone(slots_handle),
-        &context,
-    );
+    let builder = LayoutBuilder::new_with_epoch(Rc::clone(applier_host), 1, &context);
 
     builder.state.measure_node(
         root_id,
@@ -2175,12 +2175,8 @@ fn parent_data_uses_resolved_layout_properties() {
     );
     let node_id = applier.create(Box::new(layout_node));
     let context = crate::render_state::require_current_app_context("a layout test");
-    let builder = LayoutBuilder::new_with_epoch(
-        Rc::new(ConcreteApplierHost::new(applier)),
-        1,
-        Rc::new(RefCell::new(SlotTable::default())),
-        &context,
-    );
+    let builder =
+        LayoutBuilder::new_with_epoch(Rc::new(ConcreteApplierHost::new(applier)), 1, &context);
     let frame = Rc::new(LayoutChildFrame::default());
     let state = LayoutChildMeasureState::new(node_id, Rc::clone(&frame));
     builder
@@ -2206,7 +2202,7 @@ fn parent_data_uses_resolved_layout_properties() {
         cranpose_ui_layout::ParentData::default(),
         "a child reports no parent data outside its parent's measure"
     );
-    frame.bind(&builder.state, ChildPass::Measure);
+    frame.bind(&builder.state, node_id, ChildPass::Measure);
 
     let parent_data = measurable
         .flex_parent_data()
@@ -2317,7 +2313,11 @@ fn recycled_node_generation_reaches_every_semantics_snapshot() -> Result<(), Nod
     let node_id = applier.create(Box::new(make_node()));
     measure_layout(&mut applier, node_id, Size::new(100.0, 100.0))?;
     applier.remove(node_id)?;
-    applier.insert_with_id(node_id, Box::new(make_node()))?;
+    assert!(
+        applier
+            .insert_recycled_node_or_create(node_id, Box::new(make_node()))
+            .stable_id_reused
+    );
     let generation = applier.node_generation(node_id);
     assert_ne!(generation, 0);
     let measurements = measure_layout(&mut applier, node_id, Size::new(100.0, 100.0))?;
@@ -2977,115 +2977,6 @@ fn measure_layout_error_preserves_applier_and_slots() -> Result<(), NodeError> {
     );
 
     Ok(())
-}
-
-#[test]
-fn the_cached_measure_gate_rejects_a_child_that_owes_a_layout_repass() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    let mut applier = MemoryApplier::new();
-    let node = crate::widgets::nodes::LayoutNode::new(
-        Modifier::empty(),
-        Rc::new(LeafMeasurePolicy::new(Size {
-            width: 100.0,
-            height: 50.0,
-        })),
-    );
-    let id = applier.create(Box::new(node));
-    let constraints = Constraints::tight(100.0, 50.0);
-    let current_epoch = crate::render_state::current_layout_cache_epoch().max(1);
-    applier
-        .with_node::<crate::widgets::nodes::LayoutNode, _>(id, |node| {
-            let cache = node.cache_handles();
-            cache.activate(current_epoch);
-            cache.store_measurement(
-                constraints,
-                Rc::new(MeasuredNode::leaf(
-                    id,
-                    Size {
-                        width: 100.0,
-                        height: 50.0,
-                    },
-                )),
-            );
-            node.clear_needs_measure();
-            node.clear_needs_layout();
-            node.mark_needs_layout();
-        })
-        .expect("node available");
-
-    let served = LayoutBuilderState::cached_measure_node_with_applier(
-        &mut applier,
-        id,
-        constraints,
-        crate::render_state::current_layout_cache_epoch(),
-        &crate::render_state::require_current_app_context("a test"),
-    )
-    .expect("gate must not error");
-    assert!(
-        served.is_none(),
-        "a child that owes a placement-only repass (needs_layout without \
-         needs_measure: scroll offsets, text panning) must not be served from \
-         the measurement cache — its subtree still has placement work to run"
-    );
-    let still_owes = applier
-        .with_node::<crate::widgets::nodes::LayoutNode, _>(id, |node| node.needs_layout())
-        .expect("node available");
-    assert!(
-        still_owes,
-        "the gate must leave the pending repass flag for the real measure \
-         path instead of clearing it while serving stale placement"
-    );
-}
-
-#[test]
-fn the_cached_measure_gate_rejects_a_measurement_from_a_superseded_epoch() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    let mut applier = MemoryApplier::new();
-    let node = crate::widgets::nodes::LayoutNode::new(
-        Modifier::empty(),
-        Rc::new(LeafMeasurePolicy::new(Size {
-            width: 100.0,
-            height: 50.0,
-        })),
-    );
-    let id = applier.create(Box::new(node));
-    let constraints = Constraints::tight(100.0, 50.0);
-    let seeded_epoch = crate::render_state::current_layout_cache_epoch().max(1);
-    applier
-        .with_node::<crate::widgets::nodes::LayoutNode, _>(id, |node| {
-            let cache = node.cache_handles();
-            cache.activate(seeded_epoch);
-            cache.store_measurement(
-                constraints,
-                Rc::new(MeasuredNode::leaf(
-                    id,
-                    Size {
-                        width: 100.0,
-                        height: 50.0,
-                    },
-                )),
-            );
-            node.clear_needs_measure();
-            node.clear_needs_layout();
-        })
-        .expect("node available");
-
-    crate::layout::invalidate_all_layout_caches();
-
-    let served = LayoutBuilderState::cached_measure_node_with_applier(
-        &mut applier,
-        id,
-        constraints,
-        crate::render_state::current_layout_cache_epoch(),
-        &crate::render_state::require_current_app_context("a test"),
-    )
-    .expect("gate must not error");
-    assert!(
-        served.is_none(),
-        "invalidate_all_layout_caches advanced the global epoch, so every \
-         measurement cached under the previous epoch is stale; the gate must \
-         require the CURRENT epoch, not merely a nonzero one"
-    );
 }
 
 #[test]

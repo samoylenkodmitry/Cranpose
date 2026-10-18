@@ -65,6 +65,7 @@ impl Directory {
 }
 
 /// The directory, page and entry an id lives at.
+#[inline]
 fn split(id: NodeId) -> (usize, usize, usize) {
     (
         id >> (PAGE_BITS + DIRECTORY_BITS),
@@ -83,6 +84,7 @@ pub(crate) struct StableIndex {
 }
 
 impl StableIndex {
+    #[inline]
     fn entry(&self, id: NodeId) -> Entry {
         let (directory, page, entry) = split(id);
         self.directories
@@ -93,6 +95,7 @@ impl StableIndex {
     }
 
     /// The dense storage slot `id`'s node sits in.
+    #[inline]
     pub(crate) fn slot(&self, id: NodeId) -> Option<usize> {
         let slot = self.entry(id).slot;
         (slot != NO_SLOT).then_some(slot as usize)

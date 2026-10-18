@@ -442,7 +442,7 @@ pub mod graph {
 
 /// A root layer of `size` square pixels holding one draw run of `scope`'s
 /// primitives.
-pub fn draw_run_graph(size: u32, scope: cranpose_ui_graphics::DrawScopeDefault) -> RenderGraph {
+pub fn draw_run_graph(size: u32, scope: cranpose_ui_graphics::DrawScopeDefault<'_>) -> RenderGraph {
     use cranpose_render_common::graph::{DrawRunNode, PrimitivePhase};
     use cranpose_ui_graphics::DrawScope;
     RenderGraph::new(layer_node(

@@ -348,7 +348,7 @@ impl LayoutBuilderState {
                     reason: "layout applier borrowed",
                 })?;
         let parent_data = applier.with_node::<LayoutNode, _>(child, |child| {
-            child.set_position(child.position(), &self.context);
+            child.set_position(child.position(), Some(parent), &self.context);
             changed_itself.then(|| child.parent_data())
         })?;
         applier.with_node::<LayoutNode, _>(parent, |node| {

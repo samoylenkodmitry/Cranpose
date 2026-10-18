@@ -8,6 +8,7 @@ use quote::quote;
 use syn::{FnArg, Ident, ItemFn, Pat, PatType, ReturnType, Type, parse_macro_input};
 
 mod branch_groups;
+mod constant_modifiers;
 #[cfg(feature = "localization")]
 mod localization;
 mod preview;
@@ -1185,6 +1186,11 @@ fn inject_groups(core_path: &TokenStream2, func: &mut ItemFn) {
         &func.sig.ident,
         hot_reload,
     );
+    // A hot patch keeps the slots of unchanged code, so a kept chain whose
+    // constants it edits would stay as it was.
+    if !hot_reload {
+        constant_modifiers::keep_constant_modifiers(core_path, &mut func.block);
+    }
     if hot_reload {
         let end = func.block.brace_token.span.close();
         let origin = branch_groups::hot_origin_stmt(core_path, &func.sig.ident, end);

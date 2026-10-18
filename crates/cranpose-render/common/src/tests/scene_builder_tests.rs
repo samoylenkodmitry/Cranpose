@@ -4294,3 +4294,133 @@ fn a_dirty_child_that_starts_publishing_window_origins_marks_its_ancestors() {
         "the patched graph marks them too, or a later scroll skips republishing the field's origin"
     );
 }
+
+type Holder<T> = Rc<RefCell<Option<T>>>;
+
+/// A text three boxes down, the outermost box padded by a state, and what
+/// the composition hands back: the label and padding states, and the ids of
+/// the padded box and the text.
+fn nested_label_composition(
+    label: Holder<cranpose_core::MutableState<String>>,
+    padding: Holder<cranpose_core::MutableState<f32>>,
+    ids: Holder<(NodeId, NodeId)>,
+) -> cranpose_ui::TestComposition {
+    cranpose_ui::run_test_composition(move || {
+        let text = cranpose_core::rememberMutableStateOf(|| "a".to_string());
+        let pad = cranpose_core::rememberMutableStateOf(|| 0.0f32);
+        *label.borrow_mut() = Some(text);
+        *padding.borrow_mut() = Some(pad);
+        let ids = ids.clone();
+        Column(
+            Modifier::empty().size_points(240.0, 200.0),
+            ColumnSpec::default(),
+            move || {
+                let leaf = Rc::new(RefCell::new(None));
+                let leaf_seen = leaf.clone();
+                let padded = cranpose_ui::Box(
+                    Modifier::empty().padding(pad.value()),
+                    cranpose_ui::BoxSpec::default(),
+                    move || {
+                        let leaf_seen = leaf_seen.clone();
+                        cranpose_ui::Box(
+                            Modifier::empty().padding(3.0),
+                            cranpose_ui::BoxSpec::default(),
+                            move || {
+                                let leaf_seen = leaf_seen.clone();
+                                cranpose_ui::Box(
+                                    Modifier::empty(),
+                                    cranpose_ui::BoxSpec::default(),
+                                    move || {
+                                        *leaf_seen.borrow_mut() = Some(Text(
+                                            text,
+                                            Modifier::empty(),
+                                            TextStyle::default(),
+                                        ));
+                                    },
+                                );
+                            },
+                        );
+                    },
+                );
+                Text("stable", Modifier::empty(), TextStyle::default());
+                if let Some(leaf) = *leaf.borrow() {
+                    *ids.borrow_mut() = Some((padded, leaf));
+                }
+            },
+        );
+    })
+}
+
+#[test]
+fn a_node_changed_alone_frame_after_frame_updates_as_a_walk_from_the_root_does() {
+    let label: Holder<cranpose_core::MutableState<String>> = Rc::default();
+    let padding: Holder<cranpose_core::MutableState<f32>> = Rc::default();
+    let ids: Holder<(NodeId, NodeId)> = Rc::default();
+    let mut composition = nested_label_composition(label.clone(), padding.clone(), ids.clone());
+    let root = composition.root().expect("composition root");
+    let viewport = Size {
+        width: 240.0,
+        height: 200.0,
+    };
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle.clone());
+    applier.compute_layout(root, viewport).expect("layout");
+    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("graph");
+    applier.clear_runtime_handle();
+    drop(applier);
+    let (padded, leaf) = ids.borrow().expect("the ids");
+    let label = label.borrow().as_ref().copied().expect("the label state");
+    let padding = padding
+        .borrow()
+        .as_ref()
+        .copied()
+        .expect("the padding state");
+
+    // The text alone, twice; the padded box, which moves the text; the text
+    // alone, twice again.
+    let frames: [(&str, f32, NodeId, bool); 5] = [
+        ("b", 0.0, leaf, false),
+        ("c", 0.0, leaf, true),
+        ("c", 12.0, padded, false),
+        ("d", 12.0, leaf, false),
+        ("e", 12.0, leaf, true),
+    ];
+    for (text, pad, dirty, along_path) in frames {
+        label.set_value(text.to_string());
+        padding.set_value(pad);
+        composition.process_invalid_scopes().expect("recomposition");
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle.clone());
+        applier.compute_layout(root, viewport).expect("layout");
+        let held = graph
+            .retained_path
+            .as_ref()
+            .is_some_and(|path| path.node == dirty);
+        assert_eq!(
+            held, along_path,
+            "frame {text}/{pad}: the update goes along the retained path only \
+             when the last one changed this node alone"
+        );
+        assert!(update_graph_from_applier(
+            &applier,
+            &mut graph,
+            SceneUpdates::content(&[dirty]),
+            1.0
+        ));
+        let fresh = build_graph_from_applier(&applier, root, 1.0).expect("fresh graph");
+        applier.clear_runtime_handle();
+        drop(applier);
+
+        let (mut updated_labels, mut fresh_labels) = (Vec::new(), Vec::new());
+        collect_text_labels(&graph.root, &mut updated_labels);
+        collect_text_labels(&fresh.root, &mut fresh_labels);
+        assert_eq!(updated_labels, fresh_labels, "frame {text}/{pad}");
+        assert_eq!(
+            find_layer_origin(&graph.root, leaf),
+            find_layer_origin(&fresh.root, leaf),
+            "frame {text}/{pad}: the text sits where a fresh scene puts it"
+        );
+        assert_dirty_hash_road_matches_full_walk(&graph);
+    }
+}

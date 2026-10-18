@@ -1210,7 +1210,10 @@ fn draw_command_updates_on_closure_change() {
     {
         let node = chain.node::<DrawCommandNode>(0).unwrap();
         if let DrawCommand::Behind(ref func) = node.commands()[0] {
-            func(&mut crate::draw::command_draw_scope(Size::ZERO));
+            func(&mut crate::draw::command_draw_scope(
+                Size::ZERO,
+                &mut cranpose_ui_graphics::CommandRecording::default(),
+            ));
         }
     }
     assert_eq!(executed.get(), 1);
@@ -1220,7 +1223,10 @@ fn draw_command_updates_on_closure_change() {
 
     let node = chain.node::<DrawCommandNode>(0).unwrap();
     if let DrawCommand::Behind(ref func) = node.commands()[0] {
-        func(&mut crate::draw::command_draw_scope(Size::ZERO));
+        func(&mut crate::draw::command_draw_scope(
+            Size::ZERO,
+            &mut cranpose_ui_graphics::CommandRecording::default(),
+        ));
     }
     assert_eq!(
         executed.get(),

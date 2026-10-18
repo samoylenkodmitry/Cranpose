@@ -94,7 +94,8 @@ fn frame_of(children: Vec<RenderNode>) -> RenderGraph {
 
 /// The line as a draw scope records it, in one run with its background.
 fn recorded(start: Point, end: Point, stroke: Stroke) -> RenderGraph {
-    let mut scope = DrawScopeDefault::new(Size::new(FRAME as f32, FRAME as f32));
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(FRAME as f32, FRAME as f32), &mut recording);
     scope.draw_rect(Brush::solid(Color::BLACK));
     scope.draw_line(Brush::solid(Color::WHITE), start, end, stroke);
     frame_of(vec![RenderNode::DrawRun(DrawRunNode::new(
@@ -247,7 +248,8 @@ fn a_line_in_a_turned_layer_covers_the_pixels_of_the_turned_line() {
         [[side, 0.0], [side, side], [0.0, 0.0], [0.0, side]],
     );
     for (case, start, end, stroke) in cases() {
-        let mut scope = DrawScopeDefault::new(Size::new(side, side));
+        let mut recording = cranpose_ui_graphics::CommandRecording::default();
+        let mut scope = DrawScopeDefault::new(Size::new(side, side), &mut recording);
         scope.draw_line(Brush::solid(Color::WHITE), start, end, stroke);
         let turned_layer = shared_test_support::layer_node(
             frame,

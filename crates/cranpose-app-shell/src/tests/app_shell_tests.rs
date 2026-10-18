@@ -40,6 +40,9 @@ mod inspector_shell_tests;
 #[path = "mouse_button_tests.rs"]
 mod mouse_button_tests;
 
+#[path = "moved_rows_scene_tests.rs"]
+mod moved_rows_scene_tests;
+
 #[path = "reader_activation_tests.rs"]
 mod reader_activation_tests;
 
@@ -1568,6 +1571,78 @@ impl Renderer for CountingRenderer {
     fn draw_dev_overlay(&mut self, text: &str, _viewport: Size) {
         self.overlay_texts.borrow_mut().push(text.to_string());
     }
+}
+
+/// The window rect and the opacity of each solid rectangle a scene paints.
+pub(super) type PaintedRects = Vec<(Rect, f32)>;
+
+/// The window rect and the opacity of every solid rectangle `root` paints.
+pub(super) fn painted_rects(root: &cranpose_render_common::graph::LayerNode) -> PaintedRects {
+    fn collect(
+        layer: &cranpose_render_common::graph::LayerNode,
+        (parent, parent_alpha): (cranpose_render_common::graph::ProjectiveTransform, f32),
+        out: &mut PaintedRects,
+    ) {
+        let transform = layer.transform_to_parent.then(parent);
+        let alpha = parent_alpha * layer.graphics_layer.get().map_or(1.0, |layer| layer.alpha);
+        for child in &layer.children {
+            match child {
+                cranpose_render_common::graph::RenderNode::Layer(child) => {
+                    collect(child, (transform, alpha), out);
+                }
+                cranpose_render_common::graph::RenderNode::DrawRun(run) => {
+                    out.extend(run.primitives().filter_map(|primitive| match primitive {
+                        DrawPrimitive::Rect { rect, .. } => {
+                            Some((transform.bounds_for_rect(rect), alpha))
+                        }
+                        _ => None,
+                    }));
+                }
+                cranpose_render_common::graph::RenderNode::Primitive(_) => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    collect(
+        root,
+        (
+            cranpose_render_common::graph::ProjectiveTransform::identity(),
+            1.0,
+        ),
+        &mut out,
+    );
+    out
+}
+
+/// The [`painted_rects`] of the scene `shell` keeps for its primary surface,
+/// and of a scene built afresh from the same tree.
+pub(super) fn retained_and_fresh_painted_rects(
+    shell: &mut AppShell<ScopedUpdateCountingRenderer>,
+) -> (PaintedRects, PaintedRects) {
+    let retained = painted_rects(
+        &shell.surfaces[0]
+            .renderer
+            .scene()
+            .graph
+            .as_ref()
+            .expect("the frame keeps a graph")
+            .root,
+    );
+    let root = shell.surfaces[0]
+        .root_node(&shell.app)
+        .expect("the surface has a root");
+    let fresh = shell
+        .app
+        .app_context
+        .enter(|| {
+            cranpose_render_common::scene_builder::build_graph_from_applier(
+                &shell.app.composition.applier_mut(),
+                root,
+                1.0,
+            )
+        })
+        .expect("a fresh graph");
+    (retained, painted_rects(&fresh.root))
 }
 
 pub(super) struct ScopedUpdateCountingRenderer {

@@ -1616,3 +1616,113 @@ fn recomposed_lazy_item_places_a_newly_emitted_root_child() {
         "the new root child must be placed below its sibling, got {grown:?}"
     );
 }
+
+const KEPT_ROWS: usize = 12;
+
+/// Fifty-pixel rows in a list a hundred pixels tall: two rows fill it and
+/// the next two are kept composed beyond it. Row 3 reads `label`; each row
+/// counts in `compositions` how many times its content composed and in
+/// `remembers` how many times it made what it remembers.
+#[composable]
+fn KeptRowsLazyList(
+    label: MutableState<usize>,
+    compositions: Rc<RefCell<Vec<usize>>>,
+    remembers: Rc<RefCell<Vec<usize>>>,
+    captured_state: Rc<RefCell<Option<LazyListState>>>,
+) {
+    let list_state = rememberLazyListState();
+    *captured_state.borrow_mut() = Some(list_state);
+
+    LazyColumn(
+        Modifier::empty().fill_max_width().height(100.0),
+        list_state,
+        LazyColumnSpec::default(),
+        move |scope| {
+            let compositions = Rc::clone(&compositions);
+            let remembers = Rc::clone(&remembers);
+            scope.items(
+                LazyItems::new(KEPT_ROWS).key(|index: usize| index as u64),
+                move |index| {
+                    compositions.borrow_mut()[index] += 1;
+                    cranpose_core::remember(|| remembers.borrow_mut()[index] += 1);
+                    let text = if index == 3 {
+                        format!("Kept Row {index} {}", label.value())
+                    } else {
+                        format!("Kept Row {index}")
+                    };
+                    Text(text, Modifier::empty().height(50.0), TextStyle::default());
+                },
+            );
+        },
+    );
+}
+
+#[test]
+fn a_row_kept_beyond_the_viewport_keeps_its_composition_and_follows_its_state() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let compositions = Rc::new(RefCell::new(vec![0; KEPT_ROWS]));
+    let remembers = Rc::new(RefCell::new(vec![0; KEPT_ROWS]));
+    let captured_state = Rc::new(RefCell::new(None));
+    let mut composition = Composition::new(MemoryApplier::new());
+    let label = MutableState::with_runtime(0usize, composition.runtime_handle());
+    let key = location_key(file!(), line!(), column!());
+    composition
+        .render(key, {
+            let compositions = Rc::clone(&compositions);
+            let remembers = Rc::clone(&remembers);
+            let captured_state = Rc::clone(&captured_state);
+            move || {
+                KeptRowsLazyList(
+                    label,
+                    Rc::clone(&compositions),
+                    Rc::clone(&remembers),
+                    Rc::clone(&captured_state),
+                );
+            }
+        })
+        .expect("initial render");
+    let root = composition.root().expect("lazy list root");
+    let _ = render_texts(&mut composition, root);
+    let _ = render_texts(&mut composition, root);
+    let list_state = (*captured_state.borrow()).expect("state captured");
+    assert_eq!(
+        remembers.borrow()[3],
+        1,
+        "row 3 is composed beyond the viewport"
+    );
+    let composed = compositions.borrow()[3];
+
+    // Each scroll moves the list less than a row: row 3 stays beyond it.
+    for _ in 0..4 {
+        list_state.dispatch_scroll_delta(-5.0);
+        let _ = render_texts(&mut composition, root);
+    }
+    assert_eq!(
+        remembers.borrow()[3],
+        1,
+        "a kept row keeps what it remembered"
+    );
+    assert_eq!(
+        compositions.borrow()[3],
+        composed,
+        "a clean kept row is not composed again"
+    );
+
+    label.set(1);
+    composition
+        .process_invalid_scopes()
+        .expect("recompose the kept row");
+    list_state.dispatch_scroll_delta(-5.0);
+    let _ = render_texts(&mut composition, root);
+    list_state.scroll_to_item(3, 0.0);
+    let texts = render_texts(&mut composition, root);
+    assert!(
+        texts.iter().any(|text| text == "Kept Row 3 1"),
+        "the kept row shows the state it read, got {texts:?}"
+    );
+    assert_eq!(
+        remembers.borrow()[3],
+        1,
+        "the kept row composed again in its own composition"
+    );
+}

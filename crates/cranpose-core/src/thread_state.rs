@@ -12,9 +12,7 @@ use crate::{
     runtime::{DeferredStateRelease, RuntimeHandle, RuntimeId, StateHandleLease},
     snapshot_id_set::SnapshotId,
     snapshot_pinning::PinningTable,
-    snapshot_v2::{
-        AnySnapshot, ApplyObserver, GlobalSnapshot, ObserverId, SnapshotRuntime, StateObjectId,
-    },
+    snapshot_v2::{AnySnapshot, ApplyObservers, GlobalSnapshot, SnapshotRuntime, StateObjectId},
     snapshot_weak_set::SnapshotWeakSet,
     state::{ObjectId, RecordValue},
 };
@@ -69,7 +67,7 @@ pub(crate) struct SnapshotThreadState {
     pub(crate) runtime_lock_depth: Cell<usize>,
     pub(crate) global: RefCell<Option<Rc<GlobalSnapshot>>>,
     pub(crate) current: RefCell<Option<AnySnapshot>>,
-    pub(crate) apply_observers: RefCell<FixedHashMap<ObserverId, ApplyObserver>>,
+    pub(crate) apply_observers: RefCell<ApplyObservers>,
     pub(crate) last_writes: RefCell<FixedHashMap<StateObjectId, SnapshotId>>,
     pub(crate) extra_state_objects: RefCell<SnapshotWeakSet>,
     pub(crate) last_unused_record_cleanup: Cell<SnapshotId>,
@@ -87,7 +85,7 @@ impl SnapshotThreadState {
             runtime_lock_depth: Cell::new(0),
             global: RefCell::new(None),
             current: RefCell::new(None),
-            apply_observers: RefCell::new(fixed_hash_map()),
+            apply_observers: RefCell::new(ApplyObservers::new()),
             last_writes: RefCell::new(fixed_hash_map()),
             extra_state_objects: RefCell::new(SnapshotWeakSet::new()),
             last_unused_record_cleanup: Cell::new(0),
@@ -140,6 +138,10 @@ impl SnapshotThreadState {
     }
 }
 
+/// A constant value `__constant` keeps, with the key of the expression that
+/// made it.
+pub(crate) type KeptConstant = (Key, Rc<dyn Any>);
+
 pub(crate) struct RuntimeThreadState {
     pub(crate) next_runtime_id: Cell<u32>,
     pub(crate) active_runtimes: RefCell<Vec<RuntimeHandle>>,
@@ -153,6 +155,9 @@ pub(crate) struct RuntimeThreadState {
     pub(crate) spare_commands: RefCell<Vec<CommandQueue>>,
     pub(crate) spare_composer_stacks: Cell<Option<crate::composer::ComposerStacks>>,
     pub(crate) bridges: RefCell<FixedHashMap<u64, Rc<dyn Any>>>,
+    /// The constant values `__constant` keeps, by slot: empty until the
+    /// first one.
+    pub(crate) constants: RefCell<Vec<Option<KeptConstant>>>,
     /// Notes what the calculations of computed states read; made at the
     /// first such read.
     pub(crate) computed_observer:
@@ -189,6 +194,7 @@ impl RuntimeThreadState {
             spare_commands: RefCell::new(Vec::new()),
             spare_composer_stacks: Cell::new(None),
             bridges: RefCell::new(fixed_hash_map()),
+            constants: RefCell::new(Vec::new()),
             computed_observer: RefCell::new(None),
             #[cfg(any(test, debug_assertions))]
             location_keys: RefCell::new(fixed_hash_map()),
@@ -223,6 +229,7 @@ impl RuntimeThreadState {
             spare_commands,
             spare_composer_stacks,
             bridges,
+            constants,
             computed_observer,
             #[cfg(any(test, debug_assertions))]
             location_keys,
@@ -249,6 +256,7 @@ impl RuntimeThreadState {
         swap_values(spare_commands, &other.spare_commands);
         spare_composer_stacks.swap(&other.spare_composer_stacks);
         swap_values(bridges, &other.bridges);
+        swap_values(constants, &other.constants);
         swap_values(computed_observer, &other.computed_observer);
         #[cfg(any(test, debug_assertions))]
         swap_values(location_keys, &other.location_keys);

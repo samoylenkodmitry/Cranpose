@@ -9,9 +9,9 @@
 //!   - `stats` (items_in_use, items_in_pool)
 //! - Non-reactive internals (caches, callbacks, scroll window, diagnostic counters) are in inner state
 
-use std::{cell::RefCell, cmp::Reverse, collections::BinaryHeap, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
-use cranpose_core::{MutableState, NodeId, StateId, collections::map::HashMap};
+use cranpose_core::{MutableState, NodeId, RuntimeCell, StateId, collections::map::HashMap};
 use cranpose_macros::composable;
 
 use super::{diagnostics, nearest_range::NearestRangeState};
@@ -58,7 +58,7 @@ pub struct LazyLayoutStats {
 pub struct LazyListScrollPosition {
     index: MutableState<usize>,
     scroll_offset: MutableState<f32>,
-    inner: MutableState<Rc<RefCell<ScrollPositionInner>>>,
+    inner: RuntimeCell<RefCell<ScrollPositionInner>>,
 }
 
 /// Non-reactive internal state for scroll position.
@@ -70,38 +70,43 @@ struct ScrollPositionInner {
 }
 
 impl LazyListScrollPosition {
-    fn is_alive(&self) -> bool {
-        self.index.is_alive() && self.scroll_offset.is_alive() && self.inner.is_alive()
-    }
-
     fn current_index(&self) -> usize {
         self.inner
-            .try_with(|rc| rc.borrow().current_index)
+            .try_with(|cell| cell.borrow().current_index)
             .unwrap_or(0)
     }
 
     fn current_scroll_offset(&self) -> f32 {
         self.inner
-            .try_with(|rc| rc.borrow().current_scroll_offset)
+            .try_with(|cell| cell.borrow().current_scroll_offset)
             .unwrap_or(0.0)
     }
 
     /// Returns the index of the first visible item (reactive read).
     pub fn index(&self) -> usize {
-        if !self.index.is_alive() || !self.inner.is_alive() {
+        if !self.index.is_alive() {
             return 0;
         }
+        let Some(index) = self.inner.try_with(|cell| cell.borrow().current_index) else {
+            return 0;
+        };
         self.index.subscribe_current_scope_only();
-        self.current_index()
+        index
     }
 
     /// Returns the scroll offset of the first visible item (reactive read).
     pub fn scroll_offset(&self) -> f32 {
-        if !self.scroll_offset.is_alive() || !self.inner.is_alive() {
+        if !self.scroll_offset.is_alive() {
             return 0.0;
         }
+        let Some(offset) = self
+            .inner
+            .try_with(|cell| cell.borrow().current_scroll_offset)
+        else {
+            return 0.0;
+        };
         self.scroll_offset.subscribe_current_scope_only();
-        self.current_scroll_offset()
+        offset
     }
 
     pub(crate) fn update_from_measure_result(
@@ -110,16 +115,19 @@ impl LazyListScrollPosition {
         first_visible_scroll_offset: f32,
         first_visible_item_key: Option<u64>,
     ) {
-        if !self.is_alive() {
+        if !self.index.is_alive() || !self.scroll_offset.is_alive() {
             return;
         }
-        self.inner.with(|rc| {
-            let mut inner = rc.borrow_mut();
+        let updated = self.inner.try_with(|cell| {
+            let mut inner = cell.borrow_mut();
             inner.current_index = first_visible_index;
             inner.current_scroll_offset = first_visible_scroll_offset;
             inner.last_known_first_item_key = first_visible_item_key;
             inner.nearest_range_state.update(first_visible_index);
         });
+        if updated.is_none() {
+            return;
+        }
 
         if self.index.get_non_reactive() != first_visible_index {
             self.index.set(first_visible_index);
@@ -134,16 +142,19 @@ impl LazyListScrollPosition {
         index: usize,
         scroll_offset: f32,
     ) {
-        if !self.is_alive() {
+        if !self.index.is_alive() || !self.scroll_offset.is_alive() {
             return;
         }
-        self.inner.with(|rc| {
-            let mut inner = rc.borrow_mut();
+        let updated = self.inner.try_with(|cell| {
+            let mut inner = cell.borrow_mut();
             inner.current_index = index;
             inner.current_scroll_offset = scroll_offset;
             inner.last_known_first_item_key = None;
             inner.nearest_range_state.update(index);
         });
+        if updated.is_none() {
+            return;
+        }
 
         if self.index.get_non_reactive() != index {
             self.index.set(index);
@@ -161,15 +172,16 @@ impl LazyListScrollPosition {
     where
         F: Fn(u64) -> Option<usize>,
     {
-        if !self.index.is_alive() || !self.inner.is_alive() {
+        if !self.index.is_alive() {
             return 0;
         }
-
-        let current_index = self.current_index();
-        let last_key = self
-            .inner
-            .try_with(|rc| rc.borrow().last_known_first_item_key)
-            .flatten();
+        let Some(cell) = self.inner.try_get() else {
+            return 0;
+        };
+        let (current_index, last_key) = {
+            let inner = cell.borrow();
+            (inner.current_index, inner.last_known_first_item_key)
+        };
 
         let new_index = match last_key {
             None => current_index.min(new_item_count.saturating_sub(1)),
@@ -178,11 +190,11 @@ impl LazyListScrollPosition {
         };
 
         if current_index != new_index {
-            self.inner.with(|rc| {
-                let mut inner = rc.borrow_mut();
+            {
+                let mut inner = cell.borrow_mut();
                 inner.current_index = new_index;
                 inner.nearest_range_state.update(new_index);
-            });
+            }
             self.index.set(new_index);
         }
         new_index
@@ -191,7 +203,7 @@ impl LazyListScrollPosition {
     /// Returns the nearest range for optimized key lookups.
     pub fn nearest_range(&self) -> std::ops::Range<usize> {
         self.inner
-            .try_with(|rc| rc.borrow().nearest_range_state.range())
+            .try_with(|cell| cell.borrow().nearest_range_state.range())
             .unwrap_or(0..0)
     }
 }
@@ -234,7 +246,7 @@ pub struct LazyListState {
     stats_state: MutableState<LazyLayoutStats>,
     scroll_in_progress_state: MutableState<bool>,
     dragged_state: MutableState<bool>,
-    inner: MutableState<Rc<RefCell<LazyListStateInner>>>,
+    inner: RuntimeCell<RefCell<LazyListStateInner>>,
 }
 
 impl PartialEq for LazyListState {
@@ -286,7 +298,6 @@ struct LazyListStateInner {
     reuse_count: usize,
 
     item_size_cache: HashMap<usize, CachedItemSize>,
-    item_size_eviction_queue: BinaryHeap<Reverse<(u64, usize)>>,
     item_size_clock: u64,
 
     average_item_size: f32,
@@ -352,52 +363,45 @@ impl LazyListState {
                 scroll_offset: cranpose_core::mutableStateOf(
                     initial_first_visible_item_scroll_offset,
                 ),
-                inner: cranpose_core::mutableStateOfNeverEqual(Rc::new(RefCell::new(
-                    ScrollPositionInner {
-                        current_index: initial_first_visible_item_index,
-                        current_scroll_offset: initial_first_visible_item_scroll_offset,
-                        last_known_first_item_key: None,
-                        nearest_range_state: NearestRangeState::new(
-                            initial_first_visible_item_index,
-                        ),
-                    },
-                ))),
+                inner: RuntimeCell::new(RefCell::new(ScrollPositionInner {
+                    current_index: initial_first_visible_item_index,
+                    current_scroll_offset: initial_first_visible_item_scroll_offset,
+                    last_known_first_item_key: None,
+                    nearest_range_state: NearestRangeState::new(initial_first_visible_item_index),
+                })),
             },
             can_scroll_forward_state: cranpose_core::mutableStateOf(false),
             can_scroll_backward_state: cranpose_core::mutableStateOf(false),
             stats_state: cranpose_core::mutableStateOf(LazyLayoutStats::default()),
             scroll_in_progress_state: cranpose_core::mutableStateOf(false),
             dragged_state: cranpose_core::mutableStateOf(false),
-            inner: cranpose_core::mutableStateOfNeverEqual(Rc::new(RefCell::new(
-                LazyListStateInner {
-                    scroll_to_be_consumed: 0.0,
-                    settle_policy: None,
-                    scroll_animation: None,
-                    next_scroll_animation: 1,
-                    gesture_scrolling: false,
-                    scroll_start: None,
-                    pending_scroll_to_index: None,
-                    layout_info: LazyListLayoutInfo::default(),
-                    spare_items_info: Vec::new(),
-                    current_can_scroll_forward: false,
-                    current_can_scroll_backward: false,
-                    invalidate_callbacks: Vec::new(),
-                    next_callback_id: 1,
-                    layout_invalidation_callback_id: None,
-                    layout_invalidation_node_id: None,
-                    total_composed: 0,
-                    reuse_count: 0,
-                    item_size_cache: HashMap::default(),
-                    item_size_eviction_queue: BinaryHeap::new(),
-                    item_size_clock: 0,
-                    average_item_size: super::DEFAULT_ITEM_SIZE_ESTIMATE,
-                    total_measured_items: 0,
-                    next_measure_cycle_id: 1,
-                    next_item_measure_pass_id: 1,
-                    last_scroll_delta: 0.0,
-                    hold_scroll_window: false,
-                },
-            ))),
+            inner: RuntimeCell::new(RefCell::new(LazyListStateInner {
+                scroll_to_be_consumed: 0.0,
+                settle_policy: None,
+                scroll_animation: None,
+                next_scroll_animation: 1,
+                gesture_scrolling: false,
+                scroll_start: None,
+                pending_scroll_to_index: None,
+                layout_info: LazyListLayoutInfo::default(),
+                spare_items_info: Vec::new(),
+                current_can_scroll_forward: false,
+                current_can_scroll_backward: false,
+                invalidate_callbacks: Vec::new(),
+                next_callback_id: 1,
+                layout_invalidation_callback_id: None,
+                layout_invalidation_node_id: None,
+                total_composed: 0,
+                reuse_count: 0,
+                item_size_cache: HashMap::default(),
+                item_size_clock: 0,
+                average_item_size: super::DEFAULT_ITEM_SIZE_ESTIMATE,
+                total_measured_items: 0,
+                next_measure_cycle_id: 1,
+                next_item_measure_pass_id: 1,
+                last_scroll_delta: 0.0,
+                hold_scroll_window: false,
+            })),
         }
     }
 
@@ -413,11 +417,12 @@ impl LazyListState {
 
     /// Returns a stable identity pointer for the live inner state allocation.
     ///
-    /// The pointer comes from the `Rc` stored inside `inner`, so it remains stable for the
-    /// lifetime of a live `LazyListState` and can be used as a composition identity key.
+    /// The pointer is the address of the value `inner` keeps in the runtime, so it remains
+    /// stable for the lifetime of a live `LazyListState` and can be used as a composition
+    /// identity key.
     pub fn inner_ptr(&self) -> *const () {
         self.inner
-            .try_with(|rc| Rc::as_ptr(rc) as *const ())
+            .try_with(|inner| std::ptr::from_ref(inner).cast::<()>())
             .unwrap_or(std::ptr::null())
     }
 
@@ -432,7 +437,7 @@ impl LazyListState {
     /// How many items the list holds, as of its last measure.
     pub fn total_items_count(&self) -> usize {
         self.inner
-            .with(|rc| rc.borrow().layout_info.total_items_count)
+            .with(|cell| cell.borrow().layout_info.total_items_count)
     }
 
     /// Returns the first visible item index without subscribing the current composition scope.
@@ -481,7 +486,7 @@ impl LazyListState {
     /// the copy of the visible items that [`Self::layout_info`] makes.
     /// `None` once the state is gone.
     pub fn with_layout_info<R>(&self, read: impl FnOnce(&LazyListLayoutInfo) -> R) -> Option<R> {
-        self.inner.try_with(|rc| read(&rc.borrow().layout_info))
+        self.inner.try_with(|cell| read(&cell.borrow().layout_info))
     }
 
     /// Returns the current item lifecycle statistics.
@@ -494,8 +499,8 @@ impl LazyListState {
             return LazyLayoutStats::default();
         }
         let reactive = self.stats_state.get();
-        let (total_composed, reuse_count) = self.inner.with(|rc| {
-            let inner = rc.borrow();
+        let (total_composed, reuse_count) = self.inner.with(|cell| {
+            let inner = cell.borrow();
             (inner.total_composed, inner.reuse_count)
         });
         LazyLayoutStats {
@@ -539,11 +544,8 @@ impl LazyListState {
     /// This updates diagnostic counters in non-reactive state.
     /// Does NOT trigger recomposition.
     pub fn record_composition(&self, was_reused: bool) {
-        if !self.inner.is_alive() {
-            return;
-        }
-        self.inner.with(|rc| {
-            let mut inner = rc.borrow_mut();
+        self.inner.try_with(|cell| {
+            let mut inner = cell.borrow_mut();
             inner.total_composed += 1;
             if was_reused {
                 inner.reuse_count += 1;
@@ -555,36 +557,30 @@ impl LazyListState {
     /// scroll delta a pass consumed when it has none of its own, so a pass
     /// between frames keeps the window the scroll gave the frame before it.
     pub fn hold_scroll_window(&self) {
-        if !self.inner.is_alive() {
-            return;
-        }
         self.inner
-            .with(|rc| rc.borrow_mut().hold_scroll_window = true);
+            .try_with(|cell| cell.borrow_mut().hold_scroll_window = true);
     }
 
     /// Installs, or clears, where a drag or a fling the user let go of comes
     /// to rest: a pager settles on its pages.
     pub fn set_settle_policy(&self, policy: Option<LazySettlePolicy>) {
-        if !self.inner.is_alive() {
-            return;
-        }
-        self.inner.with(|rc| rc.borrow_mut().settle_policy = policy);
+        self.inner
+            .try_with(|cell| cell.borrow_mut().settle_policy = policy);
     }
 
     /// The installed settle policy, if any.
     pub fn settle_policy(&self) -> Option<LazySettlePolicy> {
-        if !self.inner.is_alive() {
-            return None;
-        }
-        self.inner.with(|rc| rc.borrow().settle_policy.clone())
+        self.inner
+            .try_with(|cell| cell.borrow().settle_policy.clone())
+            .flatten()
     }
 
     /// Registers a scroll animation, which `stop` stops, in place of the one
     /// running, which it stops, and returns the new one's id. A press on the
     /// list stops it too.
     pub fn start_scroll_animation(&self, stop: Rc<dyn Fn()>) -> u64 {
-        let Some((id, previous)) = self.inner.try_with(|rc| {
-            let mut inner = rc.borrow_mut();
+        let Some((id, previous)) = self.inner.try_with(|cell| {
+            let mut inner = cell.borrow_mut();
             let id = inner.next_scroll_animation;
             inner.next_scroll_animation += 1;
             (id, inner.scroll_animation.replace((id, stop)))
@@ -600,8 +596,8 @@ impl LazyListState {
 
     /// Forgets the scroll animation `id` once it ended on its own.
     pub fn end_scroll_animation(&self, id: u64) {
-        let _ = self.inner.try_with(|rc| {
-            let mut inner = rc.borrow_mut();
+        let _ = self.inner.try_with(|cell| {
+            let mut inner = cell.borrow_mut();
             if inner
                 .scroll_animation
                 .as_ref()
@@ -617,7 +613,7 @@ impl LazyListState {
     pub fn stop_scroll_animation(&self) -> bool {
         let running = self
             .inner
-            .try_with(|rc| rc.borrow_mut().scroll_animation.take())
+            .try_with(|cell| cell.borrow_mut().scroll_animation.take())
             .flatten();
         let stopped = running.map(|(_, stop)| stop()).is_some();
         self.refresh_scroll_in_progress();
@@ -650,8 +646,8 @@ impl LazyListState {
     /// the list, for [`Self::is_scroll_in_progress`]. The scroll modifier
     /// calls it; scroll animations mark themselves.
     pub fn set_gesture_scroll_active(&self, active: bool) {
-        let changed = self.inner.try_with(|rc| {
-            std::mem::replace(&mut rc.borrow_mut().gesture_scrolling, active) != active
+        let changed = self.inner.try_with(|cell| {
+            std::mem::replace(&mut cell.borrow_mut().gesture_scrolling, active) != active
         });
         if changed == Some(true) {
             self.refresh_scroll_in_progress();
@@ -662,15 +658,17 @@ impl LazyListState {
     /// began, or `None` while no scroll is in progress. A pager keeps its
     /// settled page from it.
     pub fn position_before_scroll(&self) -> Option<(usize, f32)> {
-        self.inner.try_with(|rc| rc.borrow().scroll_start).flatten()
+        self.inner
+            .try_with(|cell| cell.borrow().scroll_start)
+            .flatten()
     }
 
     fn refresh_scroll_in_progress(&self) {
         if !self.scroll_in_progress_state.is_alive() {
             return;
         }
-        let Some(moving) = self.inner.try_with(|rc| {
-            let inner = rc.borrow();
+        let Some(moving) = self.inner.try_with(|cell| {
+            let inner = cell.borrow();
             inner.gesture_scrolling || inner.scroll_animation.is_some()
         }) else {
             return;
@@ -681,7 +679,7 @@ impl LazyListState {
         let start = if moving { self.try_position() } else { None };
         let _ = self
             .inner
-            .try_with(|rc| rc.borrow_mut().scroll_start = start);
+            .try_with(|cell| cell.borrow_mut().scroll_start = start);
         self.scroll_in_progress_state.set(moving);
     }
 
@@ -699,8 +697,8 @@ impl LazyListState {
                 "[lazy-measure-telemetry] scroll_to_item request index={index} offset={scroll_offset:.2}"
             );
         }
-        self.inner.with(|rc| {
-            let mut inner = rc.borrow_mut();
+        self.inner.with(|cell| {
+            let mut inner = cell.borrow_mut();
             inner.pending_scroll_to_index = Some((index, scroll_offset));
             // The jump replaces the scroll deltas that have not been applied.
             inner.scroll_to_be_consumed = 0.0;
@@ -723,12 +721,10 @@ impl LazyListState {
     /// placement. The node id carries through to the scene phase, which scopes
     /// its graph update to that subtree: O(subtree) instead of O(entire app).
     pub fn dispatch_scroll_delta(&self, delta: f32) -> f32 {
-        if !self.inner.is_alive() {
+        let Some(cell) = self.inner.try_get() else {
             return 0.0;
-        }
-        let has_scroll_bounds = self
-            .inner
-            .with(|rc| rc.borrow().layout_info.total_items_count > 0);
+        };
+        let has_scroll_bounds = cell.borrow().layout_info.total_items_count > 0;
         let pushing_forward = delta < -0.001;
         let pushing_backward = delta > 0.001;
         let can_scroll_forward =
@@ -740,8 +736,8 @@ impl LazyListState {
                 || (pushing_backward && !can_scroll_backward));
 
         if blocked_by_bounds {
-            let should_invalidate = self.inner.with(|rc| {
-                let mut inner = rc.borrow_mut();
+            let should_invalidate = {
+                let mut inner = cell.borrow_mut();
                 let pending_before = inner.scroll_to_be_consumed;
                 if pending_before.abs() > 0.001 && pending_before.signum() == delta.signum() {
                     inner.scroll_to_be_consumed = 0.0;
@@ -755,22 +751,19 @@ impl LazyListState {
                     );
                 }
                 (inner.scroll_to_be_consumed - pending_before).abs() > 0.001
-            });
+            };
             if should_invalidate {
-                self.invalidate();
+                Self::run_invalidate_callbacks(&cell);
             }
             return 0.0;
         }
 
-        let mut accepted_delta = 0.0f32;
-        let should_invalidate = self.inner.with(|rc| {
-            let mut inner = rc.borrow_mut();
-            accepted_delta = delta;
+        let should_invalidate = {
+            let mut inner = cell.borrow_mut();
             let pending_before = inner.scroll_to_be_consumed;
             let pending = inner.scroll_to_be_consumed;
-            let reverse_input = pending.abs() > 0.001
-                && delta.abs() > 0.001
-                && pending.signum() != delta.signum();
+            let reverse_input =
+                pending.abs() > 0.001 && delta.abs() > 0.001 && pending.signum() != delta.signum();
             if reverse_input {
                 if diagnostics::telemetry_enabled() {
                     log::warn!(
@@ -792,11 +785,11 @@ impl LazyListState {
                 );
             }
             (inner.scroll_to_be_consumed - pending_before).abs() > 0.001
-        });
+        };
         if should_invalidate {
-            self.invalidate();
+            Self::run_invalidate_callbacks(&cell);
         }
-        accepted_delta
+        delta
     }
 
     /// Peeks at the pending scroll delta without consuming it.
@@ -807,15 +800,15 @@ impl LazyListState {
     /// - Variable height items where scroll offset changes without index change
     pub fn peek_scroll_delta(&self) -> f32 {
         self.inner
-            .try_with(|rc| rc.borrow().scroll_to_be_consumed)
+            .try_with(|cell| cell.borrow().scroll_to_be_consumed)
             .unwrap_or(0.0)
     }
 
     pub(crate) fn begin_measure_pass(&self) -> LazyListMeasureStateSnapshot {
         let (pending_scroll_delta, window_scroll_delta, pending_scroll_to, average_item_size) =
             self.inner
-                .try_with(|rc| {
-                    let mut inner = rc.borrow_mut();
+                .try_with(|cell| {
+                    let mut inner = cell.borrow_mut();
                     let pending_scroll_to = inner.pending_scroll_to_index.take();
                     let pending_scroll_delta = inner.scroll_to_be_consumed;
                     inner.scroll_to_be_consumed = 0.0;
@@ -837,9 +830,11 @@ impl LazyListState {
                 })
                 .unwrap_or((0.0, 0.0, None, super::DEFAULT_ITEM_SIZE_ESTIMATE));
 
+        let (first_visible_item_index, first_visible_item_scroll_offset) =
+            self.try_position().unwrap_or((0, 0.0));
         LazyListMeasureStateSnapshot {
-            first_visible_item_index: self.scroll_position.current_index(),
-            first_visible_item_scroll_offset: self.scroll_position.current_scroll_offset(),
+            first_visible_item_index,
+            first_visible_item_scroll_offset,
             pending_scroll_delta,
             window_scroll_delta,
             pending_scroll_to,
@@ -849,8 +844,8 @@ impl LazyListState {
 
     pub(crate) fn next_measure_cycle_id(&self) -> u64 {
         self.inner
-            .try_with(|rc| {
-                let mut inner = rc.borrow_mut();
+            .try_with(|cell| {
+                let mut inner = cell.borrow_mut();
                 let id = inner.next_measure_cycle_id;
                 inner.next_measure_cycle_id = inner.next_measure_cycle_id.saturating_add(1);
                 id
@@ -860,8 +855,8 @@ impl LazyListState {
 
     pub(crate) fn next_item_measure_pass_id(&self) -> u64 {
         self.inner
-            .try_with(|rc| {
-                let mut inner = rc.borrow_mut();
+            .try_with(|cell| {
+                let mut inner = cell.borrow_mut();
                 let id = inner.next_item_measure_pass_id;
                 inner.next_item_measure_pass_id = inner.next_item_measure_pass_id.saturating_add(1);
                 id
@@ -881,75 +876,37 @@ impl LazyListState {
     }
 
     fn insert_item_size(inner: &mut LazyListStateInner, index: usize, size: f32) -> bool {
-        use std::collections::hash_map::Entry;
-
         let tick = Self::next_item_size_cache_tick(inner);
-        if let Entry::Occupied(mut entry) = inner.item_size_cache.entry(index) {
-            entry.insert(CachedItemSize {
-                size,
-                last_used: tick,
-            });
-            Self::push_item_size_cache_ticket(inner, tick, index);
+        let item = CachedItemSize {
+            size,
+            last_used: tick,
+        };
+        if let Some(cached) = inner.item_size_cache.get_mut(&index) {
+            *cached = item;
             return false;
         }
-
         if inner.item_size_cache.len() >= ITEM_SIZE_CACHE_CAPACITY {
-            Self::evict_one_item_size(inner);
+            Self::evict_stale_item_sizes(inner, tick);
         }
-
-        inner.item_size_cache.insert(
-            index,
-            CachedItemSize {
-                size,
-                last_used: tick,
-            },
-        );
-        Self::push_item_size_cache_ticket(inner, tick, index);
+        inner.item_size_cache.insert(index, item);
         true
     }
 
-    fn push_item_size_cache_ticket(inner: &mut LazyListStateInner, last_used: u64, index: usize) {
+    /// Forgets the sizes that no read or write used in the last half of the
+    /// cache's capacity of uses. Every use takes the next tick, so at most
+    /// half the entries were used that recently: a full cache frees half its
+    /// room in one pass, and the oldest sizes go first.
+    fn evict_stale_item_sizes(inner: &mut LazyListStateInner, tick: u64) {
+        let oldest_kept = tick.saturating_sub((ITEM_SIZE_CACHE_CAPACITY / 2) as u64);
         inner
-            .item_size_eviction_queue
-            .push(Reverse((last_used, index)));
-        let compact_limit = inner
             .item_size_cache
-            .len()
-            .saturating_mul(4)
-            .max(ITEM_SIZE_CACHE_CAPACITY);
-        if inner.item_size_eviction_queue.len() > compact_limit {
-            Self::rebuild_item_size_eviction_queue(inner);
-        }
-    }
-
-    fn rebuild_item_size_eviction_queue(inner: &mut LazyListStateInner) {
-        inner.item_size_eviction_queue = inner
-            .item_size_cache
-            .iter()
-            .map(|(index, item)| Reverse((item.last_used, *index)))
-            .collect();
-    }
-
-    fn evict_one_item_size(inner: &mut LazyListStateInner) {
-        while let Some(Reverse((last_used, index))) = inner.item_size_eviction_queue.pop() {
-            let Some(current) = inner.item_size_cache.get(&index) else {
-                continue;
-            };
-            if current.last_used != last_used {
-                continue;
-            }
-            inner.item_size_cache.remove(&index);
-            return;
-        }
+            .retain(|_, item| item.last_used > oldest_kept);
     }
 
     /// Caches the measured size of an item for scroll estimation.
     pub fn cache_item_size(&self, index: usize, size: f32) {
-        if !self.inner.is_alive() {
-            return;
-        }
-        self.inner.with(|rc| {
-            let mut inner = rc.borrow_mut();
+        self.inner.try_with(|cell| {
+            let mut inner = cell.borrow_mut();
             if Self::insert_item_size(&mut inner, index, size) {
                 Self::record_item_size_sample(&mut inner, size);
             }
@@ -961,32 +918,28 @@ impl LazyListState {
     where
         I: IntoIterator<Item = (usize, f32)>,
     {
-        if !self.inner.is_alive() {
-            return super::DEFAULT_ITEM_SIZE_ESTIMATE;
-        }
-
-        self.inner.with(|rc| {
-            let mut inner = rc.borrow_mut();
-            for (index, size) in sizes {
-                if Self::insert_item_size(&mut inner, index, size) {
-                    Self::record_item_size_sample(&mut inner, size);
+        self.inner
+            .try_with(|cell| {
+                let mut inner = cell.borrow_mut();
+                for (index, size) in sizes {
+                    if Self::insert_item_size(&mut inner, index, size) {
+                        Self::record_item_size_sample(&mut inner, size);
+                    }
                 }
-            }
-            inner.average_item_size
-        })
+                inner.average_item_size
+            })
+            .unwrap_or(super::DEFAULT_ITEM_SIZE_ESTIMATE)
     }
 
     /// Gets a cached item size if available.
     pub fn get_cached_size(&self, index: usize) -> Option<f32> {
         self.inner
-            .try_with(|rc| {
-                let mut inner = rc.borrow_mut();
+            .try_with(|cell| {
+                let mut inner = cell.borrow_mut();
                 let tick = Self::next_item_size_cache_tick(&mut inner);
                 let item = inner.item_size_cache.get_mut(&index)?;
                 item.last_used = tick;
-                let size = item.size;
-                Self::push_item_size_cache_ticket(&mut inner, tick, index);
-                Some(size)
+                Some(item.size)
             })
             .flatten()
     }
@@ -994,7 +947,7 @@ impl LazyListState {
     /// Returns the running average of measured item sizes.
     pub fn average_item_size(&self) -> f32 {
         self.inner
-            .try_with(|rc| rc.borrow().average_item_size)
+            .try_with(|cell| cell.borrow().average_item_size)
             .unwrap_or(super::DEFAULT_ITEM_SIZE_ESTIMATE)
     }
 
@@ -1048,11 +1001,8 @@ impl LazyListState {
     }
 
     pub(crate) fn update_layout_info(&self, mut info: LazyListLayoutInfo) {
-        if !self.inner.is_alive() {
-            return;
-        }
-        self.inner.with(|rc| {
-            let mut inner = rc.borrow_mut();
+        self.inner.try_with(|cell| {
+            let mut inner = cell.borrow_mut();
             info.snap_anchor_offset = continuous_snap_anchor_offset(&inner.layout_info, &info);
             let mut spare = std::mem::replace(&mut inner.layout_info, info).visible_items_info;
             spare.clear();
@@ -1064,7 +1014,7 @@ impl LazyListState {
     /// the storage of the one before.
     pub(crate) fn spare_items_info(&self) -> Vec<LazyListItemInfo> {
         self.inner
-            .try_with(|rc| std::mem::take(&mut rc.borrow_mut().spare_items_info))
+            .try_with(|cell| std::mem::take(&mut cell.borrow_mut().spare_items_info))
             .unwrap_or_default()
     }
 
@@ -1086,7 +1036,7 @@ impl LazyListState {
             return false;
         }
         self.inner
-            .try_with(|rc| rc.borrow().current_can_scroll_forward)
+            .try_with(|cell| cell.borrow().current_can_scroll_forward)
             .unwrap_or(false)
     }
 
@@ -1109,19 +1059,19 @@ impl LazyListState {
             return false;
         }
         self.inner
-            .try_with(|rc| rc.borrow().current_can_scroll_backward)
+            .try_with(|cell| cell.borrow().current_can_scroll_backward)
             .unwrap_or(false)
     }
 
     pub(crate) fn update_scroll_bounds(&self) {
-        if !self.inner.is_alive()
-            || !self.can_scroll_forward_state.is_alive()
-            || !self.can_scroll_backward_state.is_alive()
-        {
+        if !self.can_scroll_forward_state.is_alive() || !self.can_scroll_backward_state.is_alive() {
             return;
         }
-        let can_forward = self.inner.with(|rc| {
-            let inner = rc.borrow();
+        let Some(cell) = self.inner.try_get() else {
+            return;
+        };
+        let can_forward = {
+            let inner = cell.borrow();
             let info = &inner.layout_info;
             let viewport_end = info.viewport_size - info.after_content_padding;
             // A staggered grid's last item by index need not be the one
@@ -1136,16 +1086,16 @@ impl LazyListState {
             } else {
                 false
             }
-        });
+        };
 
-        let can_backward = self.scroll_position.current_index() > 0
-            || self.scroll_position.current_scroll_offset() > 0.0;
+        let (first_index, first_offset) = self.try_position().unwrap_or((0, 0.0));
+        let can_backward = first_index > 0 || first_offset > 0.0;
 
-        self.inner.with(|rc| {
-            let mut inner = rc.borrow_mut();
+        {
+            let mut inner = cell.borrow_mut();
             inner.current_can_scroll_forward = can_forward;
             inner.current_can_scroll_backward = can_backward;
-        });
+        }
 
         if self.can_scroll_forward_state.get_non_reactive() != can_forward {
             self.can_scroll_forward_state.set(can_forward);
@@ -1157,16 +1107,15 @@ impl LazyListState {
 
     /// Adds an invalidation callback.
     pub fn add_invalidate_callback(&self, callback: Rc<dyn Fn()>) -> u64 {
-        if !self.inner.is_alive() {
-            return 0;
-        }
-        self.inner.with(|rc| {
-            let mut inner = rc.borrow_mut();
-            let id = inner.next_callback_id;
-            inner.next_callback_id += 1;
-            inner.invalidate_callbacks.push((id, callback));
-            id
-        })
+        self.inner
+            .try_with(|cell| {
+                let mut inner = cell.borrow_mut();
+                let id = inner.next_callback_id;
+                inner.next_callback_id += 1;
+                inner.invalidate_callbacks.push((id, callback));
+                id
+            })
+            .unwrap_or(0)
     }
 
     /// Tries to register a layout invalidation callback for the specified node.
@@ -1184,8 +1133,8 @@ impl LazyListState {
         if !self.inner.is_alive() {
             return None;
         }
-        self.inner.with(|rc| {
-            let mut inner = rc.borrow_mut();
+        self.inner.with(|cell| {
+            let mut inner = cell.borrow_mut();
             if let Some(existing_id) = inner.layout_invalidation_callback_id {
                 inner
                     .invalidate_callbacks
@@ -1202,11 +1151,8 @@ impl LazyListState {
 
     /// Removes an invalidation callback.
     pub fn remove_invalidate_callback(&self, id: u64) {
-        if !self.inner.is_alive() {
-            return;
-        }
-        self.inner.with(|rc| {
-            let mut inner = rc.borrow_mut();
+        self.inner.try_with(|cell| {
+            let mut inner = cell.borrow_mut();
             inner.invalidate_callbacks.retain(|(cb_id, _)| *cb_id != id);
             if inner.layout_invalidation_callback_id == Some(id) {
                 inner.layout_invalidation_callback_id = None;
@@ -1216,16 +1162,20 @@ impl LazyListState {
     }
 
     fn invalidate(&self) {
-        if !self.inner.is_alive() {
-            return;
+        if let Some(cell) = self.inner.try_get() {
+            Self::run_invalidate_callbacks(&cell);
         }
-        let callbacks: Vec<_> = self.inner.with(|rc| {
-            rc.borrow()
-                .invalidate_callbacks
-                .iter()
-                .map(|(_, cb)| Rc::clone(cb))
-                .collect()
-        });
+    }
+
+    /// Runs the invalidation callbacks `cell` holds, from a copy of the
+    /// list: a callback may register or remove callbacks.
+    fn run_invalidate_callbacks(cell: &RefCell<LazyListStateInner>) {
+        let callbacks: Vec<_> = cell
+            .borrow()
+            .invalidate_callbacks
+            .iter()
+            .map(|(_, cb)| Rc::clone(cb))
+            .collect();
 
         for callback in callbacks {
             callback();

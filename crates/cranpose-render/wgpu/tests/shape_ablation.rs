@@ -7,7 +7,8 @@ use crate::support;
 const TOGGLE: &str = "CRANPOSE_ABLATE";
 
 fn graph_of(record: fn(&mut DrawScopeDefault)) -> RenderGraph {
-    let mut scope = DrawScopeDefault::new(Size::new(SIZE as f32, SIZE as f32));
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(SIZE as f32, SIZE as f32), &mut recording);
     record(&mut scope);
     support::draw_run_graph(SIZE, scope)
 }

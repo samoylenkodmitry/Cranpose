@@ -788,6 +788,9 @@ pub struct RenderGraph {
     /// Where the eyes of the scenes the window shows stand among their
     /// portals' spaces, kept up by [`crate::scene_space::follow_viewers`].
     pub viewers: Vec<crate::scene_space::Viewer>,
+    /// The way to the layer the last scene updates changed alone, for the
+    /// next update that changes it alone.
+    pub(crate) retained_path: Option<crate::scene_builder::RetainedPath>,
 }
 
 impl RenderGraph {
@@ -797,6 +800,7 @@ impl RenderGraph {
             root,
             update: 0,
             viewers: Vec::new(),
+            retained_path: None,
         }
     }
 

@@ -174,6 +174,8 @@ pub struct LayoutState {
     cleared_in_pass: u64,
     content_offset: Point,
     semantics_stamp: u64,
+    /// The take of the moved-node list this node was last noted in.
+    moved_noted_in: u64,
 }
 
 impl LayoutState {
@@ -234,9 +236,10 @@ impl LayoutState {
     /// Writes the placed position and marks the node placed, self-reporting
     /// to the scene phase of `context`, the node's app context, an actual
     /// move, and a placement of a node the scene does not draw: one the
-    /// running pass did not find placed. A move is reported apart, so the
-    /// scene can keep what it drew for the node.
-    pub fn place(&mut self, position: Point, context: &AppContext) {
+    /// running pass did not find placed. A move is reported apart, with
+    /// `placer`, the node whose placement put the node there, so the scene
+    /// can keep what it drew for the node.
+    pub fn place(&mut self, position: Point, placer: Option<NodeId>, context: &AppContext) {
         // A node the running pass cleared while it was placed changes
         // nothing the scene draws by being placed again.
         let newly_placed =
@@ -246,7 +249,7 @@ impl LayoutState {
             if newly_placed {
                 context.record_geometry_scene_node(id);
             } else if moved {
-                context.record_moved_scene_node(id);
+                context.record_moved_scene_node(id, placer, &mut self.moved_noted_in);
             }
         }
         self.position = position;
@@ -619,7 +622,7 @@ impl LayoutNodeCacheHandles {
 struct NodeIdCell(Cell<NodeId>);
 
 /// The id a [`NodeIdCell`] holds for none: no node gets it, as ids index
-/// the applier's nodes and virtual ids count up from `VIRTUAL_NODE_ID_START`.
+/// the applier's nodes.
 const NO_NODE_ID: NodeId = NodeId::MAX;
 
 impl NodeIdCell {
@@ -1168,6 +1171,11 @@ impl LayoutNode {
     /// Set this node's parent (called when node is added as child).
     /// Sets both folded_parent (direct) and parent (first non-virtual ancestor for bubbling).
     pub fn set_parent(&self, parent: NodeId) {
+        // The registry holds the parent the node has; the same one again
+        // changes nothing.
+        if self.parent.get() == Some(parent) && self.folded_parent.get() == Some(parent) {
+            return;
+        }
         self.folded_parent.set(Some(parent));
         self.parent.set(Some(parent));
         self.refresh_registry_state();
@@ -1320,10 +1328,13 @@ impl LayoutNode {
         self.layout_state.borrow_mut().set_size(size, context);
     }
 
-    /// Updates the position of this node. Called during placement.
-    /// [`LayoutState::place`] self-reports actual moves to the scene phase.
-    pub fn set_position(&self, position: Point, context: &AppContext) {
-        self.layout_state.borrow_mut().place(position, context);
+    /// Updates the position of this node, which `placer` placed. Called
+    /// during placement. [`LayoutState::place`] self-reports actual moves to
+    /// the scene phase.
+    pub fn set_position(&self, position: Point, placer: Option<NodeId>, context: &AppContext) {
+        self.layout_state
+            .borrow_mut()
+            .place(position, placer, context);
     }
 
     /// Records the content offset (e.g. from padding).
@@ -1497,6 +1508,12 @@ impl Node for LayoutNode {
         out.extend_from_slice(&self.children);
     }
 
+    fn for_each_child(&self, f: &mut dyn FnMut(NodeId)) {
+        for &child in &self.children {
+            f(child);
+        }
+    }
+
     fn owned_child_index(&self, child: NodeId) -> Option<usize> {
         self.children.iter().position(|&id| id == child)
     }
@@ -1607,7 +1624,6 @@ impl Drop for LayoutNode {
 }
 
 const MIN_RETAINED_LAYOUT_NODE_REGISTRY_CAPACITY: usize = 128;
-const VIRTUAL_NODE_ID_START: NodeId = 0xC0000000;
 
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1624,14 +1640,12 @@ struct LayoutNodeRegistryEntry {
 
 pub(crate) struct LayoutNodeRegistryState {
     entries: RefCell<HashMap<NodeId, LayoutNodeRegistryEntry>>,
-    virtual_node_id_counter: Cell<NodeId>,
 }
 
 impl LayoutNodeRegistryState {
     pub(crate) fn new() -> Self {
         Self {
             entries: RefCell::new(HashMap::default()),
-            virtual_node_id_counter: Cell::new(VIRTUAL_NODE_ID_START),
         }
     }
 
@@ -1690,12 +1704,6 @@ impl LayoutNodeRegistryState {
         }
     }
 
-    fn allocate_virtual_node_id(&self) -> NodeId {
-        let id = self.virtual_node_id_counter.get();
-        self.virtual_node_id_counter.set(id.wrapping_add(1));
-        id
-    }
-
     fn resolve_modifier_local_from_parent_chain(
         &self,
         start: Option<NodeId>,
@@ -1749,12 +1757,6 @@ pub(crate) fn unregister_layout_node(
 #[cfg(test)]
 fn layout_node_registry_stats() -> LayoutNodeRegistryDebugStats {
     crate::render_state::with_layout_node_registry(LayoutNodeRegistryState::stats)
-}
-
-pub(crate) fn allocate_virtual_node_id() -> NodeId {
-    crate::render_state::with_layout_node_registry(
-        LayoutNodeRegistryState::allocate_virtual_node_id,
-    )
 }
 
 fn resolve_modifier_local_from_parent_chain(

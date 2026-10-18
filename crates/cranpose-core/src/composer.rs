@@ -15,7 +15,7 @@ use crate::{
     ProvidedValue, RecomposeOptions, RecomposeScope, RecomposeScopeInner, RecycledNode,
     RetentionMode, RetentionPolicy, RuntimeHandle, ScopeId, SlotId, SlotPassOutcome, SlotTable,
     SlotsHost, SnapshotStateList, SnapshotStateMap, StaticCompositionLocal, SubcomposeState,
-    collections::map::{HashMap, HashSet},
+    collections::map::HashMap,
     composer_context, explicit_group_key_seed,
     retention::{RetainKey, RetentionManager},
     runtime,
@@ -642,7 +642,6 @@ pub(crate) struct ParentFrame {
     pub(crate) id: NodeId,
     pub(crate) previous: ChildList,
     pub(crate) new_children: ChildList,
-    pub(crate) new_children_membership: Option<HashSet<NodeId>>,
     pub(crate) attach_mode: ParentAttachMode,
     pub(crate) synthetic_root: bool,
 }
@@ -652,8 +651,6 @@ pub(crate) enum InitialParentFrame {
     SyntheticRoot,
     RealParent,
 }
-
-const LARGE_DEFERRED_CHILD_TRACKING_THRESHOLD: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ParentAttachMode {
@@ -717,7 +714,7 @@ pub(crate) struct ComposerCore {
 /// The composition context inherited by work that is composed in another slot
 /// host. Besides composition locals, this carries the source owner scope so a
 /// secondary tree cannot outlive the composition that supplied its callbacks.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct CapturedCompositionContext {
     locals: LocalStackSnapshot,
     owner_scope: Option<Weak<RecomposeScopeInner>>,
@@ -918,11 +915,126 @@ fn push_root_frame(
             id: root_id,
             previous: ChildList::new(),
             new_children: ChildList::new(),
-            new_children_membership: None,
             attach_mode: ParentAttachMode::DeferredSync,
             synthetic_root: matches!(initial_parent_frame, InitialParentFrame::SyntheticRoot),
         });
     }
+}
+
+/// What a subcomposition takes from where it runs: the applier its nodes go
+/// to, the runtime, the phase, and whether a static composition local changed
+/// above it.
+#[derive(Clone, Copy)]
+struct SubcomposeSite<'a> {
+    applier: &'a Rc<dyn ApplierHost>,
+    runtime: &'a RuntimeHandle,
+    phase: crate::Phase,
+    locals_changed: bool,
+}
+
+impl SubcomposeSite<'_> {
+    /// A core that composes into `slots` with `shared_state`, its top-level
+    /// nodes under `root`, seeing `locals`.
+    fn spin_up_core(
+        self,
+        shared_state: Rc<ComposerRuntimeState>,
+        slots: &Rc<SlotsHost>,
+        root: Option<NodeId>,
+        locals: LocalStackSnapshot,
+    ) -> Rc<ComposerCore> {
+        let core = Rc::new(ComposerCore::new(ComposerParts {
+            shared_state,
+            slots: Rc::clone(slots),
+            applier: Rc::clone(self.applier),
+            runtime: self.runtime.clone(),
+            root,
+            initial_parent_frame: InitialParentFrame::RealParent,
+        }));
+        core.phase.set(self.phase);
+        core.locals_changed.set(self.locals_changed);
+        *core.local_stack.borrow_mut() = locals;
+        core
+    }
+
+    /// Applies a subcomposition's commands. The pass holds a state teardown
+    /// scope from its start until this returns, as a root pass does: the
+    /// states a removed group remembered stay readable until the nodes it
+    /// emitted are detached, whose modifier nodes may read them.
+    fn flush(
+        self,
+        mut commands: CommandQueue,
+        compact_applier: bool,
+        side_effects: Vec<Box<dyn FnOnce()>>,
+    ) -> Result<(), NodeError> {
+        {
+            let mut applier = self.applier.borrow_dyn();
+            commands.apply(&mut *applier)?;
+            for update in self.runtime.take_updates() {
+                update.apply(&mut *applier)?;
+            }
+        }
+        recycle_commands(commands);
+        if compact_applier {
+            self.applier.compact();
+            self.applier.borrow_dyn().clear_recycled_nodes();
+        }
+        composer_context::without_composer(|| {
+            for effect in side_effects {
+                effect();
+            }
+        });
+        Ok(())
+    }
+}
+
+/// Subcomposes `f` into `slots` at `site`, with the runtime state the host
+/// holds or, for a host without one, `fallback_state`'s. See
+/// [`Composer::subcompose_slot_with_context`].
+fn subcompose_slot_at<R>(
+    site: SubcomposeSite<'_>,
+    fallback_state: impl FnOnce() -> Rc<ComposerRuntimeState>,
+    slots: &Rc<SlotsHost>,
+    root: Option<NodeId>,
+    context: &CapturedCompositionContext,
+    f: impl FnOnce(&Composer) -> R,
+) -> Result<(R, Vec<RecomposeScope>), NodeError> {
+    let _teardown = crate::runtime::enter_state_teardown_scope();
+    let shared_state = slots.runtime_state().unwrap_or_else(fallback_state);
+    let core = site.spin_up_core(shared_state, slots, root, context.locals.clone());
+    *core.subcomposition_owner_scope.borrow_mut() = context
+        .owner_scope
+        .as_ref()
+        .and_then(RecomposeScope::upgrade);
+    let composer = Composer::from_core(core);
+    composer.subcompose_stack().push(SubcomposeFrame::default());
+    let mut guard = SubcomposeStackGuard {
+        core: composer.clone_core(),
+        leaked: false,
+    };
+    let root_group_key = crate::location_key!();
+    let (result, commands, side_effects, compact_applier) = composer.install(|composer| {
+        let (output, outcome) = composer.try_with_slot_host_pass(
+            Rc::clone(slots),
+            crate::slot::SlotPassMode::Compose,
+            |composer| {
+                let output = composer.with_group(root_group_key, |composer| f(composer));
+                if root.is_some() {
+                    composer.pop_parent();
+                }
+                output
+            },
+        )?;
+        let commands = composer.take_commands();
+        let side_effects = composer.take_side_effects();
+        Ok((output, commands, side_effects, outcome.compacted))
+    })?;
+    let frame = {
+        let frame = take_subcompose_frame(&guard.core, "subcompose_slot");
+        guard.leaked = true;
+        frame
+    };
+    site.flush(commands, compact_applier, side_effects)?;
+    Ok((result, frame.scopes))
 }
 
 /// What a composer core is built for: the tree it composes and the
@@ -1402,19 +1514,17 @@ impl Composer {
         }
     }
 
-    /// Registers a virtual node in the Applier.
+    /// Stores a virtual node in the Applier and returns its id.
     ///
     /// Assigns the node's ID so its layout registry and invalidation metadata
     /// belong to the node stored in the applier.
-    pub fn register_virtual_node(
-        &self,
-        node_id: NodeId,
-        node: Box<dyn Node>,
-    ) -> Result<(), NodeError> {
+    pub fn create_virtual_node(&self, node: Box<dyn Node>) -> NodeId {
         let mut applier = self.borrow_applier();
-        applier.insert_with_id(node_id, node)?;
-        applier.get_mut(node_id)?.set_node_id(node_id);
-        Ok(())
+        let node_id = applier.create_virtual(node);
+        if let Ok(node) = applier.get_mut(node_id) {
+            node.set_node_id(node_id);
+        }
+        node_id
     }
 
     /// Detaches and disposes subcomposition roots evicted from their reuse pool.
@@ -1436,8 +1546,21 @@ impl Composer {
             return Ok(());
         }
         self.apply_pending_commands()?;
-        let disposal = crate::NodeDisposal::from_subcomposed(disposal, &*self.borrow_applier());
-        self.core.applier.dispose_nodes(disposal)
+        Self::dispose_measure_subcomposed_nodes(&self.core.applier, disposal)
+    }
+
+    /// Disposes what a measure-time subcomposition dropped from `applier`, as
+    /// [`Self::dispose_subcomposed_nodes`] does under a composer, for a pass
+    /// [`Self::subcompose_measure_slot`] ran.
+    pub fn dispose_measure_subcomposed_nodes(
+        applier: &Rc<dyn ApplierHost>,
+        disposal: crate::subcompose::SubcomposeDisposal,
+    ) -> Result<(), NodeError> {
+        if disposal.nodes.is_empty() && disposal.slot_hosts.is_empty() {
+            return Ok(());
+        }
+        let disposal = crate::NodeDisposal::from_subcomposed(disposal, &*applier.borrow_dyn());
+        applier.dispose_nodes(disposal)
     }
 
     /// Checks if a node has no parent (is a root node).
@@ -1475,6 +1598,22 @@ impl Composer {
         }
     }
 
+    /// Runs `visit` on each child of `node_id`, in order, with whether the
+    /// child needs measurement or placement before its cached layout can be
+    /// reused: the walk [`Self::get_node_children`] and
+    /// [`Self::nodes_need_relayout`] make together, under one borrow of the
+    /// applier.
+    pub fn visit_node_children(&self, node_id: NodeId, mut visit: impl FnMut(NodeId, bool)) {
+        let applier = self.borrow_applier();
+        let Ok(node) = applier.get_ref(node_id) else {
+            return;
+        };
+        node.for_each_child(&mut |child| {
+            let needs_relayout = applier.get_ref(child).is_ok_and(Node::layout_dirty);
+            visit(child, needs_relayout);
+        });
+    }
+
     /// Whether any node needs measurement or placement before its cached layout can be reused.
     ///
     /// ```no_run
@@ -1484,44 +1623,10 @@ impl Composer {
     /// # }
     /// ```
     pub fn nodes_need_relayout(&self, node_ids: impl IntoIterator<Item = NodeId>) -> bool {
-        let mut applier = self.borrow_applier();
-        node_ids.into_iter().any(|node_id| {
-            applier
-                .get_mut(node_id)
-                .is_ok_and(|node| node.layout_dirty())
-        })
-    }
-
-    /// Records a child node in the current parent frame's expected children list.
-    ///
-    /// Used by SubcomposeLayout's `perform_subcompose` to register virtual nodes
-    /// with the outer composer's parent frame. This ensures that the `pop_parent`
-    /// call at the end of `subcompose_slot` generates a correct `SyncChildren`
-    /// command that preserves (rather than removes) the virtual nodes.
-    ///
-    /// Without this, `pop_parent` would generate `SyncChildren { expected: [] }`,
-    /// which removes all virtual nodes and their subtrees from the applier.
-    pub fn record_subcompose_child(&self, child_id: NodeId) {
-        let mut parent_stack = self.parent_stack();
-        if let Some(frame) = parent_stack.last_mut()
-            && matches!(frame.attach_mode, ParentAttachMode::DeferredSync)
-        {
-            if let Some(membership) = frame.new_children_membership.as_mut() {
-                if membership.insert(child_id) {
-                    frame.new_children.push(child_id);
-                }
-            } else if frame.new_children.len() >= LARGE_DEFERRED_CHILD_TRACKING_THRESHOLD {
-                let mut membership = HashSet::default();
-                membership.reserve(frame.new_children.len() + 1);
-                membership.extend(frame.new_children.iter().copied());
-                if membership.insert(child_id) {
-                    frame.new_children.push(child_id);
-                }
-                frame.new_children_membership = Some(membership);
-            } else if !frame.new_children.contains(&child_id) {
-                frame.new_children.push(child_id);
-            }
-        }
+        let applier = self.borrow_applier();
+        node_ids
+            .into_iter()
+            .any(|node_id| applier.get_ref(node_id).is_ok_and(Node::layout_dirty))
     }
 
     /// Clears all children of a node in the Applier.
@@ -2395,60 +2500,14 @@ impl Composer {
         (result, roots)
     }
 
-    fn spin_up_subcompose_core(
-        &self,
-        slots: &Rc<SlotsHost>,
-        root: Option<NodeId>,
-        runtime_handle: &RuntimeHandle,
-        locals: LocalStackSnapshot,
-    ) -> Rc<ComposerCore> {
-        let phase = self.phase();
-        let shared_state = slots
-            .runtime_state()
-            .unwrap_or_else(|| Rc::clone(&self.core.shared_state));
-        let core = Rc::new(ComposerCore::new(ComposerParts {
-            shared_state,
-            slots: Rc::clone(slots),
-            applier: Rc::clone(&self.core.applier),
-            runtime: runtime_handle.clone(),
-            root,
-            initial_parent_frame: InitialParentFrame::RealParent,
-        }));
-        core.phase.set(phase);
-        core.locals_changed.set(self.core.locals_changed.get());
-        *core.local_stack.borrow_mut() = locals;
-        core
-    }
-
-    /// Applies a subcomposition's commands. The pass holds a state teardown
-    /// scope from its start until this returns, as a root pass does: the
-    /// states a removed group remembered stay readable until the nodes it
-    /// emitted are detached, whose modifier nodes may read them.
-    fn flush_subcompose_pass(
-        &self,
-        mut commands: CommandQueue,
-        runtime_handle: &RuntimeHandle,
-        compact_applier: bool,
-        side_effects: Vec<Box<dyn FnOnce()>>,
-    ) -> Result<(), NodeError> {
-        {
-            let mut applier = self.borrow_applier();
-            commands.apply(&mut *applier)?;
-            for update in runtime_handle.take_updates() {
-                update.apply(&mut *applier)?;
-            }
+    /// What a subcomposition this composer runs takes from it.
+    fn subcompose_site(&self) -> SubcomposeSite<'_> {
+        SubcomposeSite {
+            applier: &self.core.applier,
+            runtime: &self.core.runtime,
+            phase: self.phase(),
+            locals_changed: self.core.locals_changed.get(),
         }
-        recycle_commands(commands);
-        if compact_applier {
-            self.core.applier.compact();
-            self.core.applier.borrow_dyn().clear_recycled_nodes();
-        }
-        composer_context::without_composer(|| {
-            for effect in side_effects {
-                effect();
-            }
-        });
-        Ok(())
     }
 
     /// Composes `f` as an independent pass over the separate slot table `slots` and applies its
@@ -2461,9 +2520,11 @@ impl Composer {
         f: impl FnOnce(&Composer) -> R,
     ) -> Result<R, NodeError> {
         let _teardown = crate::runtime::enter_state_teardown_scope();
-        let runtime_handle = self.runtime_handle();
-        let locals = self.current_local_stack();
-        let core = self.spin_up_subcompose_core(slots, root, &runtime_handle, locals);
+        let site = self.subcompose_site();
+        let shared_state = slots
+            .runtime_state()
+            .unwrap_or_else(|| Rc::clone(&self.core.shared_state));
+        let core = site.spin_up_core(shared_state, slots, root, self.current_local_stack());
         let composer = Composer::from_core(core);
         let (result, commands, side_effects, compact_applier) = composer.install(|composer| {
             let (output, outcome) = composer.try_with_slot_host_pass(
@@ -2475,7 +2536,7 @@ impl Composer {
             let side_effects = composer.take_side_effects();
             Ok((output, commands, side_effects, outcome.compacted))
         })?;
-        self.flush_subcompose_pass(commands, &runtime_handle, compact_applier, side_effects)?;
+        site.flush(commands, compact_applier, side_effects)?;
         Ok(result)
     }
 
@@ -2534,45 +2595,40 @@ impl Composer {
         context: &CapturedCompositionContext,
         f: impl FnOnce(&Composer) -> R,
     ) -> Result<(R, Vec<RecomposeScope>), NodeError> {
-        let _teardown = crate::runtime::enter_state_teardown_scope();
-        let runtime_handle = self.runtime_handle();
-        let locals = context.locals.clone();
-        let core = self.spin_up_subcompose_core(slots, root, &runtime_handle, locals);
-        *core.subcomposition_owner_scope.borrow_mut() = context
-            .owner_scope
-            .as_ref()
-            .and_then(RecomposeScope::upgrade);
-        let composer = Composer::from_core(core);
-        composer.subcompose_stack().push(SubcomposeFrame::default());
-        let mut guard = SubcomposeStackGuard {
-            core: composer.clone_core(),
-            leaked: false,
-        };
-        let root_group_key = crate::location_key!();
-        let (result, commands, side_effects, compact_applier) = composer.install(|composer| {
-            let (output, outcome) = composer.try_with_slot_host_pass(
-                Rc::clone(slots),
-                crate::slot::SlotPassMode::Compose,
-                |composer| {
-                    let output = composer.with_group(root_group_key, |composer| f(composer));
-                    if root.is_some() {
-                        composer.pop_parent();
-                    }
-                    output
-                },
-            )?;
-            let commands = composer.take_commands();
-            let side_effects = composer.take_side_effects();
-            Ok((output, commands, side_effects, outcome.compacted))
-        })?;
-        let frame = {
-            let frame = take_subcompose_frame(&guard.core, "subcompose_slot");
-            guard.leaked = true;
-            frame
-        };
+        subcompose_slot_at(
+            self.subcompose_site(),
+            || Rc::clone(&self.core.shared_state),
+            slots,
+            root,
+            context,
+            f,
+        )
+    }
 
-        self.flush_subcompose_pass(commands, &runtime_handle, compact_applier, side_effects)?;
-        Ok((result, frame.scopes))
+    /// Subcomposes `f` into `slots` for a measure pass that runs under no
+    /// composer, as [`Self::subcompose_slot_with_context`] does under one:
+    /// the nodes go to `applier` under `root`, in the measure phase. A host
+    /// without a runtime state takes a new one bound to `applier`.
+    pub fn subcompose_measure_slot<R>(
+        applier: &Rc<dyn ApplierHost>,
+        runtime: &RuntimeHandle,
+        slots: &Rc<SlotsHost>,
+        root: NodeId,
+        context: &CapturedCompositionContext,
+        f: impl FnOnce(&Composer) -> R,
+    ) -> Result<(R, Vec<RecomposeScope>), NodeError> {
+        let site = SubcomposeSite {
+            applier,
+            runtime,
+            phase: crate::Phase::Measure,
+            locals_changed: false,
+        };
+        let new_state = || {
+            let state = Rc::new(ComposerRuntimeState::default());
+            state.bind_applier_host(applier);
+            state
+        };
+        subcompose_slot_at(site, new_state, slots, Some(root), context, f)
     }
 
     fn attach_root_nodes(&self, root_nodes: RootNodeIds) {

@@ -20,7 +20,7 @@ struct RenderState {
     layer_property_repasses: RefCell<DirtyNodeSet>,
     modifier_slice_repasses: RefCell<DirtyNodeSet>,
     geometry_scene_nodes: RefCell<DirtyNodeSet>,
-    moved_scene_nodes: RefCell<DirtyNodeSet>,
+    moved_scene_nodes: RefCell<MovedSceneNodes>,
     /// Nodes whose z index changed: their parents' layers hold the order.
     z_order_changes: RefCell<DirtyNodeSet>,
     /// Nodes whose redraw flag was set before they had an id, so no draw
@@ -203,7 +203,7 @@ impl RenderState {
             layer_property_repasses: RefCell::new(DirtyNodeSet::new()),
             modifier_slice_repasses: RefCell::new(DirtyNodeSet::new()),
             geometry_scene_nodes: RefCell::new(DirtyNodeSet::new()),
-            moved_scene_nodes: RefCell::new(DirtyNodeSet::new()),
+            moved_scene_nodes: RefCell::new(MovedSceneNodes::new()),
             z_order_changes: RefCell::new(DirtyNodeSet::new()),
             retained_redraws: RefCell::new(Vec::new()),
             render_invalidated: Cell::new(false),
@@ -588,10 +588,6 @@ pub(crate) fn invalidate_layout_cache_epoch() {
     require_current_app_context("layout cache epoch access").invalidate_layout_caches();
 }
 
-pub(crate) fn current_layout_cache_epoch() -> u64 {
-    require_current_app_context("layout cache epoch access").current_layout_cache_epoch()
-}
-
 pub(crate) fn record_last_fling_velocity(velocity: f32) {
     if let Some(context) = current_app_context() {
         context.last_fling_velocity_bits.set(velocity.to_bits());
@@ -742,7 +738,7 @@ impl AppContext {
         self.state
             .moved_scene_nodes
             .borrow_mut()
-            .take_dirty_nodes_into(&mut output.moved);
+            .take_into(&mut output.moved);
     }
 
     /// Notes that the layout pass changed `node_id`'s geometry.
@@ -753,13 +749,23 @@ impl AppContext {
             .schedule_repass(node_id);
     }
 
-    /// Notes that the layout pass moved `node_id` and changed nothing else of
-    /// it, so the scene can keep what it drew for the node.
-    pub(crate) fn record_moved_scene_node(&self, node_id: NodeId) {
-        self.state
-            .moved_scene_nodes
-            .borrow_mut()
-            .schedule_repass(node_id);
+    /// Notes that the layout pass moved `node_id`, which `placer` placed, and
+    /// changed nothing else of it, so the scene can keep what it drew for the
+    /// node. `noted_in` is the node's own record of the take it was last
+    /// noted in.
+    pub(crate) fn record_moved_scene_node(
+        &self,
+        node_id: NodeId,
+        placer: Option<NodeId>,
+        noted_in: &mut u64,
+    ) {
+        self.state.moved_scene_nodes.borrow_mut().note(
+            MovedSceneNode {
+                node: node_id,
+                placer,
+            },
+            noted_in,
+        );
     }
 
     /// The placement bookkeeping of this context's running layout pass.
@@ -999,6 +1005,49 @@ fn with_draw_observer<R>(f: impl FnOnce(&SnapshotStateObserver) -> R) -> R {
 
 struct DirtyNodeSet {
     dirty_nodes: HashSet<NodeId>,
+}
+
+/// The nodes a layout pass moved and changed nothing else of, each once a
+/// take. A node keeps the take it was last noted in, so a second note in the
+/// same take is dropped with one comparison instead of a hash.
+struct MovedSceneNodes {
+    nodes: Vec<MovedSceneNode>,
+    /// The take the list fills: a number no other list on the thread uses.
+    take: u64,
+}
+
+impl MovedSceneNodes {
+    fn new() -> Self {
+        Self {
+            nodes: Vec::new(),
+            take: next_moved_scene_node_take(),
+        }
+    }
+
+    fn note(&mut self, moved: MovedSceneNode, noted_in: &mut u64) {
+        if *noted_in != self.take {
+            *noted_in = self.take;
+            self.nodes.push(moved);
+        }
+    }
+
+    /// Moves the nodes into `output` and keeps the storage `output` held
+    /// for the next take.
+    fn take_into(&mut self, output: &mut Vec<MovedSceneNode>) {
+        output.clear();
+        if !self.nodes.is_empty() {
+            std::mem::swap(&mut self.nodes, output);
+            self.take = next_moved_scene_node_take();
+        }
+    }
+}
+
+fn next_moved_scene_node_take() -> u64 {
+    crate::thread_state::cells(|cells| {
+        let take = cells.moved_scene_node_takes.get() + 1;
+        cells.moved_scene_node_takes.set(take);
+        take
+    })
 }
 
 impl DirtyNodeSet {
@@ -1288,7 +1337,17 @@ pub struct GeometrySceneNodes {
     pub reshaped: Vec<NodeId>,
     /// Nodes that moved in their parent: the scene moves what it drew for
     /// them, unless they are also reshaped or drawn again.
-    pub moved: Vec<NodeId>,
+    pub moved: Vec<MovedSceneNode>,
+}
+
+/// A node a layout pass moved, with the node whose placement put it there:
+/// its nearest ancestor that is not virtual, the parent of its layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MovedSceneNode {
+    /// The node that moved.
+    pub node: NodeId,
+    /// The node that placed it; `None` for a root.
+    pub placer: Option<NodeId>,
 }
 
 impl GeometrySceneNodes {
@@ -1364,6 +1423,17 @@ pub fn current_font_scale() -> f32 {
 /// size in `Sp` is resolved through. The scalar remains the thing to *report*.
 pub fn current_font_scale_curve() -> crate::font_scale::FontScaleCurve {
     with_render_state(|state| state.font_scale.get())
+}
+
+/// The current app context's density and font scale curve, read through one
+/// lookup of the context, or `None` outside a context.
+pub(crate) fn current_host_density() -> Option<(f32, crate::font_scale::FontScaleCurve)> {
+    current_app_context().map(|context| {
+        (
+            f32::from_bits(context.state.density_bits.get()),
+            context.state.font_scale.get(),
+        )
+    })
 }
 
 /// The running app's font scale curve, or `None` when it leaves every size as

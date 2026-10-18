@@ -34,6 +34,7 @@ mod retention;
 /// The runtime in which a composition runs: state cells, UI tasks, frame callbacks and the queue of
 /// invalidated scopes.
 pub mod runtime;
+mod runtime_cell;
 mod slot;
 /// A min-heap of snapshot ids that supports removal by handle.
 pub mod snapshot_double_index_heap;
@@ -119,6 +120,7 @@ pub use runtime::{
     DefaultScheduler, Runtime, RuntimeHandle, StateId, TaskHandle, UiDispatcher,
     current_runtime_handle, label_next_ui_task, schedule_frame, schedule_node_update,
 };
+pub use runtime_cell::RuntimeCell;
 pub use slot::{
     SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup, SlotDebugScope,
     SlotDebugSnapshot, SlotRetentionDebugStats, SlotTable, SlotTableDebugStats,
@@ -627,6 +629,56 @@ pub const fn branch_location_key(file: &str, line: u32, column: u32, branch: u32
     hash = fnv1a_location_key_bytes(hash, &[0xfd]);
     hash = fnv1a_location_key_bytes(hash, &branch.to_le_bytes());
     avalanche_location_key(hash)
+}
+
+/// The key of the `index`th constant value the `#[composable]` macro keeps
+/// at a source position, as a constant.
+#[doc(hidden)]
+pub const fn constant_value_key(file: &str, line: u32, column: u32, index: u32) -> Key {
+    let mut hash = source_location_hash(file, line, column);
+    hash = fnv1a_location_key_bytes(hash, &[0xfc]);
+    hash = fnv1a_location_key_bytes(hash, &index.to_le_bytes());
+    avalanche_location_key(hash)
+}
+
+/// Slots of the per-thread table of constant values, as a power of two.
+const CONSTANT_SLOTS: usize = 128;
+
+/// The value `make` gives, for an expression `#[composable]` found to give
+/// the same value every time it runs, such as a modifier chain of
+/// constants: `key` names the expression. The thread keeps the value it
+/// made last for `key` in a table of [`CONSTANT_SLOTS`] slots, so the
+/// expression is made again only when another expression took its slot.
+/// It needs no composition: the expression may sit in a closure that runs
+/// in an event handler, an effect or another thread.
+#[doc(hidden)]
+pub fn __constant<T: Clone + 'static>(key: Key, make: impl FnOnce() -> T) -> T {
+    let slot = (key as usize) & (CONSTANT_SLOTS - 1);
+    let kept = thread_state::try_runtimes(|state| {
+        let constants = state.constants.try_borrow().ok()?;
+        let (kept_key, value) = constants.get(slot)?.as_ref()?;
+        (*kept_key == key)
+            .then(|| value.downcast_ref::<T>().cloned())
+            .flatten()
+    })
+    .flatten();
+    if let Some(value) = kept {
+        return value;
+    }
+    let value = make();
+    let stored: Rc<dyn Any> = Rc::new(value.clone());
+    thread_state::try_runtimes(|state| {
+        let Ok(mut constants) = state.constants.try_borrow_mut() else {
+            return;
+        };
+        if constants.is_empty() {
+            constants.resize_with(CONSTANT_SLOTS, || None);
+        }
+        if let Some(entry) = constants.get_mut(slot) {
+            *entry = Some((key, stored));
+        }
+    });
+    value
 }
 
 /// Stable identifier for a slot in the slot table.
@@ -1565,6 +1617,7 @@ impl std::error::Error for NodeError {}
 
 pub use subcompose::{
     ContentTypeReusePolicy, DefaultSlotReusePolicy, SlotId, SlotReusePolicy, SubcomposeState,
+    TypedSlot,
 };
 
 /// The stage of a frame in which a composer is used.
@@ -1969,11 +2022,28 @@ pub trait Node: Any {
     fn move_child(&mut self, _from: usize, _to: usize) {}
     /// Replaces the child list with `children`, in order.
     fn update_children(&mut self, _children: &[NodeId]) {}
+    /// Whether the node adds and drops its children itself, as a
+    /// subcomposition host does with its slot hosts: the child sync a
+    /// composition pass ends with then leaves its list alone. The default
+    /// keeps the list the passes compose.
+    fn keeps_own_children(&self) -> bool {
+        false
+    }
     /// Copies child IDs into the provided scratch buffer without allocating a
     /// fresh container for every traversal. A node without children leaves
     /// the buffer empty.
     fn collect_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
         out.clear();
+    }
+    /// Runs `f` on each child id in the order [`Node::collect_children_into`]
+    /// lists them. A node that holds its list in place overrides this to
+    /// visit it without a copy.
+    fn for_each_child(&self, f: &mut dyn FnMut(NodeId)) {
+        let mut children = SmallVec::<[NodeId; 8]>::new();
+        self.collect_children_into(&mut children);
+        for child in children {
+            f(child);
+        }
     }
     /// Copies the ids of the children this node owns, in order, into `out`. A node whose
     /// `collect_children_into` leaves some children out overrides this to list them all. The
@@ -2369,6 +2439,8 @@ pub trait Applier: Any {
     fn create(&mut self, node: Box<dyn Node>) -> NodeId;
     /// Returns the node `id` for change, or an error if there is none.
     fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError>;
+    /// Returns the node `id` to read, or an error if there is none.
+    fn get_ref(&self, id: NodeId) -> Result<&dyn Node, NodeError>;
     /// Removes the node `id` and the nodes below it.
     fn remove(&mut self, id: NodeId) -> Result<(), NodeError>;
 
@@ -2420,14 +2492,9 @@ pub trait Applier: Any {
     /// preventing stale slot entries from matching recycled nodes.
     fn node_generation(&self, id: NodeId) -> u32;
 
-    /// Inserts a node with a pre-assigned ID.
-    ///
-    /// This is used for virtual nodes whose IDs are allocated separately
-    /// (e.g., via allocate_virtual_node_id()). Unlike `create()` which assigns
-    /// a new ID, this method uses the provided ID.
-    ///
-    /// Returns Ok(()) if successful, or an error if the ID is already in use.
-    fn insert_with_id(&mut self, id: NodeId, node: Box<dyn Node>) -> Result<(), NodeError>;
+    /// Stores `node` as a virtual node, one that lays out nothing itself
+    /// while its parent lays out its children, and returns its new id.
+    fn create_virtual(&mut self, node: Box<dyn Node>) -> NodeId;
 
     /// Reinserts a recycled node at its retained stable ID, or creates a fresh ID if that
     /// retained ID is no longer available.
@@ -2538,10 +2605,13 @@ impl DirtyBubble {
     /// dirty node under a clean ancestor. It stops at one an earlier walk of
     /// the same batch of commands passed with its flags
     /// (`bubble_passes.rs`). A virtual start node passes its own flags to
-    /// its parent.
+    /// its parent. A walk that carries measure marks all that one carrying
+    /// layout marks, so it passes with the layout flag too, and a layout
+    /// walk after it stops where it passed.
     fn walk(self, applier: &mut dyn Applier, first: Option<NodeId>, mut start: bool) {
-        let flags =
-            u8::from(self.layout) | u8::from(self.measure) << 1 | u8::from(self.semantics) << 2;
+        let flags = u8::from(self.layout || self.measure)
+            | u8::from(self.measure) << 1
+            | u8::from(self.semantics) << 2;
         let mut next = first;
         while let Some(id) = next {
             let Some(node) = applier.bubble_node(id, flags, !start) else {
@@ -3747,6 +3817,12 @@ fn sync_or_settle_children(
     expected_children: Option<&[NodeId]>,
     deferred_cleanup: &mut DeferredChildCleanupQueue,
 ) -> Result<(), NodeError> {
+    if applier
+        .get_mut(parent_id)
+        .is_ok_and(|parent| parent.keeps_own_children())
+    {
+        return Ok(());
+    }
     match expected_children {
         Some(expected_children) => {
             sync_children(applier, parent_id, expected_children, deferred_cleanup)
@@ -3798,7 +3874,6 @@ struct MemoryApplierState {
     high_id_generations: HashMap<NodeId, u32>,
     next_stable_id: NodeId,
     layout_runtime: Option<RuntimeHandle>,
-    slots: Rc<RefCell<SlotTable>>,
     recycled_nodes: HashMap<TypeId, Vec<RecycledNode>>,
     returning_recycled_nodes: HashMap<TypeId, Vec<RecycledNode>>,
     cold_recycled_nodes: HashMap<TypeId, Vec<RecycledNode>>,
@@ -3943,12 +4018,6 @@ impl MemoryApplier {
     /// Creates an applier with no nodes.
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// The slot table that composition during layout writes to, shared with
-    /// the layout pass that lends this applier.
-    pub fn slots_handle(&self) -> Rc<RefCell<SlotTable>> {
-        Rc::clone(&self.state.slots)
     }
 
     /// Resolves a scene-scope candidate the way structural records are
@@ -4583,6 +4652,7 @@ impl MemoryApplier {
         self.state.layout_dirt_roots.take_into(out)
     }
 
+    #[inline]
     fn resolve_node_index(&self, id: NodeId) -> Option<usize> {
         self.state.stable_index.slot(id)
     }
@@ -4628,22 +4698,32 @@ impl MemoryApplier {
 
     /// Borrows a live node without requiring exclusive access to the tree.
     /// Returns [`NodeError::Missing`] when `id` does not name a live node.
+    #[inline]
     pub fn get_ref(&self, id: NodeId) -> Result<&dyn Node, NodeError> {
-        if let Some(physical_id) = self.resolve_node_index(id) {
-            let slot = self
+        match self.resolve_node_index(id) {
+            Some(physical_id) => self
                 .state
                 .nodes
                 .get(physical_id)
-                .ok_or(NodeError::Missing { id })?
-                .as_deref()
-                .ok_or(NodeError::Missing { id })?;
-            return Ok(slot);
+                .and_then(Option::as_deref)
+                .ok_or(NodeError::Missing { id }),
+            None => self.high_id_node(id),
         }
+    }
 
+    fn high_id_node(&self, id: NodeId) -> Result<&dyn Node, NodeError> {
         self.state
             .high_id_nodes
             .get(&id)
             .map(AsRef::as_ref)
+            .ok_or(NodeError::Missing { id })
+    }
+
+    fn high_id_node_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError> {
+        self.state
+            .high_id_nodes
+            .get_mut(&id)
+            .map(std::convert::AsMut::as_mut)
             .ok_or(NodeError::Missing { id })
     }
 
@@ -4810,22 +4890,17 @@ impl Applier for MemoryApplier {
         self.state.stable_index.generation(id)
     }
 
+    #[inline]
     fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError> {
-        if let Some(physical_id) = self.resolve_node_index(id) {
-            let slot = self
+        match self.resolve_node_index(id) {
+            Some(physical_id) => self
                 .state
                 .nodes
                 .get_mut(physical_id)
-                .ok_or(NodeError::Missing { id })?
-                .as_deref_mut()
-                .ok_or(NodeError::Missing { id })?;
-            return Ok(slot);
+                .and_then(Option::as_deref_mut)
+                .ok_or(NodeError::Missing { id }),
+            None => self.high_id_node_mut(id),
         }
-        self.state
-            .high_id_nodes
-            .get_mut(&id)
-            .map(std::convert::AsMut::as_mut)
-            .ok_or(NodeError::Missing { id })
     }
 
     fn remove(&mut self, id: NodeId) -> Result<(), NodeError> {
@@ -4869,13 +4944,14 @@ impl Applier for MemoryApplier {
         self.state.nodes.get_mut(index)?.as_deref_mut()
     }
 
-    fn insert_with_id(&mut self, id: NodeId, node: Box<dyn Node>) -> Result<(), NodeError> {
-        if self.contains_node_id(id) {
-            return Err(NodeError::AlreadyExists { id });
-        }
-        self.insert_available_with_id(id, node);
+    fn get_ref(&self, id: NodeId) -> Result<&dyn Node, NodeError> {
+        MemoryApplier::get_ref(self, id)
+    }
+
+    fn create_virtual(&mut self, node: Box<dyn Node>) -> NodeId {
+        let id = self.create(node);
         self.state.virtual_node_ids.insert(id);
-        Ok(())
+        id
     }
 
     fn insert_recycled_node_or_create(

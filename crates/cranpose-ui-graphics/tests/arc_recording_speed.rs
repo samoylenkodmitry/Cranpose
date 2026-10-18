@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use cranpose_ui_graphics::{
-    Brush, Color, DrawScope, DrawScopeDefault, Point, Size, Stroke, StrokeCap,
+    Brush, Color, CommandRecording, DrawScope, DrawScopeDefault, Point, Size, Stroke, StrokeCap,
 };
 
 /// A frame the size of a watch game's: bricks as annular sectors and rails
@@ -10,7 +10,8 @@ const SECTORS: usize = 11_000;
 const ARCS: usize = 5_000;
 
 fn record_frame(frame: usize) -> usize {
-    let mut scope = DrawScopeDefault::new(Size::new(450.0, 450.0));
+    let mut recording = CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(450.0, 450.0), &mut recording);
     let center = Point::new(225.0, 225.0);
     let breathing = 1.0 + (frame as f32 * 0.37).sin() * 0.012;
     for index in 0..SECTORS {
@@ -43,7 +44,7 @@ fn record_frame(frame: usize) -> usize {
             Stroke::new(1.5).with_cap(StrokeCap::Round),
         );
     }
-    let recording = scope.finish();
+    scope.finish();
     recording.len()
 }
 

@@ -63,7 +63,8 @@ fn page_with_tilted_card() -> RenderGraph {
 
 /// Solid, gradient and stroked shapes, each kind with a pipeline of its own.
 fn shapes() -> RenderNode {
-    let mut scope = DrawScopeDefault::new(Size::new(WIDTH as f32, HEIGHT as f32));
+    let mut recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(WIDTH as f32, HEIGHT as f32), &mut recording);
     support::record_mixed_scene(&mut scope);
     RenderNode::DrawRun(DrawRunNode::new(
         PrimitivePhase::BeforeChildren,

@@ -45,9 +45,11 @@ fn arena_key(segment: &RecordSegment) -> crate::render::ShapePipelineKey {
 
 /// A run of what `draw` records, placed at the origin.
 fn drawn_run(draw: impl FnOnce(&mut DrawScopeDefault)) -> RunDraw {
-    let mut scope = DrawScopeDefault::new(Size::new(400.0, 400.0));
+    let mut scope_recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope = DrawScopeDefault::new(Size::new(400.0, 400.0), &mut scope_recording);
     draw(&mut scope);
-    let recording = scope.finish();
+    scope.finish();
+    let recording = scope_recording;
     RunDraw::of(
         &recording,
         None,

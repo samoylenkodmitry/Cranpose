@@ -225,7 +225,9 @@ fn pixel(frame: &CapturedFrame, x: u32, y: u32) -> [u8; 4] {
 }
 
 fn short_arcs() -> Vec<RenderNode> {
-    let mut scope = DrawScopeDefault::new(Size::new(FRAME as f32, FRAME as f32));
+    let mut scope_recording = cranpose_ui_graphics::CommandRecording::default();
+    let mut scope =
+        DrawScopeDefault::new(Size::new(FRAME as f32, FRAME as f32), &mut scope_recording);
     for radius in [32.0, 100.0, 200.0] {
         for index in 0..36 {
             let cap = [StrokeCap::Butt, StrokeCap::Round, StrokeCap::Square][index % 3];
@@ -240,7 +242,8 @@ fn short_arcs() -> Vec<RenderNode> {
             );
         }
     }
-    let recording = scope.finish();
+    scope.finish();
+    let recording = scope_recording;
     assert!(
         recording
             .shapes()

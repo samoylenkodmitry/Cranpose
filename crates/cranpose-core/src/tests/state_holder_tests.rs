@@ -4,6 +4,7 @@ use super::*;
 struct Probe {
     count: MutableState<i32>,
     label: MutableState<&'static str>,
+    taps: RuntimeCell<Cell<u32>>,
 }
 
 impl Probe {
@@ -11,6 +12,7 @@ impl Probe {
         Probe {
             count: mutableStateOf(0),
             label: mutableStateOf("first"),
+            taps: RuntimeCell::new(Cell::new(0)),
         }
     }
 }
@@ -52,6 +54,7 @@ fn a_remembered_holder_is_built_once_and_comes_back_the_same_object() {
     assert_eq!(builds.get(), 1, "the first pass builds the holder");
     first.count.set_value(7);
     first.label.set_value("second");
+    first.taps.with(|taps| taps.set(3));
 
     render_probe(&mut composition, root_key, &builds, &seen, show);
     let again = seen.get().expect("the holder is there on the second pass");
@@ -63,6 +66,12 @@ fn a_remembered_holder_is_built_once_and_comes_back_the_same_object() {
     assert_eq!(again.label, first.label);
     assert_eq!(again.count.value(), 7, "its states keep their values");
     assert_eq!(again.label.value(), "second");
+    assert_eq!(again.taps, first.taps);
+    assert_eq!(
+        again.taps.with(Cell::get),
+        3,
+        "its runtime cell keeps its value"
+    );
 }
 
 #[test]
@@ -77,6 +86,7 @@ fn a_remembered_holder_releases_its_states_when_it_leaves() {
     let probe = seen.get().expect("the holder is built on the first pass");
     assert!(probe.count.is_alive());
     assert!(probe.label.is_alive());
+    assert!(probe.taps.is_alive());
 
     show.set_value(false);
     render_probe(&mut composition, root_key, &builds, &seen, show);
@@ -85,6 +95,10 @@ fn a_remembered_holder_releases_its_states_when_it_leaves() {
         "the slot owns the states and lets them go with it"
     );
     assert!(!probe.label.is_alive());
+    assert!(
+        !probe.taps.is_alive(),
+        "a runtime cell made while the slot built its value goes with it too"
+    );
 }
 
 #[test]

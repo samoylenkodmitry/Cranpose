@@ -52,14 +52,11 @@ fn Child(label: &'static str) {
 fn insert_virtual_child(
     composition: &mut Composition<MemoryApplier>,
     parent: NodeId,
-    node_id: NodeId,
     label: &'static str,
     index: usize,
 ) {
     let mut applier = composition.applier_mut();
-    applier
-        .insert_with_id(node_id, Box::new(ParentTracked::new(LabelNode { label })))
-        .expect("virtual child ID is available");
+    let node_id = applier.create_virtual(Box::new(ParentTracked::new(LabelNode { label })));
     applier
         .get_mut(node_id)
         .expect("virtual child was inserted")
@@ -103,20 +100,8 @@ fn recomposition_preserves_order_around_virtual_children() {
         })
         .expect("initial composition succeeds");
     let parent = parent_id.get().expect("composition emitted its parent");
-    insert_virtual_child(
-        &mut composition,
-        parent,
-        usize::MAX - 10,
-        "virtual-before-b",
-        1,
-    );
-    insert_virtual_child(
-        &mut composition,
-        parent,
-        usize::MAX - 11,
-        "virtual-after-b",
-        3,
-    );
+    insert_virtual_child(&mut composition, parent, "virtual-before-b", 1);
+    insert_virtual_child(&mut composition, parent, "virtual-after-b", 3);
     assert_eq!(
         child_labels(&mut composition, parent),
         ["a", "virtual-before-b", "b", "virtual-after-b"]

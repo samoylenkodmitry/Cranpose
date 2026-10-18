@@ -47,11 +47,7 @@ pub(crate) fn request_wake_at_next_vsync() -> bool {
             );
             return false;
         }
-        ndk_sys::AChoreographer_postFrameCallback64(
-            choreographer,
-            Some(on_vsync),
-            std::ptr::null_mut(),
-        );
+        crate::android_symbols::post_frame_callback(choreographer, on_vsync);
     }
     true
 }
