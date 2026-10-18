@@ -1460,6 +1460,44 @@ fn software_text_line_width_is_its_prefix_widths_full_range_bit_for_bit() {
 }
 
 #[test]
+fn software_text_cached_line_widths_answer_only_their_own_style() {
+    let measurer = || {
+        SoftwareTextMeasurer::new(
+            default_software_text_font().expect("bundled default test font"),
+            8,
+        )
+    };
+    let cached = measurer();
+    let text = AnnotatedString::from("AVATAR Toy Wave, LT yo");
+    let range = 0..text.text.len();
+    for size in [14.0, 20.0, 14.0] {
+        let style = TextStyle {
+            span_style: SpanStyle {
+                font_size: cranpose_ui::text::TextUnit::Sp(size),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        // The prefix widths go first, so the whole width is read from them.
+        let prefixes = cached.measure_line_prefix_widths(&text, range.clone(), &style);
+        let width = cached.measure_line_width(&text, range.clone(), &style);
+        let fresh = measurer();
+        assert_eq!(
+            width.map(f32::to_bits),
+            fresh
+                .measure_line_width(&text, range.clone(), &style)
+                .map(f32::to_bits),
+            "size {size}"
+        );
+        assert_eq!(
+            prefixes,
+            fresh.measure_line_prefix_widths(&text, range.clone(), &style),
+            "size {size}"
+        );
+    }
+}
+
+#[test]
 fn software_text_glyph_metrics_cache_reuses_common_glyphs_across_unique_lines() {
     let measurer = SoftwareTextMeasurer::new(
         default_software_text_font().expect("bundled default test font"),
