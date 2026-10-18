@@ -16,7 +16,7 @@ use cranpose_ui::{
 
 use crate::mesh_surface_hits::{
     EYE_RADIUS, FAR, FOCAL_LENGTH, INNER, NESTED, Pressable, Presses, WALL, WalkRoom,
-    camera_looking, camera_moved, nested_window, press_middle, pressable, walk_room,
+    camera_looking, camera_moved, centered, nested_window, press_middle, pressable, walk_room,
     window_into_nested, with_scene,
 };
 
@@ -87,13 +87,7 @@ fn rooms(surface: &Pressable, depth: usize) {
             Box(panel, BoxSpec::default(), || {});
             return;
         }
-        let wall = surface((
-            "wall",
-            WALL,
-            Mat4::translation(Vec3::new(-0.5, -0.5, 0.0))
-                .then(&Mat4::scaling(Vec3::new(WALL.width, WALL.height, 1.0)))
-                .then(&Mat4::translation(Vec3::new(0.0, 0.0, NESTED.1))),
-        ));
+        let wall = surface(("wall", WALL, centered(WALL, Vec3::new(0.0, 0.0, NESTED.1))));
         let surface = Rc::clone(&surface);
         Box(wall, BoxSpec::default(), move || rooms(&surface, depth - 1));
     });
@@ -118,13 +112,7 @@ fn an_eye_sees_through_doorways_as_deep_as_they_show() {
             }),
             BoxSpec::default(),
             move || {
-                let wall = surface((
-                    "wall",
-                    WALL,
-                    Mat4::translation(Vec3::new(-0.5, -0.5, 0.0))
-                        .then(&Mat4::scaling(Vec3::new(WALL.width, WALL.height, 1.0)))
-                        .then(&Mat4::translation(FAR)),
-                ));
+                let wall = surface(("wall", WALL, centered(WALL, FAR)));
                 let surface = Rc::clone(&surface);
                 // Five doorways, one inside another, past the eye's own
                 // space: no depth below what shows on screen stops it.
@@ -163,13 +151,7 @@ fn a_doorway_off_screen_shows_nothing_of_its_space() {
             }),
             BoxSpec::default(),
             move || {
-                let wall = surface((
-                    "wall",
-                    WALL,
-                    Mat4::translation(Vec3::new(-0.5, -0.5, 0.0))
-                        .then(&Mat4::scaling(Vec3::new(WALL.width, WALL.height, 1.0)))
-                        .then(&Mat4::translation(FAR)),
-                ));
+                let wall = surface(("wall", WALL, centered(WALL, FAR)));
                 let (surface, kept) = (Rc::clone(&surface), Rc::clone(&kept));
                 Box(wall, BoxSpec::default(), move || {
                     kept.set(Some(window_into_nested(&surface).1));

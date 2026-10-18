@@ -315,6 +315,14 @@ const INNER_AT: Vec3 = Vec3::new(450.0, 260.0, -200.0);
 /// at.
 pub(crate) type Presses = Rc<RefCell<Vec<(&'static str, Point)>>>;
 
+/// The map of the unit plane onto a rectangle of `size` that faces the eye,
+/// its middle at `middle`.
+pub(crate) fn centered(size: Size, middle: Vec3) -> Mat4 {
+    Mat4::translation(Vec3::new(-0.5, -0.5, 0.0))
+        .then(&Mat4::scaling(Vec3::new(size.width, size.height, 1.0)))
+        .then(&Mat4::translation(middle))
+}
+
 /// Makes a node a pressable mesh surface on the unit plane, from its name,
 /// its content's size and its transform.
 pub(crate) type Pressable = Rc<dyn Fn((&'static str, Size, Mat4)) -> Modifier>;
@@ -328,13 +336,7 @@ fn wall_scene(inside: impl Fn(&Pressable) + 'static) -> (Scene, Presses) {
     let inside = Rc::new(inside);
     let mut composition = cranpose_ui::run_test_composition(move || {
         let surface = pressable(Rc::clone(&sink));
-        let wall = surface((
-            "wall",
-            WALL,
-            Mat4::translation(Vec3::new(-0.5, -0.5, 0.0))
-                .then(&Mat4::scaling(Vec3::new(WALL.width, WALL.height, 1.0)))
-                .then(&Mat4::translation(FAR)),
-        ));
+        let wall = surface(("wall", WALL, centered(WALL, FAR)));
         let inside = Rc::clone(&inside);
         Box(
             Modifier::empty().fill_max_size().scene3d(|| Scene3d {
@@ -597,21 +599,9 @@ pub(crate) fn walk_room(start: Vec3) -> WalkRoom {
             BoxSpec::default(),
             move || {
                 // A panel in the room, between the eye's start and the wall.
-                let front = surface((
-                    "front",
-                    INNER,
-                    Mat4::translation(Vec3::new(-0.5, -0.5, 0.0))
-                        .then(&Mat4::scaling(Vec3::new(INNER.width, INNER.height, 1.0)))
-                        .then(&Mat4::translation(Vec3::new(0.0, 0.0, -500.0))),
-                ));
+                let front = surface(("front", INNER, centered(INNER, Vec3::new(0.0, 0.0, -500.0))));
                 Box(front, BoxSpec::default(), || {});
-                let wall = surface((
-                    "wall",
-                    WALL,
-                    Mat4::translation(Vec3::new(-0.5, -0.5, 0.0))
-                        .then(&Mat4::scaling(Vec3::new(WALL.width, WALL.height, 1.0)))
-                        .then(&Mat4::translation(FAR)),
-                ));
+                let wall = surface(("wall", WALL, centered(WALL, FAR)));
                 let (surface, inner) = (Rc::clone(&surface), Rc::clone(&inner));
                 Box(wall, BoxSpec::default(), move || {
                     inner.set(Some(window_into_nested(&surface).0));
