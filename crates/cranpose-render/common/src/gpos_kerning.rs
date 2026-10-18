@@ -500,6 +500,9 @@ fn class_def(gpos: &[u8], offset: usize) -> Option<ClassDef> {
 #[derive(Clone)]
 pub struct KernedFont {
     font: FontArc,
+    /// The face's ascent, descent and line gap in font units, read once:
+    /// every scaled metric divides by the ascent less the descent.
+    vertical: [f32; 3],
     kerning: Option<Arc<GposKerning>>,
     ascii: Arc<AsciiGlyphs>,
     substitutions: Option<Arc<GlyphSubstitutions>>,
@@ -511,8 +514,14 @@ impl KernedFont {
     /// other positioning or substitution.
     pub fn new(font: FontArc, kerning: Option<Arc<GposKerning>>) -> Self {
         let ascii = Arc::new(AsciiGlyphs::new());
+        let vertical = [
+            font.ascent_unscaled(),
+            font.descent_unscaled(),
+            font.line_gap_unscaled(),
+        ];
         Self {
             font,
+            vertical,
             kerning,
             variants: Arc::new(FeatureVariants::new(Arc::clone(&ascii))),
             ascii,
@@ -538,6 +547,7 @@ impl KernedFont {
         };
         Some(Self {
             font: self.font.clone(),
+            vertical: self.vertical,
             kerning: self.kerning.clone(),
             ascii,
             substitutions,
@@ -618,15 +628,15 @@ impl Font for KernedFont {
     }
 
     fn ascent_unscaled(&self) -> f32 {
-        self.font.ascent_unscaled()
+        self.vertical[0]
     }
 
     fn descent_unscaled(&self) -> f32 {
-        self.font.descent_unscaled()
+        self.vertical[1]
     }
 
     fn line_gap_unscaled(&self) -> f32 {
-        self.font.line_gap_unscaled()
+        self.vertical[2]
     }
 
     fn italic_angle(&self) -> f32 {
