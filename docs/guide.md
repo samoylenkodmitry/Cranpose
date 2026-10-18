@@ -1744,8 +1744,8 @@ doorway opens on the screen rect it covers within the openings before it; one
 that lies off screen, faces away from the eye or opens on less than a quarter
 of a pixel shows nothing and costs nothing. So doorways inside doorways show as
 deep as they open on screen, up to 255, which the WGPU renderer's 8-bit stencil
-counts. Presses through a doorway reach the surfaces behind it. Glass, glow and
-shadows show only in the space the eye stands in. The desktop demo's Room tab
+counts. Presses through a doorway reach the surfaces behind it. Glass and glow
+show behind doorways too; shadows fall only in the space the eye stands in. The desktop demo's Room tab
 shows this: the whole demo hangs on the wall to the screen's right, and its own
 Room tab opens a doorway there into a second room.
 

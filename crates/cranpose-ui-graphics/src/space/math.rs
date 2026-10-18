@@ -245,6 +245,16 @@ impl Mat4 {
         Vec3::new(x, y, z)
     }
 
+    /// How long the map makes a unit length, averaged over the three axes:
+    /// the cube root of how much it scales volume.
+    pub fn length_scale(&self) -> f32 {
+        let axis = |axis: Vec3| self.transform_vector(axis).length();
+        (axis(Vec3::new(1.0, 0.0, 0.0))
+            * axis(Vec3::new(0.0, 1.0, 0.0))
+            * axis(Vec3::new(0.0, 0.0, 1.0)))
+        .cbrt()
+    }
+
     /// The transpose.
     pub fn transpose(&self) -> Self {
         Self::from_rows(std::array::from_fn(|row| {

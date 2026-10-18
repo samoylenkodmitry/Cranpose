@@ -138,11 +138,17 @@ fn mesh_surface_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     return shaded(color, shade(input, 1.0));
 }
 
+// Whether a point of a surface in a portal's space lies on the near side of
+// its window's plane, where the space does not show.
+fn before_window(position: vec3<f32>) -> bool {
+    return dot(mesh.clip.xyz, position) + mesh.clip.w < 0.0;
+}
+
 // A surface in a portal's space, which shows only beyond its window's
 // plane.
 @fragment
 fn mesh_portal_surface_fs(input: VertexOutput) -> @location(0) vec4<f32> {
-    if (dot(mesh.clip.xyz, input.scene_position) + mesh.clip.w < 0.0) {
+    if (before_window(input.scene_position)) {
         discard;
     }
     let color = content_color(input.uv);
@@ -263,6 +269,21 @@ fn bent_pixel(pixel: vec2<f32>, position: vec3<f32>, normal: vec3<f32>, eta: f32
 
 @fragment
 fn mesh_glass_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    return glass_color(input);
+}
+
+// Glass in a portal's space, beyond its window's plane.
+@fragment
+fn mesh_portal_glass_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    if (before_window(input.scene_position)) {
+        discard;
+    }
+    return glass_color(input);
+}
+
+// The glass's colour: the page behind it bent through it, its reflection
+// and its content over them.
+fn glass_color(input: VertexOutput) -> vec4<f32> {
     let toward_eye = normalize(mesh.eye.xyz - input.scene_position);
     var normal = normalize(input.normal);
     if (dot(normal, toward_eye) < 0.0) {
@@ -295,6 +316,15 @@ fn mesh_glass_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 @fragment
 fn mesh_depth_fs(input: VertexOutput) {
     if (content_color(input.uv).a < 1.0 / 255.0) {
+        discard;
+    }
+}
+
+// The depth of a surface in a portal's space that is not glass, beyond its
+// window's plane.
+@fragment
+fn mesh_portal_depth_fs(input: VertexOutput) {
+    if (before_window(input.scene_position) | (content_color(input.uv).a < 1.0 / 255.0)) {
         discard;
     }
 }

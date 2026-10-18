@@ -27,7 +27,7 @@ use crate::{
 #[path = "frame_portal.rs"]
 mod portals;
 
-use self::portals::{PreparedWindows, encode_portals};
+use self::portals::{PortalPass, PreparedWindows, encode_portals};
 
 /// The surfaces of a scene that draw together, in the order the phases
 /// draw.
@@ -39,8 +39,12 @@ enum ScenePhase {
     /// Volumes, each drawn with its own shader.
     Volume,
     /// The surfaces in the spaces the scene's portals show, which draw
-    /// inside their windows.
+    /// inside their windows: those that are neither glass nor glow.
     Portal,
+    /// Glass in the spaces the scene's portals show.
+    PortalGlass,
+    /// Glow in the spaces the scene's portals show.
+    PortalGlow,
     /// Glass, which reads a copy of the page the opaque surfaces and the
     /// volumes left.
     Glass,
@@ -49,18 +53,18 @@ enum ScenePhase {
 }
 
 impl ScenePhase {
-    /// The phase `mesh` draws in: its material's in the space the scene's
-    /// eye stands in, and through a doorway in any other; `None` for glass
-    /// and glow seen through a doorway, which are left out.
-    fn of(mesh: &MeshChild) -> Option<Self> {
+    /// The phase `mesh` draws in: its material's, in the space the scene's
+    /// eye stands in or through a doorway.
+    fn of(mesh: &MeshChild) -> Self {
         let through_doorway = mesh.seen != 0;
-        match &mesh.surface.material {
-            Material::Glass(_) | Material::Glow if through_doorway => None,
-            _ if through_doorway => Some(Self::Portal),
-            Material::Glass(_) => Some(Self::Glass),
-            Material::Glow => Some(Self::Glow),
-            Material::Volume(_) => Some(Self::Volume),
-            Material::Lit | Material::Unlit | Material::Emissive => Some(Self::Opaque),
+        match (&mesh.surface.material, through_doorway) {
+            (Material::Glass(_), false) => Self::Glass,
+            (Material::Glass(_), true) => Self::PortalGlass,
+            (Material::Glow, false) => Self::Glow,
+            (Material::Glow, true) => Self::PortalGlow,
+            (_, true) => Self::Portal,
+            (Material::Volume(_), false) => Self::Volume,
+            (Material::Lit | Material::Unlit | Material::Emissive, false) => Self::Opaque,
         }
     }
 }
@@ -73,7 +77,7 @@ enum StepPipeline {
     /// Each volume's own pipeline of the variant.
     Volumes(VolumeVariant),
     /// The portals' windows and the spaces they show.
-    Portals,
+    Portals(PortalPass),
 }
 
 /// Whether `mesh` casts a shadow: a volume's mesh only bounds what it
@@ -225,7 +229,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             ScenePipeline::Plain
         });
         let volumes = StepPipeline::Volumes(VolumeVariant::Color);
-        let portals = (StepPipeline::Portals, ScenePhase::Portal);
+        let portals = |pass: PortalPass| (StepPipeline::Portals(pass), ScenePhase::Portal);
         let glow = (StepPipeline::Fixed(ScenePipeline::Glow), ScenePhase::Glow);
         let depth = self.renderer.scene_depth_target(page.size);
         let Some(backdrop) = backdrop else {
@@ -234,7 +238,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 &[
                     (opaque, ScenePhase::Opaque),
                     (volumes, ScenePhase::Volume),
-                    portals,
+                    portals(PortalPass::Colour { glow: true }),
                     glow,
                 ],
                 (&draws, windows.as_ref(), None),
@@ -249,7 +253,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             &[
                 (opaque, ScenePhase::Opaque),
                 (volumes, ScenePhase::Volume),
-                portals,
+                portals(PortalPass::Colour { glow: false }),
             ],
             (&draws, windows.as_ref(), None),
             &device,
@@ -273,6 +277,9 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                     StepPipeline::Volumes(VolumeVariant::Depth),
                     ScenePhase::Volume,
                 ),
+                // Glass beyond the doorways first, then the nearer glass of
+                // the eye's own space.
+                portals(PortalPass::Glass),
                 (StepPipeline::Fixed(ScenePipeline::Glass), ScenePhase::Glass),
                 glow,
             ],
@@ -297,10 +304,12 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         device: &wgpu::Device,
     ) {
         let drawn = |phase: ScenePhase| draws.iter().filter(move |draw| draw.phase == phase);
-        if steps
-            .iter()
-            .all(|&(_, phase)| drawn(phase).next().is_none())
-        {
+        // The portals' step draws while a window shows any space.
+        let empty = |&(kind, phase): &(StepPipeline, ScenePhase)| match kind {
+            StepPipeline::Portals(_) => windows.is_none(),
+            _ => drawn(phase).next().is_none(),
+        };
+        if steps.iter().all(empty) {
             return;
         }
         let renderer = &*self.renderer;
@@ -320,27 +329,28 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             .recorder
             .begin_scene_pass("Scene Surfaces", &page.view, depth);
         render_pass.set_bind_group(2, shadow_group, &[]);
-        for &(kind, phase) in steps {
+        for step in steps {
             // A pipeline no surface takes is not asked for, so never compiles.
-            let mut phase_draws = drawn(phase).peekable();
-            if phase_draws.peek().is_none() {
+            if empty(step) {
                 continue;
             }
+            let &(kind, phase) = step;
+            let phase_draws = drawn(phase);
             let fixed = match kind {
                 StepPipeline::Fixed(kind) => match renderer.scene_surface_pipeline(kind) {
                     Some(pipeline) => Some(pipeline),
                     None => continue,
                 },
                 StepPipeline::Volumes(_) => None,
-                StepPipeline::Portals => {
+                StepPipeline::Portals(portal_pass) => {
                     if let (Some(first), Some(windows)) = (draws.first(), windows) {
                         let texture = first.texture((device, effects));
                         encode_portals(
                             &mut render_pass,
                             renderer,
-                            (draws, windows),
+                            (draws, windows, portal_pass),
                             (0, 0),
-                            (device, texture),
+                            (device, texture, backdrop),
                         );
                     }
                     continue;
@@ -349,21 +359,12 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             if let Some(pipeline) = fixed {
                 render_pass.set_pipeline(pipeline);
             }
-            for draw in phase_draws {
-                if let (StepPipeline::Volumes(variant), Material::Volume(volume)) =
-                    (kind, &draw.held.mesh.surface.material)
-                {
-                    let Some(pipeline) = renderer.scene_volume_pipeline(&volume.shader, variant)
-                    else {
-                        continue;
-                    };
-                    render_pass.set_pipeline(pipeline);
-                }
-                let (x, y, width, height) = draw.scissor;
-                render_pass.set_scissor_rect(x, y, width, height);
-                draw.bind(&mut render_pass, (device, effects), backdrop);
-                render_pass.draw_indexed(0..draw.buffers.index_count, 0, 0..1);
-            }
+            draw_surfaces(
+                &mut render_pass,
+                (renderer, kind),
+                phase_draws,
+                (device, backdrop),
+            );
         }
     }
 
@@ -420,7 +421,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
     ) -> Option<PreparedSurface<'m>> {
         let scene = &held.mesh.scene;
         let surface = &held.mesh.surface;
-        let phase = ScenePhase::of(&held.mesh)?;
+        let phase = ScenePhase::of(&held.mesh);
         let scissor = scene_scissor(scene, held.clip, page)?;
         let layout = self.renderer.scene_uniform_layout();
         let space = space_shading(&held.mesh);
@@ -524,6 +525,31 @@ impl PreparedSurface<'_> {
     }
 }
 
+/// Draws `draws`, a step's surfaces, on the pipeline the step set, or a
+/// volume each on its own pipeline of the step's variant.
+fn draw_surfaces<'d>(
+    render_pass: &mut wgpu::RenderPass<'_>,
+    (renderer, kind): (&crate::render::GpuRenderer, StepPipeline),
+    draws: impl Iterator<Item = &'d PreparedSurface<'d>>,
+    (device, backdrop): (&wgpu::Device, Option<&wgpu::BindGroup>),
+) {
+    let effects = &renderer.effect_renderer;
+    for draw in draws {
+        if let (StepPipeline::Volumes(variant), Material::Volume(volume)) =
+            (kind, &draw.held.mesh.surface.material)
+        {
+            let Some(pipeline) = renderer.scene_volume_pipeline(&volume.shader, variant) else {
+                continue;
+            };
+            render_pass.set_pipeline(pipeline);
+        }
+        let (x, y, width, height) = draw.scissor;
+        render_pass.set_scissor_rect(x, y, width, height);
+        draw.bind(render_pass, (device, effects), backdrop);
+        render_pass.draw_indexed(0..draw.buffers.index_count, 0, 0..1);
+    }
+}
+
 /// The device pixels a scene's glass reads behind it: the pixels each glass
 /// surface covers, widened by half on each side for the rays it bends
 /// outward, within the scene; the whole scene where a surface reaches
@@ -531,8 +557,7 @@ impl PreparedSurface<'_> {
 fn glass_backdrop(meshes: &[PendingMesh], page: ScenePage) -> Option<DeviceRect> {
     let mut covered: Option<DeviceRect> = None;
     for held in meshes {
-        let in_view = held.mesh.seen == 0;
-        if !in_view || !matches!(held.mesh.surface.material, Material::Glass(_)) {
+        if !matches!(held.mesh.surface.material, Material::Glass(_)) {
             continue;
         }
         let scene = &held.mesh.scene;

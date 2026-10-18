@@ -421,11 +421,22 @@ impl MeshSurface {
 
     /// This surface with its transform followed by `to_scene`: a surface
     /// inside another's content, placed in the scene through the other's
-    /// [`content_to_scene`](Self::content_to_scene).
+    /// [`content_to_scene`](Self::content_to_scene). Glass keeps its
+    /// thickness in the units of the space it is placed from.
     pub fn placed_by(&self, to_scene: &Mat4) -> Self {
+        let material = match &self.material {
+            Material::Glass(glass) => Material::Glass(Glass {
+                thickness: glass.thickness * to_scene.length_scale(),
+                ..*glass
+            }),
+            material => material.clone(),
+        };
         Self {
+            mesh: Arc::clone(&self.mesh),
             transform: self.transform.then(to_scene),
-            ..self.clone()
+            material,
+            casts_shadow: self.casts_shadow,
+            solid: self.solid,
         }
     }
 

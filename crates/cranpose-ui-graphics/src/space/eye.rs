@@ -266,16 +266,11 @@ impl EyeWorld {
     /// Adds the space an eye that walked through `doorways` stands in, whose
     /// coordinates `to_base` maps into the world's, and returns its number.
     pub fn add_space(&mut self, doorways: Arc<[usize]>, to_base: Mat4) -> usize {
-        let axis = |axis: Vec3| to_base.transform_vector(axis).length();
-        let scale = (axis(Vec3::new(1.0, 0.0, 0.0))
-            * axis(Vec3::new(0.0, 1.0, 0.0))
-            * axis(Vec3::new(0.0, 0.0, 1.0)))
-        .cbrt();
         self.spaces.push(WorldSpace {
             doorways,
             from_base: to_base.inverse().unwrap_or(Mat4::IDENTITY),
+            scale: to_base.length_scale(),
             to_base,
-            scale,
         });
         self.spaces.len() - 1
     }

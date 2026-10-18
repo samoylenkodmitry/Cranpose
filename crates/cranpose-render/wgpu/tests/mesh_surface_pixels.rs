@@ -194,29 +194,30 @@ fn GlassScene() {
                 Color::TRANSPARENT,
             ),
         );
-        Row(
-            surface(
-                &plane,
-                panel((2000.0, 1500.0), Vec3::new(0.0, 0.0, 600.0)),
-                (Material::Unlit, false),
-            ),
-            RowSpec::default(),
-            || {
-                for color in [Color(1.0, 0.0, 0.0, 1.0), Color(0.0, 0.0, 1.0, 1.0)] {
-                    Box(
-                        Modifier::empty()
-                            .size(Size {
-                                width: 128.0,
-                                height: 128.0,
-                            })
-                            .background(color),
-                        BoxSpec::default(),
-                        || {},
-                    );
-                }
-            },
-        );
+        red_blue_wall(&plane, panel((2000.0, 1500.0), Vec3::new(0.0, 0.0, 600.0)));
     });
+}
+
+/// A wall placed by `transform`, its left half red and its right half blue.
+fn red_blue_wall(plane: &Arc<Mesh>, transform: Mat4) {
+    Row(
+        surface(plane, transform, (Material::Unlit, false)),
+        RowSpec::default(),
+        || {
+            for color in [Color(1.0, 0.0, 0.0, 1.0), Color(0.0, 0.0, 1.0, 1.0)] {
+                Box(
+                    Modifier::empty()
+                        .size(Size {
+                            width: 128.0,
+                            height: 128.0,
+                        })
+                        .background(color),
+                    BoxSpec::default(),
+                    || {},
+                );
+            }
+        },
+    );
 }
 
 #[test]
@@ -719,6 +720,67 @@ fn a_scene_inside_a_wall_shows_its_space_behind_the_wall_through_its_doorway() {
     assert!(
         below[0] < 40 && below[1] < 40,
         "the space behind the doorway shows only through it: {below:?}"
+    );
+}
+
+/// [`GlassScene`] behind the doorway of [`PortalScene`]: a clear glass ball
+/// whose middle lies at the scene point (0, 0, 1400) in front of a red and
+/// blue wall at 1800, and a glow panel over the wall's red half, below the
+/// ball, at [`PORTAL_GLOW`].
+#[composable]
+fn PortalGlassScene() {
+    let (plane, sphere) = meshes();
+    Scene(0.0, move || {
+        let (inner_plane, sphere) = (Arc::clone(&plane), Arc::clone(&sphere));
+        Box(blue_wall(&plane), BoxSpec::default(), move || {
+            let (plane, sphere) = (Arc::clone(&inner_plane), Arc::clone(&sphere));
+            doorway(move || {
+                Surface(
+                    Arc::clone(&plane),
+                    panel((50.0, 10.0), Vec3::new(-75.0, 42.5, 75.0)),
+                    (Material::Glow, false, Color(0.0, 0.5, 0.0, 1.0)),
+                );
+                Surface(
+                    Arc::clone(&sphere),
+                    nested_ball(Vec3::ZERO, SPHERE_RADIUS / 4.0),
+                    (
+                        Material::Glass(Glass::clear(SPHERE_RADIUS / 2.0)),
+                        false,
+                        Color::TRANSPARENT,
+                    ),
+                );
+                red_blue_wall(&plane, panel((500.0, 375.0), Vec3::new(0.0, 0.0, 100.0)));
+            });
+        });
+    });
+}
+
+/// Where the glow panel of [`PortalGlassScene`] shows, in scene points.
+const PORTAL_GLOW: Vec3 = Vec3::new(-300.0, 170.0, 1700.0);
+
+#[test]
+fn glass_and_glow_show_through_a_doorway() {
+    let Some(frame) = capture(PortalGlassScene) else {
+        return;
+    };
+    let middle = Vec3::new(0.0, 0.0, 1400.0);
+    let ball_left = pixel_at(
+        &frame,
+        middle + Vec3::new(-0.5, 0.0, -0.866) * SPHERE_RADIUS,
+    );
+    let ball_right = pixel_at(&frame, middle + Vec3::new(0.5, 0.0, -0.866) * SPHERE_RADIUS);
+    assert!(
+        ball_left[2] > ball_left[0] + 60,
+        "the ball's left side shows the blue right half of the wall behind it: {ball_left:?}"
+    );
+    assert!(
+        ball_right[0] > ball_right[2] + 60,
+        "the ball's right side shows the red left half of the wall behind it: {ball_right:?}"
+    );
+    let glow = pixel_at(&frame, PORTAL_GLOW);
+    assert!(
+        glow[0] > 200 && glow[1] > 100,
+        "the glow panel adds its green to the red wall behind the doorway: {glow:?}"
     );
 }
 

@@ -121,7 +121,7 @@ pub(crate) struct ScenePipelineParts {
 pub(crate) struct VolumeShader {
     source: Weak<str>,
     module: LazyGpuResource<Option<wgpu::ShaderModule>>,
-    pipelines: [VolumePipeline; 3],
+    pipelines: [VolumePipeline; 4],
 }
 
 impl VolumeShader {
@@ -241,11 +241,18 @@ pub(crate) enum ScenePipeline {
     WindowRestore,
     /// Surfaces in a portal's space, inside its window and beyond its plane.
     Portal,
+    /// Glow in a portal's space, added inside its window beyond its plane.
+    PortalGlow,
+    /// The depth of the surfaces in a portal's space that are not glass,
+    /// again, for the pass that draws glass.
+    PortalDepth,
+    /// Glass in a portal's space, inside its window beyond its plane.
+    PortalGlass,
 }
 
 impl ScenePipeline {
     /// Every scene pipeline.
-    pub(crate) const ALL: [Self; 10] = [
+    pub(crate) const ALL: [Self; 13] = [
         Self::Plain,
         Self::Shadowed,
         Self::Shadow,
@@ -256,6 +263,9 @@ impl ScenePipeline {
         Self::WindowClear,
         Self::WindowRestore,
         Self::Portal,
+        Self::PortalGlow,
+        Self::PortalDepth,
+        Self::PortalGlass,
     ];
 
     /// The label a launch records the pipeline under.
@@ -271,11 +281,27 @@ impl ScenePipeline {
             Self::WindowClear => "scene/window-clear",
             Self::WindowRestore => "scene/window-restore",
             Self::Portal => "scene/mesh-portal",
+            Self::PortalGlow => "scene/mesh-portal-glow",
+            Self::PortalDepth => "scene/mesh-portal-depth",
+            Self::PortalGlass => "scene/mesh-portal-glass",
         }
     }
 
     fn spec(self) -> PipelineSpec {
-        let (label, entry_points) = match self {
+        let (label, entry_points) = self.shader();
+        let (color, depth, stencil) = self.targets();
+        PipelineSpec {
+            label,
+            entry_points,
+            color,
+            depth,
+            stencil,
+        }
+    }
+
+    /// The pipeline's label and its vertex and fragment entry points.
+    fn shader(self) -> (&'static str, (&'static str, &'static str)) {
+        match self {
             Self::Plain => (
                 "Scene Surface Pipeline",
                 ("mesh_surface_vs", "mesh_surface_fs"),
@@ -310,8 +336,25 @@ impl ScenePipeline {
                 "Scene Portal Surface Pipeline",
                 ("mesh_surface_vs", "mesh_portal_surface_fs"),
             ),
-        };
-        let (color, depth, stencil) = match self {
+            Self::PortalGlow => (
+                "Scene Portal Glow Pipeline",
+                ("mesh_surface_vs", "mesh_portal_surface_fs"),
+            ),
+            Self::PortalDepth => (
+                "Scene Portal Depth Pipeline",
+                ("mesh_surface_vs", "mesh_portal_depth_fs"),
+            ),
+            Self::PortalGlass => (
+                "Scene Portal Glass Pipeline",
+                ("mesh_surface_vs", "mesh_portal_glass_fs"),
+            ),
+        }
+    }
+
+    /// How the pipeline blends colour, if it writes any, and how it uses
+    /// depth and the stencil.
+    fn targets(self) -> (Option<Blend>, Depth, Stencil) {
+        match self {
             Self::Plain | Self::Shadowed | Self::Glass => {
                 (Some(Blend::Over), Depth::Tested, Stencil::Ignored)
             }
@@ -328,14 +371,9 @@ impl ScenePipeline {
                     Stencil::Release
                 },
             ),
-            Self::Portal => (Some(Blend::Over), Depth::Tested, Stencil::Inside),
-        };
-        PipelineSpec {
-            label,
-            entry_points,
-            color,
-            depth,
-            stencil,
+            Self::Portal | Self::PortalGlass => (Some(Blend::Over), Depth::Tested, Stencil::Inside),
+            Self::PortalGlow => (Some(Blend::Add), Depth::Read, Stencil::Inside),
+            Self::PortalDepth => (None, Depth::Tested, Stencil::Inside),
         }
     }
 }
@@ -499,6 +537,7 @@ impl ScenePass {
                     VolumePipeline::new("scene/volume"),
                     VolumePipeline::new("scene/volume-depth"),
                     VolumePipeline::new("scene/volume-portal"),
+                    VolumePipeline::new("scene/volume-portal-depth"),
                 ],
             });
         }
@@ -1130,6 +1169,9 @@ pub(crate) enum VolumeVariant {
     Depth,
     /// Draws volumes in a portal's space, inside its window.
     Portal,
+    /// Draws only the depth of volumes in a portal's space, for the pass
+    /// glass draws in.
+    PortalDepth,
 }
 
 impl VolumeVariant {
@@ -1151,6 +1193,12 @@ impl VolumeVariant {
                 "Scene Portal Volume Pipeline",
                 "mesh_volume_portal_fs",
                 Some(Blend::Over),
+                Stencil::Inside,
+            ),
+            Self::PortalDepth => (
+                "Scene Portal Volume Depth Pipeline",
+                "mesh_volume_portal_fs",
+                None,
                 Stencil::Inside,
             ),
         };

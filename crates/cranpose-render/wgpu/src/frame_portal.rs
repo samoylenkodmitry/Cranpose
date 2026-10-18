@@ -5,11 +5,14 @@
 //! the mark holds, past the doorway's plane and within its opening on
 //! screen, and the doorways seen from there the same way, deeper; and the
 //! doorway's own depth is written back, its mark taken back, so what the
-//! scene draws after sees the doorway as the surface it lies on.
+//! scene draws after sees the doorway as the surface it lies on. Glow in a
+//! space draws over the doorways seen from it. Glass draws in the pass
+//! after the copy it reads, over the depth of each space drawn again inside
+//! its doorway.
 
 use cranpose_ui_graphics::space::{Mat4, Material, Vec3};
 
-use super::{FrameExecutor, PreparedSurface};
+use super::{FrameExecutor, PreparedSurface, ScenePhase};
 use crate::{
     frame_graph::{FrameCommandRecorder, UniformUpload, UploadAllocatorId},
     render::GpuRenderer,
@@ -115,28 +118,63 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
     }
 }
 
+/// Which surfaces of the spaces seen through doorways a walk through the
+/// doorways draws.
+#[derive(Clone, Copy)]
+pub(super) enum PortalPass {
+    /// The surfaces that are neither glass nor glow, and the glow too when
+    /// no pass for glass follows.
+    Colour { glow: bool },
+    /// For the pass after the copy glass reads: the depth of the surfaces
+    /// that are not glass, again, then the glass, then the glow.
+    Glass,
+}
+
+/// What a space's surfaces of one kind draw with inside its window.
+#[derive(Clone, Copy)]
+enum SpaceStep {
+    /// The surfaces that are neither glass nor glow: volumes with the
+    /// variant, the others with the pipeline.
+    Opaque(VolumeVariant, ScenePipeline),
+    Glass,
+    Glow,
+}
+
 /// Draws the spaces seen through the doorways of seen space `from`, which
 /// shows `depth` doorways deep, inside those doorways, and the spaces seen
-/// through theirs. `texture` binds in the textures' place, which the
-/// doorway draws do not read.
+/// through theirs: the surfaces `portal_pass` names. `texture` binds in the
+/// textures' place, which the doorway draws do not read; glass reads
+/// `backdrop`.
 pub(super) fn encode_portals(
     pass: &mut wgpu::RenderPass<'_>,
     renderer: &GpuRenderer,
-    (draws, windows): (&[PreparedSurface<'_>], &PreparedWindows),
+    (draws, windows, portal_pass): (&[PreparedSurface<'_>], &PreparedWindows, PortalPass),
     (from, depth): (usize, u32),
-    (device, texture): (&wgpu::Device, &wgpu::BindGroup),
+    (device, texture, backdrop): (&wgpu::Device, &wgpu::BindGroup, Option<&wgpu::BindGroup>),
 ) {
     let pipelines = [
         ScenePipeline::WindowMark,
         ScenePipeline::WindowClear,
-        ScenePipeline::Portal,
         ScenePipeline::WindowRestore,
     ]
     .map(|kind| renderer.scene_surface_pipeline(kind));
-    let [Some(mark), Some(clear), Some(surface), Some(restore)] = pipelines else {
+    let [Some(mark), Some(clear), Some(restore)] = pipelines else {
         return;
     };
-    let effects = &renderer.effect_renderer;
+    let colour = SpaceStep::Opaque(VolumeVariant::Portal, ScenePipeline::Portal);
+    // What draws before the doorways seen from a space, and what draws over
+    // what shows through them.
+    let (before, after): (&[SpaceStep], &[SpaceStep]) = match portal_pass {
+        PortalPass::Colour { glow: false } => (&[colour], &[]),
+        PortalPass::Colour { glow: true } => (&[colour], &[SpaceStep::Glow]),
+        PortalPass::Glass => (
+            &[
+                SpaceStep::Opaque(VolumeVariant::PortalDepth, ScenePipeline::PortalDepth),
+                SpaceStep::Glass,
+            ],
+            &[SpaceStep::Glow],
+        ),
+    };
     let buffers = &windows.buffers;
     for window in windows
         .windows
@@ -145,32 +183,66 @@ pub(super) fn encode_portals(
     {
         window.draw(pass, (mark, depth), (texture, buffers));
         window.draw(pass, (clear, depth + 1), (texture, buffers));
-        for draw in draws.iter().filter(|draw| draw.seen() == window.seen) {
-            let pipeline = match &draw.held.mesh.surface.material {
-                Material::Volume(volume) => {
-                    match renderer.scene_volume_pipeline(&volume.shader, VolumeVariant::Portal) {
-                        Some(pipeline) => pipeline,
-                        None => continue,
-                    }
-                }
-                _ => surface,
-            };
-            let Some((x, y, width, height)) = within(draw.scissor, window.scissor) else {
-                continue;
-            };
-            pass.set_pipeline(pipeline);
-            pass.set_scissor_rect(x, y, width, height);
-            draw.bind(pass, (device, effects), None);
-            pass.draw_indexed(0..draw.buffers.index_count, 0, 0..1);
+        for &step in before {
+            draw_space(pass, renderer, step, (draws, window), (device, backdrop));
         }
         encode_portals(
             pass,
             renderer,
-            (draws, windows),
+            (draws, windows, portal_pass),
             (window.seen, depth + 1),
-            (device, texture),
+            (device, texture, backdrop),
         );
+        for &step in after {
+            draw_space(pass, renderer, step, (draws, window), (device, backdrop));
+        }
         window.draw(pass, (restore, depth + 1), (texture, buffers));
+    }
+}
+
+/// Draws the surfaces of the space behind `window` that `step` takes,
+/// inside the window; a step no surface takes asks for no pipeline.
+fn draw_space(
+    pass: &mut wgpu::RenderPass<'_>,
+    renderer: &GpuRenderer,
+    step: SpaceStep,
+    (draws, window): (&[PreparedSurface<'_>], &PreparedWindow),
+    (device, backdrop): (&wgpu::Device, Option<&wgpu::BindGroup>),
+) {
+    let (phase, kind) = match step {
+        SpaceStep::Opaque(_, kind) => (ScenePhase::Portal, kind),
+        SpaceStep::Glass => (ScenePhase::PortalGlass, ScenePipeline::PortalGlass),
+        SpaceStep::Glow => (ScenePhase::PortalGlow, ScenePipeline::PortalGlow),
+    };
+    let mut space = draws
+        .iter()
+        .filter(|draw| draw.seen() == window.seen && draw.phase == phase)
+        .peekable();
+    if space.peek().is_none() {
+        return;
+    }
+    let Some(fixed) = renderer.scene_surface_pipeline(kind) else {
+        return;
+    };
+    let backdrop = backdrop.filter(|_| matches!(step, SpaceStep::Glass));
+    let effects = &renderer.effect_renderer;
+    for draw in space {
+        let pipeline = match (&draw.held.mesh.surface.material, step) {
+            (Material::Volume(volume), SpaceStep::Opaque(variant, _)) => {
+                match renderer.scene_volume_pipeline(&volume.shader, variant) {
+                    Some(pipeline) => pipeline,
+                    None => continue,
+                }
+            }
+            _ => fixed,
+        };
+        let Some((x, y, width, height)) = within(draw.scissor, window.scissor) else {
+            continue;
+        };
+        pass.set_pipeline(pipeline);
+        pass.set_scissor_rect(x, y, width, height);
+        draw.bind(pass, (device, effects), backdrop);
+        pass.draw_indexed(0..draw.buffers.index_count, 0, 0..1);
     }
 }
 
