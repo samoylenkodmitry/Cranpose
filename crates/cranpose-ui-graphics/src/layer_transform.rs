@@ -1,5 +1,6 @@
 use crate::{
     GraphicsLayer, Point, Rect,
+    space::{LayerSpace, Mat4, MeshSurface, Scene3d},
     transform::{ProjectiveTransform, quad_bounds},
 };
 
@@ -233,4 +234,31 @@ pub fn layer_transform_to_window(
         ..bounds
     };
     layer_transform_to_parent(bounds, Point::default(), layer).then(parent)
+}
+
+/// The scene a layer's graphics layer shows, or `None` for a layer that
+/// shows none.
+pub fn layer_scene(layer: &GraphicsLayer) -> Option<&Scene3d> {
+    match layer.space.as_deref()? {
+        LayerSpace::Scene(scene) => Some(scene),
+        LayerSpace::Surface(_) | LayerSpace::Transform(_) => None,
+    }
+}
+
+/// The mesh a layer's graphics layer draws its content on, or `None` for a
+/// layer drawn flat.
+pub fn layer_surface(layer: &GraphicsLayer) -> Option<&MeshSurface> {
+    match layer.space.as_deref()? {
+        LayerSpace::Surface(surface) => Some(surface),
+        LayerSpace::Scene(_) | LayerSpace::Transform(_) => None,
+    }
+}
+
+/// The move a layer's graphics layer gives the 3D frames beneath it, or
+/// `None` for none.
+pub fn layer_transform3d(layer: &GraphicsLayer) -> Option<&Mat4> {
+    match layer.space.as_deref()? {
+        LayerSpace::Transform(transform) => Some(transform),
+        LayerSpace::Scene(_) | LayerSpace::Surface(_) => None,
+    }
 }

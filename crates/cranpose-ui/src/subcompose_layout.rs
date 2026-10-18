@@ -969,6 +969,11 @@ impl SubcomposeLayoutNode {
         crate::modifier::semantics_reach_of_chain(self.inner.borrow().modifier_chain.chain())
     }
 
+    /// Runs `read` with the node's modifier chain.
+    pub(crate) fn with_modifier_chain<R>(&self, read: impl FnOnce(&ModifierChainHandle) -> R) -> R {
+        read(&self.inner.borrow().modifier_chain)
+    }
+
     /// Returns the modifier slices snapshot for rendering.
     pub fn modifier_slices_snapshot(&self) -> Rc<ModifierNodeSlices> {
         if self.modifier_slices_dirty.get() {

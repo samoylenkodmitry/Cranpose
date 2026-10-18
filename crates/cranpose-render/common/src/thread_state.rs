@@ -24,6 +24,10 @@ pub(crate) struct RenderThreadState {
         Cell<Option<cranpose_core::collections::map::HashMap<cranpose_core::NodeId, NodeUpdate>>>,
     pub(crate) command_recordings: RefCell<HashMap<RecorderKey, RecorderSlot, FxBuildHasher>>,
     pub(crate) recording_generation: Cell<u64>,
+    /// Whether a scene update or build changed a layer in 3D since the
+    /// window's scenes last published where their layers show and their
+    /// eyes' worlds.
+    pub(crate) space_changed: Cell<bool>,
     #[cfg(test)]
     pub(crate) lowered_layer_count: Cell<usize>,
 }
@@ -38,6 +42,7 @@ impl RenderThreadState {
             dirty_node_scratch: Cell::new(None),
             command_recordings: RefCell::new(HashMap::default()),
             recording_generation: Cell::new(0),
+            space_changed: Cell::new(false),
             #[cfg(test)]
             lowered_layer_count: Cell::new(0),
         }

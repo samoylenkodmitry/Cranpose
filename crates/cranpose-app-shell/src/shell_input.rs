@@ -347,7 +347,7 @@ where
             hits.insert(0, near);
         }
         let event = self.cursor_event(PointerEventKind::Down, event_time);
-        self.press_hits(hits, event)
+        self.press_hits(hits, event, PointerId::PRIMARY)
     }
 
     /// An event of `kind` at the cursor, with the buttons held and the
@@ -360,16 +360,15 @@ where
     }
 
     /// Delivers a press to `hits`, nearest first, until one consumes it, and
-    /// keeps the paths it reached as the pointer's gesture targets.
+    /// keeps the paths it reached as `pointer`'s gesture targets.
     fn press_hits(
         &mut self,
         hits: Vec<<<R as Renderer>::Scene as RenderScene>::HitTarget>,
         event: PointerEvent,
+        pointer: PointerId,
     ) -> bool {
         if hits.is_empty() {
-            self.surface_mut()
-                .hit_path_tracker
-                .remove_path(PointerId::PRIMARY);
+            self.surface_mut().hit_path_tracker.remove_path(pointer);
             return false;
         }
         let mut delivered_capture_paths = Vec::new();
@@ -393,11 +392,11 @@ where
 
         surface
             .hit_path_tracker
-            .add_hit_path(PointerId::PRIMARY, delivered_capture_paths);
+            .add_hit_path(pointer, delivered_capture_paths);
         log::trace!(
             target: "cranpose::input",
             "press cached_hit_path={:?}",
-            surface.hit_path_tracker.get_path(PointerId::PRIMARY),
+            surface.hit_path_tracker.get_path(pointer),
         );
         true
     }
@@ -458,7 +457,7 @@ where
         if first {
             let (x, y) = self.surface().cursor;
             let hits = self.surface().renderer.scene().hit_test(x, y);
-            return self.press_hits(hits, event);
+            return self.press_hits(hits, event, PointerId::PRIMARY);
         }
         let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
         if targets.is_empty() {
@@ -718,6 +717,59 @@ where
             event_time.platform_time_ms,
             event_time.animation_time_nanos,
         );
+        result
+    }
+
+    /// Points pointer `pointer_id` along `ray` in the 3D scene the node
+    /// `scene` shows: a controller, a hand or a gaze, in the coordinates of
+    /// the space the scene's eye stands in. A `Down` reaches the content of
+    /// the mesh surface the ray meets first and keeps its targets as the
+    /// pointer's gesture, which the pointer's `Move`s and its `Up` or
+    /// `Cancel` reach wherever the ray points then. `pointer_id`, not 0,
+    /// tells the pointer from the window's others. Returns `true` when a
+    /// target received the event.
+    pub fn ray_pointer(
+        &mut self,
+        (pointer_id, scene): (u32, NodeId),
+        ray: cranpose_ui_graphics::space::Ray,
+        kind: PointerEventKind,
+    ) -> bool {
+        if pointer_id == 0 {
+            log::warn!(
+                target: "cranpose::input",
+                "ray pointer dispatch called with the primary pointer id"
+            );
+            return false;
+        }
+        let event_time = self.shell.app.realtime_pointer_event_time(None);
+        let _event_handler = enter_event_handler_scope();
+        let result = {
+            let _app_context = self.shell.app.app_context.enter_scope();
+            run_in_mutable_snapshot(|| {
+                let pointer = PointerId(pointer_id);
+                let event = self
+                    .pointer_event(kind, Point::default(), Point::default(), event_time)
+                    .with_id(u64::from(pointer_id))
+                    .with_ray(ray);
+                if kind == PointerEventKind::Down {
+                    let hits = self.surface().renderer.scene().hit_test_ray(scene, ray);
+                    return self.press_hits(hits, event, pointer);
+                }
+                let targets = self.resolve_gesture_targets(pointer);
+                if matches!(kind, PointerEventKind::Up | PointerEventKind::Cancel) {
+                    self.surface_mut().hit_path_tracker.remove_path(pointer);
+                }
+                if targets.is_empty() {
+                    return false;
+                }
+                self.dispatch_targets(targets, event, false);
+                true
+            })
+            .unwrap_or(false)
+        };
+        if result {
+            self.mark_dirty();
+        }
         result
     }
 
@@ -2010,6 +2062,16 @@ where
     ) -> bool {
         self.primary()
             .secondary_pointer_pressed(pointer_id, x, y, time_ms)
+    }
+
+    /// Primary-surface form of [`SurfaceMut::ray_pointer`].
+    pub fn ray_pointer(
+        &mut self,
+        (pointer_id, scene): (u32, NodeId),
+        ray: cranpose_ui_graphics::space::Ray,
+        kind: PointerEventKind,
+    ) -> bool {
+        self.primary().ray_pointer((pointer_id, scene), ray, kind)
     }
 
     /// Primary-surface form of [`SurfaceMut::secondary_pointer_moved`].

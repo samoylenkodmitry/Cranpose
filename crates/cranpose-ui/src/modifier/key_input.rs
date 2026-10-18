@@ -11,8 +11,10 @@ use cranpose_foundation::{
 };
 use smallvec::SmallVec;
 
-use super::Modifier;
-use crate::{KeyEvent, active_focus_target, widgets::nodes::layout_node::LayoutNode};
+use super::{Modifier, ModifierChainHandle};
+use crate::{
+    KeyEvent, SubcomposeLayoutNode, active_focus_target, widgets::nodes::layout_node::LayoutNode,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum KeyPass {
@@ -134,12 +136,8 @@ impl KeyEventRoute {
             handlers: SmallVec::new(),
             in_scope: false,
         };
-        route.in_scope = visit_focus_ancestors(applier, route.focused, root, |id, node| {
-            if node
-                .modifier_chain()
-                .capabilities()
-                .contains(NodeCapabilities::KEY_INPUT)
-            {
+        route.in_scope = visit_focus_ancestors(applier, route.focused, root, |id, chain| {
+            if chain.capabilities().contains(NodeCapabilities::KEY_INPUT) {
                 route.handlers.push(id);
             }
         });
@@ -181,11 +179,14 @@ impl KeyEventRoute {
     }
 }
 
+/// Visits the modifier chains of `focused` and its ancestors up to `root`,
+/// layout and subcompose nodes alike; false when the walk does not reach
+/// `root`.
 fn visit_focus_ancestors(
     applier: &mut MemoryApplier,
     focused: Option<NodeId>,
     root: Option<NodeId>,
-    mut visit: impl FnMut(NodeId, &LayoutNode),
+    mut visit: impl FnMut(NodeId, &ModifierChainHandle),
 ) -> bool {
     let (Some(mut current), Some(root)) = (focused, root) else {
         return false;
@@ -195,10 +196,14 @@ fn visit_focus_ancestors(
             return false;
         };
         let parent = node.parent();
-        let window_root = if let Some(layout) = node.as_any_mut().downcast_mut::<LayoutNode>() {
-            visit(current, layout);
+        let node = node.as_any_mut();
+        let window_root = if let Some(layout) = node.downcast_mut::<LayoutNode>() {
+            visit(current, layout.modifier_chain());
             layout.is_window_root()
         } else {
+            if let Some(subcompose) = node.downcast_mut::<SubcomposeLayoutNode>() {
+                subcompose.with_modifier_chain(|chain| visit(current, chain));
+            }
             false
         };
         if current == root {
@@ -221,23 +226,34 @@ fn dispatch_node(
     event: &KeyEvent,
     pass: KeyPass,
 ) -> bool {
+    if let Ok(handled) = applier.with_node::<LayoutNode, _>(node, |node| {
+        dispatch_chain(node.modifier_chain(), event, pass)
+    }) {
+        return handled;
+    }
     applier
-        .with_node::<LayoutNode, _>(node, |node| {
-            let chain = node.modifier_chain().chain();
-            let visit = |entry: ModifierChainNodeRef<'_>| {
-                entry.kind_set().contains(NodeCapabilities::KEY_INPUT)
-                    && entry
-                        .with_node(|node| {
-                            let node: &dyn std::any::Any = node;
-                            node.downcast_ref::<KeyInputNode>()
-                                .is_some_and(|node| node.pass == pass && (node.handler)(event))
-                        })
-                        .unwrap_or(false)
-            };
-            match pass {
-                KeyPass::Preview => chain.head_to_tail().any(visit),
-                KeyPass::Bubble => chain.tail_to_head().any(visit),
-            }
+        .with_node::<SubcomposeLayoutNode, _>(node, |node| {
+            node.with_modifier_chain(|chain| dispatch_chain(chain, event, pass))
         })
         .unwrap_or(false)
+}
+
+/// Offers `event` to the key handlers of `pass` in a node's chain: head to
+/// tail before the focused node handles it, tail to head after.
+fn dispatch_chain(chain: &ModifierChainHandle, event: &KeyEvent, pass: KeyPass) -> bool {
+    let chain = chain.chain();
+    let visit = |entry: ModifierChainNodeRef<'_>| {
+        entry.kind_set().contains(NodeCapabilities::KEY_INPUT)
+            && entry
+                .with_node(|node| {
+                    let node: &dyn std::any::Any = node;
+                    node.downcast_ref::<KeyInputNode>()
+                        .is_some_and(|node| node.pass == pass && (node.handler)(event))
+                })
+                .unwrap_or(false)
+    };
+    match pass {
+        KeyPass::Preview => chain.head_to_tail().any(visit),
+        KeyPass::Bubble => chain.tail_to_head().any(visit),
+    }
 }

@@ -1589,6 +1589,231 @@ fn Gallery(open: bool) {
 The copy in flight is the coming content's element composed once more, so
 state it remembers starts afresh during the flight.
 
+### Draw composables on 3D meshes
+
+`Modifier::scene3d` makes a node a 3D scene, seen through a `Camera` that
+looks through the middle of the node's bounds. Each child with
+`Modifier::mesh_surface` has its content drawn on a `Mesh` in that scene:
+content point `(x, y)` shows where the mesh's texture coordinate is
+`(x / width, y / height)`. The content stays live: it recomposes, animates and
+takes pointer input where it shows on the mesh, and nearer surfaces hide
+farther ones. Both closures run when the scene is drawn, so a camera or a
+surface that follows a state read in them moves without recomposition.
+
+```rust
+use std::sync::Arc;
+
+use cranpose::space::{Camera, Light, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3};
+
+#[composable]
+fn Globe(spin: MutableState<f32>) {
+    let sphere = remember(|| Arc::new(Mesh::sphere(48, 24))).with(Arc::clone);
+    Box(
+        Modifier::empty().fill_max_size().scene3d(|| Scene3d {
+            camera: Camera::look_at(
+                Vec3::new(0.0, 0.0, -900.0),
+                Vec3::ZERO,
+                Vec3::new(0.0, 1.0, 0.0),
+                700.0,
+            ),
+            light: Some(Light {
+                direction: Vec3::new(-0.4, 1.0, 0.5),
+                ambient: 0.3,
+                shadows: true,
+                size: 0.05,
+            }),
+            eye: None,
+        }),
+        BoxSpec::default(),
+        move || {
+            let sphere = Arc::clone(&sphere);
+            Box(
+                Modifier::empty()
+                    .size(Size::new(1024.0, 512.0))
+                    .mesh_surface(move || MeshSurface {
+                        mesh: Arc::clone(&sphere),
+                        transform: Mat4::scaling(Vec3::new(200.0, 200.0, 200.0))
+                            .then(&Mat4::rotation_y(spin.get())),
+                        material: Material::Lit,
+                        casts_shadow: true,
+                        solid: false,
+                    }),
+                BoxSpec::default(),
+                || {
+                    Text("Hello, sphere", Modifier::empty(), TextStyle::default());
+                },
+            );
+        },
+    );
+}
+```
+
+A light with `shadows` set casts the shadows of the surfaces with
+`casts_shadow` on every surface of the scene. A light of some `size`, the
+angle it spans, casts soft shadows: sharp where an object meets a surface,
+wider farther from it. So a 3D object in front of flat UI drops its shadow
+on the UI.
+
+A surface's `material` sets how its content meets the light:
+
+- `Material::Lit` is shaded by the angle the light falls at.
+- `Material::Unlit` shows its content as it is, as a screen does, and drops
+  to the light's `ambient` brightness where a shadow falls on it.
+- `Material::Emissive` shows its content at full colour, untouched by light
+  or shadow: fire, a lamp.
+- `Material::Glow` adds its content's colour to what lies behind it and hides
+  nothing: a halo, a flame, a spark.
+- `Material::Glass(Glass::clear(thickness))` shows the scene behind it bent by
+  its curve, with the light's highlight on it and the content over it. Glass
+  shows the surfaces that are not glass behind it; it costs one copy of the
+  pixels around it per frame, and a scene without glass takes none.
+- `Material::Volume(Volume { shader, params })` draws what the app's WGSL
+  `volume` function finds inside the mesh, ray by ray from the camera, at the
+  depth where it finds it: a ray-marched control standing out of a wall, or
+  smoke in a box. The mesh only bounds it, and a volume casts no shadow. Each
+  shader compiles once, in the background, the first time a frame draws it.
+
+```wgsl
+// A ball of radius 0.4 in the unit cube, in the content's colour.
+fn volume(eye: vec3<f32>, direction: vec3<f32>, entry: f32, exit: f32, footprint: f32) -> VolumeHit {
+    var hit: VolumeHit;
+    hit.color = vec4<f32>(0.0);
+    hit.at = eye;
+    let b = dot(eye, direction);
+    let h = b * b - dot(eye, eye) + 0.16;
+    let t = -b - sqrt(max(h, 0.0));
+    if (h >= 0.0 && t >= entry && t <= exit) {
+        hit.at = eye + direction * t;
+        hit.color = vec4<f32>(volume_content(vec2<f32>(0.5)).rgb, 1.0);
+    }
+    return hit;
+}
+```
+
+The renderer puts the framework's prelude before the shader. It works in the
+mesh's own coordinates: `entry` and `exit` are where the ray enters the mesh's
+bounds and leaves the mesh, `footprint` is a pixel's width in radians,
+`volume_param(i)` reads `params[i]`, and `volume_content(uv)` the surface's
+content. A shader that does not build logs a warning, and its volumes are left
+out.
+
+Scene space uses logical pixels with x to the right, y down and z away from
+the viewer. `Mesh::plane`, `Mesh::cuboid` and `Mesh::sphere` build common
+shapes, `Mesh::from_obj` reads a Wavefront OBJ file, and `Mesh::new` takes
+positions, texture coordinates and triangles. `Mesh::from_sdf` builds the
+surface of a signed distance field sampled on a grid, with the texture wrapped
+around it as around a sphere; build it again with each new field for a shape
+that changes, and the renderer writes the new shape into the GPU buffers of the
+one it replaced. OBJ files point y up; flip them with a transform that scales y
+by -1. A camera that stands one focal length in front of a plane the size of
+the scene shows that plane exactly as a flat screen: put the 2D UI on such a
+plane, and 3D objects in front of it. The desktop demo's Room tab shows a globe
+in front of such a screen, then walks into a room of walls, the globe and an
+imported torus.
+
+#### Place nodes in 3D
+
+Inside a scene, layout places nodes in 3D as it places them on screen: a
+node's frame is its layout place on the plane z = 0 of its parent's frame. A
+mesh surface's `transform` places its mesh in its node's frame, so surfaces
+laid out in a `Row` stand side by side. `Modifier::transform3d(|| Mat4)` moves,
+turns or scales a node and everything under it in 3D; like the scene's other
+closures, it reads state when the scene is drawn.
+
+A mesh surface inside the content of another mesh surface has its frame in
+that content: x and y in the content's pixels, z into the surface, a unit as
+long as a content pixel (`MeshSurface::content_to_scene`). So a control on a
+wall can stand out of the wall, nearer surfaces hide it, and it takes pointer
+input where it shows. One map from these frames to the window serves drawing,
+pointer input and the bounds robot tests find controls by
+(`RenderScene::surface_windows`). Accessibility reads a node's flat layout
+place.
+
+#### Look through doorways
+
+A `scene3d` inside a scene's space is a doorway: the rect its node takes in its
+frame opens into its own space, and cuts a hole in the surface whose content
+holds it. Its camera stands in the doorway's middle looking in, a unit of its
+space to a pixel of the rect (`Camera::doorway`), so a doorway seen straight on
+shows what that camera sees, and from other places the space behind it with
+depth. What lies behind that camera is cut, and the space's own light lights
+its surfaces.
+
+The eye sees through a doorway as far as the doorway shows on screen. Each
+doorway opens on the screen rect it covers within the openings before it; one
+that lies off screen, faces away from the eye or opens on less than a quarter
+of a pixel shows nothing and costs nothing. So doorways inside doorways show as
+deep as they open on screen, up to 255, which the WGPU renderer's 8-bit stencil
+counts. Presses through a doorway reach the surfaces behind it. Glass and glow
+show behind doorways too; shadows fall only in the space the eye stands in. The desktop demo's Room tab
+shows this: the whole demo hangs on the wall to the screen's right, and its own
+Room tab opens a doorway there into a second room.
+
+#### Walk the eye
+
+An `Eye` walks a window's scene among its spaces. `rememberEye(|| pose,
+radius)` keeps one, made at an `EyePose` such as `EyePose::standing(position,
+yaw, pitch)`. Read `eye.scene(focal_length, light)` in the `scene3d` closure,
+and the camera follows the eye without recomposition:
+
+```rust
+let eye = rememberEye(|| EyePose::standing(Vec3::new(0.0, 0.0, -600.0), 0.0, 0.0), 60.0);
+let sees = eye.clone();
+Box(
+    Modifier::empty()
+        .fill_max_size()
+        .scene3d(move || sees.scene(700.0, None)),
+    BoxSpec::default(),
+    move || {
+        CompositionLocalProvider(vec![local_eye().provides(Some(eye.clone()))], || Rooms());
+    },
+);
+```
+
+`eye.turn(yaw, pitch)` turns the eye, up or down no farther than
+`PITCH_LIMIT`. `EyePose::walking_axes` gives the level directions ahead and to
+the right, and `eye.walk(step)` moves the eye by `step` in the coordinates of
+the space it stands in. A step through a doorway's rect takes the eye into the
+space behind it, turned into that space's coordinates, and a step back takes it
+out again. A surface with `solid` set stops the eye a ball of `radius`, in the units
+of the space it stands in, short of it, and the eye slides along it, except
+through the holes that doorways cut.
+Each time the renderer places the scene, it leaves the eye the solid surfaces
+and doorways near it, so a wall the app moves stops the eye where it is drawn.
+`eye.place(pose)` puts the eye at `pose` without a walk; the pose's `doorways`,
+the scene nodes of the doorways walked through, name the space it stands in,
+and `EyePose::standing` gives none, the scene's own space.
+
+The scene draws from the space the eye stands in: the surfaces around the eye,
+and the spaces it came from through their doorways, cut at each doorway's
+plane. Presses start there too. Each space keeps its own light. Provide the
+eye with `local_eye()` around the scene's content, as above: a scene composed
+behind a doorway reads it and knows the window's eye walks into it, so it
+leaves its own camera standing in the doorway. In the demo's room, open the
+Room tab on the right wall, turn to it with E and walk in with W. The second
+room's Step into the room button opens its walls, and its own right wall holds
+the demo again.
+
+#### Point with a ray
+
+A controller, a hand or a gaze points along a ray from somewhere other than
+the eye. `AppShell::ray_pointer((pointer, scene), ray, kind)` sends a press,
+move or release along `ray`, given in the coordinates of the space the eye
+stands in, into the scene of the node `scene`. The nearest surface the ray
+meets, behind doorways too, takes it at the content point where the ray meets
+it, and `PointerEvent::ray` carries the ray to the content's handlers, so a
+drag goes on along the ray. Each `pointer` number is a pointer of its own. A
+clickable follows the first pointer that pressed it, so a second controller
+that presses and lets go over it does not click it.
+
+#### Renderers
+
+The WGPU renderer draws scenes. The pixels renderer draws the surfaces of the
+space the eye stands in, far ones first: a flat mesh's surface in its place,
+and a curved mesh's surface on the plane that touches the mesh at the content's
+middle. It has no depth buffer and no shadows, and draws a scene behind a
+doorway flat on the surface that holds it.
+
 ## Accessibility
 
 ### Name controls and expose state

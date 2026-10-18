@@ -86,6 +86,7 @@ fn walk_settings() -> WalkSettings {
         light: ShadowLight::for_window(100.0, 100.0, 1.0, 1.0),
         wants_pixel_sensitive: false,
         update: 0,
+        in_space: false,
     }
 }
 
@@ -229,6 +230,7 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
                     translated,
                     settings: &walk_settings(),
                 },
+                None,
                 &mut CompositorScene::new(),
                 &mut LayerSceneRecycler::default(),
             );

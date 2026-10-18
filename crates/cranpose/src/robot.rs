@@ -5,7 +5,9 @@ use std::{
 };
 
 use cranpose_app_shell::{AppShell, KeyCode, PointerSource, RuntimeLeakDebugStats};
-use cranpose_render_common::Renderer;
+use cranpose_render_common::{
+    RenderScene, Renderer, graph::ProjectiveTransform, layer_transform::layer_transform_to_window,
+};
 #[cfg(feature = "renderer-wgpu")]
 use cranpose_render_wgpu::{DebugCpuAllocationStats, RenderStatsSnapshot};
 use cranpose_ui::{PointerButton, SemanticsAction, SemanticsNode, SemanticsRole};
@@ -43,8 +45,8 @@ impl RobotPresentationInfo {
 /// Serializable semantic element combining semantics + geometry
 ///
 /// This structure combines semantic information (role, text, actions) with
-/// geometric bounds from the layout tree, enabling robot scripts to find
-/// and interact with UI elements by their semantic properties.
+/// the element's bounds where it shows in the window, enabling robot scripts
+/// to find and interact with UI elements by their semantic properties.
 #[derive(Debug, Clone)]
 pub struct SemanticElement {
     /// Semantic role (e.g., "Button", "Text", "Layout")
@@ -53,7 +55,8 @@ pub struct SemanticElement {
     pub text: Option<String>,
     /// Compose's `stateDescription` — what the control currently reads as.
     pub state_description: Option<String>,
-    /// Geometric bounds in logical pixels
+    /// Where the element shows in the window, in logical pixels: its layout
+    /// rect through the graphics layers above it.
     pub bounds: SemanticRect,
     /// Whether this element has click actions
     pub clickable: bool,
@@ -199,7 +202,10 @@ pub(crate) enum RobotCommand {
         source: PointerSource,
     },
     TypeText(String),
-    SendKey(String),
+    SendKey {
+        key: String,
+        released: bool,
+    },
     SendKeyWithModifiers {
         key: String,
         shift: bool,
@@ -712,8 +718,24 @@ impl Robot {
     /// ```
     pub fn send_key(&self, key: &str) -> Result<(), String> {
         self.tx
-            .send(RobotCommand::SendKey(key.to_string()))
+            .send(RobotCommand::SendKey {
+                key: key.to_string(),
+                released: false,
+            })
             .map_err(|e| format!("Failed to send send_key command: {e}"))?;
+        self.recv_ack()
+    }
+
+    /// Releases a key: sends its key-up event. [`Self::send_key`] sends only
+    /// the key-down, so a key the app reads while it is held, as a game or a
+    /// camera does, stays down until this call.
+    pub fn release_key(&self, key: &str) -> Result<(), String> {
+        self.tx
+            .send(RobotCommand::SendKey {
+                key: key.to_string(),
+                released: true,
+            })
+            .map_err(|e| format!("Failed to send release_key command: {e}"))?;
         self.recv_ack()
     }
 
@@ -1463,6 +1485,19 @@ const NAMED_KEYS: [(&str, KeyCode, &str); 12] = [
     ("space", KeyCode::Space, " "),
 ];
 
+/// The key event a robot sends for `key`: its press, or its release.
+pub(crate) fn robot_key_event(key: &str, released: bool) -> cranpose_app_shell::KeyEvent {
+    use cranpose_app_shell::{KeyEvent, KeyEventType, Modifiers};
+
+    let (key_code, text) = robot_key_code_and_text(key);
+    let event_type = if released {
+        KeyEventType::KeyUp
+    } else {
+        KeyEventType::KeyDown
+    };
+    KeyEvent::new(key_code, text, Modifiers::NONE, event_type)
+}
+
 pub(crate) fn robot_key_code_and_text(key: &str) -> (KeyCode, String) {
     if let Some((_, code, text)) = NAMED_KEYS.iter().find(|(name, ..)| *name == key) {
         return (*code, (*text).to_owned());
@@ -1530,7 +1565,7 @@ where
     let Some(semantic_root) = app.semantics_tree().map(|tree| tree.root().clone()) else {
         return Vec::new();
     };
-    let bounds_by_node = build_semantic_bounds_index(layout_tree.root());
+    let bounds_by_node = semantic_bounds_index(app, layout_tree.root());
     let mut bounds_for = |node_id| semantic_rect_for_node(&bounds_by_node, node_id);
     vec![semantic_element_from_semantics_node(
         &semantic_root,
@@ -1642,7 +1677,7 @@ where
 {
     let layout_tree = app.layout_tree()?.clone();
     let root = app.semantics_tree()?.root().clone();
-    let bounds_by_node = build_semantic_bounds_index(layout_tree.root());
+    let bounds_by_node = semantic_bounds_index(app, layout_tree.root());
     let result = finder(&bounds_by_node, &root, query, match_kind);
     log::trace!(
         target: "cranpose::input",
@@ -1817,21 +1852,88 @@ fn semantics_node_clickable(sem_node: &SemanticsNode) -> bool {
         .any(|action| matches!(action, SemanticsAction::Click { .. }))
 }
 
-fn build_semantic_bounds_index(
+/// Where each node of `root`'s tree shows in the window: as layout and the
+/// layers place it, and for a hit target on a mesh surface as the scene's
+/// camera shows it, which the layout walk does not follow through a
+/// doorway.
+fn semantic_bounds_index<R>(
+    app: &mut AppShell<R>,
     root: &cranpose_ui::LayoutBox,
-) -> HashMap<cranpose_core::NodeId, SemanticRect> {
+) -> HashMap<cranpose_core::NodeId, SemanticRect>
+where
+    R: Renderer,
+    R::Error: std::fmt::Debug,
+{
+    let mut surfaces = HashMap::new();
+    app.scene().surface_windows(&mut |node_id, content| {
+        surfaces.insert(node_id, content);
+    });
     let mut bounds = HashMap::new();
-    collect_semantic_bounds(root, &mut bounds);
+    app.debug_enter_app_context(|| {
+        collect_semantic_bounds(
+            root,
+            (ProjectiveTransform::identity(), &surfaces),
+            &mut bounds,
+        );
+    });
+    let scene = app.scene();
+    for (&node_id, rect) in &mut bounds {
+        if let Some(shown) = scene.surface_window_bounds(node_id) {
+            *rect = SemanticRect {
+                x: shown.x,
+                y: shown.y,
+                width: shown.width,
+                height: shown.height,
+            };
+        }
+    }
     bounds
 }
 
+/// Records where each node of `layout_box`'s subtree shows in the window,
+/// through the graphics layers above it: `parent` maps the parent's
+/// children to the window, and `surfaces` holds the map from the content of
+/// each mesh surface the window's eyes see to the window.
 fn collect_semantic_bounds(
     layout_box: &cranpose_ui::LayoutBox,
+    (parent, surfaces): (
+        ProjectiveTransform,
+        &HashMap<cranpose_core::NodeId, ProjectiveTransform>,
+    ),
     bounds: &mut HashMap<cranpose_core::NodeId, SemanticRect>,
 ) {
-    bounds.insert(layout_box.node_id, bounds_from_layout_box(layout_box));
+    let laid_out = bounds_from_layout_box(layout_box);
+    let rect = cranpose_ui::Rect {
+        x: laid_out.x,
+        y: laid_out.y,
+        width: laid_out.width,
+        height: laid_out.height,
+    };
+    let size = cranpose_ui::Size {
+        width: rect.width,
+        height: rect.height,
+    };
+    let origin = cranpose_ui::Point::new(rect.x, rect.y);
+    let slices = &layout_box.node_data.modifier_slices;
+    let layer = slices.graphics_layer();
+    let window = match surfaces.get(&layout_box.node_id) {
+        Some(content) => ProjectiveTransform::translation(-origin.x, -origin.y).then(*content),
+        None => layer.as_ref().map_or(parent, |layer| {
+            layer_transform_to_window(parent, origin, slices.layer_bounds(size), layer)
+        }),
+    };
+    let shown = window.bounds_for_rect(rect);
+    bounds.insert(
+        layout_box.node_id,
+        SemanticRect {
+            x: shown.x,
+            y: shown.y,
+            width: shown.width,
+            height: shown.height,
+        },
+    );
     for child in &layout_box.children {
-        collect_semantic_bounds(child, bounds);
+        collect_semantic_bounds(child, (window, surfaces), bounds);
     }
 }
 

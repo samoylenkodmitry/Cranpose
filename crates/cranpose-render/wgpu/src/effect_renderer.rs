@@ -551,7 +551,7 @@ fn projective_blit_uniform_spec() -> UploadAllocatorSpec {
 fn projective_blit_vertex_spec() -> UploadAllocatorSpec {
     UploadAllocatorSpec::vertex(
         "Projective Blit Vertex Buffer",
-        (std::mem::size_of::<ProjectiveBlitVertex>() * 4) as u64,
+        (std::mem::size_of::<ProjectiveBlitVertex>() * 5) as u64,
     )
 }
 
@@ -1048,7 +1048,8 @@ pub(crate) struct ProjectiveCompositeItem<'a> {
     pub source: &'a OffscreenTarget,
     pub source_region: Option<(f32, f32, f32, f32)>,
     pub viewport: (u32, u32),
-    pub dest_quad: [[f32; 2]; 4],
+    pub dest_strip: [[f32; 2]; 5],
+    pub dest_corners: u32,
     pub inverse: [[f32; 3]; 3],
     pub alpha: f32,
     pub blend_mode: BlendMode,
@@ -1066,6 +1067,7 @@ pub(crate) struct PreparedProjectiveComposite<'a> {
     texture_bind_group: &'a wgpu::BindGroup,
     uniform: UniformUpload,
     vertices: BufferUpload,
+    vertex_count: u32,
     blend_mode: BlendMode,
     variant: CompositeVariant,
     scissor: Option<(u32, u32, u32, u32)>,
@@ -3370,20 +3372,9 @@ impl EffectRenderer {
             item.depth.is_some(),
         );
         self.prefetch_projective(CompileLane::WarmUp, device, item.blend_mode, variant);
-        let vertices = [
-            ProjectiveBlitVertex {
-                position: item.dest_quad[0],
-            },
-            ProjectiveBlitVertex {
-                position: item.dest_quad[1],
-            },
-            ProjectiveBlitVertex {
-                position: item.dest_quad[2],
-            },
-            ProjectiveBlitVertex {
-                position: item.dest_quad[3],
-            },
-        ];
+        let vertices = item
+            .dest_strip
+            .map(|position| ProjectiveBlitVertex { position });
         let uniforms = ProjectiveBlitUniforms {
             viewport: [item.viewport.0 as f32, item.viewport.1 as f32],
             source_size: [item.source.width as f32, item.source.height as f32],
@@ -3439,6 +3430,7 @@ impl EffectRenderer {
             texture_bind_group,
             uniform,
             vertices,
+            vertex_count: item.dest_corners,
             blend_mode: item.blend_mode,
             variant,
             scissor: item.scissor,
@@ -3496,7 +3488,7 @@ impl EffectRenderer {
         } else {
             pass.set_scissor_rect(0, 0, viewport.0, viewport.1);
         }
-        pass.draw(0..4, 0..1);
+        pass.draw(0..draw.vertex_count, 0..1);
     }
 }
 

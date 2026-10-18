@@ -1,6 +1,6 @@
 use std::{iter::Peekable, rc::Rc, sync::Arc};
 
-use cranpose_ui_graphics::{BlendMode, Rect, RuntimeShader};
+use cranpose_ui_graphics::{BlendMode, FrontPolygon, Rect, RuntimeShader};
 
 use crate::{
     effect_renderer::{
@@ -99,7 +99,7 @@ pub(crate) enum ResolvedCompositeKind {
         alpha: f32,
     },
     Projective {
-        dest_quad: [[f32; 2]; 4],
+        dest: FrontPolygon,
         inverse: [[f32; 3]; 3],
         alpha: f32,
         blend_mode: BlendMode,
@@ -2449,7 +2449,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                 self.batches.push(Batch::Shader(prepared));
             }
             ResolvedCompositeKind::Projective {
-                dest_quad,
+                dest,
                 inverse,
                 alpha,
                 blend_mode,
@@ -2460,7 +2460,8 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     source: composite.source.as_ref(),
                     source_region: *source_region,
                     viewport: self.target_size(),
-                    dest_quad: dest_quad.map(|[x, y]| [x - offset[0], y - offset[1]]),
+                    dest_strip: dest.strip().map(|[x, y]| [x - offset[0], y - offset[1]]),
+                    dest_corners: dest.corners().len() as u32,
                     inverse: translate_inverse(*inverse, offset),
                     alpha: *alpha,
                     blend_mode: supported_blend_mode(*blend_mode),

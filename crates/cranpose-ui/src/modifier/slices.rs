@@ -212,6 +212,7 @@ fn merge_graphics_layers(base: GraphicsLayer, overlay: GraphicsLayer) -> Graphic
         color_filter: compose_color_filters(base.color_filter, overlay.color_filter),
         render_effect: compose_render_effects(base.render_effect, overlay.render_effect),
         backdrop_effect: overlay.backdrop_effect.or(base.backdrop_effect),
+        space: overlay.space.or(base.space),
     }
 }
 

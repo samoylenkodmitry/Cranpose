@@ -12,7 +12,7 @@ use cranpose_ui::{
     TextStyle,
     text::{AnnotatedString, RenderString, SpanStyle, TextDrawStyle},
 };
-pub use cranpose_ui_graphics::transform::{ProjectiveTransform, quad_bounds};
+pub use cranpose_ui_graphics::transform::{FrontPolygon, ProjectiveTransform, quad_bounds};
 use cranpose_ui_graphics::{
     BlendMode, ColorFilter, CommandRecording, DrawPrimitive, RecordingSummary, ShadowPrimitive,
 };
@@ -289,6 +289,9 @@ pub struct LayerNode {
     /// Whether this layer or a layer beneath it has a hit test node. Scene building keeps it
     /// current.
     pub has_hit_targets: bool,
+    /// [`Self::has_space`], worked out the first time a walk asks and
+    /// forgotten when the layer or its children change.
+    pub space: Cell<Option<bool>>,
     /// Whether this subtree publishes live window origins (a text field's
     /// popup anchor, a scroll container's viewport rect). Those sinks are
     /// written during a full lowering, so the scroll fast path may translate
@@ -387,6 +390,7 @@ impl Default for LayerNode {
             clip_to_bounds: false,
             hit_test: None,
             has_hit_targets: false,
+            space: Cell::new(None),
             has_origin_sinks: false,
             contained: Cell::new(None),
             isolation: IsolationReasons::default(),
@@ -477,6 +481,23 @@ impl LayerNode {
                 RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
             });
         self.contained.set(None);
+        self.space.set(None);
+    }
+
+    /// Whether this layer or a layer beneath it is a scene, a mesh surface
+    /// or a 3D transform, so a walk for what lies in 3D skips the subtrees
+    /// without one.
+    pub fn has_space(&self) -> bool {
+        if let Some(known) = self.space.get() {
+            return known;
+        }
+        let found = self.graphics_layer.space.is_some()
+            || self.children.iter().any(|child| match child {
+                RenderNode::Layer(child_layer) => child_layer.has_space(),
+                RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
+            });
+        self.space.set(Some(found));
+        found
     }
 
     /// Whether this layer, drawn as a child, puts nothing outside `bounds`:

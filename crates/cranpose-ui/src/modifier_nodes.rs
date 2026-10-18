@@ -35,6 +35,21 @@ fn hash_option_f32<H: Hasher>(state: &mut H, value: Option<f32>) {
     }
 }
 
+/// Hashes which 3D role a layer has and which mesh it is drawn on: equal
+/// layers hash alike, and the camera and placement are left to equality.
+fn hash_space<H: Hasher>(state: &mut H, space: Option<&cranpose_ui_graphics::space::LayerSpace>) {
+    use cranpose_ui_graphics::space::LayerSpace;
+    match space {
+        None => state.write_u8(0),
+        Some(LayerSpace::Scene(_)) => state.write_u8(1),
+        Some(LayerSpace::Surface(surface)) => {
+            state.write_u8(2);
+            state.write_u64(surface.mesh.id());
+        }
+        Some(LayerSpace::Transform(_)) => state.write_u8(3),
+    }
+}
+
 fn hash_graphics_layer<H: Hasher>(state: &mut H, layer: &GraphicsLayer) {
     hash_f32_value(state, layer.alpha);
     hash_f32_value(state, layer.scale);
@@ -48,6 +63,7 @@ fn hash_graphics_layer<H: Hasher>(state: &mut H, layer: &GraphicsLayer) {
     hash_f32_value(state, layer.transform_origin.pivot_fraction_y);
     hash_f32_value(state, layer.translation_x);
     hash_f32_value(state, layer.translation_y);
+    hash_space(state, layer.space.as_deref());
     hash_f32_value(state, layer.shadow_elevation);
     hash_f32_value(state, layer.ambient_shadow_color.r());
     hash_f32_value(state, layer.ambient_shadow_color.g());
@@ -1323,14 +1339,17 @@ use cranpose_foundation::DRAG_THRESHOLD;
 #[derive(Clone, Copy, Debug)]
 enum ClickPress {
     Idle,
-    Pressed(Point),
+    /// A pointer went down here, and the id of that pointer.
+    Pressed(Point, cranpose_foundation::PointerId),
     /// The press was cancelled, by a long press that took it among others:
     /// its release does not click.
     Cancelled,
 }
 
-/// Node that reports a click when the primary pointer goes down and up without moving farther than
-/// the drag threshold. Callbacks get positions in the node's local coordinates, in logical pixels.
+/// Node that reports a click when a pointer goes down and up without moving farther than the drag
+/// threshold: the first pointer that goes down holds the press, and the others pass by until it
+/// lifts, so a second finger does not click, and each controller of a headset clicks with its own.
+/// Callbacks get positions in the node's local coordinates, in logical pixels.
 pub struct ClickableNode {
     on_press: Option<Rc<dyn Fn(Point)>>,
     on_click: Rc<dyn Fn(Point)>,
@@ -1377,7 +1396,8 @@ impl ClickableNode {
         press_position: Rc<Cell<ClickPress>>,
     ) -> Rc<dyn Fn(PointerEvent)> {
         Rc::new(move |event: PointerEvent| {
-            if event.id != 0 {
+            if matches!(press_position.get(), ClickPress::Pressed(_, holder) if holder != event.id)
+            {
                 return;
             }
 
@@ -1388,7 +1408,7 @@ impl ClickableNode {
 
             match event.kind {
                 PointerEventKind::Down => {
-                    press_position.set(ClickPress::Pressed(event.travelled_to()));
+                    press_position.set(ClickPress::Pressed(event.travelled_to(), event.id));
                     if let Some(on_press) = on_press.as_ref() {
                         on_press(event.position);
                     }
@@ -1396,14 +1416,17 @@ impl ClickableNode {
                 PointerEventKind::Move => {}
                 PointerEventKind::Up => {
                     let should_click = match press_position.replace(ClickPress::Idle) {
-                        ClickPress::Pressed(press_pos) => {
+                        ClickPress::Pressed(press_pos, _) => {
                             let travelled_to = event.travelled_to();
                             let dx = travelled_to.x - press_pos.x;
                             let dy = travelled_to.y - press_pos.y;
                             let distance = (dx * dx + dy * dy).sqrt();
                             distance <= DRAG_THRESHOLD
                         }
-                        ClickPress::Idle => true,
+                        // A release with no press before it clicks for the
+                        // primary pointer only: another finger's release after
+                        // the first one clicked is not a click of its own.
+                        ClickPress::Idle => event.id == 0,
                         ClickPress::Cancelled => false,
                     };
 

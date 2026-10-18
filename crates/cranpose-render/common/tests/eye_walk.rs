@@ -1,0 +1,349 @@
+//! A window's eye among the spaces of its scene: it walks through doorways
+//! and not through walls, sees through doorways as deep as they show on
+//! screen and no deeper than they show, and pointers that point along any
+//! ray reach the surfaces behind doorways.
+
+use std::{cell::Cell, rc::Rc};
+
+use cranpose_core::NodeId;
+use cranpose_foundation::{PointerEvent, PointerEventKind};
+use cranpose_render_common::{HitTestTarget, RenderScene};
+use cranpose_ui::{
+    Modifier, Point,
+    space::{Camera, EyePose, Mat4, Ray, Scene3d, Vec3},
+    widgets::{Box, BoxSpec},
+};
+
+use crate::mesh_surface_hits::{
+    EYE_RADIUS, FAR, FOCAL_LENGTH, INNER, NESTED, Pressable, Presses, VIEWPORT, WALL, WalkRoom,
+    camera_looking, camera_moved, centered, nested_window, press_middle, pressable, walk_room,
+    window_into_nested, with_scene,
+};
+
+#[test]
+fn a_wall_without_a_doorway_stops_the_eye() {
+    // Beside the doorway, which spans x and y from -100 to 100 on the wall.
+    let WalkRoom {
+        mut composition,
+        eye,
+        ..
+    } = walk_room(Vec3::new(250.0, 150.0, 0.0));
+    with_scene(&mut composition, |_, _, _| {
+        eye.walk(Vec3::new(0.0, 0.0, 1000.0));
+    });
+    let pose = eye.pose();
+    assert!(
+        pose.doorways.is_empty(),
+        "the eye stays in the room: {pose:?}"
+    );
+    let gap = FAR.z - pose.position.z;
+    assert!(
+        (EYE_RADIUS - 0.5..=EYE_RADIUS + 0.5).contains(&gap),
+        "the eye stops its radius before the wall, {gap} from it"
+    );
+}
+
+#[test]
+fn an_eye_that_walks_back_out_of_a_doorway_stands_in_the_room_again() {
+    let WalkRoom {
+        mut composition,
+        eye,
+        scene,
+        nested,
+        ..
+    } = walk_room(Vec3::new(0.0, 0.0, 0.0));
+    let (inside, outside) = with_scene(&mut composition, |mut view, applier, root| {
+        eye.walk(Vec3::new(0.0, 0.0, FAR.z + 150.0));
+        camera_moved(&mut view, applier, (root, scene));
+        let inside = eye.pose();
+        eye.walk(Vec3::new(0.0, 0.0, -300.0));
+        (inside, eye.pose())
+    });
+    assert_eq!(&*inside.doorways, &[nested]);
+    assert!(
+        outside.doorways.is_empty(),
+        "walking back through the doorway leaves the space behind it: {outside:?}"
+    );
+    assert!(
+        (outside.position.z - (FAR.z - 150.0)).abs() < 0.5,
+        "the eye stands where it walked to, in the room's coordinates: {outside:?}"
+    );
+}
+
+/// `depth` rooms, each behind a doorway in the middle of the wall of the
+/// one before, and a panel in the last; every room is the room of
+/// [`walk_room`]'s nested scene.
+fn rooms(surface: &Pressable, depth: usize) {
+    let surface = Rc::clone(surface);
+    Box(nested_window(), BoxSpec::default(), move || {
+        if depth == 0 {
+            let panel = surface((
+                "deep",
+                INNER,
+                Mat4::scaling(Vec3::new(INNER.width, INNER.height, 1.0)).then(&Mat4::translation(
+                    Vec3::new(-INNER.width * 0.5, -INNER.height * 0.5, NESTED.1),
+                )),
+            ));
+            Box(panel, BoxSpec::default(), || {});
+            return;
+        }
+        let wall = surface(("wall", WALL, centered(WALL, Vec3::new(0.0, 0.0, NESTED.1))));
+        let surface = Rc::clone(&surface);
+        Box(wall, BoxSpec::default(), move || rooms(&surface, depth - 1));
+    });
+}
+
+#[test]
+fn an_eye_sees_through_doorways_as_deep_as_they_show() {
+    let pressed: Presses = Rc::default();
+    let sink = Rc::clone(&pressed);
+    let mut composition = cranpose_ui::run_test_composition(move || {
+        let surface = pressable(Rc::clone(&sink));
+        Box(
+            Modifier::empty().fill_max_size().scene3d(|| Scene3d {
+                camera: Camera::look_at(
+                    Vec3::new(0.0, 0.0, -1000.0),
+                    Vec3::ZERO,
+                    Vec3::new(0.0, 1.0, 0.0),
+                    FOCAL_LENGTH,
+                ),
+                light: None,
+                eye: None,
+            }),
+            BoxSpec::default(),
+            move || {
+                let wall = surface(("wall", WALL, centered(WALL, FAR)));
+                let surface = Rc::clone(&surface);
+                // Five doorways, one inside another, past the eye's own
+                // space: no depth below what shows on screen stops it.
+                Box(wall, BoxSpec::default(), move || rooms(&surface, 4));
+            },
+        );
+    });
+    let reached = with_scene(&mut composition, |view, _, _| press_middle(&view, &pressed));
+    assert_eq!(
+        reached,
+        Some("deep"),
+        "a press through five doorways reaches the panel behind the last"
+    );
+}
+
+#[test]
+fn a_doorway_off_screen_shows_nothing_of_its_space() {
+    let looking = Rc::new(Cell::new(0.0f32));
+    let (turn, panel) = (Rc::clone(&looking), Rc::new(Cell::new(None)));
+    let (scene, kept) = (Rc::new(Cell::new(None)), Rc::clone(&panel));
+    let scene_node = Rc::clone(&scene);
+    let pressed: Presses = Rc::default();
+    let sink = Rc::clone(&pressed);
+    let mut composition = cranpose_ui::run_test_composition(move || {
+        let surface = pressable(Rc::clone(&sink));
+        let turn = Rc::clone(&turn);
+        let kept = Rc::clone(&kept);
+        let id = Box(
+            Modifier::empty().fill_max_size().scene3d(move || Scene3d {
+                camera: camera_looking(
+                    Vec3::new(0.0, 0.0, -1000.0),
+                    Vec3::new(turn.get().sin(), 0.0, turn.get().cos()),
+                ),
+                light: None,
+                eye: None,
+            }),
+            BoxSpec::default(),
+            move || {
+                let wall = surface(("wall", WALL, centered(WALL, FAR)));
+                let (surface, kept) = (Rc::clone(&surface), Rc::clone(&kept));
+                Box(wall, BoxSpec::default(), move || {
+                    kept.set(Some(window_into_nested(&surface).1));
+                });
+            },
+        );
+        scene_node.set(Some(id));
+    });
+    let (Some(scene), Some(panel)) = (scene.get(), panel.get()) else {
+        panic!("the scene and the panel behind its doorway composed");
+    };
+    let (facing, turned_away) = with_scene(&mut composition, |mut view, applier, root| {
+        let facing = view.find_target(panel).is_some();
+        looking.set(std::f32::consts::FRAC_PI_2);
+        camera_moved(&mut view, applier, (root, scene));
+        (facing, view.find_target(panel).is_some())
+    });
+    assert!(
+        facing,
+        "the panel behind the doorway the eye faces takes input"
+    );
+    assert!(
+        !turned_away,
+        "with the doorway off screen, nothing behind it takes input"
+    );
+}
+
+#[test]
+fn a_ray_from_beside_the_eye_presses_the_panel_behind_a_doorway_where_it_meets_it() {
+    let WalkRoom {
+        mut composition,
+        pressed,
+        scene,
+        ..
+    } = walk_room(Vec3::new(0.0, 0.0, -1000.0));
+    // The panel behind the doorway stands NESTED.0 + NESTED.1 behind the
+    // wall's middle; the ray comes from the right of the eye, through the
+    // doorway, to the panel's middle.
+    let middle = Vec3::new(0.0, 0.0, FAR.z + NESTED.0 + NESTED.1);
+    let origin = Vec3::new(150.0, 0.0, -1000.0);
+    let ray = Ray {
+        origin,
+        direction: middle - origin,
+    };
+    with_scene(&mut composition, |view, _, _| {
+        press_along(&view, scene, ray);
+    });
+    let pressed = pressed.borrow();
+    let Some(&(name, local)) = pressed.first() else {
+        panic!("the ray reached nothing");
+    };
+    assert_eq!(name, "nested");
+    let center = Point::new(INNER.width * 0.5, INNER.height * 0.5);
+    assert!(
+        (local.x - center.x).abs() < 0.5 && (local.y - center.y).abs() < 0.5,
+        "the press lands where the ray meets the panel, {local:?}, not {center:?}"
+    );
+}
+
+#[test]
+fn a_ray_through_a_wall_beside_its_doorway_reaches_the_wall() {
+    let WalkRoom {
+        mut composition,
+        pressed,
+        scene,
+        ..
+    } = walk_room(Vec3::new(0.0, 0.0, -1000.0));
+    let ray = Ray {
+        origin: Vec3::new(250.0, 150.0, -1000.0),
+        direction: Vec3::new(0.0, 0.0, 1.0),
+    };
+    with_scene(&mut composition, |view, _, _| {
+        press_along(&view, scene, ray);
+    });
+    assert_eq!(
+        pressed
+            .borrow()
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>(),
+        ["wall"],
+        "the wall, and only the wall, takes the ray beside its doorway"
+    );
+}
+
+/// Presses and releases along `ray` in the scene of the node `scene`.
+fn press_along(view: &cranpose_render_common::graph_scene::Scene, scene: NodeId, ray: Ray) {
+    if let Some(target) = view.hit_test_ray(scene, ray).into_iter().next() {
+        for kind in [PointerEventKind::Down, PointerEventKind::Up] {
+            target.dispatch(
+                PointerEvent::new(kind, Point::default(), Point::default()).with_ray(ray),
+            );
+        }
+    }
+}
+
+#[test]
+fn surfaces_the_eye_does_not_see_take_no_input() {
+    // Past the doorway, the room the eye came from lies behind it: its wall
+    // and its panel show nothing, so their content takes no press, also
+    // where their layout places them under the press.
+    let WalkRoom {
+        mut composition,
+        eye,
+        pressed,
+        scene,
+        nested,
+    } = walk_room(Vec3::new(200.0, 0.0, -1000.0));
+    let walked = with_scene(&mut composition, |mut view, applier, root| {
+        let from = eye.pose().position;
+        eye.walk(Vec3::new(0.0, 0.0, FAR.z + 150.0) - from);
+        camera_moved(&mut view, applier, (root, scene));
+        // Every target under the point takes the press, as the app shell
+        // hands it to each.
+        let middle = Point::new(VIEWPORT.width * 0.5, VIEWPORT.height * 0.5);
+        for target in view.hit_test(middle.x, middle.y) {
+            for kind in [PointerEventKind::Down, PointerEventKind::Up] {
+                target.dispatch(PointerEvent::new(kind, middle, middle));
+            }
+        }
+        eye.pose()
+    });
+    assert_eq!(&*walked.doorways, &[nested]);
+    assert_eq!(
+        pressed
+            .borrow()
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>(),
+        ["nested"],
+        "only the panel the eye sees takes the press"
+    );
+}
+
+#[test]
+fn an_eye_enters_the_space_of_a_scene_one_doorway_away() {
+    let WalkRoom {
+        mut composition,
+        eye,
+        pressed,
+        scene,
+        nested,
+    } = walk_room(Vec3::new(0.0, 0.0, -1000.0));
+    let (unknown, entered, ahead) = with_scene(&mut composition, |mut view, applier, root| {
+        let unknown = eye.enter(scene + 1_000_000, eye.pose());
+        // Where the panel behind the doorway stands 150 ahead of the eye.
+        let standing = EyePose::standing(Vec3::new(0.0, 0.0, NESTED.1 - 150.0), 0.0, 0.0);
+        let entered = eye.enter(nested, standing);
+        camera_moved(&mut view, applier, (root, scene));
+        (unknown, entered, press_middle(&view, &pressed))
+    });
+    assert!(
+        !unknown,
+        "a scene that is no space of the world is not entered"
+    );
+    assert!(entered);
+    assert_eq!(&*eye.pose().doorways, &[nested]);
+    assert_eq!(
+        ahead,
+        Some("nested"),
+        "the eye stands in the space behind the doorway"
+    );
+}
+
+#[test]
+fn an_eye_past_a_doorway_stands_where_it_walked_in_the_room_it_came_from() {
+    let WalkRoom {
+        mut composition,
+        eye,
+        scene,
+        nested,
+        ..
+    } = walk_room(Vec3::new(200.0, 0.0, -1000.0));
+    let walked_to = Vec3::new(0.0, 0.0, FAR.z + 150.0);
+    let (inside, seen_from_room) = with_scene(&mut composition, |mut view, applier, root| {
+        eye.walk(walked_to - eye.pose().position);
+        camera_moved(&mut view, applier, (root, scene));
+        (eye.pose(), eye.pose_in(scene))
+    });
+    assert_eq!(&*inside.doorways, &[nested]);
+    let Some(seen) = seen_from_room else {
+        panic!("the room the eye came from lies a doorway from it");
+    };
+    assert!(seen.doorways.is_empty());
+    assert!(
+        (seen.position - walked_to).length() < 0.5,
+        "in the room's coordinates the eye stands at {:?}, not {walked_to:?}",
+        seen.position
+    );
+    assert!(
+        (seen.forward - Vec3::new(0.0, 0.0, 1.0)).length() < 1.0e-3,
+        "{:?}",
+        seen.forward
+    );
+}

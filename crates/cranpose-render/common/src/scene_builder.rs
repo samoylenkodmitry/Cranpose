@@ -507,6 +507,9 @@ pub(crate) struct RetainedPath {
     pass: ParentPass,
     /// The update that went along the path last.
     update: u64,
+    /// Whether a layer on the way is a scene, a surface or a 3D transform,
+    /// so a change at the end of the path changes what lies in 3D.
+    in_space: bool,
 }
 
 impl RetainedPath {
@@ -522,11 +525,24 @@ impl RetainedPath {
             node,
             &mut steps,
         )?;
+        let in_space = root.graphics_layer.space.is_some() || {
+            let mut layer = root;
+            steps
+                .iter()
+                .any(|&(index, _)| match layer.children.get(index) {
+                    Some(RenderNode::Layer(child)) => {
+                        layer = child;
+                        child.graphics_layer.space.is_some()
+                    }
+                    _ => false,
+                })
+        };
         Some(Self {
             node,
             steps,
             pass,
             update,
+            in_space,
         })
     }
 }
@@ -579,6 +595,9 @@ fn update_along_retained_path(
         return None;
     }
     let kind = dirty.remove(&path.node)?;
+    if path.in_space {
+        note_space_change();
+    }
     Some(update_at_step(
         applier,
         root,
@@ -683,6 +702,11 @@ fn replace_dirty_layers_from_applier(
         let marks = dirty.marks(identity);
         if marks == 0 {
             continue;
+        }
+        // A dirty layer in 3D, or one above a dirty layer, changes what lies
+        // in 3D.
+        if child_layer.graphics_layer.space.is_some() {
+            note_space_change();
         }
         if marks & DIRTY_NODE != 0
             && let Some(node_id) = identity
@@ -968,6 +992,64 @@ fn update_layer_properties(
         container.forget_own_raster_cache_hashes();
     }
     Some(hit_graph_dirty)
+}
+
+/// After a scene build or update that changed a layer in 3D, publishes
+/// where the window's scenes show the layers on their surfaces that publish
+/// window origins, as the eye sees them, and leaves each scene's eye the
+/// world it walks in. A flat window asks nothing of its layers.
+pub(crate) fn publish_space(applier: &MemoryApplier, graph: &RenderGraph) {
+    if !crate::thread_state::with(|state| state.space_changed.replace(false)) {
+        return;
+    }
+    publish_space_now(applier, graph);
+}
+
+#[cold]
+#[inline(never)]
+fn publish_space_now(applier: &MemoryApplier, graph: &RenderGraph) {
+    let root = ProjectiveTransform::identity();
+    crate::space::for_each_window_eye(&graph.root, root, &mut |tree, view, to_window| {
+        if let Some(eye) = &tree.cells[0].scene.eye {
+            eye.world.rebuild(|world| view.build_world(tree, world));
+        }
+        for seen in view
+            .surfaces
+            .iter()
+            .filter(|seen| seen.layer.has_origin_sinks)
+        {
+            if let Some(content) = view.content_to_window(seen, to_window) {
+                publish_content_geometry(applier, seen.layer, content);
+            }
+        }
+    });
+}
+
+/// Publishes the window geometry of `layer`, whose local space `to_window`
+/// maps to the window, and of the layers on it that publish window origins,
+/// as far as the next layer in 3D.
+fn publish_content_geometry(
+    applier: &MemoryApplier,
+    layer: &LayerNode,
+    to_window: ProjectiveTransform,
+) {
+    if let Some(node_id) = layer.node_id {
+        read_node_data(applier, node_id, |data| {
+            data.modifier_slices.publish_window_geometry(
+                Point::default(),
+                to_window,
+                data.layout_state.size(),
+            );
+        });
+    }
+    for child in &layer.children {
+        if let RenderNode::Layer(child) = child
+            && child.has_origin_sinks
+            && child.graphics_layer.space.is_none()
+        {
+            publish_content_geometry(applier, child, child.transform_to_parent.then(to_window));
+        }
+    }
 }
 
 fn publish_retained_window_geometry(
@@ -1797,6 +1879,10 @@ pub(crate) struct HitGraphState {
     transform_to_parent: ProjectiveTransform,
     clip_rect: Option<Rect>,
     shape: LayerShape,
+    /// Whether the layer is a scene, a mesh surface or a 3D transform. Each
+    /// update of such a layer runs its closure again, which may move where
+    /// the surfaces of its scene take input or hide one another.
+    space: bool,
 }
 
 impl HitGraphState {
@@ -1809,14 +1895,26 @@ impl HitGraphState {
             transform_to_parent: layer.transform_to_parent,
             clip_rect: layer.clip_rect(),
             shape: layer.graphics_layer.shape,
+            space: layer.graphics_layer.space.is_some(),
         }
     }
 
     fn dirty_against(&self, replacement: &Self) -> bool {
         self.hit_test
             || replacement.hit_test
+            || self.space
+            || replacement.space
             || ((self.has_hit_targets || replacement.has_hit_targets) && self != replacement)
     }
+}
+
+/// Notes that the scene update changes a layer that is a scene, a surface or
+/// a 3D transform, or lies beneath one: the window's scenes publish where
+/// their layers show and their eyes' worlds again.
+#[cold]
+#[inline(never)]
+fn note_space_change() {
+    crate::thread_state::with(|state| state.space_changed.set(true));
 }
 
 fn release_for_rebuild(layer: &mut LayerNode) {
@@ -1963,6 +2061,7 @@ fn assign_layer(layer: &mut LayerNode, head: LayerHead) {
         clip_to_bounds,
         hit_test,
         has_hit_targets,
+        space,
         has_origin_sinks,
         contained,
         isolation,
@@ -1988,9 +2087,13 @@ fn assign_layer(layer: &mut LayerNode, head: LayerHead) {
     *translated_content_offset = head.translated_content_offset;
     *origin_in_parent = head.origin_in_parent;
     graphics_layer.replace(head.graphics_layer);
+    if graphics_layer.space.is_some() {
+        note_space_change();
+    }
     *clip_to_bounds = head.clip_to_bounds;
     *hit_test = head.hit_test;
     *has_hit_targets = false;
+    space.set(None);
     *has_origin_sinks = head.has_origin_sinks || children_have_origin_sinks(children);
     contained.set(None);
     *isolation = head.isolation;

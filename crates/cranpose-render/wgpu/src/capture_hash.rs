@@ -503,14 +503,14 @@ fn hash_composite_kind<H: Hasher>(
             hash_f32_for_cache(*alpha, state);
         }
         ResolvedCompositeKind::Projective {
-            dest_quad,
+            dest,
             alpha,
             blend_mode,
             source_region,
             ..
         } => {
             2u8.hash(state);
-            for point in dest_quad {
+            for point in dest.corners() {
                 hash_f32_for_cache(point[0] - window.x, state);
                 hash_f32_for_cache(point[1] - window.y, state);
             }

@@ -50,10 +50,15 @@ pub const PROJECTIVE_BLIT_WGSL: &str = concat!(
 );
 /// Rounds a frame to 8-bit color for an output that stores more.
 pub const OUTPUT_CONVERSION_WGSL: &str = framework_wgsl!("output_conversion.wgsl");
+/// Draws a composable's surface on a mesh in a 3D scene, depth tested.
+pub const MESH_SURFACE_WGSL: &str = framework_wgsl!("mesh_surface.wgsl");
+/// The framework's part of a volume's shader, which the app's `volume`
+/// function follows: see [`crate::space::Volume`].
+pub const MESH_VOLUME_PRELUDE_WGSL: &str = framework_wgsl!("mesh_volume.wgsl");
 
 /// Each module the renderer builds pipelines from, by name: the shaders a
 /// WebGL page gets as GLSL templates written at build time.
-pub const MODULES: [(&str, &str); 9] = [
+pub const MODULES: [(&str, &str); 10] = [
     ("SHAPE", SHAPE_WGSL),
     ("IMAGE", IMAGE_WGSL),
     ("GLYPH_ATLAS", GLYPH_ATLAS_WGSL),
@@ -63,6 +68,7 @@ pub const MODULES: [(&str, &str); 9] = [
     ("BLIT", BLIT_WGSL),
     ("PROJECTIVE_BLIT", PROJECTIVE_BLIT_WGSL),
     ("OUTPUT_CONVERSION", OUTPUT_CONVERSION_WGSL),
+    ("MESH_SURFACE", MESH_SURFACE_WGSL),
 ];
 
 /// RuntimeShader source for GPU text brush effects (gradient/stroked text).

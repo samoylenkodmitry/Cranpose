@@ -129,6 +129,9 @@ struct RasterTraversalContext<'a> {
     /// Whether the layer is the one whose surface the walk draws: it draws
     /// its items straight into the surface, and its parent drew its shadow.
     surface_root: bool,
+    /// Whether the walk lies in a scene's space, whose scene draws the
+    /// mesh surfaces and 3D transforms there, as its eye sees them.
+    in_space: bool,
 }
 
 /// The scene the frame before built, whose items a walk copies for each
@@ -737,6 +740,7 @@ pub(crate) fn fill_raster_scene(
             same_as_before: previous.is_some_and(|old| old.start == scene.start),
             text,
             surface_root: false,
+            in_space: false,
         },
         &mut reuse,
     );
@@ -779,7 +783,23 @@ struct RasterLayerMapping {
     scale_y: f32,
 }
 
+/// The layer of content drawn at alpha one with no colour filter and at
+/// scale one, which most layers' content takes.
+const PLAIN_CONTENT_LAYER: GraphicsLayer = GraphicsLayer {
+    transform_origin: TransformOrigin::new(0.0, 0.0),
+    ..GraphicsLayer::DEFAULT
+};
+
 impl RasterLayerMapping {
+    /// Whether the node's own draws take [`PLAIN_CONTENT_LAYER`], so need no
+    /// [`Self::content_layer`] built.
+    fn draws_plain(&self) -> bool {
+        self.content_style.alpha == 1.0
+            && self.content_style.color_filter.is_none()
+            && self.scale_x == 1.0
+            && self.scale_y == 1.0
+    }
+
     /// The layer the node's own draws take: its content style, scaled from
     /// local to device pixels about its origin.
     fn content_layer(&self) -> GraphicsLayer {
@@ -975,6 +995,7 @@ fn push_layer_surface(
             same_as_before: false,
             text: context.text,
             surface_root: true,
+            in_space: context.in_space,
         },
         record,
         None,
@@ -1012,7 +1033,13 @@ fn push_layer_items(
     let diagnostics = context.diagnostics;
     let transform = layer.transform_to_parent.then(*context.parent_transform);
     let mapping = raster_layer_mapping(layer, &transform, context.parent_content_style);
-    let raster_content_layer = mapping.content_layer();
+    let styled_content_layer;
+    let raster_content_layer = if mapping.draws_plain() {
+        &PLAIN_CONTENT_LAYER
+    } else {
+        styled_content_layer = mapping.content_layer();
+        &styled_content_layer
+    };
     report_unsupported_effects(&layer.graphics_layer, diagnostics);
 
     if mapping.transformed_bounds.width <= 0.0 || mapping.transformed_bounds.height <= 0.0 {
@@ -1028,7 +1055,7 @@ fn push_layer_items(
     let effective_translated_content_context =
         context.inherited_translated_content_context || layer.translated_content_context;
     let (translated_snap_anchor, layer_snap_anchor) =
-        layer_snap_anchors(layer, context, &transform, &mapping, &raster_content_layer);
+        layer_snap_anchors(layer, context, &transform, &mapping, raster_content_layer);
 
     if visual_clip.is_some_and(|clip| clip.is_empty()) {
         return;
@@ -1052,17 +1079,33 @@ fn push_layer_items(
 
     let primitive_context = PrimitiveRenderContext {
         layer_bounds: mapping.content_bounds,
-        node_layer: &raster_content_layer,
+        node_layer: raster_content_layer,
         visual_clip,
         motion_context_animated: layer.motion_context_animated,
         content_offset_translation: effective_translated_content_context,
         layer_snap_anchor,
     };
+    // A scene draws the surfaces its eye sees in its own space where its
+    // first child in 3D comes, far ones first: this renderer keeps no depth
+    // between them, and draws a scene behind a doorway flat on its surface.
+    let (mut seen, in_space) = layer_space(layer, &transform, context.in_space);
     // Worked out at the first child layer: most layers have none.
     let mut children_same_as_before = None;
     let mut push_child =
         |child: &RenderNode, scene: &mut RasterScene, reuse: &mut Option<Reuse<'_>>| match child {
             RenderNode::Layer(child_layer) => {
+                if let Some(surfaces) = seen.take_if(|_| child_layer.has_space()) {
+                    flush_copies(reuse, scene);
+                    push_seen_surfaces(
+                        surfaces,
+                        scene,
+                        context,
+                        (&mapping.content_style, visual_clip),
+                    );
+                }
+                if drawn_by_its_scene(child_layer, in_space) {
+                    return;
+                }
                 let same_as_before = *children_same_as_before.get_or_insert_with(|| {
                     let passed_down = PassedDown {
                         transform,
@@ -1095,6 +1138,7 @@ fn push_layer_items(
                         same_as_before,
                         text: context.text,
                         surface_root: false,
+                        in_space,
                     },
                     reuse,
                 );
@@ -1105,6 +1149,107 @@ fn push_layer_items(
             }
         };
     for_each_in_draw_order(&layer.children, |child| push_child(child, scene, reuse));
+}
+
+/// Draws `surfaces`, which the eye of a scene sees, each placed by its
+/// parent map, with the scene layer's content style and clip.
+#[cold]
+#[inline(never)]
+fn push_seen_surfaces(
+    surfaces: Vec<(&LayerNode, ProjectiveTransform)>,
+    scene: &mut RasterScene,
+    context: &RasterTraversalContext<'_>,
+    (content_style, visual_clip): (&ContentStyle, Option<Rect>),
+) {
+    for (surface, parent_transform) in surfaces {
+        populate_draws_from_graph(
+            surface,
+            scene,
+            &RasterTraversalContext {
+                parent_transform: &parent_transform,
+                parent_content_style: content_style,
+                parent_visual_clip: visual_clip,
+                inherited_translated_snap_anchor: None,
+                inherited_translated_content_context: false,
+                diagnostics: context.diagnostics,
+                light: context.light,
+                same_as_before: false,
+                text: context.text,
+                surface_root: false,
+                in_space: true,
+            },
+            &mut None,
+        );
+    }
+}
+
+/// The surfaces `layer` draws for the eye of the scene it shows, if it shows
+/// one (see [`seen_surfaces`]), and whether its children lie in a scene's
+/// space, given whether `layer` does.
+fn layer_space<'a>(
+    layer: &'a LayerNode,
+    transform: &ProjectiveTransform,
+    in_space: bool,
+) -> (Option<Vec<(&'a LayerNode, ProjectiveTransform)>>, bool) {
+    if layer.graphics_layer.space.is_none() {
+        return (None, in_space);
+    }
+    let seen = seen_surfaces(layer, transform);
+    let in_space = in_space || seen.is_some();
+    (seen, in_space)
+}
+
+/// Whether a scene draws `layer` from its eye's view: so it does for a layer
+/// in 3D that lies in a scene's space, as `in_space` says, and shows no scene
+/// of its own. Such layers draw where the scene's first child in 3D comes.
+fn drawn_by_its_scene(layer: &LayerNode, in_space: bool) -> bool {
+    in_space
+        && layer.graphics_layer.space.is_some()
+        && cranpose_render_common::space::scene_of(layer).is_none()
+}
+
+/// The surfaces the eye of the scene `layer` shows sees in the space it
+/// stands in, far ones first, each with the map its layer's parent would
+/// take for the layer to land where the camera shows it, given `transform`
+/// from `layer` to device pixels; `None` when `layer` shows no scene.
+#[cold]
+#[inline(never)]
+fn seen_surfaces<'a>(
+    layer: &'a LayerNode,
+    transform: &ProjectiveTransform,
+) -> Option<Vec<(&'a LayerNode, ProjectiveTransform)>> {
+    use cranpose_render_common::space::{EyeView, SpaceTree, node_size};
+    let tree = SpaceTree::of(layer)?;
+    let view = EyeView::of(&tree, node_size(layer));
+    let rect = layer.node_rect();
+    let to_device = ProjectiveTransform::translation(rect.x, rect.y).then(*transform);
+    let mut surfaces: Vec<(f32, &'a LayerNode, ProjectiveTransform)> = view
+        .surfaces
+        .iter()
+        .filter(|seen| seen.seen == 0)
+        .filter_map(|seen| {
+            let content = seen
+                .surface
+                .content_transform(&view.camera, view.size, seen.size)?;
+            let parent = seen
+                .layer
+                .transform_to_parent
+                .inverse()?
+                .then(content)
+                .then(to_device);
+            let (low, high) = seen.surface.mesh.bounds();
+            let middle = seen.surface.transform.transform_point(low.lerp(high, 0.5));
+            let depth = view.camera.view.transform_point(middle).z;
+            Some((depth, seen.layer, parent))
+        })
+        .collect();
+    surfaces.sort_by(|a, b| b.0.total_cmp(&a.0));
+    Some(
+        surfaces
+            .into_iter()
+            .map(|(_, layer, parent)| (layer, parent))
+            .collect(),
+    )
 }
 
 /// The snap anchor `layer`'s child layers inherit and the one its own draws

@@ -194,6 +194,10 @@ impl Repush<'_> {
                 same_as_before: false,
                 text: self.text,
                 surface_root: false,
+                // A scene draws its surfaces out of the graph's order, so the
+                // walk to a changed layer stops at a scene's first child in
+                // 3D: the layers it pushes again lie outside every space.
+                in_space: false,
             },
             &mut None,
         );

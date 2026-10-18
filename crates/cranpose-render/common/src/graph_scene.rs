@@ -10,11 +10,12 @@ use cranpose_core::{
 };
 use cranpose_foundation::{MINIMUM_TOUCH_TARGET_SIZE, PointerEvent, PointerEventKind};
 use cranpose_ui::{LayoutNode, ModifierNodeSlices, SubcomposeLayoutNode};
-use cranpose_ui_graphics::{Point, PointerIcon, Rect, RoundedCornerShape};
+use cranpose_ui_graphics::{Point, PointerIcon, Rect, RoundedCornerShape, space::Ray};
 
 use crate::{
     HitTestTarget, RenderScene, SceneUpdates,
     graph::{ProjectiveTransform, RenderGraph},
+    scene_pick::ScenePick,
 };
 
 /// Counters and once-only warnings that a scene collects while it dispatches pointer events.
@@ -69,6 +70,77 @@ pub struct HitClip {
     pub bounds: Rect,
 }
 
+/// A mesh surface of a scene, as the hit targets on its content see it:
+/// the scene's pick, which surface it is, and the clips above it.
+pub struct SurfaceTarget {
+    /// Finds the surface and content point a window point shows.
+    pub pick: Rc<ScenePick>,
+    /// The surface's index in `pick`.
+    pub index: usize,
+    /// Axis-aligned bounds of the clips above the surface, in window space.
+    pub outer_clip_bounds: Option<Rect>,
+    /// The clips above the surface, as quads in window space.
+    pub outer_clips: Vec<HitClip>,
+}
+
+/// How many parts a target's rect splits into along each side for its
+/// bounds in the window: on a curved surface the corners alone miss the
+/// bulge between them.
+const WINDOW_BOUNDS_STEPS: u16 = 2;
+
+impl SurfaceTarget {
+    /// Where `local`, a rect of a target's own space into which
+    /// `content_to_local` maps the surface's content, shows in the window:
+    /// the bounds of a grid of its points in front of the eye; `None` when
+    /// none is.
+    pub fn window_bounds(
+        &self,
+        content_to_local: &ProjectiveTransform,
+        local: Rect,
+    ) -> Option<Rect> {
+        let local_to_content = content_to_local.inverse()?;
+        let steps = f32::from(WINDOW_BOUNDS_STEPS);
+        let grid = (0..=WINDOW_BOUNDS_STEPS)
+            .flat_map(|row| (0..=WINDOW_BOUNDS_STEPS).map(move |column| (row, column)));
+        grid.filter_map(|(row, column)| {
+            let point = Point::new(
+                local.x + local.width * f32::from(column) / steps,
+                local.y + local.height * f32::from(row) / steps,
+            );
+            let content = local_to_content.map_point(point);
+            self.pick.window_point(self.index, content)
+        })
+        .map(|point| Rect {
+            x: point.x,
+            y: point.y,
+            width: 0.0,
+            height: 0.0,
+        })
+        .reduce(|bounds, point| bounds.union(point))
+    }
+}
+
+/// Where a hit target on a mesh surface lies on the surface's content.
+#[derive(Clone, Copy)]
+pub struct SurfaceGeometry<'a> {
+    /// The surface the target is on.
+    pub target: &'a Rc<SurfaceTarget>,
+    /// Maps the surface's content into the node's local space.
+    pub content_to_local: ProjectiveTransform,
+    /// Axis-aligned bounds of the clips within the surface, in content
+    /// space, or `None` when none clips.
+    pub clip_bounds: Option<Rect>,
+    /// The clips within the surface, as quads in content space.
+    pub clips: &'a [HitClip],
+}
+
+impl SurfaceGeometry<'_> {
+    /// Where `local`, a rect of the target's own space, shows in the window.
+    pub fn window_bounds(&self, local: Rect) -> Option<Rect> {
+        self.target.window_bounds(&self.content_to_local, local)
+    }
+}
+
 /// Geometry for a hit target, borrowing the clip chain until the sink records it.
 #[derive(Clone, Copy)]
 pub struct HitGeometry<'a> {
@@ -84,6 +156,10 @@ pub struct HitGeometry<'a> {
     pub hit_clip_bounds: Option<Rect>,
     /// Clips of the ancestors that cut the target, as transformed quads in window space.
     pub hit_clips: &'a [HitClip],
+    /// For a target on a mesh surface, where it lies on the surface's
+    /// content. The window-space fields above then hold the surface's flat
+    /// stand-in, exact only on a flat mesh; the surface decides the hit.
+    pub surface: Option<SurfaceGeometry<'a>>,
 }
 
 /// What a hit target answers with: the shape that narrows its bounds, and the
@@ -124,7 +200,76 @@ pub struct HitRegion {
     pub hit_clip_bounds: Option<Rect>,
     /// Clips of the ancestors that cut this target, as transformed quads in window space.
     pub hit_clips: Vec<HitClip>,
+    /// For a target on a mesh surface, where it lies on the surface; shared,
+    /// as few targets are and clones of a target hold the same.
+    surface: Option<Rc<SurfaceRegion>>,
     diagnostics: Rc<RenderDiagnostics>,
+}
+
+/// A hit target's place on a mesh surface's content.
+struct SurfaceRegion {
+    target: Rc<SurfaceTarget>,
+    content_to_local: ProjectiveTransform,
+    clip_bounds: Option<Rect>,
+    clips: Vec<HitClip>,
+}
+
+impl SurfaceRegion {
+    /// The local point the window point shows on the target, when the
+    /// target's surface is the nearest there and no clip cuts the point.
+    fn local_point(&self, window: Point) -> Option<Point> {
+        let target = &self.target;
+        if target
+            .outer_clip_bounds
+            .is_some_and(|clip| !clip.contains(window.x, window.y))
+            || !target
+                .outer_clips
+                .iter()
+                .all(|clip| point_in_quad(window, clip.quad))
+        {
+            return None;
+        }
+        self.local_in(target.pick.content_point(window, target.index)?)
+    }
+
+    /// The local point `ray`, in the space the scene's eye stands in, meets
+    /// on the target, when the target's surface is the nearest along it and
+    /// no clip within the surface cuts the point.
+    fn local_point_along(&self, ray: Ray) -> Option<Point> {
+        let (index, hit) = self.target.pick.nearest_along(ray)?;
+        (index == self.target.index)
+            .then(|| self.local_in(hit.point))
+            .flatten()
+    }
+
+    /// The local point of content point `content`, unless a clip within
+    /// the surface cuts it.
+    fn local_in(&self, content: Point) -> Option<Point> {
+        if self
+            .clip_bounds
+            .is_some_and(|clip| !clip.contains(content.x, content.y))
+            || !self
+                .clips
+                .iter()
+                .all(|clip| point_in_quad(content, clip.quad))
+        {
+            return None;
+        }
+        self.content_to_local.map_point_in_front(content)
+    }
+
+    /// The local point under the window point, or along the event's ray,
+    /// for a gesture the target holds, which may leave the surface.
+    fn drag_point(&self, event: &PointerEvent) -> Option<Point> {
+        let target = &self.target;
+        let content = match event.ray {
+            Some(ray) => target.pick.drag_point_along(ray, target.index)?,
+            None => target
+                .pick
+                .drag_point(event.global_position, target.index)?,
+        };
+        Some(self.content_to_local.map_point(content))
+    }
 }
 
 struct HitRegionInit<'a> {
@@ -160,6 +305,7 @@ impl Default for HitRegionInit<'_> {
                 world_to_local: ProjectiveTransform::identity(),
                 hit_clip_bounds: None,
                 hit_clips: &[],
+                surface: None,
             },
             clip_buffer: Vec::new(),
             shape: None,
@@ -189,6 +335,7 @@ impl HitRegion {
             world_to_local,
             hit_clip_bounds,
             hit_clips: clips,
+            surface,
         } = geometry;
         hit_clips.extend_from_slice(clips);
         Self {
@@ -203,11 +350,24 @@ impl HitRegion {
             z_index,
             hit_clip_bounds,
             hit_clips,
+            surface: surface.map(|surface| {
+                Rc::new(SurfaceRegion {
+                    target: Rc::clone(surface.target),
+                    content_to_local: surface.content_to_local,
+                    clip_bounds: surface.clip_bounds,
+                    clips: surface.clips.to_vec(),
+                })
+            }),
             diagnostics,
         }
     }
 
     fn contains(&self, x: f32, y: f32) -> bool {
+        if let Some(surface) = &self.surface {
+            return surface
+                .local_point(Point { x, y })
+                .is_some_and(|local| self.contains_local(local));
+        }
         if !self.rect.contains(x, y) {
             return false;
         }
@@ -229,7 +389,13 @@ impl HitRegion {
             }
         }
 
-        let local_point = self.world_to_local.map_point(point);
+        let Some(local_point) = self.world_to_local.map_point_in_front(point) else {
+            return false;
+        };
+        self.contains_local(local_point)
+    }
+
+    fn contains_local(&self, local_point: Point) -> bool {
         if let Some(shape) = self.shape {
             point_in_rounded_rect(local_point, self.local_bounds, shape)
         } else {
@@ -242,7 +408,7 @@ impl HitRegion {
     /// input. None when the target is large enough on its own, when the point
     /// is outside its reach, or when a clip cuts the point off.
     fn reach_distance(&self, x: f32, y: f32) -> Option<f32> {
-        if self.handlers.pointer_inputs().is_empty() {
+        if self.handlers.pointer_inputs().is_empty() || self.surface.is_some() {
             return None;
         }
         if let Some(clip_bounds) = self.hit_clip_bounds
@@ -270,7 +436,12 @@ impl HitRegion {
     }
 
     fn localize_event(&self, event: &PointerEvent) -> PointerEvent {
-        let local = self.world_to_local.map_point(event.global_position);
+        let local = match &self.surface {
+            Some(surface) => surface
+                .drag_point(event)
+                .unwrap_or_else(|| self.world_to_local.map_point(event.global_position)),
+            None => self.world_to_local.map_point(event.global_position),
+        };
         event.copy_with_local_position(Point {
             x: local.x - self.local_bounds.x,
             y: local.y - self.local_bounds.y,
@@ -427,6 +598,7 @@ impl Scene {
         else {
             return;
         };
+        crate::scene_builder::publish_space(applier, &graph);
         self.graph = Some(graph);
         self.collect_hits();
     }
@@ -481,6 +653,9 @@ impl Scene {
             self.rebuild_from_applier(applier, root);
             return;
         };
+        if let Some(graph) = &self.graph {
+            crate::scene_builder::publish_space(applier, graph);
+        }
         if !refresh_hits && !report.hit_graph_dirty {
             return;
         }
@@ -574,6 +749,47 @@ impl RenderScene for Scene {
             .get(&node_id)
             .and_then(|&index| self.hits.get(index))
             .cloned()
+    }
+
+    fn hit_test_ray(&self, scene: NodeId, ray: Ray) -> Vec<Self::HitTarget> {
+        let mut hit: Vec<&HitRegion> = self
+            .hits
+            .iter()
+            .filter(|hit| {
+                hit.surface.as_ref().is_some_and(|surface| {
+                    surface.target.pick.scene() == Some(scene)
+                        && surface
+                            .local_point_along(ray)
+                            .is_some_and(|local| hit.contains_local(local))
+                })
+            })
+            .collect();
+        hit.sort_by_key(|hit| Reverse(hit.z_index));
+        hit.into_iter().cloned().collect()
+    }
+
+    fn surface_windows(&self, visit: &mut dyn FnMut(NodeId, ProjectiveTransform)) {
+        let Some(graph) = &self.graph else {
+            return;
+        };
+        let root = ProjectiveTransform::identity();
+        crate::space::for_each_window_eye(&graph.root, root, &mut |_, view, to_window| {
+            for seen in &view.surfaces {
+                if let (Some(node_id), Some(content)) =
+                    (seen.layer.node_id, view.content_to_window(seen, to_window))
+                {
+                    visit(node_id, content);
+                }
+            }
+        });
+    }
+
+    fn surface_window_bounds(&self, node_id: NodeId) -> Option<Rect> {
+        let hit = self.hits.get(*self.node_index.get(&node_id)?)?;
+        let surface = hit.surface.as_ref()?;
+        surface
+            .target
+            .window_bounds(&surface.content_to_local, hit.local_bounds)
     }
 
     fn collect_retained_visual_observation_nodes(&self, nodes: &mut HashSet<NodeId>) -> bool {
