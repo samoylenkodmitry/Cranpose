@@ -768,7 +768,7 @@ impl SubcomposeLayoutNode {
         let mut inner_data = SubcomposeLayoutNodeInner::new(measure_policy);
         inner_data
             .state
-            .set_policy(Box::new(cranpose_core::ContentTypeReusePolicy::new()));
+            .set_policy(Box::new(cranpose_core::ContentTypeReusePolicy));
         let inner = Rc::new(RefCell::new(inner_data));
         let node = Self {
             inner,

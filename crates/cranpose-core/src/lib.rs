@@ -1617,6 +1617,7 @@ impl std::error::Error for NodeError {}
 
 pub use subcompose::{
     ContentTypeReusePolicy, DefaultSlotReusePolicy, SlotId, SlotReusePolicy, SubcomposeState,
+    TypedSlot,
 };
 
 /// The stage of a frame in which a composer is used.

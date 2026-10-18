@@ -721,7 +721,7 @@ fn disposable_effect_host() -> NodeId {
 
 #[test]
 fn exact_subcompose_activation_does_not_take_compatible_cross_slot_nodes() {
-    let mut state = SubcomposeState::new(Box::new(ContentTypeReusePolicy::new()));
+    let mut state = SubcomposeState::new(Box::new(ContentTypeReusePolicy));
     let exact_slot = SlotId::new(1);
     let compatible_slot = SlotId::new(2);
     state.register_content_type(exact_slot, 7);

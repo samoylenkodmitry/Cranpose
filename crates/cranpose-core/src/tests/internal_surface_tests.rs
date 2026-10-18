@@ -131,7 +131,7 @@ fn a_ui_task_label_is_taken_by_the_next_task_and_not_the_one_after() {
 fn a_subcompose_state_takes_a_policy_and_pool_limits_without_disturbing_its_slots() {
     use crate::subcompose::{ContentTypeReusePolicy, SubcomposeState};
 
-    let mut state = SubcomposeState::new(Box::new(ContentTypeReusePolicy::default()));
+    let mut state = SubcomposeState::new(Box::new(ContentTypeReusePolicy));
     assert_eq!(
         state.was_last_slot_reused(),
         None,
@@ -139,7 +139,7 @@ fn a_subcompose_state_takes_a_policy_and_pool_limits_without_disturbing_its_slot
     );
     assert_eq!(state.active_slots_count(), 0);
 
-    state.set_policy(Box::new(ContentTypeReusePolicy::default()));
+    state.set_policy(Box::new(ContentTypeReusePolicy));
     state.set_reusable_pool_limits(2, 3);
     assert_eq!(
         state.active_slots_count(),
