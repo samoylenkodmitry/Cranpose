@@ -873,7 +873,9 @@ fn move_retained_layer(
     }
     let previous = HitGraphState::of(layer);
     translate_retained_child(layer, &state, ancestors.parent_content_offset);
-    publish_retained_window_geometry(applier, layer, ancestors.parent_abs);
+    if layer.has_origin_sinks {
+        publish_retained_window_geometry(applier, layer, ancestors.parent_abs);
+    }
     Some(previous.dirty_against(&HitGraphState::of(layer)))
 }
 
@@ -1576,7 +1578,9 @@ fn move_kept_child(
     geometry: TranslateGeometry,
 ) {
     translate_retained_child(layer, state, geometry.content_offset);
-    publish_retained_window_geometry(applier, layer, geometry.child_abs());
+    if layer.has_origin_sinks {
+        publish_retained_window_geometry(applier, layer, geometry.child_abs());
+    }
 }
 
 /// Rebuilds `layer` with `rebuild`, which reports whether it succeeded, and
