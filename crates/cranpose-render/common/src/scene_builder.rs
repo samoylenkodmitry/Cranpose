@@ -846,7 +846,7 @@ fn try_update_retained_layer(
 ) -> Option<bool> {
     match kind {
         NodeUpdate::Moved if !root => {
-            move_retained_layer(applier, layer, ancestors.parent_content_offset).or_else(|| {
+            move_retained_layer(applier, layer, ancestors).or_else(|| {
                 try_translate_scrolled_layer(applier, layer, dirty_nodes, ancestors).then_some(true)
             })
         }
@@ -859,23 +859,21 @@ fn try_update_retained_layer(
 }
 
 /// Moves the layer of a node that only moved in its parent, keeping what it
-/// drew, and returns whether hit geometry changed. `None` when the layer
-/// cannot keep its content: its size changed, or its subtree publishes
-/// window origins.
+/// drew, and returns whether hit geometry changed. A subtree that publishes
+/// window origins publishes them again from where it now lies. `None` when
+/// the layer cannot keep its content: its size changed.
 fn move_retained_layer(
     applier: &MemoryApplier,
     layer: &mut LayerNode,
-    parent_content_offset: Point,
+    ancestors: TranslateAncestorContext,
 ) -> Option<bool> {
-    if layer.has_origin_sinks {
-        return None;
-    }
     let state = placed_child_layout_state(applier, layer_identity(layer)?)?;
     if Rect::from_size(state.size()) != layer.node_rect() {
         return None;
     }
     let previous = HitGraphState::of(layer);
-    translate_retained_child(layer, &state, parent_content_offset);
+    translate_retained_child(layer, &state, ancestors.parent_content_offset);
+    publish_retained_window_geometry(applier, layer, ancestors.parent_abs);
     Some(previous.dirty_against(&HitGraphState::of(layer)))
 }
 
@@ -1142,9 +1140,9 @@ struct PlacedChild {
     /// The child's index among the container's previous children; `None`
     /// for a child that enters.
     old_index: Option<usize>,
-    /// Whether the child keeps its layer as it is and only follows its
-    /// placement: it was not dirty, or it only moved, which this step
-    /// settles.
+    /// Whether the child keeps its layer and follows its placement: it was
+    /// not dirty, it only moved, which this step settles, or its layer
+    /// properties changed, which the walk beneath the container settles.
     keeps_layer: bool,
 }
 
@@ -1218,12 +1216,8 @@ fn check_retained_children(
         let RenderNode::Layer(layer) = &container.children[old_index] else {
             return Err("retained child slot is not a layer");
         };
-        let fits =
-            !layer.has_origin_sinks && Rect::from_size(placed.state.size()) == layer.node_rect();
+        let fits = Rect::from_size(placed.state.size()) == layer.node_rect();
         placed.keeps_layer = match dirty_nodes.get_mut(&placed.id) {
-            None if layer.has_origin_sinks => {
-                return Err("child subtree publishes window origins");
-            }
             None if !fits => return Err("child resized"),
             None => true,
             Some(kind @ (NodeUpdate::Moved | NodeUpdate::MovedLayer)) if !fits => {
@@ -1234,7 +1228,11 @@ fn check_retained_children(
                 dirty_nodes.remove(&placed.id);
                 true
             }
-            Some(NodeUpdate::Content | NodeUpdate::Layer | NodeUpdate::MovedLayer) => false,
+            // The child moves with the others; the walk beneath the
+            // container then gives it its new layer properties where it
+            // now lies.
+            Some(NodeUpdate::Layer) => fits,
+            Some(NodeUpdate::Content | NodeUpdate::MovedLayer) => false,
         };
     }
     Ok(())
@@ -1411,6 +1409,7 @@ fn apply_translated_container_state(
 }
 
 fn reconcile_translated_children(
+    applier: &MemoryApplier,
     container: &mut LayerNode,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     scratch: &mut TranslateScratch,
@@ -1423,7 +1422,7 @@ fn reconcile_translated_children(
                 unreachable!("retained child identities were checked");
             };
             if placed.keeps_layer {
-                translate_retained_child(layer, &placed.state, geometry.content_offset);
+                move_kept_child(applier, layer, &placed.state, geometry);
             }
         }
         return;
@@ -1432,7 +1431,7 @@ fn reconcile_translated_children(
     for (placed, kept) in scratch.placed_fresh.iter().zip(scratch.kept.drain(..)) {
         if let Some(mut layer) = kept {
             if placed.keeps_layer {
-                translate_retained_child(&mut layer, &placed.state, geometry.content_offset);
+                move_kept_child(applier, &mut layer, &placed.state, geometry);
             }
             container.children.push(RenderNode::Layer(layer));
         } else if let Some((_, lowered)) = entering.next_if(|(id, _)| *id == placed.id) {
@@ -1530,6 +1529,7 @@ fn translate_layer_from_data(
         );
 
         reconcile_translated_children(
+            applier,
             container,
             dirty_nodes,
             scratch,
@@ -1564,6 +1564,19 @@ fn translate_retained_child(
         content_offset,
     );
     layer.origin_in_parent = state.position();
+}
+
+/// Moves a child a translated container keeps to its placement in the
+/// container laid out with `geometry`. A subtree that publishes window
+/// origins publishes them again from where it now lies.
+fn move_kept_child(
+    applier: &MemoryApplier,
+    layer: &mut LayerNode,
+    state: &cranpose_ui::widgets::LayoutState,
+    geometry: TranslateGeometry,
+) {
+    translate_retained_child(layer, state, geometry.content_offset);
+    publish_retained_window_geometry(applier, layer, geometry.child_abs());
 }
 
 /// Rebuilds `layer` with `rebuild`, which reports whether it succeeded, and
