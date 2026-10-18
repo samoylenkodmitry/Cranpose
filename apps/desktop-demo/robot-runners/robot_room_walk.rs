@@ -258,13 +258,8 @@ fn hold_key_until(
         robot_exit::fail(robot, &format!("key {key}: {err}"));
     }
     let start = std::time::Instant::now();
-    // Each query draws a frame first.
     let shown = loop {
-        let bounds = robot.find_button_bounds_exact(NESTED_COUNTER).ok().flatten();
-        let on_screen = bounds.filter(|&(x, _, width, height)| {
-            width > 0.0 && height > 0.0 && x >= 0.0 && x + width <= WINDOW_WIDTH
-        });
-        if let Some(bounds) = on_screen.filter(|&bounds| reached(bounds)) {
+        if let Some(bounds) = nested_counter(robot).filter(|&bounds| reached(bounds)) {
             break Some(bounds);
         }
         if start.elapsed() > LONGEST_HOLD {
@@ -274,12 +269,27 @@ fn hold_key_until(
     if let Err(err) = robot.release_key(key) {
         robot_exit::fail(robot, &format!("releasing {key}: {err}"));
     }
+    // Frames drawn before the release moved the eye on, along a wall it
+    // slides on too: read where the counter shows once it stands still.
+    let shown = shown.and_then(|_| nested_counter(robot));
     shown.unwrap_or_else(|| {
         robot_exit::fail(
             robot,
             &format!("holding {key} did not bring the counter behind the wall where it should show"),
         )
     })
+}
+
+/// Where the counter of the room behind the wall shows, when it shows
+/// inside the window; the query draws a frame first.
+fn nested_counter(robot: &Robot) -> Option<(f32, f32, f32, f32)> {
+    robot
+        .find_button_bounds_exact(NESTED_COUNTER)
+        .ok()
+        .flatten()
+        .filter(|&(x, _, width, height)| {
+            width > 0.0 && height > 0.0 && x >= 0.0 && x + width <= WINDOW_WIDTH
+        })
 }
 
 fn click_center(robot: &Robot, (x, y, width, height): (f32, f32, f32, f32)) {

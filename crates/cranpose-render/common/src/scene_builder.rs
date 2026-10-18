@@ -2,7 +2,6 @@ use std::{
     any::Any,
     ops::{Range, RangeInclusive},
     rc::Rc,
-    sync::Arc,
 };
 
 use cranpose_core::{MemoryApplier, NodeId, NodeMarks, collections::map::HashMap};
@@ -1884,11 +1883,10 @@ pub(crate) struct HitGraphState {
     transform_to_parent: ProjectiveTransform,
     clip_rect: Option<Rect>,
     shape: LayerShape,
-    /// The address of the layer's scene, surface or 3D transform, which
-    /// move where the surfaces beneath take input; zero for a flat layer. A
-    /// layer that changes one holds a new one, made while the old one still
-    /// lives.
-    space: usize,
+    /// Whether the layer is a scene, a mesh surface or a 3D transform. Each
+    /// update of such a layer runs its closure again, which may move where
+    /// the surfaces of its scene take input or hide one another.
+    space: bool,
 }
 
 impl HitGraphState {
@@ -1901,17 +1899,15 @@ impl HitGraphState {
             transform_to_parent: layer.transform_to_parent,
             clip_rect: layer.clip_rect(),
             shape: layer.graphics_layer.shape,
-            space: layer
-                .graphics_layer
-                .space
-                .as_ref()
-                .map_or(0, |space| Arc::as_ptr(space).addr()),
+            space: layer.graphics_layer.space.is_some(),
         }
     }
 
     fn dirty_against(&self, replacement: &Self) -> bool {
         self.hit_test
             || replacement.hit_test
+            || self.space
+            || replacement.space
             || ((self.has_hit_targets || replacement.has_hit_targets) && self != replacement)
     }
 }

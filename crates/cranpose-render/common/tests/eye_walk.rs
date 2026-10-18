@@ -15,7 +15,7 @@ use cranpose_ui::{
 };
 
 use crate::mesh_surface_hits::{
-    EYE_RADIUS, FAR, FOCAL_LENGTH, INNER, NESTED, Pressable, Presses, WALL, WalkRoom,
+    EYE_RADIUS, FAR, FOCAL_LENGTH, INNER, NESTED, Pressable, Presses, VIEWPORT, WALL, WalkRoom,
     camera_looking, camera_moved, centered, nested_window, press_middle, pressable, walk_room,
     window_into_nested, with_scene,
 };
@@ -246,4 +246,42 @@ fn press_along(view: &cranpose_render_common::graph_scene::Scene, scene: NodeId,
             );
         }
     }
+}
+
+#[test]
+fn surfaces_the_eye_does_not_see_take_no_input() {
+    // Past the doorway, the room the eye came from lies behind it: its wall
+    // and its panel show nothing, so their content takes no press, also
+    // where their layout places them under the press.
+    let WalkRoom {
+        mut composition,
+        eye,
+        pressed,
+        scene,
+        nested,
+    } = walk_room(Vec3::new(200.0, 0.0, -1000.0));
+    let walked = with_scene(&mut composition, |mut view, applier, root| {
+        let from = eye.pose().position;
+        eye.walk(Vec3::new(0.0, 0.0, FAR.z + 150.0) - from);
+        camera_moved(&mut view, applier, (root, scene));
+        // Every target under the point takes the press, as the app shell
+        // hands it to each.
+        let middle = Point::new(VIEWPORT.width * 0.5, VIEWPORT.height * 0.5);
+        for target in view.hit_test(middle.x, middle.y) {
+            for kind in [PointerEventKind::Down, PointerEventKind::Up] {
+                target.dispatch(PointerEvent::new(kind, middle, middle));
+            }
+        }
+        eye.pose()
+    });
+    assert_eq!(&*walked.doorways, &[nested]);
+    assert_eq!(
+        pressed
+            .borrow()
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>(),
+        ["nested"],
+        "only the panel the eye sees takes the press"
+    );
 }

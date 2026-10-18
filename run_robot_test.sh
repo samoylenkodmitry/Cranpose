@@ -795,6 +795,12 @@ run_test() {
             # captures per cell.
             timeout_secs=180
             ;;
+        robot_room_walk)
+            # Walks the 3D room through two rooms with held keys checked
+            # frame by frame and settled captures; a busy host draws fewer,
+            # longer frames.
+            timeout_secs=150
+            ;;
         robot_hacker_news_scroll_exact_external_contract|robot_markdown_scroll_exact_external_contract|robot_text_scroll_exact_external_contract)
             timeout_secs=180
             ;;

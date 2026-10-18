@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use cranpose_core::NodeId;
-use cranpose_ui_graphics::Rect;
+use cranpose_ui_graphics::{Rect, layer_transform::layer_surface};
 use smallvec::SmallVec;
 
 use crate::{
@@ -116,6 +116,9 @@ struct ParentSpace {
     /// Whether the layer lies in a space behind a doorway, where only the
     /// content of its mesh surfaces shows and takes input.
     behind_doorway: bool,
+    /// Whether the layer lies on a surface the eye does not see, whose
+    /// content takes no input.
+    unseen: bool,
 }
 
 impl<S: HitGraphSink> HitWalk<'_, S> {
@@ -130,7 +133,7 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
             return;
         }
         // Behind a doorway the eye does not see through, nothing takes input.
-        let Some(doorway) = Self::doorway(layer, space) else {
+        let Some((doorway, unseen)) = Self::seen(layer, space) else {
             return;
         };
         let transform = layer.transform_to_parent.then(parent_transform);
@@ -165,7 +168,7 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
         if let (Some(node_id), Some(hit), false) = (
             layer.node_id,
             &layer.hit_test,
-            behind_doorway && self.surface.is_none(),
+            self.hides_targets(unseen, behind_doorway),
         ) {
             let geometry = PlacedNode {
                 rect: transformed_rect,
@@ -192,6 +195,7 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
             content,
             content_clip: content_clip.bounds,
             behind_doorway,
+            unseen,
             ..self.children_scene(layer, (transform, hit_clip_bounds), space)
         };
         for child in &layer.children {
@@ -303,6 +307,30 @@ impl<S: HitGraphSink> HitWalk<'_, S> {
             return Some(false);
         };
         pick.sees_scene(layer).then_some(true)
+    }
+
+    /// Whether `layer` shows a scene behind a doorway of the scene above,
+    /// and whether it lies on a surface the eye does not see, whose content
+    /// takes no input but for what the eye sees through a doorway in it;
+    /// `None` when the eye does not see through the doorway `layer` is.
+    fn seen(layer: &LayerNode, space: &ParentSpace) -> Option<(bool, bool)> {
+        let doorway = Self::doorway(layer, space)?;
+        let unseen = !doorway && (space.unseen || Self::unseen_surface(layer, space));
+        Some((doorway, unseen))
+    }
+
+    /// Whether a layer pushes no hit target: it lies on a surface the eye
+    /// does not see, or behind a doorway outside any surface's content.
+    fn hides_targets(&self, unseen: bool, behind_doorway: bool) -> bool {
+        unseen || (behind_doorway && self.surface.is_none())
+    }
+
+    /// Whether `layer` is a mesh surface of the scene above that the eye
+    /// does not see: it lies in a space the eye does not see.
+    fn unseen_surface(layer: &LayerNode, space: &ParentSpace) -> bool {
+        space.scene.as_ref().is_some_and(|pick| {
+            layer_surface(&layer.graphics_layer).is_some() && pick.index_of(layer).is_none()
+        })
     }
 
     /// Starts the surface `layer` is, if the scene above draws it, or sets
