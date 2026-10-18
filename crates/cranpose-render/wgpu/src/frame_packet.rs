@@ -54,14 +54,14 @@ pub(crate) struct FramePacket {
     pub(crate) renderer_epoch: u64,
     pub(crate) surface_epoch: u64,
     pub(crate) root_scale: f32,
-    pub(crate) root: LayerScene,
-    pub(crate) overlay: Option<LayerScene>,
+    pub(crate) root: Box<LayerScene>,
+    pub(crate) overlay: Option<Box<LayerScene>>,
     pub(crate) clear: wgpu::Color,
 }
 
 pub(crate) struct FrameSceneStorage {
-    pub(crate) root: LayerScene,
-    pub(crate) overlay: Option<LayerScene>,
+    pub(crate) root: Box<LayerScene>,
+    pub(crate) overlay: Option<Box<LayerScene>>,
 }
 
 /// Present-stage timestamps for one consumed packet, in nanoseconds on the
