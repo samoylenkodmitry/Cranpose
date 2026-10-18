@@ -585,7 +585,7 @@ and the panels lie over a different part of the cluster's look-alike levels.
 | --- | --- |
 | `cranpose` | `cranpose-app`'s desktop binary |
 | `compose` | `compose-desktop-app`: Compose Multiplatform on the JVM, drawing the composables `compose-app` draws, from `shared-compose` |
-| `egui`, `slint` | the Android crates' desktop binaries |
+| `egui`, `slint` | the Android crates' desktop binaries; egui draws through eframe's default renderer, wgpu, where the phone's build uses glow |
 | `iced` | `iced-app`: iced on wgpu |
 | `gpui` | `gpui-app`: Zed's GPUI as `gpui-pre` publishes it |
 | `avalonia` | `avalonia-app`'s desktop head, Native AOT |
