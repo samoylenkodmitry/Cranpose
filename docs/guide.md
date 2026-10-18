@@ -1775,8 +1775,9 @@ Box(
 the right, and `eye.walk(step)` moves the eye by `step` in the coordinates of
 the space it stands in. A step through a doorway's rect takes the eye into the
 space behind it, turned into that space's coordinates, and a step back takes it
-out again. A surface with `solid` set stops the eye a ball of `radius` short of
-it, and the eye slides along it, except through the holes that doorways cut.
+out again. A surface with `solid` set stops the eye a ball of `radius`, in the units
+of the space it stands in, short of it, and the eye slides along it, except
+through the holes that doorways cut.
 Each time the renderer places the scene, it leaves the eye the solid surfaces
 and doorways near it, so a wall the app moves stops the eye where it is drawn.
 `eye.place(pose)` puts the eye at `pose` without a walk; the pose's `doorways`,
