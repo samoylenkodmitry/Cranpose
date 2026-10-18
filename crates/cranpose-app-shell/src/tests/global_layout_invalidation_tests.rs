@@ -265,29 +265,6 @@ fn Ticker() {
     );
 }
 
-/// The window rect of every solid rectangle `layer` paints.
-fn painted_rects(
-    layer: &cranpose_render_common::graph::LayerNode,
-    parent: cranpose_render_common::graph::ProjectiveTransform,
-    out: &mut Vec<Rect>,
-) {
-    let transform = layer.transform_to_parent.then(parent);
-    for child in &layer.children {
-        match child {
-            cranpose_render_common::graph::RenderNode::Layer(child) => {
-                painted_rects(child, transform, out);
-            }
-            cranpose_render_common::graph::RenderNode::DrawRun(run) => {
-                out.extend(run.primitives().filter_map(|primitive| match primitive {
-                    DrawPrimitive::Rect { rect, .. } => Some(transform.bounds_for_rect(rect)),
-                    _ => None,
-                }));
-            }
-            cranpose_render_common::graph::RenderNode::Primitive(_) => {}
-        }
-    }
-}
-
 #[test]
 fn a_root_render_that_moves_content_reaches_the_scene_while_a_scope_redraws() {
     let _guard = test_guard();
@@ -314,39 +291,8 @@ fn a_root_render_that_moves_content_reaches_the_scene_while_a_scope_redraws() {
     ticks.set_value(1);
     shell.update();
 
-    let mut retained = Vec::new();
-    let graph = shell.surfaces[0]
-        .renderer
-        .scene()
-        .graph
-        .as_ref()
-        .expect("the frame keeps a graph");
-    painted_rects(
-        &graph.root,
-        cranpose_render_common::graph::ProjectiveTransform::identity(),
-        &mut retained,
-    );
-    let root = shell.surfaces[0]
-        .root_node(&shell.app)
-        .expect("the surface has a root");
-    let fresh = shell
-        .app
-        .app_context
-        .enter(|| {
-            cranpose_render_common::scene_builder::build_graph_from_applier(
-                &shell.app.composition.applier_mut(),
-                root,
-                1.0,
-            )
-        })
-        .expect("a fresh graph");
-    let mut expected = Vec::new();
-    painted_rects(
-        &fresh.root,
-        cranpose_render_common::graph::ProjectiveTransform::identity(),
-        &mut expected,
-    );
-    assert_eq!(expected.first().map(|rect| rect.y), Some(40.0));
+    let (retained, expected) = retained_and_fresh_painted_rects(&mut shell);
+    assert_eq!(expected.first().map(|(rect, _)| rect.y), Some(40.0));
     assert_eq!(
         retained, expected,
         "the scene drew the column's children where the old padding put them"

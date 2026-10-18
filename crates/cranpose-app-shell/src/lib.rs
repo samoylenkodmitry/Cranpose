@@ -22,8 +22,9 @@ use std::{
 };
 
 use cranpose_core::{
-    Applier, Composition, Key, MemoryApplier, NodeError, NodeId, SceneNodeAttachmentScratch,
-    collections::map::HashSet, enter_event_handler_scope, location_key, run_in_mutable_snapshot,
+    Applier, Composition, Key, MemoryApplier, NodeError, NodeId, NodeMarks,
+    SceneNodeAttachmentScratch, collections::map::HashSet, enter_event_handler_scope, location_key,
+    run_in_mutable_snapshot,
 };
 pub use cranpose_foundation::{
     DEFAULT_ROTARY_SCROLL_FACTOR_DP, Modifiers, PointerSource, RotaryScrollEvent,
@@ -46,7 +47,10 @@ use hit_path_tracker::PointerId;
 #[cfg(test)]
 use shell_frame::build_draw_refresh_scope;
 pub use surface::{RootId, RootSurface, SurfaceMut};
-use surface::{SurfaceDirtyLane, TextInputRouter, TextInputRoutes, route_nodes_by_surface};
+use surface::{
+    SurfaceDirtyLane, TextInputRouter, TextInputRoutes, route_geometry_scene_nodes,
+    route_nodes_by_surface,
+};
 pub use touch_router::TouchRouter;
 use web_time::Instant;
 pub use wheel::WheelScroll;
@@ -246,6 +250,13 @@ pub(crate) struct SurfaceRoutingScratch {
     pub(crate) seen: HashSet<(usize, NodeId)>,
     pub(crate) attachment: SceneNodeAttachmentScratch,
     pub(crate) window_roots: cranpose_ui::WindowRootRoutingScratch,
+    /// The nodes a layout lane routing gave the surfaces, while the moved
+    /// lane after it is routed.
+    pub(crate) laid_out: NodeMarks,
+    /// Each surface's count of layout lane nodes before that routing.
+    pub(crate) laid_out_starts: Vec<usize>,
+    /// The moved nodes the moved lane routes.
+    pub(crate) moved: Vec<NodeId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
