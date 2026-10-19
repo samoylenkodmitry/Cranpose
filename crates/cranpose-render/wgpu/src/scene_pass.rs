@@ -13,7 +13,7 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 use cranpose_ui_graphics::{
     Rect,
-    space::{Light, Mat4, Material, Mesh, Vec3, Volume},
+    space::{Light, Mat4, Material, Mesh, Shaded, Vec3, Volume},
 };
 
 use crate::{
@@ -25,7 +25,7 @@ use crate::{
     pipeline_compiler::{CompileLane, CompilerSend, PipelineCompiler},
     pipeline_recorder::PipelineRecorder,
     render::{DEPTH_FORMAT, create_render_pipeline_logged},
-    shader_cache::create_volume_shader_module,
+    shader_cache::{create_shaded_shader_module, create_volume_shader_module},
     shaders,
     shared_shader::SharedShader,
 };
@@ -85,6 +85,16 @@ pub(crate) struct SceneVolumeUniforms {
     source_region: [f32; 4],
 }
 
+/// The block `mesh_shaded.wgsl` reads for one shaded surface, beside the
+/// surface's own.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub(crate) struct SceneShadedUniforms {
+    eye: [f32; 4],
+    light: [f32; 4],
+    params: [[f32; 4]; Shaded::PARAMS / 4],
+}
+
 /// One mesh's vertices and indices on the GPU.
 #[derive(Clone)]
 pub(crate) struct SceneMeshBuffers {
@@ -114,32 +124,59 @@ pub(crate) struct ScenePipelineParts {
     pub(crate) no_shadow: wgpu::BindGroup,
     /// What a volume's pipeline binds: its texture and its uniforms.
     volume_layout: wgpu::PipelineLayout,
+    /// What a shaded surface's pipeline binds: a surface's groups, and its
+    /// shader's values in the place of the backdrop glass reads.
+    shaded_layout: wgpu::PipelineLayout,
 }
 
-/// The pipelines of one volume shader, kept while anyone holds the shader,
-/// one for each [`VolumeVariant`].
-pub(crate) struct VolumeShader {
+/// The pipelines of one app shader, kept while anyone holds the shader, one
+/// for each of its `N` variants.
+pub(crate) struct AppShader<const N: usize> {
     source: Weak<str>,
     module: LazyGpuResource<Option<wgpu::ShaderModule>>,
-    pipelines: [VolumePipeline; 4],
+    pipelines: [ShaderPipeline; N],
 }
 
-impl VolumeShader {
-    /// The pipeline of `variant`.
-    pub(crate) fn pipeline(&self, variant: VolumeVariant) -> &VolumePipeline {
-        &self.pipelines[variant as usize]
+/// A volume shader's pipelines, one for each [`VolumeVariant`].
+pub(crate) type VolumeShader = AppShader<4>;
+/// A shaded surface's shader's pipelines, one for each [`ShadedVariant`].
+pub(crate) type ShadedShader = AppShader<3>;
+
+impl<const N: usize> AppShader<N> {
+    fn new(shader: &Arc<str>, module: &'static str, pipelines: [&'static str; N]) -> Self {
+        Self {
+            source: Arc::downgrade(shader),
+            module: LazyGpuResource::new(module),
+            pipelines: pipelines.map(ShaderPipeline::new),
+        }
+    }
+
+    /// The pipeline of the variant numbered `variant`.
+    pub(crate) fn pipeline(&self, variant: usize) -> &ShaderPipeline {
+        &self.pipelines[variant]
     }
 }
 
-/// One of a volume shader's pipelines; `None` once built when the shader
+/// The kept pipelines of `shader` among `kept`.
+fn kept_shader<'k, const N: usize>(
+    kept: &'k [AppShader<N>],
+    shader: &Arc<str>,
+) -> Option<&'k AppShader<N>> {
+    // A weak handle keeps the shader's memory, so no other shader takes its
+    // address while the pipelines are kept.
+    kept.iter()
+        .find(|kept| std::ptr::addr_eq(kept.source.as_ptr(), Arc::as_ptr(shader)))
+}
+
+/// One of an app shader's pipelines; `None` once built when the shader
 /// does not build.
-pub(crate) struct VolumePipeline {
+pub(crate) struct ShaderPipeline {
     resource: LazyGpuResource<Option<wgpu::RenderPipeline>>,
     /// Whether its build is queued, so it is queued once.
     queued: Cell<bool>,
 }
 
-impl VolumePipeline {
+impl ShaderPipeline {
     fn new(label: &'static str) -> Self {
         Self {
             resource: LazyGpuResource::new(label),
@@ -198,6 +235,7 @@ pub(crate) struct ScenePass {
     window: OnceCell<Arc<Mesh>>,
     meshes: IdlePool<KeptMesh>,
     volumes: Vec<VolumeShader>,
+    shaded: Vec<ShadedShader>,
     pub(crate) shadow_map: Option<ShadowMap>,
     /// The frames since a scene last drew shadows.
     shadow_map_idle: u64,
@@ -211,6 +249,7 @@ impl Default for ScenePass {
             window: OnceCell::new(),
             meshes: IdlePool::default(),
             volumes: Vec::new(),
+            shaded: Vec::new(),
             shadow_map: None,
             shadow_map_idle: 0,
         }
@@ -530,26 +569,42 @@ impl ScenePass {
     /// Keeps the pipelines of `shader`, whose volumes a frame draws.
     pub(crate) fn note_volume(&mut self, shader: &Arc<str>) {
         if self.volume(shader).is_none() {
-            self.volumes.push(VolumeShader {
-                source: Arc::downgrade(shader),
-                module: LazyGpuResource::new("scene/volume-module"),
-                pipelines: [
-                    VolumePipeline::new("scene/volume"),
-                    VolumePipeline::new("scene/volume-depth"),
-                    VolumePipeline::new("scene/volume-portal"),
-                    VolumePipeline::new("scene/volume-portal-depth"),
+            self.volumes.push(AppShader::new(
+                shader,
+                "scene/volume-module",
+                [
+                    "scene/volume",
+                    "scene/volume-depth",
+                    "scene/volume-portal",
+                    "scene/volume-portal-depth",
                 ],
-            });
+            ));
         }
     }
 
     /// The pipelines of `shader`, once a frame noted it.
     pub(crate) fn volume(&self, shader: &Arc<str>) -> Option<&VolumeShader> {
-        // A weak handle keeps the shader's memory, so no other shader takes
-        // its address while the pipelines are kept.
-        self.volumes
-            .iter()
-            .find(|kept| std::ptr::addr_eq(kept.source.as_ptr(), Arc::as_ptr(shader)))
+        kept_shader(&self.volumes, shader)
+    }
+
+    /// Keeps the pipelines of `shader`, whose shaded surfaces a frame draws.
+    pub(crate) fn note_shaded(&mut self, shader: &Arc<str>) {
+        if self.shaded(shader).is_none() {
+            self.shaded.push(AppShader::new(
+                shader,
+                "scene/shaded-module",
+                [
+                    "scene/shaded",
+                    "scene/shaded-shadowed",
+                    "scene/shaded-portal",
+                ],
+            ));
+        }
+    }
+
+    /// The pipelines of `shader`, once a frame noted it.
+    pub(crate) fn shaded(&self, shader: &Arc<str>) -> Option<&ShadedShader> {
+        kept_shader(&self.shaded, shader)
     }
 
     /// Drops the buffers of meshes no recent frame drew, the pipelines of
@@ -558,6 +613,7 @@ impl ScenePass {
     pub(crate) fn end_frame(&mut self) {
         self.meshes.end_frame();
         self.volumes.retain(|kept| kept.source.strong_count() > 0);
+        self.shaded.retain(|kept| kept.source.strong_count() > 0);
         self.shadow_map_idle += 1;
         if self.shadow_map_idle > IDLE_FRAMES {
             self.shadow_map = None;
@@ -697,6 +753,16 @@ fn pipeline_parts(
         bind_group_layouts: &[Some(texture_layout), Some(&uniform_layout)],
         immediate_size: 0,
     });
+    let shaded_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Scene Shaded Surface Pipeline Layout"),
+        bind_group_layouts: &[
+            Some(texture_layout),
+            Some(&uniform_layout),
+            Some(&shadow_layout),
+            Some(&uniform_layout),
+        ],
+        immediate_size: 0,
+    });
     ScenePipelineParts {
         shader,
         uniform_layout,
@@ -704,6 +770,7 @@ fn pipeline_parts(
         shadow_samplers,
         no_shadow,
         volume_layout,
+        shaded_layout,
     }
 }
 
@@ -829,6 +896,14 @@ pub(crate) fn scene_volume_uniform_spec() -> UploadAllocatorSpec {
     )
 }
 
+pub(crate) fn scene_shaded_uniform_spec() -> UploadAllocatorSpec {
+    UploadAllocatorSpec::uniform(
+        "Scene Shaded Uniform Buffer",
+        "Scene Shaded Uniform Bind Group",
+        std::mem::size_of::<SceneShadedUniforms>() as u64,
+    )
+}
+
 /// A space's light for a shader: the direction it travels, of length one,
 /// through `into`, and its ambient share; an ambient share below zero for a
 /// space without light.
@@ -882,6 +957,24 @@ pub(crate) fn volume_uniforms(
     })
 }
 
+/// The values the shader of `shaded` reads on a surface `transform` places
+/// in the scene, seen from `eye` in the light of `space`; `None` when its
+/// transform flattens space.
+pub(crate) fn shaded_uniforms(
+    (transform, shaded): (&Mat4, &Shaded),
+    (eye, space): (Vec3, SpaceShading),
+) -> Option<SceneShadedUniforms> {
+    let model_from_scene = transform.inverse()?;
+    let eye = model_from_scene.transform_point(eye);
+    Some(SceneShadedUniforms {
+        eye: [eye.x, eye.y, eye.z, 1.0],
+        light: light_uniform(space.light, |direction| {
+            model_from_scene.transform_vector(direction)
+        }),
+        params: bytemuck::cast(shaded.params),
+    })
+}
+
 /// The plane `plane` of the scene, in the coordinates of a mesh `transform`
 /// places in the scene.
 fn plane_in_model(plane: [f32; 4], transform: &Mat4) -> [f32; 4] {
@@ -903,7 +996,8 @@ pub(crate) fn surface_uniforms(
     let clip_from_scene = clip_from_scene(scene, page);
     let (mode, glass) = match surface.material {
         Material::Unlit => (0.0, None),
-        Material::Lit => (1.0, None),
+        // A shaded surface is lit until its shader builds.
+        Material::Lit | Material::Shaded(_) => (1.0, None),
         Material::Emissive | Material::Glow => (2.0, None),
         Material::Glass(glass) => (0.0, Some(*glass)),
         // A volume takes its own uniforms.
@@ -1138,18 +1232,52 @@ pub(crate) fn volume_pipeline_job(
     (format, backend, variant): (wgpu::TextureFormat, wgpu::Backend, VolumeVariant),
     (parts, kept): (&ScenePipelineParts, &VolumeShader),
 ) -> impl FnOnce() -> Option<wgpu::RenderPipeline> + CompilerSend + 'static {
+    app_pipeline_job(
+        device,
+        cache,
+        (format, backend, variant.spec()),
+        (&parts.volume_layout, kept, create_volume_shader_module),
+    )
+}
+
+/// The build of one shaded surface's shader's pipeline for targets of
+/// `format`, of `variant`; `None` when the shader does not build or nobody
+/// holds it any more.
+pub(crate) fn shaded_pipeline_job(
+    device: &Arc<wgpu::Device>,
+    cache: Option<wgpu::PipelineCache>,
+    (format, backend, variant): (wgpu::TextureFormat, wgpu::Backend, ShadedVariant),
+    (parts, kept): (&ScenePipelineParts, &ShadedShader),
+) -> impl FnOnce() -> Option<wgpu::RenderPipeline> + CompilerSend + 'static {
+    app_pipeline_job(
+        device,
+        cache,
+        (format, backend, variant.spec()),
+        (&parts.shaded_layout, kept, create_shaded_shader_module),
+    )
+}
+
+/// The module an app shader's source builds, after the framework's part,
+/// for a backend; `None` when it does not build.
+type AppModule = fn(&wgpu::Device, &str, wgpu::Backend) -> Option<wgpu::ShaderModule>;
+
+/// The build of one of an app shader's pipelines, of `spec`, for targets of
+/// `format`, its module built once by `module_of`.
+fn app_pipeline_job<const N: usize>(
+    device: &Arc<wgpu::Device>,
+    cache: Option<wgpu::PipelineCache>,
+    (format, backend, spec): (wgpu::TextureFormat, wgpu::Backend, PipelineSpec),
+    (layout, kept, module_of): (&wgpu::PipelineLayout, &AppShader<N>, AppModule),
+) -> impl FnOnce() -> Option<wgpu::RenderPipeline> + CompilerSend + 'static {
     let device = Arc::clone(device);
-    let layout = parts.volume_layout.clone();
+    let layout = layout.clone();
     let module = kept.module.clone();
     let source = kept.source.upgrade();
     move || {
         let source = source?;
         let module = module
-            .get_or_init(backend, || {
-                create_volume_shader_module(&device, &source, backend)
-            })
+            .get_or_init(backend, || module_of(&device, &source, backend))
             .as_ref()?;
-        let spec = variant.spec();
         Some(create_scene_pipeline(
             &device,
             cache.as_ref(),
@@ -1157,6 +1285,43 @@ pub(crate) fn volume_pipeline_job(
             (&layout, module, spec.entry_points),
             (&color_target(format, spec.color), depth_state(&spec, false)),
         ))
+    }
+}
+
+/// Which of a shaded surface's shader's pipelines a draw takes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShadedVariant {
+    /// The surfaces of a scene's own space without shadows.
+    Plain,
+    /// The surfaces of a scene's own space, which read its shadow map.
+    Shadowed,
+    /// The surfaces in a portal's space, inside its window.
+    Portal,
+}
+
+impl ShadedVariant {
+    /// The lit surfaces' pipeline the variant takes the place of, and which
+    /// a surface draws with until its shader builds.
+    pub(crate) fn lit(self) -> ScenePipeline {
+        match self {
+            Self::Plain => ScenePipeline::Plain,
+            Self::Shadowed => ScenePipeline::Shadowed,
+            Self::Portal => ScenePipeline::Portal,
+        }
+    }
+
+    /// The lit pipeline's targets, with the shader's own entry points.
+    fn spec(self) -> PipelineSpec {
+        let fragment = match self {
+            Self::Plain => "mesh_shaded_fs",
+            Self::Shadowed => "mesh_shaded_shadowed_fs",
+            Self::Portal => "mesh_shaded_portal_fs",
+        };
+        PipelineSpec {
+            label: "Scene Shaded Surface Pipeline",
+            entry_points: ("mesh_shaded_vs", fragment),
+            ..self.lit().spec()
+        }
     }
 }
 

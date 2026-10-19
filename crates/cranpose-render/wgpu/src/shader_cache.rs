@@ -950,17 +950,53 @@ pub(crate) fn create_volume_shader_module(
     source: &str,
     backend: wgpu::Backend,
 ) -> Option<wgpu::ShaderModule> {
-    let text = format!(
-        "{}{source}",
-        cranpose_ui_graphics::framework_shaders::MESH_VOLUME_PRELUDE_WGSL
-    );
-    match validate_shader_source(&text, backend, ("mesh_volume_vs", "mesh_volume_fs")) {
+    create_app_shader_module(
+        device,
+        (
+            cranpose_ui_graphics::framework_shaders::MESH_VOLUME_PRELUDE_WGSL,
+            source,
+        ),
+        (backend, ("mesh_volume_vs", "mesh_volume_fs")),
+        ("Scene Volume", "Leaving out the volumes"),
+    )
+}
+
+/// The module of a shaded surface's shader: `source` after the framework's
+/// prelude. `None`, with a warning, when it does not validate for
+/// `backend`.
+pub(crate) fn create_shaded_shader_module(
+    device: &wgpu::Device,
+    source: &str,
+    backend: wgpu::Backend,
+) -> Option<wgpu::ShaderModule> {
+    create_app_shader_module(
+        device,
+        (
+            cranpose_ui_graphics::framework_shaders::MESH_SHADED_PRELUDE_WGSL,
+            source,
+        ),
+        (backend, ("mesh_shaded_vs", "mesh_shaded_fs")),
+        ("Scene Shaded Surface", "Drawing lit the surfaces"),
+    )
+}
+
+/// The module of `source` after `prelude`, labelled `label`, once it holds
+/// `entry_points` and validates for `backend`; otherwise `None`, with a
+/// warning that starts with `left_out`.
+fn create_app_shader_module(
+    device: &wgpu::Device,
+    (prelude, source): (&str, &str),
+    (backend, entry_points): (wgpu::Backend, (&str, &str)),
+    (label, left_out): (&'static str, &str),
+) -> Option<wgpu::ShaderModule> {
+    let text = format!("{prelude}{source}");
+    match validate_shader_source(&text, backend, entry_points) {
         Ok((parsed, _, _)) => Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Scene Volume"),
+            label: Some(label),
             source: validated_source(&text, parsed),
         })),
         Err(err) => {
-            log::warn!("Leaving out the volumes of a shader that does not build: {err}");
+            log::warn!("{left_out} of a shader that does not build: {err}");
             None
         }
     }

@@ -8,7 +8,8 @@ use cranpose_macros::composable;
 use cranpose_ui::{
     Color, Modifier, Size,
     space::{
-        Camera, EyePose, Glass, Light, Mat4, Material, Mesh, MeshSurface, Scene3d, Vec3, Volume,
+        Camera, EyePose, Glass, Light, Mat4, Material, Mesh, MeshSurface, Scene3d, Shaded, Vec3,
+        Volume,
     },
     widgets::{Box, BoxSpec, Row, RowSpec},
 };
@@ -479,6 +480,85 @@ fn a_mesh_replaced_by_a_smaller_one_draws_the_new_shape() {
     }
 }
 
+/// Red: the first value. Green: how squarely the surface faces the eye.
+/// Blue: how much of the light reaches it.
+const FACING_WGSL: &str = r"
+fn shade(surface: ShadedSurface) -> vec4<f32> {
+    let facing = dot(surface.normal, surface.to_eye);
+    return vec4<f32>(shaded_param(0u), facing, surface.lit, 1.0) * surface.color.a;
+}
+";
+
+fn shaded_of(source: &'static OnceLock<Arc<str>>, text: &str) -> Material {
+    let mut params = [0.0; Shaded::PARAMS];
+    params[0] = 1.0;
+    Material::Shaded(Shaded {
+        shader: Arc::clone(source.get_or_init(|| Arc::from(text))),
+        params,
+    })
+}
+
+/// A lit red ball in front of a far wall with blue content that `wall`
+/// colours, in a light along `(1, 0, 1)` that casts the ball's shadow on
+/// the wall.
+#[composable]
+fn ShadedScene(wall: Material) {
+    let (plane, sphere) = meshes();
+    Scene(0.0, move || {
+        Surface(
+            Arc::clone(&sphere),
+            ball(),
+            (Material::Lit, true, Color(1.0, 0.0, 0.0, 1.0)),
+        );
+        Surface(
+            Arc::clone(&plane),
+            panel((2000.0, 1500.0), Vec3::new(0.0, 0.0, 600.0)),
+            (wall.clone(), false, Color(0.0, 0.0, 1.0, 1.0)),
+        );
+    });
+}
+
+#[composable]
+fn FacingScene() {
+    static SHADER: OnceLock<Arc<str>> = OnceLock::new();
+    ShadedScene(shaded_of(&SHADER, FACING_WGSL));
+}
+
+#[composable]
+fn BrokenShadedScene() {
+    static SHADER: OnceLock<Arc<str>> = OnceLock::new();
+    ShadedScene(shaded_of(&SHADER, "fn shade() {}"));
+}
+
+#[test]
+fn a_shaded_surface_takes_its_colour_from_its_shader() {
+    let Some(frame) = capture(FacingScene) else {
+        return;
+    };
+    let lit = pixel_at(&frame, Vec3::new(-400.0, 300.0, 600.0));
+    assert!(
+        lit[0] > 240 && lit[1] > 200 && lit[2] > 240,
+        "the wall shows its first value, that it faces the eye and that the light reaches it: {lit:?}"
+    );
+    let shadowed = pixel_at(&frame, Vec3::new(400.0, 0.0, 600.0));
+    assert!(
+        shadowed[0] > 240 && shadowed[2] < 40,
+        "in the ball's shadow the light does not reach the wall: {shadowed:?}"
+    );
+}
+
+#[test]
+fn a_shaded_surface_whose_shader_does_not_build_draws_lit() {
+    let Some(frame) = capture(BrokenShadedScene) else {
+        return;
+    };
+    let lit = pixel_at(&frame, Vec3::new(-400.0, 300.0, 600.0));
+    assert!(
+        lit[2] > 150 && lit[0] < 40 && lit[1] < 40,
+        "the wall shows its blue content, lit: {lit:?}"
+    );
+}
+
 /// A ball of radius 0.4 about the middle of the unit cube, in its content's
 /// colour times the first value.
 const BALL_VOLUME_WGSL: &str = r"
@@ -763,6 +843,44 @@ fn a_scene_inside_a_wall_shows_its_space_behind_the_wall_through_its_doorway() {
     assert!(
         below[0] < 40 && below[1] < 40,
         "the space behind the doorway shows only through it: {below:?}"
+    );
+}
+
+/// The red ball of [`PortalScene`] behind its doorway, coloured by
+/// [`FACING_WGSL`].
+#[composable]
+fn ShadedPortalScene() {
+    static SHADER: OnceLock<Arc<str>> = OnceLock::new();
+    let (plane, sphere) = meshes();
+    Scene(0.0, move || {
+        let sphere = Arc::clone(&sphere);
+        Box(blue_wall(&plane), BoxSpec::default(), move || {
+            let sphere = Arc::clone(&sphere);
+            doorway(move || {
+                Surface(
+                    Arc::clone(&sphere),
+                    nested_ball(Vec3::new(0.0, 0.0, 100.0), 20.0),
+                    (
+                        shaded_of(&SHADER, FACING_WGSL),
+                        false,
+                        Color(1.0, 0.0, 0.0, 1.0),
+                    ),
+                );
+            });
+        });
+    });
+}
+
+#[test]
+fn a_shaded_surface_behind_a_doorway_takes_its_colour_from_its_shader() {
+    let Some(frame) = capture(ShadedPortalScene) else {
+        return;
+    };
+    let through = pixel_at(&frame, Vec3::new(0.0, 0.0, 1720.0));
+    assert!(
+        through[0] > 240 && through[1] > 200 && through[2] > 240,
+        "the ball behind the doorway faces the eye in a space without light, all of which \
+         reaches it: {through:?}"
     );
 }
 

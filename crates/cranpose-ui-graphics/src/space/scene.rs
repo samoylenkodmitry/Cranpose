@@ -264,6 +264,50 @@ pub enum Material {
     /// camera sees it, with the depth of what each ray meets: the mesh only
     /// bounds it. A volume casts no shadow.
     Volume(Volume),
+    /// Coloured by an app's shader from the content, the light and the eye
+    /// at each point of the surface: a reflection, a sheen, a normal of its
+    /// own. Until the shader builds, and if it never does, the surface is
+    /// [`Lit`](Self::Lit).
+    Shaded(Shaded),
+}
+
+/// An app's shader that colours a surface: each pixel the mesh covers asks
+/// it for its colour from the content there, the light and the eye.
+///
+/// `shader` is WGSL that defines
+///
+/// ```text
+/// fn shade(surface: ShadedSurface) -> vec4<f32>
+/// ```
+///
+/// and returns the colour, premultiplied. `ShadedSurface` holds, in the
+/// mesh's own coordinates: `color`, the content's colour there,
+/// premultiplied; `position`; `normal`, of length one, on the side the eye
+/// sees; `to_eye` and `to_light`, of length one, toward the eye and toward
+/// the light, which is zero without a light; `lit`, how much of the light
+/// reaches the point, from 0 in full shadow to 1; and `ambient`, the
+/// light's ambient share, 1 without a light. `shaded_param(index)` reads
+/// `params[index]`. The renderer puts
+/// [`MESH_SHADED_PRELUDE_WGSL`](crate::framework_shaders::MESH_SHADED_PRELUDE_WGSL),
+/// which declares them, before it.
+#[derive(Clone, Debug)]
+pub struct Shaded {
+    /// The app's WGSL. Keep one `Arc` per shader: the renderer builds a
+    /// pipeline for each.
+    pub shader: Arc<str>,
+    /// The values the shader reads.
+    pub params: [f32; Shaded::PARAMS],
+}
+
+impl Shaded {
+    /// How many values a surface's shader reads.
+    pub const PARAMS: usize = 32;
+}
+
+impl PartialEq for Shaded {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.shader, &other.shader) && self.params == other.params
+    }
 }
 
 /// An app's shader that draws inside a mesh: each pixel the mesh covers
