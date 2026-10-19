@@ -3,7 +3,7 @@ use std::time::Duration;
 use crate::{output_paths, robot_controls_grid, robot_exit, robot_launch, robot_shot};
 
 use cranpose::{PointerButton, Robot, SemanticElement};
-use cranpose_testing::{click_button_in_semantics, find_text_in_semantics};
+use cranpose_testing::{click_button_in_semantics, find_text_in_semantics, screenshot_pixel};
 
 const STEP_IN: &str = "Step into the room";
 const BACK: &str = "Back to the screen";
@@ -17,6 +17,12 @@ const NESTED_COUNTER: &str = "Pressed 0 times";
 /// How much larger the nested room's counter shows once the eye walked
 /// from where it turned to it through the east wall's doorway.
 const PAST_THE_DOORWAY: f32 = 3.0;
+/// The demo window's background, which shows where the scene draws nothing.
+const EMPTY_BACKGROUND: [u8; 3] = [10, 10, 15];
+/// Where the demo's tab bar ends, in screenshot pixels.
+const TAB_BAR_BOTTOM: u32 = 120;
+/// How much of the window may show empty around an eye inside a room.
+const EMPTY_AROUND_THE_EYE: f32 = 0.02;
 /// How long a key may be held for the eye to turn or walk where it should.
 const LONGEST_HOLD: Duration = Duration::from_secs(8);
 
@@ -305,6 +311,16 @@ fn walk_through_the_wall(robot: &Robot, shots: &std::path::Path) {
     });
     println!("  the counter behind the wall at {turned:?}, walked up to it at {walked:?}");
     save(robot, shots, "walked.png");
+    // The eye walked into the room, which shows in space around it: its
+    // walls, floor and ceiling, not the empty window behind the scene.
+    let empty = empty_share(robot);
+    println!("  the window shows empty around the eye in the wall room: {empty:.3}");
+    if empty > EMPTY_AROUND_THE_EYE {
+        robot_exit::fail(
+            robot,
+            &format!("the room behind the wall stays flat around the eye that walked in: {empty:.3} empty"),
+        );
+    }
     click_center(robot, walked);
     if let Err(err) = robot.pump_frames(3) {
         robot_exit::fail(robot, &format!("pump frames: {err}"));
@@ -397,6 +413,31 @@ fn drag(robot: &Robot, button: PointerButton, from: (f32, f32), to: (f32, f32)) 
         robot_exit::fail(robot, &format!("{button:?} drag across the floor: {err}"));
     }
     robot_shot::settle(robot, 400);
+}
+
+/// The share of the window below the tab bar that shows the empty window
+/// background, where the scene draws nothing.
+fn empty_share(robot: &Robot) -> f32 {
+    let shot = match robot.screenshot() {
+        Ok(shot) => shot,
+        Err(err) => robot_exit::fail(robot, &format!("screenshot: {err}")),
+    };
+    let (mut empty, mut all) = (0u32, 0u32);
+    for y in (TAB_BAR_BOTTOM..shot.height).step_by(10) {
+        for x in (0..shot.width).step_by(10) {
+            let Some(pixel) = screenshot_pixel(&shot, x, y) else {
+                continue;
+            };
+            all += 1;
+            empty += u32::from(
+                pixel[..3]
+                    .iter()
+                    .zip(EMPTY_BACKGROUND)
+                    .all(|(&channel, background)| channel.abs_diff(background) <= 3),
+            );
+        }
+    }
+    empty as f32 / all.max(1) as f32
 }
 
 fn save(robot: &Robot, directory: &std::path::Path, name: &str) {

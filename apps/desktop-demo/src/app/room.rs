@@ -14,8 +14,8 @@ use cranpose::liquid::prelude::{
     LiquidCheckbox, LiquidTheme, LiquidThemeSpec, LiquidToggle, SchemeMode,
 };
 use cranpose_core::{
-    key, remember, rememberMutableStateOf, CompositionLocalProvider, LaunchedEffectAsync,
-    MutableState,
+    derivedStateOf, key, remember, rememberMutableStateOf, CompositionLocalProvider,
+    LaunchedEffectAsync, MutableState,
 };
 use cranpose_ui::{
     composable, local_eye,
@@ -113,7 +113,11 @@ pub fn RoomTab() {
 /// doorway of another room, it is the same: flat until stepped into.
 #[composable(no_skip)]
 fn Scene(room: RoomState, shape: RoomShape, meshes: RoomMeshes) {
-    let spatial = room.is_spatial();
+    // The eye moves every frame it walks: the room recomposes only when it
+    // walks in or out.
+    let holder = room.clone();
+    let walked_in = derivedStateOf(move || holder.holds_eye());
+    let spatial = room.is_spatial() || walked_in.get();
     let (camera, node) = (room.clone(), Rc::clone(&room.scene_node));
     let scene = Box(
         Modifier::empty()
