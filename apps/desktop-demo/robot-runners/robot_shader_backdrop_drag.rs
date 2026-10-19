@@ -552,8 +552,8 @@ pub(crate) fn main() {
                 println!("✗ Could not find 'Glass' label");
                 std::process::exit(1);
             };
-            let (blur_cx, blur_cy) = center(blur_before);
-            let (glass_cx, glass_cy) = center(glass_before);
+            let (blur_start_x, blur_start_y) = center(blur_before);
+            let (glass_start_x, glass_start_y) = center(glass_before);
             println!(
                 "Initial semantic label positions: Blur=({:.1},{:.1}) Glass=({:.1},{:.1})",
                 blur_before.0,
@@ -561,9 +561,6 @@ pub(crate) fn main() {
                 glass_before.0,
                 glass_before.1
             );
-
-            let blur_start_x = blur_cx + 16.0;
-            let blur_start_y = blur_cy + 16.0;
 
             let Some(blur_before_shot) = capture_screenshot(&robot) else {
                 println!("✗ Could not capture screenshot before blur drag");
@@ -604,9 +601,6 @@ pub(crate) fn main() {
                 std::process::exit(1);
             }
             assert_effect_drag_performance(&robot, "Blur drag", blur_render_stats);
-
-            let glass_start_x = glass_cx + 244.0;
-            let glass_start_y = glass_cy + 164.0;
 
             let Some(glass_before_shot) = capture_screenshot(&robot) else {
                 println!("✗ Could not capture screenshot before glass drag");
@@ -656,9 +650,7 @@ pub(crate) fn main() {
                 println!("✗ Could not find 'Blur' label after scrolling for clip test");
                 std::process::exit(1);
             };
-            let (blur_scrolled_cx, blur_scrolled_cy) = center(blur_scrolled);
-            let blur_scroll_start_x = blur_scrolled_cx + 16.0;
-            let blur_scroll_start_y = blur_scrolled_cy + 16.0;
+            let (blur_scroll_start_x, blur_scroll_start_y) = center(blur_scrolled);
 
             let Some(tab_noise_before) = capture_screenshot(&robot) else {
                 println!("✗ Could not capture screenshot for tab-row baseline (before)");
