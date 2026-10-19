@@ -457,13 +457,16 @@ fn card_value_style(dark: bool) -> TextStyle {
 }
 
 const STAGE_WGSL: &str = include_str!("controls_stage.wgsl");
+/// The stage's lights as a metal part mirrors them, which the stage and the
+/// room's parts share.
+const SHADING_WGSL: &str = include_str!("controls_shading.wgsl");
 
 fn controls_wgsl() -> Arc<str> {
     static SOURCE: OnceLock<Arc<str>> = OnceLock::new();
     SOURCE
         .get_or_init(|| {
             Arc::<str>::from(format!(
-                "{RUNTIME_SHADER_PRELUDE_WGSL}{STAGE_WGSL}{}",
+                "{RUNTIME_SHADER_PRELUDE_WGSL}{SHADING_WGSL}{STAGE_WGSL}{}",
                 include_str!("controls_ui.wgsl")
             ))
         })
