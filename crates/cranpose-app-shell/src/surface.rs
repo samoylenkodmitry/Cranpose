@@ -13,7 +13,7 @@
 use std::{cell::RefCell, fmt::Debug, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId, collections::map::HashSet};
-use cranpose_foundation::{PointerButtons, PointerSource, RotaryScrollEvent};
+use cranpose_foundation::{PointerButton, PointerButtons, PointerSource, RotaryScrollEvent};
 use cranpose_render_common::Renderer;
 use cranpose_ui::{
     LayoutNode, LayoutTree, MovedSceneNode, PlatformTextInputHandler, SemanticsTree,
@@ -205,6 +205,11 @@ impl<R: Renderer> RootSurface<R> {
 
     pub(crate) fn has_active_pointer_gesture(&self) -> bool {
         self.buttons_pressed != PointerButtons::NONE
+            && self.hit_path_tracker.has_path(PointerId::PRIMARY)
+    }
+
+    pub(crate) fn has_active_primary_gesture(&self) -> bool {
+        self.buttons_pressed.contains(PointerButton::Primary)
             && self.hit_path_tracker.has_path(PointerId::PRIMARY)
     }
 
@@ -715,10 +720,18 @@ where
             .enter(|| self.surface().needs_redraw_in_context(self.shell_app_ref()))
     }
 
-    /// Whether a primary-button gesture that started on this surface is
-    /// still in progress.
+    /// Whether a pointer button is held down on a control of this surface,
+    /// whichever button it is.
     pub fn has_active_pointer_gesture(&self) -> bool {
         self.surface().has_active_pointer_gesture()
+    }
+
+    /// Whether the primary button is held down on a control of this
+    /// surface. A platform that polls the mouse's primary button compares
+    /// it with this, so a held right button does not look like a lost left
+    /// release.
+    pub fn has_active_primary_gesture(&self) -> bool {
+        self.surface().has_active_primary_gesture()
     }
 
     /// What the update and frame produced for this surface the last time

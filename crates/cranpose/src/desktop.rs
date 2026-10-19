@@ -1063,7 +1063,7 @@ impl App {
         let active = self
             .app
             .as_ref()
-            .is_some_and(AppShell::has_active_pointer_gesture);
+            .is_some_and(AppShell::has_active_primary_gesture);
         #[cfg(feature = "robot")]
         let synthetic_primary_down = self
             .robot_controller
@@ -4365,12 +4365,12 @@ fn held_press_to_hand_over(
 }
 
 fn primary_pointer_move_should_recover_press(
-    active_pointer_gesture: bool,
+    active_primary_gesture: bool,
     synthetic_primary_down: bool,
     global_pointer: Option<NativeWindowPointerState>,
     pointer_over_surface: bool,
 ) -> bool {
-    !active_pointer_gesture
+    !active_primary_gesture
         && !synthetic_primary_down
         && pointer_over_surface
         && global_pointer.is_some_and(|pointer| pointer.primary_down)
@@ -4529,11 +4529,11 @@ enum PrimaryPointerGesturePollAction {
 }
 
 fn primary_pointer_gesture_poll_action(
-    active: bool,
+    active_primary_gesture: bool,
     synthetic_primary_down: bool,
     pointer: Option<NativeWindowPointerState>,
 ) -> PrimaryPointerGesturePollAction {
-    if !active || synthetic_primary_down {
+    if !active_primary_gesture || synthetic_primary_down {
         return PrimaryPointerGesturePollAction::Inactive;
     }
 
@@ -6028,7 +6028,7 @@ impl ApplicationHandler for App {
                 #[cfg(not(feature = "robot"))]
                 let synthetic_primary_down = false;
                 if primary_pointer_move_should_recover_press(
-                    app.has_active_pointer_gesture(),
+                    app.has_active_primary_gesture(),
                     synthetic_primary_down,
                     global_pointer,
                     pointer_over_surface,

@@ -218,3 +218,36 @@ fn a_left_release_during_a_right_drag_leaves_the_drag_its_node() {
         "the right release missed the node: {seen:?}"
     );
 }
+
+#[test]
+fn a_held_right_button_is_a_gesture_but_not_a_primary_one() {
+    let _guard = test_guard();
+    let seen: Seen = Rc::default();
+    let mut shell = recording_box(&seen, |modifier| modifier);
+
+    shell.set_cursor(50.0, 50.0);
+    shell
+        .primary()
+        .mouse_button_pressed(PointerButton::Secondary);
+    assert!(
+        shell.has_active_pointer_gesture(),
+        "a held right button kept no gesture"
+    );
+    assert!(
+        !shell.has_active_primary_gesture(),
+        "a held right button counted as a held left one, which a platform that polls the left button then releases"
+    );
+    shell
+        .primary()
+        .mouse_button_released(PointerButton::Secondary);
+    assert!(!shell.has_active_pointer_gesture());
+
+    shell.pointer_pressed();
+    assert!(shell.has_active_pointer_gesture());
+    assert!(
+        shell.has_active_primary_gesture(),
+        "a held left button is not a primary gesture"
+    );
+    shell.pointer_released();
+    assert!(!shell.has_active_primary_gesture());
+}

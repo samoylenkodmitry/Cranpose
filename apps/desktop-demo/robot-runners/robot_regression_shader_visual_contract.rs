@@ -84,8 +84,8 @@ fn run_interactive_overlap() {
                 .unwrap_or_else(|| robot_exit::fail_without_shutdown( "Glass label missing"));
             let (blur_cx, blur_cy) = center(blur);
             let (glass_cx, glass_cy) = center(glass);
-            let blur_start = (blur_cx + 16.0, blur_cy + 16.0);
-            let glass_start = (glass_cx + 244.0, glass_cy + 164.0);
+            let blur_start = (blur_cx, blur_cy);
+            let glass_start = (glass_cx, glass_cy);
             let glass_target = (glass_start.0 - 122.0, glass_start.1 - 104.0);
             let blur_target = (glass_target.0 + 60.0, glass_target.1 + 40.0);
 

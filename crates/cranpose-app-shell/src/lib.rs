@@ -1254,6 +1254,11 @@ where
         self.surfaces[0].has_active_pointer_gesture()
     }
 
+    /// Primary-surface form of [`SurfaceMut::has_active_primary_gesture`].
+    pub fn has_active_primary_gesture(&self) -> bool {
+        self.surfaces[0].has_active_primary_gesture()
+    }
+
     /// Primary-surface form of [`SurfaceMut::frame_owed`].
     pub fn frame_owed(&self) -> bool {
         self.surfaces[0].frame_owed
