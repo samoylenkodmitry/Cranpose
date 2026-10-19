@@ -17,8 +17,8 @@ use crate::{
     frame_graph::{FrameCommandRecorder, UniformUpload, UploadAllocatorId},
     render::GpuRenderer,
     scene_pass::{
-        SceneMeshBuffers, ScenePage, ScenePipeline, SpaceShading, SurfaceShading, VolumeVariant,
-        scene_scissor, scene_surface_uniform_spec, surface_uniforms,
+        SceneMeshBuffers, ScenePage, ScenePipeline, ShadedVariant, SpaceShading, SurfaceShading,
+        VolumeVariant, scene_scissor, scene_surface_uniform_spec, surface_uniforms,
     },
 };
 
@@ -134,8 +134,10 @@ pub(super) enum PortalPass {
 #[derive(Clone, Copy)]
 enum SpaceStep {
     /// The surfaces that are neither glass nor glow: volumes with the
-    /// variant, the others with the pipeline.
-    Opaque(VolumeVariant, ScenePipeline),
+    /// variant, shaded surfaces with the shaded variant, if any, and the
+    /// others, shaded ones whose shader has not built among them, with the
+    /// pipeline.
+    Opaque(VolumeVariant, Option<ShadedVariant>, ScenePipeline),
     Glass,
     Glow,
 }
@@ -161,7 +163,11 @@ pub(super) fn encode_portals(
     let [Some(mark), Some(clear), Some(restore)] = pipelines else {
         return;
     };
-    let colour = SpaceStep::Opaque(VolumeVariant::Portal, ScenePipeline::Portal);
+    let colour = SpaceStep::Opaque(
+        VolumeVariant::Portal,
+        Some(ShadedVariant::Portal),
+        ScenePipeline::Portal,
+    );
     // What draws before the doorways seen from a space, and what draws over
     // what shows through them.
     let (before, after): (&[SpaceStep], &[SpaceStep]) = match portal_pass {
@@ -169,7 +175,7 @@ pub(super) fn encode_portals(
         PortalPass::Colour { glow: true } => (&[colour], &[SpaceStep::Glow]),
         PortalPass::Glass => (
             &[
-                SpaceStep::Opaque(VolumeVariant::PortalDepth, ScenePipeline::PortalDepth),
+                SpaceStep::Opaque(VolumeVariant::PortalDepth, None, ScenePipeline::PortalDepth),
                 SpaceStep::Glass,
             ],
             &[SpaceStep::Glow],
@@ -210,7 +216,7 @@ fn draw_space(
     (device, backdrop): (&wgpu::Device, Option<&wgpu::BindGroup>),
 ) {
     let (phase, kind) = match step {
-        SpaceStep::Opaque(_, kind) => (ScenePhase::Portal, kind),
+        SpaceStep::Opaque(_, _, kind) => (ScenePhase::Portal, kind),
         SpaceStep::Glass => (ScenePhase::PortalGlass, ScenePipeline::PortalGlass),
         SpaceStep::Glow => (ScenePhase::PortalGlow, ScenePipeline::PortalGlow),
     };
@@ -227,14 +233,17 @@ fn draw_space(
     let backdrop = backdrop.filter(|_| matches!(step, SpaceStep::Glass));
     let effects = &renderer.effect_renderer;
     for draw in space {
-        let pipeline = match (&draw.held.mesh.surface.material, step) {
-            (Material::Volume(volume), SpaceStep::Opaque(variant, _)) => {
+        let (pipeline, shaded) = match (&draw.held.mesh.surface.material, step) {
+            (Material::Volume(volume), SpaceStep::Opaque(variant, _, _)) => {
                 match renderer.scene_volume_pipeline(&volume.shader, variant) {
-                    Some(pipeline) => pipeline,
+                    Some(pipeline) => (pipeline, false),
                     None => continue,
                 }
             }
-            _ => fixed,
+            (Material::Shaded(_), SpaceStep::Opaque(_, Some(variant), _)) => draw
+                .shaded_pipeline(renderer, variant)
+                .map_or((fixed, false), |pipeline| (pipeline, true)),
+            _ => (fixed, false),
         };
         let Some((x, y, width, height)) = within(draw.scissor, window.scissor) else {
             continue;
@@ -242,6 +251,9 @@ fn draw_space(
         pass.set_pipeline(pipeline);
         pass.set_scissor_rect(x, y, width, height);
         draw.bind(pass, (device, effects), backdrop);
+        if shaded {
+            draw.bind_shaded(pass);
+        }
         pass.draw_indexed(0..draw.buffers.index_count, 0, 0..1);
     }
 }

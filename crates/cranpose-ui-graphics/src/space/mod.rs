@@ -22,6 +22,6 @@ pub use math::{Mat4, Vec3};
 pub use mesh::{Mesh, MeshContact, MeshError, MeshHit};
 pub use obj::{ObjError, ObjErrorKind};
 pub use scene::{
-    Camera, Glass, LayerSpace, Light, Material, MeshSurface, NEAR_PLANE, Ray, Scene3d, SurfaceHit,
-    Volume,
+    Camera, Glass, LayerSpace, Light, Material, MeshSurface, NEAR_PLANE, Ray, Scene3d, Shaded,
+    SurfaceHit, Volume,
 };

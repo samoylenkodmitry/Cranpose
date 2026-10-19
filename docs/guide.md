@@ -1697,6 +1697,31 @@ bounds and leaves the mesh, `footprint` is a pixel's width in radians,
 content. A shader that does not build logs a warning, and its volumes are left
 out.
 
+`Material::Shaded(Shaded { shader, params })` colours each point of the
+surface with the app's WGSL `shade` function, from the content there, the
+light and the eye: a reflection, a sheen, a normal of its own. The surface
+casts and takes shadows as a lit one does. Until its shader builds, and if it
+never does, it draws as `Material::Lit`.
+
+```wgsl
+// The content, lit by the angle the light falls at, with a white sheen
+// where the light mirrors toward the eye.
+fn shade(surface: ShadedSurface) -> vec4<f32> {
+    let facing = max(dot(surface.normal, surface.to_light), 0.0);
+    let light = surface.ambient + (1.0 - surface.ambient) * facing * surface.lit;
+    let mirrored = reflect(-surface.to_light, surface.normal);
+    let sheen = pow(max(dot(mirrored, surface.to_eye), 0.0), 40.0) * surface.lit;
+    return vec4<f32>(surface.color.rgb * light + vec3<f32>(sheen * surface.color.a), surface.color.a);
+}
+```
+
+`ShadedSurface` holds, in the mesh's own coordinates: `color`, the content
+there, premultiplied; `position`; `normal`, on the side the eye sees;
+`to_eye` and `to_light`, of length one, `to_light` zero without a light;
+`lit`, from 0 in full shadow to 1; and `ambient`. `shaded_param(i)` reads
+`params[i]`. The room's controls use it to mirror the controls tab's studio
+lights.
+
 Scene space uses logical pixels with x to the right, y down and z away from
 the viewer. `Mesh::plane`, `Mesh::cuboid` and `Mesh::sphere` build common
 shapes, `Mesh::from_obj` reads a Wavefront OBJ file, and `Mesh::new` takes

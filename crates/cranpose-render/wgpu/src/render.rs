@@ -4151,20 +4151,54 @@ impl GpuRenderer {
         variant: crate::scene_pass::VolumeVariant,
     ) -> Option<&wgpu::RenderPipeline> {
         let kept = self.scene_pass.volume(shader)?;
-        let ready = kept.pipeline(variant).when_ready(
+        self.app_shader_pipeline(kept.pipeline(variant as usize), || {
+            crate::scene_pass::volume_pipeline_job(
+                &self.device,
+                self.pipeline_cache.clone(),
+                (self.composition_format, self.adapter_backend, variant),
+                (self.scene_pipeline_parts(), kept),
+            )
+        })
+    }
+
+    /// The pipeline of `variant` of a shaded surface's shader a frame
+    /// noted; `None` while it compiles, when the frame after it lands draws
+    /// the surfaces with it, or when the shader does not build.
+    pub(crate) fn scene_shaded_pipeline(
+        &self,
+        shader: &Arc<str>,
+        variant: crate::scene_pass::ShadedVariant,
+    ) -> Option<&wgpu::RenderPipeline> {
+        let kept = self.scene_pass.shaded(shader)?;
+        self.app_shader_pipeline(kept.pipeline(variant as usize), || {
+            crate::scene_pass::shaded_pipeline_job(
+                &self.device,
+                self.pipeline_cache.clone(),
+                (self.composition_format, self.adapter_backend, variant),
+                (self.scene_pipeline_parts(), kept),
+            )
+        })
+    }
+
+    /// One of an app shader's pipelines once built; `None` while `job`
+    /// builds it, which the frame notes, or when the shader does not build.
+    fn app_shader_pipeline<'p, J>(
+        &'p self,
+        pipeline: &'p crate::scene_pass::ShaderPipeline,
+        job: impl FnOnce() -> J,
+    ) -> Option<&'p wgpu::RenderPipeline>
+    where
+        J: FnOnce() -> Option<wgpu::RenderPipeline>
+            + crate::pipeline_compiler::CompilerSend
+            + 'static,
+    {
+        let ready = pipeline.when_ready(
             (
                 &self.recorder,
                 &self.pipeline_compiler,
                 self.adapter_backend,
             ),
-            || {
-                crate::scene_pass::volume_pipeline_job(
-                    &self.device,
-                    self.pipeline_cache.clone(),
-                    (self.composition_format, self.adapter_backend, variant),
-                    (self.scene_pipeline_parts(), kept),
-                )
-            },
+            job,
         );
         match ready {
             Some(built) => built.as_ref(),

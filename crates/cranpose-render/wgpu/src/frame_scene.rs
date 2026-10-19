@@ -1,9 +1,10 @@
 //! A scene's mesh surfaces in a layer's render: each surface's content is
 //! rendered as an isolated layer's is, then all surfaces of the scene draw
 //! over what lies beneath the first of them, depth-tested against each
-//! other: first the surfaces that are neither glass nor glow, then the
-//! volumes, then the spaces the scene's portals show inside their windows,
-//! then glass over a copy of the page they left, then glow added onto it.
+//! other: first the surfaces that are neither glass nor glow, then those
+//! an app's shader colours, then the volumes, then the spaces the scene's
+//! portals show inside their windows, then glass over a copy of the page
+//! they left, then glow added onto it.
 
 use std::{rc::Rc, sync::Arc};
 
@@ -18,9 +19,10 @@ use crate::{
     frame_graph::{FrameCommandRecorder, UploadAllocatorId},
     offscreen::OffscreenTarget,
     scene_pass::{
-        SceneMeshBuffers, ScenePage, ScenePipeline, SpaceShading, SurfaceShading, VolumeVariant,
-        scene_scissor, scene_surface_uniform_spec, scene_volume_uniform_spec, surface_page_bounds,
-        surface_uniforms, view_depth, volume_uniforms,
+        SceneMeshBuffers, ScenePage, ScenePipeline, ShadedVariant, SpaceShading, SurfaceShading,
+        VolumeVariant, scene_scissor, scene_shaded_uniform_spec, scene_surface_uniform_spec,
+        scene_volume_uniform_spec, shaded_uniforms, surface_page_bounds, surface_uniforms,
+        view_depth, volume_uniforms,
     },
 };
 
@@ -34,8 +36,11 @@ use self::portals::{PortalPass, PreparedWindows, encode_portals};
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ScenePhase {
     /// The surfaces of the scene's own space that are neither glass nor
-    /// glow nor volumes.
+    /// glow nor volumes, nor coloured by an app's shader.
     Opaque,
+    /// The surfaces of the scene's own space an app's shader colours, each
+    /// with its own pipeline.
+    Shaded,
     /// Volumes, each drawn with its own shader.
     Volume,
     /// The surfaces in the spaces the scene's portals show, which draw
@@ -64,6 +69,7 @@ impl ScenePhase {
             (Material::Glow, true) => Self::PortalGlow,
             (_, true) => Self::Portal,
             (Material::Volume(_), false) => Self::Volume,
+            (Material::Shaded(_), false) => Self::Shaded,
             (Material::Lit | Material::Unlit | Material::Emissive, false) => Self::Opaque,
         }
     }
@@ -76,6 +82,9 @@ enum StepPipeline {
     Fixed(ScenePipeline),
     /// Each volume's own pipeline of the variant.
     Volumes(VolumeVariant),
+    /// Each shaded surface's own pipeline of the variant, or the lit
+    /// pipeline it takes the place of until it builds.
+    Shaded(ShadedVariant),
     /// The portals' windows and the spaces they show.
     Portals(PortalPass),
 }
@@ -228,6 +237,14 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         } else {
             ScenePipeline::Plain
         });
+        let shaded = (
+            StepPipeline::Shaded(if shadows {
+                ShadedVariant::Shadowed
+            } else {
+                ShadedVariant::Plain
+            }),
+            ScenePhase::Shaded,
+        );
         let volumes = StepPipeline::Volumes(VolumeVariant::Color);
         let portals = |pass: PortalPass| (StepPipeline::Portals(pass), ScenePhase::Portal);
         let glow = (StepPipeline::Fixed(ScenePipeline::Glow), ScenePhase::Glow);
@@ -237,6 +254,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 (&page_texture, &depth, shadows),
                 &[
                     (opaque, ScenePhase::Opaque),
+                    shaded,
                     (volumes, ScenePhase::Volume),
                     portals(PortalPass::Colour { glow: true }),
                     glow,
@@ -252,6 +270,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             (&page_texture, &depth, shadows),
             &[
                 (opaque, ScenePhase::Opaque),
+                shaded,
                 (volumes, ScenePhase::Volume),
                 portals(PortalPass::Colour { glow: false }),
             ],
@@ -272,6 +291,10 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 (
                     StepPipeline::Fixed(ScenePipeline::Depth),
                     ScenePhase::Opaque,
+                ),
+                (
+                    StepPipeline::Fixed(ScenePipeline::Depth),
+                    ScenePhase::Shaded,
                 ),
                 (
                     StepPipeline::Volumes(VolumeVariant::Depth),
@@ -341,7 +364,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                     Some(pipeline) => Some(pipeline),
                     None => continue,
                 },
-                StepPipeline::Volumes(_) => None,
+                StepPipeline::Volumes(_) | StepPipeline::Shaded(_) => None,
                 StepPipeline::Portals(portal_pass) => {
                     if let (Some(first), Some(windows)) = (draws.first(), windows) {
                         let texture = first.texture((device, effects));
@@ -433,15 +456,13 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                     (held.alpha, source_region(&held.surface, held.mesh.content)),
                     (page, eye, space),
                 )?;
-                let uniform = self.recorder.upload_uniform(
+                self.recorder.upload_uniform(
                     UploadAllocatorId::SceneVolume,
                     scene_volume_uniform_spec(),
                     device,
                     layout,
                     bytemuck::bytes_of(&uniforms),
-                );
-                self.renderer.scene_pass.note_volume(&volume.shader);
-                uniform
+                )
             }
             material => {
                 let uniforms = surface_uniforms(
@@ -466,6 +487,25 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
                 )
             }
         };
+        let shaded = match &surface.material {
+            Material::Shaded(shaded) => {
+                let values = shaded_uniforms((&surface.transform, shaded), (eye, space))?;
+                Some(self.recorder.upload_uniform(
+                    UploadAllocatorId::SceneShaded,
+                    scene_shaded_uniform_spec(),
+                    device,
+                    layout,
+                    bytemuck::bytes_of(&values),
+                ))
+            }
+            _ => None,
+        };
+        // The pipelines of an app's shader stay while frames draw with it.
+        match &surface.material {
+            Material::Volume(volume) => self.renderer.scene_pass.note_volume(&volume.shader),
+            Material::Shaded(shaded) => self.renderer.scene_pass.note_shaded(&shaded.shader),
+            _ => {}
+        }
         let (buffers, staged) = self
             .renderer
             .scene_pass
@@ -476,6 +516,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
             phase,
             buffers,
             uniform,
+            shaded,
             scissor,
         })
     }
@@ -486,6 +527,8 @@ struct PreparedSurface<'m> {
     phase: ScenePhase,
     buffers: SceneMeshBuffers,
     uniform: crate::frame_graph::UniformUpload,
+    /// For a shaded surface, the values its shader reads.
+    shaded: Option<crate::frame_graph::UniformUpload>,
     scissor: (u32, u32, u32, u32),
 }
 
@@ -507,6 +550,30 @@ impl PreparedSurface<'_> {
         )
     }
 
+    /// The pipeline of `variant` the shader of a shaded surface built, and
+    /// the values it reads, which [`Self::bind_shaded`] binds; `None` for
+    /// any other surface, and for a shaded one while its shader builds and
+    /// when it does not, which then draws lit.
+    fn shaded_pipeline<'r>(
+        &self,
+        renderer: &'r crate::render::GpuRenderer,
+        variant: ShadedVariant,
+    ) -> Option<&'r wgpu::RenderPipeline> {
+        let Material::Shaded(shaded) = &self.held.mesh.surface.material else {
+            return None;
+        };
+        self.shaded.as_ref()?;
+        renderer.scene_shaded_pipeline(&shaded.shader, variant)
+    }
+
+    /// Binds the values a shaded surface's shader reads, in the place of
+    /// the copy of the page glass reads, after [`Self::bind`].
+    fn bind_shaded(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if let Some(values) = &self.shaded {
+            pass.set_bind_group(3, &values.bind_group, &[values.offset]);
+        }
+    }
+
     /// Binds the surface's texture, uniforms and mesh, and the copy of the
     /// page glass reads: a surface that reads none binds its own texture in
     /// the copy's place.
@@ -525,8 +592,9 @@ impl PreparedSurface<'_> {
     }
 }
 
-/// Draws `draws`, a step's surfaces, on the pipeline the step set, or a
-/// volume each on its own pipeline of the step's variant.
+/// Draws `draws`, a step's surfaces, on the pipeline the step set, or each
+/// volume and shaded surface on its own pipeline of the step's variant: a
+/// shaded surface whose shader has not built on the lit pipeline.
 fn draw_surfaces<'d>(
     render_pass: &mut wgpu::RenderPass<'_>,
     (renderer, kind): (&crate::render::GpuRenderer, StepPipeline),
@@ -535,17 +603,31 @@ fn draw_surfaces<'d>(
 ) {
     let effects = &renderer.effect_renderer;
     for draw in draws {
-        if let (StepPipeline::Volumes(variant), Material::Volume(volume)) =
-            (kind, &draw.held.mesh.surface.material)
-        {
-            let Some(pipeline) = renderer.scene_volume_pipeline(&volume.shader, variant) else {
-                continue;
-            };
-            render_pass.set_pipeline(pipeline);
+        let mut shaded = false;
+        match (kind, &draw.held.mesh.surface.material) {
+            (StepPipeline::Volumes(variant), Material::Volume(volume)) => {
+                let Some(pipeline) = renderer.scene_volume_pipeline(&volume.shader, variant) else {
+                    continue;
+                };
+                render_pass.set_pipeline(pipeline);
+            }
+            (StepPipeline::Shaded(variant), _) => {
+                let own = draw.shaded_pipeline(renderer, variant);
+                shaded = own.is_some();
+                let Some(pipeline) = own.or_else(|| renderer.scene_surface_pipeline(variant.lit()))
+                else {
+                    continue;
+                };
+                render_pass.set_pipeline(pipeline);
+            }
+            _ => {}
         }
         let (x, y, width, height) = draw.scissor;
         render_pass.set_scissor_rect(x, y, width, height);
         draw.bind(render_pass, (device, effects), backdrop);
+        if shaded {
+            draw.bind_shaded(render_pass);
+        }
         render_pass.draw_indexed(0..draw.buffers.index_count, 0, 0..1);
     }
 }

@@ -1,7 +1,8 @@
 //! The controls of the controls tab as objects in a 3D room. Each part of a
 //! control is a mesh built from the distance field the tab's stage shader
-//! traces: lit, casting its shadow and solid, and the moving parts follow
-//! the control's state. A part's texture lies on it as seen from straight
+//! traces, shaded by the stage's own lights through a shader of its own:
+//! it casts its shadow, it is solid, and the moving parts follow the
+//! control's state. A part's texture lies on it as seen from straight
 //! above its card, so where a pointer meets a part shows where it points
 //! on the card, and every part takes the stage's input.
 
@@ -13,14 +14,14 @@ use std::{
 use cranpose_core::key;
 use cranpose_ui::{
     composable,
-    space::{Mat4, Material, Mesh, MeshSurface, Vec3},
+    space::{Mat4, Material, Mesh, MeshSurface, Shaded, Vec3},
     Box, BoxSpec, Brush, Color, CornerRadii, DrawScope, Modifier, Point, Rect, Size,
 };
 
 use super::{
-    animateControl, card_background, stage_input, stage_pointer, ControlHandle, ControlKind,
-    StageAnimation, StageTouch, StageView, SLIDER_LIFT, SLIDER_TRAVEL, STAGE_HEIGHT,
-    WALL_STAGE_WIDTH,
+    animateControl, card_background, card_color, stage_input, stage_pointer, ControlHandle,
+    ControlKind, StageAnimation, StageTouch, StageView, CAMERA_PITCH, CAMERA_YAW, SHADING_WGSL,
+    SLIDER_LIFT, SLIDER_TRAVEL, STAGE_HEIGHT, WALL_STAGE_WIDTH,
 };
 
 /// The width of a control's card on a wall at scale one; with
@@ -33,8 +34,9 @@ const LIFT: f32 = 1.0;
 /// How many grid cells a part's distance field is sampled at along each
 /// side of its box.
 const RESOLUTION: u32 = 40;
-const METAL: Color = Color(0.80, 0.81, 0.84, 1.0);
-const STEEL: Color = Color(0.46, 0.48, 0.52, 1.0);
+// The tints the stage gives its two materials.
+const METAL: Color = Color(0.94, 0.95, 0.97, 1.0);
+const STEEL: Color = Color(0.62, 0.64, 0.68, 1.0);
 const INK: Color = Color(0.10, 0.11, 0.13, 1.0);
 
 /// One part of a control: its mesh, in its own coordinates, its colour and
@@ -450,7 +452,7 @@ fn PartModel(
             .mesh_surface(move || MeshSurface {
                 mesh: Arc::clone(&part.mesh),
                 transform: place().then(&stage_to_card(size)),
-                material: Material::Lit,
+                material: part_material(),
                 casts_shadow: true,
                 solid: true,
             })
@@ -459,6 +461,59 @@ fn PartModel(
         BoxSpec::default(),
         || {},
     );
+}
+
+/// How a part shows in the room: as the dark stage shows it, mirroring the
+/// stage's lights and its card.
+fn part_material() -> Material {
+    static MATERIAL: OnceLock<Material> = OnceLock::new();
+    MATERIAL
+        .get_or_init(|| {
+            let card = card_color(true);
+            let mut params = [0.0; Shaded::PARAMS];
+            params[..4].copy_from_slice(&[1.0, card.0, card.1, card.2]);
+            for (row, values) in tab_view_turn().iter().zip(params[4..13].chunks_mut(3)) {
+                values.copy_from_slice(row);
+            }
+            Material::Shaded(Shaded {
+                shader: Arc::from(format!(
+                    "{SHADING_WGSL}{}",
+                    include_str!("controls_part.wgsl")
+                )),
+                params,
+            })
+        })
+        .clone()
+}
+
+/// The turn, as rows, that takes the room's view of a card, straight into
+/// it with the wall's up up the screen, to the view the controls tab's
+/// camera has of its stage: a part seen straight on in the room mirrors the
+/// stage's lights as the tab shows them.
+fn tab_view_turn() -> [[f32; 3]; 3] {
+    let (yaw, pitch) = (CAMERA_YAW, CAMERA_PITCH);
+    let forward = -Vec3::new(
+        yaw.sin() * pitch.cos(),
+        pitch.sin(),
+        yaw.cos() * pitch.cos(),
+    );
+    let vertical = Vec3::new(0.0, 1.0, 0.0);
+    let up = (vertical - forward * vertical.dot(forward))
+        .normalized()
+        .unwrap_or(vertical);
+    let tab = [forward.cross(up), up, forward];
+    let room_forward = Vec3::new(0.0, -1.0, 0.0);
+    let room_up = Vec3::new(0.0, 0.0, -1.0);
+    let room = [room_forward.cross(room_up), room_up, room_forward];
+    let axis = |v: Vec3| [v.x, v.y, v.z];
+    std::array::from_fn(|i| {
+        std::array::from_fn(|j| {
+            tab.iter()
+                .zip(&room)
+                .map(|(&to, &from)| axis(to)[i] * axis(from)[j])
+                .sum()
+        })
+    })
 }
 
 /// The marks the stage draws on its ground for `kind` at `value`: the
