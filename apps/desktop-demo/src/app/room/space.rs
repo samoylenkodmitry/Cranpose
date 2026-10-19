@@ -209,6 +209,18 @@ impl RoomState {
         self.nested
     }
 
+    /// Whether the window's eye stands in this room behind a doorway, or
+    /// further in, through one of its doorways: a room the eye walked into
+    /// shows in space, as one stepped into does. Reads the eye's pose, so a
+    /// composable reads it through a derived state.
+    pub(super) fn holds_eye(&self) -> bool {
+        self.nested
+            && self
+                .scene_node
+                .get()
+                .is_some_and(|scene| self.eye.pose().doorways.contains(&scene))
+    }
+
     /// Turns the flat screen into the room's north wall and steps into the
     /// room, to where the eye stands in it. The room takes the keyboard, so
     /// the movement keys walk. The eye steps back from the screen into this
@@ -273,7 +285,7 @@ impl RoomState {
             size: 0.08,
         });
         if self.nested {
-            let camera = if self.spatial.get() {
+            let camera = if self.spatial.get() || self.holds_eye() {
                 shape.doorway_camera()
             } else {
                 shape.screen_camera()

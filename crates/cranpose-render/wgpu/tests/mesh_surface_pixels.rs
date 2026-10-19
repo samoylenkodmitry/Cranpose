@@ -300,6 +300,49 @@ fn capture(page: fn()) -> Option<cranpose_render_wgpu::CapturedFrame> {
     Some(support::warm_shell_frame(&mut shell, FRAME_WIDTH, FRAME_HEIGHT).0)
 }
 
+/// A side of content whose square at scale one is past the 16M-pixel budget
+/// of a layer's surface.
+const PAST_THE_BUDGET: f32 = 4200.0;
+
+/// A green wall across the frame whose content is larger than a surface may
+/// be at the frame's scale.
+#[composable]
+fn LargeWallScene() {
+    let (plane, _) = meshes();
+    Scene(0.0, move || {
+        let plane = Arc::clone(&plane);
+        Box(
+            Modifier::empty()
+                .required_size(Size {
+                    width: PAST_THE_BUDGET,
+                    height: PAST_THE_BUDGET,
+                })
+                .mesh_surface(move || MeshSurface {
+                    mesh: Arc::clone(&plane),
+                    transform: panel((2000.0, 1500.0), Vec3::new(0.0, 0.0, 600.0)),
+                    material: Material::Unlit,
+                    casts_shadow: false,
+                    solid: true,
+                })
+                .background(Color(0.0, 1.0, 0.0, 1.0)),
+            BoxSpec::default(),
+            || {},
+        );
+    });
+}
+
+#[test]
+fn a_mesh_surface_past_the_surface_budget_draws_its_content_at_a_lower_scale() {
+    let Some(frame) = capture(LargeWallScene) else {
+        return;
+    };
+    let wall = pixel_at(&frame, Vec3::new(0.0, 0.0, 600.0));
+    assert!(
+        wall[1] > 240 && wall[0] < 16 && wall[2] < 16,
+        "the wall shows its green content: {wall:?}"
+    );
+}
+
 #[test]
 fn a_light_of_some_size_softens_the_edge_of_a_shadow() {
     let Some(hard) = capture(MeshScene) else {

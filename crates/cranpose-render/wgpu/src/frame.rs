@@ -2592,9 +2592,16 @@ struct SurfacePlan {
 
 impl SurfacePlan {
     fn of(child: &ChildLayer, scale: f32, grid: Option<Point>, shown: DeviceRect) -> Option<Self> {
-        let surface_scale = scale * child.surface_scale;
         let translated = (child.surface_scale - 1.0).abs() <= 1e-4;
         let surface_logical = child_surface_rect(child, scale)?;
+        let surface_scale = scale * child.surface_scale;
+        // A mesh samples its surface through its texture coordinates, at
+        // whatever scale it rastered: past the budget, it rasters at the
+        // largest scale that fits, softer, rather than not at all.
+        let surface_scale = match child.mesh {
+            Some(_) => scale_within_budget(surface_logical, surface_scale),
+            None => surface_scale,
+        };
         let child_rect = DeviceRect::from_logical(surface_logical, surface_scale).snap_out();
         let grid_offset = grid.map(|grid| {
             let offset = Point::new(grid.x * scale, grid.y * scale);
@@ -5502,6 +5509,27 @@ fn surface_pixels(rect: Rect, scale: f32) -> u64 {
     let width = (rect.width * scale).ceil().max(0.0) as u64;
     let height = (rect.height * scale).ceil().max(0.0) as u64;
     width * height
+}
+
+/// `scale`, or the largest scale below it at which `rect`'s snapped surface
+/// fits the pixel budget.
+fn scale_within_budget(rect: Rect, scale: f32) -> f32 {
+    let pixels = |scale: f32| {
+        let (width, height) = DeviceRect::from_logical(rect, scale)
+            .snap_out()
+            .pixel_size();
+        u64::from(width) * u64::from(height)
+    };
+    let needed = pixels(scale);
+    if needed <= MAX_SURFACE_PIXELS {
+        return scale;
+    }
+    let mut fitted = scale * (MAX_SURFACE_PIXELS as f32 / needed as f32).sqrt();
+    // Snapping out adds up to a pixel to each side.
+    while pixels(fitted) > MAX_SURFACE_PIXELS && fitted > 0.0 {
+        fitted *= 0.995;
+    }
+    fitted
 }
 
 /// Keeps a child's surface inside the pixel budget by falling back to the
