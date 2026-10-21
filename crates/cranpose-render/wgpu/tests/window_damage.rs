@@ -826,6 +826,43 @@ fn a_small_endless_animation_turned_by_its_layer_repaints_only_its_area() {
     assert_spinner_repaints_only_itself(Scene::TurnedSpinner);
 }
 
+/// A page that moves for long enough that its target stops summarizing for
+/// a while, and lets its summaries go, and then holds still: once it
+/// summarizes again a frame reports no damage, and every frame equals the
+/// whole frame.
+#[test]
+fn a_page_holding_still_after_moving_for_long_reports_its_damage_again() {
+    const MOVING: u32 = 40;
+    const STILL: u32 = 300;
+    for keeper in KEEPERS {
+        let Some((_lock, renderer)) = renderer() else {
+            return;
+        };
+        let mut harness = Harness::new(renderer, Scene::MovedPage, 1.0, keeper);
+        let mut still_damage = None;
+        for index in 0..MOVING + STILL {
+            let step = index.min(MOVING);
+            let frame = harness.frame(step);
+            let label = format!("{keeper:?} frame {index}: {:?}", frame.stats);
+            support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+            if index > MOVING && matches!(frame.stats.damage, FrameDamage::Rect { .. }) {
+                still_damage = Some(frame.stats.damage);
+                break;
+            }
+        }
+        assert_eq!(
+            still_damage,
+            Some(FrameDamage::Rect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0
+            }),
+            "{keeper:?}: a still frame after the page moved reports no damage"
+        );
+    }
+}
+
 /// Once every image of a swapchain holds the frame, a frame that changes
 /// nothing draws nothing.
 #[test]

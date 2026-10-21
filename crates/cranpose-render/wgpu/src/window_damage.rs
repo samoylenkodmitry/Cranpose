@@ -34,6 +34,10 @@ const FULL_SHARE: f32 = 0.5;
 /// the window skips summarizing: about four seconds at 60 Hz, so a page
 /// that never holds still pays two summaries in 258 frames.
 const MAX_SKIPPED: u32 = 256;
+/// The frames to skip at or past which a target lets its summaries go until
+/// it summarizes again: after four frames in a row changed most of the
+/// window.
+const RELEASE_SKIPS: u32 = 64;
 /// The item between the root's items and the overlay's.
 const OVERLAY_KEY: u64 = 0x6f76_6572_6c61_7973;
 
@@ -231,6 +235,8 @@ pub(crate) struct FrameWindow<'a> {
 #[derive(Default)]
 pub(crate) struct WindowDamage {
     next: WindowSummary,
+    /// The items of the last summary, which the next one takes room for.
+    last_items: usize,
     summarized: bool,
     skipped: u32,
     full_frames: u32,
@@ -240,7 +246,7 @@ pub(crate) struct WindowDamage {
 
 impl WindowDamage {
     /// Summarizes `frame` and compares it with `kept`.
-    pub(crate) fn begin(&mut self, frame: &FrameWindow<'_>, kept: &KeptWindow) -> Damage {
+    pub(crate) fn begin(&mut self, frame: &FrameWindow<'_>, kept: &mut KeptWindow) -> Damage {
         self.summarized = false;
         if self.skipped > 0 {
             self.skipped -= 1;
@@ -258,6 +264,9 @@ impl WindowDamage {
             self.full_frames = self.full_frames.saturating_add(1);
             let doublings = 2 * (self.full_frames - 1);
             self.skipped = 1u32 << doublings.min(MAX_SKIPPED.trailing_zeros());
+            if self.skipped >= RELEASE_SKIPS {
+                self.release(kept);
+            }
         } else {
             self.full_frames = 0;
         }
@@ -270,6 +279,16 @@ impl WindowDamage {
         changed.map_or(Repaint::Nothing, |changed| {
             widen(&self.next, changed, viewport).repaint()
         })
+    }
+
+    /// Lets the summaries go, `kept`'s among them: a page that keeps changing
+    /// most of the window holds none while it skips. The frame keeps none.
+    fn release(&mut self, kept: &mut KeptWindow) {
+        kept.summary = WindowSummary::default();
+        self.next = WindowSummary::default();
+        self.events = Vec::new();
+        self.open = Vec::new();
+        self.summarized = false;
     }
 
     /// Ends the frame [`Self::begin`] summarized: `kept` now holds its
@@ -286,6 +305,7 @@ impl WindowDamage {
     /// summary cannot describe.
     fn summarize(&mut self, frame: &FrameWindow<'_>) -> bool {
         self.next.items.clear();
+        self.next.items.reserve(self.last_items);
         self.next.captures.clear();
         let scale = frame.root_scale;
         if !scale.is_finite() || scale <= 0.0 {
@@ -320,7 +340,9 @@ impl WindowDamage {
             });
             walk.layer(overlay, &place, None);
         }
-        walk.complete
+        let complete = walk.complete;
+        self.last_items = self.next.items.len();
+        complete
     }
 }
 

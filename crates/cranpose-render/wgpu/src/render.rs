@@ -5340,7 +5340,7 @@ impl GpuRenderer {
                 // the history does not follow.
                 self.swapchain.forget();
                 let frame = self.frame_window(packet, viewport);
-                let damage = self.window_damage.begin(&frame, &composition.kept);
+                let damage = self.window_damage.begin(&frame, &mut composition.kept);
                 Some(FrameDamagePlan {
                     damage,
                     repaint: damage.repaint(),
@@ -5358,7 +5358,7 @@ impl GpuRenderer {
                     return None;
                 }
                 let frame = self.frame_window(packet, viewport);
-                let damage = self.window_damage.begin(&frame, &self.swapchain.kept);
+                let damage = self.window_damage.begin(&frame, &mut self.swapchain.kept);
                 let repaint = self
                     .swapchain
                     .changed_since(image, damage)
