@@ -43,7 +43,10 @@ use crate::{
     },
     effect_renderer::{CompositeSampleMode, EffectRenderer, RoundedCompositeMask},
     fixed_pipeline::{FixedPipeline, FixedPipelineJob},
-    frame::{AdmissionGate, FrameExecutor, StageSideScratch},
+    frame::{
+        AdmissionGate, Damage, FrameExecutor, FrameWindow, KeptWindow, Repaint, StageSideScratch,
+        WindowDamage,
+    },
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
         FrameUploadAllocators, UniformUpload, UploadAllocatorId, UploadAllocatorSpec, UploadMode,
@@ -3315,6 +3318,8 @@ pub(crate) struct StoreRunBatch {
 struct CompositionTarget {
     target: Rc<OffscreenTarget>,
     output_bind_group: wgpu::BindGroup,
+    /// The frame the target's pixels show.
+    kept: KeptWindow,
 }
 
 /// Where a frame renders: straight into the presentable image, or into the
@@ -3383,6 +3388,36 @@ fn surface_is_direct_root(
         && usage.contains(DIRECT_SURFACE_ROOT_USAGES)
         && (!reads_page || usage.contains(wgpu::TextureUsages::TEXTURE_BINDING))
         && (texture.width(), texture.height()) == viewport
+}
+
+/// What a frame draws into its page: the root and overlay scenes at the
+/// root's scale over the clear colour, all of the page or a part of it.
+#[derive(Clone, Copy)]
+struct FrameDraw<'a> {
+    root: &'a LayerScene,
+    overlay: Option<&'a LayerScene>,
+    root_scale: f32,
+    clear: wgpu::Color,
+    repaint: Repaint,
+}
+
+fn frame_damage(damage: Option<Damage>) -> gpu_stats::FrameDamage {
+    match damage {
+        None => gpu_stats::FrameDamage::Untracked,
+        Some(Damage::Skipped) => gpu_stats::FrameDamage::Skipped,
+        Some(Damage::Full) => gpu_stats::FrameDamage::Full,
+        Some(Damage::Part(rect)) => {
+            let rect = rect.map_or([0; 4], |rect| {
+                [rect.x, rect.y, rect.width, rect.height].map(|value| value as u32)
+            });
+            gpu_stats::FrameDamage::Rect {
+                x: rect[0],
+                y: rect[1],
+                width: rect[2],
+                height: rect[3],
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -3500,6 +3535,10 @@ pub struct GpuRenderer {
     pub(crate) ablation: Ablation,
     pub(crate) ablation_frames: u32,
     pub(crate) nesting_overflow_reported: bool,
+    window_damage: WindowDamage,
+    /// The colour a frame drawn in a window last filled it with, and a
+    /// pixel of it.
+    pub(crate) window_fill: Option<(wgpu::Color, Rc<OffscreenTarget>)>,
     pub(crate) backdrop_gates: HashMap<NodeId, AdmissionGate>,
     pub(crate) fill_gates: HashMap<DrawCommandId, AdmissionGate>,
     pub(crate) effect_gates: HashMap<NodeId, AdmissionGate>,
@@ -3900,6 +3939,8 @@ impl GpuRenderer {
             ablation: Ablation::default(),
             ablation_frames: 0,
             nesting_overflow_reported: false,
+            window_damage: WindowDamage::default(),
+            window_fill: None,
             backdrop_gates: HashMap::default(),
             fill_gates: HashMap::default(),
             effect_gates: HashMap::default(),
@@ -4857,6 +4898,7 @@ impl GpuRenderer {
         CompositionTarget {
             target,
             output_bind_group,
+            kept: KeptWindow::default(),
         }
     }
 
@@ -5049,13 +5091,19 @@ impl GpuRenderer {
                 .overlay
                 .as_ref()
                 .is_some_and(|overlay| overlay.contains_backdrop());
-        let frame_root = self.frame_root(
+        let mut frame_root = self.frame_root(
             output_mode,
             output_view,
             output_texture,
             (width, height),
             reads_page,
         );
+        let damage = self.damage_of(&packet, &mut frame_root, output_mode, (width, height));
+        self.frame_stats.damage.set(frame_damage(damage));
+        let repaint = damage.map_or(Repaint::Whole, Damage::repaint);
+        self.frame_stats
+            .repainted_pixels
+            .set(repaint.pixels((width, height)));
         let root = frame_root.target();
         let screenshot_bind_group = output_view.and_then(|_| {
             matches!(output_mode, OutputMode::Screenshot).then(|| {
@@ -5064,7 +5112,7 @@ impl GpuRenderer {
             })
         });
         let output = frame_root.output(output_view, screenshot_bind_group.as_ref());
-        let result = self.render_graph(root, packet, returns, output_mode, output);
+        let submitted = self.render_graph(root, packet, repaint, returns, output_mode, output);
         #[cfg(not(target_arch = "wasm32"))]
         self.effect_renderer
             .compiler()
@@ -5108,6 +5156,10 @@ impl GpuRenderer {
             .set(self.image_texture_cache.len() as u32);
         self.effect_renderer
             .merge_and_reset_debug_counters(&self.frame_stats);
+        if damage.is_some() {
+            self.keep_window(matches!(submitted, Ok(true)));
+        }
+        let result = submitted.map(drop);
         self.frame_graph_executor.reset_upload_allocators();
         let snapshot = self.frame_stats.snapshot();
         if crate::frame_graph::frame_graph_pass_telemetry_threshold_ms().is_some() {
@@ -5219,11 +5271,63 @@ impl GpuRenderer {
         self.shape_pipelines.build_in_background();
     }
 
-    /// Drops the layers and the blurred shadows earlier frames drew and kept.
+    /// Drops the layers, the blurred shadows and the window earlier frames
+    /// drew and kept.
     fn drop_kept_drawing(&mut self) {
         self.layer_cache.clear();
         self.shadow_surface_cache.clear();
         self.shadow_surface_cache_bytes = 0;
+        if let Some(composition) = self.composition_target.as_mut() {
+            composition.kept.forget();
+        }
+    }
+
+    /// What `packet` changes against the frame `frame_root` kept: a frame
+    /// displayed through the composition target draws only that, while a
+    /// screenshot is drawn whole and a presentable image keeps no frame.
+    fn damage_of(
+        &mut self,
+        packet: &FramePacket,
+        frame_root: &mut FrameRoot,
+        output_mode: OutputMode,
+        viewport: (u32, u32),
+    ) -> Option<Damage> {
+        let FrameRoot::Composition(composition) = frame_root else {
+            return None;
+        };
+        if matches!(output_mode, OutputMode::Screenshot) {
+            composition.kept.forget();
+            return None;
+        }
+        let frame = FrameWindow {
+            root: &packet.root,
+            overlay: packet.overlay.as_deref(),
+            viewport,
+            root_scale: packet.root_scale,
+            setting: self.frame_setting(packet.clear),
+        };
+        Some(self.window_damage.begin(&frame, &composition.kept))
+    }
+
+    /// Keeps the summary of the frame just drawn into the composition target
+    /// when it was `submitted` and drew no stand-in.
+    fn keep_window(&mut self, submitted: bool) {
+        let drawn = submitted && !self.frame_stats.drew_stand_in();
+        if let Some(composition) = self.composition_target.as_mut() {
+            self.window_damage.end(&mut composition.kept, drawn);
+        }
+    }
+
+    /// What every pixel of a frame depends on besides its items: the clear
+    /// colour, the glyph atlas and the debug switches.
+    fn frame_setting(&self, clear: wgpu::Color) -> u64 {
+        let mut state = FxHasher::default();
+        for channel in [clear.r, clear.g, clear.b, clear.a] {
+            state.write_u64(channel.to_bits());
+        }
+        state.write_u64(self.text_glyph_atlas.generation());
+        state.write_u64(cranpose_render_common::debug_toggles::debug_toggle_generation());
+        state.finish()
     }
 
     /// Notes an effect drawn as its placeholder, or a draw left out, while
@@ -5474,14 +5578,16 @@ impl GpuRenderer {
         self.run_store.recall();
     }
 
+    /// Records and submits the frame: whether it submitted anything.
     fn render_graph(
         &mut self,
         root_target: &Rc<OffscreenTarget>,
         packet: FramePacket,
+        repaint: Repaint,
         returns: &mut RenderReturns,
         output_mode: OutputMode,
         output: Option<(&wgpu::TextureView, &wgpu::BindGroup)>,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         #[cfg(target_arch = "wasm32")]
         let (device, queue, graph_start) =
             (self.device.clone(), self.queue.clone(), Instant::now());
@@ -5493,17 +5599,16 @@ impl GpuRenderer {
             ..
         } = packet;
         let page = Rc::clone(root_target);
-
-        #[cfg(not(target_arch = "wasm32"))]
-        let (result, submitted) = self.execute_frame_graph(
-            &root,
-            overlay.as_deref(),
-            &page,
+        let draw = FrameDraw {
+            root: &root,
+            overlay: overlay.as_deref(),
             root_scale,
             clear,
-            output_mode,
-            output,
-        );
+            repaint,
+        };
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let (result, submitted) = self.execute_frame_graph(draw, &page, output_mode, output);
 
         #[cfg(target_arch = "wasm32")]
         let (result, submitted) = {
@@ -5514,11 +5619,8 @@ impl GpuRenderer {
                 let initial_pass_count = frame_encoder.recorded_pass_count();
                 let result = self.encode_frame(
                     &mut frame_encoder,
-                    &root,
-                    overlay.as_deref(),
+                    draw,
                     Rc::clone(&page),
-                    root_scale,
-                    clear,
                     output_mode,
                     output,
                 );
@@ -5555,20 +5657,16 @@ impl GpuRenderer {
             self.text_glyph_run_arena = GlyphRunArena::new(self.copy_free);
         }
         returns.scene = Some(FrameSceneStorage { root, overlay });
-        result
+        result.map(|()| submitted)
     }
 
     /// Records and submits the frame through the frame graph: whether it
     /// recorded without error, and whether it submitted anything.
     #[cfg(not(target_arch = "wasm32"))]
-    #[expect(clippy::too_many_arguments)]
     fn execute_frame_graph(
         &mut self,
-        root: &LayerScene,
-        overlay: Option<&LayerScene>,
+        draw: FrameDraw<'_>,
         page: &Rc<OffscreenTarget>,
-        root_scale: f32,
-        clear: wgpu::Color,
         output_mode: OutputMode,
         output: Option<(&wgpu::TextureView, &wgpu::BindGroup)>,
     ) -> (Result<(), String>, bool) {
@@ -5583,16 +5681,7 @@ impl GpuRenderer {
             &[],
             &[surface],
             |frame_encoder| {
-                self.encode_frame(
-                    frame_encoder,
-                    root,
-                    overlay,
-                    Rc::clone(page),
-                    root_scale,
-                    clear,
-                    output_mode,
-                    output,
-                )
+                self.encode_frame(frame_encoder, draw, Rc::clone(page), output_mode, output)
             },
         );
         let after_build = Instant::now();
@@ -5622,24 +5711,21 @@ impl GpuRenderer {
     /// Records the frame: the root and overlay layer scenes into the frame's
     /// target, the output conversion when the target is not the presented
     /// image, and the viewport uniforms the recorded passes claimed.
-    #[expect(clippy::too_many_arguments)]
     fn encode_frame<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
-        root: &LayerScene,
-        overlay: Option<&LayerScene>,
+        draw: FrameDraw<'_>,
         page: Rc<OffscreenTarget>,
-        root_scale: f32,
-        clear: wgpu::Color,
         output_mode: OutputMode,
         output: Option<(&wgpu::TextureView, &wgpu::BindGroup)>,
     ) -> Result<(), String> {
         FrameExecutor::new(self, recorder).render_frame(
-            root,
-            overlay,
+            draw.root,
+            draw.overlay,
             page,
-            root_scale,
-            wgpu::LoadOp::Clear(clear),
+            draw.root_scale,
+            wgpu::LoadOp::Clear(draw.clear),
+            draw.repaint,
         )?;
         if let Some((output_view, bind_group)) = output {
             match output_mode {

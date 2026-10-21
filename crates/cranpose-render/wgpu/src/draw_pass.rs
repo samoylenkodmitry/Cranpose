@@ -389,7 +389,7 @@ pub(crate) fn scissor_in_target(
     ))
 }
 
-fn intersect_scissors(
+pub(crate) fn intersect_scissors(
     a: Option<(u32, u32, u32, u32)>,
     b: Option<(u32, u32, u32, u32)>,
 ) -> Option<Option<(u32, u32, u32, u32)>> {

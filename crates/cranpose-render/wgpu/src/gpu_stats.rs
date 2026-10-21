@@ -56,6 +56,34 @@ impl Default for IsolatedLayerStat {
     }
 }
 
+/// The window pixels a frame changes against the frame the renderer's
+/// composition target kept.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FrameDamage {
+    /// The frame drew straight into the presentable image, which keeps no
+    /// earlier frame, or was a screenshot, drawn whole.
+    #[default]
+    Untracked,
+    /// Recent frames changed most of the window, so the frame skipped
+    /// comparing.
+    Skipped,
+    /// The whole window: the target kept no frame to compare with, or the
+    /// frame changes most of it.
+    Full,
+    /// Only the pixels of this rect, in window pixels; empty when nothing
+    /// changes.
+    Rect {
+        /// The rect's left edge.
+        x: u32,
+        /// The rect's top edge.
+        y: u32,
+        /// The rect's width.
+        width: u32,
+        /// The rect's height.
+        height: u32,
+    },
+}
+
 /// The counters of one drawn frame, from `WgpuRenderer::last_frame_stats`. Pixel counts are in
 /// device pixels.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -196,6 +224,12 @@ pub struct FrameStatsSnapshot {
     /// included: they are one draw each and already counted by `blur_passes`
     /// and `effect_applies`.
     pub draw_calls: u32,
+    /// The window pixels the frame changes against the frame the
+    /// renderer's composition target kept.
+    pub damage: FrameDamage,
+    /// The window pixels the frame drew again: all of them, or those of the
+    /// damage, over what the frame before left in the rest.
+    pub repainted_pixels: u64,
     /// Texts drawn from the cache of rasterized text images.
     pub text_image_cache_hits: u32,
     /// Texts rasterized into an image because the cache held none.
@@ -463,6 +497,8 @@ pub(crate) struct FrameStats {
     pub image_passes: Cell<u32>,
     pub text_passes: Cell<u32>,
     pub draw_calls: Cell<u32>,
+    pub damage: Cell<FrameDamage>,
+    pub repainted_pixels: Cell<u64>,
     pub text_image_cache_hits: Cell<u32>,
     pub text_image_cache_misses: Cell<u32>,
     pub text_image_cache_hit_pixels: Cell<u64>,
@@ -484,6 +520,15 @@ pub(crate) struct FrameStats {
 }
 
 impl FrameStats {
+    /// Whether the frame drew anything in place of what its pipelines
+    /// draw: a placeholder, a left-out draw, fallback triangles or a
+    /// shader's general pipeline.
+    pub(crate) fn drew_stand_in(&self) -> bool {
+        self.placeholder_draws.get() != 0
+            || self.shape_pipeline_fallback_draws.get() != 0
+            || self.shader_pipeline_fallback_draws.get() != 0
+    }
+
     pub fn record_capture_fixup_pass(&self) {
         self.capture_fixup_passes
             .set(self.capture_fixup_passes.get().saturating_add(1));
@@ -844,6 +889,8 @@ impl FrameStats {
             image_passes: self.image_passes.get(),
             text_passes: self.text_passes.get(),
             draw_calls: self.draw_calls.get(),
+            damage: self.damage.get(),
+            repainted_pixels: self.repainted_pixels.get(),
             text_image_cache_hits: self.text_image_cache_hits.get(),
             text_image_cache_misses: self.text_image_cache_misses.get(),
             text_image_cache_hit_pixels: self.text_image_cache_hit_pixels.get(),
@@ -919,6 +966,8 @@ impl FrameStats {
         self.image_passes.set(0);
         self.text_passes.set(0);
         self.draw_calls.set(0);
+        self.damage.set(FrameDamage::default());
+        self.repainted_pixels.set(0);
         self.text_image_cache_hits.set(0);
         self.text_image_cache_misses.set(0);
         self.text_image_cache_hit_pixels.set(0);

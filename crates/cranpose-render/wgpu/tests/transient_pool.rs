@@ -225,8 +225,11 @@ fn glasses_scrolling_back_and_forth_under_the_top_edge_create_no_textures() {
         .iter()
         .map(|offset| render(*offset).offscreen_news)
         .sum();
+    // Seven for the captures, and the pixel of the clear colour the first
+    // frame drawing only the glasses' rows fills them with, which the
+    // renderer keeps.
     assert!(
-        first_sweep <= 7,
+        first_sweep <= 8,
         "the first sweep created {first_sweep} textures, exceeding its allocation budget"
     );
     for offset in SCROLL_OFFSETS.iter().rev().chain(SCROLL_OFFSETS.iter()) {

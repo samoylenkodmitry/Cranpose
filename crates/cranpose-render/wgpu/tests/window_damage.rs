@@ -1,0 +1,866 @@
+//! A frame displayed through the renderer's own composition target draws
+//! only the window pixels that changed since the frame the target kept, and
+//! equals the frame drawn whole byte for byte. One small thing changes per
+//! frame, beside and under glass, through layers, effects and shadows, over
+//! a page of still cards; the damage each frame reports holds every pixel
+//! the whole frames change, and a frame that moves the whole page draws the
+//! whole window.
+
+use std::{cell::RefCell, rc::Rc};
+
+use cranpose_app_shell::AppShell;
+use cranpose_core::{MutableState, location_key};
+use cranpose_liquid::{Glass, GlassSurface};
+use cranpose_render_common::{
+    Renderer,
+    graph::{DrawCommandId, DrawRunNode, PrimitivePhase, RenderGraph, RenderNode},
+    style_shared::DrawPlacement,
+};
+use cranpose_render_wgpu::{FrameDamage, RenderStatsSnapshot, WgpuRenderer};
+use cranpose_ui::{
+    Alignment, Box, BoxSpec, Color, Column, ColumnSpec, ContentScale, GraphicsLayer, Image,
+    LayerShape, Modifier, RenderEffect, Row, RowSpec, Text, TextStyle, composable,
+    text::{SpanStyle, TextUnit},
+};
+use cranpose_ui_graphics::{
+    Brush, CornerRadii, Dp, DrawPrimitive, DrawScope, DrawStyle, ImageBitmap, Path, Point, Rect,
+    RoundedCornerShape, Stroke,
+};
+
+use crate::support::{self, rect_modifier};
+
+const WIDTH: u32 = 320;
+const HEIGHT: u32 = 400;
+const STEPS: u32 = 6;
+/// Device pixels per logical one: whole, and a fraction that leaves edges
+/// between pixels.
+const SCALES: [f32; 2] = [1.0, 1.5];
+/// Where the changing thing sits: over the cards and under the glass.
+const SPOT: [f32; 4] = [120.0, 110.0, 24.0, 24.0];
+const GLASS: [f32; 4] = [60.0, 80.0, 200.0, 100.0];
+const UPPER_GLASS: [f32; 4] = [140.0, 140.0, 140.0, 90.0];
+/// A spinner beside the glass, over the cards.
+const SPINNER: [f32; 4] = [180.0, 10.0, 24.0, 24.0];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Scene {
+    Shape,
+    Arc,
+    Gradient,
+    Star,
+    Label,
+    Picture,
+    TurnedLayer,
+    FadedLayer,
+    UnderBlur,
+    UnderBlurUnderBlur,
+    UnderLiquidGlass,
+    BlurredContent,
+    Shadow,
+    Appearing,
+    MovedPage,
+    /// A spinner turning by drawing its arc again, beside two liquid glass
+    /// panes.
+    Spinner,
+    /// A spinner turning by its layer, beside two liquid glass panes.
+    TurnedSpinner,
+}
+
+fn spot() -> Modifier {
+    rect_modifier(SPOT)
+}
+
+fn shade(step: u32) -> Color {
+    Color(0.2 + 0.12 * (step % 6) as f32, 0.75, 0.3, 1.0)
+}
+
+fn arc(scope: &mut dyn DrawScope, start: f32) {
+    let size = scope.size();
+    scope.draw_arc(
+        Brush::solid(Color(0.3, 0.8, 1.0, 1.0)),
+        Point::new(size.width * 0.5, size.height * 0.5),
+        9.0,
+        start,
+        270.0,
+        Stroke::new(3.0),
+    );
+}
+
+fn star(center: Point, outer: f32) -> Path {
+    let mut star = Path::new();
+    for point in 0..10 {
+        let angle = point as f32 * std::f32::consts::PI / 5.0;
+        let radius = if point % 2 == 0 { outer } else { outer * 0.4 };
+        let at = Point::new(
+            center.x + radius * angle.cos(),
+            center.y + radius * angle.sin(),
+        );
+        if point == 0 {
+            star.move_to(at);
+        } else {
+            star.line_to(at);
+        }
+    }
+    star.close();
+    star
+}
+
+fn label_style(size: f32) -> TextStyle {
+    TextStyle::from_span_style(SpanStyle {
+        color: Some(Color::WHITE),
+        font_size: TextUnit::Sp(size),
+        ..Default::default()
+    })
+}
+
+thread_local! {
+    static PICTURES: [ImageBitmap; 2] = [[230, 80, 40, 255], [40, 90, 230, 255]]
+        .map(|rgba| ImageBitmap::from_rgba8(2, 2, rgba.repeat(4)).expect("a solid image"));
+}
+
+/// A card of the still page: a gradient round rect under a border, a star
+/// path, a row of dots and a label.
+#[composable]
+fn Card(index: usize) {
+    let hue = (index % 7) as f32 / 7.0;
+    Box(
+        Modifier::empty()
+            .size_points(60.0, 52.0)
+            .padding(2.0)
+            .rounded_corners(8.0)
+            .border(
+                1.0,
+                Color(1.0, 1.0, 1.0, 0.35),
+                RoundedCornerShape::uniform(8.0),
+            )
+            .draw_behind(move |scope| {
+                let size = scope.size();
+                scope.draw_round_rect(
+                    Brush::linear_gradient(vec![
+                        Color(0.2 + hue * 0.6, 0.3, 0.8 - hue * 0.5, 1.0),
+                        Color(0.1, 0.5 + hue * 0.3, 0.4, 1.0),
+                    ]),
+                    CornerRadii::uniform(8.0),
+                );
+                let center = Point::new(size.width * 0.5, size.height * 0.5);
+                scope.draw_path(
+                    &star(center, 12.0),
+                    Brush::solid(Color(1.0, 0.9, 0.4, 0.8)),
+                    DrawStyle::Fill,
+                );
+                for dot in 0..6 {
+                    scope.draw_circle(
+                        Brush::solid(Color(1.0, 1.0, 1.0, 0.5)),
+                        Point::new(6.0 + dot as f32 * 7.0, size.height - 6.0),
+                        2.0,
+                    );
+                }
+            }),
+        BoxSpec::default(),
+        move || {
+            Text(
+                format!("#{index}"),
+                Modifier::empty().padding(3.0),
+                label_style(9.0),
+            );
+        },
+    );
+}
+
+#[composable]
+fn Cards(scene: Scene, step: MutableState<u32>) {
+    let shift = if scene == Scene::MovedPage {
+        step.get() as f32
+    } else {
+        0.0
+    };
+    Column(
+        Modifier::empty().offset(4.0, 4.0 - shift),
+        ColumnSpec::default(),
+        || {
+            for row in 0..7 {
+                Row(Modifier::empty(), RowSpec::default(), move || {
+                    for column in 0..5 {
+                        Card(row * 5 + column);
+                    }
+                });
+            }
+        },
+    );
+}
+
+fn blur_pane(rect: [f32; 4]) -> Modifier {
+    rect_modifier(rect)
+        .backdrop_effect(RenderEffect::blur(6.0))
+        .background(Color(1.0, 1.0, 1.0, 0.15))
+        .rounded_corners(16.0)
+}
+
+/// An arc in `rect` drawn again `degrees` further a step.
+fn arc_drawn_again(rect: [f32; 4], step: MutableState<u32>, degrees: f32) -> Modifier {
+    rect_modifier(rect).draw_behind(move |scope| arc(scope, step.get() as f32 * degrees))
+}
+
+/// An arc in `rect` whose layer turns `degrees` a step.
+fn arc_turned(rect: [f32; 4], step: MutableState<u32>, degrees: f32) -> Modifier {
+    rect_modifier(rect)
+        .graphics_layer(move || GraphicsLayer {
+            rotation_z: step.get() as f32 * degrees,
+            ..Default::default()
+        })
+        .draw_behind(|scope| arc(scope, 0.0))
+}
+
+/// A white box at the spot whose blurred shadow moves down a pixel a step.
+fn shadowed(step: MutableState<u32>) -> Modifier {
+    spot()
+        .drop_shadow(
+            LayerShape::Rounded(RoundedCornerShape::uniform(6.0)),
+            move |shadow| {
+                shadow.radius = 8.0;
+                shadow.offset.y = (step.get() % 3) as f32;
+                shadow.color = Color(0.0, 0.0, 0.0, 0.7);
+            },
+        )
+        .background(Color::WHITE)
+        .rounded_corners(6.0)
+}
+
+fn gradient(scope: &mut dyn DrawScope, step: u32) {
+    scope.draw_round_rect(
+        Brush::linear_gradient(vec![shade(step), Color(0.1, 0.2, 0.6, 1.0)]),
+        CornerRadii::uniform(6.0),
+    );
+}
+
+fn growing_star(scope: &mut dyn DrawScope, step: u32) {
+    scope.draw_path(
+        &star(Point::new(12.0, 12.0), 8.0 + (step % 3) as f32),
+        Brush::solid(Color(1.0, 0.4, 0.4, 1.0)),
+        DrawStyle::Fill,
+    );
+}
+
+/// The modifier of the box `scene` changes at a step; `None` for a scene
+/// that changes no box.
+fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
+    Some(match scene {
+        Scene::Shape | Scene::UnderBlur | Scene::UnderBlurUnderBlur | Scene::UnderLiquidGlass => {
+            spot().background(shade(step.get()))
+        }
+        Scene::Arc => arc_drawn_again(SPOT, step, 30.0),
+        Scene::Gradient => spot().draw_behind(move |scope| gradient(scope, step.get())),
+        Scene::Star => spot().draw_behind(move |scope| growing_star(scope, step.get())),
+        Scene::TurnedLayer => arc_turned(SPOT, step, 15.0),
+        Scene::FadedLayer => spot().graphics_layer(|| GraphicsLayer {
+            alpha: 0.6,
+            ..Default::default()
+        }),
+        Scene::BlurredContent => spot().blur(Dp(3.0)),
+        Scene::Shadow => shadowed(step),
+        Scene::Appearing if step.get() % 2 == 1 => spot().background(Color(0.9, 0.2, 0.2, 1.0)),
+        Scene::Spinner => arc_drawn_again(SPINNER, step, 12.0),
+        Scene::TurnedSpinner => arc_turned(SPINNER, step, 12.0),
+        Scene::Label | Scene::Picture | Scene::Appearing | Scene::MovedPage => return None,
+    })
+}
+
+#[composable]
+fn Changing(scene: Scene, step: MutableState<u32>) {
+    match scene {
+        Scene::Label => {
+            Text(
+                format!("{}", step.get() * 7),
+                rect_modifier([SPOT[0], SPOT[1], 60.0, 20.0]),
+                label_style(14.0),
+            );
+        }
+        Scene::Picture => {
+            let picture = PICTURES.with(|pictures| pictures[(step.get() % 2) as usize].clone());
+            Image(
+                picture,
+                None,
+                spot(),
+                Alignment::CENTER,
+                ContentScale::FillBounds,
+                1.0,
+                None,
+            );
+        }
+        _ => {
+            let shaded = matches!(scene, Scene::FadedLayer | Scene::BlurredContent);
+            if let Some(modifier) = changing_box(scene, step) {
+                Box(modifier, BoxSpec::default(), move || {
+                    if shaded {
+                        Box(
+                            Modifier::empty()
+                                .size_points(SPOT[2], SPOT[3])
+                                .background(shade(step.get())),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    }
+                });
+            }
+        }
+    }
+}
+
+#[composable]
+fn Page(scene: Scene, step: MutableState<u32>) {
+    Box(
+        Modifier::empty()
+            .fill_max_size()
+            .background(Color(0.06, 0.06, 0.1, 1.0)),
+        BoxSpec::default(),
+        move || {
+            Cards(scene, step);
+            Changing(scene, step);
+            match scene {
+                Scene::UnderBlur => {
+                    Box(blur_pane(GLASS), BoxSpec::default(), || {});
+                }
+                Scene::UnderBlurUnderBlur => {
+                    Box(blur_pane(GLASS), BoxSpec::default(), || {});
+                    Box(blur_pane(UPPER_GLASS), BoxSpec::default(), || {});
+                }
+                Scene::UnderLiquidGlass => {
+                    GlassSurface(rect_modifier(GLASS), Glass::regular(), || {});
+                }
+                Scene::Spinner | Scene::TurnedSpinner => {
+                    GlassSurface(rect_modifier(GLASS), Glass::regular(), || {});
+                    GlassSurface(rect_modifier(UPPER_GLASS), Glass::regular(), || {});
+                }
+                _ => {}
+            }
+        },
+    );
+}
+
+/// An image the renderer can draw and copy from, but not copy into: frames
+/// compose in the renderer's own target, which keeps the frame before.
+const COMPOSED: wgpu::TextureUsages =
+    wgpu::TextureUsages::RENDER_ATTACHMENT.union(wgpu::TextureUsages::COPY_SRC);
+/// An image every frame draws straight into, whole.
+const DIRECT: wgpu::TextureUsages = COMPOSED
+    .union(wgpu::TextureUsages::COPY_DST)
+    .union(wgpu::TextureUsages::TEXTURE_BINDING);
+
+/// A presentable image and its view.
+struct Image {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
+/// A page of a scene drawn as a window shows it, into presentable images.
+struct Harness {
+    shell: AppShell<WgpuRenderer>,
+    step: Rc<RefCell<Option<MutableState<u32>>>>,
+    composed: Image,
+    direct: Image,
+}
+
+/// A frame drawn into both images.
+struct Frame {
+    /// The statistics of the frame drawn into the composed image.
+    stats: RenderStatsSnapshot,
+    composed: Vec<u8>,
+    direct: Vec<u8>,
+}
+
+impl Harness {
+    /// The page of `scene` at `scale` device pixels per logical one.
+    fn new(renderer: WgpuRenderer, scene: Scene, scale: f32) -> Self {
+        let device = renderer.try_device().expect("device").clone();
+        let image = |usage| {
+            let (texture, view) = support::render_target(
+                &device,
+                WIDTH,
+                HEIGHT,
+                wgpu::TextureFormat::Rgba8Unorm,
+                usage,
+            );
+            Image { texture, view }
+        };
+        let (composed, direct) = (image(COMPOSED), image(DIRECT));
+        let step: Rc<RefCell<Option<MutableState<u32>>>> = Rc::new(RefCell::new(None));
+        let slot = Rc::clone(&step);
+        let mut shell = AppShell::new(renderer, location_key(file!(), line!(), column!()), {
+            move || {
+                let state = cranpose_core::rememberMutableStateOf(|| 0u32);
+                *slot.borrow_mut() = Some(state);
+                Page(scene, state);
+            }
+        });
+        shell.set_density(scale);
+        shell.set_buffer_size(WIDTH, HEIGHT);
+        shell.set_viewport(WIDTH as f32 / scale, HEIGHT as f32 / scale);
+        shell.update();
+        Self {
+            shell,
+            step,
+            composed,
+            direct,
+        }
+    }
+
+    /// The frame of `step` drawn into the composed image, over the frame
+    /// before, and then into the direct image, whole.
+    fn frame(&mut self, step: u32) -> Frame {
+        let state = self
+            .step
+            .borrow()
+            .as_ref()
+            .copied()
+            .expect("the page remembers its step");
+        self.shell.debug_enter_app_context(|| state.set(step));
+        self.shell.update();
+        let (composed, stats) = draw(&mut self.shell, &self.composed);
+        let (direct, direct_stats) = draw(&mut self.shell, &self.direct);
+        assert_eq!(
+            direct_stats.damage,
+            FrameDamage::Untracked,
+            "a frame drawn straight into the image keeps no frame"
+        );
+        Frame {
+            stats,
+            composed,
+            direct,
+        }
+    }
+}
+
+/// Draws the shell's scene into `image`: its pixels and the frame's
+/// statistics.
+fn draw(shell: &mut AppShell<WgpuRenderer>, image: &Image) -> (Vec<u8>, RenderStatsSnapshot) {
+    let renderer = shell.renderer();
+    renderer
+        .render(&image.texture, &image.view, WIDTH, HEIGHT)
+        .expect("the frame renders");
+    assert_eq!(renderer.device_error_count_for_tests(), 0);
+    let stats = renderer.last_frame_stats().expect("frame statistics");
+    let device = renderer.try_device().expect("device").clone();
+    let queue = renderer.try_queue_for_tests().expect("queue").clone();
+    (
+        support::read_texture(&device, &queue, &image.texture),
+        stats,
+    )
+}
+
+fn holds(damage: FrameDamage, x: usize, y: usize) -> bool {
+    match damage {
+        FrameDamage::Untracked => false,
+        FrameDamage::Skipped | FrameDamage::Full => true,
+        FrameDamage::Rect {
+            x: left,
+            y: top,
+            width,
+            height,
+        } => {
+            let (left, top) = (left as usize, top as usize);
+            x >= left && y >= top && x < left + width as usize && y < top + height as usize
+        }
+    }
+}
+
+/// Asserts every pixel that differs between `before` and `after` lies
+/// within `damage`.
+fn assert_covers(label: &str, damage: FrameDamage, before: &[u8], after: &[u8]) {
+    let outside: Vec<_> = support::differing_pixels(WIDTH, before, after)
+        .into_iter()
+        .filter(|&(x, y, _, _)| !holds(damage, x, y))
+        .collect();
+    assert!(
+        outside.is_empty(),
+        "{label}: {} changed pixels lie outside the damage {damage:?}: {}",
+        outside.len(),
+        support::describe_differing(&outside)
+    );
+}
+
+fn around(rect: [f32; 4], margin: f32) -> [f32; 4] {
+    [
+        rect[0] - margin,
+        rect[1] - margin,
+        rect[2] + margin * 2.0,
+        rect[3] + margin * 2.0,
+    ]
+}
+
+impl Scene {
+    /// The window pixels a step may change: the spot, what draws from it,
+    /// and the panes over it.
+    fn reach(self) -> [f32; 4] {
+        match self {
+            Scene::UnderBlur | Scene::UnderLiquidGlass => around(GLASS, 32.0),
+            Scene::UnderBlurUnderBlur => {
+                let right = (UPPER_GLASS[0] + UPPER_GLASS[2]).max(GLASS[0] + GLASS[2]);
+                let bottom = (UPPER_GLASS[1] + UPPER_GLASS[3]).max(GLASS[1] + GLASS[3]);
+                around(
+                    [GLASS[0], GLASS[1], right - GLASS[0], bottom - GLASS[1]],
+                    32.0,
+                )
+            }
+            Scene::Label => around([SPOT[0], SPOT[1], 60.0, 20.0], 8.0),
+            Scene::Shadow | Scene::BlurredContent => around(SPOT, 32.0),
+            // A turned square reaches past its box by a fifth of its side.
+            Scene::TurnedLayer => around(SPOT, 12.0),
+            Scene::Spinner | Scene::TurnedSpinner => around(SPINNER, 12.0),
+            _ => around(SPOT, 8.0),
+        }
+    }
+}
+
+/// Asserts `damage` is a rect within `reach`.
+fn assert_within(label: &str, damage: FrameDamage, reach: [f32; 4]) {
+    let FrameDamage::Rect {
+        x,
+        y,
+        width,
+        height,
+    } = damage
+    else {
+        panic!("{label}: a small change must report a rect, not {damage:?}");
+    };
+    if width == 0 || height == 0 {
+        return;
+    }
+    let [left, top, reach_width, reach_height] = reach;
+    assert!(
+        x as f32 >= left
+            && y as f32 >= top
+            && (x + width) as f32 <= left + reach_width
+            && (y + height) as f32 <= top + reach_height,
+        "{label}: the damage {damage:?} reaches past {reach:?}"
+    );
+}
+
+/// Renders `scene` for [`STEPS`] changes after a still frame and checks
+/// each frame's damage against the pixels it changed.
+fn assert_damage_holds_the_changes(scene: Scene) {
+    for scale in SCALES {
+        assert_damage_holds_the_changes_at(scene, scale);
+    }
+}
+
+/// Draws each frame of `scene` twice: into the renderer's own target, which
+/// draws its damage over the frame before, and straight into an image that
+/// takes the whole frame. The first must equal the second byte for byte,
+/// and what the second changes must lie in the damage the first reports.
+fn assert_damage_holds_the_changes_at(scene: Scene, scale: f32) {
+    let (_lock, renderer) =
+        match support::headless_renderer_parts_with_display_format(wgpu::TextureFormat::Rgba8Unorm)
+        {
+            Ok(parts) => parts,
+            Err(err) => {
+                eprintln!("skipping (headless WGPU init failed): {err}");
+                return;
+            }
+        };
+    let mut harness = Harness::new(renderer, scene, scale);
+    let reach = scene.reach().map(|value| value * scale);
+    let mut before: Option<Vec<u8>> = None;
+    let mut partial_frames = 0;
+    for step in [0, 0].into_iter().chain(1..=STEPS) {
+        let frame = harness.frame(step);
+        let damage = frame.stats.damage;
+        let label = format!("{scene:?} at {scale}, step {step}, damage {damage:?}");
+        if let Some(before) = &before {
+            assert_covers(&label, damage, before, &frame.direct);
+        }
+        support::assert_same_bytes(&label, WIDTH, &frame.composed, &frame.direct);
+        let repainted = match damage {
+            FrameDamage::Rect { width, height, .. } => u64::from(width * height),
+            _ => u64::from(WIDTH * HEIGHT),
+        };
+        assert_eq!(frame.stats.repainted_pixels, repainted, "{label}");
+        if before.is_some() {
+            if step == 0 {
+                assert_eq!(
+                    damage,
+                    FrameDamage::Rect {
+                        x: 0,
+                        y: 0,
+                        width: 0,
+                        height: 0
+                    },
+                    "{label}: a frame that changes nothing reports no damage"
+                );
+            } else if scene == Scene::MovedPage {
+                assert!(
+                    matches!(damage, FrameDamage::Full | FrameDamage::Skipped),
+                    "{label}: a frame moving the page changes most of the window"
+                );
+            } else {
+                assert_within(&label, damage, reach);
+                partial_frames += usize::from(repainted > 0);
+            }
+        }
+        before = Some(frame.direct);
+    }
+    assert!(
+        scene == Scene::MovedPage || partial_frames > 0,
+        "{scene:?} at {scale}: no frame drew a part of the window"
+    );
+}
+
+#[test]
+fn a_shape_changing_colour() {
+    assert_damage_holds_the_changes(Scene::Shape);
+}
+
+#[test]
+fn an_arc_drawn_at_a_new_angle() {
+    assert_damage_holds_the_changes(Scene::Arc);
+}
+
+#[test]
+fn a_gradient_changing_colour() {
+    assert_damage_holds_the_changes(Scene::Gradient);
+}
+
+#[test]
+fn a_path_changing_size() {
+    assert_damage_holds_the_changes(Scene::Star);
+}
+
+#[test]
+fn a_label_changing_text() {
+    assert_damage_holds_the_changes(Scene::Label);
+}
+
+#[test]
+fn an_image_changing_bitmap() {
+    assert_damage_holds_the_changes(Scene::Picture);
+}
+
+#[test]
+fn a_layer_turning() {
+    assert_damage_holds_the_changes(Scene::TurnedLayer);
+}
+
+#[test]
+fn a_translucent_layer_changing_content() {
+    assert_damage_holds_the_changes(Scene::FadedLayer);
+}
+
+#[test]
+fn a_shape_changing_under_a_blur_pane() {
+    assert_damage_holds_the_changes(Scene::UnderBlur);
+}
+
+#[test]
+fn a_shape_changing_under_a_blur_pane_another_pane_reads() {
+    assert_damage_holds_the_changes(Scene::UnderBlurUnderBlur);
+}
+
+#[test]
+fn a_shape_changing_under_liquid_glass() {
+    assert_damage_holds_the_changes(Scene::UnderLiquidGlass);
+}
+
+#[test]
+fn blurred_content_changing() {
+    assert_damage_holds_the_changes(Scene::BlurredContent);
+}
+
+#[test]
+fn a_blurred_shadow_moving() {
+    assert_damage_holds_the_changes(Scene::Shadow);
+}
+
+#[test]
+fn a_shape_appearing_and_going() {
+    assert_damage_holds_the_changes(Scene::Appearing);
+}
+
+#[test]
+fn the_whole_page_moving_one_pixel() {
+    assert_damage_holds_the_changes(Scene::MovedPage);
+}
+
+/// The frames of a spinner that turns for as long as it shows, beside two
+/// liquid glass panes over a page of cards: after the first frames each
+/// draws only the spinner's part of the window, with a few draws and no
+/// glass, and equals the whole frame.
+fn assert_spinner_repaints_only_itself(scene: Scene) {
+    const FRAMES: u32 = 60;
+    let (_lock, renderer) =
+        match support::headless_renderer_parts_with_display_format(wgpu::TextureFormat::Rgba8Unorm)
+        {
+            Ok(parts) => parts,
+            Err(err) => {
+                eprintln!("skipping (headless WGPU init failed): {err}");
+                return;
+            }
+        };
+    let mut harness = Harness::new(renderer, scene, 1.0);
+    let spinner_pixels = (SPINNER[2] * SPINNER[3]) as u64;
+    let mut whole_draws = 0;
+    for step in 0..FRAMES {
+        let frame = harness.frame(step);
+        let stats = frame.stats;
+        let label = format!("{scene:?} frame {step}: {stats:?}");
+        support::assert_same_bytes(&label, WIDTH, &frame.composed, &frame.direct);
+        if step == 0 {
+            whole_draws = stats.draw_calls;
+            continue;
+        }
+        assert!(
+            stats.repainted_pixels <= 4 * spinner_pixels,
+            "{label}: the frame drew {} pixels again for a spinner of {spinner_pixels}",
+            stats.repainted_pixels
+        );
+        assert!(
+            stats.draw_calls * 10 < whole_draws,
+            "{label}: {} draws against {whole_draws} for the whole window",
+            stats.draw_calls
+        );
+        assert_eq!(
+            (stats.shader_pixels, stats.blur_pixels),
+            (0, 0),
+            "{label}: the glass beside the spinner must not shade again"
+        );
+    }
+}
+
+#[test]
+fn a_small_endless_animation_drawn_again_repaints_only_its_area() {
+    assert_spinner_repaints_only_itself(Scene::Spinner);
+}
+
+#[test]
+fn a_small_endless_animation_turned_by_its_layer_repaints_only_its_area() {
+    assert_spinner_repaints_only_itself(Scene::TurnedSpinner);
+}
+
+const OVERLAY: Rect = Rect {
+    x: 200.0,
+    y: 300.0,
+    width: 60.0,
+    height: 40.0,
+};
+const DOT: Rect = Rect {
+    x: 20.0,
+    y: 20.0,
+    width: 10.0,
+    height: 10.0,
+};
+
+fn rect_array(rect: Rect) -> [f32; 4] {
+    [rect.x, rect.y, rect.width, rect.height]
+}
+
+fn page_with_dot(dot: Color) -> RenderGraph {
+    support::page_graph(
+        WIDTH,
+        HEIGHT,
+        vec![
+            support::solid_rect(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: WIDTH as f32,
+                    height: HEIGHT as f32,
+                },
+                Color(0.1, 0.1, 0.2, 1.0),
+            ),
+            RenderNode::DrawRun(DrawRunNode::for_command(
+                PrimitivePhase::BeforeChildren,
+                Some(DrawCommandId {
+                    node_id: 5,
+                    command_index: 0,
+                    placement: DrawPlacement::Behind,
+                }),
+                vec![DrawPrimitive::Rect {
+                    rect: DOT,
+                    brush: Brush::solid(dot),
+                    stroke: None,
+                }],
+            )),
+        ],
+    )
+}
+
+fn overlay_graph() -> RenderGraph {
+    support::page_graph(
+        WIDTH,
+        HEIGHT,
+        vec![support::solid_rect(OVERLAY, Color(0.9, 0.9, 0.2, 1.0))],
+    )
+}
+
+/// The page with a dot of `dot` under `overlay`, displayed in the composed
+/// image and then in the direct one: the composed frame's damage and the
+/// two images' texels.
+fn overlay_frame(
+    renderer: &mut support::LockedRenderer,
+    images: &[Image; 2],
+    overlay: Option<RenderGraph>,
+    dot: Color,
+) -> (FrameDamage, Vec<u8>, Vec<u8>) {
+    renderer.set_inspector_overlay(overlay);
+    renderer.scene_mut().graph = Some(page_with_dot(dot));
+    let [composed, direct] = images.each_ref().map(|image| {
+        renderer
+            .display_into(&image.texture, &image.view)
+            .expect("the frame renders")
+    });
+    (composed.0.damage, composed.1, direct.1)
+}
+
+#[test]
+fn an_overlay_appearing_and_going() {
+    let mut renderer =
+        match support::headless_renderer_with_display_format(wgpu::TextureFormat::Rgba8Unorm) {
+            Ok(renderer) => renderer,
+            Err(err) => {
+                eprintln!("skipping (headless WGPU init failed): {err}");
+                return;
+            }
+        };
+    let device = renderer.try_device().expect("device").clone();
+    let images = [COMPOSED, DIRECT].map(|usage| {
+        let (texture, view) = support::render_target(
+            &device,
+            WIDTH,
+            HEIGHT,
+            wgpu::TextureFormat::Rgba8Unorm,
+            usage,
+        );
+        Image { texture, view }
+    });
+    let red = Color(0.9, 0.2, 0.2, 1.0);
+    let (_, _, mut before) = overlay_frame(&mut renderer, &images, None, red);
+    let overlay = around(rect_array(OVERLAY), 8.0);
+    let dot = around(rect_array(DOT), 8.0);
+    let frames = [
+        (Some(overlay_graph()), red, overlay, "overlay shown"),
+        (
+            Some(overlay_graph()),
+            Color::WHITE,
+            dot,
+            "page changed under it",
+        ),
+        (None, Color::WHITE, overlay, "overlay gone"),
+    ];
+    for (shown, colour, reach, label) in frames {
+        let (damage, drawn, whole) = overlay_frame(&mut renderer, &images, shown, colour);
+        assert_covers(label, damage, &before, &whole);
+        support::assert_same_bytes(label, WIDTH, &drawn, &whole);
+        assert_within(label, damage, reach);
+        before = whole;
+    }
+    let (damage, drawn, whole) = overlay_frame(&mut renderer, &images, None, Color::WHITE);
+    assert_eq!(
+        damage,
+        FrameDamage::Rect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0
+        },
+        "a frame that changes nothing reports no damage"
+    );
+    support::assert_same_bytes("still frame", WIDTH, &drawn, &whole);
+}
