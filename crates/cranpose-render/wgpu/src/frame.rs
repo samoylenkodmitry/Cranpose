@@ -27,7 +27,8 @@ use crate::{
     debug_toggles::DebugToggle,
     draw_pass::{
         PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SegmentLayout,
-        SourceContent, op_draw_bounds, scissor_in_target, segment_draws_anything,
+        SourceContent, intersect_scissors, op_draw_bounds, scissor_in_target,
+        segment_draws_anything,
     },
     effect_renderer::{
         AtlasSideWork, BlurRegion, CompositeSampleMode, EffectReads, EffectScratchTargetProvider,
@@ -252,6 +253,25 @@ impl PageBase {
     }
 }
 
+/// A segment drawing `fill` alone, within the page's window.
+fn fill_segment<'a>(
+    scene: &'a CompositorScene,
+    fill: &'a ResolvedComposite,
+    page: &Page,
+    scale: f32,
+) -> PassSegment<'a> {
+    PassSegment {
+        scene,
+        ops: &[],
+        composites: std::slice::from_ref(fill),
+        offset: page.offset,
+        scissor: page.window_scissor(),
+        first_run_window: None,
+        transform: SegmentTransform::IDENTITY,
+        scale,
+    }
+}
+
 /// A kept prefix drawn back where the page drew it.
 fn prefix_blit(prefix: &OpaquePrefix, texture: Rc<OffscreenTarget>) -> ResolvedComposite {
     ResolvedComposite {
@@ -306,9 +326,26 @@ fn page_blit(
 struct Page {
     texture: Rc<OffscreenTarget>,
     offset: [f32; 2],
+    /// The part of the page the frame draws again, in whole device pixels
+    /// inside it; the rest keeps what the frame before drew. `None` draws
+    /// all of it.
+    window: Option<DeviceRect>,
 }
 
 impl Page {
+    /// The device rect the frame draws of the page.
+    fn window(&self) -> DeviceRect {
+        self.window.unwrap_or_else(|| self.rect())
+    }
+
+    /// The window as a scissor in the texture's pixels; `None` for the
+    /// whole page.
+    fn window_scissor(&self) -> Option<(u32, u32, u32, u32)> {
+        let size = (self.texture.width, self.texture.height);
+        self.window
+            .and_then(|window| scissor_in_target(window.tuple(), size, self.offset))
+    }
+
     fn pass_target(&self) -> PassTarget<'_> {
         PassTarget {
             view: &self.texture.view,
@@ -511,8 +548,16 @@ fn backdrop_cache_keys_use_pending(pass: &LayerPass<'_>) -> bool {
 }
 
 impl<'scene> LayerPass<'scene> {
+    /// The device rect the layer draws in: its page's window.
     fn target_rect(&self) -> DeviceRect {
-        self.page.rect()
+        self.page.window()
+    }
+
+    /// The shelf width of the layer's capture atlases: the page's width, so
+    /// a frame drawing a window of it packs its glasses as a whole frame
+    /// does.
+    fn shelf_width(&self) -> u32 {
+        self.page.rect().pixel_size().0
     }
 
     fn capture_bounds(&self) -> Option<DeviceRect> {
@@ -2750,7 +2795,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     }
 
     /// Renders the root scene into the frame's page, then the overlay on top
-    /// of it.
+    /// of it: all of the page, or the part `repaint` names over what the
+    /// frame before left there.
     pub(crate) fn render_frame(
         mut self,
         root: &LayerScene,
@@ -2758,10 +2804,17 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         page: Rc<OffscreenTarget>,
         root_scale: f32,
         load_op: wgpu::LoadOp<wgpu::Color>,
+        repaint: Repaint,
     ) -> Result<(), String> {
+        let window = match repaint {
+            Repaint::Whole => None,
+            Repaint::Window(window) => Some(window),
+            Repaint::Nothing => return Ok(()),
+        };
         let page = Page {
             texture: page,
             offset: [0.0, 0.0],
+            window,
         };
         let beneath = Beneath::over(load_op);
         self.render_layer(root, page.clone(), root_scale, load_op, &beneath)?;
@@ -3122,10 +3175,28 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
 
     /// Applies the page's pending clear, so a child reading the page through
     /// its base finds it cleared.
-    fn start_page(&mut self, pass: &mut LayerPass<'_>) {
-        if let Some(load_op) = pass.load_op.take() {
-            self.renderer
-                .clear_target(self.recorder, pass.page.pass_target().view, load_op);
+    fn start_page(&mut self, pass: &mut LayerPass<'_>) -> Result<(), String> {
+        let Some(load_op) = pass.load_op.take() else {
+            return Ok(());
+        };
+        match self.window_base(&pass.page, load_op) {
+            (load_op, Some(fill)) => {
+                let segment = fill_segment(&self.empty_scene, &fill, &pass.page, pass.scale);
+                self.renderer
+                    .encode_pass(
+                        self.recorder,
+                        pass.page.pass_target(),
+                        (std::slice::from_ref(&segment), SegmentLayout::Stacked),
+                        load_op,
+                        "Window Fill",
+                    )
+                    .map(drop)
+            }
+            (load_op, None) => {
+                self.renderer
+                    .clear_target(self.recorder, pass.page.pass_target().view, load_op);
+                Ok(())
+            }
         }
     }
 
@@ -3206,7 +3277,26 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         if !complete {
             self.report_nesting_overflow();
         }
-        let segments = flush_segments(&pass.layer.scene, &parts, &flush, place.offset, pass.scale);
+        let mut segments =
+            flush_segments(&pass.layer.scene, &parts, &flush, place.offset, pass.scale);
+        let (load_op, fill) = self.window_base(&pass.page, load_op);
+        if let Some(window) = pass.page.window_scissor() {
+            segments.retain_mut(|segment| {
+                match intersect_scissors(segment.scissor, Some(window)) {
+                    Some(scissor) => {
+                        segment.scissor = scissor;
+                        true
+                    }
+                    None => false,
+                }
+            });
+        }
+        if let Some(fill) = &fill {
+            segments.insert(
+                0,
+                fill_segment(&self.empty_scene, fill, &pass.page, pass.scale),
+            );
+        }
         let label = LAYER_PASS_LABELS[pass.segments.min(LAYER_PASS_LABELS.len() - 1)];
         pass.segments += 1;
         self.renderer
@@ -3218,6 +3308,51 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 label,
             )
             .map(drop)
+    }
+
+    /// The load op a pass into `page` starts with, and the fill it draws
+    /// first: a clear takes the whole texture, so a page drawn in a window
+    /// is cleared by filling the window with the clear colour.
+    fn window_base(
+        &mut self,
+        page: &Page,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+    ) -> (wgpu::LoadOp<wgpu::Color>, Option<ResolvedComposite>) {
+        match (page.window, load_op) {
+            (Some(window), wgpu::LoadOp::Clear(color)) => {
+                (wgpu::LoadOp::Load, Some(self.window_fill(color, window)))
+            }
+            _ => (load_op, None),
+        }
+    }
+
+    /// `window` filled with `color`, replacing what it held, from a pixel of
+    /// `color` the renderer keeps while the colour stays.
+    fn window_fill(&mut self, color: wgpu::Color, window: DeviceRect) -> ResolvedComposite {
+        let source = match &self.renderer.window_fill {
+            Some((filled, source)) if *filled == color => Rc::clone(source),
+            _ => {
+                let source = Rc::new(self.renderer.acquire_retained_surface(1, 1));
+                self.renderer
+                    .clear_target(self.recorder, &source.view, wgpu::LoadOp::Clear(color));
+                self.renderer.window_fill = Some((color, Rc::clone(&source)));
+                source
+            }
+        };
+        ResolvedComposite {
+            z_index: 0,
+            source,
+            content: SourceContent::Transient,
+            dest: window.tuple(),
+            scissor: Some(window.tuple()),
+            kind: ResolvedCompositeKind::Blit {
+                alpha: 1.0,
+                blend_mode: BlendMode::Src,
+                rounded_mask: None,
+                sample_mode: CompositeSampleMode::Nearest,
+                source_viewport: None,
+            },
+        }
     }
 
     /// Clears the pass to the flush's first op when it is a solid fill of
@@ -3245,6 +3380,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             scale: pass.scale,
         };
         if let Some(clear) = page_fill_clear(&context, ops, composites, first_in_place_z) {
+            // A page drawn in a window keeps its pixels outside it: the fill
+            // then covers the window as it is drawn, in place of a clear.
+            if pass.page.window.is_some() {
+                *load_op = Some(wgpu::LoadOp::Load);
+                return Ok(None);
+            }
             *load_op = Some(clear);
             return Ok(Some(1..u32::MAX));
         }
@@ -3268,6 +3409,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             composites.push(prefix_blit(&prefix, retained.texture));
             ensure_sorted_by_key(composites, composite_z);
             return Ok(Some(1..u32::MAX));
+        }
+        // A frame that draws a window of the page draws only that part of
+        // the prefix, which leaves nothing whole to keep.
+        if pass.page.window.is_some() {
+            return Ok(None);
         }
         self.renderer
             .frame_stats
@@ -3355,8 +3501,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     z: item.z,
                     rect: item.capture_rect,
                 }));
-            let mut layout =
-                self.plan_stage(&pending[start..end], pass.target_rect().pixel_size().0);
+            let mut layout = self.plan_stage(&pending[start..end], pass.shelf_width());
             let items = self.take_uncached(pass, &mut pending[start..end], &mut layout);
             if !items.is_empty() {
                 if diagnose {
@@ -3685,10 +3830,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .batched
             .is_some_and(|effect| !effect.substrates().is_empty())
         {
-            let layout = self.plan_stage(
-                std::slice::from_ref(&item),
-                pass.target_rect().pixel_size().0,
-            );
+            let layout = self.plan_stage(std::slice::from_ref(&item), pass.shelf_width());
             if layout.placements[0].is_some() {
                 item.key = self.backdrop_cache_key(
                     pass,
@@ -4695,7 +4837,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             SourceDecision::Render(retain) => retain,
         };
         let beneath = if child.content.contains_backdrop() {
-            self.start_page(pass);
+            self.start_page(pass)?;
             beneath_for_child(pass, child, z, plan.grid_offset.filter(|_| plan.translated))?
         } else {
             Beneath::over(wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT))
@@ -4749,6 +4891,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let child_page = Page {
             texture: Rc::clone(&texture),
             offset: [plan.surface_rect.x, plan.surface_rect.y],
+            window: None,
         };
         self.renderer.frame_stats.record_isolated_layer_render(
             plan.width,
@@ -5644,6 +5787,11 @@ pub(crate) fn scene_bounds(layer: &LayerScene, scale: f32) -> Option<Rect> {
 
 #[path = "frame_scene.rs"]
 mod scene_surfaces;
+
+#[path = "window_damage.rs"]
+mod window_damage;
+
+pub(crate) use window_damage::{Damage, FrameWindow, KeptWindow, Repaint, WindowDamage};
 
 #[cfg(test)]
 #[path = "tests/frame_tests.rs"]

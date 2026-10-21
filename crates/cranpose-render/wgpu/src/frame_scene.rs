@@ -180,7 +180,7 @@ impl<C: FrameCommandRecorder> FrameExecutor<'_, '_, C> {
         let first_z = first.z;
         self.run_stages(pass)?;
         self.flush_page(pass, first_z)?;
-        self.start_page(pass);
+        self.start_page(pass)?;
         let mut meshes = std::mem::take(&mut pass.meshes);
         meshes.sort_by(|a, b| b.depth.total_cmp(&a.depth));
         self.encode_scene_pass(pass, &meshes, first_z)

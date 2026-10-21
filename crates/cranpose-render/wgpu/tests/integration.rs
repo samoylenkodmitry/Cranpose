@@ -107,4 +107,5 @@ mod viewport_crop;
 mod viewport_uniform_growth;
 mod wear_layer_alpha_pixels;
 mod wear_scaling_list_pixels;
+mod window_damage;
 mod with_content_recording;

@@ -66,7 +66,7 @@ const SAMPLED: wgpu::TextureUsages = UNSAMPLED.union(wgpu::TextureUsages::TEXTUR
 struct Frames {
     captured: Vec<u8>,
     presented: Vec<u8>,
-    /// The passes of the presented frame.
+    /// The passes of the first presented frame.
     passes: u32,
 }
 
@@ -100,18 +100,21 @@ fn render_frames(page: fn(), usage: wgpu::TextureUsages) -> Option<Frames> {
         wgpu::TextureFormat::Rgba8Unorm,
         usage,
     );
-    for _ in 0..2 {
+    // The first presented frame is drawn whole; the second changes nothing,
+    // and a frame composed in the renderer's own target then draws nothing
+    // again but its conversion into the image.
+    let passes = [0; 2].map(|_| {
         shell
             .renderer()
             .render(&texture, &view, FRAME_WIDTH, FRAME_HEIGHT)
             .expect("presentable render should succeed");
-    }
+        shell
+            .renderer()
+            .last_frame_stats()
+            .expect("frame stats")
+            .pass_count
+    })[0];
     assert_eq!(shell.renderer().device_error_count_for_tests(), 0);
-    let passes = shell
-        .renderer()
-        .last_frame_stats()
-        .expect("frame stats")
-        .pass_count;
     Some(Frames {
         captured: captured.pixels,
         presented: read_texture(&device, &queue, &texture),

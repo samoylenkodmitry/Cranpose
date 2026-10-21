@@ -106,6 +106,13 @@ pub fn set_debug_toggle_os(name: &'static str, value: Option<&OsStr>) {
     GENERATION.fetch_add(1, Ordering::Release);
 }
 
+/// The number of overrides set so far: every toggle reads the same value
+/// while it stays the same.
+#[doc(hidden)]
+pub fn debug_toggle_generation() -> u64 {
+    GENERATION.load(Ordering::Acquire)
+}
+
 #[cfg(all(test, unix))]
 #[path = "tests/debug_toggles_tests.rs"]
 mod tests;

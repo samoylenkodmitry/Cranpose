@@ -169,6 +169,27 @@ impl LockedRenderer {
         })
     }
 
+    /// Displays the current scene in `texture`: the frame's statistics and
+    /// the texture's texels.
+    pub fn display_into(
+        &mut self,
+        texture: &wgpu::Texture,
+        view: &wgpu::TextureView,
+    ) -> Result<(RenderStatsSnapshot, Vec<u8>), String> {
+        self.app_context.enter(|| {
+            self.renderer
+                .render(texture, view, texture.width(), texture.height())
+                .map_err(|err| format!("{err:?}"))?;
+            let stats = self
+                .renderer
+                .last_frame_stats()
+                .ok_or_else(|| "renderer did not publish frame stats".to_string())?;
+            let device = self.renderer.try_device().ok_or("no device")?;
+            let queue = self.renderer.try_queue_for_tests().ok_or("no queue")?;
+            Ok((stats, read_texture(device, queue, texture)))
+        })
+    }
+
     pub fn capture_frame(&mut self, width: u32, height: u32) -> Result<CapturedFrame, String> {
         self.app_context.enter(|| {
             self.renderer
@@ -216,6 +237,14 @@ pub fn headless_renderer_parts_compiling_in_background()
 -> Result<(MutexGuard<'static, ()>, WgpuRenderer), String> {
     let lock = lock_gpu_test();
     Ok((lock, create_background_compiling_renderer()?))
+}
+
+/// [`headless_renderer`] presenting images of `format`.
+pub fn headless_renderer_with_display_format(
+    format: wgpu::TextureFormat,
+) -> Result<LockedRenderer, String> {
+    let (lock, renderer) = headless_renderer_parts_with_display_format(format)?;
+    Ok(with_app_context(renderer, Some(lock)))
 }
 
 pub fn headless_renderer_with_limits(limits: wgpu::Limits) -> Result<LockedRenderer, String> {
