@@ -34,6 +34,10 @@ const FULL_SHARE: f32 = 0.5;
 /// the window skips summarizing: about four seconds at 60 Hz, so a page
 /// that never holds still pays two summaries in 258 frames.
 const MAX_SKIPPED: u32 = 256;
+/// The frames to skip at or past which a target lets its summaries go until
+/// it summarizes again: after four frames in a row changed most of the
+/// window.
+const RELEASE_SKIPS: u32 = 64;
 /// The item between the root's items and the overlay's.
 const OVERLAY_KEY: u64 = 0x6f76_6572_6c61_7973;
 
@@ -127,6 +131,92 @@ impl KeptWindow {
     }
 }
 
+/// A swapchain image a frame draws into, as the surface handed it out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PresentedImage {
+    pub(crate) index: u32,
+    /// Whether it holds what it last presented.
+    pub(crate) kept: bool,
+}
+
+/// The frames back a kept swapchain image can be drawn again from, and the
+/// images the history follows.
+const IMAGE_HISTORY: usize = 8;
+
+/// The frames a swapchain's images hold and each frame's damage against the
+/// frame before: a frame drawn into an image that holds an older frame draws
+/// the union of the damages since that frame.
+#[derive(Default)]
+pub(crate) struct SwapchainHistory {
+    surface_epoch: u64,
+    frame: u64,
+    /// By image index, the frame the image holds.
+    held: [Option<u64>; IMAGE_HISTORY],
+    /// By frame modulo [`IMAGE_HISTORY`], the frame and its damage.
+    damages: [Option<(u64, Damage)>; IMAGE_HISTORY],
+    /// The summary of the frame presented last.
+    pub(crate) kept: KeptWindow,
+}
+
+impl SwapchainHistory {
+    /// Starts a frame on the surface of `surface_epoch`: a new surface's
+    /// images hold none of the frames before.
+    pub(crate) fn begin(&mut self, surface_epoch: u64) {
+        if surface_epoch != self.surface_epoch {
+            self.surface_epoch = surface_epoch;
+            self.forget();
+        }
+    }
+
+    /// Forgets what the images hold.
+    pub(crate) fn forget(&mut self) {
+        self.held = [None; IMAGE_HISTORY];
+        self.kept.forget();
+    }
+
+    /// Forgets what `image` holds: a frame the history does not follow
+    /// draws into it.
+    pub(crate) fn drop_image(&mut self, image: PresentedImage) {
+        if let Some(held) = self.held.get_mut(image.index as usize) {
+            *held = None;
+        }
+    }
+
+    /// The pixels that differ between the frame the kept `image` holds and a
+    /// frame of `damage`, nothing when none does; `None` unless the image
+    /// holds a frame whose damages since are all known.
+    pub(crate) fn changed_since(
+        &self,
+        image: PresentedImage,
+        damage: Damage,
+    ) -> Option<Option<DeviceRect>> {
+        let held = self.held.get(image.index as usize).copied().flatten()?;
+        let Damage::Part(mut union) = damage else {
+            return None;
+        };
+        for frame in held + 1..=self.frame {
+            let entry = self.damages[(frame % IMAGE_HISTORY as u64) as usize];
+            let (_, Damage::Part(part)) = entry.filter(|(at, _)| *at == frame)? else {
+                return None;
+            };
+            union = match (union, part) {
+                (Some(union), Some(part)) => Some(union.union(part)),
+                (union, part) => union.or(part),
+            };
+        }
+        Some(union)
+    }
+
+    /// Ends a frame of `damage`: `image` holds it when it was `drawn` whole.
+    pub(crate) fn record(&mut self, image: PresentedImage, damage: Damage, drawn: bool) {
+        self.frame += 1;
+        self.damages[(self.frame % IMAGE_HISTORY as u64) as usize] = Some((self.frame, damage));
+        if let Some(held) = self.held.get_mut(image.index as usize) {
+            *held = drawn.then_some(self.frame);
+        }
+    }
+}
+
 /// What a frame draws into the window.
 pub(crate) struct FrameWindow<'a> {
     pub(crate) root: &'a LayerScene,
@@ -145,6 +235,8 @@ pub(crate) struct FrameWindow<'a> {
 #[derive(Default)]
 pub(crate) struct WindowDamage {
     next: WindowSummary,
+    /// The items of the last summary, which the next one takes room for.
+    last_items: usize,
     summarized: bool,
     skipped: u32,
     full_frames: u32,
@@ -154,7 +246,7 @@ pub(crate) struct WindowDamage {
 
 impl WindowDamage {
     /// Summarizes `frame` and compares it with `kept`.
-    pub(crate) fn begin(&mut self, frame: &FrameWindow<'_>, kept: &KeptWindow) -> Damage {
+    pub(crate) fn begin(&mut self, frame: &FrameWindow<'_>, kept: &mut KeptWindow) -> Damage {
         self.summarized = false;
         if self.skipped > 0 {
             self.skipped -= 1;
@@ -172,10 +264,31 @@ impl WindowDamage {
             self.full_frames = self.full_frames.saturating_add(1);
             let doublings = 2 * (self.full_frames - 1);
             self.skipped = 1u32 << doublings.min(MAX_SKIPPED.trailing_zeros());
+            if self.skipped >= RELEASE_SKIPS {
+                self.release(kept);
+            }
         } else {
             self.full_frames = 0;
         }
         damage
+    }
+
+    /// What the frame [`Self::begin`] summarized, with a [`Damage::Part`],
+    /// draws when the pixels `changed` differ from what its target holds.
+    pub(crate) fn repaint(&self, changed: Option<DeviceRect>, viewport: (u32, u32)) -> Repaint {
+        changed.map_or(Repaint::Nothing, |changed| {
+            widen(&self.next, changed, viewport).repaint()
+        })
+    }
+
+    /// Lets the summaries go, `kept`'s among them: a page that keeps changing
+    /// most of the window holds none while it skips. The frame keeps none.
+    fn release(&mut self, kept: &mut KeptWindow) {
+        kept.summary = WindowSummary::default();
+        self.next = WindowSummary::default();
+        self.events = Vec::new();
+        self.open = Vec::new();
+        self.summarized = false;
     }
 
     /// Ends the frame [`Self::begin`] summarized: `kept` now holds its
@@ -192,6 +305,7 @@ impl WindowDamage {
     /// summary cannot describe.
     fn summarize(&mut self, frame: &FrameWindow<'_>) -> bool {
         self.next.items.clear();
+        self.next.items.reserve(self.last_items);
         self.next.captures.clear();
         let scale = frame.root_scale;
         if !scale.is_finite() || scale <= 0.0 {
@@ -226,7 +340,9 @@ impl WindowDamage {
             });
             walk.layer(overlay, &place, None);
         }
-        walk.complete
+        let complete = walk.complete;
+        self.last_items = self.next.items.len();
+        complete
     }
 }
 
@@ -245,9 +361,16 @@ fn window_rect((width, height): (u32, u32)) -> DeviceRect {
 /// changes all it writes, and a backdrop drawn again reads the page beneath
 /// it again, which must be drawn again then, not kept.
 fn compare(kept: &WindowSummary, next: &WindowSummary, viewport: (u32, u32)) -> Damage {
-    let Some(mut damage) = changed_bounds(&kept.items, &next.items) else {
-        return Damage::Part(None);
-    };
+    match changed_bounds(&kept.items, &next.items) {
+        Some(changed) => widen(next, changed, viewport),
+        None => Damage::Part(None),
+    }
+}
+
+/// The pixels a frame `next` summarizes draws when the pixels `damage`
+/// differ from what its target holds: all that every backdrop touching them
+/// reads and writes too, cut to the window.
+fn widen(next: &WindowSummary, mut damage: DeviceRect, viewport: (u32, u32)) -> Damage {
     loop {
         let mut grew = false;
         for capture in &next.captures {

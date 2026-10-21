@@ -892,6 +892,10 @@ struct NativeSurfaceTextureMetadata {
 }
 
 impl SurfaceTextureMetadata for NativeSurfaceTextureMetadata {
+    fn awaits_acquire(&self) -> bool {
+        self.acquire_semaphores.lock().should_wait_for_acquire
+    }
+
     fn get_semaphore_guard(&self) -> Box<dyn SwapchainSubmissionSemaphoreGuard + '_> {
         Box::new(NativeSwapchainSubmissionSemaphoreGuard {
             acquire_semaphore_guard: self

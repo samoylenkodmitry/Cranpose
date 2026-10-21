@@ -18,11 +18,29 @@ static_assertions::assert_impl_all!(SurfaceTexture: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(SurfaceTexture => .texture.inner);
 
+/// The swapchain image a [`SurfaceTexture`] is (Cranpose fork).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SurfaceImage {
+    /// The image's index in the swapchain.
+    pub index: u32,
+    /// Whether the texture holds what the image last presented: the surface
+    /// keeps presented images (see [`Surface::keep_presented_images`]) and
+    /// this one was presented since the surface was configured. Otherwise its
+    /// contents are undefined.
+    pub kept: bool,
+}
+
 impl SurfaceTexture {
     #[cfg(custom)]
     /// Returns custom implementation of SurfaceTexture (if custom backend and is internally T)
     pub fn as_custom<T: crate::custom::SurfaceOutputDetailInterface>(&self) -> Option<&T> {
         self.detail.as_custom()
+    }
+
+    /// The swapchain image this texture is, on a backend whose images are
+    /// numbered (Vulkan); `None` elsewhere (Cranpose fork).
+    pub fn image(&self) -> Option<SurfaceImage> {
+        self.detail.image()
     }
 }
 

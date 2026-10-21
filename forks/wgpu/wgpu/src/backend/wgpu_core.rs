@@ -659,6 +659,7 @@ pub struct CoreSurfaceOutputDetail {
     context: ContextWgpuCore,
     surface_id: wgc::id::SurfaceId,
     error_sink: ErrorSink,
+    image: Option<crate::SurfaceImage>,
 }
 
 type ErrorSink = Arc<Mutex<ErrorSinkRaw>>;
@@ -4010,6 +4011,10 @@ impl dispatch::SurfaceInterface for CoreSurface {
         self.context.0.surface_display_hdr_info(self.id, adapter.id)
     }
 
+    fn keep_presented_images(&self, keep: bool) {
+        self.context.0.surface_keep_presented_images(self.id, keep);
+    }
+
     fn configure(&self, device: &dispatch::DispatchDevice, config: &crate::SurfaceConfiguration) {
         let device = device.as_core();
 
@@ -4036,18 +4041,26 @@ impl dispatch::SurfaceInterface for CoreSurface {
             Arc::new(Mutex::new(ErrorSinkRaw::new()))
         };
 
-        let output_detail = CoreSurfaceOutputDetail {
-            context: self.context.clone(),
-            surface_id: self.id,
-            error_sink: error_sink.clone(),
-        }
-        .into();
+        let output_detail = |image: Option<wgc::present::SurfaceImage>| {
+            CoreSurfaceOutputDetail {
+                context: self.context.clone(),
+                surface_id: self.id,
+                error_sink: error_sink.clone(),
+                image: image.map(|image| crate::SurfaceImage {
+                    index: image.index,
+                    kept: image.kept,
+                }),
+            }
+            .into()
+        };
 
         match self.context.0.surface_get_current_texture(self.id, None) {
             Ok(wgc::present::SurfaceOutput {
                 status,
                 texture: texture_id,
+                image,
             }) => {
+                let output_detail = output_detail(image);
                 let data = texture_id
                     .map(|id| CoreTexture {
                         context: self.context.clone(),
@@ -4059,6 +4072,7 @@ impl dispatch::SurfaceInterface for CoreSurface {
                 (data, status, output_detail)
             }
             Err(err) => {
+                let output_detail = output_detail(None);
                 let error_sink = self.error_sink.lock();
                 match error_sink.as_ref() {
                     Some(error_sink) => {
@@ -4103,6 +4117,10 @@ impl dispatch::SurfaceOutputDetailInterface for CoreSurfaceOutputDetail {
                     .handle_error_nolabel(&self.error_sink, err, "Surface::release_texture")
             }
         }
+    }
+
+    fn image(&self) -> Option<crate::SurfaceImage> {
+        self.image
     }
 }
 impl Drop for CoreSurfaceOutputDetail {

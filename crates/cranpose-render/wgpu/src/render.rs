@@ -44,8 +44,8 @@ use crate::{
     effect_renderer::{CompositeSampleMode, EffectRenderer, RoundedCompositeMask},
     fixed_pipeline::{FixedPipeline, FixedPipelineJob},
     frame::{
-        AdmissionGate, Damage, FrameExecutor, FrameWindow, KeptWindow, Repaint, StageSideScratch,
-        WindowDamage,
+        AdmissionGate, Damage, FrameExecutor, FrameWindow, KeptWindow, PresentedImage, Repaint,
+        StageSideScratch, SwapchainHistory, WindowDamage,
     },
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
@@ -3426,6 +3426,35 @@ enum OutputMode {
     Screenshot,
 }
 
+/// Where a frame goes: displayed in a presentable image, or read back as a
+/// screenshot.
+#[derive(Clone, Copy)]
+struct FrameOutput<'a> {
+    mode: OutputMode,
+    view: Option<&'a wgpu::TextureView>,
+    texture: Option<&'a wgpu::Texture>,
+    /// The swapchain image `texture` is, where the surface numbers them.
+    image: Option<PresentedImage>,
+}
+
+/// The kept frame a frame's damage is measured against.
+#[derive(Clone, Copy)]
+enum Keeper {
+    /// The renderer's composition target.
+    Composition,
+    /// A swapchain image.
+    Image(PresentedImage),
+}
+
+/// What a frame changes against the frame its target kept, what it draws
+/// for that, and which target kept it.
+#[derive(Clone, Copy)]
+struct FrameDamagePlan {
+    damage: Damage,
+    repaint: Repaint,
+    keeper: Keeper,
+}
+
 pub struct GpuRenderer {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
@@ -3536,6 +3565,8 @@ pub struct GpuRenderer {
     pub(crate) ablation_frames: u32,
     pub(crate) nesting_overflow_reported: bool,
     window_damage: WindowDamage,
+    /// The frames the swapchain's images hold.
+    swapchain: SwapchainHistory,
     /// The colour a frame drawn in a window last filled it with, and a
     /// pixel of it.
     pub(crate) window_fill: Option<(wgpu::Color, Rc<OffscreenTarget>)>,
@@ -3940,6 +3971,7 @@ impl GpuRenderer {
             ablation_frames: 0,
             nesting_overflow_reported: false,
             window_damage: WindowDamage::default(),
+            swapchain: SwapchainHistory::default(),
             window_fill: None,
             backdrop_gates: HashMap::default(),
             fill_gates: HashMap::default(),
@@ -5033,20 +5065,17 @@ impl GpuRenderer {
         packet: FramePacket,
         surface_epoch: u64,
         returns: &mut RenderReturns,
+        image: Option<PresentedImage>,
     ) -> Result<(), String> {
-        self.render_internal(
-            width,
-            height,
-            packet,
-            surface_epoch,
-            returns,
-            OutputMode::Display,
-            Some(view),
-            Some(texture),
-        )
+        let output = FrameOutput {
+            mode: OutputMode::Display,
+            view: Some(view),
+            texture: Some(texture),
+            image,
+        };
+        self.render_internal(width, height, packet, surface_epoch, returns, output)
     }
 
-    #[expect(clippy::too_many_arguments)]
     fn render_internal(
         &mut self,
         width: u32,
@@ -5054,10 +5083,14 @@ impl GpuRenderer {
         packet: FramePacket,
         surface_epoch: u64,
         returns: &mut RenderReturns,
-        output_mode: OutputMode,
-        output_view: Option<&wgpu::TextureView>,
-        output_texture: Option<&wgpu::Texture>,
+        output: FrameOutput<'_>,
     ) -> Result<(), String> {
+        let FrameOutput {
+            mode: output_mode,
+            view: output_view,
+            texture: output_texture,
+            image,
+        } = output;
         let cancel_reason = if packet.renderer_epoch != self.renderer_epoch {
             Some(CancelReason::RendererEpoch)
         } else if packet.surface_epoch != surface_epoch {
@@ -5098,12 +5131,14 @@ impl GpuRenderer {
             (width, height),
             reads_page,
         );
-        let damage = self.damage_of(&packet, &mut frame_root, output_mode, (width, height));
-        self.frame_stats.damage.set(frame_damage(damage));
-        let repaint = damage.map_or(Repaint::Whole, Damage::repaint);
-        self.frame_stats
-            .repainted_pixels
-            .set(repaint.pixels((width, height)));
+        let plan = self.damage_of(
+            &packet,
+            &mut frame_root,
+            output_mode,
+            (width, height),
+            (surface_epoch, image),
+        );
+        let repaint = self.count_damage(plan, (width, height));
         let root = frame_root.target();
         let screenshot_bind_group = output_view.and_then(|_| {
             matches!(output_mode, OutputMode::Screenshot).then(|| {
@@ -5156,9 +5191,7 @@ impl GpuRenderer {
             .set(self.image_texture_cache.len() as u32);
         self.effect_renderer
             .merge_and_reset_debug_counters(&self.frame_stats);
-        if damage.is_some() {
-            self.keep_window(matches!(submitted, Ok(true)));
-        }
+        self.keep_window(plan, &submitted);
         let result = submitted.map(drop);
         self.frame_graph_executor.reset_upload_allocators();
         let snapshot = self.frame_stats.snapshot();
@@ -5280,41 +5313,111 @@ impl GpuRenderer {
         if let Some(composition) = self.composition_target.as_mut() {
             composition.kept.forget();
         }
+        self.swapchain.forget();
     }
 
     /// What `packet` changes against the frame `frame_root` kept: a frame
-    /// displayed through the composition target draws only that, while a
-    /// screenshot is drawn whole and a presentable image keeps no frame.
+    /// displayed through the composition target, or into a swapchain `image`
+    /// that holds an earlier frame, draws only that, while a screenshot is
+    /// drawn whole and any other presentable image keeps no frame.
     fn damage_of(
         &mut self,
         packet: &FramePacket,
         frame_root: &mut FrameRoot,
         output_mode: OutputMode,
         viewport: (u32, u32),
-    ) -> Option<Damage> {
-        let FrameRoot::Composition(composition) = frame_root else {
-            return None;
-        };
-        if matches!(output_mode, OutputMode::Screenshot) {
-            composition.kept.forget();
-            return None;
+        (surface_epoch, image): (u64, Option<PresentedImage>),
+    ) -> Option<FrameDamagePlan> {
+        match frame_root {
+            FrameRoot::Composition(composition)
+                if matches!(output_mode, OutputMode::Screenshot) =>
+            {
+                composition.kept.forget();
+                None
+            }
+            FrameRoot::Composition(composition) => {
+                // The swapchain image the frame is copied into holds a frame
+                // the history does not follow.
+                self.swapchain.forget();
+                let frame = self.frame_window(packet, viewport);
+                let damage = self.window_damage.begin(&frame, &mut composition.kept);
+                Some(FrameDamagePlan {
+                    damage,
+                    repaint: damage.repaint(),
+                    keeper: Keeper::Composition,
+                })
+            }
+            FrameRoot::Surface(_) => {
+                let image = image?;
+                self.swapchain.begin(surface_epoch);
+                if !image.kept {
+                    // Drawn whole, and only a frame a lap of images later
+                    // could draw over it, so the first frames of a surface
+                    // take no summary.
+                    self.swapchain.drop_image(image);
+                    return None;
+                }
+                let frame = self.frame_window(packet, viewport);
+                let damage = self.window_damage.begin(&frame, &mut self.swapchain.kept);
+                let repaint = self
+                    .swapchain
+                    .changed_since(image, damage)
+                    .map_or(Repaint::Whole, |changed| {
+                        self.window_damage.repaint(changed, viewport)
+                    });
+                Some(FrameDamagePlan {
+                    damage,
+                    repaint,
+                    keeper: Keeper::Image(image),
+                })
+            }
         }
-        let frame = FrameWindow {
+    }
+
+    fn frame_window<'p>(&self, packet: &'p FramePacket, viewport: (u32, u32)) -> FrameWindow<'p> {
+        FrameWindow {
             root: &packet.root,
             overlay: packet.overlay.as_deref(),
             viewport,
             root_scale: packet.root_scale,
             setting: self.frame_setting(packet.clear),
-        };
-        Some(self.window_damage.begin(&frame, &composition.kept))
+        }
     }
 
-    /// Keeps the summary of the frame just drawn into the composition target
-    /// when it was `submitted` and drew no stand-in.
-    fn keep_window(&mut self, submitted: bool) {
-        let drawn = submitted && !self.frame_stats.drew_stand_in();
-        if let Some(composition) = self.composition_target.as_mut() {
-            self.window_damage.end(&mut composition.kept, drawn);
+    /// Counts what a frame of `plan` changes and draws of a page of
+    /// `viewport` in the frame's stats, and returns what it draws.
+    fn count_damage(&self, plan: Option<FrameDamagePlan>, viewport: (u32, u32)) -> Repaint {
+        self.frame_stats
+            .damage
+            .set(frame_damage(plan.map(|plan| plan.damage)));
+        let repaint = plan.map_or(Repaint::Whole, |plan| plan.repaint);
+        self.frame_stats
+            .repainted_pixels
+            .set(repaint.pixels(viewport));
+        repaint
+    }
+
+    /// Keeps the summary of the frame of `plan` just drawn into its target
+    /// when it was drawn whole, with no stand-in. A frame that draws nothing
+    /// into a presentable image submits nothing, and is drawn all the same.
+    fn keep_window(&mut self, plan: Option<FrameDamagePlan>, submitted: &Result<bool, String>) {
+        let Some(plan) = plan else {
+            return;
+        };
+        let drawn = match submitted {
+            Ok(submitted) => *submitted || plan.repaint == Repaint::Nothing,
+            Err(_) => false,
+        } && !self.frame_stats.drew_stand_in();
+        match plan.keeper {
+            Keeper::Composition => {
+                if let Some(composition) = self.composition_target.as_mut() {
+                    self.window_damage.end(&mut composition.kept, drawn);
+                }
+            }
+            Keeper::Image(image) => {
+                self.swapchain.record(image, plan.damage, drawn);
+                self.window_damage.end(&mut self.swapchain.kept, drawn);
+            }
         }
     }
 
@@ -5451,16 +5554,13 @@ impl GpuRenderer {
             Some("Screenshot Output Texture"),
         );
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        self.render_internal(
-            width,
-            height,
-            packet,
-            surface_epoch,
-            returns,
-            OutputMode::Screenshot,
-            Some(&output_view),
-            None,
-        )?;
+        let output = FrameOutput {
+            mode: OutputMode::Screenshot,
+            view: Some(&output_view),
+            texture: None,
+            image: None,
+        };
+        self.render_internal(width, height, packet, surface_epoch, returns, output)?;
         if returns.outcome != PresentOutcome::Presented {
             return Err(format!(
                 "Screenshot rendering did not complete: {:?}",

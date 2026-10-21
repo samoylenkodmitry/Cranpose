@@ -99,6 +99,9 @@ pub(super) trait SurfaceTextureMetadata: Debug + Send + Sync + 'static {
     /// Returns a guard which can yield the semaphores needed for submission using this swapchain texture.
     fn get_semaphore_guard(&self) -> Box<dyn SwapchainSubmissionSemaphoreGuard + '_>;
 
+    /// Whether no submission has waited for this texture's acquisition yet.
+    fn awaits_acquire(&self) -> bool;
+
     /// Allows downcasting to the concrete type.
     fn as_any(&self) -> &dyn Any;
 }

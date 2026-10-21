@@ -614,11 +614,22 @@ pub trait SurfaceInterface: CommonTraits {
         crate::SurfaceStatus,
         DispatchSurfaceOutputDetail,
     );
+
+    /// See [`crate::Surface::keep_presented_images`]; a backend whose
+    /// images are not numbered does nothing.
+    fn keep_presented_images(&self, keep: bool) {
+        let _ = keep;
+    }
 }
 
 pub trait SurfaceOutputDetailInterface: CommonTraits {
     fn texture_discard(&self);
     fn texture_release(&self);
+
+    /// See [`crate::SurfaceTexture::image`].
+    fn image(&self) -> Option<crate::SurfaceImage> {
+        None
+    }
 }
 
 pub trait QueueWriteBufferInterface: CommonTraits {

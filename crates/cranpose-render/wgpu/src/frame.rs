@@ -5791,7 +5791,9 @@ mod scene_surfaces;
 #[path = "window_damage.rs"]
 mod window_damage;
 
-pub(crate) use window_damage::{Damage, FrameWindow, KeptWindow, Repaint, WindowDamage};
+pub(crate) use window_damage::{
+    Damage, FrameWindow, KeptWindow, PresentedImage, Repaint, SwapchainHistory, WindowDamage,
+};
 
 #[cfg(test)]
 #[path = "tests/frame_tests.rs"]

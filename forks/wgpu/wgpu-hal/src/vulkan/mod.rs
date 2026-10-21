@@ -285,7 +285,15 @@ pub struct SurfaceTexture {
     metadata: Box<dyn swapchain::SurfaceTextureMetadata>,
 }
 
-impl crate::DynSurfaceTexture for SurfaceTexture {}
+impl crate::DynSurfaceTexture for SurfaceTexture {
+    fn image_index(&self) -> Option<u32> {
+        Some(self.index)
+    }
+
+    fn awaits_acquire(&self) -> bool {
+        self.metadata.awaits_acquire()
+    }
+}
 
 impl Borrow<Texture> for SurfaceTexture {
     fn borrow(&self) -> &Texture {

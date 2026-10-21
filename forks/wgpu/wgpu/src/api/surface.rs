@@ -135,6 +135,16 @@ impl Surface<'_> {
         self.config.lock().clone()
     }
 
+    /// Asks the surface to hand each presented image back as it presented
+    /// it, so a frame may load the image and draw only what changed since
+    /// (Cranpose fork). It takes effect on a backend whose images are
+    /// numbered (Vulkan), where [`SurfaceTexture::image`] then says whether
+    /// an acquired image holds its last presented frame. The platform must
+    /// keep presented images' contents, which Vulkan does not promise.
+    pub fn keep_presented_images(&self, keep: bool) {
+        self.inner.keep_presented_images(keep);
+    }
+
     /// Returns the next texture to be presented by the surface for drawing.
     ///
     /// After rendering to the returned [`SurfaceTexture`], submit work via [`Queue::submit`]
