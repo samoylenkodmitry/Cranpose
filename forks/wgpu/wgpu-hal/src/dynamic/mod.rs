@@ -112,6 +112,17 @@ pub trait DynShaderModule: DynResource + fmt::Debug {}
 pub trait DynSurfaceTexture:
     DynResource + core::borrow::Borrow<dyn DynTexture> + fmt::Debug
 {
+    /// The swapchain image this texture is, by its index, on a backend whose
+    /// images are numbered (Vulkan); `None` elsewhere.
+    fn image_index(&self) -> Option<u32> {
+        None
+    }
+
+    /// Whether no submission has waited for this texture's acquisition yet,
+    /// on a backend whose presentation waits for one.
+    fn awaits_acquire(&self) -> bool {
+        false
+    }
 }
 pub trait DynTexture: DynResource + fmt::Debug {}
 pub trait DynTextureView: DynResource + fmt::Debug {}

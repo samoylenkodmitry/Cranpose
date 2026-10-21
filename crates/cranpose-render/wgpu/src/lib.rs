@@ -583,7 +583,7 @@ impl WgpuRenderer {
         width: u32,
         height: u32,
     ) -> Result<(), WgpuRendererError> {
-        self.render_frame(texture, view, width, height)
+        self.render_frame(texture, view, width, height, None)
     }
 
     /// Renders the frame into a presentable image. When the image carries the
@@ -596,7 +596,7 @@ impl WgpuRenderer {
         width: u32,
         height: u32,
     ) -> Result<(), WgpuRendererError> {
-        self.render_frame(texture, view, width, height)
+        self.render_frame(texture, view, width, height, None)
     }
 
     /// Presents a surface image this renderer drew with
@@ -612,12 +612,34 @@ impl WgpuRenderer {
         }
     }
 
+    /// Draws a swapchain image the way the present runtime does on a surface
+    /// that keeps presented images: `index` is its place in the swapchain and
+    /// `kept` says it holds the frame drawn into it last.
+    #[doc(hidden)]
+    pub fn render_swapchain_image_for_tests(
+        &mut self,
+        texture: &wgpu::Texture,
+        view: &wgpu::TextureView,
+        index: u32,
+        kept: bool,
+    ) -> Result<(), WgpuRendererError> {
+        let image = frame::PresentedImage { index, kept };
+        self.render_frame(
+            texture,
+            view,
+            texture.width(),
+            texture.height(),
+            Some(image),
+        )
+    }
+
     fn render_frame(
         &mut self,
         texture: &wgpu::Texture,
         view: &wgpu::TextureView,
         width: u32,
         height: u32,
+        image: Option<frame::PresentedImage>,
     ) -> Result<(), WgpuRendererError> {
         let PresentBackend::Sync(gpu_renderer) = &mut self.backend else {
             return Err(WgpuRendererError::Wgpu(
@@ -638,6 +660,7 @@ impl WgpuRenderer {
             packet,
             self.surface_epoch,
             &mut returns,
+            image,
         );
         self.frontend.apply_returns(returns);
         result.map_err(WgpuRendererError::Wgpu)
@@ -1191,6 +1214,7 @@ impl WgpuRenderer {
             packet.0,
             self.surface_epoch,
             &mut returns,
+            None,
         );
         let outcome = returns.outcome;
         self.frontend.apply_returns(returns);

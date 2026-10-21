@@ -22,18 +22,19 @@ those desktop targets would compile does not belong here.
 
 Upstream: <https://github.com/gfx-rs/wgpu>, commit
 `40f4a34ebaf56f9a046231f54125ad046239d3f3` (`wgpu-hal` 30.0.1).
-`cranpose-wgpu-hal` is at 30.0.16 for the catch-up barrier, the Metal
+`cranpose-wgpu-hal` is at 30.0.17 for the catch-up barrier, the Metal
 pipeline switch, the dedicated Vulkan allocations, the GL point size, the
 GL state tracker, the web surface usages, the boxed GL copy commands, the
 Vulkan command pools that give a burst's memory back, the GL shaders
 without the branches their constants decide, the GL program status read
 only on failure, the GLSL templates, the GL link reads, the WebGL
-extensions and the GL varying minimum below. `cranpose-wgpu-core` is at
-30.0.18 to require those, to make template modules, to configure a
-surface while another thread submits and to let Vulkan pipelines drop their
-shader modules. `cranpose-wgpu` is at 30.0.21 for
-the WebGPU pipeline discovery, the background compiles and the pipeline
-readiness below and to require them.
+extensions, the GL varying minimum and the Vulkan swapchain image indices
+below. `cranpose-wgpu-core` is at 30.0.19 to require those, to make
+template modules, to configure a surface while another thread submits, to
+let Vulkan pipelines drop their shader modules and to hand presented
+swapchain images back as they presented. `cranpose-wgpu` is at 30.0.22 for
+the WebGPU pipeline discovery, the background compiles, the pipeline
+readiness and the kept swapchain images below and to require them.
 
 | fork | upstream |
 | --- | --- |
@@ -411,6 +412,31 @@ On a Mate 20 X the gauntlet at tier 12 held 78.0 to 78.2 MB of native heap
 on a second start instead of 81.4 to 82.2 (PSS 149.8 instead of 153.3 MB),
 and 1.8 to 2.0 MB less on a first start (three launches each, paired).
 Other backends keep the modules: their pipelines may need them.
+
+### Swapchain images come back as they presented
+
+`wgpu-core` hands out every acquired surface texture as uninitialized, so
+a pass that loads it gets a clear first, and a frame must draw the whole
+window. Android's swapchain gives back each buffer with the pixels it
+presented. Cranpose's renderer draws into such a buffer only what changed
+since the frame it holds.
+
+`Surface::keep_presented_images(true)` asks for that. `wgpu-core` then
+counts, per swapchain image, whether it presented since the surface was
+configured; such an image is handed out initialized and in the layout it
+presented in, so a pass that loads it reads its pixels. A failed present or
+a discard forgets the image. `SurfaceTexture::image` gives the image's
+index and whether it is kept, on Vulkan; other backends give `None`.
+
+A frame that draws nothing new into a kept image submits no work. Vulkan's
+present waits on the image's acquire semaphore only through a submission,
+so the queue's present now submits once when no submission waited on it
+yet.
+
+Vulkan does not promise that a presented image keeps its pixels, so only
+Android asks for it. On a Mate 20 X (Mali-G76, 4 images, FIFO) every frame
+of a probe that drew a part of the window into a kept image read back equal
+to the frame drawn whole (36 of 36).
 
 ### Update the fork
 

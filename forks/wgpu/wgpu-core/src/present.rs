@@ -10,7 +10,7 @@ extract it from the hub.
 !*/
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
-use core::mem::ManuallyDrop;
+use core::{mem::ManuallyDrop, sync::atomic::Ordering};
 
 #[cfg(feature = "trace")]
 use crate::device::trace::{Action, IntoTrace};
@@ -36,6 +36,36 @@ pub(crate) struct Presentation {
     pub(crate) device: Arc<Device>,
     pub(crate) config: wgt::SurfaceConfiguration<Vec<wgt::TextureFormat>>,
     pub(crate) acquired_texture: Option<Arc<resource::Texture>>,
+    /// The index of the acquired texture's swapchain image, where the
+    /// backend numbers them.
+    pub(crate) acquired_image: Option<u32>,
+    /// The swapchain images, as bits by index, that hold what they last
+    /// presented since the surface was configured.
+    pub(crate) kept_images: u64,
+}
+
+/// A swapchain image a surface texture is (Cranpose fork).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SurfaceImage {
+    /// The image's index in the swapchain.
+    pub index: u32,
+    /// Whether the texture holds what the image last presented: the surface
+    /// keeps presented images and this one was presented since the surface
+    /// was configured. Otherwise its contents are undefined.
+    pub kept: bool,
+}
+
+/// The bit of `index` in [`Presentation::kept_images`]; `None` past 64.
+fn image_bit(index: u32) -> Option<u64> {
+    1u64.checked_shl(index)
+}
+
+/// Forgets the acquired image of a presentation, which goes back
+/// unpresented: its pixels and layout are whatever the frame left.
+fn forget_acquired_image(acquired_image: &mut Option<u32>, kept_images: &mut u64) {
+    if let Some(bit) = acquired_image.take().and_then(image_bit) {
+        *kept_images &= !bit;
+    }
 }
 
 #[derive(Clone, Debug, Error)]
@@ -159,6 +189,8 @@ pub type ResolvedSurfaceOutput = SurfaceOutput<Arc<resource::Texture>>;
 pub struct SurfaceOutput<T = id::TextureId> {
     pub status: Status,
     pub texture: Option<T>,
+    /// The swapchain image the texture is, where the backend numbers them.
+    pub image: Option<SurfaceImage>,
 }
 
 impl Surface {
@@ -173,6 +205,7 @@ impl Surface {
         };
 
         let suf = self.raw(device.backend()).unwrap();
+        let mut image = None;
         let (texture, status) = match unsafe {
             suf.acquire_texture(
                 Some(core::time::Duration::from_millis(FRAME_TIMEOUT_MS as u64)),
@@ -224,8 +257,16 @@ impl Surface {
                 }
                 .map_err(|e| device.handle_hal_error(e))?;
 
+                let image_index = ast.texture.image_index();
                 let mut presentation = self.presentation.lock();
                 let present = presentation.as_mut().unwrap();
+                // An image that holds what it presented stays as it is: in
+                // the layout it was presented in, and initialized, so a pass
+                // that loads it reads those pixels instead of a clear.
+                let kept = self.keep_images.load(Ordering::Acquire)
+                    && image_index
+                        .and_then(image_bit)
+                        .is_some_and(|bit| present.kept_images & bit != 0);
                 let texture = resource::Texture::new(
                     &device,
                     resource::TextureInner::Surface { raw: ast.texture },
@@ -235,21 +276,26 @@ impl Surface {
                     resource::TextureClearMode::Surface {
                         clear_view: ManuallyDrop::new(clear_view),
                     },
-                    true,
+                    !kept,
                 );
 
                 let texture = Arc::new(texture);
 
-                device
-                    .trackers
-                    .lock()
-                    .textures
-                    .insert_single(&texture, wgt::TextureUses::UNINITIALIZED);
+                device.trackers.lock().textures.insert_single(
+                    &texture,
+                    if kept {
+                        wgt::TextureUses::PRESENT
+                    } else {
+                        wgt::TextureUses::UNINITIALIZED
+                    },
+                );
 
                 if present.acquired_texture.is_some() {
                     return Err(SurfaceError::AlreadyAcquired);
                 }
                 present.acquired_texture = Some(texture.clone());
+                present.acquired_image = image_index;
+                image = image_index.map(|index| SurfaceImage { index, kept });
 
                 let status = if ast.suboptimal {
                     Status::Suboptimal
@@ -276,7 +322,27 @@ impl Surface {
             ),
         };
 
-        Ok(ResolvedSurfaceOutput { status, texture })
+        Ok(ResolvedSurfaceOutput {
+            status,
+            texture,
+            image,
+        })
+    }
+
+    /// Marks the swapchain image `index` as holding what it presented, or
+    /// not: its pixels or layout are unknown after a failed present or a
+    /// discard.
+    fn keep_image(&self, index: Option<u32>, kept: bool) {
+        let Some(bit) = index.and_then(image_bit) else {
+            return;
+        };
+        if let Some(present) = self.presentation.lock().as_mut() {
+            if kept {
+                present.kept_images |= bit;
+            } else {
+                present.kept_images &= !bit;
+            }
+        }
     }
 
     pub fn present(&self) -> Result<Status, SurfaceError> {
@@ -303,7 +369,7 @@ impl Queue {
     pub fn present(&self, surface: &Surface) -> Result<Status, SurfaceError> {
         profiling::scope!("Queue::present");
 
-        let texture = {
+        let (texture, image) = {
             let mut presentation = surface.presentation.lock();
             let present = match presentation.as_mut() {
                 Some(present) => present,
@@ -324,10 +390,14 @@ impl Queue {
                 ))));
             }
 
-            present
+            let texture = present
                 .acquired_texture
                 .take()
-                .ok_or(SurfaceError::NothingToPresent)?
+                .ok_or(SurfaceError::NothingToPresent)?;
+            // Kept again only once it presented.
+            let image = present.acquired_image;
+            forget_acquired_image(&mut present.acquired_image, &mut present.kept_images);
+            (texture, image)
         };
 
         // If the texture was never rendered to, clear it and transition to
@@ -357,6 +427,9 @@ impl Queue {
             }
             _ => unreachable!(),
         };
+        if result.is_ok() {
+            surface.keep_image(image, true);
+        }
 
         match result {
             Ok(()) => Ok(Status::Good),
@@ -395,6 +468,7 @@ impl Surface {
             .acquired_texture
             .take()
             .ok_or(SurfaceError::NothingToPresent)?;
+        forget_acquired_image(&mut present.acquired_image, &mut present.kept_images);
 
         let mut exclusive_snatch_guard = device.snatchable_lock.write();
         let inner = texture
@@ -433,6 +507,7 @@ impl Surface {
             .acquired_texture
             .take()
             .ok_or(SurfaceError::NothingToPresent)?;
+        forget_acquired_image(&mut present.acquired_image, &mut present.kept_images);
 
         Ok(())
     }
@@ -468,7 +543,21 @@ impl Global {
         Ok(SurfaceOutput {
             status,
             texture: texture_id,
+            image: output.image,
         })
+    }
+
+    /// Asks the surface to hand each presented swapchain image back as it
+    /// presented it, where the backend numbers images: an acquired image
+    /// presented since the surface was configured is then initialized and
+    /// holds its pixels, so a pass may load it and draw only what changed
+    /// (Cranpose fork). The platform must keep presented images' contents,
+    /// which Vulkan does not promise.
+    pub fn surface_keep_presented_images(&self, surface_id: id::SurfaceId, keep: bool) {
+        self.surfaces
+            .get(surface_id)
+            .keep_images
+            .store(keep, Ordering::Release);
     }
 
     pub fn surface_present(&self, surface_id: id::SurfaceId) -> Result<Status, SurfaceError> {

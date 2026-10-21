@@ -186,7 +186,14 @@ impl Queue {
             pending
         };
 
-        if pending.is_empty() {
+        // A kept image (see `Surface::keep_presented_images`) that no
+        // submission used is already in PRESENT, but a submission must still
+        // wait for its acquisition before it is presented.
+        let awaits_acquire = match texture.inner.get(&submission.snatch_guard).maybe_valid() {
+            Some(TextureInner::Surface { raw }) => raw.awaits_acquire(),
+            _ => false,
+        };
+        if pending.is_empty() && !awaits_acquire {
             // This assert checks that we don't return here if we encoded a
             // clear operation for the texture, which would be a problem since
             // we haven't done anything yet to ensure it stays alive. If we

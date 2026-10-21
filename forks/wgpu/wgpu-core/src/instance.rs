@@ -1,5 +1,5 @@
 use alloc::{borrow::ToOwned as _, boxed::Box, string::String, sync::Arc, vec, vec::Vec};
-use core::fmt;
+use core::{fmt, sync::atomic::AtomicBool};
 
 use hashbrown::HashMap;
 use thiserror::Error;
@@ -247,6 +247,7 @@ impl Instance {
         } else {
             let surface = Surface {
                 presentation: Mutex::new(rank::SURFACE_PRESENTATION, None),
+                keep_images: AtomicBool::new(false),
                 surface_per_backend,
             };
 
@@ -314,6 +315,7 @@ impl Instance {
         } else {
             let surface = Surface {
                 presentation: Mutex::new(rank::SURFACE_PRESENTATION, None),
+                keep_images: AtomicBool::new(false),
                 surface_per_backend,
             };
 
@@ -352,6 +354,7 @@ impl Instance {
 
         let surface = Surface {
             presentation: Mutex::new(rank::SURFACE_PRESENTATION, None),
+            keep_images: AtomicBool::new(false),
             surface_per_backend: core::iter::once((Backend::Metal, raw_surface)).collect(),
         };
 
@@ -369,6 +372,7 @@ impl Instance {
 
         let surface = Surface {
             presentation: Mutex::new(rank::SURFACE_PRESENTATION, None),
+            keep_images: AtomicBool::new(false),
             surface_per_backend: core::iter::once((Backend::Dx12, surface)).collect(),
         };
 
@@ -657,6 +661,9 @@ impl Instance {
 
 pub struct Surface {
     pub(crate) presentation: Mutex<Option<Presentation>>,
+    /// Whether an image acquired again holds what it presented, where the
+    /// backend keeps it (Cranpose fork; see `Global::surface_keep_presented_images`).
+    pub(crate) keep_images: AtomicBool,
     pub surface_per_backend: HashMap<Backend, Box<dyn hal::DynSurface>>,
 }
 

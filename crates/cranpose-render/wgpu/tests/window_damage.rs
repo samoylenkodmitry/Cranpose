@@ -1,12 +1,12 @@
-//! A frame displayed through the renderer's own composition target draws
-//! only the window pixels that changed since the frame the target kept, and
-//! equals the frame drawn whole byte for byte. One small thing changes per
-//! frame, beside and under glass, through layers, effects and shadows, over
-//! a page of still cards; the damage each frame reports holds every pixel
-//! the whole frames change, and a frame that moves the whole page draws the
-//! whole window.
+//! A frame displayed through the renderer's own composition target, or into
+//! a swapchain image that holds a frame drawn before, draws only the window
+//! pixels that changed since that frame, and equals the frame drawn whole
+//! byte for byte. One small thing changes per frame, beside and under glass,
+//! through layers, effects and shadows, over a page of still cards; the
+//! damage each frame reports holds every pixel the whole frames change, and
+//! a frame that moves the whole page draws the whole window.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, sync::MutexGuard};
 
 use cranpose_app_shell::AppShell;
 use cranpose_core::{MutableState, location_key};
@@ -64,7 +64,15 @@ enum Scene {
     Spinner,
     /// A spinner turning by its layer, beside two liquid glass panes.
     TurnedSpinner,
+    /// A shape changing colour, under a blur pane that shows at
+    /// [`GLASS_STEP`] only.
+    GlassOnce,
 }
+
+/// The step at which the pane of [`Scene::GlassOnce`] shows: after a
+/// swapchain's images first held no frame, then frames the history did not
+/// follow, a frame draws a part of the window.
+const GLASS_STEP: u32 = 2 * SWAPCHAIN_IMAGES as u32 + 1;
 
 fn spot() -> Modifier {
     rect_modifier(SPOT)
@@ -245,9 +253,11 @@ fn growing_star(scope: &mut dyn DrawScope, step: u32) {
 /// that changes no box.
 fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
     Some(match scene {
-        Scene::Shape | Scene::UnderBlur | Scene::UnderBlurUnderBlur | Scene::UnderLiquidGlass => {
-            spot().background(shade(step.get()))
-        }
+        Scene::Shape
+        | Scene::UnderBlur
+        | Scene::UnderBlurUnderBlur
+        | Scene::UnderLiquidGlass
+        | Scene::GlassOnce => spot().background(shade(step.get())),
         Scene::Arc => arc_drawn_again(SPOT, step, 30.0),
         Scene::Gradient => spot().draw_behind(move |scope| gradient(scope, step.get())),
         Scene::Star => spot().draw_behind(move |scope| growing_star(scope, step.get())),
@@ -320,6 +330,9 @@ fn Page(scene: Scene, step: MutableState<u32>) {
                 Scene::UnderBlur => {
                     Box(blur_pane(GLASS), BoxSpec::default(), || {});
                 }
+                Scene::GlassOnce if step.get() == GLASS_STEP => {
+                    Box(blur_pane(GLASS), BoxSpec::default(), || {});
+                }
                 Scene::UnderBlurUnderBlur => {
                     Box(blur_pane(GLASS), BoxSpec::default(), || {});
                     Box(blur_pane(UPPER_GLASS), BoxSpec::default(), || {});
@@ -341,10 +354,26 @@ fn Page(scene: Scene, step: MutableState<u32>) {
 /// compose in the renderer's own target, which keeps the frame before.
 const COMPOSED: wgpu::TextureUsages =
     wgpu::TextureUsages::RENDER_ATTACHMENT.union(wgpu::TextureUsages::COPY_SRC);
+/// An image the renderer draws straight into unless the frame reads the page
+/// through glass.
+const UNSAMPLED: wgpu::TextureUsages = COMPOSED.union(wgpu::TextureUsages::COPY_DST);
 /// An image every frame draws straight into, whole.
-const DIRECT: wgpu::TextureUsages = COMPOSED
-    .union(wgpu::TextureUsages::COPY_DST)
-    .union(wgpu::TextureUsages::TEXTURE_BINDING);
+const DIRECT: wgpu::TextureUsages = UNSAMPLED.union(wgpu::TextureUsages::TEXTURE_BINDING);
+/// The images of a swapchain.
+const SWAPCHAIN_IMAGES: usize = 3;
+
+/// What a frame draws over.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Keeper {
+    /// The renderer's own composition target, which keeps the frame before.
+    Composition,
+    /// The images of a swapchain of these usages in turn, each holding the
+    /// frame drawn into it last, as a surface that keeps presented images
+    /// hands them out.
+    Swapchain(wgpu::TextureUsages),
+}
+
+const KEEPERS: [Keeper; 2] = [Keeper::Composition, Keeper::Swapchain(DIRECT)];
 
 /// A presentable image and its view.
 struct Image {
@@ -356,21 +385,28 @@ struct Image {
 struct Harness {
     shell: AppShell<WgpuRenderer>,
     step: Rc<RefCell<Option<MutableState<u32>>>>,
+    keeper: Keeper,
     composed: Image,
+    swapchain: [Image; SWAPCHAIN_IMAGES],
+    /// The frames drawn into the swapchain.
+    presented: usize,
+    /// The frame, by its place among the frames drawn into the swapchain,
+    /// whose image comes without the frame it held.
+    unkept: Option<usize>,
     direct: Image,
 }
 
-/// A frame drawn into both images.
+/// A frame drawn over the frame its keeper holds, and whole.
 struct Frame {
-    /// The statistics of the frame drawn into the composed image.
+    /// The statistics of the frame drawn over the frame its keeper holds.
     stats: RenderStatsSnapshot,
-    composed: Vec<u8>,
+    kept: Vec<u8>,
     direct: Vec<u8>,
 }
 
 impl Harness {
     /// The page of `scene` at `scale` device pixels per logical one.
-    fn new(renderer: WgpuRenderer, scene: Scene, scale: f32) -> Self {
+    fn new(renderer: WgpuRenderer, scene: Scene, scale: f32, keeper: Keeper) -> Self {
         let device = renderer.try_device().expect("device").clone();
         let image = |usage| {
             let (texture, view) = support::render_target(
@@ -382,6 +418,11 @@ impl Harness {
             );
             Image { texture, view }
         };
+        let swapchain_usage = match keeper {
+            Keeper::Composition => DIRECT,
+            Keeper::Swapchain(usage) => usage,
+        };
+        let swapchain = std::array::from_fn(|_| image(swapchain_usage));
         let (composed, direct) = (image(COMPOSED), image(DIRECT));
         let step: Rc<RefCell<Option<MutableState<u32>>>> = Rc::new(RefCell::new(None));
         let slot = Rc::clone(&step);
@@ -399,13 +440,17 @@ impl Harness {
         Self {
             shell,
             step,
+            keeper,
             composed,
+            swapchain,
+            presented: 0,
+            unkept: None,
             direct,
         }
     }
 
-    /// The frame of `step` drawn into the composed image, over the frame
-    /// before, and then into the direct image, whole.
+    /// The frame of `step` drawn over the frame its keeper holds, and then
+    /// into the direct image, whole.
     fn frame(&mut self, step: u32) -> Frame {
         let state = self
             .step
@@ -415,8 +460,18 @@ impl Harness {
             .expect("the page remembers its step");
         self.shell.debug_enter_app_context(|| state.set(step));
         self.shell.update();
-        let (composed, stats) = draw(&mut self.shell, &self.composed);
-        let (direct, direct_stats) = draw(&mut self.shell, &self.direct);
+        let (kept, stats) = match self.keeper {
+            Keeper::Composition => draw(&mut self.shell, &self.composed, None),
+            Keeper::Swapchain(_) => {
+                let index = self.presented % SWAPCHAIN_IMAGES;
+                let kept =
+                    self.presented >= SWAPCHAIN_IMAGES && self.unkept != Some(self.presented);
+                self.presented += 1;
+                let image = Some((index as u32, kept));
+                draw(&mut self.shell, &self.swapchain[index], image)
+            }
+        };
+        let (direct, direct_stats) = draw(&mut self.shell, &self.direct, None);
         assert_eq!(
             direct_stats.damage,
             FrameDamage::Untracked,
@@ -424,19 +479,28 @@ impl Harness {
         );
         Frame {
             stats,
-            composed,
+            kept,
             direct,
         }
     }
 }
 
-/// Draws the shell's scene into `image`: its pixels and the frame's
-/// statistics.
-fn draw(shell: &mut AppShell<WgpuRenderer>, image: &Image) -> (Vec<u8>, RenderStatsSnapshot) {
+/// Draws the shell's scene into `image`, as the swapchain image of `index`
+/// that holds the frame drawn into it last when `swapchain` says so: its
+/// pixels and the frame's statistics.
+fn draw(
+    shell: &mut AppShell<WgpuRenderer>,
+    image: &Image,
+    swapchain: Option<(u32, bool)>,
+) -> (Vec<u8>, RenderStatsSnapshot) {
     let renderer = shell.renderer();
-    renderer
-        .render(&image.texture, &image.view, WIDTH, HEIGHT)
-        .expect("the frame renders");
+    match swapchain {
+        Some((index, kept)) => {
+            renderer.render_swapchain_image_for_tests(&image.texture, &image.view, index, kept)
+        }
+        None => renderer.render(&image.texture, &image.view, WIDTH, HEIGHT),
+    }
+    .expect("the frame renders");
     assert_eq!(renderer.device_error_count_for_tests(), 0);
     let stats = renderer.last_frame_stats().expect("frame statistics");
     let device = renderer.try_device().expect("device").clone();
@@ -538,42 +602,64 @@ fn assert_within(label: &str, damage: FrameDamage, reach: [f32; 4]) {
 /// Renders `scene` for [`STEPS`] changes after a still frame and checks
 /// each frame's damage against the pixels it changed.
 fn assert_damage_holds_the_changes(scene: Scene) {
-    for scale in SCALES {
-        assert_damage_holds_the_changes_at(scene, scale);
+    for keeper in KEEPERS {
+        for scale in SCALES {
+            assert_damage_holds_the_changes_at(scene, scale, keeper);
+        }
     }
 }
 
-/// Draws each frame of `scene` twice: into the renderer's own target, which
-/// draws its damage over the frame before, and straight into an image that
-/// takes the whole frame. The first must equal the second byte for byte,
-/// and what the second changes must lie in the damage the first reports.
-fn assert_damage_holds_the_changes_at(scene: Scene, scale: f32) {
-    let (_lock, renderer) =
-        match support::headless_renderer_parts_with_display_format(wgpu::TextureFormat::Rgba8Unorm)
-        {
-            Ok(parts) => parts,
-            Err(err) => {
-                eprintln!("skipping (headless WGPU init failed): {err}");
-                return;
-            }
-        };
-    let mut harness = Harness::new(renderer, scene, scale);
+/// A headless renderer whose display format is the composition format, so
+/// an image of [`DIRECT`] usages takes frames straight, or `None` without a
+/// GPU.
+fn renderer() -> Option<(MutexGuard<'static, ()>, WgpuRenderer)> {
+    match support::headless_renderer_parts_with_display_format(wgpu::TextureFormat::Rgba8Unorm) {
+        Ok(parts) => Some(parts),
+        Err(err) => {
+            eprintln!("skipping (headless WGPU init failed): {err}");
+            None
+        }
+    }
+}
+
+/// Draws each frame of `scene` twice: over the frame `keeper` holds, which
+/// draws its damage, and straight into an image that takes the whole frame.
+/// The first must equal the second byte for byte, and what the second
+/// changes must lie in the damage the first reports.
+fn assert_damage_holds_the_changes_at(scene: Scene, scale: f32, keeper: Keeper) {
+    let Some((_lock, renderer)) = renderer() else {
+        return;
+    };
+    let mut harness = Harness::new(renderer, scene, scale, keeper);
     let reach = scene.reach().map(|value| value * scale);
+    let whole = u64::from(WIDTH * HEIGHT);
     let mut before: Option<Vec<u8>> = None;
     let mut partial_frames = 0;
     for step in [0, 0].into_iter().chain(1..=STEPS) {
         let frame = harness.frame(step);
         let damage = frame.stats.damage;
-        let label = format!("{scene:?} at {scale}, step {step}, damage {damage:?}");
+        let repainted = frame.stats.repainted_pixels;
+        let label = format!("{scene:?} {keeper:?} at {scale}, step {step}, damage {damage:?}");
+        support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+        if damage == FrameDamage::Untracked {
+            // A swapchain image that holds no frame takes the frame whole.
+            assert_eq!(repainted, whole, "{label}");
+            before = None;
+            continue;
+        }
         if let Some(before) = &before {
             assert_covers(&label, damage, before, &frame.direct);
         }
-        support::assert_same_bytes(&label, WIDTH, &frame.composed, &frame.direct);
-        let repainted = match damage {
+        let damaged = match damage {
             FrameDamage::Rect { width, height, .. } => u64::from(width * height),
-            _ => u64::from(WIDTH * HEIGHT),
+            _ => whole,
         };
-        assert_eq!(frame.stats.repainted_pixels, repainted, "{label}");
+        match keeper {
+            Keeper::Composition => assert_eq!(repainted, damaged, "{label}"),
+            // An image holds a frame a few frames back, so it draws the
+            // damages of the frames since too.
+            Keeper::Swapchain(_) => assert!(repainted >= damaged, "{label}: {repainted} pixels"),
+        }
         if before.is_some() {
             if step == 0 {
                 assert_eq!(
@@ -593,14 +679,14 @@ fn assert_damage_holds_the_changes_at(scene: Scene, scale: f32) {
                 );
             } else {
                 assert_within(&label, damage, reach);
-                partial_frames += usize::from(repainted > 0);
+                partial_frames += usize::from((1..whole).contains(&repainted));
             }
         }
         before = Some(frame.direct);
     }
     assert!(
         scene == Scene::MovedPage || partial_frames > 0,
-        "{scene:?} at {scale}: no frame drew a part of the window"
+        "{scene:?} {keeper:?} at {scale}: no frame drew a part of the window"
     );
 }
 
@@ -680,29 +766,35 @@ fn the_whole_page_moving_one_pixel() {
 }
 
 /// The frames of a spinner that turns for as long as it shows, beside two
-/// liquid glass panes over a page of cards: after the first frames each
-/// draws only the spinner's part of the window, with a few draws and no
-/// glass, and equals the whole frame.
+/// liquid glass panes over a page of cards: once its target holds a frame,
+/// each draws only the spinner's part of the window, with a few draws and
+/// no glass, and equals the whole frame.
 fn assert_spinner_repaints_only_itself(scene: Scene) {
+    for keeper in KEEPERS {
+        assert_spinner_repaints_only_itself_over(scene, keeper);
+    }
+}
+
+fn assert_spinner_repaints_only_itself_over(scene: Scene, keeper: Keeper) {
     const FRAMES: u32 = 60;
-    let (_lock, renderer) =
-        match support::headless_renderer_parts_with_display_format(wgpu::TextureFormat::Rgba8Unorm)
-        {
-            Ok(parts) => parts,
-            Err(err) => {
-                eprintln!("skipping (headless WGPU init failed): {err}");
-                return;
-            }
-        };
-    let mut harness = Harness::new(renderer, scene, 1.0);
+    let Some((_lock, renderer)) = renderer() else {
+        return;
+    };
+    let mut harness = Harness::new(renderer, scene, 1.0, keeper);
+    // A swapchain's images first hold no frame, then frames drawn before
+    // the history follows them.
+    let whole_frames = match keeper {
+        Keeper::Composition => 1,
+        Keeper::Swapchain(_) => 2 * SWAPCHAIN_IMAGES as u32,
+    };
     let spinner_pixels = (SPINNER[2] * SPINNER[3]) as u64;
     let mut whole_draws = 0;
     for step in 0..FRAMES {
         let frame = harness.frame(step);
         let stats = frame.stats;
-        let label = format!("{scene:?} frame {step}: {stats:?}");
-        support::assert_same_bytes(&label, WIDTH, &frame.composed, &frame.direct);
-        if step == 0 {
+        let label = format!("{scene:?} {keeper:?} frame {step}: {stats:?}");
+        support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+        if step < whole_frames {
             whole_draws = stats.draw_calls;
             continue;
         }
@@ -732,6 +824,77 @@ fn a_small_endless_animation_drawn_again_repaints_only_its_area() {
 #[test]
 fn a_small_endless_animation_turned_by_its_layer_repaints_only_its_area() {
     assert_spinner_repaints_only_itself(Scene::TurnedSpinner);
+}
+
+/// Once every image of a swapchain holds the frame, a frame that changes
+/// nothing draws nothing.
+#[test]
+fn a_swapchain_image_that_holds_the_frame_draws_nothing() {
+    let Some((_lock, renderer)) = renderer() else {
+        return;
+    };
+    let mut harness = Harness::new(renderer, Scene::Shape, 1.0, Keeper::Swapchain(DIRECT));
+    let still = (0..3 * SWAPCHAIN_IMAGES).map(|_| 2);
+    let mut last = None;
+    for step in (0..2).chain(still) {
+        let frame = harness.frame(step);
+        support::assert_same_bytes(&format!("step {step}"), WIDTH, &frame.kept, &frame.direct);
+        last = Some(frame.stats);
+    }
+    let stats = last.expect("frames were drawn");
+    assert_eq!(
+        (stats.repainted_pixels, stats.draw_calls),
+        (0, 0),
+        "a still frame into an image that holds it: {stats:?}"
+    );
+}
+
+/// A swapchain whose images cannot be read as textures takes the frame with
+/// glass through the composition target, which copies it into its image.
+#[test]
+fn a_frame_copied_into_a_swapchain_image_between_frames_drawn_into_it() {
+    assert_swapchain_frames_after_the_glass(UNSAMPLED, true);
+}
+
+/// The swapchain hands the image for the frame with glass out without the
+/// frame it held, as after a failed present.
+#[test]
+fn a_swapchain_image_handed_out_without_its_frame() {
+    assert_swapchain_frames_after_the_glass(DIRECT, false);
+}
+
+/// Draws [`Scene::GlassOnce`] into a swapchain of `usage` whose image for the
+/// frame with glass holds the frame drawn into it before only when
+/// `glass_image_kept`. No frame after the glass draws over that image as if
+/// it held the frame drawn into it before the glass, and once the images
+/// hold frames the history follows again, frames draw a part of the window
+/// again.
+fn assert_swapchain_frames_after_the_glass(usage: wgpu::TextureUsages, glass_image_kept: bool) {
+    let Some((_lock, renderer)) = renderer() else {
+        return;
+    };
+    let mut harness = Harness::new(renderer, Scene::GlassOnce, 1.0, Keeper::Swapchain(usage));
+    if !glass_image_kept {
+        harness.unkept = Some(GLASS_STEP as usize);
+    }
+    let whole = u64::from(WIDTH * HEIGHT);
+    let (mut partial_before, mut partial_after) = (0, 0);
+    for step in 0..=GLASS_STEP + 2 * SWAPCHAIN_IMAGES as u32 {
+        let frame = harness.frame(step);
+        let label = format!("step {step}: {:?}", frame.stats);
+        support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+        let partial = usize::from((1..whole).contains(&frame.stats.repainted_pixels));
+        match step.cmp(&GLASS_STEP) {
+            std::cmp::Ordering::Less => partial_before += partial,
+            std::cmp::Ordering::Equal => {}
+            std::cmp::Ordering::Greater => partial_after += partial,
+        }
+    }
+    assert!(
+        partial_before > 0 && partial_after > 0,
+        "frames draw a part of the window before the glass ({partial_before}) and after it \
+         ({partial_after})"
+    );
 }
 
 const OVERLAY: Rect = Rect {
