@@ -239,8 +239,9 @@ pub use microphone_permission::{
     set_platform_microphone_access,
 };
 pub use microphone_standby::{
-    MicrophoneStandby, MicrophoneStandbyLease, hold_microphone_standby,
-    microphone_standby_available, set_platform_microphone_standby,
+    MicrophoneStandby, MicrophoneStandbyLease, StandbyNotice, hold_microphone_standby,
+    microphone_standby_available, microphone_standby_stopped, on_microphone_standby_stop,
+    set_microphone_standby_notice, set_platform_microphone_standby,
 };
 pub use navigation::{
     BackEdge, BackEvent, BackGesture, BackHandler, BackRequestObserver, PredictiveBackHandler,

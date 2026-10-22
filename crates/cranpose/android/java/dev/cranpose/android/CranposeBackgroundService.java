@@ -184,6 +184,18 @@ public final class CranposeBackgroundService extends Service {
         super.onDestroy();
     }
 
+    /**
+     * Android 15 gives a data sync service six hours a day. When they run out
+     * it calls this, and the service must stop within seconds or the system
+     * ends the app. Work that remains goes on the next time the app asks for
+     * the service, once the system allows it again.
+     */
+    @Override
+    public void onTimeout(int startId, int fgsType) {
+        android.util.Log.w("cranpose", "the background work used up its daily time");
+        stopSelf();
+    }
+
     @Override
     public IBinder onBind(Intent intent) {
         return null;
