@@ -13,10 +13,13 @@ can be installed with **Settings → Plugins → Install Plugin from Disk**.
 
 ## Build previews on Windows
 
-The IDE builds the preview with Cargo. A Windows x64 PC needs the MSVC C++ build
-tools, a Windows SDK and **C++ ATL for x64/x86 (Latest MSVC)**; see
-[Windows build tools](guide.md#windows-build-tools). The plugin checks these
-components before a Windows preview build and offers to install the missing ones.
+The IDE builds the preview with Cargo. A Windows x64 PC needs Rust, the MSVC C++
+build tools, a Windows SDK and **C++ ATL for x64/x86 (Latest MSVC)**. Before the
+first preview build the Cranpose panel checks them. When one is missing it names
+the parts. **Install** opens the Visual Studio Installer with them selected, or
+installs the Build Tools with winget on a PC without Visual Studio. Confirm the
+installation there, then choose **Retry**. A build that stops with
+`LNK1104: cannot open file 'atls.lib'` opens the same panel.
 
 ## Register component previews
 

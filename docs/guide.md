@@ -36,9 +36,7 @@ to an Android Compose app. **Native views** adds platform controls to Rust UI.
 
 Install Rust with [rustup](https://rustup.rs/). Cargo creates packages, resolves
 dependencies and runs the compiler. `Cargo.toml` serves the role of a Gradle build
-file. A crate is a Rust library or executable. A Windows PC also needs Visual
-Studio's C++ components, including ATL. [Windows build tools](guide.md#windows-build-tools)
-lists them.
+file. A crate is a Rust library or executable.
 
 The [Cranpose plugin for IntelliJ IDEA and RustRover](https://plugins.jetbrains.com/plugin/34594-cranpose)
 includes the [cranpose-showcase project template](https://github.com/samoylenkodmitry/cranpose-showcase).
@@ -56,60 +54,6 @@ cargo run --features desktop,renderer-wgpu
 The starter contains shared Rust UI, Android Gradle files, iOS scripts and a web
 build script. Replace the sample screens in `src/screens`. Keep data access in
 `src/data` and screen models in `src/presentation`.
-
-### Windows build tools
-
-A Windows x64 PC needs Rust and the C++ components of Visual Studio. Install Rust
-from [rustup](https://rustup.rs/) with its default MSVC toolchain. Install Visual
-Studio 2022 or newer. The Build Tools edition is enough. Select these components:
-
-- MSVC C++ build tools, `Microsoft.VisualStudio.Component.VC.Tools.x86.x64`.
-- A Windows 10 or 11 SDK, for example `Microsoft.VisualStudio.Component.Windows11SDK.26100`.
-- C++ ATL, shown in the installer as **C++ ATL for x64/x86 (Latest MSVC)**,
-  `Microsoft.VisualStudio.Component.VC.ATL`.
-
-The workload **Desktop development with C++**
-(`Microsoft.VisualStudio.Workload.VCTools`) with its recommended components covers
-the first two. Select ATL separately.
-
-The Windows x64 renderer links Microsoft's DirectX shader compiler into the app
-(the wgpu feature `static-dxc`). That library uses ATL, so the linker needs
-`atls.lib` from the ATL component. A build without it stops with this error:
-
-```text
-LINK : fatal error LNK1104: cannot open file 'atls.lib'
-```
-
-Windows on ARM64 does not use the statically linked compiler and needs no ATL.
-
-To install the Build Tools with ATL on a PC that has no Visual Studio, run this
-command in PowerShell:
-
-```powershell
-winget install --id Microsoft.VisualStudio.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --add Microsoft.VisualStudio.Component.VC.ATL"
-```
-
-To add ATL to an installed Visual Studio, first read its installation path:
-
-```powershell
-& "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
-```
-
-Then run the installer's modify command with that path in place of
-`<installation path>`. The installer asks for administrator rights.
-
-```powershell
-& "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe" modify --installPath "<installation path>" --add Microsoft.VisualStudio.Component.VC.ATL --passive --norestart
-```
-
-In the Visual Studio Installer window, choose **Modify**, open **Individual
-components** and tick **C++ ATL for x64/x86 (Latest MSVC)**.
-
-To build a Windows binary on macOS or Linux with cargo-xwin, set
-`XWIN_INCLUDE_ATL=true` in the environment. The linker needs `atls.lib` there too.
-cargo-xwin adds ATL only to a new cache, so also point `XWIN_CACHE_DIR` at a new
-directory if an earlier build filled the default one. `cranpose-build` sets both
-for its Windows builds.
 
 ### Preview in the IDE
 
@@ -222,9 +166,8 @@ transfers captured values into the closure.
 ### Run on desktop
 
 Build and run on Windows, Linux or macOS. The commands below use a native toolchain
-on the target OS: Visual Studio C++ Build Tools with ATL on Windows (see
-[Windows build tools](guide.md#windows-build-tools)), a C compiler and X11/Wayland
-development packages on Linux, or Xcode Command Line Tools on macOS.
+on the target OS: Visual Studio C++ Build Tools on Windows, a C compiler and
+X11/Wayland development packages on Linux, or Xcode Command Line Tools on macOS.
 The app needs a GPU driver with a wgpu backend such as Vulkan, Metal or DirectX 12.
 GitHub's Windows, Linux and macOS runners can build separate desktop artifacts.
 
