@@ -162,10 +162,8 @@ fn configure_audio_session() {
 }
 
 fn activate_audio_session(active: bool) {
-    unsafe {
-        if let Err(error) = AVAudioSession::sharedInstance().setActive_error(active) {
-            log::warn!("cranpose: iOS audio session activation refused: {error:?}");
-        }
+    if let Err(error) = crate::apple_audio_session::hold_for_media(active) {
+        log::warn!("cranpose: iOS media playback {error}");
     }
 }
 

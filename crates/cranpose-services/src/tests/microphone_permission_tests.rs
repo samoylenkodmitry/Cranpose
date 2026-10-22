@@ -47,7 +47,46 @@ fn without_a_backend_the_microphone_is_allowed_and_nothing_is_asked() {
     assert_eq!(microphone_permission(), MicrophonePermission::Granted);
     request_microphone_permission();
     open_microphone_settings();
-    assert_eq!(prepare_microphone(), Ok(()));
+    assert!(prepare_microphone().is_ok());
+}
+
+#[test]
+fn the_platform_releases_the_audio_when_the_last_recording_lets_go() {
+    struct Counted {
+        prepared: AtomicUsize,
+        finished: AtomicUsize,
+    }
+    impl MicrophoneAccess for Counted {
+        fn permission(&self) -> MicrophonePermission {
+            MicrophonePermission::Granted
+        }
+        fn request(&self) {}
+        fn open_settings(&self) {}
+        fn prepare_recording(&self) -> Result<(), String> {
+            self.prepared.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn finish_recording(&self) {
+            self.finished.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let _guard = crate::registry::test_service_guard();
+    let platform = Arc::new(Counted {
+        prepared: AtomicUsize::new(0),
+        finished: AtomicUsize::new(0),
+    });
+    set_platform_microphone_access(Some(platform.clone()));
+    let first = prepare_microphone().expect("ready");
+    let second = prepare_microphone().expect("ready");
+    assert_eq!(platform.prepared.load(Ordering::SeqCst), 2);
+    drop(first);
+    assert_eq!(platform.finished.load(Ordering::SeqCst), 0);
+    drop(second);
+    assert_eq!(platform.finished.load(Ordering::SeqCst), 1);
+    // Without a platform there is nothing to release.
+    set_platform_microphone_access(None);
+    drop(prepare_microphone().expect("ready"));
+    assert_eq!(platform.finished.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -66,8 +105,8 @@ fn preparing_reports_why_the_platform_cannot_record() {
     let _guard = crate::registry::test_service_guard();
     set_platform_microphone_access(Some(Arc::new(Busy)));
     assert_eq!(
-        prepare_microphone(),
-        Err("a call holds the audio session".into())
+        prepare_microphone().err(),
+        Some("a call holds the audio session".into())
     );
     set_platform_microphone_access(None);
 }

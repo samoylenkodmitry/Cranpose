@@ -17,7 +17,7 @@
 //! the first time an application records), the permission reads
 //! [`MicrophonePermission::Granted`].
 
-use std::sync::{Arc, Mutex, OnceLock, atomic::Ordering};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, atomic::Ordering};
 
 use cranpose_core::{State, rememberEventStream};
 use portable_atomic::AtomicU64;
@@ -52,6 +52,10 @@ pub trait MicrophoneAccess: Send + Sync {
     fn prepare_recording(&self) -> Result<(), String> {
         Ok(())
     }
+    /// Releases what [`prepare_recording`](Self::prepare_recording) readied,
+    /// once no recording needs it: on iOS and watchOS other apps' audio
+    /// resumes and a Bluetooth headset leaves its call mode.
+    fn finish_recording(&self) {}
 }
 
 static PLATFORM: ServiceRegistry<dyn MicrophoneAccess> = ServiceRegistry::new();
@@ -94,13 +98,40 @@ pub fn open_microphone_settings() {
     }
 }
 
+/// The platform's audio readied for recording, from [`prepare_microphone`].
+/// Keep it as long as the microphone stream: when the last one is dropped,
+/// the platform releases its audio for other apps.
+#[must_use = "dropping it releases the audio readied for recording"]
+#[derive(Debug)]
+pub struct PreparedMicrophone {
+    _private: (),
+}
+
+/// The number of [`PreparedMicrophone`]s alive.
+static PREPARED: Mutex<usize> = Mutex::new(0);
+
 /// Readies the platform's audio for recording; call it before opening a
 /// microphone stream. On iOS and watchOS it sets the audio session to record
 /// and play and activates it; elsewhere it does nothing.
-pub fn prepare_microphone() -> Result<(), String> {
-    PLATFORM
-        .get()
-        .map_or(Ok(()), |access| access.prepare_recording())
+pub fn prepare_microphone() -> Result<PreparedMicrophone, String> {
+    let mut prepared = PREPARED.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(access) = PLATFORM.get() {
+        access.prepare_recording()?;
+    }
+    *prepared += 1;
+    Ok(PreparedMicrophone { _private: () })
+}
+
+impl Drop for PreparedMicrophone {
+    fn drop(&mut self) {
+        let mut prepared = PREPARED.lock().unwrap_or_else(PoisonError::into_inner);
+        *prepared -= 1;
+        if *prepared == 0
+            && let Some(access) = PLATFORM.get()
+        {
+            access.finish_recording();
+        }
+    }
 }
 
 type Observer = Arc<dyn Fn(MicrophonePermission) + Send + Sync>;

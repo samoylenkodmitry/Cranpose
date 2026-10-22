@@ -719,6 +719,12 @@ mod apple_mobile;
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
     all(feature = "watchos", target_os = "watchos")
 ))]
+mod apple_audio_session;
+
+#[cfg(any(
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(feature = "watchos", target_os = "watchos")
+))]
 mod apple_microphone;
 
 #[cfg(all(

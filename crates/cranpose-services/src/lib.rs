@@ -233,10 +233,10 @@ pub use memory_pressure::{
     rememberMemoryPressure,
 };
 pub use microphone_permission::{
-    MicrophoneAccess, MicrophonePermission, MicrophonePermissionObserver, microphone_permission,
-    observe_microphone_permission, open_microphone_settings, prepare_microphone,
-    publish_microphone_permission, rememberMicrophonePermission, request_microphone_permission,
-    set_platform_microphone_access,
+    MicrophoneAccess, MicrophonePermission, MicrophonePermissionObserver, PreparedMicrophone,
+    microphone_permission, observe_microphone_permission, open_microphone_settings,
+    prepare_microphone, publish_microphone_permission, rememberMicrophonePermission,
+    request_microphone_permission, set_platform_microphone_access,
 };
 pub use microphone_standby::{
     MicrophoneStandby, MicrophoneStandbyLease, StandbyNotice, hold_microphone_standby,
