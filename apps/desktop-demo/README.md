@@ -127,7 +127,7 @@ The Android and Web platform wrappers live in the sibling
 
 If you encounter rendering issues:
 - Update your graphics drivers
-- Try the pixels renderer: `cargo run -p desktop-app --bin desktop-app --no-default-features --features desktop,renderer-pixels`
+- Try the pixels renderer: `cargo run -p desktop-app --bin desktop-app --no-default-features --features desktop-http,renderer-pixels`
 
 ### Web
 
