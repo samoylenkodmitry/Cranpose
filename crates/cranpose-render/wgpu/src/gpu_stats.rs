@@ -70,18 +70,47 @@ pub enum FrameDamage {
     /// The whole window: the target kept no frame to compare with, or the
     /// frame changes most of it.
     Full,
-    /// Only the pixels of this rect, in window pixels; empty when nothing
-    /// changes.
-    Rect {
-        /// The rect's left edge.
-        x: u32,
-        /// The rect's top edge.
-        y: u32,
-        /// The rect's width.
-        width: u32,
-        /// The rect's height.
-        height: u32,
-    },
+    /// Only the pixels of these rects; none when nothing changes.
+    Part(WindowRects),
+}
+
+/// Up to four rects of window pixels that share no pixel, each as
+/// `[x, y, width, height]`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WindowRects {
+    rects: [[u32; 4]; crate::frame::MAX_DAMAGE_RECTS],
+    len: usize,
+}
+
+impl WindowRects {
+    /// The rects.
+    pub fn rects(&self) -> &[[u32; 4]] {
+        &self.rects[..self.len]
+    }
+
+    /// Whether the pixel at `x`, `y` lies in one of the rects.
+    pub fn contains(&self, x: u32, y: u32) -> bool {
+        self.rects().iter().any(|&[left, top, width, height]| {
+            x >= left && y >= top && x < left + width && y < top + height
+        })
+    }
+
+    /// The pixels of all the rects.
+    pub fn pixels(&self) -> u64 {
+        self.rects()
+            .iter()
+            .map(|&[_, _, width, height]| u64::from(width) * u64::from(height))
+            .sum()
+    }
+
+    /// Adds `rect`, past the rects held: the renderer's damage holds no
+    /// more than four.
+    pub(crate) fn push(&mut self, rect: [u32; 4]) {
+        if let Some(slot) = self.rects.get_mut(self.len) {
+            *slot = rect;
+            self.len += 1;
+        }
+    }
 }
 
 /// The counters of one drawn frame, from `WgpuRenderer::last_frame_stats`. Pixel counts are in

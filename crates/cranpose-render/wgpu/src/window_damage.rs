@@ -76,6 +76,10 @@ impl Summaries {
         first_skips_log2: COPY_HOLD_OFF.trailing_zeros(),
     };
 }
+/// The most rects a frame's damage keeps apart: changes far apart, such as
+/// a spinner at the top and a caret at the bottom, each draw their own part
+/// of the window, not a part spanning both.
+pub(crate) const MAX_DAMAGE_RECTS: usize = 4;
 /// The item between the root's items and the overlay's.
 const OVERLAY_KEY: u64 = 0x6f76_6572_6c61_7973;
 
@@ -92,9 +96,8 @@ pub(crate) enum Damage {
     /// The whole window: the target kept no frame to compare with, or the
     /// frame changes most of it.
     Full,
-    /// Only the whole window pixels of this rect; nothing when no pixel
-    /// changes.
-    Part(Option<DeviceRect>),
+    /// Only the window pixels of these rects; none when no pixel changes.
+    Part(DamageRects),
 }
 
 impl Damage {
@@ -102,8 +105,8 @@ impl Damage {
     pub(crate) fn repaint(self) -> Repaint {
         match self {
             Self::Skipped | Self::Full => Repaint::Whole,
-            Self::Part(Some(window)) => Repaint::Window(window),
-            Self::Part(None) => Repaint::Nothing,
+            Self::Part(rects) if rects.is_empty() => Repaint::Nothing,
+            Self::Part(rects) => Repaint::Window(rects),
         }
     }
 }
@@ -112,9 +115,9 @@ impl Damage {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Repaint {
     Whole,
-    /// Only this rect of whole pixels inside the page; the rest keeps the
-    /// frame before's pixels.
-    Window(DeviceRect),
+    /// Only these rects inside the page; the rest keeps the frame before's
+    /// pixels.
+    Window(DamageRects),
     /// Nothing: the page holds the frame already.
     Nothing,
 }
@@ -124,9 +127,142 @@ impl Repaint {
     pub(crate) fn pixels(self, (width, height): (u32, u32)) -> u64 {
         match self {
             Self::Whole => u64::from(width) * u64::from(height),
-            Self::Window(window) => (window.width * window.height) as u64,
+            Self::Window(rects) => rects.pixels() as u64,
             Self::Nothing => 0,
         }
+    }
+}
+
+/// Window pixels as up to [`MAX_DAMAGE_RECTS`] rects of whole pixels that
+/// share no pixel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DamageRects {
+    rects: [DeviceRect; MAX_DAMAGE_RECTS],
+    len: usize,
+}
+
+impl Default for DamageRects {
+    fn default() -> Self {
+        let none = DeviceRect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        };
+        Self {
+            rects: [none; MAX_DAMAGE_RECTS],
+            len: 0,
+        }
+    }
+}
+
+impl DamageRects {
+    pub(crate) fn as_slice(&self) -> &[DeviceRect] {
+        &self.rects[..self.len]
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// The pixels of every rect.
+    pub(crate) fn pixels(&self) -> f32 {
+        self.as_slice()
+            .iter()
+            .map(|rect| rect.width * rect.height)
+            .sum()
+    }
+
+    /// The rect holding every rect; `None` when there is none.
+    pub(crate) fn bounds(&self) -> Option<DeviceRect> {
+        self.as_slice().iter().copied().reduce(DeviceRect::union)
+    }
+
+    /// Whether `rect` shares a pixel with a rect.
+    pub(crate) fn meets(&self, rect: DeviceRect) -> bool {
+        self.as_slice()
+            .iter()
+            .any(|part| part.intersect(rect).is_some())
+    }
+
+    /// Whether one rect holds all of `rect`.
+    fn holds(&self, rect: DeviceRect) -> bool {
+        self.as_slice().iter().any(|part| holds(*part, rect))
+    }
+
+    /// Adds `rect`, grown out to whole pixels. It merges with every rect it
+    /// shares a pixel with; past [`MAX_DAMAGE_RECTS`], the two rects whose
+    /// bounds add the fewest pixels merge.
+    pub(crate) fn add(&mut self, rect: DeviceRect) {
+        let mut rect = rect.snap_out();
+        loop {
+            while let Some(at) = self
+                .as_slice()
+                .iter()
+                .position(|part| part.intersect(rect).is_some())
+            {
+                rect = rect.union(self.remove(at));
+            }
+            if self.len < MAX_DAMAGE_RECTS {
+                self.rects[self.len] = rect;
+                self.len += 1;
+                return;
+            }
+            let (first, second) = self.cheapest_pair(rect);
+            if second == self.len {
+                rect = rect.union(self.remove(first));
+            } else {
+                let merged = self.rects[first].union(self.rects[second]);
+                self.remove(second);
+                self.remove(first);
+                self.rects[self.len] = rect;
+                self.len += 1;
+                rect = merged;
+            }
+        }
+    }
+
+    /// The two of the rects and `rect`, at index `len`, whose bounds add the
+    /// fewest pixels to theirs.
+    fn cheapest_pair(&self, rect: DeviceRect) -> (usize, usize) {
+        let candidate = |index: usize| {
+            if index < self.len {
+                self.rects[index]
+            } else {
+                rect
+            }
+        };
+        let area = |rect: DeviceRect| rect.width * rect.height;
+        let mut best = (0, 1, f32::INFINITY);
+        for first in 0..=self.len {
+            for second in first + 1..=self.len {
+                let (a, b) = (candidate(first), candidate(second));
+                let added = area(a.union(b)) - area(a) - area(b);
+                if added < best.2 {
+                    best = (first, second, added);
+                }
+            }
+        }
+        (best.0, best.1)
+    }
+
+    fn remove(&mut self, at: usize) -> DeviceRect {
+        let rect = self.rects[at];
+        self.rects.copy_within(at + 1..self.len, at);
+        self.len -= 1;
+        rect
+    }
+
+    /// The rects cut to `window`.
+    fn within(&self, window: DeviceRect) -> Self {
+        let mut within = Self::default();
+        for part in self.as_slice() {
+            if let Some(part) = part.intersect(window) {
+                within.rects[within.len] = part;
+                within.len += 1;
+            }
+        }
+        within
     }
 }
 
@@ -324,13 +460,13 @@ impl SwapchainHistory {
     }
 
     /// The pixels that differ between the frame the kept `image` holds and a
-    /// frame of `damage`, nothing when none does; `None` unless the image
-    /// holds a frame whose damages since are all known.
+    /// frame of `damage`, none when none does; `None` unless the image holds
+    /// a frame whose damages since are all known.
     pub(crate) fn changed_since(
         &self,
         image: PresentedImage,
         damage: Damage,
-    ) -> Option<Option<DeviceRect>> {
+    ) -> Option<DamageRects> {
         let held = self.held.get(image.index as usize).copied().flatten()?;
         let Damage::Part(mut union) = damage else {
             return None;
@@ -340,10 +476,9 @@ impl SwapchainHistory {
             let (_, Damage::Part(part)) = entry.filter(|(at, _)| *at == frame)? else {
                 return None;
             };
-            union = match (union, part) {
-                (Some(union), Some(part)) => Some(union.union(part)),
-                (union, part) => union.or(part),
-            };
+            for rect in part.as_slice() {
+                union.add(*rect);
+            }
         }
         Some(union)
     }
@@ -455,10 +590,11 @@ impl WindowDamage {
 
     /// What the frame [`Self::begin`] summarized, with a [`Damage::Part`],
     /// draws when the pixels `changed` differ from what its target holds.
-    pub(crate) fn repaint(&self, changed: Option<DeviceRect>, viewport: (u32, u32)) -> Repaint {
-        changed.map_or(Repaint::Nothing, |changed| {
-            widen(&self.next, changed, viewport).repaint()
-        })
+    pub(crate) fn repaint(&self, changed: DamageRects, viewport: (u32, u32)) -> Repaint {
+        if changed.is_empty() {
+            return Repaint::Nothing;
+        }
+        widen(&self.next, changed, viewport).repaint()
     }
 
     /// Lets the summaries go, `kept`'s among them: a page that keeps changing
@@ -541,23 +677,26 @@ fn window_rect((width, height): (u32, u32)) -> DeviceRect {
 /// changes all it writes, and a backdrop drawn again reads the page beneath
 /// it again, which must be drawn again then, not kept.
 fn compare(kept: &WindowSummary, next: &WindowSummary, viewport: (u32, u32)) -> Damage {
-    match changed_bounds(&kept.items, &next.items) {
+    let window = window_rect(viewport);
+    let most = FULL_SHARE * window.width * window.height;
+    match changed_bounds(&kept.items, &next.items, most) {
+        Some(changed) if changed.is_empty() => Damage::Part(changed),
         Some(changed) => widen(next, changed, viewport),
-        None => Damage::Part(None),
+        None => Damage::Full,
     }
 }
 
 /// The pixels a frame `next` summarizes draws when the pixels `damage`
 /// differ from what its target holds: all that every backdrop touching them
-/// reads and writes too, cut to the window.
-fn widen(next: &WindowSummary, mut damage: DeviceRect, viewport: (u32, u32)) -> Damage {
+/// reads and writes too, in one rect with them, cut to the window.
+fn widen(next: &WindowSummary, mut damage: DamageRects, viewport: (u32, u32)) -> Damage {
     loop {
         let mut grew = false;
         for capture in &next.captures {
-            let touched = capture.reads.intersect(damage).is_some()
-                || capture.writes.intersect(damage).is_some();
-            if touched && !(holds(damage, capture.reads) && holds(damage, capture.writes)) {
-                damage = damage.union(capture.reads).union(capture.writes);
+            let touched = damage.meets(capture.reads) || damage.meets(capture.writes);
+            let both = capture.reads.union(capture.writes);
+            if touched && !damage.holds(both) {
+                damage.add(both);
                 grew = true;
             }
         }
@@ -566,15 +705,16 @@ fn widen(next: &WindowSummary, mut damage: DeviceRect, viewport: (u32, u32)) -> 
         }
     }
     let window = window_rect(viewport);
-    let Some(damage) = damage.intersect(window).map(DeviceRect::snap_out) else {
-        return Damage::Part(None);
-    };
-    if damage.width * damage.height > FULL_SHARE * window.width * window.height
-        || !leaves_out_an_item(next, damage, window)
+    let damage = damage.within(window);
+    if damage.is_empty() {
+        return Damage::Part(damage);
+    }
+    if damage.pixels() > FULL_SHARE * window.width * window.height
+        || !leaves_out_an_item(next, &damage, window)
     {
         Damage::Full
     } else {
-        Damage::Part(Some(damage))
+        Damage::Part(damage)
     }
 }
 
@@ -582,30 +722,31 @@ fn widen(next: &WindowSummary, mut damage: DeviceRect, viewport: (u32, u32)) -> 
 /// those that take the whole window. Without one, the part draws about all
 /// the whole does, and a page cleared with its background's colour as a
 /// whole frame starts fills its part by a draw.
-fn leaves_out_an_item(next: &WindowSummary, damage: DeviceRect, window: DeviceRect) -> bool {
+fn leaves_out_an_item(next: &WindowSummary, damage: &DamageRects, window: DeviceRect) -> bool {
     next.items.iter().any(|item| {
         item.bounds
-            .is_some_and(|bounds| !holds(bounds, window) && bounds.intersect(damage).is_none())
+            .is_some_and(|bounds| !holds(bounds, window) && !damage.meets(bounds))
     })
 }
 
-/// The union of the bounds of the items that differ: pair by pair when the
+/// The bounds of the items that differ, as rects: pair by pair when the
 /// counts match, else everything between the common prefix and suffix.
-fn changed_bounds(kept: &[Item], next: &[Item]) -> Option<DeviceRect> {
-    let mut damage = None;
+/// `None` once they cover more than `most` pixels.
+fn changed_bounds(kept: &[Item], next: &[Item], most: f32) -> Option<DamageRects> {
+    let mut damage = DamageRects::default();
     let mut add = |item: &Item| {
         if let Some(bounds) = item.bounds {
-            damage = Some(damage.map_or(bounds, |damage: DeviceRect| damage.union(bounds)));
+            damage.add(bounds);
         }
+        damage.pixels() <= most
     };
     if kept.len() == next.len() {
         for (before, after) in kept.iter().zip(next) {
-            if before != after {
-                add(before);
-                add(after);
+            if before != after && !(add(before) && add(after)) {
+                return None;
             }
         }
-        return damage;
+        return Some(damage);
     }
     let prefix = kept
         .iter()
@@ -618,9 +759,15 @@ fn changed_bounds(kept: &[Item], next: &[Item]) -> Option<DeviceRect> {
         .zip(next[prefix..].iter().rev())
         .take_while(|(before, after)| before == after)
         .count();
-    kept[prefix..kept.len() - suffix].iter().for_each(&mut add);
-    next[prefix..next.len() - suffix].iter().for_each(&mut add);
-    damage
+    let changed = kept[prefix..kept.len() - suffix]
+        .iter()
+        .chain(&next[prefix..next.len() - suffix]);
+    for item in changed {
+        if !add(item) {
+            return None;
+        }
+    }
+    Some(damage)
 }
 
 fn holds(outer: DeviceRect, inner: DeviceRect) -> bool {

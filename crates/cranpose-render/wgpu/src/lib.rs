@@ -104,7 +104,7 @@ use frame_packet::RenderReturns;
 #[doc(hidden)]
 pub use frame_packet::{CancelReason, PresentOutcome};
 use frontend::{DevOverlayCache, RendererFrontend};
-pub use gpu_stats::{FrameDamage, FrameStatsSnapshot as RenderStatsSnapshot};
+pub use gpu_stats::{FrameDamage, FrameStatsSnapshot as RenderStatsSnapshot, WindowRects};
 pub use initial_present::{clear_to_background, clear_to_default_background};
 pub use pass_timing::{GpuPassTimingEntry, GpuPassTimingReport};
 use pipeline_compiler::PipelineCompilation;
