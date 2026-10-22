@@ -32,8 +32,9 @@ use std::{
 };
 
 use cranpose_core::{
-    CompositionLocalProvider, OwnedMutableState, SideEffect, StaticCompositionLocal,
-    ownedMutableStateOf, remember, staticCompositionLocalOf,
+    CapturedCompositionContext, CompositionLocalProvider, OwnedMutableState, SideEffect,
+    StaticCompositionLocal, ownedMutableStateOf, remember, staticCompositionLocalOf,
+    with_current_composer,
 };
 use cranpose_foundation::PointerEventKind;
 use cranpose_ui_graphics::{Point, Rect};
@@ -60,6 +61,9 @@ struct PopupContent {
     position: Point,
     content: Rc<dyn Fn()>,
     on_dismiss: Option<Rc<dyn Fn()>>,
+    /// The composition locals at the popup's call site, which its content
+    /// reads where the host composes it.
+    locals: CapturedCompositionContext,
 }
 
 impl PartialEq for PopupContent {
@@ -192,11 +196,13 @@ impl PopupRegistry {
         position: Point,
         content: Rc<dyn Fn()>,
         on_dismiss: Option<Rc<dyn Fn()>>,
+        locals: CapturedCompositionContext,
     ) {
         let next = PopupContent {
             position,
             content,
             on_dismiss,
+            locals,
         };
         let mut entries = self.inner.entries.borrow_mut();
         if let Some(existing) = entries.iter_mut().find(|entry| entry.id == id) {
@@ -318,7 +324,7 @@ fn PopupLayer(entry: PopupEntry) {
             || {},
         );
     }
-    let content = data.content;
+    let (content, locals) = (data.content, data.locals);
     Box(
         Modifier::empty()
             .absolute_offset(data.position.x, data.position.y)
@@ -332,7 +338,9 @@ fn PopupLayer(entry: PopupEntry) {
                 });
             }),
         BoxSpec::default(),
-        move || content(),
+        move || {
+            with_current_composer(|composer| composer.with_captured_locals(&locals, |_| content()));
+        },
     );
 }
 
@@ -476,10 +484,17 @@ fn popup_impl(
         y: anchor.y + offset.y,
     };
 
+    let locals = with_current_composer(cranpose_core::Composer::capture_composition_context);
     let sync_registry = registry.clone();
     let sync_content = content.clone();
     SideEffect(move || {
-        sync_registry.upsert(id, position, sync_content.clone(), on_dismiss.clone());
+        sync_registry.upsert(
+            id,
+            position,
+            sync_content.clone(),
+            on_dismiss.clone(),
+            locals.clone(),
+        );
     });
 
     let dispose_registry = registry;
