@@ -16,17 +16,17 @@ pub fn start() {
     console_error_panic_hook::set_once();
 }
 
-/// The query string as the command line it stands for.
+/// The query string as the command line it stands for. The first value of
+/// an argument counts, so the gauntlet comes last, for a query that names
+/// no scenario.
 fn launch_tokens(query: &str) -> Vec<String> {
-    let mut tokens = vec!["--scenario=gauntlet".to_owned()];
-    tokens.extend(
-        query
-            .trim_start_matches('?')
-            .split('&')
-            .filter(|pair| !pair.is_empty())
-            .map(|pair| format!("--{pair}")),
-    );
-    tokens
+    query
+        .trim_start_matches('?')
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| format!("--{pair}"))
+        .chain(std::iter::once("--scenario=gauntlet".to_owned()))
+        .collect()
 }
 
 /// Draws the gauntlet in the canvas `canvas_id`.
