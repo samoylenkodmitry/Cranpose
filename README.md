@@ -145,11 +145,10 @@ covers [ownership](docs/guide.md#ownership), [state](docs/guide.md#state),
 
 1. Install a C toolchain. On macOS run `xcode-select --install`. On Ubuntu or
    Debian run `sudo apt install build-essential`. On Windows x64 install
-   **Visual Studio Build Tools** 2022 or newer with **Desktop development with
-   C++** and the component **C++ ATL for x64/x86 (Latest MSVC)**. A build without
-   ATL stops with `LINK : fatal error LNK1104: cannot open file 'atls.lib'`.
-   [Windows build tools](docs/guide.md#windows-build-tools) has the install
-   commands.
+   **Visual Studio Build Tools** with **Desktop development with C++** and
+   **C++ ATL for x64/x86 (Latest MSVC)**. The
+   [IntelliJ plugin](docs/intellij.md#build-previews-on-windows) checks these
+   parts and installs the missing ones.
 2. Install Rust from <https://rustup.rs>. On macOS and Linux:
 
    ```sh
