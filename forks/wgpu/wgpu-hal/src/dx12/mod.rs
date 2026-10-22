@@ -1123,7 +1123,13 @@ impl Texture {
 }
 
 impl crate::DynTexture for Texture {}
-impl crate::DynSurfaceTexture for Texture {}
+impl crate::DynSurfaceTexture for Texture {
+    /// A swapchain buffer is the same resource each time the swapchain hands
+    /// it out again, until the swapchain is configured anew.
+    fn image_id(&self) -> Option<u64> {
+        Some(self.resource.as_raw() as usize as u64)
+    }
+}
 
 impl core::borrow::Borrow<dyn crate::DynTexture> for Texture {
     fn borrow(&self) -> &dyn crate::DynTexture {
@@ -1535,7 +1541,14 @@ impl crate::Surface for Surface {
                     BufferUsage: Dxgi::DXGI_USAGE_RENDER_TARGET_OUTPUT,
                     BufferCount: swap_chain_buffer,
                     Scaling: Dxgi::DXGI_SCALING_STRETCH,
-                    SwapEffect: Dxgi::DXGI_SWAP_EFFECT_FLIP_DISCARD,
+                    // A discarding swapchain leaves a buffer's contents
+                    // undefined after its present; a sequential one keeps
+                    // them for a frame that draws only what changed.
+                    SwapEffect: if config.keep_presented {
+                        Dxgi::DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL
+                    } else {
+                        Dxgi::DXGI_SWAP_EFFECT_FLIP_DISCARD
+                    },
                     Flags: flags.0 as u32,
                 };
                 let swap_chain1 = match self.target {

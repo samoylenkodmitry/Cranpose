@@ -656,9 +656,17 @@ pub struct SurfaceTexture {
     // window resizing.
     drawable: Retained<ProtocolObject<dyn MTLDrawable>>,
     present_with_transaction: bool,
+    /// The system-wide ID of the IOSurface behind the drawable: the layer
+    /// hands its few drawables out again and again, each over the same
+    /// IOSurface, whose ID is not used again.
+    image_id: Option<u64>,
 }
 
-impl crate::DynSurfaceTexture for SurfaceTexture {}
+impl crate::DynSurfaceTexture for SurfaceTexture {
+    fn image_id(&self) -> Option<u64> {
+        self.image_id
+    }
+}
 
 impl core::borrow::Borrow<Texture> for SurfaceTexture {
     fn borrow(&self) -> &Texture {

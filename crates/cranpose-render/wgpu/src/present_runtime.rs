@@ -211,10 +211,6 @@ impl PresentState {
             } => {
                 self.surface_epoch = surface_epoch;
                 self.cancel_waiting(CancelReason::SurfaceEpoch);
-                // Android's swapchain hands each buffer back as it presented
-                // it, so a frame draws only what changed since.
-                #[cfg(target_os = "android")]
-                surface.keep_presented_images(true);
                 surface.configure(&self.device, &config);
                 self.surface = Some(surface);
                 self.config = Some(config);
@@ -324,13 +320,7 @@ impl PresentState {
             format: Some(self.gpu_renderer.surface_format().remove_srgb_suffix()),
             ..Default::default()
         });
-        #[cfg(target_os = "android")]
-        let image = frame.image().map(|image| crate::frame::PresentedImage {
-            index: image.index,
-            kept: image.kept,
-        });
-        #[cfg(not(target_os = "android"))]
-        let image = None;
+        let image = crate::frame::PresentedImage::of(&frame);
         let mut returns = RenderReturns::default();
         let result = self.gpu_renderer.render(
             &frame.texture,

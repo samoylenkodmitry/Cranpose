@@ -224,7 +224,9 @@ impl Surface for NativeSurface {
             .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
             .composite_alpha(conv::map_composite_alpha_mode(config.composite_alpha_mode))
             .present_mode(conv::map_present_mode(config.present_mode))
-            .clipped(true)
+            // A clipped swapchain may leave the pixels other windows cover
+            // undrawn, which an image kept for its next frame cannot.
+            .clipped(!config.keep_presented)
             .old_swapchain(old_swapchain);
 
         let mut format_list_info = vk::ImageFormatListCreateInfo::default();

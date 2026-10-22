@@ -487,7 +487,13 @@ pub struct Texture {
 }
 
 impl crate::DynTexture for Texture {}
-impl crate::DynSurfaceTexture for Texture {}
+impl crate::DynSurfaceTexture for Texture {
+    /// A GL surface draws every frame into its one texture or renderbuffer,
+    /// made at configure, and copies it to the window at present.
+    fn image_id(&self) -> Option<u64> {
+        Some(0)
+    }
+}
 
 impl core::borrow::Borrow<dyn crate::DynTexture> for Texture {
     fn borrow(&self) -> &dyn crate::DynTexture {

@@ -60,7 +60,7 @@ fn queued_surface_images_keep_their_own_complete_frame_after_image_reuse() {
         renderer.scene_mut().graph = Some(frame_graph(index));
         let (texture, view) = &images[index % images.len()];
         renderer
-            .render_surface_texture(texture, view, WIDTH, HEIGHT)
+            .render(texture, view, WIDTH, HEIGHT)
             .expect("queued surface render");
         let (snapshot, _) = target();
         let mut encoder = device.create_command_encoder(&Default::default());

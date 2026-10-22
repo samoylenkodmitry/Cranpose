@@ -286,8 +286,8 @@ pub struct SurfaceTexture {
 }
 
 impl crate::DynSurfaceTexture for SurfaceTexture {
-    fn image_index(&self) -> Option<u32> {
-        Some(self.index)
+    fn image_id(&self) -> Option<u64> {
+        Some(u64::from(self.index))
     }
 
     fn awaits_acquire(&self) -> bool {

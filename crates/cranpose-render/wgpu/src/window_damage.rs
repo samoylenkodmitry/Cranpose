@@ -139,6 +139,16 @@ pub(crate) struct PresentedImage {
     pub(crate) kept: bool,
 }
 
+impl PresentedImage {
+    /// The image `frame` is, where its surface tells its images apart.
+    pub(crate) fn of(frame: &wgpu::SurfaceTexture) -> Option<Self> {
+        frame.image().map(|image| Self {
+            index: image.index,
+            kept: image.kept,
+        })
+    }
+}
+
 /// The frames back a kept swapchain image can be drawn again from, and the
 /// images the history follows.
 const IMAGE_HISTORY: usize = 8;

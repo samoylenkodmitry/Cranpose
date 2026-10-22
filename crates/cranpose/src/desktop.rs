@@ -1933,6 +1933,7 @@ impl App {
             .instance
             .create_surface(window.clone())
             .map_err(LaunchError::SurfaceCreate)?;
+        surface.keep_presented_images(true);
         trace_native_window_timing!(
             "{} create_surface {}ms",
             options.title,
@@ -3392,7 +3393,7 @@ impl App {
             return false;
         };
         if let Err(error) = surface.renderer().render_surface_texture(
-            &output.texture,
+            &output,
             &view,
             native.surface_config.width,
             native.surface_config.height,
@@ -6266,7 +6267,7 @@ impl ApplicationHandler for App {
                     });
 
                     if let Err(err) = app.renderer().render_surface_texture(
-                        &output.texture,
+                        &output,
                         &view,
                         surface_config.width,
                         surface_config.height,
@@ -7320,6 +7321,7 @@ impl GpuStart {
     ) -> Option<(OpenedGpu, wgpu::Surface<'static>)> {
         let gpu = self.0.take()?.join().ok()??;
         let surface = gpu.instance.create_surface(window.clone()).ok()?;
+        surface.keep_presented_images(true);
         gpu.adapter
             .is_surface_supported(&surface)
             .then_some((gpu, surface))

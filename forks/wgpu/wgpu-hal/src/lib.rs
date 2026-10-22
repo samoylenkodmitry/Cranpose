@@ -2744,6 +2744,11 @@ pub struct SurfaceConfiguration {
     /// Allows views of swapchain texture to have a different format
     /// than the texture does.
     pub view_formats: Vec<wgt::TextureFormat>,
+    /// Whether an image the surface hands out again must hold every pixel it
+    /// last presented, so a frame can draw only what changed (Cranpose
+    /// fork): a Vulkan swapchain then draws the pixels other windows cover
+    /// too, and a DXGI one keeps its buffers' contents.
+    pub keep_presented: bool,
 }
 
 #[derive(Debug, Clone)]

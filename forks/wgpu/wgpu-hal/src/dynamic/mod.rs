@@ -112,9 +112,11 @@ pub trait DynShaderModule: DynResource + fmt::Debug {}
 pub trait DynSurfaceTexture:
     DynResource + core::borrow::Borrow<dyn DynTexture> + fmt::Debug
 {
-    /// The swapchain image this texture is, by its index, on a backend whose
-    /// images are numbered (Vulkan); `None` elsewhere.
-    fn image_index(&self) -> Option<u32> {
+    /// Which of the surface's presentable images this texture is: the same
+    /// value each time the surface hands that image out again, until it is
+    /// configured anew. `None` where the backend cannot tell its images
+    /// apart.
+    fn image_id(&self) -> Option<u64> {
         None
     }
 

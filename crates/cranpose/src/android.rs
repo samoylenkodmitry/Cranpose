@@ -1224,10 +1224,9 @@ fn render_once(
             });
             let (width, height) = shell.buffer_size();
 
-            if let Err(e) =
-                shell
-                    .renderer()
-                    .render_surface_texture(&frame.texture, &view, width, height)
+            if let Err(e) = shell
+                .renderer()
+                .render_surface_texture(&frame, &view, width, height)
             {
                 log::error!("Render error: {e:?}");
             }

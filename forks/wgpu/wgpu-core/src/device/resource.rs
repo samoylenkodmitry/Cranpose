@@ -5377,6 +5377,9 @@ impl Device {
                             | wgt::TextureFormatFeatureFlags::STORAGE_READ_WRITE,
                     ),
                     view_formats: hal_view_formats,
+                    keep_presented: surface
+                        .keep_images
+                        .load(Ordering::Acquire),
                 };
 
                 if let Err(error) = validate_surface_configuration(
@@ -5455,7 +5458,7 @@ impl Device {
                     config: config.clone(),
                     acquired_texture: None,
                     acquired_image: None,
-                    kept_images: 0,
+                    images: present::PresentedImages::default(),
                 });
             }
 

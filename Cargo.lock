@@ -1698,7 +1698,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu"
-version = "30.0.22"
+version = "30.0.23"
 dependencies = [
  "arrayvec",
  "bitflags 2.13.2",
@@ -1726,7 +1726,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu-core"
-version = "30.0.19"
+version = "30.0.20"
 dependencies = [
  "arrayvec",
  "bit-set 0.10.0",
@@ -1787,7 +1787,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu-hal"
-version = "30.0.17"
+version = "30.0.18"
 dependencies = [
  "android_system_properties",
  "arrayvec",
@@ -1815,6 +1815,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
+ "objc2-io-surface",
  "objc2-metal 0.3.2",
  "objc2-quartz-core 0.3.2",
  "once_cell",
@@ -4543,6 +4544,7 @@ dependencies = [
  "block2 0.6.2",
  "objc2 0.6.5",
  "objc2-foundation 0.3.2",
+ "objc2-io-surface",
 ]
 
 [[package]]

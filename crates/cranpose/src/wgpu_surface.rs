@@ -42,6 +42,9 @@ pub(crate) fn create_wgpu_surface_and_adapter(
     let surface = instance
         .create_surface(window.clone())
         .map_err(crate::app_launcher::LaunchError::SurfaceCreate)?;
+    // Each image comes back with the frame it presented, so a frame draws
+    // only what changed since (`render_surface_texture`).
+    surface.keep_presented_images(true);
     let adapter = request_adapter(&instance, Some(&surface))
         .map_err(crate::app_launcher::LaunchError::NoAdapter)?;
     Ok((instance, surface, adapter))
