@@ -5,11 +5,15 @@ use parking_lot::Mutex;
 use super::*;
 
 #[derive(Default)]
-struct Recorded(Mutex<Vec<bool>>);
+struct Recorded(Mutex<Vec<bool>>, Mutex<Vec<StandbyNotice>>);
 
 impl MicrophoneStandby for Recorded {
     fn set_held(&self, held: bool) {
         self.0.lock().push(held);
+    }
+
+    fn set_notice(&self, notice: &StandbyNotice) {
+        self.1.lock().push(notice.clone());
     }
 }
 
@@ -36,4 +40,26 @@ fn a_lease_without_a_platform_holds_nothing() {
     set_platform_microphone_standby(None);
     assert!(!microphone_standby_available());
     drop(hold_microphone_standby());
+}
+
+#[test]
+fn the_notice_reaches_the_platform_and_its_stop_reaches_the_application() {
+    let _guard = crate::registry::test_service_guard();
+    let recorded = Arc::new(Recorded::default());
+    set_platform_microphone_standby(Some(recorded.clone()));
+    let notice = StandbyNotice {
+        text: "Recording".into(),
+        stop: "Stop".into(),
+    };
+    set_microphone_standby_notice(notice.clone());
+    assert_eq!(*recorded.1.lock(), vec![notice]);
+
+    let stops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&stops);
+    on_microphone_standby_stop(move || {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
+    microphone_standby_stopped();
+    assert_eq!(stops.load(std::sync::atomic::Ordering::SeqCst), 1);
+    set_platform_microphone_standby(None);
 }
