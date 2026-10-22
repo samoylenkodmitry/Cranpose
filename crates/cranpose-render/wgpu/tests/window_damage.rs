@@ -1,7 +1,8 @@
-//! A frame displayed through the renderer's own composition target, or into
-//! a swapchain image that holds a frame drawn before, draws only the window
-//! pixels that changed since that frame, and equals the frame drawn whole
-//! byte for byte. One small thing changes per frame, beside and under glass,
+//! A frame displayed through the renderer's own composition target, into a
+//! swapchain image that holds a frame drawn before, or into an image that
+//! comes cleared through the renderer's copy of the frame, draws only the
+//! window pixels that changed since that frame, and equals the frame drawn
+//! whole byte for byte. One small thing changes per frame, beside and under glass,
 //! through layers, effects and shadows, over a page of still cards; the
 //! damage each frame reports holds every pixel the whole frames change, and
 //! a frame that moves the whole page draws the whole window.
@@ -67,6 +68,9 @@ enum Scene {
     /// A shape changing colour, under a blur pane that shows at
     /// [`GLASS_STEP`] only.
     GlassOnce,
+    /// A spinner turning by drawing its arc again over the background
+    /// alone: a page that costs less drawn whole than copied.
+    BareSpinner,
 }
 
 /// The frames a target draws whole before one can draw a part: the first,
@@ -78,6 +82,19 @@ const START_FRAMES: u32 = 3;
 /// first hold no frame, then the target's start frames, until the image of
 /// the last of those comes back.
 const SWAPCHAIN_START_FRAMES: u32 = 2 * SWAPCHAIN_IMAGES as u32 + START_FRAMES - 1;
+
+/// The frames in a row that change a small part of the window before the
+/// renderer keeps a copy of the frame for images that come cleared.
+const COPY_AFTER: u32 = 3;
+
+/// The frames images that come cleared take before they first summarize.
+const COPY_HOLD_OFF: u32 = 64;
+
+/// The frames images that come cleared take whole before one takes a part:
+/// the frames before they summarize, the one summarized as the frame the
+/// next compares with, then the small changes before the renderer keeps a
+/// copy, the last of which it copies.
+const CLEARED_START_FRAMES: u32 = COPY_HOLD_OFF + 1 + COPY_AFTER;
 
 /// The step at which the pane of [`Scene::GlassOnce`] shows: after a
 /// swapchain frame drew a part of the window.
@@ -278,7 +295,7 @@ fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
         Scene::BlurredContent => spot().blur(Dp(3.0)),
         Scene::Shadow => shadowed(step),
         Scene::Appearing if step.get() % 2 == 1 => spot().background(Color(0.9, 0.2, 0.2, 1.0)),
-        Scene::Spinner => arc_drawn_again(SPINNER, step, 12.0),
+        Scene::Spinner | Scene::BareSpinner => arc_drawn_again(SPINNER, step, 12.0),
         Scene::TurnedSpinner => arc_turned(SPINNER, step, 12.0),
         Scene::Label | Scene::Picture | Scene::Appearing | Scene::MovedPage => return None,
     })
@@ -333,7 +350,9 @@ fn Page(scene: Scene, step: MutableState<u32>) {
             .background(Color(0.06, 0.06, 0.1, 1.0)),
         BoxSpec::default(),
         move || {
-            Cards(scene, step);
+            if scene != Scene::BareSpinner {
+                Cards(scene, step);
+            }
             Changing(scene, step);
             match scene {
                 Scene::UnderBlur => {
@@ -380,9 +399,48 @@ enum Keeper {
     /// frame drawn into it last, as a surface that keeps presented images
     /// hands them out.
     Swapchain(wgpu::TextureUsages),
+    /// An image that comes cleared, as a WebGPU canvas hands them out: the
+    /// renderer keeps the frame in its own target and copies it in.
+    Cleared,
 }
 
-const KEEPERS: [Keeper; 2] = [Keeper::Composition, Keeper::Swapchain(DIRECT)];
+const KEEPERS: [Keeper; 3] = [
+    Keeper::Composition,
+    Keeper::Swapchain(DIRECT),
+    Keeper::Cleared,
+];
+
+impl Keeper {
+    /// The frames drawn whole before one draws a part.
+    fn start_frames(self) -> u32 {
+        match self {
+            Keeper::Composition => START_FRAMES,
+            Keeper::Swapchain(_) => SWAPCHAIN_START_FRAMES,
+            Keeper::Cleared => CLEARED_START_FRAMES,
+        }
+    }
+}
+
+/// How a frame is drawn into an image.
+#[derive(Clone, Copy)]
+enum Draw {
+    /// Into a texture the caller hands in.
+    Untracked,
+    /// Into the swapchain image of this index, holding the frame drawn
+    /// into it last when the flag says so.
+    Swapchain(u32, bool),
+    /// Into an image that comes cleared.
+    Cleared,
+}
+
+/// The colour an image that comes cleared holds before a frame draws into
+/// it: a frame that leaves a pixel undrawn shows it.
+const CLEARED_TO: wgpu::Color = wgpu::Color {
+    r: 1.0,
+    g: 0.0,
+    b: 1.0,
+    a: 1.0,
+};
 
 /// A presentable image and its view.
 struct Image {
@@ -428,7 +486,7 @@ impl Harness {
             Image { texture, view }
         };
         let swapchain_usage = match keeper {
-            Keeper::Composition => DIRECT,
+            Keeper::Composition | Keeper::Cleared => DIRECT,
             Keeper::Swapchain(usage) => usage,
         };
         let swapchain = std::array::from_fn(|_| image(swapchain_usage));
@@ -470,17 +528,18 @@ impl Harness {
         self.shell.debug_enter_app_context(|| state.set(step));
         self.shell.update();
         let (kept, stats) = match self.keeper {
-            Keeper::Composition => draw(&mut self.shell, &self.composed, None),
+            Keeper::Composition => draw(&mut self.shell, &self.composed, Draw::Untracked),
             Keeper::Swapchain(_) => {
                 let index = self.presented % SWAPCHAIN_IMAGES;
                 let kept =
                     self.presented >= SWAPCHAIN_IMAGES && self.unkept != Some(self.presented);
                 self.presented += 1;
-                let image = Some((index as u32, kept));
+                let image = Draw::Swapchain(index as u32, kept);
                 draw(&mut self.shell, &self.swapchain[index], image)
             }
+            Keeper::Cleared => draw(&mut self.shell, &self.swapchain[0], Draw::Cleared),
         };
-        let (direct, direct_stats) = draw(&mut self.shell, &self.direct, None);
+        let (direct, direct_stats) = draw(&mut self.shell, &self.direct, Draw::Untracked);
         assert_eq!(
             direct_stats.damage,
             FrameDamage::Untracked,
@@ -494,30 +553,55 @@ impl Harness {
     }
 }
 
-/// Draws the shell's scene into `image`, as the swapchain image of `index`
-/// that holds the frame drawn into it last when `swapchain` says so: its
-/// pixels and the frame's statistics.
+/// Draws the shell's scene into `image` as `how` says: its pixels and the
+/// frame's statistics.
 fn draw(
     shell: &mut AppShell<WgpuRenderer>,
     image: &Image,
-    swapchain: Option<(u32, bool)>,
+    how: Draw,
 ) -> (Vec<u8>, RenderStatsSnapshot) {
     let renderer = shell.renderer();
-    match swapchain {
-        Some((index, kept)) => {
+    let device = renderer.try_device().expect("device").clone();
+    let queue = renderer.try_queue_for_tests().expect("queue").clone();
+    match how {
+        Draw::Untracked => renderer.render(&image.texture, &image.view, WIDTH, HEIGHT),
+        Draw::Swapchain(index, kept) => {
             renderer.render_swapchain_image_for_tests(&image.texture, &image.view, index, kept)
         }
-        None => renderer.render(&image.texture, &image.view, WIDTH, HEIGHT),
+        Draw::Cleared => {
+            clear(&device, &queue, image);
+            renderer.render_cleared_image_for_tests(&image.texture, &image.view)
+        }
     }
     .expect("the frame renders");
     assert_eq!(renderer.device_error_count_for_tests(), 0);
     let stats = renderer.last_frame_stats().expect("frame statistics");
-    let device = renderer.try_device().expect("device").clone();
-    let queue = renderer.try_queue_for_tests().expect("queue").clone();
     (
         support::read_texture(&device, &queue, &image.texture),
         stats,
     )
+}
+
+/// Fills `image` with [`CLEARED_TO`], as a surface hands out an image that
+/// holds none of the frames before.
+fn clear(device: &wgpu::Device, queue: &wgpu::Queue, image: &Image) {
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("cleared image"),
+    });
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("cleared image"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &image.view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(CLEARED_TO),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        ..Default::default()
+    });
+    queue.submit([encoder.finish()]);
 }
 
 fn holds(damage: FrameDamage, x: usize, y: usize) -> bool {
@@ -644,8 +728,12 @@ fn assert_damage_holds_the_changes_at(scene: Scene, scale: f32, keeper: Keeper) 
     let whole = u64::from(WIDTH * HEIGHT);
     let mut before: Option<Vec<u8>> = None;
     let (mut partial_frames, mut still_compared) = (0, 0);
-    // Still frames until a swapchain's frame compares with the one before.
-    let still = SWAPCHAIN_IMAGES + START_FRAMES as usize + 1;
+    // Still frames until a swapchain's frame compares with the one before,
+    // or until images that come cleared take frames from the copy.
+    let still = match keeper {
+        Keeper::Cleared => CLEARED_START_FRAMES as usize + 1,
+        _ => SWAPCHAIN_IMAGES + START_FRAMES as usize + 1,
+    };
     for step in std::iter::repeat_n(0, still).chain(1..=STEPS) {
         let frame = harness.frame(step);
         let damage = frame.stats.damage;
@@ -670,6 +758,12 @@ fn assert_damage_holds_the_changes_at(scene: Scene, scale: f32, keeper: Keeper) 
             // An image holds a frame a few frames back, so it draws the
             // damages of the frames since too.
             Keeper::Swapchain(_) => assert!(repainted >= damaged, "{label}: {repainted} pixels"),
+            // Drawn straight into the image, whole, until the renderer keeps
+            // a copy.
+            Keeper::Cleared => assert!(
+                repainted == damaged || repainted == whole,
+                "{label}: {repainted} pixels"
+            ),
         }
         if before.is_some() {
             if step == 0 {
@@ -795,18 +889,15 @@ fn assert_spinner_repaints_only_itself(scene: Scene) {
 }
 
 fn assert_spinner_repaints_only_itself_over(scene: Scene, keeper: Keeper) {
-    const FRAMES: u32 = 60;
+    const PARTIAL_FRAMES: u32 = 50;
     let Some((_lock, renderer)) = renderer() else {
         return;
     };
     let mut harness = Harness::new(renderer, scene, 1.0, keeper);
-    let whole_frames = match keeper {
-        Keeper::Composition => START_FRAMES,
-        Keeper::Swapchain(_) => SWAPCHAIN_START_FRAMES,
-    };
+    let whole_frames = keeper.start_frames();
     let spinner_pixels = (SPINNER[2] * SPINNER[3]) as u64;
     let mut whole_draws = 0;
-    for step in 0..FRAMES {
+    for step in 0..whole_frames + PARTIAL_FRAMES {
         let frame = harness.frame(step);
         let stats = frame.stats;
         let label = format!("{scene:?} {keeper:?} frame {step}: {stats:?}");
@@ -904,6 +995,111 @@ fn a_target_that_keeps_losing_its_frame_summarizes_less_and_less_often() {
     }
     assert!(
         summarized * 4 <= FRAMES,
+        "{summarized} of {FRAMES} frames summarized"
+    );
+}
+
+/// Whether the frame copied a whole window, between an image that comes
+/// cleared and the renderer's copy of the frame.
+fn copies_a_window(stats: &RenderStatsSnapshot) -> bool {
+    stats.copy_pixels >= u64::from(WIDTH * HEIGHT)
+}
+
+/// The bytes of the renderer's copy of a window.
+const COPY_BYTES: u64 = WIDTH as u64 * HEIGHT as u64 * 4;
+
+/// Draws still frames into images that come cleared until the renderer
+/// keeps a copy and a frame draws nothing over it: the pooled bytes then.
+fn keep_a_copy(harness: &mut Harness) -> u64 {
+    let mut pool = 0;
+    for index in 0..=CLEARED_START_FRAMES {
+        let frame = harness.frame(0);
+        let stats = frame.stats;
+        let label = format!("still frame {index}: {stats:?}");
+        support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+        assert_eq!(
+            copies_a_window(&stats),
+            index + 1 >= CLEARED_START_FRAMES,
+            "{label}: the copy starts after {COPY_AFTER} small changes"
+        );
+        pool = stats.offscreen_pool_bytes;
+    }
+    pool
+}
+
+/// An image that comes cleared takes the frame from the renderer's copy
+/// once a few frames in a row changed a small part of the window; the first
+/// frame that moves the whole page draws straight into the image again, and
+/// the copy's window of memory goes.
+#[test]
+fn an_image_that_comes_cleared_lets_the_copy_go_when_the_whole_window_changes() {
+    let Some((_lock, renderer)) = renderer() else {
+        return;
+    };
+    let mut harness = Harness::new(renderer, Scene::MovedPage, 1.0, Keeper::Cleared);
+    let pool = keep_a_copy(&mut harness);
+    let frame = harness.frame(1);
+    let stats = frame.stats;
+    let label = format!("the page moved: {stats:?}");
+    support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+    assert_eq!(stats.repainted_pixels, u64::from(WIDTH * HEIGHT), "{label}");
+    assert!(!copies_a_window(&stats), "{label}: drawn straight in");
+    assert_eq!(stats.offscreen_pool_bytes, pool - COPY_BYTES, "{label}");
+}
+
+/// The renderer lets go of the copy it keeps for images that come cleared
+/// when the runtime says the app holds still: the next frames draw whole
+/// straight into their images, and a few small changes later the renderer
+/// keeps a copy again.
+#[test]
+fn an_image_that_comes_cleared_lets_the_copy_go_while_the_app_holds_still() {
+    let Some((_lock, renderer)) = renderer() else {
+        return;
+    };
+    let mut harness = Harness::new(renderer, Scene::Shape, 1.0, Keeper::Cleared);
+    let pool = keep_a_copy(&mut harness);
+    harness.shell.renderer().release_kept_copy();
+    for index in 0..=COPY_AFTER {
+        let frame = harness.frame(0);
+        let stats = frame.stats;
+        let label = format!("frame {index} after the app held still: {stats:?}");
+        support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+        let whole = index < COPY_AFTER;
+        let expected = if whole { u64::from(WIDTH * HEIGHT) } else { 0 };
+        assert_eq!(stats.repainted_pixels, expected, "{label}");
+        assert_eq!(copies_a_window(&stats), index + 1 >= COPY_AFTER, "{label}");
+        if index + 1 < COPY_AFTER {
+            assert_eq!(stats.offscreen_pool_bytes, pool - COPY_BYTES, "{label}");
+        }
+    }
+}
+
+/// A page that costs less drawn whole than copied, a spinner over the
+/// background alone, draws straight into images that come cleared, keeps no
+/// copy, and summarizes seldom: not in its first frames, and then two
+/// frames, the one compared with and the one comparing, after each skip.
+#[test]
+fn a_light_page_draws_whole_into_images_that_come_cleared() {
+    const FRAMES: u32 = 3 * CLEARED_START_FRAMES;
+    let Some((_lock, renderer)) = renderer() else {
+        return;
+    };
+    let mut harness = Harness::new(renderer, Scene::BareSpinner, 1.0, Keeper::Cleared);
+    let mut summarized = 0;
+    for step in 0..FRAMES {
+        let frame = harness.frame(step);
+        let stats = frame.stats;
+        let label = format!("frame {step}: {stats:?}");
+        support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+        assert_eq!(stats.repainted_pixels, u64::from(WIDTH * HEIGHT), "{label}");
+        assert!(!copies_a_window(&stats), "{label}: no copy");
+        if step < COPY_HOLD_OFF {
+            assert_eq!(stats.damage, FrameDamage::Skipped, "{label}: held off");
+        }
+        summarized += u32::from(stats.damage != FrameDamage::Skipped);
+    }
+    assert!(
+        summarized <= 4,
         "{summarized} of {FRAMES} frames summarized"
     );
 }

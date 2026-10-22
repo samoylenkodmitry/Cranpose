@@ -433,7 +433,9 @@ such an image is handed out initialized and in the layout it presented in,
 so a pass that loads it reads its pixels. A failed present or a discard
 forgets the image. `SurfaceTexture::image` gives the slot and whether the
 image is kept; a browser's WebGPU canvas, which keeps no frame by design,
-gives `None`.
+gives `None`. For such a canvas Cranpose's renderer keeps the frame in a
+texture of its own while frames change a small part of a heavy window, and
+copies it into each image.
 
 Keeping images also tells the backend at configure
 (`SurfaceConfiguration::keep_presented`): a Vulkan swapchain is made

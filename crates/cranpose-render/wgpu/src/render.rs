@@ -44,13 +44,13 @@ use crate::{
     effect_renderer::{CompositeSampleMode, EffectRenderer, RoundedCompositeMask},
     fixed_pipeline::{FixedPipeline, FixedPipelineJob},
     frame::{
-        AdmissionGate, Damage, FrameExecutor, FrameWindow, KeptWindow, PresentedImage, Repaint,
-        StageSideScratch, SwapchainHistory, WindowDamage,
+        AdmissionGate, ClearedImages, Damage, FrameExecutor, FrameWindow, ImageContent, KeptWindow,
+        PresentedImage, Repaint, StageSideScratch, Summaries, SwapchainHistory, WindowDamage,
     },
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
-        FrameUploadAllocators, UniformUpload, UploadAllocatorId, UploadAllocatorSpec, UploadMode,
-        WgpuFrameGraph, WgpuFrameGraphExecutor,
+        FrameUploadAllocators, TextureRegionCopy, UniformUpload, UploadAllocatorId,
+        UploadAllocatorSpec, UploadMode, WgpuFrameGraph, WgpuFrameGraphExecutor,
     },
     frame_packet::{CancelReason, FramePacket, FrameSceneStorage, PresentOutcome, RenderReturns},
     geometry::{
@@ -3323,35 +3323,88 @@ struct CompositionTarget {
 }
 
 /// Where a frame renders: straight into the presentable image, or into the
-/// reusable composition target that the output conversion then copies out.
+/// reusable composition target that then goes into the image.
 enum FrameRoot {
-    Surface(Rc<OffscreenTarget>),
-    Composition(CompositionTarget),
+    /// Straight into the presentable image `image`; copied into the
+    /// composition target `keep` too when that target is to keep the frame
+    /// for images that come cleared.
+    Surface {
+        image: Rc<OffscreenTarget>,
+        keep: Option<CompositionTarget>,
+    },
+    /// Into the composition target, which is copied whole into an image
+    /// that comes `cleared`, and otherwise drawn into the image by the
+    /// output conversion.
+    Composition {
+        composition: CompositionTarget,
+        cleared: Option<Rc<OffscreenTarget>>,
+    },
+}
+
+/// What goes into the presentable image or out of it once the frame is
+/// drawn.
+#[derive(Clone, Copy)]
+enum OutputStep<'a> {
+    /// Nothing: the frame rendered into the presentable image.
+    None,
+    /// The output conversion into the view, from the bind group's source.
+    Convert(&'a wgpu::TextureView, &'a wgpu::BindGroup),
+    /// A whole copy, between the composition target and an image that
+    /// comes cleared.
+    Copy {
+        from: &'a OffscreenTarget,
+        to: &'a OffscreenTarget,
+    },
 }
 
 impl FrameRoot {
     fn target(&self) -> &Rc<OffscreenTarget> {
         match self {
-            Self::Surface(target) => target,
-            Self::Composition(composition) => &composition.target,
+            Self::Surface { image, .. } => image,
+            Self::Composition { composition, .. } => &composition.target,
         }
     }
 
-    /// The output conversion's destination and source bind group; nothing
-    /// when the frame already rendered into the presentable image.
+    /// What the frame ends with between its root and the presentable image.
     fn output<'a>(
         &'a self,
         output_view: Option<&'a wgpu::TextureView>,
         screenshot_bind_group: Option<&'a wgpu::BindGroup>,
-    ) -> Option<(&'a wgpu::TextureView, &'a wgpu::BindGroup)> {
+    ) -> OutputStep<'a> {
         match self {
-            Self::Surface(_) => None,
-            Self::Composition(composition) => output_view.map(|view| {
-                (
+            Self::Surface { keep: None, .. } => OutputStep::None,
+            Self::Surface {
+                image,
+                keep: Some(keep),
+            } => OutputStep::Copy {
+                from: image,
+                to: &keep.target,
+            },
+            Self::Composition {
+                composition,
+                cleared: Some(image),
+            } => OutputStep::Copy {
+                from: &composition.target,
+                to: image,
+            },
+            Self::Composition {
+                composition,
+                cleared: None,
+            } => output_view.map_or(OutputStep::None, |view| {
+                OutputStep::Convert(
                     view,
                     screenshot_bind_group.unwrap_or(&composition.output_bind_group),
                 )
             }),
+        }
+    }
+
+    /// The composition target the frame drew into or copied into, which
+    /// the renderer keeps for the next frame.
+    fn into_composition(self) -> Option<CompositionTarget> {
+        match self {
+            Self::Surface { keep, .. } => keep,
+            Self::Composition { composition, .. } => Some(composition),
         }
     }
 }
@@ -3433,8 +3486,8 @@ struct FrameOutput<'a> {
     mode: OutputMode,
     view: Option<&'a wgpu::TextureView>,
     texture: Option<&'a wgpu::Texture>,
-    /// The swapchain image `texture` is, where the surface numbers them.
-    image: Option<PresentedImage>,
+    /// What `texture` holds as the frame draws into it.
+    image: ImageContent,
 }
 
 /// The kept frame a frame's damage is measured against.
@@ -3444,6 +3497,9 @@ enum Keeper {
     Composition,
     /// A swapchain image.
     Image(PresentedImage),
+    /// The frame drawn last into an image that comes cleared; `keeping`
+    /// when the composition target takes a copy of this frame to keep.
+    Cleared { keeping: bool },
 }
 
 /// What a frame changes against the frame its target kept, what it draws
@@ -3567,6 +3623,8 @@ pub struct GpuRenderer {
     window_damage: WindowDamage,
     /// The frames the swapchain's images hold.
     swapchain: SwapchainHistory,
+    /// The frames drawn into images that come cleared.
+    cleared: ClearedImages,
     /// The colour a frame drawn in a window last filled it with, and a
     /// pixel of it.
     pub(crate) window_fill: Option<(wgpu::Color, Rc<OffscreenTarget>)>,
@@ -3972,6 +4030,7 @@ impl GpuRenderer {
             nesting_overflow_reported: false,
             window_damage: WindowDamage::default(),
             swapchain: SwapchainHistory::default(),
+            cleared: ClearedImages::default(),
             window_fill: None,
             backdrop_gates: HashMap::default(),
             fill_gates: HashMap::default(),
@@ -4893,24 +4952,32 @@ impl GpuRenderer {
             .acquire_offscreen(&self.device, width, height, Some(&self.frame_stats))
     }
 
+    /// Where the frame renders: straight into an image that can take it,
+    /// unless the image comes cleared and the composition target keeps the
+    /// frame for it; else into the composition target.
     fn frame_root(
         &mut self,
-        output_mode: OutputMode,
-        output_view: Option<&wgpu::TextureView>,
-        output_texture: Option<&wgpu::Texture>,
+        output: FrameOutput<'_>,
         viewport: (u32, u32),
         reads_page: bool,
     ) -> FrameRoot {
         if let (OutputMode::Display, Some(view), Some(texture)) =
-            (output_mode, output_view, output_texture)
+            (output.mode, output.view, output.texture)
             && surface_is_direct_root(texture, self.composition_format, viewport, reads_page)
         {
-            return FrameRoot::Surface(Rc::new(OffscreenTarget::from_surface(
-                texture.clone(),
-                view.clone(),
-            )));
+            let image = Rc::new(OffscreenTarget::from_surface(texture.clone(), view.clone()));
+            if output.image == ImageContent::Cleared && self.cleared.copied {
+                return FrameRoot::Composition {
+                    composition: self.take_composition_target(viewport.0, viewport.1),
+                    cleared: Some(image),
+                };
+            }
+            return FrameRoot::Surface { image, keep: None };
         }
-        FrameRoot::Composition(self.take_composition_target(viewport.0.max(1), viewport.1.max(1)))
+        FrameRoot::Composition {
+            composition: self.take_composition_target(viewport.0.max(1), viewport.1.max(1)),
+            cleared: None,
+        }
     }
 
     fn take_composition_target(&mut self, width: u32, height: u32) -> CompositionTarget {
@@ -5065,7 +5132,7 @@ impl GpuRenderer {
         packet: FramePacket,
         surface_epoch: u64,
         returns: &mut RenderReturns,
-        image: Option<PresentedImage>,
+        image: ImageContent,
     ) -> Result<(), String> {
         let output = FrameOutput {
             mode: OutputMode::Display,
@@ -5088,8 +5155,8 @@ impl GpuRenderer {
         let FrameOutput {
             mode: output_mode,
             view: output_view,
-            texture: output_texture,
             image,
+            ..
         } = output;
         let cancel_reason = if packet.renderer_epoch != self.renderer_epoch {
             Some(CancelReason::RendererEpoch)
@@ -5124,13 +5191,7 @@ impl GpuRenderer {
                 .overlay
                 .as_ref()
                 .is_some_and(|overlay| overlay.contains_backdrop());
-        let mut frame_root = self.frame_root(
-            output_mode,
-            output_view,
-            output_texture,
-            (width, height),
-            reads_page,
-        );
+        let mut frame_root = self.frame_root(output, (width, height), reads_page);
         let plan = self.damage_of(
             &packet,
             &mut frame_root,
@@ -5152,7 +5213,7 @@ impl GpuRenderer {
         self.effect_renderer
             .compiler()
             .spread_demand(thread_builds() == builds_before);
-        if let FrameRoot::Composition(composition) = frame_root {
+        if let Some(composition) = frame_root.into_composition() {
             self.composition_target = Some(composition);
         }
         let after_graph = Instant::now();
@@ -5319,23 +5380,54 @@ impl GpuRenderer {
     /// What `packet` changes against the frame `frame_root` kept: a frame
     /// displayed through the composition target, or into a swapchain `image`
     /// that holds an earlier frame, draws only that, while a screenshot is
-    /// drawn whole and any other presentable image keeps no frame.
+    /// drawn whole and so is a frame into any other presentable image. An
+    /// image that comes cleared takes the frame from the composition target
+    /// while the frames change a small part of a heavy window.
     fn damage_of(
         &mut self,
         packet: &FramePacket,
         frame_root: &mut FrameRoot,
         output_mode: OutputMode,
         viewport: (u32, u32),
-        (surface_epoch, image): (u64, Option<PresentedImage>),
+        (surface_epoch, image): (u64, ImageContent),
     ) -> Option<FrameDamagePlan> {
         match frame_root {
-            FrameRoot::Composition(composition)
+            FrameRoot::Composition { composition, .. }
                 if matches!(output_mode, OutputMode::Screenshot) =>
             {
                 composition.kept.forget();
                 None
             }
-            FrameRoot::Composition(composition) => {
+            FrameRoot::Composition {
+                composition,
+                cleared: Some(cleared),
+            } => {
+                let frame = self.frame_window(packet, viewport);
+                let damage =
+                    self.window_damage
+                        .begin_as(&frame, &mut composition.kept, Summaries::COPIED);
+                if matches!(damage, Damage::Part(_)) {
+                    return Some(FrameDamagePlan {
+                        damage,
+                        repaint: damage.repaint(),
+                        keeper: Keeper::Composition,
+                    });
+                }
+                // The frame changes most of the window, or costs less drawn
+                // whole than copied: it draws straight into the image, and
+                // the composition target lets the frame go.
+                self.cleared.copied = false;
+                *frame_root = FrameRoot::Surface {
+                    image: Rc::clone(cleared),
+                    keep: None,
+                };
+                Some(FrameDamagePlan {
+                    damage,
+                    repaint: Repaint::Whole,
+                    keeper: Keeper::Cleared { keeping: false },
+                })
+            }
+            FrameRoot::Composition { composition, .. } => {
                 // The swapchain image the frame is copied into holds a frame
                 // the history does not follow.
                 self.swapchain.forget();
@@ -5347,8 +5439,27 @@ impl GpuRenderer {
                     keeper: Keeper::Composition,
                 })
             }
-            FrameRoot::Surface(_) => {
-                let image = image?;
+            FrameRoot::Surface { image: target, .. } => {
+                let image = match image {
+                    ImageContent::Untracked => return None,
+                    ImageContent::Numbered(image) => image,
+                    ImageContent::Cleared => {
+                        let frame = self.frame_window(packet, viewport);
+                        let (damage, keeping) =
+                            self.cleared.damage(&mut self.window_damage, &frame);
+                        if keeping {
+                            *frame_root = FrameRoot::Surface {
+                                image: Rc::clone(target),
+                                keep: Some(self.take_composition_target(viewport.0, viewport.1)),
+                            };
+                        }
+                        return Some(FrameDamagePlan {
+                            damage,
+                            repaint: Repaint::Whole,
+                            keeper: Keeper::Cleared { keeping },
+                        });
+                    }
+                };
                 self.swapchain.begin(surface_epoch);
                 if !image.kept {
                     // Drawn whole, and only a frame a lap of images later
@@ -5418,6 +5529,26 @@ impl GpuRenderer {
                 self.swapchain.record(image, plan.damage, drawn);
                 self.window_damage.end(&mut self.swapchain.kept, drawn);
             }
+            Keeper::Cleared { keeping } => {
+                self.window_damage.end(&mut self.cleared.kept, drawn);
+                if keeping && let Some(composition) = self.composition_target.as_mut() {
+                    self.cleared.hand_over(&mut composition.kept);
+                }
+            }
+        }
+    }
+
+    /// Lets go of the copy of the last frame the renderer keeps for a
+    /// surface whose images come cleared, as a WebGPU canvas's do: for a
+    /// runtime whose app holds still, so the copy's window of memory goes.
+    /// The next frame draws whole into its image.
+    pub(crate) fn release_kept_copy(&mut self) {
+        if !self.cleared.copied {
+            return;
+        }
+        match self.composition_target.take() {
+            Some(mut composition) => self.cleared.take_back(&mut composition.kept),
+            None => self.cleared.copied = false,
         }
     }
 
@@ -5558,7 +5689,7 @@ impl GpuRenderer {
             mode: OutputMode::Screenshot,
             view: Some(&output_view),
             texture: None,
-            image: None,
+            image: ImageContent::Untracked,
         };
         self.render_internal(width, height, packet, surface_epoch, returns, output)?;
         if returns.outcome != PresentOutcome::Presented {
@@ -5686,7 +5817,7 @@ impl GpuRenderer {
         repaint: Repaint,
         returns: &mut RenderReturns,
         output_mode: OutputMode,
-        output: Option<(&wgpu::TextureView, &wgpu::BindGroup)>,
+        output: OutputStep<'_>,
     ) -> Result<bool, String> {
         #[cfg(target_arch = "wasm32")]
         let (device, queue, graph_start) =
@@ -5768,7 +5899,7 @@ impl GpuRenderer {
         draw: FrameDraw<'_>,
         page: &Rc<OffscreenTarget>,
         output_mode: OutputMode,
-        output: Option<(&wgpu::TextureView, &wgpu::BindGroup)>,
+        output: OutputStep<'_>,
     ) -> (Result<(), String>, bool) {
         let device = self.device.clone();
         let queue = self.queue.clone();
@@ -5817,7 +5948,7 @@ impl GpuRenderer {
         draw: FrameDraw<'_>,
         page: Rc<OffscreenTarget>,
         output_mode: OutputMode,
-        output: Option<(&wgpu::TextureView, &wgpu::BindGroup)>,
+        output: OutputStep<'_>,
     ) -> Result<(), String> {
         FrameExecutor::new(self, recorder).render_frame(
             draw.root,
@@ -5827,20 +5958,34 @@ impl GpuRenderer {
             wgpu::LoadOp::Clear(draw.clear),
             draw.repaint,
         )?;
-        if let Some((output_view, bind_group)) = output {
-            match output_mode {
-                OutputMode::Display => &self.output_converter,
-                OutputMode::Screenshot => &self.screenshot_converter,
+        match output {
+            OutputStep::None => {}
+            OutputStep::Convert(output_view, bind_group) => {
+                match output_mode {
+                    OutputMode::Display => &self.output_converter,
+                    OutputMode::Screenshot => &self.screenshot_converter,
+                }
+                .encode(
+                    &self.device,
+                    recorder,
+                    output_view,
+                    bind_group,
+                    self.adapter_backend,
+                    &self.recorder,
+                );
+                recorder.record_pass();
             }
-            .encode(
-                &self.device,
-                recorder,
-                output_view,
-                bind_group,
-                self.adapter_backend,
-                &self.recorder,
-            );
-            recorder.record_pass();
+            OutputStep::Copy { from, to } => {
+                recorder.copy_texture_region(TextureRegionCopy {
+                    source: from,
+                    source_origin: [0, 0],
+                    dest: to,
+                    dest_origin: [0, 0],
+                    size: [to.width, to.height],
+                });
+                // The image takes the copy even when the frame drew nothing.
+                recorder.record_pass();
+            }
         }
         self.stage_frame_uploads(recorder);
         self.shape_pipelines.build_wanted();

@@ -443,6 +443,11 @@ impl FrameScheduler {
 }
 
 impl FrameSchedule {
+    /// Whether the shell asks for nothing more: no frame, no update and no timed event.
+    pub fn is_idle(self) -> bool {
+        !self.needs_frame && !self.needs_update && self.next_deadline.is_none()
+    }
+
     /// Asks `driver` for what this schedule calls for: a frame, an immediate wake, a wake at the
     /// deadline, or no wake.
     pub fn apply_to<D>(self, driver: &D)

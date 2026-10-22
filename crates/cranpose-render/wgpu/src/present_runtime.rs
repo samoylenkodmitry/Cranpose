@@ -320,7 +320,7 @@ impl PresentState {
             format: Some(self.gpu_renderer.surface_format().remove_srgb_suffix()),
             ..Default::default()
         });
-        let image = crate::frame::PresentedImage::of(&frame);
+        let image = crate::frame::ImageContent::of(&frame);
         let mut returns = RenderReturns::default();
         let result = self.gpu_renderer.render(
             &frame.texture,
@@ -460,7 +460,7 @@ impl PresentState {
             packet,
             self.surface_epoch,
             &mut returns,
-            None,
+            crate::frame::ImageContent::Untracked,
         );
         let after_render_ns = self.now();
         returns.timings = PresentTimings {

@@ -38,6 +38,44 @@ const MAX_SKIPPED: u32 = 256;
 /// it summarizes again: after four frames in a row changed most of the
 /// window.
 const RELEASE_SKIPS: u32 = 64;
+/// The windows of pixels a frame's items must cover before a presentable
+/// image that comes cleared takes the frame from a kept copy: the copy reads
+/// one window and writes one, so a lighter frame costs less drawn whole.
+const COPY_COVERAGE: f32 = 2.0;
+/// The frames in a row that change a small part of the window before the
+/// composition target starts keeping the frame for images that come cleared.
+const COPY_AFTER: u32 = 3;
+/// The frames images that come cleared take before they first summarize,
+/// about a second at 60 Hz: a page starting up keeps changing, and the copy
+/// these summaries can start is worth little that early.
+const COPY_HOLD_OFF: u32 = 64;
+
+/// How a target summarizes its frames.
+#[derive(Clone, Copy)]
+pub(crate) struct Summaries {
+    /// The windows of pixels below which the items of a frame that changes
+    /// a part of the window cover so little that the whole costs less.
+    windows: f32,
+    /// The frames skipped after the first frame that changes most of the
+    /// window, as a power of two: each such frame in a row quadruples them,
+    /// up to [`MAX_SKIPPED`].
+    first_skips_log2: u32,
+}
+
+impl Summaries {
+    /// A target that keeps its pixels: each part it draws saves work at
+    /// once, so it summarizes again soon after a busy frame.
+    pub(crate) const KEPT: Self = Self {
+        windows: 0.0,
+        first_skips_log2: 0,
+    };
+    /// Images that come cleared: a copy pays only on a heavy page that holds
+    /// mostly still, so they summarize seldom after a busy frame.
+    pub(crate) const COPIED: Self = Self {
+        windows: COPY_COVERAGE,
+        first_skips_log2: COPY_HOLD_OFF.trailing_zeros(),
+    };
+}
 /// The item between the root's items and the overlay's.
 const OVERLAY_KEY: u64 = 0x6f76_6572_6c61_7973;
 
@@ -115,6 +153,20 @@ pub(crate) struct WindowSummary {
     captures: Vec<Capture>,
 }
 
+impl WindowSummary {
+    /// The window pixels the items cover, a pixel counted once for each
+    /// item over it; the first item, the frame's setting, covers none.
+    fn coverage(&self, viewport: (u32, u32)) -> f32 {
+        let window = window_rect(viewport);
+        self.items
+            .iter()
+            .skip(1)
+            .filter_map(|item| item.bounds?.intersect(window))
+            .map(|bounds| bounds.width * bounds.height)
+            .sum()
+    }
+}
+
 /// The summary of the frame a composition target's pixels show; valid only
 /// while they show that frame, drawn without a stand-in.
 #[derive(Default)]
@@ -139,13 +191,92 @@ pub(crate) struct PresentedImage {
     pub(crate) kept: bool,
 }
 
-impl PresentedImage {
-    /// The image `frame` is, where its surface tells its images apart.
-    pub(crate) fn of(frame: &wgpu::SurfaceTexture) -> Option<Self> {
-        frame.image().map(|image| Self {
-            index: image.index,
-            kept: image.kept,
+/// What the renderer knows of the pixels a presentable image holds when a
+/// frame draws into it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ImageContent {
+    /// A texture the caller hands in, drawn whole.
+    Untracked,
+    /// A swapchain image its surface tells apart from the others.
+    Numbered(PresentedImage),
+    /// An image of a surface that hands every image out cleared, as a
+    /// WebGPU canvas does.
+    Cleared,
+}
+
+impl ImageContent {
+    /// What `frame` holds: a surface that does not tell its images apart
+    /// hands them out cleared.
+    pub(crate) fn of(frame: &wgpu::SurfaceTexture) -> Self {
+        frame.image().map_or(Self::Cleared, |image| {
+            Self::Numbered(PresentedImage {
+                index: image.index,
+                kept: image.kept,
+            })
         })
+    }
+}
+
+/// The frames drawn into presentable images that come cleared. While a page
+/// whose items cover the window more than twice changes a small part of it,
+/// the composition target keeps the frame, draws only what changes, and is
+/// copied whole into each image; the first frame that changes most of the
+/// window draws straight into its image again and lets the target go. The
+/// images summarize first after [`COPY_HOLD_OFF`] frames.
+#[derive(Default)]
+pub(crate) struct ClearedImages {
+    /// The summary of the frame drawn straight into an image last.
+    pub(crate) kept: KeptWindow,
+    /// The frames in a row drawn straight into an image that changed a
+    /// small part of the window.
+    small_frames: u32,
+    /// Whether these images took a frame yet.
+    started: bool,
+    /// Whether the composition target keeps the frame for these images.
+    pub(crate) copied: bool,
+}
+
+impl ClearedImages {
+    /// What `frame`, drawn straight into an image, changes against the frame
+    /// before, summarized by `summaries`; and whether the composition target
+    /// is to keep a copy of it.
+    pub(crate) fn damage(
+        &mut self,
+        summaries: &mut WindowDamage,
+        frame: &FrameWindow<'_>,
+    ) -> (Damage, bool) {
+        if !self.started {
+            self.started = true;
+            summaries.hold_off(COPY_HOLD_OFF);
+        }
+        let damage = summaries.begin_as(frame, &mut self.kept, Summaries::COPIED);
+        if !matches!(damage, Damage::Part(_)) {
+            self.small_frames = 0;
+            return (damage, false);
+        }
+        self.small_frames += 1;
+        let keeps = self.small_frames >= COPY_AFTER;
+        if keeps {
+            self.small_frames = 0;
+        }
+        (damage, keeps)
+    }
+
+    /// Hands the summary of the frame just copied into the composition
+    /// target to the target's `kept`. A frame that drew a stand-in leaves no
+    /// summary, so the next frame draws whole and the target goes.
+    pub(crate) fn hand_over(&mut self, target: &mut KeptWindow) {
+        std::mem::swap(&mut self.kept, target);
+        self.kept.forget();
+        self.copied = true;
+    }
+
+    /// Takes back the summary of the frame the composition target kept,
+    /// which goes: frames draw straight into their images again.
+    pub(crate) fn take_back(&mut self, target: &mut KeptWindow) {
+        std::mem::swap(&mut self.kept, target);
+        self.copied = false;
+        self.small_frames = 0;
     }
 }
 
@@ -261,6 +392,25 @@ pub(crate) struct WindowDamage {
 impl WindowDamage {
     /// Summarizes `frame` and compares it with `kept`.
     pub(crate) fn begin(&mut self, frame: &FrameWindow<'_>, kept: &mut KeptWindow) -> Damage {
+        self.begin_as(frame, kept, Summaries::KEPT)
+    }
+
+    /// Skips summarizing for the next `frames` frames; the frame after them
+    /// summarizes as the frame the next one compares with.
+    pub(crate) fn hold_off(&mut self, frames: u32) {
+        self.skipped = self.skipped.max(frames);
+    }
+
+    /// Summarizes `frame` and compares it with `kept`, as [`Self::begin`]
+    /// does, by `summaries`: a part of a frame whose items cover fewer
+    /// windows of pixels than they say counts as the whole window, which
+    /// costs that frame less.
+    pub(crate) fn begin_as(
+        &mut self,
+        frame: &FrameWindow<'_>,
+        kept: &mut KeptWindow,
+        summaries: Summaries,
+    ) -> Damage {
         self.summarized = false;
         if self.skipped > 0 {
             self.skipped -= 1;
@@ -270,7 +420,14 @@ impl WindowDamage {
         self.summarized = self.summarize(frame);
         let baseline = std::mem::take(&mut self.baseline);
         let damage = if self.summarized && kept.valid {
-            compare(&kept.summary, &self.next, frame.viewport)
+            match compare(&kept.summary, &self.next, frame.viewport) {
+                Damage::Part(_)
+                    if summaries.windows > 0.0 && self.covers_less(frame, summaries) =>
+                {
+                    Damage::Full
+                }
+                damage => damage,
+            }
         } else if self.summarized && baseline {
             return Damage::Full;
         } else {
@@ -278,7 +435,7 @@ impl WindowDamage {
         };
         if damage == Damage::Full {
             self.full_frames = self.full_frames.saturating_add(1);
-            let doublings = 2 * (self.full_frames - 1);
+            let doublings = 2 * (self.full_frames - 1) + summaries.first_skips_log2;
             self.skipped = 1u32 << doublings.min(MAX_SKIPPED.trailing_zeros());
             if self.skipped >= RELEASE_SKIPS {
                 self.release(kept);
@@ -287,6 +444,13 @@ impl WindowDamage {
             self.full_frames = 0;
         }
         damage
+    }
+
+    /// Whether the items of the frame just summarized cover fewer windows of
+    /// pixels than `summaries` asks for.
+    fn covers_less(&self, frame: &FrameWindow<'_>, summaries: Summaries) -> bool {
+        let (width, height) = frame.viewport;
+        self.next.coverage(frame.viewport) < summaries.windows * width as f32 * height as f32
     }
 
     /// What the frame [`Self::begin`] summarized, with a [`Damage::Part`],

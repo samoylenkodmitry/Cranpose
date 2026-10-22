@@ -5792,7 +5792,8 @@ mod scene_surfaces;
 mod window_damage;
 
 pub(crate) use window_damage::{
-    Damage, FrameWindow, KeptWindow, PresentedImage, Repaint, SwapchainHistory, WindowDamage,
+    ClearedImages, Damage, FrameWindow, ImageContent, KeptWindow, PresentedImage, Repaint,
+    Summaries, SwapchainHistory, WindowDamage,
 };
 
 #[cfg(test)]
