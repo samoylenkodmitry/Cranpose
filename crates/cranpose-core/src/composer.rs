@@ -2588,6 +2588,22 @@ impl Composer {
         }
     }
 
+    /// Runs `f` with the composition locals of `context` in scope, as at the
+    /// site that captured it: content that composes elsewhere, as a popup's
+    /// content at the window's root, reads the locals of the site that placed
+    /// it. Compose's `CompositionLocalProvider(currentCompositionLocalContext)`.
+    pub fn with_captured_locals<R>(
+        &self,
+        context: &CapturedCompositionContext,
+        f: impl FnOnce(&Composer) -> R,
+    ) -> R {
+        let parent = self.current_local_stack();
+        self.local_stack().clone_from(&context.locals);
+        let result = self.with_locals_changed(context.locals_changed, f);
+        *self.local_stack() = parent;
+        result
+    }
+
     /// Runs `f` as content under a static composition local that changed
     /// when `changed`: every group it opens runs its body, as under the
     /// provider of a changed static local.

@@ -201,3 +201,103 @@ fn a_dialog_traps_focus_inside_it_and_releases_it_on_close() {
     crate::modal::clear_modals();
     crate::text_field_focus::clear_focus();
 }
+
+#[test]
+fn the_scrim_covers_the_window_while_the_surface_keeps_inside_the_insets() {
+    use std::cell::Cell;
+
+    use cranpose_core::{
+        Composition, CompositionLocalProvider, MemoryApplier, NodeId, location_key,
+    };
+
+    use crate::{
+        layout::{LayoutBox, LayoutEngine},
+        safe_area::local_safe_area_insets,
+        widgets::{
+            box_widget::{Box, BoxSpec},
+            popup::PopupHost,
+        },
+    };
+
+    let _app_context = crate::render_state::app_context_test_scope();
+    crate::modal::clear_modals();
+    let insets = cranpose_ui_graphics::EdgeInsets::from_components(0.0, 24.0, 0.0, 48.0);
+    let surface: Rc<Cell<Option<NodeId>>> = Rc::new(Cell::new(None));
+    let mut content = {
+        let surface = Rc::clone(&surface);
+        move || {
+            let surface = Rc::clone(&surface);
+            PopupHost(move || {
+                let surface = Rc::clone(&surface);
+                CompositionLocalProvider([local_safe_area_insets().provides(insets)], move || {
+                    let surface = Rc::clone(&surface);
+                    Dialog(
+                        DialogSpec::default(),
+                        |_reason: DismissReason| {},
+                        move || {
+                            let size = Size {
+                                width: 100.0,
+                                height: 50.0,
+                            };
+                            surface.set(Some(Box(
+                                Modifier::empty().size(size),
+                                BoxSpec::default(),
+                                || {},
+                            )));
+                        },
+                    );
+                });
+            });
+        }
+    };
+    let mut composition = Composition::new(MemoryApplier::new());
+    let key = location_key(file!(), line!(), column!());
+    composition.render(key, &mut content).expect("render");
+    let mut layout = None;
+    for _ in 0..4 {
+        for _ in 0..8 {
+            if !composition.should_render() {
+                break;
+            }
+            composition.reconcile(key, &mut content).expect("reconcile");
+        }
+        let root = composition.root().expect("root");
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        layout = Some(
+            applier
+                .compute_layout(root, Size::new(400.0, 800.0))
+                .expect("layout"),
+        );
+        applier.clear_runtime_handle();
+    }
+    let layout = layout.expect("a layout");
+
+    fn trail<'a>(node: &'a LayoutBox, id: NodeId, path: &mut Vec<&'a LayoutBox>) -> bool {
+        path.push(node);
+        if node.node_id == id || node.children.iter().any(|child| trail(child, id, path)) {
+            return true;
+        }
+        path.pop();
+        false
+    }
+    let mut path = Vec::new();
+    let id = surface.get().expect("the surface composed");
+    assert!(trail(layout.root(), id, &mut path), "the surface is placed");
+    let placed = path.last().expect("the surface").rect;
+    assert_eq!(
+        (placed.x, placed.y),
+        (150.0, 24.0 + (728.0 - 50.0) / 2.0),
+        "the surface centers between the insets"
+    );
+    let scrim = path
+        .iter()
+        .find(|node| !node.node_data.modifier_slices().draw_commands().is_empty())
+        .expect("the scrim draws");
+    assert_eq!(
+        (scrim.rect.y, scrim.rect.height),
+        (0.0, 800.0),
+        "the scrim covers the bars too"
+    );
+}

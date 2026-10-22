@@ -38,8 +38,9 @@ pub struct DialogSpec {
     pub dismiss_on_outside_tap: bool,
     /// Whether the platform's back gesture dismisses it.
     pub dismiss_on_back: bool,
-    /// Whether the dialog keeps clear of the system bars and the on-screen
-    /// keyboard. A dialog that draws its own full-bleed surface turns this off.
+    /// Whether the dialog's surface keeps clear of the system bars and the
+    /// on-screen keyboard; the scrim covers the whole window either way. A
+    /// dialog that draws its own full-bleed surface turns this off.
     pub apply_window_insets: bool,
     /// Where the dialog's surface sits in the window: the centre, or the
     /// bottom edge for a sheet.
@@ -100,8 +101,8 @@ pub const DEFAULT_SCRIM: Color = Color(0.0, 0.0, 0.0, 0.4);
 
 /// The rectangle a dialog's surface is placed in.
 ///
-/// The dialog fills the window minus its insets; the surface itself is centred
-/// inside that and sized by its own content.
+/// The window minus its insets; the surface itself sits inside that at the
+/// spec's alignment, sized by its own content.
 pub(crate) fn dialog_bounds(viewport: Size, insets: cranpose_ui_graphics::EdgeInsets) -> Rect {
     let width = (viewport.width - insets.left - insets.right).max(0.0);
     let height = (viewport.height - insets.top - insets.bottom).max(0.0);
@@ -179,6 +180,7 @@ pub fn DialogWithFadingScrim<C>(
         cranpose_ui_graphics::EdgeInsets::default()
     };
     let bounds = dialog_bounds(viewport, insets);
+    let window = Rect::from_origin_size(Point { x: 0.0, y: 0.0 }, viewport);
 
     let on_dismiss = Rc::new(on_dismiss);
     let content = Rc::new(content);
@@ -208,15 +210,12 @@ pub fn DialogWithFadingScrim<C>(
     });
 
     let scrim_alpha = Rc::new(scrim_alpha);
-    PopupDismissable(bounds, Point { x: 0.0, y: 0.0 }, scrim_dismiss, move || {
+    PopupDismissable(window, Point { x: 0.0, y: 0.0 }, scrim_dismiss, move || {
         let content = Rc::clone(&content);
         let scrim_alpha = Rc::clone(&scrim_alpha);
         Box(
             Modifier::empty()
-                .size(Size {
-                    width: bounds.width,
-                    height: bounds.height,
-                })
+                .size(viewport)
                 .draw_behind(move |scope| {
                     let alpha = scrim.3 * scrim_alpha().clamp(0.0, 1.0);
                     scope.draw_rect(Brush::solid(Color(scrim.0, scrim.1, scrim.2, alpha)));
@@ -234,18 +233,30 @@ pub fn DialogWithFadingScrim<C>(
                         })
                     });
                 }),
-            BoxSpec::default().content_alignment(spec.alignment),
+            BoxSpec::default(),
             move || {
                 let content = Rc::clone(&content);
-                // Taps on the dialog's own surface stay off the scrim below.
                 Box(
-                    Modifier::empty().pointer_opaque(),
-                    BoxSpec::default(),
+                    Modifier::empty()
+                        .absolute_offset(bounds.x, bounds.y)
+                        .size(Size {
+                            width: bounds.width,
+                            height: bounds.height,
+                        }),
+                    BoxSpec::default().content_alignment(spec.alignment),
                     move || {
                         let content = Rc::clone(&content);
-                        cranpose_core::CompositionLocalProvider(
-                            [crate::modal::local_modal_depth().provides(own_modal_depth)],
-                            move || content(),
+                        // Taps on the dialog's own surface stay off the scrim below.
+                        Box(
+                            Modifier::empty().pointer_opaque(),
+                            BoxSpec::default(),
+                            move || {
+                                let content = Rc::clone(&content);
+                                cranpose_core::CompositionLocalProvider(
+                                    [crate::modal::local_modal_depth().provides(own_modal_depth)],
+                                    move || content(),
+                                );
+                            },
                         );
                     },
                 );

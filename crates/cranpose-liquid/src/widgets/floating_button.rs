@@ -290,7 +290,12 @@ fn floating_gesture(
                             if down.is_some_and(|(id, _)| id != event.id) {
                                 continue;
                             }
-                            let claimed = previous.take().is_some_and(|event| event.is_consumed());
+                            // A parent that takes the gesture, as a scroll, consumes
+                            // a move; a surface that keeps taps off what lies behind
+                            // it, as a dialog's, consumes the press and claims nothing.
+                            let claimed = previous.take().is_some_and(|event| {
+                                event.kind != PointerEventKind::Down && event.is_consumed()
+                            });
                             if down.is_some() && (claimed || event.is_consumed()) {
                                 down = None;
                                 contact.pressed(false, event.animation_time_nanos);
