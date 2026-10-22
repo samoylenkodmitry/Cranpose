@@ -69,10 +69,19 @@ enum Scene {
     GlassOnce,
 }
 
+/// The frames a target draws whole before one can draw a part: the first,
+/// with nothing to compare with; one the back-off skips; and the next,
+/// summarized as the frame the one after compares with.
+const START_FRAMES: u32 = 3;
+
+/// The frames a swapchain draws whole before one draws a part: its images
+/// first hold no frame, then the target's start frames, until the image of
+/// the last of those comes back.
+const SWAPCHAIN_START_FRAMES: u32 = 2 * SWAPCHAIN_IMAGES as u32 + START_FRAMES - 1;
+
 /// The step at which the pane of [`Scene::GlassOnce`] shows: after a
-/// swapchain's images first held no frame, then frames the history did not
-/// follow, a frame draws a part of the window.
-const GLASS_STEP: u32 = 2 * SWAPCHAIN_IMAGES as u32 + 1;
+/// swapchain frame drew a part of the window.
+const GLASS_STEP: u32 = SWAPCHAIN_START_FRAMES + 1;
 
 fn spot() -> Modifier {
     rect_modifier(SPOT)
@@ -634,8 +643,10 @@ fn assert_damage_holds_the_changes_at(scene: Scene, scale: f32, keeper: Keeper) 
     let reach = scene.reach().map(|value| value * scale);
     let whole = u64::from(WIDTH * HEIGHT);
     let mut before: Option<Vec<u8>> = None;
-    let mut partial_frames = 0;
-    for step in [0, 0].into_iter().chain(1..=STEPS) {
+    let (mut partial_frames, mut still_compared) = (0, 0);
+    // Still frames until a swapchain's frame compares with the one before.
+    let still = SWAPCHAIN_IMAGES + START_FRAMES as usize + 1;
+    for step in std::iter::repeat_n(0, still).chain(1..=STEPS) {
         let frame = harness.frame(step);
         let damage = frame.stats.damage;
         let repainted = frame.stats.repainted_pixels;
@@ -662,16 +673,20 @@ fn assert_damage_holds_the_changes_at(scene: Scene, scale: f32, keeper: Keeper) 
         }
         if before.is_some() {
             if step == 0 {
-                assert_eq!(
-                    damage,
-                    FrameDamage::Rect {
-                        x: 0,
-                        y: 0,
-                        width: 0,
-                        height: 0
-                    },
-                    "{label}: a frame that changes nothing reports no damage"
-                );
+                // Until the target compares, a frame draws whole.
+                if matches!(damage, FrameDamage::Rect { .. }) {
+                    assert_eq!(
+                        damage,
+                        FrameDamage::Rect {
+                            x: 0,
+                            y: 0,
+                            width: 0,
+                            height: 0
+                        },
+                        "{label}: a frame that changes nothing reports no damage"
+                    );
+                    still_compared += 1;
+                }
             } else if scene == Scene::MovedPage {
                 assert!(
                     matches!(damage, FrameDamage::Full | FrameDamage::Skipped),
@@ -687,6 +702,10 @@ fn assert_damage_holds_the_changes_at(scene: Scene, scale: f32, keeper: Keeper) 
     assert!(
         scene == Scene::MovedPage || partial_frames > 0,
         "{scene:?} {keeper:?} at {scale}: no frame drew a part of the window"
+    );
+    assert!(
+        still_compared > 0,
+        "{scene:?} {keeper:?} at {scale}: no still frame compared with the frame before"
     );
 }
 
@@ -781,11 +800,9 @@ fn assert_spinner_repaints_only_itself_over(scene: Scene, keeper: Keeper) {
         return;
     };
     let mut harness = Harness::new(renderer, scene, 1.0, keeper);
-    // A swapchain's images first hold no frame, then frames drawn before
-    // the history follows them.
     let whole_frames = match keeper {
-        Keeper::Composition => 1,
-        Keeper::Swapchain(_) => 2 * SWAPCHAIN_IMAGES as u32,
+        Keeper::Composition => START_FRAMES,
+        Keeper::Swapchain(_) => SWAPCHAIN_START_FRAMES,
     };
     let spinner_pixels = (SPINNER[2] * SPINNER[3]) as u64;
     let mut whole_draws = 0;
@@ -861,6 +878,34 @@ fn a_page_holding_still_after_moving_for_long_reports_its_damage_again() {
             "{keeper:?}: a still frame after the page moved reports no damage"
         );
     }
+}
+
+/// A target that keeps losing the frame it kept, here to a screenshot
+/// between its frames as to a stand-in drawn while a pipeline compiles,
+/// summarizes less and less often, and every frame equals the whole frame.
+#[test]
+fn a_target_that_keeps_losing_its_frame_summarizes_less_and_less_often() {
+    const FRAMES: u32 = 40;
+    let Some((_lock, renderer)) = renderer() else {
+        return;
+    };
+    let mut harness = Harness::new(renderer, Scene::Shape, 1.0, Keeper::Composition);
+    let mut summarized = 0;
+    for step in 0..FRAMES {
+        let frame = harness.frame(step);
+        let label = format!("frame {step}: {:?}", frame.stats.damage);
+        support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+        summarized += u32::from(frame.stats.damage != FrameDamage::Skipped);
+        harness
+            .shell
+            .renderer()
+            .capture_frame(WIDTH, HEIGHT)
+            .expect("the screenshot renders");
+    }
+    assert!(
+        summarized * 4 <= FRAMES,
+        "{summarized} of {FRAMES} frames summarized"
+    );
 }
 
 /// Once every image of a swapchain holds the frame, a frame that changes
@@ -1031,7 +1076,10 @@ fn an_overlay_appearing_and_going() {
         Image { texture, view }
     });
     let red = Color(0.9, 0.2, 0.2, 1.0);
-    let (_, _, mut before) = overlay_frame(&mut renderer, &images, None, red);
+    let mut before = Vec::new();
+    for _ in 0..START_FRAMES {
+        (_, _, before) = overlay_frame(&mut renderer, &images, None, red);
+    }
     let overlay = around(rect_array(OVERLAY), 8.0);
     let dot = around(rect_array(DOT), 8.0);
     let frames = [
