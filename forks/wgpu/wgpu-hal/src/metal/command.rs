@@ -458,9 +458,9 @@ impl super::CommandState {
 
         // Extend with the sizes of the mapped vertex buffers, in the order
         // they were added to the map.
-        result_sizes.extend(stage_info.vertex_buffer_ids.iter().map(|id| {
+        result_sizes.extend(stage_info.vertex_buffer_mappings.iter().map(|mapping| {
             self.vertex_buffer_size_map
-                .get(id)
+                .get(&mapping.id)
                 .map(|size| u32::try_from(size.get()).unwrap_or(u32::MAX))
                 .unwrap_or_default()
         }));
