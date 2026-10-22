@@ -1,7 +1,7 @@
 use std::mem;
 
 use super::{
-    GroupNodeRange, GroupRecord, NodeLifecycle, NodeRange, NodeRecord, NodeSlotUpdate, SlotTable,
+    GroupNodeRange, GroupRecord, NodeRange, NodeRecord, NodeSlotUpdate, SlotTable,
     checked_usize_to_i64,
     segments::{
         NodeSegment, extract_subtree_segment, group_segment_len, group_segment_len_checked,
@@ -206,44 +206,22 @@ impl SlotTable {
             return NodeSlotUpdate::Inserted { id, generation };
         };
         self.record_node_at(
-            owner,
             group_index,
             node_index,
-            id,
-            parent_id,
-            generation,
-            source,
+            NodeRecord::active(owner, id, parent_id, generation, source, 0),
         )
     }
 
-    /// Records node `id` at `node_index` of `owner`'s group, which sits at
+    /// Records `record` at `node_index` of its owner's group, which sits at
     /// `group_index`.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "a node record's fields and where it goes"
-    )]
     pub(super) fn record_node_at(
         &mut self,
-        owner: AnchorId,
         group_index: usize,
         node_index: usize,
-        id: NodeId,
-        parent_id: Option<NodeId>,
-        generation: u32,
-        source: crate::Key,
+        record: NodeRecord,
     ) -> NodeSlotUpdate {
-        let update = self.record_group_node(
-            group_index,
-            node_index,
-            NodeRecord {
-                owner,
-                id,
-                parent_id,
-                generation,
-                source,
-                lifecycle: NodeLifecycle::Active,
-            },
-        );
+        let owner = record.owner;
+        let update = self.record_group_node(group_index, node_index, record);
         if matches!(update, NodeSlotUpdate::Inserted { .. }) {
             self.adjust_ancestor_group_spans(owner, 0, 1);
         }

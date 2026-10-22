@@ -151,7 +151,7 @@ impl SlotWriteSession<'_> {
         log::error!(
             "slot writer recovered malformed group start for key {key:?}; rejected_anchor={rejected_anchor:?} parent={parent_anchor:?} fallback_child_index={insert_index}"
         );
-        self.state.advance_parent_after_child(insert_index);
+        self.state.restart_parent_children(insert_index);
         let fallback_cursor = ChildCursor::new(parent_anchor, insert_index);
         let anchor = self.table.insert_new_group(fallback_cursor, key);
         if let Some(started) =
@@ -162,7 +162,7 @@ impl SlotWriteSession<'_> {
 
         while self.state.pop_group_frame().is_some() {}
         let root_insert_index = self.table.group_count();
-        self.state.advance_parent_after_child(root_insert_index);
+        self.state.restart_parent_children(root_insert_index);
         let root_anchor = self
             .table
             .insert_new_group(ChildCursor::new(AnchorId::INVALID, root_insert_index), key);
@@ -415,18 +415,9 @@ impl SlotWriteSession<'_> {
             );
             return;
         };
-        let subtree_end = match self.table.subtree_end_and_root_node_ids_at(group_index) {
-            Some((end, roots)) => {
-                roots.for_each(attach_root);
-                end
-            }
-            None => {
-                self.table
-                    .subtree_root_node_id_iter_at(group_index)
-                    .for_each(attach_root);
-                self.group_subtree_end(group_index, "group skip cursor advance")
-            }
-        };
+        self.table
+            .for_each_subtree_root_node_id_at(group_index, attach_root);
+        let subtree_end = self.group_subtree_end(group_index, "group skip cursor advance");
         self.state.advance_parent_after_child(subtree_end);
     }
 

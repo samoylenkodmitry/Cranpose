@@ -271,6 +271,32 @@ pub(super) struct NodeRecord {
     pub(super) generation: u32,
     pub(super) source: crate::Key,
     pub(super) lifecycle: NodeLifecycle,
+    /// How many of the owner group's direct child groups the owner composed
+    /// before this node. A group's own records sit ahead of its children's;
+    /// this count places each one among them in the order the group emitted
+    /// it.
+    pub(super) child_groups_before: u32,
+}
+
+impl NodeRecord {
+    pub(super) fn active(
+        owner: AnchorId,
+        id: NodeId,
+        parent_id: Option<NodeId>,
+        generation: u32,
+        source: Key,
+        child_groups_before: u32,
+    ) -> Self {
+        Self {
+            owner,
+            id,
+            parent_id,
+            generation,
+            source,
+            lifecycle: NodeLifecycle::Active,
+            child_groups_before,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

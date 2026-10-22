@@ -24,10 +24,15 @@ pub(super) fn validate_group_nodes(
         return Err(view.node_out_of_range(group_index, node_start, node_len, view.nodes.len()));
     }
 
+    let mut previous_child_groups_before = 0;
     for node in &view.nodes[node_start..node_end] {
         if !node_ids.insert(node.id) {
             return Err(view.duplicate_node_id(node.id));
         }
+        if node.child_groups_before < previous_child_groups_before {
+            return Err(view.node_order_mismatch(node, previous_child_groups_before));
+        }
+        previous_child_groups_before = node.child_groups_before;
         if node.owner != group.anchor {
             return Err(view.node_owner_mismatch(node.id, group.anchor, node.owner));
         }

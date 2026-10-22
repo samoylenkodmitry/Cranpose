@@ -134,6 +134,12 @@ pub(crate) enum SlotInvariantError {
         tree: SlotTreeContext,
         node_id: NodeId,
     },
+    NodeOrderMismatch {
+        tree: SlotTreeContext,
+        node_id: NodeId,
+        child_groups_before: u32,
+        previous_child_groups_before: u32,
+    },
     DuplicateSiblingKey {
         parent_anchor: AnchorId,
         key: GroupKey,

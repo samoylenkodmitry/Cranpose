@@ -278,6 +278,7 @@ fn node_record(id: NodeId, parent_id: Option<NodeId>) -> NodeRecord {
         generation: 0,
         source: crate::slot::BRANCH_PATH_ROOT,
         lifecycle: NodeLifecycle::Active,
+        child_groups_before: 0,
     }
 }
 
