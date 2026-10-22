@@ -11,6 +11,11 @@ Rust screens inside Android Compose and UIKit apps.
 
 ## Run a counter
 
+A Windows x64 PC needs Visual Studio Build Tools with the C++ tools, a Windows SDK
+and the ATL component before the first build.
+[Windows build tools](https://github.com/samoylenkodmitry/Cranpose/blob/main/docs/guide.md#windows-build-tools)
+has the component names and the install commands.
+
 Create a desktop app:
 
 ```sh
