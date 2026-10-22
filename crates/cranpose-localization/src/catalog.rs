@@ -29,6 +29,7 @@ pub struct Resource<'a> {
 
 struct CatalogData {
     fallback: Locale,
+    /// In negotiation order: see [`negotiation_order`].
     languages: Vec<LanguageIdentifier>,
     resources: Resources,
     parents: Vec<Catalog>,
@@ -90,9 +91,8 @@ impl Catalog {
                 .push(Arc::new(source));
         }
         validate_duplicates(&parsed)?;
-        let languages: Vec<_> = parsed.keys().cloned().collect();
-        let choices = languages
-            .iter()
+        let choices = parsed
+            .keys()
             .map(|language| {
                 let tag: Arc<str> = language.to_string().into();
                 Language {
@@ -108,7 +108,7 @@ impl Catalog {
         Ok(Self(
             Arc::new(CatalogData {
                 fallback,
-                languages,
+                languages: negotiation_order(parsed.keys().cloned().collect()),
                 resources: parsed,
                 parents: Vec::new(),
             }),
@@ -165,7 +165,7 @@ impl Catalog {
         Self(
             Arc::new(CatalogData {
                 fallback: self.0.fallback.clone(),
-                languages,
+                languages: negotiation_order(languages),
                 resources: BTreeMap::new(),
                 parents: vec![self, library.clone()],
             }),
@@ -360,4 +360,19 @@ fn resource_error(resource: &Resource<'_>, detail: String) -> LocalizationError 
         resource: format!("{}/{}", resource.locale, resource.namespace),
         detail,
     }
+}
+
+/// Orders languages for negotiation: a tag with a script, region or variant
+/// comes before the shorter tags it narrows. fluent-langneg keeps the order of
+/// the available languages among matches of one kind, so a request for
+/// `sr-Latn-RS` meets `sr-Latn` before `sr` matches it as a range.
+fn negotiation_order(mut languages: Vec<LanguageIdentifier>) -> Vec<LanguageIdentifier> {
+    languages.sort_by_key(|language| {
+        std::cmp::Reverse(
+            usize::from(language.script.is_some())
+                + usize::from(language.region.is_some())
+                + language.variants().len(),
+        )
+    });
+    languages
 }
