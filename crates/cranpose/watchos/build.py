@@ -312,6 +312,12 @@ panic = "abort"
         info.update(plistlib.loads(usage.read_bytes()))
     info.update(extra_info)
     (bundle / 'Info.plist').write_bytes(plistlib.dumps(info))
+    # The reasons in each language the application's catalogs translate them
+    # into, which the system reads from <tag>.lproj/InfoPlist.strings.
+    for stale in bundle.glob('*.lproj'):
+        shutil.rmtree(stale)
+    for strings in sorted((capabilities / f"{app['name']}-usage").glob('*.lproj')):
+        shutil.copytree(strings, bundle / strings.name)
     if simulator or args.sign:
         run(['codesign', '--force', '--sign', args.sign or '-', bundle])
     print(f'Built {args.target} app: {bundle}')

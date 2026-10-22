@@ -219,6 +219,14 @@ The extractor recognizes literal `tr!` and `message!` invocations. A wrapper mac
 translation calls from Rust macro parameters needs its messages defined in a
 Fluent file and generated accessors instead.
 
+The extractor also reads the crate's `build.rs` (in the source folder or the
+one above it) for the usage reasons it declares, such as
+`Use::microphone("…")`. The system shows them when it asks the person to
+allow a service. `cranpose_capabilities::declare(…).emit()` finds their
+translations in the crate's `locales` catalogs and writes
+`<tag>.lproj/InfoPlist.strings` beside the usage plist; the watchOS packager
+copies them into the bundle, and an iOS build copies them the same way.
+
 ## Plurals, grammar, and generated accessors
 
 For a notice captured by an event callback, retain the message request and

@@ -1,11 +1,12 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use fluent_syntax::ast::{Entry, Resource};
-use proc_macro2::{TokenStream, TokenTree};
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
+use quote::quote;
 
 use super::TranslationCall;
 
@@ -17,12 +18,25 @@ struct Extracted {
 
 /// Extracts `tr!` calls from Rust files, including calls nested inside other macros.
 /// Conflicting explicit IDs are errors; identical entries share their source locations.
+///
+/// The usage reasons the crate's build script declares, such as
+/// `Use::microphone("…")`, are extracted too: the system shows them when it
+/// asks the person to allow a service, and the Apple builds read their
+/// translations back from the catalogs.
 pub fn extract_sources(root: &Path, source_locale: &str) -> Result<String, String> {
     let source_locale = crate::Locale::parse(source_locale)
         .map_err(|error| error.to_string())?
         .to_string();
     let mut messages = BTreeMap::new();
     visit_path(root, &mut messages)?;
+    if let Some(script) = build_script(root) {
+        let source = fs::read_to_string(&script)
+            .map_err(|error| format!("{}: {error}", script.display()))?;
+        let tokens = source
+            .parse()
+            .map_err(|error| format!("{}: {error}", script.display()))?;
+        visit_reasons(tokens, &script, &source_locale, &mut messages)?;
+    }
     let mut output = String::new();
     for entry in messages.values() {
         if entry.call.source_locale != source_locale {
@@ -156,6 +170,58 @@ fn visit_tokens(
                 }
             }
             TokenTree::Group(group) => visit_tokens(group.stream(), path, messages)?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// The build script of the crate whose sources are at `root`: the crate's
+/// own folder, or its `src` folder.
+fn build_script(root: &Path) -> Option<PathBuf> {
+    [root.join("build.rs"), root.parent()?.join("build.rs")]
+        .into_iter()
+        .find(|path| path.is_file())
+}
+
+/// Adds each usage reason a build script declares, a string literal in
+/// `Use::<service>(…)`.
+fn visit_reasons(
+    tokens: TokenStream,
+    path: &Path,
+    source_locale: &str,
+    messages: &mut BTreeMap<String, Extracted>,
+) -> Result<(), String> {
+    let tokens: Vec<TokenTree> = tokens.into_iter().collect();
+    for (index, token) in tokens.iter().enumerate() {
+        match token {
+            TokenTree::Ident(name) if name == "Use" => {
+                if let [
+                    TokenTree::Punct(first),
+                    TokenTree::Punct(second),
+                    TokenTree::Ident(service),
+                    TokenTree::Group(arguments),
+                    ..,
+                ] = &tokens[index + 1..]
+                    && first.as_char() == ':'
+                    && second.as_char() == ':'
+                    && arguments.delimiter() == Delimiter::Parenthesis
+                    && let Some(TokenTree::Literal(reason)) = arguments.stream().into_iter().next()
+                {
+                    let location = format!("{}:{}", path.display(), name.span().start().line);
+                    let comment = format!(
+                        "The reason the system shows when it asks the person to allow `{service}`."
+                    );
+                    let call = syn::parse2::<TranslationCall>(
+                        quote!(#reason, comment = #comment, source_locale = #source_locale),
+                    )
+                    .map_err(|error| format!("{location}: {error}"))?;
+                    add_message(messages, call, location)?;
+                }
+            }
+            TokenTree::Group(group) => {
+                visit_reasons(group.stream(), path, source_locale, messages)?;
+            }
             _ => {}
         }
     }

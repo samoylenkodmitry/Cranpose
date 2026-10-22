@@ -68,6 +68,32 @@ fn extraction_sees_nested_macros_and_reports_conflicting_ids() {
 }
 
 #[test]
+fn extraction_takes_the_usage_reasons_of_the_build_script() {
+    let directory = tempfile::tempdir().expect("directory");
+    let source = directory.path().join("src");
+    fs::create_dir_all(&source).expect("sources");
+    fs::write(source.join("main.rs"), r#"fn main() { tr!("Save"); }"#).expect("source");
+    fs::write(
+        directory.path().join("build.rs"),
+        "use cranpose_capabilities::{declare, Use};\n\
+         fn main() {\n    declare(&[\n        Use::microphone(\"Hears speech to write it down.\"),\n        \
+         Use::haptics(),\n        Use::camera(REASON),\n    ])\n    .emit();\n}\n",
+    )
+    .expect("build script");
+    for root in [source.as_path(), directory.path()] {
+        let extracted = extract_sources(root, "en").expect("extract");
+        assert!(
+            extracted.contains("= Hears speech to write it down.\n"),
+            "{extracted}"
+        );
+        assert!(extracted.contains("`microphone`"), "{extracted}");
+        assert!(extracted.contains("build.rs:4"), "{extracted}");
+        assert!(extracted.contains("= Save\n"), "{extracted}");
+        assert_eq!(extracted.matches("build.rs:4").count(), 1, "{extracted}");
+    }
+}
+
+#[test]
 fn signatures_follow_references_and_reject_cycles() {
     let signatures =
         catalog_signatures("name = { $name }\nhello = Hello { name }").expect("references");

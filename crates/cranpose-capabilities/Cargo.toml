@@ -22,3 +22,6 @@ workspace = true
 [[bin]]
 name = "cranpose-plist"
 path = "src/bin/cranpose_plist.rs"
+
+[dependencies]
+fluent-syntax = "0.12.0"
