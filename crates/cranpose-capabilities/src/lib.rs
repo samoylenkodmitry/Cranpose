@@ -2,13 +2,15 @@
 #![doc = include_str!("../README.md")]
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     env,
     ffi::OsString,
     fmt::Write as _,
     fs,
     path::{Path, PathBuf},
 };
+
+use fluent_syntax::ast::{Entry, Expression, InlineExpression, Message, Pattern, PatternElement};
 
 /// Something an application uses that the device has to allow.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -458,6 +460,10 @@ impl<'a> Declaration<'a> {
     /// Writes the declaration where the application and every platform build
     /// reads it.
     ///
+    /// When the crate keeps Fluent catalogs in `locales`, the usage
+    /// descriptions they translate go to `<package>-usage/<tag>.lproj`
+    /// beside the usage plist, for the Apple builds to copy into the bundle.
+    ///
     /// Call this from a build script. It panics when the files cannot be
     /// written, which is what a build script does with a failure.
     pub fn emit(self) {
@@ -482,9 +488,20 @@ impl<'a> Declaration<'a> {
         for (path, text) in outputs.iter().zip(contents.iter()) {
             write_file(path, text);
         }
+        let catalogs = crate_dir.join("locales");
+        let strings = write_usage_strings(
+            &shared.join(format!("{package}-usage")),
+            apple_usage_strings(&self.capabilities, &catalogs),
+        );
         println!("cargo::rerun-if-changed=build.rs");
         println!("cargo::rerun-if-env-changed={CAPABILITIES_DIR}");
-        for directive in rerun_directives(&outputs) {
+        if catalogs.is_dir() {
+            println!("cargo::rerun-if-changed={}", catalogs.display());
+        }
+        for directive in rerun_directives(&outputs)
+            .into_iter()
+            .chain(rerun_directives(&strings))
+        {
             println!("{directive}");
         }
     }
@@ -895,6 +912,149 @@ fn apple_content_types(opens: &[&str]) -> Vec<&'static str> {
         }
     }
     found
+}
+
+/// The usage descriptions in each language the application's Fluent
+/// catalogs translate them into: pairs of a language tag and the text of the
+/// `InfoPlist.strings` an Apple bundle reads from `<tag>.lproj`.
+///
+/// `catalogs` holds `<tag>/<name>.ftl`, as `cranpose-l10n` lays them out. The
+/// message of a reason is the one whose text is the reason itself, which
+/// `cranpose-l10n extract` writes into the source catalog from the build
+/// script. A language with no reason translated is left out, and the system
+/// shows the `Info.plist` reasons in it.
+pub fn apple_usage_strings(
+    capabilities: &Capabilities<'_>,
+    catalogs: &Path,
+) -> Vec<(String, String)> {
+    let (tags, languages) = read_catalogs(catalogs);
+    let keyed: Vec<(&str, &str)> = capabilities
+        .uses
+        .iter()
+        .filter_map(|entry| {
+            let key = entry.service.apple_key()?;
+            let reason = entry.reason?;
+            let id = languages.iter().find_map(|messages| {
+                messages
+                    .iter()
+                    .find(|(_, text)| text.as_str() == reason)
+                    .map(|(id, _)| id.as_str())
+            })?;
+            let keys = std::iter::once(key).chain(entry.service.apple_more_keys().iter().copied());
+            Some(keys.map(move |key| (key, id)))
+        })
+        .flatten()
+        .collect();
+    tags.into_iter()
+        .zip(&languages)
+        .filter_map(|(tag, messages)| {
+            let mut text = String::new();
+            for (key, id) in &keyed {
+                if let Some(translation) = messages.get(*id) {
+                    let _ = writeln!(text, "\"{key}\" = \"{}\";", escape_strings(translation));
+                }
+            }
+            (!text.is_empty()).then_some((tag, text))
+        })
+        .collect()
+}
+
+/// The language tags of a folder of Fluent catalogs, `<tag>/<name>.ftl`, in
+/// order, and the plain-text messages of each by id.
+fn read_catalogs(folder: &Path) -> (Vec<String>, Vec<BTreeMap<String, String>>) {
+    let mut languages: Vec<(String, PathBuf)> = fs::read_dir(folder)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .filter_map(|entry| Some((entry.file_name().into_string().ok()?, entry.path())))
+        .collect();
+    languages.sort();
+    languages
+        .into_iter()
+        .map(|(tag, folder)| (tag, plain_messages(&folder)))
+        .unzip()
+}
+
+/// The messages of the Fluent catalogs in a folder whose values are plain
+/// text, by id.
+fn plain_messages(folder: &Path) -> BTreeMap<String, String> {
+    let mut messages = BTreeMap::new();
+    for entry in fs::read_dir(folder).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|extension| extension != "ftl") {
+            continue;
+        }
+        let Ok(source) = fs::read_to_string(&path) else {
+            continue;
+        };
+        // A catalog with errors still gives the messages it parsed;
+        // `cranpose-l10n check` reports the errors.
+        let resource =
+            fluent_syntax::parser::parse(source.as_str()).unwrap_or_else(|(resource, _)| resource);
+        for entry in resource.body {
+            if let Entry::Message(Message {
+                id,
+                value: Some(pattern),
+                ..
+            }) = entry
+                && let Some(text) = plain_text(&pattern)
+            {
+                messages.insert(id.name.to_owned(), text);
+            }
+        }
+    }
+    messages
+}
+
+/// The text of a Fluent pattern with no variables, functions or references.
+fn plain_text(pattern: &Pattern<&str>) -> Option<String> {
+    pattern
+        .elements
+        .iter()
+        .map(|element| match element {
+            PatternElement::TextElement { value } => Some(*value),
+            PatternElement::Placeable {
+                expression: Expression::Inline(InlineExpression::StringLiteral { value }),
+            } => Some(*value),
+            PatternElement::Placeable { .. } => None,
+        })
+        .collect()
+}
+
+/// Writes each language's usage descriptions to
+/// `<folder>/<tag>.lproj/InfoPlist.strings`, removes the languages the
+/// catalogs no longer translate, and returns the files.
+fn write_usage_strings(folder: &Path, languages: Vec<(String, String)>) -> Vec<PathBuf> {
+    let written: Vec<PathBuf> = languages
+        .into_iter()
+        .map(|(tag, text)| {
+            let language = folder.join(format!("{tag}.lproj"));
+            fs::create_dir_all(&language)
+                .unwrap_or_else(|error| panic!("creating {}: {error}", language.display()));
+            let path = language.join("InfoPlist.strings");
+            write_file(&path, &text);
+            path
+        })
+        .collect();
+    for entry in fs::read_dir(folder).into_iter().flatten().flatten() {
+        let stale = entry.path();
+        if !written
+            .iter()
+            .any(|file| file.parent() == Some(stale.as_path()))
+        {
+            fs::remove_dir_all(&stale)
+                .unwrap_or_else(|error| panic!("removing {}: {error}", stale.display()));
+        }
+    }
+    written
+}
+
+/// Escapes text for a quoted value of an `InfoPlist.strings` file.
+fn escape_strings(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
 }
 
 fn escape_xml(text: &str) -> String {

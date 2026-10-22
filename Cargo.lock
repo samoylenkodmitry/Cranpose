@@ -1313,6 +1313,9 @@ dependencies = [
 [[package]]
 name = "cranpose-capabilities"
 version = "0.16.0"
+dependencies = [
+ "fluent-syntax",
+]
 
 [[package]]
 name = "cranpose-core"
