@@ -2,6 +2,7 @@
 
 - No unsafe code or `unwrap()`. Keep KISS, DRY and SOLID; duplicated code of ten or more lines needs a shared abstraction.
 - Fix root causes and audit every consumer of a wrong value. Leave no partial fixes, deprecated paths or compatibility layers in this pre-alpha repo. Review architecture, correctness and maintainability before completion.
+- Handle all platforms, always. A change is not done while any platform Cranpose ships lacks it: Android, iOS, watchOS, macOS, Windows, Linux and the web (WebGPU and WebGL).
 - Always make performance optimizations. Never write absurd, wasteful code, and remove any you spot in the codebase as soon as you spot it.
 - If you spot a clone, copy or allocation made just to satisfy the borrow checker, immediately rearchitect so no allocation is needed. A big refactoring is justified.
 - For implementation, read [Rust/API conventions](docs/agent-workflows.md#rust-and-api-conventions) and the [performance coding guide](docs/performance_coding_guide.md). Document public APIs only.
