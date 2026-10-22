@@ -114,6 +114,7 @@ pub(crate) enum ResolvedCompositeKind {
 /// `None`), the transform its device space is drawn under: the identity,
 /// except for a layer drawn in place, whose segments carry no composites,
 /// and the scale from its scene's logical space to device pixels.
+#[derive(Clone)]
 pub(crate) struct PassSegment<'a> {
     pub(crate) scene: &'a CompositorScene,
     pub(crate) ops: &'a [DrawOp],

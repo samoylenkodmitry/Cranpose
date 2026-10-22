@@ -44,8 +44,9 @@ use crate::{
     effect_renderer::{CompositeSampleMode, EffectRenderer, RoundedCompositeMask},
     fixed_pipeline::{FixedPipeline, FixedPipelineJob},
     frame::{
-        AdmissionGate, ClearedImages, Damage, FrameExecutor, FrameWindow, ImageContent, KeptWindow,
-        PresentedImage, Repaint, StageSideScratch, Summaries, SwapchainHistory, WindowDamage,
+        AdmissionGate, ClearedImages, Damage, DeviceRect, FrameExecutor, FrameWindow, ImageContent,
+        KeptWindow, PresentedImage, Repaint, StageSideScratch, Summaries, SwapchainHistory, Window,
+        WindowDamage,
     },
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
@@ -3459,16 +3460,12 @@ fn frame_damage(damage: Option<Damage>) -> gpu_stats::FrameDamage {
         None => gpu_stats::FrameDamage::Untracked,
         Some(Damage::Skipped) => gpu_stats::FrameDamage::Skipped,
         Some(Damage::Full) => gpu_stats::FrameDamage::Full,
-        Some(Damage::Part(rect)) => {
-            let rect = rect.map_or([0; 4], |rect| {
-                [rect.x, rect.y, rect.width, rect.height].map(|value| value as u32)
-            });
-            gpu_stats::FrameDamage::Rect {
-                x: rect[0],
-                y: rect[1],
-                width: rect[2],
-                height: rect[3],
+        Some(Damage::Part(rects)) => {
+            let mut window = gpu_stats::WindowRects::default();
+            for rect in rects.as_slice() {
+                window.push([rect.x, rect.y, rect.width, rect.height].map(|value| value as u32));
             }
+            gpu_stats::FrameDamage::Part(window)
         }
     }
 }
@@ -6089,7 +6086,7 @@ impl GpuRenderer {
         shadow: &ShadowDraw,
         z: usize,
         root_scale: f32,
-        target_rect: DeviceRect4,
+        window: &Window,
         transients: &mut Vec<(FrameTextureDescriptor, Rc<OffscreenTarget>)>,
         resolved: &mut Vec<ResolvedComposite>,
     ) {
@@ -6112,14 +6109,17 @@ impl GpuRenderer {
             };
             visible = clipped;
         }
-        let target_logical = Rect {
-            x: target_rect.0 / root_scale,
-            y: target_rect.1 / root_scale,
-            width: target_rect.2 / root_scale,
-            height: target_rect.3 / root_scale,
-        };
-        let Some(visible) = visible.intersect(expand_rect(target_logical, margin, margin)) else {
+        let Some(drawn) = window.cut_near(
+            DeviceRect::from_logical(visible, root_scale),
+            margin * root_scale,
+        ) else {
             return;
+        };
+        let visible = Rect {
+            x: drawn.x / root_scale,
+            y: drawn.y / root_scale,
+            width: drawn.width / root_scale,
+            height: drawn.height / root_scale,
         };
         let max_texture_dim = self.max_texture_dim();
         let shape_only = shadow.texts.is_empty();
@@ -6158,7 +6158,14 @@ impl GpuRenderer {
             source_device.width as f32,
             source_device.height as f32,
         );
-        let mut coverage = intersect_device_rects(dest, target_rect);
+        let mut coverage = window
+            .cut(DeviceRect {
+                x: dest.0,
+                y: dest.1,
+                width: dest.2,
+                height: dest.3,
+            })
+            .map(|cut| (cut.x, cut.y, cut.width, cut.height));
         if let Some(clip) = shadow.clip {
             coverage = coverage.and_then(|coverage| {
                 intersect_device_rects(coverage, anchored_rect_to_device(clip, anchor, root_scale))

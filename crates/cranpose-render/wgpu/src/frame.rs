@@ -61,7 +61,7 @@ pub(crate) struct DeviceRect {
 }
 
 impl DeviceRect {
-    fn from_logical(rect: Rect, scale: f32) -> Self {
+    pub(crate) fn from_logical(rect: Rect, scale: f32) -> Self {
         let pixel = |value: f32| {
             let whole = value.round();
             if (value - whole).abs() <= value.abs().max(1.0) * f32::EPSILON * 2.0 {
@@ -119,7 +119,6 @@ impl DeviceRect {
         }
     }
 
-    /// Snaps to whole pixels, growing outward.
     fn translated(self, delta: Point) -> Self {
         Self {
             x: self.x + delta.x,
@@ -128,6 +127,7 @@ impl DeviceRect {
         }
     }
 
+    /// Snaps to whole pixels, growing outward.
     fn snap_out(self) -> Self {
         let left = self.x.floor();
         let top = self.y.floor();
@@ -253,23 +253,57 @@ impl PageBase {
     }
 }
 
-/// A segment drawing `fill` alone, within the page's window.
-fn fill_segment<'a>(
+/// Segments drawing `fill` alone, one within each part of the page's
+/// window.
+fn fill_segments<'a>(
     scene: &'a CompositorScene,
     fill: &'a ResolvedComposite,
-    page: &Page,
+    page: &'a Page,
     scale: f32,
-) -> PassSegment<'a> {
-    PassSegment {
+) -> impl Iterator<Item = PassSegment<'a>> + 'a {
+    page.window_scissors().map(move |scissor| PassSegment {
         scene,
         ops: &[],
         composites: std::slice::from_ref(fill),
         offset: page.offset,
-        scissor: page.window_scissor(),
+        scissor: Some(scissor),
         first_run_window: None,
         transform: SegmentTransform::IDENTITY,
         scale,
+    })
+}
+
+/// Cuts `segments` to each scissor of `parts`, in their order: each
+/// segment's part in the first, then in the next. The parts share no pixel,
+/// so no pixel draws twice.
+fn cut_segments(
+    segments: &mut Vec<PassSegment<'_>>,
+    parts: impl Iterator<Item = (u32, u32, u32, u32)> + Clone,
+) {
+    let mut first_two = parts.clone();
+    if let (Some(only), None) = (first_two.next(), first_two.next()) {
+        segments.retain_mut(
+            |segment| match intersect_scissors(segment.scissor, Some(only)) {
+                Some(scissor) => {
+                    segment.scissor = scissor;
+                    true
+                }
+                None => false,
+            },
+        );
+        return;
     }
+    *segments = segments
+        .iter()
+        .flat_map(|segment| {
+            parts.clone().filter_map(move |part| {
+                intersect_scissors(segment.scissor, Some(part)).map(|scissor| PassSegment {
+                    scissor,
+                    ..segment.clone()
+                })
+            })
+        })
+        .collect();
 }
 
 /// A kept prefix drawn back where the page drew it.
@@ -319,6 +353,39 @@ fn page_blit(
     }
 }
 
+/// The part of a page a frame draws: all of it, or the rects of the frame's
+/// damage inside it.
+#[derive(Clone, Copy)]
+pub(crate) struct Window {
+    /// What holds all the frame draws.
+    bounds: DeviceRect,
+    /// The rects the frame draws; `None` for all of `bounds`.
+    parts: Option<DamageRects>,
+}
+
+impl Window {
+    /// The part of `rect` the frame draws: the bounds of its pieces in the
+    /// window's rects; `None` when it draws none of it.
+    pub(crate) fn cut(&self, rect: DeviceRect) -> Option<DeviceRect> {
+        match self.parts {
+            None => rect.intersect(self.bounds),
+            Some(_) => self.cut_near(rect, 0.0),
+        }
+    }
+
+    /// The part of `rect` within `margin` of what the frame draws.
+    pub(crate) fn cut_near(&self, rect: DeviceRect, margin: f32) -> Option<DeviceRect> {
+        match &self.parts {
+            None => rect.intersect(self.bounds.expand(margin)),
+            Some(parts) => parts
+                .as_slice()
+                .iter()
+                .filter_map(|part| rect.intersect(part.expand(margin)))
+                .reduce(DeviceRect::union),
+        }
+    }
+}
+
 /// The texture a layer draws its strata into and its captures read back:
 /// the frame's root image, or an isolated child's surface, with the device
 /// offset its origin sits at.
@@ -326,24 +393,32 @@ fn page_blit(
 struct Page {
     texture: Rc<OffscreenTarget>,
     offset: [f32; 2],
-    /// The part of the page the frame draws again, in whole device pixels
+    /// The parts of the page the frame draws again, in whole device pixels
     /// inside it; the rest keeps what the frame before drew. `None` draws
     /// all of it.
-    window: Option<DeviceRect>,
+    window: Option<DamageRects>,
 }
 
 impl Page {
-    /// The device rect the frame draws of the page.
-    fn window(&self) -> DeviceRect {
-        self.window.unwrap_or_else(|| self.rect())
+    /// What the frame draws of the page.
+    fn window(&self) -> Window {
+        Window {
+            bounds: self
+                .window
+                .and_then(|parts| parts.bounds())
+                .unwrap_or_else(|| self.rect()),
+            parts: self.window,
+        }
     }
 
-    /// The window as a scissor in the texture's pixels; `None` for the
-    /// whole page.
-    fn window_scissor(&self) -> Option<(u32, u32, u32, u32)> {
+    /// Each part of the window as a scissor in the texture's pixels; none
+    /// for the whole page.
+    fn window_scissors(&self) -> impl Iterator<Item = (u32, u32, u32, u32)> + Clone + '_ {
         let size = (self.texture.width, self.texture.height);
         self.window
-            .and_then(|window| scissor_in_target(window.tuple(), size, self.offset))
+            .iter()
+            .flat_map(DamageRects::as_slice)
+            .filter_map(move |part| scissor_in_target(part.tuple(), size, self.offset))
     }
 
     fn pass_target(&self) -> PassTarget<'_> {
@@ -548,8 +623,8 @@ fn backdrop_cache_keys_use_pending(pass: &LayerPass<'_>) -> bool {
 }
 
 impl<'scene> LayerPass<'scene> {
-    /// The device rect the layer draws in: its page's window.
-    fn target_rect(&self) -> DeviceRect {
+    /// What the layer draws of its page: the page's window.
+    fn window(&self) -> Window {
         self.page.window()
     }
 
@@ -561,7 +636,7 @@ impl<'scene> LayerPass<'scene> {
     }
 
     fn capture_bounds(&self) -> Option<DeviceRect> {
-        let target = self.target_rect();
+        let target = self.window().bounds;
         self.beneath.page.as_ref().map_or(Some(target), |base| {
             base.child_rect().map(|rect| target.union(rect))
         })
@@ -1014,13 +1089,13 @@ fn layer_events(layer: &LayerScene) -> Vec<(usize, Event)> {
     events
 }
 
-fn plan_backdrop(
-    backdrop: &BackdropLayer,
+fn plan_backdrop<'a>(
+    backdrop: &'a BackdropLayer,
     z: usize,
     scale: f32,
-    target_rect: DeviceRect,
+    window: &Window,
     capture_bounds: Option<DeviceRect>,
-) -> Option<PendingBackdrop<'_>> {
+) -> Option<PendingBackdrop<'a>> {
     if backdrop.alpha == 0.0 {
         return None;
     }
@@ -1037,7 +1112,7 @@ fn plan_backdrop(
         Some(clip) => reach.intersect(clip)?,
         None => reach,
     };
-    let visible = DeviceRect::from_logical(visible, scale).intersect(target_rect)?;
+    let visible = window.cut(DeviceRect::from_logical(visible, scale))?;
     let support = match output_support(&backdrop.effect) {
         Some(support) => Some(
             DeviceRect::from_logical(support.translate(rect.x, rect.y), scale)
@@ -1196,10 +1271,10 @@ fn child_device_placement(
     child: &ChildLayer,
     snap: Point,
     scale: f32,
-    target_rect: DeviceRect,
+    window: &Window,
 ) -> (DeviceRect, Option<DeviceRect>) {
     let dest = child_device_rect(child, child.local_bounds, snap, scale);
-    (dest, child_visible(child, dest, snap, scale, target_rect))
+    (dest, child_visible(child, dest, snap, scale, window))
 }
 
 /// `local`, a rect in the child's own space, on the device.
@@ -1211,13 +1286,14 @@ fn child_device_rect(child: &ChildLayer, local: Rect, snap: Point, scale: f32) -
     DeviceRect::from_logical(logical, scale)
 }
 
-/// The part of `rect` the child's clip and the target leave visible.
+/// The part of `rect` the child's clip and the frame's window leave
+/// visible.
 fn child_visible(
     child: &ChildLayer,
     rect: DeviceRect,
     snap: Point,
     scale: f32,
-    target_rect: DeviceRect,
+    window: &Window,
 ) -> Option<DeviceRect> {
     let clipped = match child.clip {
         Some(clip) => rect.intersect(DeviceRect::from_logical(
@@ -1226,7 +1302,7 @@ fn child_visible(
         )),
         None => Some(rect),
     };
-    clipped.and_then(|rect| rect.intersect(target_rect))
+    clipped.and_then(|rect| window.cut(rect))
 }
 
 /// What a child's backdrop effect writes: the child's bounds and the output
@@ -1238,15 +1314,15 @@ fn backdrop_written(
     effect: &RenderEffect,
     snap: Point,
     scale: f32,
-    target_rect: DeviceRect,
+    window: &Window,
 ) -> Option<DeviceRect> {
     let local = expand_rect(child.local_bounds, effect.output_padding());
     let reach = child_device_rect(child, local, snap, scale);
-    child_visible(child, reach, snap, scale, target_rect)
+    child_visible(child, reach, snap, scale, window)
 }
 
 /// What the page shows of a child's rendered surface: the child's clip
-/// within the target, and nothing narrower.
+/// within the frame's window, and nothing narrower.
 ///
 /// Not the child's own box. A surface holds what the child draws outside
 /// itself as well -- the shadow it casts -- and [`child_surface_rect`] sizes
@@ -1257,13 +1333,14 @@ fn child_surface_bound(
     child: &ChildLayer,
     snap: Point,
     scale: f32,
-    target_rect: DeviceRect,
+    window: &Window,
 ) -> Option<DeviceRect> {
     match child.clip {
-        Some(clip) => {
-            DeviceRect::from_logical(clip.translate(snap.x, snap.y), scale).intersect(target_rect)
-        }
-        None => Some(target_rect),
+        Some(clip) => window.cut(DeviceRect::from_logical(
+            clip.translate(snap.x, snap.y),
+            scale,
+        )),
+        None => Some(window.bounds),
     }
 }
 
@@ -2404,7 +2481,7 @@ fn child_snap(child: &ChildLayer, scale: f32) -> Point {
 /// device rect, size in pixels and offset.
 struct InPlaceTarget {
     scale: f32,
-    rect: DeviceRect,
+    window: Window,
     size: (u32, u32),
     offset: [f32; 2],
 }
@@ -2451,7 +2528,7 @@ fn flush_parts<'s>(
         push_page_part(&mut parts, op_start..op_end, composite_start..composite_end);
         (op_start, composite_start) = (op_end, composite_end);
         let snap = child_snap(child, target.scale);
-        let Some(shown) = child_surface_bound(child, snap, target.scale, target.rect) else {
+        let Some(shown) = child_surface_bound(child, snap, target.scale, &target.window) else {
             continue;
         };
         let scissor = match child.clip {
@@ -2606,7 +2683,7 @@ fn in_place_transform(child: &ChildLayer, scale: f32) -> Option<(SegmentTransfor
 }
 
 impl ChildFrame {
-    fn of(child: &ChildLayer, scale: f32, target: DeviceRect) -> Self {
+    fn of(child: &ChildLayer, scale: f32, target: &Window) -> Self {
         let snap = child_snap(child, scale);
         let grid = uniform_scale_translation(child.transform)
             .filter(|(uniform, _)| (uniform - child.surface_scale).abs() <= 1e-4)
@@ -2808,7 +2885,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     ) -> Result<(), String> {
         let window = match repaint {
             Repaint::Whole => None,
-            Repaint::Window(window) => Some(window),
+            Repaint::Window(parts) => Some(parts),
             Repaint::Nothing => return Ok(()),
         };
         let page = Page {
@@ -3096,7 +3173,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             in_place: Vec::new(),
             meshes: Vec::new(),
         };
-        let target_rect = pass.target_rect();
+        let window = pass.window();
         let capture_bounds = pass.capture_bounds();
         self.resolve_flat_children(&mut pass)?;
 
@@ -3107,7 +3184,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     let backdrop = &scene.backdrop_layers[index];
                     if !self.renderer.ablation.stages
                         && let Some(item) =
-                            plan_backdrop(backdrop, z, scale, target_rect, capture_bounds)
+                            plan_backdrop(backdrop, z, scale, &window, capture_bounds)
                     {
                         if self.backdrop_draws_now(&item) {
                             pass.stages.push(item);
@@ -3123,7 +3200,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                         shadow,
                         z,
                         scale,
-                        target_rect.tuple(),
+                        &window,
                         &mut self.transients,
                         &mut pass.pending,
                     );
@@ -3181,12 +3258,13 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         };
         match self.window_base(&pass.page, load_op) {
             (load_op, Some(fill)) => {
-                let segment = fill_segment(&self.empty_scene, &fill, &pass.page, pass.scale);
+                let segments: smallvec::SmallVec<[PassSegment<'_>; MAX_DAMAGE_RECTS]> =
+                    fill_segments(&self.empty_scene, &fill, &pass.page, pass.scale).collect();
                 self.renderer
                     .encode_pass(
                         self.recorder,
                         pass.page.pass_target(),
-                        (std::slice::from_ref(&segment), SegmentLayout::Stacked),
+                        (&segments[..], SegmentLayout::Stacked),
                         load_op,
                         "Window Fill",
                     )
@@ -3262,7 +3340,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let target = pass.page.pass_target();
         let place = InPlaceTarget {
             scale: pass.scale,
-            rect: pass.target_rect(),
+            window: pass.window(),
             size: (target.width, target.height),
             offset: pass.page.offset,
         };
@@ -3280,21 +3358,13 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let mut segments =
             flush_segments(&pass.layer.scene, &parts, &flush, place.offset, pass.scale);
         let (load_op, fill) = self.window_base(&pass.page, load_op);
-        if let Some(window) = pass.page.window_scissor() {
-            segments.retain_mut(|segment| {
-                match intersect_scissors(segment.scissor, Some(window)) {
-                    Some(scissor) => {
-                        segment.scissor = scissor;
-                        true
-                    }
-                    None => false,
-                }
-            });
+        if pass.page.window.is_some() {
+            cut_segments(&mut segments, pass.page.window_scissors());
         }
         if let Some(fill) = &fill {
-            segments.insert(
-                0,
-                fill_segment(&self.empty_scene, fill, &pass.page, pass.scale),
+            segments.splice(
+                0..0,
+                fill_segments(&self.empty_scene, fill, &pass.page, pass.scale),
             );
         }
         let label = LAYER_PASS_LABELS[pass.segments.min(LAYER_PASS_LABELS.len() - 1)];
@@ -3319,15 +3389,17 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         load_op: wgpu::LoadOp<wgpu::Color>,
     ) -> (wgpu::LoadOp<wgpu::Color>, Option<ResolvedComposite>) {
         match (page.window, load_op) {
-            (Some(window), wgpu::LoadOp::Clear(color)) => {
-                (wgpu::LoadOp::Load, Some(self.window_fill(color, window)))
-            }
+            (Some(_), wgpu::LoadOp::Clear(color)) => (
+                wgpu::LoadOp::Load,
+                Some(self.window_fill(color, page.window().bounds)),
+            ),
             _ => (load_op, None),
         }
     }
 
     /// `window` filled with `color`, replacing what it held, from a pixel of
-    /// `color` the renderer keeps while the colour stays.
+    /// `color` the renderer keeps while the colour stays; each segment it
+    /// goes into cuts it to a part of the page's window.
     fn window_fill(&mut self, color: wgpu::Color, window: DeviceRect) -> ResolvedComposite {
         let source = match &self.renderer.window_fill {
             Some((filled, source)) if *filled == color => Rc::clone(source),
@@ -4205,7 +4277,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 let own_end = pass
                     .pending
                     .partition_point(|composite| composite.z_index < region.z);
-                let own = region.rect.intersect(pass.target_rect())?;
+                let own = pass.window().cut(region.rect)?;
                 Some(PassSegment {
                     scene: &pass.layer.scene,
                     ops: fixup,
@@ -4328,11 +4400,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .as_ref()
             .map_or(0.0, |effect| effect.input_padding() + output_padding)
             * scale;
-        let target_rect = pass.target_rect();
-        let Some(source_rect) = DeviceRect::from_logical(rect, scale)
-            .expand(padding.ceil())
-            .intersect(target_rect.expand(padding.ceil()))
-        else {
+        let Some(source_rect) = pass.window().cut_near(
+            DeviceRect::from_logical(rect, scale).expand(padding.ceil()),
+            padding.ceil(),
+        ) else {
             return Ok(None);
         };
         let source_rect = source_rect.snap_out();
@@ -4473,14 +4544,13 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             translation,
             dest,
             visible: visible_device,
-        } = ChildFrame::of(child, scale, pass.target_rect());
+        } = ChildFrame::of(child, scale, &pass.window());
         let layer_rect = dest;
 
         if !self.renderer.ablation.stages
             && child.backdrop_alpha != 0.0
             && let Some(backdrop) = &child.backdrop
-            && let Some(visible) =
-                backdrop_written(child, backdrop, snap, scale, pass.target_rect())
+            && let Some(visible) = backdrop_written(child, backdrop, snap, scale, &pass.window())
             && let Some(support) =
                 child_composite_support(child, backdrop.output_support(), snap, scale, visible)
         {
@@ -4509,7 +4579,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             pass.pending.extend(composite);
             return Ok(());
         }
-        let shown = child_surface_bound(child, snap, scale, pass.target_rect()).unwrap_or(visible);
+        let shown = child_surface_bound(child, snap, scale, &pass.window()).unwrap_or(visible);
         let resolved = match pass.resolved.get_mut(index).and_then(Option::take) {
             Some(Resolved::Surface(resolved)) => resolved,
             Some(Resolved::InPlace) | None => {
@@ -4938,12 +5008,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         child: &ChildLayer,
     ) -> Result<bool, String> {
         let scale = pass.scale;
-        let target = pass.target_rect();
-        let frame = ChildFrame::of(child, scale, target);
+        let target = pass.window();
+        let frame = ChildFrame::of(child, scale, &target);
         let Some(visible) = frame.visible else {
             return Ok(true);
         };
-        let shown = child_surface_bound(child, frame.snap, scale, target).unwrap_or(visible);
+        let shown = child_surface_bound(child, frame.snap, scale, &target).unwrap_or(visible);
         let Some(plan) = SurfacePlan::of(child, scale, frame.grid, shown) else {
             return Ok(true);
         };
@@ -4969,7 +5039,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             return Ok(());
         }
         let scale = pass.scale;
-        let target = pass.target_rect();
+        let target = pass.window();
         let mut resolved: Vec<Option<Resolved>> = std::iter::repeat_with(|| None)
             .take(layer.children.len())
             .collect();
@@ -4978,7 +5048,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             if !renders_flat(child) || child.mesh.is_some() {
                 continue;
             }
-            let frame = ChildFrame::of(child, scale, target);
+            let frame = ChildFrame::of(child, scale, &target);
             let Some(visible) = frame.visible else {
                 continue;
             };
@@ -4986,7 +5056,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 continue;
             }
             let in_place = pass.can_draw_in_place(child);
-            let shown = child_surface_bound(child, frame.snap, scale, target).unwrap_or(visible);
+            let shown = child_surface_bound(child, frame.snap, scale, &target).unwrap_or(visible);
             let Some(plan) = SurfacePlan::of(child, scale, frame.grid, shown) else {
                 resolved[index] = Some(if in_place {
                     Resolved::InPlace
@@ -5440,7 +5510,7 @@ fn projected_placement(
         .snap_anchor
         .map(|anchor| snap_delta_for_anchor(anchor, scale))
         .unwrap_or_default();
-    let parent_rect = pass.target_rect();
+    let parent_rect = pass.window().bounds;
     let surface_scale = scale * child.surface_scale;
     let child_device_to_parent_device = ProjectiveTransform::uniform_scale(1.0 / surface_scale)
         .then(child.transform)
@@ -5792,8 +5862,8 @@ mod scene_surfaces;
 mod window_damage;
 
 pub(crate) use window_damage::{
-    ClearedImages, Damage, FrameWindow, ImageContent, KeptWindow, PresentedImage, Repaint,
-    Summaries, SwapchainHistory, WindowDamage,
+    ClearedImages, Damage, DamageRects, FrameWindow, ImageContent, KeptWindow, MAX_DAMAGE_RECTS,
+    PresentedImage, Repaint, Summaries, SwapchainHistory, WindowDamage,
 };
 
 #[cfg(test)]

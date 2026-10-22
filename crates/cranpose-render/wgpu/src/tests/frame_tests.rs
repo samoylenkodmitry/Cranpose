@@ -127,8 +127,8 @@ fn a_backdrop_captures_no_further_than_the_clip_it_is_drawn_in() {
         effect: RenderEffect::runtime_shader(shader),
         z_index: 0,
     };
-    let planned =
-        plan_backdrop(&layer, 0, 2.0, target, Some(target)).expect("the backdrop is on the target");
+    let planned = plan_backdrop(&layer, 0, 2.0, &whole(target), Some(target))
+        .expect("the backdrop is on the target");
     assert_eq!(
         planned.capture_rect,
         DeviceRect::from_logical(
@@ -174,7 +174,7 @@ fn a_backdrop_keeps_its_capture_and_records_the_part_of_it_inside_the_effects_ou
             effect: RenderEffect::runtime_shader(shader),
             z_index: 0,
         };
-        let planned = plan_backdrop(&layer, 0, 2.0, target, Some(target))
+        let planned = plan_backdrop(&layer, 0, 2.0, &whole(target), Some(target))
             .expect("the backdrop is on the target");
         (planned.visible, planned.capture_rect, planned.support)
     };
@@ -550,15 +550,23 @@ fn in_place_child(
     }
 }
 
+/// The window of a frame drawing all of `bounds`.
+fn whole(bounds: DeviceRect) -> Window {
+    Window {
+        bounds,
+        parts: None,
+    }
+}
+
 fn page_target() -> InPlaceTarget {
     InPlaceTarget {
         scale: 2.0,
-        rect: DeviceRect {
+        window: whole(DeviceRect {
             x: 0.0,
             y: 0.0,
             width: 100.0,
             height: 100.0,
-        },
+        }),
         size: (100, 100),
         offset: [0.0, 0.0],
     }

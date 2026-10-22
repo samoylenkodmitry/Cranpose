@@ -71,7 +71,25 @@ enum Scene {
     /// A spinner turning by drawing its arc again over the background
     /// alone: a page that costs less drawn whole than copied.
     BareSpinner,
+    /// The spinner at the top and a caret changing at the bottom, far apart,
+    /// with the two liquid glass panes between them.
+    SpinnerAndCaret,
+    /// Five spots far apart changing colour, one more than the rects a
+    /// frame's damage keeps apart.
+    FiveSpots,
 }
+
+/// A caret near the bottom, far from the spinner.
+const CARET: [f32; 4] = [40.0, 372.0, 2.0, 16.0];
+
+/// Spots in the corners and the middle of the window.
+const SPOTS: [[f32; 4]; 5] = [
+    [8.0, 8.0, 20.0, 20.0],
+    [292.0, 8.0, 20.0, 20.0],
+    [8.0, 372.0, 20.0, 20.0],
+    [292.0, 372.0, 20.0, 20.0],
+    [150.0, 190.0, 20.0, 20.0],
+];
 
 /// The frames a target draws whole before one can draw a part: the first,
 /// with nothing to compare with; one the back-off skips; and the next,
@@ -297,7 +315,12 @@ fn changing_box(scene: Scene, step: MutableState<u32>) -> Option<Modifier> {
         Scene::Appearing if step.get() % 2 == 1 => spot().background(Color(0.9, 0.2, 0.2, 1.0)),
         Scene::Spinner | Scene::BareSpinner => arc_drawn_again(SPINNER, step, 12.0),
         Scene::TurnedSpinner => arc_turned(SPINNER, step, 12.0),
-        Scene::Label | Scene::Picture | Scene::Appearing | Scene::MovedPage => return None,
+        Scene::Label
+        | Scene::Picture
+        | Scene::Appearing
+        | Scene::MovedPage
+        | Scene::SpinnerAndCaret
+        | Scene::FiveSpots => return None,
     })
 }
 
@@ -310,6 +333,27 @@ fn Changing(scene: Scene, step: MutableState<u32>) {
                 rect_modifier([SPOT[0], SPOT[1], 60.0, 20.0]),
                 label_style(14.0),
             );
+        }
+        Scene::SpinnerAndCaret => {
+            Box(
+                arc_drawn_again(SPINNER, step, 12.0),
+                BoxSpec::default(),
+                || {},
+            );
+            Box(
+                rect_modifier(CARET).background(shade(step.get())),
+                BoxSpec::default(),
+                || {},
+            );
+        }
+        Scene::FiveSpots => {
+            for spot in SPOTS {
+                Box(
+                    rect_modifier(spot).background(shade(step.get())),
+                    BoxSpec::default(),
+                    || {},
+                );
+            }
         }
         Scene::Picture => {
             let picture = PICTURES.with(|pictures| pictures[(step.get() % 2) as usize].clone());
@@ -368,7 +412,7 @@ fn Page(scene: Scene, step: MutableState<u32>) {
                 Scene::UnderLiquidGlass => {
                     GlassSurface(rect_modifier(GLASS), Glass::regular(), || {});
                 }
-                Scene::Spinner | Scene::TurnedSpinner => {
+                Scene::Spinner | Scene::TurnedSpinner | Scene::SpinnerAndCaret => {
                     GlassSurface(rect_modifier(GLASS), Glass::regular(), || {});
                     GlassSurface(rect_modifier(UPPER_GLASS), Glass::regular(), || {});
                 }
@@ -608,16 +652,13 @@ fn holds(damage: FrameDamage, x: usize, y: usize) -> bool {
     match damage {
         FrameDamage::Untracked => false,
         FrameDamage::Skipped | FrameDamage::Full => true,
-        FrameDamage::Rect {
-            x: left,
-            y: top,
-            width,
-            height,
-        } => {
-            let (left, top) = (left as usize, top as usize);
-            x >= left && y >= top && x < left + width as usize && y < top + height as usize
-        }
+        FrameDamage::Part(rects) => rects.contains(x as u32, y as u32),
     }
+}
+
+/// Whether the frame changed nothing, and drew nothing for it.
+fn no_damage(damage: FrameDamage) -> bool {
+    matches!(damage, FrameDamage::Part(rects) if rects.rects().is_empty())
 }
 
 /// Asserts every pixel that differs between `before` and `after` lies
@@ -668,28 +709,21 @@ impl Scene {
     }
 }
 
-/// Asserts `damage` is a rect within `reach`.
+/// Asserts `damage` is rects within `reach`.
 fn assert_within(label: &str, damage: FrameDamage, reach: [f32; 4]) {
-    let FrameDamage::Rect {
-        x,
-        y,
-        width,
-        height,
-    } = damage
-    else {
-        panic!("{label}: a small change must report a rect, not {damage:?}");
+    let FrameDamage::Part(rects) = damage else {
+        panic!("{label}: a small change must report rects, not {damage:?}");
     };
-    if width == 0 || height == 0 {
-        return;
-    }
     let [left, top, reach_width, reach_height] = reach;
-    assert!(
-        x as f32 >= left
-            && y as f32 >= top
-            && (x + width) as f32 <= left + reach_width
-            && (y + height) as f32 <= top + reach_height,
-        "{label}: the damage {damage:?} reaches past {reach:?}"
-    );
+    for &[x, y, width, height] in rects.rects() {
+        assert!(
+            x as f32 >= left
+                && y as f32 >= top
+                && (x + width) as f32 <= left + reach_width
+                && (y + height) as f32 <= top + reach_height,
+            "{label}: the damage {damage:?} reaches past {reach:?}"
+        );
+    }
 }
 
 /// Renders `scene` for [`STEPS`] changes after a still frame and checks
@@ -750,7 +784,7 @@ fn assert_damage_holds_the_changes_at(scene: Scene, scale: f32, keeper: Keeper) 
             assert_covers(&label, damage, before, &frame.direct);
         }
         let damaged = match damage {
-            FrameDamage::Rect { width, height, .. } => u64::from(width * height),
+            FrameDamage::Part(rects) => rects.pixels(),
             _ => whole,
         };
         match keeper {
@@ -768,15 +802,9 @@ fn assert_damage_holds_the_changes_at(scene: Scene, scale: f32, keeper: Keeper) 
         if before.is_some() {
             if step == 0 {
                 // Until the target compares, a frame draws whole.
-                if matches!(damage, FrameDamage::Rect { .. }) {
-                    assert_eq!(
-                        damage,
-                        FrameDamage::Rect {
-                            x: 0,
-                            y: 0,
-                            width: 0,
-                            height: 0
-                        },
+                if matches!(damage, FrameDamage::Part(_)) {
+                    assert!(
+                        no_damage(damage),
                         "{label}: a frame that changes nothing reports no damage"
                     );
                     still_compared += 1;
@@ -934,6 +962,87 @@ fn a_small_endless_animation_turned_by_its_layer_repaints_only_its_area() {
     assert_spinner_repaints_only_itself(Scene::TurnedSpinner);
 }
 
+/// Two small animations far apart, a spinner at the top and a caret at the
+/// bottom, draw only their own parts of the window, in a rect each, with
+/// few draws and no glass for the panes between them, and every frame
+/// equals the whole frame.
+#[test]
+fn two_small_animations_far_apart_repaint_only_their_areas() {
+    const PARTIAL_FRAMES: u32 = 30;
+    let changing = (SPINNER[2] * SPINNER[3] + CARET[2] * CARET[3]) as u64;
+    for keeper in KEEPERS {
+        let Some((_lock, renderer)) = renderer() else {
+            return;
+        };
+        let mut harness = Harness::new(renderer, Scene::SpinnerAndCaret, 1.0, keeper);
+        let start = keeper.start_frames();
+        let mut whole_draws = 0;
+        for step in 0..start + PARTIAL_FRAMES {
+            let frame = harness.frame(step);
+            let stats = frame.stats;
+            let label = format!("{keeper:?} frame {step}: {stats:?}");
+            support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+            if step < start {
+                whole_draws = stats.draw_calls;
+                continue;
+            }
+            assert!(
+                stats.draw_calls * 10 < whole_draws,
+                "{label}: {} draws against {whole_draws} for the whole window",
+                stats.draw_calls
+            );
+            assert_eq!(
+                (stats.shader_pixels, stats.blur_pixels),
+                (0, 0),
+                "{label}: the glass between the two must not shade again"
+            );
+            let FrameDamage::Part(rects) = stats.damage else {
+                panic!("{label}: two small changes report rects");
+            };
+            assert_eq!(rects.rects().len(), 2, "{label}: a rect for each change");
+            assert!(
+                stats.repainted_pixels <= 4 * changing,
+                "{label}: {} pixels drawn again for {changing} that change",
+                stats.repainted_pixels
+            );
+        }
+    }
+}
+
+/// Five small changes far apart, one more than the rects a frame's damage
+/// keeps apart, draw in four rects, the two that join with the fewest
+/// pixels sharing one, and every frame equals the whole frame.
+#[test]
+fn five_small_changes_far_apart_draw_in_four_rects() {
+    let Some((_lock, renderer)) = renderer() else {
+        return;
+    };
+    let mut harness = Harness::new(renderer, Scene::FiveSpots, 1.0, Keeper::Composition);
+    let mut before: Option<Vec<u8>> = None;
+    for step in 0..START_FRAMES + 6 {
+        let frame = harness.frame(step);
+        let stats = frame.stats;
+        let label = format!("frame {step}: {stats:?}");
+        support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
+        if step >= START_FRAMES {
+            let FrameDamage::Part(rects) = stats.damage else {
+                panic!("{label}: five small changes report rects");
+            };
+            assert_eq!(rects.rects().len(), 4, "{label}");
+            if let Some(before) = &before {
+                assert_covers(&label, stats.damage, before, &frame.direct);
+            }
+            // The two top spots share a rect as wide as the window.
+            assert!(
+                stats.repainted_pixels < u64::from(WIDTH) * 40,
+                "{label}: {} pixels",
+                stats.repainted_pixels
+            );
+        }
+        before = Some(frame.direct);
+    }
+}
+
 /// A page that moves for long enough that its target stops summarizing for
 /// a while, and lets its summaries go, and then holds still: once it
 /// summarizes again a frame reports no damage, and every frame equals the
@@ -953,20 +1062,14 @@ fn a_page_holding_still_after_moving_for_long_reports_its_damage_again() {
             let frame = harness.frame(step);
             let label = format!("{keeper:?} frame {index}: {:?}", frame.stats);
             support::assert_same_bytes(&label, WIDTH, &frame.kept, &frame.direct);
-            if index > MOVING && matches!(frame.stats.damage, FrameDamage::Rect { .. }) {
+            if index > MOVING && matches!(frame.stats.damage, FrameDamage::Part(_)) {
                 still_damage = Some(frame.stats.damage);
                 break;
             }
         }
-        assert_eq!(
-            still_damage,
-            Some(FrameDamage::Rect {
-                x: 0,
-                y: 0,
-                width: 0,
-                height: 0
-            }),
-            "{keeper:?}: a still frame after the page moved reports no damage"
+        assert!(
+            still_damage.is_some_and(no_damage),
+            "{keeper:?}: a still frame after the page moved reports no damage, not {still_damage:?}"
         );
     }
 }
@@ -1296,15 +1399,9 @@ fn an_overlay_appearing_and_going() {
         before = whole;
     }
     let (damage, drawn, whole) = overlay_frame(&mut renderer, &images, None, Color::WHITE);
-    assert_eq!(
-        damage,
-        FrameDamage::Rect {
-            x: 0,
-            y: 0,
-            width: 0,
-            height: 0
-        },
-        "a frame that changes nothing reports no damage"
+    assert!(
+        no_damage(damage),
+        "a frame that changes nothing reports no damage, not {damage:?}"
     );
     support::assert_same_bytes("still frame", WIDTH, &drawn, &whole);
 }
