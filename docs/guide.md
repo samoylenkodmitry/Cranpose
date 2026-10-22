@@ -3550,6 +3550,9 @@ the editor supplies hit tests, selection ranges and clipboard actions.
 #### SelectionLoupe
 
 Show a magnifier above the active text line. Pass `None` after the drag ends.
+The magnifier stays inside its `PopupHost` window. It slides along a side edge,
+sits below the line when the window has more room there than above, and shrinks
+when the window is smaller than the magnifier.
 
 ```rust
 SelectionLoupe(Some(LoupeTarget {
