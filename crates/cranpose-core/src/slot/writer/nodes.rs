@@ -1,24 +1,11 @@
 use std::ops::ControlFlow;
 
-use super::super::{NodeRecord, NodeSlotUpdate, RootNodeIds, SlotTable, SlotWriteSession};
+use super::super::{
+    GroupRecord, NodeRecord, NodeSlotUpdate, RootNodeIds, SlotTable, SlotWriteSession,
+};
 use crate::NodeId;
 
 impl SlotTable {
-    fn subtree_node_records_at(&self, group_index: usize) -> &[NodeRecord] {
-        let records = self.groups.get(group_index).and_then(|group| {
-            let start = group.node_start as usize;
-            start
-                .checked_add(group.subtree_node_count as usize)
-                .and_then(|end| self.nodes.get(start..end))
-        });
-        records.unwrap_or_else(|| {
-            log::error!(
-                "slot table ignored root-node collection past node storage at group index {group_index}"
-            );
-            &[]
-        })
-    }
-
     pub(in crate::slot) fn subtree_root_node_ids_at(&self, group_index: usize) -> RootNodeIds {
         let mut roots = RootNodeIds::new();
         self.for_each_subtree_root_node_id_at(group_index, |id| roots.push(id));
@@ -33,45 +20,69 @@ impl SlotTable {
         group_index: usize,
         mut f: impl FnMut(NodeId),
     ) {
-        let _ = self.try_for_each_subtree_root_node_id_at(group_index, |id| {
+        let Some(parent) = self
+            .subtree_first_record_at(group_index)
+            .map(|first| first.parent_id)
+        else {
+            return;
+        };
+        #[cfg(any(test, debug_assertions))]
+        self.debug_assert_roots_in_emission_order(group_index, parent);
+        let _ = self.try_for_each_root_in(group_index, parent, &mut |id| {
             f(id);
             ControlFlow::<()>::Continue(())
         });
     }
 
+    /// The root node the subtree at `group_index` emitted first.
     pub(in crate::slot) fn first_subtree_root_node_id_at(
         &self,
         group_index: usize,
     ) -> Option<NodeId> {
-        self.try_for_each_subtree_root_node_id_at(group_index, ControlFlow::Break)
-            .break_value()
-    }
-
-    fn try_for_each_subtree_root_node_id_at<B>(
-        &self,
-        group_index: usize,
-        mut f: impl FnMut(NodeId) -> ControlFlow<B>,
-    ) -> ControlFlow<B> {
-        let records = self.subtree_node_records_at(group_index);
-        let Some(parent) = records.first().map(|record| record.parent_id) else {
-            return ControlFlow::Continue(());
+        let first = self.subtree_first_record_at(group_index)?;
+        // The subtree's first record is a root. The groups above its own
+        // group hold no records, so it is the first one emitted unless its
+        // group composed a child group before it.
+        let found = if first.child_groups_before == 0 {
+            Some(first.id)
+        } else {
+            self.try_for_each_root_in(group_index, first.parent_id, &mut ControlFlow::Break)
+                .break_value()
         };
         #[cfg(any(test, debug_assertions))]
         if crate::slot_validation_diagnostics_enabled() {
-            let mut emitted = Vec::new();
-            let _ = self.try_for_each_root_in(group_index, parent, &mut |id| {
-                emitted.push(id);
-                ControlFlow::<()>::Continue(())
-            });
-            let mut stored: Vec<_> = super::super::types::root_node_ids(records).collect();
-            emitted.sort_unstable();
-            stored.sort_unstable();
             assert_eq!(
-                emitted, stored,
-                "the roots found in emission order must be the subtree's root records"
+                found,
+                self.try_for_each_root_in(group_index, first.parent_id, &mut ControlFlow::Break)
+                    .break_value(),
+                "the first root must be the first one the subtree emitted"
             );
         }
-        self.try_for_each_root_in(group_index, parent, &mut f)
+        found
+    }
+
+    /// The subtree's first record, whose parent all its roots share. `None`
+    /// when the subtree holds no nodes.
+    fn subtree_first_record_at(&self, group_index: usize) -> Option<&NodeRecord> {
+        let group = self.groups.get(group_index)?;
+        if group.subtree_node_count == 0 {
+            return None;
+        }
+        let first = self.nodes.get(group.node_start as usize);
+        if first.is_none() {
+            log::error!(
+                "slot table ignored root-node collection past node storage at group index {group_index}"
+            );
+        }
+        first
+    }
+
+    fn own_node_records(&self, group: &GroupRecord) -> &[NodeRecord] {
+        let start = group.node_start as usize;
+        start
+            .checked_add(group.node_len as usize)
+            .and_then(|end| self.nodes.get(start..end))
+            .unwrap_or_default()
     }
 
     /// Visits the records of the subtree at `group_index` whose parent is
@@ -88,44 +99,76 @@ impl SlotTable {
         let Some(group) = self.groups.get(group_index) else {
             return ControlFlow::Continue(());
         };
-        let mut own = self.group_node_records_at(group_index).iter().peekable();
+        let own = self.own_node_records(group);
         let mut child_nodes = group.subtree_node_count.saturating_sub(group.node_len);
-        let end = group_index.saturating_add(group.subtree_len as usize);
-        let mut child_index = group_index + 1;
-        let mut children_before = 0;
-        while child_nodes > 0 && child_index < end {
-            while let Some(record) =
-                own.next_if(|record| record.child_groups_before <= children_before)
-            {
-                if record.parent_id == parent {
-                    f(record.id)?;
+        let mut next_own = 0;
+        if child_nodes > 0 {
+            let end = group_index.saturating_add(group.subtree_len as usize);
+            let mut child_index = group_index + 1;
+            let mut children_before = 0;
+            while child_nodes > 0 && child_index < end {
+                while let Some(record) = own
+                    .get(next_own)
+                    .filter(|record| record.child_groups_before <= children_before)
+                {
+                    if record.parent_id == parent {
+                        f(record.id)?;
+                    }
+                    next_own += 1;
                 }
-            }
-            let Some(child) = self.groups.get(child_index) else {
-                log::error!(
-                    "slot table stopped root-node collection at missing child group index {child_index}"
-                );
-                break;
-            };
-            if child.subtree_node_count > 0 {
-                let first_parent = self
-                    .nodes
-                    .get(child.node_start as usize)
-                    .map(|record| record.parent_id);
-                if first_parent == Some(parent) {
-                    self.try_for_each_root_in(child_index, parent, f)?;
+                let Some(child) = self.groups.get(child_index) else {
+                    log::error!(
+                        "slot table stopped root-node collection at missing child group index {child_index}"
+                    );
+                    break;
+                };
+                if child.subtree_node_count > 0 {
+                    let first_parent = self
+                        .nodes
+                        .get(child.node_start as usize)
+                        .map(|record| record.parent_id);
+                    if first_parent == Some(parent) {
+                        self.try_for_each_root_in(child_index, parent, f)?;
+                    }
+                    child_nodes = child_nodes.saturating_sub(child.subtree_node_count);
                 }
-                child_nodes = child_nodes.saturating_sub(child.subtree_node_count);
+                children_before += 1;
+                child_index += (child.subtree_len as usize).max(1);
             }
-            children_before += 1;
-            child_index += (child.subtree_len as usize).max(1);
         }
-        for record in own {
+        for record in &own[next_own..] {
             if record.parent_id == parent {
                 f(record.id)?;
             }
         }
         ControlFlow::Continue(())
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    fn debug_assert_roots_in_emission_order(&self, group_index: usize, parent: Option<NodeId>) {
+        if !crate::slot_validation_diagnostics_enabled() {
+            return;
+        }
+        let Some(group) = self.groups.get(group_index) else {
+            return;
+        };
+        let start = group.node_start as usize;
+        let records = start
+            .checked_add(group.subtree_node_count as usize)
+            .and_then(|end| self.nodes.get(start..end))
+            .unwrap_or_default();
+        let mut emitted = Vec::new();
+        let _ = self.try_for_each_root_in(group_index, parent, &mut |id| {
+            emitted.push(id);
+            ControlFlow::<()>::Continue(())
+        });
+        let mut stored: Vec<_> = super::super::types::root_node_ids(records).collect();
+        emitted.sort_unstable();
+        stored.sort_unstable();
+        assert_eq!(
+            emitted, stored,
+            "the roots found in emission order must be the subtree's root records"
+        );
     }
 }
 
