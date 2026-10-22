@@ -824,6 +824,7 @@ pub async fn run(
             render_loop: &render_loop_for_deadline,
         };
         let schedule = app.borrow().schedule_platform_frame(&frame_driver);
+        release_kept_copy_when_idle(&app, schedule);
         frame_driver.also_wake_at(schedule, accessibility.borrow().sync_wake());
         idle_prefetch.queue_after_frame(frame_started_at);
     }) as Box<dyn FnMut()>));
@@ -987,6 +988,14 @@ pub(crate) async fn open_device(
         .await
         .map_err(|e| format!("failed to create device: {e:?}"))?;
     Ok((adapter, device, queue))
+}
+
+/// Once the app holds still, the copy of the frame the renderer may keep for
+/// the canvas goes until frames change again.
+fn release_kept_copy_when_idle(app: &RefCell<AppShell<WgpuRenderer>>, schedule: FrameSchedule) {
+    if schedule.is_idle() {
+        app.borrow_mut().renderer().release_kept_copy();
+    }
 }
 
 fn request_animation_frame(window: &web_sys::Window, f: &Closure<dyn FnMut()>) -> bool {

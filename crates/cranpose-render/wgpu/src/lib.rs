@@ -583,7 +583,7 @@ impl WgpuRenderer {
         width: u32,
         height: u32,
     ) -> Result<(), WgpuRendererError> {
-        self.render_frame(texture, view, width, height, None)
+        self.render_frame(texture, view, width, height, frame::ImageContent::Untracked)
     }
 
     /// Renders the frame into a surface's presentable image `frame`, through
@@ -591,7 +591,11 @@ impl WgpuRenderer {
     /// usages, the scene renders into it directly and no output conversion
     /// pass runs. When the surface hands the image back with the frame it
     /// last presented (`wgpu::Surface::keep_presented_images`), the frame
-    /// draws only what changed since that frame.
+    /// draws only what changed since that frame. When the surface hands its
+    /// images out cleared, as a WebGPU canvas does, and the frames change a
+    /// small part of a window drawn over more than twice, the renderer keeps
+    /// the frame in a texture of its own, draws only what changed there and
+    /// copies it into the image; see [`release_kept_copy`](Self::release_kept_copy).
     pub fn render_surface_texture(
         &mut self,
         frame: &wgpu::SurfaceTexture,
@@ -599,7 +603,7 @@ impl WgpuRenderer {
         width: u32,
         height: u32,
     ) -> Result<(), WgpuRendererError> {
-        let image = frame::PresentedImage::of(frame);
+        let image = frame::ImageContent::of(frame);
         self.render_frame(&frame.texture, view, width, height, image)
     }
 
@@ -633,8 +637,36 @@ impl WgpuRenderer {
             view,
             texture.width(),
             texture.height(),
-            Some(image),
+            frame::ImageContent::Numbered(image),
         )
+    }
+
+    /// Draws an image the way a surface that hands out its images cleared,
+    /// as a WebGPU canvas does, has it drawn.
+    #[doc(hidden)]
+    pub fn render_cleared_image_for_tests(
+        &mut self,
+        texture: &wgpu::Texture,
+        view: &wgpu::TextureView,
+    ) -> Result<(), WgpuRendererError> {
+        self.render_frame(
+            texture,
+            view,
+            texture.width(),
+            texture.height(),
+            frame::ImageContent::Cleared,
+        )
+    }
+
+    /// Lets go of the texture that keeps the last frame for a surface whose
+    /// images come cleared (see
+    /// [`render_surface_texture`](Self::render_surface_texture)), a window of
+    /// memory. A runtime calls it once its app holds still; the next frame
+    /// draws whole.
+    pub fn release_kept_copy(&mut self) {
+        if let PresentBackend::Sync(gpu_renderer) = &mut self.backend {
+            gpu_renderer.release_kept_copy();
+        }
     }
 
     fn render_frame(
@@ -643,7 +675,7 @@ impl WgpuRenderer {
         view: &wgpu::TextureView,
         width: u32,
         height: u32,
-        image: Option<frame::PresentedImage>,
+        image: frame::ImageContent,
     ) -> Result<(), WgpuRendererError> {
         let PresentBackend::Sync(gpu_renderer) = &mut self.backend else {
             return Err(WgpuRendererError::Wgpu(
@@ -1218,7 +1250,7 @@ impl WgpuRenderer {
             packet.0,
             self.surface_epoch,
             &mut returns,
-            None,
+            frame::ImageContent::Untracked,
         );
         let outcome = returns.outcome;
         self.frontend.apply_returns(returns);
