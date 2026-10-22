@@ -194,3 +194,37 @@ fn scrolling_from_a_floating_button_cancels_its_activation() {
     assert!(after.y < before.y - 20.0, "the parent must actually scroll");
     assert_eq!(clicks.get(), 0);
 }
+
+#[test]
+fn a_floating_button_in_a_dialog_activates_on_a_tap() {
+    use cranpose_ui::widgets::{Dialog, DialogSpec};
+
+    let clicks = Rc::new(Cell::new(0));
+    let recorded = Rc::clone(&clicks);
+    let mut robot = create_headless_robot_test(400, 300, move || {
+        let recorded = Rc::clone(&recorded);
+        LiquidTheme(LiquidThemeSpec::default(), move || {
+            let recorded = Rc::clone(&recorded);
+            Dialog(
+                DialogSpec::default(),
+                |_| {},
+                move || {
+                    let recorded = Rc::clone(&recorded);
+                    GlassButton(
+                        Modifier::empty().size_points(100.0, 44.0),
+                        GlassButtonSpec::glass(),
+                        move || recorded.set(recorded.get() + 1),
+                        || GlassButtonLabel("Continue".into(), GlassButtonSpec::glass()),
+                    );
+                },
+            );
+        });
+    });
+    robot.wait_for_idle();
+    // The dialog's surface takes the taps off the scrim behind it; that
+    // must not cancel the button's own press.
+    robot.mouse_move(200.0, 150.0);
+    robot.mouse_down();
+    robot.mouse_up();
+    assert_eq!(clicks.get(), 1);
+}
