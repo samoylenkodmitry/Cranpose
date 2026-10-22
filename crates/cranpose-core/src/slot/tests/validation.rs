@@ -1203,6 +1203,7 @@ fn validate_reports_duplicate_node_id_structurally() {
         generation: 2,
         source: crate::slot::BRANCH_PATH_ROOT,
         lifecycle: super::NodeLifecycle::Active,
+        child_groups_before: 0,
     });
     table.groups[0].node_len = 2;
     table.groups[0].subtree_node_count = 2;
@@ -1275,6 +1276,7 @@ fn validate_reports_node_count_mismatch_structurally() {
         generation: 1,
         source: crate::slot::BRANCH_PATH_ROOT,
         lifecycle: super::NodeLifecycle::Active,
+        child_groups_before: 0,
     });
 
     assert_eq!(

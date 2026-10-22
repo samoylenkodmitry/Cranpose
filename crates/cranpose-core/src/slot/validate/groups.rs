@@ -188,6 +188,19 @@ impl SlotTreeView<'_> {
             node_id,
         }
     }
+
+    pub(super) fn node_order_mismatch(
+        &self,
+        node: &NodeRecord,
+        previous_child_groups_before: u32,
+    ) -> SlotInvariantError {
+        SlotInvariantError::NodeOrderMismatch {
+            tree: self.tree,
+            node_id: node.id,
+            child_groups_before: node.child_groups_before,
+            previous_child_groups_before,
+        }
+    }
 }
 
 impl SlotTreeChecks for ActiveSlotTreeChecks<'_> {

@@ -59,6 +59,7 @@ fn immediate_detached_subtree_disposal_propagates_remove_failure() {
             generation: 0,
             source: crate::slot::BRANCH_PATH_ROOT,
             lifecycle: NodeLifecycle::RetainedDetached,
+            child_groups_before: 0,
         }],
     };
     let mut applier = RemoveFailingApplier;
@@ -99,6 +100,7 @@ fn detached_subtree_root_node_metadata_falls_back_to_all_nodes() {
             generation: 0,
             source: crate::slot::BRANCH_PATH_ROOT,
             lifecycle: NodeLifecycle::RetainedDetached,
+            child_groups_before: 0,
         }],
     };
     let mut root_nodes = Vec::new();

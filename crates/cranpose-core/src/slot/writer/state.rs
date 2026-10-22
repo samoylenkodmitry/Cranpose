@@ -213,8 +213,20 @@ impl SlotWriteSessionState {
     pub(in crate::slot) fn advance_parent_after_child(&mut self, subtree_end: usize) {
         if let Some(parent) = self.group_stack.last_mut() {
             parent.next_child_index = subtree_end;
+            parent.ended_children = parent.ended_children.saturating_add(1);
         } else {
             self.root.next_child_index = subtree_end;
+        }
+    }
+
+    /// Moves the parent's child cursor back to `first_child`, the start of
+    /// its children.
+    pub(in crate::slot) fn restart_parent_children(&mut self, first_child: usize) {
+        if let Some(parent) = self.group_stack.last_mut() {
+            parent.next_child_index = first_child;
+            parent.ended_children = 0;
+        } else {
+            self.root.next_child_index = first_child;
         }
     }
 

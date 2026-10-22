@@ -1,7 +1,8 @@
 //! `Box`, `Row` and `Column` compose in their caller's group, as Compose's
 //! inline widgets do. The node tree stays as the code nests them while a
 //! composable around them skips, and a loop of them that shrinks and grows
-//! again keeps the nodes and remembered values of the items that stay.
+//! again keeps the nodes and remembered values of the items that stay. A
+//! composable that skips keeps its nodes in the order it emitted them.
 
 use std::{
     cell::{Cell, RefCell},
@@ -19,6 +20,10 @@ thread_local! {
     /// The outer box, inner box and text the last `Card` pass composed.
     static CARD: Cell<Option<(NodeId, NodeId, NodeId)>> = const { Cell::new(None) };
     static CARD_PASSES: Cell<usize> = const { Cell::new(0) };
+    /// The boxes the last `Wheel` and `Surfaces` passes composed.
+    static WHEEL: Cell<Option<NodeId>> = const { Cell::new(None) };
+    static READER: Cell<Option<NodeId>> = const { Cell::new(None) };
+    static SURFACES_PASSES: Cell<usize> = const { Cell::new(0) };
 }
 
 #[composable]
@@ -41,6 +46,21 @@ fn Card(label: String) {
     });
     let (inner, text) = nested.get().expect("the card composed its inner box");
     CARD.with(|card| card.set(Some((outer, inner, text))));
+}
+
+#[composable]
+fn Wheel() {
+    let wheel = Box(Modifier::empty(), BoxSpec::default(), || {});
+    WHEEL.with(|cell| cell.set(Some(wheel)));
+}
+
+/// A node from a child composable, then a node of its own.
+#[composable]
+fn Surfaces() {
+    SURFACES_PASSES.with(|passes| passes.set(passes.get() + 1));
+    Wheel();
+    let reader = Box(Modifier::empty(), BoxSpec::default(), || {});
+    READER.with(|cell| cell.set(Some(reader)));
 }
 
 fn children(composition: &mut TestComposition, id: NodeId) -> Vec<NodeId> {
@@ -147,5 +167,45 @@ fn a_loop_of_inline_widgets_keeps_the_items_that_stay_as_it_shrinks_and_grows() 
         *items.borrow(),
         [(0, 0), (1, 0), (2, 2)],
         "the items that stayed keep their values; the new one makes its own"
+    );
+}
+
+#[test]
+fn a_skipped_composable_keeps_a_child_composables_node_ahead_of_its_own_later_node() {
+    let count: Captured<u32> = Rc::default();
+    let captured = Rc::clone(&count);
+    let mut composition = run_test_composition(move || {
+        let state = rememberMutableStateOf(|| 0u32);
+        *captured.borrow_mut() = Some(state);
+        Box(Modifier::empty(), BoxSpec::default(), move || {
+            Surfaces();
+            Text(
+                format!("Count {}", state.value()),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+        });
+    });
+    let root = composition.root().expect("the box is the root");
+    let wheel = WHEEL.with(Cell::get).expect("the wheel composed");
+    let reader = READER.with(Cell::get).expect("the reader composed");
+    let first = children(&mut composition, root);
+    assert_eq!(first[..2], [wheel, reader]);
+    let passes = SURFACES_PASSES.with(Cell::get);
+
+    set(&count, 1);
+    composition
+        .process_invalid_scopes()
+        .expect("the box recomposes");
+
+    assert_eq!(
+        SURFACES_PASSES.with(Cell::get),
+        passes,
+        "the surfaces take no arguments, so they skip"
+    );
+    assert_eq!(
+        children(&mut composition, root),
+        first,
+        "the wheel stays below the reader, as the surfaces emitted them"
     );
 }

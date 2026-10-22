@@ -16,6 +16,8 @@ pub(in crate::slot) struct GroupFrame {
     /// so this stays the group's index while the frame is open.
     pub(in crate::slot) group_index: usize,
     pub(in crate::slot) next_child_index: usize,
+    /// How many direct child groups the frame's body has ended so far.
+    pub(in crate::slot) ended_children: u32,
     pub(in crate::slot) payload_cursor: usize,
     pub(in crate::slot) old_payload_len: usize,
     pub(in crate::slot) node_cursor: usize,
@@ -108,6 +110,7 @@ impl Default for GroupFrame {
             group_anchor: AnchorId::INVALID,
             group_index: 0,
             next_child_index: 0,
+            ended_children: 0,
             payload_cursor: 0,
             old_payload_len: 0,
             node_cursor: 0,
@@ -132,6 +135,7 @@ impl GroupFrame {
         self.group_anchor = anchor;
         self.group_index = group_index;
         self.next_child_index = group_index + 1;
+        self.ended_children = 0;
         self.payload_cursor = 0;
         self.old_payload_len = old_payload_len;
         self.node_cursor = 0;
