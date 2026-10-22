@@ -117,15 +117,14 @@ jobs:
           pkg-config --exists wayland-client xkbcommon x11 xrandr xcursor xi gl
 
       # Size-minimized distribution build (nightly build-std + abort panics;
-      # see docs/binary_size.md). xtask picks per-OS linker flags.
+      # see docs/binary_size.md). xtask picks per-OS linker flags. The demo's
+      # default features include HTTP, which its network pages need.
       - name: Build desktop (dist-min)
         run: >
           cargo run -p xtask -- dist-min
           --package desktop-app
           --bin desktop-app
           --target ${{ matrix.target }}
-          --features desktop,renderer-wgpu
-          --no-default-features
 
       - name: Package macOS .app bundle
         if: runner.os == 'macOS'
@@ -207,8 +206,6 @@ jobs:
           --bin desktop-app
           --profile release-small
           --target x86_64-pc-windows-msvc
-          --features desktop,renderer-wgpu
-          --no-default-features
 
       - name: Package Windows binary
         run: >
