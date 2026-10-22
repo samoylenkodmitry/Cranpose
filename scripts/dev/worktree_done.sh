@@ -144,12 +144,14 @@ if [ "$fetch" -eq 1 ]; then
     done
 fi
 head="$(git -C "$path" rev-parse HEAD)"
-# The remote-tracking refs that hold a commit, their symbolic HEADs aside.
-remote_refs_holding() {
+# The first remote-tracking ref that holds a commit, symbolic HEADs aside. awk
+# reads every ref: a reader that stops early would end git with SIGPIPE, which
+# pipefail makes the script's exit once many remote branches hold the commit.
+remote_ref_holding() {
     git -C "$1" for-each-ref --contains "$2" --format='%(refname)' refs/remotes \
-        | awk '!/\/HEAD$/ { sub(/^refs\/remotes\//, ""); print }'
+        | awk '!/\/HEAD$/ && !found { sub(/^refs\/remotes\//, ""); print; found = 1 }'
 }
-held_by="$(remote_refs_holding "$path" "$head" | head -1)"
+held_by="$(remote_ref_holding "$path" "$head")"
 [ -n "$held_by" ] || refuse "commit $(git -C "$path" rev-parse --short HEAD) is on no remote; push it first"
 
 branch="$(git -C "$path" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
@@ -169,7 +171,7 @@ echo "removed worktree $path (HEAD is on $held_by)"
 # covered HEAD, and the branch is HEAD's, so this cannot lose a commit.
 if [ -n "$branch" ] && git -C "$repo" show-ref --verify --quiet "refs/heads/$branch"; then
     tip="$(git -C "$repo" rev-parse "refs/heads/$branch")"
-    if [ -n "$(remote_refs_holding "$repo" "$tip" | head -1)" ]; then
+    if [ -n "$(remote_ref_holding "$repo" "$tip")" ]; then
         git -C "$repo" branch -D "$branch" >/dev/null
         echo "deleted local branch $branch"
     fi
