@@ -11,6 +11,13 @@ Signed versions awaiting Marketplace review are also available from
 [GitHub Releases](https://github.com/samoylenkodmitry/cranpose-idea/releases) and
 can be installed with **Settings → Plugins → Install Plugin from Disk**.
 
+## Build previews on Windows
+
+The IDE builds the preview with Cargo. A Windows x64 PC needs the MSVC C++ build
+tools, a Windows SDK and **C++ ATL for x64/x86 (Latest MSVC)**; see
+[Windows build tools](guide.md#windows-build-tools). The plugin checks these
+components before a Windows preview build and offers to install the missing ones.
+
 ## Register component previews
 
 Enable the `cranpose/preview` feature alongside your desktop features. Add a
