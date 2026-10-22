@@ -68,9 +68,8 @@ categories = ["gui"]
 # lock-based fallback on 32-bit microcontrollers such as the ESP32-S3.
 portable-atomic = { version = "1.15", features = ["fallback"] }
 cranpose-localization = { path = "crates/cranpose-localization", version = "0.15.0" }
-# Cranpose's patched wgpu (forks/README.md), which the web, Android and iOS
-# take. Its library is still `wgpu`. Desktop builds take wgpu 30.0.1 from
-# crates.io, which each crate names in its desktop target tables.
+# Cranpose's patched wgpu (forks/README.md), which every target takes. Its
+# library is still `wgpu`.
 wgpu = { package = "cranpose-wgpu", version = "30.0.22", default-features = false }
 # Force android-activity to use native-activity feature across all workspace crates
 android-activity = { version = "0.6", features = ["native-activity"] }
@@ -167,9 +166,8 @@ needless_raw_string_hashes = "warn"
 elidable_lifetime_names = "warn"
 manual_assert = "warn"
 
-# The workspace builds the fork from forks/. Crates name it by version, as
-# their desktop tables name upstream wgpu: Cargo wants one source for a
-# dependency on every target.
+# The workspace builds the fork from forks/. Crates name it by version, so a
+# published crate takes the same fork from crates.io.
 [patch.crates-io]
 cranpose-wgpu = { path = "forks/wgpu/wgpu" }
 
@@ -193,14 +191,7 @@ opt-level = 3
 # these are the crates that run per frame or per asset, not per build. They are
 # third-party and rebuilt rarely, so optimising them costs one compile and buys
 # every subsequent run. The workspace's own crates stay unoptimised so stepping
-# through them still works. wgpu is upstream's on desktop and Cranpose's fork
-# of it elsewhere (forks/README.md).
-[profile.dev.package.wgpu]
-opt-level = 3
-[profile.dev.package.wgpu-core]
-opt-level = 3
-[profile.dev.package.wgpu-hal]
-opt-level = 3
+# through them still works. wgpu is Cranpose's fork of it (forks/README.md).
 [profile.dev.package.cranpose-wgpu]
 opt-level = 3
 [profile.dev.package.cranpose-wgpu-core]

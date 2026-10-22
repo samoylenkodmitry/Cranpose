@@ -13,10 +13,11 @@ patch version, up to the workspace's `wgpu` requirement, so a build that
 updates Cranpose cannot keep the old crate in its lockfile. The repository's
 formatting, spelling and diff gates skip the forks.
 
-The web, Android and iOS build with the wgpu fork. macOS, Windows and Linux
-take wgpu from crates.io, so a desktop game engine on upstream wgpu, such as
-Bevy, shares one wgpu with Cranpose without a patch. A change that only
-those desktop targets would compile does not belong here.
+Every target builds with the wgpu fork: one wgpu, with the same fixes, on
+Android, iOS, watchOS, macOS, Windows, Linux and the web. A game engine that
+shares Cranpose's device, such as Bevy, takes the fork too through a
+`[patch.crates-io]` of `wgpu` in the app's workspace. A patch stays only
+while it gains enough to justify the fork; each one is offered upstream.
 
 ## wgpu 30.0.1
 

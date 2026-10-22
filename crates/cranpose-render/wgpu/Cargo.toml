@@ -54,11 +54,10 @@ smallvec = "1.16.3"
 # not express soundly).
 rayon = "1.12"
 
-# Desktop builds take wgpu from crates.io. The web, Android and iOS take
-# Cranpose's fork of it (`wgpu` in the workspace, forks/README.md), whose
-# library is also `wgpu`.
+# Every target takes Cranpose's fork of wgpu (`wgpu` in the workspace,
+# forks/README.md), whose library is also `wgpu`, with its backends.
 [target.'cfg(all(target_os = "linux", not(target_arch = "wasm32")))'.dependencies]
-wgpu = { version = "30.0.1", default-features = false, features = [
+wgpu = { workspace = true, features = [
     "std",
     "parking_lot",
     "vulkan",
@@ -74,7 +73,7 @@ wgpu = { version = "30.0.1", default-features = false, features = [
 rustix = { version = "1.1", features = ["thread"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-wgpu = { version = "30.0.1", default-features = false, features = [
+wgpu = { workspace = true, features = [
     "std",
     "parking_lot",
     "dx12",
@@ -86,7 +85,7 @@ wgpu = { version = "30.0.1", default-features = false, features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-wgpu = { version = "30.0.1", default-features = false, features = [
+wgpu = { workspace = true, features = [
     "std",
     "parking_lot",
     "metal",
@@ -97,7 +96,7 @@ wgpu = { version = "30.0.1", default-features = false, features = [
 ] }
 
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios", target_os = "linux", target_os = "windows", target_os = "macos")))'.dependencies]
-wgpu = { version = "30.0.1", default-features = false, features = [
+wgpu = { workspace = true, features = [
     "std",
     "parking_lot",
     "vulkan",

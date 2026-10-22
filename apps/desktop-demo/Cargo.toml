@@ -99,12 +99,7 @@ cranpose-navigation = { path = "../../crates/cranpose-navigation" }
 cranpose-testing = { path = "../../crates/cranpose-testing", features = ["desktop-robot"] }
 pollster = "0.4.0"
 
-# The wgpu the renderer takes on each target (`cranpose-render-wgpu`).
-[target.'cfg(any(target_arch = "wasm32", target_os = "android", target_os = "ios"))'.dev-dependencies]
 wgpu = { workspace = true }
-
-[target.'cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))'.dev-dependencies]
-wgpu = { version = "30.0.1", default-features = false }
 
 # Robot test runners
 [[example]]
