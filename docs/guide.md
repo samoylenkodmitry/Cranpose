@@ -107,6 +107,9 @@ components** and tick **C++ ATL for x64/x86 (Latest MSVC)**.
 
 To build a Windows binary on macOS or Linux with cargo-xwin, set
 `XWIN_INCLUDE_ATL=true` in the environment. The linker needs `atls.lib` there too.
+cargo-xwin adds ATL only to a new cache, so also point `XWIN_CACHE_DIR` at a new
+directory if an earlier build filled the default one. `cranpose-build` sets both
+for its Windows builds.
 
 ### Preview in the IDE
 
