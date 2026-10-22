@@ -22,6 +22,8 @@ use objc2_foundation::{NSDictionary, NSString, NSURL};
 #[cfg(target_os = "ios")]
 use objc2_ui_kit::{UIApplication, UIApplicationOpenSettingsURLString};
 
+use crate::apple_audio_session;
+
 pub(crate) fn register() {
     set_platform_microphone_access(Some(Arc::new(AppleMicrophone)));
 }
@@ -103,9 +105,13 @@ impl MicrophoneAccess for AppleMicrophone {
             session
                 .setCategory_mode_options_error(category, mode, options)
                 .map_err(|error| format!("audio session category: {error}"))?;
-            session
-                .setActive_error(true)
-                .map_err(|error| format!("audio session: {error}"))
+        }
+        apple_audio_session::hold_for_recording(true)
+    }
+
+    fn finish_recording(&self) {
+        if let Err(error) = apple_audio_session::hold_for_recording(false) {
+            log::warn!("cranpose: releasing the recording {error}");
         }
     }
 }
