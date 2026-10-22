@@ -21,6 +21,15 @@
 //! Visibility (also from the recording): the loupe shows only while the
 //! finger covers the text line — dragging a handle by its dot below the line
 //! rises for every handle interaction (see [`loupe_target_for_drag`]).
+//!
+//! Window bounds: the bubble is never drawn outside the window of the
+//! enclosing [`PopupHost`](crate::widgets::popup::PopupHost), the way Android's
+//! Magnifier keeps itself on the surface. It slides along the window edge
+//! when the finger is near a side, drops below the line when the window has
+//! no room above it, and shrinks when the window is smaller than the bubble.
+//! The lens keeps magnifying the grabbed line at the finger x in every case;
+//! only the focus offset changes. A window with room shows the bubble exactly
+//! as before.
 
 use std::{
     cell::{Cell, RefCell},
@@ -39,7 +48,7 @@ use crate::{
     modifier::Modifier,
     widgets::{
         box_widget::{Box, BoxSpec},
-        popup::Popup,
+        popup::{Popup, local_popup_viewport},
     },
 };
 
@@ -125,6 +134,78 @@ fn loupe_pose(progress: f32, phase: LoupePhase) -> LoupePose {
     }
 }
 
+/// Where the bubble is drawn and what its lens magnifies, in window
+/// coordinates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LoupePlacement {
+    /// Top-left corner of the bubble.
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    /// The magnified point, relative to the bubble center.
+    focus_offset: (f32, f32),
+}
+
+/// Whether the bubble sits below the grabbed line. It does when a full bubble
+/// rising above the line would leave the window at the top and the window has
+/// more room below the line than above it.
+fn loupe_below_line(line_mid_y: f32, window: Size) -> bool {
+    let fit = (window.width / LOUPE_WIDTH)
+        .min(window.height / LOUPE_HEIGHT)
+        .min(1.0);
+    let room_above = line_mid_y;
+    let room_below = window.height - line_mid_y;
+    let needed_above = LOUPE_RISE + 0.5 * LOUPE_HEIGHT * fit;
+    room_above < needed_above && room_below > room_above
+}
+
+/// Places a bubble of `width` × `height` whose center would ride `rise` above
+/// (or, with `below`, under) the line, then keeps all of it inside `window`:
+/// shrunk when the window is smaller, slid back when it crosses a side. The
+/// lens focus stays on the line at `center_x`, so a moved bubble looks at the
+/// content it looked at before the move. Without a measured window
+/// (`None`) the bubble is placed unchanged.
+fn place_loupe(
+    line_mid_y: f32,
+    center_x: f32,
+    (width, height): (f32, f32),
+    rise: f32,
+    below: bool,
+    window: Option<Size>,
+) -> LoupePlacement {
+    let center_y = if below {
+        line_mid_y + rise
+    } else {
+        line_mid_y - rise
+    };
+    let Some(window) = window else {
+        return LoupePlacement {
+            x: center_x - width * 0.5,
+            y: center_y - height * 0.5,
+            width,
+            height,
+            focus_offset: (0.0, line_mid_y - center_y),
+        };
+    };
+    let fit = (window.width / width).min(window.height / height).min(1.0);
+    let (width, height) = (
+        (width * fit).min(window.width),
+        (height * fit).min(window.height),
+    );
+    let wanted_x = center_x - width * 0.5;
+    let wanted_y = center_y - height * 0.5;
+    let x = wanted_x.max(0.0).min(window.width - width);
+    let y = wanted_y.max(0.0).min(window.height - height);
+    LoupePlacement {
+        x,
+        y,
+        width,
+        height,
+        focus_offset: (wanted_x - x, (line_mid_y - center_y) + (wanted_y - y)),
+    }
+}
+
 fn loupe_optical_activity(progress: f32) -> f32 {
     smoothstep01(progress)
 }
@@ -158,6 +239,9 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
         })
     })
     .with(Rc::clone);
+
+    let viewport = local_popup_viewport().current().get();
+    let window = (viewport.width > 0.0 && viewport.height > 0.0).then_some(viewport);
 
     let active = target.is_some();
     if let Some(t) = target {
@@ -212,24 +296,37 @@ pub fn SelectionLoupe(target: Option<LoupeTarget>) {
     let follow = state.follow_x.borrow().state().value();
     let trail = shown.focus_x - follow;
     let stretch = 1.0 + (trail.abs() * 0.004).clamp(0.0, 0.12);
-    let width = LOUPE_WIDTH * pose.width_frac * stretch;
-    let height = LOUPE_HEIGHT * pose.height_frac / stretch;
-    let center_x = follow;
-    let center_y = shown.line_mid_y - LOUPE_RISE * pose.rise_frac;
-    let focus_offset_y = shown.line_mid_y - center_y;
+    let below = window.is_some_and(|window| loupe_below_line(shown.line_mid_y, window));
+    let LoupePlacement {
+        x,
+        y,
+        width,
+        height,
+        focus_offset,
+    } = place_loupe(
+        shown.line_mid_y,
+        follow,
+        (
+            LOUPE_WIDTH * pose.width_frac * stretch,
+            LOUPE_HEIGHT * pose.height_frac / stretch,
+        ),
+        LOUPE_RISE * pose.rise_frac,
+        below,
+        window,
+    );
 
     let corner_radius = 0.5 * width.min(height);
     let spec = LiquidLoupeSpec {
         magnification: LOUPE_MAGNIFICATION,
-        focus_offset: (0.0, focus_offset_y),
+        focus_offset,
         corner_radius,
         activity: optic,
         ..LiquidLoupeSpec::default()
     };
 
     let anchor = Rect {
-        x: center_x - width * 0.5,
-        y: center_y - height * 0.5,
+        x,
+        y,
         width: 0.0,
         height: 0.0,
     };

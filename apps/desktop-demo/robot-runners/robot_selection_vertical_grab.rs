@@ -20,7 +20,10 @@ use image::RgbaImage;
 
 const TEXT: &str = "alpha bravo alpha bravo alpha bravo alpha bravo";
 const FIELD_X: f32 = 42.0;
-const FIELD_Y: f32 = 84.0;
+// Low enough that the loupe, 75 dp above the line with 41 dp of bubble, stays
+// above the first line inside the 260 dp window. A loupe below the line would
+// show a magnified handle that the pixel probe reads as the handle.
+const FIELD_Y: f32 = 120.0;
 const FIELD_WIDTH: f32 = 110.0;
 const ACCENT: Color = Color(0.965, 0.208, 0.557, 1.0);
 type SelectedEditable = ((f32, f32, f32, f32), (usize, usize));
