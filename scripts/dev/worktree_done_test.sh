@@ -117,5 +117,16 @@ mkdir -p "$wt/target-extra"
 echo notes > "$wt/target-extra/notes.txt"
 check "an untagged directory named like a cache is refused" "$(status_of "$DONE" "$wt")" "1"
 
+# An old commit is on many remote branches: their names fill more than a pipe
+# buffer, under a remote no fetch prunes.
+wt="$(new_worktree held-widely)"
+held="$(git -C "$wt" rev-parse HEAD)"
+for index in $(seq 1 4000); do
+    printf 'create refs/remotes/mirror/branch-held-by-many-%05d %s\n' "$index" "$held"
+done | git -C "$main" update-ref --stdin
+check "a worktree whose commit many remote branches hold is removed" \
+    "$(status_of "$DONE" "$wt")" "0"
+check "the widely held worktree is gone" "$(present "$wt")" "gone"
+
 echo "$passed passed, $failed failed"
 [ "$failed" -eq 0 ]
