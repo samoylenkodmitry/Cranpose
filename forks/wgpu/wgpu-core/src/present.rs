@@ -36,18 +36,18 @@ pub(crate) struct Presentation {
     pub(crate) device: Arc<Device>,
     pub(crate) config: wgt::SurfaceConfiguration<Vec<wgt::TextureFormat>>,
     pub(crate) acquired_texture: Option<Arc<resource::Texture>>,
-    /// The index of the acquired texture's swapchain image, where the
-    /// backend numbers them.
+    /// The slot of the acquired texture's image in `images`, where the
+    /// backend tells its images apart.
     pub(crate) acquired_image: Option<u32>,
-    /// The swapchain images, as bits by index, that hold what they last
-    /// presented since the surface was configured.
-    pub(crate) kept_images: u64,
+    /// The images the surface handed out since it was configured.
+    pub(crate) images: PresentedImages,
 }
 
-/// A swapchain image a surface texture is (Cranpose fork).
+/// A presentable image a surface texture is (Cranpose fork).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SurfaceImage {
-    /// The image's index in the swapchain.
+    /// The image's slot, the same each time the surface hands the image out
+    /// again until it is configured anew.
     pub index: u32,
     /// Whether the texture holds what the image last presented: the surface
     /// keeps presented images and this one was presented since the surface
@@ -55,16 +55,60 @@ pub struct SurfaceImage {
     pub kept: bool,
 }
 
-/// The bit of `index` in [`Presentation::kept_images`]; `None` past 64.
-fn image_bit(index: u32) -> Option<u64> {
-    1u64.checked_shl(index)
+/// The images a surface followed at once; a surface with more hands the
+/// oldest followed one's slot to the next new image, which holds nothing.
+const IMAGE_SLOTS: usize = 8;
+
+/// The presentable images a surface handed out since it was configured, by
+/// the identity their backend gives them (`image_id`), and which of them
+/// hold what they last presented (Cranpose fork).
+#[derive(Debug, Default)]
+pub(crate) struct PresentedImages {
+    /// By slot, the identity of the image in it.
+    ids: [Option<u64>; IMAGE_SLOTS],
+    /// The slots, as bits, whose image holds what it last presented.
+    kept: u8,
+    /// The slot a new image takes once every slot is taken.
+    next: usize,
+}
+
+impl PresentedImages {
+    /// The slot of the image of `id`, and whether it holds what it last
+    /// presented; an image not seen before takes a slot and holds nothing.
+    fn acquire(&mut self, id: u64) -> (u32, bool) {
+        let slot = match self.ids.iter().position(|known| *known == Some(id)) {
+            Some(slot) => slot,
+            None => {
+                let slot = self
+                    .ids
+                    .iter()
+                    .position(Option::is_none)
+                    .unwrap_or(self.next);
+                self.next = (slot + 1) % IMAGE_SLOTS;
+                self.ids[slot] = Some(id);
+                self.kept &= !(1 << slot);
+                slot
+            }
+        };
+        (slot as u32, self.kept & (1 << slot) != 0)
+    }
+
+    /// Marks the image in `slot` as holding what it presented, or not.
+    fn keep(&mut self, slot: u32, kept: bool) {
+        let bit = 1u8 << slot;
+        if kept {
+            self.kept |= bit;
+        } else {
+            self.kept &= !bit;
+        }
+    }
 }
 
 /// Forgets the acquired image of a presentation, which goes back
 /// unpresented: its pixels and layout are whatever the frame left.
-fn forget_acquired_image(acquired_image: &mut Option<u32>, kept_images: &mut u64) {
-    if let Some(bit) = acquired_image.take().and_then(image_bit) {
-        *kept_images &= !bit;
+fn forget_acquired_image(acquired_image: &mut Option<u32>, images: &mut PresentedImages) {
+    if let Some(slot) = acquired_image.take() {
+        images.keep(slot, false);
     }
 }
 
@@ -257,16 +301,15 @@ impl Surface {
                 }
                 .map_err(|e| device.handle_hal_error(e))?;
 
-                let image_index = ast.texture.image_index();
+                let image_id = ast.texture.image_id();
                 let mut presentation = self.presentation.lock();
                 let present = presentation.as_mut().unwrap();
+                let slot = image_id.map(|id| present.images.acquire(id));
                 // An image that holds what it presented stays as it is: in
                 // the layout it was presented in, and initialized, so a pass
                 // that loads it reads those pixels instead of a clear.
                 let kept = self.keep_images.load(Ordering::Acquire)
-                    && image_index
-                        .and_then(image_bit)
-                        .is_some_and(|bit| present.kept_images & bit != 0);
+                    && slot.is_some_and(|(_, kept)| kept);
                 let texture = resource::Texture::new(
                     &device,
                     resource::TextureInner::Surface { raw: ast.texture },
@@ -294,8 +337,8 @@ impl Surface {
                     return Err(SurfaceError::AlreadyAcquired);
                 }
                 present.acquired_texture = Some(texture.clone());
-                present.acquired_image = image_index;
-                image = image_index.map(|index| SurfaceImage { index, kept });
+                present.acquired_image = slot.map(|(index, _)| index);
+                image = slot.map(|(index, _)| SurfaceImage { index, kept });
 
                 let status = if ast.suboptimal {
                     Status::Suboptimal
@@ -329,19 +372,13 @@ impl Surface {
         })
     }
 
-    /// Marks the swapchain image `index` as holding what it presented, or
-    /// not: its pixels or layout are unknown after a failed present or a
-    /// discard.
-    fn keep_image(&self, index: Option<u32>, kept: bool) {
-        let Some(bit) = index.and_then(image_bit) else {
+    /// Marks the image in `slot` as holding what it presented.
+    fn keep_image(&self, slot: Option<u32>) {
+        let Some(slot) = slot else {
             return;
         };
         if let Some(present) = self.presentation.lock().as_mut() {
-            if kept {
-                present.kept_images |= bit;
-            } else {
-                present.kept_images &= !bit;
-            }
+            present.images.keep(slot, true);
         }
     }
 
@@ -396,7 +433,7 @@ impl Queue {
                 .ok_or(SurfaceError::NothingToPresent)?;
             // Kept again only once it presented.
             let image = present.acquired_image;
-            forget_acquired_image(&mut present.acquired_image, &mut present.kept_images);
+            forget_acquired_image(&mut present.acquired_image, &mut present.images);
             (texture, image)
         };
 
@@ -428,7 +465,7 @@ impl Queue {
             _ => unreachable!(),
         };
         if result.is_ok() {
-            surface.keep_image(image, true);
+            surface.keep_image(image);
         }
 
         match result {
@@ -468,7 +505,7 @@ impl Surface {
             .acquired_texture
             .take()
             .ok_or(SurfaceError::NothingToPresent)?;
-        forget_acquired_image(&mut present.acquired_image, &mut present.kept_images);
+        forget_acquired_image(&mut present.acquired_image, &mut present.images);
 
         let mut exclusive_snatch_guard = device.snatchable_lock.write();
         let inner = texture
@@ -507,7 +544,7 @@ impl Surface {
             .acquired_texture
             .take()
             .ok_or(SurfaceError::NothingToPresent)?;
-        forget_acquired_image(&mut present.acquired_image, &mut present.kept_images);
+        forget_acquired_image(&mut present.acquired_image, &mut present.images);
 
         Ok(())
     }

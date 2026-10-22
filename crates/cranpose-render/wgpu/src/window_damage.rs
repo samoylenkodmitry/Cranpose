@@ -139,6 +139,16 @@ pub(crate) struct PresentedImage {
     pub(crate) kept: bool,
 }
 
+impl PresentedImage {
+    /// The image `frame` is, where its surface tells its images apart.
+    pub(crate) fn of(frame: &wgpu::SurfaceTexture) -> Option<Self> {
+        frame.image().map(|image| Self {
+            index: image.index,
+            kept: image.kept,
+        })
+    }
+}
+
 /// The frames back a kept swapchain image can be drawn again from, and the
 /// images the history follows.
 const IMAGE_HISTORY: usize = 8;
@@ -230,8 +240,9 @@ pub(crate) struct FrameWindow<'a> {
 
 /// Summarizes the frames drawn into a composition target and compares each
 /// with the frame the target kept. While frames keep changing most of the
-/// window it skips 1, 4, 16, 64 and then [`MAX_SKIPPED`] frames between
-/// summaries.
+/// window, or keep leaving it no frame to compare with (a stand-in drawn, a
+/// screenshot between), it skips 1, 4, 16, 64 and then [`MAX_SKIPPED`]
+/// frames between summaries.
 #[derive(Default)]
 pub(crate) struct WindowDamage {
     next: WindowSummary,
@@ -239,6 +250,9 @@ pub(crate) struct WindowDamage {
     last_items: usize,
     summarized: bool,
     skipped: u32,
+    /// Whether the frame after the skipped ones summarizes as the frame the
+    /// next one compares with, which a skipped frame leaves none of.
+    baseline: bool,
     full_frames: u32,
     events: Vec<(usize, u8, usize)>,
     open: Vec<OpenEffect>,
@@ -250,15 +264,17 @@ impl WindowDamage {
         self.summarized = false;
         if self.skipped > 0 {
             self.skipped -= 1;
+            self.baseline = self.skipped == 0;
             return Damage::Skipped;
         }
         self.summarized = self.summarize(frame);
-        let damage = if !self.summarized {
-            Damage::Full
-        } else if kept.valid {
+        let baseline = std::mem::take(&mut self.baseline);
+        let damage = if self.summarized && kept.valid {
             compare(&kept.summary, &self.next, frame.viewport)
-        } else {
+        } else if self.summarized && baseline {
             return Damage::Full;
+        } else {
+            Damage::Full
         };
         if damage == Damage::Full {
             self.full_frames = self.full_frames.saturating_add(1);

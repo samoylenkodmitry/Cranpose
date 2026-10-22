@@ -421,9 +421,7 @@ accesskit_unix = { version = "0.24.0", default-features = false, features = ["as
 # AccessKit's AT-SPI adapter already resolves.
 zbus = { version = "5.19", optional = true, default-features = false, features = ["async-io", "blocking-api"] }
 x11rb = { version = "0.13.2", optional = true }
-# Desktop builds take wgpu from crates.io. The web, Android and iOS take
-# Cranpose's fork of it (`wgpu` in the workspace, forks/README.md).
-wgpu = { version = "30.0.1", default-features = false, optional = true, features = [
+wgpu = { workspace = true, optional = true, features = [
     "std",
     "parking_lot",
     "vulkan",
@@ -441,7 +439,7 @@ windows-sys = { version = "0.61", optional = true, features = [
 # The internet connection profile and its changes (`windows_network`). The
 # version AccessKit and wgpu already resolve.
 windows = { version = "0.62", optional = true, features = ["Networking_Connectivity", "Foundation", "System_Power"] }
-wgpu = { version = "30.0.1", default-features = false, optional = true, features = [
+wgpu = { workspace = true, optional = true, features = [
     "std",
     "parking_lot",
     "dx12",
@@ -548,7 +546,7 @@ objc2-core-video = { version = "0.3", default-features = false, optional = true,
     "CVBuffer",
     "CVReturn",
 ] }
-wgpu = { version = "30.0.1", default-features = false, optional = true, features = [
+wgpu = { workspace = true, optional = true, features = [
     "std",
     "parking_lot",
     "metal",
@@ -777,7 +775,7 @@ objc2-health-kit = { version = "0.3.2", default-features = false, optional = tru
 ] }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "linux"), not(target_os = "windows"), not(target_os = "macos"), not(target_os = "ios")))'.dependencies]
-wgpu = { version = "30.0.1", default-features = false, optional = true, features = [
+wgpu = { workspace = true, optional = true, features = [
     "std",
     "parking_lot",
     "vulkan",

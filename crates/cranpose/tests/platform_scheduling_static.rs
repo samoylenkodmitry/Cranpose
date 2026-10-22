@@ -1791,21 +1791,22 @@ fn wgpu_backend_features_are_target_specific() {
             "{manifest} macOS WGPU backend set should be Metal only"
         );
 
-        for (os, section) in [("Linux", linux), ("Windows", windows), ("macOS", macos)] {
-            assert!(
-                !wgpu_dependency(section).contains("workspace = true"),
-                "{manifest} {os} must take wgpu from crates.io, which a desktop engine such as Bevy shares without a patch"
-            );
-        }
         let ios = manifest_section(&source, "[target.'cfg(target_os = \"ios\")'.dependencies]");
         let web = manifest_section(
             &source,
             "[target.'cfg(all(target_arch = \"wasm32\", target_os = \"unknown\"))'.dependencies]",
         );
-        for (os, section) in [("Android", android), ("iOS", ios), ("web", web)] {
+        for (os, section) in [
+            ("Linux", linux),
+            ("Windows", windows),
+            ("macOS", macos),
+            ("Android", android),
+            ("iOS", ios),
+            ("web", web),
+        ] {
             assert!(
                 wgpu_dependency(section).contains("workspace = true"),
-                "{manifest} {os} must take the workspace's wgpu fork"
+                "{manifest} {os} must take the workspace's wgpu fork, the one wgpu of every target"
             );
         }
     }

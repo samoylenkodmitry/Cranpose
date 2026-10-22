@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.87"
 name = "cranpose-wgpu-hal"
-version = "30.0.17"
+version = "30.0.18"
 authors = ["gfx-rs developers"]
 build = "build.rs"
 autolib = false
@@ -117,7 +117,9 @@ metal = [
     "dep:objc2-core-foundation",
     "dep:objc2-core-graphics",
     "dep:objc2-foundation",
+    "dep:objc2-io-surface",
     "dep:objc2-metal",
+    "objc2-metal/objc2-io-surface",
     "dep:objc2-quartz-core",
     "dep:parking_lot",
     "dep:profiling",
@@ -426,6 +428,12 @@ features = [
     "NSRange",
     "NSString",
 ]
+optional = true
+default-features = false
+
+[target.'cfg(target_vendor = "apple")'.dependencies.objc2-io-surface]
+version = "0.3.2"
+features = ["std", "IOSurfaceRef", "IOSurfaceTypes"]
 optional = true
 default-features = false
 

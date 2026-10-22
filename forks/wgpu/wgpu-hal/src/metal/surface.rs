@@ -11,7 +11,7 @@ use objc2::{
 use objc2_core_foundation::{CFString, CGSize};
 use objc2_core_graphics::CGColorSpace;
 use objc2_foundation::NSObjectProtocol;
-use objc2_metal::MTLTextureType;
+use objc2_metal::{MTLTexture as _, MTLTextureType};
 use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
 use parking_lot::{Mutex, RwLock};
 
@@ -381,6 +381,9 @@ impl crate::Surface for super::Surface {
 
         let swapchain_format = self.swapchain_format.read().unwrap();
         let extent = self.extent.read();
+        let image_id = texture
+            .iosurface()
+            .map(|surface| u64::from(surface.id()));
         let suf_texture = super::SurfaceTexture {
             texture: super::Texture {
                 raw: texture,
@@ -397,6 +400,7 @@ impl crate::Surface for super::Surface {
             },
             drawable: ProtocolObject::from_retained(drawable),
             present_with_transaction: render_layer.presentsWithTransaction(),
+            image_id,
         };
 
         Ok(crate::AcquiredSurfaceTexture {

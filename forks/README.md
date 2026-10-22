@@ -13,26 +13,27 @@ patch version, up to the workspace's `wgpu` requirement, so a build that
 updates Cranpose cannot keep the old crate in its lockfile. The repository's
 formatting, spelling and diff gates skip the forks.
 
-The web, Android and iOS build with the wgpu fork. macOS, Windows and Linux
-take wgpu from crates.io, so a desktop game engine on upstream wgpu, such as
-Bevy, shares one wgpu with Cranpose without a patch. A change that only
-those desktop targets would compile does not belong here.
+Every target builds with the wgpu fork: one wgpu, with the same fixes, on
+Android, iOS, watchOS, macOS, Windows, Linux and the web. A game engine that
+shares Cranpose's device, such as Bevy, takes the fork too through a
+`[patch.crates-io]` of `wgpu` in the app's workspace. A patch stays only
+while it gains enough to justify the fork; each one is offered upstream.
 
 ## wgpu 30.0.1
 
 Upstream: <https://github.com/gfx-rs/wgpu>, commit
 `40f4a34ebaf56f9a046231f54125ad046239d3f3` (`wgpu-hal` 30.0.1).
-`cranpose-wgpu-hal` is at 30.0.17 for the catch-up barrier, the Metal
+`cranpose-wgpu-hal` is at 30.0.18 for the catch-up barrier, the Metal
 pipeline switch, the dedicated Vulkan allocations, the GL point size, the
 GL state tracker, the web surface usages, the boxed GL copy commands, the
 Vulkan command pools that give a burst's memory back, the GL shaders
 without the branches their constants decide, the GL program status read
 only on failure, the GLSL templates, the GL link reads, the WebGL
-extensions, the GL varying minimum and the Vulkan swapchain image indices
-below. `cranpose-wgpu-core` is at 30.0.19 to require those, to make
+extensions, the GL varying minimum and the presentable image identities
+below. `cranpose-wgpu-core` is at 30.0.20 to require those, to make
 template modules, to configure a surface while another thread submits, to
 let Vulkan pipelines drop their shader modules and to hand presented
-swapchain images back as they presented. `cranpose-wgpu` is at 30.0.22 for
+images back as they presented. `cranpose-wgpu` is at 30.0.23 for
 the WebGPU pipeline discovery, the background compiles, the pipeline
 readiness and the kept swapchain images below and to require them.
 
@@ -417,26 +418,37 @@ Other backends keep the modules: their pipelines may need them.
 
 `wgpu-core` hands out every acquired surface texture as uninitialized, so
 a pass that loads it gets a clear first, and a frame must draw the whole
-window. Android's swapchain gives back each buffer with the pixels it
-presented. Cranpose's renderer draws into such a buffer only what changed
-since the frame it holds.
+window. Most platforms give an image back with the pixels it presented:
+Android's buffer queue, Metal's drawables, wgpu-hal's own GL texture, and
+DXGI swapchains made with the sequential flip. Cranpose's renderer draws
+into such an image only what changed since the frame it holds.
 
-`Surface::keep_presented_images(true)` asks for that. `wgpu-core` then
-counts, per swapchain image, whether it presented since the surface was
-configured; such an image is handed out initialized and in the layout it
-presented in, so a pass that loads it reads its pixels. A failed present or
-a discard forgets the image. `SurfaceTexture::image` gives the image's
-index and whether it is kept, on Vulkan; other backends give `None`.
+Each backend tells its presentable images apart (`DynSurfaceTexture::
+image_id`): Vulkan by the swapchain index, Metal by the system-wide ID of
+the drawable's IOSurface, GL by its one texture or renderbuffer, DX12 by
+the buffer resource. `Surface::keep_presented_images(true)`, asked before
+the surface is configured, makes `wgpu-core` give each image a slot (8 at
+once) and count whether it presented since the surface was configured;
+such an image is handed out initialized and in the layout it presented in,
+so a pass that loads it reads its pixels. A failed present or a discard
+forgets the image. `SurfaceTexture::image` gives the slot and whether the
+image is kept; a browser's WebGPU canvas, which keeps no frame by design,
+gives `None`.
+
+Keeping images also tells the backend at configure
+(`SurfaceConfiguration::keep_presented`): a Vulkan swapchain is made
+unclipped, since a clipped one may leave the pixels other windows cover
+undrawn, and a DXGI one with `FLIP_SEQUENTIAL`, which keeps a buffer's
+contents after its present where `FLIP_DISCARD` does not.
 
 A frame that draws nothing new into a kept image submits no work. Vulkan's
 present waits on the image's acquire semaphore only through a submission,
 so the queue's present now submits once when no submission waited on it
 yet.
 
-Vulkan does not promise that a presented image keeps its pixels, so only
-Android asks for it. On a Mate 20 X (Mali-G76, 4 images, FIFO) every frame
-of a probe that drew a part of the window into a kept image read back equal
-to the frame drawn whole (36 of 36).
+On a Mate 20 X (Mali-G76, 4 images, FIFO) every frame of a probe that drew
+a part of the window into a kept image read back equal to the frame drawn
+whole (36 of 36).
 
 ### Update the fork
 

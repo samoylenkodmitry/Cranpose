@@ -522,16 +522,10 @@ const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     },
 ];
 
-const ALL_FEATURES_EXTRA_DUPLICATE_DEBT: &[DuplicateDebt] = &[
-    DuplicateDebt {
-        family: "env_filter",
-        reason: "android_logger 0.15.1 (latest) pins env_filter ^0.1 while env_logger 0.11 is past 1.0",
-    },
-    DuplicateDebt {
-        family: "glow",
-        reason: "wgpu-hal 30.0.1 (latest), the desktop GL fallback, holds glow ^0.17 while the wgpu fork on the web and Android is on 0.18 for Emscripten builds without wasm-bindgen, as upstream's trunk is",
-    },
-];
+const ALL_FEATURES_EXTRA_DUPLICATE_DEBT: &[DuplicateDebt] = &[DuplicateDebt {
+    family: "env_filter",
+    reason: "android_logger 0.15.1 (latest) pins env_filter ^0.1 while env_logger 0.11 is past 1.0",
+}];
 
 /// Upstream wgpu and Cranpose's fork of it (forks/README.md) alike.
 const RENDERER_PIXELS_FORBIDDEN_PACKAGES: &[&str] = &[

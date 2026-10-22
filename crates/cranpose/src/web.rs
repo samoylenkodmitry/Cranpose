@@ -307,6 +307,9 @@ pub async fn run(
     let surface = instance
         .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
         .map_err(|e| format!("failed to create surface: {e:?}"))?;
+    // WebGL keeps its frame in wgpu's own texture; a WebGPU canvas keeps
+    // none, and its frames draw whole.
+    surface.keep_presented_images(true);
 
     let (adapter, device, queue) =
         open_device(&instance, &surface, settings.gpu_requirements).await?;
@@ -913,7 +916,7 @@ impl CanvasPresenter {
                     let mut app_mut = app.borrow_mut();
                     self.discovery.begin_frame(app_mut.renderer());
                     if let Err(err) = app_mut.renderer().render_surface_texture(
-                        &output.texture,
+                        &output,
                         &view,
                         render_width,
                         render_height,

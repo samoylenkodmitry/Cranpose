@@ -29,7 +29,6 @@ exact versions.
 | `objc2`, `objc2-app-kit`, `objc2-foundation` | AccessKit's macOS adapter and winit's AppKit backend |
 | `syn` | Procedural macro dependencies on different major versions |
 | `env_filter` (all features) | Android and desktop loggers |
-| `glow` (all features) | Desktop GL fallback on upstream WGPU and the WGPU fork |
 | `rustc-hash` | Fluent localization and the shader stack; UniFFI's all-features bindings also enable Askama |
 
 Remove locally resolvable splits. Reserve the debt list for upstream constraints.
@@ -37,12 +36,11 @@ Inspect the current dependency requirements before each upgrade.
 
 ## Dependency boundaries
 
-- The web, Android and iOS use the [published WGPU forks](../forks/README.md),
-  which the workspace's `[patch.crates-io]` builds from `forks/`. macOS,
-  Windows and Linux use WGPU 30.0.1 from crates.io. Library names remain
+- Every target uses the [published WGPU forks](../forks/README.md), which the
+  workspace's `[patch.crates-io]` builds from `forks/`. Library names remain
   `wgpu`, `wgpu_core` and `wgpu_hal`; fork package names have the `cranpose-`
   prefix. `wgpu-types`, Naga and `wgpu-naga-bridge` remain upstream
-  dependencies on every target.
+  dependencies.
 - Internal collection aliases use `foldhash`. Choose a map based on key type
   and input trust.
 - Shared software text measurement and rasterization live in

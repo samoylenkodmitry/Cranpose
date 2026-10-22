@@ -586,17 +586,21 @@ impl WgpuRenderer {
         self.render_frame(texture, view, width, height, None)
     }
 
-    /// Renders the frame into a presentable image. When the image carries the
-    /// composition format and the capture usages, the scene renders into it
-    /// directly and no output conversion pass runs.
+    /// Renders the frame into a surface's presentable image `frame`, through
+    /// `view`. When the image carries the composition format and the capture
+    /// usages, the scene renders into it directly and no output conversion
+    /// pass runs. When the surface hands the image back with the frame it
+    /// last presented (`wgpu::Surface::keep_presented_images`), the frame
+    /// draws only what changed since that frame.
     pub fn render_surface_texture(
         &mut self,
-        texture: &wgpu::Texture,
+        frame: &wgpu::SurfaceTexture,
         view: &wgpu::TextureView,
         width: u32,
         height: u32,
     ) -> Result<(), WgpuRendererError> {
-        self.render_frame(texture, view, width, height, None)
+        let image = frame::PresentedImage::of(frame);
+        self.render_frame(&frame.texture, view, width, height, image)
     }
 
     /// Presents a surface image this renderer drew with

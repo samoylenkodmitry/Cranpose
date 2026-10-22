@@ -36,8 +36,15 @@ pub(crate) fn create_android_wgpu_surface(
         raw_window_handle,
     };
 
-    // SAFETY: `native_window_ptr` comes from `ndk::NativeWindow::ptr()` for the
-    // currently live Android surface, and the owning `NativeWindow` is retained
-    // in `GpuResources` for at least as long as the returned `wgpu::Surface`.
-    unsafe { instance.create_surface_unsafe(target) }.map_err(AndroidSurfaceError::from)
+    let surface = {
+        // SAFETY: `native_window_ptr` comes from `ndk::NativeWindow::ptr()` for the
+        // currently live Android surface, and the owning `NativeWindow` is retained
+        // in `GpuResources` for at least as long as the returned `wgpu::Surface`.
+        unsafe { instance.create_surface_unsafe(target) }
+    }
+    .map_err(AndroidSurfaceError::from)?;
+    // Each buffer comes back with the frame it presented, so a frame draws
+    // only what changed since (`render_surface_texture`).
+    surface.keep_presented_images(true);
+    Ok(surface)
 }
