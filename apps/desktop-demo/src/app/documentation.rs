@@ -8,11 +8,10 @@ use cranpose_core::{
 use cranpose_foundation::lazy::{LazyListScope, LazyListState};
 use cranpose_services::local_uri_handler;
 use cranpose_ui::{
-    composable, rememberScrollableState, text::FontWeight, Alignment, Box, BoxSpec, Button,
+    composable, rememberScrollableState, text::FontWeight, Alignment, Axis, Box, BoxSpec, Button,
     ButtonSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, LinearArrangement, Modifier,
     PointerEventKind, PointerInputScope, Row, RowSpec, Spacer, Text, VerticalAlignment,
 };
-use cranpose_ui_layout::Axis;
 
 use super::markdown::{render_markdown_block, MarkdownAppearance};
 mod document;

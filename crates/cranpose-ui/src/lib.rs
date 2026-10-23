@@ -130,7 +130,7 @@ pub use cranpose_ui_graphics::{
     SubstrateSpec, TileMode, WindowCoordinates, glass_material_folds_enabled,
     set_glass_material_folds,
 };
-pub use cranpose_ui_layout::{AlignmentLines, IntrinsicSize, Measurement};
+pub use cranpose_ui_layout::{AlignmentLines, Axis, IntrinsicSize, Measurement};
 pub use cursor_animation::{
     is_cursor_visible, next_cursor_blink_time, reset_cursor_blink, start_cursor_blink,
     stop_cursor_blink, tick_cursor_blink,

@@ -2059,7 +2059,6 @@ dependencies = [
  "cranpose-testing",
  "cranpose-ui",
  "cranpose-ui-graphics",
- "cranpose-ui-layout",
  "cranpose-wgpu",
  "env_logger",
  "getrandom 0.4.3",
