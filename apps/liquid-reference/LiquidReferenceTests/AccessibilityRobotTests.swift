@@ -9,6 +9,10 @@ final class AccessibilityRobotTests: XCTestCase {
         app.launchArguments = ["--test_screen=accessibility_robot"]
         app.launch()
         XCTAssertTrue(named("Accessibility robot", in: app).waitForExistence(timeout: 15))
+        XCTAssertTrue(
+            drawsScreen(app),
+            "The app drew no screen in 15 seconds: the first frame it drew while its pipelines compiled stays on the display until something asks for another."
+        )
         return app
     }
 
@@ -30,6 +34,40 @@ final class AccessibilityRobotTests: XCTestCase {
         let top = image.height / 8
         let below = CGRect(x: 0, y: top, width: image.width, height: image.height - top)
         return image.cropping(to: below).flatMap { UIImage(cgImage: $0).pngData() }
+    }
+
+    /// Whether the screen below the status bar holds more than a background within fifteen seconds.
+    private func drawsScreen(_ app: XCUIApplication) -> Bool {
+        let deadline = Date().addingTimeInterval(15)
+        repeat {
+            if holdsContent(app) { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        } while Date() < deadline
+        return false
+    }
+
+    /// Whether the screen below the status bar shows more than a handful of colors.
+    private func holdsContent(_ app: XCUIApplication) -> Bool {
+        guard let image = app.screenshot().image.cgImage else { return false }
+        let top = image.height / 8
+        let width = image.width
+        let height = image.height - top
+        guard let below = image.cropping(to: CGRect(x: 0, y: top, width: width, height: height)) else { return false }
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        guard let context = CGContext(
+            data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return false }
+        context.draw(below, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var colors = Set<UInt32>()
+        for y in stride(from: 0, to: height, by: 4) {
+            for x in stride(from: 0, to: width, by: 4) {
+                let at = (y * width + x) * 4
+                colors.insert(UInt32(pixels[at]) << 16 | UInt32(pixels[at + 1]) << 8 | UInt32(pixels[at + 2]))
+                if colors.count > 16 { return true }
+            }
+        }
+        return false
     }
 
     /// Whether the app draws a screen other than `previous` within five seconds.
