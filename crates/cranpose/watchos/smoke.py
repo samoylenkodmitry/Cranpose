@@ -15,8 +15,15 @@ import time
 SCRATCH_ROOT = '/Users/Shared'
 
 # What simctl prints on stderr when CoreSimulator itself went away: its service
-# died under a command, or the device shut down under a running session.
-CORESIMULATOR_DIED = ('Mach error -308', 'device is not booted', 'Bad or unknown session')
+# died under a command, the device shut down under a running session, or the
+# device lost its runtime.
+CORESIMULATOR_DIED = (
+    'Mach error -308',
+    'device is not booted',
+    'Bad or unknown session',
+    'in current state: Shut',
+    'not available for spawning processes',
+)
 
 
 def command(*args):
