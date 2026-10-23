@@ -21,6 +21,16 @@ NOT_BOOTED = '''An error was encountered processing the command (domain=com.appl
 Process spawn via launchd failed because device is not booted.
 \tBad or unknown session: com.apple.CoreSimulator.SimDevice.3B5A9A2B-918A-4F6A-BCA7-F5EB640C4A5E
 '''
+# Seen on the showcase's watch job on 2026-10-23: the device shut down while
+# the app installed, and it lost its runtime before a spawn.
+SHUTTING_DOWN = '''An error was encountered processing the command (domain=com.apple.CoreSimulator.SimError, code=405):
+Unable to lookup in current state: Shutting Down
+'''
+NO_RUNTIME = '''An error was encountered processing the command (domain=com.apple.CoreSimulator.SimError, code=404):
+Invalid device: The specified device is not available for spawning processes.
+Underlying error (domain=com.apple.CoreSimulator.SimError, code=401):
+\tThe com.apple.CoreSimulator.SimRuntime.watchOS-27-0 simulator runtime is not available.
+'''
 BAD_BUNDLE = '''An error was encountered processing the command (domain=NSPOSIXErrorDomain, code=22):
 Failed to install the requested application: the bundle is not valid
 '''
@@ -118,12 +128,13 @@ class SmokeTest(unittest.TestCase):
 
     def test_coresimulator_dying_at_any_step_repeats_the_session_in_a_new_device_set(self):
         for verb, text in (('bootstatus', SERVER_DIED), ('install', SERVER_DIED),
-                           ('launch', SERVER_DIED), ('spawn', NOT_BOOTED)):
-            with self.subTest(verb=verb):
+                           ('launch', SERVER_DIED), ('spawn', NOT_BOOTED),
+                           ('install', SHUTTING_DOWN), ('spawn', NO_RUNTIME)):
+            with self.subTest(verb=verb, text=text):
                 (self.root / 'calls.jsonl').unlink(missing_ok=True)
                 for marker in self.root.glob('dead-*'):
                     marker.unlink()
-                self.evidence = self.root / f'evidence-{verb}'
+                self.evidence = self.root / f'evidence-{verb}-{len(text)}'
                 self.run_smoke({'fail': {verb: text}}, {})
                 first, second = self.calls('create')
                 self.assertNotEqual(first, second)
