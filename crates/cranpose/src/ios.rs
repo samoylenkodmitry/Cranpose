@@ -285,7 +285,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
         }
     }
 
-    fn render(&mut self) {
+    fn render(&mut self) -> bool {
         #[cfg(feature = "webview")]
         self.webviews.dispatch(&self.platform_env.native_views);
         let mut ime_changed = false;
@@ -318,7 +318,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
         }
 
         let (Some(gpu), Some(shell)) = (self.gpu.as_mut(), self.shell.as_mut()) else {
-            return;
+            return false;
         };
         if ime_changed {
             shell.request_root_render();
@@ -368,14 +368,14 @@ impl<F: FnMut() + 'static> IosApp<F> {
         }
         if crate::ios_background::app_is_off_screen() {
             gpu.surface_dirty = true;
-            return;
+            return false;
         }
         if !surface_present_required(
             dirty_before,
             update_result.visual_changed,
             shell.needs_redraw(),
         ) {
-            return;
+            return false;
         }
 
         match current_surface_texture(&gpu.surface, "ios") {
@@ -397,15 +397,28 @@ impl<F: FnMut() + 'static> IosApp<F> {
                 gpu.surface_dirty = false;
                 self.device_loss.presented();
                 self.device_loss_drill.presented();
+                true
             }
             SurfaceFrame::Reconfigure => {
                 gpu.surface.configure(&gpu.device, &gpu.config);
                 gpu.surface_dirty = true;
                 shell.mark_dirty();
+                false
             }
             SurfaceFrame::Skip => {
                 gpu.surface_dirty = true;
+                false
             }
+        }
+    }
+
+    fn request_owed_frame(&self) {
+        if self
+            .shell
+            .as_ref()
+            .is_some_and(|shell| shell.frame_schedule().needs_frame)
+        {
+            self.event_proxy.wake_up();
         }
     }
 }
@@ -623,7 +636,9 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
                 }
             }
             WindowEvent::RedrawRequested => {
-                self.render();
+                if self.render() {
+                    self.request_owed_frame();
+                }
                 self.schedule_wake(event_loop);
             }
             WindowEvent::CloseRequested => {
