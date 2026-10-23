@@ -151,3 +151,21 @@ fn runtime_shader_settings_are_named_from_the_prelude_alone() {
         TileMode::Decal
     ));
 }
+
+#[test]
+fn drag_and_scroll_axes_are_named_from_the_prelude_alone() {
+    run_test_composition(|| {
+        let horizontal = rememberDraggableState(|_delta| {});
+        let guarded = rememberDraggableState(|_delta| {});
+        let scrolled = rememberScrollableState(|_delta| 0.0);
+        Box(
+            Modifier::empty()
+                .size_points(40.0, 40.0)
+                .draggable(Axis::Horizontal, horizontal)
+                .draggable_guarded(Axis::Vertical, guarded, || true)
+                .scrollable(Axis::Horizontal, scrolled),
+            BoxSpec::default(),
+            || {},
+        );
+    });
+}
