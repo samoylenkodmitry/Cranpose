@@ -830,7 +830,7 @@ impl RuntimeInner {
     }
 
     fn drain_ui(&self) {
-        #[cfg(target_os = "emscripten")]
+        #[cfg(any(target_os = "emscripten", target_os = "espidf"))]
         crate::concurrency::fire_due_alarms();
         loop {
             let mut executed = false;
@@ -894,7 +894,11 @@ impl RuntimeInner {
             .try_borrow()
             .map_or(true, |tasks| !tasks.is_empty());
 
-        local_pending || self.ui_dispatcher.has_pending() || self.has_runnable_tasks()
+        let pending =
+            local_pending || self.ui_dispatcher.has_pending() || self.has_runnable_tasks();
+        #[cfg(any(target_os = "emscripten", target_os = "espidf"))]
+        let pending = pending || crate::concurrency::has_due_alarm();
+        pending
     }
 
     /// A finished task's waker may still wake after the task is gone; with
