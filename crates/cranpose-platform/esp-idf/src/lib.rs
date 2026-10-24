@@ -1,4 +1,4 @@
-//! Runs a Cranpose application on an ESP32-S3 display under ESP-IDF.
+//! Runs a Cranpose application on an ESP32 display under ESP-IDF.
 //!
 //! [`run`] composes the application into a [`cranpose::framebuffer::Framebuffer`].
 //! For each new picture it draws on the CPU only the areas the picture changes,
@@ -8,9 +8,13 @@
 
 #![deny(unsafe_code)]
 
+mod board;
+pub mod e32r35t;
+pub mod es3c35p;
 mod panel;
 mod present;
 mod small_alloc;
+mod touch;
 
 use std::{
     convert::Infallible,
@@ -21,15 +25,21 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub use board::{Board, Qemu, run_board};
 pub use cranpose::framebuffer::{SurfaceError, TouchPhase};
 use cranpose::{SystemTheme, framebuffer::Framebuffer};
+pub use e32r35t::E32r35t;
+pub use es3c35p::Es3c35p;
 use esp_idf_svc::{
     hal::{delay::BLOCK, task::queue::Queue},
     sys::{ESP_ERR_NO_MEM, EspError},
     timer::EspTaskTimerService,
 };
-pub use panel::{Panel, PixelFormat};
+pub use panel::{InitCommand, Panel, PixelFormat, QspiPins, SpiPins};
 pub use small_alloc::SmallBlockAllocator;
+pub use touch::{
+    NoTouch, St77922Touch, St77922TouchPins, Touch, Xpt2046Calibration, Xpt2046Pins, Xpt2046Touch,
+};
 
 #[cfg(feature = "small-block-alloc")]
 #[global_allocator]
@@ -99,14 +109,14 @@ impl Wake {
         })
     }
 
-    fn notify(&self) {
+    /// Returns whether an interrupt that called this must yield to the
+    /// task it woke.
+    fn notify(&self) -> bool {
         // Sequentially consistent on both sides: either the sleeper sees
         // `pending` before it blocks, or this sees `sleeping` and leaves a
         // token for it. A full slot holds one already.
         self.pending.store(true, Ordering::SeqCst);
-        if self.sleeping.load(Ordering::SeqCst) {
-            let _ = self.signal.send_back(0, 0);
-        }
+        self.sleeping.load(Ordering::SeqCst) && self.signal.send_back(0, 0).unwrap_or(false)
     }
 
     /// Forgets the notices that came so far: the caller handles what they
@@ -132,7 +142,8 @@ impl Wake {
 }
 
 /// Composes `content` on `panel` and drives it on the calling task until an
-/// error stops it.
+/// error stops it. `touch` delivers the fingers on the panel to `content`;
+/// [`NoTouch`] stands for a display without one.
 ///
 /// The calling task becomes the UI thread. Its stack holds composition and
 /// layout, so give it at least 32 KB (`CONFIG_ESP_MAIN_TASK_STACK_SIZE` for
@@ -140,6 +151,7 @@ impl Wake {
 /// event, so frame timing does not depend on `CONFIG_FREERTOS_HZ`.
 pub fn run(
     mut panel: Panel,
+    mut touch: impl Touch,
     config: DisplayConfig,
     content: impl FnMut() + 'static,
 ) -> Result<Infallible, RunError> {
@@ -155,18 +167,34 @@ pub fn run(
     let mut presenter = Presenter::new(&panel)?;
     let wake = Arc::new(Wake::new()?);
     let waker = Arc::clone(&wake);
-    framebuffer.set_frame_waker(move || waker.notify());
+    framebuffer.set_frame_waker(move || {
+        waker.notify();
+    });
     // The FreeRTOS tick would round each wait up to whole ticks.
     let timer_wake = Arc::clone(&wake);
     let timers = EspTaskTimerService::new()?;
-    let deadline_timer = timers.timer(move || timer_wake.notify())?;
+    let deadline_timer = timers.timer(move || {
+        timer_wake.notify();
+    })?;
+    let touched = Arc::new(AtomicBool::new(false));
+    let touch_wake = Arc::clone(&wake);
+    let touch_event = Arc::clone(&touched);
+    touch.arm(move || {
+        touch_event.store(true, Ordering::SeqCst);
+        touch_wake.notify()
+    })?;
     framebuffer.set_active(true);
+    // Where the finger is while it touches the panel.
+    let mut finger: Option<(u16, u16)> = None;
     let mut stats: Option<FrameStats> = None;
     // The start of the last tick. The next one waits `frame_interval` after
     // it; a wake before then runs the posted tasks only. The waker fires on
     // every frame request, the composition's own among them.
     let mut last_tick: Option<Instant> = None;
     loop {
+        if finger.is_some() || touched.swap(false, Ordering::SeqCst) {
+            route_touch(&mut touch, &mut finger, &mut framebuffer, config.density);
+        }
         let now = Instant::now();
         if last_tick.is_none_or(|last| now >= last + config.frame_interval) {
             last_tick = Some(now);
@@ -189,7 +217,9 @@ pub fn run(
         wake.clear();
         framebuffer.run_pending_tasks();
         let schedule = framebuffer.frame_schedule();
-        let deadline = if schedule.needs_update || schedule.needs_frame {
+        // A finger on the panel is read at every frame: its lifting raises no
+        // interrupt that the loop could wait for.
+        let deadline = if finger.is_some() || schedule.needs_update || schedule.needs_frame {
             last_tick.map(|last| last + config.frame_interval)
         } else {
             schedule.next_deadline
@@ -203,6 +233,41 @@ pub fn run(
         }
         wake.wait();
     }
+}
+
+/// Reads the panel and passes what changed since the last read to the
+/// composition: a finger down, moved or lifted. A failed read leaves the
+/// finger where it was.
+fn route_touch(
+    touch: &mut impl Touch,
+    finger: &mut Option<(u16, u16)>,
+    framebuffer: &mut Framebuffer,
+    density: f32,
+) {
+    let sample = match touch.read() {
+        Ok(sample) => sample,
+        Err(error) => {
+            log::warn!("reading the touch panel failed: {error}");
+            return;
+        }
+    };
+    let point = |(x, y): (u16, u16)| (f32::from(x) / density, f32::from(y) / density);
+    match (*finger, sample) {
+        (None, Some(now)) => {
+            let (x, y) = point(now);
+            framebuffer.touch(TouchPhase::Down, x, y);
+        }
+        (Some(before), Some(now)) if now != before => {
+            let (x, y) = point(now);
+            framebuffer.touch(TouchPhase::Move, x, y);
+        }
+        (Some(before), None) => {
+            let (x, y) = point(before);
+            framebuffer.touch(TouchPhase::Up, x, y);
+        }
+        _ => {}
+    }
+    *finger = sample;
 }
 
 const STATS_WINDOW: Duration = Duration::from_secs(5);

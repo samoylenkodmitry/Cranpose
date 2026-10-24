@@ -681,7 +681,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose"
-version = "0.13.0"
+version = "0.17.2"
 dependencies = [
  "accesskit_macos",
  "accesskit_unix",
@@ -719,7 +719,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-animation"
-version = "0.13.0"
+version = "0.17.2"
 dependencies = [
  "cranpose-core",
  "cranpose-ui-graphics",
@@ -727,7 +727,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-app-shell"
-version = "0.13.0"
+version = "0.17.2"
 dependencies = [
  "cranpose-core",
  "cranpose-foundation",
@@ -741,11 +741,14 @@ dependencies = [
 
 [[package]]
 name = "cranpose-capabilities"
-version = "0.13.0"
+version = "0.17.2"
+dependencies = [
+ "fluent-syntax",
+]
 
 [[package]]
 name = "cranpose-core"
-version = "0.13.0"
+version = "0.17.2"
 dependencies = [
  "dispatch2",
  "event-listener",
@@ -765,7 +768,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-foundation"
-version = "0.13.0"
+version = "0.17.2"
 dependencies = [
  "cranpose-core",
  "cranpose-macros",
@@ -779,7 +782,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-liquid"
-version = "0.13.0"
+version = "0.17.2"
 dependencies = [
  "cranpose-animation",
  "cranpose-core",
@@ -795,7 +798,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-macros"
-version = "0.13.0"
+version = "0.17.2"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -816,7 +819,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-render-common"
-version = "0.13.0"
+version = "0.17.2"
 dependencies = [
  "ab_glyph",
  "cranpose-core",
@@ -834,7 +837,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-render-pixels"
-version = "0.13.0"
+version = "0.17.2"
 dependencies = [
  "bytemuck",
  "cranpose-core",
@@ -848,7 +851,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-runtime-std"
-version = "0.13.0"
+version = "0.17.2"
 dependencies = [
  "cranpose-core",
  "web-time",
@@ -856,7 +859,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-services"
-version = "0.13.0"
+version = "0.17.2"
 dependencies = [
  "cranpose-core",
  "cranpose-macros",
@@ -876,7 +879,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-ui"
-version = "0.13.0"
+version = "0.17.2"
 dependencies = [
  "cranpose-animation",
  "cranpose-core",
@@ -896,7 +899,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-ui-graphics"
-version = "0.13.0"
+version = "0.17.2"
 dependencies = [
  "arrayvec",
  "bytemuck",
@@ -908,7 +911,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-ui-layout"
-version = "0.13.0"
+version = "0.17.2"
 dependencies = [
  "cranpose-core",
  "cranpose-ui-graphics",
@@ -1416,6 +1419,16 @@ name = "find-msvc-tools"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
+
+[[package]]
+name = "fluent-syntax"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54f0d287c53ffd184d04d8677f590f4ac5379785529e5e08b1c8083acdd5c198"
+dependencies = [
+ "memchr",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "fnv"

@@ -6,10 +6,8 @@ use cranpose::{prelude::*, text::TextUnit};
 use cranpose_animation::{
     AnimationSpec, RepeatMode, StartOffset, infiniteRepeatable, rememberInfiniteTransition,
 };
-use cranpose_platform_esp_idf::{DisplayConfig, Panel, RunError, run};
+use cranpose_platform_esp_idf::run_board;
 
-const WIDTH: u32 = 320;
-const HEIGHT: u32 = 240;
 static FONTS: &[&[u8]] = &[include_bytes!("../assets/NotoSans-Latin.ttf")];
 
 fn text_style(color: Color, size: f32) -> TextStyle {
@@ -74,6 +72,27 @@ fn Seconds() {
 }
 
 #[composable]
+fn Taps() {
+    let taps = cranpose_core::rememberMutableStateOf(|| 0u32);
+    Box(
+        Modifier::empty()
+            .fill_max_width()
+            .background(Color::from_rgb_u8(98, 160, 255))
+            .rounded_corners(12.0)
+            .clickable(move |_| taps.set(taps.get() + 1))
+            .padding(20.0),
+        BoxSpec::default(),
+        move || {
+            Text(
+                format!("Taps: {}", taps.get()),
+                Modifier::empty(),
+                text_style(Color::from_rgb_u8(18, 20, 30), 18.0),
+            );
+        },
+    );
+}
+
+#[composable]
 fn Screen() {
     Column(
         Modifier::empty()
@@ -82,11 +101,7 @@ fn Screen() {
             .padding(20.0),
         ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(14.0)),
         || {
-            Text(
-                "Cranpose on ESP32-S3",
-                Modifier::empty(),
-                text_style(Color::WHITE, 22.0),
-            );
+            Text(TITLE, Modifier::empty(), text_style(Color::WHITE, 22.0));
             Text(
                 "Composed, laid out and drawn on the chip.",
                 Modifier::empty(),
@@ -94,21 +109,30 @@ fn Screen() {
             );
             Pulse();
             Seconds();
+            Taps();
         },
     );
 }
 
+#[cfg(all(feature = "es3c35p", feature = "e32r35t"))]
+compile_error!("choose one board feature: es3c35p or e32r35t");
+
+#[cfg(feature = "e32r35t")]
+const TITLE: &str = "Cranpose on ESP32";
+#[cfg(not(feature = "e32r35t"))]
+const TITLE: &str = "Cranpose on ESP32-S3";
+
+/// The board the demo runs on.
+#[cfg(feature = "es3c35p")]
+type Board = cranpose_platform_esp_idf::Es3c35p;
+#[cfg(feature = "e32r35t")]
+type Board = cranpose_platform_esp_idf::E32r35t;
+#[cfg(not(any(feature = "es3c35p", feature = "e32r35t")))]
+type Board = cranpose_platform_esp_idf::Qemu;
+
 fn main() {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
-    let Err(error) = Panel::qemu(WIDTH, HEIGHT)
-        .map_err(RunError::from)
-        .and_then(|panel| {
-            let config = DisplayConfig {
-                fonts: FONTS,
-                ..DisplayConfig::default()
-            };
-            run(panel, config, Screen)
-        });
+    let Err(error) = run_board::<Board>(FONTS, Screen);
     log::error!("esp32-demo stopped: {error}");
 }

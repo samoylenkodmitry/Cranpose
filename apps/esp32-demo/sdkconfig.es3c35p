@@ -1,0 +1,5 @@
+# Added to sdkconfig.defaults for the ES3C35P board: its USB-C port is the
+# chip's USB Serial/JTAG, so the log goes there instead of to UART0.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y

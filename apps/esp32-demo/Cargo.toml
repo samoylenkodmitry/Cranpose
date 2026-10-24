@@ -2,7 +2,7 @@
 name = "esp32-demo"
 version = "0.1.0"
 edition = "2024"
-description = "Cranpose on an ESP32-S3 through ESP-IDF"
+description = "Cranpose on an ESP32 through ESP-IDF"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/samoylenkodmitry/cranpose"
 publish = false
@@ -11,8 +11,16 @@ publish = false
 name = "esp32-demo"
 harness = false
 
+[features]
+# Runs on the Hosyond ES3C35P board's display and touch panel.
+es3c35p = []
+# Runs on the 3.5-inch ESP32-32E board's display and touch panel, for the
+# `xtensa-esp32-espidf` target. Without a board feature the demo draws on
+# QEMU's virtual panel.
+e32r35t = []
+
 [dependencies]
-cranpose = { path = "../../crates/cranpose", default-features = false, features = ["framebuffer"] }
+cranpose ={ path = "../../crates/cranpose", default-features = false, features = ["framebuffer"] }
 cranpose-animation = { path = "../../crates/cranpose-animation" }
 cranpose-core = { path = "../../crates/cranpose-core" }
 cranpose-platform-esp-idf = { path = "../../crates/cranpose-platform/esp-idf" }
