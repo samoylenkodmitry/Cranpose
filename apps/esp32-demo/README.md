@@ -43,10 +43,11 @@ README explains the runtime and the toolchain traps.
 `sdkconfig.defaults.esp32s3` and `sdkconfig.defaults.esp32` hold the settings
 of each chip, which ESP-IDF adds by the chip it builds for: the S3 file
 expects a module with 8 MB of octal PSRAM, such as N8R8 or N16R8 (a board with
-quad PSRAM needs `CONFIG_SPIRAM_MODE_QUAD=y` instead), and runs the code from
-it. `sdkconfig.es3c35p` and `sdkconfig.e32r35t` hold the settings of each
-board: console, flash size, and flash in QIO mode, which the bootloader that
-ESP-IDF built turns on, so the `just` recipes flash it with the app.
+quad PSRAM needs `CONFIG_SPIRAM_MODE_QUAD=y` instead). `sdkconfig.es3c35p` and
+`sdkconfig.e32r35t` hold the settings of each board: console, flash size,
+flash in QIO mode, which the bootloader that ESP-IDF built turns on, so the
+`just` recipes flash it with the app, and on the ES3C35P the code run from
+its octal PSRAM.
 `partitions_4mb.csv` fits the classic board's 4 MB of flash. The classic ESP32
 builds for another target, which needs its own `MCU`:
 `just esp32-build-e32r35t` runs
