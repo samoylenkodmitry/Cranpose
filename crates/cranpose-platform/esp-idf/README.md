@@ -91,10 +91,12 @@ boards and QEMU this way, with touch.
   multiples of 4 columns only) and the start-up sequence, which comes from
   the glass vendor. Without a reset line the panel sends the software reset
   command. `Panel::spi` only starts the reset: the first draw sends the
-  start-up sequence, each command after the wait the one before it asks for,
-  so the waits pass while `run` creates the composition and rasterizes the
-  glyphs of the first picture. The backlight turns on once the first picture
-  is on the display.
+  start-up sequence, each command once the wait the one before it asks for
+  has passed, to the microsecond rather than to the next FreeRTOS tick. The
+  waits pass while `run` creates the composition and draws the first
+  picture: whole into PSRAM when the chip has room for it, so only its
+  transfer is left after the waits, else the glyphs of its text. The
+  backlight turns on once the first picture is on the display.
 - `Panel::qemu` opens QEMU's virtual RGB panel.
 - A display's colour transfer is asynchronous: the panel reads a strip by DMA
   after the draw call returns. The presenter keeps two strips in turn and
@@ -169,7 +171,7 @@ on the ESP32-S3 waited for code before them.
 | No check of the app image at boot | `sdkconfig.defaults` | the first frame 470 ms (ES3C35P) and 830 ms (E32R35T) sooner |
 
 The demo's bar now reads its animated width while it draws, so a frame
-neither composes nor lays out: it takes 0.68 ms on the ES3C35P and 1.77 ms
+neither composes nor lays out: it takes 0.67 ms on the ES3C35P and 1.80 ms
 on the E32R35T, against 1.14 and 2.21 ms for the same screen in LVGL. With
 the per-frame code in IRAM, the ES3C35P runs its code from flash: the copy to
 PSRAM would cut its frame to 0.49 ms for 190 ms more before the first frame
