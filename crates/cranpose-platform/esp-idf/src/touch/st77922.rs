@@ -1,13 +1,14 @@
 #![expect(unsafe_code)]
 
-use std::{
-    mem::zeroed,
-    ptr,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use esp_idf_svc::{
-    hal::delay::FreeRtos,
+    hal::{
+        delay::{FreeRtos, TickType},
+        gpio::AnyIOPin,
+        i2c::{I2C0, I2cConfig, I2cDriver},
+        units::Hertz,
+    },
     sys::{self, EspError, esp},
 };
 
@@ -25,11 +26,11 @@ pub struct St77922TouchPins {
     /// The interrupt line, which goes low when the panel has a sample.
     pub interrupt: i32,
     /// The 7-bit I2C address.
-    pub address: u16,
+    pub address: u8,
 }
 
 const I2C_CLOCK_HZ: u32 = 400_000;
-const I2C_TIMEOUT_MS: i32 = 20;
+const I2C_TIMEOUT_MS: u64 = 20;
 const RESET_MS: u32 = 100;
 const FIRMWARE_VERSION_REGISTER: u16 = 0x0000;
 /// The registers from the largest X to the touch count, five bytes.
@@ -54,8 +55,8 @@ const REPORT_TIMEOUT: Duration = Duration::from_millis(150);
 /// The capacitive touch panel that the ST77922 display controller has built
 /// in, on an I2C bus with 16-bit register addresses.
 pub struct St77922Touch {
-    bus: sys::i2c_master_bus_handle_t,
-    device: sys::i2c_master_dev_handle_t,
+    bus: I2cDriver<'static>,
+    address: u8,
     interrupt: Interrupt,
     /// Where the last report put the finger.
     finger: Option<(u16, u16)>,
@@ -65,32 +66,27 @@ pub struct St77922Touch {
 
 impl St77922Touch {
     /// Opens the panel on `pins`: resets it, then logs the firmware version
-    /// and the limits it reports.
+    /// and the limits it reports. The panel takes the chip's first I2C
+    /// controller and its two pins for itself. The bus is `esp-idf-hal`'s
+    /// driver, which an application's own I2C devices use as well: ESP-IDF
+    /// aborts at start-up when its old and new I2C drivers are both linked.
     pub fn new(pins: St77922TouchPins) -> Result<Self, EspError> {
         reset(pins.reset)?;
-        let mut bus_config: sys::i2c_master_bus_config_t = unsafe { zeroed() };
-        bus_config.i2c_port = -1;
-        bus_config.sda_io_num = pins.sda;
-        bus_config.scl_io_num = pins.scl;
-        bus_config.__bindgen_anon_1.clk_source = sys::soc_periph_i2c_clk_src_t_I2C_CLK_SRC_DEFAULT;
-        bus_config.glitch_ignore_cnt = 7;
-        bus_config.flags.set_enable_internal_pullup(1);
-        let mut bus: sys::i2c_master_bus_handle_t = ptr::null_mut();
-        esp!(unsafe { sys::i2c_new_master_bus(&bus_config, &mut bus) })?;
+        let config = I2cConfig::new()
+            .baudrate(Hertz(I2C_CLOCK_HZ))
+            .sda_enable_pullup(true)
+            .scl_enable_pullup(true);
+        // SAFETY: the board hands these peripherals to the panel alone.
+        let bus = unsafe {
+            I2cDriver::new(I2C0::steal(), io_pin(pins.sda)?, io_pin(pins.scl)?, &config)
+        }?;
         let mut touch = Self {
             bus,
-            device: ptr::null_mut(),
+            address: pins.address,
             interrupt: Interrupt::new(pins.interrupt),
             finger: None,
             reported: Instant::now(),
         };
-        let mut device_config: sys::i2c_device_config_t = unsafe { zeroed() };
-        device_config.dev_addr_length = sys::i2c_addr_bit_len_t_I2C_ADDR_BIT_LEN_7;
-        device_config.device_address = pins.address;
-        device_config.scl_speed_hz = I2C_CLOCK_HZ;
-        esp!(unsafe {
-            sys::i2c_master_bus_add_device(touch.bus, &device_config, &mut touch.device)
-        })?;
         let mut version = [0u8; 1];
         touch.read_registers(FIRMWARE_VERSION_REGISTER, &mut version)?;
         let mut limits = [0u8; 5];
@@ -106,18 +102,24 @@ impl St77922Touch {
     }
 
     fn read_registers(&mut self, register: u16, buffer: &mut [u8]) -> Result<(), EspError> {
-        let address = register.to_be_bytes();
-        esp!(unsafe {
-            sys::i2c_master_transmit_receive(
-                self.device,
-                address.as_ptr(),
-                address.len(),
-                buffer.as_mut_ptr(),
-                buffer.len(),
-                I2C_TIMEOUT_MS,
-            )
-        })
+        self.bus.write_read(
+            self.address,
+            &register.to_be_bytes(),
+            buffer,
+            TickType::new_millis(I2C_TIMEOUT_MS).ticks(),
+        )
     }
+}
+
+/// The pin `number` of the chip, taken for the panel.
+///
+/// # Safety
+///
+/// Nothing else may use the pin.
+unsafe fn io_pin(number: i32) -> Result<AnyIOPin<'static>, EspError> {
+    let number = u8::try_from(number)
+        .map_err(|_| EspError::from_infallible::<{ sys::ESP_ERR_INVALID_ARG }>())?;
+    Ok(unsafe { AnyIOPin::steal(number) })
 }
 
 fn reset(pin: i32) -> Result<(), EspError> {
@@ -170,18 +172,5 @@ impl Touch for St77922Touch {
         );
         self.reported = Instant::now();
         Ok(self.finger)
-    }
-}
-
-impl Drop for St77922Touch {
-    fn drop(&mut self) {
-        if !self.device.is_null()
-            && let Err(error) = esp!(unsafe { sys::i2c_master_bus_rm_device(self.device) })
-        {
-            log::warn!("closing the touch panel failed: {error}");
-        }
-        if let Err(error) = esp!(unsafe { sys::i2c_del_master_bus(self.bus) }) {
-            log::warn!("closing the I2C bus failed: {error}");
-        }
     }
 }
