@@ -2,7 +2,7 @@
 
 use std::sync::{
     OnceLock,
-    atomic::{AtomicU32, Ordering},
+    atomic::{AtomicI16, Ordering},
 };
 
 use ab_glyph::{Font, GlyphId};
@@ -15,8 +15,12 @@ pub(crate) const ASCII_COUNT: usize = 95;
 /// Marks a filled glyph slot, above the glyph id's 16 bits and the
 /// advance's 32.
 const KNOWN_GLYPH: u64 = 1 << 48;
-/// An unfilled kerning slot: a NaN, which no kerning value is.
-const UNKNOWN_KERN: u32 = u32::MAX;
+/// An unfilled kerning slot, which holds as well a kerning that is no whole
+/// number of font units, as a font variation may give.
+const UNKNOWN_KERN: i16 = i16::MIN;
+
+/// The kerning in font units after one character, per next character.
+type KernRow = [AtomicI16; ASCII_COUNT];
 
 /// The glyph id, advance and pair kerning of each printable ASCII character
 /// of a face. Measuring and drawing text read them a character at a time,
@@ -27,9 +31,11 @@ pub(crate) struct AsciiGlyphs {
     /// Per character: [`KNOWN_GLYPH`], the glyph id in bits 32..48 and the
     /// advance's bits below, or 0 while unread.
     glyphs: [AtomicU64; ASCII_COUNT],
-    /// Per pair, previous character major: the kerning's bits, or
-    /// [`UNKNOWN_KERN`] while unread. Allocated on the first kerned pair.
-    kerns: OnceLock<Box<[AtomicU32]>>,
+    /// Per previous character, its row of kernings, or [`UNKNOWN_KERN`]
+    /// while unread. A row is allocated when its character first precedes
+    /// another: a screen's text uses a few dozen of the 95, and the whole
+    /// table took 36 KB, a seventh of what a classic ESP32 has free.
+    kerns: [OnceLock<Box<KernRow>>; ASCII_COUNT],
 }
 
 /// The index of a printable ASCII character, `None` for any other.
@@ -42,7 +48,7 @@ impl AsciiGlyphs {
     pub(crate) fn new() -> Self {
         Self {
             glyphs: std::array::from_fn(|_| AtomicU64::new(0)),
-            kerns: OnceLock::new(),
+            kerns: std::array::from_fn(|_| OnceLock::new()),
         }
     }
 
@@ -74,19 +80,19 @@ impl AsciiGlyphs {
         (previous, previous_id): (char, GlyphId),
         (ch, id): (char, GlyphId),
     ) -> Option<f32> {
-        let index = ascii_slot(previous)? * ASCII_COUNT + ascii_slot(ch)?;
-        let kerns = self.kerns.get_or_init(|| {
-            (0..ASCII_COUNT * ASCII_COUNT)
-                .map(|_| AtomicU32::new(UNKNOWN_KERN))
-                .collect()
-        });
-        let cell = &kerns[index];
-        let bits = cell.load(Ordering::Relaxed);
-        if bits != UNKNOWN_KERN {
-            return Some(f32::from_bits(bits));
+        let (row, next) = (ascii_slot(previous)?, ascii_slot(ch)?);
+        let row = self.kerns[row]
+            .get_or_init(|| Box::new(std::array::from_fn(|_| AtomicI16::new(UNKNOWN_KERN))));
+        let cell = &row[next];
+        let units = cell.load(Ordering::Relaxed);
+        if units != UNKNOWN_KERN {
+            return Some(f32::from(units));
         }
         let kern = font.kern_unscaled(previous_id, id);
-        cell.store(kern.to_bits(), Ordering::Relaxed);
+        let whole = kern as i16;
+        if f32::from(whole) == kern && whole != UNKNOWN_KERN {
+            cell.store(whole, Ordering::Relaxed);
+        }
         Some(kern)
     }
 }
