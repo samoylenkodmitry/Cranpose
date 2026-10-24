@@ -7,7 +7,7 @@ const DEV_OVERLAY_SEPARATOR: &str = " | ";
 const DEV_OVERLAY_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 const DEFAULT_FRAME_STAGE_TELEMETRY_THRESHOLD_MS: f64 = 4.0;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 enum DispatchInvalidationKind {
     Pointer,
     Focus,
@@ -609,46 +609,31 @@ where
 
     fn run_dispatch_queues(&mut self) {
         if self.app.app_context.has_pending_pointer_repasses() {
-            let mut applier = self.app.composition.applier_mut();
-            process_pointer_repasses(|node_id| {
-                match clear_dispatch_invalidation(
-                    &mut applier,
-                    node_id,
-                    DispatchInvalidationKind::Pointer,
-                ) {
-                    Ok(true) => {
-                        log::trace!("Cleared pointer repass flag for node #{node_id}");
-                    }
-                    Ok(false) => {}
-                    Err(err) => {
-                        log::debug!("Could not process pointer repass for node #{node_id}: {err}");
-                    }
-                }
-            });
+            self.clear_dispatch_flags(DispatchInvalidationKind::Pointer);
         }
-
         if self.app.app_context.has_pending_focus_invalidations() {
-            let mut applier = self.app.composition.applier_mut();
-            process_focus_invalidations(|node_id| {
-                match clear_dispatch_invalidation(
-                    &mut applier,
-                    node_id,
-                    DispatchInvalidationKind::Focus,
-                ) {
-                    Ok(true) => {
-                        log::trace!("Cleared focus sync flag for node #{node_id}");
-                    }
-                    Ok(false) => {}
-                    Err(err) => {
-                        log::debug!(
-                            "Could not process focus invalidation for node #{node_id}: {err}"
-                        );
-                    }
-                }
-            });
+            self.clear_dispatch_flags(DispatchInvalidationKind::Focus);
         }
-
         self.app.flush_semantics_invalidations();
+    }
+
+    /// Clears the `kind` flag of the nodes its queue holds. Out of line: a
+    /// frame checks the queues and seldom finds work in them, so the frame's
+    /// own code stays small.
+    #[inline(never)]
+    fn clear_dispatch_flags(&mut self, kind: DispatchInvalidationKind) {
+        let mut applier = self.app.composition.applier_mut();
+        let clear = |node_id| match clear_dispatch_invalidation(&mut applier, node_id, kind) {
+            Ok(true) => log::trace!("Cleared the {kind:?} flag of node #{node_id}"),
+            Ok(false) => {}
+            Err(err) => {
+                log::debug!("Could not clear the {kind:?} flag of node #{node_id}: {err}");
+            }
+        };
+        match kind {
+            DispatchInvalidationKind::Pointer => process_pointer_repasses(clear),
+            DispatchInvalidationKind::Focus => process_focus_invalidations(clear),
+        }
     }
 
     fn take_structural_change_parents(&mut self) {

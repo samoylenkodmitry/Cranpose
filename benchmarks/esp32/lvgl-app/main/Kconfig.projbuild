@@ -1,0 +1,11 @@
+menu "LVGL bench"
+
+config BENCH_TEXT_EVERY_FRAME
+    bool "A line of text changes every frame"
+    default n
+    help
+        The seconds line shows a number that counts up every frame, as a
+        clock or a sensor reading does, instead of the seconds. The Cranpose
+        demo's text-drawn and text-composed features show the same line.
+
+endmenu

@@ -33,6 +33,9 @@ where
         self.reveal_node_with(focused, false)
     }
 
+    /// Out of line: a frame checks for a newly focused node and seldom finds
+    /// one, so the frame's own code stays small.
+    #[inline(never)]
     fn reveal_node_with(&mut self, focused: NodeId, remeasure_containers: bool) -> bool {
         let mut revealed = false;
         for index in 0..self.surfaces.len() {

@@ -234,8 +234,8 @@ fn Screen() {
             }
             match ticker_text() {
                 TickerText::None => {}
-                TickerText::Composed => ComposedReading(),
-                TickerText::Drawn => DrawnReading(),
+                TickerText::Composed => ComposedReading(TextStyle::default()),
+                TickerText::Drawn => DrawnReading(Color::WHITE, DrawTextStyle::default().font_size),
             }
             Nested(nest_depth());
         },

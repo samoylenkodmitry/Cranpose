@@ -179,9 +179,11 @@ esp32-bench board app="demo": _disk-guard
 
 # Runs without the per-frame code in IRAM. See
 # crates/cranpose-platform/esp-idf/components/cranpose_hot_code/README.md.
+# `mode` drawn or composed shows a line of text that changes every frame
+# (the demo's text-drawn or text-composed feature).
 # Profiles the demo on a board with the sampler and prints the hottest functions.
-esp32-profile board seconds="40": _disk-guard
-    . "$HOME/export-{{esp32_toolchain}}.sh" && python3 scripts/esp32/board_run.py --board {{board}} --component scripts/esp32/sampler --sdkconfig scripts/esp32/sdkconfig.no_hot_code --seconds {{seconds}} --log target/esp32/profile-{{board}}.log && python3 scripts/esp32/profile.py target/esp32/profile-{{board}}.elf target/esp32/profile-{{board}}.log --crates
+esp32-profile board mode="demo" seconds="40": _disk-guard
+    . "$HOME/export-{{esp32_toolchain}}.sh" && python3 scripts/esp32/board_run.py --board {{board}} {{ if mode == "demo" { "" } else { "--feature text-" + mode } }} --component scripts/esp32/sampler --sdkconfig scripts/esp32/sdkconfig.no_hot_code --seconds {{seconds}} --log target/esp32/profile-{{board}}-{{mode}}.log && python3 scripts/esp32/profile.py target/esp32/profile-{{board}}-{{mode}}.elf target/esp32/profile-{{board}}-{{mode}}.log --crates
 
 # Lints the ESP-IDF platform crate and the demo for the ESP32-S3.
 esp32-clippy: _disk-guard

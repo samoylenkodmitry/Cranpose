@@ -1,0 +1,2 @@
+# The LVGL bench app sets its seconds label every frame (main/Kconfig.projbuild).
+CONFIG_BENCH_TEXT_EVERY_FRAME=y

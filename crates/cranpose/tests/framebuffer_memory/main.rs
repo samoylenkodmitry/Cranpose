@@ -4,7 +4,7 @@
 
 use std::{alloc::System, ops::Range};
 
-use cranpose::{SystemTheme, framebuffer::Framebuffer};
+use cranpose::{SystemTheme, framebuffer::Framebuffer, prelude::*};
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 
 #[path = "../support/reading.rs"]
@@ -60,8 +60,8 @@ fn left_behind(content: impl Fn() + 'static) -> isize {
 /// frames used. One test, as the allocator counts every thread's memory.
 #[test]
 fn text_that_changes_every_frame_leaves_no_memory_behind() {
-    let composed = left_behind(ComposedReading);
-    let drawn = left_behind(DrawnReading);
+    let composed = left_behind(|| ComposedReading(TextStyle::default()));
+    let drawn = left_behind(|| DrawnReading(Color::WHITE, DrawTextStyle::default().font_size));
     println!("left behind: composed {composed} bytes, drawn {drawn} bytes");
     assert!(composed < LEFT_BEHIND_BOUND, "composed: {composed} bytes");
     assert!(drawn < LEFT_BEHIND_BOUND, "drawn: {drawn} bytes");

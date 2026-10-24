@@ -191,6 +191,15 @@ static void count_second(lv_timer_t *timer)
     lv_label_set_text_fmt(seconds_label, "Running for %u s", seconds);
 }
 
+#if CONFIG_BENCH_TEXT_EVERY_FRAME
+// A number that counts up every frame, set as the label's text.
+static void count_reading(lv_timer_t *timer)
+{
+    seconds++;
+    lv_label_set_text_fmt(seconds_label, "Reading %u", seconds);
+}
+#endif
+
 static void count_tap(lv_event_t *event)
 {
     taps++;
@@ -231,7 +240,11 @@ static void build_screen(void)
     lv_anim_start(&sweep);
 
     seconds_label = text(screen, &lv_font_montserrat_14, lv_color_make(200, 204, 220), "Running for 0 s");
+#if CONFIG_BENCH_TEXT_EVERY_FRAME
+    lv_timer_create(count_reading, 16, NULL);
+#else
     lv_timer_create(count_second, 1000, NULL);
+#endif
 
     lv_obj_t *button = plain(screen);
     lv_obj_set_width(button, LV_PCT(100));

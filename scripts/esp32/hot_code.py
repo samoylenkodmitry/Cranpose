@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """Writes the linker script that moves Cranpose's per-frame code into IRAM.
 
-It reads a profile that `scripts/esp32/sampler` printed (`SPC <pc> <count>`
-lines) and the ELF the profile ran, picks the framework functions with the
+It reads profiles that `scripts/esp32/sampler` printed (`SPC <pc> <count>`
+lines), each with the ELF it ran, picks the framework functions with the
 most samples per byte up to a size budget, and writes their sections as
 patterns that match in any application: the crate hashes and back-references
 of the v0 mangled names become wildcards, and so does the crate that
 instantiated a generic function.
 
-Usage: hot_code.py ELF LOG BUDGET_KB OUT_LD [--board NAME]
+Each profile weighs the same: a function's samples count as their share of
+the framework samples of its profile, so a list made from a profile of the
+demo and one of a screen whose text changes every frame serves both.
+
+Usage: hot_code.py BUDGET_KB OUT_LD --profile ELF LOG [--profile ELF LOG ...]
+       [--board NAME]
 """
 
 import argparse
@@ -29,51 +34,80 @@ def framework_function(name, app_crates):
         f"{len(crate)}{crate}" in name for crate in app_crates)
 
 
+class Profile:
+    """One profile: the functions of its ELF and the share of the
+    framework samples each pattern of them took."""
+
+    def __init__(self, elf, log, app_crates):
+        self.starts, self.sizes, self.names = functions(elf, demangle=False)
+        hits = samples(log, self.starts, self.sizes)
+        if not hits:
+            sys.exit(f"{log} has no samples inside functions of {elf}")
+        self.rust = [i for i in range(len(self.names)) if self.names[i].startswith("_R")]
+        candidates = [
+            i for i in hits
+            if self.sizes[i] > 0
+            and framework_function(self.names[i], app_crates)
+            and not any(low <= self.starts[i] < high for low, high in IRAM)
+        ]
+        total = sum(hits[i] for i in hits if self.names[i].startswith("_R"))
+        self.matches = {}
+        self.placed = set()
+        self.shares = {}
+        for i in candidates:
+            text = pattern(self.names[i])
+            if i not in self.matched(text):
+                sys.exit(f"{text} does not match {self.names[i]}")
+            self.shares[text] = self.shares.get(text, 0.0) + hits[i] / total
+
+    def matched(self, text):
+        """The functions of this ELF that `text` matches."""
+        if text not in self.matches:
+            regex = re.compile(fnmatch.translate(text))
+            self.matches[text] = {j for j in self.rust if regex.match(self.names[j])}
+        return self.matches[text]
+
+    def extra(self, text):
+        """The bytes `text` adds to what the patterns placed so far match."""
+        return sum(self.sizes[j] for j in self.matched(text) - self.placed)
+
+    def place(self, text):
+        self.placed |= self.matched(text)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("elf", type=pathlib.Path)
-    parser.add_argument("log", type=pathlib.Path)
     parser.add_argument("budget_kb", type=float)
     parser.add_argument("out", type=pathlib.Path)
+    parser.add_argument("--profile", nargs=2, action="append", required=True,
+                        metavar=("ELF", "LOG"), type=pathlib.Path,
+                        help="a profile and the ELF it ran; repeat for more")
     parser.add_argument("--board", default="the demo")
     parser.add_argument("--app-crate", action="append", default=["esp32_demo"],
                         help="crates of the profiled app, whose functions stay out")
     args = parser.parse_args()
 
-    starts, sizes, names = functions(args.elf, demangle=False)
-    hits = samples(args.log, starts, sizes)
-    if not hits:
-        sys.exit(f"{args.log} has no samples inside functions of {args.elf}")
-    candidates = [
-        i for i in hits
-        if sizes[i] > 0
-        and framework_function(names[i], args.app_crate)
-        and not any(low <= starts[i] < high for low, high in IRAM)
-    ]
+    profiles = [Profile(elf, log, args.app_crate) for elf, log in args.profile]
+    shares = {}
+    for profile in profiles:
+        for text, share in profile.shares.items():
+            shares[text] = shares.get(text, 0.0) + share / len(profiles)
+    sizes = {text: max(profile.extra(text) for profile in profiles) for text in shares}
     budget = args.budget_kb * 1024
-    rust = [i for i in range(len(names)) if names[i].startswith("_R")]
-    placed, patterns, used = set(), [], 0
-    for i in sorted(candidates, key=lambda i: (-hits[i] / sizes[i], names[i])):
-        if i in placed:
-            continue
-        text = pattern(names[i])
-        regex = re.compile(fnmatch.translate(text))
-        matched = {j for j in rust if regex.match(names[j])}
-        if i not in matched:
-            sys.exit(f"{text} does not match {names[i]}")
-        extra = sum(sizes[j] for j in matched - placed)
+    patterns, used, covered = [], 0, 0.0
+    for text in sorted(shares, key=lambda text: (-shares[text] / sizes[text], text)):
+        extra = max(profile.extra(text) for profile in profiles)
         if used + extra <= budget:
-            placed |= matched
+            for profile in profiles:
+                profile.place(text)
             patterns.append(text)
             used += extra
-    covered = sum(hits.get(i, 0) for i in placed)
-    total = sum(hits[i] for i in hits if names[i].startswith("_R"))
-    chosen = placed
+            covered += shares[text]
     patterns.sort()
 
     lines = [
-        f"/* Generated by scripts/esp32/hot_code.py from a profile of {args.board}.",
-        f" * {len(chosen)} functions, {used / 1024:.0f} KB, took {100 * covered / total:.0f}% of the samples in Rust code.",
+        f"/* Generated by scripts/esp32/hot_code.py from {len(profiles)} profiles of {args.board}.",
+        f" * {len(patterns)} patterns, {used / 1024:.0f} KB, took {100 * covered:.0f}% of the samples in Rust code.",
         " * See README.md beside this file. */",
         "SECTIONS",
         "{",
@@ -86,8 +120,8 @@ def main():
     # linker puts the section in the first executable region, IRAM.
     lines += ["  }", "}", "INSERT AFTER .iram0.text;", ""]
     args.out.write_text("\n".join(lines))
-    print(f"{args.out}: {len(chosen)} functions, {used / 1024:.1f} KB, "
-          f"{100 * covered / total:.1f}% of Rust samples, {len(patterns)} patterns")
+    print(f"{args.out}: {len(patterns)} patterns, {used / 1024:.1f} KB, "
+          f"{100 * covered:.1f}% of Rust samples")
 
 
 main()

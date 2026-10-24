@@ -24,6 +24,13 @@ where
         {
             return;
         }
+        self.refocus_modal_surfaces(modal_may_be_live);
+    }
+
+    /// Moves focus into the top modal of each surface whose top modal
+    /// changed, or back out of it. Out of line, as most frames have no modal.
+    #[inline(never)]
+    fn refocus_modal_surfaces(&mut self, modal_may_be_live: bool) {
         for surface in &mut self.surfaces {
             let modal = if modal_may_be_live {
                 surface.top_modal(&mut self.app)
