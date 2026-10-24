@@ -271,6 +271,26 @@ pub(crate) fn draw_raster_window(
     }
 }
 
+/// Rasterizes into the glyph cache the glyphs of the text of `scene` that
+/// reaches `window`, so that drawing the window takes them from the cache.
+pub(crate) fn prepare_raster_window(scene: &RasterScene, window: ClipBounds, text: &TextRaster) {
+    for draw in &scene.texts {
+        if is_static_text(draw)
+            && let Some(raster_rect) = text_raster_rect(draw)
+            && text_bounds(draw, window).is_some()
+        {
+            // A part of one pixel visits every glyph, and the cache keeps
+            // each glyph it misses, whether the part shows it or not.
+            let part = Rect {
+                width: 1.0,
+                height: 1.0,
+                ..raster_rect
+            };
+            rasterize_text_part(draw, raster_rect, part, text);
+        }
+    }
+}
+
 /// Draws one item of `scene` into `target`, where it reaches the target's
 /// window. A shape, an image or a shadow cuts itself to the window as it
 /// places itself; a text is checked first, as rasterizing it costs more.
@@ -1156,7 +1176,26 @@ fn draw_text(
     diagnostics: &RenderDiagnostics,
     text: &TextRaster,
 ) {
-    if let Some((pixels, rect)) = rasterize_text(draw, text) {
+    let Some(raster_rect) = text_raster_rect(draw) else {
+        return;
+    };
+    // A text on whole pixels rasterizes only its part inside the target, as
+    // a strip takes a few rows of it; one between pixels samples its
+    // neighbours and rasterizes whole.
+    let part = if raster_rect.x.fract() == 0.0 && raster_rect.y.fract() == 0.0 {
+        let Some(part) = clip_rect_to_bounds(raster_rect, None, target) else {
+            return;
+        };
+        Rect {
+            x: part.min_x as f32,
+            y: part.min_y as f32,
+            width: (part.max_x - part.min_x) as f32,
+            height: (part.max_y - part.min_y) as f32,
+        }
+    } else {
+        raster_rect
+    };
+    if let Some((pixels, rect)) = rasterize_text_part(draw, raster_rect, part, text) {
         blit_rasterized_text(target, rect, draw.clip, pixels, diagnostics);
     }
 }
@@ -1165,10 +1204,21 @@ fn draw_text(
 /// rect that image covers.
 pub(crate) fn rasterize_text(draw: &TextDraw, text: &TextRaster) -> Option<(TextPixels, Rect)> {
     let raster_rect = text_raster_rect(draw)?;
+    rasterize_text_part(draw, raster_rect, raster_rect, text)
+}
+
+/// `part` of `draw`, whose text covers `raster_rect`, rasterized into an
+/// image of its own, straight alpha, and the rect that image covers.
+fn rasterize_text_part(
+    draw: &TextDraw,
+    raster_rect: Rect,
+    part: Rect,
+    text: &TextRaster,
+) -> Option<(TextPixels, Rect)> {
     let mut glyphs = text.glyphs.try_borrow_mut().ok();
     let pixels = rasterize_annotated_text_region_pixels(
         draw.text.as_ref(),
-        raster_rect,
+        part,
         Point::new(raster_rect.x, raster_rect.y),
         &draw.text_style,
         draw.color,
@@ -1178,25 +1228,29 @@ pub(crate) fn rasterize_text(draw: &TextDraw, text: &TextRaster) -> Option<(Text
         glyphs.as_deref_mut(),
     )?;
     let rect = Rect {
-        x: raster_rect.x,
-        y: raster_rect.y,
+        x: part.x,
+        y: part.y,
         width: pixels.width as f32,
         height: pixels.height as f32,
     };
     Some((pixels, rect))
 }
 
+/// Whether `draw` keeps its glyphs on whole pixels, where the glyph cache
+/// serves them.
+fn is_static_text(draw: &TextDraw) -> bool {
+    draw.text_style
+        .paragraph_style
+        .text_motion
+        .unwrap_or(TextMotion::Static)
+        == TextMotion::Static
+}
+
 fn text_raster_rect(draw: &TextDraw) -> Option<Rect> {
     if draw.scale.max(0.0) == 0.0 {
         return None;
     }
-    let static_text_motion = draw
-        .text_style
-        .paragraph_style
-        .text_motion
-        .unwrap_or(TextMotion::Static)
-        == TextMotion::Static;
-    if !static_text_motion {
+    if !is_static_text(draw) {
         return Some(draw.rect);
     }
     let snap_delta = draw

@@ -21,6 +21,9 @@ small-block-alloc = []
 bytemuck = "1.25"
 cranpose = { path = "../../cranpose", default-features = false, features = ["framebuffer"] }
 esp-idf-svc = "0.53"
+# Its link arguments reach the build script, which checks that ESP-IDF
+# links this copy's components.
+esp-idf-sys = { version = "0.38", default-features = false }
 log = "0.4"
 thiserror = "2.0.21"
 

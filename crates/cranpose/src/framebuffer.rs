@@ -198,6 +198,17 @@ impl Framebuffer {
         self.drawn_picture = Some(self.picture);
     }
 
+    /// Rasterizes the glyphs of the text in `area` of the picture
+    /// [`Self::changed_areas`] took last, so that [`Self::draw_area`] takes
+    /// them from the glyph cache. A host calls it while it waits anyway, such
+    /// as for a display that is still starting up.
+    pub fn prepare_area(&mut self, area: PixelRect) {
+        let drawing = &self.drawing;
+        self.shell.primary().with_renderer(|renderer| {
+            renderer.prepare_picture_area(drawing, area);
+        });
+    }
+
     /// Draws `area` of the picture [`Self::changed_areas`] took last into
     /// `pixels`, as row-major, straight-alpha RGBA8 rows of `area.width`
     /// pixels, `area.height` of them.

@@ -10,10 +10,10 @@ animated frame:
 
 | Per frame | instructions | cycles waiting for code | cycles waiting for data |
 | --- | --- | --- | --- |
-| ES3C35P (ESP32-S3), all code in PSRAM | 67K | 302K | 38K |
-| ES3C35P, this component on | 67K | 38K | 11K |
+| ES3C35P (ESP32-S3), all code in flash | 66K | 732K | 85K |
+| ES3C35P, this component on | 66K | 94K | 19K |
 | E32R35T (classic ESP32), all code in flash | 57K | 805K | 110K |
-| E32R35T, this component on | 57K | 361K | 64K |
+| E32R35T, this component on | 57K | 358K | 64K |
 
 This component links the framework functions that a frame runs most into
 IRAM, the internal RAM that the CPU fetches without the cache. A linker
@@ -22,10 +22,10 @@ output section after ESP-IDF's own IRAM code.
 
 | Demo frame | update | drawing and sending |
 | --- | --- | --- |
-| ES3C35P, without | 0.89 ms | 0.65 ms |
-| ES3C35P, with 128 KB | 0.18 ms | 0.32 ms |
+| ES3C35P, without | 2.01 ms | 1.21 ms |
+| ES3C35P, with 128 KB | 0.29 ms | 0.39 ms |
 | E32R35T, without | 2.30 ms | 1.30 ms |
-| E32R35T, with 64 KB | 0.95 ms | 0.82 ms |
+| E32R35T, with 64 KB | 0.93 ms | 0.83 ms |
 
 The demo's bar reads its animated width while it draws, so its frames
 neither compose nor lay out. The functions an app runs only when it
@@ -35,7 +35,7 @@ recomposes each frame, most of composition and layout, stay in the cache.
 
 - ESP32-S3: IRAM and the heap share the same internal RAM, so the section
   (128 KB of functions and their literals) is that much less internal heap:
-  the demo has 86 KB of it free with the section and 214 KB without. With
+  the demo has 89 KB of it free with the section and 218 KB without. With
   PSRAM, the heap takes larger blocks from PSRAM.
 - Classic ESP32: the section takes 66 KB of IRAM, which the heap otherwise
   only lends to 32-bit allocations.

@@ -503,6 +503,12 @@ impl<'d> Panel<'d> {
         }
     }
 
+    /// Returns whether the controller's setup still waits to run, which the
+    /// first draw finishes.
+    pub(crate) fn is_setting_up(&self) -> bool {
+        matches!(&self.device, Device::Dcs(dcs) if dcs.setup.is_some())
+    }
+
     /// Returns how many pixel buffers the panel needs so that the next strip
     /// is drawn while the last one is on its way.
     pub(crate) fn buffers(&self) -> usize {

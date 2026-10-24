@@ -2028,6 +2028,7 @@ pub fn rasterize_text_to_image(
     rasterize_text_pixels(
         text,
         rect,
+        Point::new(rect.x, rect.y),
         style,
         fallback_color,
         font_size,
@@ -2053,6 +2054,7 @@ pub fn rasterize_text_to_image_with_glyph_cache(
     rasterize_text_pixels(
         text,
         rect,
+        Point::new(rect.x, rect.y),
         style,
         fallback_color,
         font_size,
@@ -2067,6 +2069,7 @@ pub fn rasterize_text_to_image_with_glyph_cache(
 fn rasterize_text_pixels(
     text: &str,
     rect: Rect,
+    text_origin: Point,
     style: &TextStyle,
     fallback_color: Color,
     font_size: f32,
@@ -2081,7 +2084,7 @@ fn rasterize_text_pixels(
                 span_styles: &[],
             },
             rect,
-            Point::new(rect.x, rect.y),
+            text_origin,
             style,
             fallback_color,
             font_size,
@@ -2096,6 +2099,7 @@ fn rasterize_text_pixels(
         TextRasterImageRequest {
             text,
             rect,
+            text_origin,
             style,
             fallback_color,
             font_size,
@@ -2418,13 +2422,13 @@ fn rasterize_styled_text_region(
     }
     if text.span_styles.is_empty()
         && !requires_font_layout(text.text, style)
-        && text_origin.x == rect.x
-        && text_origin.y == rect.y
+        && ((text_origin.x == rect.x && text_origin.y == rect.y) || paints_part_directly(style))
         && let Some(font) = fonts.single_font_for_text(text.text, style)
     {
         return rasterize_text_pixels(
             text.text,
             rect,
+            text_origin,
             style,
             fallback_color,
             font_size,
@@ -3300,6 +3304,7 @@ pub fn rasterize_text_to_image_with_font(
         TextRasterImageRequest {
             text,
             rect,
+            text_origin: Point::new(rect.x, rect.y),
             style,
             fallback_color,
             font_size,
@@ -3449,9 +3454,13 @@ impl TextRasterCanvas {
     }
 }
 
+/// A text to rasterize: the image covers `rect`, the text's lines start at
+/// `text_origin`. A static text with a solid brush may cover only part of
+/// `rect` from an origin outside it.
 struct TextRasterImageRequest<'a> {
     text: &'a str,
     rect: Rect,
+    text_origin: Point,
     style: &'a TextStyle,
     fallback_color: Color,
     font_size: f32,
@@ -3467,6 +3476,7 @@ fn rasterize_text_to_image_impl(
     let TextRasterImageRequest {
         text,
         rect,
+        text_origin,
         style,
         fallback_color,
         font_size,
@@ -3508,12 +3518,12 @@ fn rasterize_text_to_image_impl(
         == TextMotion::Static;
 
     let origin_x = if static_text_motion {
-        0.0
+        text_origin.x - rect.x
     } else {
         rect.x.fract()
     };
     let origin_y = if static_text_motion {
-        0.0
+        text_origin.y - rect.y
     } else {
         rect.y.fract()
     };
@@ -3559,10 +3569,25 @@ fn rasterize_text_to_image_impl(
         weight_synthesis,
         style_synthesis,
         glyph_cache,
-        None,
+        Some(&GlyphRasterClip::new(width, height, &paint)),
         |mask| canvas.paint(mask, &paint),
     );
     canvas.into_pixels()
+}
+
+/// Whether the single-font path paints a part of `style`'s text from an
+/// origin outside the part: a static text with a solid brush, whose pixels
+/// take nothing from the part's size or place.
+fn paints_part_directly(style: &TextStyle) -> bool {
+    style
+        .paragraph_style
+        .text_motion
+        .is_none_or(|motion| motion == TextMotion::Static)
+        && style
+            .span_style
+            .brush
+            .as_ref()
+            .is_none_or(|brush| matches!(brush, Brush::Solid(_)))
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -4836,27 +4861,33 @@ fn raster_glyph_mask(
             weight_synthesis,
             style_synthesis,
         );
-        if let Some(mask) = cache.get(&key, glyph) {
-            return clip
-                .is_none_or(|clip| {
-                    clip.intersects(Rect {
-                        x: mask.origin_x as f32,
-                        y: mask.origin_y as f32,
-                        width: mask.width as f32,
-                        height: mask.height as f32,
-                    })
+        // A missed glyph goes into the cache even when the clip leaves it
+        // out: the next part of the same text, a strip below, draws it.
+        let mask = match cache.get(&key, glyph) {
+            Some(mask) => mask,
+            None => cache.put(
+                key,
+                glyph,
+                build_complete_glyph_mask(
+                    font,
+                    glyph,
+                    raster_style,
+                    weight_synthesis,
+                    style_synthesis,
+                    None,
+                )?,
+            ),
+        };
+        return clip
+            .is_none_or(|clip| {
+                clip.intersects(Rect {
+                    x: mask.origin_x as f32,
+                    y: mask.origin_y as f32,
+                    width: mask.width as f32,
+                    height: mask.height as f32,
                 })
-                .then_some(mask);
-        }
-        let mask = build_complete_glyph_mask(
-            font,
-            glyph,
-            raster_style,
-            weight_synthesis,
-            style_synthesis,
-            clip,
-        )?;
-        return Some(cache.put(key, glyph, mask));
+            })
+            .then_some(mask);
     }
     build_complete_glyph_mask(
         font,

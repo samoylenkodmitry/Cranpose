@@ -10,13 +10,12 @@
 //! `SkTMaskGamma<3, 3, 3>` with Skia's default parameters (sRGB transfer,
 //! contrast 0.5), which both Android's HWUI and Compose Desktop use.
 
-use std::sync::OnceLock;
-
 use cranpose_ui_graphics::{Brush, Color};
 
+/// The bits of luminance that pick a class; `build.rs` writes a table for
+/// each class.
 const LUMINANCE_BITS: u32 = 3;
 const LUMINANCE_CLASSES: usize = 1 << LUMINANCE_BITS;
-const CONTRAST: f32 = 0.5;
 
 type CorrectionTable = [u8; 256];
 
@@ -46,7 +45,7 @@ impl TextLuminance {
 
     /// The correction for glyph masks of this class.
     pub fn correction(self) -> MaskGammaCorrection {
-        MaskGammaCorrection(correction_table_of(usize::from(self.0)))
+        MaskGammaCorrection(&CORRECTION_TABLES[usize::from(self.0)])
     }
 }
 
@@ -92,50 +91,11 @@ pub(crate) fn unit_to_u8(value: f32) -> u8 {
     cranpose_ui_graphics::whole::round(value.clamp(0.0, 1.0) * 255.0) as u8
 }
 
-/// The table of luminance class `class`, built the first time a text of
-/// that class draws: a screen shows few classes, and each table takes 256
-/// `powf` calls.
-fn correction_table_of(class: usize) -> &'static CorrectionTable {
-    static TABLES: [OnceLock<CorrectionTable>; LUMINANCE_CLASSES] =
-        [const { OnceLock::new() }; LUMINANCE_CLASSES];
-    TABLES[class].get_or_init(|| correction_table(class))
-}
-
-/// `SkTMaskGamma_build_correcting_lut` for the class's representative
-/// luminance: the class index repeated across eight bits, as
-/// `sk_t_scale255` spreads it. No class sits within 1/256 of mid grey, so
-/// the source and the guessed destination always differ.
-fn correction_table(class: usize) -> CorrectionTable {
-    let class = class as u32;
-    let representative = (class << 5) | (class << 2) | (class >> 1);
-    let src = representative as f32 / 255.0;
-    let dst = 1.0 - src;
-    let linear_src = srgb_to_linear(src);
-    let linear_dst = srgb_to_linear(dst);
-    let contrast = CONTRAST * linear_dst;
-    std::array::from_fn(|index| {
-        let raw = index as f32 / 255.0;
-        let boosted = raw + (1.0 - raw) * contrast * raw;
-        let blended = linear_to_srgb(linear_src * boosted + (1.0 - boosted) * linear_dst);
-        unit_to_u8((blended - dst) / (src - dst))
-    })
-}
-
-fn srgb_to_linear(value: f32) -> f32 {
-    if value <= 0.04045 {
-        value / 12.92
-    } else {
-        ((value + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-fn linear_to_srgb(value: f32) -> f32 {
-    if value <= 0.003_130_8 {
-        value * 12.92
-    } else {
-        1.055 * value.powf(1.0 / 2.4) - 0.055
-    }
-}
+/// The correction table of each luminance class, which `build.rs` works
+/// out: Skia's `SkTMaskGamma_build_correcting_lut` with the sRGB transfer
+/// and contrast 0.5.
+static CORRECTION_TABLES: [CorrectionTable; LUMINANCE_CLASSES] =
+    include!(concat!(env!("OUT_DIR"), "/mask_gamma.rs"));
 
 #[cfg(test)]
 #[path = "tests/text_mask_gamma_tests.rs"]

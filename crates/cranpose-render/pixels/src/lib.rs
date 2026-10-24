@@ -226,6 +226,23 @@ impl PixelsRenderer {
         )
     }
 
+    /// Rasterizes the glyphs of the text in `area` of `picture` into the
+    /// renderer's glyph cache, so that drawing the area later takes them from
+    /// it. A host calls it while it waits anyway, such as for a display that
+    /// is still starting up.
+    pub fn prepare_picture_area(&self, picture: &Picture, area: PixelRect) {
+        let Some(raster) = picture.raster.as_ref() else {
+            return;
+        };
+        let window = draw::ClipBounds {
+            min_x: i32::try_from(area.x).unwrap_or(i32::MAX),
+            min_y: i32::try_from(area.y).unwrap_or(i32::MAX),
+            max_x: i32::try_from(area.x.saturating_add(area.width)).unwrap_or(i32::MAX),
+            max_y: i32::try_from(area.y.saturating_add(area.height)).unwrap_or(i32::MAX),
+        };
+        draw::prepare_raster_window(raster, window, &self.text);
+    }
+
     /// Draws `area` of `picture` into `pixels` as straight-alpha RGBA8 rows of
     /// `area.width` pixels, `area.height` of them. Draws nothing before the
     /// first [`Self::update_picture`] or when `pixels` is shorter than the area.

@@ -9,6 +9,10 @@
 //! its width in the draw phase instead, as a progress indicator that takes
 //! its progress as a function does: frames then draw again without composing
 //! or laying out.
+//!
+//! `STRIP_ROWS` (default 0, an area at once) draws each area in strips of
+//! that many rows, as a host with a small buffer does, and `REDRAW=all`
+//! draws the whole picture each frame, as a host does after a screen change.
 
 use std::hint::black_box;
 
@@ -41,6 +45,54 @@ fn nest_depth() -> usize {
 /// Whether the bar reads its width while it draws: `BAR=draw`.
 fn bar_reads_in_draw() -> bool {
     std::env::var("BAR").is_ok_and(|bar| bar == "draw")
+}
+
+/// How each frame's pixels are drawn: `STRIP_ROWS` and `REDRAW`.
+#[derive(Clone, Copy)]
+struct Drawing {
+    strip_rows: u32,
+    whole_picture: bool,
+}
+
+impl Drawing {
+    fn from_env() -> Self {
+        Self {
+            strip_rows: u32::try_from(env_count("STRIP_ROWS")).unwrap_or(u32::MAX),
+            whole_picture: std::env::var("REDRAW").is_ok_and(|redraw| redraw == "all"),
+        }
+    }
+
+    /// Draws the areas `framebuffer` changed, or its whole picture, into
+    /// `pixels`.
+    fn draw(self, framebuffer: &mut Framebuffer, areas: &mut Vec<PixelRect>, pixels: &mut [u8]) {
+        framebuffer.changed_areas(areas);
+        if self.whole_picture {
+            areas.clear();
+            areas.push(PixelRect {
+                x: 0,
+                y: 0,
+                width: WIDTH,
+                height: HEIGHT,
+            });
+        }
+        for area in areas.iter() {
+            let rows = match self.strip_rows {
+                0 => area.height,
+                rows => rows,
+            };
+            let mut top = area.y;
+            while top < area.y + area.height {
+                let strip = PixelRect {
+                    y: top,
+                    height: rows.min(area.y + area.height - top),
+                    ..*area
+                };
+                let len = strip.width as usize * strip.height as usize * 4;
+                framebuffer.draw_area(strip, &mut pixels[..len]);
+                top += strip.height;
+            }
+        }
+    }
 }
 
 fn env_count(name: &str) -> usize {
@@ -157,21 +209,17 @@ fn Screen() {
     );
 }
 
-/// Runs frames `from..to`, drawing what each changed into `pixels`.
+/// Runs frames `from..to`, drawing each into `pixels` as `drawing` says.
 fn run_frames(
     framebuffer: &mut Framebuffer,
-    areas: &mut Vec<PixelRect>,
-    pixels: &mut [u8],
+    (areas, pixels): (&mut Vec<PixelRect>, &mut [u8]),
+    drawing: Drawing,
     from: u64,
     to: u64,
 ) {
     for frame in from..to {
         if framebuffer.tick(frame * FRAME_NANOS) {
-            framebuffer.changed_areas(areas);
-            for area in areas.iter() {
-                let len = area.width as usize * area.height as usize * 4;
-                framebuffer.draw_area(*area, &mut pixels[..len]);
-            }
+            drawing.draw(framebuffer, areas, pixels);
         }
         framebuffer.run_pending_tasks();
     }
@@ -180,14 +228,14 @@ fn run_frames(
 #[inline(never)]
 fn steady_frames(
     framebuffer: &mut Framebuffer,
-    areas: &mut Vec<PixelRect>,
-    pixels: &mut [u8],
+    target: (&mut Vec<PixelRect>, &mut [u8]),
+    drawing: Drawing,
     frames: u64,
 ) {
     run_frames(
         framebuffer,
-        areas,
-        pixels,
+        target,
+        drawing,
         WARMUP_FRAMES,
         WARMUP_FRAMES + frames,
     );
@@ -204,10 +252,17 @@ fn main() {
         return;
     };
     framebuffer.set_active(true);
+    let drawing = Drawing::from_env();
     let mut areas = Vec::new();
     let mut pixels = vec![0u8; WIDTH as usize * HEIGHT as usize * 4];
-    run_frames(&mut framebuffer, &mut areas, &mut pixels, 0, WARMUP_FRAMES);
-    steady_frames(&mut framebuffer, &mut areas, &mut pixels, frames);
+    run_frames(
+        &mut framebuffer,
+        (&mut areas, &mut pixels),
+        drawing,
+        0,
+        WARMUP_FRAMES,
+    );
+    steady_frames(&mut framebuffer, (&mut areas, &mut pixels), drawing, frames);
     println!(
         "frames {frames} checksum {}",
         black_box(pixels.iter().map(|&byte| u64::from(byte)).sum::<u64>())
