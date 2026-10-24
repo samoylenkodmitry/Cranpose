@@ -9,7 +9,8 @@ use cranpose_render_common::{
     layer_shadow::ShadowRRect,
     shape_sdf,
     software_text_raster::{
-        SoftwareGlyphRasterCache, TextPixels, rasterize_annotated_text_region_pixels,
+        SoftwareGlyphRasterCache, TextPixelWindow, TextPixels, blend_byte_pixel,
+        paint_annotated_text_region, rasterize_annotated_text_region_pixels,
     },
     text_measure::SoftwareTextResources,
 };
@@ -1186,6 +1187,9 @@ fn draw_text(
         let Some(part) = clip_rect_to_bounds(raster_rect, None, target) else {
             return;
         };
+        if paint_text_over_target(draw, raster_rect, target, text) {
+            return;
+        }
         Rect {
             x: part.min_x as f32,
             y: part.min_y as f32,
@@ -1198,6 +1202,52 @@ fn draw_text(
     if let Some((pixels, rect)) = rasterize_text_part(draw, raster_rect, part, text) {
         blit_rasterized_text(target, rect, draw.clip, pixels, diagnostics);
     }
+}
+
+/// Paints the part of `draw`, a text on whole pixels covering `raster_rect`,
+/// that the target and the draw's clip leave, straight over the target's
+/// pixels. Returns whether it did: a text that needs an image of its own,
+/// as a gradient or a shadow does, goes through
+/// [`rasterize_text_part`] instead.
+fn paint_text_over_target(
+    draw: &TextDraw,
+    raster_rect: Rect,
+    target: &mut Target,
+    text: &TextRaster,
+) -> bool {
+    let Some(bounds) = clip_rect_to_bounds(raster_rect, draw.clip, target) else {
+        return true;
+    };
+    let first = (bounds.min_y - target.top) as usize * target.width as usize
+        + (bounds.min_x - target.left) as usize;
+    let stride = target.width as usize;
+    let Some(pixels) = target.pixels.as_chunks_mut::<4>().0.get_mut(first..) else {
+        return true;
+    };
+    let window = TextPixelWindow {
+        pixels,
+        stride,
+        width: (bounds.max_x - bounds.min_x) as u32,
+        height: (bounds.max_y - bounds.min_y) as u32,
+    };
+    let mut glyphs = text.glyphs.try_borrow_mut().ok();
+    paint_annotated_text_region(
+        draw.text.as_ref(),
+        Rect {
+            x: bounds.min_x as f32,
+            y: bounds.min_y as f32,
+            width: window.width as f32,
+            height: window.height as f32,
+        },
+        Point::new(raster_rect.x, raster_rect.y),
+        &draw.text_style,
+        draw.color,
+        draw.font_size,
+        draw.scale,
+        text.resources.fonts(),
+        glyphs.as_deref_mut(),
+        window,
+    )
 }
 
 /// `draw` rasterized into an image of its own, straight alpha, and the
@@ -1317,31 +1367,6 @@ fn blit_image_between_pixels(
                 continue;
             }
             blend_pixel(dst, src, BlendMode::SrcOver, diagnostics);
-        }
-    }
-}
-
-/// Draws a straight-alpha byte pixel over `dst`, source over, with the bytes
-/// `blend_pixel` works out in floats. Each channel is the rational
-/// `(s * a + d * (255 - a)) / 255` rounded: its fraction is a multiple of
-/// 1/255, never one half, and the float error stays far below that gap, so
-/// whole numbers round it the same way.
-fn blend_byte_pixel(dst: &mut [u8; 4], src: [u8; 4]) {
-    let alpha = u32::from(src[3]);
-    match alpha {
-        0 => {}
-        255 => *dst = src,
-        _ => {
-            let keep = 255 - alpha;
-            let mix = |source: u8, under: u8| {
-                ((u32::from(source) * alpha + u32::from(under) * keep + 127) / 255) as u8
-            };
-            *dst = [
-                mix(src[0], dst[0]),
-                mix(src[1], dst[1]),
-                mix(src[2], dst[2]),
-                mix(255, dst[3]),
-            ];
         }
     }
 }
