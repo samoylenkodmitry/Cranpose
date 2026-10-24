@@ -10,6 +10,12 @@
 //! its progress as a function does: frames then draw again without composing
 //! or laying out.
 //!
+//! `TEXT=frame` adds a line of text whose number changes every frame, as a
+//! clock or a sensor reading does: each frame composes, measures and draws
+//! that text again. `TEXT=draw` draws that line in the draw phase instead,
+//! reading the number there: frames then draw it again without composing or
+//! laying out.
+//!
 //! `STRIP_ROWS` (default 0, an area at once) draws each area in strips of
 //! that many rows, as a host with a small buffer does, and `REDRAW=all`
 //! draws the whole picture each frame, as a host does after a screen change.
@@ -40,6 +46,23 @@ fn static_rows() -> usize {
 /// should not grow with them either.
 fn nest_depth() -> usize {
     env_count("NEST_DEPTH")
+}
+
+/// The line of text that changes every frame, if any: `TEXT=frame` composes
+/// it, `TEXT=draw` draws it.
+#[derive(Clone, Copy, PartialEq)]
+enum TickerText {
+    None,
+    Composed,
+    Drawn,
+}
+
+fn ticker_text() -> TickerText {
+    match std::env::var("TEXT").as_deref() {
+        Ok("frame") => TickerText::Composed,
+        Ok("draw") => TickerText::Drawn,
+        _ => TickerText::None,
+    }
 }
 
 /// Whether the bar reads its width while it draws: `BAR=draw`.
@@ -180,6 +203,50 @@ fn Nested(depth: usize) {
     }
 }
 
+/// A number that counts up one every frame.
+#[composable]
+fn ticker_count() -> State<f32> {
+    let transition = rememberInfiniteTransition("ticker");
+    let spec = infiniteRepeatable(
+        AnimationSpec::linear(100_000),
+        RepeatMode::Restart,
+        StartOffset::default(),
+    );
+    transition.animateFloat(0.0, 6000.0, spec, "count")
+}
+
+/// The number in a line of text, composed again each frame.
+#[composable]
+fn Ticker() {
+    let count = ticker_count().value();
+    Text(
+        format!("Reading {}", count as u32),
+        Modifier::empty(),
+        TextStyle::default(),
+    );
+}
+
+/// The number in a line of text that reads it while it draws.
+#[composable]
+fn DrawnTicker() {
+    let count = ticker_count();
+    Box(
+        Modifier::empty()
+            .width(120.0)
+            .height(20.0)
+            .draw_behind(move |scope| {
+                scope.draw_text_from(
+                    Point::new(0.0, 0.0),
+                    Brush::solid(Color::WHITE),
+                    &format!("Reading {}", count.value() as u32),
+                    &DrawTextStyle::default(),
+                );
+            }),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
 #[composable]
 fn Screen() {
     Column(
@@ -203,6 +270,11 @@ fn Screen() {
                         TextStyle::default(),
                     );
                 });
+            }
+            match ticker_text() {
+                TickerText::None => {}
+                TickerText::Composed => Ticker(),
+                TickerText::Drawn => DrawnTicker(),
             }
             Nested(nest_depth());
         },
