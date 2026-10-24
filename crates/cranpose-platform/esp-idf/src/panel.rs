@@ -14,13 +14,13 @@ use std::{
 use cranpose::framebuffer::{PixelRect, SurfaceError};
 use esp_idf_svc::{
     hal::{
-        delay::BLOCK,
+        delay::{BLOCK, Ets, FreeRtos, TICK_RATE_HZ},
         gpio::{self, AnyOutputPin, Level, Pin, PinDriver},
         spi::{
             SpiDriver,
             config::{Mode, Phase, Polarity},
         },
-        task::queue::Queue,
+        task::{do_yield, queue::Queue},
         units::Hertz,
     },
     sys::{self, EspError, esp, esp_lcd_panel_handle_t, esp_lcd_panel_io_handle_t},
@@ -213,6 +213,23 @@ struct Setup {
     at: Instant,
 }
 
+/// Waits until `deadline`. A FreeRTOS delay ends at a tick, up to a tick after
+/// the time it was asked for, which made the start-up sequence's three waits
+/// 20 ms longer: the delay covers the whole ticks but the last ones, and a
+/// busy wait the rest.
+fn wait_until(deadline: Instant) {
+    let tick = Duration::from_secs(1) / TICK_RATE_HZ;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left < tick * 2 {
+            Ets::delay_us(u32::try_from(left.as_micros()).unwrap_or(u32::MAX));
+            return;
+        }
+        // A delay of n ticks ends after n - 1 to n of them.
+        FreeRtos::delay_ms(u32::try_from((left - tick).as_millis()).unwrap_or(u32::MAX));
+    }
+}
+
 /// The completion count that the panel IO's interrupt callback advances.
 struct Transfers {
     done: AtomicU32,
@@ -229,7 +246,14 @@ unsafe extern "C" fn color_transfer_done(
     let transfers = unsafe { &*transfers.cast::<Transfers>() };
     transfers.done.fetch_add(1, Ordering::Release);
     // A full slot already holds a token for the waiter.
-    transfers.signal.send_back(0, 0).unwrap_or(false)
+    let woken = transfers.signal.send_back(0, 0).unwrap_or(false);
+    // ESP-IDF 5.5's panel IO drops the callback's answer, so the woken task
+    // would run at the next tick, up to 10 ms later: the switch is asked
+    // for here.
+    if woken {
+        do_yield();
+    }
+    woken
 }
 
 fn spi_mode(mode: Mode) -> i32 {
@@ -255,7 +279,7 @@ impl Dcs<'_> {
             return Ok(());
         };
         loop {
-            std::thread::sleep(setup.at.saturating_duration_since(Instant::now()));
+            wait_until(setup.at);
             let wait = if setup.resetting {
                 if let Some(reset) = self.reset.as_mut() {
                     reset.set_high()?;
@@ -529,7 +553,7 @@ impl<'d> Panel<'d> {
     pub(crate) fn draw_rect(
         &mut self,
         area: PixelRect,
-        pixels: &TransferBuffer,
+        pixels: &PixelBuffer,
     ) -> Result<(), EspError> {
         let len = area.width as usize * area.height as usize;
         if len > pixels.len {
@@ -574,20 +598,30 @@ impl Drop for Panel<'_> {
     }
 }
 
-pub(crate) struct TransferBuffer {
+/// `len` encoded pixels in memory of the heap's capabilities.
+pub(crate) struct PixelBuffer {
     pixels: NonNull<u16>,
     len: usize,
 }
 
-impl TransferBuffer {
-    pub(crate) fn new(len: usize) -> Result<Self, SurfaceError> {
-        let caps = sys::MALLOC_CAP_DMA | sys::MALLOC_CAP_INTERNAL;
-        let memory = unsafe { sys::heap_caps_calloc(len, size_of::<u16>(), caps) };
-        let pixels = NonNull::new(memory.cast::<u16>()).ok_or(SurfaceError)?;
-        Ok(Self { pixels, len })
+impl PixelBuffer {
+    /// Internal memory a panel reads by DMA.
+    pub(crate) fn for_transfer(len: usize) -> Result<Self, SurfaceError> {
+        Self::with_caps(len, sys::MALLOC_CAP_DMA | sys::MALLOC_CAP_INTERNAL).ok_or(SurfaceError)
     }
 
-    fn as_slice(&self) -> &[u16] {
+    /// PSRAM, when the chip has it with room for `len` pixels.
+    pub(crate) fn in_psram(len: usize) -> Option<Self> {
+        Self::with_caps(len, sys::MALLOC_CAP_SPIRAM | sys::MALLOC_CAP_8BIT)
+    }
+
+    fn with_caps(len: usize, caps: u32) -> Option<Self> {
+        let memory = unsafe { sys::heap_caps_calloc(len, size_of::<u16>(), caps) };
+        let pixels = NonNull::new(memory.cast::<u16>())?;
+        Some(Self { pixels, len })
+    }
+
+    pub(crate) fn as_slice(&self) -> &[u16] {
         unsafe { slice::from_raw_parts(self.pixels.as_ptr(), self.len) }
     }
 
@@ -596,7 +630,7 @@ impl TransferBuffer {
     }
 }
 
-impl Drop for TransferBuffer {
+impl Drop for PixelBuffer {
     fn drop(&mut self) {
         unsafe { sys::heap_caps_free(self.pixels.as_ptr().cast()) };
     }

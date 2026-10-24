@@ -49,11 +49,11 @@ from flash on both boards.
 
 | | Cranpose ES3C35P | LVGL ES3C35P | Cranpose E32R35T | LVGL E32R35T |
 | --- | --- | --- | --- | --- |
-| Frame | 0.68 ms | 1.14 ms | 1.77 ms | 2.21 ms |
-| Instructions | 66K | 159K | 57K | 181K |
-| Cycles waiting for code | 94K | 58K | 358K | 229K |
-| Cycles waiting for data | 19K | 8K | 64K | 35K |
-| First frame after reset | 377 ms | 342 ms | 450 ms | 439 ms |
+| Frame | 0.67 ms | 1.14 ms | 1.80 ms | 2.21 ms |
+| Instructions | 65K | 159K | 56K | 181K |
+| Cycles waiting for code | 85K | 58K | 365K | 229K |
+| Cycles waiting for data | 16K | 8K | 66K | 35K |
+| First frame after reset | 337 ms | 342 ms | 420 ms | 439 ms |
 | Internal RAM free (lowest) | 89 KB (58 KB) | 135 KB (103 KB) | 66 KB (54 KB) | 198 KB (198 KB) |
 | App image | 2.96 MB | 0.52 MB | 2.90 MB | 0.47 MB |
 
@@ -63,7 +63,8 @@ of IRAM for the framework holds less of a frame's code than the ESP32-S3's
 128 KB.
 
 Before its first frame each app waits out the panel's reset and start-up
-sequence, about 260 ms on the ES3C35P and 220 ms on the E32R35T. Cranpose
-creates its composition and rasterizes the glyphs of its first picture
-meanwhile, then draws and sends the picture; LVGL draws it from its
-pre-rendered fonts after the wait.
+sequence, about 260 ms on the ES3C35P and 220 ms on the E32R35T. LVGL
+draws its first picture after the wait. Cranpose creates its composition
+meanwhile and draws its first picture ahead: whole into PSRAM on the
+ES3C35P, so only its transfer is left after the wait, and the glyphs of its
+text on the E32R35T, which has no PSRAM.
