@@ -151,6 +151,24 @@ esp32-setup:
 esp32-build: _disk-guard
     . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && cargo build --release
 
+# Builds the demo for the Hosyond ES3C35P board: an ESP32-S3 with a display
+# and a touch panel.
+esp32-build-es3c35p: _disk-guard
+    . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.es3c35p" cargo build --release --features es3c35p
+
+# Builds the demo for the 3.5-inch ESP32-32E board (E32R35T): a classic ESP32
+# with a display and a touch panel.
+esp32-build-e32r35t: _disk-guard
+    . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && MCU=esp32 cargo build --release --target xtensa-esp32-espidf --features e32r35t
+
+# Flashes the ES3C35P demo to the board on `port` and shows its log.
+esp32-flash-es3c35p port: esp32-build-es3c35p
+    . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && espflash flash --monitor --port {{port}} --partition-table partitions.csv target/xtensa-esp32s3-espidf/release/esp32-demo
+
+# Flashes the E32R35T demo to the board on `port` and shows its log.
+esp32-flash-e32r35t port: esp32-build-e32r35t
+    . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && espflash flash --monitor --baud 460800 --port {{port}} --partition-table partitions_4mb.csv target/xtensa-esp32-espidf/release/esp32-demo
+
 # Lints the ESP-IDF platform crate and the demo for the ESP32-S3.
 esp32-clippy: _disk-guard
     . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && cargo clippy --workspace --release -- -D warnings

@@ -1,4 +1,4 @@
-//! Runs a Cranpose application on an ESP32-S3 display under ESP-IDF.
+//! Runs a Cranpose application on an ESP32 display under ESP-IDF.
 //!
 //! [`run`] composes the application into a [`cranpose::framebuffer::Framebuffer`].
 //! For each new picture it draws on the CPU only the areas the picture changes,
@@ -11,6 +11,7 @@
 mod panel;
 mod present;
 mod small_alloc;
+mod touch;
 
 use std::{
     convert::Infallible,
@@ -24,12 +25,16 @@ use std::{
 pub use cranpose::framebuffer::{SurfaceError, TouchPhase};
 use cranpose::{SystemTheme, framebuffer::Framebuffer};
 use esp_idf_svc::{
-    hal::{delay::BLOCK, task::queue::Queue},
+    hal::{
+        delay::{BLOCK, FreeRtos},
+        task::queue::Queue,
+    },
     sys::{ESP_ERR_NO_MEM, EspError},
-    timer::EspTaskTimerService,
+    timer::{EspTaskTimerService, EspTimer},
 };
-pub use panel::{Panel, PixelFormat};
+pub use panel::{Backlight, Controller, InitCommand, Lines, Panel, SpiWiring};
 pub use small_alloc::SmallBlockAllocator;
+pub use touch::{NoTouch, Orientation, St77922Touch, Touch, Xpt2046Calibration, Xpt2046Touch};
 
 #[cfg(feature = "small-block-alloc")]
 #[global_allocator]
@@ -61,6 +66,17 @@ pub struct DisplayConfig {
     /// font, which the `embedded-default-font` feature of `cranpose` adds:
     /// 1.3 MB of flash.
     pub fonts: &'static [&'static [u8]],
+    /// The rows of a strip of the drawing pass. A strip takes 10 bytes of
+    /// internal memory a pixel: 4 for its RGBA drawing and 2 for each of the
+    /// two RGB565 buffers the panel reads by DMA in turn. Taller strips cost
+    /// fewer draw and transfer calls a picture.
+    pub strip_rows: u32,
+}
+
+impl DisplayConfig {
+    /// The rows of a strip that fit 25 KB of internal memory on a 320-pixel
+    /// wide display.
+    pub const DEFAULT_STRIP_ROWS: u32 = 8;
 }
 
 impl Default for DisplayConfig {
@@ -70,9 +86,16 @@ impl Default for DisplayConfig {
             theme: SystemTheme::Light,
             frame_interval: Duration::from_micros(16_667),
             fonts: &[],
+            strip_rows: Self::DEFAULT_STRIP_ROWS,
         }
     }
 }
+
+/// The longest the loop runs without blocking. While frames take longer than
+/// the frame interval, the loop never waits, and the idle task of its core
+/// would not run: ESP-IDF's task watchdog reports it after
+/// `CONFIG_ESP_TASK_WDT_TIMEOUT_S`, 5 s by default.
+const IDLE_SHARE_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Wakes the run loop from any thread. Most notices come from the loop's own
 /// thread during a tick, when it does not sleep: they set `pending` and
@@ -99,14 +122,14 @@ impl Wake {
         })
     }
 
-    fn notify(&self) {
+    /// Returns whether an interrupt that called this must yield to the
+    /// task it woke.
+    fn notify(&self) -> bool {
         // Sequentially consistent on both sides: either the sleeper sees
         // `pending` before it blocks, or this sees `sleeping` and leaves a
         // token for it. A full slot holds one already.
         self.pending.store(true, Ordering::SeqCst);
-        if self.sleeping.load(Ordering::SeqCst) {
-            let _ = self.signal.send_back(0, 0);
-        }
+        self.sleeping.load(Ordering::SeqCst) && self.signal.send_back(0, 0).unwrap_or(false)
     }
 
     /// Forgets the notices that came so far: the caller handles what they
@@ -118,28 +141,33 @@ impl Wake {
     /// Sleeps until a notice arrives, or returns at once if one came since
     /// the last wait or clear. A token left by a notice that raced the end
     /// of an earlier wait returns one wait early; the loop then waits again.
-    fn wait(&self) {
+    /// Returns whether it slept.
+    fn wait(&self) -> bool {
         if self.pending.swap(false, Ordering::SeqCst) {
-            return;
+            return false;
         }
         self.sleeping.store(true, Ordering::SeqCst);
-        if !self.pending.load(Ordering::SeqCst) {
+        let slept = !self.pending.load(Ordering::SeqCst);
+        if slept {
             let _ = self.signal.recv_front(BLOCK);
         }
         self.sleeping.store(false, Ordering::SeqCst);
         self.pending.store(false, Ordering::SeqCst);
+        slept
     }
 }
 
 /// Composes `content` on `panel` and drives it on the calling task until an
-/// error stops it.
+/// error stops it. `touch` delivers the fingers on the panel to `content`;
+/// [`NoTouch`] stands for a display without one.
 ///
 /// The calling task becomes the UI thread. Its stack holds composition and
 /// layout, so give it at least 32 KB (`CONFIG_ESP_MAIN_TASK_STACK_SIZE` for
 /// the main task). An `esp_timer` wakes the task at each frame or timed
 /// event, so frame timing does not depend on `CONFIG_FREERTOS_HZ`.
 pub fn run(
-    mut panel: Panel,
+    panel: Panel<'_>,
+    mut touch: impl Touch,
     config: DisplayConfig,
     content: impl FnMut() + 'static,
 ) -> Result<Infallible, RunError> {
@@ -152,56 +180,190 @@ pub fn run(
         config.fonts,
         content,
     )?;
-    let mut presenter = Presenter::new(&panel)?;
+    let presenter = Presenter::new(&panel, config.strip_rows)?;
     let wake = Arc::new(Wake::new()?);
     let waker = Arc::clone(&wake);
-    framebuffer.set_frame_waker(move || waker.notify());
+    framebuffer.set_frame_waker(move || {
+        waker.notify();
+    });
     // The FreeRTOS tick would round each wait up to whole ticks.
     let timer_wake = Arc::clone(&wake);
     let timers = EspTaskTimerService::new()?;
-    let deadline_timer = timers.timer(move || timer_wake.notify())?;
+    let timer = timers.timer(move || {
+        timer_wake.notify();
+    })?;
+    let touched = Arc::new(AtomicBool::new(false));
+    let touch_wake = Arc::clone(&wake);
+    let touch_event = Arc::clone(&touched);
+    touch.arm(move || {
+        touch_event.store(true, Ordering::SeqCst);
+        touch_wake.notify()
+    })?;
     framebuffer.set_active(true);
-    let mut stats: Option<FrameStats> = None;
-    // The start of the last tick. The next one waits `frame_interval` after
-    // it; a wake before then runs the posted tasks only. The waker fires on
-    // every frame request, the composition's own among them.
-    let mut last_tick: Option<Instant> = None;
+    let mut screen = Screen {
+        framebuffer,
+        presenter,
+        panel,
+        touch,
+        config,
+        start,
+        finger: None,
+        stats: None,
+        last_tick: None,
+    };
+    let mut pacer = Pacer {
+        wake,
+        timer,
+        slept: false,
+        awake_since: start,
+    };
     loop {
-        let now = Instant::now();
-        if last_tick.is_none_or(|last| now >= last + config.frame_interval) {
-            last_tick = Some(now);
-            let elapsed = now.duration_since(start).as_nanos();
-            if framebuffer.tick(u64::try_from(elapsed).unwrap_or(u64::MAX)) {
-                let updated = Instant::now();
-                presenter.present(&mut framebuffer, &mut panel)?;
-                let presented = Instant::now();
-                let phases = FramePhases {
-                    update: updated.duration_since(now),
-                    present: presented.duration_since(updated),
-                };
-                FrameStats::record_into(&mut stats, start, phases, presented);
-            }
+        if screen.finger.is_some() || touched.swap(false, Ordering::SeqCst) {
+            screen.route_touch();
         }
+        let now = Instant::now();
+        pacer.begin_round(now);
+        screen.tick(now)?;
         // A tick notifies the wake itself when the composition asks for
-        // its next frame, which the schedule below covers. Clearing before
+        // its next frame, which the deadline covers. Clearing before
         // running the posted tasks keeps every later notice for the wait,
         // so the loop does not go round once more for the tick's own one.
-        wake.clear();
-        framebuffer.run_pending_tasks();
-        let schedule = framebuffer.frame_schedule();
-        let deadline = if schedule.needs_update || schedule.needs_frame {
-            last_tick.map(|last| last + config.frame_interval)
+        pacer.wake.clear();
+        let deadline = screen.next_deadline();
+        pacer.sleep(deadline)?;
+    }
+}
+
+/// The application's side of the loop: its composition, the panel it is
+/// drawn on and the touch panel it reads.
+struct Screen<'d, T> {
+    framebuffer: Framebuffer,
+    presenter: Presenter,
+    panel: Panel<'d>,
+    touch: T,
+    config: DisplayConfig,
+    start: Instant,
+    /// Where the finger is while it touches the panel.
+    finger: Option<(u16, u16)>,
+    stats: Option<FrameStats>,
+    /// The start of the last tick. The next one waits `frame_interval` after
+    /// it; a wake before then runs the posted tasks only. The waker fires on
+    /// every frame request, the composition's own among them.
+    last_tick: Option<Instant>,
+}
+
+impl<T: Touch> Screen<'_, T> {
+    /// Composes a frame and presents what it changes, unless a frame interval
+    /// has not passed since the last tick.
+    fn tick(&mut self, now: Instant) -> Result<(), EspError> {
+        if self
+            .last_tick
+            .is_some_and(|last| now < last + self.config.frame_interval)
+        {
+            return Ok(());
+        }
+        self.last_tick = Some(now);
+        let elapsed = now.duration_since(self.start).as_nanos();
+        if !self
+            .framebuffer
+            .tick(u64::try_from(elapsed).unwrap_or(u64::MAX))
+        {
+            return Ok(());
+        }
+        let updated = Instant::now();
+        self.presenter
+            .present(&mut self.framebuffer, &mut self.panel)?;
+        let presented = Instant::now();
+        let phases = FramePhases {
+            update: updated.duration_since(now),
+            present: presented.duration_since(updated),
+        };
+        FrameStats::record_into(&mut self.stats, self.start, phases, presented);
+        Ok(())
+    }
+
+    /// Runs the tasks posted to the UI thread and returns when the loop must
+    /// run next: at the next frame while the composition or a finger on the
+    /// panel needs one, else at the composition's next timed event.
+    fn next_deadline(&mut self) -> Option<Instant> {
+        self.framebuffer.run_pending_tasks();
+        let schedule = self.framebuffer.frame_schedule();
+        // A finger on the panel is read at every frame: its lifting raises no
+        // interrupt that the loop could wait for.
+        if self.finger.is_some() || schedule.needs_update || schedule.needs_frame {
+            self.last_tick.map(|last| last + self.config.frame_interval)
         } else {
             schedule.next_deadline
-        };
-        if let Some(deadline) = deadline {
-            let delay = deadline.saturating_duration_since(Instant::now());
-            if delay.is_zero() {
-                continue;
-            }
-            deadline_timer.after(delay)?;
         }
-        wake.wait();
+    }
+
+    /// Reads the panel and passes what changed since the last read to the
+    /// composition: a finger down, moved or lifted. A failed read leaves the
+    /// finger where it was.
+    fn route_touch(&mut self) {
+        let sample = match self.touch.read() {
+            Ok(sample) => sample,
+            Err(error) => {
+                log::warn!("reading the touch panel failed: {error}");
+                return;
+            }
+        };
+        let density = self.config.density;
+        let point = |(x, y): (u16, u16)| (f32::from(x) / density, f32::from(y) / density);
+        let touch = match (self.finger, sample) {
+            (None, Some(now)) => Some((TouchPhase::Down, now)),
+            (Some(before), Some(now)) if now != before => Some((TouchPhase::Move, now)),
+            (Some(before), None) => Some((TouchPhase::Up, before)),
+            _ => None,
+        };
+        if let Some((phase, position)) = touch {
+            let (x, y) = point(position);
+            self.framebuffer.touch(phase, x, y);
+        }
+        self.finger = sample;
+    }
+}
+
+/// Puts the loop to sleep until its deadline or a notice, and lets the idle
+/// task run when frames leave no time to sleep.
+struct Pacer {
+    wake: Arc<Wake>,
+    timer: EspTimer<'static>,
+    /// Whether the last round slept, which lets the idle task run.
+    slept: bool,
+    /// When the loop woke from its last sleep.
+    awake_since: Instant,
+}
+
+impl Pacer {
+    /// Notes the start of a round at `now`.
+    fn begin_round(&mut self, now: Instant) {
+        if self.slept {
+            self.awake_since = now;
+        }
+    }
+
+    /// Sleeps until `deadline` or a notice, or until a notice without a
+    /// deadline. A deadline that has passed leaves no sleep, unless the loop
+    /// has been awake for [`IDLE_SHARE_INTERVAL`]: then it sleeps one
+    /// FreeRTOS tick, the shortest sleep there is.
+    fn sleep(&mut self, deadline: Option<Instant>) -> Result<(), EspError> {
+        let now = Instant::now();
+        let delay = deadline.map(|deadline| deadline.saturating_duration_since(now));
+        self.slept = match delay {
+            Some(delay) if delay.is_zero() => false,
+            delay => {
+                if let Some(delay) = delay {
+                    self.timer.after(delay)?;
+                }
+                self.wake.wait()
+            }
+        };
+        if !self.slept && now.duration_since(self.awake_since) >= IDLE_SHARE_INTERVAL {
+            FreeRtos::delay_ms(1);
+            self.slept = true;
+        }
+        Ok(())
     }
 }
 

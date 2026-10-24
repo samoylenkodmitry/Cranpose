@@ -3,13 +3,14 @@ use esp_idf_svc::sys::EspError;
 
 use crate::panel::{Panel, PixelFormat, TransferBuffer};
 
-const STRIP_PIXELS: usize = 320 * 24;
-
 pub(crate) struct Presenter {
     areas: Vec<PixelRect>,
     /// One word a pixel, so the encode loads each pixel's four bytes at once.
     rgba: Vec<u32>,
-    strip: TransferBuffer,
+    /// The buffers the panel reads, in turn: while it reads one, the next
+    /// strip is drawn and encoded into the other.
+    strips: Vec<TransferBuffer>,
+    next_strip: usize,
     strip_pixels: usize,
 }
 
@@ -43,16 +44,21 @@ fn encode_with(rgba: &[u32], strip: &mut [u16], encoded: impl Fn(u32) -> u16) {
 }
 
 impl Presenter {
-    pub(crate) fn new(panel: &Panel) -> Result<Self, SurfaceError> {
-        let strip_pixels = STRIP_PIXELS.max(panel.width() as usize);
+    /// A presenter that draws `strip_rows` rows of `panel` at a time.
+    pub(crate) fn new(panel: &Panel<'_>, strip_rows: u32) -> Result<Self, SurfaceError> {
+        let strip_pixels = panel.width() as usize * panel.aligned_rows(strip_rows.max(1)) as usize;
         let mut rgba = Vec::new();
         rgba.try_reserve_exact(strip_pixels)
             .map_err(|_| SurfaceError)?;
         rgba.resize(strip_pixels, 0);
+        let strips = (0..panel.buffers())
+            .map(|_| TransferBuffer::new(strip_pixels))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             areas: Vec::new(),
             rgba,
-            strip: TransferBuffer::new(strip_pixels)?,
+            strips,
+            next_strip: 0,
             strip_pixels,
         })
     }
@@ -60,11 +66,13 @@ impl Presenter {
     pub(crate) fn present(
         &mut self,
         framebuffer: &mut Framebuffer,
-        panel: &mut Panel,
+        panel: &mut Panel<'_>,
     ) -> Result<(), EspError> {
         framebuffer.changed_areas(&mut self.areas);
-        for area in &self.areas {
-            let rows_per_strip = (self.strip_pixels / area.width.max(1) as usize).max(1) as u32;
+        for &area in &self.areas {
+            let area = panel.align(area);
+            let rows_per_strip =
+                panel.aligned_rows((self.strip_pixels / area.width.max(1) as usize) as u32);
             let mut top = area.y;
             while top < area.y + area.height {
                 let rows = rows_per_strip.min(area.y + area.height - top);
@@ -79,15 +87,18 @@ impl Presenter {
                     strip_area,
                     bytemuck::cast_slice_mut(&mut self.rgba[..pixels]),
                 );
+                panel.wait_for_free_buffer();
+                let strip = &mut self.strips[self.next_strip];
                 encode(
                     &self.rgba[..pixels],
-                    &mut self.strip.as_mut_slice()[..pixels],
+                    &mut strip.as_mut_slice()[..pixels],
                     panel.format(),
                 );
-                panel.draw_rect(strip_area, &self.strip)?;
+                panel.draw_rect(strip_area, strip)?;
+                self.next_strip = (self.next_strip + 1) % self.strips.len();
                 top += rows;
             }
         }
-        Ok(())
+        panel.finish_picture()
     }
 }

@@ -57,6 +57,18 @@ const MAX_GAUSSIAN_KERNEL_HALF: i32 = 128;
 const SOFTWARE_TEXT_GLYPH_METRICS_SLOTS_LOG2: u32 = 11;
 /// Slots of the per-pair kerning cache, as a power of two.
 const SOFTWARE_TEXT_KERN_METRICS_SLOTS_LOG2: u32 = 13;
+
+/// Slots of the kerning cache of a glyph mask cache that holds `capacity`
+/// masks, as a power of two: a text has about as many pairs as glyphs, so a
+/// cache with a few hundred masks needs a few hundred slots. The most is
+/// `SOFTWARE_TEXT_KERN_METRICS_SLOTS_LOG2`: with 32 bytes a slot, a fixed
+/// 8192-slot table took 256 KB, which a chip with 300 KB of RAM lacks.
+fn kern_slots_log2(capacity: usize) -> u32 {
+    capacity
+        .clamp(1, 1 << SOFTWARE_TEXT_KERN_METRICS_SLOTS_LOG2)
+        .next_power_of_two()
+        .ilog2()
+}
 #[cfg(feature = "embedded-default-font")]
 #[doc(hidden)]
 pub const DEFAULT_SOFTWARE_TEXT_FONT_BYTES: &[u8] = include_bytes!("../assets/NotoSansMerged.ttf");
@@ -1773,7 +1785,7 @@ impl SoftwareGlyphRasterCache {
     pub fn with_capacity_at_least_one(capacity: usize) -> Self {
         Self {
             masks: BoundedLruCache::with_capacity_at_least_one(capacity),
-            kerns: DirectMappedCache::with_slots_log2(SOFTWARE_TEXT_KERN_METRICS_SLOTS_LOG2),
+            kerns: DirectMappedCache::with_slots_log2(kern_slots_log2(capacity)),
             segment_metrics: SegmentGlyphMetrics::new(),
             hits: 0,
             misses: 0,

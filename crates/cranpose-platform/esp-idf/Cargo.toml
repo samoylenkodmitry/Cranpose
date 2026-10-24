@@ -5,7 +5,7 @@ edition = "2024"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/samoylenkodmitry/cranpose"
 readme = "README.md"
-description = "Runs Cranpose applications on ESP32-S3 displays through ESP-IDF"
+description = "Runs Cranpose applications on ESP32 displays through ESP-IDF"
 publish = false
 # Built, linted and formatted with the ESP-IDF demo, the workspace with the
 # ESP-IDF cargo configuration.
@@ -19,7 +19,7 @@ small-block-alloc = []
 
 [dependencies]
 bytemuck = "1.25"
-cranpose ={ path = "../../cranpose", default-features = false, features = ["framebuffer"] }
+cranpose = { path = "../../cranpose", default-features = false, features = ["framebuffer"] }
 esp-idf-svc = "0.53"
 log = "0.4"
 thiserror = "2.0.21"
