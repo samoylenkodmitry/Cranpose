@@ -2,7 +2,7 @@ plugins {
     id("com.android.application")
 }
 
-val lynx = "4.1.0"
+val lynx = "4.1.2"
 // PrimJS, Lynx's JavaScript engine, has releases of its own.
 val primjs = "4.1.1"
 
