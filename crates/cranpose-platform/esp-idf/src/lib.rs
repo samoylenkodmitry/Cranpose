@@ -224,12 +224,17 @@ pub fn run(
         let now = Instant::now();
         pacer.begin_round(now);
         screen.tick(now)?;
+        // The touch panel's setup goes on between the first pictures.
+        let touch_setup = screen.touch.set_up(Instant::now())?;
         // A tick notifies the wake itself when the composition asks for
         // its next frame, which the deadline covers. Clearing before
         // running the posted tasks keeps every later notice for the wait,
         // so the loop does not go round once more for the tick's own one.
         pacer.wake.clear();
-        let deadline = screen.next_deadline();
+        let deadline = match (screen.next_deadline(), touch_setup) {
+            (Some(frame), Some(setup)) => Some(frame.min(setup)),
+            (frame, setup) => frame.or(setup),
+        };
         pacer.sleep(deadline)?;
     }
 }

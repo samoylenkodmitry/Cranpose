@@ -911,12 +911,15 @@ fn rebuild_surface_scene<R>(
     let mut applier = app.composition.applier_mut();
     dirt.log(frame, scene_dirty, dirt.rebuild_path());
     let rebuild_result = if dirt.use_visual_update() {
+        // Nothing was composed or laid out: the partial nodes are the draw
+        // lane's, whose draws read state that changed.
         surface.renderer.update_visual_scene_from_applier(
             &mut applier,
             root,
             viewport_size,
             SceneUpdates {
-                content: &dirt.partial_dirty_nodes,
+                content: &[],
+                draws: &dirt.draw_dirty_nodes,
                 layers: &dirt.layer_property_nodes,
                 moved: &dirt.moved_nodes,
             },
@@ -928,6 +931,7 @@ fn rebuild_surface_scene<R>(
             viewport_size,
             SceneUpdates {
                 content: &dirt.partial_dirty_nodes,
+                draws: &[],
                 layers: &dirt.layer_property_nodes,
                 moved: &dirt.moved_nodes,
             },

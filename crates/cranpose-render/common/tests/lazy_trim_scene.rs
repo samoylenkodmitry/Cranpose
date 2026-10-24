@@ -148,6 +148,7 @@ fn dropping_leading_keyed_lazy_rows_one_at_a_time_repaints_the_survivors() {
                 &mut graph,
                 SceneUpdates {
                     content: &dirty,
+                    draws: &[],
                     layers: &[],
                     moved: &moved,
                 },

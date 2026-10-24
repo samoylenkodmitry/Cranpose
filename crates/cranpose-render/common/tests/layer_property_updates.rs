@@ -216,6 +216,7 @@ fn layer_only_update_keeps_outer_draw_and_child_canvas_recordings() {
         &mut graph,
         SceneUpdates {
             content: &[],
+            draws: &[],
             layers: &[parent],
             moved: &[],
         },
@@ -280,6 +281,7 @@ fn parent_layer_update_republishes_child_text_viewport_geometry() {
         &mut graph,
         SceneUpdates {
             content: &[],
+            draws: &[],
             layers: &[parent],
             moved: &[],
         },
@@ -354,6 +356,7 @@ fn parent_layer_and_child_content_dirt_are_both_applied() {
         &mut graph,
         SceneUpdates {
             content: &[child],
+            draws: &[],
             layers: &[parent],
             moved: &[],
         },
@@ -430,6 +433,7 @@ fn parent_content_and_child_layer_dirt_match_a_fresh_rebuild() {
         &mut graph,
         SceneUpdates {
             content: &[parent],
+            draws: &[],
             layers: &[child],
             moved: &[],
         },

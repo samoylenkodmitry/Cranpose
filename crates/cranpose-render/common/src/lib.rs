@@ -80,15 +80,17 @@ use cranpose_ui_graphics::Size;
 
 /// Describes scene nodes whose recorded content or layer properties changed.
 ///
-/// Content updates may re-record a node's draw commands. Layer updates change
-/// graphics-layer properties while retaining those recordings. If a node
-/// appears in both slices, content dirt takes precedence.
+/// Content updates may re-record a node's draw commands. Draw updates
+/// re-record them and keep everything else of the node's layer. Layer updates
+/// change graphics-layer properties while retaining those recordings. A node
+/// in two slices takes the content update.
 /// Layout, child structure, and draw-command changes belong in `content`.
 ///
 /// ```
 /// use cranpose_render_common::SceneUpdates;
 /// let updates = SceneUpdates {
 ///     content: &[1],
+///     draws: &[4],
 ///     layers: &[2],
 ///     moved: &[3],
 /// };
@@ -99,6 +101,10 @@ pub struct SceneUpdates<'a> {
     /// Nodes whose recorded draw content must be refreshed; a node may be
     /// named more than once.
     pub content: &'a [cranpose_core::NodeId],
+    /// Nodes whose draw commands read state that changed while their layout,
+    /// modifiers and children stayed: the scene records their draws again
+    /// and keeps their layers.
+    pub draws: &'a [cranpose_core::NodeId],
     /// Nodes whose graphics-layer properties changed without content dirt.
     pub layers: &'a [cranpose_core::NodeId],
     /// Nodes that moved in their parent and kept their size: the scene moves
@@ -111,6 +117,7 @@ impl<'a> SceneUpdates<'a> {
     pub const fn content(nodes: &'a [cranpose_core::NodeId]) -> Self {
         Self {
             content: nodes,
+            draws: &[],
             layers: &[],
             moved: &[],
         }
@@ -118,7 +125,10 @@ impl<'a> SceneUpdates<'a> {
 
     /// Returns whether the update contains no dirty nodes.
     pub const fn is_empty(self) -> bool {
-        self.content.is_empty() && self.layers.is_empty() && self.moved.is_empty()
+        self.content.is_empty()
+            && self.draws.is_empty()
+            && self.layers.is_empty()
+            && self.moved.is_empty()
     }
 }
 

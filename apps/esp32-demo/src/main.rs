@@ -31,27 +31,30 @@ fn Pulse() {
         RepeatMode::Reverse,
         StartOffset::default(),
     );
-    let progress = transition
-        .animateFloat(0.1, 1.0, spec, "pulse_width")
-        .value();
+    let progress = transition.animateFloat(0.1, 1.0, spec, "pulse_width");
+    // The bar reads the animated width while it draws: each frame draws it
+    // again without composing or laying out the screen.
     Box(
         Modifier::empty()
             .fill_max_width()
             .height(16.0)
             .background(Color::from_rgb_u8(40, 44, 64))
-            .rounded_corners(8.0),
+            .rounded_corners(8.0)
+            .draw_behind(move |scope| {
+                let size = scope.size();
+                scope.draw_round_rect_at(
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: size.width * progress.value(),
+                        height: size.height,
+                    },
+                    Brush::solid(Color::from_rgb_u8(98, 160, 255)),
+                    CornerRadii::uniform(8.0),
+                );
+            }),
         BoxSpec::default(),
-        move || {
-            Box(
-                Modifier::empty()
-                    .fill_max_width_fraction(progress)
-                    .height(16.0)
-                    .background(Color::from_rgb_u8(98, 160, 255))
-                    .rounded_corners(8.0),
-                BoxSpec::default(),
-                || {},
-            );
-        },
+        || {},
     );
 }
 

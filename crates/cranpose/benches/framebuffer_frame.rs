@@ -5,7 +5,10 @@
 //! `FRAMES` frames (default 600) run in `steady_frames` after a warm-up; under
 //! callgrind, `--toggle-collect=*steady_frames*` counts only those.
 //! `STATIC_ROWS` text rows (default 0) that never change sit above the bar;
-//! `NEST_DEPTH` plain boxes (default 0) wrap it.
+//! `NEST_DEPTH` plain boxes (default 0) wrap it. With `BAR=draw` the bar reads
+//! its width in the draw phase instead, as a progress indicator that takes
+//! its progress as a function does: frames then draw again without composing
+//! or laying out.
 
 use std::hint::black_box;
 
@@ -33,6 +36,11 @@ fn static_rows() -> usize {
 /// should not grow with them either.
 fn nest_depth() -> usize {
     env_count("NEST_DEPTH")
+}
+
+/// Whether the bar reads its width while it draws: `BAR=draw`.
+fn bar_reads_in_draw() -> bool {
+    std::env::var("BAR").is_ok_and(|bar| bar == "draw")
 }
 
 fn env_count(name: &str) -> usize {
@@ -73,9 +81,46 @@ fn AnimatedBar() {
 }
 
 #[composable]
+fn DrawnBar() {
+    let transition = rememberInfiniteTransition("bar");
+    let spec = infiniteRepeatable(
+        AnimationSpec::linear(1500),
+        RepeatMode::Reverse,
+        StartOffset::default(),
+    );
+    let fraction = transition.animateFloat(0.1, 1.0, spec, "width");
+    Box(
+        Modifier::empty()
+            .fill_max_width()
+            .height(16.0)
+            .background(Color::from_rgb_u8(40, 44, 64))
+            .rounded_corners(8.0)
+            .draw_behind(move |scope| {
+                let size = scope.size();
+                scope.draw_round_rect_at(
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: size.width * fraction.value(),
+                        height: size.height,
+                    },
+                    Brush::solid(Color::from_rgb_u8(98, 160, 255)),
+                    CornerRadii::uniform(8.0),
+                );
+            }),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+#[composable]
 fn Nested(depth: usize) {
     if depth == 0 {
-        AnimatedBar();
+        if bar_reads_in_draw() {
+            DrawnBar();
+        } else {
+            AnimatedBar();
+        }
     } else {
         Box(Modifier::empty(), BoxSpec::default(), move || {
             Nested(depth - 1);

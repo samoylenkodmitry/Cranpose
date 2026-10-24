@@ -73,7 +73,7 @@ impl Renderer for GraphRenderer {
         updates: SceneUpdates<'_>,
     ) -> Result<(), ()> {
         self.updates += 1;
-        self.dirty_ids += updates.content.len() + updates.layers.len();
+        self.dirty_ids += updates.content.len() + updates.draws.len() + updates.layers.len();
         let updated = self
             .scene
             .graph

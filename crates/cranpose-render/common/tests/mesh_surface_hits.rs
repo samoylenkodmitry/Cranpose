@@ -292,6 +292,7 @@ pub(crate) fn camera_moved(
         root,
         cranpose_render_common::SceneUpdates {
             content: &[],
+            draws: &[],
             layers: &[scene_id],
             moved: &[],
         },

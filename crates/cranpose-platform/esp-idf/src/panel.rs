@@ -8,12 +8,13 @@ use std::{
     ptr::NonNull,
     slice,
     sync::atomic::{AtomicU32, Ordering},
+    time::{Duration, Instant},
 };
 
 use cranpose::framebuffer::{PixelRect, SurfaceError};
 use esp_idf_svc::{
     hal::{
-        delay::{BLOCK, FreeRtos},
+        delay::BLOCK,
         gpio::{self, AnyOutputPin, Level, Pin, PinDriver},
         spi::{
             SpiDriver,
@@ -146,8 +147,8 @@ const QUAD_COMMAND: i32 = 0x02;
 const QUAD_PIXELS: i32 = 0x32;
 /// How long a reset line stays low, and how long the controller then takes
 /// before it reads commands, as in the vendors' drivers.
-const RESET_PULSE_MS: u32 = 10;
-const RESET_RECOVERY_MS: u32 = 120;
+const RESET_PULSE: Duration = Duration::from_millis(10);
+const RESET_RECOVERY: Duration = Duration::from_millis(120);
 /// Colour transfers that the panel IO queues before a draw call waits.
 const TRANSFER_QUEUE_DEPTH: usize = 10;
 
@@ -187,13 +188,29 @@ struct Dcs<'d> {
     y_offset: u32,
     transfers: Box<Transfers>,
     submitted: u32,
-    /// Held high while the panel is open.
-    _reset: Option<PinDriver<'d, gpio::Output>>,
+    /// The steps of the controller's setup still to run, until the first
+    /// draw runs them.
+    setup: Option<Setup>,
+    /// Held high, after the reset, while the panel is open.
+    reset: Option<PinDriver<'d, gpio::Output>>,
     /// The pins the panel IO drives.
     _cs: AnyOutputPin<'d>,
     _dc: Option<AnyOutputPin<'d>>,
     /// Kept open until the panel IO is closed.
     _bus: Box<dyn Borrow<SpiDriver<'d>> + 'd>,
+}
+
+/// The part of a controller's setup that waits: the release of its reset
+/// line, then its commands, each once the wait before it has passed. It runs
+/// before the first draw, so the waits pass while the application builds its
+/// first picture.
+struct Setup {
+    /// Whether the reset line is still low.
+    resetting: bool,
+    /// The commands still to send.
+    commands: &'static [InitCommand],
+    /// When the next step may run.
+    at: Instant,
 }
 
 /// The completion count that the panel IO's interrupt callback advances.
@@ -230,6 +247,33 @@ fn invalid_size() -> EspError {
 }
 
 impl Dcs<'_> {
+    /// Runs the steps of the setup still to run, each once its wait has
+    /// passed.
+    #[cold]
+    fn finish_setup(&mut self) -> Result<(), EspError> {
+        let Some(mut setup) = self.setup.take() else {
+            return Ok(());
+        };
+        loop {
+            std::thread::sleep(setup.at.saturating_duration_since(Instant::now()));
+            let wait = if setup.resetting {
+                if let Some(reset) = self.reset.as_mut() {
+                    reset.set_high()?;
+                }
+                setup.resetting = false;
+                RESET_RECOVERY
+            } else {
+                let Some((command, rest)) = setup.commands.split_first() else {
+                    return Ok(());
+                };
+                self.send(command.command, command.parameters)?;
+                setup.commands = rest;
+                Duration::from_millis(command.delay_ms.into())
+            };
+            setup.at = Instant::now() + wait;
+        }
+    }
+
     fn send(&self, command: u8, parameters: &[u8]) -> Result<(), EspError> {
         let command = if self.quad {
             QUAD_COMMAND << 24 | i32::from(command) << 8
@@ -248,6 +292,9 @@ impl Dcs<'_> {
 
     /// Selects `area` of the visible pixels and queues `pixels` for it.
     fn draw(&mut self, area: PixelRect, pixels: &[u16]) -> Result<(), EspError> {
+        if self.setup.is_some() {
+            self.finish_setup()?;
+        }
         let window = |start: u32, size: u32| {
             let [start_high, start_low] = (start as u16).to_be_bytes();
             let [end_high, end_low] = ((start + size - 1) as u16).to_be_bytes();
@@ -319,7 +366,9 @@ impl<'d> Panel<'d> {
     }
 
     /// Opens `controller` on `bus`, wired as `wiring` says: turns the
-    /// backlight off, resets the controller and sends it its setup.
+    /// backlight off and starts the controller's reset. The first draw sends
+    /// the setup, each command after the wait the one before it asks for, so
+    /// the waits pass while the application builds its first picture.
     ///
     /// Give the bus a DMA transfer size of at least one strip of the drawing
     /// pass, `strip_rows * width * 2` bytes (see
@@ -376,31 +425,34 @@ impl<'d> Panel<'d> {
             y_offset: controller.y_offset,
             transfers,
             submitted: 0,
-            _reset: None,
+            setup: None,
+            reset: None,
             _cs: wiring.cs,
             _dc: dc,
             _bus: Box::new(bus),
         };
-        match wiring.reset {
+        let resetting = match wiring.reset {
             Some(pin) => {
                 let mut reset = PinDriver::output(pin)?;
                 reset.set_low()?;
-                FreeRtos::delay_ms(RESET_PULSE_MS);
-                reset.set_high()?;
-                FreeRtos::delay_ms(RESET_RECOVERY_MS);
-                dcs._reset = Some(reset);
+                dcs.reset = Some(reset);
+                true
             }
             None => {
                 dcs.send(SWRESET, &[])?;
-                FreeRtos::delay_ms(RESET_RECOVERY_MS);
+                false
             }
-        }
-        for command in controller.init {
-            dcs.send(command.command, command.parameters)?;
-            if command.delay_ms > 0 {
-                FreeRtos::delay_ms(command.delay_ms);
-            }
-        }
+        };
+        dcs.setup = Some(Setup {
+            resetting,
+            commands: controller.init,
+            at: Instant::now()
+                + if resetting {
+                    RESET_PULSE
+                } else {
+                    RESET_RECOVERY
+                },
+        });
         Ok(Self {
             device: Device::Dcs(dcs),
             width: controller.width,

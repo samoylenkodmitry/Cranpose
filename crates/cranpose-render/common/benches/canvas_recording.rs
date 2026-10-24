@@ -495,6 +495,7 @@ fn run_property_mode(
         let updates = if layers_only {
             SceneUpdates {
                 content: &[],
+                draws: &[],
                 layers: std::slice::from_ref(&canvas_node),
                 moved: &[],
             }

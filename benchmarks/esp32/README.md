@@ -36,22 +36,33 @@ build installed it.
 
 ## Results
 
-2026-10-24, the demo at the commit that added this directory. Frame is the
-CPU time of a frame: Cranpose's composition, layout, drawing and sending,
-LVGL's `lv_timer_handler` call that drew it. Instructions and stall cycles
-are per frame. Free RAM is byte-addressable internal RAM.
+2026-10-24. Frame is the CPU time of a frame: Cranpose's composition,
+layout, drawing and sending, LVGL's `lv_timer_handler` call that drew it.
+Instructions and stall cycles are per frame. Free RAM is byte-addressable
+internal RAM.
+
+The demo's bar reads the animated width in its draw: each frame records the
+bar's drawing again, as LVGL draws its bar again, without composing or
+laying out the screen. The framework code such a frame runs is in IRAM
+(`cranpose_hot_code`, from a profile of this demo).
 
 | | Cranpose ES3C35P | LVGL ES3C35P | Cranpose E32R35T | LVGL E32R35T |
 | --- | --- | --- | --- | --- |
-| Frame | 1.43 ms | 1.05 ms | 4.49 ms | 2.21 ms |
-| Instructions | 87K | 163K | 77K | 182K |
-| Cycles waiting for code | 239K | 27K | 960K | 229K |
-| Cycles waiting for data | 34K | 6K | 137K | 35K |
-| First frame after reset | 777 ms | 371 ms | 510 ms | 439 ms |
-| Internal RAM free (lowest) | 84 KB (53 KB) | 118 KB (86 KB) | 61 KB (31 KB) | 198 KB (198 KB) |
+| Frame | 0.49 ms | 1.05 ms | 1.80 ms | 2.21 ms |
+| Instructions | 67K | 163K | 57K | 182K |
+| Cycles waiting for code | 38K | 27K | 361K | 229K |
+| Cycles waiting for data | 11K | 6K | 64K | 35K |
+| First frame after reset | 567 ms | 371 ms | 490 ms | 439 ms |
+| Internal RAM free (lowest) | 86 KB (55 KB) | 118 KB (86 KB) | 64 KB (35 KB) | 198 KB (198 KB) |
 | App image | 2.96 MB | 0.52 MB | 2.90 MB | 0.47 MB |
 
-Cranpose runs half the instructions of LVGL for this frame and loses the
-time waiting for its code: a frame runs through several hundred KB of
-framework code, more than the 32 KB cache holds, while LVGL's frame waits
-27K cycles for its code on the ES3C35P.
+Cranpose runs a third of LVGL's instructions for this frame. Most of the
+rest of its time waits for code, more on the classic ESP32, whose 64 KB of
+IRAM for the framework holds less of a frame's code than the ESP32-S3's
+128 KB.
+
+Before its first frame, Cranpose's ES3C35P build copies its 2.7 MB of code
+and read-only data to PSRAM (180 ms, `CONFIG_SPIRAM_XIP_FROM_PSRAM`), where
+LVGL copies 0.5 MB. Both apps then wait the panel's reset and start-up
+sequence, about 270 ms on the ES3C35P and 220 ms on the E32R35T; Cranpose
+creates its composition meanwhile and draws its first picture after it.
