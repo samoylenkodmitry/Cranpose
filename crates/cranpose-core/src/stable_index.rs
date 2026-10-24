@@ -9,9 +9,9 @@
 
 use crate::NodeId;
 
-const PAGE_BITS: usize = 9;
+const PAGE_BITS: usize = 7;
 const PAGE_LEN: usize = 1 << PAGE_BITS;
-const DIRECTORY_BITS: usize = 10;
+const DIRECTORY_BITS: usize = 7;
 const DIRECTORY_LEN: usize = 1 << DIRECTORY_BITS;
 const NO_SLOT: u32 = u32::MAX;
 
