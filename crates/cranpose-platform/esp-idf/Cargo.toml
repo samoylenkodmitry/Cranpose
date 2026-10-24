@@ -19,7 +19,7 @@ small-block-alloc = []
 
 [dependencies]
 bytemuck = "1.25"
-cranpose ={ path = "../../cranpose", default-features = false, features = ["framebuffer"] }
+cranpose = { path = "../../cranpose", default-features = false, features = ["framebuffer"] }
 esp-idf-svc = "0.53"
 log = "0.4"
 thiserror = "2.0.21"
@@ -28,14 +28,6 @@ thiserror = "2.0.21"
 [[package.metadata.esp-idf-sys.extra_components]]
 remote_component = { name = "espressif/esp_lcd_qemu_rgb", version = "1.0.2" }
 bindings_header = "src/bindings.h"
-
-# The driver of the ES3C35P's display, which `Panel::st77922_qspi` opens.
-[[package.metadata.esp-idf-sys.extra_components]]
-remote_component = { name = "espressif/esp_lcd_st77922", version = "2.1.1" }
-
-# The driver of the E32R35T's display, which `Panel::st7796_spi` opens.
-[[package.metadata.esp-idf-sys.extra_components]]
-remote_component = { name = "espressif/esp_lcd_st7796", version = "1.5.0" }
 
 # Thread-local lookups in a few instructions: see
 # components/cranpose_fast_tls/fast_tls.c.

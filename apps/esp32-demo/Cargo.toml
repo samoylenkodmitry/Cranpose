@@ -20,7 +20,7 @@ es3c35p = []
 e32r35t = []
 
 [dependencies]
-cranpose ={ path = "../../crates/cranpose", default-features = false, features = ["framebuffer"] }
+cranpose = { path = "../../crates/cranpose", default-features = false, features = ["framebuffer"] }
 cranpose-animation = { path = "../../crates/cranpose-animation" }
 cranpose-core = { path = "../../crates/cranpose-core" }
 cranpose-platform-esp-idf = { path = "../../crates/cranpose-platform/esp-idf" }

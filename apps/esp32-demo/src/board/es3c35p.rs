@@ -1,0 +1,266 @@
+//! The Hosyond ES3C35P: an ESP32-S3 with 16 MB of flash and 8 MB of octal
+//! PSRAM behind a 320 by 480 display with an ST77922 controller on a quad
+//! SPI bus. The controller has a capacitive touch panel built in, on I2C.
+
+use cranpose_platform_esp_idf::{
+    Backlight, Controller, DisplayConfig, InitCommand, Lines, Orientation, Panel, SpiWiring,
+    St77922Touch,
+};
+use esp_idf_svc::{
+    hal::{
+        gpio::Level,
+        i2c::{I2cConfig, I2cDriver},
+        peripherals::Peripherals,
+        spi::{Dma, SpiDriver, SpiDriverConfig, config::MODE_0},
+        units::Hertz,
+    },
+    sys::EspError,
+};
+
+/// The demo's title.
+pub const TITLE: &str = "Cranpose on ESP32-S3";
+
+const WIDTH: u32 = 320;
+const HEIGHT: u32 = 480;
+
+/// The rows of a strip: 24 rows take 77 KB of the chip's internal memory.
+const STRIP_ROWS: u32 = 24;
+/// The display's DMA transfers carry one strip.
+const STRIP_BYTES: usize = WIDTH as usize * STRIP_ROWS as usize * 2;
+
+/// The I2C address at which the touch panel answers. The board's data sheet
+/// names 0x38.
+const TOUCH_ADDRESS: u8 = 0x55;
+
+/// The controller's setup for this glass, in the board vendor's values,
+/// between the scan direction and 16-bit colour that Espressif's ST77922
+/// driver selects first and the display on that it sends last.
+const INIT: &[InitCommand] = &[
+    InitCommand::new(0x36, &[0x00], 0),
+    InitCommand::new(0x3A, &[0x55], 0),
+    InitCommand::new(0xF1, &[0x00], 0),
+    InitCommand::new(0x60, &[0x00, 0x00, 0x00], 0),
+    InitCommand::new(0x65, &[0x80], 0),
+    InitCommand::new(0x79, &[0x06], 0),
+    InitCommand::new(0x7B, &[0x00, 0x08, 0x08], 0),
+    InitCommand::new(
+        0x80,
+        &[
+            0x55, 0x62, 0x2F, 0x17, 0xF0, 0x52, 0x70, 0xD2, 0x52, 0x62, 0xEA,
+        ],
+        0,
+    ),
+    InitCommand::new(0x81, &[0x26, 0x52, 0x72, 0x27], 0),
+    InitCommand::new(0x84, &[0x92, 0x25], 0),
+    InitCommand::new(0x87, &[0x10, 0x10, 0x58, 0x00, 0x02, 0x3A], 0),
+    InitCommand::new(
+        0x88,
+        &[
+            0x00, 0x00, 0x2C, 0x10, 0x04, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00,
+            0x06,
+        ],
+        0,
+    ),
+    InitCommand::new(0x89, &[0x00, 0x00, 0x00], 0),
+    InitCommand::new(
+        0x8A,
+        &[
+            0x13, 0x00, 0x2C, 0x00, 0x00, 0x2C, 0x10, 0x10, 0x00, 0x3E, 0x19,
+        ],
+        0,
+    ),
+    InitCommand::new(
+        0x8B,
+        &[0x15, 0xB1, 0xB1, 0x44, 0x96, 0x2C, 0x10, 0x97, 0x8E],
+        0,
+    ),
+    InitCommand::new(
+        0x8C,
+        &[
+            0x1D, 0xB1, 0xB1, 0x44, 0x96, 0x2C, 0x10, 0x50, 0x0F, 0x01, 0xC5, 0x12, 0x09,
+        ],
+        0,
+    ),
+    InitCommand::new(0x8D, &[0x0C], 0),
+    InitCommand::new(0x8E, &[0x33, 0x01, 0x0C, 0x13, 0x01, 0x01], 0),
+    InitCommand::new(0xB3, &[0x00, 0x30], 0),
+    InitCommand::new(0xF1, &[0x00], 0),
+    InitCommand::new(0x71, &[0xC0], 0),
+    InitCommand::new(0x66, &[0x02, 0x3F], 0),
+    InitCommand::new(0xBE, &[0x24, 0x00, 0x9D], 0),
+    InitCommand::new(
+        0x70,
+        &[
+            0x01, 0xA0, 0x11, 0x40, 0xE0, 0x00, 0x11, 0x69, 0x11, 0x00, 0x00, 0x1A,
+        ],
+        0,
+    ),
+    InitCommand::new(
+        0x90,
+        &[0x04, 0x04, 0x55, 0x74, 0x00, 0x40, 0x43, 0x27, 0x27],
+        0,
+    ),
+    InitCommand::new(
+        0x91,
+        &[0x04, 0x04, 0x55, 0x75, 0x00, 0x40, 0x42, 0x27, 0x27],
+        0,
+    ),
+    InitCommand::new(
+        0x92,
+        &[0x04, 0x44, 0x55, 0xC0, 0x06, 0x00, 0x07, 0x05, 0x90, 0x27],
+        0,
+    ),
+    InitCommand::new(
+        0x93,
+        &[0x04, 0x43, 0x11, 0x00, 0x00, 0x00, 0x00, 0x05, 0x90, 0x27],
+        0,
+    ),
+    InitCommand::new(0x94, &[0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 0),
+    InitCommand::new(0x95, &[0x96, 0x16, 0x00, 0x00, 0xFF], 0),
+    InitCommand::new(
+        0x96,
+        &[
+            0x44, 0x53, 0x03, 0x12, 0x23, 0x24, 0x06, 0x05, 0x94, 0x27, 0x00, 0x44,
+        ],
+        0,
+    ),
+    InitCommand::new(
+        0x97,
+        &[
+            0x44, 0x53, 0x47, 0x56, 0x20, 0x20, 0x02, 0x01, 0x94, 0x27, 0x00, 0x44,
+        ],
+        0,
+    ),
+    InitCommand::new(0xBA, &[0x55, 0x94, 0x2D, 0x94, 0x27], 0),
+    InitCommand::new(0x9A, &[0x40, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00], 0),
+    InitCommand::new(0x9B, &[0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00], 0),
+    InitCommand::new(
+        0x9C,
+        &[
+            0x5C, 0x12, 0x00, 0x00, 0x10, 0x12, 0x00, 0x00, 0x10, 0x02, 0x00, 0x00, 0x00,
+        ],
+        0,
+    ),
+    InitCommand::new(0x9D, &[0x8A, 0x51, 0x00, 0x00, 0x00, 0x80, 0x1E, 0x01], 0),
+    InitCommand::new(0x9E, &[0x51, 0x00, 0x00, 0x00, 0x80, 0x1E, 0x01], 0),
+    InitCommand::new(
+        0xB4,
+        &[
+            0x1D, 0x1C, 0x1E, 0x0B, 0x14, 0x02, 0x13, 0x09, 0x1E, 0x00, 0x1E, 0x10,
+        ],
+        0,
+    ),
+    InitCommand::new(
+        0xB5,
+        &[
+            0x1D, 0x1C, 0x1E, 0x0A, 0x15, 0x03, 0x11, 0x08, 0x1E, 0x01, 0x1E, 0x12,
+        ],
+        0,
+    ),
+    InitCommand::new(0xB6, &[0x77, 0x77, 0x00, 0x0A, 0xFF, 0x0A, 0xFF], 0),
+    InitCommand::new(
+        0x86,
+        &[
+            0xCD, 0x04, 0xB1, 0x02, 0x58, 0x12, 0x58, 0x0C, 0x13, 0x01, 0xA5, 0x00, 0xA5, 0xA5,
+        ],
+        0,
+    ),
+    InitCommand::new(
+        0xB7,
+        &[
+            0x07, 0x0A, 0x0E, 0x06, 0x05, 0x03, 0x2B, 0x03, 0x03, 0x42, 0x07, 0x10, 0x10, 0x2E,
+            0x3F, 0x0D,
+        ],
+        0,
+    ),
+    InitCommand::new(
+        0xB8,
+        &[
+            0x07, 0x0A, 0x0D, 0x05, 0x05, 0x02, 0x2B, 0x02, 0x03, 0x42, 0x06, 0x10, 0x0F, 0x2E,
+            0x3F, 0x0D,
+        ],
+        0,
+    ),
+    InitCommand::new(0xB9, &[0x23, 0x23], 0),
+    InitCommand::new(0xBF, &[0x10, 0x14, 0x14, 0x0B, 0x0B, 0x0B], 0),
+    InitCommand::new(0xF2, &[0x00], 0),
+    InitCommand::new(0x73, &[0x04, 0xDA, 0x12, 0x54, 0x47], 0),
+    InitCommand::new(0x77, &[0x6B, 0x5B, 0xFD, 0xC3, 0xC5], 0),
+    InitCommand::new(0x7A, &[0x15, 0x27], 0),
+    InitCommand::new(0x7B, &[0x04, 0x57], 0),
+    InitCommand::new(0x7E, &[0x01, 0x0E], 0),
+    InitCommand::new(0xBF, &[0x36], 0),
+    InitCommand::new(0xE3, &[0x40, 0x40], 0),
+    InitCommand::new(0xF0, &[0x00], 0),
+    InitCommand::new(0xD0, &[0x00], 0),
+    InitCommand::new(0x2A, &[0x00, 0x00, 0x01, 0x3F], 0),
+    InitCommand::new(0x2B, &[0x00, 0x00, 0x01, 0xDF], 0),
+    InitCommand::new(0x21, &[], 0),
+    InitCommand::new(0x11, &[], 120),
+    InitCommand::new(0x29, &[], 0),
+    InitCommand::new(0x2C, &[], 0),
+    InitCommand::new(0x3A, &[0x01], 0),
+    InitCommand::new(0x36, &[0x00], 0),
+    InitCommand::new(0x35, &[0x01], 20),
+    InitCommand::new(0x29, &[], 0),
+];
+
+/// The ST77922 shows an update window only when it starts and ends on a
+/// multiple of four columns.
+const CONTROLLER: Controller = Controller {
+    column_alignment: 4,
+    ..Controller::new(WIDTH, HEIGHT, INIT)
+};
+
+/// The display settings of the chip.
+pub fn config() -> DisplayConfig {
+    DisplayConfig {
+        strip_rows: STRIP_ROWS,
+        ..DisplayConfig::default()
+    }
+}
+
+/// Opens the display on its quad SPI bus and the touch panel on I2C. The
+/// panel's reset line is the chip's reset.
+pub fn open() -> Result<(Panel<'static>, St77922Touch<'static>), EspError> {
+    let peripherals = Peripherals::take()?;
+    let pins = peripherals.pins;
+    let bus = SpiDriver::new_quad(
+        peripherals.spi2,
+        pins.gpio12,
+        pins.gpio11,
+        pins.gpio13,
+        pins.gpio14,
+        pins.gpio9,
+        &SpiDriverConfig::new().dma(Dma::Auto(STRIP_BYTES)),
+    )?;
+    let wiring = SpiWiring {
+        cs: pins.gpio10.into(),
+        lines: Lines::Quad,
+        clock: Hertz(40_000_000),
+        mode: MODE_0,
+        reset: None,
+        backlight: Some(Backlight {
+            pin: pins.gpio41.into(),
+            on: Level::High,
+        }),
+    };
+    let panel = Panel::spi(bus, wiring, CONTROLLER)?;
+    let i2c = I2cDriver::new(
+        peripherals.i2c0,
+        pins.gpio38,
+        pins.gpio39,
+        &I2cConfig::new()
+            .baudrate(Hertz(400_000))
+            .sda_enable_pullup(true)
+            .scl_enable_pullup(true),
+    )?;
+    let touch = St77922Touch::new(
+        i2c,
+        TOUCH_ADDRESS,
+        pins.gpio48,
+        pins.gpio47,
+        Orientation::default(),
+    )?;
+    Ok((panel, touch))
+}

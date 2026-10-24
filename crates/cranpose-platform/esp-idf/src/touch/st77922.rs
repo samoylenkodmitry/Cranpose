@@ -1,35 +1,16 @@
-#![expect(unsafe_code)]
-
 use std::time::{Duration, Instant};
 
 use esp_idf_svc::{
     hal::{
         delay::{FreeRtos, TickType},
-        gpio::AnyIOPin,
-        i2c::{I2C0, I2cConfig, I2cDriver},
-        units::Hertz,
+        gpio::{self, AnyInputPin, AnyOutputPin, PinDriver},
+        i2c::I2cDriver,
     },
-    sys::{self, EspError, esp},
+    sys::EspError,
 };
 
-use super::{Interrupt, Touch};
+use super::{Interrupt, Orientation, Touch};
 
-/// The pins and address of the touch panel inside an ST77922 display.
-#[derive(Clone, Copy, Debug)]
-pub struct St77922TouchPins {
-    /// The I2C data line.
-    pub sda: i32,
-    /// The I2C clock line.
-    pub scl: i32,
-    /// The reset line, which a low level resets.
-    pub reset: i32,
-    /// The interrupt line, which goes low when the panel has a sample.
-    pub interrupt: i32,
-    /// The 7-bit I2C address.
-    pub address: u8,
-}
-
-const I2C_CLOCK_HZ: u32 = 400_000;
 const I2C_TIMEOUT_MS: u64 = 20;
 const RESET_MS: u32 = 100;
 const FIRMWARE_VERSION_REGISTER: u16 = 0x0000;
@@ -54,36 +35,48 @@ const REPORT_TIMEOUT: Duration = Duration::from_millis(150);
 
 /// The capacitive touch panel that the ST77922 display controller has built
 /// in, on an I2C bus with 16-bit register addresses.
-pub struct St77922Touch {
-    bus: I2cDriver<'static>,
+pub struct St77922Touch<'d> {
+    bus: I2cDriver<'d>,
     address: u8,
-    interrupt: Interrupt,
+    interrupt: Interrupt<'d>,
+    /// Held high while the panel is open.
+    _reset: PinDriver<'d, gpio::Output>,
+    orientation: Orientation,
+    /// The pixels along the controller's X and Y axes, as it reports them.
+    size: (u16, u16),
     /// Where the last report put the finger.
     finger: Option<(u16, u16)>,
     /// When the last report came.
     reported: Instant,
 }
 
-impl St77922Touch {
-    /// Opens the panel on `pins`: resets it, then logs the firmware version
-    /// and the limits it reports. The panel takes the chip's first I2C
-    /// controller and its two pins for itself. The bus is `esp-idf-hal`'s
-    /// driver, which an application's own I2C devices use as well: ESP-IDF
-    /// aborts at start-up when its old and new I2C drivers are both linked.
-    pub fn new(pins: St77922TouchPins) -> Result<Self, EspError> {
-        reset(pins.reset)?;
-        let config = I2cConfig::new()
-            .baudrate(Hertz(I2C_CLOCK_HZ))
-            .sda_enable_pullup(true)
-            .scl_enable_pullup(true);
-        // SAFETY: the board hands these peripherals to the panel alone.
-        let bus = unsafe {
-            I2cDriver::new(I2C0::steal(), io_pin(pins.sda)?, io_pin(pins.scl)?, &config)
-        }?;
+impl<'d> St77922Touch<'d> {
+    /// Resets the panel through `reset` and reads it on `bus` at `address`,
+    /// with its interrupt on `interrupt`. It logs the firmware version and
+    /// the limits the panel reports.
+    ///
+    /// ESP-IDF aborts at start-up when its old and new I2C drivers are both
+    /// linked, so the bus is `esp-idf-hal`'s driver, which the application's
+    /// other I2C devices use as well.
+    pub fn new(
+        bus: I2cDriver<'d>,
+        address: u8,
+        reset: impl Into<AnyOutputPin<'d>>,
+        interrupt: impl Into<AnyInputPin<'d>>,
+        orientation: Orientation,
+    ) -> Result<Self, EspError> {
+        let mut reset = PinDriver::output(reset.into())?;
+        reset.set_low()?;
+        FreeRtos::delay_ms(RESET_MS);
+        reset.set_high()?;
+        FreeRtos::delay_ms(RESET_MS);
         let mut touch = Self {
             bus,
-            address: pins.address,
-            interrupt: Interrupt::new(pins.interrupt),
+            address,
+            interrupt: Interrupt::new(interrupt.into()),
+            _reset: reset,
+            orientation,
+            size: (u16::MAX, u16::MAX),
             finger: None,
             reported: Instant::now(),
         };
@@ -91,11 +84,15 @@ impl St77922Touch {
         touch.read_registers(FIRMWARE_VERSION_REGISTER, &mut version)?;
         let mut limits = [0u8; 5];
         touch.read_registers(LIMITS_REGISTER, &mut limits)?;
+        touch.size = (
+            u16::from_be_bytes([limits[0], limits[1]]),
+            u16::from_be_bytes([limits[2], limits[3]]),
+        );
         log::info!(
             "touch panel firmware {}, largest X {}, largest Y {}, {} fingers",
             version[0],
-            u16::from_be_bytes([limits[0], limits[1]]),
-            u16::from_be_bytes([limits[2], limits[3]]),
+            touch.size.0,
+            touch.size.1,
             limits[4],
         );
         Ok(touch)
@@ -111,28 +108,7 @@ impl St77922Touch {
     }
 }
 
-/// The pin `number` of the chip, taken for the panel.
-///
-/// # Safety
-///
-/// Nothing else may use the pin.
-unsafe fn io_pin(number: i32) -> Result<AnyIOPin<'static>, EspError> {
-    let number = u8::try_from(number)
-        .map_err(|_| EspError::from_infallible::<{ sys::ESP_ERR_INVALID_ARG }>())?;
-    Ok(unsafe { AnyIOPin::steal(number) })
-}
-
-fn reset(pin: i32) -> Result<(), EspError> {
-    esp!(unsafe { sys::gpio_reset_pin(pin) })?;
-    esp!(unsafe { sys::gpio_set_direction(pin, sys::gpio_mode_t_GPIO_MODE_OUTPUT) })?;
-    esp!(unsafe { sys::gpio_set_level(pin, 0) })?;
-    FreeRtos::delay_ms(RESET_MS);
-    esp!(unsafe { sys::gpio_set_level(pin, 1) })?;
-    FreeRtos::delay_ms(RESET_MS);
-    Ok(())
-}
-
-impl Touch for St77922Touch {
+impl Touch for St77922Touch<'_> {
     fn arm<F>(&mut self, wake: F) -> Result<(), EspError>
     where
         F: Fn() -> bool + Send + Sync + 'static,
@@ -160,13 +136,15 @@ impl Touch for St77922Touch {
         let mut reports = [0u8; REPORT_BYTES * MAX_FINGERS];
         let reports = &mut reports[..REPORT_BYTES * usize::from(count[0]).min(MAX_FINGERS)];
         self.read_registers(REPORT_REGISTER, reports)?;
+        let (orientation, size) = (self.orientation, self.size);
         self.finger = reports.as_chunks::<REPORT_BYTES>().0.iter().find_map(
             |&[flags, x_low, y_high, y_low, ..]| {
                 (flags & REPORT_VALID != 0).then(|| {
-                    (
+                    let point = (
                         u16::from(flags & 0x3F) << 8 | u16::from(x_low),
                         u16::from(y_high) << 8 | u16::from(y_low),
-                    )
+                    );
+                    orientation.place(point, size)
                 })
             },
         );

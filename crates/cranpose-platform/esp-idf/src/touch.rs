@@ -6,11 +6,14 @@ mod xpt2046;
 use std::{ffi::c_void, ptr};
 
 use esp_idf_svc::{
-    hal::task::do_yield,
+    hal::{
+        gpio::{AnyInputPin, Pin},
+        task::do_yield,
+    },
     sys::{self, EspError, esp},
 };
-pub use st77922::{St77922Touch, St77922TouchPins};
-pub use xpt2046::{Xpt2046Calibration, Xpt2046Pins, Xpt2046Touch};
+pub use st77922::St77922Touch;
+pub use xpt2046::{Xpt2046Calibration, Xpt2046Touch};
 
 /// A touch panel that [`run`](crate::run) reads.
 pub trait Touch {
@@ -43,23 +46,59 @@ impl Touch for NoTouch {
     }
 }
 
+/// How the axes of a touch controller lie on the display. The default puts
+/// the controller's X along the display's width and its Y along the height,
+/// both growing from the top left corner.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Orientation {
+    /// The controller's Y axis runs along the display's width.
+    pub swap_xy: bool,
+    /// Display X grows from the right edge.
+    pub mirror_x: bool,
+    /// Display Y grows from the bottom edge.
+    pub mirror_y: bool,
+}
+
+impl Orientation {
+    /// Places `point` of a controller whose axes span `size` pixels on the
+    /// display.
+    fn place(self, point: (u16, u16), size: (u16, u16)) -> (u16, u16) {
+        let ((x, y), (width, height)) = if self.swap_xy {
+            ((point.1, point.0), (size.1, size.0))
+        } else {
+            (point, size)
+        };
+        let mirror = |value: u16, size: u16, mirrored: bool| {
+            let last = size.saturating_sub(1);
+            let value = value.min(last);
+            if mirrored { last - value } else { value }
+        };
+        (
+            mirror(x, width, self.mirror_x),
+            mirror(y, height, self.mirror_y),
+        )
+    }
+}
+
 type Wake = Box<dyn Fn() -> bool + Send + Sync>;
 
 /// The line on which a touch controller signals a sample: it goes low.
-struct Interrupt {
-    pin: i32,
+struct Interrupt<'d> {
+    pin: AnyInputPin<'d>,
     wake: Option<Box<Wake>>,
 }
 
 unsafe extern "C" fn interrupt_handler(wake: *mut c_void) {
+    // SAFETY: the handler's argument is the `Wake` box of the `Interrupt`
+    // that added it, which removes the handler before it frees the box.
     let wake = unsafe { &*wake.cast::<Wake>() };
     if wake() {
         do_yield();
     }
 }
 
-impl Interrupt {
-    fn new(pin: i32) -> Self {
+impl<'d> Interrupt<'d> {
+    fn new(pin: AnyInputPin<'d>) -> Self {
         Self { pin, wake: None }
     }
 
@@ -69,8 +108,9 @@ impl Interrupt {
     where
         F: Fn() -> bool + Send + Sync + 'static,
     {
+        let pin = i32::from(self.pin.pin());
         let config = sys::gpio_config_t {
-            pin_bit_mask: 1 << self.pin,
+            pin_bit_mask: 1 << pin,
             mode: sys::gpio_mode_t_GPIO_MODE_INPUT,
             pull_up_en: if pull_up {
                 sys::gpio_pullup_t_GPIO_PULLUP_ENABLE
@@ -89,7 +129,7 @@ impl Interrupt {
         let wake: Box<Wake> = Box::new(Box::new(wake));
         esp!(unsafe {
             sys::gpio_isr_handler_add(
-                self.pin,
+                pin,
                 Some(interrupt_handler),
                 ptr::from_ref(&*wake).cast_mut().cast(),
             )
@@ -99,10 +139,11 @@ impl Interrupt {
     }
 }
 
-impl Drop for Interrupt {
+impl Drop for Interrupt<'_> {
     fn drop(&mut self) {
         if self.wake.is_some()
-            && let Err(error) = esp!(unsafe { sys::gpio_isr_handler_remove(self.pin) })
+            && let Err(error) =
+                esp!(unsafe { sys::gpio_isr_handler_remove(i32::from(self.pin.pin())) })
         {
             log::warn!("removing the touch interrupt failed: {error}");
         }

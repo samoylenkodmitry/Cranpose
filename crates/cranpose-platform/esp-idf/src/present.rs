@@ -44,8 +44,9 @@ fn encode_with(rgba: &[u32], strip: &mut [u16], encoded: impl Fn(u32) -> u16) {
 }
 
 impl Presenter {
-    pub(crate) fn new(panel: &Panel) -> Result<Self, SurfaceError> {
-        let strip_pixels = panel.strip_pixels();
+    /// A presenter that draws `strip_rows` rows of `panel` at a time.
+    pub(crate) fn new(panel: &Panel<'_>, strip_rows: u32) -> Result<Self, SurfaceError> {
+        let strip_pixels = panel.width() as usize * panel.aligned_rows(strip_rows.max(1)) as usize;
         let mut rgba = Vec::new();
         rgba.try_reserve_exact(strip_pixels)
             .map_err(|_| SurfaceError)?;
@@ -65,12 +66,13 @@ impl Presenter {
     pub(crate) fn present(
         &mut self,
         framebuffer: &mut Framebuffer,
-        panel: &mut Panel,
+        panel: &mut Panel<'_>,
     ) -> Result<(), EspError> {
         framebuffer.changed_areas(&mut self.areas);
         for &area in &self.areas {
             let area = panel.align(area);
-            let rows_per_strip = (self.strip_pixels / area.width.max(1) as usize).max(1) as u32;
+            let rows_per_strip =
+                panel.aligned_rows((self.strip_pixels / area.width.max(1) as usize) as u32);
             let mut top = area.y;
             while top < area.y + area.height {
                 let rows = rows_per_strip.min(area.y + area.height - top);
