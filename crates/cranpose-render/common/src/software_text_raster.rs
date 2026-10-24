@@ -2375,6 +2375,60 @@ pub fn rasterize_annotated_text_region_pixels<'a>(
     )
 }
 
+/// Paints the part of an annotated paragraph that `rect` covers straight
+/// over `window`, the renderer's pixels under `rect`, when the paragraph
+/// takes no image of its own: one style and one font, in a solid color with
+/// no shadow, its glyphs on whole pixels. Returns whether it painted; for any
+/// other text, [`rasterize_annotated_text_region_pixels`] makes the image to
+/// draw. Each glyph goes over the pixels as that image's pixel would, so a
+/// glyph that overlaps no other gives the same bytes.
+#[expect(clippy::too_many_arguments)]
+pub fn paint_annotated_text_region<'a>(
+    text: impl Into<StyledTextRef<'a>>,
+    rect: Rect,
+    text_origin: Point,
+    style: &TextStyle,
+    fallback_color: Color,
+    font_size: f32,
+    scale: f32,
+    fonts: &SoftwareTextFontSet,
+    glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
+    window: TextPixelWindow<'_>,
+) -> bool {
+    let text: StyledTextRef<'a> = text.into();
+    if text_render_request_is_degenerate(text.is_empty(), rect, font_size, scale) {
+        return true;
+    }
+    if !text.span_styles.is_empty()
+        || requires_font_layout(text.text, style)
+        || !paints_part_directly(style)
+        || !paints_solid(style)
+    {
+        return false;
+    }
+    let Some(font) = FontResolver::from(fonts).single_font_for_text(text.text, style) else {
+        return false;
+    };
+    let shaped = font.shaped_for(style);
+    let font = &*shaped;
+    paint_text_glyphs(
+        TextRasterImageRequest {
+            text: text.text,
+            rect,
+            text_origin,
+            style,
+            fallback_color,
+            font_size,
+            scale,
+        },
+        font.raster_ref(),
+        font.content_hash(),
+        glyph_cache,
+        &mut TextRasterCanvas::over(window),
+    );
+    true
+}
+
 /// Rasterizes an annotated paragraph into `rect`, preserving its original
 /// `text_origin` when the image covers only a clipped portion of the paragraph.
 /// Glyphs from every span share line baselines and may extend across line boxes.
@@ -3374,18 +3428,35 @@ impl GlyphRasterClip {
     }
 }
 
-enum TextRasterPixels {
+/// Straight-alpha RGBA pixels that a text paints over, as a renderer's
+/// target holds them: `width` by `height` of them from the first, a row
+/// every `stride` pixels.
+pub struct TextPixelWindow<'a> {
+    /// The pixels from the window's top left corner on.
+    pub pixels: &'a mut [[u8; 4]],
+    /// Pixels from the start of one row to the start of the next.
+    pub stride: usize,
+    /// Width of the window in pixels.
+    pub width: u32,
+    /// Height of the window in pixels.
+    pub height: u32,
+}
+
+enum TextRasterPixels<'a> {
     Solid(Vec<u8>),
     Blended(Vec<[f32; 4]>),
+    /// A renderer's pixels, which solid glyphs blend over as its own
+    /// drawing does.
+    Window(TextPixelWindow<'a>),
 }
 
-struct TextRasterCanvas {
+struct TextRasterCanvas<'a> {
     width: u32,
     height: u32,
-    pixels: TextRasterPixels,
+    pixels: TextRasterPixels<'a>,
 }
 
-impl TextRasterCanvas {
+impl TextRasterCanvas<'static> {
     fn new(width: u32, height: u32, solid: bool) -> Self {
         let len = width as usize * height as usize;
         Self {
@@ -3398,18 +3469,45 @@ impl TextRasterCanvas {
             },
         }
     }
+}
+
+impl<'a> TextRasterCanvas<'a> {
+    /// A canvas over `window`, for a text whose paint is solid.
+    fn over(window: TextPixelWindow<'a>) -> Self {
+        Self {
+            width: window.width,
+            height: window.height,
+            pixels: TextRasterPixels::Window(window),
+        }
+    }
 
     fn paint(&mut self, mask: &GlyphMask, paint: &GlyphPaint<'_>) {
+        let area = (self.width, self.height);
         match &mut self.pixels {
             TextRasterPixels::Solid(pixels) => {
                 if let Brush::Solid(color) = paint.brush {
+                    let color = color_to_rgba(*color);
                     draw_mask_glyph_solid_u8(
-                        pixels,
-                        self.width,
-                        self.height,
+                        pixels.as_chunks_mut::<4>().0,
+                        self.width as usize,
+                        area,
+                        mask,
+                        color,
+                        paint.alpha,
+                        CanvasBlend { color },
+                    );
+                }
+            }
+            TextRasterPixels::Window(window) => {
+                if let Brush::Solid(color) = paint.brush {
+                    draw_mask_glyph_solid_u8(
+                        window.pixels,
+                        window.stride,
+                        area,
                         mask,
                         color_to_rgba(*color),
                         paint.alpha,
+                        OverBlend,
                     );
                 }
             }
@@ -3436,6 +3534,7 @@ impl TextRasterCanvas {
         }
         let pixels = match self.pixels {
             TextRasterPixels::Solid(pixels) => pixels,
+            TextRasterPixels::Window(_) => return None,
             TextRasterPixels::Blended(canvas) => {
                 let mut pixels = Vec::with_capacity(canvas.len() * 4);
                 for pixel in canvas {
@@ -3473,6 +3572,44 @@ fn rasterize_text_to_image_impl(
     font_cache_key: u64,
     glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
 ) -> Option<TextPixels> {
+    if text_render_request_is_degenerate(
+        request.text.is_empty(),
+        request.rect,
+        request.font_size,
+        request.scale,
+    ) {
+        return None;
+    }
+    let width = whole::ceil(request.rect.width).max(1.0) as u32;
+    let height = whole::ceil(request.rect.height).max(1.0) as u32;
+    let mut canvas = TextRasterCanvas::new(width, height, paints_solid(request.style));
+    paint_text_glyphs(request, font_ref, font_cache_key, glyph_cache, &mut canvas);
+    canvas.into_pixels()
+}
+
+/// Whether `style`'s glyphs paint in one solid color with no shadow, which a
+/// canvas of bytes holds.
+fn paints_solid(style: &TextStyle) -> bool {
+    style
+        .span_style
+        .brush
+        .as_ref()
+        .is_none_or(|brush| matches!(brush, Brush::Solid(_)))
+        && style
+            .span_style
+            .shadow
+            .is_none_or(|shadow| shadow.color.3 <= 0.0)
+}
+
+/// Paints the glyphs of `request`'s text over `canvas`, which covers
+/// `request.rect`.
+fn paint_text_glyphs(
+    request: TextRasterImageRequest<'_>,
+    font_ref: RasterFontRef<'_, impl RasterFace>,
+    font_cache_key: u64,
+    glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
+    canvas: &mut TextRasterCanvas<'_>,
+) {
     let TextRasterImageRequest {
         text,
         rect,
@@ -3482,13 +3619,6 @@ fn rasterize_text_to_image_impl(
         font_size,
         scale,
     } = request;
-
-    if text_render_request_is_degenerate(text.is_empty(), rect, font_size, scale) {
-        return None;
-    }
-
-    let width = whole::ceil(rect.width).max(1.0) as u32;
-    let height = whole::ceil(rect.height).max(1.0) as u32;
 
     let fallback_brush = Brush::solid(fallback_color);
     let (brush, brush_alpha_multiplier) = match style.span_style.brush.as_ref() {
@@ -3539,11 +3669,6 @@ fn rasterize_text_to_image_impl(
     let line_height = line_box.height;
     let first_baseline_y = line_box.first_baseline();
 
-    let mut canvas = TextRasterCanvas::new(
-        width,
-        height,
-        matches!(brush, Brush::Solid(_)) && shadow.is_none(),
-    );
     let paint = GlyphPaint {
         brush,
         alpha: brush_alpha_multiplier,
@@ -3553,6 +3678,7 @@ fn rasterize_text_to_image_impl(
         scale,
         static_text_motion,
     };
+    let clip = GlyphRasterClip::new(canvas.width, canvas.height, &paint);
     visit_text_glyph_masks(
         text,
         font,
@@ -3569,10 +3695,9 @@ fn rasterize_text_to_image_impl(
         weight_synthesis,
         style_synthesis,
         glyph_cache,
-        Some(&GlyphRasterClip::new(width, height, &paint)),
+        Some(&clip),
         |mask| canvas.paint(mask, &paint),
     );
-    canvas.into_pixels()
 }
 
 /// Whether the single-font path paints a part of `style`'s text from an
@@ -5158,30 +5283,63 @@ fn blend_src_over_u8(dst: &mut [u8], src: [f32; 4]) {
     dst[3] = whole::round(out_alpha.clamp(0.0, 1.0) * 255.0) as u8;
 }
 
+/// How a solid glyph's pixel goes over the pixel under it.
+trait SolidGlyphBlend {
+    /// Puts `src`, the glyph's color with its coverage as alpha, over
+    /// `dst`; `alpha` gives that coverage as a unit value.
+    fn blend(&self, dst: &mut [u8; 4], src: [u8; 4], alpha: impl FnOnce() -> f32);
+}
+
+/// A text's own canvas: a pixel no glyph covered yet takes the glyph's,
+/// and glyphs that overlap combine in floats before the canvas is drawn.
+struct CanvasBlend {
+    color: [f32; 4],
+}
+
+impl SolidGlyphBlend for CanvasBlend {
+    fn blend(&self, dst: &mut [u8; 4], src: [u8; 4], alpha: impl FnOnce() -> f32) {
+        if dst[3] == 0 {
+            *dst = src;
+        } else {
+            blend_src_over_u8(dst, [self.color[0], self.color[1], self.color[2], alpha()]);
+        }
+    }
+}
+
+/// A renderer's pixels: each glyph pixel goes over them as a text canvas's
+/// pixel would, so a glyph that overlaps no other draws the same bytes.
+struct OverBlend;
+
+impl SolidGlyphBlend for OverBlend {
+    fn blend(&self, dst: &mut [u8; 4], src: [u8; 4], _alpha: impl FnOnce() -> f32) {
+        blend_byte_pixel(dst, src);
+    }
+}
+
+/// Paints the solid glyph `mask` in `color` over an `area` of `pixels`,
+/// width by height, a row every `stride` pixels.
 fn draw_mask_glyph_solid_u8(
-    canvas: &mut [u8],
-    width: u32,
-    height: u32,
+    pixels: &mut [[u8; 4]],
+    stride: usize,
+    (width, height): (u32, u32),
     mask: &GlyphMask,
     color: [f32; 4],
     alpha_multiplier: f32,
+    blend: impl SolidGlyphBlend,
 ) {
     let red = whole::round(color[0].clamp(0.0, 1.0) * 255.0) as u8;
     let green = whole::round(color[1].clamp(0.0, 1.0) * 255.0) as u8;
     let blue = whole::round(color[2].clamp(0.0, 1.0) * 255.0) as u8;
     let alpha_scale = color[3].clamp(0.0, 1.0) * alpha_multiplier.clamp(0.0, 1.0);
-    if alpha_scale <= 0.0 || width == 0 || mask.width == 0 {
+    if alpha_scale <= 0.0 || width == 0 || mask.width == 0 || stride == 0 {
         return;
     }
     let correction = TextLuminance::of_color(Color(color[0], color[1], color[2], 1.0)).correction();
-    // The mask columns and rows that land on the canvas.
+    // The mask columns and rows that land in the area.
     let columns = canvas_span(mask.origin_x, mask.width, width);
     let rows = canvas_span(mask.origin_y, mask.height, height);
-    let canvas_rows = canvas
-        .as_chunks_mut::<4>()
-        .0
-        .chunks_exact_mut(width as usize);
-    for (row, mask_row) in canvas_rows
+    let area_rows = pixels.chunks_mut(stride);
+    for (row, mask_row) in area_rows
         .skip(rows.start.saturating_add_signed(mask.origin_y as isize))
         .zip(
             mask.alpha
@@ -5209,11 +5367,32 @@ fn draw_mask_glyph_solid_u8(
             if alpha_u8 == 0 {
                 continue;
             }
-            if dst[3] == 0 {
-                *dst = [red, green, blue, alpha_u8];
-            } else {
-                blend_src_over_u8(dst, [color[0], color[1], color[2], alpha()]);
-            }
+            blend.blend(dst, [red, green, blue, alpha_u8], alpha);
+        }
+    }
+}
+
+/// Draws a straight-alpha byte pixel over `dst`, source over, with the bytes
+/// a float blend would work out. Each channel is the rational
+/// `(s * a + d * (255 - a)) / 255` rounded: its fraction is a multiple of
+/// 1/255, never one half, and the float error stays far below that gap, so
+/// whole numbers round it the same way.
+pub fn blend_byte_pixel(dst: &mut [u8; 4], src: [u8; 4]) {
+    let alpha = u32::from(src[3]);
+    match alpha {
+        0 => {}
+        255 => *dst = src,
+        _ => {
+            let keep = 255 - alpha;
+            let mix = |source: u8, under: u8| {
+                ((u32::from(source) * alpha + u32::from(under) * keep + 127) / 255) as u8
+            };
+            *dst = [
+                mix(src[0], dst[0]),
+                mix(src[1], dst[1]),
+                mix(src[2], dst[2]),
+                mix(255, dst[3]),
+            ];
         }
     }
 }

@@ -2021,19 +2021,25 @@ fn a_glyph_hanging_off_the_canvas_paints_only_the_pixels_on_it() {
         ((-3, 0), vec![]),
         ((0, 4), vec![]),
     ] {
-        let mut canvas = vec![0u8; (SIDE * SIDE * 4) as usize];
-        draw_mask_glyph_solid_u8(
-            &mut canvas,
-            SIDE,
-            SIDE,
-            &mask(origin.0, origin.1),
-            [1.0, 1.0, 1.0, 1.0],
-            1.0,
-        );
-        let painted: Vec<(u32, u32)> = (0..SIDE * SIDE)
-            .filter(|pixel| canvas[*pixel as usize * 4 + 3] != 0)
-            .map(|pixel| (pixel % SIDE, pixel / SIDE))
-            .collect();
-        assert_eq!(painted, covered, "mask at {origin:?}");
+        // A canvas of its own, and a window of the same size in rows two
+        // pixels wider, as a renderer's target is: neither takes a pixel
+        // outside the area.
+        for stride in [SIDE, SIDE + 2] {
+            let mut pixels = vec![[0u8; 4]; (stride * SIDE) as usize];
+            draw_mask_glyph_solid_u8(
+                &mut pixels,
+                stride as usize,
+                (SIDE, SIDE),
+                &mask(origin.0, origin.1),
+                [1.0, 1.0, 1.0, 1.0],
+                1.0,
+                OverBlend,
+            );
+            let painted: Vec<(u32, u32)> = (0..stride * SIDE)
+                .filter(|pixel| pixels[*pixel as usize][3] != 0)
+                .map(|pixel| (pixel % stride, pixel / stride))
+                .collect();
+            assert_eq!(painted, covered, "mask at {origin:?}, stride {stride}");
+        }
     }
 }
