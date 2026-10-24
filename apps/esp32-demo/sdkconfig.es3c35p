@@ -7,3 +7,11 @@ CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 # The module's flash reads four bits a clock. The bootloader that ESP-IDF
 # builds turns quad mode on, so flash it with the image (see the justfile).
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+
+# The app's code and read-only data are copied to the module's octal PSRAM at
+# start and run from there: a cache miss then fills from a bus twice as wide
+# as quad flash. A frame of the demo takes 2.0 ms to compose and 0.6 ms to
+# draw and send, against 4.5 and 1.2 ms from flash, for about 200 ms of
+# copying at start and 2.6 MB of the PSRAM. QEMU's build leaves it out: the
+# emulator has no cache timing, and the copy would slow its start.
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y

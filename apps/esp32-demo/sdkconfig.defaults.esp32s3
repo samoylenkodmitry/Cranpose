@@ -11,13 +11,6 @@ CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 # A memory test of the whole PSRAM at every boot delays the first frame.
 CONFIG_SPIRAM_MEMTEST=n
 
-# The app's code and read-only data are copied to the octal PSRAM at start
-# and run from there: a cache miss then fills from a bus twice as wide as
-# quad flash. On the ES3C35P a frame of the demo takes 2.0 ms to compose and
-# 0.6 ms to draw and send, against 4.5 and 1.2 ms from flash, for about 200 ms
-# of copying at start and 2.6 MB of the PSRAM.
-CONFIG_SPIRAM_XIP_FROM_PSRAM=y
-
 # The largest caches: a frame runs through more code than the default 16 KB
 # instruction cache holds.
 CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y

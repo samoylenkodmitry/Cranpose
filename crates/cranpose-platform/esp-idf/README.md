@@ -157,7 +157,7 @@ files and in the template's.
 | --- | --- | --- |
 | Flash in QIO mode at 80 MHz, flashed with the bootloader ESP-IDF built (espflash's own does not turn QIO on) | the board's sdkconfig | ES3C35P 10.2 to 6.1 ms, E32R35T 20.4 to 6.4 ms |
 | 32 KB instruction and 64 KB data cache, 64-byte data lines | `sdkconfig.defaults.esp32s3` | ES3C35P 6.1 to 5.7 ms |
-| Code and read-only data copied to octal PSRAM at start (`CONFIG_SPIRAM_XIP_FROM_PSRAM`) | `sdkconfig.defaults.esp32s3` | ES3C35P 5.7 to 2.7 ms, for about 200 ms of copying at start |
+| Code and read-only data copied to octal PSRAM at start (`CONFIG_SPIRAM_XIP_FROM_PSRAM`) | the board's sdkconfig | ES3C35P 5.7 to 2.7 ms, for about 200 ms of copying at start |
 | The framework's per-frame code in IRAM | this crate's [`cranpose_hot_code`](components/cranpose_hot_code/README.md) component, on by default | ES3C35P 2.7 to 1.4 ms, E32R35T 6.4 to 4.5 ms |
 | No check of the app image at boot | `sdkconfig.defaults` | the first frame 470 ms (ES3C35P) and 830 ms (E32R35T) sooner |
 
