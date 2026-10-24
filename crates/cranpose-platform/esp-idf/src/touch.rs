@@ -3,7 +3,7 @@
 mod st77922;
 mod xpt2046;
 
-use std::{ffi::c_void, ptr};
+use std::{ffi::c_void, ptr, time::Instant};
 
 use esp_idf_svc::{
     hal::{
@@ -25,8 +25,17 @@ pub trait Touch {
         F: Fn() -> bool + Send + Sync + 'static;
 
     /// Returns the position of the first finger in display pixels, or
-    /// `None` while no finger touches the panel.
+    /// `None` while no finger touches the panel or its setup runs.
     fn read(&mut self) -> Result<Option<(u16, u16)>, EspError>;
+
+    /// Runs the steps of the panel's setup whose wait has passed at `now`,
+    /// and returns when the next one is due: `None` once the panel is set
+    /// up. [`run`](crate::run) calls it while it shows the first pictures,
+    /// so the waits of a reset do not hold the first one back.
+    fn set_up(&mut self, now: Instant) -> Result<Option<Instant>, EspError> {
+        let _ = now;
+        Ok(None)
+    }
 }
 
 /// A display without touch input.
