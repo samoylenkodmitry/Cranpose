@@ -3311,7 +3311,7 @@ pub fn rasterize_text_to_image_with_font(
             scale,
         },
         RasterFontRef {
-            font,
+            font: &font,
             ab_glyph_scale_factor: 1.0,
             weight: FontWeight::NORMAL,
             style: FontStyle::Normal,
@@ -3469,7 +3469,7 @@ struct TextRasterImageRequest<'a> {
 
 fn rasterize_text_to_image_impl(
     request: TextRasterImageRequest<'_>,
-    font_ref: RasterFontRef<'_, impl Font>,
+    font_ref: RasterFontRef<'_, impl RasterFace>,
     font_cache_key: u64,
     glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
 ) -> Option<TextPixels> {
@@ -4940,6 +4940,37 @@ fn line_offset(offsets: &Option<Vec<f32>>, line_idx: usize) -> f32 {
         .unwrap_or(0.0)
 }
 
+/// A face the raster walks a text in. A face with a table of its printable
+/// ASCII glyphs answers them from it: a glyph without a cmap search, a pair's
+/// kerning without a GPOS search or a slot in the glyph cache's own kerning
+/// table, which then stays unallocated for text in ASCII.
+trait RasterFace: Font {
+    /// The glyph of `ch`.
+    fn char_glyph(&self, ch: char) -> GlyphId {
+        self.glyph_id(ch)
+    }
+
+    /// The kerning in font units between the glyphs of two consecutive
+    /// characters, when the face's table holds the pair.
+    fn table_kern(&self, previous: (char, GlyphId), next: (char, GlyphId)) -> Option<f32> {
+        let _ = (previous, next);
+        None
+    }
+}
+
+impl RasterFace for KernedFont {
+    fn char_glyph(&self, ch: char) -> GlyphId {
+        self.ascii_glyph(ch)
+            .map_or_else(|| self.glyph_id(ch), |(id, _)| id)
+    }
+
+    fn table_kern(&self, previous: (char, GlyphId), next: (char, GlyphId)) -> Option<f32> {
+        self.ascii_kern(previous, next)
+    }
+}
+
+impl<F: Font> RasterFace for &F {}
+
 /// `scaled_font`'s kerning between two glyphs, through `glyph_cache` when a
 /// caller has one.
 fn cached_kern<F: Font, S: ScaleFont<F>>(
@@ -4961,7 +4992,7 @@ fn cached_kern<F: Font, S: ScaleFont<F>>(
 #[expect(clippy::too_many_arguments)]
 fn visit_text_glyph_masks(
     text: &str,
-    font: &impl Font,
+    font: &impl RasterFace,
     font_hash: u64,
     font_px_size: f32,
     line_height: f32,
@@ -4988,19 +5019,23 @@ fn visit_text_glyph_masks(
         let mut caret_x = origin_x + line_offset(&line_offsets, line_idx) + lead_in;
         let mut previous = None;
         for ch in line.chars() {
-            let glyph_id = scaled_font.glyph_id(ch);
-            if let Some(previous_id) = previous {
-                caret_x += cached_kern(
-                    glyph_cache.as_deref_mut(),
-                    font_hash,
-                    &scaled_font,
-                    previous_id,
-                    glyph_id,
-                ) + letter_spacing;
+            let glyph_id = font.char_glyph(ch);
+            if let Some((previous_ch, previous_id)) = previous {
+                let kern = match font.table_kern((previous_ch, previous_id), (ch, glyph_id)) {
+                    Some(units) => units * scaled_font.h_scale_factor(),
+                    None => cached_kern(
+                        glyph_cache.as_deref_mut(),
+                        font_hash,
+                        &scaled_font,
+                        previous_id,
+                        glyph_id,
+                    ),
+                };
+                caret_x += kern + letter_spacing;
             }
             let glyph = glyph_id.with_scale_and_position(scale, point(caret_x, baseline_y));
             caret_x += scaled_font.h_advance(glyph_id);
-            previous = Some(glyph_id);
+            previous = Some((ch, glyph_id));
             let glyph = align_glyph_for_text_motion(glyph, static_text_motion);
             let Some(mask) = raster_glyph_mask(
                 if static_text_motion {
