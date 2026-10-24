@@ -63,11 +63,57 @@ enum PendingInput {
     PointerUp(f32, f32, Option<i64>, PointerSource),
     PointerMove(f32, f32, Option<i64>, PointerSource),
     PointerCancel,
+    HoverExit,
     Key(KeyEvent),
     SecondaryPointerDown(u64, f32, f32, Option<i64>),
     SecondaryPointerUp(u64, f32, f32, Option<i64>),
     SecondaryPointerMove(u64, f32, f32, Option<i64>),
     RotaryScroll(f32, u64),
+}
+
+fn dispatch_pending_input(shell: &mut AppShell<WgpuRenderer>, input: PendingInput) {
+    match input {
+        PendingInput::PointerDown(x, y, time_ms, source) => {
+            shell.set_pointer_source(source);
+            let event_time = shell.realtime_pointer_event_time(time_ms);
+            shell.set_cursor_at_event_time(x, y, event_time);
+            shell.pointer_pressed_at_event_time(event_time);
+        }
+        PendingInput::PointerUp(x, y, time_ms, source) => {
+            shell.set_pointer_source(source);
+            let event_time = shell.realtime_pointer_event_time(time_ms);
+            shell.pointer_released_at_position_event_time(x, y, event_time);
+        }
+        PendingInput::PointerMove(x, y, time_ms, source) => {
+            shell.set_pointer_source(source);
+            let event_time = shell.realtime_pointer_event_time(time_ms);
+            shell.set_cursor_at_event_time(x, y, event_time);
+        }
+        PendingInput::HoverExit => {
+            shell.cancel_gesture_unless_pressed();
+        }
+        PendingInput::PointerCancel => {
+            shell.cancel_gesture();
+        }
+        PendingInput::Key(event) => {
+            shell.on_key_event(&event);
+        }
+        PendingInput::SecondaryPointerDown(id, x, y, time_ms) => {
+            shell.set_pointer_source(PointerSource::Touch);
+            shell.secondary_pointer_pressed(id, x, y, time_ms);
+        }
+        PendingInput::SecondaryPointerUp(id, x, y, time_ms) => {
+            shell.set_pointer_source(PointerSource::Touch);
+            shell.secondary_pointer_released(id, x, y, time_ms);
+        }
+        PendingInput::SecondaryPointerMove(id, x, y, time_ms) => {
+            shell.set_pointer_source(PointerSource::Touch);
+            shell.secondary_pointer_moved(id, x, y, time_ms);
+        }
+        PendingInput::RotaryScroll(detents, uptime_ms) => {
+            shell.rotary_scrolled_by_detents(detents, uptime_ms);
+        }
+    }
 }
 
 fn android_event_time_ms(event_time_ns: i64) -> i64 {
@@ -542,9 +588,35 @@ fn push_pending_inputs_from_android_event(
             *primary_pointer_id = None;
             true
         }
-        android_activity::input::MotionAction::Scroll => {
-            push_rotary_pending_input(motion_event, event_source, time_ms, pending_inputs)
+        _ => push_hover_or_scroll(motion_event, android_platform, time_ms, pending_inputs),
+    }
+}
+
+fn push_hover_or_scroll(
+    event: &android_activity::input::MotionEvent<'_>,
+    platform: &AndroidPlatform,
+    time_ms: Option<i64>,
+    pending: &mut Vec<PendingInput>,
+) -> bool {
+    use android_activity::input::MotionAction;
+    match event.action() {
+        MotionAction::HoverEnter | MotionAction::HoverMove => {
+            if let Some(pointer) = event.pointers().next() {
+                let position = platform.pointer_position(pointer.x() as f64, pointer.y() as f64);
+                pending.push(PendingInput::PointerMove(
+                    position.x,
+                    position.y,
+                    time_ms,
+                    android_pointer_source(&pointer, event.source()),
+                ));
+            }
+            true
         }
+        MotionAction::HoverExit => {
+            pending.push(PendingInput::HoverExit);
+            true
+        }
+        MotionAction::Scroll => push_rotary_pending_input(event, event.source(), time_ms, pending),
         _ => false,
     }
 }
@@ -2583,46 +2655,14 @@ pub fn run(
         {
             frame_rate_boost.note_input(Instant::now());
             for input in pending_inputs.drain(..) {
-                match input {
-                    PendingInput::PointerDown(x, y, time_ms, source) => {
-                        shell.set_pointer_source(source);
-                        let event_time = shell.realtime_pointer_event_time(time_ms);
-                        shell.set_cursor_at_event_time(x, y, event_time);
-                        shell.pointer_pressed_at_event_time(event_time);
-                    }
-                    PendingInput::PointerUp(x, y, time_ms, source) => {
-                        shell.set_pointer_source(source);
-                        let event_time = shell.realtime_pointer_event_time(time_ms);
-                        shell.pointer_released_at_position_event_time(x, y, event_time);
-                    }
-                    PendingInput::PointerMove(x, y, time_ms, source) => {
-                        shell.set_pointer_source(source);
-                        let event_time = shell.realtime_pointer_event_time(time_ms);
-                        shell.set_cursor_at_event_time(x, y, event_time);
-                    }
-                    PendingInput::PointerCancel => {
-                        shell.cancel_gesture();
-                    }
-                    PendingInput::Key(event) => {
-                        shell.on_key_event(&event);
-                    }
-                    PendingInput::SecondaryPointerDown(id, x, y, time_ms) => {
-                        shell.set_pointer_source(PointerSource::Touch);
-                        shell.secondary_pointer_pressed(id, x, y, time_ms);
-                    }
-                    PendingInput::SecondaryPointerUp(id, x, y, time_ms) => {
-                        shell.set_pointer_source(PointerSource::Touch);
-                        shell.secondary_pointer_released(id, x, y, time_ms);
-                    }
-                    PendingInput::SecondaryPointerMove(id, x, y, time_ms) => {
-                        shell.set_pointer_source(PointerSource::Touch);
-                        shell.secondary_pointer_moved(id, x, y, time_ms);
-                    }
-                    PendingInput::RotaryScroll(detents, uptime_ms) => {
-                        shell.rotary_scrolled_by_detents(detents, uptime_ms);
-                    }
-                }
+                dispatch_pending_input(shell, input);
             }
+        }
+
+        if let Some(shell) = &app_shell
+            && let Some(icon) = shell.take_pointer_icon_change()
+        {
+            crate::android_pointer_icon::apply(&app, &icon);
         }
 
         if ime_session.is_active()

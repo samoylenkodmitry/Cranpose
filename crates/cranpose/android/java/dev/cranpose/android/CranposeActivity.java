@@ -78,6 +78,49 @@ import java.util.Locale;
  * tracks appear and can be played while the rest keep streaming in.
  */
 public class CranposeActivity extends NativeActivity {
+    private final android.util.LruCache<Long, android.view.PointerIcon> cranposePointerIcons =
+            new android.util.LruCache<>(32);
+
+    /** Applies the shared UI's pointer shape to mouse and stylus hover targets. */
+    public void cranposeSetPointerIcon(int type, long identity, byte[] rgba, int width,
+            int height, float hotspotX, float hotspotY) {
+        runOnUiThread(() -> {
+            if (Build.VERSION.SDK_INT < 24) return;
+            android.view.PointerIcon icon;
+            if (rgba == null) {
+                icon = android.view.PointerIcon.getSystemIcon(this, type);
+            } else {
+                icon = cranposePointerIcons.get(identity);
+                if (icon == null) {
+                    if (width <= 0 || height <= 0 || width > 128 || height > 128
+                            || rgba.length != width * height * 4) return;
+                    int[] argb = new int[width * height];
+                    for (int i = 0; i < argb.length; i++) {
+                        int at = i * 4;
+                        argb[i] = ((rgba[at + 3] & 255) << 24) | ((rgba[at] & 255) << 16)
+                                | ((rgba[at + 1] & 255) << 8) | (rgba[at + 2] & 255);
+                    }
+                    android.graphics.Bitmap bitmap = android.graphics.Bitmap.createBitmap(
+                            argb, width, height, android.graphics.Bitmap.Config.ARGB_8888);
+                    bitmap.setDensity(android.graphics.Bitmap.DENSITY_NONE);
+                    icon = android.view.PointerIcon.create(bitmap, hotspotX, hotspotY);
+                    cranposePointerIcons.put(identity, icon);
+                }
+            }
+            cranposeApplyPointerIcon(getWindow().getDecorView(), icon);
+        });
+    }
+
+    private static void cranposeApplyPointerIcon(View view, android.view.PointerIcon icon) {
+        view.setPointerIcon(icon);
+        if (view instanceof android.view.ViewGroup) {
+            android.view.ViewGroup group = (android.view.ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                cranposeApplyPointerIcon(group.getChildAt(i), icon);
+            }
+        }
+    }
+
     private static native boolean nativeOnBackInvoked();
     private static native void nativeOnIncomingContent(String name, String mimeType, String uri);
     private static native void nativeOnTrimMemory(int level);

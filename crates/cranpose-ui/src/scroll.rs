@@ -402,7 +402,9 @@ impl ScrollState {
     }
 
     pub(crate) fn remove_invalidate_callback(&self, id: u64) {
-        self.inner().invalidate_callbacks.borrow_mut().remove(&id);
+        self.inner.try_with(|inner| {
+            inner.invalidate_callbacks.borrow_mut().remove(&id);
+        });
     }
 
     fn invalidate(&self) {

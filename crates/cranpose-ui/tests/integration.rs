@@ -18,3 +18,5 @@ mod text_options_contract_integration;
 mod text_overflow_ellipsis_integration;
 mod wear_list_and_painters;
 mod widget_composition;
+
+mod scroll_resize;
