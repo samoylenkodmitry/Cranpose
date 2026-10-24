@@ -813,6 +813,7 @@ dependencies = [
  "bytemuck",
  "cranpose",
  "esp-idf-svc",
+ "esp-idf-sys",
  "log",
  "thiserror 2.0.21",
 ]
