@@ -1,0 +1,2 @@
+# Builds without the per-frame code in IRAM, to profile what the cache costs.
+CONFIG_CRANPOSE_HOT_CODE_IN_IRAM=n

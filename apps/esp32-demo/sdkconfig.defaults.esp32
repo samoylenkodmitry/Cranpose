@@ -1,10 +1,5 @@
-# The 3.5-inch ESP32-32E display board: an ESP32-D0WD-V3 with 4 MB of flash
-# and no PSRAM, so everything the app allocates comes from 520 KB of SRAM.
-CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
-
-# Composition and layout need the stack, and every KB of it is one less for
-# the heap.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
+# The classic ESP32 without PSRAM: everything the app allocates comes from
+# 520 KB of SRAM.
 
 # The UI runs on one task, so the second core only costs RAM for its idle and
 # IPC tasks and their stacks.

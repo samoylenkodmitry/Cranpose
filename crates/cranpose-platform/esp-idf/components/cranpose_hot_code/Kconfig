@@ -1,0 +1,15 @@
+menu "Cranpose"
+
+    config CRANPOSE_HOT_CODE_IN_IRAM
+        bool "Run the framework's per-frame code from IRAM"
+        default y
+        help
+            Links the framework functions that a frame runs most into IRAM,
+            where the CPU fetches them without waiting for the flash or PSRAM
+            cache. A frame of the demo then takes about half the time. The
+            code takes 128 KB of internal RAM on the ESP32-S3, where IRAM and
+            the heap share it, and 64 KB of the classic ESP32's IRAM, which
+            its heap only lends to 32-bit allocations. Turn it off for an
+            application that needs that memory more.
+
+endmenu

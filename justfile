@@ -159,15 +159,28 @@ esp32-build-es3c35p: _disk-guard
 # Builds the demo for the 3.5-inch ESP32-32E board (E32R35T): a classic ESP32
 # with a display and a touch panel.
 esp32-build-e32r35t: _disk-guard
-    . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && MCU=esp32 cargo build --release --target xtensa-esp32-espidf --features e32r35t
+    . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.e32r35t" MCU=esp32 cargo build --release --target xtensa-esp32-espidf --features e32r35t
 
-# Flashes the ES3C35P demo to the board on `port` and shows its log.
+# The bootloader ESP-IDF built turns the flash's quad mode on; espflash's own
+# does not. Its header says DIO, as ESP-IDF writes it for a QIO app.
+# Flashes the ES3C35P demo with its bootloader to the board on `port`, shows the log.
 esp32-flash-es3c35p port: esp32-build-es3c35p
-    . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && espflash flash --monitor --port {{port}} --partition-table partitions.csv target/xtensa-esp32s3-espidf/release/esp32-demo
+    . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && espflash flash --monitor --port {{port}} --flash-mode dio --flash-freq 80mhz --bootloader target/xtensa-esp32s3-espidf/release/bootloader.bin --partition-table partitions.csv target/xtensa-esp32s3-espidf/release/esp32-demo
 
-# Flashes the E32R35T demo to the board on `port` and shows its log.
+# Flashes the E32R35T demo with its bootloader to the board on `port`, shows the log.
 esp32-flash-e32r35t port: esp32-build-e32r35t
-    . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && espflash flash --monitor --baud 460800 --port {{port}} --partition-table partitions_4mb.csv target/xtensa-esp32-espidf/release/esp32-demo
+    . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && espflash flash --monitor --baud 460800 --port {{port}} --flash-mode dio --flash-freq 80mhz --bootloader target/xtensa-esp32-espidf/release/bootloader.bin --partition-table partitions_4mb.csv target/xtensa-esp32-espidf/release/esp32-demo
+
+# `app` is demo or lvgl, `board` es3c35p or e32r35t. See benchmarks/esp32/README.md.
+# Runs an app on a board and prints its frame time, instructions and stall cycles.
+esp32-bench board app="demo": _disk-guard
+    . "$HOME/export-{{esp32_toolchain}}.sh" && python3 scripts/esp32/board_run.py --board {{board}} --app {{app}} --component benchmarks/esp32/perfstats --seconds 22 --log target/esp32/bench-{{app}}-{{board}}.log && python3 benchmarks/esp32/summary.py target/esp32/bench-{{app}}-{{board}}.log
+
+# Runs without the per-frame code in IRAM. See
+# crates/cranpose-platform/esp-idf/components/cranpose_hot_code/README.md.
+# Profiles the demo on a board with the sampler and prints the hottest functions.
+esp32-profile board seconds="40": _disk-guard
+    . "$HOME/export-{{esp32_toolchain}}.sh" && python3 scripts/esp32/board_run.py --board {{board}} --component scripts/esp32/sampler --sdkconfig scripts/esp32/sdkconfig.no_hot_code --seconds {{seconds}} --log target/esp32/profile-{{board}}.log && python3 scripts/esp32/profile.py target/esp32/profile-{{board}}.elf target/esp32/profile-{{board}}.log --crates
 
 # Lints the ESP-IDF platform crate and the demo for the ESP32-S3.
 esp32-clippy: _disk-guard

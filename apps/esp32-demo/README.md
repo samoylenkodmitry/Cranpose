@@ -40,10 +40,16 @@ the `esp-1.98.1` toolchain, `sdkconfig.defaults` the ESP-IDF settings, and
 README explains the runtime and the toolchain traps.
 
 `sdkconfig.defaults` holds the settings that both chips share.
-`sdkconfig.defaults.esp32s3` expects a module with 8 MB of octal PSRAM, such as N8R8 or N16R8; a board with
-quad PSRAM needs `CONFIG_SPIRAM_MODE_QUAD=y` instead. `sdkconfig.es3c35p` adds
-the ES3C35P's USB console and 16 MB of flash, and `sdkconfig.defaults.esp32`
-the classic board's 4 MB of flash with `partitions_4mb.csv`. The classic
-ESP32 builds for another target, which needs its own `MCU`:
-`just esp32-build-e32r35t` runs `MCU=esp32 cargo build --release --target
-xtensa-esp32-espidf --features e32r35t`.
+`sdkconfig.defaults.esp32s3` and `sdkconfig.defaults.esp32` hold the settings
+of each chip, which ESP-IDF adds by the chip it builds for: the S3 file
+expects a module with 8 MB of octal PSRAM, such as N8R8 or N16R8 (a board with
+quad PSRAM needs `CONFIG_SPIRAM_MODE_QUAD=y` instead), and runs the code from
+it. `sdkconfig.es3c35p` and `sdkconfig.e32r35t` hold the settings of each
+board: console, flash size, and flash in QIO mode, which the bootloader that
+ESP-IDF built turns on, so the `just` recipes flash it with the app.
+`partitions_4mb.csv` fits the classic board's 4 MB of flash. The classic ESP32
+builds for another target, which needs its own `MCU`:
+`just esp32-build-e32r35t` runs
+`ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.e32r35t" MCU=esp32
+cargo build --release --target xtensa-esp32-espidf --features e32r35t`. The platform crate's README explains
+what these settings do to a frame.

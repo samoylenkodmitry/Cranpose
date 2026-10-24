@@ -145,13 +145,35 @@ crates build only for ESP-IDF targets. The framework crates must build for a
 CPU without 64-bit atomics; `just clippy-no-atomic64` checks that with the
 stable toolchain.
 
+## Code fetch
+
+A frame runs through several hundred KB of framework code, more than the
+32 KB instruction cache holds, so on both chips most of a frame's cycles wait
+for code: 530K of a 620K-cycle frame of the demo on the ESP32-S3 before the
+settings below, which apply to every app and live in the demo's sdkconfig
+files and in the template's.
+
+| Setting | Where | Effect on the demo's frame |
+| --- | --- | --- |
+| Flash in QIO mode at 80 MHz, flashed with the bootloader ESP-IDF built (espflash's own does not turn QIO on) | the board's sdkconfig | ES3C35P 10.2 to 6.1 ms, E32R35T 20.4 to 6.4 ms |
+| 32 KB instruction and 64 KB data cache, 64-byte data lines | `sdkconfig.defaults.esp32s3` | ES3C35P 6.1 to 5.7 ms |
+| Code and read-only data copied to octal PSRAM at start (`CONFIG_SPIRAM_XIP_FROM_PSRAM`) | `sdkconfig.defaults.esp32s3` | ES3C35P 5.7 to 2.7 ms, for about 200 ms of copying at start |
+| The framework's per-frame code in IRAM | this crate's [`cranpose_hot_code`](components/cranpose_hot_code/README.md) component, on by default | ES3C35P 2.7 to 1.4 ms, E32R35T 6.4 to 4.5 ms |
+| No check of the app image at boot | `sdkconfig.defaults` | the first frame 470 ms (ES3C35P) and 830 ms (E32R35T) sooner |
+
+[`benchmarks/esp32`](../../../benchmarks/esp32) compares the demo with the
+same screen in LVGL on both boards, and `scripts/esp32` holds the tools that
+measured these: a sampling profiler that runs on the chip, and a script that
+builds, flashes and logs an app with it or with the Xtensa performance
+counters.
+
 ## Toolchain
 
 ```sh
 just esp32-setup        # Xtensa Rust, espflash, ldproxy, Espressif QEMU
 just esp32-build        # the demo firmware; the first build downloads ESP-IDF
 just esp32-clippy       # lints this crate and the demo for the ESP32-S3
-just esp32-flash-es3c35p /dev/cu.usbmodem31301     # builds, flashes and shows the log
+just esp32-flash-es3c35p /dev/cu.usbmodem31301     # builds, flashes with ESP-IDF's bootloader and shows the log
 just esp32-flash-e32r35t /dev/cu.usbserial-3120
 just esp32-qemu-check   # boots the demo in QEMU and saves the panel picture
 just esp32-qemu         # shows the demo on QEMU's virtual panel in a window
@@ -178,9 +200,10 @@ the esp toolchain links for it and then strips.
 
 The demo's composition takes about 150 KB of heap, and a text takes four
 bytes a pixel of its rectangle while it draws. A chip without PSRAM, such as
-the classic ESP32 with about 300 KB of heap, runs the demo with a 32 KB main
-stack, `CONFIG_FREERTOS_UNICORE=y` (the second core's idle and IPC tasks cost
-20 KB) and 8-row strips.
+the classic ESP32 with about 300 KB of heap, runs the demo with
+`CONFIG_FREERTOS_UNICORE=y` (the second core's idle and IPC tasks cost
+20 KB) and 8-row strips. The main task's 32 KB stack suits both chips: the
+demo's deepest use of it was about 22 KB.
 
 ## Thread-local lookups
 

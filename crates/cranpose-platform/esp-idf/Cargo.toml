@@ -43,3 +43,8 @@ component_dirs = ["components/cranpose_fast_time"]
 # components/cranpose_small_alloc/small_alloc.c.
 [[package.metadata.esp-idf-sys.extra_components]]
 component_dirs = ["components/cranpose_small_alloc"]
+
+# The framework's per-frame code in IRAM: see
+# components/cranpose_hot_code/README.md.
+[[package.metadata.esp-idf-sys.extra_components]]
+component_dirs = ["components/cranpose_hot_code"]

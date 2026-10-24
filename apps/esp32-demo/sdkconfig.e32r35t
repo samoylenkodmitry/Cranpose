@@ -1,0 +1,11 @@
+# Added to sdkconfig.defaults for the E32R35T board: an ESP32-WROOM-32E with
+# 4 MB of flash.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# The code runs from flash through a 32 KB cache. Four bits a clock at 80 MHz
+# instead of two at 40 MHz: a frame of the demo takes 5.1 ms to compose and
+# 1.3 ms to draw and send, against 16.6 and 3.8 ms. The bootloader that
+# ESP-IDF builds turns quad mode on, so flash it with the image (see the
+# justfile).
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
