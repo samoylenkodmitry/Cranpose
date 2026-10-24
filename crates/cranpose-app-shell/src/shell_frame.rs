@@ -623,14 +623,13 @@ where
     #[inline(never)]
     fn clear_dispatch_flags(&mut self, kind: DispatchInvalidationKind) {
         let mut applier = self.app.composition.applier_mut();
-        let clear =
-            |node_id| match clear_dispatch_invalidation(&mut applier, node_id, kind) {
-                Ok(true) => log::trace!("Cleared the {kind:?} flag of node #{node_id}"),
-                Ok(false) => {}
-                Err(err) => {
-                    log::debug!("Could not clear the {kind:?} flag of node #{node_id}: {err}");
-                }
-            };
+        let clear = |node_id| match clear_dispatch_invalidation(&mut applier, node_id, kind) {
+            Ok(true) => log::trace!("Cleared the {kind:?} flag of node #{node_id}"),
+            Ok(false) => {}
+            Err(err) => {
+                log::debug!("Could not clear the {kind:?} flag of node #{node_id}: {err}");
+            }
+        };
         match kind {
             DispatchInvalidationKind::Pointer => process_pointer_repasses(clear),
             DispatchInvalidationKind::Focus => process_focus_invalidations(clear),
