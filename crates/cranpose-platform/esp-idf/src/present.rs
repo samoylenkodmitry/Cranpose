@@ -69,6 +69,14 @@ impl Presenter {
         panel: &mut Panel<'_>,
     ) -> Result<(), EspError> {
         framebuffer.changed_areas(&mut self.areas);
+        // While the display waits out its start-up, the glyphs of the first
+        // picture rasterize into the glyph cache: its strips then take them
+        // from there once the display reads pixels.
+        if panel.is_setting_up() {
+            for &area in &self.areas {
+                framebuffer.prepare_area(area);
+            }
+        }
         for &area in &self.areas {
             let area = panel.align(area);
             let rows_per_strip =

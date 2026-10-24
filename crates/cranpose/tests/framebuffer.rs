@@ -130,3 +130,87 @@ fn a_delay_wakes_a_sleeping_host_and_its_change_presents() {
         }
     }
 }
+
+/// Draws the whole picture of `framebuffer` in strips of `rows` rows, as a
+/// host with a small buffer does.
+fn picture_in_strips(framebuffer: &mut Framebuffer, rows: u32) -> Vec<u8> {
+    let (width, height) = (framebuffer.width(), framebuffer.height());
+    let mut picture = vec![0; width as usize * height as usize * 4];
+    let mut top = 0;
+    while top < height {
+        let area = PixelRect {
+            x: 0,
+            y: top,
+            width,
+            height: rows.min(height - top),
+        };
+        let start = top as usize * width as usize * 4;
+        let len = area.width as usize * area.height as usize * 4;
+        framebuffer.draw_area(area, &mut picture[start..start + len]);
+        top += area.height;
+    }
+    picture
+}
+
+fn text_framebuffer() -> Framebuffer {
+    let mut framebuffer = Framebuffer::new(120, 60, 1.0, SystemTheme::Light, &[], || {
+        Column(
+            Modifier::empty().padding(3.0),
+            ColumnSpec::default(),
+            || {
+                Text(
+                    "Strips Ag",
+                    Modifier::empty(),
+                    TextStyle {
+                        span_style: SpanStyle {
+                            font_size: cranpose::text::TextUnit::Sp(24.0),
+                            ..SpanStyle::default()
+                        },
+                        ..TextStyle::default()
+                    },
+                );
+                Text(
+                    "cut through glyphs",
+                    Modifier::empty(),
+                    TextStyle::default(),
+                );
+            },
+        );
+    })
+    .expect("valid surface");
+    framebuffer.set_active(true);
+    assert!(framebuffer.tick(1));
+    framebuffer.changed_areas(&mut Vec::new());
+    framebuffer
+}
+
+#[test]
+fn text_drawn_in_strips_matches_text_drawn_whole() {
+    let mut framebuffer = text_framebuffer();
+    let whole = picture_in_strips(&mut framebuffer, 60);
+    assert!(
+        whole.as_chunks::<4>().0.iter().any(|pixel| pixel[0] < 128),
+        "the text draws"
+    );
+    for rows in [1, 3, 8] {
+        assert!(
+            picture_in_strips(&mut framebuffer, rows) == whole,
+            "strips of {rows} rows draw the picture whole strips draw"
+        );
+    }
+}
+
+#[test]
+fn preparing_an_area_draws_the_same_picture() {
+    let mut drawn = text_framebuffer();
+    let whole = picture_in_strips(&mut drawn, 60);
+    let mut prepared = text_framebuffer();
+    let area = PixelRect {
+        x: 0,
+        y: 0,
+        width: prepared.width(),
+        height: prepared.height(),
+    };
+    prepared.prepare_area(area);
+    assert!(picture_in_strips(&mut prepared, 8) == whole);
+}
