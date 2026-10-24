@@ -92,8 +92,9 @@ boards and QEMU this way, with touch.
   the glass vendor. Without a reset line the panel sends the software reset
   command. `Panel::spi` only starts the reset: the first draw sends the
   start-up sequence, each command after the wait the one before it asks for,
-  so the waits pass while `run` creates the composition. The backlight turns
-  on once the first picture is on the display.
+  so the waits pass while `run` creates the composition and rasterizes the
+  glyphs of the first picture. The backlight turns on once the first picture
+  is on the display.
 - `Panel::qemu` opens QEMU's virtual RGB panel.
 - A display's colour transfer is asynchronous: the panel reads a strip by DMA
   after the draw call returns. The presenter keeps two strips in turn and
@@ -163,20 +164,34 @@ on the ESP32-S3 waited for code before them.
 | --- | --- | --- |
 | Flash in QIO mode at 80 MHz, flashed with the bootloader ESP-IDF built (espflash's own does not turn QIO on) | the board's sdkconfig | ES3C35P 10.2 to 6.1 ms, E32R35T 20.4 to 6.4 ms |
 | 32 KB instruction and 64 KB data cache, 64-byte data lines | `sdkconfig.defaults.esp32s3` | ES3C35P 6.1 to 5.7 ms |
-| Code and read-only data copied to octal PSRAM at start (`CONFIG_SPIRAM_XIP_FROM_PSRAM`) | the board's sdkconfig | ES3C35P 5.7 to 2.7 ms, for about 200 ms of copying at start |
+| Code and read-only data copied to octal PSRAM at start (`CONFIG_SPIRAM_XIP_FROM_PSRAM`), off now | the board's sdkconfig | ES3C35P 5.7 to 2.7 ms, for about 200 ms of copying at start |
 | The framework's per-frame code in IRAM | this crate's [`cranpose_hot_code`](components/cranpose_hot_code/README.md) component, on by default | ES3C35P 2.7 to 1.4 ms, E32R35T 6.4 to 4.5 ms |
 | No check of the app image at boot | `sdkconfig.defaults` | the first frame 470 ms (ES3C35P) and 830 ms (E32R35T) sooner |
 
 The demo's bar now reads its animated width while it draws, so a frame
-neither composes nor lays out: with all the settings it takes 0.49 ms on the
-ES3C35P and 1.80 ms on the E32R35T, against 1.05 and 2.21 ms for the same
-screen in LVGL.
+neither composes nor lays out: it takes 0.68 ms on the ES3C35P and 1.77 ms
+on the E32R35T, against 1.14 and 2.21 ms for the same screen in LVGL. With
+the per-frame code in IRAM, the ES3C35P runs its code from flash: the copy to
+PSRAM would cut its frame to 0.49 ms for 190 ms more before the first frame
+and 2.6 MB of the PSRAM.
 
 [`benchmarks/esp32`](../../../benchmarks/esp32) compares the demo with the
 same screen in LVGL on both boards, and `scripts/esp32` holds the tools that
 measured these: a sampling profiler that runs on the chip, and a script that
 builds, flashes and logs an app with it or with the Xtensa performance
 counters.
+
+## Components
+
+The crate brings ESP-IDF components of its own (`components/`), which
+esp-idf-sys finds in its metadata: fast thread-locals, a clock without a
+64-bit division, a small-block allocator and the per-frame code in IRAM.
+esp-idf-sys configures its CMake project once and runs it again only when
+its own settings change, so an application that moves to another revision of
+this crate would keep the components of the revision it built first. The
+crate's build script stops such a build and names the command that starts
+ESP-IDF's build over, `cargo clean -p esp-idf-sys --release --target <the
+target>`.
 
 ## Toolchain
 

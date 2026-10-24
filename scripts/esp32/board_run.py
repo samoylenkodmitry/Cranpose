@@ -76,7 +76,10 @@ def idf_environment():
     idf = ESPRESSIF / "esp-idf" / IDF_VERSION
     tools = ESPRESSIF / "tools"
     paths = [
-        one(str(ESPRESSIF / "python_env/idf*_env/bin"), "ESP-IDF Python"),
+        # ESP-IDF keeps an environment for each Python that installed it:
+        # the one of the Python running this script.
+        one(str(ESPRESSIF / f"python_env/idf*_py{sys.version_info.major}.{sys.version_info.minor}_env/bin"),
+            "ESP-IDF Python"),
         one(str(tools / "xtensa-esp-elf/*/xtensa-esp-elf/bin"), "Xtensa GCC"),
         one(str(tools / "cmake/*/CMake.app/Contents/bin"), "CMake")
         if sys.platform == "darwin" else one(str(tools / "cmake/*/bin"), "CMake"),
@@ -101,6 +104,10 @@ def build_lvgl(board, component, extra_sdkconfig, log):
                "-D", f"EXTRA_COMPONENT_DIRS={component or ''}"]
     if not (LVGL / f"build-{mcu}/CMakeCache.txt").exists():
         command.append(f"-DIDF_TARGET={mcu}")
+    # ESP-IDF reads the defaults only into a new sdkconfig, so the build
+    # writes its sdkconfig from them every time, as esp-idf-sys does for the
+    # demo.
+    (LVGL / f"build-{mcu}/sdkconfig").unlink(missing_ok=True)
     run(command + ["build"], LVGL, env, log.with_suffix(".build"))
     build = LVGL / f"build-{mcu}"
     return build / "lvgl_bench.elf", build / "bootloader/bootloader.bin", DEMO / config["partitions"]
