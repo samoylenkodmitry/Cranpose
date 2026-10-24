@@ -511,11 +511,18 @@ pub struct RuntimeLeakDebugStats {
 impl ShellApp {
     pub(crate) fn flush_semantics_invalidations(&mut self) {
         if self.app_context.has_pending_semantics_invalidations() {
-            let mut applier = self.composition.applier_mut();
-            process_semantics_invalidations(|node_id| {
-                cranpose_core::bubble_semantics_dirty(&mut *applier, node_id);
-            });
+            self.bubble_semantics_invalidations();
         }
+    }
+
+    /// Marks the semantics of the queued nodes and their ancestors dirty.
+    /// Out of line, as a frame seldom has any.
+    #[inline(never)]
+    fn bubble_semantics_invalidations(&mut self) {
+        let mut applier = self.composition.applier_mut();
+        process_semantics_invalidations(|node_id| {
+            cranpose_core::bubble_semantics_dirty(&mut *applier, node_id);
+        });
     }
 
     pub(crate) fn request_layout_pass(&mut self) {

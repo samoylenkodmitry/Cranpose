@@ -18,6 +18,10 @@ es3c35p = []
 # `xtensa-esp32-espidf` target. Without a board feature the demo draws on
 # QEMU's virtual panel.
 e32r35t = []
+# For the benchmarks: a number that counts up every frame in place of the
+# seconds line, drawn by a draw scope or composed in a Text.
+text-drawn = []
+text-composed = []
 
 [dependencies]
 cranpose = { path = "../../crates/cranpose", default-features = false, features = ["framebuffer"] }

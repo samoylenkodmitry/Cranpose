@@ -36,33 +36,53 @@ build installed it.
 
 ## Results
 
-2026-10-24. Frame is the CPU time of a frame: Cranpose's composition,
+2026-10-25. Frame is the CPU time of a frame: Cranpose's composition,
 layout, drawing and sending, LVGL's `lv_timer_handler` call that drew it.
 Instructions and stall cycles are per frame. Free RAM is byte-addressable
 internal RAM.
 
 The demo's bar reads the animated width in its draw: each frame records the
 bar's drawing again, as LVGL draws its bar again, without composing or
-laying out the screen. The framework code such a frame runs is in IRAM
-(`cranpose_hot_code`, from a profile of this demo). Both apps run their code
-from flash on both boards.
+laying out the screen. The framework code such frames run most is in IRAM
+(`cranpose_hot_code`, from profiles of this demo and of the text below).
+Both apps run their code from flash on both boards.
 
 | | Cranpose ES3C35P | LVGL ES3C35P | Cranpose E32R35T | LVGL E32R35T |
 | --- | --- | --- | --- | --- |
-| Frame | 0.69 ms | 1.14 ms | 1.79 ms | 2.21 ms |
-| Instructions | 65K | 159K | 56K | 181K |
-| Cycles waiting for code | 92K | 58K | 363K | 229K |
-| Cycles waiting for data | 18K | 8K | 66K | 35K |
+| Frame | 0.50 ms | 1.14 ms | 1.60 ms | 2.21 ms |
+| Instructions | 64K | 159K | 56K | 181K |
+| Cycles waiting for code | 40K | 58K | 306K | 229K |
+| Cycles waiting for data | 11K | 8K | 51K | 35K |
 | First frame after reset | 337 ms | 342 ms | 420 ms | 439 ms |
-| Internal RAM free (lowest) | 90 KB (58 KB) | 135 KB (103 KB) | 109 KB (98 KB) | 198 KB (198 KB) |
-| App image | 2.96 MB | 0.52 MB | 2.90 MB | 0.47 MB |
+| Internal RAM free (lowest) | 97 KB (66 KB) | 135 KB (103 KB) | 135 KB (132 KB) | 198 KB (198 KB) |
+| App image | 2.94 MB | 0.52 MB | 2.89 MB | 0.47 MB |
 
 Cranpose runs about a third of LVGL's instructions for this frame. Most of
 the rest of its time waits for code, more on the classic ESP32, whose 64 KB
 of IRAM for the framework holds less of a frame's code than the ESP32-S3's
-128 KB. On the ESP32-S3 that IRAM comes out of the same internal RAM as the
+125 KB. On the ESP32-S3 that IRAM comes out of the same internal RAM as the
 heap, which leaves Cranpose less of it free than LVGL; the classic ESP32
 has a separate region for IRAM.
+
+### A line of text that changes every frame
+
+The seconds line shows a number that counts up every frame instead, as a
+clock or a sensor reading does: LVGL sets its label's text every frame
+(`--sdkconfig benchmarks/esp32/sdkconfig.text_every_frame`), Cranpose
+composes the number in a `Text` (`--feature text-composed`) or draws it in
+`draw_behind`, which reads it while it draws (`--feature text-drawn`).
+
+| Frame | ES3C35P | E32R35T |
+| --- | --- | --- |
+| LVGL, label set every frame | 2.83 ms | 4.46 ms |
+| Cranpose, drawn | 2.65 ms | 4.25 ms |
+| Cranpose, composed | 5.82 ms | 7.53 ms |
+
+A drawn line takes no composition or layout, as the bar does. A composed
+line composes its `Text` and lays it out each frame: fewer instructions
+than LVGL's frame (205K against 331K on the ES3C35P), but over more code
+than IRAM and the cache hold, so it waits three to four times as long for
+code (1,073K cycles against 263K).
 
 Before its first frame each app waits out the panel's reset and start-up
 sequence, about 260 ms on the ES3C35P and 220 ms on the E32R35T. LVGL

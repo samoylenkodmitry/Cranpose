@@ -1,5 +1,6 @@
 //! A line of text whose number changes every frame, as a clock or a sensor
-//! reading does, for the framebuffer bench and tests.
+//! reading does, for the framebuffer bench and tests and the ESP32 demo's
+//! benchmark features.
 
 use cranpose::prelude::*;
 use cranpose_animation::{
@@ -18,21 +19,21 @@ fn reading() -> State<f32> {
     transition.animateFloat(0.0, 6000.0, spec, "count")
 }
 
-/// The number in a `Text`, composed again each frame.
+/// The number in a `Text` in `style`, composed again each frame.
 #[composable]
-pub fn ComposedReading() {
+pub fn ComposedReading(style: TextStyle) {
     let count = reading().value();
     Text(
         format!("Reading {}", count as u32),
         Modifier::empty(),
-        TextStyle::default(),
+        style,
     );
 }
 
-/// The number drawn by a draw scope that reads it: frames draw it again
-/// without composing or laying out.
+/// The number in `color` at `font_size`, drawn by a draw scope that reads
+/// it: frames draw it again without composing or laying out.
 #[composable]
-pub fn DrawnReading() {
+pub fn DrawnReading(color: Color, font_size: f32) {
     let count = reading();
     Box(
         Modifier::empty()
@@ -41,9 +42,12 @@ pub fn DrawnReading() {
             .draw_behind(move |scope| {
                 scope.draw_text_from(
                     Point::new(0.0, 0.0),
-                    Brush::solid(Color::WHITE),
+                    Brush::solid(color),
                     &format!("Reading {}", count.value() as u32),
-                    &DrawTextStyle::default(),
+                    &DrawTextStyle {
+                        font_size,
+                        ..DrawTextStyle::default()
+                    },
                 );
             }),
         BoxSpec::default(),

@@ -2,6 +2,7 @@
 
 mod board;
 
+#[cfg(not(any(feature = "text-drawn", feature = "text-composed")))]
 use std::time::Duration;
 
 use cranpose::{prelude::*, text::TextUnit};
@@ -58,8 +59,12 @@ fn Pulse() {
     );
 }
 
+/// The line under the bar: the seconds since the start. The benchmarks'
+/// `text-drawn` and `text-composed` features show a number that counts up
+/// every frame there instead, as a clock or a sensor reading does.
+#[cfg(not(any(feature = "text-drawn", feature = "text-composed")))]
 #[composable]
-fn Seconds() {
+fn StatusLine() {
     let seconds = cranpose_core::rememberMutableStateOf(|| 0u32);
     cranpose_core::LaunchedEffectAsync((), move |_| {
         std::boxed::Box::pin(async move {
@@ -74,6 +79,28 @@ fn Seconds() {
         Modifier::empty(),
         text_style(Color::from_rgb_u8(200, 204, 220), 14.0),
     );
+}
+
+#[cfg(all(feature = "text-drawn", feature = "text-composed"))]
+compile_error!("text-drawn and text-composed each replace the seconds line: pick one");
+
+#[cfg(any(feature = "text-drawn", feature = "text-composed"))]
+#[path = "../../../crates/cranpose/tests/support/reading.rs"]
+mod reading;
+
+/// The number in a `Text`, composed again each frame.
+#[cfg(feature = "text-composed")]
+#[composable]
+fn StatusLine() {
+    reading::ComposedReading(text_style(Color::from_rgb_u8(200, 204, 220), 14.0));
+}
+
+/// The number drawn by a draw scope that reads it: frames draw it again
+/// without composing or laying out.
+#[cfg(feature = "text-drawn")]
+#[composable]
+fn StatusLine() {
+    reading::DrawnReading(Color::from_rgb_u8(200, 204, 220), 14.0);
 }
 
 #[composable]
@@ -117,7 +144,7 @@ fn Screen() {
                 text_style(Color::from_rgb_u8(160, 166, 190), 14.0),
             );
             Pulse();
-            Seconds();
+            StatusLine();
             Taps();
         },
     );

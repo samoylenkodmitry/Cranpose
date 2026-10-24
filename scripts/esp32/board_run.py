@@ -53,7 +53,7 @@ def one(pattern, what):
     return found[0]
 
 
-def build_demo(board, component, extra_sdkconfig, log):
+def build_demo(board, component, extra_sdkconfig, features, log):
     config = BOARDS[board]
     target = f"xtensa-{config['mcu']}-espidf"
     defaults = ";".join([f"sdkconfig.defaults;sdkconfig.{board}", *map(str, extra_sdkconfig)])
@@ -65,7 +65,7 @@ def build_demo(board, component, extra_sdkconfig, log):
     # esp-idf-sys rebuilds its CMake project only when its own inputs change,
     # so a component added or removed since the last build needs a nudge.
     (DEMO / "sdkconfig.defaults").touch()
-    run(["cargo", "build", "--release", "--target", target, "--features", board],
+    run(["cargo", "build", "--release", "--target", target, "--features", ",".join([board, *features])],
         DEMO, env, log.with_suffix(".build"))
     release = DEMO / "target" / target / "release"
     return release / "esp32-demo", release / "bootloader.bin", DEMO / config["partitions"]
@@ -186,6 +186,8 @@ def main():
                         help="an ESP-IDF component directory to link in")
     parser.add_argument("--sdkconfig", type=pathlib.Path, action="append", default=[],
                         help="an sdkconfig defaults file to add after the board's")
+    parser.add_argument("--feature", action="append", default=[],
+                        help="a feature of the demo to build it with, such as text-drawn")
     parser.add_argument("--port", help="the serial port; found by name when omitted")
     parser.add_argument("--seconds", type=float, default=17)
     parser.add_argument("--log", type=pathlib.Path, required=True)
@@ -197,9 +199,13 @@ def main():
     port = args.port or one(config["port"], "serial port")
     component = args.component.resolve() if args.component else None
     args.log.parent.mkdir(parents=True, exist_ok=True)
-    build = build_demo if args.app == "demo" else build_lvgl
     extra = [path.resolve() for path in args.sdkconfig]
-    elf, bootloader, partitions = build(args.board, component, extra, args.log)
+    if args.app == "demo":
+        elf, bootloader, partitions = build_demo(args.board, component, extra, args.feature, args.log)
+    elif args.feature:
+        sys.exit("--feature builds the demo; the LVGL app takes its options from --sdkconfig")
+    else:
+        elf, bootloader, partitions = build_lvgl(args.board, component, extra, args.log)
     flash(args.board, port, elf, bootloader, partitions, args.log)
     capture = capture_usb if config["console"] == "usb" else capture_uart
     text = capture(port, args.seconds)
