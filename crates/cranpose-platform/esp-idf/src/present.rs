@@ -1,7 +1,7 @@
 use cranpose::framebuffer::{Framebuffer, PixelRect, SurfaceError};
 use esp_idf_svc::sys::EspError;
 
-use crate::panel::{Panel, PixelFormat, TransferBuffer};
+use crate::panel::{Panel, PixelBuffer, PixelFormat};
 
 pub(crate) struct Presenter {
     areas: Vec<PixelRect>,
@@ -9,22 +9,31 @@ pub(crate) struct Presenter {
     rgba: Vec<u32>,
     /// The buffers the panel reads, in turn: while it reads one, the next
     /// strip is drawn and encoded into the other.
-    strips: Vec<TransferBuffer>,
+    strips: Vec<PixelBuffer>,
     next_strip: usize,
     strip_pixels: usize,
 }
 
+/// `pixel`, straight RGBA8 in a little-endian word, as RGB565: red's top
+/// five bits, green's top six and blue's top five. Each field comes from the
+/// word with one shift and one mask.
 fn rgb565(pixel: u32) -> u16 {
-    let [red, green, blue, _] = pixel.to_ne_bytes();
-    (u16::from(red & 0xF8) << 8) | (u16::from(green & 0xFC) << 3) | u16::from(blue >> 3)
+    (((pixel & 0xF8) << 8) | ((pixel >> 5) & 0x07E0) | ((pixel >> 19) & 0x1F)) as u16
+}
+
+/// [`rgb565`] with its high byte first, as display controllers read it,
+/// without swapping the bytes after: the first byte takes red's top five
+/// bits and green's top three, the second green's next three and blue's top
+/// five.
+fn rgb565_big_endian(pixel: u32) -> u16 {
+    ((pixel & 0xF8) | ((pixel >> 13) & 0x07) | ((pixel << 3) & 0xE000) | ((pixel >> 11) & 0x1F00))
+        as u16
 }
 
 fn encode(rgba: &[u32], strip: &mut [u16], format: PixelFormat) {
     match format {
         PixelFormat::Rgb565 => encode_with(rgba, strip, rgb565),
-        PixelFormat::Rgb565BigEndian => {
-            encode_with(rgba, strip, |pixel| rgb565(pixel).swap_bytes());
-        }
+        PixelFormat::Rgb565BigEndian => encode_with(rgba, strip, rgb565_big_endian),
     }
 }
 
@@ -52,7 +61,7 @@ impl Presenter {
             .map_err(|_| SurfaceError)?;
         rgba.resize(strip_pixels, 0);
         let strips = (0..panel.buffers())
-            .map(|_| TransferBuffer::new(strip_pixels))
+            .map(|_| PixelBuffer::for_transfer(strip_pixels))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             areas: Vec::new(),
@@ -69,44 +78,97 @@ impl Presenter {
         panel: &mut Panel<'_>,
     ) -> Result<(), EspError> {
         framebuffer.changed_areas(&mut self.areas);
-        // While the display waits out its start-up, the glyphs of the first
-        // picture rasterize into the glyph cache: its strips then take them
-        // from there once the display reads pixels.
-        if panel.is_setting_up() {
-            for &area in &self.areas {
-                framebuffer.prepare_area(area);
-            }
-        }
+        let ahead = if panel.is_setting_up() {
+            self.draw_ahead(framebuffer, panel)
+        } else {
+            None
+        };
         for &area in &self.areas {
             let area = panel.align(area);
-            let rows_per_strip =
-                panel.aligned_rows((self.strip_pixels / area.width.max(1) as usize) as u32);
-            let mut top = area.y;
-            while top < area.y + area.height {
-                let rows = rows_per_strip.min(area.y + area.height - top);
-                let strip_area = PixelRect {
-                    x: area.x,
-                    y: top,
-                    width: area.width,
-                    height: rows,
-                };
-                let pixels = strip_area.width as usize * rows as usize;
-                framebuffer.draw_area(
-                    strip_area,
-                    bytemuck::cast_slice_mut(&mut self.rgba[..pixels]),
-                );
+            for strip_area in strips(area, self.rows_per_strip(panel, area)) {
+                let pixels = strip_area.width as usize * strip_area.height as usize;
+                if ahead.is_none() {
+                    framebuffer.draw_area(
+                        strip_area,
+                        bytemuck::cast_slice_mut(&mut self.rgba[..pixels]),
+                    );
+                }
                 panel.wait_for_free_buffer();
                 let strip = &mut self.strips[self.next_strip];
-                encode(
-                    &self.rgba[..pixels],
-                    &mut strip.as_mut_slice()[..pixels],
-                    panel.format(),
-                );
+                let encoded = &mut strip.as_mut_slice()[..pixels];
+                match &ahead {
+                    Some(picture) => {
+                        let first = strip_area.y as usize * panel.width() as usize;
+                        encoded.copy_from_slice(&picture.as_slice()[first..first + pixels]);
+                    }
+                    None => encode(&self.rgba[..pixels], encoded, panel.format()),
+                }
                 panel.draw_rect(strip_area, strip)?;
                 self.next_strip = (self.next_strip + 1) % self.strips.len();
-                top += rows;
             }
         }
         panel.finish_picture()
     }
+
+    /// Draws the first picture while the display still waits out its
+    /// start-up, so that only its transfer is left once the display reads
+    /// pixels: whole into PSRAM, when it covers the panel and the chip has
+    /// the room, and returns it; else only the glyphs of its text, into the
+    /// glyph cache.
+    fn draw_ahead(
+        &mut self,
+        framebuffer: &mut Framebuffer,
+        panel: &Panel<'_>,
+    ) -> Option<PixelBuffer> {
+        let whole = PixelRect {
+            x: 0,
+            y: 0,
+            width: panel.width(),
+            height: panel.height(),
+        };
+        let picture = match self.areas.as_slice() {
+            [area] if panel.align(*area) == whole => {
+                PixelBuffer::in_psram(whole.width as usize * whole.height as usize)
+            }
+            _ => None,
+        };
+        let Some(mut picture) = picture else {
+            for &area in &self.areas {
+                framebuffer.prepare_area(area);
+            }
+            return None;
+        };
+        for strip_area in strips(whole, self.rows_per_strip(panel, whole)) {
+            let pixels = strip_area.width as usize * strip_area.height as usize;
+            framebuffer.draw_area(
+                strip_area,
+                bytemuck::cast_slice_mut(&mut self.rgba[..pixels]),
+            );
+            let first = strip_area.y as usize * whole.width as usize;
+            encode(
+                &self.rgba[..pixels],
+                &mut picture.as_mut_slice()[first..first + pixels],
+                panel.format(),
+            );
+        }
+        Some(picture)
+    }
+
+    /// The rows of a strip of `area`: as many as the strip buffers hold, on
+    /// the rows the panel takes.
+    fn rows_per_strip(&self, panel: &Panel<'_>, area: PixelRect) -> u32 {
+        panel.aligned_rows((self.strip_pixels / area.width.max(1) as usize) as u32)
+    }
+}
+
+/// The strips of `rows` rows that cover `area`, top to bottom.
+fn strips(area: PixelRect, rows: u32) -> impl Iterator<Item = PixelRect> {
+    let end = area.y + area.height;
+    (area.y..end)
+        .step_by(rows.max(1) as usize)
+        .map(move |top| PixelRect {
+            y: top,
+            height: rows.min(end - top),
+            ..area
+        })
 }
