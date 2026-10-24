@@ -1245,6 +1245,7 @@ dependencies = [
  "raw-window-handle",
  "serde",
  "serde_json",
+ "stats_alloc",
  "sys-locale",
  "thiserror 2.0.21",
  "tray-icon",

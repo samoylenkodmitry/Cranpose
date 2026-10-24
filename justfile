@@ -123,6 +123,7 @@ optional_backend_features := "desktop,renderer-wgpu,camera-desktop,robot,audio-d
 test-watchos:
     cargo test -p cranpose-render-pixels
     cargo test -p cranpose --no-default-features --features watchos,embedded-default-font --test integration -- --test-threads=1
+    cargo test -p cranpose --no-default-features --features framebuffer,embedded-default-font --test framebuffer_memory
     cargo clippy -p cranpose --no-default-features --features watchos,embedded-default-font --all-targets -- -D warnings
     python3 -m unittest discover -s crates/cranpose/watchos/tests -v
 

@@ -31,6 +31,11 @@ use cranpose_animation::{
     AnimationSpec, RepeatMode, StartOffset, infiniteRepeatable, rememberInfiniteTransition,
 };
 
+#[path = "../tests/support/reading.rs"]
+mod reading;
+
+use reading::{ComposedReading, DrawnReading};
+
 const WIDTH: u32 = 320;
 const HEIGHT: u32 = 240;
 const FRAME_NANOS: u64 = 16_666_667;
@@ -203,50 +208,6 @@ fn Nested(depth: usize) {
     }
 }
 
-/// A number that counts up one every frame.
-#[composable]
-fn ticker_count() -> State<f32> {
-    let transition = rememberInfiniteTransition("ticker");
-    let spec = infiniteRepeatable(
-        AnimationSpec::linear(100_000),
-        RepeatMode::Restart,
-        StartOffset::default(),
-    );
-    transition.animateFloat(0.0, 6000.0, spec, "count")
-}
-
-/// The number in a line of text, composed again each frame.
-#[composable]
-fn Ticker() {
-    let count = ticker_count().value();
-    Text(
-        format!("Reading {}", count as u32),
-        Modifier::empty(),
-        TextStyle::default(),
-    );
-}
-
-/// The number in a line of text that reads it while it draws.
-#[composable]
-fn DrawnTicker() {
-    let count = ticker_count();
-    Box(
-        Modifier::empty()
-            .width(120.0)
-            .height(20.0)
-            .draw_behind(move |scope| {
-                scope.draw_text_from(
-                    Point::new(0.0, 0.0),
-                    Brush::solid(Color::WHITE),
-                    &format!("Reading {}", count.value() as u32),
-                    &DrawTextStyle::default(),
-                );
-            }),
-        BoxSpec::default(),
-        || {},
-    );
-}
-
 #[composable]
 fn Screen() {
     Column(
@@ -273,8 +234,8 @@ fn Screen() {
             }
             match ticker_text() {
                 TickerText::None => {}
-                TickerText::Composed => Ticker(),
-                TickerText::Drawn => DrawnTicker(),
+                TickerText::Composed => ComposedReading(),
+                TickerText::Drawn => DrawnReading(),
             }
             Nested(nest_depth());
         },

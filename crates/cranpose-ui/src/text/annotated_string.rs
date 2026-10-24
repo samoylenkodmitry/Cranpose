@@ -315,7 +315,8 @@ pub struct RangeStyle<T> {
 /// pass re-copied a string it had copied the frame before, only to hash it and
 /// hit a layout cache that is keyed by content anyway. Entries are verified by
 /// content on hit, so a hash collision costs a fresh copy, never wrong text.
-/// The pool clears itself when full; a live scene re-warms within one frame.
+/// The pool keeps the strings that something still holds, as
+/// [`cranpose_ui_graphics::ContentPool`] does.
 pub fn shared_plain_annotated_string(text: &str) -> Rc<AnnotatedString> {
     with_shared_plain_text(text, |shared| Rc::clone(&shared.annotated))
 }
@@ -338,30 +339,31 @@ pub(crate) struct SharedPlainText {
     render: std::cell::OnceCell<std::sync::Arc<RenderString>>,
 }
 
+impl cranpose_ui_graphics::PooledValue for SharedPlainText {
+    fn is_held(&self) -> bool {
+        self.annotated.is_held()
+            || self
+                .render
+                .get()
+                .is_some_and(|render| std::sync::Arc::strong_count(render) > 1)
+    }
+}
+
 fn with_shared_plain_text<R>(text: &str, read: impl FnOnce(&SharedPlainText) -> R) -> R {
     use std::hash::{Hash, Hasher};
 
-    const POOL_CAPACITY: usize = 256;
-
     let mut hasher = cranpose_ui_graphics::FxHasher::default();
     text.hash(&mut hasher);
-    let key = hasher.finish();
-
     crate::thread_state::with(|state| {
-        let mut pool = state.shared_plain_texts.borrow_mut();
-        if let Some(shared) = pool.get(&key)
-            && shared.annotated.text == text
-        {
-            return read(shared);
-        }
-        if pool.len() >= POOL_CAPACITY {
-            pool.clear();
-        }
-        let shared = pool.entry(key).insert_entry(SharedPlainText {
-            annotated: Rc::new(AnnotatedString::new(text.to_owned())),
-            render: std::cell::OnceCell::new(),
-        });
-        read(shared.get())
+        state.shared_plain_texts.borrow_mut().with(
+            hasher.finish(),
+            |shared| shared.annotated.text == text,
+            || SharedPlainText {
+                annotated: Rc::new(AnnotatedString::new(text.to_owned())),
+                render: std::cell::OnceCell::new(),
+            },
+            read,
+        )
     })
 }
 

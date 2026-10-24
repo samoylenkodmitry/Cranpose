@@ -495,6 +495,7 @@ pub(crate) fn begin_text_layout_pass() {
 
 pub(crate) fn with_text_service<R>(f: impl FnOnce(&crate::text::measure::TextService) -> R) -> R {
     let context = require_current_app_context("text service access");
+    context.text.pay_owed_pass();
     f(&context.text)
 }
 
@@ -785,6 +786,14 @@ impl AppContext {
     /// does in the current context.
     pub fn take_layout_invalidation(&self) -> bool {
         self.state.layout_invalidated.replace(false)
+    }
+
+    /// Starts a frame for the text caches. The first text measured in it
+    /// outside a layout pass, as a draw scope measures its labels, begins a
+    /// pass of the caches, so a text that a frame only draws ages out as a
+    /// laid-out one does.
+    pub fn start_text_frame(&self) {
+        self.text.owe_pass();
     }
 
     /// Takes the pending render invalidation, as [`take_render_invalidation`]

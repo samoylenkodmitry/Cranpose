@@ -800,10 +800,16 @@ cranpose-animation.workspace = true
 # workspace's shared test scratch directory for this crate's own tests.
 cranpose-core = { path = "../cranpose-core", features = ["test-helpers"] }
 cranpose-runtime-std = { path = "../cranpose-runtime-std" }
+stats_alloc = "0.1.10"
 
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+
+[[test]]
+name = "framebuffer_memory"
+path = "tests/framebuffer_memory/main.rs"
+required-features = ["framebuffer"]
 
 [[bench]]
 name = "framebuffer_frame"

@@ -356,6 +356,7 @@ where
     ) -> FrameUpdateResult {
         let mut stages = FrameStages::start(frame_stage_telemetry_threshold_ms().is_some());
 
+        self.app.app_context.start_text_frame();
         #[cfg(feature = "installed-fonts")]
         self.apply_installed_fonts();
         self.sync_window_roots_in_context();

@@ -902,30 +902,20 @@ pub struct TextPrimitive {
 /// is the same characters frame after frame — without this pool every call
 /// copied them into a fresh `Rc<str>` anyway, defeating the sharing
 /// [`TextPrimitive::text`] exists for. Hits are verified by content, so a hash
-/// collision costs one fresh copy, never the wrong text. The pool clears
-/// itself when full; a live scene re-warms within one frame.
+/// collision costs one fresh copy, never the wrong text. The pool keeps the
+/// copies that recordings still hold, as [`crate::ContentPool`] does.
 fn shared_text_str(text: &str) -> Rc<str> {
     use std::hash::{Hash, Hasher};
 
-    const POOL_CAPACITY: usize = 256;
-
     let mut hasher = crate::FxHasher::default();
     text.hash(&mut hasher);
-    let key = hasher.finish();
-
     crate::thread_state::with(|state| {
-        let mut pool = state.shared_texts.borrow_mut();
-        if let Some(shared) = pool.get(&key)
-            && &**shared == text
-        {
-            return Rc::clone(shared);
-        }
-        let shared: Rc<str> = Rc::from(text);
-        if pool.len() >= POOL_CAPACITY {
-            pool.clear();
-        }
-        pool.insert(key, Rc::clone(&shared));
-        shared
+        state.shared_texts.borrow_mut().with(
+            hasher.finish(),
+            |shared| &**shared == text,
+            || Rc::from(text),
+            Rc::clone,
+        )
     })
 }
 
