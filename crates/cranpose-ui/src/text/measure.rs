@@ -722,6 +722,9 @@ struct TextPreparedCacheKey {
 
 pub(crate) struct TextService {
     generation: Cell<u64>,
+    /// Whether a frame started since the last pass began: the first use of
+    /// the service outside a layout pass then begins one.
+    pass_owed: Cell<bool>,
     measurer: RefCell<Rc<dyn TextMeasurer>>,
     metrics_cache: RefCell<PassAgedCache<TextBaseCacheKey, TextMetrics>>,
     options_metrics_cache: RefCell<PassAgedCache<TextOptionsCacheKey, TextMetrics>>,
@@ -737,6 +740,7 @@ impl TextService {
     pub(crate) fn from_measurer(measurer: Rc<dyn TextMeasurer>) -> Self {
         Self {
             generation: Cell::new(1),
+            pass_owed: Cell::new(false),
             measurer: RefCell::new(measurer),
             metrics_cache: RefCell::new(PassAgedCache::with_capacity_at_least_one(
                 TEXT_SERVICE_CACHE_CAPACITY,
@@ -886,11 +890,26 @@ impl TextService {
     /// Starts a layout pass: the measurer and these caches drop what recent
     /// passes did not use.
     pub(crate) fn begin_layout_pass(&self) {
+        self.pass_owed.set(false);
         self.with_measurer(TextMeasurer::begin_layout_pass);
         self.metrics_cache.borrow_mut().begin_pass(drop);
         self.options_metrics_cache.borrow_mut().begin_pass(drop);
         self.prepared_cache.borrow_mut().begin_pass(drop);
         self.layout_cache.borrow_mut().begin_pass(drop);
+    }
+
+    /// A frame starts: the first use of the service in it outside a layout
+    /// pass begins a pass.
+    pub(crate) fn owe_pass(&self) {
+        self.pass_owed.set(true);
+    }
+
+    /// Begins the pass a frame owes, if no layout pass began one: what a
+    /// frame that only draws measures then ages out as a layout pass's does.
+    pub(crate) fn pay_owed_pass(&self) {
+        if self.pass_owed.get() {
+            self.begin_layout_pass();
+        }
     }
 
     fn clear_caches(&self) {

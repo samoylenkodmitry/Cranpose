@@ -1,12 +1,11 @@
 use std::{
     cell::{Cell, OnceCell, RefCell},
-    collections::HashMap,
     rc::Rc,
     sync::Arc,
 };
 
 use crate::{
-    FxBuildHasher,
+    ContentPool,
     accessibility::AccessibilityOptions,
     geometry::VectorPathMaskCache,
     liquid_glass::{GLASS_SPECIALIZATION_CACHE_CAPACITY, GlassCacheKey},
@@ -19,7 +18,7 @@ use crate::{
 pub(crate) struct GraphicsThreadState {
     pub(crate) accessibility_options: Cell<AccessibilityOptions>,
     pub(crate) vector_path_masks: RefCell<VectorPathMaskCache>,
-    pub(crate) shared_texts: RefCell<HashMap<u64, Rc<str>, FxBuildHasher>>,
+    pub(crate) shared_texts: RefCell<ContentPool<Rc<str>>>,
     pub(crate) path_slicer: RefCell<PathSlicer>,
     pub(crate) path_buffers: RefCell<PathBuffers>,
     pub(crate) glass_specializations:
@@ -34,7 +33,7 @@ impl GraphicsThreadState {
         Self {
             accessibility_options: Cell::new(AccessibilityOptions::DEFAULT),
             vector_path_masks: RefCell::new(VectorPathMaskCache::new()),
-            shared_texts: RefCell::new(HashMap::with_hasher(FxBuildHasher::new())),
+            shared_texts: RefCell::new(ContentPool::new()),
             path_slicer: RefCell::new(PathSlicer::new()),
             path_buffers: RefCell::new(PathBuffers::new()),
             glass_specializations: RefCell::new(ShaderSpecializationCache::new()),
