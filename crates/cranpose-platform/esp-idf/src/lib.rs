@@ -427,7 +427,7 @@ impl FrameStats {
         }
         let average = |total: Duration| total.as_secs_f32() * 1000.0 / self.frames as f32;
         log::info!(
-            "{} frames in {:.1} s: update {:.1} ms, draw and send {:.1} ms, slowest {:.1} ms",
+            "{} frames in {:.1} s: update {:.2} ms, draw and send {:.2} ms, slowest {:.1} ms",
             self.frames,
             window.as_secs_f32(),
             average(self.update),

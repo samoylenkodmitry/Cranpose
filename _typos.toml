@@ -16,6 +16,12 @@ extend-exclude = [
   "**/node_modules/**",
   "Cargo.lock",
   "**/*.ftl",
+  # Linker scripts that scripts/esp32/hot_code.py writes: mangled symbol
+  # names.
+  "crates/cranpose-platform/esp-idf/components/cranpose_hot_code/*.ld",
+  # The ESP32 benchmark's build output and the components ESP-IDF fetches.
+  "benchmarks/esp32/lvgl-app/build-*/**",
+  "benchmarks/esp32/lvgl-app/managed_components/**",
   # Captured third-party text used as robot fixtures. Its spelling is the
   # upstream document's, and correcting it would break the comparison.
   "apps/desktop-demo/robot-fixtures/**",

@@ -1,7 +1,15 @@
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
-# Composition, layout and drawing run on the main task.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=49152
+# Composition, layout and drawing run on the main task. The demo's deepest
+# use of it was about 22 KB, and every KB more is one less for the heap.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
 CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
 CONFIG_FREERTOS_IDLE_TASK_STACKSIZE=4096
 CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=8192
+
+# The bootloader checks the whole 3 MB app image before it starts it. With
+# its log, that took 520 ms on the ES3C35P and 830 ms on the E32R35T before
+# the app started. An app without secure boot and with one app partition has
+# no other image to fall back to, so the check only delays the start.
+CONFIG_BOOTLOADER_SKIP_VALIDATE_ALWAYS=y
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y

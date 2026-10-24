@@ -1,0 +1,3 @@
+# ESP-IDF build directories and the components the component manager fetches.
+/build-*/
+/managed_components/

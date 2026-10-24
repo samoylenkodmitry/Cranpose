@@ -3,3 +3,7 @@
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# The module's flash reads four bits a clock. The bootloader that ESP-IDF
+# builds turns quad mode on, so flash it with the image (see the justfile).
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
