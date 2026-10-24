@@ -17,11 +17,9 @@ use crate::{
     state::{ObjectId, RecordValue},
 };
 
-pub(crate) const CALL_SITE_KEY_SLOTS: usize = 1024;
 pub(crate) const FILE_HASH_SLOTS: usize = 64;
 
 pub(crate) struct ThreadCells {
-    pub(crate) call_site_keys: [Cell<(usize, Key)>; CALL_SITE_KEY_SLOTS],
     pub(crate) file_hashes: [Cell<(usize, usize, u64)>; FILE_HASH_SLOTS],
     pub(crate) hot_origin: Cell<HotOrigin>,
     pub(crate) in_event_handler: Cell<bool>,
@@ -43,7 +41,6 @@ const _: () = assert!(!std::mem::needs_drop::<ThreadCells>());
 impl ThreadCells {
     const fn new() -> Self {
         Self {
-            call_site_keys: [const { Cell::new((0, 0)) }; CALL_SITE_KEY_SLOTS],
             file_hashes: [const { Cell::new((0, 0, 0)) }; FILE_HASH_SLOTS],
             hot_origin: Cell::new(HotOrigin::NONE),
             in_event_handler: Cell::new(false),

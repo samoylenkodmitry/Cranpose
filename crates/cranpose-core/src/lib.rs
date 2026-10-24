@@ -374,12 +374,12 @@ fn static_file_location_hash(cells: &thread_state::ThreadCells, file: &'static s
     hash
 }
 
-const fn position_location_hash(mut hash: u64, line: u32, column: u32) -> u64 {
-    hash = fnv1a_location_key_bytes(hash, &[0xff]);
-    hash = fnv1a_location_key_bytes(hash, &line.to_le_bytes());
-    hash = fnv1a_location_key_bytes(hash, &[0xfe]);
-    hash = fnv1a_location_key_bytes(hash, &column.to_le_bytes());
-    hash
+/// The file's hash with a position in it: line and column fill the two
+/// halves of a word, so two positions of a file never give the same word.
+/// The keys made from it go through [`avalanche_location_key`], which mixes
+/// every bit.
+const fn position_location_hash(hash: u64, line: u32, column: u32) -> u64 {
+    hash ^ (((line as u64) << 32) | column as u64)
 }
 
 const fn fnv1a_location_key_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
@@ -412,29 +412,14 @@ pub fn caller_location_key() -> Key {
     call_site_key(caller)
 }
 
-/// The key of a call site, remembered by its `Location`'s address. Each call
-/// site's `Location` is a static, so its address names it for the whole run,
-/// and a hit skips hashing the file, line and column on every `remember` and
-/// parameter slot. The key is still made from the location's contents, so
-/// two statics for one location give the same key.
+/// The key of a call site, made from its `Location`'s contents, so two
+/// statics for one location give the same key. The file's hash comes from
+/// the table [`static_file_location_hash`] keeps; the position takes a word
+/// and the finalizer.
 fn call_site_key(caller: &'static std::panic::Location<'static>) -> Key {
-    let address = std::ptr::from_ref(caller).addr();
-    thread_state::cells(|cells| {
-        let cached = &cells.call_site_keys[(address >> 3) % thread_state::CALL_SITE_KEY_SLOTS];
-        let (cached_address, key) = cached.get();
-        if cached_address == address {
-            return key;
-        }
-        let file = caller.file();
-        let key = registered_location_key(
-            static_file_location_hash(cells, file),
-            file,
-            caller.line(),
-            caller.column(),
-        );
-        cached.set((address, key));
-        key
-    })
+    let file = caller.file();
+    let file_hash = thread_state::cells(|cells| static_file_location_hash(cells, file));
+    registered_location_key(file_hash, file, caller.line(), caller.column())
 }
 
 #[derive(Clone, Copy)]
