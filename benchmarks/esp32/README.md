@@ -49,18 +49,20 @@ from flash on both boards.
 
 | | Cranpose ES3C35P | LVGL ES3C35P | Cranpose E32R35T | LVGL E32R35T |
 | --- | --- | --- | --- | --- |
-| Frame | 0.67 ms | 1.14 ms | 1.80 ms | 2.21 ms |
+| Frame | 0.69 ms | 1.14 ms | 1.79 ms | 2.21 ms |
 | Instructions | 65K | 159K | 56K | 181K |
-| Cycles waiting for code | 85K | 58K | 365K | 229K |
-| Cycles waiting for data | 16K | 8K | 66K | 35K |
+| Cycles waiting for code | 92K | 58K | 363K | 229K |
+| Cycles waiting for data | 18K | 8K | 66K | 35K |
 | First frame after reset | 337 ms | 342 ms | 420 ms | 439 ms |
-| Internal RAM free (lowest) | 89 KB (58 KB) | 135 KB (103 KB) | 66 KB (54 KB) | 198 KB (198 KB) |
+| Internal RAM free (lowest) | 90 KB (58 KB) | 135 KB (103 KB) | 109 KB (98 KB) | 198 KB (198 KB) |
 | App image | 2.96 MB | 0.52 MB | 2.90 MB | 0.47 MB |
 
 Cranpose runs about a third of LVGL's instructions for this frame. Most of
 the rest of its time waits for code, more on the classic ESP32, whose 64 KB
 of IRAM for the framework holds less of a frame's code than the ESP32-S3's
-128 KB.
+128 KB. On the ESP32-S3 that IRAM comes out of the same internal RAM as the
+heap, which leaves Cranpose less of it free than LVGL; the classic ESP32
+has a separate region for IRAM.
 
 Before its first frame each app waits out the panel's reset and start-up
 sequence, about 260 ms on the ES3C35P and 220 ms on the E32R35T. LVGL
