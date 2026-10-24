@@ -1690,6 +1690,7 @@ impl ScopedUpdateCountingRenderer {
             self.updates.set(self.updates.get() + 1);
         }
         let mut dirty_nodes = updates.content.to_vec();
+        dirty_nodes.extend_from_slice(updates.draws);
         dirty_nodes.extend_from_slice(updates.layers);
         *self.last_dirty_nodes.borrow_mut() = dirty_nodes;
         let updated = self.scene.graph.as_mut().is_some_and(|graph| {

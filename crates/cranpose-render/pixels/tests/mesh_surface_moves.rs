@@ -105,6 +105,7 @@ fn a_surface_that_moves_again_and_again_draws_where_the_camera_shows_it() {
             root,
             SceneUpdates {
                 content: &[],
+                draws: &[],
                 layers: &[panel],
                 moved: &[],
             },

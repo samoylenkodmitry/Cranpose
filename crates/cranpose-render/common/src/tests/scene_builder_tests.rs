@@ -2327,6 +2327,7 @@ fn update_graph_from_applier_refreshes_dirty_graphics_layer_transform() {
         &mut graph,
         SceneUpdates {
             content: &[],
+            draws: &[],
             layers: &[node_id],
             moved: &[],
         },
@@ -2411,6 +2412,7 @@ fn update_graph_from_applier_reports_hit_dirty_for_moved_clickable_layer() {
         &mut graph,
         SceneUpdates {
             content: &[],
+            draws: &[],
             layers: &[node_id],
             moved: &[],
         },

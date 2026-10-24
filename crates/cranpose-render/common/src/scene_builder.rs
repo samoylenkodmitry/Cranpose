@@ -195,7 +195,10 @@ pub fn update_graph_from_applier_report(
     {
         eprintln!(
             "[scene-update-diag] scoped update abandoned, whole scene rebuilt: {reason:?} dirty={}",
-            updates.content.len() + updates.layers.len() + updates.moved.len()
+            updates.content.len()
+                + updates.draws.len()
+                + updates.layers.len()
+                + updates.moved.len()
         );
     }
     report
@@ -204,6 +207,9 @@ pub fn update_graph_from_applier_report(
 #[derive(Clone, Copy)]
 pub(crate) enum NodeUpdate {
     Content,
+    /// Only state the node's draws read changed: its layer keeps its
+    /// children and records the node's draws again.
+    Draws,
     Layer,
     /// The node moved in its parent and kept its size: its layer moves and
     /// keeps what it drew.
@@ -214,16 +220,25 @@ pub(crate) enum NodeUpdate {
 }
 
 /// Puts into `dirty` each dirty node with the update it needs: content wins
-/// over the others, and a moved node whose layer properties changed too
-/// moves with them.
+/// over the others, a node whose draws changed with another change takes
+/// it, and a moved node whose layer properties changed too moves with them.
 fn dirty_node_updates(updates: SceneUpdates<'_>, dirty: &mut HashMap<NodeId, NodeUpdate>) {
     dirty.clear();
-    dirty.reserve(updates.moved.len() + updates.layers.len() + updates.content.len());
+    dirty.reserve(
+        updates.moved.len() + updates.layers.len() + updates.draws.len() + updates.content.len(),
+    );
     dirty.extend(updates.moved.iter().map(|&id| (id, NodeUpdate::Moved)));
     for &id in updates.layers {
         let kind = match dirty.get(&id) {
             Some(NodeUpdate::Moved) => NodeUpdate::MovedLayer,
             _ => NodeUpdate::Layer,
+        };
+        dirty.insert(id, kind);
+    }
+    for &id in updates.draws {
+        let kind = match dirty.get(&id) {
+            None | Some(NodeUpdate::Draws) => NodeUpdate::Draws,
+            Some(_) => NodeUpdate::Content,
         };
         dirty.insert(id, kind);
     }
@@ -879,12 +894,59 @@ fn try_update_retained_layer(
                 try_translate_scrolled_layer(applier, layer, dirty_nodes, ancestors).then_some(true)
             })
         }
-        NodeUpdate::Content | NodeUpdate::Moved => {
+        NodeUpdate::Draws if redraw_retained_layer(applier, layer, root, ancestors) => Some(false),
+        NodeUpdate::Content | NodeUpdate::Draws | NodeUpdate::Moved => {
             try_translate_scrolled_layer(applier, layer, dirty_nodes, ancestors).then_some(true)
         }
         NodeUpdate::Layer => update_layer_properties(applier, layer, root, false, ancestors),
         NodeUpdate::MovedLayer => update_layer_properties(applier, layer, root, true, ancestors),
     }
+}
+
+/// Records the own draws of the node of `container` again around the child
+/// layers it keeps, for a node whose draws read state that changed while its
+/// layout, modifiers and children stayed. False when the layer no longer
+/// fits the node: the content update then takes it.
+fn redraw_retained_layer(
+    applier: &MemoryApplier,
+    container: &mut LayerNode,
+    root: bool,
+    ancestors: TranslateAncestorContext,
+) -> bool {
+    // The wrapper of a node's outer draws is written with its layer.
+    if container.wraps.is_some() {
+        return false;
+    }
+    let Some(node_id) = container.node_id else {
+        return false;
+    };
+    read_placed_node_data(applier, node_id, root, |data| {
+        let placement = container.origin_in_parent;
+        if !retained_layer_matches_layout(container, &data, placement, false, false) {
+            return false;
+        }
+        let Ok(plan) = translated_container(
+            container,
+            &data.layout_state,
+            &data.modifier_slices,
+            ancestors.inherited_motion_context_animated,
+            false,
+        ) else {
+            return false;
+        };
+        container.node_bounds = plan.node_bounds;
+        crate::layer_recycling::recycle_primitives(container);
+        write_own_content_around_children(
+            container,
+            node_id,
+            &data.modifier_slices,
+            data.layout_state.size(),
+        );
+        container.refresh_child_facts();
+        container.note_content_change(ancestors.update);
+        true
+    })
+    .unwrap_or(false)
 }
 
 /// Moves the layer of a node that only moved in its parent, keeping what it
@@ -1404,9 +1466,9 @@ fn check_retained_children(
                 true
             }
             // The child moves with the others; the walk beneath the
-            // container then gives it its new layer properties where it
-            // now lies.
-            Some(NodeUpdate::Layer) => fits,
+            // container then gives it its new layer properties or draws
+            // where it now lies.
+            Some(NodeUpdate::Layer | NodeUpdate::Draws) => fits,
             Some(NodeUpdate::Content | NodeUpdate::MovedLayer) => false,
         };
     }

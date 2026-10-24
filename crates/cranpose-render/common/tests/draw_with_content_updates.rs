@@ -126,11 +126,33 @@ fn assert_callback_once_per_update(outer_wrapper: bool, around: Around) {
         [Color(0.0, 1.0, 1.0, 1.0), Color::RED, Color::GREEN]
     );
 
+    // A change to what the draws read alone records them again around the
+    // children the layer keeps.
+    before.set(Color(0.5, 0.5, 1.0, 1.0));
+    after.set(Color::BLACK);
+    let report = update_graph_from_applier_report(
+        &applier,
+        &mut graph,
+        SceneUpdates {
+            draws: std::slice::from_ref(&parent),
+            ..SceneUpdates::default()
+        },
+        1.0,
+    );
+    assert!(report.applied(), "draw update applies to retained graph");
+    assert_eq!(calls.get(), 3, "one draw update records once");
+    colors.clear();
+    crate::scene_probe::painted_solid_rect_colors(&graph.root, &mut colors);
+    assert_eq!(
+        colors,
+        [Color(0.5, 0.5, 1.0, 1.0), Color::RED, Color::BLACK]
+    );
+
     before.set(Color(1.0, 1.0, 0.0, 1.0));
     after.set(Color(1.0, 0.0, 1.0, 1.0));
     graph = rebuild_graph_from_applier(&applier, root, 1.0, Some(graph))
         .expect("full scene update rebuilds graph");
-    assert_eq!(calls.get(), 3, "one full rebuild records once");
+    assert_eq!(calls.get(), 4, "one full rebuild records once");
     colors.clear();
     crate::scene_probe::painted_solid_rect_colors(&graph.root, &mut colors);
     assert_eq!(

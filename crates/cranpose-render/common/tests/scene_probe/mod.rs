@@ -71,6 +71,7 @@ pub fn update_scene(
                 graph,
                 SceneUpdates {
                     content: &content,
+                    draws: &[],
                     layers: &layers,
                     moved: &moved,
                 },
