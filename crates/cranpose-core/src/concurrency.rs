@@ -155,7 +155,7 @@ impl Future for Delay {
         let this = self.get_mut();
         if !this.armed {
             this.armed = true;
-            timer().arm(
+            arm(
                 this.deadline,
                 context.waker().clone(),
                 Arc::clone(&this.fired),
@@ -184,6 +184,25 @@ pub(crate) struct Alarm {
     deadline: Instant,
     waker: Waker,
     fired: Arc<AtomicBool>,
+}
+
+/// Arms the alarm of a [`Delay`]. On ESP-IDF, a delay on a thread that runs
+/// a composition waits in that thread's runtime, as under Emscripten: its
+/// host fires it as it drains the UI work and wakes for it through
+/// [`next_alarm_deadline`], so no timer thread takes the 9 KB of RAM its
+/// stack and task need. A delay on any other thread waits on the timer
+/// thread.
+fn arm(deadline: Instant, waker: Waker, fired: Arc<AtomicBool>) {
+    #[cfg(target_os = "espidf")]
+    if current_runtime_handle().is_some() {
+        arm_host_alarm(Alarm {
+            deadline,
+            waker,
+            fired,
+        });
+        return;
+    }
+    timer().arm(deadline, waker, fired);
 }
 
 struct Timer {
@@ -348,18 +367,49 @@ impl Timer {
     fn start(&'static self) {}
 
     fn arm(&self, deadline: Instant, waker: Waker, fired: Arc<AtomicBool>) {
-        crate::thread_state::runtimes(|state| {
-            state.alarms.borrow_mut().push(Alarm {
-                deadline,
-                waker,
-                fired,
-            })
+        arm_host_alarm(Alarm {
+            deadline,
+            waker,
+            fired,
         });
     }
 }
 
+/// Puts `alarm` in the thread's runtime state, for the runtime to fire as it
+/// drains its UI work.
+#[cfg(any(target_os = "emscripten", target_os = "espidf"))]
+fn arm_host_alarm(alarm: Alarm) {
+    crate::thread_state::runtimes(|state| state.alarms.borrow_mut().push(alarm));
+}
+
+/// When the earliest delay waiting in this thread's runtime is due, for a
+/// host that runs its own loop to wake then and drain the UI work. `None`
+/// when none waits, and on platforms whose delays wait on a timer of their
+/// own.
+pub fn next_alarm_deadline() -> Option<Instant> {
+    #[cfg(any(target_os = "emscripten", target_os = "espidf"))]
+    return crate::thread_state::try_runtimes(|state| {
+        state
+            .alarms
+            .borrow()
+            .iter()
+            .map(|alarm| alarm.deadline)
+            .min()
+    })
+    .flatten();
+    #[cfg(not(any(target_os = "emscripten", target_os = "espidf")))]
+    None
+}
+
+/// Whether a delay waiting in this thread's runtime is due, which makes UI
+/// work pending.
+#[cfg(any(target_os = "emscripten", target_os = "espidf"))]
+pub(crate) fn has_due_alarm() -> bool {
+    next_alarm_deadline().is_some_and(|deadline| deadline <= Instant::now())
+}
+
 /// Wakes the delays whose deadline passed.
-#[cfg(target_os = "emscripten")]
+#[cfg(any(target_os = "emscripten", target_os = "espidf"))]
 pub(crate) fn fire_due_alarms() {
     let now = Instant::now();
     let due: Vec<Alarm> = crate::thread_state::runtimes(|state| {

@@ -557,7 +557,11 @@ impl ShellApp {
     }
 
     pub(crate) fn next_event_time(&self) -> Option<web_time::Instant> {
-        self.app_context.enter(cranpose_ui::next_cursor_blink_time)
+        let blink = self.app_context.enter(cranpose_ui::next_cursor_blink_time);
+        match (blink, cranpose_core::concurrency::next_alarm_deadline()) {
+            (Some(blink), Some(alarm)) => Some(blink.min(alarm)),
+            (blink, alarm) => blink.or(alarm),
+        }
     }
 
     pub(crate) fn frame_time_nanos_at(&self, now: Instant) -> u64 {
@@ -1274,7 +1278,8 @@ where
         std::mem::take(&mut self.surfaces[0].frame_owed)
     }
 
-    /// Returns the next scheduled event time for cursor blink.
+    /// Returns when the next timed event is due: a cursor blink, or a
+    /// `delay` that waits for the host to drain the UI work, as on ESP-IDF.
     /// Use this for `ControlFlow::WaitUntil` scheduling.
     pub fn next_event_time(&self) -> Option<web_time::Instant> {
         self.app.next_event_time()
