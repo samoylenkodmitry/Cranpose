@@ -207,7 +207,7 @@ fn lower_handle_center(shot: &RobotScreenshot, rect: (f32, f32, f32, f32)) -> Op
     let right = (((x + width) * sx) as usize).min(shot.width as usize);
     let top = (y.max(0.0) * sy) as usize;
     let bottom = (((y + height + 10.0) * sy) as usize).min(shot.height as usize);
-    robot_handle_probe::lower_band_center(shot, sx, sy, left, right, top, bottom, |r, g, b| {
+    robot_handle_probe::lower_band_center(shot, sx, sy, left..right, top..bottom, |r, g, b| {
         r > 180 && r.saturating_sub(g) > 70 && b.saturating_sub(g) > 25
     })
 }

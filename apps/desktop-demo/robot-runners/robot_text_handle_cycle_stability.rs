@@ -341,14 +341,5 @@ fn lower_handle_center(shot: &RobotScreenshot, band: (f32, f32, f32)) -> Option<
     let right = (((x + width) * sx) as usize).min(shot.width as usize);
     let top = ((line_y * sy) as usize).min(shot.height as usize);
     let bottom = (((line_y + 40.0) * sy) as usize).min(shot.height as usize);
-    robot_handle_probe::lower_band_center(
-        shot,
-        sx,
-        sy,
-        left,
-        right,
-        top,
-        bottom,
-        robot_handle_probe::is_blue_handle,
-    )
+    robot_handle_probe::lower_band_center(shot, sx, sy, left..right, top..bottom, robot_handle_probe::is_blue_handle)
 }

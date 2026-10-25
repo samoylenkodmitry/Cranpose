@@ -2,6 +2,15 @@ use cranpose_core::{Composition, MemoryApplier, location_key};
 
 use super::*;
 
+fn frame() -> LazyFrame {
+    LazyFrame {
+        is_vertical: true,
+        raw_viewport_size: 100.0,
+        cross_axis_size: 50.0,
+        item_cross_axis_size: 50.0,
+    }
+}
+
 #[test]
 fn test_lazy_column_spec_default() {
     let spec = LazyColumnSpec::default();
@@ -57,7 +66,7 @@ fn lazy_list_placements_reuse_output_storage() {
     let mut placements = Vec::with_capacity(8);
     let original_capacity = placements.capacity();
 
-    push_lazy_list_placements(&mut placements, 1.0, &[item], 1, true, 100.0, &config, 50.0);
+    push_lazy_list_placements(&mut placements, 1.0, &[item], 1, &frame(), 100.0, &config);
 
     assert_eq!(placements.len(), 2);
     assert_eq!(placements[0].node_id, 101);
@@ -94,10 +103,9 @@ fn lazy_list_placements_retain_offscreen_measured_items_for_renderer_prewarm() {
         1.0,
         &[hidden, partial],
         100,
-        true,
+        &frame(),
         100.0,
         &config,
-        50.0,
     );
 
     assert_eq!(placements.len(), 2);

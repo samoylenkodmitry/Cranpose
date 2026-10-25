@@ -1187,7 +1187,7 @@ pub trait DrawScope {
         stroke: Stroke,
     );
     /// As `draw_arc`, composited with `blend_mode` instead of `SrcOver`.
-    #[expect(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments, reason = "Compose's parameters")]
     fn draw_arc_blend(
         &mut self,
         brush: Brush,
@@ -1251,7 +1251,7 @@ pub trait DrawScope {
         sweep_angle: f32,
     );
     /// As `draw_annular_sector`, composited with `blend_mode` instead of `SrcOver`.
-    #[expect(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments, reason = "Compose's parameters")]
     fn draw_annular_sector_blend(
         &mut self,
         brush: Brush,
@@ -1589,34 +1589,13 @@ impl<'a> DrawScopeDefault<'a> {
         self.recording.push_other(primitive);
     }
 
-    #[expect(clippy::too_many_arguments)]
     #[inline]
-    fn push_arc(
-        &mut self,
-        brush: Brush,
-        center: Point,
-        radius: f32,
-        start_angle: f32,
-        sweep_angle: f32,
-        stroke: Option<Stroke>,
-        inner_radius: f32,
-        blend_mode: BlendMode,
-    ) {
-        let args = ArcRecordArgs {
-            brush: &brush,
-            center,
-            radius,
-            start_angle,
-            sweep_angle,
-            stroke,
-            inner_radius,
-            blend_mode,
-        };
-        let geometry = normalized_band(&args);
+    fn push_arc(&mut self, args: &ArcRecordArgs<'_>) {
+        let geometry = normalized_band(args);
         if geometry.is_degenerate() {
             return;
         }
-        self.recording.push_scope_arc(&args, &geometry);
+        self.recording.push_scope_arc(args, &geometry);
     }
 
     /// Records the fill of `path` as the slices the GPU draws, its brush
@@ -1960,16 +1939,16 @@ impl DrawScope for DrawScopeDefault<'_> {
         if !stroke.is_visible() {
             return;
         }
-        self.push_arc(
-            brush,
+        self.push_arc(&ArcRecordArgs {
+            brush: &brush,
             center,
             radius,
             start_angle,
             sweep_angle,
-            Some(stroke),
-            0.0,
+            stroke: Some(stroke),
+            inner_radius: 0.0,
             blend_mode,
-        );
+        });
     }
 
     fn draw_line(&mut self, brush: Brush, start: Point, end: Point, stroke: Stroke) {
@@ -2064,16 +2043,16 @@ impl DrawScope for DrawScopeDefault<'_> {
         sweep_angle: f32,
         blend_mode: BlendMode,
     ) {
-        self.push_arc(
-            brush,
+        self.push_arc(&ArcRecordArgs {
+            brush: &brush,
             center,
-            outer_radius,
+            radius: outer_radius,
             start_angle,
             sweep_angle,
-            None,
+            stroke: None,
             inner_radius,
             blend_mode,
-        );
+        });
     }
 
     fn draw_circle(&mut self, brush: Brush, center: Point, radius: f32) {

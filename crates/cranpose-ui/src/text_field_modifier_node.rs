@@ -275,7 +275,6 @@ pub(crate) fn caret_visual_line_for_offset(
     }
 }
 
-#[expect(clippy::too_many_arguments)]
 pub(crate) fn range_visual_line_rects(
     text: &str,
     style: &TextStyle,
@@ -283,9 +282,9 @@ pub(crate) fn range_visual_line_rects(
     wrap_width: Option<f32>,
     pan: f32,
     line_height: f32,
-    start: usize,
-    end: usize,
+    range: std::ops::Range<usize>,
 ) -> Vec<cranpose_ui_graphics::Rect> {
+    let std::ops::Range { start, end } = range;
     if start >= end {
         return Vec::new();
     }
@@ -1231,8 +1230,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                         measured_wrap_width.get(),
                         pan,
                         line_height,
-                        comp_start,
-                        comp_end,
+                        comp_start..comp_end,
                     ) {
                         let underline_rect = cranpose_ui_graphics::Rect {
                             x: line_rect.x,
@@ -1337,8 +1335,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                 measured_wrap_width.get(),
                 pan,
                 line_height,
-                selection_start,
-                selection_end,
+                selection_start..selection_end,
             ) {
                 let sel_rect = cranpose_ui_graphics::Rect {
                     y: sel_rect.y + box_off,

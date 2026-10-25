@@ -852,52 +852,22 @@ fn intersect(rect: Rect, bounds: Rect) -> Option<Rect> {
     })
 }
 
-/// Draws a tiled painter across the whole container.
-///
-/// Content scale and alignment do not apply: a tiled fill covers its bounds by
-/// definition, and scaling the source would defeat the reason for tiling it.
-fn draw_bitmap_tiled_painter(
+// Draws a tiled or nine-patch painter across the whole container, in the
+// patches `quads_of` cuts for it. Content scale and alignment do not apply:
+// such a fill covers its bounds by construction.
+fn draw_filled_painter(
     scope: &mut dyn DrawScope,
-    bitmap: ImageBitmap,
-    source: Rect,
+    bitmap: &ImageBitmap,
+    quads_of: impl FnOnce(Rect) -> Vec<PatchQuad>,
     alpha: f32,
     color_filter: Option<ColorFilter>,
     sampling: ImageSampling,
 ) {
     let container = Rect::from_size(scope.size());
-    let quads = tile_quads(source, container);
+    let quads = quads_of(container);
     draw_patch_quads(
         scope,
-        &bitmap,
-        &quads,
-        container,
-        alpha,
-        color_filter,
-        sampling,
-    );
-}
-
-/// Draws a nine-patch painter across the whole container.
-///
-/// Like tiling, this fills its bounds by construction, so content scale and
-/// alignment have nothing left to decide.
-#[expect(clippy::too_many_arguments)]
-fn draw_nine_patch_painter(
-    scope: &mut dyn DrawScope,
-    bitmap: ImageBitmap,
-    source: Rect,
-    insets: NinePatchInsets,
-    center: PatchFill,
-    edges: PatchFill,
-    alpha: f32,
-    color_filter: Option<ColorFilter>,
-    sampling: ImageSampling,
-) {
-    let container = Rect::from_size(scope.size());
-    let quads = nine_patch_quads(source, container, insets, center, edges);
-    draw_patch_quads(
-        scope,
-        &bitmap,
+        bitmap,
         &quads,
         container,
         alpha,
@@ -1051,10 +1021,10 @@ where
                     bitmap,
                     source,
                     sampling,
-                } => draw_bitmap_tiled_painter(
+                } => draw_filled_painter(
                     scope,
-                    bitmap.clone(),
-                    source.rect(),
+                    bitmap,
+                    |container| tile_quads(source.rect(), container),
                     draw_alpha,
                     color_filter.clone(),
                     *sampling,
@@ -1066,13 +1036,12 @@ where
                     center,
                     edges,
                     sampling,
-                } => draw_nine_patch_painter(
+                } => draw_filled_painter(
                     scope,
-                    bitmap.clone(),
-                    source.rect(),
-                    insets.insets(),
-                    *center,
-                    *edges,
+                    bitmap,
+                    |container| {
+                        nine_patch_quads(source.rect(), container, insets.insets(), *center, *edges)
+                    },
                     draw_alpha,
                     color_filter.clone(),
                     *sampling,

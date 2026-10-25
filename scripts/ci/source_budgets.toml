@@ -3,8 +3,8 @@
 # removes the cause (`just source-budgets-lower`).
 
 [counts]
-too_many_arguments = 57
-private_docs = 14098
+too_many_arguments = 49
+private_docs = 14092
 for_test_fns = 40
 cranpose_env_names = 78
 source_text_checks = 341
@@ -39,7 +39,7 @@ limit = 1000
 "apps/desktop-demo/src/app/liquid_ui.rs" = 2376
 "apps/desktop-demo/src/app/markdown.rs" = 1153
 "apps/desktop-demo/src/app/performance_dashboard.rs" = 1788
-"apps/desktop-demo/src/app/shaders.rs" = 2385
+"apps/desktop-demo/src/app/shaders.rs" = 2379
 "apps/desktop-demo/src/app/wsz/mod.rs" = 1966
 "apps/desktop-demo/src/test_screens/compose_twin_matrix.rs" = 5083
 "crates/cranpose-animation/src/animation.rs" = 1200
@@ -84,7 +84,7 @@ limit = 1000
 "crates/cranpose-services/src/http.rs" = 1351
 "crates/cranpose-services/src/media.rs" = 1453
 "crates/cranpose-testing/src/robot_helpers.rs" = 1469
-"crates/cranpose-ui-graphics/src/geometry.rs" = 2283
+"crates/cranpose-ui-graphics/src/geometry.rs" = 2262
 "crates/cranpose-ui-graphics/src/liquid_glass.rs" = 1065
 "crates/cranpose-ui-graphics/src/record.rs" = 2779
 "crates/cranpose-ui-graphics/src/render_effect.rs" = 1287
@@ -96,9 +96,9 @@ limit = 1000
 "crates/cranpose-ui/src/render_state.rs" = 1661
 "crates/cranpose-ui/src/subcompose_layout.rs" = 1671
 "crates/cranpose-ui/src/text/measure.rs" = 3064
-"crates/cranpose-ui/src/text_field_modifier_node.rs" = 1710
-"crates/cranpose-ui/src/widgets/image.rs" = 1104
-"crates/cranpose-ui/src/widgets/lazy_list.rs" = 1919
+"crates/cranpose-ui/src/text_field_modifier_node.rs" = 1707
+"crates/cranpose-ui/src/widgets/image.rs" = 1073
+"crates/cranpose-ui/src/widgets/lazy_list.rs" = 1916
 "crates/cranpose-ui/src/widgets/nodes/layout_node.rs" = 1785
 "crates/cranpose-ui/src/widgets/wear/scaling_list.rs" = 1648
 "crates/cranpose/src/accessibility.rs" = 2281

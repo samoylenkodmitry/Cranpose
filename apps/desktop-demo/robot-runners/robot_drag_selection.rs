@@ -203,16 +203,7 @@ fn lower_handle_center(shot: &RobotScreenshot, rect: (f32, f32, f32, f32)) -> Op
     let right = (((x + width) * sx) as usize).min(shot.width as usize);
     let top = (((y + height * 0.5) * sy) as usize).min(shot.height as usize);
     let bottom = (((y + height + 8.0) * sy) as usize).min(shot.height as usize);
-    robot_handle_probe::lower_band_center(
-        shot,
-        sx,
-        sy,
-        left,
-        right,
-        top,
-        bottom,
-        robot_handle_probe::is_blue_handle,
-    )
+    robot_handle_probe::lower_band_center(shot, sx, sy, left..right, top..bottom, robot_handle_probe::is_blue_handle)
 }
 
 fn selected_editable(elements: &[SemanticElement]) -> Option<SelectedEditable> {
@@ -244,16 +235,7 @@ fn count_blue_handle_bands(shot: &RobotScreenshot, rect: (f32, f32, f32, f32)) -
     let bottom = (((y + height) * sy) as usize).min(shot.height as usize);
     let upper_end = ((y + height * 0.45) * sy) as usize;
     let lower_start = ((y + height * 0.55) * sy) as usize;
-    robot_handle_probe::count_upper_lower_bands(
-        shot,
-        left,
-        right,
-        top,
-        bottom,
-        upper_end,
-        lower_start,
-        robot_handle_probe::is_blue_handle,
-    )
+    robot_handle_probe::count_upper_lower_bands(shot, left..right, top..bottom, upper_end, lower_start, robot_handle_probe::is_blue_handle)
 }
 
 fn save(shot: &RobotScreenshot, dir: &Path, name: &str) {

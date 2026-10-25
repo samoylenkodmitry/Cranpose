@@ -28,7 +28,7 @@ fn selection_rects_follow_wrapped_visual_lines() {
     let style = TextStyle::default();
     let line_height = 10.0_f32;
 
-    let rects = range_visual_line_rects(text, &style, None, Some(30.0), 0.0, line_height, 6, 8);
+    let rects = range_visual_line_rects(text, &style, None, Some(30.0), 0.0, line_height, 6..8);
     assert_eq!(rects.len(), 1, "one visual line touched, got {rects:?}");
     assert_eq!(
         rects[0].y,
@@ -37,7 +37,7 @@ fn selection_rects_follow_wrapped_visual_lines() {
     );
     assert!(rects[0].width > 0.0);
 
-    let spanning = range_visual_line_rects(text, &style, None, Some(30.0), 0.0, line_height, 0, 5);
+    let spanning = range_visual_line_rects(text, &style, None, Some(30.0), 0.0, line_height, 0..5);
     assert_eq!(spanning.len(), 2, "wrapped line spans two visual rows");
     assert_eq!(spanning[0].y, 0.0);
     assert_eq!(spanning[1].y, line_height);

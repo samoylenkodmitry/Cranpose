@@ -157,10 +157,10 @@ fn a_tiled_painter_repeats_its_region_at_its_own_size() {
     let bitmap = atlas_bitmap();
     let source = source_rect(8.0, 8.0, 16.0, 4.0);
     let drawn = drawn_images(Size::new(32.0, 8.0), |scope| {
-        draw_bitmap_tiled_painter(
+        draw_filled_painter(
             scope,
-            bitmap.clone(),
-            source,
+            &bitmap,
+            |container| tile_quads(source, container),
             1.0,
             None,
             ImageSampling::Nearest,
@@ -190,10 +190,10 @@ fn a_tiled_painter_clips_the_last_row_and_column() {
     let bitmap = atlas_bitmap();
     let source = source_rect(0.0, 0.0, 10.0, 10.0);
     let drawn = drawn_images(Size::new(25.0, 10.0), |scope| {
-        draw_bitmap_tiled_painter(
+        draw_filled_painter(
             scope,
-            bitmap.clone(),
-            source,
+            &bitmap,
+            |container| tile_quads(source, container),
             1.0,
             None,
             ImageSampling::Nearest,
@@ -237,13 +237,18 @@ fn a_nine_patch_painter_keeps_the_region_as_its_intrinsic_size() {
 fn a_nine_patch_painter_draws_its_corners_at_their_own_size() {
     let bitmap = atlas_bitmap();
     let drawn = drawn_images(Size::new(100.0, 60.0), |scope| {
-        draw_nine_patch_painter(
+        draw_filled_painter(
             scope,
-            bitmap.clone(),
-            source_rect(0.0, 0.0, 30.0, 30.0),
-            NinePatchInsets::uniform(10.0),
-            PatchFill::Stretch,
-            PatchFill::Stretch,
+            &bitmap,
+            |container| {
+                nine_patch_quads(
+                    source_rect(0.0, 0.0, 30.0, 30.0),
+                    container,
+                    NinePatchInsets::uniform(10.0),
+                    PatchFill::Stretch,
+                    PatchFill::Stretch,
+                )
+            },
             1.0,
             None,
             ImageSampling::Nearest,
@@ -279,13 +284,18 @@ fn a_nine_patch_painter_draws_its_corners_at_their_own_size() {
 fn a_nine_patch_painter_reads_only_its_region_of_an_atlas() {
     let bitmap = atlas_bitmap();
     let drawn = drawn_images(Size::new(80.0, 40.0), |scope| {
-        draw_nine_patch_painter(
+        draw_filled_painter(
             scope,
-            bitmap.clone(),
-            source_rect(32.0, 16.0, 24.0, 24.0),
-            NinePatchInsets::uniform(8.0),
-            PatchFill::Tile,
-            PatchFill::Tile,
+            &bitmap,
+            |container| {
+                nine_patch_quads(
+                    source_rect(32.0, 16.0, 24.0, 24.0),
+                    container,
+                    NinePatchInsets::uniform(8.0),
+                    PatchFill::Tile,
+                    PatchFill::Tile,
+                )
+            },
             1.0,
             None,
             ImageSampling::Nearest,

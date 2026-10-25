@@ -11,7 +11,7 @@ use cranpose_ui::{
 use cranpose_ui_graphics::{
     gradient_cut_mask_effect, liquid_glass_effect, rounded_alpha_mask_effect, BlendMode,
     CompositingStrategy, CutDirection, GradientCutMaskSpec, LiquidGlassRect, LiquidGlassSpec,
-    RenderEffect, TileMode,
+    RenderEffect, Size, TileMode,
 };
 
 use super::images::generate_chessboard_bitmap;
@@ -493,24 +493,20 @@ fn InteractiveEffectsDemo() {
                     DraggableOverlay(
                         blur_pos,
                         blur_fx.clone(),
-                        rect_w,
-                        rect_h,
+                        Size::new(rect_w, rect_h),
                         corner,
                         "Blur",
                         Color(0.4, 0.7, 1.0, 0.5),
-                        area_w,
-                        area_h,
+                        Size::new(area_w, area_h),
                     );
                     DraggableOverlay(
                         glass_pos,
                         glass_fx.clone(),
-                        rect_w,
-                        rect_h,
+                        Size::new(rect_w, rect_h),
                         corner,
                         "Glass",
                         Color(0.6, 1.0, 0.7, 0.5),
-                        area_w,
-                        area_h,
+                        Size::new(area_w, area_h),
                     );
                 },
             );
@@ -2281,18 +2277,16 @@ fn NestedLayerEventDemo(
 }
 
 #[composable]
-#[expect(clippy::too_many_arguments)]
 fn DraggableOverlay(
     pos: cranpose_core::MutableState<Point>,
     backdrop_effect: RenderEffect,
-    width: f32,
-    height: f32,
+    size: Size,
     corner: f32,
     label: &'static str,
     border_color: Color,
-    area_w: f32,
-    area_h: f32,
+    area: Size,
 ) {
+    let (width, height, area_w, area_h) = (size.width, size.height, area.width, area.height);
     Box(
         Modifier::empty()
             .size_points(width, height)
