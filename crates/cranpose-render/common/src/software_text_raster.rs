@@ -21,7 +21,7 @@ use cranpose_ui::{
     },
     text_layout_result::{GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult},
 };
-use cranpose_ui_graphics::{Color, ImageBitmap, Point, Rect, whole};
+use cranpose_ui_graphics::{BrushSampler, Color, ImageBitmap, Point, Rect, whole};
 use tiny_skia::{LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -4930,6 +4930,7 @@ fn draw_mask_glyph(
     paint: &GlyphPaint<'_>,
 ) {
     let correction = TextLuminance::of_brush(paint.brush).correction();
+    let brush = BrushSampler::new(paint.brush, paint.brush_rect);
     for y in 0..mask.height {
         let py = mask.origin_y + y as i32;
         if py < 0 || py >= height as i32 {
@@ -4948,8 +4949,7 @@ fn draw_mask_glyph(
             }
 
             let sample = sample_brush_rgba(
-                paint.brush,
-                paint.brush_rect,
+                &brush,
                 paint.canvas_origin.x + px as f32 + 0.5,
                 paint.canvas_origin.y + py as f32 + 0.5,
                 Point::default(),

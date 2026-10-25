@@ -37,6 +37,7 @@ macro_rules! runtime_shader_wgsl {
 
 pub mod alpha_mask;
 mod brush;
+mod brush_sampler;
 mod color;
 mod content_pool;
 mod draw_group;
@@ -71,6 +72,7 @@ pub mod whole;
 
 pub use alpha_mask::*;
 pub use brush::*;
+pub use brush_sampler::*;
 pub use color::*;
 pub use content_pool::*;
 pub use draw_group::*;

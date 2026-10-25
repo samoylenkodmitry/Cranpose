@@ -11,7 +11,7 @@ use cranpose_ui::text::{
     AnnotatedString, FontFamily, FontStyle, FontWeight, RangeStyle, SpanStyle, TextMeasurer,
     TextStyle, TextUnit,
 };
-use cranpose_ui_graphics::{Brush, Color, Point, Rect};
+use cranpose_ui_graphics::{Brush, BrushSampler, Color, Point, Rect};
 
 const REGULAR: &[u8] = include_bytes!("../assets/NotoSansMerged.ttf");
 const BOLD: &[u8] = include_bytes!("../assets/NotoSansBold.ttf");
@@ -267,8 +267,7 @@ fn check_global_gradient(
             checked_right_of_initial_run = true;
         }
         let sample = sample_brush_rgba(
-            &brush,
-            rect,
+            &BrushSampler::new(&brush, rect),
             x as f32 + 0.5,
             y as f32 + 0.5,
             Point::default(),

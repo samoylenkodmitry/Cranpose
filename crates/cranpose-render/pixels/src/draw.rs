@@ -4,7 +4,7 @@ use cranpose_render_common::text_measure::{
     fallback_text_metrics,
 };
 use cranpose_render_common::{
-    brush_sampling::{color_to_rgba, sample_brush_rgba},
+    brush_sampling::{DitherAxis, DitheredLine, color_to_rgba, sample_brush_rgba},
     graph_scene::RenderDiagnostics,
     layer_shadow::ShadowRRect,
     shape_sdf,
@@ -12,8 +12,8 @@ use cranpose_render_common::{
     text_measure::SoftwareTextResources,
 };
 use cranpose_ui_graphics::{
-    ArcGeometry, BlendMode, Brush, CornerRadii, LineGeometry, Point, Rect, StrokeJoin, Trapezoid,
-    expand_rect, whole,
+    ArcGeometry, BlendMode, Brush, BrushSampler, CornerRadii, LineGeometry, Point, Rect,
+    StrokeJoin, Trapezoid, expand_rect, whole,
 };
 
 use crate::{
@@ -543,10 +543,13 @@ fn draw_shape(
         ShapeCoverage::Trapezoid(trapezoid) => {
             paint.paint(whole_rows, |point| trapezoid.coverage(point));
         }
-        ShapeCoverage::Arc(arc) => paint.paint(
-            |y, min_x, max_x| arc_row_runs(arc, y, min_x, max_x),
-            |point| shape_sdf::arc_coverage(point, arc),
-        ),
+        ShapeCoverage::Arc(arc) => {
+            let band = shape_sdf::ArcBand::new(arc);
+            paint.paint(
+                |y, min_x, max_x| arc_row_runs(arc, y, min_x, max_x),
+                |point| band.coverage(point),
+            );
+        }
         &ShapeCoverage::Stroke {
             rect,
             radii,
@@ -595,7 +598,106 @@ impl ShapeRows<'_, '_> {
                     }
                 }
             }
-            None => self.paint(runs, |_| 1.0),
+            None => {
+                let brush = BrushSampler::new(&self.draw.brush, self.rect);
+                if brush.has_uniform_rows() {
+                    self.fill_uniform_rows(runs);
+                } else if brush.has_uniform_columns()
+                    && brush.is_opaque()
+                    && self.draw.blend_mode == BlendMode::SrcOver
+                {
+                    self.fill_uniform_columns(runs);
+                } else {
+                    self.paint(runs, |_| 1.0);
+                }
+            }
+        }
+    }
+
+    // Paints a fill whose brush gives every pixel of a row one color, such
+    // as a gradient that runs straight down: the pixels [`Self::paint`]
+    // paints, with each row's colors worked out once for the four columns
+    // of the dither pattern instead of once a pixel.
+    #[inline(never)]
+    fn fill_uniform_rows(self, runs: impl Fn(f32, i32, i32) -> RowRuns) {
+        let Self {
+            target,
+            draw,
+            rect,
+            clip_bounds,
+            dither_origin,
+            diagnostics,
+            ..
+        } = self;
+        let brush = BrushSampler::new(&draw.brush, rect);
+        let columns = DitherAxis::new(dither_origin.x);
+        for py in clip_bounds.min_y..clip_bounds.max_y {
+            let center_y = py as f32 + 0.5;
+            let row_runs = runs(center_y, clip_bounds.min_x, clip_bounds.max_x);
+            let Some(&(first, _)) = row_runs.iter().find(|(start, end)| start < end) else {
+                continue;
+            };
+            let row = DitheredLine::row(&brush, first as f32 + 0.5, center_y, dither_origin);
+            let colors = row.colors();
+            let bytes = colors.map(|color| {
+                (draw.blend_mode == BlendMode::SrcOver && color[3] >= 1.0)
+                    .then(|| opaque_bytes(color))
+            });
+            for (start, end) in row_runs {
+                for (px, dst) in (start..).zip(target.row(py, start, end)) {
+                    let cell = columns.cell(px);
+                    match bytes[cell] {
+                        Some(bytes) => *dst = bytes,
+                        None if colors[cell][3] > 0.0 => {
+                            blend_pixel(dst, colors[cell], draw.blend_mode, diagnostics);
+                        }
+                        None => {}
+                    }
+                }
+            }
+        }
+    }
+
+    // Paints a fill whose opaque brush gives every pixel of a column one
+    // color, such as a gradient that runs straight across: the pixels
+    // [`Self::paint`] paints, with each column's bytes worked out once for
+    // the four rows of the dither pattern instead of once a pixel.
+    #[inline(never)]
+    fn fill_uniform_columns(self, runs: impl Fn(f32, i32, i32) -> RowRuns) {
+        let Self {
+            target,
+            draw,
+            rect,
+            clip_bounds,
+            dither_origin,
+            ..
+        } = self;
+        let brush = BrushSampler::new(&draw.brush, rect);
+        let rows = DitherAxis::new(dither_origin.y);
+        let top = clip_bounds.min_y as f32 + 0.5;
+        let mut band = [[[0u8; 4]; 4]; COLUMN_BAND];
+        let mut left = clip_bounds.min_x;
+        while left < clip_bounds.max_x {
+            let right = left
+                .saturating_add(COLUMN_BAND as i32)
+                .min(clip_bounds.max_x);
+            for (bytes, px) in band.iter_mut().zip(left..right) {
+                let column = DitheredLine::column(&brush, px as f32 + 0.5, top, dither_origin);
+                *bytes = column.colors().map(opaque_bytes);
+            }
+            for py in clip_bounds.min_y..clip_bounds.max_y {
+                let cell = rows.cell(py);
+                for (start, end) in runs(py as f32 + 0.5, left, right) {
+                    if start >= end {
+                        continue;
+                    }
+                    let first = (start - left) as usize;
+                    for (dst, bytes) in target.row(py, start, end).iter_mut().zip(&band[first..]) {
+                        *dst = bytes[cell];
+                    }
+                }
+            }
+            left = right;
         }
     }
 
@@ -612,6 +714,7 @@ impl ShapeRows<'_, '_> {
             opaque,
             diagnostics,
         } = self;
+        let brush = BrushSampler::new(&draw.brush, rect);
         for py in clip_bounds.min_y..clip_bounds.max_y {
             let center_y = py as f32 + 0.5;
             for (start, end) in runs(center_y, clip_bounds.min_x, clip_bounds.max_x) {
@@ -628,8 +731,7 @@ impl ShapeRows<'_, '_> {
                         continue;
                     }
 
-                    let mut sample =
-                        sample_brush_rgba(&draw.brush, rect, center_x, center_y, dither_origin);
+                    let mut sample = sample_brush_rgba(&brush, center_x, center_y, dither_origin);
                     sample[3] *= coverage;
                     if sample[3] <= 0.0 {
                         continue;
@@ -647,15 +749,7 @@ fn opaque_solid_bytes(brush: &Brush, blend_mode: BlendMode) -> Option<[u8; 4]> {
     let Brush::Solid(color) = brush else {
         return None;
     };
-    paints_opaque(brush, blend_mode).then(|| {
-        let rgba = color_to_rgba(*color);
-        [
-            whole::round(rgba[0] * 255.0) as u8,
-            whole::round(rgba[1] * 255.0) as u8,
-            whole::round(rgba[2] * 255.0) as u8,
-            255,
-        ]
-    })
+    paints_opaque(brush, blend_mode).then(|| opaque_bytes(color_to_rgba(*color)))
 }
 
 /// Whether [`opaque_solid_bytes`] has bytes for `brush` under `blend_mode`,
@@ -747,6 +841,25 @@ fn placed_shadow(draw: &crate::scene::ShadowDraw) -> (ShadowRRect, Option<Rect>)
     )
 }
 
+// The columns [`ShapeRows::fill_uniform_columns`] works out at a time: their
+// bytes, a kilobyte, sit on the stack.
+const COLUMN_BAND: usize = 64;
+
+// `unit` clamped to 0..=1 as the nearest of 256 levels, halves rounded up:
+// `whole::round(unit.clamp(0.0, 1.0) * 255.0) as u8`. Below 2^23 the
+// truncation and the fraction left are exact, and the level is never
+// negative, so a fraction from one half up is the whole step `round` takes.
+fn unit_byte(unit: f32) -> u8 {
+    let level = unit.clamp(0.0, 1.0) * 255.0;
+    let truncated = level as u32;
+    (truncated + u32::from(level - truncated as f32 >= 0.5)) as u8
+}
+
+// The bytes an opaque `src` leaves on any pixel under `SrcOver`.
+fn opaque_bytes(src: [f32; 4]) -> [u8; 4] {
+    [unit_byte(src[0]), unit_byte(src[1]), unit_byte(src[2]), 255]
+}
+
 fn blend_pixel(
     dst: &mut [u8; 4],
     src: [f32; 4],
@@ -771,10 +884,7 @@ fn blend_pixel(
     // An opaque source over anything is the source: the same bytes the
     // blend below works out, without reading the destination.
     if src_alpha >= 1.0 && resolved_blend_mode != BlendMode::DstOut {
-        dst[0] = whole::round(src[0].clamp(0.0, 1.0) * 255.0) as u8;
-        dst[1] = whole::round(src[1].clamp(0.0, 1.0) * 255.0) as u8;
-        dst[2] = whole::round(src[2].clamp(0.0, 1.0) * 255.0) as u8;
-        dst[3] = 255;
+        *dst = opaque_bytes(src);
         return;
     }
     let [dst_r, dst_g, dst_b, dst_a] = dst.map(|channel| UNIT[usize::from(channel)]);
@@ -798,10 +908,12 @@ fn blend_pixel(
         ),
     };
 
-    dst[0] = whole::round(out_r.clamp(0.0, 1.0) * 255.0) as u8;
-    dst[1] = whole::round(out_g.clamp(0.0, 1.0) * 255.0) as u8;
-    dst[2] = whole::round(out_b.clamp(0.0, 1.0) * 255.0) as u8;
-    dst[3] = whole::round(out_a.clamp(0.0, 1.0) * 255.0) as u8;
+    *dst = [
+        unit_byte(out_r),
+        unit_byte(out_g),
+        unit_byte(out_b),
+        unit_byte(out_a),
+    ];
 }
 
 #[cfg(test)]

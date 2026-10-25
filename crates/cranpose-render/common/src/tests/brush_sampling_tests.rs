@@ -1,24 +1,23 @@
-use cranpose_ui_graphics::Point;
+use cranpose_ui_graphics::{Brush, Point, Rect};
 
 use super::*;
 
-fn sample_rect() -> Rect {
-    Rect {
+// `brush` filling a 100 by 40 rect at the origin, sampled at `(x, y)`.
+fn sample(brush: &Brush, x: f32, y: f32) -> [f32; 4] {
+    let rect = Rect {
         x: 0.0,
         y: 0.0,
         width: 100.0,
         height: 40.0,
-    }
+    };
+    sample_brush_rgba(&BrushSampler::new(brush, rect), x, y, Point::default())
 }
 
 #[test]
 fn empty_gradient_samples_transparent_instead_of_panicking() {
     let brush =
         Brush::linear_gradient_range(Vec::new(), Point::new(0.0, 0.0), Point::new(100.0, 0.0));
-    assert_eq!(
-        sample_brush_rgba(&brush, sample_rect(), 50.0, 10.0, Point::default()),
-        [0.0, 0.0, 0.0, 0.0]
-    );
+    assert_eq!(sample(&brush, 50.0, 10.0), [0.0, 0.0, 0.0, 0.0]);
 }
 
 #[test]
@@ -30,13 +29,7 @@ fn clamped_gradient_samples_last_color_at_end() {
     );
     for y in 0..4 {
         for x in 0..4 {
-            let sampled = sample_brush_rgba(
-                &brush,
-                sample_rect(),
-                120.0 + x as f32,
-                y as f32,
-                Point::default(),
-            );
+            let sampled = sample(&brush, 120.0 + x as f32, y as f32);
             let bytes: Vec<u8> = sampled.iter().map(|c| (c * 255.0).round() as u8).collect();
             assert_eq!(bytes, vec![0, 0, 255, 255], "cell ({x}, {y})");
         }
@@ -94,10 +87,7 @@ fn a_solid_brush_is_left_alone() {
     let brush = Brush::Solid(Color(0.25, 0.5, 0.75, 1.0));
     for y in 0..4 {
         for x in 0..4 {
-            assert_eq!(
-                sample_brush_rgba(&brush, sample_rect(), x as f32, y as f32, Point::default()),
-                [0.25, 0.5, 0.75, 1.0],
-            );
+            assert_eq!(sample(&brush, x as f32, y as f32), [0.25, 0.5, 0.75, 1.0],);
         }
     }
 }
@@ -113,8 +103,7 @@ fn the_dither_moves_a_flat_gradient_off_one_value_onto_two() {
     let mut levels = std::collections::BTreeSet::new();
     for y in 0..4 {
         for x in 0..4 {
-            let sampled =
-                sample_brush_rgba(&brush, sample_rect(), x as f32, y as f32, Point::default());
+            let sampled = sample(&brush, x as f32, y as f32);
             levels.insert((sampled[0] * 255.0).round() as u8);
         }
     }

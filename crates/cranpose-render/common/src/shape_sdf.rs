@@ -77,33 +77,69 @@ pub fn sdf_stroked_rounded_rect(
 /// Signed distance to a circular band limited to an angular sweep — the shape
 /// behind both stroked arcs and filled annular sectors.
 pub fn sdf_arc_band(p: Point, arc: &ArcGeometry) -> f32 {
-    let ra = arc.mid_radius();
-    let rb = arc.half_thickness().max(0.0);
-    let sweep = arc.sweep_angle.clamp(0.0, cranpose_ui_graphics::TAU);
-    let half_sweep = sweep * 0.5;
-    let mid = arc.start_angle + half_sweep;
+    ArcBand::new(arc).distance(p)
+}
 
-    let (sm, cm) = mid.sin_cos();
-    let dx = p.x - arc.center.x;
-    let dy = p.y - arc.center.y;
-    let qx = (-sm * dx + cm * dy).abs();
-    let qy = cm * dx + sm * dy;
+/// An arc's band with the sines and cosines of its sweep worked out once,
+/// for the distances of many points.
+pub struct ArcBand {
+    center: Point,
+    mid_radius: f32,
+    half_thickness: f32,
+    // The sine and cosine of the angle halfway along the sweep.
+    mid: (f32, f32),
+    // The sine, not below zero, and the cosine of half the sweep.
+    half_sweep: (f32, f32),
+    cap: StrokeCap,
+}
 
-    let sc = (half_sweep.sin().max(0.0), half_sweep.cos());
-
-    let mut dist = if sc.1 * qx > sc.0 * qy {
-        ((qx - sc.0 * ra).powi(2) + (qy - sc.1 * ra).powi(2)).sqrt() - rb
-    } else {
-        ((qx * qx + qy * qy).sqrt() - ra).abs() - rb
-    };
-
-    let plane = sc.1 * qx - sc.0 * qy;
-    match arc.cap {
-        StrokeCap::Butt => dist = dist.max(plane),
-        StrokeCap::Square => dist = dist.max(plane - rb),
-        StrokeCap::Round => {}
+impl ArcBand {
+    /// The band of `arc`.
+    pub fn new(arc: &ArcGeometry) -> Self {
+        let sweep = arc.sweep_angle.clamp(0.0, cranpose_ui_graphics::TAU);
+        let half_sweep = sweep * 0.5;
+        let mid = arc.start_angle + half_sweep;
+        Self {
+            center: arc.center,
+            mid_radius: arc.mid_radius(),
+            half_thickness: arc.half_thickness().max(0.0),
+            mid: mid.sin_cos(),
+            half_sweep: (half_sweep.sin().max(0.0), half_sweep.cos()),
+            cap: arc.cap,
+        }
     }
-    dist
+
+    /// [`sdf_arc_band`] at `p`.
+    pub fn distance(&self, p: Point) -> f32 {
+        let ra = self.mid_radius;
+        let rb = self.half_thickness;
+        let (sm, cm) = self.mid;
+        let dx = p.x - self.center.x;
+        let dy = p.y - self.center.y;
+        let qx = (-sm * dx + cm * dy).abs();
+        let qy = cm * dx + sm * dy;
+
+        let sc = self.half_sweep;
+
+        let mut dist = if sc.1 * qx > sc.0 * qy {
+            ((qx - sc.0 * ra).powi(2) + (qy - sc.1 * ra).powi(2)).sqrt() - rb
+        } else {
+            ((qx * qx + qy * qy).sqrt() - ra).abs() - rb
+        };
+
+        let plane = sc.1 * qx - sc.0 * qy;
+        match self.cap {
+            StrokeCap::Butt => dist = dist.max(plane),
+            StrokeCap::Square => dist = dist.max(plane - rb),
+            StrokeCap::Round => {}
+        }
+        dist
+    }
+
+    /// The antialiased coverage of `p`, as [`arc_coverage`] gives it.
+    pub fn coverage(&self, p: Point) -> f32 {
+        coverage_for_distance(self.distance(p))
+    }
 }
 
 /// Antialiased coverage for a signed distance, matching the shader's
@@ -112,7 +148,17 @@ pub fn coverage_for_distance(distance: f32) -> f32 {
     if !distance.is_finite() {
         return 0.0;
     }
-    let t = ((distance + 0.5).clamp(0.0, 1.0)) as f64;
+    let t = (distance + 0.5).clamp(0.0, 1.0);
+    // Inside and outside the edge's pixel the smoothstep is exactly 0 or 1:
+    // only the edge needs the f64 steps, which a target without a double
+    // precision unit runs in software.
+    if t <= 0.0 {
+        return 1.0;
+    }
+    if t >= 1.0 {
+        return 0.0;
+    }
+    let t = f64::from(t);
     let smooth = t * t * (3.0 - 2.0 * t);
     (1.0 - smooth) as f32
 }
@@ -149,7 +195,7 @@ pub fn stroked_rect_coverage(
 
 /// Coverage of `point` by an arc band.
 pub fn arc_coverage(point: Point, arc: &ArcGeometry) -> f32 {
-    coverage_for_distance(sdf_arc_band(point, arc))
+    ArcBand::new(arc).coverage(point)
 }
 
 #[cfg(test)]
