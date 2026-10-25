@@ -230,7 +230,7 @@ static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =
 
 /// Keeps the platform display awake while this call remains in composition and
 /// `enabled` is true. Multiple active callers are reference-counted.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn KeepScreenOn(enabled: bool) {
     cranpose_core::__disposable_effect_impl(
@@ -255,7 +255,7 @@ pub fn KeepScreenOn(enabled: bool) {
 /// Installs a declared bundled-asset set on a worker and returns the outcome
 /// on the UI runtime. Work is cancelled with the owning composition.
 #[cfg(not(target_arch = "wasm32"))]
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn BundledAssetInstallEffect<K: PartialEq + 'static>(
     keys: K,
@@ -279,7 +279,7 @@ pub fn BundledAssetInstallEffect<K: PartialEq + 'static>(
 /// Screens that only need the current state read
 /// [`cranpose_services::local_lifecycle_state`] instead; this is for work that
 /// must react to a *transition*.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn LifecycleEffect<K: PartialEq + 'static>(
     keys: K,
@@ -290,7 +290,7 @@ pub fn LifecycleEffect<K: PartialEq + 'static>(
 }
 
 /// Remembers observable application update state for the current composition.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberAppUpdateState() -> State<AppUpdateStatus> {
     let updates = rememberEventStream((), |sender| {
@@ -306,7 +306,7 @@ pub fn rememberAppUpdateState() -> State<AppUpdateStatus> {
 /// simulation flag, "the window is visible", "a gesture is in progress" — and
 /// the loop starts and stops with it. There is no wake handle to hold and no
 /// scheduler to poke: stopping is a state change like any other.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn FrameEffect<K: PartialEq + 'static>(
     keys: K,

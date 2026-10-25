@@ -2,7 +2,7 @@
 //! `HWND` and handles its clicks; the shortcuts it shows reach it through
 //! the event loop's message hook, which hands each message to
 //! `TranslateAcceleratorW` first.
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "calls into the Win32 API")]
 
 use std::{
     ffi::c_void,

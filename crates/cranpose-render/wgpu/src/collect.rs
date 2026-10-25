@@ -104,7 +104,7 @@ pub(crate) struct LayerScene {
 /// which every recycle, take and child push moved inline.
 #[derive(Default)]
 pub(crate) struct LayerSceneRecycler {
-    #[expect(clippy::vec_box)]
+    #[expect(clippy::vec_box, reason = "scenes are recycled by box, so none moves")]
     scenes: Vec<Box<LayerScene>>,
 }
 

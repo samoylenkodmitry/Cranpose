@@ -1,6 +1,6 @@
 //! The battery of a Mac, from IOKit's power sources: the internal
 //! battery's charge, and whether external power feeds it.
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "Objective-C messages to AppKit")]
 
 use cranpose_services::{BatteryStatus, PowerReading};
 use objc2_core_foundation::{CFDictionary, CFNumber, CFRetained, CFString, CFType};

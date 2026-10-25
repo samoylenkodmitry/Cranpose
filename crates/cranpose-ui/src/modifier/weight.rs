@@ -20,13 +20,13 @@ impl Modifier {
     }
 
     /// Same as [`Self::weight_with_fill`], for a child of a `Column`.
-    #[expect(non_snake_case)]
+    #[expect(non_snake_case, reason = "names follow Compose's casing")]
     pub fn columnWeight(self, weight: f32, fill: bool) -> Self {
         self.weight_with_fill(weight, fill)
     }
 
     /// Same as [`Self::weight_with_fill`], for a child of a `Row`.
-    #[expect(non_snake_case)]
+    #[expect(non_snake_case, reason = "names follow Compose's casing")]
     pub fn rowWeight(self, weight: f32, fill: bool) -> Self {
         self.weight_with_fill(weight, fill)
     }

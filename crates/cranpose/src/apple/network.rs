@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "Objective-C messages to Apple frameworks")]
 //! Network status on iOS and macOS. Network.framework's path monitor reports
 //! each change of the default network path on a private queue, and the
 //! monitor installed here keeps the last report.

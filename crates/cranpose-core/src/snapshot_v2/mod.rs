@@ -836,7 +836,7 @@ pub(crate) struct SnapshotState {
     pub(crate) disposed: Cell<bool>,
     pub(crate) read_observer: RefCell<Option<ReadObserver>>,
     pub(crate) write_observer: RefCell<Option<WriteObserver>>,
-    #[expect(clippy::type_complexity)]
+    #[expect(clippy::type_complexity, reason = "modified states by id")]
     pub(crate) modified: RefCell<HashMap<StateObjectId, (Rc<dyn StateObject>, SnapshotId)>>,
     on_dispose: RefCell<Option<Box<dyn FnOnce()>>>,
     runtime_tracked: bool,

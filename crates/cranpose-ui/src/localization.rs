@@ -80,7 +80,7 @@ pub fn local_translator() -> CompositionLocal<Option<Translator>> {
 /// Installs a catalog and language for this subtree, including its reading direction.
 /// Change the supplied locale state to update text and accessibility descriptions.
 /// Nested layout-direction providers can override the direction for individual controls.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn ProvideLocalization(catalog: &Catalog, locale: Locale, content: impl FnOnce()) {
     let translator = rememberKeyed((catalog.clone(), locale), |(catalog, locale)| {
@@ -93,7 +93,7 @@ pub fn ProvideLocalization(catalog: &Catalog, locale: Locale, content: impl FnOn
 }
 
 /// Installs a prepared translator, including one negotiated from several preferred languages.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn ProvideTranslator(translator: Translator, content: impl FnOnce()) {
     let translator = rememberKeyed(translator, |translator| {

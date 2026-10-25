@@ -1594,7 +1594,7 @@ pub use composer_context::{
 
 /// Runs `f` with the composer that is current on this thread. Panics if there is none. Same as
 /// `with_current_composer`.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn withCurrentComposer<R>(f: impl FnOnce(&Composer) -> R) -> R {
     composer_context::with_composer(f)
 }
@@ -1715,7 +1715,7 @@ pub fn movable<K: Hash>(key: K, content: impl FnOnce()) {
 /// wants [`movableContentOf`] instead, which takes the identity as a key.
 ///
 /// Mirrors Jetpack Compose's `movableContentOf`.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberMovableContentOf(content: impl Fn() + 'static) -> MovableContent {
     let runtime = with_current_composer(Composer::runtime_handle);
@@ -1733,7 +1733,7 @@ pub fn rememberMovableContentOf(content: impl Fn() + 'static) -> MovableContent 
 /// `movable` under the same key is one piece of content. Reach for this when
 /// the parents that can show it are in different composables, so no single
 /// value can be handed to all of them.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn movableContentOf<K: Hash>(key: K, content: impl Fn() + 'static) -> MovableContent {
     MovableContent {
         id: hash_key(&key),
@@ -1865,7 +1865,7 @@ impl DisposableEffectResult {
 
 /// Queues `effect` to run each time this call site is composed, after the node changes of the pass
 /// are applied. Compose's `SideEffect`.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn SideEffect(effect: impl FnOnce() + 'static) {
     with_current_composer(|composer| composer.register_side_effect(effect));
 }
@@ -1904,7 +1904,7 @@ where
 ///
 /// `keys` may be a tuple to depend on more than one value, matching Jetpack
 /// Compose's `DisposableEffect(vararg keys)`.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn DisposableEffect<K, F>(keys: K, effect: F)
 where

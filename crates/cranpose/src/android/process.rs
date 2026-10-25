@@ -7,7 +7,7 @@
 //! no window starts here: the logger, the application's folders, the services
 //! that work from the application context, and the application's own
 //! [`AppLauncher::with_process_start`](crate::AppLauncher::with_process_start).
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "JNI and NDK calls into the Android system")]
 
 use std::sync::{Once, OnceLock};
 

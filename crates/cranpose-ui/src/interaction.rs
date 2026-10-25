@@ -1,4 +1,4 @@
-#![expect(non_snake_case)]
+#![expect(non_snake_case, reason = "names follow Compose's casing")]
 
 use std::{
     cell::RefCell,

@@ -1,5 +1,5 @@
 //! The AppKit window behind a winit window on macOS.
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "Objective-C messages to AppKit")]
 
 use objc2::rc::Retained;
 use objc2_app_kit::{NSView, NSWindow, NSWindowAnimationBehavior};

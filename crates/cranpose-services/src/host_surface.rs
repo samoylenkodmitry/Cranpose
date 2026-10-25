@@ -202,7 +202,7 @@ pub fn publish_host_surface_size(size: HostSurfaceSize) {
 
 /// The host surface's size, observed for as long as this call stays in the
 /// composition.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberHostSurfaceSize() -> State<HostSurfaceSize> {
     let updates = rememberEventStream((), |sender| {

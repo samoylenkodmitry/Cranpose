@@ -1,4 +1,7 @@
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "process memory and CPU counters through libc and mach"
+)]
 
 use std::{rc::Rc, time::Duration};
 

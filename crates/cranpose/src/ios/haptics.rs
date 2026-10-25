@@ -72,7 +72,7 @@ fn style(amplitude: u8) -> UIImpactFeedbackStyle {
 }
 
 fn impact(mtm: MainThreadMarker, style: UIImpactFeedbackStyle, intensity: f64) {
-    #[expect(deprecated)]
+    #[expect(deprecated, reason = "the replacement needs iOS 17")]
     let generator =
         UIImpactFeedbackGenerator::initWithStyle(UIImpactFeedbackGenerator::alloc(mtm), style);
     generator.impactOccurredWithIntensity(intensity);

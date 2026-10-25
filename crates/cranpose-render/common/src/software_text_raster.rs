@@ -2431,12 +2431,7 @@ fn rasterize_styled_text_region(
             static_text_motion,
         };
         Some(visit_text_segment_masks(
-            segment.text,
-            local_rect,
-            segment.style,
-            segment.font_size,
-            scale,
-            segment.font,
+            request_of(&segment, local_rect, scale),
             glyph_cache.as_deref_mut(),
             &GlyphRasterClip::new(width, height, &paint),
             |mask| canvas.paint(mask, &paint),
@@ -2463,30 +2458,27 @@ fn annotated_brush_rect(
     Some(extents[index].rect.translate(text_origin.x, text_origin.y))
 }
 
-#[expect(clippy::too_many_arguments)]
-fn walk_solid_text_atlas_segments<'a, T>(
-    text: impl Into<StyledTextRef<'a>>,
-    rect: Rect,
-    style: &TextStyle,
-    fallback_color: Color,
-    font_size: f32,
-    scale: f32,
+fn walk_solid_text_atlas_segments<T>(
+    request: TextRasterRequest<'_>,
     fonts: &SoftwareTextFontSet,
     glyph_cache: &mut SoftwareGlyphRasterCache,
     out: &mut Vec<T>,
     mut collect_segment: impl FnMut(
-        &str,
-        Rect,
-        &TextStyle,
+        SegmentRequest<'_>,
         Color,
-        f32,
-        f32,
-        &SoftwareTextFont,
         &mut SoftwareGlyphRasterCache,
         &mut Vec<T>,
     ) -> Option<f32>,
 ) -> Option<()> {
-    let text = text.into();
+    let TextRasterRequest {
+        text,
+        rect,
+        style,
+        fallback_color,
+        font_size,
+        scale,
+        ..
+    } = request;
     if text_render_request_is_degenerate(text.is_empty(), rect, font_size, scale) {
         return Some(());
     }
@@ -2495,19 +2487,22 @@ fn walk_solid_text_atlas_segments<'a, T>(
             return None;
         }
         if let Some(font) = fonts.single_font_for_text(text.text, style) {
-            return collect_segment(
-                text.text,
-                Rect {
+            let segment = SegmentRequest {
+                text: text.text,
+                local_rect: Rect {
                     x: 0.0,
                     y: 0.0,
                     width: rect.width,
                     height: rect.height,
                 },
                 style,
-                style.resolve_text_color(fallback_color),
                 font_size,
                 scale,
                 font,
+            };
+            return collect_segment(
+                segment,
+                style.resolve_text_color(fallback_color),
                 glyph_cache,
                 out,
             )
@@ -2519,19 +2514,15 @@ fn walk_solid_text_atlas_segments<'a, T>(
         if !text_segment_supports_solid_atlas(segment.style) {
             return None;
         }
+        let local_rect = Rect {
+            x: whole::round(segment.origin.x),
+            y: segment.origin.y,
+            width: rect.width,
+            height: rect.height,
+        };
         collect_segment(
-            segment.text,
-            Rect {
-                x: whole::round(segment.origin.x),
-                y: segment.origin.y,
-                width: rect.width,
-                height: rect.height,
-            },
-            segment.style,
+            request_of(&segment, local_rect, scale),
             segment.style.resolve_text_color(fallback_color),
-            segment.font_size,
-            scale,
-            segment.font,
             glyph_cache,
             out,
         )
@@ -2542,28 +2533,17 @@ fn walk_solid_text_atlas_segments<'a, T>(
     result.map(|_| ())
 }
 
-/// Appends to `out` every glyph of `text` that puts pixels down, with its mask, for a renderer
+/// Appends to `out` every glyph of the text that puts pixels down, with its mask, for a renderer
 /// that draws solid text from a glyph atlas. Returns `None` when the style cannot be drawn as
-/// solid atlas glyphs. Arguments are as for `rasterize_text_to_image`.
-#[expect(clippy::too_many_arguments)]
+/// solid atlas glyphs. Only the size of `request.rect` counts: the glyphs are placed from the text's corner.
 pub fn collect_solid_text_atlas_glyphs(
-    text: &AnnotatedString,
-    rect: Rect,
-    style: &TextStyle,
-    fallback_color: Color,
-    font_size: f32,
-    scale: f32,
+    request: TextRasterRequest<'_>,
     fonts: &SoftwareTextFontSet,
     glyph_cache: &mut SoftwareGlyphRasterCache,
     out: &mut Vec<SoftwareGlyphAtlasGlyph>,
 ) -> Option<()> {
     walk_solid_text_atlas_segments(
-        text,
-        rect,
-        style,
-        fallback_color,
-        font_size,
-        scale,
+        request,
         fonts,
         glyph_cache,
         out,
@@ -2571,28 +2551,17 @@ pub fn collect_solid_text_atlas_glyphs(
     )
 }
 
-/// Appends to `out` the atlas placements of the glyphs of `text`, without rasterizing anything.
+/// Appends to `out` the atlas placements of the glyphs of the text, without rasterizing anything.
 /// Returns `None` when a glyph has no cached mask or the style cannot be drawn as solid atlas
-/// glyphs. Arguments are as for `rasterize_text_to_image`.
-#[expect(clippy::too_many_arguments)]
+/// glyphs. Only the size of `request.rect` counts: the glyphs are placed from the text's corner.
 pub fn collect_cached_solid_text_atlas_placements(
-    text: &AnnotatedString,
-    rect: Rect,
-    style: &TextStyle,
-    fallback_color: Color,
-    font_size: f32,
-    scale: f32,
+    request: TextRasterRequest<'_>,
     fonts: &SoftwareTextFontSet,
     glyph_cache: &mut SoftwareGlyphRasterCache,
     out: &mut Vec<SoftwareGlyphAtlasPlacement>,
 ) -> Option<()> {
     walk_solid_text_atlas_segments(
-        text,
-        rect,
-        style,
-        fallback_color,
-        font_size,
-        scale,
+        request,
         fonts,
         glyph_cache,
         out,
@@ -2600,27 +2569,16 @@ pub fn collect_cached_solid_text_atlas_placements(
     )
 }
 
-/// Appends the glyphs of `text` that put pixels down to `out`: each either
+/// Appends the glyphs of the text that put pixels down to `out`: each either
 /// placed from the mask cache or rasterized into it.
-#[expect(clippy::too_many_arguments)]
-pub fn collect_solid_text_atlas_run<'a>(
-    text: impl Into<StyledTextRef<'a>>,
-    rect: Rect,
-    style: &TextStyle,
-    fallback_color: Color,
-    font_size: f32,
-    scale: f32,
+pub fn collect_solid_text_atlas_run(
+    request: TextRasterRequest<'_>,
     fonts: &SoftwareTextFontSet,
     glyph_cache: &mut SoftwareGlyphRasterCache,
     out: &mut Vec<SoftwareGlyphAtlasRunGlyph>,
 ) -> Option<()> {
     walk_solid_text_atlas_segments(
-        text,
-        rect,
-        style,
-        fallback_color,
-        font_size,
-        scale,
+        request,
         fonts,
         glyph_cache,
         out,
@@ -3538,18 +3496,20 @@ fn paints_part_directly(style: &TextStyle) -> bool {
             .is_none_or(|brush| matches!(brush, Brush::Solid(_)))
 }
 
-#[expect(clippy::too_many_arguments)]
 fn visit_text_segment_masks(
-    text: &str,
-    local_rect: Rect,
-    style: &TextStyle,
-    font_size: f32,
-    scale: f32,
-    font: &SoftwareTextFont,
+    request: SegmentRequest<'_>,
     glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
     clip: &GlyphRasterClip,
     visit: impl FnMut(&GlyphMask),
 ) -> f32 {
+    let SegmentRequest {
+        text,
+        local_rect,
+        style,
+        font_size,
+        scale,
+        font,
+    } = request;
     if text_render_request_is_degenerate(text.is_empty(), local_rect, font_size, scale) {
         return 0.0;
     }
@@ -3616,26 +3576,12 @@ fn visit_text_segment_masks(
     )
 }
 
-#[expect(clippy::too_many_arguments)]
 fn collect_text_segment_solid_atlas_glyphs(
-    text: &str,
-    local_rect: Rect,
-    style: &TextStyle,
+    request: SegmentRequest<'_>,
     color: Color,
-    font_size: f32,
-    scale: f32,
-    font: &SoftwareTextFont,
     glyph_cache: &mut SoftwareGlyphRasterCache,
     out: &mut Vec<SoftwareGlyphAtlasGlyph>,
 ) -> Option<f32> {
-    let request = AtlasSegmentRequest {
-        text,
-        local_rect,
-        style,
-        font_size,
-        scale,
-        font,
-    };
     collect_atlas_segment(request, glyph_cache, out, |cache, glyph, out| {
         let mask = match cache.get(&glyph.key, &glyph.glyph) {
             Some(mask) => mask,
@@ -3666,26 +3612,12 @@ fn collect_text_segment_solid_atlas_glyphs(
     })
 }
 
-#[expect(clippy::too_many_arguments)]
 fn collect_text_segment_cached_solid_atlas_placements(
-    text: &str,
-    local_rect: Rect,
-    style: &TextStyle,
+    request: SegmentRequest<'_>,
     color: Color,
-    font_size: f32,
-    scale: f32,
-    font: &SoftwareTextFont,
     glyph_cache: &mut SoftwareGlyphRasterCache,
     out: &mut Vec<SoftwareGlyphAtlasPlacement>,
 ) -> Option<f32> {
-    let request = AtlasSegmentRequest {
-        text,
-        local_rect,
-        style,
-        font_size,
-        scale,
-        font,
-    };
     collect_atlas_segment(request, glyph_cache, out, |cache, glyph, out| {
         let Some((key, x, y, width, height)) = cache.get_atlas_placement(&glyph.key, &glyph.glyph)
         else {
@@ -3711,26 +3643,12 @@ fn collect_text_segment_cached_solid_atlas_placements(
     })
 }
 
-#[expect(clippy::too_many_arguments)]
 fn collect_text_segment_solid_atlas_run(
-    text: &str,
-    local_rect: Rect,
-    style: &TextStyle,
+    request: SegmentRequest<'_>,
     color: Color,
-    font_size: f32,
-    scale: f32,
-    font: &SoftwareTextFont,
     glyph_cache: &mut SoftwareGlyphRasterCache,
     out: &mut Vec<SoftwareGlyphAtlasRunGlyph>,
 ) -> Option<f32> {
-    let request = AtlasSegmentRequest {
-        text,
-        local_rect,
-        style,
-        font_size,
-        scale,
-        font,
-    };
     glyph_cache.segment_metrics.clear();
     let transparent = color.3 <= 0.0;
     collect_atlas_segment(request, glyph_cache, out, |cache, glyph, out| {
@@ -3803,15 +3721,27 @@ fn rasterize_atlas_run_glyph(
     })
 }
 
-/// One styled segment of a text, laid out for the solid glyph atlas.
+/// One styled segment of a text, with the font that draws it.
 #[derive(Clone, Copy)]
-struct AtlasSegmentRequest<'a> {
+struct SegmentRequest<'a> {
     text: &'a str,
     local_rect: Rect,
     style: &'a TextStyle,
     font_size: f32,
     scale: f32,
     font: &'a SoftwareTextFont,
+}
+
+// Not a method: an impl block here renumbers the impls the ESP IRAM lists name.
+fn request_of<'a>(seg: &AnnotatedTextSegment<'a>, rect: Rect, scale: f32) -> SegmentRequest<'a> {
+    SegmentRequest {
+        text: seg.text,
+        local_rect: rect,
+        style: seg.style,
+        font_size: seg.font_size,
+        scale,
+        font: seg.font,
+    }
 }
 
 /// A glyph of a segment walked for the solid glyph atlas: where it draws
@@ -3871,7 +3801,7 @@ impl<'a> AtlasSegmentGlyph<'a> {
 /// line's advance, or `None` with `out` as it was when the style cannot draw
 /// from the atlas or `visit` breaks.
 fn collect_atlas_segment<T>(
-    request: AtlasSegmentRequest<'_>,
+    request: SegmentRequest<'_>,
     glyph_cache: &mut SoftwareGlyphRasterCache,
     out: &mut Vec<T>,
     mut visit: impl FnMut(
@@ -3880,7 +3810,7 @@ fn collect_atlas_segment<T>(
         &mut Vec<T>,
     ) -> ControlFlow<()>,
 ) -> Option<f32> {
-    let AtlasSegmentRequest {
+    let SegmentRequest {
         text,
         local_rect,
         style,

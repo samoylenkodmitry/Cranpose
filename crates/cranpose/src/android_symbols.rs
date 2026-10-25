@@ -2,7 +2,7 @@
 //! (`minSdk` 24), found while the app runs. A direct call would leave an
 //! undefined symbol that stops the whole library loading on an older device.
 
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "JNI and NDK calls into the Android system")]
 
 use std::{
     ffi::{CStr, c_int, c_long, c_void},

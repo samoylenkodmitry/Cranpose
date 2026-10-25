@@ -159,12 +159,7 @@ fn solid_annotated_text_collects_atlas_glyphs_with_stable_keys() {
     let mut glyphs = Vec::new();
 
     collect_solid_text_atlas_glyphs(
-        &annotated,
-        rect,
-        &style,
-        Color::WHITE,
-        18.0,
-        1.0,
+        TextRasterRequest::new(&annotated, rect, &style, Color::WHITE, 18.0, 1.0),
         &font_set,
         &mut cache,
         &mut glyphs,
@@ -209,15 +204,10 @@ fn cached_atlas_placements_reuse_existing_glyph_masks_without_payloads() {
 
     assert!(
         collect_cached_solid_text_atlas_placements(
-            &annotated,
-            rect,
-            &style,
-            Color::WHITE,
-            18.0,
-            1.0,
+            TextRasterRequest::new(&annotated, rect, &style, Color::WHITE, 18.0, 1.0),
             &font_set,
             &mut cache,
-            &mut placements,
+            &mut placements
         )
         .is_none(),
         "placement-only collection requires retained glyph masks"
@@ -226,12 +216,7 @@ fn cached_atlas_placements_reuse_existing_glyph_masks_without_payloads() {
 
     let mut glyphs = Vec::new();
     collect_solid_text_atlas_glyphs(
-        &annotated,
-        rect,
-        &style,
-        Color::WHITE,
-        18.0,
-        1.0,
+        TextRasterRequest::new(&annotated, rect, &style, Color::WHITE, 18.0, 1.0),
         &font_set,
         &mut cache,
         &mut glyphs,
@@ -239,12 +224,7 @@ fn cached_atlas_placements_reuse_existing_glyph_masks_without_payloads() {
     .expect("solid styled text is atlas-eligible");
 
     collect_cached_solid_text_atlas_placements(
-        &annotated,
-        rect,
-        &style,
-        Color::WHITE,
-        18.0,
-        1.0,
+        TextRasterRequest::new(&annotated, rect, &style, Color::WHITE, 18.0, 1.0),
         &font_set,
         &mut cache,
         &mut placements,
@@ -319,15 +299,17 @@ fn atlas_glyph_collection_rejects_shadow_and_gradient_without_partial_output() {
     });
     assert!(
         collect_solid_text_atlas_glyphs(
-            &AnnotatedString::new("shadow".to_string()),
-            rect,
-            &shadow_style,
-            Color::WHITE,
-            18.0,
-            1.0,
+            TextRasterRequest::new(
+                &AnnotatedString::new("shadow".to_string()),
+                rect,
+                &shadow_style,
+                Color::WHITE,
+                18.0,
+                1.0
+            ),
             &font_set,
             &mut cache,
-            &mut glyphs,
+            &mut glyphs
         )
         .is_none()
     );
@@ -339,15 +321,17 @@ fn atlas_glyph_collection_rejects_shadow_and_gradient_without_partial_output() {
     });
     assert!(
         collect_solid_text_atlas_glyphs(
-            &AnnotatedString::new("gradient".to_string()),
-            rect,
-            &gradient_style,
-            Color::WHITE,
-            18.0,
-            1.0,
+            TextRasterRequest::new(
+                &AnnotatedString::new("gradient".to_string()),
+                rect,
+                &gradient_style,
+                Color::WHITE,
+                18.0,
+                1.0
+            ),
             &font_set,
             &mut cache,
-            &mut glyphs,
+            &mut glyphs
         )
         .is_none()
     );
@@ -1273,12 +1257,14 @@ fn solid_text_atlas_line_advance_matches_measured_line_height() {
     let mut run = Vec::new();
 
     collect_solid_text_atlas_run(
-        &text,
-        rect,
-        &style,
-        Color(1.0, 1.0, 1.0, 1.0),
-        font_size,
-        1.0,
+        TextRasterRequest::new(
+            &text,
+            rect,
+            &style,
+            Color(1.0, 1.0, 1.0, 1.0),
+            font_size,
+            1.0,
+        ),
         &fonts,
         &mut glyph_cache,
         &mut run,
@@ -1952,12 +1938,7 @@ fn collected_run(text: &AnnotatedString, color: Color) -> Vec<SoftwareGlyphAtlas
     let mut glyph_cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(64);
     let mut run = Vec::new();
     collect_solid_text_atlas_run(
-        text,
-        rect,
-        &TextStyle::default(),
-        color,
-        14.0,
-        1.0,
+        TextRasterRequest::new(text, rect, &TextStyle::default(), color, 14.0, 1.0),
         &fonts,
         &mut glyph_cache,
         &mut run,

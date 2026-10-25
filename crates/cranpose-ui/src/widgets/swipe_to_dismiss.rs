@@ -472,7 +472,7 @@ impl SwipeDismissState {
 /// Inside a keyed lazy list the state is keyed by the item, so a row removed
 /// from the middle does not leave its displacement on the row that moves up
 /// into its slot.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberSwipeDismissState() -> SwipeDismissState {
     let caller = cranpose_core::caller_location_key();

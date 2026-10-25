@@ -211,7 +211,7 @@ pub(crate) fn in_shared_transition() -> bool {
 
 /// Composes `content` as one content of an `AnimatedContent`, for the
 /// shared elements in it.
-#[allow(non_snake_case)]
+#[allow(non_snake_case, reason = "names follow Compose's casing")]
 pub(crate) fn ProvideSharedEntry(entry: SharedEntry, content: impl FnOnce()) {
     let local = local_entry();
     CompositionLocalProvider(vec![local.provides(Some(entry))], content);

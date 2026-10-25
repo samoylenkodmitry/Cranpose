@@ -314,12 +314,14 @@ fn render(
     .expect("the styled text renders to a bitmap");
     let mut glyphs = Vec::new();
     collect_solid_text_atlas_glyphs(
-        text,
-        rect,
-        style,
-        Color::WHITE,
-        style.resolve_font_size(10.0),
-        1.0,
+        TextRasterRequest::new(
+            text,
+            rect,
+            style,
+            Color::WHITE,
+            style.resolve_font_size(10.0),
+            1.0,
+        ),
         &fonts,
         &mut cache,
         &mut glyphs,

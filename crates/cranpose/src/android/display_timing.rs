@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "JNI and NDK calls into the Android system")]
 
 //! When each frame reached the screen, from the swapchain's
 //! `VK_GOOGLE_display_timing` records.

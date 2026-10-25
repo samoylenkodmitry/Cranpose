@@ -8,7 +8,7 @@
 //! Note: This module uses camelCase for function names to maintain 1:1 API
 //! parity with Jetpack Compose.
 
-#![expect(non_snake_case)]
+#![expect(non_snake_case, reason = "names follow Compose's casing")]
 
 use cranpose_core::State;
 use cranpose_ui_graphics::{Dp, Sp};

@@ -21,7 +21,7 @@
 )]
 
 #[path = "../robot-runners/robot_shot.rs"]
-#[expect(dead_code)]
+#[expect(dead_code, reason = "this example uses a part of the module")]
 mod robot_shot;
 
 use std::path::PathBuf;

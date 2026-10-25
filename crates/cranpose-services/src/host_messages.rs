@@ -176,7 +176,7 @@ pub fn send_to_host(channel: &str, payload: &str) -> bool {
 ///     log::info!("the host shows {}", file.get());
 /// }
 /// ```
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberHostMessages(channel: &str) -> EventStream<String> {
     let channel = channel.to_owned();

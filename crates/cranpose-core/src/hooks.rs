@@ -25,7 +25,7 @@ pub fn remember<T: 'static>(init: impl FnOnce() -> T) -> Owned<T> {
 /// whose path prop changes), the stale value survives. `rememberKeyed`
 /// stores the key beside the value and re-runs `init` on mismatch — the JC
 /// `remember(key1) { ... }` contract.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberKeyed<K, T>(key: K, init: impl FnOnce(&K) -> T) -> T
 where
@@ -73,7 +73,7 @@ where
 /// fun <T> rememberUpdatedState(newValue: T): State<T> =
 ///     remember { mutableStateOf(newValue) }.apply { value = newValue }
 /// ```
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberUpdatedState<T: Clone + 'static>(value: T) -> MutableState<T> {
     let source = crate::caller_location_key();
@@ -92,7 +92,7 @@ pub fn rememberUpdatedState<T: Clone + 'static>(value: T) -> MutableState<T> {
 /// Runs `callback` once on the next frame with the frame time in nanoseconds. Dropping the returned
 /// registration before the frame cancels the callback. Must be called during composition.
 #[cfg(feature = "internal")]
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn withFrameNanos(
     callback: impl FnOnce(u64) + 'static,
 ) -> crate::internal::FrameCallbackRegistration {
@@ -107,7 +107,7 @@ pub fn withFrameNanos(
 /// Runs `callback` once on the next frame with the frame time in milliseconds. Dropping the
 /// returned registration before the frame cancels the callback. Must be called during composition.
 #[cfg(feature = "internal")]
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn withFrameMillis(
     callback: impl FnOnce(u64) + 'static,
 ) -> crate::internal::FrameCallbackRegistration {
@@ -166,7 +166,7 @@ pub fn withFrameMillis(
 /// remembered whole. Made anywhere else it is owned by the runtime and lives
 /// as long as the runtime does; to tie that to a Rust owner instead, store an
 /// [`OwnedMutableState`] or call [`MutableState::retain`] on the handle.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn mutableStateOf<T: Clone + PartialEq + 'static>(initial: T) -> MutableState<T> {
     current_runtime("mutableStateOf")
         .alloc_persistent_state_with_policy(initial, Rc::new(StructuralEqual))
@@ -177,20 +177,20 @@ pub fn mutableStateOf<T: Clone + PartialEq + 'static>(initial: T) -> MutableStat
 ///
 /// This is Jetpack Compose's `neverEqualPolicy()`, and the non-remembered form
 /// of [`rememberMutableStateOfNeverEqual`].
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn mutableStateOfNeverEqual<T: Clone + 'static>(initial: T) -> MutableState<T> {
     current_runtime("mutableStateOfNeverEqual").alloc_persistent_state(initial)
 }
 
 /// Creates an [`OwnedMutableState`] holding `initial`, which is released when its owner is dropped.
 /// Writing an equal value is not a change. Panics without an active runtime.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn ownedMutableStateOf<T: Clone + PartialEq + 'static>(initial: T) -> OwnedMutableState<T> {
     OwnedMutableState::with_runtime_structural_eq(initial, current_runtime("ownedMutableStateOf"))
 }
 
 /// Like [`ownedMutableStateOf`], for a value that cannot be compared.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn ownedMutableStateOfNeverEqual<T: Clone + 'static>(initial: T) -> OwnedMutableState<T> {
     OwnedMutableState::with_runtime(initial, current_runtime("ownedMutableStateOfNeverEqual"))
 }
@@ -209,7 +209,7 @@ pub(crate) fn current_runtime(what: &str) -> runtime::RuntimeHandle {
 ///
 /// Use this when you want to lazily initialize reactive state and gracefully
 /// handle the case where the runtime isn't yet available.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn try_mutableStateOf<T: Clone + PartialEq + 'static>(initial: T) -> Option<MutableState<T>> {
     let runtime = composer_context::try_with_composer(super::composer::Composer::runtime_handle)
         .or_else(runtime::current_runtime_handle)?;
@@ -218,7 +218,7 @@ pub fn try_mutableStateOf<T: Clone + PartialEq + 'static>(initial: T) -> Option<
 
 /// Creates a snapshot-aware list holding `values`. Must be called during composition. Compose's
 /// `mutableStateListOf`.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn mutableStateListOf<T, I>(values: I) -> SnapshotStateList<T>
 where
     T: Clone + 'static,
@@ -228,14 +228,14 @@ where
 }
 
 /// Creates an empty snapshot-aware list. Must be called during composition.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn mutableStateList<T: Clone + 'static>() -> SnapshotStateList<T> {
     mutableStateListOf(std::iter::empty::<T>())
 }
 
 /// Creates a snapshot-aware map holding `pairs`. Must be called during composition. Compose's
 /// `mutableStateMapOf`.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn mutableStateMapOf<K, V, I>(pairs: I) -> SnapshotStateMap<K, V>
 where
     K: Clone + Eq + Hash + 'static,
@@ -246,7 +246,7 @@ where
 }
 
 /// Creates an empty snapshot-aware map. Must be called during composition.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn mutableStateMap<K, V>() -> SnapshotStateMap<K, V>
 where
     K: Clone + Eq + Hash + 'static,
@@ -282,7 +282,7 @@ where
 ///     );
 /// }
 /// ```
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberMutableStateOf<T: Clone + PartialEq + 'static>(
     init: impl FnOnce() -> T,
@@ -300,7 +300,7 @@ pub fn rememberMutableStateOf<T: Clone + PartialEq + 'static>(
 
 /// Like [`rememberMutableStateOf`], for a value that cannot be compared or whose every write must
 /// count as a change.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberMutableStateOfNeverEqual<T: Clone + 'static>(
     init: impl FnOnce() -> T,
@@ -326,7 +326,7 @@ pub fn rememberMutableStateOfNeverEqual<T: Clone + 'static>(
 /// A read between a write to a state `compute` read and the next
 /// recomposition, as in an event handler or an effect, runs `compute` first
 /// and sees the new result.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn derivedStateOf<T: 'static + Clone + PartialEq>(
     compute: impl Fn() -> T + 'static,

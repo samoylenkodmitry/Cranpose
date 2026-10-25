@@ -6,7 +6,8 @@ use cranpose_render_common::{
     font_source::SoftwareTextFontRegistry,
     software_text_raster::{
         SoftwareGlyphAtlasRunGlyph, SoftwareGlyphRasterCache, SoftwareTextFontSet,
-        SoftwareTextMeasurer, collect_solid_text_atlas_run, default_software_text_font,
+        SoftwareTextMeasurer, TextRasterRequest, collect_solid_text_atlas_run,
+        default_software_text_font,
     },
 };
 use cranpose_ui::text::{
@@ -85,12 +86,14 @@ fn collect(
 ) -> Vec<SoftwareGlyphAtlasRunGlyph> {
     let mut run = Vec::new();
     collect_solid_text_atlas_run(
-        &AnnotatedString::from(text),
-        rect,
-        style,
-        Color::WHITE,
-        FONT_SIZE,
-        1.0,
+        TextRasterRequest::new(
+            &AnnotatedString::from(text),
+            rect,
+            style,
+            Color::WHITE,
+            FONT_SIZE,
+            1.0,
+        ),
         fonts,
         cache,
         &mut run,

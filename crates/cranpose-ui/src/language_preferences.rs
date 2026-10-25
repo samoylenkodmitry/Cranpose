@@ -116,7 +116,7 @@ pub fn local_localization() -> CompositionLocal<Option<LocalizationController>> 
 /// Provides automatic language selection and stored overrides to a UI subtree.
 /// Native applications normally use `cranpose::ProvideApplicationLocalization`,
 /// which supplies and refreshes the host language list automatically.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn ProvideLanguagePreferences(
     application: Localization,

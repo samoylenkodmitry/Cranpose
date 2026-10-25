@@ -35,7 +35,7 @@ impl<T: Clone + PartialEq + 'static> Clone for ComputedState<T> {
 /// read changed and the calculation then gives a value other than the one
 /// read last. The calculation may run more often than the value is read,
 /// once per frame after such a change. It must not write any state.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn computedStateOf<T: Clone + PartialEq + 'static>(
     calculation: impl Fn() -> T + 'static,
 ) -> ComputedState<T> {

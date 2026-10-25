@@ -1387,7 +1387,7 @@ pub fn open_media_source(uri: &str) -> std::io::Result<MediaSourceHandle> {
 
 /// What the player is doing, observed for as long as this call stays in the
 /// composition.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberPlaybackState() -> State<PlaybackState> {
     let updates = rememberEventStream((), |sender| {
@@ -1402,7 +1402,7 @@ pub fn rememberPlaybackState() -> State<PlaybackState> {
 /// This recomposes as the position moves, which is what a seek bar and a time
 /// label want. A visualiser or a waveform that redraws every frame anyway reads
 /// [`playback_progress`] during draw instead.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberPlaybackProgress() -> State<PlaybackProgress> {
     let updates = rememberEventStream((), |sender| {
@@ -1413,7 +1413,7 @@ pub fn rememberPlaybackProgress() -> State<PlaybackProgress> {
 
 /// What the rest of the device is doing with the output, observed for as long
 /// as this call stays in the composition.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberAudioFocus() -> State<AudioFocus> {
     let updates = rememberEventStream((), |sender| {
@@ -1428,7 +1428,7 @@ pub fn rememberAudioFocus() -> State<AudioFocus> {
 /// The transport commands have already been carried out by the time they arrive
 /// here; what an application acts on is [`MediaCommand::Next`] and
 /// [`MediaCommand::Previous`], which need the playlist it owns.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberMediaCommands() -> EventStream<MediaCommand> {
     rememberEventStream((), |sender| {
@@ -1440,7 +1440,7 @@ pub fn rememberMediaCommands() -> EventStream<MediaCommand> {
 ///
 /// Enable them with [`set_media_analysis_enabled`] first; a backend that cannot
 /// produce them says so through [`MediaCapabilities::analysis`].
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberMediaSamples() -> EventStream<MediaSamples> {
     rememberEventStream((), |sender| {

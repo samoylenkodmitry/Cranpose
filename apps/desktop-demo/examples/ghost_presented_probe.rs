@@ -5,7 +5,7 @@
 )]
 
 #[path = "../robot-runners/robot_launch.rs"]
-#[expect(dead_code)]
+#[expect(dead_code, reason = "this example uses a part of the module")]
 mod robot_launch;
 
 use std::time::Duration;

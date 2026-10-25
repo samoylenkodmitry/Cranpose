@@ -538,7 +538,6 @@ impl App {
             closed_native_windows: HashSet::new(),
             next_native_window_position_poll_at: Instant::now()
                 + NATIVE_WINDOW_POSITION_POLL_INTERVAL,
-            #[allow(clippy::default_constructed_unit_structs)]
             native_window_platform_probe: NativeWindowPlatformProbe::default(),
             native_global_primary_down: false,
             primary_held_press: None,
@@ -4122,21 +4121,9 @@ enum X11WindowClientState {
     not(target_arch = "wasm32"),
     feature = "desktop-x11"
 ))]
+#[derive(Default)]
 struct NativeWindowPlatformProbe {
     x11_window_client: RefCell<Option<X11WindowClientState>>,
-}
-
-#[cfg(all(
-    target_os = "linux",
-    not(target_arch = "wasm32"),
-    feature = "desktop-x11"
-))]
-impl Default for NativeWindowPlatformProbe {
-    fn default() -> Self {
-        Self {
-            x11_window_client: RefCell::new(None),
-        }
-    }
 }
 
 #[cfg(not(all(
@@ -4145,7 +4132,7 @@ impl Default for NativeWindowPlatformProbe {
     feature = "desktop-x11"
 )))]
 #[derive(Default)]
-struct NativeWindowPlatformProbe;
+struct NativeWindowPlatformProbe {}
 
 #[cfg(all(
     target_os = "linux",
@@ -6245,7 +6232,7 @@ fn build_event_loop() -> Result<EventLoop, winit::error::EventLoopError> {
 /// With no reachable X display the application runs on Wayland.
 ///
 /// **Note:** Applications should use `AppLauncher` instead of calling this directly.
-#[allow(unused_mut)]
+#[allow(unused_mut, reason = "only some platforms change the settings")]
 pub fn try_run(
     mut settings: AppSettings,
     content: impl FnMut() + 'static,

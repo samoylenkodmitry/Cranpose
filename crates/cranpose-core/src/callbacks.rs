@@ -266,7 +266,7 @@ impl Default for CallbackHolder {
 /// It mirrors [`CallbackHolder`] but supports callbacks that receive one argument.
 #[derive(Clone)]
 pub struct CallbackHolder1<A: 'static> {
-    #[expect(clippy::type_complexity)]
+    #[expect(clippy::type_complexity, reason = "a shared, replaceable callback")]
     rc: Rc<RefCell<Option<Box<dyn FnMut(A)>>>>,
     creator_scope: CallbackScopeCell,
 }

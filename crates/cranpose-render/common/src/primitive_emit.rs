@@ -251,215 +251,136 @@ pub fn resolve_primitive_clip(
     resolve_clip(parent_clip, Some(requested_clip))
 }
 
-/// The [`DrawPrimitive::Rect`] arm of [`emit_draw_primitive`] as a pure
-/// builder over borrowed fields. The parallel shape-run collect calls these
-/// directly from worker threads — a `&DrawPrimitive` cannot cross (the text
-/// variant carries `Rc`), but the shape variants' fields can.
-#[expect(clippy::too_many_arguments)]
-pub fn rect_shape_params(
-    local_rect: Rect,
-    brush: &Brush,
-    stroke: Option<Stroke>,
+// Where a shape lands: the layer that places it, the clip that cuts it and
+// the blend it draws with.
+struct ShapePlacement<'a> {
     layer_bounds: Rect,
-    layer: &GraphicsLayer,
+    layer: &'a GraphicsLayer,
     clip: Option<Rect>,
     blend_mode: BlendMode,
     motion_context_animated: bool,
+}
+
+impl ShapePlacement<'_> {
+    // A shape over `draw_rect` with no geometry of its own; each builder sets its geometry.
+    fn fill(&self, draw_rect: Rect, brush: &Brush) -> ShapeDrawParams {
+        let quad = apply_layer_to_quad(draw_rect, self.layer_bounds, self.layer);
+        ShapeDrawParams {
+            rect: quad_bounds(quad),
+            local_rect: apply_layer_affine_to_rect(draw_rect, self.layer_bounds, self.layer),
+            quad,
+            brush: resolve_layer_brush(brush, self.layer),
+            shape: None,
+            stroke: None,
+            arc: None,
+            line: None,
+            trapezoid: None,
+            clip: self.clip,
+            blend_mode: self.blend_mode,
+            motion_context_animated: self.motion_context_animated,
+        }
+    }
+
+    fn translate(&self, rect: Rect) -> Rect {
+        rect.translate(self.layer_bounds.x, self.layer_bounds.y)
+    }
+
+    fn place(&self, point: Point) -> Point {
+        apply_layer_affine_to_point(
+            Point::new(point.x + self.layer_bounds.x, point.y + self.layer_bounds.y),
+            self.layer_bounds,
+            self.layer,
+        )
+    }
+}
+
+fn rect_shape_params(
+    local_rect: Rect,
+    brush: &Brush,
+    stroke: Option<Stroke>,
+    placement: &ShapePlacement,
 ) -> Option<ShapeDrawParams> {
-    let (draw_rect, stroke) = stroked_draw_rect(local_rect, stroke, layer_bounds, layer)?;
-    let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
-    let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
+    let (draw_rect, stroke) =
+        stroked_draw_rect(local_rect, stroke, placement.layer_bounds, placement.layer)?;
     Some(ShapeDrawParams {
-        rect: quad_bounds(quad),
-        local_rect,
-        quad,
-        brush: resolve_layer_brush(brush, layer),
-        shape: None,
         stroke,
-        arc: None,
-        line: None,
-        trapezoid: None,
-        clip,
-        blend_mode,
-        motion_context_animated,
+        ..placement.fill(draw_rect, brush)
     })
 }
 
-/// The [`DrawPrimitive::RoundRect`] arm of [`emit_draw_primitive`]; see
-/// [`rect_shape_params`].
-#[expect(clippy::too_many_arguments)]
-pub fn round_rect_shape_params(
+fn round_rect_shape_params(
     local_rect: Rect,
     brush: &Brush,
     radii: CornerRadii,
     stroke: Option<Stroke>,
-    layer_bounds: Rect,
-    layer: &GraphicsLayer,
-    clip: Option<Rect>,
-    blend_mode: BlendMode,
-    motion_context_animated: bool,
+    placement: &ShapePlacement,
 ) -> Option<ShapeDrawParams> {
-    let (draw_rect, stroke) = stroked_draw_rect(local_rect, stroke, layer_bounds, layer)?;
-    let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
-    let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
-    let shape =
-        RoundedCornerShape::with_radii(scale_corner_radii(radii, layer_uniform_scale(layer)));
+    let (draw_rect, stroke) =
+        stroked_draw_rect(local_rect, stroke, placement.layer_bounds, placement.layer)?;
+    let radii = scale_corner_radii(radii, layer_uniform_scale(placement.layer));
     Some(ShapeDrawParams {
-        rect: quad_bounds(quad),
-        local_rect,
-        quad,
-        brush: resolve_layer_brush(brush, layer),
-        shape: Some(shape),
+        shape: Some(RoundedCornerShape::with_radii(radii)),
         stroke,
-        arc: None,
-        line: None,
-        trapezoid: None,
-        clip,
-        blend_mode,
-        motion_context_animated,
+        ..placement.fill(draw_rect, brush)
     })
 }
 
-/// The [`DrawPrimitive::Arc`] arm of [`emit_draw_primitive`]; see
-/// [`rect_shape_params`].
-#[expect(clippy::too_many_arguments)]
-pub fn arc_shape_params(
+// `arc` is in scope coordinates and `local_rect` is its tight bounds.
+fn arc_shape_params(
     local_rect: Rect,
     brush: &Brush,
-    center: Point,
-    radius: f32,
-    start_angle: f32,
-    sweep_angle: f32,
-    stroke: Option<Stroke>,
-    inner_radius: f32,
-    layer_bounds: Rect,
-    layer: &GraphicsLayer,
-    clip: Option<Rect>,
-    blend_mode: BlendMode,
-    motion_context_animated: bool,
+    arc: ArcGeometry,
+    placement: &ShapePlacement,
 ) -> Option<ShapeDrawParams> {
-    let (band_inner, band_outer, cap) = arc_band(radius, inner_radius, stroke);
-    let arc = ArcGeometry::new(
-        center,
-        band_inner,
-        band_outer,
-        start_angle,
-        sweep_angle,
-        cap,
-    );
     if arc.is_degenerate() {
         return None;
     }
-    let draw_rect = local_rect.translate(layer_bounds.x, layer_bounds.y);
-    let out_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
-    let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
-    let scale = layer_uniform_scale(layer);
-    let arc_center = apply_layer_affine_to_point(
-        Point::new(center.x + layer_bounds.x, center.y + layer_bounds.y),
-        layer_bounds,
-        layer,
-    );
+    let scale = layer_uniform_scale(placement.layer);
     Some(ShapeDrawParams {
-        rect: quad_bounds(quad),
-        local_rect: out_rect,
-        quad,
-        brush: resolve_layer_brush(brush, layer),
-        shape: None,
-        stroke: None,
-        arc: Some(arc.scaled_about(arc_center, scale)),
-        line: None,
-        trapezoid: None,
-        clip,
-        blend_mode,
-        motion_context_animated,
+        arc: Some(arc.scaled_about(placement.place(arc.center), scale)),
+        ..placement.fill(placement.translate(local_rect), brush)
     })
 }
 
-/// The [`DrawPrimitive::Line`] arm of [`emit_draw_primitive`]: the segment's
-/// ends placed by the layer's transform, its width scaled by the layer's
-/// uniform scale; see [`rect_shape_params`].
-#[expect(clippy::too_many_arguments)]
-pub fn line_shape_params(
+// The segment's ends are placed by the layer's transform and its width is
+// scaled by the layer's uniform scale.
+fn line_shape_params(
     brush: &Brush,
     start: Point,
     end: Point,
     stroke: Stroke,
-    layer_bounds: Rect,
-    layer: &GraphicsLayer,
-    clip: Option<Rect>,
-    blend_mode: BlendMode,
-    motion_context_animated: bool,
+    placement: &ShapePlacement,
 ) -> Option<ShapeDrawParams> {
     let line = LineGeometry::new(start, end, stroke);
     if line.is_degenerate() {
         return None;
     }
-    let place = |point: Point| {
-        apply_layer_affine_to_point(
-            Point::new(point.x + layer_bounds.x, point.y + layer_bounds.y),
-            layer_bounds,
-            layer,
-        )
-    };
-    let draw_rect = line.bounds().translate(layer_bounds.x, layer_bounds.y);
-    let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
+    let scale = layer_uniform_scale(placement.layer);
     Some(ShapeDrawParams {
-        rect: quad_bounds(quad),
-        local_rect: apply_layer_affine_to_rect(draw_rect, layer_bounds, layer),
-        quad,
-        brush: resolve_layer_brush(brush, layer),
-        shape: None,
-        stroke: None,
-        arc: None,
-        line: Some(line.placed(place(start), place(end), layer_uniform_scale(layer))),
-        trapezoid: None,
-        clip,
-        blend_mode,
-        motion_context_animated,
+        line: Some(line.placed(placement.place(start), placement.place(end), scale)),
+        ..placement.fill(placement.translate(line.bounds()), brush)
     })
 }
 
-/// The [`DrawPrimitive::Trapezoid`] arm of [`emit_draw_primitive`]: the
-/// brush rect placed by the layer's transform as a rect is, and the slice's
-/// corners placed by it as points; see [`rect_shape_params`].
-#[expect(clippy::too_many_arguments)]
-pub fn trapezoid_shape_params(
+// The brush rect is placed by the layer's transform as a rect is, and the
+// slice's corners are placed by it as points.
+fn trapezoid_shape_params(
     brush_rect: Rect,
     brush: &Brush,
     trapezoid: Trapezoid,
-    layer_bounds: Rect,
-    layer: &GraphicsLayer,
-    clip: Option<Rect>,
-    blend_mode: BlendMode,
-    motion_context_animated: bool,
+    placement: &ShapePlacement,
 ) -> Option<ShapeDrawParams> {
     if trapezoid.right <= trapezoid.left {
         return None;
     }
-    let place = |x: f32, y: f32| {
-        apply_layer_affine_to_point(
-            Point::new(x + layer_bounds.x, y + layer_bounds.y),
-            layer_bounds,
-            layer,
-        )
-    };
+    let place = |x: f32, y: f32| placement.place(Point::new(x, y));
     let [top_left, top_right, bottom_left, bottom_right] = [
         place(trapezoid.left, trapezoid.top[0]),
         place(trapezoid.right, trapezoid.top[1]),
         place(trapezoid.left, trapezoid.bottom[0]),
         place(trapezoid.right, trapezoid.bottom[1]),
     ];
-    let draw_rect = brush_rect.translate(layer_bounds.x, layer_bounds.y);
-    let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
     Some(ShapeDrawParams {
-        rect: quad_bounds(quad),
-        local_rect: apply_layer_affine_to_rect(draw_rect, layer_bounds, layer),
-        quad,
-        brush: resolve_layer_brush(brush, layer),
-        shape: None,
-        stroke: None,
-        arc: None,
-        line: None,
         trapezoid: Some(Trapezoid {
             left: top_left.x,
             right: top_right.x,
@@ -467,9 +388,7 @@ pub fn trapezoid_shape_params(
             bottom: [bottom_left.y, bottom_right.y],
             ..trapezoid
         }),
-        clip,
-        blend_mode,
-        motion_context_animated,
+        ..placement.fill(placement.translate(brush_rect), brush)
     })
 }
 
@@ -486,6 +405,13 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
     blend_mode: Option<BlendMode>,
     motion_context_animated: bool,
 ) {
+    let placement = ShapePlacement {
+        layer_bounds,
+        layer,
+        clip,
+        blend_mode: blend_mode.unwrap_or(BlendMode::SrcOver),
+        motion_context_animated,
+    };
     match primitive {
         DrawPrimitive::Content | DrawPrimitive::Group(_) => {}
         DrawPrimitive::Blend {
@@ -501,45 +427,27 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
             motion_context_animated,
         ),
         DrawPrimitive::Rect {
-            rect: local_rect,
+            rect,
             brush,
             stroke,
         } => {
-            if let Some(params) = rect_shape_params(
-                *local_rect,
-                brush,
-                *stroke,
-                layer_bounds,
-                layer,
-                clip,
-                blend_mode.unwrap_or(BlendMode::SrcOver),
-                motion_context_animated,
-            ) {
+            if let Some(params) = rect_shape_params(*rect, brush, *stroke, &placement) {
                 sink.push_shape(params);
             }
         }
         DrawPrimitive::RoundRect {
-            rect: local_rect,
+            rect,
             brush,
             radii,
             stroke,
         } => {
-            if let Some(params) = round_rect_shape_params(
-                *local_rect,
-                brush,
-                *radii,
-                *stroke,
-                layer_bounds,
-                layer,
-                clip,
-                blend_mode.unwrap_or(BlendMode::SrcOver),
-                motion_context_animated,
-            ) {
+            if let Some(params) = round_rect_shape_params(*rect, brush, *radii, *stroke, &placement)
+            {
                 sink.push_shape(params);
             }
         }
         DrawPrimitive::Arc {
-            rect: local_rect,
+            rect,
             brush,
             center,
             radius,
@@ -548,21 +456,16 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
             stroke,
             inner_radius,
         } => {
-            if let Some(params) = arc_shape_params(
-                *local_rect,
-                brush,
+            let (band_inner, band_outer, cap) = arc_band(*radius, *inner_radius, *stroke);
+            let arc = ArcGeometry::new(
                 *center,
-                *radius,
+                band_inner,
+                band_outer,
                 *start_angle,
                 *sweep_angle,
-                *stroke,
-                *inner_radius,
-                layer_bounds,
-                layer,
-                clip,
-                blend_mode.unwrap_or(BlendMode::SrcOver),
-                motion_context_animated,
-            ) {
+                cap,
+            );
+            if let Some(params) = arc_shape_params(*rect, brush, arc, &placement) {
                 sink.push_shape(params);
             }
         }
@@ -573,17 +476,7 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
             stroke,
             ..
         } => {
-            if let Some(params) = line_shape_params(
-                brush,
-                *start,
-                *end,
-                *stroke,
-                layer_bounds,
-                layer,
-                clip,
-                blend_mode.unwrap_or(BlendMode::SrcOver),
-                motion_context_animated,
-            ) {
+            if let Some(params) = line_shape_params(brush, *start, *end, *stroke, &placement) {
                 sink.push_shape(params);
             }
         }
@@ -592,16 +485,7 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
             brush,
             trapezoid,
         } => {
-            if let Some(params) = trapezoid_shape_params(
-                *rect,
-                brush,
-                *trapezoid,
-                layer_bounds,
-                layer,
-                clip,
-                blend_mode.unwrap_or(BlendMode::SrcOver),
-                motion_context_animated,
-            ) {
+            if let Some(params) = trapezoid_shape_params(*rect, brush, *trapezoid, &placement) {
                 sink.push_shape(params);
             }
         }

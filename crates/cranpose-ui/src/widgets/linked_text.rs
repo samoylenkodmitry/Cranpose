@@ -3,7 +3,7 @@
 //! Mirrors the behaviour of Jetpack Compose `BasicText` / `Text` when the
 //! annotated string contains `LinkAnnotation.Url` or `LinkAnnotation.Clickable`.
 
-#![expect(non_snake_case)]
+#![expect(non_snake_case, reason = "names follow Compose's casing")]
 
 use std::rc::Rc;
 

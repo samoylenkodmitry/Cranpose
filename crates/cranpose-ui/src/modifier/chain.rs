@@ -5,7 +5,7 @@ use std::{
 };
 
 use cranpose_core::NodeId;
-#[expect(unused_imports)]
+#[expect(unused_imports, reason = "only some cfgs read it")]
 use cranpose_foundation::InvalidationKind;
 use cranpose_foundation::{
     BasicModifierNodeContext, ModifierInvalidations, ModifierNodeChain, ModifierNodeContext,

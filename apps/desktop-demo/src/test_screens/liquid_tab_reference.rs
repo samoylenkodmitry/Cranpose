@@ -44,7 +44,7 @@ struct ReferenceContent {
 
 static CONTENT: std::sync::OnceLock<ReferenceContent> = std::sync::OnceLock::new();
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "only the reference test binary calls it")]
 pub(crate) fn configure_reference_content(json: &str) -> anyhow::Result<()> {
     let content: ReferenceContent = serde_json::from_str(json)?;
     content.validate()?;

@@ -425,7 +425,7 @@ where
 /// navigation entry's state stays apart from another's. When the composable
 /// leaves the composition its last value is kept and saved at the next
 /// boundary, and a composable that comes back restores it.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberSaveable<T>(
     key: &'static str,
@@ -561,7 +561,7 @@ impl SaveableScope {
 }
 
 /// Gives the [`rememberSaveable`] calls in `content` the saveable `scope`.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn ProvideSaveableScope(scope: SaveableScope, content: impl FnOnce()) {
     cranpose_core::CompositionLocalProvider([local_saveable_scope().provides(scope)], content);

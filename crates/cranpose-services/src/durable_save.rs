@@ -116,7 +116,7 @@ pub fn register_preference_save(
 }
 
 /// Registers fallible durable work for this composition's lifetime.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn DurableSaveEffect<K: PartialEq + 'static>(
     keys: K,

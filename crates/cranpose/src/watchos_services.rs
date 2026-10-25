@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "Objective-C messages to watchOS frameworks")]
 
 //! The platform services of the watchOS host: the application's folders,
 //! taps, the microphone, with the `heart-rate` feature the wearer's pulse,

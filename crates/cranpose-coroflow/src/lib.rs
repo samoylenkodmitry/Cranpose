@@ -1,6 +1,6 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
-#![expect(non_snake_case)]
+#![expect(non_snake_case, reason = "names follow Compose's casing")]
 
 mod dispatcher;
 mod hooks;

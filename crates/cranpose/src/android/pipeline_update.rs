@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "JNI and NDK calls into the Android system")]
 //! Android tells an updated app so (`MY_PACKAGE_REPLACED`), and its
 //! receiver, `CranposePipelines`, runs here: the pipelines the app's last
 //! launches drew are built for this build in the background, so its first

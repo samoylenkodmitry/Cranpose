@@ -50,7 +50,7 @@ fn screen() -> Screen {
     }
 }
 
-#[allow(non_snake_case)]
+#[allow(non_snake_case, reason = "names follow Compose's casing")]
 fn Control(requester: &FocusRequester) {
     Box(
         Modifier::empty()

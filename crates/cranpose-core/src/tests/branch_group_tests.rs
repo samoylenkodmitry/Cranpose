@@ -691,7 +691,7 @@ fn a_user_binding_named_like_the_guard_is_not_shadowed() {
     assert_composition_valid(&composition);
 }
 
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 fn PlainCamelHelper(value: i32) -> i32 {
     value
 }

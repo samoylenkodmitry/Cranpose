@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "Objective-C messages to UIKit")]
 
 use cranpose_services::{BackEdge, BackEvent, BackGesture, push_back_gesture, push_back_request};
 use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained, sel};

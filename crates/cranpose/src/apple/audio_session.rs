@@ -1,4 +1,4 @@
-#![expect(unsafe_code)]
+#![expect(unsafe_code, reason = "Objective-C messages to Apple frameworks")]
 
 //! The one audio session of an Apple app, which media playback and recording
 //! share. It is active while either uses it, and released with a notice to

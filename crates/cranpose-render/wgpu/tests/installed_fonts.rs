@@ -7,12 +7,16 @@
 )]
 
 #[path = "../src/record_columns.rs"]
-#[allow(dead_code)]
+#[allow(dead_code, reason = "this binary reads a part of the module")]
 mod record_columns;
 #[path = "../src/test_support.rs"]
-#[allow(dead_code)]
+#[allow(dead_code, reason = "this binary reads a part of the module")]
 mod shared_test_support;
-#[allow(dead_code, unused_imports)]
+#[allow(
+    dead_code,
+    unused_imports,
+    reason = "this binary reads a part of the module"
+)]
 mod support;
 
 use std::path::Path;

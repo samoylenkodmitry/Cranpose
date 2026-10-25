@@ -182,7 +182,7 @@ fn shared_executor() -> &'static BlockingExecutor {
 /// closures cannot be interrupted. Bound concurrent callers to bound the memory
 /// retained by their suspended futures.
 /// On Web this returns `Unsupported` without running the closure.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub async fn withBlocking<T, F>(work: F) -> Result<T, BlockingError>
 where
     T: Send + 'static,
@@ -200,7 +200,7 @@ where
 /// method, or dropping the runtime, cancels waiting work and the callback.
 /// For screen ownership, prefer `rememberCoroutineScope().launch` with
 /// `withBlocking`. Without a live runtime this returns `NoRuntime`.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 pub fn launchBlocking<T>(
     work: impl FnOnce() -> T + Send + 'static,
     on_ui: impl FnOnce(Result<T, BlockingError>) + 'static,

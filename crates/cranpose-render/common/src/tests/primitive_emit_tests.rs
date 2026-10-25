@@ -674,18 +674,21 @@ fn a_line_lands_at_its_layer_placed_ends_with_its_width_scaled() {
         cap: StrokeCap::Round,
         join: StrokeJoin::Miter,
     };
-    let params = line_shape_params(
-        &Brush::solid(Color::WHITE),
-        Point::new(5.0, 10.0),
-        Point::new(25.0, 10.0),
+    let line = DrawPrimitive::Line {
+        rect: Rect {
+            x: 5.0,
+            y: 10.0,
+            width: 20.0,
+            height: 0.0,
+        },
+        brush: Brush::solid(Color::WHITE),
+        start: Point::new(5.0, 10.0),
+        end: Point::new(25.0, 10.0),
         stroke,
-        layer_bounds(),
-        &layer,
-        None,
-        BlendMode::SrcOver,
-        false,
-    )
-    .expect("a visible line");
+    };
+    let params =
+        draw_shape_params_for_primitive(&line, layer_bounds(), &layer, None, BlendMode::SrcOver)
+            .expect("a visible line");
     let line = params.line.expect("the line's geometry");
     let expected_start =
         apply_layer_affine_to_point(Point::new(15.0, 30.0), layer_bounds(), &layer);
@@ -708,17 +711,25 @@ fn a_line_lands_at_its_layer_placed_ends_with_its_width_scaled() {
 #[test]
 fn a_line_that_covers_nothing_emits_no_shape() {
     let point = Point::new(5.0, 5.0);
+    let line = DrawPrimitive::Line {
+        rect: Rect {
+            x: point.x,
+            y: point.y,
+            width: 0.0,
+            height: 0.0,
+        },
+        brush: Brush::solid(Color::WHITE),
+        start: point,
+        end: point,
+        stroke: Stroke::new(4.0),
+    };
     assert!(
-        line_shape_params(
-            &Brush::solid(Color::WHITE),
-            point,
-            point,
-            Stroke::new(4.0),
+        draw_shape_params_for_primitive(
+            &line,
             layer_bounds(),
             &GraphicsLayer::default(),
             None,
             BlendMode::SrcOver,
-            false,
         )
         .is_none()
     );

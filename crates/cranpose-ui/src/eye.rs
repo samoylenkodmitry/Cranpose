@@ -101,7 +101,7 @@ impl PartialEq for Eye {
 }
 
 /// An [`Eye`] kept across recompositions, made at `pose` the first time.
-#[allow(non_snake_case)]
+#[allow(non_snake_case, reason = "names follow Compose's casing")]
 #[composable]
 pub fn rememberEye(pose: impl FnOnce() -> EyePose, radius: f32) -> Eye {
     remember(move || Eye::new(pose(), radius)).with(Clone::clone)

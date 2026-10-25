@@ -213,7 +213,7 @@ static ACTIVE_BACK_HANDLERS: AtomicUsize = AtomicUsize::new(0);
 /// Handles platform back requests on the UI thread while `enabled` is true.
 /// Nested handlers follow stack order: the innermost active handler receives
 /// the request and dropping it restores the handler beneath it.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn BackHandler(enabled: bool, on_back: impl FnMut() + 'static) {
     PredictiveBackHandler(enabled, |_| {}, on_back);
@@ -223,7 +223,7 @@ pub fn BackHandler(enabled: bool, on_back: impl FnMut() + 'static) {
 /// moves: Compose's `PredictiveBackHandler`. `on_gesture` receives each step;
 /// a gesture that goes back ends in `on_back`, one that does not ends in
 /// [`BackGesture::Cancelled`].
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn PredictiveBackHandler(
     enabled: bool,

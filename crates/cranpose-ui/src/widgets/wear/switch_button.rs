@@ -15,7 +15,7 @@
 //!   it overlaps the light track — but it still occludes the track, so it
 //!   cannot be optimised away.
 
-#![expect(non_snake_case)]
+#![expect(non_snake_case, reason = "names follow Compose's casing")]
 
 use cranpose_core::NodeId;
 use cranpose_foundation::SemanticsWidgetRole;

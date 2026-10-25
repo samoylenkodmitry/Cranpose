@@ -110,7 +110,7 @@ impl CoroutineScope {
 }
 
 /// Remembers a [`CoroutineScope`] bound to this position in the composition.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberCoroutineScope() -> CoroutineScope {
     remember(|| {
@@ -570,7 +570,7 @@ impl<T: 'static> Future for EventStreamNext<T> {
 ///
 /// `key` re-starts the collection when it changes, exactly like
 /// `LaunchedEffect`.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn CollectEvents<T, K>(stream: EventStream<T>, key: K, on_event: impl FnMut(T) + 'static)
 where
@@ -596,7 +596,7 @@ where
 ///
 /// The composition reads the latest value the stream produced, and recomposes
 /// when a new one arrives.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn collectAsState<T, K>(stream: EventStream<T>, key: K, initial: T) -> State<T>
 where
@@ -693,7 +693,7 @@ impl<T: Send + 'static> Drop for Bridge<T> {
 /// the service — when `key` changes or the composition leaves. This is the one
 /// place the framework bridges "a service publishes from another thread" to
 /// "a composition collects".
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn rememberEventStream<T, K, R, S>(key: K, subscribe: S) -> EventStream<T>
 where
@@ -730,7 +730,7 @@ where
 /// The Compose `produceState` contract: the producer receives a handle it uses
 /// to publish values, and is cancelled when the key changes or the composition
 /// leaves.
-#[expect(non_snake_case)]
+#[expect(non_snake_case, reason = "names follow Compose's casing")]
 #[track_caller]
 pub fn produceState<T, K, F>(initial: T, key: K, producer: F) -> State<T>
 where
