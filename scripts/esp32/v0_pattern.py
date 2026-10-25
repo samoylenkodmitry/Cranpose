@@ -111,8 +111,13 @@ class Parser:
             raise ValueError(f"bad path at {self.pos} in {self.text}")
 
     def impl_path(self):
+        # An impl's disambiguator numbers the impl blocks of its module, so
+        # an impl block added or merged above renumbers it; the pattern
+        # leaves it out, and an impl without one matches as well.
         if self.peek() == "s":
-            self.emit(self.take() + self.base62())
+            self.take()
+            self.base62()
+        self.emit("*")
         self.path()
 
     def generic_arg(self):
