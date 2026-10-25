@@ -649,16 +649,7 @@ fn draw_scene(renderer: &mut GpuRenderer, scene: &CompositorScene) -> (Vec<u8>, 
     renderer.run_store.begin_frame(false);
     renderer.text.glyph_run_arena.begin_frame();
     renderer.frame_stats.draw_calls.set(0);
-    let segments = [PassSegment {
-        scene,
-        ops: &scene.draw_ops,
-        composites: &[],
-        offset: [0.0, 0.0],
-        scissor: None,
-        first_run_window: None,
-        transform: SegmentTransform::IDENTITY,
-        scale: 1.0,
-    }];
+    let segments = [PassSegment::plain(scene, [0.0, 0.0], 1.0)];
     let (device, queue) = (Arc::clone(&renderer.device), Arc::clone(&renderer.queue));
     let mut graph = WgpuFrameGraph::new(None);
     graph.add_fallible_command_pass(None, &[], &[], |recorder| {

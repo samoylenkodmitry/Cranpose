@@ -36,7 +36,7 @@ use crate::{
         PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SegmentLayout,
         SourceContent, TrackedPass,
     },
-    effect_renderer::{CompositeSampleMode, EffectRenderer},
+    effect_renderer::{BlurDest, BlurSpec, CompositeSampleMode, EffectRenderer},
     fixed_pipeline::{FixedPipeline, FixedPipelineJob},
     frame::{
         ClearedImages, Damage, DeviceRect, FrameExecutor, FrameWindow, ImageContent, KeptWindow,
@@ -3736,16 +3736,7 @@ impl GpuRenderer {
             &shadow.texts,
             blur_reach(shadow.blur_radius, root_scale),
         );
-        let segment = PassSegment {
-            scene: &scene,
-            ops: &scene.draw_ops,
-            composites: &[],
-            offset,
-            scissor: None,
-            first_run_window: None,
-            transform: SegmentTransform::IDENTITY,
-            scale: root_scale,
-        };
+        let segment = PassSegment::plain(&scene, offset, root_scale);
         let drew = self.encode_pass(
             recorder,
             target,
@@ -3786,7 +3777,7 @@ impl GpuRenderer {
             } else {
                 None
             };
-            let blur_dest = match &blurred {
+            let (view, size) = match &blurred {
                 Some(blurred) => (&blurred.view, (scratch_width, scratch_height)),
                 None => (&result.view, (result_width, result_height)),
             };
@@ -3795,11 +3786,12 @@ impl GpuRenderer {
                 &device,
                 &source,
                 &scratch,
-                blur_dest,
-                pixel_radius,
-                pixel_radius,
-                TileMode::Decal,
-                None,
+                BlurDest {
+                    view,
+                    size,
+                    scissor: None,
+                },
+                BlurSpec::uniform(pixel_radius, TileMode::Decal),
             );
             recorder.record_passes(passes);
             self.effect_renderer.record_blur_pass();
@@ -3812,16 +3804,7 @@ impl GpuRenderer {
         }
         if let Some(cutout_run) = &shadow.post_blur_cutouts {
             let cutouts = shadow_scene(Some(cutout_run), &[], 0.0);
-            let segment = PassSegment {
-                scene: &cutouts,
-                ops: &cutouts.draw_ops,
-                composites: &[],
-                offset,
-                scissor: None,
-                first_run_window: None,
-                transform: SegmentTransform::IDENTITY,
-                scale: root_scale,
-            };
+            let segment = PassSegment::plain(&cutouts, offset, root_scale);
             if let Err(error) = self.encode_pass(
                 recorder,
                 target,

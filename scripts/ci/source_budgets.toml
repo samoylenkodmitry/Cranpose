@@ -3,7 +3,7 @@
 # removes the cause (`just source-budgets-lower`).
 
 [counts]
-too_many_arguments = 47
+too_many_arguments = 38
 private_docs = 13878
 for_test_fns = 40
 cranpose_env_names = 78
@@ -67,15 +67,15 @@ limit = 1000
 "crates/cranpose-render/pixels/src/draw.rs" = 1262
 "crates/cranpose-render/pixels/src/pipeline.rs" = 1563
 "crates/cranpose-render/wgpu/src/collect.rs" = 1825
-"crates/cranpose-render/wgpu/src/draw_pass.rs" = 2500
-"crates/cranpose-render/wgpu/src/effect_renderer.rs" = 3514
-"crates/cranpose-render/wgpu/src/frame.rs" = 5685
+"crates/cranpose-render/wgpu/src/draw_pass.rs" = 2475
+"crates/cranpose-render/wgpu/src/effect_renderer.rs" = 3494
+"crates/cranpose-render/wgpu/src/frame.rs" = 5676
 "crates/cranpose-render/wgpu/src/frame_graph.rs" = 2712
 "crates/cranpose-render/wgpu/src/gpu_stats.rs" = 1115
-"crates/cranpose-render/wgpu/src/lib.rs" = 1470
+"crates/cranpose-render/wgpu/src/lib.rs" = 1403
 "crates/cranpose-render/wgpu/src/mesh_fallback.rs" = 1190
 "crates/cranpose-render/wgpu/src/pipeline.rs" = 1715
-"crates/cranpose-render/wgpu/src/render.rs" = 5413
+"crates/cranpose-render/wgpu/src/render.rs" = 5396
 "crates/cranpose-render/wgpu/src/run_store.rs" = 2005
 "crates/cranpose-render/wgpu/src/scene_pass.rs" = 1467
 "crates/cranpose-render/wgpu/src/shader_cache.rs" = 1143

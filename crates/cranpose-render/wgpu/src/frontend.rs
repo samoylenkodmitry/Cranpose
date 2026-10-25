@@ -4,11 +4,11 @@ use cranpose_render_common::{graph::RenderGraph, software_text_raster::SoftwareT
 use web_time::Instant;
 
 use crate::{
-    TextSystemState,
     collect::{LayerMotion, LayerSceneRecycler, collect_overlay, collect_root},
     frame_packet::{FramePacket, MAX_FRAMES_IN_FLIGHT, RenderReturns},
     render::{frame_clear_color, instant_ms, should_log_wgpu_render_stage},
     scene::{Scene, SceneCapacityHint},
+    text_system::TextSystemState,
 };
 
 #[derive(Clone, Debug)]

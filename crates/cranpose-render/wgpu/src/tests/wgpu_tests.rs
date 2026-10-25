@@ -1,6 +1,7 @@
-use std::cell::Cell;
+use std::{cell::Cell, rc::Rc};
 
 use cranpose_render_common::graph::RenderNode;
+use cranpose_ui::TextMeasurer;
 use cranpose_ui_graphics::GraphicsLayer;
 
 use super::*;
