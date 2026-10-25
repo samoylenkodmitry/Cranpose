@@ -9,7 +9,7 @@ use cranpose_ui::{Catalog, Column, ColumnSpec, Locale, Modifier, ProvideLocaliza
 #[test]
 fn changing_language_updates_tab_search_and_action_accessibility_labels() {
     let state_capture = Rc::new(Cell::new(None::<MutableState<Locale>>));
-    let capture = state_capture.clone();
+    let capture = Rc::clone(&state_capture);
     let catalog = Catalog::from_resources(
         "en",
         &[cranpose_ui::localization::Resource {
@@ -51,7 +51,7 @@ fn changing_language_updates_tab_search_and_action_accessibility_labels() {
                             0,
                             |_| {},
                             |scope| {
-                                scope.tab(cranpose_liquid::icons::SEARCH, tr!("Home", id = "home"));
+                                scope.tab(icons::SEARCH, tr!("Home", id = "home"));
                             },
                         );
                     },
@@ -85,9 +85,9 @@ fn changing_language_updates_tab_search_and_action_accessibility_labels() {
 #[test]
 fn rtl_tabs_remain_visible_and_select_the_logical_index() {
     let selected = Rc::new(Cell::new(usize::MAX));
-    let selection = selected.clone();
+    let selection = Rc::clone(&selected);
     let mut robot = create_headless_robot_test(400, 120, move || {
-        let selection = selection.clone();
+        let selection = Rc::clone(&selection);
         cranpose_ui::ProvideLayoutDirection(cranpose_ui::LayoutDirection::Rtl, || {
             LiquidTheme(LiquidThemeSpec::default(), move || {
                 LiquidTabBar(
@@ -96,9 +96,9 @@ fn rtl_tabs_remain_visible_and_select_the_logical_index() {
                     2,
                     move |index| selection.set(index),
                     |tabs| {
-                        tabs.tab(cranpose_liquid::icons::BOOKMARK, "Library");
-                        tabs.tab(cranpose_liquid::icons::SEARCH, "Scan");
-                        tabs.tab(cranpose_liquid::icons::STAR, "Settings");
+                        tabs.tab(icons::BOOKMARK, "Library");
+                        tabs.tab(icons::SEARCH, "Scan");
+                        tabs.tab(icons::STAR, "Settings");
                     },
                 );
             });
