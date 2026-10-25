@@ -1,4 +1,5 @@
 use std::{
+    any::Any,
     cell::{Cell, RefCell},
     rc::Rc,
     sync::{
@@ -20,6 +21,7 @@ use crate::{
     slot::ActiveGroupId,
     snapshot_v2::take_mutable_snapshot,
     state::{MutationPolicy, SnapshotMutableState},
+    subcompose::{ContentTypeReusePolicy, SlotId, SubcomposeState},
 };
 
 #[cfg(test)]

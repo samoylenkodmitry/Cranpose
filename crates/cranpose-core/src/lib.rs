@@ -4,7 +4,9 @@
 
 pub extern crate self as cranpose_core;
 
+mod applier;
 mod applier_host;
+pub use applier::Applier;
 mod blocking;
 mod bubble_passes;
 mod callbacks;
@@ -64,7 +66,9 @@ mod recompose_scope;
 pub use recompose_scope::{RecomposeOptions, RecomposeScope, RecomposeScopeRegistryDebugStats};
 pub(crate) use recompose_scope::{RecomposeScopeInner, ScopeRead};
 mod recycle_pool;
+mod recycled_node;
 use recycle_pool::RecyclePool;
+pub use recycled_node::{RecycledNode, RecycledNodeInsertion};
 mod retention;
 /// The runtime in which a composition runs: state cells, UI tasks, frame callbacks and the queue of
 /// invalidated scopes.
@@ -296,7 +300,7 @@ pub fn in_applied_snapshot() -> bool {
 }
 
 use std::{
-    any::{Any, TypeId},
+    any::TypeId,
     cell::{Cell, Ref, RefCell, RefMut},
     cmp::Reverse,
     collections::BinaryHeap,
@@ -452,210 +456,6 @@ pub fn current_recompose_scope_invalidated_only_by(
         saw_unknown_source.then_some(false)
     })
     .flatten()
-}
-
-/// A removed node kept in a pool with its old id, so that a later node of the same type can reuse
-/// it.
-pub struct RecycledNode {
-    stable_id: NodeId,
-    node: Box<dyn Node>,
-    warm_origin: bool,
-}
-
-impl RecycledNode {
-    /// A removed node as a pool shell: the fresh box it rehouses into, or
-    /// the node itself cleared in place when it offers none. A rehoused
-    /// node is dropped as it is, so it is not cleared first.
-    fn new(stable_id: NodeId, mut node: Box<dyn Node>, warm_origin: bool) -> Self {
-        let node = node.rehouse_for_recycle().unwrap_or_else(|| {
-            node.prepare_for_recycle();
-            node
-        });
-        Self {
-            stable_id,
-            node,
-            warm_origin,
-        }
-    }
-
-    fn from_shell(stable_id: NodeId, node: Box<dyn Node>, warm_origin: bool) -> Self {
-        Self {
-            stable_id,
-            node,
-            warm_origin,
-        }
-    }
-
-    /// Returns the id the node had before it was recycled.
-    pub fn stable_id(&self) -> NodeId {
-        self.stable_id
-    }
-
-    fn warm_origin(&self) -> bool {
-        self.warm_origin
-    }
-
-    fn set_warm_origin(&mut self, warm_origin: bool) {
-        self.warm_origin = warm_origin;
-    }
-
-    /// Returns the pooled node, so that it can be reset before reuse.
-    pub fn node_mut(&mut self) -> &mut dyn Node {
-        self.node.as_mut()
-    }
-
-    /// Splits the shell into its stable id and its node, with a flag that tells whether it came
-    /// from the warm recycle path.
-    pub fn into_parts(self) -> (NodeId, Box<dyn Node>, bool) {
-        (self.stable_id, self.node, self.warm_origin)
-    }
-}
-
-/// The result of putting a recycled node back into an applier.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecycledNodeInsertion {
-    /// The id the node has now.
-    pub id: NodeId,
-    /// Whether the node got its old stable id back.
-    pub stable_id_reused: bool,
-    /// The error that forced a new id, or `None` if the old id was reused.
-    pub fallback_error: Option<NodeError>,
-}
-
-impl RecycledNodeInsertion {
-    fn reused(stable_id: NodeId) -> Self {
-        Self {
-            id: stable_id,
-            stable_id_reused: true,
-            fallback_error: None,
-        }
-    }
-
-    fn fresh(id: NodeId, fallback_error: Option<NodeError>) -> Self {
-        Self {
-            id,
-            stable_id_reused: false,
-            fallback_error,
-        }
-    }
-}
-
-/// Stores the nodes that a composition builds and applies changes to them. The UI layer supplies an
-/// applier; [`MemoryApplier`] is the stock one.
-pub trait Applier: Any {
-    /// Stores `node` and returns its new id.
-    fn create(&mut self, node: Box<dyn Node>) -> NodeId;
-    /// Returns the node `id` for change, or an error if there is none.
-    fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError>;
-    /// Returns the node `id` to read, or an error if there is none.
-    fn get_ref(&self, id: NodeId) -> Result<&dyn Node, NodeError>;
-    /// Removes the node `id` and the nodes below it.
-    fn remove(&mut self, id: NodeId) -> Result<(), NodeError>;
-
-    /// Opens a batch of commands, in which no layout pass runs: within it a
-    /// dirty bubble may stop at an ancestor an earlier one passed
-    /// ([`Self::note_bubble_pass`]). Batches nest.
-    fn begin_bubble_batch(&mut self) {}
-
-    /// Notes that a dirty bubble marked `id` as needing measure or layout,
-    /// or carried the dirt of `id` to its ancestors, for a layout pass that
-    /// starts from the dirty nodes. An applier that keeps no notes ignores
-    /// it.
-    fn note_layout_dirt(&mut self, _id: NodeId) {}
-
-    /// Closes the batch [`Self::begin_bubble_batch`] opened.
-    fn end_bubble_batch(&mut self) {}
-
-    /// Forgets what the open batch's bubbles passed: a node changed its
-    /// parent, or other code ran, so their marks may no longer reach the root.
-    fn forget_bubble_passes(&mut self) {}
-
-    /// Notes that a dirty bubble carrying `flags` passed the ancestor `id`.
-    /// `true` when one carrying all of them passed it earlier in the open
-    /// batch: that one marked every ancestor above `id`, so this one may
-    /// stop. An applier that keeps no notes answers `false`.
-    fn note_bubble_pass(&mut self, _id: NodeId, _flags: u8) -> bool {
-        false
-    }
-
-    /// The node `id` for a dirty bubble to mark, or `None` when it is
-    /// missing or, with `note`, when [`Self::note_bubble_pass`] says a
-    /// bubble carrying `flags` passed it earlier in the open batch.
-    fn bubble_node(&mut self, id: NodeId, flags: u8, note: bool) -> Option<&mut dyn Node> {
-        if note && self.note_bubble_pass(id, flags) {
-            return None;
-        }
-        self.get_mut(id).ok()
-    }
-
-    /// Records that `parent_id`'s child list changed structurally this frame
-    /// (insert, remove, move, or reparent). Incremental scene consumers drain
-    /// the recorded parents and re-patch those subtrees so removed nodes are
-    /// evicted from a persistent render graph even when the frame's scene
-    /// update is otherwise scoped to unrelated dirty nodes.
-    fn record_structural_change(&mut self, _parent_id: NodeId) {}
-
-    /// Returns the current generation for a node index.
-    /// Generation is incremented when an index is reused from the freelist,
-    /// preventing stale slot entries from matching recycled nodes.
-    fn node_generation(&self, id: NodeId) -> u32;
-
-    /// Stores `node` as a virtual node, one that lays out nothing itself
-    /// while its parent lays out its children, and returns its new id.
-    fn create_virtual(&mut self, node: Box<dyn Node>) -> NodeId;
-
-    /// Reinserts a recycled node at its retained stable ID, or creates a fresh ID if that
-    /// retained ID is no longer available.
-    fn insert_recycled_node_or_create(
-        &mut self,
-        stable_id: NodeId,
-        node: Box<dyn Node>,
-    ) -> RecycledNodeInsertion {
-        let id = self.create(node);
-        RecycledNodeInsertion::fresh(id, Some(NodeError::AlreadyExists { id: stable_id }))
-    }
-
-    /// Returns the applier as `Any`, for downcasting to its concrete type.
-    fn as_any(&self) -> &dyn Any
-    where
-        Self: Sized,
-    {
-        self
-    }
-
-    /// Returns the applier as `Any`, for downcasting to its concrete type.
-    fn as_any_mut(&mut self) -> &mut dyn Any
-    where
-        Self: Sized,
-    {
-        self
-    }
-
-    /// Trim trailing tombstones/unused capacity after structural changes.
-    fn compact(&mut self) {}
-
-    /// Returns a previously recycled node shell and its stable ID for the requested concrete type.
-    fn take_recycled_node(&mut self, _key: TypeId) -> Option<RecycledNode> {
-        None
-    }
-
-    /// Marks whether a reinserted recycled node originated from the warm recycle path.
-    fn set_recycled_node_origin(&mut self, _id: NodeId, _warm_origin: bool) {}
-
-    /// Seeds a warm recyclable shell for future reuse without requiring a prior removal.
-    fn seed_recycled_node_shell(
-        &mut self,
-        _key: TypeId,
-        _recycle_pool_limit: Option<usize>,
-        _shell: Box<dyn Node>,
-    ) {
-    }
-
-    /// Records that the current apply pass had to allocate a fresh recyclable shell for this type.
-    fn record_fresh_recyclable_creation(&mut self, _key: TypeId) {}
-
-    /// Drops any recyclable shells that should not survive beyond the current apply pass.
-    fn clear_recycled_nodes(&mut self) {}
 }
 
 type CommandCallback = Box<dyn FnOnce(&mut dyn Applier) -> Result<(), NodeError> + 'static>;
