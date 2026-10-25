@@ -38,6 +38,7 @@ pub mod clipboard_session;
 mod cursor_animation;
 mod debug;
 pub mod density;
+mod dirty_node_queue;
 pub mod draggable;
 mod draw;
 mod environment_locals;

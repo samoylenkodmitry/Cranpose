@@ -56,7 +56,7 @@ pub struct AppContext {
     scroll_motion_contexts: crate::scroll::ScrollMotionContextStore,
     lazy_prefetch: crate::lazy_prefetch::LazyPrefetchState,
     layout_node_registry: crate::widgets::nodes::layout_node::LayoutNodeRegistryState,
-    pointer_dispatch: crate::pointer_dispatch::PointerDispatchState,
+    pointer_dispatch: crate::dirty_node_queue::DirtyNodeQueue,
     mouse_input: crate::mouse_input::MouseInputQueue,
     pointer_claim: Cell<Option<cranpose_core::NodeId>>,
     focus_dispatch: crate::focus_dispatch::FocusInvalidationState,
@@ -64,7 +64,7 @@ pub struct AppContext {
     modal_nodes: crate::modal_nodes::ModalNodes,
     semantics_layout: crate::semantics_layout_log::SemanticsLayoutLog,
     hosted_popups: crate::widgets::popup::HostedPopupRegistries,
-    pub(crate) semantics_dispatch: crate::semantics_dispatch::SemanticsInvalidationState,
+    pub(crate) semantics_dispatch: crate::dirty_node_queue::DirtyNodeQueue,
     pub(crate) cursor_animation: crate::cursor_animation::CursorAnimationState,
     pub(crate) text_field_focus: crate::text_field_focus::TextFieldFocusState,
     pub(crate) text_input_session: crate::text_input_session::PlatformTextInputState,
@@ -261,7 +261,7 @@ impl AppContext {
             lazy_prefetch: crate::lazy_prefetch::LazyPrefetchState::new(),
             layout_node_registry: crate::widgets::nodes::layout_node::LayoutNodeRegistryState::new(
             ),
-            pointer_dispatch: crate::pointer_dispatch::PointerDispatchState::new(),
+            pointer_dispatch: crate::dirty_node_queue::DirtyNodeQueue::new(),
             mouse_input: crate::mouse_input::MouseInputQueue::default(),
             pointer_claim: Cell::new(None),
             focus_dispatch: crate::focus_dispatch::FocusInvalidationState::new(),
@@ -269,7 +269,7 @@ impl AppContext {
             modal_nodes: crate::modal_nodes::ModalNodes::default(),
             semantics_layout: crate::semantics_layout_log::SemanticsLayoutLog::default(),
             hosted_popups: crate::widgets::popup::HostedPopupRegistries::default(),
-            semantics_dispatch: crate::semantics_dispatch::SemanticsInvalidationState::new(),
+            semantics_dispatch: crate::dirty_node_queue::DirtyNodeQueue::new(),
             cursor_animation: crate::cursor_animation::CursorAnimationState::new(),
             text_field_focus: crate::text_field_focus::TextFieldFocusState::new(),
             text_input_session: crate::text_input_session::PlatformTextInputState::new(),
@@ -635,8 +635,8 @@ impl AppContext {
     pub fn has_stale_work(&self) -> bool {
         self.has_pending_frame_work()
             || self.state.draw_repasses.borrow_mut().has_pending_repass()
-            || self.pointer_dispatch.has_pending_repass()
-            || self.focus_dispatch.has_pending_invalidation()
+            || self.pointer_dispatch.has_pending()
+            || self.focus_dispatch.invalidations.has_pending()
     }
 
     /// Whether a modal node may be live in this context.
@@ -823,13 +823,13 @@ impl AppContext {
     /// Whether a pointer repass waits, as
     /// [`crate::has_pending_pointer_repasses`] says in the current context.
     pub fn has_pending_pointer_repasses(&self) -> bool {
-        self.pointer_dispatch.has_pending_repass()
+        self.pointer_dispatch.has_pending()
     }
 
     /// Whether a focus invalidation waits, as
     /// [`crate::has_pending_focus_invalidations`] says in the current context.
     pub fn has_pending_focus_invalidations(&self) -> bool {
-        self.focus_dispatch.has_pending_invalidation()
+        self.focus_dispatch.invalidations.has_pending()
     }
 
     /// The node holding focus, as [`crate::active_focus_target`] says in the
@@ -881,7 +881,7 @@ pub(crate) fn with_layout_node_registry<R>(
 }
 
 pub(crate) fn with_pointer_dispatch<R>(
-    f: impl FnOnce(&crate::pointer_dispatch::PointerDispatchState) -> R,
+    f: impl FnOnce(&crate::dirty_node_queue::DirtyNodeQueue) -> R,
 ) -> R {
     let context = require_current_app_context("pointer dispatch access");
     f(&context.pointer_dispatch)
@@ -926,7 +926,7 @@ pub(crate) fn with_hosted_popup_registries<R>(
 }
 
 pub(crate) fn with_semantics_dispatch<R>(
-    f: impl FnOnce(&crate::semantics_dispatch::SemanticsInvalidationState) -> R,
+    f: impl FnOnce(&crate::dirty_node_queue::DirtyNodeQueue) -> R,
 ) -> R {
     let context = require_current_app_context("semantics dispatch access");
     f(&context.semantics_dispatch)
@@ -934,7 +934,7 @@ pub(crate) fn with_semantics_dispatch<R>(
 
 pub(crate) fn with_semantics_dispatch_by_app_context(
     id: AppContextId,
-    f: impl FnOnce(&crate::semantics_dispatch::SemanticsInvalidationState),
+    f: impl FnOnce(&crate::dirty_node_queue::DirtyNodeQueue),
 ) {
     with_app_context_by_id(id, |context| f(&context.semantics_dispatch));
 }

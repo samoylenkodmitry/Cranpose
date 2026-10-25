@@ -1,18 +1,15 @@
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
-use cranpose_core::{
-    NodeId,
-    collections::map::{HashMap, HashSet},
-};
+use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_foundation::FocusState;
+
+use crate::dirty_node_queue::DirtyNodeQueue;
 
 pub(crate) trait FocusTargetHandle {
     fn set_focus_state(&self, state: FocusState);
 }
 
 struct FocusInvalidationManager {
-    dirty_nodes: HashSet<NodeId>,
-    is_processing: bool,
     active_focus_target: Option<NodeId>,
     focus_targets: HashMap<NodeId, Vec<Rc<dyn FocusTargetHandle>>>,
     pending_focus_requests: VecDeque<NodeId>,
@@ -22,21 +19,11 @@ struct FocusInvalidationManager {
 impl FocusInvalidationManager {
     fn new() -> Self {
         Self {
-            dirty_nodes: HashSet::default(),
-            is_processing: false,
             active_focus_target: None,
             focus_targets: HashMap::default(),
             pending_focus_requests: VecDeque::new(),
             dispatching_focus: false,
         }
-    }
-
-    fn schedule_invalidation(&mut self, node_id: NodeId) {
-        self.dirty_nodes.insert(node_id);
-    }
-
-    fn has_pending_invalidation(&self) -> bool {
-        !self.dirty_nodes.is_empty()
     }
 
     fn set_active_focus_target(&mut self, node_id: Option<NodeId>) {
@@ -114,30 +101,10 @@ impl FocusInvalidationManager {
     fn finish_focus_dispatch(&mut self) {
         self.dispatching_focus = false;
     }
-
-    fn take_pending_for_processing(&mut self) -> Option<Vec<NodeId>> {
-        if self.is_processing {
-            return None;
-        }
-
-        self.is_processing = true;
-        Some(self.dirty_nodes.drain().collect())
-    }
-
-    fn finish_processing<I>(&mut self, remaining: I)
-    where
-        I: IntoIterator<Item = NodeId>,
-    {
-        self.dirty_nodes.extend(remaining);
-        self.is_processing = false;
-    }
-
-    fn clear(&mut self) {
-        self.dirty_nodes.clear();
-    }
 }
 
 pub(crate) struct FocusInvalidationState {
+    pub(crate) invalidations: DirtyNodeQueue,
     manager: RefCell<FocusInvalidationManager>,
     order: RefCell<Vec<crate::FocusEntry>>,
     requested_move: std::cell::Cell<Option<crate::FocusDirection>>,
@@ -146,6 +113,7 @@ pub(crate) struct FocusInvalidationState {
 impl FocusInvalidationState {
     pub(crate) fn new() -> Self {
         Self {
+            invalidations: DirtyNodeQueue::new(),
             manager: RefCell::new(FocusInvalidationManager::new()),
             order: RefCell::new(Vec::new()),
             requested_move: std::cell::Cell::new(None),
@@ -166,14 +134,6 @@ impl FocusInvalidationState {
 
     pub(crate) fn with_focus_order<T>(&self, reader: impl FnOnce(&[crate::FocusEntry]) -> T) -> T {
         reader(&self.order.borrow())
-    }
-
-    fn schedule_invalidation(&self, node_id: NodeId) {
-        self.manager.borrow_mut().schedule_invalidation(node_id);
-    }
-
-    pub(crate) fn has_pending_invalidation(&self) -> bool {
-        self.manager.borrow().has_pending_invalidation()
     }
 
     fn set_active_focus_target(&self, node_id: Option<NodeId>) {
@@ -273,39 +233,6 @@ impl FocusInvalidationState {
             }
         });
     }
-
-    fn process_invalidations<F>(&self, processor: F)
-    where
-        F: FnMut(NodeId),
-    {
-        let Some(nodes) = self.manager.borrow_mut().take_pending_for_processing() else {
-            return;
-        };
-
-        self.process_pending_nodes(nodes, processor);
-    }
-
-    fn clear(&self) {
-        self.manager.borrow_mut().clear();
-    }
-
-    fn process_pending_nodes<F>(&self, nodes: Vec<NodeId>, mut processor: F)
-    where
-        F: FnMut(NodeId),
-    {
-        let mut remaining = nodes.into_iter();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            for node_id in remaining.by_ref() {
-                processor(node_id);
-            }
-        }));
-
-        self.manager.borrow_mut().finish_processing(remaining);
-
-        if let Err(payload) = result {
-            std::panic::resume_unwind(payload);
-        }
-    }
 }
 
 /// Schedules a focus invalidation for the specified node.
@@ -313,7 +240,7 @@ impl FocusInvalidationState {
 /// This is called automatically when focus modifiers invalidate
 /// and mirrors Kotlin's `FocusInvalidationManager.scheduleInvalidation`.
 pub fn schedule_focus_invalidation(node_id: NodeId) {
-    crate::render_state::with_focus_dispatch(|state| state.schedule_invalidation(node_id));
+    crate::render_state::with_focus_dispatch(|state| state.invalidations.schedule(node_id));
 }
 
 /// Returns true if any focus invalidations are pending.
@@ -385,12 +312,12 @@ pub fn process_focus_invalidations<F>(processor: F)
 where
     F: FnMut(NodeId),
 {
-    crate::render_state::with_focus_dispatch(|state| state.process_invalidations(processor));
+    crate::render_state::with_focus_dispatch(|state| state.invalidations.process(processor));
 }
 
 /// Clears all pending focus invalidations without processing them.
 pub fn clear_focus_invalidations() {
-    crate::render_state::with_focus_dispatch(FocusInvalidationState::clear);
+    crate::render_state::with_focus_dispatch(|state| state.invalidations.clear());
 }
 
 #[cfg(test)]
