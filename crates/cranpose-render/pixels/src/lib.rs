@@ -56,6 +56,9 @@ pub struct Picture {
     changed: Vec<draw::ClipBounds>,
     /// The layers an update in place pushed again: their old and new records.
     repushed: Vec<(usize, usize)>,
+    // Where each item of `raster` can draw in the frame, in its order: each
+    // strip a host draws passes over the items that miss it.
+    reach: Vec<Option<draw::ClipBounds>>,
 }
 
 fn valid_scale(scale: f32) -> f32 {
@@ -154,6 +157,7 @@ impl PixelsRenderer {
         if self.update_picture_in_place(picture, width, height, scale) {
             changed.clear();
             changed.extend(picture.changed.iter().copied().map(pixel_rect));
+            picture.measure_reach();
             return;
         }
         let mut raster = std::mem::take(&mut picture.spare);
@@ -186,6 +190,7 @@ impl PixelsRenderer {
         picture.width = width;
         picture.height = height;
         picture.scale = scale;
+        picture.measure_reach();
     }
 
     /// Brings `picture`'s scene up to the current scene where it lies, when
@@ -261,7 +266,13 @@ impl PixelsRenderer {
             width: area.width,
             height: area.height,
         };
-        draw::draw_raster_window(&mut target, raster, self.scene.diagnostics(), &self.text);
+        draw::draw_raster_window(
+            &mut target,
+            raster,
+            &picture.reach,
+            self.scene.diagnostics(),
+            &self.text,
+        );
     }
 
     /// The scene at `scale` device pixels per point as sprites for a GPU
@@ -278,6 +289,22 @@ impl PixelsRenderer {
         self.fill_raster_scene(&mut scene, valid_scale(scale), None);
         frame.compose(&scene, width, height, self.scene.diagnostics(), &self.text);
         frame.scene = scene;
+    }
+}
+
+impl Picture {
+    fn measure_reach(&mut self) {
+        let Some(raster) = self.raster.as_ref() else {
+            self.reach.clear();
+            return;
+        };
+        let frame = draw::ClipBounds {
+            min_x: 0,
+            min_y: 0,
+            max_x: i32::try_from(self.width).unwrap_or(i32::MAX),
+            max_y: i32::try_from(self.height).unwrap_or(i32::MAX),
+        };
+        raster.reach_into(frame, &mut self.reach);
     }
 }
 

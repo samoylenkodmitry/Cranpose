@@ -119,6 +119,22 @@ pub(crate) struct ClipBounds {
     pub max_y: i32,
 }
 
+impl ClipBounds {
+    fn overlaps(self, other: Self) -> bool {
+        self.min_x < other.max_x
+            && other.min_x < self.max_x
+            && self.min_y < other.max_y
+            && other.min_y < self.max_y
+    }
+
+    fn holds(self, other: Self) -> bool {
+        self.min_x <= other.min_x
+            && self.min_y <= other.min_y
+            && self.max_x >= other.max_x
+            && self.max_y >= other.max_y
+    }
+}
+
 /// The whole pixels of `rect` cut to `clip` and to the target's window.
 fn clip_rect_to_bounds(rect: Rect, clip: Option<Rect>, target: &Target) -> Option<ClipBounds> {
     clip_rect_to_window(rect, clip, target.window())
@@ -253,27 +269,35 @@ fn draw_raster_scene(
         width,
         height,
     };
-    draw_raster_window(&mut target, scene, diagnostics, text);
+    let mut reach = Vec::new();
+    scene.reach_into(target.window(), &mut reach);
+    draw_raster_window(&mut target, scene, &reach, diagnostics, text);
 }
 
+/// Draws the items of `scene` into `target`'s window. `reach` holds where
+/// each item of the scene's order can draw, as [`RasterScene::reach_into`]
+/// puts it: an item that cannot draw in the window is passed over.
 pub(crate) fn draw_raster_window(
     target: &mut Target,
     scene: &RasterScene,
+    reach: &[Option<ClipBounds>],
     diagnostics: &RenderDiagnostics,
     text: &TextRaster,
 ) {
     let window = target.window();
     // The topmost item that paints the whole window opaquely hides what
     // lies under it there: drawing starts with it.
-    let first = scene
-        .order
-        .iter()
-        .rposition(|&item| scene.covers_window(item, window));
+    let first = scene.order.iter().zip(reach).rposition(|(&item, bounds)| {
+        bounds.is_some_and(|bounds| bounds.holds(window)) && scene.covers_window(item, window)
+    });
     if first.is_none() {
         clear_frame(target.pixels);
     }
-    for &item in &scene.order[first.unwrap_or(0)..] {
-        draw_item(target, scene, item, diagnostics, text);
+    let first = first.unwrap_or(0);
+    for (&item, bounds) in scene.order[first..].iter().zip(&reach[first..]) {
+        if bounds.is_some_and(|bounds| bounds.overlaps(window)) {
+            draw_item(target, scene, item, diagnostics, text);
+        }
     }
 }
 
@@ -379,6 +403,18 @@ impl RasterScene {
                     .into_iter()
                     .all(|(x, y)| point_in_resolved_rounded_rect(x, y, rect, &radii))
         })
+    }
+
+    /// Puts into `reach` where each item of the order can draw in `window`,
+    /// in order: what a host that draws a picture in strips would otherwise
+    /// work out again for every strip.
+    pub(crate) fn reach_into(&self, window: ClipBounds, reach: &mut Vec<Option<ClipBounds>>) {
+        reach.clear();
+        reach.extend(
+            self.order
+                .iter()
+                .map(|&item| self.item_bounds(item, window)),
+        );
     }
 
     pub(crate) fn item_bounds(&self, item: RenderItem, window: ClipBounds) -> Option<ClipBounds> {
