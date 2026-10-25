@@ -719,3 +719,16 @@ impl Default for CompositorScene {
 #[cfg(test)]
 #[path = "tests/scene_tests.rs"]
 mod tests;
+
+/// Where a layer's own primitives land: the layer's bounds and local
+/// graphics layer, the clip and anchor they inherit, and whether their
+/// motion context animates.
+#[derive(Clone, Copy)]
+pub(crate) struct ContentContext<'a> {
+    pub(crate) layer_bounds: Rect,
+    pub(crate) local_layer: &'a GraphicsLayer,
+    pub(crate) visual_clip: Option<Rect>,
+    pub(crate) rounding: Option<ClipRounding>,
+    pub(crate) anchor: Option<SnapAnchor>,
+    pub(crate) motion_context_animated: bool,
+}

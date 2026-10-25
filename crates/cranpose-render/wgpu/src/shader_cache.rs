@@ -301,23 +301,20 @@ pub(crate) struct ShaderPipelineCache {
 }
 
 impl ShaderPipelineCache {
-    #[expect(clippy::too_many_arguments)]
+    // `bind_group_layouts` are the effect's texture and uniform groups, in
+    // that order.
     pub(crate) fn new(
         device: &wgpu::Device,
         compiler: PipelineCompiler,
         pipeline_cache: Option<wgpu::PipelineCache>,
         backend: wgpu::Backend,
         format: wgpu::TextureFormat,
-        texture_bind_group_layout: &wgpu::BindGroupLayout,
-        uniform_bind_group_layout: &wgpu::BindGroupLayout,
+        bind_group_layouts: [&wgpu::BindGroupLayout; 2],
         recorder: crate::pipeline_recorder::PipelineRecorder,
     ) -> Self {
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Effect Pipeline Layout"),
-            bind_group_layouts: &[
-                Some(texture_bind_group_layout),
-                Some(uniform_bind_group_layout),
-            ],
+            bind_group_layouts: &bind_group_layouts.map(Some),
             immediate_size: 0,
         });
         Self {

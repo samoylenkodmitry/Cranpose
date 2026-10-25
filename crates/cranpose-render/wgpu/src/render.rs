@@ -3539,11 +3539,9 @@ impl GpuRenderer {
             self.frame_stats
                 .record_shadow_shape_cache_miss(source_device.width, source_device.height);
             self.frame_stats.maybe_print_shadow_shape_cache_miss(
-                source_device.width,
-                source_device.height,
+                source_device,
                 key.content_hash,
                 pixel_radius,
-                [source_device.x, source_device.y],
                 shadow.shapes.as_ref().map_or(0, RunDraw::record_count) as usize,
                 shadow.clip,
             );

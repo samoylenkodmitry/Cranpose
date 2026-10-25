@@ -727,14 +727,11 @@ impl FrameStats {
         );
     }
 
-    #[expect(clippy::too_many_arguments)]
-    pub fn maybe_print_shadow_shape_cache_miss(
+    pub(crate) fn maybe_print_shadow_shape_cache_miss(
         &self,
-        width: u32,
-        height: u32,
+        bounds: crate::geometry::DevicePixelBounds,
         content_hash: u64,
         blur_radius: f32,
-        viewport_offset: [f32; 2],
         shape_count: usize,
         clip: Option<Rect>,
     ) {
@@ -759,11 +756,11 @@ impl FrameStats {
         );
         stats_line!(
             "[shadow-cache-miss #{count}] size={}x{} content_hash={content_hash} blur={:.2} viewport_offset=({:.1},{:.1}) shapes={} clip={}",
-            width,
-            height,
+            bounds.width,
+            bounds.height,
             blur_radius,
-            viewport_offset[0],
-            viewport_offset[1],
+            bounds.x,
+            bounds.y,
             shape_count,
             clip_text,
         );

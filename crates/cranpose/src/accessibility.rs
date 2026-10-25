@@ -582,7 +582,7 @@ impl TreeWatch {
     }
 }
 
-#[cfg_attr(test, allow(dead_code))]
+#[cfg_attr(test, allow(dead_code, reason = "platform runtimes call it"))]
 pub(crate) fn snapshot_if_changed<R>(
     shell: &mut AppShell<R>,
     seen_revision: &mut Option<u64>,
@@ -710,7 +710,7 @@ fn reuse_texts<'a>(mut buffer: Vec<String>, texts: impl Iterator<Item = &'a str>
     buffer
 }
 
-#[cfg_attr(test, allow(dead_code))]
+#[cfg_attr(test, allow(dead_code, reason = "platform runtimes call it"))]
 pub(crate) fn install_inspector<R: Renderer>(shell: &mut AppShell<R>, enabled: Option<bool>)
 where
     R::Error: Debug,
@@ -722,7 +722,7 @@ where
     );
 }
 
-#[cfg_attr(test, allow(dead_code))]
+#[cfg_attr(test, allow(dead_code, reason = "platform runtimes call it"))]
 fn inspector_nodes(
     semantics: &cranpose_ui::SemanticsTree,
 ) -> Vec<cranpose_app_shell::inspector::InspectorNode> {
@@ -1806,7 +1806,7 @@ pub(crate) fn focus_node(root: &SemanticsNode, node_id: NodeId) -> bool {
 /// render when they changed, so the theme, the glass and the animations read
 /// them. A backend that scales text calls `set_font_scale` on the shell
 /// beside this.
-#[cfg_attr(test, allow(dead_code))]
+#[cfg_attr(test, allow(dead_code, reason = "platform runtimes call it"))]
 pub(crate) fn apply_accessibility_options<R>(
     shell: &mut AppShell<R>,
     options: cranpose_services::AccessibilityOptions,
@@ -1822,7 +1822,7 @@ where
     changed
 }
 
-#[cfg_attr(test, allow(dead_code))]
+#[cfg_attr(test, allow(dead_code, reason = "platform runtimes call it"))]
 pub(crate) fn drain_app_announcements() -> Vec<Announcement> {
     cranpose_ui::drain_announcements()
 }

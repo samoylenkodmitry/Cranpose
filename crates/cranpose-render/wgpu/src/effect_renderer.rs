@@ -1213,50 +1213,23 @@ impl EffectRenderer {
         let effect_texture_bind_group_layout = OffscreenPool::texture_bind_group_layout(device);
         let effect_uniform_bind_group_layout = OffscreenPool::uniform_bind_group_layout(device);
 
-        let blur_uniform_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Blur Uniform Bind Group Layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: true,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
+        let blur_uniform_bind_group_layout = crate::offscreen::dynamic_uniform_layout(
+            device,
+            "Blur Uniform Bind Group Layout",
+            wgpu::ShaderStages::FRAGMENT,
+        );
 
-        let offset_uniform_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Offset Uniform Bind Group Layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: true,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
+        let offset_uniform_bind_group_layout = crate::offscreen::dynamic_uniform_layout(
+            device,
+            "Offset Uniform Bind Group Layout",
+            wgpu::ShaderStages::FRAGMENT,
+        );
 
-        let blit_uniform_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Blit Uniform Bind Group Layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: true,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
+        let blit_uniform_bind_group_layout = crate::offscreen::dynamic_uniform_layout(
+            device,
+            "Blit Uniform Bind Group Layout",
+            wgpu::ShaderStages::VERTEX_FRAGMENT,
+        );
 
         let blur_shader = SharedShader::new(
             device,
@@ -1351,6 +1324,10 @@ impl EffectRenderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let effect_layouts = [
+            &effect_texture_bind_group_layout,
+            &effect_uniform_bind_group_layout,
+        ];
         Self {
             offscreen_pool: OffscreenPool::new(device, surface_format),
             shader_cache: ShaderPipelineCache::new(
@@ -1359,8 +1336,7 @@ impl EffectRenderer {
                 pipeline_cache.clone(),
                 adapter_backend,
                 surface_format,
-                &effect_texture_bind_group_layout,
-                &effect_uniform_bind_group_layout,
+                effect_layouts,
                 recorder.clone(),
             ),
             recorder,

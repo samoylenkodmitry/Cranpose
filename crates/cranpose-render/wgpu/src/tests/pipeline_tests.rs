@@ -2144,19 +2144,21 @@ fn a_text_draw_primitive_joins_the_scene_text_list_the_text_nodes_use() {
             },
             "SCORE",
         ),
-        Rect {
-            x: 10.0,
-            y: 20.0,
-            width: 200.0,
-            height: 100.0,
+        &ContentContext {
+            layer_bounds: Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 200.0,
+                height: 100.0,
+            },
+            local_layer: &GraphicsLayer::default(),
+            visual_clip: None,
+            rounding: None,
+            anchor: None,
+            motion_context_animated: false,
         },
-        &GraphicsLayer::default(),
-        None,
-        None,
-        None,
         &mut scene,
         None,
-        false,
     );
 
     assert_eq!(scene.texts.len(), 1, "text must reach the glyph-atlas path");
@@ -2206,14 +2208,16 @@ fn text_draw_primitives_keep_their_z_order_against_the_shapes_around_them() {
     ] {
         push_draw_primitive(
             &primitive,
-            bounds,
-            &GraphicsLayer::default(),
-            None,
-            None,
-            None,
+            &ContentContext {
+                layer_bounds: bounds,
+                local_layer: &GraphicsLayer::default(),
+                visual_clip: None,
+                rounding: None,
+                anchor: None,
+                motion_context_animated: false,
+            },
             &mut scene,
             None,
-            false,
         );
     }
 

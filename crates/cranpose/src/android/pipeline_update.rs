@@ -87,13 +87,13 @@ fn prepare_after_update(data_dir: &Path) {
             }
         };
     let mut renderer = WgpuRenderer::default();
-    renderer.init_gpu(
-        Arc::new(device),
-        Arc::new(queue),
-        wgpu::TextureFormat::Rgba8Unorm,
-        info.backend,
-        adapter.get_downlevel_capabilities().flags,
-    );
+    renderer.init_gpu(cranpose_render_wgpu::GpuTarget {
+        device: Arc::new(device),
+        queue: Arc::new(queue),
+        surface_format: wgpu::TextureFormat::Rgba8Unorm,
+        adapter_backend: info.backend,
+        adapter_downlevel: adapter.get_downlevel_capabilities().flags,
+    });
     let built = renderer
         .prepare_recorded_pipelines(PREPARE_TIMEOUT, &|| APP_LAUNCHED.load(Ordering::Acquire));
     drop(renderer);

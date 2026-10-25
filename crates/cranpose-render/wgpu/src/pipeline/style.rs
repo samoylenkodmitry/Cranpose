@@ -58,14 +58,16 @@ pub(crate) fn apply_draw_commands(
             | DrawPrimitive::Text(_)) => {
                 super::push_draw_primitive(
                     &shape_primitive,
-                    layer_bounds,
-                    layer,
-                    clip,
-                    None,
-                    None,
+                    &crate::scene::ContentContext {
+                        layer_bounds,
+                        local_layer: layer,
+                        visual_clip: clip,
+                        rounding: None,
+                        anchor: None,
+                        motion_context_animated: false,
+                    },
                     scene,
                     blend_mode,
-                    false,
                 );
             }
             DrawPrimitive::Image {

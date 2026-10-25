@@ -475,14 +475,21 @@ impl ResourceGraph {
     }
 }
 
+// What a frame's passes leave for its end: the transient textures to
+// release once it is submitted, the bytes those took and the copies made.
+#[derive(Default)]
+struct FrameTally {
+    releases: Vec<(FrameTextureDescriptor, OffscreenTarget)>,
+    transient_bytes: u64,
+    copies: TextureCopyStats,
+}
+
 pub(crate) struct PassContext<'pass> {
     device: &'pass wgpu::Device,
     pub(crate) encoder: &'pass mut wgpu::CommandEncoder,
     uploads: &'pass mut FrameUploadAllocators,
     transient_textures: &'pass mut TransientTexturePool,
-    pending_transient_releases: &'pass mut Vec<(FrameTextureDescriptor, OffscreenTarget)>,
-    transient_texture_bytes: &'pass mut u64,
-    copies: &'pass mut TextureCopyStats,
+    tally: &'pass mut FrameTally,
     pass_count: u32,
     pass_timer: Option<&'pass PassTimer>,
 }
@@ -655,9 +662,7 @@ impl WgpuFrameGraphExecutor {
         }
         let _profile_frame = fence_profile::enabled().then(|| fence_profile::FrameRecording);
         let mut pass_count = 0u32;
-        let mut transient_texture_bytes = 0u64;
-        let mut copies = TextureCopyStats::default();
-        let mut pending_transient_releases = Vec::new();
+        let mut tally = FrameTally::default();
         let mut encoder = Self::create_command_encoder(device, graph.label);
 
         if graph.passes.len() == 1 {
@@ -666,23 +671,12 @@ impl WgpuFrameGraphExecutor {
                 .into_iter()
                 .next()
                 .expect("single-pass graph should contain one pass");
-            match self.encode_pass_node(
-                device,
-                &mut encoder,
-                &mut pending_transient_releases,
-                &mut transient_texture_bytes,
-                &mut copies,
-                0,
-                pass,
-            ) {
+            match self.encode_pass_node(device, &mut encoder, &mut tally, 0, pass) {
                 Ok(recorded_pass_count) => {
                     pass_count = pass_count.saturating_add(recorded_pass_count);
                 }
                 Err(error) => {
-                    release_pending_transients(
-                        &mut self.transient_textures,
-                        pending_transient_releases,
-                    );
+                    release_pending_transients(&mut self.transient_textures, tally.releases);
                     return Err(error);
                 }
             }
@@ -693,30 +687,19 @@ impl WgpuFrameGraphExecutor {
                 let Some(pass) = passes[pass_index].take() else {
                     return Err(FrameGraphError::ScheduledPassTwice { pass_index });
                 };
-                match self.encode_pass_node(
-                    device,
-                    &mut encoder,
-                    &mut pending_transient_releases,
-                    &mut transient_texture_bytes,
-                    &mut copies,
-                    pass_index,
-                    pass,
-                ) {
+                match self.encode_pass_node(device, &mut encoder, &mut tally, pass_index, pass) {
                     Ok(recorded_pass_count) => {
                         pass_count = pass_count.saturating_add(recorded_pass_count);
                     }
                     Err(error) => {
-                        release_pending_transients(
-                            &mut self.transient_textures,
-                            pending_transient_releases,
-                        );
+                        release_pending_transients(&mut self.transient_textures, tally.releases);
                         return Err(error);
                     }
                 }
             }
         }
         if pass_count == 0 {
-            release_pending_transients(&mut self.transient_textures, pending_transient_releases);
+            release_pending_transients(&mut self.transient_textures, tally.releases);
             return Err(FrameGraphError::NoDeclaredPasses);
         }
         let uploads = self.upload_allocators.encode_pending(device);
@@ -730,7 +713,7 @@ impl WgpuFrameGraphExecutor {
         let (submission, upload_writes) =
             Self::submit_frame(queue, encoder, before_passes, self.pass_timer.as_ref());
         self.upload_allocators.recall();
-        release_pending_transients(&mut self.transient_textures, pending_transient_releases);
+        release_pending_transients(&mut self.transient_textures, tally.releases);
         let retained_texture_bytes = self.retained_texture_bytes();
         let (transient_acquires, transient_news) = self.transient_textures.take_counts();
         Ok(FrameGraphExecution {
@@ -740,10 +723,10 @@ impl WgpuFrameGraphExecutor {
                 submit_count: 1,
                 pass_count,
                 pass_pixels: take_render_pass_pixels(),
-                transient_texture_bytes,
+                transient_texture_bytes: tally.transient_bytes,
                 retained_texture_bytes,
-                copy_count: copies.count,
-                copy_pixels: copies.pixels,
+                copy_count: tally.copies.count,
+                copy_pixels: tally.copies.pixels,
                 upload_bytes: uploads.upload_bytes,
                 upload_writes: upload_writes + uploads.upload_writes,
                 transient_acquires,
@@ -752,14 +735,11 @@ impl WgpuFrameGraphExecutor {
         })
     }
 
-    #[expect(clippy::too_many_arguments)]
     fn encode_pass_node(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        pending_transient_releases: &mut Vec<(FrameTextureDescriptor, OffscreenTarget)>,
-        transient_texture_bytes: &mut u64,
-        copies: &mut TextureCopyStats,
+        tally: &mut FrameTally,
         pass_index: usize,
         pass: PassNode<'_>,
     ) -> Result<u32, FrameGraphError> {
@@ -770,9 +750,7 @@ impl WgpuFrameGraphExecutor {
             encoder,
             uploads: &mut self.upload_allocators,
             transient_textures: &mut self.transient_textures,
-            pending_transient_releases,
-            transient_texture_bytes,
-            copies,
+            tally,
             pass_count: 0,
             pass_timer: self.pass_timer.as_ref(),
         };
@@ -1187,8 +1165,10 @@ impl FrameCommandRecorder for PassContext<'_> {
         device: &wgpu::Device,
         descriptor: FrameTextureDescriptor,
     ) -> OffscreenTarget {
-        *self.transient_texture_bytes =
-            (*self.transient_texture_bytes).saturating_add(descriptor.estimated_bytes());
+        self.tally.transient_bytes = self
+            .tally
+            .transient_bytes
+            .saturating_add(descriptor.estimated_bytes());
         self.transient_textures.acquire(device, descriptor)
     }
 
@@ -1197,12 +1177,12 @@ impl FrameCommandRecorder for PassContext<'_> {
         descriptor: FrameTextureDescriptor,
         target: OffscreenTarget,
     ) {
-        self.pending_transient_releases.push((descriptor, target));
+        self.tally.releases.push((descriptor, target));
     }
 
     fn copy_texture_region(&mut self, copy: TextureRegionCopy<'_>) {
         encode_texture_region_copy(self.encoder, copy);
-        self.copies.note(copy.size);
+        self.tally.copies.note(copy.size);
     }
 
     fn record_passes(&mut self, count: u32) {

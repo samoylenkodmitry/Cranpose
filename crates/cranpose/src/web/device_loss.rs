@@ -237,13 +237,13 @@ impl WebDeviceLoss {
             let mut app = recovery.app.borrow_mut();
             let renderer = app.renderer();
             renderer.set_device_lost_handler(self.handler());
-            renderer.init_gpu(
-                Arc::clone(&device),
-                Arc::clone(&queue),
-                view_format,
-                backend,
-                downlevel,
-            );
+            renderer.init_gpu(cranpose_render_wgpu::GpuTarget {
+                device: Arc::clone(&device),
+                queue: Arc::clone(&queue),
+                surface_format: view_format,
+                adapter_backend: backend,
+                adapter_downlevel: downlevel,
+            });
             app.request_root_render();
         }
         recovery.surface_dirty.set(true);

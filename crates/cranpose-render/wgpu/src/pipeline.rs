@@ -34,8 +34,8 @@ use cranpose_ui_graphics::{
 };
 
 use crate::scene::{
-    ClipRounding, CompositorScene, DrawnText, EffectLayer, ImageDraw, Placement, RRectShadowDraw,
-    RunDraw, Scene, ShadowDraw, SnapAnchor, TextDraw,
+    ClipRounding, CompositorScene, ContentContext, DrawnText, EffectLayer, ImageDraw, Placement,
+    RRectShadowDraw, RunDraw, Scene, ShadowDraw, SnapAnchor, TextDraw,
 };
 
 mod style;
@@ -1506,25 +1506,22 @@ fn blended(primitive: DrawPrimitive, blend_mode: Option<BlendMode>) -> DrawPrimi
     }
 }
 
-#[expect(clippy::too_many_arguments)]
+// Records `primitive` where `content` places it, its clip and rounding
+// being the content's.
 pub(crate) fn push_draw_primitive(
     primitive: &DrawPrimitive,
-    layer_bounds: Rect,
-    layer: &GraphicsLayer,
-    clip: Option<Rect>,
-    rounding: Option<ClipRounding>,
-    snap_anchor: Option<SnapAnchor>,
+    content: &ContentContext<'_>,
     scene: &mut CompositorScene,
     blend_mode: Option<BlendMode>,
-    motion_context_animated: bool,
 ) {
-    if let Some(shape) = loose_shape(primitive, layer) {
+    let bounds = content.layer_bounds;
+    if let Some(shape) = loose_shape(primitive, content.local_layer) {
         let placement = Placement::at(
-            Point::new(layer_bounds.x, layer_bounds.y),
-            snap_anchor,
-            clip,
+            Point::new(bounds.x, bounds.y),
+            content.anchor,
+            content.visual_clip,
         )
-        .with_rounding(rounding);
+        .with_rounding(content.rounding);
         scene.push_loose(blended(shape, blend_mode), placement);
         return;
     }
@@ -1594,17 +1591,17 @@ pub(crate) fn push_draw_primitive(
 
     let mut emitter = SceneEmitter {
         scene,
-        snap_anchor,
-        rounding,
+        snap_anchor: content.anchor,
+        rounding: content.rounding,
     };
     emit_draw_primitive(
         primitive,
-        layer_bounds,
-        layer,
-        clip,
+        bounds,
+        content.local_layer,
+        content.visual_clip,
         &mut emitter,
         blend_mode,
-        motion_context_animated,
+        content.motion_context_animated,
     );
 }
 

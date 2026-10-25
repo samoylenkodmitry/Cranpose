@@ -685,19 +685,11 @@ fn pipeline_parts(
     backend: wgpu::Backend,
     texture_layout: &wgpu::BindGroupLayout,
 ) -> ScenePipelineParts {
-    let uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("Scene Surface Uniform Bind Group Layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: true,
-                min_binding_size: None,
-            },
-            count: None,
-        }],
-    });
+    let uniform_layout = crate::offscreen::dynamic_uniform_layout(
+        device,
+        "Scene Surface Uniform Bind Group Layout",
+        wgpu::ShaderStages::VERTEX_FRAGMENT,
+    );
     let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Scene Shadow Map Bind Group Layout"),
         entries: &[

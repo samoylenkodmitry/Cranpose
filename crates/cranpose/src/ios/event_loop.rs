@@ -210,13 +210,12 @@ impl<F: FnMut() + 'static> IosApp<F> {
         let loss_proxy = self.event_proxy.clone();
         let renderer = shell.renderer();
         renderer.set_device_lost_handler(self.device_loss.handler(move || loss_proxy.wake_up()));
-        renderer.init_gpu(
+        renderer.init_gpu(cranpose_render_wgpu::GpuTarget::on_adapter(
+            &gpu.adapter,
             Arc::clone(&device),
             Arc::new(queue),
             crate::surface_format::display_surface_view_format(gpu.config.format),
-            gpu.adapter.get_info().backend,
-            gpu.adapter.get_downlevel_capabilities().flags,
-        );
+        ));
         gpu.device = device;
         gpu.surface_dirty = true;
         shell.mark_dirty();
@@ -456,8 +455,6 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
                     return;
                 }
             };
-        let backend = adapter.get_info().backend;
-
         let (device, queue) =
             match pollster::block_on(adapter.request_device(&ios_device_descriptor(&adapter))) {
                 Ok(pair) => pair,
@@ -498,13 +495,12 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         let mut renderer = WgpuRenderer::with_font_set(fonts);
         let loss_proxy = self.event_proxy.clone();
         renderer.set_device_lost_handler(self.device_loss.handler(move || loss_proxy.wake_up()));
-        renderer.init_gpu(
+        renderer.init_gpu(cranpose_render_wgpu::GpuTarget::on_adapter(
+            &adapter,
             Arc::clone(&device),
             Arc::clone(&queue),
             crate::surface_format::display_surface_view_format(config.format),
-            backend,
-            adapter.get_downlevel_capabilities().flags,
-        );
+        ));
 
         let Some(content) = self.content.take() else {
             self.abort(event_loop, LaunchError::ContentUnavailable);

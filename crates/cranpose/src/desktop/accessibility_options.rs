@@ -113,7 +113,13 @@ pub(crate) fn flag_is_on(value: &str) -> bool {
 }
 
 /// A number a settings tool printed, or nothing when it printed no number.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(
+    not(target_os = "linux"),
+    allow(
+        dead_code,
+        reason = "only Linux reads its settings from a tool's output"
+    )
+)]
 pub(crate) fn number_in(value: &str) -> Option<f32> {
     value
         .split_whitespace()
@@ -191,7 +197,13 @@ fn system_options() -> AccessibilityOptions {
 
 /// The number in a `reg query` line such as
 /// `    MinAnimate    REG_SZ    0` or `    Flags    REG_DWORD    0x7e`.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[cfg_attr(
+    not(target_os = "windows"),
+    allow(
+        dead_code,
+        reason = "only Windows reads its settings from the registry"
+    )
+)]
 pub(crate) fn registry_value(text: &str) -> Option<f32> {
     text.lines()
         .filter_map(|line| {

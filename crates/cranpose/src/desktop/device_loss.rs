@@ -123,13 +123,13 @@ impl App {
         let gpu = &context.gpu;
         let hand_over = |renderer: &mut cranpose_render_wgpu::WgpuRenderer, format| {
             renderer.set_device_lost_handler(Arc::clone(&handler));
-            renderer.init_gpu(
-                Arc::clone(&gpu.device),
-                Arc::clone(&gpu.queue),
-                crate::surface_format::display_surface_view_format(format),
-                backend,
-                downlevel,
-            );
+            renderer.init_gpu(cranpose_render_wgpu::GpuTarget {
+                device: Arc::clone(&gpu.device),
+                queue: Arc::clone(&gpu.queue),
+                surface_format: crate::surface_format::display_surface_view_format(format),
+                adapter_backend: backend,
+                adapter_downlevel: downlevel,
+            });
         };
         if let (Some(surface), Some(config)) = (&self.surface, &self.surface_config) {
             surface.configure(&gpu.device, config);

@@ -85,6 +85,19 @@ impl DeviceRect {
         (self.x, self.y, self.width, self.height)
     }
 
+    fn from_tuple((x, y, width, height): (f32, f32, f32, f32)) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    fn from_rect(rect: Rect) -> Self {
+        Self::from_tuple((rect.x, rect.y, rect.width, rect.height))
+    }
+
     fn size(self) -> [f32; 2] {
         [self.width, self.height]
     }
@@ -950,6 +963,17 @@ struct PendingBackdrop<'a> {
 }
 
 impl PendingBackdrop<'_> {
+    // The backdrop's slot: at its capture rect, showing its support or what
+    // is visible of it.
+    fn slot(&self, source: CompositeSource) -> CompositeSlot {
+        CompositeSlot {
+            z: self.z,
+            source,
+            dest: self.capture_rect,
+            visible: self.support.unwrap_or(self.visible),
+        }
+    }
+
     /// Whether `shader`, drawing last in the effect, draws in the final pass
     /// composited over what is beneath rather than into a texture first.
     fn composites_tail(&self, shader: &RuntimeShader) -> bool {
@@ -1389,26 +1413,37 @@ fn layer_pixel_rect(child: &ChildLayer, surface_rect: DeviceRect, scale: f32) ->
     ]
 }
 
-/// A runtime shader drawn in the final pass over `source`, the child's
-/// content, at `dest`.
-#[expect(clippy::too_many_arguments)]
-fn shader_tail_composite(
-    child: &ChildLayer,
-    shader: &Arc<RuntimeShader>,
+// Where a composite lands: its z, the texture it draws, its destination and
+// the part of that which shows.
+struct CompositeSlot {
     z: usize,
     source: CompositeSource,
     dest: DeviceRect,
-    layer_pixel_rect: [f32; 4],
-    rounded_mask: Option<RoundedCompositeMask>,
     visible: DeviceRect,
-) -> ResolvedComposite {
-    ResolvedComposite {
-        z_index: z,
-        source: source.texture,
-        content: source.content,
-        dest: dest.tuple(),
-        scissor: Some(visible.tuple()),
-        kind: ResolvedCompositeKind::Shader {
+}
+
+impl CompositeSlot {
+    fn composite(self, kind: ResolvedCompositeKind) -> ResolvedComposite {
+        ResolvedComposite {
+            z_index: self.z,
+            source: self.source.texture,
+            content: self.source.content,
+            dest: self.dest.tuple(),
+            scissor: Some(self.visible.tuple()),
+            kind,
+        }
+    }
+
+    // A runtime shader drawn in the final pass over the slot's source, the
+    // child's content.
+    fn shader_tail(
+        self,
+        child: &ChildLayer,
+        shader: &Arc<RuntimeShader>,
+        layer_pixel_rect: [f32; 4],
+        rounded_mask: Option<RoundedCompositeMask>,
+    ) -> ResolvedComposite {
+        self.composite(ResolvedCompositeKind::Shader {
             shader: Arc::clone(shader),
             layer_pixel_rect,
             source_region: None,
@@ -1416,7 +1451,25 @@ fn shader_tail_composite(
             substrate_regions: [None; MAX_SUBSTRATES],
             rounded_mask,
             alpha: child.alpha,
-        },
+        })
+    }
+
+    // A child whose surface lies on the parent's pixel grid, blitted one to
+    // one into the slot.
+    fn grid_child(
+        self,
+        child: &ChildLayer,
+        region: Option<DeviceRect>,
+        snap: Point,
+        scale: f32,
+    ) -> ResolvedComposite {
+        self.composite(ResolvedCompositeKind::Blit {
+            alpha: child.alpha,
+            blend_mode: child.blend_mode,
+            rounded_mask: grid_rounded_mask(child, snap, scale),
+            sample_mode: CompositeSampleMode::Nearest,
+            source_viewport: region.map(DeviceRect::tuple),
+        })
     }
 }
 
@@ -1463,20 +1516,9 @@ fn hash_base<H: Hasher>(base: wgpu::LoadOp<wgpu::Color>, state: &mut H) {
 
 /// The pixels a composite may touch: its destination within its scissor.
 fn composite_coverage(composite: &ResolvedComposite) -> Option<DeviceRect> {
-    let (x, y, width, height) = composite.dest;
-    let dest = DeviceRect {
-        x,
-        y,
-        width,
-        height,
-    };
+    let dest = DeviceRect::from_tuple(composite.dest);
     match composite.scissor {
-        Some((sx, sy, sw, sh)) => dest.intersect(DeviceRect {
-            x: sx,
-            y: sy,
-            width: sw,
-            height: sh,
-        }),
+        Some(scissor) => dest.intersect(DeviceRect::from_tuple(scissor)),
         None => Some(dest),
     }
 }
@@ -1484,49 +1526,13 @@ fn composite_coverage(composite: &ResolvedComposite) -> Option<DeviceRect> {
 /// A backdrop's result blitted where the backdrop sits, through its rounded
 /// mask and scissored to what is visible.
 fn backdrop_blit(item: &PendingBackdrop<'_>, source: CompositeSource) -> ResolvedComposite {
-    ResolvedComposite {
-        z_index: item.z,
-        source: source.texture,
-        content: source.content,
-        dest: item.capture_rect.tuple(),
-        scissor: Some(item.support.unwrap_or(item.visible).tuple()),
-        kind: ResolvedCompositeKind::Blit {
-            alpha: item.alpha,
-            blend_mode: BlendMode::SrcOver,
-            rounded_mask: item.rounded_mask,
-            sample_mode: CompositeSampleMode::Nearest,
-            source_viewport: None,
-        },
-    }
-}
-
-/// A child whose surface lies on the parent's pixel grid, blitted one to one
-/// at `dest`.
-#[expect(clippy::too_many_arguments)]
-fn grid_child_composite(
-    child: &ChildLayer,
-    z: usize,
-    source: CompositeSource,
-    region: Option<DeviceRect>,
-    dest: DeviceRect,
-    snap: Point,
-    scale: f32,
-    visible: DeviceRect,
-) -> ResolvedComposite {
-    ResolvedComposite {
-        z_index: z,
-        source: source.texture,
-        content: source.content,
-        dest: dest.tuple(),
-        scissor: Some(visible.tuple()),
-        kind: ResolvedCompositeKind::Blit {
-            alpha: child.alpha,
-            blend_mode: child.blend_mode,
-            rounded_mask: grid_rounded_mask(child, snap, scale),
-            sample_mode: CompositeSampleMode::Nearest,
-            source_viewport: region.map(DeviceRect::tuple),
-        },
-    }
+    item.slot(source).composite(ResolvedCompositeKind::Blit {
+        alpha: item.alpha,
+        blend_mode: BlendMode::SrcOver,
+        rounded_mask: item.rounded_mask,
+        sample_mode: CompositeSampleMode::Nearest,
+        source_viewport: None,
+    })
 }
 
 /// A transformed child's surface projected through its transform; none
@@ -1556,13 +1562,7 @@ fn projected_child_composite(
         z_index: z,
         source: source.texture,
         content: source.content,
-        dest: DeviceRect {
-            x: bounds.x,
-            y: bounds.y,
-            width: bounds.width,
-            height: bounds.height,
-        }
-        .tuple(),
+        dest: DeviceRect::from_rect(bounds).tuple(),
         scissor: Some(visible.tuple()),
         kind: ResolvedCompositeKind::Projective {
             dest,
@@ -1679,14 +1679,11 @@ fn stage_composites(
                     }
                 }
             };
-            ResolvedComposite {
-                z_index: item.z,
-                source: Rc::clone(source),
+            item.slot(CompositeSource {
+                texture: Rc::clone(source),
                 content: SourceContent::Transient,
-                dest: item.capture_rect.tuple(),
-                scissor: Some(item.support.unwrap_or(item.visible).tuple()),
-                kind,
-            }
+            })
+            .composite(kind)
         })
         .collect()
 }
@@ -4413,17 +4410,13 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         }
         let composite = match surface.grid_dest {
             Some(dest) => {
-                let visible = dest.intersect(shown).unwrap_or(visible);
-                let mut composite = grid_child_composite(
-                    child,
+                let mut composite = CompositeSlot {
                     z,
                     source,
-                    surface.region,
                     dest,
-                    snap,
-                    scale,
-                    visible,
-                );
+                    visible: dest.intersect(shown).unwrap_or(visible),
+                }
+                .grid_child(child, surface.region, snap, scale);
                 clip_to_placeholder(&mut composite, waiting, layer_rect, scale);
                 composite
             }
@@ -4608,15 +4601,17 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         if !self.effect_draws_now(effect, layer_pixel_rect, source_size, true) {
             return Some(None);
         }
-        Some(Some(shader_tail_composite(
+        let slot = CompositeSlot {
+            z,
+            source: surface.source.clone(),
+            dest,
+            visible,
+        };
+        Some(Some(slot.shader_tail(
             child,
             shader,
-            z,
-            surface.source.clone(),
-            dest,
             layer_pixel_rect,
             grid_rounded_mask(child, snap, scale),
-            visible,
         )))
     }
 
@@ -4672,18 +4667,20 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let source = self
             .renderer
             .transparent_source(self.recorder, width, height);
-        Some(Some(shader_tail_composite(
-            child,
-            shader,
+        let slot = CompositeSlot {
             z,
-            CompositeSource {
+            source: CompositeSource {
                 texture: source,
                 content: SourceContent::retained(&TRANSPARENT_SOURCE),
             },
             dest,
+            visible: support,
+        };
+        Some(Some(slot.shader_tail(
+            child,
+            shader,
             layer_pixel_rect,
             rounded_mask,
-            support,
         )))
     }
 
@@ -5387,13 +5384,7 @@ fn rounded_mask(clip: LayerRoundedClip, snap: Point, scale: f32) -> RoundedCompo
 }
 
 fn quad_device_bounds(quad: [[f32; 2]; 4]) -> DeviceRect {
-    let bounds = quad_bounds(quad);
-    DeviceRect {
-        x: bounds.x,
-        y: bounds.y,
-        width: bounds.width,
-        height: bounds.height,
-    }
+    DeviceRect::from_rect(quad_bounds(quad))
 }
 
 /// Source pixel -> parent device pixel for a projective child surface.
