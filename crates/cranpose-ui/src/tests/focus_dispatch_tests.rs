@@ -1,30 +1,6 @@
 use super::*;
 
 #[test]
-fn schedule_and_process_invalidations() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    clear_focus_invalidations();
-
-    let node1: NodeId = 1;
-    let node2: NodeId = 2;
-
-    schedule_focus_invalidation(node1);
-    schedule_focus_invalidation(node2);
-
-    assert!(has_pending_focus_invalidations());
-
-    let mut processed = Vec::new();
-    process_focus_invalidations(|node_id| {
-        processed.push(node_id);
-    });
-
-    assert_eq!(processed.len(), 2);
-    assert!(processed.contains(&node1));
-    assert!(processed.contains(&node2));
-    assert!(!has_pending_focus_invalidations());
-}
-
-#[test]
 fn active_focus_target_tracking() {
     let _app_context = crate::render_state::app_context_test_scope();
     set_active_focus_target(None);
@@ -39,102 +15,19 @@ fn active_focus_target_tracking() {
 }
 
 #[test]
-fn duplicate_invalidations_deduplicated() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    clear_focus_invalidations();
-
-    let node: NodeId = 42;
-    schedule_focus_invalidation(node);
-    schedule_focus_invalidation(node);
-    schedule_focus_invalidation(node);
-
-    let mut count = 0;
-    process_focus_invalidations(|_| {
-        count += 1;
-    });
-
-    assert_eq!(count, 1);
-}
-
-#[test]
-fn process_invalidations_recovers_after_processor_panic() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    clear_focus_invalidations();
-
-    schedule_focus_invalidation(1);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        process_focus_invalidations(|_| panic!("focus processor panic"));
-    }));
-    assert!(result.is_err());
-
-    schedule_focus_invalidation(2);
-    let mut processed = Vec::new();
-    process_focus_invalidations(|node_id| processed.push(node_id));
-
-    assert!(
-        processed.contains(&2),
-        "focus invalidation processing must not stay stuck after a processor panic"
-    );
-    assert!(!has_pending_focus_invalidations());
-}
-
-#[test]
-fn process_invalidations_allows_processor_to_schedule_more_work() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    clear_focus_invalidations();
-
-    schedule_focus_invalidation(1);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        process_focus_invalidations(|_| schedule_focus_invalidation(2));
-    }));
-    assert!(
-        result.is_ok(),
-        "focus processors must be able to enqueue follow-up invalidations"
-    );
-    assert!(has_pending_focus_invalidations());
-
-    let mut processed = Vec::new();
-    process_focus_invalidations(|node_id| processed.push(node_id));
-
-    assert_eq!(processed, vec![2]);
-    assert!(!has_pending_focus_invalidations());
-}
-
-#[test]
-fn focus_state_is_scoped_by_app_context() {
+fn active_focus_target_is_scoped_by_app_context() {
     let _app_context = crate::render_state::app_context_test_scope();
     let first = crate::render_state::AppContext::new_with_density(1.0);
     let second = crate::render_state::AppContext::new_with_density(1.0);
 
-    first.enter(|| {
-        clear_focus_invalidations();
-        schedule_focus_invalidation(7);
-        set_active_focus_target(Some(17));
-        assert!(has_pending_focus_invalidations());
-        assert_eq!(active_focus_target(), Some(17));
-    });
-
+    first.enter(|| set_active_focus_target(Some(17)));
     second.enter(|| {
-        clear_focus_invalidations();
-        assert!(!has_pending_focus_invalidations());
         assert_eq!(active_focus_target(), None);
-        schedule_focus_invalidation(9);
         set_active_focus_target(Some(19));
     });
 
-    first.enter(|| {
-        let mut processed = Vec::new();
-        process_focus_invalidations(|node_id| processed.push(node_id));
-        assert_eq!(processed, vec![7]);
-        assert_eq!(active_focus_target(), Some(17));
-    });
-
-    second.enter(|| {
-        let mut processed = Vec::new();
-        process_focus_invalidations(|node_id| processed.push(node_id));
-        assert_eq!(processed, vec![9]);
-        assert_eq!(active_focus_target(), Some(19));
-    });
+    first.enter(|| assert_eq!(active_focus_target(), Some(17)));
+    second.enter(|| assert_eq!(active_focus_target(), Some(19)));
 }
 
 struct RecordingTarget {
