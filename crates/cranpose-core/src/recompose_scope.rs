@@ -12,6 +12,19 @@ use crate::{
     SlotsHost, StateId, collections::map::HashSet, composer, runtime, thread_state,
 };
 
+// Whether a scope's body ran to its end or was skipped.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BodyRun {
+    Ran,
+    Skipped,
+}
+
+impl From<bool> for BodyRun {
+    fn from(ran: bool) -> Self {
+        if ran { Self::Ran } else { Self::Skipped }
+    }
+}
+
 /// A composable's body. The scope passes itself when it runs, so the
 /// callback needs neither a second box nor a reference back to its scope; a
 /// capture-free body records how to name its type, to be kept as is.
@@ -374,7 +387,8 @@ impl RecomposeScope {
     /// subscriptions and drops the states it did not read again, as Compose
     /// does; a skipped or unfinished one keeps the subscriptions it had.
     #[inline]
-    pub(crate) fn end_reads(&self, ran: bool) {
+    pub(crate) fn end_reads(&self, run: BodyRun) {
+        let ran = run == BodyRun::Ran;
         let cursor = self.inner.read_cursor.replace(NOT_READING);
         // A skipped body that read in order keeps the subscriptions as they
         // are.
@@ -527,7 +541,7 @@ impl RecomposeScope {
         self.inner.recomposing.set(true);
         (callback.body)(composer);
         self.inner.recomposing.set(false);
-        self.end_reads(true);
+        self.end_reads(BodyRun::Ran);
         // The body may have stored a new callback for the scope while it ran.
         update_cell(&self.inner.recompose, |slot| {
             if slot.is_none() {

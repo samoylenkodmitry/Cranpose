@@ -1064,7 +1064,11 @@ fn recyclable_emit_discards_mismatched_recycled_shell() {
         .entry(key)
         .or_default()
         .warm
-        .push(RecycledNode::from_shell(0, Box::new(WrongNode), true));
+        .push(RecycledNode::from_shell(
+            0,
+            Box::new(WrongNode),
+            RecycleOrigin::Warm,
+        ));
 
     let (composer, slots_host, applier_host) =
         setup_composer(&mut slots, &mut applier, handle, None);
@@ -1134,7 +1138,7 @@ fn recyclable_emit_creates_fresh_id_when_recycled_stable_id_is_live() {
                 from_recycled_shell: true,
                 reset_calls: 0,
             }),
-            true,
+            RecycleOrigin::Warm,
         ));
 
     let (composer, slots_host, applier_host) =

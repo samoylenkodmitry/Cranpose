@@ -9,8 +9,8 @@ use std::{
 use smallvec::SmallVec;
 
 use crate::{
-    AnchorId, Applier, ApplierGuard, ApplierHost, COMMAND_FLUSH_THRESHOLD, ChildList, Command,
-    CommandQueue, CompositionLocal, ComputedLocalEntry, DirtyBubble, Key, LocalKey,
+    AnchorId, Applier, ApplierGuard, ApplierHost, BodyRun, COMMAND_FLUSH_THRESHOLD, ChildList,
+    Command, CommandQueue, CompositionLocal, ComputedLocalEntry, DirtyBubble, Key, LocalKey,
     LocalStackSnapshot, LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned,
     ProvidedValue, RecomposeOptions, RecomposeScope, RecomposeScopeInner, RecycledNode,
     RetentionMode, RetentionPolicy, RuntimeHandle, ScopeId, SlotId, SlotPassOutcome, SlotTable,
@@ -1182,8 +1182,8 @@ impl Drop for ComposableGroup<'_> {
         if self.completed {
             self.scope.mark_composed_once();
         }
-        self.scope
-            .end_reads(self.completed & self.runs_body & !self.skipped.get());
+        let ran = self.completed & self.runs_body & !self.skipped.get();
+        self.scope.end_reads(BodyRun::from(ran));
         if self.skipped.get() {
             self.composer
                 .close_skipped_group_in_active_pass(&self.host, &self.scope);

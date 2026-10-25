@@ -1,6 +1,6 @@
 use std::any::{Any, TypeId};
 
-use crate::{Node, NodeError, NodeId, RecycledNode, RecycledNodeInsertion};
+use crate::{Node, NodeError, NodeId, RecycleOrigin, RecycledNode, RecycledNodeInsertion};
 
 /// Stores the nodes that a composition builds and applies changes to them. The UI layer supplies an
 /// applier; [`MemoryApplier`] is the stock one.
@@ -102,7 +102,7 @@ pub trait Applier: Any {
     }
 
     /// Marks whether a reinserted recycled node originated from the warm recycle path.
-    fn set_recycled_node_origin(&mut self, _id: NodeId, _warm_origin: bool) {}
+    fn set_recycled_node_origin(&mut self, _id: NodeId, _origin: RecycleOrigin) {}
 
     /// Seeds a warm recyclable shell for future reuse without requiring a prior removal.
     fn seed_recycled_node_shell(

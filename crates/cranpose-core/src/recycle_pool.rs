@@ -1,6 +1,6 @@
 //! The recycled shells of one node type and what sizes their pool.
 
-use crate::{Node, NodeId, RecycledNode};
+use crate::{Node, NodeId, RecycleOrigin, RecycledNode};
 
 // The recycled shells of one node type, and what sizes its pool: the shells
 // warm from the last pass, the ones returned this pass by a node that came
@@ -37,7 +37,7 @@ impl RecyclePool {
     }
 
     pub(crate) fn push(&mut self, recycled: RecycledNode) {
-        let pool = if recycled.warm_origin() {
+        let pool = if recycled.origin() == RecycleOrigin::Warm {
             &mut self.returning
         } else {
             &mut self.cold
@@ -47,7 +47,7 @@ impl RecyclePool {
     }
 
     pub(crate) fn push_warm(&mut self, mut recycled: RecycledNode) {
-        recycled.set_warm_origin(true);
+        recycled.set_origin(RecycleOrigin::Warm);
         self.warm.push(recycled);
         drop_oldest_past(&mut self.warm, self.limit);
     }
@@ -99,7 +99,11 @@ impl RecyclePool {
             }
             let stable_id = *next_stable_id;
             *next_stable_id = next_stable_id.saturating_add(1);
-            self.push_warm(RecycledNode::from_shell(stable_id, shell, true));
+            self.push_warm(RecycledNode::from_shell(
+                stable_id,
+                shell,
+                RecycleOrigin::Warm,
+            ));
         }
     }
 
@@ -133,7 +137,7 @@ impl RecyclePool {
             let promote = cold.len().min(needed).min(remaining_limit);
             let split_at = cold.len().saturating_sub(promote);
             for mut recycled in cold.split_off(split_at) {
-                recycled.set_warm_origin(true);
+                recycled.set_origin(RecycleOrigin::Warm);
                 self.warm.push(recycled);
             }
         }

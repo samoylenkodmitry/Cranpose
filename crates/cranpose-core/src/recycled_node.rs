@@ -1,18 +1,28 @@
 use crate::{Node, NodeError, NodeId};
 
+/// Which recycle path a pooled node came from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RecycleOrigin {
+    /// A node created fresh, or one kept from before the last pass.
+    #[default]
+    Cold,
+    /// A node kept warm from the last pass.
+    Warm,
+}
+
 /// A removed node kept in a pool with its old id, so that a later node of the same type can reuse
 /// it.
 pub struct RecycledNode {
     stable_id: NodeId,
     pub(crate) node: Box<dyn Node>,
-    warm_origin: bool,
+    origin: RecycleOrigin,
 }
 
 impl RecycledNode {
     /// A removed node as a pool shell: the fresh box it rehouses into, or
     /// the node itself cleared in place when it offers none. A rehoused
     /// node is dropped as it is, so it is not cleared first.
-    pub(crate) fn new(stable_id: NodeId, mut node: Box<dyn Node>, warm_origin: bool) -> Self {
+    pub(crate) fn new(stable_id: NodeId, mut node: Box<dyn Node>, origin: RecycleOrigin) -> Self {
         let node = node.rehouse_for_recycle().unwrap_or_else(|| {
             node.prepare_for_recycle();
             node
@@ -20,15 +30,19 @@ impl RecycledNode {
         Self {
             stable_id,
             node,
-            warm_origin,
+            origin,
         }
     }
 
-    pub(crate) fn from_shell(stable_id: NodeId, node: Box<dyn Node>, warm_origin: bool) -> Self {
+    pub(crate) fn from_shell(
+        stable_id: NodeId,
+        node: Box<dyn Node>,
+        origin: RecycleOrigin,
+    ) -> Self {
         Self {
             stable_id,
             node,
-            warm_origin,
+            origin,
         }
     }
 
@@ -37,12 +51,12 @@ impl RecycledNode {
         self.stable_id
     }
 
-    pub(crate) fn warm_origin(&self) -> bool {
-        self.warm_origin
+    pub(crate) fn origin(&self) -> RecycleOrigin {
+        self.origin
     }
 
-    pub(crate) fn set_warm_origin(&mut self, warm_origin: bool) {
-        self.warm_origin = warm_origin;
+    pub(crate) fn set_origin(&mut self, origin: RecycleOrigin) {
+        self.origin = origin;
     }
 
     /// Returns the pooled node, so that it can be reset before reuse.
@@ -50,10 +64,9 @@ impl RecycledNode {
         self.node.as_mut()
     }
 
-    /// Splits the shell into its stable id and its node, with a flag that tells whether it came
-    /// from the warm recycle path.
-    pub fn into_parts(self) -> (NodeId, Box<dyn Node>, bool) {
-        (self.stable_id, self.node, self.warm_origin)
+    /// Splits the shell into its stable id, its node and the recycle path it came from.
+    pub fn into_parts(self) -> (NodeId, Box<dyn Node>, RecycleOrigin) {
+        (self.stable_id, self.node, self.origin)
     }
 }
 

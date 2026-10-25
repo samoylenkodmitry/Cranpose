@@ -63,12 +63,12 @@ pub mod owned;
 pub mod platform;
 mod recompose;
 mod recompose_scope;
+pub(crate) use recompose_scope::{BodyRun, RecomposeScopeInner, ScopeRead};
 pub use recompose_scope::{RecomposeOptions, RecomposeScope, RecomposeScopeRegistryDebugStats};
-pub(crate) use recompose_scope::{RecomposeScopeInner, ScopeRead};
 mod recycle_pool;
 mod recycled_node;
 use recycle_pool::RecyclePool;
-pub use recycled_node::{RecycledNode, RecycledNodeInsertion};
+pub use recycled_node::{RecycleOrigin, RecycledNode, RecycledNodeInsertion};
 mod retention;
 /// The runtime in which a composition runs: state cells, UI tasks, frame callbacks and the queue of
 /// invalidated scopes.
@@ -1766,7 +1766,7 @@ pub struct MemoryApplier {
 struct MemoryApplierState {
     nodes: Vec<Option<Box<dyn Node>>>,
     physical_stable_ids: Vec<u32>,
-    physical_warm_recycled_origins: Vec<bool>,
+    physical_warm_recycled_origins: Vec<RecycleOrigin>,
     stable_index: stable_index::StableIndex,
     free_ids: BinaryHeap<Reverse<usize>>,
     high_ids: HashMap<NodeId, HighIdSlot>,
@@ -1785,7 +1785,7 @@ struct MemoryApplierState {
 #[derive(Default)]
 struct HighIdSlot {
     node: Option<Box<dyn Node>>,
-    warm_origin: bool,
+    origin: RecycleOrigin,
     generation: u32,
 }
 
@@ -2284,13 +2284,13 @@ impl MemoryApplier {
             .physical_warm_recycled_origins
             .iter()
             .zip(self.state.nodes.iter())
-            .filter(|(warm_origin, node)| **warm_origin && node.is_some())
+            .filter(|(origin, node)| **origin == RecycleOrigin::Warm && node.is_some())
             .count()
             + self
                 .state
                 .high_ids
                 .values()
-                .filter(|slot| slot.warm_origin && slot.node.is_some())
+                .filter(|slot| slot.origin == RecycleOrigin::Warm && slot.node.is_some())
                 .count()
     }
 
@@ -2333,7 +2333,11 @@ impl MemoryApplier {
         self.state.next_stable_id = self.state.next_stable_id.saturating_add(1);
         let pool = self.state.recycle_pools.entry(key).or_default();
         pool.remember_prototype(shell.as_ref());
-        pool.push_warm(RecycledNode::from_shell(stable_id, shell, true));
+        pool.push_warm(RecycledNode::from_shell(
+            stable_id,
+            shell,
+            RecycleOrigin::Warm,
+        ));
     }
 
     fn prune_stable_generations(&mut self) {
@@ -2405,22 +2409,27 @@ impl MemoryApplier {
         self.resolve_node_index(id).is_some() || self.high_id_node(id).is_ok()
     }
 
-    fn insert_high_id_node(&mut self, stable_id: NodeId, node: Box<dyn Node>, warm_origin: bool) {
+    fn insert_high_id_node(
+        &mut self,
+        stable_id: NodeId,
+        node: Box<dyn Node>,
+        origin: RecycleOrigin,
+    ) {
         let slot = self.state.high_ids.entry(stable_id).or_default();
         slot.node = Some(node);
-        slot.warm_origin = warm_origin;
+        slot.origin = origin;
     }
 
     fn insert_available_with_id(&mut self, stable_id: NodeId, node: Box<dyn Node>) {
         if stable_id >= Self::HIGH_ID_THRESHOLD {
-            self.insert_high_id_node(stable_id, node, false);
+            self.insert_high_id_node(stable_id, node, RecycleOrigin::Cold);
             return;
         }
 
         let physical_id = if let Some(Reverse(free_physical_id)) = self.state.free_ids.pop() {
             self.state.nodes[free_physical_id] = Some(node);
             self.state.physical_stable_ids[free_physical_id] = Self::pack_stable_id(stable_id);
-            self.state.physical_warm_recycled_origins[free_physical_id] = false;
+            self.state.physical_warm_recycled_origins[free_physical_id] = RecycleOrigin::Cold;
             free_physical_id
         } else {
             self.ensure_dense_node_storage_capacity();
@@ -2429,7 +2438,9 @@ impl MemoryApplier {
             self.state
                 .physical_stable_ids
                 .push(Self::pack_stable_id(stable_id));
-            self.state.physical_warm_recycled_origins.push(false);
+            self.state
+                .physical_warm_recycled_origins
+                .push(RecycleOrigin::Cold);
             physical_id
         };
 
@@ -2491,14 +2502,14 @@ impl MemoryApplier {
         if let Some(slot) = self.state.high_ids.get_mut(&node_id)
             && let Some(node) = slot.node.take()
         {
-            let warm_origin = std::mem::take(&mut slot.warm_origin);
+            let origin = std::mem::take(&mut slot.origin);
             slot.generation = slot.generation.wrapping_add(1);
             if let Some(key) = node.recycle_key() {
                 let recycle_pool_limit = node.recycle_pool_limit();
                 self.push_recycled_node(
                     key,
                     recycle_pool_limit,
-                    RecycledNode::new(node_id, node, warm_origin),
+                    RecycledNode::new(node_id, node, origin),
                 );
             }
             return Ok(());
@@ -2511,15 +2522,16 @@ impl MemoryApplier {
             && let Some(key) = node.recycle_key()
         {
             let recycle_pool_limit = node.recycle_pool_limit();
-            let warm_origin = self
+            let origin = self
                 .state
                 .physical_warm_recycled_origins
                 .get_mut(physical_id)
-                .is_some_and(std::mem::take);
+                .map(std::mem::take)
+                .unwrap_or_default();
             self.push_recycled_node(
                 key,
                 recycle_pool_limit,
-                RecycledNode::new(node_id, node, warm_origin),
+                RecycledNode::new(node_id, node, origin),
             );
         }
         self.state.physical_stable_ids[physical_id] = Self::INVALID_STABLE_ID;
@@ -2588,7 +2600,7 @@ impl Applier for MemoryApplier {
         let stable_id = self.state.next_stable_id;
         self.state.next_stable_id = self.state.next_stable_id.saturating_add(1);
         if stable_id >= Self::HIGH_ID_THRESHOLD {
-            self.insert_high_id_node(stable_id, node, false);
+            self.insert_high_id_node(stable_id, node, RecycleOrigin::Cold);
             return stable_id;
         }
 
@@ -2599,7 +2611,7 @@ impl Applier for MemoryApplier {
             );
             self.state.nodes[id] = Some(node);
             self.state.physical_stable_ids[id] = Self::pack_stable_id(stable_id);
-            self.state.physical_warm_recycled_origins[id] = false;
+            self.state.physical_warm_recycled_origins[id] = RecycleOrigin::Cold;
             id
         } else {
             self.ensure_dense_node_storage_capacity();
@@ -2608,7 +2620,9 @@ impl Applier for MemoryApplier {
             self.state
                 .physical_stable_ids
                 .push(Self::pack_stable_id(stable_id));
-            self.state.physical_warm_recycled_origins.push(false);
+            self.state
+                .physical_warm_recycled_origins
+                .push(RecycleOrigin::Cold);
             id
         };
         self.state.stable_index.insert_fresh(stable_id, physical_id);
@@ -2768,13 +2782,13 @@ impl Applier for MemoryApplier {
         self.state.recycle_pools.get_mut(&key)?.take()
     }
 
-    fn set_recycled_node_origin(&mut self, id: NodeId, warm_origin: bool) {
+    fn set_recycled_node_origin(&mut self, id: NodeId, origin: RecycleOrigin) {
         if let Some(physical_id) = self.resolve_node_index(id) {
-            self.state.physical_warm_recycled_origins[physical_id] = warm_origin;
+            self.state.physical_warm_recycled_origins[physical_id] = origin;
         } else if let Some(slot) = self.state.high_ids.get_mut(&id)
             && slot.node.is_some()
         {
-            slot.warm_origin = warm_origin;
+            slot.origin = origin;
         }
     }
 

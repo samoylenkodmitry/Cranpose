@@ -131,7 +131,7 @@ impl Composer {
             let id = match emitted {
                 EmittedNode::Fresh(node) => applier.create(node),
                 EmittedNode::Recycled(recycled) => {
-                    let (stable_id, node, warm_origin) = recycled.into_parts();
+                    let (stable_id, node, origin) = recycled.into_parts();
                     let insertion = applier.insert_recycled_node_or_create(stable_id, node);
                     if let Some(error) = insertion.fallback_error.as_ref() {
                         log::warn!(
@@ -139,7 +139,7 @@ impl Composer {
                             "discarding stale recycled stable id #{stable_id}: {error}",
                         );
                     }
-                    applier.set_recycled_node_origin(insertion.id, warm_origin);
+                    applier.set_recycled_node_origin(insertion.id, origin);
                     insertion.id
                 }
             };
