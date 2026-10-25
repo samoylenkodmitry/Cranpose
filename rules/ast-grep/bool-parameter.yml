@@ -1,0 +1,16 @@
+id: bool-parameter
+language: rust
+severity: warning
+message: An argument that selects behavior is an enum, so the call site says which.
+rule:
+  kind: parameter
+  has:
+    field: type
+    kind: primitive_type
+    regex: ^bool$
+  inside:
+    kind: parameters
+    inside:
+      kind: function_item
+      has:
+        kind: visibility_modifier

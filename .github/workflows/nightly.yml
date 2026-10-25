@@ -226,6 +226,8 @@ jobs:
         run: scripts/ci/provision_toolchain.sh
       - name: Check the workspace with the declared minimum Rust
         run: just msrv-check
+      - name: Check the dependency advisories
+        run: just deny-advisories
 
   # The supported platforms running the app, not only building it: browsers,
   # Windows and the phones (docs/platform_support.md).

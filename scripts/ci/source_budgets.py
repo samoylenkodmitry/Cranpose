@@ -20,8 +20,12 @@ it fails until the budget comes down in the same commit, so the saving stays.
 - source_text_checks: `.contains(` calls in tests under crates/ and apps/
   that read source files as text. Such a check breaks on a rename and passes
   a changed behavior. xtask reads text by design and is left out.
+- ast_grep: the sites of each structural rule in rules/ast-grep, from one
+  `ast-grep scan` of crates/, apps/ and xtask/. A rule with no budget fails.
 """
 
+import collections
+import json
 import pathlib
 import re
 import subprocess
@@ -105,9 +109,49 @@ def private_doc_lines(files: list[pathlib.Path]) -> int:
     return int(result.stdout.strip().splitlines()[-1].split()[0])
 
 
+def ast_grep_matches() -> list[dict]:
+    result = subprocess.run(
+        ["ast-grep", "scan", *CODE_ROOTS, "--json=compact"],
+        cwd=ROOT, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise SystemExit(f"source-budgets: ast-grep scan failed\n{result.stderr}")
+    return json.loads(result.stdout)
+
+
+def report_rule_sites(matches: list[dict], budgets: dict[str, int], counts: dict[str, int]) -> None:
+    for rule, count in sorted(counts.items()):
+        if count <= budgets.get(rule, 0):
+            continue
+        sites = [match for match in matches if match["ruleId"] == rule]
+        print(f"source-budgets: {rule}: {sites[0]['message']}", file=sys.stderr)
+        for match in sites[:20]:
+            print(f"    {match['file']}:{match['range']['start']['line'] + 1}", file=sys.stderr)
+
+
+def compare(measured: dict[str, int], budgets: dict[str, int], failures: list[str]) -> bool:
+    lowered = False
+    for name in sorted(set(measured) | set(budgets)):
+        count = measured.get(name, 0)
+        if name not in budgets:
+            failures.append(f"{name}: {count}, and no budget for it")
+            continue
+        budget = budgets[name]
+        if count > budget:
+            failures.append(f"{name}: {count}, over the budget of {budget}")
+        elif count < budget:
+            lowered = True
+            budgets[name] = count
+            failures.append(f"{name}: {count}, under the budget of {budget}")
+    return lowered
+
+
 def write_budgets(config: dict) -> None:
     lines = [BUDGET_FILE.read_text().split("[counts]")[0].rstrip("\n"), "", "[counts]"]
     lines += [f"{name} = {value}" for name, value in config["counts"].items()]
+    if "ast_grep" in config:
+        lines += ["", "[ast_grep]"]
+        lines += [f'"{rule}" = {value}' for rule, value in sorted(config["ast_grep"].items())]
     lines += ["", "[file_lines]", f"limit = {config['file_lines']['limit']}", "", "[file_lines.over]"]
     lines += [f'"{path}" = {length}' for path, length in sorted(config["file_lines"]["over"].items())]
     BUDGET_FILE.write_text("\n".join(lines) + "\n")
@@ -120,17 +164,13 @@ def main(argv: list[str]) -> int:
         return 2
     config = tomllib.loads(BUDGET_FILE.read_text())
     counts, lengths = measure()
-    failures = []
-    lowered = False
-
-    for name, count in counts.items():
-        budget = config["counts"][name]
-        if count > budget:
-            failures.append(f"{name}: {count}, over the budget of {budget}")
-        elif count < budget:
-            lowered = True
-            config["counts"][name] = count
-            failures.append(f"{name}: {count}, under the budget of {budget}")
+    failures: list[str] = []
+    lowered = compare(counts, config["counts"], failures)
+    if "ast_grep" in config:
+        matches = ast_grep_matches()
+        rule_counts = dict(collections.Counter(match["ruleId"] for match in matches))
+        report_rule_sites(matches, config["ast_grep"], rule_counts)
+        lowered |= compare(rule_counts, config["ast_grep"], failures)
 
     limit = config["file_lines"]["limit"]
     over = config["file_lines"]["over"]

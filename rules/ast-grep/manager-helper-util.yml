@@ -1,0 +1,12 @@
+id: manager-helper-util
+language: rust
+severity: warning
+message: A type is named after what it is; Manager, Helper and Util name nothing.
+rule:
+  any:
+    - kind: struct_item
+    - kind: enum_item
+    - kind: trait_item
+  has:
+    field: name
+    regex: (Manager|Helper|Helpers|Util|Utils)$

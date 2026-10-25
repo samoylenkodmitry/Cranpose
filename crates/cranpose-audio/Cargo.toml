@@ -33,7 +33,6 @@ aaudio = ["dep:ndk"]
 # dependencies are only declared for the watchOS target.
 avaudio = [
     "dep:objc2",
-    "dep:objc2-foundation",
     "dep:objc2-avf-audio",
     "dep:objc2-core-audio-types",
     "dep:block2",
@@ -49,11 +48,6 @@ ndk = { version = "0.9.0", default-features = false, features = ["audio"], optio
 
 [target.'cfg(target_os = "watchos")'.dependencies]
 objc2 = { version = "0.6", optional = true }
-objc2-foundation = { version = "0.3", default-features = false, optional = true, features = [
-    "std",
-    "NSError",
-    "NSString",
-] }
 objc2-avf-audio = { version = "0.3.2", default-features = false, optional = true, features = [
     "std",
     "block2",

@@ -10,6 +10,13 @@ repository.workspace = true
 [lints]
 workspace = true
 
+# getrandom and cranpose are named only for their features: getrandom turns on
+# its browser source for the crates that draw random numbers, and cranpose takes
+# the web features. The #[wasm_bindgen] attribute on an async function expands
+# to a path into wasm-bindgen-futures, which no source line names.
+[package.metadata.cargo-shear]
+ignored = ["cranpose", "getrandom", "wasm-bindgen-futures"]
+
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false
 

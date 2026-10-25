@@ -2184,9 +2184,7 @@ fn counter_app() {
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    use std::thread;
-
-                    use instant::Duration;
+                    use std::{thread, time::Duration};
                     for _ in 0..5 {
                         if token.is_cancelled() {
                             return String::new();

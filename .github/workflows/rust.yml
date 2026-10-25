@@ -110,6 +110,14 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just source-budgets
 
+      - name: Check dependency licenses, bans and sources
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just deny
+
+      - name: Check for unused dependencies
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just shear
+
       - name: Check the generated modifier matrix is current
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just twin-matrix-check

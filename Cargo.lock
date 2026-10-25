@@ -944,9 +944,9 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
 name = "clipboard-win"
-version = "5.4.1"
+version = "5.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bde03770d3df201d4fb868f2c9c59e66a3e4e2bd06692a0fe701e7103c7e84d4"
+checksum = "052af7878466feccda12ba7a6a67d019d712f296809559b47c12c8cc196d3a9a"
 dependencies = [
  "error-code",
 ]
@@ -1092,7 +1092,6 @@ version = "0.17.2"
 dependencies = [
  "coroflow",
  "cranpose",
- "cranpose-core",
  "cranpose-coroflow",
  "cranpose-foundation",
  "cranpose-navigation",
@@ -1259,8 +1258,6 @@ dependencies = [
  "wry",
  "x11rb",
  "zbus",
- "zune-core",
- "zune-jpeg",
 ]
 
 [[package]]
@@ -1307,7 +1304,6 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-avf-audio",
  "objc2-core-audio-types",
- "objc2-foundation 0.3.2",
  "parking_lot",
 ]
 
@@ -1413,7 +1409,6 @@ dependencies = [
  "cranpose-ui",
  "cranpose-ui-graphics",
  "cranpose-ui-layout",
- "log",
  "thiserror 2.0.21",
 ]
 
@@ -1493,7 +1488,6 @@ dependencies = [
 name = "cranpose-navigation"
 version = "0.17.2"
 dependencies = [
- "coroflow",
  "cranpose-animation",
  "cranpose-core",
  "cranpose-coroflow",
@@ -1536,7 +1530,6 @@ dependencies = [
  "cranpose-ui",
  "cranpose-ui-graphics",
  "hyphenation",
- "log",
  "portable-atomic",
  "rustybuzz",
  "smallvec",
@@ -1557,13 +1550,11 @@ dependencies = [
  "bytemuck",
  "cranpose-app-shell",
  "cranpose-core",
- "cranpose-foundation",
  "cranpose-macros",
  "cranpose-render-common",
  "cranpose-ui",
  "cranpose-ui-graphics",
  "log",
- "once_cell",
 ]
 
 [[package]]
@@ -1586,7 +1577,6 @@ dependencies = [
  "naga",
  "png",
  "pollster",
- "rayon",
  "rustix",
  "smallvec",
  "stats_alloc",
@@ -1968,7 +1958,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 3.0.9",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -2046,7 +2036,6 @@ name = "desktop-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "console_error_panic_hook",
  "cranpose",
  "cranpose-animation",
  "cranpose-app-shell",
@@ -2064,16 +2053,13 @@ dependencies = [
  "env_logger",
  "getrandom 0.4.3",
  "image",
- "instant",
  "log",
  "perf-compare-cranpose",
  "pollster",
  "pulldown-cmark",
  "serde",
  "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "wasm-logger",
+ "web-time",
  "zip",
 ]
 
@@ -2085,7 +2071,6 @@ dependencies = [
  "cranpose",
  "cranpose-capabilities",
  "desktop-app",
- "env_logger",
  "log",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -3552,18 +3537,6 @@ dependencies = [
  "hashbrown 0.17.1",
  "serde",
  "serde_core",
-]
-
-[[package]]
-name = "instant"
-version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0242819d153cba4b4b05a5a8f2a7e9bbf97b6055b2a002b395c96b5ff3c0222"
-dependencies = [
- "cfg-if",
- "js-sys",
- "wasm-bindgen",
- "web-sys",
 ]
 
 [[package]]
@@ -5646,9 +5619,9 @@ checksum = "eec689c0bc40ff2458a5977b6619cb718087084a18e02a131c599b62d05e1a5f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -7442,9 +7415,9 @@ dependencies = [
 
 [[package]]
 name = "webpki-root-certs"
-version = "1.0.9"
+version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b96554aa2acc8ccdb7e1c9a58a7a68dd5d13bccc69cd124cb09406db612a1c9b"
+checksum = "e49d0e65abc00c142e8f9428da991da9f1a250c39be97459901eb12b9b49f62a"
 dependencies = [
  "rustls-pki-types",
 ]

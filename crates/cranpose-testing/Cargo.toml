@@ -31,7 +31,6 @@ image-loading = ["cranpose/image-loading"]
 
 [dependencies]
 cranpose-core = { workspace = true }
-cranpose-foundation = { workspace = true }
 cranpose-ui = { workspace = true, features = ["test-helpers"] }
 cranpose-app-shell = { workspace = true, features = ["test-support"] }
 cranpose-render-common = { workspace = true }
@@ -45,6 +44,7 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 # Path-only dev-deps: stripped from the published manifest (publish order ignores dev edges).
 cranpose-macros = { path = "../cranpose-macros" }
 cranpose-ui-layout = { path = "../cranpose-ui-layout" }
+cranpose-foundation = { workspace = true }
 
  
 

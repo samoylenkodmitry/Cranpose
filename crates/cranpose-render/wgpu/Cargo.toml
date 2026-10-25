@@ -38,7 +38,6 @@ installed-fonts = ["cranpose-render-common/installed-fonts"]
 [dependencies]
 cranpose-render-common = { workspace = true }
 cranpose-ui-graphics = { workspace = true }
-cranpose-foundation = { workspace = true }
 cranpose-ui = { workspace = true }
 cranpose-core = { workspace = true }
 bytemuck = { workspace = true }
@@ -46,13 +45,6 @@ log = "0.4"
 naga = { version = "30.0.1", features = ["wgsl-in"] }
 web-time = { workspace = true }
 smallvec = "1.16.3"
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# Substrate for the stage executor: vetted scoped parallelism so the frame
-# fan-outs need no repository-local unsafe (the pipeline's producer and
-# present stages submit concurrently, which the old single-job pool could
-# not express soundly).
-rayon = "1.12"
 
 # Every target takes Cranpose's fork of wgpu (`wgpu` in the workspace,
 # forks/README.md), whose library is also `wgpu`, with its backends.
@@ -164,6 +156,7 @@ stats_alloc = "0.1.10"
 # The GL lowering of the fork the web and Android draw with, which the
 # `gles_lowering` tests run on every host.
 wgpu-hal = { package = "cranpose-wgpu-hal", path = "../../../forks/wgpu/wgpu-hal" }
+cranpose-foundation = { workspace = true }
 
 [[test]]
 name = "integration"

@@ -32,6 +32,7 @@ AGENTS.md holds the code rules every change follows; these are the rest.
 - Keep related fixes in one PR; finish requested code changes before optional measurements or PR prose.
 - Before opening a PR, run `/simplify` on the diff, or review it the same way where that command is missing: the gates check shape, and review catches renamed copies and code in the wrong module.
 - Cut budgets in cleanup PRs of their own, with no feature work. A PR that lowers a budgeted count lowers its budget in the same commit.
+- CI time: pull request checks stay the fastest lane; main's run after a merge stays under 20 minutes and the nightly under an hour. Time a new check locally before choosing its lane.
 - A batch merge means merging each ready PR straight into main on its own green CI run, never through a combined branch; a PR is not rebased or run again after another PR of the batch lands, unless the two conflict. Watch main's CI once after the batch and fix any failure there.
 - Never use `git reset`; preserve work with a stash when needed.
 - Worktrees share stashes: inspect contents, resolve the immutable stash hash, and apply only the intended work.
