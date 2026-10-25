@@ -3,7 +3,8 @@
 A Cranpose screen on an ESP32-S3 or ESP32 under ESP-IDF: a title, a bar that
 an infinite transition sweeps, a counter that a coroutine `delay` advances
 once a second and a box that counts taps. Without a board feature it draws on
-QEMU's virtual RGB panel at 320 by 240 pixels.
+QEMU's virtual RGB panel at 320 by 480 pixels, the size of the boards'
+panels.
 
 ```sh
 just esp32-setup        # once: Xtensa Rust, espflash, ldproxy, Espressif QEMU

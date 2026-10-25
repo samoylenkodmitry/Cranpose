@@ -2,7 +2,7 @@
 
 mod board;
 
-#[cfg(not(any(feature = "text-drawn", feature = "text-composed")))]
+#[cfg(not(any(feature = "text-drawn", feature = "text-composed", feature = "workload")))]
 use std::time::Duration;
 
 use cranpose::{prelude::*, text::TextUnit};
@@ -61,8 +61,9 @@ fn Pulse() {
 
 /// The line under the bar: the seconds since the start. The benchmarks'
 /// `text-drawn` and `text-composed` features show a number that counts up
-/// every frame there instead, as a clock or a sensor reading does.
-#[cfg(not(any(feature = "text-drawn", feature = "text-composed")))]
+/// every frame there instead, as a clock or a sensor reading does, and the
+/// `workload` feature the work of a busier screen.
+#[cfg(not(any(feature = "text-drawn", feature = "text-composed", feature = "workload")))]
 #[composable]
 fn StatusLine() {
     let seconds = cranpose_core::rememberMutableStateOf(|| 0u32);
@@ -81,8 +82,12 @@ fn StatusLine() {
     );
 }
 
-#[cfg(all(feature = "text-drawn", feature = "text-composed"))]
-compile_error!("text-drawn and text-composed each replace the seconds line: pick one");
+#[cfg(any(
+    all(feature = "text-drawn", feature = "text-composed"),
+    all(feature = "text-drawn", feature = "workload"),
+    all(feature = "text-composed", feature = "workload"),
+))]
+compile_error!("text-drawn, text-composed and workload each replace the seconds line: pick one");
 
 #[cfg(any(feature = "text-drawn", feature = "text-composed"))]
 #[path = "../../../crates/cranpose/tests/support/reading.rs"]
@@ -101,6 +106,17 @@ fn StatusLine() {
 #[composable]
 fn StatusLine() {
     reading::DrawnReading(Color::from_rgb_u8(200, 204, 220), 14.0);
+}
+
+#[cfg(feature = "workload")]
+#[path = "../../../crates/cranpose/tests/support/workload.rs"]
+mod workload;
+
+/// The work of a busier screen, for the profiles of the IRAM lists.
+#[cfg(feature = "workload")]
+#[composable]
+fn StatusLine() {
+    workload::Workload(text_style(Color::from_rgb_u8(200, 204, 220), 14.0));
 }
 
 #[composable]

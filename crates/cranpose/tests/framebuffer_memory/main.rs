@@ -9,8 +9,11 @@ use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 
 #[path = "../support/reading.rs"]
 mod reading;
+#[path = "../support/workload.rs"]
+mod workload;
 
 use reading::{ComposedReading, DrawnReading};
+use workload::Workload;
 
 #[global_allocator]
 static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
@@ -57,12 +60,16 @@ fn left_behind(content: impl Fn() + 'static) -> isize {
 /// A number that changes every frame, as a clock or a sensor reading does,
 /// composed in a `Text` or drawn in a draw scope, leaves no memory behind:
 /// the text pools and caches keep what the screen shows and what recent
-/// frames used. One test, as the allocator counts every thread's memory.
+/// frames used. Nor does a busier screen, whose list scrolls and whose
+/// panel comes and goes. One test, as the allocator counts every thread's
+/// memory.
 #[test]
-fn text_that_changes_every_frame_leaves_no_memory_behind() {
+fn screens_that_change_every_frame_leave_no_memory_behind() {
     let composed = left_behind(|| ComposedReading(TextStyle::default()));
     let drawn = left_behind(|| DrawnReading(Color::WHITE, DrawTextStyle::default().font_size));
-    println!("left behind: composed {composed} bytes, drawn {drawn} bytes");
+    let busy = left_behind(|| Workload(TextStyle::default()));
+    println!("left behind: composed {composed} bytes, drawn {drawn} bytes, busy {busy} bytes");
     assert!(composed < LEFT_BEHIND_BOUND, "composed: {composed} bytes");
     assert!(drawn < LEFT_BEHIND_BOUND, "drawn: {drawn} bytes");
+    assert!(busy < LEFT_BEHIND_BOUND, "busy: {busy} bytes");
 }

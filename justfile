@@ -180,10 +180,21 @@ esp32-bench board app="demo": _disk-guard
 # Runs without the per-frame code in IRAM. See
 # crates/cranpose-platform/esp-idf/components/cranpose_hot_code/README.md.
 # `mode` drawn or composed shows a line of text that changes every frame
-# (the demo's text-drawn or text-composed feature).
+# (the demo's text-drawn or text-composed feature), and workload the work of
+# a busier screen (its workload feature).
 # Profiles the demo on a board with the sampler and prints the hottest functions.
 esp32-profile board mode="demo" seconds="40": _disk-guard
-    . "$HOME/export-{{esp32_toolchain}}.sh" && python3 scripts/esp32/board_run.py --board {{board}} {{ if mode == "demo" { "" } else { "--feature text-" + mode } }} --component scripts/esp32/sampler --sdkconfig scripts/esp32/sdkconfig.no_hot_code --seconds {{seconds}} --log target/esp32/profile-{{board}}-{{mode}}.log && python3 scripts/esp32/profile.py target/esp32/profile-{{board}}-{{mode}}.elf target/esp32/profile-{{board}}-{{mode}}.log --crates
+    . "$HOME/export-{{esp32_toolchain}}.sh" && python3 scripts/esp32/board_run.py --board {{board}} {{ if mode == "demo" { "" } else if mode == "workload" { "--feature workload" } else { "--feature text-" + mode } }} --component scripts/esp32/sampler --sdkconfig scripts/esp32/sdkconfig.no_hot_code --seconds {{seconds}} --log target/esp32/profile-{{board}}-{{mode}}.log && python3 scripts/esp32/profile.py target/esp32/profile-{{board}}-{{mode}}.elf target/esp32/profile-{{board}}-{{mode}}.log --crates
+
+# For the ES3C35P's IRAM list (see crates/cranpose-platform/esp-idf/
+# components/cranpose_hot_code/README.md): builds the demo for QEMU's ESP32-S3
+# without the IRAM section and counts the misses of 120 frames. Needs
+# scripts/esp32/icache/setup.sh once. `mode` as for esp32-profile.
+# Profiles the demo in QEMU by its instruction cache misses, without a board.
+esp32-sim-profile mode="demo": _disk-guard
+    . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;{{justfile_directory()}}/scripts/esp32/sdkconfig.no_hot_code" CARGO_WORKSPACE_DIR={{justfile_directory()}}/{{esp32_demo}} CARGO_TARGET_DIR={{justfile_directory()}}/target/esp32-sim cargo build --release {{ if mode == "demo" { "" } else if mode == "workload" { "--features workload" } else { "--features text-" + mode } }}
+    mkdir -p target/esp32 && cp target/esp32-sim/xtensa-esp32s3-espidf/release/esp32-demo target/esp32/sim-{{mode}}.elf
+    . "$HOME/export-{{esp32_toolchain}}.sh" && python3 scripts/esp32/sim_profile.py target/esp32/sim-{{mode}}.elf target/esp32/sim-{{mode}}.log --bootloader target/esp32-sim/xtensa-esp32s3-espidf/release/bootloader.bin
 
 # Lints the ESP-IDF platform crate and the demo for the ESP32-S3.
 esp32-clippy: _disk-guard

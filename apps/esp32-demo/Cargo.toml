@@ -22,6 +22,10 @@ e32r35t = []
 # seconds line, drawn by a draw scope or composed in a Text.
 text-drawn = []
 text-composed = []
+# For the IRAM lists' profiles: the work of a busier screen in place of the
+# seconds line, with readings, a panel that comes and goes, a counting button
+# and a list that scrolls by itself.
+workload = []
 
 [dependencies]
 cranpose = { path = "../../crates/cranpose", default-features = false, features = ["framebuffer"] }
@@ -33,6 +37,11 @@ log = "0.4"
 
 [build-dependencies]
 embuild = "0.33.5"
+
+# build.rs passes on esp-idf-sys's cfgs; the QEMU board reads the chip from
+# `esp_idf_idf_target_esp32`.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(esp_idf_idf_target_esp32)"] }
 
 [workspace]
 members = [".", "../../crates/cranpose-platform/esp-idf"]
