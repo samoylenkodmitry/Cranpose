@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Boot an ESP32-S3 firmware in Espressif's QEMU and watch its serial log.
+"""Boot an ESP32-S3 or classic ESP32 firmware in Espressif's QEMU and watch
+its serial log.
 
 Builds the merged flash image with espflash, starts QEMU headless with the
-octal PSRAM and the virtual RGB panel ESP-IDF's `idf.py qemu` uses, and streams
-the serial log. It stops as soon as the log shows `--until` (success), a panic
-(failure) or the timeout passes (failure). `--screenshot` saves the virtual
-panel as PNG at the moment the run stops. `--window` shows the panel in a
-window and runs until QEMU exits.
+virtual RGB panel ESP-IDF's `idf.py qemu` uses, and the octal PSRAM on the
+ESP32-S3, and streams the serial log. It stops as soon as the log shows
+`--until` (success) `--until-count` times, a panic (failure) or the timeout
+passes (failure). `--screenshot` saves the virtual panel as PNG at the moment
+the run stops. `--window` shows the panel in a window and runs until QEMU
+exits.
 """
 
 import argparse
@@ -42,10 +44,10 @@ def find_qemu(explicit):
     sys.exit("qemu-system-xtensa not found: run `just esp32-setup` or set ESP_QEMU")
 
 
-def flash_image(elf, bootloader, partitions, flash_size, out):
+def flash_image(chip, elf, bootloader, partitions, flash_size, out):
     subprocess.run(
         [
-            "espflash", "save-image", "--chip", "esp32s3", "--merge",
+            "espflash", "save-image", "--chip", chip, "--merge",
             "--flash-size", flash_size, "--bootloader", str(bootloader),
             "--partition-table", str(partitions), str(elf), str(out),
         ],
@@ -176,6 +178,7 @@ def print_cpu_samples(path, elf, samples=20):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--chip", choices=("esp32s3", "esp32"), default="esp32s3")
     parser.add_argument("--elf", required=True, type=pathlib.Path)
     parser.add_argument("--flash-image", type=pathlib.Path,
                         help="a merged flash image to boot instead of building one from the ELF")
@@ -186,6 +189,8 @@ def main():
     parser.add_argument("--psram", default="8M")
     parser.add_argument("--qemu")
     parser.add_argument("--until", help="log text that ends the run successfully")
+    parser.add_argument("--until-count", type=int, default=1,
+                        help="how many lines with the `--until` text end the run")
     parser.add_argument("--timeout", type=float, default=60.0)
     parser.add_argument("--screenshot", type=pathlib.Path)
     parser.add_argument("--log", type=pathlib.Path)
@@ -205,20 +210,23 @@ def main():
             parser.error("--partitions is required to build the flash image")
         image = workdir / "flash.bin"
         bootloader = args.bootloader or args.elf.parent / "bootloader.bin"
-        flash_image(args.elf, bootloader, args.partitions, args.flash_size, image)
-    efuse = workdir / "efuse.bin"
-    efuse_image(efuse)
+        flash_image(args.chip, args.elf, bootloader, args.partitions, args.flash_size, image)
     monitor_path = workdir / "monitor.sock"
     pump_path = workdir / "pump.sock"
     serial = workdir / "serial.log"
-    command = [
-        find_qemu(args.qemu),
-        "-M", "esp32s3", "-m", args.psram,
+    command = [find_qemu(args.qemu), "-M", args.chip]
+    if args.chip == "esp32s3":
+        efuse = workdir / "efuse.bin"
+        efuse_image(efuse)
+        command += [
+            "-m", args.psram,
+            "-drive", f"file={efuse},if=none,format=raw,id=efuse",
+            "-global", "driver=nvram.esp32s3.efuse,property=drive,value=efuse",
+            "-global", "driver=ssi_psram,property=is_octal,value=true",
+        ]
+    command += [
         "-drive", f"file={image},if=mtd,format=raw",
-        "-drive", f"file={efuse},if=none,format=raw,id=efuse",
-        "-global", "driver=nvram.esp32s3.efuse,property=drive,value=efuse",
-        "-global", "driver=timer.esp32s3.timg,property=wdt_disable,value=true",
-        "-global", "driver=ssi_psram,property=is_octal,value=true",
+        "-global", f"driver=timer.{args.chip}.timg,property=wdt_disable,value=true",
         "-nic", "user,model=open_eth",
         "-display", "cocoa" if args.window and sys.platform == "darwin" else ("sdl" if args.window else "none"),
         "-serial", f"file:{serial}",
@@ -232,6 +240,8 @@ def main():
         command += ["-plugin", args.plugin]
         if args.plugin_log:
             command += ["-d", "plugin", "-D", str(args.plugin_log)]
+    if args.log:
+        args.log.parent.mkdir(parents=True, exist_ok=True)
     log = args.log.open("w") if args.log else None
     qemu = subprocess.Popen(command, stdin=subprocess.DEVNULL)
     stop_pump = threading.Event()
@@ -245,6 +255,7 @@ def main():
         pump.start()
     deadline = None if args.window else time.monotonic() + args.timeout
     outcome = None
+    seen = 0
     pending = b""
     offset = 0
     while outcome is None:
@@ -272,7 +283,9 @@ def main():
             if any(marker in line for marker in PANIC_MARKERS):
                 outcome = "panic"
             elif args.until and args.until in line:
-                outcome = "done"
+                seen += 1
+                if seen >= args.until_count:
+                    outcome = "done"
     stop_pump.set()
     if pump:
         pump.join()

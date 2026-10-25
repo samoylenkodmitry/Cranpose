@@ -212,6 +212,13 @@ esp32-clippy: _disk-guard
 esp32-qemu-check: esp32-build
     python3 scripts/esp32/qemu_run.py --elf {{esp32_elf}} --partitions {{esp32_demo}}/partitions.csv --until "first frame after" --timeout 120 --screenshot target/esp32/qemu.png
 
+# Runs the demo's busy screen (its workload feature) for 15 s on QEMU's
+# classic ESP32, the chip with the least memory. Fails when the screen runs
+# out of memory or panics.
+esp32-qemu-check-esp32: _disk-guard
+    . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.qemu_esp32" MCU=esp32 CARGO_WORKSPACE_DIR={{justfile_directory()}}/{{esp32_demo}} CARGO_TARGET_DIR={{justfile_directory()}}/target/esp32-qemu-esp32 cargo build --release --target xtensa-esp32-espidf --features workload
+    python3 scripts/esp32/qemu_run.py --chip esp32 --elf target/esp32-qemu-esp32/xtensa-esp32-espidf/release/esp32-demo --partitions {{esp32_demo}}/partitions_4mb.csv --flash-size 4mb --until "frames in" --until-count 3 --timeout 240 --log target/esp32/qemu-esp32-workload.log
+
 # Shows the demo on QEMU's virtual panel in a window.
 esp32-qemu: esp32-build
     python3 scripts/esp32/qemu_run.py --elf {{esp32_elf}} --partitions {{esp32_demo}}/partitions.csv --window
