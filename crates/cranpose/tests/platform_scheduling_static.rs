@@ -2460,7 +2460,7 @@ const FFI_BOUNDARY_MODULES: &[&str] = &[
     "crates/cranpose-audio/src/ring.rs",
     "crates/cranpose-audio/src/backend/aaudio.rs",
     "crates/cranpose-audio/src/backend/avaudio.rs",
-    "crates/cranpose-platform/esp-idf/src/heap.rs",
+    "crates/cranpose-platform/esp-idf/src/memory.rs",
     "crates/cranpose-platform/esp-idf/src/panel.rs",
     "crates/cranpose-platform/esp-idf/src/small_alloc.rs",
     "crates/cranpose-platform/esp-idf/src/touch.rs",
