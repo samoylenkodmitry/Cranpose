@@ -2217,6 +2217,16 @@ struct TextSegmentMetrics {
     first_baseline_y: f32,
 }
 
+impl TextSegmentMetrics {
+    fn raster(&self, style: GlyphRasterStyle) -> GlyphRaster {
+        GlyphRaster {
+            style,
+            weight: self.weight_synthesis,
+            slant: self.style_synthesis,
+        }
+    }
+}
+
 fn text_segment_metrics(
     text: &str,
     local_rect: Rect,
@@ -3441,14 +3451,21 @@ fn paint_text_glyphs(
 
     let font = font_ref.font;
     let font_px_size = font_size * scale * font_ref.ab_glyph_scale_factor;
-    let letter_spacing = font_ref.tracking.resolve(style, font_size) * scale;
-    let align_fraction = cranpose_ui::text::text_align_fraction(style, text);
-    let weight_synthesis = TextWeightSynthesis::for_style(style, font_ref.weight, font_size, scale);
-    let style_synthesis = TextStyleSynthesis::for_style(style, font_ref.style, font_size, scale);
-    let metrics = vertical_metrics(font, font_px_size);
-    let line_box = line_box_for(style, metrics, asked_line_height(style, scale), 1.0);
-    let line_height = line_box.height;
-    let first_baseline_y = line_box.first_baseline();
+    let line_box = line_box_for(
+        style,
+        vertical_metrics(font, font_px_size),
+        asked_line_height(style, scale),
+        1.0,
+    );
+    let metrics = TextSegmentMetrics {
+        font_px_size,
+        letter_spacing: font_ref.tracking.resolve(style, font_size) * scale,
+        align_fraction: cranpose_ui::text::text_align_fraction(style, text),
+        weight_synthesis: TextWeightSynthesis::for_style(style, font_ref.weight, font_size, scale),
+        style_synthesis: TextStyleSynthesis::for_style(style, font_ref.style, font_size, scale),
+        line_height: line_box.height,
+        first_baseline_y: line_box.first_baseline(),
+    };
 
     let paint = GlyphPaint {
         brush,
@@ -3460,25 +3477,18 @@ fn paint_text_glyphs(
         static_text_motion,
     };
     let clip = GlyphRasterClip::new(canvas.width, canvas.height, &paint);
-    visit_text_glyph_masks(
+    let lines = GlyphLines {
         text,
         font,
-        font_cache_key,
-        font_px_size,
-        line_height,
-        first_baseline_y,
-        origin_x,
-        origin_y,
-        letter_spacing,
-        align_fraction,
+        font_hash: font_cache_key,
+        metrics,
+        origin: Point::new(origin_x, origin_y),
         static_text_motion,
-        raster_style,
-        weight_synthesis,
-        style_synthesis,
-        glyph_cache,
-        Some(&clip),
-        |mask| canvas.paint(mask, &paint),
-    );
+        raster: metrics.raster(raster_style),
+    };
+    visit_text_glyph_masks(lines, glyph_cache, Some(&clip), |mask| {
+        canvas.paint(mask, &paint);
+    });
 }
 
 /// Whether the single-font path paints a part of `style`'s text from an
@@ -3544,9 +3554,7 @@ fn visit_text_segment_masks(
                 font.content_hash(),
                 &font.font,
                 &glyph,
-                raster_style,
-                m.weight_synthesis,
-                m.style_synthesis,
+                m.raster(raster_style),
                 Some(clip),
             ) {
                 visit(&mask);
@@ -3555,25 +3563,16 @@ fn visit_text_segment_masks(
         })
         .unwrap_or(0.0);
     }
-    visit_text_glyph_masks(
+    let lines = GlyphLines {
         text,
-        &font.font,
-        font.content_hash(),
-        m.font_px_size,
-        m.line_height,
-        m.first_baseline_y,
-        local_rect.x,
-        0.0,
-        m.letter_spacing,
-        m.align_fraction,
+        font: &font.font,
+        font_hash: font.content_hash(),
+        metrics: m,
+        origin: Point::new(local_rect.x, 0.0),
         static_text_motion,
-        raster_style,
-        m.weight_synthesis,
-        m.style_synthesis,
-        glyph_cache,
-        Some(clip),
-        visit,
-    )
+        raster: m.raster(raster_style),
+    };
+    visit_text_glyph_masks(lines, glyph_cache, Some(clip), visit)
 }
 
 fn collect_text_segment_solid_atlas_glyphs(
@@ -3760,14 +3759,8 @@ impl AtlasSegmentGlyph<'_> {
     }
 
     fn build_mask(&self) -> Option<GlyphMask> {
-        build_complete_glyph_mask(
-            self.font,
-            &self.glyph,
-            GlyphRasterStyle::Fill,
-            self.metrics.weight_synthesis,
-            self.metrics.style_synthesis,
-            None,
-        )
+        let raster = self.metrics.raster(GlyphRasterStyle::Fill);
+        build_complete_glyph_mask(self.font, &self.glyph, raster, None)
     }
 }
 
@@ -3784,9 +3777,7 @@ impl<'a> AtlasSegmentGlyph<'a> {
             key: glyph_mask_cache_key(
                 font.content_hash(),
                 &glyph,
-                GlyphRasterStyle::Fill,
-                metrics.weight_synthesis,
-                metrics.style_synthesis,
+                metrics.raster(GlyphRasterStyle::Fill),
             ),
             glyph,
             font: &font.font,
@@ -4640,21 +4631,15 @@ fn static_glyph_pixel_origin(glyph: &Glyph) -> (i32, i32) {
     )
 }
 
-fn glyph_mask_cache_key(
-    font_hash: u64,
-    glyph: &Glyph,
-    raster_style: GlyphRasterStyle,
-    weight_synthesis: TextWeightSynthesis,
-    style_synthesis: TextStyleSynthesis,
-) -> GlyphMaskCacheKey {
+fn glyph_mask_cache_key(font_hash: u64, glyph: &Glyph, raster: GlyphRaster) -> GlyphMaskCacheKey {
     GlyphMaskCacheKey {
         font_hash,
         glyph_id: u32::from(glyph.id.0),
         scale_x_bits: glyph.scale.x.to_bits(),
         scale_y_bits: glyph.scale.y.to_bits(),
-        raster_style: GlyphRasterStyleKey::from_style(raster_style),
-        embolden_px_bits: weight_synthesis.embolden_px.to_bits(),
-        slant_bits: style_synthesis.slant.to_bits(),
+        raster_style: GlyphRasterStyleKey::from_style(raster.style),
+        embolden_px_bits: raster.weight.embolden_px.to_bits(),
+        slant_bits: raster.slant.slant.to_bits(),
     }
 }
 
@@ -4675,34 +4660,21 @@ fn glyph_atlas_key_from_mask_key(key: GlyphMaskCacheKey) -> Option<SoftwareGlyph
 fn build_complete_glyph_mask(
     font: &impl Font,
     glyph: &Glyph,
-    raster_style: GlyphRasterStyle,
-    weight_synthesis: TextWeightSynthesis,
-    style_synthesis: TextStyleSynthesis,
+    raster: GlyphRaster,
     clip: Option<&GlyphRasterClip>,
 ) -> Option<GlyphMask> {
     let (outlined, bounds) = outline_glyph_with_bounds(font, glyph)?;
-    if clip.is_some_and(|clip| {
-        !clip.intersects(complete_glyph_bounds(
-            bounds,
-            raster_style,
-            weight_synthesis,
-            style_synthesis,
-        ))
-    }) {
+    if clip.is_some_and(|clip| !clip.intersects(complete_glyph_bounds(bounds, raster))) {
         return None;
     }
-    let mask = build_glyph_mask(font, glyph, &outlined, bounds, raster_style)?;
-    let mask = synthesize_glyph_weight(mask, weight_synthesis);
-    Some(synthesize_glyph_style(mask, style_synthesis).into_glyph_mask())
+    let mask = build_glyph_mask(font, glyph, &outlined, bounds, raster.style)?;
+    let mask = synthesize_glyph_weight(mask, raster.weight);
+    Some(synthesize_glyph_style(mask, raster.slant).into_glyph_mask())
 }
 
-fn complete_glyph_bounds(
-    bounds: GlyphPixelBounds,
-    raster_style: GlyphRasterStyle,
-    weight: TextWeightSynthesis,
-    style: TextStyleSynthesis,
-) -> Rect {
-    let pad = match raster_style {
+fn complete_glyph_bounds(bounds: GlyphPixelBounds, raster: GlyphRaster) -> Rect {
+    let (weight, style) = (raster.weight, raster.slant);
+    let pad = match raster.style {
         GlyphRasterStyle::Fill => 0.0,
         GlyphRasterStyle::Stroke { width_px } => stroke_mask_padding(width_px) as f32,
     };
@@ -4722,25 +4694,25 @@ fn complete_glyph_bounds(
     }
 }
 
-#[expect(clippy::too_many_arguments)]
+// How a glyph's mask is drawn: filled or stroked, with the weight and the
+// slant synthesized for a face that lacks them.
+#[derive(Clone, Copy)]
+struct GlyphRaster {
+    style: GlyphRasterStyle,
+    weight: TextWeightSynthesis,
+    slant: TextStyleSynthesis,
+}
+
 fn raster_glyph_mask(
     cache: Option<&mut SoftwareGlyphRasterCache>,
     font_hash: u64,
     font: &impl Font,
     glyph: &Glyph,
-    raster_style: GlyphRasterStyle,
-    weight_synthesis: TextWeightSynthesis,
-    style_synthesis: TextStyleSynthesis,
+    raster: GlyphRaster,
     clip: Option<&GlyphRasterClip>,
 ) -> Option<GlyphMask> {
     if let Some(cache) = cache {
-        let key = glyph_mask_cache_key(
-            font_hash,
-            glyph,
-            raster_style,
-            weight_synthesis,
-            style_synthesis,
-        );
+        let key = glyph_mask_cache_key(font_hash, glyph, raster);
         // A missed glyph goes into the cache even when the clip leaves it
         // out: the next part of the same text, a strip below, draws it.
         let mask = match cache.get(&key, glyph) {
@@ -4748,14 +4720,7 @@ fn raster_glyph_mask(
             None => cache.put(
                 key,
                 glyph,
-                build_complete_glyph_mask(
-                    font,
-                    glyph,
-                    raster_style,
-                    weight_synthesis,
-                    style_synthesis,
-                    None,
-                )?,
+                build_complete_glyph_mask(font, glyph, raster, None)?,
             ),
         };
         return clip
@@ -4769,14 +4734,7 @@ fn raster_glyph_mask(
             })
             .then_some(mask);
     }
-    build_complete_glyph_mask(
-        font,
-        glyph,
-        raster_style,
-        weight_synthesis,
-        style_synthesis,
-        clip,
-    )
+    build_complete_glyph_mask(font, glyph, raster, clip)
 }
 
 fn line_alignment_offsets<F: Font, S: ScaleFont<F>>(
@@ -4869,34 +4827,37 @@ fn cached_kern<F: Font, S: ScaleFont<F>>(
     }
 }
 
-#[expect(clippy::too_many_arguments)]
-fn visit_text_glyph_masks(
-    text: &str,
-    font: &impl RasterFace,
+// The lines of one text in one face to rasterize: the face and its hash,
+// the metrics the text is laid out with, where its first line starts and how
+// its masks are drawn.
+struct GlyphLines<'a, F> {
+    text: &'a str,
+    font: &'a F,
     font_hash: u64,
-    font_px_size: f32,
-    line_height: f32,
-    first_baseline_y: f32,
-    origin_x: f32,
-    origin_y: f32,
-    letter_spacing: f32,
-    align_fraction: f32,
+    metrics: TextSegmentMetrics,
+    origin: Point,
     static_text_motion: bool,
-    raster_style: GlyphRasterStyle,
-    weight_synthesis: TextWeightSynthesis,
-    style_synthesis: TextStyleSynthesis,
+    raster: GlyphRaster,
+}
+
+fn visit_text_glyph_masks(
+    lines: GlyphLines<'_, impl RasterFace>,
     mut glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
     clip: Option<&GlyphRasterClip>,
     mut visit: impl FnMut(&GlyphMask),
 ) -> f32 {
-    let scale = PxScale::from(font_px_size);
+    let (text, font, font_hash, m) = (lines.text, lines.font, lines.font_hash, lines.metrics);
+    let (origin, static_text_motion, raster) =
+        (lines.origin, lines.static_text_motion, lines.raster);
+    let letter_spacing = m.letter_spacing;
+    let scale = PxScale::from(m.font_px_size);
     let scaled_font = font.as_scaled(scale);
-    let line_offsets = line_alignment_offsets(&scaled_font, text, letter_spacing, align_fraction);
+    let line_offsets = line_alignment_offsets(&scaled_font, text, letter_spacing, m.align_fraction);
     let mut max_advance = 0.0f32;
     for (line_idx, line) in text.split('\n').enumerate() {
-        let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
+        let baseline_y = m.first_baseline_y + line_idx as f32 * m.line_height + origin.y;
         let lead_in = run_lead_in(line, letter_spacing);
-        let mut caret_x = origin_x + line_offset(&line_offsets, line_idx) + lead_in;
+        let mut caret_x = origin.x + line_offset(&line_offsets, line_idx) + lead_in;
         let mut previous = None;
         for ch in line.chars() {
             let glyph_id = font.char_glyph(ch);
@@ -4926,16 +4887,14 @@ fn visit_text_glyph_masks(
                 font_hash,
                 font,
                 &glyph,
-                raster_style,
-                weight_synthesis,
-                style_synthesis,
+                raster,
                 clip,
             ) else {
                 continue;
             };
             visit(&mask);
         }
-        max_advance = max_advance.max((caret_x - origin_x + lead_in).max(0.0));
+        max_advance = max_advance.max((caret_x - origin.x + lead_in).max(0.0));
     }
     max_advance
 }
