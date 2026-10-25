@@ -247,7 +247,7 @@ impl Modifier {
     ///
     /// This mirrors `Modifier.graphicsLayer(...)` style APIs and maps directly to
     /// [`GraphicsLayer`] fields currently implemented by the renderer stack.
-    #[expect(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments, reason = "Compose's parameters")]
     pub fn graphics_layer_params(
         self,
         scale_x: f32,

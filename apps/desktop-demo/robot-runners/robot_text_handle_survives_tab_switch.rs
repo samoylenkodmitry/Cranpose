@@ -354,10 +354,8 @@ fn count_handle_bands_in(
     let lower_start = ((y + height * 0.55) * sy) as usize;
     robot_handle_probe::count_upper_lower_bands(
         shot,
-        left,
-        right,
-        top,
-        bottom,
+        left..right,
+        top..bottom,
         upper_end,
         lower_start,
         |r, g, b| matches_accent(r, g, b, target),

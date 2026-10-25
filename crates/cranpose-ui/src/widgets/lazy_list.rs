@@ -746,10 +746,9 @@ fn place_lazy_list(
             density,
             &result.visible_items,
             count,
-            is_vertical,
+            frame,
             effective_viewport_size,
             context.config,
-            cross_axis_size,
         );
         // The placements follow the items and their roots in this order.
         placed_roots.extend(
@@ -1329,19 +1328,18 @@ fn normalized_axis_bits(size: f32) -> u32 {
     }
 }
 
-#[expect(clippy::too_many_arguments)]
 fn push_lazy_list_placements(
     placements: &mut Vec<Placement>,
     density: f32,
     visible_items: &[LazyListMeasuredItem],
     items_count: usize,
-    is_vertical: bool,
+    frame: &LazyFrame,
     viewport_size: f32,
     layout_config: &LazyListLayoutConfig,
-    cross_axis_size: f32,
 ) {
     use cranpose_ui_layout::Arrangement;
 
+    let is_vertical = frame.is_vertical;
     let config = &layout_config.measure;
 
     placements.clear();
@@ -1383,13 +1381,13 @@ fn push_lazy_list_placements(
         arrangement.arrange(density, available_main_axis, &sizes, &mut positions);
 
         for (item, &pos) in visible_items.iter().zip(positions.iter()) {
+            let offset = content_offset + pos;
             push_lazy_item_placements(
                 placements,
                 item,
-                content_offset + pos,
-                is_vertical,
+                offset,
+                frame,
                 viewport_size,
-                cross_axis_size,
                 layout_config,
             );
         }
@@ -1399,9 +1397,8 @@ fn push_lazy_list_placements(
                 placements,
                 item,
                 item.offset,
-                is_vertical,
+                frame,
                 viewport_size,
-                cross_axis_size,
                 layout_config,
             );
         }
@@ -1412,11 +1409,11 @@ fn push_lazy_item_placements(
     placements: &mut Vec<Placement>,
     item: &LazyListMeasuredItem,
     offset: f32,
-    is_vertical: bool,
+    frame: &LazyFrame,
     viewport_size: f32,
-    cross_axis_size: f32,
     layout_config: &LazyListLayoutConfig,
 ) {
+    let (is_vertical, cross_axis_size) = (frame.is_vertical, frame.cross_axis_size);
     let config = &layout_config.measure;
     let (cross_start, cross_end) = layout_config.cross_padding;
     let start = if config.reverse_layout {

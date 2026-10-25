@@ -98,6 +98,10 @@ struct Fill {
     visible: Vec<LazyListMeasuredItem>,
     /// Where the content ends, when the items ran out above the bottom.
     end: Option<f32>,
+    /// Where the viewport starts once the lanes settled.
+    scroll: f32,
+    /// The item the fill keeps in place.
+    anchor: usize,
 }
 
 impl StaggeredLanes {
@@ -473,8 +477,8 @@ pub fn measure_lazy_staggered_grid<S: LazyStaggeredItemSource>(
     } else {
         lanes.slots[anchor].start + offset - snapshot.pending_scroll_delta
     };
-    let (fill, scroll) = fill_viewport(lanes, &pass, anchor, scroll, source);
-    publish(lanes, &pass, config, fill, scroll, anchor, state, source)
+    let fill = fill_viewport(lanes, &pass, anchor, scroll, source);
+    publish(lanes, &pass, config, fill, state, source)
 }
 
 /// Fills the viewport at `scroll` from `anchor`, and again where the scroll
@@ -484,15 +488,17 @@ fn fill_viewport<S: LazyStaggeredItemSource>(
     lanes: &mut StaggeredLanes,
     pass: &Pass,
     anchor: usize,
-    mut scroll: f32,
+    scroll: f32,
     source: &mut S,
-) -> (Fill, f32) {
+) -> Fill {
     let mut fill = Fill {
         visible: Vec::new(),
         end: None,
+        scroll,
+        anchor,
     };
     for attempt in 1..=MAX_FILLS {
-        let window = pass.window(scroll);
+        let window = pass.window(fill.scroll);
         // The first item of each lane from the anchor on stays where it was,
         // so the items before it end there and the ones after follow it.
         let starts = lanes.starts_from(anchor);
@@ -514,33 +520,35 @@ fn fill_viewport<S: LazyStaggeredItemSource>(
         }
         // The viewport stays on the anchor while the lanes line up.
         let target = pass.clamp(
-            scroll + lanes.slots[anchor].start - anchored,
+            fill.scroll + lanes.slots[anchor].start - anchored,
             fill.end,
             reached_start,
         );
-        if attempt == MAX_FILLS || (target - scroll).abs() <= 0.5 {
+        if attempt == MAX_FILLS || (target - fill.scroll).abs() <= 0.5 {
             break;
         }
-        scroll = target;
+        fill.scroll = target;
     }
-    (fill, scroll)
+    fill
 }
 
 /// Puts the items of `fill` at their offsets in the viewport, keeps the
 /// items beside them composed, and publishes the scroll position and the
 /// layout to `state`.
-#[expect(clippy::too_many_arguments)]
 fn publish<S: LazyStaggeredItemSource>(
     lanes: &mut StaggeredLanes,
     pass: &Pass,
     config: &LazyListMeasureConfig,
     fill: Fill,
-    scroll: f32,
-    anchor: usize,
     state: &LazyListState,
     source: &mut S,
 ) -> LazyListMeasureResult {
-    let mut visible = fill.visible;
+    let Fill {
+        mut visible,
+        end,
+        scroll,
+        anchor,
+    } = fill;
     for item in &mut visible {
         item.offset += pass.before - scroll;
     }
@@ -553,9 +561,7 @@ fn publish<S: LazyStaggeredItemSource>(
         None => state.update_scroll_position(first, first_offset),
     }
     state.cache_item_sizes(visible.iter().map(|item| (item.index, item.main_axis_size)));
-    let content = fill
-        .end
-        .unwrap_or_else(|| lanes.estimated_extent(pass.items_count, pass.estimate));
+    let content = end.unwrap_or_else(|| lanes.estimated_extent(pass.items_count, pass.estimate));
     let total_content_size = content + pass.before + pass.after;
     let viewport = if pass.unbounded {
         total_content_size

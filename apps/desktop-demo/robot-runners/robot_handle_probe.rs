@@ -1,20 +1,20 @@
+use std::ops::Range;
+
 use cranpose::RobotScreenshot;
 
 pub fn is_blue_handle(r: u8, g: u8, b: u8) -> bool {
     b > 170 && b.saturating_sub(r) > 55 && b.saturating_sub(g) > 25
 }
 
-#[expect(clippy::too_many_arguments)]
 pub fn lower_band_center(
     shot: &RobotScreenshot,
     sx: f32,
     sy: f32,
-    left: usize,
-    right: usize,
-    top: usize,
-    bottom: usize,
+    xs: Range<usize>,
+    ys: Range<usize>,
     matches: impl Fn(u8, u8, u8) -> bool,
 ) -> Option<(f32, f32)> {
+    let (left, right, top, bottom) = (xs.start, xs.end, ys.start, ys.end);
     let is_match = |px: usize, py: usize| {
         let i = (py * shot.width as usize + px) * 4;
         let (r, g, b) = (shot.pixels[i], shot.pixels[i + 1], shot.pixels[i + 2]);
@@ -44,17 +44,15 @@ pub fn lower_band_center(
     })
 }
 
-#[expect(clippy::too_many_arguments)]
 pub fn count_upper_lower_bands(
     shot: &RobotScreenshot,
-    left: usize,
-    right: usize,
-    top: usize,
-    bottom: usize,
+    xs: Range<usize>,
+    ys: Range<usize>,
     upper_end: usize,
     lower_start: usize,
     matches: impl Fn(u8, u8, u8) -> bool,
 ) -> (usize, usize) {
+    let (left, right, top, bottom) = (xs.start, xs.end, ys.start, ys.end);
     let mut upper = 0usize;
     let mut lower = 0usize;
     for py in top..bottom {

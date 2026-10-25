@@ -608,7 +608,7 @@ pub fn LiquidTextMenu(
 /// and Cut, as a secret's field does. `can_paste` hides the
 /// Paste item when the clipboard is empty. Each action runs against the
 /// focused field; the caller is expected to dismiss the menu.
-#[expect(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "Compose's parameters")]
 #[composable]
 pub fn TextSelectionMenu(
     anchor: MenuAnchor,
@@ -655,7 +655,7 @@ fn append_edit_actions(
 ///
 /// `can_paste` hides Paste when the clipboard is empty; `can_undo`/`can_redo`
 /// hide those items when the field's history has nothing to undo/redo.
-#[expect(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "Compose's parameters")]
 #[composable]
 pub fn CaretActionMenu(
     anchor: MenuAnchor,
