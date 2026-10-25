@@ -1706,6 +1706,18 @@ impl LayoutBuilderState {
                 .measure_node_untimed(node_id, constraints)
                 .map(|(_, measured)| measured);
         };
+        self.measure_node_timed(node_id, constraints, threshold_ms)
+    }
+
+    // Out of line, so a measure without telemetry keeps no room for its
+    // timing and log on the stack at each level of the tree.
+    #[inline(never)]
+    fn measure_node_timed(
+        self: &Rc<Self>,
+        node_id: NodeId,
+        constraints: Constraints,
+        threshold_ms: f64,
+    ) -> Result<Rc<MeasuredNode>, NodeError> {
         let start = Instant::now();
         let (kind, measured) = self.measure_node_untimed(node_id, constraints)?;
         log_node_measure_telemetry(kind, node_id, constraints, &measured, (threshold_ms, start));
