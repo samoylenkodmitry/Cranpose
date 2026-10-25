@@ -339,3 +339,58 @@ impl SharedShader {
 #[cfg(test)]
 #[path = "tests/shared_shader_tests.rs"]
 mod tests;
+
+/// A pipeline that draws one full-screen triangle strip from `fullscreen_vs`
+/// into a single color target, the shape every effect and composite pass
+/// shares; `constants` fixes the shader's override constants.
+#[expect(clippy::too_many_arguments)]
+pub(crate) fn create_fullscreen_strip_pipeline(
+    device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
+    log_label: &str,
+    label: &'static str,
+    layout: &wgpu::PipelineLayout,
+    (vertex_module, fragment_module): (&wgpu::ShaderModule, &wgpu::ShaderModule),
+    (vertex_entry, fragment_entry): (&'static str, &'static str),
+    constants: &[(&str, f64)],
+    (target, depth_stencil): (wgpu::ColorTargetState, Option<wgpu::DepthStencilState>),
+) -> wgpu::RenderPipeline {
+    crate::render::create_render_pipeline_logged(
+        device,
+        cache,
+        log_label,
+        wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: vertex_module,
+                entry_point: Some(vertex_entry),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants,
+                    ..wgpu::PipelineCompilationOptions::default()
+                },
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: fragment_module,
+                entry_point: Some(fragment_entry),
+                targets: &[Some(target)],
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants,
+                    ..wgpu::PipelineCompilationOptions::default()
+                },
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        },
+    )
+}

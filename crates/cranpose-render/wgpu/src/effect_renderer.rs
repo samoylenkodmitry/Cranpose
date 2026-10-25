@@ -1109,7 +1109,7 @@ fn fullscreen_pipeline_job(
     let constants = entry.constants.to_vec();
     Box::new(move || {
         let stages = shader.stages((vertex_entry, fragment_entry), &constants);
-        crate::render::create_fullscreen_strip_pipeline(
+        crate::shared_shader::create_fullscreen_strip_pipeline(
             &device,
             cache.as_ref(),
             &format!("effect {label} entry={fragment_entry}"),

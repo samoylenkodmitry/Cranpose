@@ -241,7 +241,7 @@ impl PipelineJob {
             .counters
             .pipelines
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Some(crate::render::create_fullscreen_strip_pipeline(
+        Some(crate::shared_shader::create_fullscreen_strip_pipeline(
             &factory.device,
             factory.pipeline_cache.as_ref(),
             &format!(
