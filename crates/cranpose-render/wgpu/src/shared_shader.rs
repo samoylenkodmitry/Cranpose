@@ -51,6 +51,29 @@ pub(crate) struct Stages<'c> {
     pub(crate) constants: &'c [(&'c str, f64)],
 }
 
+impl Stages<'_> {
+    // These stages at their `entries`, the vertex entry first.
+    pub(crate) fn strip(
+        &self,
+        (vertex, fragment): (&'static str, &'static str),
+    ) -> StripStages<'_> {
+        StripStages {
+            vertex: (&self.vertex, vertex),
+            fragment: (&self.fragment, fragment),
+            constants: self.constants,
+        }
+    }
+}
+
+// A strip pipeline's two stages, each a module and its entry point, and the
+// override constants both read.
+#[derive(Clone, Copy)]
+pub(crate) struct StripStages<'a> {
+    pub(crate) vertex: (&'a wgpu::ShaderModule, &'static str),
+    pub(crate) fragment: (&'a wgpu::ShaderModule, &'static str),
+    pub(crate) constants: &'a [(&'a str, f64)],
+}
+
 /// A shader's naga module and what validating it found, which each stage
 /// is specialized from.
 #[cfg(not(target_arch = "wasm32"))]
@@ -342,19 +365,21 @@ mod tests;
 
 /// A pipeline that draws one full-screen triangle strip from `fullscreen_vs`
 /// into a single color target, the shape every effect and composite pass
-/// shares; `constants` fixes the shader's override constants.
-#[expect(clippy::too_many_arguments)]
+/// shares; the stages' constants fix the shader's override constants.
 pub(crate) fn create_fullscreen_strip_pipeline(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
     log_label: &str,
     label: &'static str,
     layout: &wgpu::PipelineLayout,
-    (vertex_module, fragment_module): (&wgpu::ShaderModule, &wgpu::ShaderModule),
-    (vertex_entry, fragment_entry): (&'static str, &'static str),
-    constants: &[(&str, f64)],
+    stages: StripStages<'_>,
     (target, depth_stencil): (wgpu::ColorTargetState, Option<wgpu::DepthStencilState>),
 ) -> wgpu::RenderPipeline {
+    let StripStages {
+        vertex: (vertex_module, vertex_entry),
+        fragment: (fragment_module, fragment_entry),
+        constants,
+    } = stages;
     crate::render::create_render_pipeline_logged(
         device,
         cache,

@@ -33,15 +33,15 @@ use crate::{
     collect::LayerScene,
     debug_toggles::DebugToggle,
     draw_pass::{
-        PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SegmentLayout,
+        PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, RunCalls, SegmentLayout,
         SourceContent, TrackedPass,
     },
     effect_renderer::{BlurDest, BlurSpec, CompositeSampleMode, EffectRenderer},
     fixed_pipeline::{FixedPipeline, FixedPipelineJob},
     frame::{
-        ClearedImages, Damage, DeviceRect, FrameExecutor, FrameWindow, ImageContent, KeptWindow,
-        PresentedImage, Repaint, StageSideScratch, Summaries, SwapchainHistory, Window,
-        WindowDamage,
+        ClearedImages, Damage, DeviceRect, FrameExecutor, FrameRecording, FrameWindow,
+        ImageContent, KeptWindow, PresentedImage, Repaint, StageSideScratch, Summaries,
+        SwapchainHistory, Window, WindowDamage,
     },
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
@@ -912,6 +912,16 @@ pub(crate) struct ViewportUniformParams {
 }
 
 impl ViewportUniformParams {
+    // The fallback meshes' target in this viewport, counting depth from its
+    // base in a pass with the depth buffer.
+    fn mesh_target(self, depth: bool) -> crate::mesh_fallback::MeshTarget {
+        crate::mesh_fallback::MeshTarget {
+            offset: self.offset,
+            size: [self.width as f32, self.height as f32],
+            depth_base: depth.then_some(self.depth_base),
+        }
+    }
+
     /// The logical rect of the drawn scene that the target shows.
     pub(crate) fn scene_rect(self, root_scale: f32) -> Rect {
         segment_scene_rect(
@@ -1124,12 +1134,28 @@ enum OutputMode {
 /// Where a frame goes: displayed in a presentable image, or read back as a
 /// screenshot.
 #[derive(Clone, Copy)]
-struct FrameOutput<'a> {
+pub(crate) struct FrameOutput<'a> {
     mode: OutputMode,
     view: Option<&'a wgpu::TextureView>,
     texture: Option<&'a wgpu::Texture>,
     /// What `texture` holds as the frame draws into it.
     image: ImageContent,
+}
+
+impl<'a> FrameOutput<'a> {
+    // A frame displayed in `texture` through `view`, which holds `image`.
+    pub(crate) fn display(
+        texture: &'a wgpu::Texture,
+        view: &'a wgpu::TextureView,
+        image: ImageContent,
+    ) -> Self {
+        Self {
+            mode: OutputMode::Display,
+            view: Some(view),
+            texture: Some(texture),
+            image,
+        }
+    }
 }
 
 /// The kept frame a frame's damage is measured against.
@@ -2049,12 +2075,10 @@ impl GpuRenderer {
 
     /// Lays out as fallback triangles a stored run's draws in `range` of
     /// `draws` whose shape pipelines still compile.
-    #[expect(clippy::too_many_arguments)]
     pub(crate) fn mesh_store_run(
         &self,
         run: &RunDraw,
-        viewport: ViewportUniformParams,
-        root_scale: f32,
+        space: DrawSpace,
         range: std::ops::Range<usize>,
         draws: &[RunDrawCall],
         depth: bool,
@@ -2072,17 +2096,15 @@ impl GpuRenderer {
             brushes: &tables.brushes,
             stops: &tables.stops,
         };
-        let placement =
-            PlacementData::of(&run.placement, root_scale, viewport.transform, [0.0; 2]).mesh();
-        self.mesh_unready(
-            draws,
-            range,
-            records,
-            &|_| Some(placement),
-            viewport,
-            depth,
-            meshes,
-        );
+        let placement = PlacementData::of(
+            &run.placement,
+            space.scale,
+            space.viewport.transform,
+            [0.0; 2],
+        )
+        .mesh();
+        let target = space.viewport.mesh_target(depth);
+        self.mesh_unready(draws, range, records, &|_| Some(placement), target, meshes);
     }
 
     /// Lays out as fallback triangles the arena draws in `range` of `draws`,
@@ -2110,8 +2132,7 @@ impl GpuRenderer {
                     .get(body.placement as usize)
                     .map(PlacementData::mesh)
             },
-            viewport,
-            depth,
+            viewport.mesh_target(depth),
             meshes,
         );
     }
@@ -2503,7 +2524,6 @@ impl GpuRenderer {
     /// Lays out as fallback triangles the run draws of `draws` in `range`
     /// whose shape pipelines still compile, each record of `tables` placed
     /// by `placement`.
-    #[expect(clippy::too_many_arguments)]
     fn mesh_unready(
         &self,
         draws: &[RunDrawCall],
@@ -2512,15 +2532,9 @@ impl GpuRenderer {
         placement: &dyn Fn(
             &cranpose_ui_graphics::ShapeRecordBody,
         ) -> Option<crate::mesh_fallback::MeshPlacement>,
-        viewport: ViewportUniformParams,
-        depth: bool,
+        target: crate::mesh_fallback::MeshTarget,
         meshes: &mut crate::mesh_fallback::PassMeshes,
     ) {
-        let target = crate::mesh_fallback::MeshTarget {
-            offset: viewport.offset,
-            size: [viewport.width as f32, viewport.height as f32],
-            depth_base: depth.then_some(viewport.depth_base),
-        };
         for index in range {
             let Some(draw) = draws.get(index) else {
                 continue;
@@ -2552,28 +2566,7 @@ fn update_frame_warmup_budget(pending_frames: &mut u8, snapshot: &gpu_stats::Fra
 }
 
 impl GpuRenderer {
-    #[expect(clippy::too_many_arguments)]
     pub(crate) fn render(
-        &mut self,
-        texture: &wgpu::Texture,
-        view: &wgpu::TextureView,
-        width: u32,
-        height: u32,
-        packet: FramePacket,
-        surface_epoch: u64,
-        returns: &mut RenderReturns,
-        image: ImageContent,
-    ) -> Result<(), String> {
-        let output = FrameOutput {
-            mode: OutputMode::Display,
-            view: Some(view),
-            texture: Some(texture),
-            image,
-        };
-        self.render_internal(width, height, packet, surface_epoch, returns, output)
-    }
-
-    fn render_internal(
         &mut self,
         width: u32,
         height: u32,
@@ -2653,6 +2646,29 @@ impl GpuRenderer {
         self.flush_deferred_offscreen_releases();
         self.pass_scratch.glyph_instances.end_frame();
 
+        self.record_pool_sizes();
+        self.effect_renderer
+            .merge_and_reset_debug_counters(&self.frame_stats);
+        self.keep_window(plan, &submitted);
+        let result = submitted.map(drop);
+        self.frame_graph_executor.reset_upload_allocators();
+        self.close_frame_stats();
+        let after_stats = Instant::now();
+        if let Some(total_ms) = should_log_wgpu_render_stage(render_start, after_stats) {
+            log::warn!(
+                "[wgpu-render-stage:render] total_ms={total_ms:.2} graph_ms={:.2} cleanup_stats_ms={:.2}",
+                instant_ms(render_start, after_graph),
+                instant_ms(after_graph, after_stats),
+            );
+        }
+        if result.is_ok() {
+            returns.outcome = PresentOutcome::Presented;
+        }
+        result
+    }
+
+    // Notes the sizes of the caches and pools the frame left.
+    fn record_pool_sizes(&self) {
         self.frame_stats
             .layer_cache_size
             .set(self.layer_cache.len() as u32);
@@ -2680,11 +2696,11 @@ impl GpuRenderer {
         self.frame_stats
             .image_cache_size
             .set(self.images.len() as u32);
-        self.effect_renderer
-            .merge_and_reset_debug_counters(&self.frame_stats);
-        self.keep_window(plan, &submitted);
-        let result = submitted.map(drop);
-        self.frame_graph_executor.reset_upload_allocators();
+    }
+
+    // Takes the frame's stats, logs and prints them as asked, and resets
+    // them for the next frame.
+    fn close_frame_stats(&mut self) {
         let snapshot = self.frame_stats.snapshot();
         if crate::frame_graph::frame_graph_pass_telemetry_threshold_ms().is_some() {
             log::warn!(
@@ -2711,18 +2727,6 @@ impl GpuRenderer {
         self.frame_graph_executor
             .end_pass_timing_frame(&self.device, &self.queue);
         self.frame_stats.reset();
-        let after_stats = Instant::now();
-        if let Some(total_ms) = should_log_wgpu_render_stage(render_start, after_stats) {
-            log::warn!(
-                "[wgpu-render-stage:render] total_ms={total_ms:.2} graph_ms={:.2} cleanup_stats_ms={:.2}",
-                instant_ms(render_start, after_graph),
-                instant_ms(after_graph, after_stats),
-            );
-        }
-        if result.is_ok() {
-            returns.outcome = PresentOutcome::Presented;
-        }
-        result
     }
 
     /// Returns a packet unrendered, handing its scene back for recycling.
@@ -3038,9 +3042,9 @@ impl GpuRenderer {
             run_arena_staging_bytes: self.run_store.arena_staging_bytes(),
             run_store_bytes: self.run_store.stored_bytes(),
             run_store_runs: self.run_store.stored_count(),
-            scratch_image_vertices_cap: self.pass_scratch.image_vertices.capacity(),
-            scratch_image_indices_cap: self.pass_scratch.image_indices.capacity(),
-            scratch_image_cmds_cap: self.pass_scratch.image_cmds.capacity(),
+            scratch_image_vertices_cap: self.pass_scratch.images.vertices.capacity(),
+            scratch_image_indices_cap: self.pass_scratch.images.indices.capacity(),
+            scratch_image_cmds_cap: self.pass_scratch.images.cmds.capacity(),
             scratch_glyph_instances_cap: self.pass_scratch.glyph_instances.plain.capacity()
                 + self.pass_scratch.glyph_instances.turned.capacity(),
             layer_cache_len: self.layer_cache.len(),
@@ -3075,7 +3079,7 @@ impl GpuRenderer {
             texture: None,
             image: ImageContent::Untracked,
         };
-        self.render_internal(width, height, packet, surface_epoch, returns, output)?;
+        self.render(width, height, packet, surface_epoch, returns, output)?;
         if returns.outcome != PresentOutcome::Presented {
             return Err(format!(
                 "Screenshot rendering did not complete: {:?}",
@@ -3414,12 +3418,11 @@ impl GpuRenderer {
     /// text renders every frame.
     fn blurred_shadow_source<C: FrameCommandRecorder>(
         &mut self,
-        recorder: &mut C,
+        frame: &mut FrameRecording<'_, C>,
         shadow: &ShadowDraw,
         source_device: DevicePixelBounds,
         pixel_radius: f32,
         root_scale: f32,
-        transients: &mut Vec<(FrameTextureDescriptor, Rc<OffscreenTarget>)>,
     ) -> Option<(Rc<OffscreenTarget>, bool, SourceContent)> {
         let shape_only = shadow.texts.is_empty();
         let key = if shape_only {
@@ -3448,13 +3451,12 @@ impl GpuRenderer {
             self.frame_stats.record_shadow_text_blur_fallback();
         }
         let source = self.render_shadow_source(
-            recorder,
+            frame,
             shadow,
             source_device,
             pixel_radius,
             root_scale,
             key.is_some(),
-            transients,
         )?;
         if let Some(key) = key {
             self.frame_stats
@@ -3471,15 +3473,13 @@ impl GpuRenderer {
         Some((source, false, content))
     }
 
-    #[expect(clippy::too_many_arguments)]
     pub(crate) fn resolve_blurred_shadow<C: FrameCommandRecorder>(
         &mut self,
-        recorder: &mut C,
+        frame: &mut FrameRecording<'_, C>,
         shadow: &ShadowDraw,
         z: usize,
         root_scale: f32,
         window: &Window,
-        transients: &mut Vec<(FrameTextureDescriptor, Rc<OffscreenTarget>)>,
         resolved: &mut Vec<ResolvedComposite>,
     ) {
         if !shadow.requires_surface()
@@ -3534,14 +3534,9 @@ impl GpuRenderer {
             return;
         };
         let pixel_radius = shadow.blur_radius * root_scale;
-        let Some((source, hit, content)) = self.blurred_shadow_source(
-            recorder,
-            shadow,
-            source_device,
-            pixel_radius,
-            root_scale,
-            transients,
-        ) else {
+        let Some((source, hit, content)) =
+            self.blurred_shadow_source(frame, shadow, source_device, pixel_radius, root_scale)
+        else {
             return;
         };
         let dest = (
@@ -3606,16 +3601,14 @@ impl GpuRenderer {
     /// result feeds the shadow cache; a transient one is registered with
     /// the frame's transients and released with them. `None` when the
     /// shadow draws nothing.
-    #[expect(clippy::too_many_arguments)]
     fn render_shadow_source<C: FrameCommandRecorder>(
         &mut self,
-        recorder: &mut C,
+        frame: &mut FrameRecording<'_, C>,
         shadow: &ShadowDraw,
         bounds: DevicePixelBounds,
         pixel_radius: f32,
         root_scale: f32,
         retained: bool,
-        transients: &mut Vec<(FrameTextureDescriptor, Rc<OffscreenTarget>)>,
     ) -> Option<Rc<OffscreenTarget>> {
         let (width, height) = (bounds.width, bounds.height);
         let device = Arc::clone(&self.device);
@@ -3631,18 +3624,12 @@ impl GpuRenderer {
         let result = if retained {
             Rc::new(self.acquire_retained_surface(result_width, result_height))
         } else {
-            self.shadow_transient(
-                recorder,
-                transients,
-                "Shadow Result",
-                result_width,
-                result_height,
-            )
+            self.shadow_transient(frame, "Shadow Result", result_width, result_height)
         };
         let source = if full_size_result {
             Rc::clone(&result)
         } else {
-            self.shadow_transient(recorder, transients, "Shadow Source", width, height)
+            self.shadow_transient(frame, "Shadow Source", width, height)
         };
         let offset = [bounds.x, bounds.y];
         let target = PassTarget {
@@ -3657,7 +3644,7 @@ impl GpuRenderer {
         );
         let segment = PassSegment::plain(&scene, offset, root_scale);
         let drew = self.encode_pass(
-            recorder,
+            frame.recorder,
             target,
             (std::slice::from_ref(&segment), SegmentLayout::Stacked),
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -3683,12 +3670,13 @@ impl GpuRenderer {
                 scratch_width,
                 scratch_height,
             );
-            let scratch = recorder.acquire_transient_offscreen(&device, scratch_descriptor);
+            let scratch = frame
+                .recorder
+                .acquire_transient_offscreen(&device, scratch_descriptor);
             let blurred = if full_size_result && (scratch_width, scratch_height) != (width, height)
             {
                 Some(self.shadow_transient(
-                    recorder,
-                    transients,
+                    frame,
                     "Shadow Blur Result",
                     scratch_width,
                     scratch_height,
@@ -3701,7 +3689,7 @@ impl GpuRenderer {
                 None => (&result.view, (result_width, result_height)),
             };
             let passes = self.effect_renderer.encode_blur_scissored_ping_pong_passes(
-                recorder,
+                frame.recorder,
                 &device,
                 &source,
                 &scratch,
@@ -3712,20 +3700,26 @@ impl GpuRenderer {
                 },
                 BlurSpec::uniform(pixel_radius, TileMode::Decal),
             );
-            recorder.record_passes(passes);
+            frame.recorder.record_passes(passes);
             self.effect_renderer.record_blur_pass();
-            recorder.release_transient_offscreen(scratch_descriptor, scratch);
+            frame
+                .recorder
+                .release_transient_offscreen(scratch_descriptor, scratch);
             if let Some(blurred) = &blurred {
-                self.effect_renderer
-                    .encode_upscale_pass(recorder, &device, blurred, &result.view);
-                recorder.record_pass();
+                self.effect_renderer.encode_upscale_pass(
+                    frame.recorder,
+                    &device,
+                    blurred,
+                    &result.view,
+                );
+                frame.recorder.record_pass();
             }
         }
         if let Some(cutout_run) = &shadow.post_blur_cutouts {
             let cutouts = shadow_scene(Some(cutout_run), &[], 0.0);
             let segment = PassSegment::plain(&cutouts, offset, root_scale);
             if let Err(error) = self.encode_pass(
-                recorder,
+                frame.recorder,
                 target,
                 (std::slice::from_ref(&segment), SegmentLayout::Stacked),
                 wgpu::LoadOp::Load,
@@ -3741,15 +3735,18 @@ impl GpuRenderer {
     /// transients.
     fn shadow_transient<C: FrameCommandRecorder>(
         &self,
-        recorder: &mut C,
-        transients: &mut Vec<(FrameTextureDescriptor, Rc<OffscreenTarget>)>,
+        frame: &mut FrameRecording<'_, C>,
         label: &'static str,
         width: u32,
         height: u32,
     ) -> Rc<OffscreenTarget> {
         let descriptor = self.transient_offscreen_descriptor(label, width, height);
-        let target = Rc::new(recorder.acquire_transient_offscreen(&self.device, descriptor));
-        transients.push((descriptor, Rc::clone(&target)));
+        let target = Rc::new(
+            frame
+                .recorder
+                .acquire_transient_offscreen(&self.device, descriptor),
+        );
+        frame.transients.push((descriptor, Rc::clone(&target)));
         target
     }
 
@@ -3804,17 +3801,16 @@ impl GpuRenderer {
     /// Brings a stored run's tables up to date and appends its draws, under
     /// a placement uniform of its own, to the pass's run draws `draws`, and
     /// the pipelines they draw with to `pipelines`.
-    #[expect(clippy::too_many_arguments)]
     pub(crate) fn prepare_store_run<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
         run: &RunDraw,
-        viewport: ViewportUniformParams,
-        root_scale: f32,
+        space: DrawSpace,
         window: &std::ops::Range<u32>,
         (depth, mut depth_keys): (bool, Option<&mut PipelineDemand>),
         (draws, pipelines): (&mut Vec<RunDrawCall>, &mut PipelineDemand),
     ) -> StoreRunBatch {
+        let (viewport, root_scale) = (space.viewport, space.scale);
         let placement = &run.placement;
         let ablation = self.ablation.shape;
         let turns = ShapeTurns::of(viewport.transform, false);
@@ -3906,27 +3902,25 @@ impl GpuRenderer {
     /// draw with to `pipelines`. `clip` says how its variant tests its clip:
     /// an unturned run leaves a rect clip to its paint's scissor, never a
     /// rounded one.
-    #[expect(clippy::too_many_arguments)]
     pub(crate) fn append_arena_run(
         &mut self,
         chunk: usize,
         run: &RunDraw,
         window: std::ops::Range<u32>,
-        (root_scale, shift): (f32, [f32; 2]),
-        viewport: ViewportUniformParams,
-        mixed_turns: bool,
-        (depth, clip): (bool, SegmentClip),
+        at: ArenaPlacement,
+        clip: SegmentClip,
         (pipelines, mut depth_keys): (&mut PipelineDemand, Option<&mut PipelineDemand>),
     ) -> u32 {
         let placement = &run.placement;
         let ablation = self.ablation.shape;
+        let (viewport, depth) = (at.space.viewport, at.depth);
         let turn = viewport.transform;
-        let turns = ShapeTurns::of(turn, mixed_turns);
+        let turns = ShapeTurns::of(turn, at.mixed_turns);
         self.run_store.append_arena(
             chunk,
             run,
             window,
-            (root_scale, turn, shift),
+            (at.space.scale, turn, at.shift),
             &mut |segment| {
                 let key = |depth| {
                     Self::run_pipeline_key(
@@ -3962,17 +3956,19 @@ impl GpuRenderer {
         }
     }
 
-    #[expect(clippy::too_many_arguments)]
     pub(crate) fn draw_run_calls(
         &self,
         pass: &mut TrackedPass<'_, '_>,
         tables: ArenaBinding<'_>,
-        uniform_slot: usize,
-        draws: &[RunDrawCall],
-        scissor: (u32, u32, u32, u32),
-        stage: RunStage,
-        meshes: Option<(crate::mesh_fallback::RunMeshes<'_>, bool)>,
+        calls: RunCalls<'_>,
     ) -> Result<(), String> {
+        let RunCalls {
+            uniform_slot,
+            draws,
+            scissor,
+            stage,
+            meshes,
+        } = calls;
         match stage {
             RunStage::Paint => {
                 if draws.is_empty() {
@@ -4092,37 +4088,23 @@ impl GpuRenderer {
         stage: RunStage,
         meshes: Option<(crate::mesh_fallback::RunMeshes<'_>, bool)>,
     ) -> Result<(), String> {
-        self.draw_run_calls(
-            pass,
-            batch.tables.binding(),
-            batch.uniform_slot,
-            &draws[batch.draws.clone()],
+        let calls = RunCalls {
+            uniform_slot: batch.uniform_slot,
+            draws: &draws[batch.draws.clone()],
             scissor,
             stage,
-            meshes.map(|(meshes, depth)| (meshes.of(batch.draws.clone()), depth)),
-        )
+            meshes: meshes.map(|(meshes, depth)| (meshes.of(batch.draws.clone()), depth)),
+        };
+        self.draw_run_calls(pass, batch.tables.binding(), calls)
     }
 
-    #[expect(clippy::too_many_arguments)]
     pub(crate) fn draw_arena(
         &self,
         pass: &mut TrackedPass<'_, '_>,
         chunk: usize,
-        uniform_slot: usize,
-        draws: &[RunDrawCall],
-        scissor: (u32, u32, u32, u32),
-        stage: RunStage,
-        meshes: Option<(crate::mesh_fallback::RunMeshes<'_>, bool)>,
+        calls: RunCalls<'_>,
     ) -> Result<(), String> {
-        self.draw_run_calls(
-            pass,
-            self.run_store.arena_binding(chunk),
-            uniform_slot,
-            draws,
-            scissor,
-            stage,
-            meshes,
-        )
+        self.draw_run_calls(pass, self.run_store.arena_binding(chunk), calls)
     }
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn surface_format(&self) -> wgpu::TextureFormat {
@@ -4306,12 +4288,10 @@ impl GpuRenderer {
     pub(crate) fn append_image_draw_cmd(
         &mut self,
         image_draw: &ImageDraw,
-        viewport: ViewportUniformParams,
-        root_scale: f32,
-        (image_vertices, image_indices): (&mut Vec<Vertex>, &mut Vec<u32>),
-        image_clips: &mut Vec<DeviceRoundedClip>,
-        image_cmds: &mut Vec<ImageDrawCmd>,
+        space: DrawSpace,
+        images: &mut ImageBatch,
     ) -> Result<(), String> {
+        let (viewport, root_scale) = (space.viewport, space.scale);
         let snap_delta = image_draw
             .snap_anchor
             .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
@@ -4348,13 +4328,17 @@ impl GpuRenderer {
             return Ok(());
         };
         let device_quad = geometry.device_quad(root_scale);
-        let index_start =
-            push_image_quad((image_vertices, image_indices), device_quad, tint, &uv_rect);
+        let index_start = push_image_quad(
+            (&mut images.vertices, &mut images.indices),
+            device_quad,
+            tint,
+            &uv_rect,
+        );
         let clip = DeviceRoundedClip::of(image_draw, root_scale).map(|clip| {
-            image_clips.push(clip);
-            image_clips.len() as u32 - 1
+            images.clips.push(clip);
+            images.clips.len() as u32 - 1
         });
-        image_cmds.push(ImageDrawCmd {
+        images.cmds.push(ImageDrawCmd {
             index_start,
             scissor,
             image: self.image_binding(prepared_image, geometry.sampling)?,
@@ -4516,17 +4500,16 @@ impl GpuRenderer {
         Ok(entries)
     }
 
-    #[expect(clippy::too_many_arguments)]
     fn append_text_glyph_quad_run(
         &mut self,
         source_raster_rect: Rect,
         quads: GlyphRunQuads<'_>,
         (clip, cut): (Option<Rect>, Option<[f32; 4]>),
-        viewport: ViewportUniformParams,
-        root_scale: f32,
+        space: DrawSpace,
         glyph_instances: &mut GlyphInstances,
         record_cached_hits: bool,
     ) -> (GlyphQuads, GlyphExtent) {
+        let (viewport, root_scale) = (space.viewport, space.scale);
         let start = glyph_instances.lens();
         let mut extent = GlyphExtent::EMPTY;
         let origin = [source_raster_rect.x, source_raster_rect.y];
@@ -4794,8 +4777,10 @@ impl GpuRenderer {
             raster_rect,
             quads,
             (text_draw.clip, cut),
-            viewport,
-            root_scale,
+            DrawSpace {
+                viewport,
+                scale: root_scale,
+            },
             glyph_instances,
             entries_cached,
         );
@@ -4816,19 +4801,16 @@ impl GpuRenderer {
         true
     }
 
-    #[expect(clippy::too_many_arguments)]
     fn append_image_bitmap_draw_cmd(
         &mut self,
         image: &ImageBitmap,
         rect: Rect,
         clip: Option<Rect>,
         sampling: ImageSampling,
-        viewport: ViewportUniformParams,
-        root_scale: f32,
-        image_vertices: &mut Vec<Vertex>,
-        image_indices: &mut Vec<u32>,
-        image_cmds: &mut Vec<ImageDrawCmd>,
+        space: DrawSpace,
+        images: &mut ImageBatch,
     ) -> Result<(), String> {
+        let (viewport, root_scale) = (space.viewport, space.scale);
         if rect.width <= 0.0 || rect.height <= 0.0 {
             return Ok(());
         }
@@ -4871,12 +4853,12 @@ impl GpuRenderer {
         };
 
         let index_start = push_image_quad(
-            (image_vertices, image_indices),
+            (&mut images.vertices, &mut images.indices),
             device_quad,
             [1.0, 1.0, 1.0, 1.0],
             &uv_rect,
         );
-        image_cmds.push(ImageDrawCmd {
+        images.cmds.push(ImageDrawCmd {
             index_start,
             scissor,
             image: self.image_binding(image, sampling)?,
@@ -4889,12 +4871,10 @@ impl GpuRenderer {
     pub(crate) fn append_text_image_draw_cmds(
         &mut self,
         text_draw: &TextDraw,
-        viewport: ViewportUniformParams,
-        root_scale: f32,
-        image_vertices: &mut Vec<Vertex>,
-        image_indices: &mut Vec<u32>,
-        image_cmds: &mut Vec<ImageDrawCmd>,
+        space: DrawSpace,
+        images: &mut ImageBatch,
     ) -> Result<(), String> {
+        let (viewport, root_scale) = (space.viewport, space.scale);
         let Some((logical_rect, raster_rect, clip, text_scale, static_text_motion)) =
             self.text_raster_geometry(text_draw, root_scale)
         else {
@@ -4979,11 +4959,8 @@ impl GpuRenderer {
             draw_rect,
             clip,
             sampling_under(ImageSampling::Nearest, viewport.transform),
-            viewport,
-            root_scale,
-            image_vertices,
-            image_indices,
-            image_cmds,
+            space,
+            images,
         )
     }
 
@@ -5251,12 +5228,16 @@ use renderer_pipelines::{
     GLYPH_ATLAS_PIPELINES, IMAGE_DST_OUT_PIPELINES, IMAGE_SRC_OVER_PIPELINES,
     RRECT_SHADOW_PIPELINES, RendererPipelines,
 };
+mod draw_space;
 mod image_draws;
+pub(crate) use draw_space::{ArenaPlacement, DrawSpace};
 mod image_textures;
 use image_textures::ImageTextures;
 mod text_glyph_cache;
 mod text_resources;
-pub(crate) use image_draws::{ImageDrawCmd, ImageSlot, place_image_draws, resolve_image_geometry};
+pub(crate) use image_draws::{
+    ImageBatch, ImageDrawCmd, ImageSlot, place_image_draws, resolve_image_geometry,
+};
 mod shadow_cache;
 pub(crate) use shadow_cache::{shadow_composite_mask, shadow_draw_bounds};
 mod shape_pipeline;

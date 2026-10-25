@@ -113,7 +113,7 @@ use pipeline_compiler::PipelineCompilation;
 use present_runtime::{
     PresentControl, PresentHandle, PresentMsg, PresentRuntimeInit, PresentState,
 };
-use render::{GpuRenderer, GpuRendererInit};
+use render::{FrameOutput, GpuRenderer, GpuRendererInit};
 pub use render::{
     frame_clear_color, frames_presented, pipelines_created, pipelines_created_off_frame,
 };
@@ -594,14 +594,12 @@ impl WgpuRenderer {
             .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
         let mut returns = RenderReturns::default();
         let result = gpu_renderer.render(
-            texture,
-            view,
             width,
             height,
             packet,
             self.surface_epoch,
             &mut returns,
-            image,
+            FrameOutput::display(texture, view, image),
         );
         self.frontend.apply_returns(returns);
         result.map_err(WgpuRendererError::Wgpu)
@@ -1148,14 +1146,12 @@ impl WgpuRenderer {
         };
         let mut returns = RenderReturns::default();
         let result = gpu_renderer.render(
-            texture,
-            view,
             width,
             height,
             packet.0,
             self.surface_epoch,
             &mut returns,
-            frame::ImageContent::Untracked,
+            FrameOutput::display(texture, view, frame::ImageContent::Untracked),
         );
         let outcome = returns.outcome;
         self.frontend.apply_returns(returns);

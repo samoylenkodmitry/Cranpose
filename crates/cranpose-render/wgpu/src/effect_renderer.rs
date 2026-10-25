@@ -1115,9 +1115,7 @@ fn fullscreen_pipeline_job(
             &format!("effect {label} entry={fragment_entry}"),
             label,
             shader.layout(),
-            (&stages.vertex, &stages.fragment),
-            (vertex_entry, fragment_entry),
-            stages.constants,
+            stages.strip((vertex_entry, fragment_entry)),
             (
                 wgpu::ColorTargetState {
                     format: surface_format,

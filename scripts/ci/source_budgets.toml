@@ -3,7 +3,7 @@
 # removes the cause (`just source-budgets-lower`).
 
 [counts]
-too_many_arguments = 28
+too_many_arguments = 16
 private_docs = 13866
 for_test_fns = 40
 cranpose_env_names = 78
@@ -11,7 +11,7 @@ source_text_checks = 341
 half_state_words = 0
 
 [ast_grep]
-"bool-parameter" = 306
+"bool-parameter" = 305
 "cfg-on-robot-app-feature" = 0
 "drain-collect" = 11
 "get-prefix" = 133
@@ -68,17 +68,17 @@ limit = 1000
 "crates/cranpose-render/pixels/src/pipeline.rs" = 1563
 "crates/cranpose-render/wgpu/src/collect.rs" = 1801
 "crates/cranpose-render/wgpu/src/draw_pass.rs" = 2304
-"crates/cranpose-render/wgpu/src/effect_renderer.rs" = 3470
+"crates/cranpose-render/wgpu/src/effect_renderer.rs" = 3468
 "crates/cranpose-render/wgpu/src/frame.rs" = 5667
 "crates/cranpose-render/wgpu/src/frame_graph.rs" = 2692
 "crates/cranpose-render/wgpu/src/gpu_stats.rs" = 1112
-"crates/cranpose-render/wgpu/src/lib.rs" = 1375
+"crates/cranpose-render/wgpu/src/lib.rs" = 1371
 "crates/cranpose-render/wgpu/src/mesh_fallback.rs" = 1190
 "crates/cranpose-render/wgpu/src/pipeline.rs" = 1712
-"crates/cranpose-render/wgpu/src/render.rs" = 5317
+"crates/cranpose-render/wgpu/src/render.rs" = 5298
 "crates/cranpose-render/wgpu/src/run_store.rs" = 2005
 "crates/cranpose-render/wgpu/src/scene_pass.rs" = 1459
-"crates/cranpose-render/wgpu/src/shader_cache.rs" = 1140
+"crates/cranpose-render/wgpu/src/shader_cache.rs" = 1139
 "crates/cranpose-render/wgpu/src/shader_flatten.rs" = 1726
 "crates/cranpose-render/wgpu/src/window_damage.rs" = 1333
 "crates/cranpose-services/src/http.rs" = 1351

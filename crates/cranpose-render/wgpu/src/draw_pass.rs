@@ -14,9 +14,9 @@ use crate::{
     offscreen::OffscreenTarget,
     pipeline_compiler::CompileLane,
     render::{
-        GpuRenderer, PassFrame, RunStage, StoreRunBatch, TargetRect, ViewportUniformParams,
-        image_draw_bounds, run_draw_bounds, scissor_rect_for_rect, segment_scene_rect,
-        supported_blend_mode, text_draw_bounds, text_draw_geometry_in_rect,
+        ArenaPlacement, DrawSpace, GpuRenderer, PassFrame, RunStage, StoreRunBatch, TargetRect,
+        ViewportUniformParams, image_draw_bounds, run_draw_bounds, scissor_rect_for_rect,
+        segment_scene_rect, supported_blend_mode, text_draw_bounds, text_draw_geometry_in_rect,
     },
     rrect_shadow::{ShadowInstance, append_shadow_instances, rrect_shadow_bounds},
     run_store::{RunDrawCall, run_has_shapes},
@@ -471,12 +471,12 @@ impl GpuRenderer {
                     bytemuck::cast_slice(builder.indices()),
                 ),
             }),
-            images: (!scratch.image_indices.is_empty()).then(|| {
+            images: (!scratch.images.indices.is_empty()).then(|| {
                 self.upload_image_slot(
                     recorder,
-                    &scratch.image_vertices,
-                    &scratch.image_indices,
-                    &scratch.image_clips,
+                    &scratch.images.vertices,
+                    &scratch.images.indices,
+                    &scratch.images.clips,
                 )
             }),
             shadows: (!scratch.shadow_instances.is_empty())
@@ -580,7 +580,7 @@ impl GpuRenderer {
                         frame,
                         &batches,
                         PassCmds {
-                            images: &scratch.image_cmds,
+                            images: &scratch.images.cmds,
                             glyphs: &scratch.glyph_cmds,
                             arena: &scratch.arena_draws,
                             meshes: &scratch.meshes,
@@ -601,10 +601,10 @@ impl GpuRenderer {
         let mut scratch = std::mem::take(&mut self.pass_scratch);
         scratch.meshes.clear();
         scratch.arena_draws.clear();
-        scratch.image_vertices.clear();
-        scratch.image_indices.clear();
-        scratch.image_cmds.clear();
-        scratch.image_clips.clear();
+        scratch.images.vertices.clear();
+        scratch.images.indices.clear();
+        scratch.images.cmds.clear();
+        scratch.images.clips.clear();
         scratch.glyph_instances.clear();
         scratch.glyph_cmds.clear();
         scratch.shadow_instances.clear();
@@ -633,7 +633,7 @@ impl GpuRenderer {
                 Batch::Images {
                     cmds, blend_mode, ..
                 } => self.prefetch_image_pipelines(
-                    &scratch.image_cmds[cmds.clone()],
+                    &scratch.images.cmds[cmds.clone()],
                     *blend_mode,
                     depth_lane,
                     awaited,
@@ -841,19 +841,30 @@ impl GpuRenderer {
                     return Ok(());
                 };
                 let meshes = meshes.map(|(meshes, depth)| (meshes.of(draws.clone()), depth));
-                self.draw_arena(
-                    pass,
-                    *chunk,
-                    *uniform_slot,
-                    &arena[draws],
+                let calls = RunCalls {
+                    uniform_slot: *uniform_slot,
+                    draws: &arena[draws],
                     scissor,
                     stage,
                     meshes,
-                )
+                };
+                self.draw_arena(pass, *chunk, calls)
             }
             _ => Ok(()),
         }
     }
+}
+
+// A batch of run draw calls: the uniform slot and scissor they draw under,
+// the calls, the stage they draw and the meshes a call falls back to while
+// its pipeline compiles, with the depth buffer or not.
+#[derive(Clone, Copy)]
+pub(crate) struct RunCalls<'a> {
+    pub(crate) uniform_slot: usize,
+    pub(crate) draws: &'a [RunDrawCall],
+    pub(crate) scissor: (u32, u32, u32, u32),
+    pub(crate) stage: RunStage,
+    pub(crate) meshes: Option<(crate::mesh_fallback::RunMeshes<'a>, bool)>,
 }
 
 /// Changes between flat and turned segments a pass takes before its shapes
@@ -1203,10 +1214,7 @@ impl PassBuffers {
 
 #[derive(Default)]
 pub(crate) struct PassScratch {
-    pub(crate) image_vertices: Vec<crate::render::Vertex>,
-    pub(crate) image_indices: Vec<u32>,
-    pub(crate) image_cmds: Vec<crate::render::ImageDrawCmd>,
-    image_clips: Vec<crate::render::DeviceRoundedClip>,
+    pub(crate) images: crate::render::ImageBatch,
     pub(crate) glyph_instances: crate::render::GlyphInstances,
     glyph_cmds: Vec<crate::render::GlyphDrawCmd>,
     /// Where a glyph batch's draws of one kind wait while it groups them.
@@ -1229,9 +1237,9 @@ struct ImageMark {
 impl PassScratch {
     fn image_mark(&self) -> ImageMark {
         ImageMark {
-            vertices: self.image_vertices.len(),
-            clips: self.image_clips.len(),
-            cmds: self.image_cmds.len(),
+            vertices: self.images.vertices.len(),
+            clips: self.images.clips.len(),
+            cmds: self.images.cmds.len(),
         }
     }
 
@@ -1242,9 +1250,9 @@ impl PassScratch {
         if let Some(slot) = run.slot {
             crate::render::place_image_draws(
                 (
-                    &mut self.image_vertices[mark.vertices..],
-                    &mut self.image_clips[mark.clips..],
-                    &mut self.image_cmds[mark.cmds..],
+                    &mut self.images.vertices[mark.vertices..],
+                    &mut self.images.clips[mark.clips..],
+                    &mut self.images.cmds[mark.cmds..],
                 ),
                 run.shift,
                 slot,
@@ -1901,23 +1909,24 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             let window = window.unwrap_or(0..u32::MAX);
             if renderer.run_is_stored(draw) {
                 self.close_chunk(renderer, run.binding);
-                let viewport = ViewportUniformParams {
-                    depth_base: self.depth_seq as f32,
-                    ..run.viewport
+                let space = DrawSpace {
+                    viewport: ViewportUniformParams {
+                        depth_base: self.depth_seq as f32,
+                        ..run.viewport
+                    },
+                    scale: run.segment.scale,
                 };
                 let batch = renderer.prepare_store_run(
                     self.recorder,
                     draw,
-                    viewport,
-                    run.segment.scale,
+                    space,
                     &window,
                     (self.depth, self.depth_keys.as_mut()),
                     (&mut self.arena_draws, &mut self.pipelines),
                 );
                 renderer.mesh_store_run(
                     draw,
-                    viewport,
-                    run.segment.scale,
+                    space,
                     batch.draws.clone(),
                     &self.arena_draws,
                     self.depth,
@@ -1945,6 +1954,12 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                 }
                 self.chunk_clip = clip.paint;
                 let segment_clip = clip.tested;
+                let at = ArenaPlacement {
+                    space: run.space(),
+                    shift: run.shift,
+                    mixed_turns: self.mixed_turns,
+                    depth: self.depth,
+                };
                 while from < total {
                     if self
                         .chunk
@@ -1960,10 +1975,8 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                         open,
                         draw,
                         from..total,
-                        (run.segment.scale, run.shift),
-                        run.viewport,
-                        self.mixed_turns,
-                        (self.depth, segment_clip),
+                        at,
+                        segment_clip,
                         (&mut self.pipelines, self.depth_keys.as_mut()),
                     );
                     if taken == 0 {
@@ -2005,22 +2018,16 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             self.draw_held(renderer, run.binding);
         }
         let mark = scratch.image_mark();
-        renderer.append_image_draw_cmd(
-            image,
-            run.viewport,
-            run.segment.scale,
-            (&mut scratch.image_vertices, &mut scratch.image_indices),
-            &mut scratch.image_clips,
-            &mut scratch.image_cmds,
-        )?;
+        renderer.append_image_draw_cmd(image, run.space(), &mut scratch.images)?;
         scratch.place_images(mark, run);
         if let Some(bounds) = scratch
-            .image_cmds
+            .images
+            .cmds
             .get(mark.cmds)
             .map(crate::render::ImageDrawCmd::bounds)
         {
             self.held
-                .hold_image(mark.cmds..scratch.image_cmds.len(), viewport, bounds);
+                .hold_image(mark.cmds..scratch.images.cmds.len(), viewport, bounds);
         }
         Ok(())
     }
@@ -2042,20 +2049,13 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             matches!(item, Item::Image(index) if supported_blend_mode(images[*index].blend_mode) == blend_mode)
         }) {
             let image = &images[index];
-            renderer.append_image_draw_cmd(
-                image,
-                run.viewport,
-                run.segment.scale,
-                (&mut scratch.image_vertices, &mut scratch.image_indices),
-                &mut scratch.image_clips,
-                &mut scratch.image_cmds,
-            )?;
+            renderer.append_image_draw_cmd(image, run.space(), &mut scratch.images)?;
         }
         scratch.place_images(mark, run);
         self.push_images(
             renderer,
             (run.binding, run.image_viewport()),
-            mark.cmds..scratch.image_cmds.len(),
+            mark.cmds..scratch.images.cmds.len(),
             (blend_mode, None),
         );
         Ok(())
@@ -2124,19 +2124,12 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         }
         self.flush(renderer, run.binding);
         let mark = scratch.image_mark();
-        renderer.append_text_image_draw_cmds(
-            text,
-            run.viewport,
-            run.segment.scale,
-            &mut scratch.image_vertices,
-            &mut scratch.image_indices,
-            &mut scratch.image_cmds,
-        )?;
+        renderer.append_text_image_draw_cmds(text, run.space(), &mut scratch.images)?;
         scratch.place_images(mark, run);
         self.push_images(
             renderer,
             (run.binding, run.image_viewport()),
-            mark.cmds..scratch.image_cmds.len(),
+            mark.cmds..scratch.images.cmds.len(),
             (BlendMode::SrcOver, None),
         );
         Ok(())
@@ -2277,6 +2270,13 @@ struct ArenaClip {
 }
 
 impl SegmentRun<'_, '_> {
+    fn space(&self) -> DrawSpace {
+        DrawSpace {
+            viewport: self.viewport,
+            scale: self.segment.scale,
+        }
+    }
+
     /// The viewport the segment's images draw under: a member's are moved
     /// into its binding's space.
     fn image_viewport(&self) -> ViewportUniformParams {

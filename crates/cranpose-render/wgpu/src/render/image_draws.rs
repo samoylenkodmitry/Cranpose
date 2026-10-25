@@ -79,6 +79,16 @@ pub(super) fn create_image_pipeline(
     )
 }
 
+// The image draws a pass collects: their quads' vertices and indices,
+// their rounded clips and their commands.
+#[derive(Default)]
+pub(crate) struct ImageBatch {
+    pub(crate) vertices: Vec<Vertex>,
+    pub(crate) indices: Vec<u32>,
+    pub(crate) clips: Vec<DeviceRoundedClip>,
+    pub(crate) cmds: Vec<ImageDrawCmd>,
+}
+
 pub(super) struct CachedImageTexture {
     pub(super) bind_groups: ImageBindGroups,
     pub(super) _texture: wgpu::Texture,
