@@ -107,4 +107,4 @@ limit = 1000
 "crates/cranpose/src/robot.rs" = 1968
 "crates/cranpose/src/web.rs" = 1194
 "crates/cranpose/src/web_accessibility.rs" = 1254
-"xtask/src/main.rs" = 4236
+"xtask/src/main.rs" = 3849
