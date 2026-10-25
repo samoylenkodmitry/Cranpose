@@ -3,8 +3,8 @@ use cranpose_render_common::{
     brush_sampling::sample_brush_rgba,
     font_source::SoftwareTextFontRegistry,
     software_text_raster::{
-        SoftwareGlyphRasterCache, SoftwareTextFontSet, SoftwareTextMeasurer,
-        collect_solid_text_atlas_run, rasterize_annotated_text_to_image_with_glyph_cache,
+        SoftwareGlyphRasterCache, SoftwareTextFontSet, SoftwareTextMeasurer, TextPixels,
+        TextRasterRequest, collect_solid_text_atlas_run, rasterize_text,
     },
 };
 use cranpose_ui::text::{
@@ -54,21 +54,26 @@ fn render_at_scale(
 ) -> Vec<u8> {
     let width = 180.0 * scale;
     let height = 48.0 * scale;
-    rasterize_annotated_text_to_image_with_glyph_cache(
-        text,
-        Rect {
-            x: 0.0,
-            y: 0.0,
-            width,
-            height,
-        },
-        style,
-        Color::BLACK,
-        28.0,
-        scale,
+    rasterize_text(
+        TextRasterRequest::new(
+            text,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width,
+                height,
+            },
+            style,
+            Color::BLACK,
+            28.0,
+            scale,
+        ),
         fonts,
-        &mut SoftwareGlyphRasterCache::with_capacity_at_least_one(64),
+        Some(&mut SoftwareGlyphRasterCache::with_capacity_at_least_one(
+            64,
+        )),
     )
+    .and_then(TextPixels::into_image)
     .expect("test text produces a raster")
     .pixels()
     .to_vec()

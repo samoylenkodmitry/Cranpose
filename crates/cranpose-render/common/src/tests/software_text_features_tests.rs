@@ -124,7 +124,13 @@ fn zero_draws_different_pixels_from_the_plain_zero() {
         height: 32.0,
     };
     let draw = |style: &TextStyle| {
-        rasterize_text_to_image("0", rect, style, Color::WHITE, 24.0, 1.0, &font).expect("image")
+        rasterize_text(
+            TextRasterRequest::new("0", rect, style, Color::WHITE, 24.0, 1.0),
+            &font,
+            None,
+        )
+        .and_then(TextPixels::into_image)
+        .expect("image")
     };
     assert_ne!(
         draw(&featured(Some("zero"))).pixels(),

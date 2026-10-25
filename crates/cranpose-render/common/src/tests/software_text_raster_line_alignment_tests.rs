@@ -58,20 +58,24 @@ fn rtl_physical_left_and_relative_end_rasterize_at_the_left_edge() {
     let rasterize = |alignment, direction| {
         let mut style = centred_style(alignment);
         style.paragraph_style.text_direction = direction;
-        rasterize_text_to_image(
-            "wwwwwwwwwwww\nww",
-            Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 400.0,
-                height: 80.0,
-            },
-            &style,
-            Color(1.0, 1.0, 1.0, 1.0),
-            20.0,
-            1.0,
+        rasterize_text(
+            TextRasterRequest::new(
+                "wwwwwwwwwwww\nww",
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 400.0,
+                    height: 80.0,
+                },
+                &style,
+                Color(1.0, 1.0, 1.0, 1.0),
+                20.0,
+                1.0,
+            ),
             &font,
+            None,
         )
+        .and_then(TextPixels::into_image)
         .expect("text image")
     };
     let left = rasterize(TextAlign::Left, TextDirection::Ltr);
@@ -96,15 +100,19 @@ fn a_wrapped_list_header_centres_both_its_lines() {
         width: 400.0,
         height: 80.0,
     };
-    let image = rasterize_text_to_image(
-        "wwwwwwwwwwww\nww",
-        rect,
-        &style,
-        Color(1.0, 1.0, 1.0, 1.0),
-        20.0,
-        1.0,
+    let image = rasterize_text(
+        TextRasterRequest::new(
+            "wwwwwwwwwwww\nww",
+            rect,
+            &style,
+            Color(1.0, 1.0, 1.0, 1.0),
+            20.0,
+            1.0,
+        ),
         &font,
+        None,
     )
+    .and_then(TextPixels::into_image)
     .expect("header image");
     let long = ink_columns(&image, 0..(image.height() / 2)).expect("first line ink");
     let short = ink_columns(&image, (image.height() / 2)..image.height()).expect("second line ink");
@@ -126,15 +134,19 @@ fn a_wrapped_line_is_centred_under_the_one_above_it_not_left_under_it() {
         height: 80.0,
     };
     let text = "wwwwwwwwwwww\nww";
-    let image = rasterize_text_to_image(
-        text,
-        rect,
-        &centred_style(TextAlign::Center),
-        Color(1.0, 1.0, 1.0, 1.0),
-        20.0,
-        1.0,
+    let image = rasterize_text(
+        TextRasterRequest::new(
+            text,
+            rect,
+            &centred_style(TextAlign::Center),
+            Color(1.0, 1.0, 1.0, 1.0),
+            20.0,
+            1.0,
+        ),
         &font,
+        None,
     )
+    .and_then(TextPixels::into_image)
     .expect("centred image");
     let long = ink_columns(&image, 0..(image.height() / 2)).expect("first line ink");
     let short = ink_columns(&image, (image.height() / 2)..image.height()).expect("second line ink");
@@ -224,15 +236,19 @@ fn a_start_aligned_paragraph_still_stacks_its_lines_flush_left() {
         width: 400.0,
         height: 80.0,
     };
-    let image = rasterize_text_to_image(
-        "wwwwwwwwwwww\nww",
-        rect,
-        &centred_style(TextAlign::Start),
-        Color(1.0, 1.0, 1.0, 1.0),
-        20.0,
-        1.0,
+    let image = rasterize_text(
+        TextRasterRequest::new(
+            "wwwwwwwwwwww\nww",
+            rect,
+            &centred_style(TextAlign::Start),
+            Color(1.0, 1.0, 1.0, 1.0),
+            20.0,
+            1.0,
+        ),
         &font,
+        None,
     )
+    .and_then(TextPixels::into_image)
     .expect("start aligned image");
     let long = ink_columns(&image, 0..(image.height() / 2)).expect("first line ink");
     let short = ink_columns(&image, (image.height() / 2)..image.height()).expect("second line ink");

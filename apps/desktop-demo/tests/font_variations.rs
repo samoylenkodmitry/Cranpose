@@ -2,7 +2,8 @@ use cranpose::text::{FontFamily, FontStyle, FontWeight, TextStyle};
 use cranpose_render_common::{
     font_source::SoftwareTextFontRegistry,
     software_text_raster::{
-        measure_text_with_font, rasterize_text_to_image, SoftwareTextFont, SoftwareTextFontError,
+        measure_text_with_font, rasterize_text, SoftwareTextFont, SoftwareTextFontError,
+        TextPixels, TextRasterRequest,
     },
 };
 use cranpose_ui_graphics::{Color, Rect, Size};
@@ -29,15 +30,19 @@ fn explicit_axes_change_measurement_rasterization_and_cache_identity() {
     assert!(measure(&wide) > measure(&normal));
     assert_ne!(normal.content_hash(), wide.content_hash());
     let raster = |font: &SoftwareTextFont| {
-        rasterize_text_to_image(
-            "AVATAR Browse",
-            Rect::from_size(Size::new(300.0, 40.0)),
-            &style,
-            Color::BLACK,
-            20.0,
-            1.0,
+        rasterize_text(
+            TextRasterRequest::new(
+                "AVATAR Browse",
+                Rect::from_size(Size::new(300.0, 40.0)),
+                &style,
+                Color::BLACK,
+                20.0,
+                1.0,
+            ),
             font,
+            None,
         )
+        .and_then(TextPixels::into_image)
         .unwrap()
         .pixels()
         .to_vec()

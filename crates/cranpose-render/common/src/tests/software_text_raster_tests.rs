@@ -3,6 +3,24 @@ use cranpose_ui_graphics::Point;
 
 use super::*;
 
+fn rasterize_text_with_raw_font(
+    request: TextRasterRequest<'_>,
+    font: &impl Font,
+) -> Option<TextPixels> {
+    rasterize_text_to_image_impl(
+        request,
+        RasterFontRef {
+            font: &font,
+            ab_glyph_scale_factor: 1.0,
+            weight: FontWeight::NORMAL,
+            style: FontStyle::Normal,
+            tracking: &FontTracking::default(),
+        },
+        0,
+        None,
+    )
+}
+
 fn count_ink_pixels(image: &ImageBitmap) -> usize {
     image
         .pixels()
@@ -25,26 +43,19 @@ fn software_glyph_raster_cache_reuses_static_masks_across_positions() {
     };
     let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(64);
 
-    let uncached = rasterize_text_to_image(
-        "aaaa",
-        rect,
-        &style,
-        Color(1.0, 1.0, 1.0, 1.0),
-        18.0,
-        1.0,
+    let uncached = rasterize_text(
+        TextRasterRequest::new("aaaa", rect, &style, Color(1.0, 1.0, 1.0, 1.0), 18.0, 1.0),
         &font,
+        None,
     )
+    .and_then(TextPixels::into_image)
     .expect("uncached image");
-    let cached = rasterize_text_to_image_with_glyph_cache(
-        "aaaa",
-        rect,
-        &style,
-        Color(1.0, 1.0, 1.0, 1.0),
-        18.0,
-        1.0,
+    let cached = rasterize_text(
+        TextRasterRequest::new("aaaa", rect, &style, Color(1.0, 1.0, 1.0, 1.0), 18.0, 1.0),
         &font,
-        &mut cache,
+        Some(&mut cache),
     )
+    .and_then(TextPixels::into_image)
     .expect("cached image");
 
     assert_eq!(cached.pixels(), uncached.pixels());
@@ -58,16 +69,19 @@ fn software_glyph_raster_cache_reuses_static_masks_across_positions() {
         y: 17.0,
         ..rect
     };
-    let _ = rasterize_text_to_image_with_glyph_cache(
-        "aaaa",
-        shifted_rect,
-        &style,
-        Color(1.0, 1.0, 1.0, 1.0),
-        18.0,
-        1.0,
+    let _ = rasterize_text(
+        TextRasterRequest::new(
+            "aaaa",
+            shifted_rect,
+            &style,
+            Color(1.0, 1.0, 1.0, 1.0),
+            18.0,
+            1.0,
+        ),
         &font,
-        &mut cache,
+        Some(&mut cache),
     )
+    .and_then(TextPixels::into_image)
     .expect("cached shifted image");
 
     let shifted_stats = cache.stats();
@@ -101,19 +115,19 @@ fn annotated_solid_text_direct_raster_matches_plain_text_pixels() {
     };
     let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(64);
 
-    let plain = rasterize_text_to_image(
-        annotated.text.as_str(),
-        rect,
-        &style,
-        color,
-        18.0,
-        1.0,
+    let plain = rasterize_text(
+        TextRasterRequest::new(annotated.text.as_str(), rect, &style, color, 18.0, 1.0),
         &font,
+        None,
     )
+    .and_then(TextPixels::into_image)
     .expect("plain text image");
-    let direct = rasterize_annotated_text_to_image_with_glyph_cache(
-        &annotated, rect, &style, color, 18.0, 1.0, &font_set, &mut cache,
+    let direct = rasterize_text(
+        TextRasterRequest::new(&annotated, rect, &style, color, 18.0, 1.0),
+        &font_set,
+        Some(&mut cache),
     )
+    .and_then(TextPixels::into_image)
     .expect("annotated text image");
 
     assert_eq!(direct.pixels(), plain.pixels());
@@ -749,35 +763,43 @@ fn rasterized_synthetic_bold_adds_ink_without_changing_line_box() {
     let normal_metrics = measure_text_with_font("Composer", &normal_style, 20.0, &font);
     let bold_metrics = measure_text_with_font("Composer", &bold_style, 20.0, &font);
 
-    let normal = rasterize_text_to_image(
-        "Composer",
-        Rect {
-            x: 0.0,
-            y: 0.0,
-            width: normal_metrics.width.ceil(),
-            height: normal_metrics.height.ceil(),
-        },
-        &normal_style,
-        Color::WHITE,
-        20.0,
-        1.0,
+    let normal = rasterize_text(
+        TextRasterRequest::new(
+            "Composer",
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: normal_metrics.width.ceil(),
+                height: normal_metrics.height.ceil(),
+            },
+            &normal_style,
+            Color::WHITE,
+            20.0,
+            1.0,
+        ),
         &font,
+        None,
     )
+    .and_then(TextPixels::into_image)
     .expect("normal text image");
-    let bold = rasterize_text_to_image(
-        "Composer",
-        Rect {
-            x: 0.0,
-            y: 0.0,
-            width: bold_metrics.width.ceil(),
-            height: bold_metrics.height.ceil(),
-        },
-        &bold_style,
-        Color::WHITE,
-        20.0,
-        1.0,
+    let bold = rasterize_text(
+        TextRasterRequest::new(
+            "Composer",
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: bold_metrics.width.ceil(),
+                height: bold_metrics.height.ceil(),
+            },
+            &bold_style,
+            Color::WHITE,
+            20.0,
+            1.0,
+        ),
         &font,
+        None,
     )
+    .and_then(TextPixels::into_image)
     .expect("bold text image");
 
     assert_eq!(bold.height(), normal.height());
@@ -828,49 +850,28 @@ fn software_text_synthesizes_missing_italic_style() {
         "explicit FontSynthesis::None should preserve regular metrics: normal={normal_metrics:?} disabled={disabled_metrics:?}"
     );
 
-    let normal = rasterize_text_to_image(
-        "Italic",
-        Rect {
+    let raster = |style: &TextStyle, width: f32, height: f32| {
+        let rect = Rect {
             x: 0.0,
             y: 0.0,
-            width: normal_metrics.width.ceil(),
-            height: normal_metrics.height.ceil(),
-        },
-        &normal_style,
-        Color::WHITE,
-        36.0,
-        1.0,
-        &font,
-    )
-    .expect("normal text image");
-    let italic = rasterize_text_to_image(
-        "Italic",
-        Rect {
-            x: 0.0,
-            y: 0.0,
-            width: italic_metrics.width.ceil(),
-            height: italic_metrics.height.ceil(),
-        },
-        &italic_style,
-        Color::WHITE,
-        36.0,
-        1.0,
-        &font,
-    )
-    .expect("italic text image");
-    let disabled = rasterize_text_to_image(
-        "Italic",
-        Rect {
-            x: 0.0,
-            y: 0.0,
-            width: disabled_metrics.width.ceil(),
-            height: disabled_metrics.height.ceil(),
-        },
+            width: width.ceil(),
+            height: height.ceil(),
+        };
+        rasterize_text(
+            TextRasterRequest::new("Italic", rect, style, Color::WHITE, 36.0, 1.0),
+            &font,
+            None,
+        )
+        .and_then(TextPixels::into_image)
+    };
+    let normal = raster(&normal_style, normal_metrics.width, normal_metrics.height)
+        .expect("normal text image");
+    let italic = raster(&italic_style, italic_metrics.width, italic_metrics.height)
+        .expect("italic text image");
+    let disabled = raster(
         &no_synthesis_style,
-        Color::WHITE,
-        36.0,
-        1.0,
-        &font,
+        disabled_metrics.width,
+        disabled_metrics.height,
     )
     .expect("disabled italic text image");
 
@@ -896,20 +897,24 @@ fn rasterized_default_text_fills_expected_visual_height() {
         ..Default::default()
     };
     let metrics = measure_text_with_font("Counter App", &style, 14.0, &font);
-    let image = rasterize_text_to_image(
-        "Counter App",
-        Rect {
-            x: 0.0,
-            y: 0.0,
-            width: metrics.width.ceil(),
-            height: metrics.height.ceil(),
-        },
-        &style,
-        Color::WHITE,
-        14.0,
-        1.0,
+    let image = rasterize_text(
+        TextRasterRequest::new(
+            "Counter App",
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: metrics.width.ceil(),
+                height: metrics.height.ceil(),
+            },
+            &style,
+            Color::WHITE,
+            14.0,
+            1.0,
+        ),
         &font,
+        None,
     )
+    .and_then(TextPixels::into_image)
     .expect("text image");
     let (top, bottom) = ink_y_range(&image).expect("text should contain ink");
     let ink_height = bottom - top;
@@ -1530,20 +1535,23 @@ fn software_text_glyph_metrics_cache_reuses_common_glyphs_across_unique_lines() 
 fn rasterized_gradient_text_shows_color_transition() {
     let font = test_font();
     let plain_style = TextStyle::default();
-    let probe = rasterize_text_to_image_with_font(
-        "MMMMMMMM",
-        Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 320.0,
-            height: 96.0,
-        },
-        &plain_style,
-        Color::WHITE,
-        48.0,
-        1.0,
+    let probe = rasterize_text_with_raw_font(
+        TextRasterRequest::new(
+            "MMMMMMMM",
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 96.0,
+            },
+            &plain_style,
+            Color::WHITE,
+            48.0,
+            1.0,
+        ),
         &font,
     )
+    .and_then(TextPixels::into_image)
     .expect("probe image");
     let (ink_x_min, ink_x_max) = ink_x_range(&probe).expect("probe must contain ink");
     let gradient_end = ink_x_max as f32;
@@ -1560,20 +1568,23 @@ fn rasterized_gradient_text_shows_color_transition() {
         ..Default::default()
     };
 
-    let image = rasterize_text_to_image_with_font(
-        "MMMMMMMM",
-        Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 320.0,
-            height: 96.0,
-        },
-        &style,
-        Color::WHITE,
-        48.0,
-        1.0,
+    let image = rasterize_text_with_raw_font(
+        TextRasterRequest::new(
+            "MMMMMMMM",
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 96.0,
+            },
+            &style,
+            Color::WHITE,
+            48.0,
+            1.0,
+        ),
         &font,
     )
+    .and_then(TextPixels::into_image)
     .expect("rasterized image");
 
     let ink_span = ink_x_max.saturating_sub(ink_x_min).max(1);
@@ -1609,25 +1620,17 @@ fn rasterized_stroke_and_fill_ink_coverage_differs() {
         height: 96.0,
     };
 
-    let fill = rasterize_text_to_image_with_font(
-        "MMMMMMMM",
-        rect,
-        &fill_style,
-        Color::WHITE,
-        48.0,
-        1.0,
+    let fill = rasterize_text_with_raw_font(
+        TextRasterRequest::new("MMMMMMMM", rect, &fill_style, Color::WHITE, 48.0, 1.0),
         &font,
     )
+    .and_then(TextPixels::into_image)
     .expect("fill image");
-    let stroke = rasterize_text_to_image_with_font(
-        "MMMMMMMM",
-        rect,
-        &stroke_style,
-        Color::WHITE,
-        48.0,
-        1.0,
+    let stroke = rasterize_text_with_raw_font(
+        TextRasterRequest::new("MMMMMMMM", rect, &stroke_style, Color::WHITE, 48.0, 1.0),
         &font,
     )
+    .and_then(TextPixels::into_image)
     .expect("stroke image");
 
     let fill_ink = count_ink_pixels(&fill);
@@ -1660,18 +1663,17 @@ fn stroke_path_uses_miter_join_for_acute_apexes() {
         height: 140.0,
     };
 
-    let fill =
-        rasterize_text_to_image_with_font("A", rect, &fill_style, Color::WHITE, 110.0, 1.0, &font)
-            .expect("fill image");
-    let stroke = rasterize_text_to_image_with_font(
-        "A",
-        rect,
-        &stroke_style,
-        Color::WHITE,
-        110.0,
-        1.0,
+    let fill = rasterize_text_with_raw_font(
+        TextRasterRequest::new("A", rect, &fill_style, Color::WHITE, 110.0, 1.0),
         &font,
     )
+    .and_then(TextPixels::into_image)
+    .expect("fill image");
+    let stroke = rasterize_text_with_raw_font(
+        TextRasterRequest::new("A", rect, &stroke_style, Color::WHITE, 110.0, 1.0),
+        &font,
+    )
+    .and_then(TextPixels::into_image)
     .expect("stroke image");
 
     let fill_top = top_ink_row(&fill).expect("fill top row");
@@ -1727,25 +1729,31 @@ fn shadow_blur_radius_changes_spread_for_shared_raster_path() {
         height: 120.0,
     };
 
-    let hard_shadow = rasterize_text_to_image_with_font(
-        "Shared shadow",
-        rect,
-        &hard_shadow_style,
-        Color::TRANSPARENT,
-        48.0,
-        1.0,
+    let hard_shadow = rasterize_text_with_raw_font(
+        TextRasterRequest::new(
+            "Shared shadow",
+            rect,
+            &hard_shadow_style,
+            Color::TRANSPARENT,
+            48.0,
+            1.0,
+        ),
         &font,
     )
+    .and_then(TextPixels::into_image)
     .expect("hard shadow image");
-    let blurred_shadow = rasterize_text_to_image_with_font(
-        "Shared shadow",
-        rect,
-        &blurred_shadow_style,
-        Color::TRANSPARENT,
-        48.0,
-        1.0,
+    let blurred_shadow = rasterize_text_with_raw_font(
+        TextRasterRequest::new(
+            "Shared shadow",
+            rect,
+            &blurred_shadow_style,
+            Color::TRANSPARENT,
+            48.0,
+            1.0,
+        ),
         &font,
     )
+    .and_then(TextPixels::into_image)
     .expect("blurred shadow image");
 
     let hard_ink = count_ink_pixels(&hard_shadow);
@@ -1796,25 +1804,31 @@ fn text_motion_changes_fractional_shadow_sampling() {
         height: 120.0,
     };
 
-    let static_image = rasterize_text_to_image_with_font(
-        "Motion shadow",
-        rect,
-        &static_style,
-        Color::TRANSPARENT,
-        42.0,
-        1.0,
+    let static_image = rasterize_text_with_raw_font(
+        TextRasterRequest::new(
+            "Motion shadow",
+            rect,
+            &static_style,
+            Color::TRANSPARENT,
+            42.0,
+            1.0,
+        ),
         &font,
     )
+    .and_then(TextPixels::into_image)
     .expect("static image");
-    let animated_image = rasterize_text_to_image_with_font(
-        "Motion shadow",
-        rect,
-        &animated_style,
-        Color::TRANSPARENT,
-        42.0,
-        1.0,
+    let animated_image = rasterize_text_with_raw_font(
+        TextRasterRequest::new(
+            "Motion shadow",
+            rect,
+            &animated_style,
+            Color::TRANSPARENT,
+            42.0,
+            1.0,
+        ),
         &font,
     )
+    .and_then(TextPixels::into_image)
     .expect("animated image");
 
     assert_ne!(

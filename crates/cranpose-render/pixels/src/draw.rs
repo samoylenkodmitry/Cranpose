@@ -8,13 +8,9 @@ use cranpose_render_common::{
     graph_scene::RenderDiagnostics,
     layer_shadow::ShadowRRect,
     shape_sdf,
-    software_text_raster::{
-        SoftwareGlyphRasterCache, TextPixelWindow, TextPixels, blend_byte_pixel,
-        paint_annotated_text_region, rasterize_annotated_text_region_pixels,
-    },
+    software_text_raster::SoftwareGlyphRasterCache,
     text_measure::SoftwareTextResources,
 };
-use cranpose_ui::text::TextMotion;
 use cranpose_ui_graphics::{
     ArcGeometry, BlendMode, Brush, CornerRadii, LineGeometry, Point, Rect, StrokeJoin, Trapezoid,
     expand_rect, whole,
@@ -25,6 +21,11 @@ use crate::{
     scene::{ImageDraw, RasterScene, Scene, TextDraw},
     style::point_in_resolved_rounded_rect,
 };
+
+mod text;
+
+pub(crate) use text::rasterize_text;
+use text::{draw_text, is_static_text, rasterize_text_part, text_raster_rect};
 
 /// Glyph masks a renderer keeps between frames.
 const GLYPH_MASKS: usize = 256;
@@ -1175,184 +1176,6 @@ fn sample_image_linear(image: &cranpose_ui_graphics::ImageBitmap, x: f32, y: f32
         out[channel] = top + (bottom - top) * ty;
     }
     out
-}
-
-fn draw_text(
-    target: &mut Target,
-    draw: &TextDraw,
-    diagnostics: &RenderDiagnostics,
-    text: &TextRaster,
-) {
-    let Some(raster_rect) = text_raster_rect(draw) else {
-        return;
-    };
-    // A text on whole pixels rasterizes only its part inside the target, as
-    // a strip takes a few rows of it; one between pixels samples its
-    // neighbours and rasterizes whole.
-    let part = if raster_rect.x.fract() == 0.0 && raster_rect.y.fract() == 0.0 {
-        let Some(part) = clip_rect_to_bounds(raster_rect, None, target) else {
-            return;
-        };
-        if paint_text_over_target(draw, raster_rect, target, text) {
-            return;
-        }
-        Rect {
-            x: part.min_x as f32,
-            y: part.min_y as f32,
-            width: (part.max_x - part.min_x) as f32,
-            height: (part.max_y - part.min_y) as f32,
-        }
-    } else {
-        raster_rect
-    };
-    if let Some((pixels, rect)) = rasterize_text_part(draw, raster_rect, part, text) {
-        blit_rasterized_text(target, rect, draw.clip, pixels, diagnostics);
-    }
-}
-
-/// Paints the part of `draw`, a text on whole pixels covering `raster_rect`,
-/// that the target and the draw's clip leave, straight over the target's
-/// pixels. Returns whether it did: a text that needs an image of its own,
-/// as a gradient or a shadow does, goes through
-/// [`rasterize_text_part`] instead.
-fn paint_text_over_target(
-    draw: &TextDraw,
-    raster_rect: Rect,
-    target: &mut Target,
-    text: &TextRaster,
-) -> bool {
-    let Some(bounds) = clip_rect_to_bounds(raster_rect, draw.clip, target) else {
-        return true;
-    };
-    let first = (bounds.min_y - target.top) as usize * target.width as usize
-        + (bounds.min_x - target.left) as usize;
-    let stride = target.width as usize;
-    let Some(pixels) = target.pixels.as_chunks_mut::<4>().0.get_mut(first..) else {
-        return true;
-    };
-    let window = TextPixelWindow {
-        pixels,
-        stride,
-        width: (bounds.max_x - bounds.min_x) as u32,
-        height: (bounds.max_y - bounds.min_y) as u32,
-    };
-    let mut glyphs = text.glyphs.try_borrow_mut().ok();
-    paint_annotated_text_region(
-        draw.text.as_ref(),
-        Rect {
-            x: bounds.min_x as f32,
-            y: bounds.min_y as f32,
-            width: window.width as f32,
-            height: window.height as f32,
-        },
-        Point::new(raster_rect.x, raster_rect.y),
-        &draw.text_style,
-        draw.color,
-        draw.font_size,
-        draw.scale,
-        text.resources.fonts(),
-        glyphs.as_deref_mut(),
-        window,
-    )
-}
-
-/// `draw` rasterized into an image of its own, straight alpha, and the
-/// rect that image covers.
-pub(crate) fn rasterize_text(draw: &TextDraw, text: &TextRaster) -> Option<(TextPixels, Rect)> {
-    let raster_rect = text_raster_rect(draw)?;
-    rasterize_text_part(draw, raster_rect, raster_rect, text)
-}
-
-/// `part` of `draw`, whose text covers `raster_rect`, rasterized into an
-/// image of its own, straight alpha, and the rect that image covers.
-fn rasterize_text_part(
-    draw: &TextDraw,
-    raster_rect: Rect,
-    part: Rect,
-    text: &TextRaster,
-) -> Option<(TextPixels, Rect)> {
-    let mut glyphs = text.glyphs.try_borrow_mut().ok();
-    let pixels = rasterize_annotated_text_region_pixels(
-        draw.text.as_ref(),
-        part,
-        Point::new(raster_rect.x, raster_rect.y),
-        &draw.text_style,
-        draw.color,
-        draw.font_size,
-        draw.scale,
-        text.resources.fonts(),
-        glyphs.as_deref_mut(),
-    )?;
-    let rect = Rect {
-        x: part.x,
-        y: part.y,
-        width: pixels.width as f32,
-        height: pixels.height as f32,
-    };
-    Some((pixels, rect))
-}
-
-/// Whether `draw` keeps its glyphs on whole pixels, where the glyph cache
-/// serves them.
-fn is_static_text(draw: &TextDraw) -> bool {
-    draw.text_style
-        .paragraph_style
-        .text_motion
-        .unwrap_or(TextMotion::Static)
-        == TextMotion::Static
-}
-
-fn text_raster_rect(draw: &TextDraw) -> Option<Rect> {
-    if draw.scale.max(0.0) == 0.0 {
-        return None;
-    }
-    if !is_static_text(draw) {
-        return Some(draw.rect);
-    }
-    let snap_delta = draw
-        .snap_anchor
-        .map(snap_delta_for_anchor)
-        .unwrap_or_default();
-    Some(on_pixel_grid(
-        draw.rect.translate(snap_delta.x, snap_delta.y),
-    ))
-}
-
-fn blit_rasterized_text(
-    target: &mut Target,
-    rect: Rect,
-    clip: Option<Rect>,
-    text: TextPixels,
-    diagnostics: &RenderDiagnostics,
-) {
-    if rect.width <= 0.0 || rect.height <= 0.0 || text.width == 0 || text.height == 0 {
-        return;
-    }
-    let Some(clip_bounds) = clip_rect_to_bounds(rect, clip, target) else {
-        return;
-    };
-
-    // The pixels are the rect's size. On whole pixels each pixel takes the
-    // text pixel under it; between pixels it takes the text moved by the
-    // fraction, sampled linearly from it as an image.
-    if rect.x.fract() != 0.0 || rect.y.fract() != 0.0 {
-        if let Some(image) = text.into_image() {
-            blit_image_between_pixels(target, rect, clip_bounds, &image, diagnostics);
-        }
-        return;
-    }
-    let source_pixels = text.pixels.as_chunks::<4>().0;
-    for py in clip_bounds.min_y..clip_bounds.max_y {
-        let row = target.row(py, clip_bounds.min_x, clip_bounds.max_x);
-        let first = (py as f32 - rect.y) as usize * text.width as usize
-            + (clip_bounds.min_x as f32 - rect.x) as usize;
-        let source = source_pixels
-            .get(first..first + row.len())
-            .unwrap_or_default();
-        for (dst, src) in row.iter_mut().zip(source) {
-            blend_byte_pixel(dst, *src);
-        }
-    }
 }
 
 /// Draws `image`, the size of `rect`, at a rect between whole pixels: each
