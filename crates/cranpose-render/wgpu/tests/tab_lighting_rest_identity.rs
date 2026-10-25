@@ -48,7 +48,7 @@ fn tab_lighting_at_zero_glow_leaves_the_page_untouched() {
     )));
     let lit = support::capture_graph_settled(
         &mut renderer,
-        support::page_graph(WIDTH, HEIGHT, lit_page),
+        &support::page_graph(WIDTH, HEIGHT, lit_page),
         WIDTH,
         HEIGHT,
     );

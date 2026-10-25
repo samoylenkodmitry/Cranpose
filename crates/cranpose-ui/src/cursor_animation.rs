@@ -2,24 +2,24 @@ use std::cell::Cell;
 
 use web_time::{Duration, Instant};
 
-pub const BLINK_INTERVAL_MS: u64 = 500;
+pub(crate) const BLINK_INTERVAL_MS: u64 = 500;
 
-pub struct CursorAnimationState {
+pub(crate) struct CursorAnimationState {
     cursor_alpha: Cell<f32>,
     next_blink_time: Cell<Option<Instant>>,
 }
 
 impl CursorAnimationState {
-    pub const BLINK_INTERVAL: Duration = Duration::from_millis(BLINK_INTERVAL_MS);
+    pub(crate) const BLINK_INTERVAL: Duration = Duration::from_millis(BLINK_INTERVAL_MS);
 
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             cursor_alpha: Cell::new(1.0),
             next_blink_time: Cell::new(None),
         }
     }
 
-    pub fn start(&self) -> bool {
+    pub(crate) fn start(&self) -> bool {
         let flipped = !self.is_visible();
         self.cursor_alpha.set(1.0);
         self.next_blink_time
@@ -27,7 +27,7 @@ impl CursorAnimationState {
         flipped
     }
 
-    pub fn stop(&self) -> bool {
+    pub(crate) fn stop(&self) -> bool {
         let flipped = !self.is_visible();
         self.cursor_alpha.set(1.0);
         self.next_blink_time.set(None);
@@ -39,11 +39,11 @@ impl CursorAnimationState {
         self.next_blink_time.get().is_some()
     }
 
-    pub fn is_visible(&self) -> bool {
+    pub(crate) fn is_visible(&self) -> bool {
         self.cursor_alpha.get() > 0.5
     }
 
-    pub fn tick(&self, now: Instant) -> bool {
+    pub(crate) fn tick(&self, now: Instant) -> bool {
         if let Some(next) = self.next_blink_time.get()
             && now >= next
         {
@@ -59,7 +59,7 @@ impl CursorAnimationState {
         false
     }
 
-    pub fn next_blink_time(&self) -> Option<Instant> {
+    pub(crate) fn next_blink_time(&self) -> Option<Instant> {
         self.next_blink_time.get()
     }
 }
@@ -94,7 +94,7 @@ pub fn reset_cursor_blink() {
     start_cursor_blink();
 }
 
-pub fn suspend_cursor_blink() {
+pub(crate) fn suspend_cursor_blink() {
     if crate::render_state::with_cursor_animation(CursorAnimationState::stop) {
         invalidate_focused_caret();
     }

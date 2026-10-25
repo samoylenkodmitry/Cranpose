@@ -40,7 +40,7 @@ pub(super) struct WheelGeometry {
 }
 
 impl WheelGeometry {
-    pub fn new(width: f32, height: f32) -> Self {
+    pub(super) fn new(width: f32, height: f32) -> Self {
         let radius = width.max(780.0) * 0.7;
         let left = (width * 0.25).clamp(200.0, 300.0);
         let center = Point::new(radius + left - 24.0, (height * 0.08).clamp(48.0, 80.0));
@@ -54,15 +54,15 @@ impl WheelGeometry {
         }
     }
 
-    pub fn height(self) -> f32 {
+    pub(super) fn height(self) -> f32 {
         self.height
     }
 
-    pub fn reader_left(self) -> f32 {
+    pub(super) fn reader_left(self) -> f32 {
         (self.width * 0.25).clamp(200.0, 300.0)
     }
 
-    pub fn wheel_width(self) -> f32 {
+    pub(super) fn wheel_width(self) -> f32 {
         if self.width < super::COMPACT_BREAKPOINT {
             self.width
         } else {
@@ -70,7 +70,7 @@ impl WheelGeometry {
         }
     }
 
-    pub fn reader_preview_modifier(self, scale_content: bool) -> Modifier {
+    pub(super) fn reader_preview_modifier(self, scale_content: bool) -> Modifier {
         let layout_scale = if scale_content { 1.0 } else { 0.44 };
         let content_scale = if scale_content { 0.44 } else { 1.0 };
         Modifier::empty()
@@ -86,22 +86,22 @@ impl WheelGeometry {
             .clip_to_bounds()
     }
 
-    pub fn section_angle(self) -> f32 {
+    pub(super) fn section_angle(self) -> f32 {
         120.0 / (self.radius + 64.0)
     }
 
-    pub fn point(self, angle: f32, radius: f32) -> Point {
+    pub(super) fn point(self, angle: f32, radius: f32) -> Point {
         Point::new(
             self.center.x - radius * angle.cos(),
             self.center.y + radius * angle.sin(),
         )
     }
 
-    pub fn entry_modifier(self, position: f32, height: f32) -> Modifier {
+    pub(super) fn entry_modifier(self, position: f32, height: f32) -> Modifier {
         self.item_modifier(position, height, 270.0, 64.0)
     }
 
-    pub fn entry_hit_modifier(self, position: f32, height: f32) -> Option<Modifier> {
+    pub(super) fn entry_hit_modifier(self, position: f32, height: f32) -> Option<Modifier> {
         let angle = self.focus_angle + position * self.section_angle();
         let (sin, cos) = angle.sin_cos();
         if cos <= 0.0 {
@@ -119,7 +119,7 @@ impl WheelGeometry {
         Some(Self::placed_item(center, end - start, height, angle))
     }
 
-    pub fn visible_entries(self, position: f32, count: usize) -> std::ops::Range<usize> {
+    pub(super) fn visible_entries(self, position: f32, count: usize) -> std::ops::Range<usize> {
         let radius = self.radius + 64.0;
         let margin = 150.0;
         let first_angle = ((-margin - self.center.y) / radius).clamp(-1.0, 1.0).asin();
@@ -132,7 +132,7 @@ impl WheelGeometry {
         first.max(0.0) as usize..(last.max(0.0) as usize).min(count)
     }
 
-    pub fn brand_modifier(self, position: f32) -> Modifier {
+    pub(super) fn brand_modifier(self, position: f32) -> Modifier {
         self.item_modifier(position, 112.0, 246.0, 24.0)
     }
 

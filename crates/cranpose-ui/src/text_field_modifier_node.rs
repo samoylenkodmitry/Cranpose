@@ -508,7 +508,7 @@ pub struct PointerPressTrack {
 }
 
 impl TextFieldRefs {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             is_focused: Rc::new(RefCell::new(false)),
             content_origin: Rc::default(),

@@ -96,7 +96,7 @@ impl focus_dispatch::FocusTargetHandle for FocusTargetShared {
     }
 }
 
-pub struct FocusTargetNode {
+pub(super) struct FocusTargetNode {
     state: NodeState,
     shared: Rc<FocusTargetShared>,
     handle: Rc<dyn focus_dispatch::FocusTargetHandle>,
@@ -104,7 +104,7 @@ pub struct FocusTargetNode {
 }
 
 impl FocusTargetNode {
-    pub fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self::from_callback(None)
     }
 
@@ -120,11 +120,11 @@ impl FocusTargetNode {
         }
     }
 
-    pub fn set_focus_state(&self, state: FocusState) {
+    pub(super) fn set_focus_state(&self, state: FocusState) {
         self.shared.set_focus_state(state);
     }
 
-    pub fn clear_focus(&self) {
+    pub(super) fn clear_focus(&self) {
         self.set_focus_state(FocusState::Inactive);
     }
 
@@ -176,20 +176,20 @@ impl FocusNode for FocusTargetNode {
 }
 
 #[derive(Clone)]
-pub struct FocusTargetElement {
+pub(super) struct FocusTargetElement {
     on_focus_changed: Option<FocusChangedCallback>,
     observers: Option<FocusWithinChain>,
 }
 
 impl FocusTargetElement {
-    pub fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             on_focus_changed: None,
             observers: current_focus_within(),
         }
     }
 
-    pub fn with_callback<F>(callback: F) -> Self
+    pub(super) fn with_callback<F>(callback: F) -> Self
     where
         F: Fn(FocusState) + 'static,
     {
@@ -360,7 +360,7 @@ impl std::fmt::Debug for FocusRequester {
     }
 }
 
-pub struct FocusRequesterNode {
+pub(crate) struct FocusRequesterNode {
     state: NodeState,
     requester: FocusRequester,
 }
@@ -393,9 +393,8 @@ impl ModifierNode for FocusRequesterNode {
     }
 }
 
-/// Modifier element for [`FocusRequester`].
 #[derive(Clone)]
-pub struct FocusRequesterElement {
+pub(crate) struct FocusRequesterElement {
     requester: FocusRequester,
 }
 

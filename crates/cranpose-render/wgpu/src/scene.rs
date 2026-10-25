@@ -510,11 +510,11 @@ impl Drop for CompositorScene {
 }
 
 impl CompositorScene {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::with_capacity(SceneCapacityHint::default())
     }
 
-    pub fn with_capacity(hint: SceneCapacityHint) -> Self {
+    pub(crate) fn with_capacity(hint: SceneCapacityHint) -> Self {
         if let Some(buffers) =
             crate::thread_state::with(|state| state.scene_buffer_pool.borrow_mut().pop())
         {
@@ -553,7 +553,7 @@ impl CompositorScene {
         }
     }
 
-    pub fn capacity_hint(&self) -> SceneCapacityHint {
+    pub(crate) fn capacity_hint(&self) -> SceneCapacityHint {
         SceneCapacityHint {
             runs: self.runs.len(),
             images: self.images.len(),
@@ -566,7 +566,7 @@ impl CompositorScene {
         }
     }
 
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.runs.clear();
         self.loose.recorder.clear();
         self.images.clear();
@@ -592,18 +592,12 @@ impl CompositorScene {
         self.next_z = 0;
     }
 
-    /// The z the next push takes. Closes the open loose run first, since
-    /// whatever the caller places at this z must draw above it.
-    pub fn next_z(&mut self) -> usize {
+    pub(crate) fn next_z(&mut self) -> usize {
         self.flush_loose();
         self.next_z
     }
 
-    /// Records one shape primitive under `placement`, joining the open
-    /// loose run when it shares the placement and closing it otherwise.
-    /// The primitive is in the placement's record space and carries its
-    /// own paint; the placement's alpha and filter are identity.
-    pub fn push_loose(&mut self, primitive: DrawPrimitive, placement: Placement) {
+    pub(crate) fn push_loose(&mut self, primitive: DrawPrimitive, placement: Placement) {
         if !self.loose.recorder.is_empty() && self.loose.placement != placement {
             self.flush_loose();
         }
@@ -613,12 +607,8 @@ impl CompositorScene {
         }
     }
 
-    /// Closes the open loose run into a run draw at the next z. Asked
-    /// before every run and layer, mostly with none open; the check is
-    /// inlined, as a function that also builds the run saves its registers
-    /// before it checks.
     #[inline]
-    pub fn flush_loose(&mut self) {
+    pub(crate) fn flush_loose(&mut self) {
         if !self.loose.recorder.is_empty() {
             self.push_loose_run();
         }
@@ -635,7 +625,7 @@ impl CompositorScene {
         self.push_run_unflushed(run);
     }
 
-    pub fn push_run(&mut self, run: RunDraw) {
+    pub(crate) fn push_run(&mut self, run: RunDraw) {
         self.flush_loose();
         self.push_run_unflushed(run);
     }
@@ -651,7 +641,7 @@ impl CompositorScene {
         });
     }
 
-    pub fn push_image(&mut self, draw: ImageDraw) {
+    pub(crate) fn push_image(&mut self, draw: ImageDraw) {
         self.flush_loose();
         let z_index = self.next_z;
         self.next_z += 1;
@@ -666,7 +656,7 @@ impl CompositorScene {
         });
     }
 
-    pub fn push_text(&mut self, draw: TextDraw) {
+    pub(crate) fn push_text(&mut self, draw: TextDraw) {
         self.flush_loose();
         let z_index = self.next_z;
         self.next_z += 1;
@@ -682,7 +672,7 @@ impl CompositorScene {
         self.shadow_recorders.pop().unwrap_or_default()
     }
 
-    pub fn push_shadow_draw(&mut self, mut draw: ShadowDraw) {
+    pub(crate) fn push_shadow_draw(&mut self, mut draw: ShadowDraw) {
         self.flush_loose();
         let z_index = self.next_z;
         self.next_z += 1;
@@ -707,12 +697,12 @@ impl CompositorScene {
         });
     }
 
-    pub fn push_effect_layer(&mut self, layer: EffectLayer) {
+    pub(crate) fn push_effect_layer(&mut self, layer: EffectLayer) {
         self.flush_loose();
         self.effect_layers.push(layer);
     }
 
-    pub fn push_backdrop_layer(&mut self, mut layer: BackdropLayer) {
+    pub(crate) fn push_backdrop_layer(&mut self, mut layer: BackdropLayer) {
         self.flush_loose();
         layer.z_index = self.next_z;
         self.next_z += 1;

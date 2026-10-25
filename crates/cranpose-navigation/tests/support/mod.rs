@@ -14,24 +14,20 @@ use cranpose_services::{
     DurableSaveOutcome, MemoryPreferences, run_durable_saves, set_platform_preferences,
 };
 
-/// Runs the tests that share the platform preferences one at a time.
-pub fn serial() -> MutexGuard<'static, ()> {
+pub(crate) fn serial() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(Mutex::default)
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Empty preferences for the platform to save in.
-pub fn fresh_store() -> Arc<MemoryPreferences> {
+pub(crate) fn fresh_store() -> Arc<MemoryPreferences> {
     let store = Arc::new(MemoryPreferences::new());
     set_platform_preferences(Arc::<MemoryPreferences>::clone(&store));
     store
 }
 
-/// Saves what the composition holds, as a host does when it goes to the
-/// background.
-pub fn save() {
+pub(crate) fn save() {
     assert_eq!(
         run_durable_saves(Duration::from_secs(5)),
         DurableSaveOutcome::Completed
@@ -50,14 +46,13 @@ const SETTLE_FRAMES: u64 = 60;
 const FRAME_NANOS: u64 = 16_666_667;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum Screen {
+pub(crate) enum Screen {
     Home,
     Detail(u32),
     Settings,
 }
 
-/// Counts drops, so a test sees when a view model is dropped.
-pub struct DropMarker(pub Arc<AtomicUsize>);
+pub(crate) struct DropMarker(pub Arc<AtomicUsize>);
 
 impl Drop for DropMarker {
     fn drop(&mut self) {
@@ -65,15 +60,13 @@ impl Drop for DropMarker {
     }
 }
 
-/// A screen's view model: it records which screen built it.
-pub struct ScreenModel {
+pub(crate) struct ScreenModel {
     pub screen: Screen,
     _dropped: DropMarker,
 }
 
-/// What the screens of a test host saw.
 #[derive(Clone, Default)]
-pub struct Probe {
+pub(crate) struct Probe {
     /// The screens in the composition right now.
     pub live: Rc<RefCell<Vec<Screen>>>,
     /// The screens whose view model was built, in order.
@@ -83,21 +76,19 @@ pub struct Probe {
 }
 
 impl Probe {
-    pub fn live(&self) -> Vec<Screen> {
+    pub(crate) fn live(&self) -> Vec<Screen> {
         self.live.borrow().clone()
     }
 
-    pub fn built(&self) -> Vec<Screen> {
+    pub(crate) fn built(&self) -> Vec<Screen> {
         self.built.borrow().clone()
     }
 
-    pub fn dropped(&self) -> usize {
+    pub(crate) fn dropped(&self) -> usize {
         self.dropped.load(Ordering::SeqCst)
     }
 
-    /// A screen that reports when it enters and leaves the composition and
-    /// asks for its view model.
-    pub fn screen(&self, screen: Screen) {
+    pub(crate) fn screen(&self, screen: Screen) {
         let live = Rc::clone(&self.live);
         DisposableEffect(screen, move |scope| {
             live.borrow_mut().push(screen);
@@ -115,14 +106,13 @@ impl Probe {
     }
 }
 
-/// A composition driven frame by frame.
-pub struct Host {
+pub(crate) struct Host {
     pub rule: ComposeTestRule,
     now: u64,
 }
 
 impl Host {
-    pub fn new(content: impl FnMut() + 'static) -> Self {
+    pub(crate) fn new(content: impl FnMut() + 'static) -> Self {
         let mut rule = ComposeTestRule::new();
         rule.set_content(content).expect("compose");
         let mut host = Self { rule, now: 0 };
@@ -130,14 +120,11 @@ impl Host {
         host
     }
 
-    /// Delivers queued UI work, such as back requests, and runs frames until
-    /// every transition has finished.
-    pub fn settle(&mut self) {
+    pub(crate) fn settle(&mut self) {
         self.run_frames(SETTLE_FRAMES);
     }
 
-    /// Delivers queued UI work and runs `count` frames.
-    pub fn run_frames(&mut self, count: u64) {
+    pub(crate) fn run_frames(&mut self, count: u64) {
         for _ in 0..count {
             self.rule.runtime_handle().drain_ui();
             self.now += FRAME_NANOS;
@@ -146,9 +133,7 @@ impl Host {
     }
 }
 
-/// A host whose `NavHost` starts at [`Screen::Home`] and shows every screen
-/// through `probe`, with its controller in `nav`.
-pub fn screens(probe: &Probe) -> (Host, Rc<Cell<Option<NavController<Screen>>>>) {
+pub(crate) fn screens(probe: &Probe) -> (Host, Rc<Cell<Option<NavController<Screen>>>>) {
     let nav = Rc::new(Cell::new(None));
     let (captured, probe) = (Rc::clone(&nav), probe.clone());
     let host = Host::new(move || {
@@ -160,13 +145,9 @@ pub fn screens(probe: &Probe) -> (Host, Rc<Cell<Option<NavController<Screen>>>>)
     (host, nav)
 }
 
-/// The controller a test host composed, once it composed it.
-pub type SharedNav = Rc<Cell<Option<NavController<Screen>>>>;
+pub(crate) type SharedNav = Rc<Cell<Option<NavController<Screen>>>>;
 
-/// A whole app shell, so dialogs compose, whose `NavHost` starts at
-/// [`Screen::Home`], shows [`Screen::Settings`] as a dialog and every screen
-/// through `probe`.
-pub fn with_settings_dialog(probe: &Probe) -> (RobotTestRule<TestRenderer>, SharedNav) {
+pub(crate) fn with_settings_dialog(probe: &Probe) -> (RobotTestRule<TestRenderer>, SharedNav) {
     let nav = Rc::new(Cell::new(None));
     let (captured, probe) = (Rc::clone(&nav), probe.clone());
     let mut robot = create_headless_robot_test(300, 400, move || {
@@ -184,8 +165,7 @@ pub fn with_settings_dialog(probe: &Probe) -> (RobotTestRule<TestRenderer>, Shar
     (robot, nav)
 }
 
-/// Runs the robot's frames until every transition has finished.
-pub fn settle_robot(robot: &mut RobotTestRule<TestRenderer>) {
+pub(crate) fn settle_robot(robot: &mut RobotTestRule<TestRenderer>) {
     for _ in 0..SETTLE_FRAMES {
         robot.advance_time(FRAME_NANOS);
         robot.wait_for_idle();

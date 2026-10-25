@@ -16,28 +16,19 @@ use cranpose_render_common::{
 };
 use cranpose_ui_graphics::Size;
 
-/// Builds the scene graph from the applier and counts whole rebuilds. With
-/// `mismatches`, it builds a graph from scratch after each scoped update and
-/// counts the updates whose scene differs from it, which runs every draw of
-/// the screen again.
-pub struct CheckingRenderer {
+pub(crate) struct CheckingRenderer {
     pub scene: Scene,
     pub rebuilds: Rc<Cell<usize>>,
     pub mismatches: Option<Rc<Cell<usize>>>,
 }
 
-/// What a [`CheckingRenderer`] counts: whole rebuilds, and the scoped updates
-/// whose scene differs from one built from scratch.
 #[derive(Clone, Default)]
-pub struct SceneChecks {
+pub(crate) struct SceneChecks {
     pub rebuilds: Rc<Cell<usize>>,
     pub mismatches: Rc<Cell<usize>>,
 }
 
-/// A 320 by 240 shell that draws `content` through a [`CheckingRenderer`]
-/// counting into the returned checks. With `check`, every scoped update is
-/// compared with a scene built from scratch.
-pub fn checking_shell(
+pub(crate) fn checking_shell(
     check: bool,
     content: impl FnMut() + 'static,
 ) -> (AppShell<CheckingRenderer>, SceneChecks) {
@@ -56,9 +47,7 @@ pub fn checking_shell(
     (shell, checks)
 }
 
-/// What `layer` draws where, in drawing order: each layer's node, bounds and
-/// placement, and each draw and text with its place.
-pub fn scene_signature(layer: &LayerNode, out: &mut Vec<String>) {
+pub(crate) fn scene_signature(layer: &LayerNode, out: &mut Vec<String>) {
     out.push(format!(
         "layer {:?} {:?} {:?}",
         layer.node_id, layer.local_bounds, layer.transform_to_parent

@@ -102,7 +102,7 @@ impl fmt::Debug for SemanticsRequester {
     }
 }
 
-pub struct SemanticsModifierNode {
+pub(super) struct SemanticsModifierNode {
     recorder: Rc<dyn Fn(&mut SemanticsConfiguration)>,
     /// The recorder may read state it did not capture.
     reads_live_state: bool,
@@ -112,7 +112,10 @@ pub struct SemanticsModifierNode {
 impl SemanticsModifierNode {
     /// A node running `recorder`; `reads_live_state` says the recorder may
     /// read state it did not capture, so every semantics update runs it.
-    pub fn new(recorder: Rc<dyn Fn(&mut SemanticsConfiguration)>, reads_live_state: bool) -> Self {
+    pub(super) fn new(
+        recorder: Rc<dyn Fn(&mut SemanticsConfiguration)>,
+        reads_live_state: bool,
+    ) -> Self {
         Self {
             recorder,
             reads_live_state,
@@ -137,7 +140,7 @@ impl ModifierNode for SemanticsModifierNode {
     }
 }
 
-pub struct SemanticsRequesterNode {
+pub(crate) struct SemanticsRequesterNode {
     state: NodeState,
     requester: SemanticsRequester,
 }
@@ -170,9 +173,8 @@ impl ModifierNode for SemanticsRequesterNode {
     }
 }
 
-/// Modifier element for [`SemanticsRequester`].
 #[derive(Clone)]
-pub struct SemanticsRequesterElement {
+pub(crate) struct SemanticsRequesterElement {
     requester: SemanticsRequester,
 }
 
@@ -238,7 +240,7 @@ impl SemanticsNodeTrait for SemanticsModifierNode {
 }
 
 #[derive(Clone)]
-pub struct SemanticsElement {
+pub(super) struct SemanticsElement {
     recorder: Rc<dyn Fn(&mut SemanticsConfiguration)>,
     reads_live_state: bool,
 }
@@ -246,7 +248,10 @@ pub struct SemanticsElement {
 impl SemanticsElement {
     /// An element running `recorder`; `reads_live_state` says the recorder
     /// may read state it did not capture.
-    pub fn new(recorder: Rc<dyn Fn(&mut SemanticsConfiguration)>, reads_live_state: bool) -> Self {
+    pub(super) fn new(
+        recorder: Rc<dyn Fn(&mut SemanticsConfiguration)>,
+        reads_live_state: bool,
+    ) -> Self {
         Self {
             recorder,
             reads_live_state,
@@ -312,8 +317,9 @@ fn merge_semantics_from_node(node: &dyn ModifierNode, config: &mut SemanticsConf
     merged
 }
 
-/// Collects semantics contributed by a reconciled modifier chain.
-pub fn collect_semantics_from_chain(chain: &ModifierNodeChain) -> Option<SemanticsConfiguration> {
+pub(crate) fn collect_semantics_from_chain(
+    chain: &ModifierNodeChain,
+) -> Option<SemanticsConfiguration> {
     if !chain.has_capability(NodeCapabilities::SEMANTICS) {
         return None;
     }
@@ -340,9 +346,9 @@ fn reach_of_node(node: &dyn ModifierNode) -> cranpose_foundation::SemanticsReach
     reach
 }
 
-/// Whether a reconciled modifier chain makes its node modal or hidden,
-/// without collecting the rest of its semantics.
-pub fn semantics_reach_of_chain(chain: &ModifierNodeChain) -> cranpose_foundation::SemanticsReach {
+pub(crate) fn semantics_reach_of_chain(
+    chain: &ModifierNodeChain,
+) -> cranpose_foundation::SemanticsReach {
     let mut reach = cranpose_foundation::SemanticsReach::default();
     if !chain.has_capability(NodeCapabilities::SEMANTICS) {
         return reach;

@@ -302,7 +302,7 @@ pub(crate) struct ShaderPipelineCache {
 
 impl ShaderPipelineCache {
     #[expect(clippy::too_many_arguments)]
-    pub fn new(
+    pub(crate) fn new(
         device: &wgpu::Device,
         compiler: PipelineCompiler,
         pipeline_cache: Option<wgpu::PipelineCache>,
@@ -346,7 +346,7 @@ impl ShaderPipelineCache {
         }
     }
 
-    pub fn set_forced_flags(&mut self, flags: impl Iterator<Item = &'static str>) {
+    pub(crate) fn set_forced_flags(&mut self, flags: impl Iterator<Item = &'static str>) {
         let mut forced: Vec<&'static str> = flags.collect();
         forced.sort_unstable();
         if forced == self.forced {
@@ -490,10 +490,7 @@ impl ShaderPipelineCache {
             .queue(&self.compiler, lane, self.factory.backend, || job.build());
     }
 
-    /// Queues the pipeline drawing `shader` whole for `mode` on the
-    /// background compiler, overrides included, so its first draw finds the
-    /// pipeline ready; a shader without overrides warms its general one.
-    pub fn warm(&mut self, shader: &RuntimeShader, mode: RuntimeShaderPipelineMode) {
+    pub(crate) fn warm(&mut self, shader: &RuntimeShader, mode: RuntimeShaderPipelineMode) {
         if !self.compiler.is_active() {
             return;
         }
@@ -502,10 +499,7 @@ impl ShaderPipelineCache {
         self.request(shader, specialization, key, CompileLane::WarmUp);
     }
 
-    /// The pipeline drawing `shader` as `variant` with `specialization`, or
-    /// `None` when the shader failed validation. The fit says whether the
-    /// draw got the specialization it asked for or a pipeline standing in.
-    pub fn get_or_create(
+    pub(crate) fn get_or_create(
         &mut self,
         shader: &RuntimeShader,
         specialization: DrawSpecialization<'_>,

@@ -2,14 +2,14 @@ use super::{
     lazy_list_measure::LazyListMeasureConfig, lazy_list_measured_item::LazyListMeasuredItem,
 };
 
-pub struct BoundsAdjuster<'a> {
+pub(super) struct BoundsAdjuster<'a> {
     config: &'a LazyListMeasureConfig,
     items_count: usize,
     effective_viewport_size: f32,
 }
 
 impl<'a> BoundsAdjuster<'a> {
-    pub fn new(
+    pub(super) fn new(
         config: &'a LazyListMeasureConfig,
         items_count: usize,
         effective_viewport_size: f32,
@@ -21,12 +21,12 @@ impl<'a> BoundsAdjuster<'a> {
         }
     }
 
-    pub fn clamp(&self, items: &mut [LazyListMeasuredItem]) {
+    pub(super) fn clamp(&self, items: &mut [LazyListMeasuredItem]) {
         self.clamp_at_start(items);
         self.clamp_at_end(items);
     }
 
-    pub fn clamp_at_start(&self, items: &mut [LazyListMeasuredItem]) {
+    pub(super) fn clamp_at_start(&self, items: &mut [LazyListMeasuredItem]) {
         if items.is_empty() {
             return;
         }
@@ -40,7 +40,7 @@ impl<'a> BoundsAdjuster<'a> {
         }
     }
 
-    pub fn clamp_at_end(&self, items: &mut [LazyListMeasuredItem]) {
+    pub(super) fn clamp_at_end(&self, items: &mut [LazyListMeasuredItem]) {
         if items.is_empty() {
             return;
         }

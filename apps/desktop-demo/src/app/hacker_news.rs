@@ -43,7 +43,7 @@ const THREAD_DISCUSSION_KEY: u64 = (1 << 61) + 2;
 const THREAD_FOOTER_KEY: u64 = (1 << 61) + 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
-pub struct Story {
+pub(super) struct Story {
     pub id: u64,
     pub title: Option<String>,
     pub text: Option<String>,

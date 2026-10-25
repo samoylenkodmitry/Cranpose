@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use cranpose_ui::ImageBitmap;
 
 #[derive(Clone, PartialEq)]
-pub struct WszSkin {
+pub(super) struct WszSkin {
     pub main: ImageBitmap,
     pub titlebar: ImageBitmap,
     pub cbuttons: ImageBitmap,
@@ -19,7 +19,7 @@ pub struct WszSkin {
     pub pledit: ImageBitmap,
 }
 
-pub fn load_skin(wsz_bytes: &[u8]) -> Result<WszSkin> {
+pub(super) fn load_skin(wsz_bytes: &[u8]) -> Result<WszSkin> {
     let mut archive =
         zip::ZipArchive::new(Cursor::new(wsz_bytes)).context("failed to open WSZ archive")?;
     let mut bytes = Vec::new();

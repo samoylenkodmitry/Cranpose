@@ -484,12 +484,12 @@ fn shadows_in_recorded_and_loose_content_respect_rounded_clip_pixels() {
             let children = shadow_children(full_bleed, recorded, blend_depth);
             let reference = capture_graph_settled(
                 &mut renderer,
-                clipped(children.clone(), true),
+                &clipped(children.clone(), true),
                 WIDTH,
                 HEIGHT,
             );
             let actual =
-                capture_graph_settled(&mut renderer, clipped(children, false), WIDTH, HEIGHT);
+                capture_graph_settled(&mut renderer, &clipped(children, false), WIDTH, HEIGHT);
             let label =
                 format!("full_bleed={full_bleed}, recorded={recorded}, blend_depth={blend_depth}");
             support::assert_same_bytes(&label, WIDTH, &actual.pixels, &reference.pixels);
@@ -1106,7 +1106,7 @@ fn a_backdrop_updates_when_only_the_captured_clip_radius_changes() {
     let mut fresh = support::LockedRenderer::beside_locked().expect("reference GPU renderer");
     let initial = capture_graph_settled(
         &mut renderer,
-        backdrop_over_rounded_fill(4.0),
+        &backdrop_over_rounded_fill(4.0),
         WIDTH,
         HEIGHT,
     );
@@ -1119,7 +1119,7 @@ fn a_backdrop_updates_when_only_the_captured_clip_radius_changes() {
         );
     }
     let expected =
-        capture_graph_settled(&mut fresh, backdrop_over_rounded_fill(20.0), WIDTH, HEIGHT);
+        capture_graph_settled(&mut fresh, &backdrop_over_rounded_fill(20.0), WIDTH, HEIGHT);
     assert_ne!(
         initial.pixels, expected.pixels,
         "the radius change must alter visible pixels"

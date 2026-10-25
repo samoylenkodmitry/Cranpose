@@ -8,7 +8,7 @@ use std::{
 
 use coroflow::{SendFlow, delay, flow};
 
-pub struct DropMarker(pub Arc<AtomicUsize>);
+pub(crate) struct DropMarker(pub Arc<AtomicUsize>);
 
 impl Drop for DropMarker {
     fn drop(&mut self) {
@@ -16,7 +16,7 @@ impl Drop for DropMarker {
     }
 }
 
-pub fn timed(steps: Vec<(u64, u32)>) -> impl SendFlow<Item = u32> + Clone {
+pub(crate) fn timed(steps: Vec<(u64, u32)>) -> impl SendFlow<Item = u32> + Clone {
     flow(async move |emitter| {
         for (wait, value) in steps {
             delay(Duration::from_millis(wait)).await;
@@ -25,7 +25,7 @@ pub fn timed(steps: Vec<(u64, u32)>) -> impl SendFlow<Item = u32> + Clone {
     })
 }
 
-pub fn endless(dropped: &Arc<AtomicUsize>) -> impl SendFlow<Item = u32> + Clone {
+pub(crate) fn endless(dropped: &Arc<AtomicUsize>) -> impl SendFlow<Item = u32> + Clone {
     let marker = Arc::clone(dropped);
     flow(move |emitter| {
         let marker = Arc::clone(&marker);

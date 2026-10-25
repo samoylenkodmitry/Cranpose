@@ -1213,7 +1213,7 @@ struct FrameDamagePlan {
     keeper: Keeper,
 }
 
-pub struct GpuRenderer {
+pub(crate) struct GpuRenderer {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
     device_errors: Arc<DeviceErrorSentry>,
@@ -1374,7 +1374,7 @@ pub(crate) struct GpuRendererInit {
 }
 
 impl GpuRenderer {
-    pub fn new(init: GpuRendererInit) -> Self {
+    pub(crate) fn new(init: GpuRendererInit) -> Self {
         let GpuRendererInit {
             device,
             queue,
@@ -2800,7 +2800,7 @@ fn update_frame_warmup_budget(pending_frames: &mut u8, snapshot: &gpu_stats::Fra
 
 impl GpuRenderer {
     #[expect(clippy::too_many_arguments)]
-    pub fn render(
+    pub(crate) fn render(
         &mut self,
         texture: &wgpu::Texture,
         view: &wgpu::TextureView,
@@ -2987,15 +2987,15 @@ impl GpuRenderer {
         Ok(())
     }
 
-    pub fn last_frame_stats(&self) -> Option<gpu_stats::FrameStatsSnapshot> {
+    pub(crate) fn last_frame_stats(&self) -> Option<gpu_stats::FrameStatsSnapshot> {
         self.last_frame_stats
     }
 
-    pub fn gpu_pass_timings(&self) -> crate::pass_timing::GpuPassTimingReport {
+    pub(crate) fn gpu_pass_timings(&self) -> crate::pass_timing::GpuPassTimingReport {
         self.frame_graph_executor.pass_timing_report()
     }
 
-    pub fn needs_frame_warmup(&self) -> bool {
+    pub(crate) fn needs_frame_warmup(&self) -> bool {
         self.pending_frame_warmup_frames > 0 || self.placeholder_awaits_frame()
     }
 
@@ -3316,7 +3316,7 @@ impl GpuRenderer {
         }
     }
 
-    pub fn debug_cpu_allocation_stats(&self) -> DebugCpuAllocationStats {
+    pub(crate) fn debug_cpu_allocation_stats(&self) -> DebugCpuAllocationStats {
         DebugCpuAllocationStats {
             scene_graph_node_count: 0,
             scene_graph_heap_bytes: 0,
@@ -3340,7 +3340,7 @@ impl GpuRenderer {
             layer_cache_bytes: self.layer_cache.bytes(),
         }
     }
-    pub fn render_to_rgba_pixels(
+    pub(crate) fn render_to_rgba_pixels(
         &mut self,
         width: u32,
         height: u32,
@@ -4459,7 +4459,7 @@ impl GpuRenderer {
         self.display_format
     }
 
-    pub fn device_error_count(&self) -> u64 {
+    pub(crate) fn device_error_count(&self) -> u64 {
         self.device_errors.error_count()
     }
 

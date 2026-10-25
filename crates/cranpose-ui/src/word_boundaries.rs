@@ -13,8 +13,7 @@ fn is_word(grapheme: &str) -> bool {
         .is_some_and(|c| c.is_alphanumeric() || c == '_')
 }
 
-/// The start of the word before `pos`, past any non-word characters between.
-pub fn find_word_start(text: &str, pos: usize) -> usize {
+pub(crate) fn find_word_start(text: &str, pos: usize) -> usize {
     let pos = text.floor_char_boundary(pos);
     let mut word_start = None;
     for (index, grapheme) in text[..pos].grapheme_indices(true).rev() {
@@ -27,8 +26,7 @@ pub fn find_word_start(text: &str, pos: usize) -> usize {
     0
 }
 
-/// The end of the word after `pos`, past any non-word characters between.
-pub fn find_word_end(text: &str, pos: usize) -> usize {
+pub(crate) fn find_word_end(text: &str, pos: usize) -> usize {
     let pos = text.floor_char_boundary(pos);
     let mut in_word = false;
     for (index, grapheme) in text[pos..].grapheme_indices(true) {
@@ -41,9 +39,7 @@ pub fn find_word_end(text: &str, pos: usize) -> usize {
     text.len()
 }
 
-/// The word that touches `pos`, or the empty range at `pos` where no word
-/// does.
-pub fn find_word_boundaries(text: &str, pos: usize) -> (usize, usize) {
+pub(crate) fn find_word_boundaries(text: &str, pos: usize) -> (usize, usize) {
     let pos = text.floor_char_boundary(pos);
     let word_after = text[pos..].graphemes(true).next().is_some_and(is_word);
     let word_before = text[..pos].graphemes(true).next_back().is_some_and(is_word);

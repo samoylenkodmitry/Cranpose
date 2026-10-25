@@ -36,12 +36,7 @@ pub struct ModifierChainInspectorNode {
     pub inspector: Option<ModifierInspectorRecord>,
 }
 
-/// Runtime helper that keeps a [`ModifierNodeChain`] in sync with a [`Modifier`].
-///
-/// This is the first step toward Jetpack Compose parity: callers can keep a handle
-/// per layout node, feed it the latest `Modifier`, and then drive layout/draw/input
-/// phases through the reconciled chain.
-pub type ModifierLocalsHandle = Rc<RefCell<ModifierLocalManager>>;
+pub(crate) type ModifierLocalsHandle = Rc<RefCell<ModifierLocalManager>>;
 
 pub struct ModifierChainHandle {
     chain: ModifierNodeChain,

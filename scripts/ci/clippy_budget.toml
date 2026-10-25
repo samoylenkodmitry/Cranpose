@@ -24,4 +24,4 @@
 "clippy::trivially_copy_pass_by_ref" = 31
 "clippy::unused_result_ok" = 33
 "clippy::wildcard_imports" = 33
-"unreachable_pub" = 732
+"unreachable_pub" = 107

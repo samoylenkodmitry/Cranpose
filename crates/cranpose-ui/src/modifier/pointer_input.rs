@@ -399,7 +399,7 @@ impl ArcWake for PointerInputTaskWaker {
     }
 }
 
-pub struct SuspendingPointerInputNode {
+pub(crate) struct SuspendingPointerInputNode {
     site: KeyToken,
     keys: Vec<KeyToken>,
     handler: PointerInputHandler,

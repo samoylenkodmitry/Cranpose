@@ -1,24 +1,24 @@
 use cranpose_core::{NodeId, collections::map::HashMap};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct PointerId(pub u32);
+pub(crate) struct PointerId(pub u32);
 
 impl PointerId {
-    pub const PRIMARY: Self = Self(0);
+    pub(crate) const PRIMARY: Self = Self(0);
 }
 
-pub struct HitPathTracker {
+pub(crate) struct HitPathTracker {
     paths: HashMap<PointerId, Vec<Vec<NodeId>>>,
 }
 
 impl HitPathTracker {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             paths: HashMap::default(),
         }
     }
 
-    pub fn add_hit_path(&mut self, pointer: PointerId, capture_paths: Vec<Vec<NodeId>>) {
+    pub(crate) fn add_hit_path(&mut self, pointer: PointerId, capture_paths: Vec<Vec<NodeId>>) {
         if capture_paths.is_empty() {
             self.paths.remove(&pointer);
         } else {
@@ -26,23 +26,23 @@ impl HitPathTracker {
         }
     }
 
-    pub fn get_path(&self, pointer: PointerId) -> Option<&[Vec<NodeId>]> {
+    pub(crate) fn get_path(&self, pointer: PointerId) -> Option<&[Vec<NodeId>]> {
         self.paths.get(&pointer).map(Vec::as_slice)
     }
 
-    pub fn dispatch_order(&self, pointer: PointerId) -> Option<Vec<NodeId>> {
+    pub(crate) fn dispatch_order(&self, pointer: PointerId) -> Option<Vec<NodeId>> {
         self.get_path(pointer).map(dispatch_order_for_paths)
     }
 
-    pub fn remove_path(&mut self, pointer: PointerId) -> Option<Vec<Vec<NodeId>>> {
+    pub(crate) fn remove_path(&mut self, pointer: PointerId) -> Option<Vec<Vec<NodeId>>> {
         self.paths.remove(&pointer)
     }
 
-    pub fn has_path(&self, pointer: PointerId) -> bool {
+    pub(crate) fn has_path(&self, pointer: PointerId) -> bool {
         self.paths.contains_key(&pointer)
     }
 
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.paths.clear();
     }
 

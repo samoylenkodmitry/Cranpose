@@ -2,7 +2,7 @@
 
 use std::sync::PoisonError;
 #[path = "support/device.rs"]
-pub mod device;
+pub(crate) mod device;
 
 use std::{
     ops::{Deref, DerefMut},
@@ -33,9 +33,9 @@ use cranpose_ui_graphics::{
     liquid_glass_effect,
 };
 
-pub static TEST_FONT: &[u8] = DEFAULT_SOFTWARE_TEXT_FONT_BYTES;
+pub(crate) static TEST_FONT: &[u8] = DEFAULT_SOFTWARE_TEXT_FONT_BYTES;
 
-pub fn layer_node(
+pub(crate) fn layer_node(
     node_id: Option<NodeId>,
     width: f32,
     height: f32,
@@ -56,7 +56,7 @@ pub fn layer_node(
 
 static GPU_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-pub fn gpu_test_lock() -> MutexGuard<'static, ()> {
+pub(crate) fn gpu_test_lock() -> MutexGuard<'static, ()> {
     lock_gpu_test()
 }
 
@@ -93,7 +93,7 @@ fn lock_gpu_test() -> MutexGuard<'static, ()> {
     lock
 }
 
-pub struct LockedRenderer {
+pub(crate) struct LockedRenderer {
     renderer: WgpuRenderer,
     app_context: std::rc::Rc<AppContext>,
     _lock: Option<MutexGuard<'static, ()>>,
@@ -127,23 +127,18 @@ impl DerefMut for LockedRenderer {
 }
 
 impl LockedRenderer {
-    /// A reference renderer beside the locked one. It compiles every
-    /// pipeline where first needed, so its frames never draw with a
-    /// stand-in a slow machine's background compiler has not replaced yet.
-    pub fn beside_locked() -> Result<Self, String> {
+    pub(crate) fn beside_locked() -> Result<Self, String> {
         Ok(with_app_context(headless_renderer_beside_locked()?, None))
     }
 
-    /// A renderer beside the locked one that compiles on the background
-    /// compiler, as an app's does.
-    pub fn compiling_in_background_beside_locked() -> Result<Self, String> {
+    pub(crate) fn compiling_in_background_beside_locked() -> Result<Self, String> {
         Ok(with_app_context(
             create_background_compiling_renderer()?,
             None,
         ))
     }
 
-    pub fn render_current_scene_to_texture(
+    pub(crate) fn render_current_scene_to_texture(
         &mut self,
         width: u32,
         height: u32,
@@ -169,9 +164,7 @@ impl LockedRenderer {
         })
     }
 
-    /// Displays the current scene in `texture`: the frame's statistics and
-    /// the texture's texels.
-    pub fn display_into(
+    pub(crate) fn display_into(
         &mut self,
         texture: &wgpu::Texture,
         view: &wgpu::TextureView,
@@ -190,7 +183,11 @@ impl LockedRenderer {
         })
     }
 
-    pub fn capture_frame(&mut self, width: u32, height: u32) -> Result<CapturedFrame, String> {
+    pub(crate) fn capture_frame(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> Result<CapturedFrame, String> {
         self.app_context.enter(|| {
             self.renderer
                 .capture_frame(width, height)
@@ -198,7 +195,7 @@ impl LockedRenderer {
         })
     }
 
-    pub fn capture_frame_with_scale(
+    pub(crate) fn capture_frame_with_scale(
         &mut self,
         width: u32,
         height: u32,
@@ -211,20 +208,16 @@ impl LockedRenderer {
         })
     }
 
-    pub fn last_frame_stats(&self) -> Option<RenderStatsSnapshot> {
+    pub(crate) fn last_frame_stats(&self) -> Option<RenderStatsSnapshot> {
         self.app_context.enter(|| self.renderer.last_frame_stats())
     }
 }
 
-pub fn headless_renderer() -> Result<LockedRenderer, String> {
+pub(crate) fn headless_renderer() -> Result<LockedRenderer, String> {
     headless_renderer_with_limits(wgpu::Limits::default())
 }
 
-/// A renderer that compiles on the background compiler, as an app's does:
-/// its frames draw stand-ins and placeholders while pipelines compile. The
-/// other renderers compile every pipeline where first needed, so their
-/// frames draw what a settled app's do.
-pub fn headless_renderer_compiling_in_background() -> Result<LockedRenderer, String> {
+pub(crate) fn headless_renderer_compiling_in_background() -> Result<LockedRenderer, String> {
     let lock = lock_gpu_test();
     Ok(with_app_context(
         create_background_compiling_renderer()?,
@@ -232,26 +225,26 @@ pub fn headless_renderer_compiling_in_background() -> Result<LockedRenderer, Str
     ))
 }
 
-/// [`headless_renderer_compiling_in_background`] without an app context.
-pub fn headless_renderer_parts_compiling_in_background()
+pub(crate) fn headless_renderer_parts_compiling_in_background()
 -> Result<(MutexGuard<'static, ()>, WgpuRenderer), String> {
     let lock = lock_gpu_test();
     Ok((lock, create_background_compiling_renderer()?))
 }
 
-/// [`headless_renderer`] presenting images of `format`.
-pub fn headless_renderer_with_display_format(
+pub(crate) fn headless_renderer_with_display_format(
     format: wgpu::TextureFormat,
 ) -> Result<LockedRenderer, String> {
     let (lock, renderer) = headless_renderer_parts_with_display_format(format)?;
     Ok(with_app_context(renderer, Some(lock)))
 }
 
-pub fn headless_renderer_with_limits(limits: wgpu::Limits) -> Result<LockedRenderer, String> {
+pub(crate) fn headless_renderer_with_limits(
+    limits: wgpu::Limits,
+) -> Result<LockedRenderer, String> {
     headless_renderer_configured(limits, wgpu::Backends::all())
 }
 
-pub fn headless_renderer_configured(
+pub(crate) fn headless_renderer_configured(
     limits: wgpu::Limits,
     backends: wgpu::Backends,
 ) -> Result<LockedRenderer, String> {
@@ -261,10 +254,7 @@ pub fn headless_renderer_configured(
     Ok(with_app_context(renderer, Some(lock)))
 }
 
-/// Whether the test renderers draw animated frames copy-free: on Metal,
-/// with mapped primary buffers, where run tables and retained glyph runs
-/// are written mapped and kept layer surfaces stay in their atlas.
-pub fn renders_copy_free() -> bool {
+pub(crate) fn renders_copy_free() -> bool {
     device::headless_adapter(wgpu::Backends::all()).is_ok_and(|adapter| {
         adapter.get_info().backend == wgpu::Backend::Metal
             && cranpose_render_wgpu::optional_device_features(&adapter)
@@ -272,16 +262,11 @@ pub fn renders_copy_free() -> bool {
     })
 }
 
-/// A renderer whose device does not map its vertex and table buffers, so
-/// its uploads take copies even on an integrated GPU.
-pub fn headless_renderer_copying_uploads() -> Result<LockedRenderer, String> {
+pub(crate) fn headless_renderer_copying_uploads() -> Result<LockedRenderer, String> {
     headless_renderer_on(copying_upload_device)
 }
 
-/// [`headless_renderer_copying_uploads`] without an app context, for a
-/// shell: its kept layer surfaces are copied out of their atlas, as off
-/// Metal.
-pub fn headless_renderer_parts_copying_uploads()
+pub(crate) fn headless_renderer_parts_copying_uploads()
 -> Result<(MutexGuard<'static, ()>, WgpuRenderer), String> {
     let lock = lock_gpu_test();
     Ok((lock, inline_renderer(copying_upload_device()?)))
@@ -296,7 +281,9 @@ fn copying_upload_device() -> Result<device::HeadlessDevice, String> {
     )
 }
 
-pub fn headless_renderer_without(flags: wgpu::DownlevelFlags) -> Result<LockedRenderer, String> {
+pub(crate) fn headless_renderer_without(
+    flags: wgpu::DownlevelFlags,
+) -> Result<LockedRenderer, String> {
     headless_renderer_on(|| {
         Ok(device::HeadlessDevice::request(
             wgpu::Backends::all(),
@@ -328,19 +315,19 @@ fn inline_renderer(device: device::HeadlessDevice) -> WgpuRenderer {
     renderer
 }
 
-pub fn headless_renderer_unencoded() -> Result<LockedRenderer, String> {
+pub(crate) fn headless_renderer_unencoded() -> Result<LockedRenderer, String> {
     let lock = lock_gpu_test();
     let renderer = create_headless_renderer_with_format(wgpu::TextureFormat::Bgra8Unorm)?;
     Ok(with_app_context(renderer, Some(lock)))
 }
 
-pub fn headless_renderer_parts() -> Result<(MutexGuard<'static, ()>, WgpuRenderer), String> {
+pub(crate) fn headless_renderer_parts() -> Result<(MutexGuard<'static, ()>, WgpuRenderer), String> {
     let lock = lock_gpu_test();
     let renderer = create_headless_renderer()?;
     Ok((lock, renderer))
 }
 
-pub fn headless_renderer_parts_with_display_format(
+pub(crate) fn headless_renderer_parts_with_display_format(
     format: wgpu::TextureFormat,
 ) -> Result<(MutexGuard<'static, ()>, WgpuRenderer), String> {
     let lock = lock_gpu_test();
@@ -348,9 +335,7 @@ pub fn headless_renderer_parts_with_display_format(
     Ok((lock, renderer))
 }
 
-/// A renderer compiling on the background compiler, created once
-/// `configure` ran under the GPU test lock.
-pub fn headless_renderer_parts_configured<T>(
+pub(crate) fn headless_renderer_parts_configured<T>(
     configure: impl FnOnce() -> T,
 ) -> Result<(MutexGuard<'static, ()>, T, WgpuRenderer), String> {
     let lock = lock_gpu_test();
@@ -359,7 +344,7 @@ pub fn headless_renderer_parts_configured<T>(
     Ok((lock, configured, renderer))
 }
 
-pub fn reinit_gpu(renderer: &mut LockedRenderer) -> Result<(), String> {
+pub(crate) fn reinit_gpu(renderer: &mut LockedRenderer) -> Result<(), String> {
     device::HeadlessDevice::request(
         wgpu::Backends::all(),
         wgpu::Limits::default(),
@@ -373,16 +358,14 @@ pub fn reinit_gpu(renderer: &mut LockedRenderer) -> Result<(), String> {
     Ok(())
 }
 
-pub fn headless_renderer_parts_unencoded() -> Result<(MutexGuard<'static, ()>, WgpuRenderer), String>
-{
+pub(crate) fn headless_renderer_parts_unencoded()
+-> Result<(MutexGuard<'static, ()>, WgpuRenderer), String> {
     let lock = lock_gpu_test();
     let renderer = create_headless_renderer_with_format(wgpu::TextureFormat::Bgra8Unorm)?;
     Ok((lock, renderer))
 }
 
-/// A second renderer beside one already holding the GPU test lock.
-/// [`LockedRenderer::beside_locked`] without an app context.
-pub fn headless_renderer_beside_locked() -> Result<WgpuRenderer, String> {
+pub(crate) fn headless_renderer_beside_locked() -> Result<WgpuRenderer, String> {
     let device = device::HeadlessDevice::request(
         wgpu::Backends::all(),
         wgpu::Limits::default(),
@@ -441,23 +424,17 @@ fn create_headless_renderer_configured(
     Ok(renderer)
 }
 
-/// Composes `page` in an app shell over a fresh headless renderer, laid out
-/// and updated twice so caches are warm, or `None` when no GPU is available.
-/// Everything a composable page test imports: the page widgets and the
-/// frame helpers below.
-pub mod page {
+pub(crate) mod page {
     pub use cranpose_ui::{
         Color, Modifier, RenderEffect, TextStyle, composable,
         widgets::{Box, BoxSpec, Text},
     };
 
-    pub use super::{FramePage, rect_modifier};
+    pub(crate) use super::{FramePage, rect_modifier};
 }
 
-/// Everything a raw render-graph test imports: the graph node types and the
-/// drawing primitives that fill a draw run.
 #[expect(unused_imports, reason = "each test binary uses a part of the support")]
-pub mod graph {
+pub(crate) mod graph {
     pub use cranpose_render_common::{
         Renderer,
         graph::{RenderGraph, RenderNode},
@@ -466,12 +443,10 @@ pub mod graph {
         Brush, Color, CornerRadii, DrawScope, DrawScopeDefault, Point, Rect, Stroke, TileMode,
     };
 
-    pub use super::draw_run_graph;
+    pub(crate) use super::draw_run_graph;
 }
 
-/// A root layer of `size` square pixels holding one draw run of `scope`'s
-/// primitives.
-pub fn draw_run_graph(size: u32, scope: DrawScopeDefault<'_>) -> RenderGraph {
+pub(crate) fn draw_run_graph(size: u32, scope: DrawScopeDefault<'_>) -> RenderGraph {
     use cranpose_render_common::graph::{DrawRunNode, PrimitivePhase};
     use cranpose_ui_graphics::DrawScope;
     RenderGraph::new(layer_node(
@@ -485,8 +460,7 @@ pub fn draw_run_graph(size: u32, scope: DrawScopeDefault<'_>) -> RenderGraph {
     ))
 }
 
-/// The texture's texels, tightly packed row by row in its own format.
-pub fn read_texture(
+pub(crate) fn read_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     texture: &wgpu::Texture,
@@ -549,9 +523,7 @@ pub fn read_texture(
     pixels
 }
 
-/// A render-attachment texture of `format` and its default view, the shape
-/// every presentable-target test hands to the renderer.
-pub fn render_target(
+pub(crate) fn render_target(
     device: &wgpu::Device,
     width: u32,
     height: u32,
@@ -576,7 +548,7 @@ pub fn render_target(
     (texture, view)
 }
 
-pub fn app_shell_for(
+pub(crate) fn app_shell_for(
     page: fn(),
     width: u32,
     height: u32,
@@ -600,7 +572,7 @@ pub fn app_shell_for(
     Some((lock, shell))
 }
 
-pub fn update_and_capture(
+pub(crate) fn update_and_capture(
     shell: &mut AppShell<WgpuRenderer>,
     width: u32,
     height: u32,
@@ -614,9 +586,10 @@ pub fn update_and_capture(
     (stats, frame)
 }
 
-/// The dynamics of a lens morphing inside a node: one primary shape with
-/// wobble, bulge, ellipse blend and an incompressible strain along x.
-pub fn morphing_lens_dynamics(node: Rect, primary: (f32, f32, f32, f32, f32)) -> GlassDynamics {
+pub(crate) fn morphing_lens_dynamics(
+    node: Rect,
+    primary: (f32, f32, f32, f32, f32),
+) -> GlassDynamics {
     GlassDynamics {
         activity: Some(1.0),
         morph: Some(GlassMorph {
@@ -637,9 +610,7 @@ pub fn morphing_lens_dynamics(node: Rect, primary: (f32, f32, f32, f32, f32)) ->
     }
 }
 
-/// Composes `page` in an app shell, captures it twice and returns the second
-/// frame with the stats it recorded; `None` when headless WGPU is unavailable.
-pub fn warm_app_frame(
+pub(crate) fn warm_app_frame(
     page: fn(),
     width: u32,
     height: u32,
@@ -675,16 +646,14 @@ pub(crate) fn warm_shell_frame(
     (frame, stats)
 }
 
-/// Set to write golden fixtures instead of comparing captures with them.
-pub const WRITE_GOLDENS_ENV: &str = "CRANPOSE_WRITE_GOLDENS";
+pub(crate) const WRITE_GOLDENS_ENV: &str = "CRANPOSE_WRITE_GOLDENS";
 /// Goldens are captured on Metal; other GPUs round anti-aliased edges a step
 /// differently. At a fractional root scale the arena run differs in 0.50% of
 /// its bytes on both Intel and NVIDIA Vulkan, each by one step (#859).
 const GOLDEN_MAX_SMALL_DIFF_FRACTION: f64 = 0.01;
 const GOLDEN_SMALL_DIFF: u8 = 2;
 
-/// Writes RGBA8 `pixels` of `width` x `height` as a PNG at `path`.
-pub fn write_png(path: &std::path::Path, width: u32, height: u32, pixels: &[u8]) {
+pub(crate) fn write_png(path: &std::path::Path, width: u32, height: u32, pixels: &[u8]) {
     let file = std::fs::File::create(path).expect("fixture file");
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgba);
@@ -693,8 +662,7 @@ pub fn write_png(path: &std::path::Path, width: u32, height: u32, pixels: &[u8])
     writer.write_image_data(pixels).expect("png data");
 }
 
-/// The size and RGBA8 pixels of the PNG at `path`.
-pub fn read_png(path: &std::path::Path) -> (u32, u32, Vec<u8>) {
+pub(crate) fn read_png(path: &std::path::Path) -> (u32, u32, Vec<u8>) {
     let file = std::fs::File::open(path)
         .unwrap_or_else(|err| panic!("missing golden {}: {err}", path.display()));
     let decoder = png::Decoder::new(std::io::BufReader::new(file));
@@ -705,11 +673,7 @@ pub fn read_png(path: &std::path::Path) -> (u32, u32, Vec<u8>) {
     (info.width, info.height, buffer)
 }
 
-/// Checks `pixels` of `size` against the golden PNG at `path`, or writes it
-/// there when [`WRITE_GOLDENS_ENV`] is set. A byte may differ by a step or two
-/// in a small share of the image, the way other GPUs round edges; `what`
-/// says what a larger difference breaks.
-pub fn check_golden(
+pub(crate) fn check_golden(
     name: &str,
     path: &std::path::Path,
     (width, height): (u32, u32),
@@ -748,14 +712,15 @@ pub fn check_golden(
     );
 }
 
-/// The pixels of two RGBA8 frames of `width` that differ: `(x, y, a, b)`.
-pub fn differing_pixels(width: u32, a: &[u8], b: &[u8]) -> Vec<(usize, usize, [u8; 4], [u8; 4])> {
+pub(crate) fn differing_pixels(
+    width: u32,
+    a: &[u8],
+    b: &[u8],
+) -> Vec<(usize, usize, [u8; 4], [u8; 4])> {
     pixels_differing_beyond(width, a, b, 0)
 }
 
-/// The pixels of two RGBA8 frames of `width` with a channel that differs by
-/// more than `tolerance`: `(x, y, a, b)`.
-pub fn pixels_differing_beyond(
+pub(crate) fn pixels_differing_beyond(
     width: u32,
     a: &[u8],
     b: &[u8],
@@ -772,9 +737,7 @@ pub fn pixels_differing_beyond(
         .collect()
 }
 
-/// A one-line account of `differing`: the count, the bounding box and the
-/// first few pixels.
-pub fn describe_differing(differing: &[(usize, usize, [u8; 4], [u8; 4])]) -> String {
+pub(crate) fn describe_differing(differing: &[(usize, usize, [u8; 4], [u8; 4])]) -> String {
     let bbox = differing
         .iter()
         .fold((usize::MAX, usize::MAX, 0, 0), |b, (x, y, _, _)| {
@@ -791,9 +754,11 @@ pub fn describe_differing(differing: &[(usize, usize, [u8; 4], [u8; 4])]) -> Str
     )
 }
 
-/// Captures `graph` three times and returns the last frame, after checking
-/// that repeated captures of one graph are byte-stable.
-pub fn stable_capture(renderer: &mut LockedRenderer, graph: &RenderGraph, size: u32) -> Vec<u8> {
+pub(crate) fn stable_capture(
+    renderer: &mut LockedRenderer,
+    graph: &RenderGraph,
+    size: u32,
+) -> Vec<u8> {
     let mut passes = Vec::new();
     for _ in 0..3 {
         renderer.scene_mut().graph = Some(graph.clone());
@@ -809,11 +774,7 @@ pub fn stable_capture(renderer: &mut LockedRenderer, graph: &RenderGraph, size: 
     );
     passes.pop().expect("three captures")
 }
-/// Vertical stripes in three hues crossed by horizontal bands over a dark
-/// page of `width` x `height`, so every tap of a kernel meets an edge
-/// somewhere: a blur at the wrong radius, a tap in the wrong texels or a
-/// neighbour's texels all change pixels.
-pub fn striped_page(width: u32, height: u32) -> Vec<RenderNode> {
+pub(crate) fn striped_page(width: u32, height: u32) -> Vec<RenderNode> {
     let mut nodes = vec![solid_rect(
         Rect {
             x: 0.0,
@@ -852,17 +813,13 @@ pub fn striped_page(width: u32, height: u32) -> Vec<RenderNode> {
     }
     nodes
 }
-/// How a substrate probe reads its substrate: the texel of the block its
-/// pixel lies in, or a bilinear read held to the substrate's texel centers.
 #[derive(Clone, Copy)]
-pub enum SubstrateProbeRead {
+pub(crate) enum SubstrateProbeRead {
     BlockTexel,
     Held,
 }
 
-/// A batched shader declaring `spec` that paints its first substrate at its
-/// own coordinate, magenta when the renderer packed none.
-pub fn substrate_probe(spec: SubstrateSpec, read: SubstrateProbeRead) -> RenderEffect {
+pub(crate) fn substrate_probe(spec: SubstrateSpec, read: SubstrateProbeRead) -> RenderEffect {
     let uv = match read {
         SubstrateProbeRead::BlockTexel => {
             "(substrate.xy + floor(input.uv * substrate.zw) + vec2<f32>(0.5)) / dims"
@@ -879,12 +836,11 @@ pub fn substrate_probe(spec: SubstrateSpec, read: SubstrateProbeRead) -> RenderE
     RenderEffect::runtime_shader(shader)
 }
 
-/// A page of the given size holding `children` in order.
-pub fn page_graph(width: u32, height: u32, children: Vec<RenderNode>) -> RenderGraph {
+pub(crate) fn page_graph(width: u32, height: u32, children: Vec<RenderNode>) -> RenderGraph {
     RenderGraph::new(layer_node(None, width as f32, height as f32, children))
 }
 
-pub fn shader_probe_graph(bounds: Rect, shader: RuntimeShader) -> RenderGraph {
+pub(crate) fn shader_probe_graph(bounds: Rect, shader: RuntimeShader) -> RenderGraph {
     RenderGraph::new(LayerNode {
         local_bounds: bounds,
         graphics_layer: cranpose_ui_graphics::GraphicsLayer {
@@ -897,27 +853,26 @@ pub fn shader_probe_graph(bounds: Rect, shader: RuntimeShader) -> RenderGraph {
     })
 }
 
-/// A clipped band across the lower part of a square frame holding one child
-/// placed the way the graph builder places a `graphics_layer` node: a list
-/// item at the list's top edge, with the frame's top rows standing in for
-/// whatever sits above the list.
-pub mod clip_band {
+pub(crate) mod clip_band {
     use cranpose_render_common::layer_transform::layer_transform_to_parent;
     use cranpose_ui_graphics::GraphicsLayer;
 
     use super::*;
 
-    pub const FRAME: u32 = 200;
-    /// The band covers the frame below this row.
-    pub const CLIP_TOP: usize = 80;
-    pub const CHILD: Rect = Rect {
+    pub(crate) const FRAME: u32 = 200;
+    pub(crate) const CLIP_TOP: usize = 80;
+    pub(crate) const CHILD: Rect = Rect {
         x: 0.0,
         y: 0.0,
         width: 120.0,
         height: 120.0,
     };
 
-    pub fn page(layer: GraphicsLayer, placement: Point, children: Vec<RenderNode>) -> RenderGraph {
+    pub(crate) fn page(
+        layer: GraphicsLayer,
+        placement: Point,
+        children: Vec<RenderNode>,
+    ) -> RenderGraph {
         let child = LayerNode {
             local_bounds: CHILD,
             transform_to_parent: layer_transform_to_parent(CHILD, placement, &layer),
@@ -944,8 +899,7 @@ pub mod clip_band {
         page_graph(FRAME, FRAME, vec![RenderNode::Layer(Box::new(band))])
     }
 
-    /// Red pixels above and inside the band.
-    pub fn red_pixels(pixels: &[u8]) -> (usize, usize) {
+    pub(crate) fn red_pixels(pixels: &[u8]) -> (usize, usize) {
         pixels
             .as_chunks::<4>()
             .0
@@ -962,8 +916,7 @@ pub mod clip_band {
     }
 }
 
-/// Renders `graph` through the renderer and captures a frame of the given size.
-pub fn capture_graph(
+pub(crate) fn capture_graph(
     renderer: &mut LockedRenderer,
     graph: RenderGraph,
     width: u32,
@@ -972,11 +925,7 @@ pub fn capture_graph(
     capture_graph_with_scale(renderer, graph, width, height, 1.0)
 }
 
-/// The statistics of the frame drawing `graph`, and what it waited for:
-/// pipelines built on the frame thread, effects drawn as placeholders and
-/// shapes drawn with a stand-in while theirs compiled. No waits means all it
-/// drew was built before it.
-pub fn capture_waits(
+pub(crate) fn capture_waits(
     renderer: &mut LockedRenderer,
     graph: RenderGraph,
     width: u32,
@@ -986,8 +935,7 @@ pub fn capture_waits(
     (stats, waits)
 }
 
-/// [`capture_waits`] with the frame.
-pub fn capture_with_waits(
+pub(crate) fn capture_with_waits(
     renderer: &mut LockedRenderer,
     graph: RenderGraph,
     width: u32,
@@ -1002,9 +950,7 @@ pub fn capture_with_waits(
     (frame, stats, waits)
 }
 
-/// The first frame of `graph` that draws no placeholder: every effect in it
-/// draws, standing in or with its own pipelines.
-pub fn capture_drawn(
+pub(crate) fn capture_drawn(
     renderer: &mut LockedRenderer,
     graph: &RenderGraph,
     width: u32,
@@ -1025,9 +971,7 @@ pub fn capture_drawn(
     }
 }
 
-/// Renders `graph` with its root scaled by `root_scale` and captures a frame
-/// of the given size.
-pub fn capture_graph_with_scale(
+pub(crate) fn capture_graph_with_scale(
     renderer: &mut LockedRenderer,
     graph: RenderGraph,
     width: u32,
@@ -1040,8 +984,7 @@ pub fn capture_graph_with_scale(
         .expect("capture should succeed")
 }
 
-/// The RGBA bytes of `region` of the frame, row by row.
-pub fn region_pixels(frame: &CapturedFrame, region: Rect) -> Vec<u8> {
+pub(crate) fn region_pixels(frame: &CapturedFrame, region: Rect) -> Vec<u8> {
     let left = region.x as u32;
     let top = region.y as u32;
     let width = region.width as u32;
@@ -1054,10 +997,7 @@ pub fn region_pixels(frame: &CapturedFrame, region: Rect) -> Vec<u8> {
     out
 }
 
-/// Waits until the background compiler has built nothing for a second, so
-/// a count of pipelines built from here on is the scene's, not the
-/// renderer's warm-up.
-pub fn wait_for_background_compiler_idle() {
+pub(crate) fn wait_for_background_compiler_idle() {
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let mut seen = cranpose_render_wgpu::pipelines_created_off_frame();
     let mut quiet_since = std::time::Instant::now();
@@ -1077,18 +1017,13 @@ pub fn wait_for_background_compiler_idle() {
     }
 }
 
-/// Whether every draw of the last frame used the pipeline it asked for,
-/// rather than a first screen's stand-in while a specialization compiled or
-/// a placeholder while nothing had.
-pub fn pipelines_settled(stats: &RenderStatsSnapshot) -> bool {
+pub(crate) fn pipelines_settled(stats: &RenderStatsSnapshot) -> bool {
     stats.shape_pipeline_fallback_draws == 0
         && stats.shader_pipeline_fallback_draws == 0
         && stats.placeholder_draws == 0
 }
 
-/// Captures until the frame's pipelines have settled, so what the frame
-/// draws and counts is what the specialized pipelines draw.
-pub fn capture_settled(
+pub(crate) fn capture_settled(
     renderer: &mut LockedRenderer,
     mut capture: impl FnMut(&mut LockedRenderer) -> CapturedFrame,
 ) -> CapturedFrame {
@@ -1099,7 +1034,7 @@ pub fn capture_settled(
     })
 }
 
-pub fn settle<T>(mut frame: impl FnMut() -> (RenderStatsSnapshot, T)) -> T {
+pub(crate) fn settle<T>(mut frame: impl FnMut() -> (RenderStatsSnapshot, T)) -> T {
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
         let (stats, captured) = frame();
@@ -1114,10 +1049,9 @@ pub fn settle<T>(mut frame: impl FnMut() -> (RenderStatsSnapshot, T)) -> T {
     }
 }
 
-/// [`capture_graph`] once the graph's pipelines have settled.
-pub fn capture_graph_settled(
+pub(crate) fn capture_graph_settled(
     renderer: &mut LockedRenderer,
-    graph: RenderGraph,
+    graph: &RenderGraph,
     width: u32,
     height: u32,
 ) -> CapturedFrame {
@@ -1126,7 +1060,7 @@ pub fn capture_graph_settled(
     })
 }
 
-pub fn settled_capture(renderer: &mut LockedRenderer, graph: &RenderGraph) -> Vec<u8> {
+pub(crate) fn settled_capture(renderer: &mut LockedRenderer, graph: &RenderGraph) -> Vec<u8> {
     stable_settled_capture(renderer, |renderer| {
         renderer.scene_mut().graph = Some(graph.clone());
         let captured = renderer
@@ -1137,7 +1071,7 @@ pub fn settled_capture(renderer: &mut LockedRenderer, graph: &RenderGraph) -> Ve
     })
 }
 
-pub fn stable_settled_capture(
+pub(crate) fn stable_settled_capture(
     renderer: &mut LockedRenderer,
     mut capture: impl FnMut(&mut LockedRenderer) -> CapturedFrame,
 ) -> Vec<u8> {
@@ -1151,22 +1085,18 @@ pub fn stable_settled_capture(
     current
 }
 
-pub fn distinct_colors(pixels: &[u8]) -> usize {
+pub(crate) fn distinct_colors(pixels: &[u8]) -> usize {
     let mut colors: Vec<[u8; 4]> = pixels.as_chunks::<4>().0.to_vec();
     colors.sort_unstable();
     colors.dedup();
     colors.len()
 }
 
-/// Asserts two RGBA frames of `width` pixels per row are identical, naming
-/// the first differing pixel otherwise.
-pub fn assert_same_bytes(label: &str, width: u32, a: &[u8], b: &[u8]) {
+pub(crate) fn assert_same_bytes(label: &str, width: u32, a: &[u8], b: &[u8]) {
     assert_bytes_within(label, width, a, b, 0);
 }
 
-/// Asserts that no byte of `a` and `b` differs by more than `tolerance`,
-/// naming the count, the largest difference and the first pixel beyond it.
-pub fn assert_bytes_within(label: &str, width: u32, a: &[u8], b: &[u8], tolerance: u8) {
+pub(crate) fn assert_bytes_within(label: &str, width: u32, a: &[u8], b: &[u8], tolerance: u8) {
     assert_eq!(a.len(), b.len(), "{label}: capture sizes differ");
     let mut differing = 0usize;
     let mut worst = 0u8;
@@ -1185,9 +1115,7 @@ pub fn assert_bytes_within(label: &str, width: u32, a: &[u8], b: &[u8], toleranc
     );
 }
 
-/// How many pixels of two RGBA frames of `width` pixels per row differ
-/// outside `rect`, and by how many levels at most.
-pub fn difference_outside(width: u32, a: &[u8], b: &[u8], rect: [f32; 4]) -> (usize, u8) {
+pub(crate) fn difference_outside(width: u32, a: &[u8], b: &[u8], rect: [f32; 4]) -> (usize, u8) {
     let inside = |x: f32, y: f32| {
         (rect[0]..rect[0] + rect[2]).contains(&x) && (rect[1]..rect[1] + rect[3]).contains(&y)
     };
@@ -1216,7 +1144,7 @@ pub fn difference_outside(width: u32, a: &[u8], b: &[u8], rect: [f32; 4]) -> (us
     (differing, max_delta)
 }
 
-pub fn rect_modifier(rect: [f32; 4]) -> Modifier {
+pub(crate) fn rect_modifier(rect: [f32; 4]) -> Modifier {
     Modifier::empty().offset(rect[0], rect[1]).size(Size {
         width: rect[2],
         height: rect[3],
@@ -1239,9 +1167,7 @@ pub fn FramePage(width: u32, height: u32, background: Color, content: impl Fn() 
     );
 }
 
-/// One solid-filled rectangle drawn before the children.
-/// A white plain text of `font_size` drawn in `rect`.
-pub fn text_node(node_id: usize, text: &str, rect: Rect, font_size: f32) -> RenderNode {
+pub(crate) fn text_node(node_id: usize, text: &str, rect: Rect, font_size: f32) -> RenderNode {
     let style = cranpose_ui::text::TextStyle::from_span_style(cranpose_ui::text::SpanStyle {
         color: Some(Color::WHITE),
         font_size: cranpose_ui::text::TextUnit::Sp(font_size),
@@ -1263,13 +1189,11 @@ pub fn text_node(node_id: usize, text: &str, rect: Rect, font_size: f32) -> Rend
     })
 }
 
-pub fn solid_rect(rect: Rect, color: Color) -> RenderNode {
+pub(crate) fn solid_rect(rect: Rect, color: Color) -> RenderNode {
     brush_rect(rect, Brush::solid(color))
 }
 
-/// A drop shadow of `rect` in `color` blurred by `blur_radius`: a shadow the
-/// renderer resolves on a surface of its own.
-pub fn drop_shadow(rect: Rect, color: Color, blur_radius: f32) -> RenderNode {
+pub(crate) fn drop_shadow(rect: Rect, color: Color, blur_radius: f32) -> RenderNode {
     draw_node(
         DrawPrimitive::Shadow(cranpose_ui_graphics::ShadowPrimitive::Drop {
             shape: Box::new(DrawPrimitive::Rect {
@@ -1285,7 +1209,7 @@ pub fn drop_shadow(rect: Rect, color: Color, blur_radius: f32) -> RenderNode {
     )
 }
 
-pub fn brush_rect(rect: Rect, brush: Brush) -> RenderNode {
+pub(crate) fn brush_rect(rect: Rect, brush: Brush) -> RenderNode {
     draw_node(
         DrawPrimitive::Rect {
             rect,
@@ -1296,16 +1220,15 @@ pub fn brush_rect(rect: Rect, brush: Brush) -> RenderNode {
     )
 }
 
-/// `primitive` drawn before the children, within `clip` if there is one.
-pub fn draw_node(primitive: DrawPrimitive, clip: Option<Rect>) -> RenderNode {
+pub(crate) fn draw_node(primitive: DrawPrimitive, clip: Option<Rect>) -> RenderNode {
     RenderNode::Primitive(PrimitiveEntry {
         phase: PrimitivePhase::BeforeChildren,
         node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode { primitive, clip })),
     })
 }
 
-pub const SIZE: u32 = 256;
-pub const CENTER: f32 = 128.0;
+pub(crate) const SIZE: u32 = 256;
+pub(crate) const CENTER: f32 = 128.0;
 
 /// The dark background every parity scene draws first.
 fn draw_scene_background(scope: &mut DrawScopeDefault) {
@@ -1320,10 +1243,7 @@ fn draw_scene_background(scope: &mut DrawScopeDefault) {
     );
 }
 
-/// Only solid fills, so their batch takes a fill-only pipeline: circles
-/// and rounded squares of many sizes at fractional positions, opaque and
-/// translucent, over a background.
-pub fn record_solid_fill_scene(scope: &mut DrawScopeDefault) {
+pub(crate) fn record_solid_fill_scene(scope: &mut DrawScopeDefault) {
     draw_scene_background(scope);
     for index in 0..48u32 {
         let x = (index % 8) as f32 * 31.3 + 3.37;
@@ -1352,9 +1272,7 @@ pub fn record_solid_fill_scene(scope: &mut DrawScopeDefault) {
     }
 }
 
-/// A scene of solid arcs, discs, rounded rects and strokes, the shape of
-/// cranorbit's arena.
-pub fn record_solid_scene(scope: &mut DrawScopeDefault) {
+pub(crate) fn record_solid_scene(scope: &mut DrawScopeDefault) {
     draw_scene_background(scope);
     for ring in 0..3u32 {
         let radius = 40.0 + ring as f32 * 28.0;
@@ -1403,9 +1321,7 @@ pub fn record_solid_scene(scope: &mut DrawScopeDefault) {
     );
 }
 
-/// [`record_solid_scene`] plus linear and radial gradient fills and a
-/// gradient stroke.
-pub fn record_mixed_scene(scope: &mut DrawScopeDefault) {
+pub(crate) fn record_mixed_scene(scope: &mut DrawScopeDefault) {
     record_solid_scene(scope);
     scope.draw_rect_at(
         Rect {
@@ -1444,9 +1360,7 @@ pub fn record_mixed_scene(scope: &mut DrawScopeDefault) {
     );
 }
 
-/// A layer node with every field spelled out, for contract tests that
-/// build graphs by hand.
-pub fn record_gradient_fill_scene(scope: &mut DrawScopeDefault) {
+pub(crate) fn record_gradient_fill_scene(scope: &mut DrawScopeDefault) {
     use cranpose_ui_graphics::{CornerRadii, TileMode};
     let tile_modes = [
         TileMode::Clamp,
@@ -1570,7 +1484,7 @@ pub fn record_gradient_fill_scene(scope: &mut DrawScopeDefault) {
     );
 }
 
-pub fn contract_layer(
+pub(crate) fn contract_layer(
     node_id: Option<NodeId>,
     cache_policy: CachePolicy,
     local_bounds: Rect,
@@ -1587,12 +1501,9 @@ pub fn contract_layer(
     }
 }
 
-/// The node id of the one command of [`stored_run_graph`].
-pub const STORED_RUN_NODE: NodeId = 7_200;
+pub(crate) const STORED_RUN_NODE: NodeId = 7_200;
 
-/// The rect the record at `index` of [`stored_run_graph`] draws: eight
-/// per row, apart from each other and from the edges.
-pub fn stored_run_rect(index: usize) -> Rect {
+pub(crate) fn stored_run_rect(index: usize) -> Rect {
     Rect {
         x: (index % 8) as f32 * 14.0 + 4.0,
         y: (index / 8) as f32 * 9.0 + 4.0,
@@ -1601,15 +1512,11 @@ pub fn stored_run_rect(index: usize) -> Rect {
     }
 }
 
-/// A `width` by `height` graph whose one command records one rect per
-/// colour of `colors`: enough records for the run store to retain the
-/// command's tables when there are as many as a stored run needs.
-pub fn stored_run_graph(width: u32, height: u32, colors: &[Color]) -> RenderGraph {
+pub(crate) fn stored_run_graph(width: u32, height: u32, colors: &[Color]) -> RenderGraph {
     stored_run_graph_of(width, height, colors.iter().copied().map(Brush::solid))
 }
 
-/// [`stored_run_graph`] with one rect painted by each of `brushes`.
-pub fn stored_run_graph_of(
+pub(crate) fn stored_run_graph_of(
     width: u32,
     height: u32,
     brushes: impl IntoIterator<Item = Brush>,
@@ -1617,10 +1524,7 @@ pub fn stored_run_graph_of(
     stored_runs_graph_of(width, height, [brushes.into_iter().collect()])
 }
 
-/// One command, and so one stored run, per entry of `runs`, each recording
-/// a rect per brush: the records of later runs follow the earlier runs'
-/// in [`stored_run_rect`]'s order.
-pub fn stored_runs_graph_of<const RUNS: usize>(
+pub(crate) fn stored_runs_graph_of<const RUNS: usize>(
     width: u32,
     height: u32,
     runs: [Vec<Brush>; RUNS],
@@ -1666,9 +1570,7 @@ pub fn stored_runs_graph_of<const RUNS: usize>(
     ))
 }
 
-/// Presents `graph` at `width` by `height` through the renderer's own
-/// packet path and reads the pixels back as RGBA8 rows.
-pub fn present_and_read(
+pub(crate) fn present_and_read(
     renderer: &mut LockedRenderer,
     width: u32,
     height: u32,
@@ -1678,9 +1580,7 @@ pub fn present_and_read(
     read_presented(renderer, &texture)
 }
 
-/// Presents `graph` at `width` by `height` into a texture of its own and
-/// returns it without waiting for the GPU.
-pub fn present(
+pub(crate) fn present(
     renderer: &mut LockedRenderer,
     width: u32,
     height: u32,
@@ -1704,24 +1604,19 @@ pub fn present(
     texture
 }
 
-/// The pixels of a texture [`present`] drew, as RGBA8 rows.
-pub fn read_presented(renderer: &LockedRenderer, texture: &wgpu::Texture) -> Vec<u8> {
+pub(crate) fn read_presented(renderer: &LockedRenderer, texture: &wgpu::Texture) -> Vec<u8> {
     let device = renderer.try_device().expect("device");
     let queue = renderer.try_queue_for_tests().expect("queue");
     read_texture(device, queue, texture)
 }
 
-/// What a reference blur reads past the image: the edge pixel again, or
-/// nothing.
 #[derive(Clone, Copy)]
-pub enum ReferenceEdge {
+pub(crate) enum ReferenceEdge {
     Clamp,
     Transparent,
 }
 
-/// The renderer's kernel: `ceil(radius)` taps each side, `sigma = radius /
-/// 2`, truncated there and normalized.
-pub fn reference_kernel(radius: f32) -> Vec<f32> {
+pub(crate) fn reference_kernel(radius: f32) -> Vec<f32> {
     let taps = radius.ceil() as i32;
     let sigma = radius * 0.5;
     let weights: Vec<f32> = (-taps..=taps)
@@ -1731,9 +1626,7 @@ pub fn reference_kernel(radius: f32) -> Vec<f32> {
     weights.into_iter().map(|w| w / total).collect()
 }
 
-/// A separable blur of an image of `channels` floats per pixel, horizontal
-/// then vertical, reading `edge` past the image.
-pub fn reference_blur(
+pub(crate) fn reference_blur(
     image: &[f32],
     width: usize,
     height: usize,
@@ -1776,7 +1669,7 @@ pub fn reference_blur(
     pass(&pass(image, (1, 0)), (0, 1))
 }
 
-pub fn max_channel_delta(a: &[u8], b: &[u8]) -> u8 {
+pub(crate) fn max_channel_delta(a: &[u8], b: &[u8]) -> u8 {
     assert_eq!(a.len(), b.len(), "pixel buffer lengths");
     a.iter()
         .zip(b)
@@ -1785,21 +1678,20 @@ pub fn max_channel_delta(a: &[u8], b: &[u8]) -> u8 {
         .unwrap_or(0)
 }
 
-pub mod glass_page {
+pub(crate) mod glass_page {
     use super::*;
 
-    pub const FRAME_WIDTH: u32 = 240;
-    pub const FRAME_HEIGHT: u32 = 120;
-    pub const GLASS_WIDTH: f32 = 56.0;
-    pub const GLASS_HEIGHT: f32 = 40.0;
-    pub const GLASS_TOP: f32 = 30.0;
-    pub const GLASS_PITCH: f32 = 72.0;
-    pub const GLASS_LEFT: f32 = 12.0;
-    pub const GLASS_RADIUS: f32 = 12.0;
-    pub const BLUR_RADIUS: f32 = 6.0;
+    pub(crate) const FRAME_WIDTH: u32 = 240;
+    pub(crate) const FRAME_HEIGHT: u32 = 120;
+    pub(crate) const GLASS_WIDTH: f32 = 56.0;
+    pub(crate) const GLASS_HEIGHT: f32 = 40.0;
+    pub(crate) const GLASS_TOP: f32 = 30.0;
+    pub(crate) const GLASS_PITCH: f32 = 72.0;
+    pub(crate) const GLASS_LEFT: f32 = 12.0;
+    pub(crate) const GLASS_RADIUS: f32 = 12.0;
+    pub(crate) const BLUR_RADIUS: f32 = 6.0;
 
-    /// A striped page under a row of rounded panes, one per backdrop effect.
-    pub fn panes_page(effects: impl IntoIterator<Item = RenderEffect>) -> RenderGraph {
+    pub(crate) fn panes_page(effects: impl IntoIterator<Item = RenderEffect>) -> RenderGraph {
         let mut children = striped_page(FRAME_WIDTH, FRAME_HEIGHT);
         for (index, effect) in effects.into_iter().enumerate() {
             children.push(RenderNode::Layer(Box::new(
@@ -1829,11 +1721,10 @@ pub mod glass_page {
         page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
     }
 
-    /// Glass folding set for one test, then restored: it is process-wide.
-    pub struct GlassFolds(bool);
+    pub(crate) struct GlassFolds(bool);
 
     impl GlassFolds {
-        pub fn set(folds: bool) -> Self {
+        pub(crate) fn set(folds: bool) -> Self {
             let restore = Self(cranpose_ui_graphics::glass_material_folds_enabled());
             cranpose_ui_graphics::set_glass_material_folds(folds);
             restore
@@ -1846,7 +1737,7 @@ pub mod glass_page {
         }
     }
 
-    pub fn glass_shader() -> RenderEffect {
+    pub(crate) fn glass_shader() -> RenderEffect {
         liquid_glass_effect(
             &LiquidGlassRect {
                 left: 0.0,
@@ -1862,14 +1753,12 @@ pub mod glass_page {
     }
 }
 
-/// The frame and glass pane the effect-domain and capture-culling tests
-/// share.
-pub mod glass_scene {
+pub(crate) mod glass_scene {
     use cranpose_ui_graphics::Rect;
 
-    pub const FRAME_WIDTH: u32 = 240;
-    pub const FRAME_HEIGHT: u32 = 120;
-    pub const GLASS: Rect = Rect {
+    pub(crate) const FRAME_WIDTH: u32 = 240;
+    pub(crate) const FRAME_HEIGHT: u32 = 120;
+    pub(crate) const GLASS: Rect = Rect {
         x: 80.0,
         y: 30.0,
         width: 96.0,
@@ -1877,13 +1766,12 @@ pub mod glass_scene {
     };
 }
 
-/// The frame and bar the layer-cache and shader-identity tests share.
-pub mod bar_scene {
+pub(crate) mod bar_scene {
     use cranpose_ui_graphics::Rect;
 
-    pub const WIDTH: u32 = 160;
-    pub const HEIGHT: u32 = 96;
-    pub const BAR: Rect = Rect {
+    pub(crate) const WIDTH: u32 = 160;
+    pub(crate) const HEIGHT: u32 = 96;
+    pub(crate) const BAR: Rect = Rect {
         x: 20.0,
         y: 24.0,
         width: 120.0,

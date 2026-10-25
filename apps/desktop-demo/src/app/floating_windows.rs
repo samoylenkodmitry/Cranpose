@@ -10,7 +10,7 @@ use super::{
     pet::pet_app,
 };
 
-pub fn toggle_label(open: bool, opened: &'static str, closed: &'static str) -> &'static str {
+pub(super) fn toggle_label(open: bool, opened: &'static str, closed: &'static str) -> &'static str {
     if open {
         closed
     } else {

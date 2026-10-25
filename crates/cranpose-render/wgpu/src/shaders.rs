@@ -4,7 +4,7 @@ use cranpose_ui_graphics::framework_shaders as wgsl;
 
 use crate::shared_shader::ShaderCode;
 
-pub const SHADER: &str = wgsl::SHAPE_WGSL;
+pub(crate) const SHADER: &str = wgsl::SHAPE_WGSL;
 
 /// A built-in module's code, with its GLSL templates where the build script
 /// wrote them.

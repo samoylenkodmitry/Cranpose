@@ -9,7 +9,7 @@ use cranpose_testing::{
 };
 use desktop_app::app::{DemoTab, TEST_ACTIVE_TAB_STATE, TEST_RECURSIVE_LAYOUT_DEPTH_STATE};
 
-pub fn with_active_tab<F>(f: F)
+pub(crate) fn with_active_tab<F>(f: F)
 where
     F: FnOnce(&MutableState<DemoTab>),
 {
@@ -19,15 +19,15 @@ where
     });
 }
 
-pub fn active_tab_state() -> MutableState<DemoTab> {
+pub(crate) fn active_tab_state() -> MutableState<DemoTab> {
     TEST_ACTIVE_TAB_STATE.with(|cell| *cell.borrow().as_ref().expect("active tab state registered"))
 }
 
-pub fn set_active_tab(tab: DemoTab) {
+pub(crate) fn set_active_tab(tab: DemoTab) {
     with_active_tab(|state| state.set(tab));
 }
 
-pub fn wait_for_active_tab_registration_robot(robot: &mut RobotTestRule<TestRenderer>) {
+pub(crate) fn wait_for_active_tab_registration_robot(robot: &mut RobotTestRule<TestRenderer>) {
     for _ in 0..20 {
         robot.wait_for_idle();
         let registered = TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow().is_some());
@@ -38,7 +38,7 @@ pub fn wait_for_active_tab_registration_robot(robot: &mut RobotTestRule<TestRend
     panic!("active tab state was not registered");
 }
 
-pub fn with_recursive_depth<F>(f: F)
+pub(crate) fn with_recursive_depth<F>(f: F)
 where
     F: FnOnce(&MutableState<usize>),
 {
@@ -51,11 +51,11 @@ where
     });
 }
 
-pub fn set_recursive_depth(depth: usize) {
+pub(crate) fn set_recursive_depth(depth: usize) {
     with_recursive_depth(|state| state.set(depth));
 }
 
-pub fn wait_for_recursive_depth_registration(rule: &mut ComposeTestRule) {
+pub(crate) fn wait_for_recursive_depth_registration(rule: &mut ComposeTestRule) {
     for _ in 0..20 {
         let registered = TEST_RECURSIVE_LAYOUT_DEPTH_STATE.with(|cell| cell.borrow().is_some());
         if registered {
@@ -70,7 +70,7 @@ pub fn wait_for_recursive_depth_registration(rule: &mut ComposeTestRule) {
     );
 }
 
-pub fn pump_shell_until_stable<R>(shell: &mut AppShell<R>)
+pub(crate) fn pump_shell_until_stable<R>(shell: &mut AppShell<R>)
 where
     R: Renderer,
     R::Error: Debug,

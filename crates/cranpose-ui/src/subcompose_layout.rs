@@ -85,7 +85,7 @@ impl PartialEq for SubcomposeChild {
     }
 }
 
-pub type SubcomposePlaceable = cranpose_ui_layout::Placeable;
+pub(crate) type SubcomposePlaceable = cranpose_ui_layout::Placeable;
 
 type RetainedMeasureLookup<'a> = Box<dyn FnMut(NodeId) -> Option<Rc<MeasuredNode>> + 'a>;
 
@@ -701,7 +701,7 @@ fn compose_subcompose_slot_content(holder: cranpose_core::CallbackHolder) {
     invoke();
 }
 
-pub type MeasurePolicy =
+pub(crate) type MeasurePolicy =
     dyn for<'scope> Fn(&mut SubcomposeMeasureScopeImpl<'scope>, Constraints) -> MeasureResult;
 
 /// Node responsible for orchestrating measure-time subcomposition.
