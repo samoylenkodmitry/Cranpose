@@ -9,4 +9,5 @@ mod payload;
 mod siblings;
 mod state;
 
+pub(crate) use frames::GroupFrameStorage;
 pub(crate) use state::SlotWriteSessionState;

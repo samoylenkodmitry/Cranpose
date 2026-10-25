@@ -35,7 +35,55 @@ pub(in crate::slot) struct GroupFrameStack {
     depth: usize,
 }
 
+/// The frames of a [`GroupFrameStack`] between passes. A frame takes a few
+/// hundred bytes, and every slot host kept the frames of its deepest pass:
+/// each item of a lazy list as many as the root. The hosts on a thread hand
+/// them to each other instead ([`GroupFrameStack::recycle`],
+/// [`GroupFrameStack::adopt_spare`]).
+pub(crate) struct GroupFrameStorage(Vec<GroupFrame>);
+
+/// The most kept frame storages on a thread: passes of more hosts at once
+/// than this are rare, and take new storage.
+const SPARE_GROUP_FRAME_STORAGES: usize = 2;
+
+/// The most frames a storage the hosts share has room for. A host whose
+/// passes need more is deep, such as an app's root, and keeps its own.
+const SPARE_GROUP_FRAME_CAPACITY: usize = 64;
+
 impl GroupFrameStack {
+    /// Takes the frame storage an earlier pass on this thread left, for the
+    /// coming pass, unless the stack kept its own: a deep host's, or one of a
+    /// pass that ended early.
+    /// Its frames are opened afresh, as frames reused within one host are.
+    pub(in crate::slot) fn adopt_spare(&mut self) {
+        if self.frames.capacity() > 0 {
+            return;
+        }
+        if let Some(GroupFrameStorage(frames)) =
+            crate::thread_state::try_runtimes(|state| state.spare_group_frames.borrow_mut().pop())
+                .flatten()
+        {
+            self.frames = frames;
+        }
+    }
+
+    /// Keeps the stack's frames for the next pass on this thread, after a
+    /// pass that left none open.
+    pub(in crate::slot) fn recycle(&mut self) {
+        self.depth = 0;
+        let capacity = self.frames.capacity();
+        if capacity == 0 || capacity > SPARE_GROUP_FRAME_CAPACITY {
+            return;
+        }
+        let frames = std::mem::take(&mut self.frames);
+        crate::thread_state::try_runtimes(|state| {
+            let mut spare = state.spare_group_frames.borrow_mut();
+            if spare.len() < SPARE_GROUP_FRAME_STORAGES {
+                spare.push(GroupFrameStorage(frames));
+            }
+        });
+    }
+
     pub(in crate::slot) fn push(&mut self) -> &mut GroupFrame {
         if self.depth == self.frames.len() {
             self.frames.push(GroupFrame::default());

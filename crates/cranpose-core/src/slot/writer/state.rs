@@ -54,6 +54,12 @@ impl SlotWriteSessionState {
         self.folds = folds;
     }
 
+    /// Hands the pass's group frames to the next pass on this thread, once
+    /// the pass finished.
+    pub(crate) fn recycle_group_frames(&mut self) {
+        self.group_stack.recycle();
+    }
+
     pub(in crate::slot) const COMPACT_PAYLOAD_THRESHOLD: usize = 16 * 1024;
     const COMPACT_NODE_THRESHOLD: usize = 16 * 1024;
     const COMPACT_GROUP_THRESHOLD: usize = 32 * 1024;
@@ -61,6 +67,7 @@ impl SlotWriteSessionState {
     pub(crate) fn reset_for_pass(&mut self, mode: SlotPassMode) {
         self.root.reset(matches!(mode, SlotPassMode::Compose));
         self.group_stack.clear();
+        self.group_stack.adopt_spare();
         self.payload_location_refreshes.clear();
         if !self.rejected_restore_subtrees.is_empty() {
             log::error!(
