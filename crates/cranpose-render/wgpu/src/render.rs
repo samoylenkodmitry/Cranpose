@@ -8,13 +8,12 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 use cranpose_core::{
-    NodeId,
     collections::{bounded_lru::BoundedLruCache, map::HashMap},
     hash::default as default_hash,
 };
 use cranpose_render_common::{
     geometry::blur_reach,
-    graph::{DrawCommandId, quad_bounds},
+    graph::quad_bounds,
     software_text_raster::{
         SoftwareGlyphAtlasGlyph, SoftwareGlyphAtlasPlacement, SoftwareGlyphAtlasRunGlyph,
         SoftwareTextFontSet,
@@ -40,8 +39,8 @@ use crate::{
     effect_renderer::{CompositeSampleMode, EffectRenderer},
     fixed_pipeline::{FixedPipeline, FixedPipelineJob},
     frame::{
-        AdmissionGate, ClearedImages, Damage, DeviceRect, FrameExecutor, FrameWindow, ImageContent,
-        KeptWindow, PresentedImage, Repaint, StageSideScratch, Summaries, SwapchainHistory, Window,
+        ClearedImages, Damage, DeviceRect, FrameExecutor, FrameWindow, ImageContent, KeptWindow,
+        PresentedImage, Repaint, StageSideScratch, Summaries, SwapchainHistory, Window,
         WindowDamage,
     },
     frame_graph::{
@@ -1288,18 +1287,7 @@ pub(crate) struct GpuRenderer {
     /// kept layer surfaces stay in their atlas: see [`UploadMode::copy_free`].
     pub(crate) copy_free: UploadMode,
     /// Text runs the frame has drawn so far, cached or not.
-    pub(crate) scratch_image_vertices: Vec<Vertex>,
-    pub(crate) scratch_image_indices: Vec<u32>,
-    pub(crate) scratch_glyph_instances: GlyphInstances,
-    pub(crate) scratch_image_cmds: Vec<ImageDrawCmd>,
-    pub(crate) scratch_image_clips: Vec<DeviceRoundedClip>,
-    pub(crate) scratch_glyph_cmds: Vec<GlyphDrawCmd>,
-    pub(crate) scratch_glyph_moved: Vec<GlyphDrawCmd>,
-    pub(crate) scratch_shadow_instances: Vec<ShadowInstance>,
-    pub(crate) scratch_arena_draws: Vec<RunDrawCall>,
-    pub(crate) scratch_pipelines: PipelineDemand,
-    pub(crate) scratch_held: crate::draw_pass::HeldDraws,
-    pub(crate) scratch_meshes: crate::mesh_fallback::PassMeshes,
+    pub(crate) pass_scratch: crate::draw_pass::PassScratch,
     frame_graph_executor: WgpuFrameGraphExecutor,
     pub(crate) stage_side_scratch: StageSideScratch,
     deferred_offscreen_releases: Vec<OffscreenTarget>,
@@ -1316,10 +1304,7 @@ pub(crate) struct GpuRenderer {
     /// The colour a frame drawn in a window last filled it with, and a
     /// pixel of it.
     pub(crate) window_fill: Option<(wgpu::Color, Rc<OffscreenTarget>)>,
-    pub(crate) backdrop_gates: HashMap<NodeId, AdmissionGate>,
-    pub(crate) fill_gates: HashMap<DrawCommandId, AdmissionGate>,
-    pub(crate) effect_gates: HashMap<NodeId, AdmissionGate>,
-    pub(crate) source_gates: HashMap<NodeId, AdmissionGate>,
+    pub(crate) gates: admission_gate::AdmissionGates,
     transparent_sources: HashMap<(u32, u32), Rc<OffscreenTarget>>,
     shadow_surface_cache: BoundedLruCache<ShadowSurfaceCacheKey, CachedShadowSurface>,
     shadow_surface_cache_bytes: u64,
@@ -1654,18 +1639,7 @@ impl GpuRenderer {
                 MAX_EXTERNAL_TEXTURE_BINDINGS,
             ),
             copy_free,
-            scratch_image_vertices: Vec::new(),
-            scratch_image_indices: Vec::new(),
-            scratch_glyph_instances: GlyphInstances::default(),
-            scratch_image_cmds: Vec::new(),
-            scratch_image_clips: Vec::new(),
-            scratch_glyph_cmds: Vec::new(),
-            scratch_glyph_moved: Vec::new(),
-            scratch_shadow_instances: Vec::new(),
-            scratch_arena_draws: Vec::new(),
-            scratch_pipelines: PipelineDemand::default(),
-            scratch_held: crate::draw_pass::HeldDraws::default(),
-            scratch_meshes: crate::mesh_fallback::PassMeshes::default(),
+            pass_scratch: crate::draw_pass::PassScratch::default(),
             frame_graph_executor,
             stage_side_scratch: StageSideScratch::default(),
             deferred_offscreen_releases: Vec::new(),
@@ -1678,10 +1652,7 @@ impl GpuRenderer {
             swapchain: SwapchainHistory::default(),
             cleared: ClearedImages::default(),
             window_fill: None,
-            backdrop_gates: HashMap::default(),
-            fill_gates: HashMap::default(),
-            effect_gates: HashMap::default(),
-            source_gates: HashMap::default(),
+            gates: admission_gate::AdmissionGates::default(),
             transparent_sources: HashMap::default(),
             shadow_surface_cache: BoundedLruCache::with_capacity_at_least_one(
                 MAX_SHADOW_SURFACE_CACHE_ITEMS,
@@ -2695,18 +2666,7 @@ impl GpuRenderer {
     }
 
     fn flush_deferred_offscreen_releases(&mut self) {
-        let layer_cache = &mut self.layer_cache;
-        let mut retire = |gate: &mut AdmissionGate| {
-            let seen = gate.end_frame();
-            if !seen && let Some(dead) = gate.dead_entry() {
-                layer_cache.remove(&dead);
-            }
-            seen
-        };
-        self.backdrop_gates.retain(|_, gate| retire(gate));
-        self.fill_gates.retain(|_, gate| retire(gate));
-        self.effect_gates.retain(|_, gate| retire(gate));
-        self.source_gates.retain(|_, gate| retire(gate));
+        self.gates.end_frame(&mut self.layer_cache);
         for target in self.deferred_offscreen_releases.drain(..) {
             self.effect_renderer.release_offscreen(target);
         }
@@ -2827,7 +2787,7 @@ impl GpuRenderer {
         self.viewport_uniforms.begin_frame();
         self.run_store.begin_frame(gpu_stats_enabled());
         self.text.begin_text_glyph_run_frame();
-        self.scratch_meshes.begin_frame();
+        self.pass_scratch.meshes.begin_frame();
 
         let reads_page = packet.root.contains_backdrop()
             || packet
@@ -2864,7 +2824,7 @@ impl GpuRenderer {
             self.note_placeholder();
         }
         self.flush_deferred_offscreen_releases();
-        self.scratch_glyph_instances.end_frame();
+        self.pass_scratch.glyph_instances.end_frame();
 
         self.frame_stats
             .layer_cache_size
@@ -3285,11 +3245,11 @@ impl GpuRenderer {
             run_arena_staging_bytes: self.run_store.arena_staging_bytes(),
             run_store_bytes: self.run_store.stored_bytes(),
             run_store_runs: self.run_store.stored_count(),
-            scratch_image_vertices_cap: self.scratch_image_vertices.capacity(),
-            scratch_image_indices_cap: self.scratch_image_indices.capacity(),
-            scratch_image_cmds_cap: self.scratch_image_cmds.capacity(),
-            scratch_glyph_instances_cap: self.scratch_glyph_instances.plain.capacity()
-                + self.scratch_glyph_instances.turned.capacity(),
+            scratch_image_vertices_cap: self.pass_scratch.image_vertices.capacity(),
+            scratch_image_indices_cap: self.pass_scratch.image_indices.capacity(),
+            scratch_image_cmds_cap: self.pass_scratch.image_cmds.capacity(),
+            scratch_glyph_instances_cap: self.pass_scratch.glyph_instances.plain.capacity()
+                + self.pass_scratch.glyph_instances.turned.capacity(),
             layer_cache_len: self.layer_cache.len(),
             layer_cache_bytes: self.layer_cache.bytes(),
         }
@@ -5527,6 +5487,7 @@ pub(crate) use glyph_draws::{
     GlyphDrawCmd, GlyphInstance, GlyphInstances, defer_retained_glyph_runs, group_glyph_kinds,
 };
 use text_resources::TextResources;
+pub(crate) mod admission_gate;
 mod glyph_atlas;
 mod image_draws;
 mod text_glyph_cache;
