@@ -4,7 +4,8 @@ use cranpose_ui_graphics::Color;
 
 use super::*;
 use crate::{
-    render::text_glyph_cache::{CachedTextGlyphQuad, cached_text_glyph_quad},
+    glyph_run::RunGlyphScratch,
+    render::text_glyph_cache::{CachedTextGlyphQuad, CachedTextGlyphRun, cached_text_glyph_quad},
     scene::{CompositorScene, DrawnText},
 };
 
@@ -84,7 +85,7 @@ fn run_quads<'a>(
     GlyphRunQuads {
         glyphs,
         entries: &run.1,
-        texel: renderer.text_glyph_atlas.texel(),
+        texel: renderer.text.glyph_atlas.texel(),
         bounds: GlyphRunBounds::of(run.0),
     }
 }
@@ -163,10 +164,10 @@ fn draw_queued(renderer: &mut GpuRenderer, commands: &[GlyphDrawCmd]) -> wgpu::T
 }
 
 fn whiten_atlas(renderer: &GpuRenderer) {
-    let size = renderer.text_glyph_atlas.size();
+    let size = renderer.text.glyph_atlas.size();
     WgpuFrameGraphExecutor::new().upload_texture(
         &renderer.queue,
-        renderer.text_glyph_atlas.texture.as_image_copy(),
+        renderer.text.glyph_atlas.texture.as_image_copy(),
         &vec![255; (size * size) as usize],
         wgpu::TexelCopyBufferLayout {
             offset: 0,
@@ -208,11 +209,11 @@ fn assert_white_columns(
 #[test]
 fn queued_glyph_draw_keeps_its_atlas_after_growth() {
     let (_lock, mut renderer) = test_renderer();
-    let size = renderer.text_glyph_atlas.size();
+    let size = renderer.text.glyph_atlas.size();
     whiten_atlas(&renderer);
     let mut commands = Vec::new();
     queue_glyph(&mut renderer, 1, 0.0, &mut commands);
-    renderer.text_glyph_atlas.reset(
+    renderer.text.glyph_atlas.reset(
         &renderer.device,
         &renderer.image_bind_group_layout,
         GlyphSamplers {
@@ -220,7 +221,7 @@ fn queued_glyph_draw_keeps_its_atlas_after_growth() {
             linear: &renderer.image_linear_sampler,
         },
     );
-    assert_eq!(renderer.text_glyph_atlas.size(), size * 2);
+    assert_eq!(renderer.text.glyph_atlas.size(), size * 2);
     queue_glyph(&mut renderer, 2, 4.0, &mut commands);
     let target = draw_queued(&mut renderer, &commands);
     assert_white_columns(
@@ -235,16 +236,21 @@ fn queued_glyph_draw_keeps_its_atlas_after_growth() {
 fn queued_glyph_draw_keeps_its_quads_after_cache_eviction() {
     let (_lock, mut renderer) = test_renderer();
     whiten_atlas(&renderer);
-    renderer.text_glyph_gpu_run_cache = BoundedLruCache::with_capacity_at_least_one(1);
+    renderer.text.glyph_gpu_run_cache = BoundedLruCache::with_capacity_at_least_one(1);
     let mut commands = Vec::new();
     queue_glyph(&mut renderer, 1, 0.0, &mut commands);
     let moved = test_run(4);
     let glyphs = run_glyphs(&moved);
     let quads = run_quads(&renderer, &glyphs, &moved);
-    assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(2), quads));
+    assert!(renderer.text.ensure_retained_text_glyph_run(
+        TextGlyphRunCacheKey(2),
+        quads,
+        &renderer.device
+    ));
     assert!(
         renderer
-            .text_glyph_gpu_run_cache
+            .text
+            .glyph_gpu_run_cache
             .peek(&TextGlyphRunCacheKey(1))
             .is_none()
     );
@@ -271,7 +277,7 @@ fn retained_glyph_runs_draw_together_and_again_on_later_frames() {
         |x| x < 2 || (4..6).contains(&x),
         "both runs",
     );
-    renderer.text_glyph_run_arena.begin_frame();
+    renderer.text.glyph_run_arena.begin_frame();
     let mut second = Vec::new();
     queue_glyph(&mut renderer, 2, 4.0, &mut second);
     let target = draw_queued(&mut renderer, &second);
@@ -380,7 +386,7 @@ fn a_retained_glyph_run_under_a_turn_adds_its_raster_origin_before_the_turn() {
 #[test]
 fn the_glyph_atlas_filters_only_glyphs_a_transform_turns() {
     let (_lock, renderer) = test_renderer();
-    let atlas = &renderer.text_glyph_atlas;
+    let atlas = &renderer.text.glyph_atlas;
     assert!(Rc::ptr_eq(
         &atlas.bind_group(SegmentTransform::IDENTITY),
         &atlas.texel_bind_group
@@ -414,40 +420,45 @@ fn a_glyph_run_no_frame_draws_leaves_the_cpu_cache() {
         bounds: GlyphRunBounds::of(std::iter::empty()),
         atlas_entries: None,
         atlas_generation: 0,
-        last_frame: Cell::new(renderer.text_glyph_run_frame),
+        last_frame: Cell::new(renderer.text.glyph_run_frame),
     };
     let idle = run(&renderer);
     renderer
-        .text_glyph_run_cache
+        .text
+        .glyph_run_cache
         .put(TextGlyphRunCacheKey(1), idle);
     let drawn = run(&renderer);
     renderer
-        .text_glyph_run_cache
+        .text
+        .glyph_run_cache
         .put(TextGlyphRunCacheKey(2), drawn);
     for _ in 0..TEXT_GLYPH_RUN_IDLE_FRAMES {
-        renderer.begin_text_glyph_run_frame();
-        let frame = renderer.text_glyph_run_frame;
-        if let Some(drawn) = renderer.text_glyph_run_cache.get(&TextGlyphRunCacheKey(2)) {
+        renderer.text.begin_text_glyph_run_frame();
+        let frame = renderer.text.glyph_run_frame;
+        if let Some(drawn) = renderer.text.glyph_run_cache.get(&TextGlyphRunCacheKey(2)) {
             drawn.last_frame.set(frame);
         }
     }
     assert!(
         renderer
-            .text_glyph_run_cache
+            .text
+            .glyph_run_cache
             .peek(&TextGlyphRunCacheKey(1))
             .is_some()
     );
-    renderer.begin_text_glyph_run_frame();
+    renderer.text.begin_text_glyph_run_frame();
     assert!(
         renderer
-            .text_glyph_run_cache
+            .text
+            .glyph_run_cache
             .peek(&TextGlyphRunCacheKey(1))
             .is_none(),
         "a run no frame drew leaves after its idle frames"
     );
     assert!(
         renderer
-            .text_glyph_run_cache
+            .text
+            .glyph_run_cache
             .peek(&TextGlyphRunCacheKey(2))
             .is_some(),
         "a run drawn every frame stays"
@@ -460,33 +471,45 @@ fn a_retained_run_no_frame_draws_gives_its_quads_back() {
     let run = test_run(0);
     let glyphs = run_glyphs(&run);
     let quads = run_quads(&renderer, &glyphs, &run);
-    assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(1), quads));
-    assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(2), quads));
+    assert!(renderer.text.ensure_retained_text_glyph_run(
+        TextGlyphRunCacheKey(1),
+        quads,
+        &renderer.device
+    ));
+    assert!(renderer.text.ensure_retained_text_glyph_run(
+        TextGlyphRunCacheKey(2),
+        quads,
+        &renderer.device
+    ));
     for _ in 0..TEXT_GLYPH_GPU_RUN_IDLE_FRAMES {
-        renderer.begin_text_glyph_run_frame();
+        renderer.text.begin_text_glyph_run_frame();
         assert!(
             renderer
+                .text
                 .retained_text_glyph_run(TextGlyphRunCacheKey(2))
                 .is_some()
         );
     }
     assert!(
         renderer
-            .text_glyph_gpu_run_cache
+            .text
+            .glyph_gpu_run_cache
             .peek(&TextGlyphRunCacheKey(1))
             .is_some()
     );
-    renderer.begin_text_glyph_run_frame();
+    renderer.text.begin_text_glyph_run_frame();
     assert!(
         renderer
-            .text_glyph_gpu_run_cache
+            .text
+            .glyph_gpu_run_cache
             .peek(&TextGlyphRunCacheKey(1))
             .is_none(),
         "an idle run leaves after its idle frames"
     );
     assert!(
         renderer
-            .text_glyph_gpu_run_cache
+            .text
+            .glyph_gpu_run_cache
             .peek(&TextGlyphRunCacheKey(2))
             .is_some()
     );
@@ -495,8 +518,8 @@ fn a_retained_run_no_frame_draws_gives_its_quads_back() {
 #[test]
 fn consecutive_shared_glyph_quads_draw_as_one_until_a_state_changes() {
     let (_lock, mut renderer) = test_renderer();
-    let texel = Rc::clone(&renderer.text_glyph_atlas.texel_bind_group);
-    let filtered = Rc::clone(&renderer.text_glyph_atlas.filtered_bind_group);
+    let texel = Rc::clone(&renderer.text.glyph_atlas.texel_bind_group);
+    let filtered = Rc::clone(&renderer.text.glyph_atlas.filtered_bind_group);
     let full = (0, 0, 8, 8);
     let half = (0, 0, 4, 8);
     let plain = GlyphQuads::Plain;
@@ -624,7 +647,7 @@ fn draw_scene(renderer: &mut GpuRenderer, scene: &CompositorScene) -> (Vec<u8>, 
     let view = target.create_view(&Default::default());
     renderer.viewport_uniforms.begin_frame();
     renderer.run_store.begin_frame(false);
-    renderer.text_glyph_run_arena.begin_frame();
+    renderer.text.glyph_run_arena.begin_frame();
     renderer.frame_stats.draw_calls.set(0);
     let segments = [PassSegment {
         scene,
@@ -800,7 +823,7 @@ fn a_runs_quads_are_derived_from_its_glyphs_and_atlas_entries() {
     let run = (glyphs, entries);
     let glyphs = run_glyphs(&run);
     let quads = run_quads(&renderer, &glyphs, &run);
-    let texel = renderer.text_glyph_atlas.texel();
+    let texel = renderer.text.glyph_atlas.texel();
 
     let derived: Vec<_> = quads.iter().collect();
 
@@ -898,7 +921,7 @@ fn a_glyph_placed_before_the_atlas_fills_reaches_the_atlas_its_draws_bind() {
     run.1 = [placed];
     let mut commands = Vec::new();
     queue_run(&mut renderer, 1, 0.0, &run, &mut commands);
-    let side = renderer.text_glyph_atlas.size() as usize;
+    let side = renderer.text.glyph_atlas.size() as usize;
     assert!(
         renderer
             .glyph_atlas_entry_for(&solid_glyph(2, side))
