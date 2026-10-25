@@ -1,8 +1,9 @@
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
-# Composition, layout and drawing run on the main task. The demo's deepest
-# use of it was about 22 KB, and every KB more is one less for the heap.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
+# Composition, layout and drawing run on the main task. The demo's busiest
+# screen (the `workload` feature) used about 22.5 KB of it and the demo about
+# 18 KB; every KB more is one less for the heap.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=28672
 CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
 CONFIG_FREERTOS_IDLE_TASK_STACKSIZE=4096
 CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=8192

@@ -163,8 +163,9 @@ impl Wake {
 /// [`NoTouch`] stands for a display without one.
 ///
 /// The calling task becomes the UI thread. Its stack holds composition and
-/// layout, so give it at least 32 KB (`CONFIG_ESP_MAIN_TASK_STACK_SIZE` for
-/// the main task). An `esp_timer` wakes the task at each frame or timed
+/// layout, so give it at least 28 KB (`CONFIG_ESP_MAIN_TASK_STACK_SIZE` for
+/// the main task); the stats line logged every 5 s tells the bytes of it that
+/// the run never used. An `esp_timer` wakes the task at each frame or timed
 /// event, so frame timing does not depend on `CONFIG_FREERTOS_HZ`.
 pub fn run(
     panel: Panel<'_>,

@@ -137,9 +137,10 @@ RGB565 buffers the panel reads by DMA. The default, 8 rows, takes 25 KB on a
 ## Run loop
 
 The calling task becomes the UI thread. Composition and layout run on its
-stack, so give it at least 32 KB (`CONFIG_ESP_MAIN_TASK_STACK_SIZE` for the
-main task). An `esp_timer` wakes the task at each frame or timed event, so
-frame timing does not depend on `CONFIG_FREERTOS_HZ`.
+stack, so give it at least 28 KB (`CONFIG_ESP_MAIN_TASK_STACK_SIZE` for the
+main task). The stats line the loop logs every 5 s tells the bytes of it that
+the run never used. An `esp_timer` wakes the task at each frame or timed
+event, so frame timing does not depend on `CONFIG_FREERTOS_HZ`.
 
 While frames take longer than the frame interval the loop has nothing to wait
 for. A loop that never blocks starves the idle task of its core, and ESP-IDF's
@@ -230,8 +231,8 @@ The demo's composition takes about 150 KB of heap, and a text takes four
 bytes a pixel of its rectangle while it draws. A chip without PSRAM, such as
 the classic ESP32 with about 300 KB of heap, runs the demo with
 `CONFIG_FREERTOS_UNICORE=y` (the second core's idle and IPC tasks cost
-20 KB) and 8-row strips. The main task's 32 KB stack suits both chips: the
-demo's deepest use of it was about 22 KB.
+20 KB) and 8-row strips. The main task's 28 KB stack suits both chips: the
+demo's busiest screen used about 22.5 KB of it, the demo about 18 KB.
 
 ## Thread-local lookups
 
