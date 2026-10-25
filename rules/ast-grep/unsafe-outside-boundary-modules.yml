@@ -23,6 +23,7 @@ ignores:
   - crates/cranpose-audio/src/ring.rs
   - crates/cranpose-macros/src/branch_groups.rs
   - crates/cranpose-macros/src/tests/branch_groups_tests.rs
+  - crates/cranpose-platform/esp-idf/src/memory.rs
   - crates/cranpose-platform/esp-idf/src/panel.rs
   - crates/cranpose-platform/esp-idf/src/small_alloc.rs
   - crates/cranpose-platform/esp-idf/src/touch.rs
