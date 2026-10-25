@@ -319,9 +319,6 @@ fn a_drag_polls_from_the_anchor_the_press_recorded() {
         Some(PhysicalPosition::new(1.0, 2.0))
     );
 }
-
-#[cfg(feature = "robot")]
-use cranpose_app_shell::FrameUpdateResult;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 
 use super::{
@@ -344,18 +341,6 @@ use super::{
     primary_surface_redraw_drives_app, primary_viewport_for_surface_size,
     primary_window_should_show, recovered_native_window_drag_start_pointer, scroll_frame_request,
     should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw,
-};
-#[cfg(feature = "robot")]
-use super::{
-    IdleWaitTimeout, ROBOT_IDLE_MIN_ITERATIONS, ROBOT_IDLE_PRESENT_TIMEOUT,
-    ROBOT_IDLE_STARVATION_CEILING, ROBOT_IDLE_TIMEOUT, ROBOT_PARKED_COMMAND_POLL_INTERVAL,
-    ROBOT_PRESENT_WAIT_TIMEOUT, bound_park_for_robot,
-};
-#[cfg(feature = "robot")]
-use super::{
-    RobotController, parse_robot_capture_scale, resolve_robot_screenshot_params,
-    resolve_robot_screenshot_params_with_scale, robot_query_visual_dirty,
-    robot_visible_present_target, robot_visible_pump_present_target,
 };
 use crate::{app_launcher::AppSettings, wgpu_surface::surface_present_required};
 
@@ -415,26 +400,6 @@ fn native_window_position_only_options_change_does_not_require_content_sync() {
     ));
     assert!(!native_window_options_change_is_position_only(
         &previous, &retitled
-    ));
-}
-
-#[cfg(feature = "robot")]
-#[test]
-fn desktop_robot_queries_schedule_presentation_for_drained_visual_updates() {
-    assert!(robot_query_visual_dirty(
-        FrameUpdateResult {
-            visual_changed: true,
-            ..FrameUpdateResult::default()
-        },
-        false,
-    ));
-    assert!(robot_query_visual_dirty(FrameUpdateResult::default(), true,));
-    assert!(!robot_query_visual_dirty(
-        FrameUpdateResult {
-            structure_changed: true,
-            ..FrameUpdateResult::default()
-        },
-        false,
     ));
 }
 
@@ -512,230 +477,6 @@ fn free_running_loop_never_parks_on_a_frame_it_already_asked_for() {
         true,
         true
     ));
-}
-
-#[cfg(feature = "robot")]
-#[test]
-fn a_driven_run_never_parks_longer_than_its_command_poll() {
-    let now = Instant::now();
-    let far = now + Duration::from_secs(5);
-    let soon = now + Duration::from_millis(1);
-    let bound = now + ROBOT_PARKED_COMMAND_POLL_INTERVAL;
-
-    assert_eq!(
-        bound_park_for_robot(ControlFlow::Wait, true, now),
-        ControlFlow::WaitUntil(bound)
-    );
-    assert_eq!(
-        bound_park_for_robot(ControlFlow::WaitUntil(far), true, now),
-        ControlFlow::WaitUntil(bound)
-    );
-    assert_eq!(
-        bound_park_for_robot(ControlFlow::WaitUntil(soon), true, now),
-        ControlFlow::WaitUntil(soon)
-    );
-    assert_eq!(
-        bound_park_for_robot(ControlFlow::Poll, true, now),
-        ControlFlow::Poll
-    );
-    assert_eq!(
-        bound_park_for_robot(ControlFlow::Wait, false, now),
-        ControlFlow::Wait
-    );
-    assert_eq!(
-        bound_park_for_robot(ControlFlow::WaitUntil(far), false, now),
-        ControlFlow::WaitUntil(far)
-    );
-}
-
-#[cfg(feature = "robot")]
-#[test]
-fn an_idle_robot_lets_the_loop_park() {
-    let (mut controller, robot) = RobotController::new(|| {});
-
-    assert!(!controller.awaiting_progress());
-
-    robot
-        .command_sender()
-        .send(crate::robot::RobotCommand::PumpFrames { count: 1 })
-        .expect("robot command channel should remain open");
-    assert!(controller.awaiting_progress());
-    assert!(matches!(
-        controller.next_command(),
-        Some(crate::robot::RobotCommand::PumpFrames { count: 1 })
-    ));
-    assert!(!controller.awaiting_progress());
-
-    controller.start_idle_wait();
-    assert!(controller.awaiting_progress());
-    controller.finish_idle_wait();
-    assert!(!controller.awaiting_progress());
-
-    controller.begin_pump_present_wait(7);
-    assert!(controller.awaiting_progress());
-    controller.finish_pump_present_wait();
-    assert!(!controller.awaiting_progress());
-
-    controller.begin_synthetic_primary_gesture();
-    assert!(controller.awaiting_progress());
-    controller.end_synthetic_primary_gesture();
-    assert!(!controller.awaiting_progress());
-}
-
-#[cfg(feature = "robot")]
-#[test]
-fn robot_idle_wait_times_out_once_the_app_keeps_the_loop_busy() {
-    let (mut controller, _robot) = RobotController::new(|| {});
-    let started_at = Instant::now();
-
-    controller.start_idle_wait_at(started_at);
-    controller.idle_iterations = ROBOT_IDLE_MIN_ITERATIONS;
-
-    assert_eq!(
-        controller.idle_wait_timeout(started_at + ROBOT_IDLE_TIMEOUT / 2),
-        None
-    );
-    assert_eq!(
-        controller.idle_wait_timeout(started_at + ROBOT_IDLE_TIMEOUT),
-        Some(IdleWaitTimeout::AppNotConverging)
-    );
-    controller.finish_idle_wait();
-    assert_eq!(
-        controller.idle_wait_timeout(started_at + ROBOT_IDLE_TIMEOUT * 2),
-        None
-    );
-}
-
-#[cfg(feature = "robot")]
-#[test]
-fn robot_idle_wait_does_not_blame_the_app_for_a_starved_host() {
-    let (mut controller, _robot) = RobotController::new(|| {});
-    let started_at = Instant::now();
-
-    controller.start_idle_wait_at(started_at);
-    controller.idle_iterations = 1;
-
-    assert_eq!(
-        controller.idle_wait_timeout(started_at + ROBOT_IDLE_TIMEOUT),
-        None
-    );
-    assert_eq!(
-        controller.idle_wait_timeout(
-            started_at + ROBOT_IDLE_STARVATION_CEILING - Duration::from_millis(1)
-        ),
-        None
-    );
-}
-
-#[cfg(feature = "robot")]
-#[test]
-fn robot_idle_wait_still_gives_up_on_a_permanently_wedged_host() {
-    let (mut controller, _robot) = RobotController::new(|| {});
-    let started_at = Instant::now();
-
-    controller.start_idle_wait_at(started_at);
-    controller.idle_iterations = 1;
-
-    assert_eq!(
-        controller.idle_wait_timeout(started_at + ROBOT_IDLE_STARVATION_CEILING),
-        Some(IdleWaitTimeout::HostStarved)
-    );
-}
-
-#[cfg(feature = "robot")]
-#[test]
-fn robot_idle_wait_does_not_blame_the_app_for_a_slow_present() {
-    let (mut controller, _robot) = RobotController::new(|| {});
-    let started_at = Instant::now();
-
-    controller.start_idle_wait_at(started_at);
-    controller.idle_iterations = 1_280_577;
-    controller.observe_idle_present_block(true, started_at);
-
-    assert_eq!(
-        controller.idle_wait_timeout(started_at + ROBOT_IDLE_TIMEOUT),
-        None
-    );
-    assert_eq!(
-        controller
-            .idle_wait_timeout(started_at + ROBOT_IDLE_PRESENT_TIMEOUT - Duration::from_millis(1)),
-        None
-    );
-}
-
-#[cfg(feature = "robot")]
-#[test]
-fn robot_idle_wait_blames_the_surface_when_a_present_never_lands() {
-    let (mut controller, _robot) = RobotController::new(|| {});
-    let started_at = Instant::now();
-
-    controller.start_idle_wait_at(started_at);
-    controller.idle_iterations = 1_280_577;
-    controller.observe_idle_present_block(true, started_at);
-
-    assert_eq!(
-        controller.idle_wait_timeout(started_at + ROBOT_IDLE_PRESENT_TIMEOUT),
-        Some(IdleWaitTimeout::SurfaceNotPresenting)
-    );
-}
-
-#[cfg(feature = "robot")]
-#[test]
-fn robot_idle_wait_still_blames_an_app_that_churns_while_a_present_is_outstanding() {
-    let (mut controller, _robot) = RobotController::new(|| {});
-    let started_at = Instant::now();
-
-    controller.start_idle_wait_at(started_at);
-    controller.idle_iterations = ROBOT_IDLE_MIN_ITERATIONS;
-    controller.observe_idle_present_block(true, started_at);
-    controller.observe_idle_present_block(false, started_at);
-
-    assert_eq!(
-        controller.idle_wait_timeout(started_at + ROBOT_IDLE_TIMEOUT),
-        Some(IdleWaitTimeout::AppNotConverging)
-    );
-}
-
-#[cfg(feature = "robot")]
-#[test]
-fn a_present_wait_gives_up_when_the_surface_never_presents() {
-    let (mut controller, _robot) = RobotController::new(|| {});
-    let started_at = Instant::now();
-
-    controller.begin_pump_present_wait_at(11, started_at);
-    assert!(!controller.pump_present_wait_timed_out(started_at));
-    assert!(!controller.pump_present_wait_timed_out(started_at + ROBOT_PRESENT_WAIT_TIMEOUT / 2));
-    assert!(controller.pump_present_wait_timed_out(started_at + ROBOT_PRESENT_WAIT_TIMEOUT));
-}
-
-#[cfg(feature = "robot")]
-#[test]
-fn a_present_that_arrives_clears_the_wait_deadline() {
-    let (mut controller, _robot) = RobotController::new(|| {});
-    let started_at = Instant::now();
-
-    controller.begin_pump_present_wait_at(11, started_at);
-    controller.finish_pump_present_wait();
-
-    assert!(controller.waiting_for_pump_present_generation.is_none());
-    assert!(
-        !controller.pump_present_wait_timed_out(started_at + ROBOT_PRESENT_WAIT_TIMEOUT * 4),
-        "a finished wait must not report a timeout on the next loop turn"
-    );
-}
-
-#[cfg(feature = "robot")]
-#[test]
-fn each_presented_scroll_step_restarts_the_wait_deadline() {
-    let (mut controller, _robot) = RobotController::new(|| {});
-    let started_at = Instant::now();
-
-    controller.begin_pump_present_wait_at(11, started_at);
-    let next_step = started_at + ROBOT_PRESENT_WAIT_TIMEOUT - Duration::from_millis(1);
-    controller.begin_pump_present_wait_at(12, next_step);
-
-    assert!(!controller.pump_present_wait_timed_out(next_step + Duration::from_millis(2)));
-    assert!(controller.pump_present_wait_timed_out(next_step + ROBOT_PRESENT_WAIT_TIMEOUT));
 }
 
 #[test]
@@ -1024,27 +765,6 @@ fn hidden_primary_declaration_host_updates_without_redraw_event() {
     assert!(!primary_declaration_host_needs_direct_update(
         false, false, false, false
     ));
-}
-
-#[cfg(feature = "robot")]
-#[test]
-fn visible_robot_wait_requires_present_after_visual_mutation() {
-    assert_eq!(robot_visible_present_target(true, false, true, 7), Some(8));
-    assert_eq!(robot_visible_present_target(true, false, false, 7), None);
-    assert_eq!(robot_visible_present_target(true, true, true, 7), None);
-    assert_eq!(robot_visible_present_target(false, false, true, 7), None);
-}
-
-#[cfg(feature = "robot")]
-#[test]
-fn visible_robot_frame_pump_waits_for_presented_frames() {
-    assert_eq!(
-        robot_visible_pump_present_target(true, false, 3, 11),
-        Some(14)
-    );
-    assert_eq!(robot_visible_pump_present_target(true, false, 0, 11), None);
-    assert_eq!(robot_visible_pump_present_target(true, true, 3, 11), None);
-    assert_eq!(robot_visible_pump_present_target(false, false, 3, 11), None);
 }
 
 #[test]
@@ -1568,49 +1288,6 @@ fn inferred_native_drag_requires_pointer_over_surface() {
     ));
 }
 
-#[cfg(feature = "robot")]
-#[test]
-fn robot_controller_tracks_synthetic_primary_button_lifetime() {
-    let (mut controller, _robot) = RobotController::new(|| {});
-
-    assert!(!controller.synthetic_primary_down());
-    controller.begin_synthetic_primary_gesture();
-    assert!(controller.synthetic_primary_down());
-    controller.end_synthetic_primary_gesture();
-    assert!(!controller.synthetic_primary_down());
-}
-
-#[cfg(feature = "robot")]
-#[test]
-fn robot_controller_stages_commands_during_continuous_frame_wakes() {
-    let (mut controller, robot) = RobotController::new(|| {});
-    robot
-        .command_sender()
-        .send(crate::robot::RobotCommand::PumpFrames { count: 2 })
-        .expect("robot command channel should remain open");
-
-    assert!(controller.stage_pending_command());
-    assert!(matches!(
-        controller.next_command(),
-        Some(crate::robot::RobotCommand::PumpFrames { count: 2 })
-    ));
-    assert!(!controller.stage_pending_command());
-}
-
-#[cfg(feature = "robot")]
-#[test]
-fn robot_screenshot_prefers_logical_viewport_size() {
-    let resolved = resolve_robot_screenshot_params((1600, 1200), Some((800.0, 600.0)));
-    assert_eq!(resolved, (800, 600, 1.0));
-}
-
-#[cfg(feature = "robot")]
-#[test]
-fn robot_screenshot_uses_ceil_on_fractional_logical_size() {
-    let resolved = resolve_robot_screenshot_params((0, 0), Some((801.2, 601.3)));
-    assert_eq!(resolved, (802, 602, 1.0));
-}
-
 #[test]
 fn headless_primary_viewport_uses_requested_launcher_size() {
     let settings = AppSettings {
@@ -1637,36 +1314,6 @@ fn visible_primary_viewport_uses_actual_surface_size() {
     let viewport = primary_viewport_for_surface_size(&settings, 1601, 901, 2.0);
 
     assert_eq!(viewport, (800.5, 450.5));
-}
-
-#[cfg(feature = "robot")]
-#[test]
-fn robot_screenshot_falls_back_to_physical_buffer_when_layout_is_missing() {
-    let resolved = resolve_robot_screenshot_params((1600, 1200), None);
-    assert_eq!(resolved, (1600, 1200, 1.0));
-}
-
-#[cfg(feature = "robot")]
-#[test]
-fn robot_screenshot_clamps_to_non_zero_target() {
-    let resolved = resolve_robot_screenshot_params((0, 0), Some((10.0, 20.0)));
-    assert_eq!(resolved, (10, 20, 1.0));
-}
-
-#[cfg(feature = "robot")]
-#[test]
-fn robot_screenshot_honors_capture_scale() {
-    let resolved = resolve_robot_screenshot_params_with_scale((0, 0), Some((100.0, 50.0)), 2.0);
-    assert_eq!(resolved, (200, 100, 2.0));
-
-    assert_eq!(parse_robot_capture_scale(Some("2")), 2.0);
-    assert_eq!(
-        parse_robot_capture_scale(Some("999")),
-        1.0,
-        "out-of-range scale is ignored"
-    );
-    assert_eq!(parse_robot_capture_scale(Some("junk")), 1.0);
-    assert_eq!(parse_robot_capture_scale(None), 1.0);
 }
 
 #[test]

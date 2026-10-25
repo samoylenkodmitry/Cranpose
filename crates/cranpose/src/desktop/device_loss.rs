@@ -75,7 +75,7 @@ impl App {
             self.recover_lost_device(event_loop);
         }
         if let Some(controller) = &self.robot_controller {
-            let _ = controller.tx.send(crate::robot::RobotResponse::Ok);
+            controller.respond(crate::robot::RobotResponse::Ok);
         }
     }
 

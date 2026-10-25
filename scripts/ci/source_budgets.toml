@@ -3,7 +3,7 @@
 # removes the cause (`just source-budgets-lower`).
 
 [counts]
-too_many_arguments = 88
+too_many_arguments = 87
 private_docs = 14101
 for_test_fns = 40
 cranpose_env_names = 78
@@ -105,7 +105,7 @@ limit = 1000
 "crates/cranpose/src/android/event_loop.rs" = 3073
 "crates/cranpose/src/app_launcher.rs" = 1498
 "crates/cranpose/src/desktop/accessibility.rs" = 1237
-"crates/cranpose/src/desktop/event_loop.rs" = 7614
+"crates/cranpose/src/desktop/event_loop.rs" = 6345
 "crates/cranpose/src/embed.rs" = 1016
 "crates/cranpose/src/ios/accessibility.rs" = 1143
 "crates/cranpose/src/native_window.rs" = 1059
