@@ -97,10 +97,10 @@ fn an_animation_asks_for_the_next_frame() {
 #[test]
 fn a_delay_wakes_a_sleeping_host_and_its_change_presents() {
     let mut framebuffer = Framebuffer::new(40, 30, 1.0, SystemTheme::Light, &[], || {
-        let done = cranpose_core::rememberMutableStateOf(|| false);
-        cranpose_core::LaunchedEffectAsync((), move |_| {
-            std::boxed::Box::pin(async move {
-                cranpose_core::delay(Duration::from_millis(20)).await;
+        let done = rememberMutableStateOf(|| false);
+        LaunchedEffectAsync((), move |_| {
+            Box::pin(async move {
+                delay(Duration::from_millis(20)).await;
                 done.set(true);
             })
         });
@@ -163,7 +163,7 @@ fn text_framebuffer() -> Framebuffer {
                     Modifier::empty(),
                     TextStyle {
                         span_style: SpanStyle {
-                            font_size: cranpose::text::TextUnit::Sp(24.0),
+                            font_size: text::TextUnit::Sp(24.0),
                             ..SpanStyle::default()
                         },
                         ..TextStyle::default()

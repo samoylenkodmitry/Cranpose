@@ -16,7 +16,7 @@ use cranpose_core::{LaunchedEffectAsync, MutableState, rememberMutableStateOf};
 fn ticker(period: Duration) -> MutableState<u32> {
     let count = rememberMutableStateOf(|| 0u32);
     LaunchedEffectAsync(period, move |scope| {
-        std::boxed::Box::pin(async move {
+        Box::pin(async move {
             let clock = scope.runtime().frame_clock();
             let start = clock.next_frame().await;
             let period = period.as_nanos().max(1);
@@ -48,7 +48,7 @@ fn Reading(label: &'static str, period: Duration, style: TextStyle) {
 fn ScrollingRows(style: TextStyle) {
     let state = rememberLazyListState();
     LaunchedEffectAsync((), move |scope| {
-        std::boxed::Box::pin(async move {
+        Box::pin(async move {
             let clock = scope.runtime().frame_clock();
             loop {
                 clock.next_frame().await;
