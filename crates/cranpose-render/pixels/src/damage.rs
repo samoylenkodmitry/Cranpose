@@ -288,20 +288,23 @@ pub(crate) fn changed_areas(
     let (common_start, common_end) = common_ends(old, new);
     let old_changed = &old_items[common_start..old_items.len() - common_end];
     let new_changed = &new_items[common_start..new_items.len() - common_end];
-    let add_bounds = |areas: &mut Vec<ClipBounds>, scene: &RasterScene, item: RenderItem| {
-        if let Some(area) = scene.item_bounds(item, window) {
-            add_area(areas, area);
+    // Items paired in order draw in the same order in both scenes, so a
+    // pixel no changed pair and no unpaired item reaches keeps its colour.
+    let paired = old_changed.len().min(new_changed.len());
+    add_changed_pairs(
+        old,
+        &old_changed[..paired],
+        new,
+        &new_changed[..paired],
+        window,
+        areas,
+    );
+    for (scene, unpaired) in [(old, &old_changed[paired..]), (new, &new_changed[paired..])] {
+        for &item in unpaired {
+            if let Some(area) = scene.item_bounds(item, window) {
+                add_area(areas, area);
+            }
         }
-    };
-    if old_changed.len() != new_changed.len() {
-        old_changed
-            .iter()
-            .for_each(|item| add_bounds(areas, old, *item));
-        new_changed
-            .iter()
-            .for_each(|item| add_bounds(areas, new, *item));
-    } else {
-        add_changed_pairs(old, old_changed, new, new_changed, window, areas);
     }
     merge_areas(areas);
 }
@@ -338,12 +341,26 @@ pub(crate) fn add_changed_pairs(
     }
 }
 
-/// Joins `areas` into the one around them all when they are too many to draw
-/// one by one.
+fn pixels(area: ClipBounds) -> i64 {
+    i64::from(area.max_x - area.min_x) * i64::from(area.max_y - area.min_y)
+}
+
+// Joins `areas` while they are too many to draw one by one, each time the
+// two whose join takes in the fewest pixels that neither covers, so that
+// changes far apart do not draw the still pixels between them again.
 pub(crate) fn merge_areas(areas: &mut Vec<ClipBounds>) {
-    if areas.len() > MAX_AREAS {
-        let around = areas.iter().copied().reduce(union);
-        areas.clear();
-        areas.extend(around);
+    while areas.len() > MAX_AREAS {
+        let mut cheapest = (0, 1, i64::MAX);
+        for (first, &a) in areas.iter().enumerate() {
+            for (second, &b) in areas.iter().enumerate().skip(first + 1) {
+                let extra = pixels(union(a, b)) - pixels(a) - pixels(b);
+                if extra < cheapest.2 {
+                    cheapest = (first, second, extra);
+                }
+            }
+        }
+        let (first, second, _) = cheapest;
+        let joined = union(areas.swap_remove(second), areas.swap_remove(first));
+        add_area(areas, joined);
     }
 }

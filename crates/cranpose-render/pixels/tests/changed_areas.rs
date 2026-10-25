@@ -587,3 +587,141 @@ fn a_growing_bar_changes_only_the_strip_at_its_end() {
         }]
     );
 }
+
+#[composable]
+fn SpreadChanges(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    Box(
+        Modifier::empty().fill_max_size(),
+        BoxSpec::default(),
+        move || {
+            Box(
+                Modifier::empty()
+                    .offset(10.0, 10.0)
+                    .width(20.0)
+                    .height(10.0)
+                    .background(color(step.value(), 1)),
+                BoxSpec::default(),
+                || {},
+            );
+            for index in 0..10u32 {
+                cranpose_core::with_key(&index, || {
+                    Box(
+                        Modifier::empty()
+                            .offset(10.0 + index as f32 * 22.0, 160.0)
+                            .width(12.0)
+                            .height(10.0)
+                            .background(color(step.value(), index + 2)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                });
+            }
+        },
+    );
+}
+
+#[test]
+fn many_changes_far_apart_leave_the_still_pixels_between_them() {
+    let captured: Step = Rc::default();
+    let content = Rc::clone(&captured);
+    let mut shell = AppShell::new_with_size(
+        PixelsRenderer::new(),
+        location_key(file!(), line!(), column!()),
+        move || SpreadChanges(Rc::clone(&content)),
+        (WIDTH, HEIGHT),
+        (WIDTH as f32, HEIGHT as f32),
+    );
+    let mut picture = Picture::default();
+    let mut areas = Vec::new();
+    shell.update();
+    shell.primary().with_renderer(|renderer| {
+        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+    });
+
+    let step = (*captured.borrow()).expect("the composition remembered the step");
+    step.set(1);
+    shell.update();
+    shell.primary().with_renderer(|renderer| {
+        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+    });
+    assert!(
+        areas
+            .iter()
+            .all(|area| area.y + area.height <= 20 || area.y >= 160),
+        "eleven boxes change at the top and the bottom; the rows between them stay: {areas:?}"
+    );
+}
+
+#[composable]
+fn GrowingList(captured: Step) {
+    let step = rememberMutableStateOf(|| 0u32);
+    *captured.borrow_mut() = Some(step);
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            Box(
+                Modifier::empty()
+                    .width(40.0)
+                    .height(10.0)
+                    .background(color(step.value(), 1)),
+                BoxSpec::default(),
+                || {},
+            );
+            Box(
+                Modifier::empty()
+                    .width(200.0)
+                    .height(100.0)
+                    .background(Color::WHITE),
+                BoxSpec::default(),
+                || {},
+            );
+            for row in 0..2 + step.value() {
+                cranpose_core::with_key(&row, || {
+                    Box(
+                        Modifier::empty()
+                            .width(30.0)
+                            .height(10.0)
+                            .background(color(row, 3)),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                });
+            }
+        },
+    );
+}
+
+#[test]
+fn a_row_added_below_still_content_leaves_that_content() {
+    let captured: Step = Rc::default();
+    let content = Rc::clone(&captured);
+    let mut shell = AppShell::new_with_size(
+        PixelsRenderer::new(),
+        location_key(file!(), line!(), column!()),
+        move || GrowingList(Rc::clone(&content)),
+        (WIDTH, HEIGHT),
+        (WIDTH as f32, HEIGHT as f32),
+    );
+    let mut picture = Picture::default();
+    let mut areas = Vec::new();
+    shell.update();
+    shell.primary().with_renderer(|renderer| {
+        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+    });
+
+    let step = (*captured.borrow()).expect("the composition remembered the step");
+    step.set(1);
+    shell.update();
+    shell.primary().with_renderer(|renderer| {
+        renderer.update_picture(&mut picture, WIDTH, HEIGHT, 1.0, &mut areas);
+    });
+    assert!(
+        areas
+            .iter()
+            .all(|area| area.y + area.height <= 10 || area.y >= 110),
+        "the top box changes and a row is added; the white box between them stays: {areas:?}"
+    );
+}
