@@ -4,9 +4,6 @@ CONFIG_LV_COLOR_DEPTH_16=y
 # The optimization esp-idf-sys gives ESP-IDF's C code in the demo's release
 # build, -O2. idf.py builds at -Og unless told otherwise.
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
-# The dashboard's objects take more than LVGL's 64 KB pool: LVGL allocates
-# from the ESP-IDF heap, as Cranpose does.
-CONFIG_LV_USE_CLIB_MALLOC=y
 # A frame every 16 ms while something changes, as the demo's 60 Hz.
 CONFIG_LV_DEF_REFR_PERIOD=16
 CONFIG_LV_FONT_MONTSERRAT_12=y

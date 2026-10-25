@@ -49,7 +49,11 @@ static void send(uint8_t command, const void *data, size_t length)
 
 static bool on_transfer_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *event, void *context)
 {
-    on_drawn(drawn_context);
+    if (on_drawn(drawn_context)) {
+        // The SPI driver calls this from a hook that cannot ask for a task
+        // switch, so a task the call woke would wait for the next tick.
+        portYIELD_FROM_ISR();
+    }
     return false;
 }
 

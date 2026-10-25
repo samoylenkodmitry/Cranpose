@@ -36,12 +36,13 @@ static uint64_t sent_bytes;
 static SemaphoreHandle_t flushed;
 static volatile bool flushing;
 
-static void on_transfer_done(void *context)
+static bool on_transfer_done(void *context)
 {
     flushing = false;
     lv_display_flush_ready(display);
     BaseType_t woken = pdFALSE;
     xSemaphoreGiveFromISR(flushed, &woken);
+    return woken == pdTRUE;
 }
 
 // LVGL waits here for the panel to read a strip: blocked, as the other

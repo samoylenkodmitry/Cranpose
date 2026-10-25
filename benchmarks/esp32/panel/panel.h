@@ -4,6 +4,7 @@
 // Cranpose demo's board modules do it: the LVGL and Slint benchmarks draw
 // through it.
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #define PANEL_WIDTH 320
@@ -25,8 +26,9 @@
 #define PANEL_STRIP_BYTES (PANEL_WIDTH * PANEL_STRIP_ROWS * 2)
 
 // Called from the transfer's interrupt when the panel has read the pixels of
-// a panel_draw call.
-typedef void (*panel_drawn_t)(void *context);
+// a panel_draw call. Returns whether it woke a task that should run as soon
+// as the interrupt ends, rather than at the next tick.
+typedef bool (*panel_drawn_t)(void *context);
 
 // Starts the bus and the panel, with its backlight off, and sends it its
 // start-up sequence; `drawn` is told of each transfer that ends.

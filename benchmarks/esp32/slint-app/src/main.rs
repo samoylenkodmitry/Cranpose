@@ -28,7 +28,7 @@ use slint::platform::{
 slint::include_modules!();
 
 unsafe extern "C" {
-    fn panel_open(drawn: extern "C" fn(*mut c_void), context: *mut c_void);
+    fn panel_open(drawn: extern "C" fn(*mut c_void) -> bool, context: *mut c_void);
     fn panel_draw(x1: i32, y1: i32, x2: i32, y2: i32, pixels: *const c_void);
     fn panel_backlight_on();
     fn panel_strip_rows() -> u32;
@@ -74,9 +74,10 @@ struct Strips {
     pixels: usize,
 }
 
-extern "C" fn drawn(done: *mut c_void) {
+extern "C" fn drawn(done: *mut c_void) -> bool {
     let mut woken = 0;
     unsafe { sys::xQueueGiveFromISR(done as sys::QueueHandle_t, &mut woken) };
+    woken != 0
 }
 
 impl Strips {
