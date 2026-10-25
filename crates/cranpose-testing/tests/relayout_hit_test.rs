@@ -9,54 +9,65 @@ use cranpose_core::{MutableState, rememberMutableStateOf};
 use cranpose_testing::{RobotTestRule, TestRenderer, create_headless_robot_test};
 use cranpose_ui::{Box, BoxSpec, Column, ColumnSpec, Modifier, Size, Text, TextStyle};
 
-/// A control of 100 x 50 below a spacer whose height is a state.
-struct ControlBelowSpacer {
+/// A control of 100 x 50 that counts its clicks in `clicks`.
+fn control(clicks: Rc<Cell<u32>>) {
+    Box(
+        Modifier::empty()
+            .size(Size::new(100.0, 50.0))
+            .clickable(move |_| clicks.set(clicks.get() + 1)),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+/// A column of a sibling that reads a state and a [`control`] below it.
+struct ControlBelow<T: Clone + 'static> {
     robot: RobotTestRule<TestRenderer>,
     /// The clicks the control counted.
     clicks: Rc<Cell<u32>>,
-    /// The spacer's height, once composed.
-    height: Rc<Cell<Option<MutableState<f32>>>>,
+    /// The state the sibling reads, once composed.
+    state: Rc<Cell<Option<MutableState<T>>>>,
 }
 
-fn control_below_spacer() -> ControlBelowSpacer {
+fn control_below<T: Clone + PartialEq + 'static>(
+    initial: T,
+    sibling: impl Fn(MutableState<T>) + 'static,
+) -> ControlBelow<T> {
     let clicks = Rc::new(Cell::new(0));
     let counted = Rc::clone(&clicks);
-    let height: Rc<Cell<Option<MutableState<f32>>>> = Rc::default();
-    let installed = Rc::clone(&height);
+    let state: Rc<Cell<Option<MutableState<T>>>> = Rc::default();
+    let installed = Rc::clone(&state);
+    let sibling = Rc::new(sibling);
     let robot = create_headless_robot_test(300, 400, move || {
-        let spacer = rememberMutableStateOf(|| 20.0_f32);
-        installed.set(Some(spacer));
+        let value = rememberMutableStateOf(|| initial.clone());
+        installed.set(Some(value));
         let counted = Rc::clone(&counted);
+        let sibling = Rc::clone(&sibling);
         Column(Modifier::empty(), ColumnSpec::default(), move || {
-            Box(
-                Modifier::empty().size(Size::new(100.0, spacer.get())),
-                BoxSpec::default(),
-                || {},
-            );
-            let counted = Rc::clone(&counted);
-            Box(
-                Modifier::empty()
-                    .size(Size::new(100.0, 50.0))
-                    .clickable(move |_| counted.set(counted.get() + 1)),
-                BoxSpec::default(),
-                || {},
-            );
+            sibling(value);
+            control(Rc::clone(&counted));
         });
     });
-    ControlBelowSpacer {
+    ControlBelow {
         robot,
         clicks,
-        height,
+        state,
     }
 }
 
 #[test]
 fn a_click_follows_a_control_that_a_taller_sibling_pushed_down() {
-    let ControlBelowSpacer {
+    let ControlBelow {
         mut robot,
         clicks,
-        height,
-    } = control_below_spacer();
+        state: height,
+    } = control_below(20.0_f32, |height| {
+        Box(
+            Modifier::empty().size(Size::new(100.0, height.get())),
+            BoxSpec::default(),
+            || {},
+        );
+    });
     robot.wait_for_idle();
     height.get().expect("composed").set(120.0);
     robot.wait_for_idle();
@@ -68,30 +79,17 @@ fn a_click_follows_a_control_that_a_taller_sibling_pushed_down() {
 
 #[test]
 fn a_click_reaches_a_control_after_a_sibling_text_changed() {
-    let clicks = Rc::new(Cell::new(0));
-    let counted = Rc::clone(&clicks);
-    let reading: Rc<Cell<Option<MutableState<u32>>>> = Rc::default();
-    let installed = Rc::clone(&reading);
-    let mut robot = create_headless_robot_test(300, 400, move || {
-        let value = rememberMutableStateOf(|| 10u32);
-        installed.set(Some(value));
-        let counted = Rc::clone(&counted);
-        Column(Modifier::empty(), ColumnSpec::default(), move || {
-            // The text keeps its height, so the control stays where it is.
-            Text(
-                format!("Reading {}", value.get()),
-                Modifier::empty().height(20.0),
-                TextStyle::default(),
-            );
-            let counted = Rc::clone(&counted);
-            Box(
-                Modifier::empty()
-                    .size(Size::new(100.0, 50.0))
-                    .clickable(move |_| counted.set(counted.get() + 1)),
-                BoxSpec::default(),
-                || {},
-            );
-        });
+    let ControlBelow {
+        mut robot,
+        clicks,
+        state: reading,
+    } = control_below(10u32, |value| {
+        // The text keeps its height, so the control stays where it is.
+        Text(
+            format!("Reading {}", value.get()),
+            Modifier::empty().height(20.0),
+            TextStyle::default(),
+        );
     });
     robot.wait_for_idle();
     for next in 11..14 {
@@ -112,18 +110,11 @@ fn a_click_runs_the_handler_of_the_last_composition() {
     let mut robot = create_headless_robot_test(300, 400, move || {
         let use_second = rememberMutableStateOf(|| false);
         installed.set(Some(use_second));
-        let counter = if use_second.get() {
+        control(if use_second.get() {
             Rc::clone(&to_second)
         } else {
             Rc::clone(&to_first)
-        };
-        Box(
-            Modifier::empty()
-                .size(Size::new(100.0, 50.0))
-                .clickable(move |_| counter.set(counter.get() + 1)),
-            BoxSpec::default(),
-            || {},
-        );
+        });
     });
     robot.wait_for_idle();
     robot.click_at(50.0, 25.0);

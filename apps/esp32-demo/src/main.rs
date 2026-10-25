@@ -2,7 +2,11 @@
 
 mod board;
 
-#[cfg(not(any(feature = "text-drawn", feature = "text-composed", feature = "workload")))]
+#[cfg(not(any(
+    feature = "text-drawn",
+    feature = "text-composed",
+    feature = "workload"
+)))]
 use std::time::Duration;
 
 use cranpose::{prelude::*, text::TextUnit};
@@ -63,7 +67,11 @@ fn Pulse() {
 /// `text-drawn` and `text-composed` features show a number that counts up
 /// every frame there instead, as a clock or a sensor reading does, and the
 /// `workload` feature the work of a busier screen.
-#[cfg(not(any(feature = "text-drawn", feature = "text-composed", feature = "workload")))]
+#[cfg(not(any(
+    feature = "text-drawn",
+    feature = "text-composed",
+    feature = "workload"
+)))]
 #[composable]
 fn StatusLine() {
     let seconds = cranpose_core::rememberMutableStateOf(|| 0u32);
