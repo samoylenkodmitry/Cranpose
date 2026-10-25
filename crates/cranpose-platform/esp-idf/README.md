@@ -172,10 +172,10 @@ on the ESP32-S3 waited for code before them.
 | No check of the app image at boot | `sdkconfig.defaults` | the first frame 470 ms (ES3C35P) and 830 ms (E32R35T) sooner |
 
 The demo's bar now reads its animated width while it draws, so a frame
-neither composes nor lays out: it takes 0.67 ms on the ES3C35P and 1.80 ms
+neither composes nor lays out: it takes 0.46 ms on the ES3C35P and 1.40 ms
 on the E32R35T, against 1.14 and 2.21 ms for the same screen in LVGL. With
 the per-frame code in IRAM, the ES3C35P runs its code from flash: the copy to
-PSRAM would cut its frame to 0.49 ms for 190 ms more before the first frame
+PSRAM would cut its frame to 0.39 ms for 180 ms more before the first frame
 and 2.6 MB of the PSRAM.
 
 [`benchmarks/esp32`](../../../benchmarks/esp32) compares the demo with the
