@@ -1,6 +1,6 @@
 use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, Point, ShapeRecorder};
 
-use super::*;
+use super::{held_draws::held_cells, *};
 use crate::scene::{Placement, ShadowDraw};
 
 #[test]
