@@ -449,6 +449,13 @@ mutants-nightly:
     @command -v cargo-mutants >/dev/null || cargo install cargo-mutants --locked --version 27.1.0
     scripts/ci/mutants_since.sh "24 hours ago" 25
 
+# Mutation testing of the Rust lines this branch changed against main: the
+# mutants no test caught are changed code no test checks. Stops after the
+# given minutes.
+mutants-diff minutes="15":
+    @command -v cargo-mutants >/dev/null || cargo install cargo-mutants --locked --version 27.1.0
+    scripts/ci/mutants_since.sh origin/main {{minutes}}
+
 # The public API each published crate the branch changed gains or loses,
 # against the merge base. A report: about 30 seconds for each changed crate.
 public-api-diff base="origin/main":
