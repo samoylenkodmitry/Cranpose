@@ -8,7 +8,7 @@
 
 #![deny(unsafe_code)]
 
-mod heap;
+mod memory;
 mod panel;
 mod present;
 mod small_alloc;
@@ -163,8 +163,9 @@ impl Wake {
 /// [`NoTouch`] stands for a display without one.
 ///
 /// The calling task becomes the UI thread. Its stack holds composition and
-/// layout, so give it at least 32 KB (`CONFIG_ESP_MAIN_TASK_STACK_SIZE` for
-/// the main task). An `esp_timer` wakes the task at each frame or timed
+/// layout, so give it at least 28 KB (`CONFIG_ESP_MAIN_TASK_STACK_SIZE` for
+/// the main task); the stats line logged every 5 s tells the bytes of it that
+/// the run never used. An `esp_timer` wakes the task at each frame or timed
 /// event, so frame timing does not depend on `CONFIG_FREERTOS_HZ`.
 pub fn run(
     panel: Panel<'_>,
@@ -202,7 +203,7 @@ pub fn run(
     })?;
     framebuffer.set_active(true);
     let mut screen = Screen {
-        framebuffer,
+        framebuffer: &mut framebuffer,
         presenter,
         panel,
         touch: &mut touch,
@@ -257,7 +258,7 @@ fn drive(
 /// The application's side of the loop: its composition, the panel it is
 /// drawn on and the touch panel it reads.
 struct Screen<'d, 't> {
-    framebuffer: Framebuffer,
+    framebuffer: &'t mut Framebuffer,
     presenter: Presenter,
     panel: Panel<'d>,
     touch: &'t mut dyn Touch,
@@ -292,7 +293,7 @@ impl Screen<'_, '_> {
         }
         let updated = Instant::now();
         self.presenter
-            .present(&mut self.framebuffer, &mut self.panel)?;
+            .present(self.framebuffer, &mut self.panel)?;
         let presented = Instant::now();
         let phases = FramePhases {
             update: updated.duration_since(now),
@@ -448,18 +449,19 @@ impl FrameStats {
             return;
         }
         let average = |total: Duration| total.as_secs_f32() * 1000.0 / self.frames as f32;
-        let heap = heap::HeapReport::now();
+        let memory = memory::MemoryReport::now();
         log::info!(
             "{} frames in {:.1} s: update {:.2} ms, draw and send {:.2} ms, slowest {:.1} ms; \
-             heap {} KB free, {} KB in one block, {} KB at least",
+             heap {} KB free, {} KB in one block, {} KB at least; stack {} bytes never used",
             self.frames,
             window.as_secs_f32(),
             average(self.update),
             average(self.present),
             self.slowest.as_secs_f32() * 1000.0,
-            heap.free / 1024,
-            heap.largest / 1024,
-            heap.lowest / 1024,
+            memory.heap_free / 1024,
+            memory.heap_largest / 1024,
+            memory.heap_lowest / 1024,
+            memory.stack_unused,
         );
         *self = Self::new(presented);
     }

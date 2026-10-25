@@ -50,8 +50,15 @@ thread_local! {
 
 pub(crate) fn with<R>(f: impl FnOnce(&GraphicsThreadState) -> R) -> R {
     let mut f = Some(f);
-    let mut call = |state: &GraphicsThreadState| f.take().map(|f| f(state));
-    let ran = STATE.try_with(&mut call).ok().flatten();
-    ran.or_else(|| call(&GraphicsThreadState::new()))
-        .expect("the closure runs on exactly one state")
+    if let Ok(Some(result)) = STATE.try_with(|state| f.take().map(|f| f(state))) {
+        return result;
+    }
+    with_fresh(f.expect("the closure runs on exactly one state"))
+}
+
+// Out of line, so a caller keeps no room on its stack for the fresh state,
+// which only a late destructor at thread exit needs.
+#[inline(never)]
+fn with_fresh<R>(f: impl FnOnce(&GraphicsThreadState) -> R) -> R {
+    f(&GraphicsThreadState::new())
 }

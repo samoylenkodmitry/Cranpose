@@ -77,12 +77,15 @@ pub(crate) fn frame_bytes(width: u32, height: u32, density: f32) -> Result<usize
 }
 
 impl Framebuffer {
+    // Out of line: inlined, the renderer and shell it builds kept their room
+    // on the host's stack under every frame its loop runs.
     /// Composes `content` for a display of `width` by `height` physical
     /// pixels. `density` is physical pixels per point, and `theme` is the
     /// system theme content reads. Text draws in `fonts`; with none, in the
     /// embedded default font of the `embedded-default-font` feature.
     ///
     /// Frames start once the host calls [`Self::set_active`].
+    #[inline(never)]
     pub fn new(
         width: u32,
         height: u32,
