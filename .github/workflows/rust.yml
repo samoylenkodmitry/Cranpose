@@ -118,6 +118,12 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just shear
 
+      - name: Report the public API changes
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && github.event_name == 'pull_request' }}
+        # A report for review in the job summary; it never fails the job.
+        continue-on-error: true
+        run: just public-api-diff
+
       - name: Check the generated modifier matrix is current
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just twin-matrix-check
@@ -322,6 +328,9 @@ jobs:
       - name: Build web demo
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
         run: just web
+      - name: Check the web demo's wasm size
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
+        run: just web-size-budget
       - name: Package the web demo for a check in a browser
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
         run: apps/desktop-demo/package-web.sh "$RUNNER_TEMP/web-demo"

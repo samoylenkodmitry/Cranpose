@@ -201,6 +201,10 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
         run: just esp32-qemu-check
 
+      - name: Check the app image size
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        run: just esp32-size-budget
+
       - name: Upload the panel picture
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -228,6 +232,58 @@ jobs:
         run: just msrv-check
       - name: Check the dependency advisories
         run: just deny-advisories
+
+  # Each feature of the framework crates built alone (cargo-hack, about 12
+  # minutes), and the generic functions that copy most IR into the desktop
+  # binary, as a report.
+  features:
+    name: each feature alone (macOS)
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Provision toolchain
+        id: provision
+        run: scripts/ci/provision_toolchain.sh
+      - name: Check each feature alone
+        run: just features
+      - name: Report the largest generic functions
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' }}
+        continue-on-error: true
+        run: |
+          {
+            echo "## Generic functions that copy the most IR into desktop-app"
+            echo '```'
+            just llvm-lines
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Mutation testing of the last day's Rust changes (cargo-mutants): the job
+  # summary lists the mutants no test caught. A report, stopped after 25
+  # minutes. The Linux runner already carries the robot suite, so both of
+  # these run on the Macs to keep the nightly under an hour.
+  mutants:
+    name: mutants of the last day's changes (macOS)
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Provision toolchain
+        run: scripts/ci/provision_toolchain.sh
+      - name: Mutate the last day's changes
+        run: just mutants-nightly
 
   # The supported platforms running the app, not only building it: browsers,
   # Windows and the phones (docs/platform_support.md).

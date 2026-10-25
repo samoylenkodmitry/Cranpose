@@ -4,6 +4,11 @@
 //! moves to another Cranpose revision keeps the components of the revision
 //! it first built: the old IRAM function list and C code.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a build script reads cargo's environment"
+)]
+
 use std::{env, path::Path, process::ExitCode};
 
 fn main() -> ExitCode {

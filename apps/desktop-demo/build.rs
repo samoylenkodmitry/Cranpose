@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a build script reads cargo's environment"
+)]
+
 use std::{fmt::Write as _, path::Path, process::Command};
 
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};

@@ -5,6 +5,11 @@
 //! of each file, in name order, so it changes when a shader's code does and
 //! with nothing else.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a build script reads cargo's environment"
+)]
+
 use std::{env, ffi::OsStr, fs, io, path::Path};
 
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;

@@ -4,6 +4,11 @@
 //! 0.5. Each table takes 256 `powf` calls, which cost a chip without a float
 //! divider milliseconds at the first text a class draws.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a build script reads cargo's environment"
+)]
+
 use std::{env, fmt::Write as _, fs, io, path::Path};
 
 const LUMINANCE_BITS: u32 = 3;

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a build script reads cargo's environment"
+)]
+
 use std::{env, path::PathBuf, process::Command};
 
 const LIB_NAME: &str = "cranpose_storekit_swift";

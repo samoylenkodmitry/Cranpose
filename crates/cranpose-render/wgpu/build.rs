@@ -3,6 +3,11 @@
 //! module (`cranpose_gl_templates`), which a WebGL device builds pipelines
 //! from instead of running naga on the page.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a build script reads cargo's environment"
+)]
+
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
     #[cfg(feature = "gl-templates")]
