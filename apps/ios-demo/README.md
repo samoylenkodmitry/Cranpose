@@ -74,14 +74,14 @@ in its own `Info.plist`:
 </dict>
 ```
 
-`CranposeSceneDelegate` lives in `crates/cranpose/src/ios_scene.rs`. It takes
+`CranposeSceneDelegate` lives in `crates/cranpose/src/ios/scene.rs`. It takes
 the window winit creates and hands it to the scene UIKit connects, in whichever
 order the two arrive. An app without the manifest keeps the older path and
 still runs on iOS 26 and below.
 
 ## Architecture
 
-The backend lives in `crates/cranpose/src/ios.rs` and is selected by the `ios`
+The backend lives in `crates/cranpose/src/ios/event_loop.rs` and is selected by the `ios`
 cargo feature on `target_os = "ios"`. It reuses the shared render stack
 (`AppShell`, `WgpuRenderer`, wgpu Metal surface) and the winit input mapping,
 publishing safe-area insets to composition via `local_safe_area_insets()`.

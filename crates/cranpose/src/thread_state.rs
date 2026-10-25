@@ -61,7 +61,7 @@ pub(crate) struct CranposeThreadState {
             all(target_os = "linux", not(target_arch = "wasm32"))
         )
     ))]
-    pub(crate) native_menus: RefCell<crate::desktop_menus::MenuRequests>,
+    pub(crate) native_menus: RefCell<crate::desktop::menus::MenuRequests>,
     #[cfg(all(
         feature = "desktop-menus",
         feature = "renderer-wgpu",
@@ -116,7 +116,7 @@ impl CranposeThreadState {
                     all(target_os = "linux", not(target_arch = "wasm32"))
                 )
             ))]
-            native_menus: RefCell::new(crate::desktop_menus::MenuRequests::default()),
+            native_menus: RefCell::new(crate::desktop::menus::MenuRequests::default()),
             #[cfg(all(
                 feature = "desktop-menus",
                 feature = "renderer-wgpu",
@@ -140,14 +140,14 @@ impl CranposeThreadState {
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 pub(crate) struct IosThreadState {
     pub(crate) back_gesture_target:
-        RefCell<Option<objc2::rc::Retained<crate::ios_back_gesture::BackGestureTarget>>>,
+        RefCell<Option<objc2::rc::Retained<crate::ios::back_gesture::BackGestureTarget>>>,
     pub(crate) text_field_traits: OnceCell<objc2_ui_kit::UIAccessibilityTraits>,
     pub(crate) notification_delegate:
-        RefCell<Option<objc2::rc::Retained<crate::ios_notifier::NotificationDelegate>>>,
+        RefCell<Option<objc2::rc::Retained<crate::ios::notifier::NotificationDelegate>>>,
     pub(crate) window_scene: RefCell<Option<objc2::rc::Retained<objc2_ui_kit::UIWindowScene>>>,
     pub(crate) window: RefCell<Option<objc2::rc::Retained<objc2_ui_kit::UIWindow>>>,
     pub(crate) key_input_view:
-        RefCell<Option<objc2::rc::Retained<crate::ios_keyboard::KeyInputView>>>,
+        RefCell<Option<objc2::rc::Retained<crate::ios::keyboard::KeyInputView>>>,
 }
 
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
@@ -170,9 +170,9 @@ pub(crate) struct WebThreadState {
     pub(crate) frame_canvas: RefCell<Option<web_sys::HtmlCanvasElement>>,
     pub(crate) frame_asked_of: RefCell<Option<web_sys::Window>>,
     pub(crate) host_surface_wake: RefCell<Option<std::rc::Rc<dyn Fn()>>>,
-    pub(crate) media_browser: RefCell<Option<crate::web_media::Browser>>,
+    pub(crate) media_browser: RefCell<Option<crate::web::media::Browser>>,
     pub(crate) active_notifications:
-        RefCell<std::collections::HashMap<String, crate::web_services::ActiveNotification>>,
+        RefCell<std::collections::HashMap<String, crate::web::services::ActiveNotification>>,
 }
 
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]

@@ -32,7 +32,7 @@ import android.os.Looper;
  * with the app off screen.
  */
 final class CranposeMedia {
-    /** Session states; these mirror the constants in `android_media.rs`. */
+    /** Session states; these mirror the constants in `android/media.rs`. */
     static final int SESSION_STOPPED = 0;
     static final int SESSION_PLAYING = 1;
     static final int SESSION_PAUSED = 2;

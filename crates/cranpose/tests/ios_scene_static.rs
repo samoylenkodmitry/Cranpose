@@ -9,10 +9,10 @@ fn read(path: &str) -> String {
 
 #[test]
 fn scene_delegate_keeps_the_name_apps_declare() {
-    let source = read("src/ios_scene.rs");
+    let source = read("src/ios/scene.rs");
     assert!(
         source.contains(&format!("#[name = \"{CLASS_NAME}\"]")),
-        "ios_scene.rs no longer registers {CLASS_NAME}; every app Info.plist names that class"
+        "ios/scene.rs no longer registers {CLASS_NAME}; every app Info.plist names that class"
     );
 }
 

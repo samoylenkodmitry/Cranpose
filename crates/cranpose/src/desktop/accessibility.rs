@@ -1,0 +1,1237 @@
+#![allow(unsafe_code)]
+
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{
+        Arc, Mutex, PoisonError,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Instant,
+};
+
+use accesskit::{
+    Action, ActionData, ActionHandler, ActionRequest, ActivationHandler, CustomAction,
+    DeactivationHandler, Invalid, Live, Node, NodeId, Point, Rect, Role, TextDirection,
+    TextPosition, TextSelection, Toggled, TreeId, TreeInfo, TreeUpdate,
+};
+use cranpose_app_shell::AppShell;
+use cranpose_render_wgpu::WgpuRenderer;
+use cranpose_ui::{Announcement, LiveRegionMode, ToggleableState};
+use winit::{event::WindowEvent, event_loop::EventLoopProxy, window::Window};
+
+use crate::{
+    accessibility::{self, AccessibilityElement, AccessibilityRole, Replaced},
+    accessibility_publish_policy::AccessibilityPublishPolicy,
+};
+
+const ROOT_ID: NodeId = NodeId(u64::MAX);
+const ANNOUNCEMENT_ID: NodeId = NodeId(u64::MAX - 1);
+const TEXT_RUN_BIT: u64 = 1 << 31;
+/// The most characters one text run holds: accesskit counts the words of a
+/// run in a byte, so a long line is broken into runs at a space.
+const TEXT_RUN_CHARS: usize = 200;
+
+/// A reader asking for the tree. Nothing builds one while no reader holds it,
+/// so the request only says one is owed and wakes the loop: accesskit shows a
+/// placeholder until the loop's next sync sends the whole tree.
+struct Activation {
+    reader_connected: Arc<AtomicBool>,
+    tree_owed: Arc<AtomicBool>,
+    wake: Box<dyn Fn() + Send>,
+}
+
+impl ActivationHandler for Activation {
+    fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
+        self.reader_connected.store(true, Ordering::Relaxed);
+        self.tree_owed.store(true, Ordering::Relaxed);
+        (self.wake)();
+        None
+    }
+}
+
+#[derive(Clone)]
+struct Actions {
+    queue: Arc<Mutex<Vec<ActionRequest>>>,
+    waker: EventLoopProxy,
+}
+
+impl ActionHandler for Actions {
+    fn do_action(&mut self, request: ActionRequest) {
+        self.queue
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(request);
+        self.waker.wake_up();
+    }
+}
+
+/// Clears the reader flag when the reader lets go of the tree.
+struct Deactivation(Arc<AtomicBool>);
+
+impl DeactivationHandler for Deactivation {
+    fn deactivate_accessibility(&mut self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
+}
+
+pub(crate) struct DesktopAccessibilityBridge {
+    adapter: PlatformAdapter,
+    actions: Arc<Mutex<Vec<ActionRequest>>>,
+    reader_connected: Arc<AtomicBool>,
+    tree_owed: Arc<AtomicBool>,
+    policy: AccessibilityPublishPolicy,
+    pending_custom_actions: Vec<(NodeId, usize)>,
+    pending_focus: Vec<NodeId>,
+    pending_values: Vec<(NodeId, f32)>,
+    pending_texts: Vec<(NodeId, String)>,
+    pending_selections: Vec<(NodeId, TextSelection)>,
+    pending_scrolls: Vec<(NodeId, bool)>,
+    pending_jumps: Vec<(NodeId, usize)>,
+    pending_expansions: Vec<(NodeId, bool)>,
+    previous: accessibility::AccessibilitySnapshot,
+    watch: accessibility::TreeWatch,
+    announcement: Option<Announcement>,
+    announcement_turn: bool,
+    options: super::accessibility_options::OptionsProbe,
+    scale_factor: f64,
+    window_title: String,
+    geometry_changed: bool,
+}
+
+impl DesktopAccessibilityBridge {
+    pub(crate) fn new(window: &dyn Window, waker: EventLoopProxy, robot_drives: bool) -> Self {
+        let actions = Arc::new(Mutex::new(Vec::new()));
+        let reader_connected = Arc::new(AtomicBool::new(false));
+        let tree_owed = Arc::new(AtomicBool::new(false));
+        let options_waker = waker.clone();
+        let activation_waker = waker.clone();
+        let adapter = PlatformAdapter::new(
+            window,
+            Activation {
+                reader_connected: Arc::clone(&reader_connected),
+                tree_owed: Arc::clone(&tree_owed),
+                wake: Box::new(move || activation_waker.wake_up()),
+            },
+            Actions {
+                queue: Arc::clone(&actions),
+                waker,
+            },
+            Deactivation(Arc::clone(&reader_connected)),
+        );
+        Self {
+            adapter,
+            actions,
+            reader_connected,
+            tree_owed,
+            policy: AccessibilityPublishPolicy::new(),
+            pending_custom_actions: Vec::new(),
+            pending_focus: Vec::new(),
+            pending_values: Vec::new(),
+            pending_texts: Vec::new(),
+            pending_selections: Vec::new(),
+            pending_scrolls: Vec::new(),
+            pending_jumps: Vec::new(),
+            pending_expansions: Vec::new(),
+            previous: accessibility::AccessibilitySnapshot::default(),
+            watch: accessibility::TreeWatch::default(),
+            announcement: None,
+            announcement_turn: false,
+            options: super::accessibility_options::OptionsProbe::start(!robot_drives, move || {
+                options_waker.wake_up();
+            }),
+            scale_factor: window.scale_factor(),
+            window_title: window.title(),
+            geometry_changed: true,
+        }
+    }
+
+    pub(crate) fn process_event(&mut self, window: &dyn Window, event: &WindowEvent) {
+        self.adapter.process_event(window, event);
+        if let WindowEvent::ScaleFactorChanged { scale_factor, .. } = event
+            && self.scale_factor != *scale_factor
+        {
+            self.scale_factor = *scale_factor;
+            self.geometry_changed = true;
+        }
+    }
+
+    pub(crate) fn apply_platform_options(&mut self, shell: &mut AppShell<WgpuRenderer>) -> bool {
+        self.options.apply(shell)
+    }
+
+    /// Publishes what changed to a connected reader: the whole tree when one
+    /// connects, a focus move or typed text at once, and any other change at
+    /// most once a second, or once per interactive interval for a while after
+    /// the reader acts. With no reader connected nothing is built.
+    pub(crate) fn sync(&mut self, shell: &mut AppShell<WgpuRenderer>) {
+        let reader_connected = self.reader_connected.load(Ordering::Relaxed);
+        let reader_on = cranpose_services::AccessibilityState {
+            screen_reader_on: reader_connected,
+        };
+        if cranpose_services::set_platform_accessibility_state(reader_on) {
+            shell.request_root_render();
+        }
+        let mut announcements = accessibility::drain_app_announcements();
+        let tree_owed = self.tree_owed.swap(false, Ordering::Relaxed);
+        if self.policy.update_enabled(reader_connected) || tree_owed {
+            self.watch.forget();
+        }
+        if !reader_connected {
+            return;
+        }
+        let mut changed = std::mem::take(&mut self.geometry_changed) || tree_owed;
+        let elements = self.watch.elements_due(
+            shell,
+            &mut self.policy,
+            Instant::now(),
+            tree_owed,
+            &mut self.previous,
+        );
+        let mut replaced = None;
+        if let Some(elements) = elements.and_then(|elements| self.previous.changed(elements, false))
+        {
+            announcements.extend(accessibility::pane_title_announcements(
+                &self.previous.elements,
+                &elements,
+            ));
+            match self.previous.update(elements) {
+                Ok(was) => replaced = Some(was),
+                Err(error) => {
+                    log::error!("Could not publish accessibility tree: {error}");
+                    return;
+                }
+            }
+            changed = true;
+        }
+        if let Some(spoken) = join_announcements(announcements) {
+            self.announcement = Some(spoken);
+            self.announcement_turn = !self.announcement_turn;
+            changed = true;
+        }
+        if !changed {
+            return;
+        }
+        let scope = match (&replaced, tree_owed) {
+            (_, true) => TreeScope::Whole,
+            (Some(replaced), false) => TreeScope::Since(replaced),
+            (None, false) => TreeScope::Root,
+        };
+        let update = tree_update(
+            &self.previous,
+            scope,
+            self.announcement.as_ref(),
+            self.announcement_turn,
+            self.scale_factor,
+            &self.window_title,
+        );
+        if let Some(replaced) = replaced {
+            self.previous.recycle(replaced.elements);
+        }
+        self.adapter.update_if_active(|| update);
+        // AccessKit activates only while a reader is connected, so a tree
+        // that goes unread is no cause to wait longer.
+        self.policy.published(false);
+    }
+
+    /// Runs what a reader asked of the app since the loop last looked, and
+    /// publishes a tree the reader is owed outside a frame: the whole tree it
+    /// asked for, or a change the publish interval held back. Returns whether
+    /// a request changed the app, so the window needs a frame.
+    pub(crate) fn serve(&mut self, shell: &mut AppShell<WgpuRenderer>, now: Instant) -> bool {
+        let mut activated = self.apply_platform_options(shell);
+        for (node_id, canvas_key) in self.drain_clicks() {
+            activated |= shell.accessibility_activate(node_id, canvas_key);
+        }
+        activated |= self.run_custom_actions(shell);
+        activated |= self.run_value_requests(shell);
+        activated |= self.run_scroll_requests(shell);
+        activated |= self.run_focus_requests(shell);
+        if self.tree_owed.load(Ordering::Relaxed)
+            || self
+                .policy
+                .wake_deadline()
+                .is_some_and(|deadline| deadline <= now)
+        {
+            self.sync(shell);
+        }
+        activated
+    }
+
+    /// When the loop must wake to publish a change the interval held back.
+    pub(crate) fn wake_deadline(&self) -> Option<Instant> {
+        self.policy.wake_deadline()
+    }
+
+    pub(crate) fn drain_clicks(&mut self) -> Vec<(cranpose_core::NodeId, Option<u64>)> {
+        let requests =
+            std::mem::take(&mut *self.actions.lock().unwrap_or_else(PoisonError::into_inner));
+        if !requests.is_empty() {
+            // The person is using the reader: what the action changes
+            // publishes at the interactive interval.
+            self.policy.note_read(Instant::now());
+        }
+        requests
+            .into_iter()
+            .filter_map(|request| self.queue_request(request))
+            .collect()
+    }
+
+    fn queue_request(
+        &mut self,
+        request: ActionRequest,
+    ) -> Option<(cranpose_core::NodeId, Option<u64>)> {
+        let target = request.target_node;
+        match request.action {
+            Action::Click => {
+                let element = self.element_for(target)?;
+                return (element.enabled && element.clickable)
+                    .then_some((element.node_id, element.canvas_key));
+            }
+            Action::Focus => self.pending_focus.push(target),
+            Action::Expand => self.pending_expansions.push((target, true)),
+            Action::Collapse => self.pending_expansions.push((target, false)),
+            Action::Increment => self.step_value(target, true),
+            Action::Decrement => self.step_value(target, false),
+            Action::ScrollDown | Action::ScrollRight => self.pending_scrolls.push((target, true)),
+            Action::ScrollUp | Action::ScrollLeft => self.pending_scrolls.push((target, false)),
+            _ => self.queue_request_with_data(request),
+        }
+        None
+    }
+
+    /// The requests that carry a value of their own: which custom action a
+    /// reader picked, the number or the text it handed a control, and the row
+    /// it asked a list for.
+    fn queue_request_with_data(&mut self, request: ActionRequest) {
+        let target = request.target_node;
+        match (request.action, request.data) {
+            (Action::CustomAction, Some(ActionData::CustomAction(index))) if index >= 0 => {
+                self.pending_custom_actions.push((target, index as usize));
+            }
+            (Action::SetValue, Some(ActionData::NumericValue(value))) => {
+                self.pending_values.push((target, value as f32));
+            }
+            (Action::SetValue, Some(ActionData::Value(text))) => {
+                self.pending_texts.push((target, text.to_string()));
+            }
+            (Action::SetTextSelection, Some(ActionData::SetTextSelection(selection))) => {
+                self.pending_selections.push((target, selection));
+            }
+            (Action::SetScrollOffset, Some(ActionData::SetScrollOffset(point))) => {
+                if let Some(index) = row_offset(&point) {
+                    self.pending_jumps.push((target, index));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Queues the value one step up or down from the one an adjustable control
+    /// holds now, for a reader that offers a step rather than a value.
+    fn step_value(&mut self, target: NodeId, up: bool) {
+        let Some(element) = self.element_for(target) else {
+            return;
+        };
+        if let Some(progress) = element.details().progress {
+            self.pending_values
+                .push((target, accessibility::stepped_value(&progress, up)));
+        }
+    }
+
+    /// Moves app focus onto the element a screen reader asked for, so the two
+    /// agree on what holds focus. Answers whether focus moved.
+    pub(crate) fn run_focus_requests(&mut self, shell: &mut AppShell<WgpuRenderer>) -> bool {
+        if self.pending_focus.is_empty() {
+            return false;
+        }
+        let pending = std::mem::take(&mut self.pending_focus);
+        let mut moved = false;
+        for target in pending {
+            let Some(element) = self.element_for(target) else {
+                continue;
+            };
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::focus_node(root, element.node_id)
+            });
+        }
+        moved
+    }
+
+    pub(crate) fn run_custom_actions(&mut self, shell: &mut AppShell<WgpuRenderer>) -> bool {
+        if self.pending_custom_actions.is_empty() {
+            return false;
+        }
+        let pending = std::mem::take(&mut self.pending_custom_actions);
+        let mut ran = false;
+        for (target, index) in pending {
+            let Some(element) = self.element_for(target) else {
+                continue;
+            };
+            let (node_id, canvas_key) = (element.node_id, element.canvas_key);
+            let named = accessibility::reader_actions(element).len();
+            ran |= accessibility::run_reader_action(shell, |root| {
+                accessibility::perform_listed_action(root, node_id, canvas_key, named, index)
+            });
+        }
+        ran
+    }
+
+    /// Pages a scroll container a screen reader asked to move on or back.
+    /// Answers whether one moved.
+    pub(crate) fn run_scroll_requests(&mut self, shell: &mut AppShell<WgpuRenderer>) -> bool {
+        if self.pending_scrolls.is_empty() {
+            return false;
+        }
+        let pending = std::mem::take(&mut self.pending_scrolls);
+        let mut moved = false;
+        for (target, forward) in pending {
+            let Some(element) = self.element_for(target) else {
+                continue;
+            };
+            let (dx, dy) = accessibility::page_delta(element, forward);
+            let node_id = element.node_id;
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::scroll_by(root, node_id, dx, dy)
+            });
+        }
+        moved | self.run_jump_requests(shell)
+    }
+
+    /// Puts the row a screen reader named by number in view. accesskit has no
+    /// scroll-to-index action, so the offset a reader sets on a list counts
+    /// rows. Answers whether a list moved.
+    pub(crate) fn run_jump_requests(&mut self, shell: &mut AppShell<WgpuRenderer>) -> bool {
+        let mut moved = false;
+        for (target, index) in std::mem::take(&mut self.pending_jumps) {
+            let Some(node_id) = self.node_id_for(target) else {
+                continue;
+            };
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::scroll_to_index(root, node_id, index)
+            });
+        }
+        moved
+    }
+
+    /// Moves the value of an adjustable control a screen reader asked to
+    /// change. Answers whether one took the new value.
+    pub(crate) fn run_value_requests(&mut self, shell: &mut AppShell<WgpuRenderer>) -> bool {
+        let mut moved = false;
+        for (target, value) in std::mem::take(&mut self.pending_values) {
+            let Some(node_id) = self.node_id_for(target) else {
+                continue;
+            };
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::set_progress(root, node_id, value)
+            });
+        }
+        for (target, open) in std::mem::take(&mut self.pending_expansions) {
+            let Some(node_id) = self.node_id_for(target) else {
+                continue;
+            };
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::set_expanded(root, node_id, open)
+            });
+        }
+        for (target, text) in std::mem::take(&mut self.pending_texts) {
+            let Some(node_id) = self.node_id_for(target) else {
+                continue;
+            };
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::set_text(root, node_id, &text)
+            });
+        }
+        for (target, selection) in std::mem::take(&mut self.pending_selections) {
+            let Some((node_id, anchor, focus)) =
+                selection_chars(&self.previous, target, &selection)
+            else {
+                continue;
+            };
+            moved |= accessibility::run_reader_action(shell, |root| {
+                accessibility::set_text_selection_chars(root, node_id, anchor, focus)
+            });
+        }
+        moved
+    }
+
+    fn node_id_for(&self, target: NodeId) -> Option<cranpose_core::NodeId> {
+        self.element_for(target).map(|element| element.node_id)
+    }
+
+    fn element_for(&self, target: NodeId) -> Option<&AccessibilityElement> {
+        self.previous.element(i32::try_from(target.0).ok()?)
+    }
+}
+
+/// Which nodes a publish sends. accesskit keeps a node it is not sent again
+/// and drops one no parent names, so after the whole tree a reader only needs
+/// the nodes that changed and the parents whose children changed.
+enum TreeScope<'a> {
+    /// Every node: a reader just connected.
+    Whole,
+    /// The nodes that are new or changed since the elements an update
+    /// replaced, or whose children changed.
+    Since(&'a Replaced),
+    /// Only the root: the elements are as published, and the root's scale or
+    /// announcement changed.
+    Root,
+}
+
+fn tree_update(
+    snapshot: &accessibility::AccessibilitySnapshot,
+    scope: TreeScope<'_>,
+    announcement: Option<&Announcement>,
+    announcement_turn: bool,
+    scale_factor: f64,
+    window_title: &str,
+) -> TreeUpdate {
+    let elements = &snapshot.elements;
+    let ids = &snapshot.ids;
+    let mut nested = nested_children(ids, elements);
+    let mut children = nested.remove(&None).unwrap_or_default();
+    if announcement.is_some() {
+        children.push(ANNOUNCEMENT_ID);
+    }
+    let mut root = Node::new(Role::Window);
+    if scale_factor != 1.0 {
+        root.set_transform(accesskit::Affine::scale(scale_factor));
+    }
+    if !window_title.is_empty() {
+        root.set_label(window_title);
+    }
+    root.set_children(children);
+    let mut nodes = vec![(ROOT_ID, root)];
+    let replaced = match scope {
+        TreeScope::Whole => None,
+        TreeScope::Since(replaced) => {
+            Some((replaced, nested_children(&replaced.ids, &replaced.elements)))
+        }
+        TreeScope::Root => {
+            nodes.extend(announcement.map(|announcement| {
+                (
+                    ANNOUNCEMENT_ID,
+                    announcement_node(announcement, announcement_turn),
+                )
+            }));
+            return tree_update_of(nodes, ids, elements);
+        }
+    };
+    for (index, (id, element)) in ids.iter().zip(elements).enumerate() {
+        let mut below = if element.canvas_key.is_none() {
+            nested.remove(&Some(element.node_id)).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let unchanged = replaced.as_ref().is_some_and(|(replaced, old_nested)| {
+            replaced.was[index].is_some_and(|old| replaced.elements[old] == *element)
+                && old_nested
+                    .get(&Some(element.node_id))
+                    .filter(|_| element.canvas_key.is_none())
+                    .map_or(below.is_empty(), |old_below| *old_below == below)
+        });
+        if unchanged {
+            continue;
+        }
+        let mut node = accesskit_node(element);
+        let runs = text_run_nodes(*id, element);
+        below.extend(runs.iter().map(|(run_id, _)| *run_id));
+        if !below.is_empty() {
+            node.set_children(below);
+        }
+        apply_text_selection(&mut node, *id, element);
+        nodes.push((NodeId(*id as u64), node));
+        nodes.extend(runs);
+    }
+    nodes.extend(announcement.map(|announcement| {
+        (
+            ANNOUNCEMENT_ID,
+            announcement_node(announcement, announcement_turn),
+        )
+    }));
+    tree_update_of(nodes, ids, elements)
+}
+
+fn tree_update_of(
+    nodes: Vec<(NodeId, Node)>,
+    ids: &[i32],
+    elements: &[AccessibilityElement],
+) -> TreeUpdate {
+    let mut tree = TreeInfo::new(ROOT_ID);
+    tree.toolkit_name = Some("Cranpose".into());
+    TreeUpdate {
+        nodes,
+        tree: Some(tree),
+        tree_id: TreeId::ROOT,
+        focus: focused_node(ids, elements),
+    }
+}
+
+/// The accesskit ids under each container, keyed by the container's node, and
+/// under `None` the ones with nothing above them, so a reader hears "list, 12
+/// items" and "tab 2 of 5" from the shape of the tree. A row whose container
+/// was not published sits at the root rather than out of reach.
+fn nested_children(
+    ids: &[i32],
+    elements: &[AccessibilityElement],
+) -> HashMap<Option<cranpose_core::NodeId>, Vec<NodeId>> {
+    let containers: HashSet<cranpose_core::NodeId> = elements
+        .iter()
+        .filter(|element| element.canvas_key.is_none())
+        .map(|element| element.node_id)
+        .collect();
+    let mut nested: HashMap<Option<cranpose_core::NodeId>, Vec<NodeId>> = HashMap::new();
+    for (id, element) in ids.iter().zip(elements) {
+        let parent = element
+            .scroll_parent
+            .filter(|parent| containers.contains(parent));
+        nested.entry(parent).or_default().push(NodeId(*id as u64));
+    }
+    nested
+}
+
+fn accesskit_element_role(element: &AccessibilityElement) -> Role {
+    let details = element.details();
+    let scrolls = details.vertical_scroll.is_some() || details.horizontal_scroll.is_some();
+    match details.progress {
+        Some(_) if details.adjustable && element.role != AccessibilityRole::ValuePicker => {
+            Role::Slider
+        }
+        Some(_) => accesskit_role(element.role),
+        None if details.pane_title.is_some() && element.role == AccessibilityRole::StaticText => {
+            Role::Region
+        }
+        None if scrolls && element.label.is_empty() && !element.role.is_named_container() => {
+            scroll_role(element)
+        }
+        None if details.password => Role::PasswordInput,
+        None if element.role.is_text_field() && details.multiline => Role::MultilineTextInput,
+        None => accesskit_role(element.role),
+    }
+}
+
+fn accesskit_node(element: &AccessibilityElement) -> Node {
+    let role = accesskit_element_role(element);
+    let mut node = Node::new(role);
+    if role == Role::Label {
+        node.set_value(element.label.as_str());
+    } else {
+        node.set_label(element.label.as_str());
+    }
+    if let Some(title) = &element.details().pane_title {
+        node.set_label(title.as_str());
+    }
+    node.set_bounds(Rect {
+        x0: element.bounds.x as f64,
+        y0: element.bounds.y as f64,
+        x1: (element.bounds.x + element.bounds.width) as f64,
+        y1: (element.bounds.y + element.bounds.height) as f64,
+    });
+    apply_state(&mut node, element);
+    apply_actions(&mut node, element);
+    node
+}
+
+/// A node with no control behind it, whose only job is to hold text a screen
+/// reader reads at once. accesskit reads a live node again when its value
+/// changes, so the same text twice in a row carries a trailing space one time
+/// out of two to stay a change.
+fn announcement_node(announcement: &Announcement, turn: bool) -> Node {
+    let mut node = Node::new(Role::Label);
+    let text = if turn {
+        format!("{} ", announcement.text)
+    } else {
+        announcement.text.clone()
+    };
+    node.set_value(text);
+    node.set_live(accesskit_live(announcement.mode));
+    node
+}
+
+fn accesskit_live(mode: LiveRegionMode) -> Live {
+    match mode {
+        LiveRegionMode::Polite => Live::Polite,
+        LiveRegionMode::Assertive => Live::Assertive,
+    }
+}
+
+fn join_announcements(announcements: Vec<Announcement>) -> Option<Announcement> {
+    let mode = announcements
+        .iter()
+        .map(|announcement| announcement.mode)
+        .fold(LiveRegionMode::Polite, |mode, next| match next {
+            LiveRegionMode::Assertive => LiveRegionMode::Assertive,
+            LiveRegionMode::Polite => mode,
+        });
+    let text = announcements
+        .into_iter()
+        .map(|announcement| announcement.text)
+        .collect::<Vec<_>>()
+        .join(". ");
+    (!text.is_empty()).then_some(Announcement { text, mode })
+}
+
+/// A scroll container with no label of its own: a list when it says how many
+/// rows it holds, a plain scroll view otherwise.
+fn scroll_role(element: &AccessibilityElement) -> Role {
+    if element.details().collection.is_some() {
+        Role::List
+    } else {
+        Role::ScrollView
+    }
+}
+
+/// The accesskit role of each role a reader names.
+const ACCESSKIT_ROLES: [(AccessibilityRole, Role); 24] = [
+    (AccessibilityRole::Button, Role::Button),
+    (AccessibilityRole::StaticText, Role::Label),
+    (AccessibilityRole::TextField, Role::TextInput),
+    (AccessibilityRole::Checkbox, Role::CheckBox),
+    (AccessibilityRole::Switch, Role::Switch),
+    (AccessibilityRole::RadioButton, Role::RadioButton),
+    (AccessibilityRole::Tab, Role::Tab),
+    (AccessibilityRole::Image, Role::Image),
+    (AccessibilityRole::Header, Role::Heading),
+    (AccessibilityRole::Dialog, Role::Dialog),
+    (AccessibilityRole::DropdownList, Role::ComboBox),
+    (AccessibilityRole::ValuePicker, Role::SpinButton),
+    (AccessibilityRole::Link, Role::Link),
+    (AccessibilityRole::SearchField, Role::SearchInput),
+    (AccessibilityRole::ProgressBar, Role::ProgressIndicator),
+    (AccessibilityRole::ToggleButton, Role::Button),
+    (AccessibilityRole::Alert, Role::Alert),
+    (AccessibilityRole::Toolbar, Role::Toolbar),
+    (AccessibilityRole::Menu, Role::Menu),
+    (AccessibilityRole::MenuItem, Role::MenuItem),
+    (AccessibilityRole::TabBar, Role::TabList),
+    (AccessibilityRole::List, Role::List),
+    (AccessibilityRole::ListItem, Role::ListItem),
+    (AccessibilityRole::RadioGroup, Role::RadioGroup),
+];
+
+const _: () = assert!(ACCESSKIT_ROLES.len() == AccessibilityRole::ALL.len());
+
+/// The accesskit role a screen reader reads the control as.
+fn accesskit_role(role: AccessibilityRole) -> Role {
+    accessibility::role_entry(&ACCESSKIT_ROLES, role, Role::Unknown)
+}
+
+/// What the control says about itself beyond its name: its value, the state
+/// description, and whether it is selected, toggled or disabled.
+fn apply_state(node: &mut Node, element: &AccessibilityElement) {
+    let details = element.details();
+    if details.is_modal {
+        node.set_modal();
+    }
+    if let Some(value) = &element.value {
+        node.set_value(value.as_str());
+    }
+    if let Some(description) = accessibility::description_text(element) {
+        node.set_description(description.as_str());
+    }
+    if let Some(language) = &details.language {
+        node.set_language(language.as_str());
+    }
+    if details.error.is_some() {
+        node.set_invalid(Invalid::True);
+    }
+    if let Some(item) = element.collection_item {
+        node.set_position_in_set(item.position.saturating_sub(1));
+        node.set_size_of_set(item.count);
+    }
+    if let Some(selected) = selected_state(element) {
+        node.set_selected(selected);
+    }
+    if let Some(toggled) = toggled_state(element) {
+        node.set_toggled(match toggled {
+            ToggleableState::Indeterminate => Toggled::Mixed,
+            ToggleableState::On => Toggled::True,
+            ToggleableState::Off => Toggled::False,
+        });
+    }
+    if !element.enabled {
+        node.set_disabled();
+    }
+    if let Some(expanded) = details.expanded {
+        node.set_expanded(expanded);
+    }
+    if let Some(mode) = details.live_region {
+        node.set_live(accesskit_live(mode));
+    }
+    if let Some(progress) = details.progress {
+        node.set_numeric_value(progress.current as f64);
+        node.set_min_numeric_value(progress.start as f64);
+        node.set_max_numeric_value(progress.end as f64);
+        node.set_numeric_value_step(progress.step() as f64);
+    }
+    if let Some(range) = details.vertical_scroll {
+        node.set_scroll_y(range.value as f64);
+        node.set_scroll_y_min(0.0);
+        node.set_scroll_y_max(range.max_value as f64);
+    }
+    if let Some(range) = details.horizontal_scroll {
+        node.set_scroll_x(range.value as f64);
+        node.set_scroll_x_min(0.0);
+        node.set_scroll_x_max(range.max_value as f64);
+    }
+}
+
+fn reads_selection_as_pressed(role: AccessibilityRole) -> bool {
+    matches!(
+        role,
+        AccessibilityRole::Button | AccessibilityRole::ToggleButton
+    )
+}
+
+fn selected_state(element: &AccessibilityElement) -> Option<bool> {
+    element.selected.filter(|_| {
+        element.role != AccessibilityRole::RadioButton && !reads_selection_as_pressed(element.role)
+    })
+}
+
+fn toggled_state(element: &AccessibilityElement) -> Option<ToggleableState> {
+    if reads_selection_as_pressed(element.role) {
+        element
+            .toggled
+            .or_else(|| element.selected.map(ToggleableState::from))
+    } else {
+        accessibility::checked_state(element)
+    }
+}
+
+/// What a screen reader can do with the control: activate it, run one of the
+/// actions it lists, or put focus on it. accesskit has no long press of its
+/// own, so a long press is the last action in that list.
+fn apply_actions(node: &mut Node, element: &AccessibilityElement) {
+    let details = element.details();
+    if !element.enabled {
+        return;
+    }
+    if element.clickable {
+        node.add_action(Action::Click);
+    }
+    let listed = accessibility::listed_actions(element);
+    if !listed.is_empty() {
+        node.add_action(Action::CustomAction);
+        node.set_custom_actions(
+            listed
+                .into_iter()
+                .enumerate()
+                .map(|(index, label)| CustomAction {
+                    id: index as i32,
+                    description: label,
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
+    if let Some(expanded) = details.expanded {
+        node.add_action(if expanded {
+            Action::Collapse
+        } else {
+            Action::Expand
+        });
+    }
+    if element.focusable {
+        node.add_action(Action::Focus);
+    }
+    if element.role.is_text_field() {
+        node.add_action(Action::SetValue);
+    }
+    if details.text_selection.is_some() {
+        node.add_action(Action::SetTextSelection);
+    }
+    if details.adjustable {
+        node.add_action(Action::SetValue);
+        node.add_action(Action::Increment);
+        node.add_action(Action::Decrement);
+    }
+    if let Some(range) = details.vertical_scroll {
+        if range.can_scroll_forward() {
+            node.add_action(Action::ScrollDown);
+        }
+        if range.can_scroll_backward() {
+            node.add_action(Action::ScrollUp);
+        }
+    }
+    if let Some(range) = details.horizontal_scroll {
+        if range.can_scroll_forward() {
+            node.add_action(Action::ScrollRight);
+        }
+        if range.can_scroll_backward() {
+            node.add_action(Action::ScrollLeft);
+        }
+    }
+    apply_row_offset(node, element);
+}
+
+/// The rows a screen reader may ask a list for. accesskit 0.24.1 has no
+/// scroll-to-index action, so the list carries its rows as the scroll offset
+/// of the axis it runs along: the reader reads the range, sets an offset in
+/// rows, and the list puts that row at the top.
+fn apply_row_offset(node: &mut Node, element: &AccessibilityElement) {
+    let details = element.details();
+    let count = accessibility::row_count(element);
+    if count == 0 {
+        return;
+    }
+    let last = (count - 1) as f64;
+    let first_visible = details
+        .vertical_scroll
+        .or(details.horizontal_scroll)
+        .map_or(0.0, |range| f64::from(range.value).clamp(0.0, last));
+    if details.vertical_scroll.is_some() {
+        node.set_scroll_y_min(0.0);
+        node.set_scroll_y_max(last);
+        node.set_scroll_y(first_visible);
+    } else {
+        node.set_scroll_x_min(0.0);
+        node.set_scroll_x_max(last);
+        node.set_scroll_x(first_visible);
+    }
+    node.add_action(Action::SetScrollOffset);
+}
+
+/// The row a screen reader named through an accesskit scroll offset. The list
+/// publishes its rows on one axis and leaves the other at zero, so the larger
+/// of the two is the row the reader asked for.
+fn row_offset(point: &Point) -> Option<usize> {
+    let row = point.x.max(point.y);
+    (row.is_finite() && row >= 0.0).then(|| row.round() as usize)
+}
+
+/// The node a screen reader should sit on: the control the app focused, or the
+/// window when nothing holds focus.
+fn focused_node(ids: &[i32], elements: &[AccessibilityElement]) -> NodeId {
+    ids.iter()
+        .zip(elements)
+        .find(|(_, element)| element.focused)
+        .map_or(ROOT_ID, |(id, _)| NodeId(*id as u64))
+}
+
+#[cfg(target_os = "macos")]
+struct PlatformAdapter(accesskit_macos::SubclassingAdapter);
+
+#[cfg(target_os = "macos")]
+impl PlatformAdapter {
+    fn new(
+        window: &dyn Window,
+        activation: impl 'static + ActivationHandler,
+        actions: impl 'static + ActionHandler,
+        _deactivation: impl 'static + DeactivationHandler,
+    ) -> Self {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let Ok(RawWindowHandle::AppKit(handle)) =
+            window.window_handle().map(|handle| handle.as_raw())
+        else {
+            unreachable!("macOS desktop window did not expose an AppKit view")
+        };
+        Self(unsafe {
+            accesskit_macos::SubclassingAdapter::new(handle.ns_view.as_ptr(), activation, actions)
+        })
+    }
+
+    fn process_event(&mut self, _window: &dyn Window, event: &WindowEvent) {
+        if let WindowEvent::Focused(focused) = event
+            && let Some(events) = self.0.update_view_focus_state(*focused)
+        {
+            events.raise();
+        }
+    }
+
+    fn update_if_active(&mut self, update: impl FnOnce() -> TreeUpdate) {
+        if let Some(events) = self.0.update_if_active(update) {
+            events.raise();
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct PlatformAdapter(accesskit_windows::SubclassingAdapter);
+
+#[cfg(target_os = "windows")]
+impl PlatformAdapter {
+    fn new(
+        window: &dyn Window,
+        activation: impl 'static + ActivationHandler,
+        actions: impl 'static + ActionHandler + Send,
+        _deactivation: impl 'static + DeactivationHandler,
+    ) -> Self {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let Ok(RawWindowHandle::Win32(handle)) =
+            window.window_handle().map(|handle| handle.as_raw())
+        else {
+            unreachable!("Windows desktop window did not expose an HWND")
+        };
+        Self(accesskit_windows::SubclassingAdapter::new(
+            accesskit_windows::HWND(handle.hwnd.get() as *mut _),
+            activation,
+            actions,
+        ))
+    }
+
+    fn process_event(&mut self, _window: &dyn Window, _event: &WindowEvent) {}
+
+    fn update_if_active(&mut self, update: impl FnOnce() -> TreeUpdate) {
+        if let Some(events) = self.0.update_if_active(update) {
+            events.raise();
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct PlatformAdapter(accesskit_unix::Adapter);
+
+#[cfg(target_os = "linux")]
+impl PlatformAdapter {
+    fn new(
+        _window: &dyn Window,
+        activation: impl 'static + ActivationHandler + Send,
+        actions: impl 'static + ActionHandler + Send,
+        deactivation: impl 'static + DeactivationHandler + Send,
+    ) -> Self {
+        Self(accesskit_unix::Adapter::new(
+            activation,
+            actions,
+            deactivation,
+        ))
+    }
+
+    fn process_event(&mut self, window: &dyn Window, event: &WindowEvent) {
+        match event {
+            WindowEvent::Moved(_) | WindowEvent::SurfaceResized(_) => {
+                let Ok(outer_origin) = window.outer_position() else {
+                    return;
+                };
+                let surface_origin = window.surface_position();
+                let outer_position = (outer_origin.x as f64, outer_origin.y as f64);
+                let outer_size: (_, _) = window.outer_size().cast::<f64>().into();
+                let inner_position = (
+                    (outer_origin.x + surface_origin.x) as f64,
+                    (outer_origin.y + surface_origin.y) as f64,
+                );
+                let inner_size: (_, _) = window.surface_size().cast::<f64>().into();
+                self.0.set_root_window_bounds(
+                    Rect::from_origin_size(outer_position, outer_size),
+                    Rect::from_origin_size(inner_position, inner_size),
+                );
+            }
+            WindowEvent::Focused(focused) => self.0.update_window_focus_state(*focused),
+            _ => {}
+        }
+    }
+
+    fn update_if_active(&mut self, update: impl FnOnce() -> TreeUpdate) {
+        self.0.update_if_active(update);
+    }
+}
+
+/// One stretch of a field's text that accesskit reads as a text run: where it
+/// starts and ends in bytes, and where it starts in characters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TextRunSpan {
+    start_byte: usize,
+    end_byte: usize,
+    start_char: usize,
+}
+
+/// The text runs of a field: one per line, with the line break at the end of
+/// the line it ends, and a line longer than [`TEXT_RUN_CHARS`] broken at the
+/// last space before that, because accesskit counts the words of a run in a
+/// byte. An empty text is one empty run, so a caret has a place to sit.
+fn text_runs(text: &str) -> Vec<TextRunSpan> {
+    let mut runs = Vec::new();
+    let mut start_byte = 0;
+    let mut start_char = 0;
+    let mut chars = 0;
+    let mut last_space: Option<(usize, usize)> = None;
+    for (byte, character) in text.char_indices() {
+        chars += 1;
+        let end = byte + character.len_utf8();
+        if character == '\n' {
+            runs.push(TextRunSpan {
+                start_byte,
+                end_byte: end,
+                start_char,
+            });
+            start_byte = end;
+            start_char += chars;
+            chars = 0;
+            last_space = None;
+            continue;
+        }
+        if character.is_whitespace() {
+            last_space = Some((end, chars));
+        }
+        if chars >= TEXT_RUN_CHARS {
+            let (cut_byte, cut_chars) = last_space.unwrap_or((end, chars));
+            runs.push(TextRunSpan {
+                start_byte,
+                end_byte: cut_byte,
+                start_char,
+            });
+            start_byte = cut_byte;
+            start_char += cut_chars;
+            chars -= cut_chars;
+            last_space = None;
+        }
+    }
+    if chars > 0 || runs.is_empty() {
+        runs.push(TextRunSpan {
+            start_byte,
+            end_byte: text.len(),
+            start_char,
+        });
+    }
+    runs
+}
+
+/// Where the words of a run start, in characters: after each stretch of
+/// spaces. The first character starts a word on its own, so it is left out.
+fn word_starts(run: &str) -> Vec<u8> {
+    let mut starts = Vec::new();
+    let mut after_space = false;
+    for (index, character) in run.chars().enumerate() {
+        if index > 0 && after_space && !character.is_whitespace() {
+            starts.push(index as u8);
+        }
+        after_space = character.is_whitespace();
+    }
+    starts
+}
+
+/// The accesskit id of one text run of a field.
+fn text_run_id(field_id: i32, run_index: u32) -> NodeId {
+    NodeId(TEXT_RUN_BIT | ((run_index as u64) << 32) | field_id as u64)
+}
+
+/// The field and the run index behind the accesskit id of a text run, or
+/// nothing for the id of a control.
+fn text_run_owner(id: NodeId) -> Option<(i32, usize)> {
+    if id.0 & TEXT_RUN_BIT == 0 || id == ROOT_ID || id == ANNOUNCEMENT_ID {
+        return None;
+    }
+    let field_id = (id.0 & 0x7fff_ffff) as i32;
+    let run_index = (id.0 >> 32) as usize;
+    Some((field_id, run_index))
+}
+
+/// The text runs under an editable field, each with the text it holds, the
+/// length of each character in bytes and where its words start, so a screen
+/// reader walks the text by character, word and line and puts the caret
+/// where the user asks. A control that is not a field, or one that holds a
+/// secret, has none.
+fn text_run_nodes(field_id: i32, element: &AccessibilityElement) -> Vec<(NodeId, Node)> {
+    let (Some(value), Some(_)) = (&element.value, element.details().text_selection) else {
+        return Vec::new();
+    };
+    (0u32..)
+        .zip(text_runs(value))
+        .map(|(index, span)| {
+            let text = &value[span.start_byte..span.end_byte];
+            let mut run = Node::new(Role::TextRun);
+            run.set_value(text);
+            run.set_character_lengths(
+                text.chars()
+                    .map(|character| character.len_utf8() as u8)
+                    .collect::<Vec<_>>(),
+            );
+            run.set_word_starts(word_starts(text));
+            run.set_text_direction(TextDirection::LeftToRight);
+            run.set_bounds(Rect {
+                x0: element.bounds.x as f64,
+                y0: element.bounds.y as f64,
+                x1: (element.bounds.x + element.bounds.width) as f64,
+                y1: (element.bounds.y + element.bounds.height) as f64,
+            });
+            (text_run_id(field_id, index), run)
+        })
+        .collect()
+}
+
+/// The run and the character inside it that a character offset into a
+/// field's text falls on. An offset right after a line break belongs to the
+/// start of the next line.
+fn text_position(
+    field_id: i32,
+    value: &str,
+    runs: &[TextRunSpan],
+    chars: usize,
+) -> Option<TextPosition> {
+    let chars = chars.min(value.chars().count());
+    let mut run_index = runs
+        .iter()
+        .rposition(|run| run.start_char <= chars)
+        .unwrap_or(0);
+    if run_index + 1 < runs.len()
+        && runs[run_index + 1].start_char == chars
+        && value[..runs[run_index].end_byte].ends_with('\n')
+    {
+        run_index += 1;
+    }
+    Some(TextPosition {
+        node: text_run_id(field_id, u32::try_from(run_index).ok()?),
+        character_index: chars - runs[run_index].start_char,
+    })
+}
+
+/// Puts the caret, or the picked stretch of text, on the accesskit node of an
+/// editable field, in the characters of its text runs.
+fn apply_text_selection(node: &mut Node, field_id: i32, element: &AccessibilityElement) {
+    let (Some(value), Some((anchor, focus))) = (&element.value, element.details().text_selection)
+    else {
+        return;
+    };
+    let runs = text_runs(value);
+    let Some(anchor) = text_position(
+        field_id,
+        value,
+        &runs,
+        accessibility::char_offset(value, anchor),
+    ) else {
+        return;
+    };
+    let Some(focus) = text_position(
+        field_id,
+        value,
+        &runs,
+        accessibility::char_offset(value, focus),
+    ) else {
+        return;
+    };
+    node.set_text_selection(TextSelection { anchor, focus });
+}
+
+/// The live node of the field a screen reader set a selection on, with the
+/// two ends counted in characters of the whole text, or nothing when the
+/// selection names a run that is not in the published tree.
+fn selection_chars(
+    snapshot: &accessibility::AccessibilitySnapshot,
+    target: NodeId,
+    selection: &TextSelection,
+) -> Option<(cranpose_core::NodeId, usize, usize)> {
+    let field_id = match text_run_owner(target) {
+        Some((owner, _)) => owner,
+        None => i32::try_from(target.0).ok()?,
+    };
+    let element = snapshot.element(field_id)?;
+    let value = element.value.as_deref()?;
+    let runs = text_runs(value);
+    if let Some((_, index)) = text_run_owner(target) {
+        runs.get(index)?;
+    }
+    let offset = |position: &TextPosition| -> Option<usize> {
+        let (owner, run_index) = text_run_owner(position.node)?;
+        (owner == field_id).then_some(())?;
+        let run = runs.get(run_index)?;
+        let length = value[run.start_byte..run.end_byte].chars().count();
+        (position.character_index <= length).then(|| run.start_char + position.character_index)
+    };
+    Some((
+        element.node_id,
+        offset(&selection.anchor)?,
+        offset(&selection.focus)?,
+    ))
+}
+
+#[cfg(test)]
+#[path = "tests/accessibility.rs"]
+mod tests;

@@ -15,7 +15,7 @@ identifies the window across recomposition. The platform reads the registry,
 creates or updates native surfaces, and asks the scene builder to render each
 root. See [`native_window.rs`](../crates/cranpose/src/native_window.rs),
 [`window_root.rs`](../crates/cranpose-ui/src/modifier/window_root.rs) and
-[`desktop.rs`](../crates/cranpose/src/desktop.rs).
+[`desktop.rs`](../crates/cranpose/src/desktop/event_loop.rs).
 
 `LocalWindowState::current()` gives composables access to the state for their
 window. Window drag and resize areas, pointer position, and cross-window drag

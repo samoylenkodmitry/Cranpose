@@ -14,7 +14,7 @@ const BILLING: &str =
 const APP_UPDATE: &str =
     "crates/cranpose/android/java-update/dev/cranpose/android/CranposeAppUpdate.java";
 const MANIFEST_CHECK: &str = "crates/cranpose/android/cranpose-gradle-plugin/src/main/kotlin/dev/cranpose/gradle/CranposeManifestCheck.kt";
-const WIRE_TESTS: &str = "crates/cranpose/src/tests/android_accessibility_wire.rs";
+const WIRE_TESTS: &str = "crates/cranpose/src/android/tests/accessibility_wire.rs";
 const PARSER_TEST: &str = "apps/android-demo/android/app/src/androidTest/java/com/compose_rs/demo/CranposeAccessibilityParserTest.java";
 const APPLICATION_MANIFESTS: [&str; 2] = [
     "apps/android-demo/android/app/src/main/AndroidManifest.xml",

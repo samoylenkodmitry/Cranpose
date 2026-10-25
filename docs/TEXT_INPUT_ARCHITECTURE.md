@@ -55,7 +55,7 @@ the same edit path. Clipboard access goes through the UI clipboard session;
 the web adapter requests paste asynchronously because browser clipboard reads
 require an event-driven response. See
 [`clipboard_session.rs`](../crates/cranpose-ui/src/clipboard_session.rs) and
-[`web_clipboard.rs`](../crates/cranpose/src/web_clipboard.rs).
+[`web/clipboard.rs`](../crates/cranpose/src/web/clipboard.rs).
 
 ## Layout, text position and frame time
 

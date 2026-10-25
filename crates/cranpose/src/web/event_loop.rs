@@ -1,0 +1,1190 @@
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::Arc,
+};
+
+use cranpose_app_shell::{AppShell, FrameSchedule, PlatformFrameDriver, default_root_key};
+use cranpose_platform_web::WebPlatform;
+use cranpose_render_wgpu::WgpuRenderer;
+use wasm_bindgen::{JsCast, prelude::*};
+use web_sys::{HtmlCanvasElement, PointerEvent, WheelEvent};
+
+use super::pipeline_discovery::{GpuTarget, PipelineDiscovery};
+use crate::{
+    app_launcher::AppSettings,
+    wgpu_surface::{
+        SurfaceFrame, current_surface_texture, present_initial_placeholder_frame,
+        surface_present_required,
+    },
+};
+
+type RenderLoop = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
+
+type ReshapeFn = Rc<dyn Fn(Option<(f32, f32)>)>;
+
+fn canvas_window(canvas: &HtmlCanvasElement, page: &web_sys::Window) -> web_sys::Window {
+    canvas
+        .owner_document()
+        .and_then(|document| document.default_view())
+        .unwrap_or_else(|| page.clone())
+}
+
+fn resize_floating_window(host: &web_sys::Window, width: f32, height: f32) -> bool {
+    let measure = |value: Result<JsValue, JsValue>| value.ok().and_then(|value| value.as_f64());
+    let (Some(outer_width), Some(outer_height), Some(inner_width), Some(inner_height)) = (
+        measure(host.outer_width()),
+        measure(host.outer_height()),
+        measure(host.inner_width()),
+        measure(host.inner_height()),
+    ) else {
+        return false;
+    };
+    let (window_width, window_height) = super::floating_window::outer_size_for_inner(
+        (width, height),
+        (outer_width, outer_height),
+        (inner_width, inner_height),
+    );
+    match host.resize_to(window_width, window_height) {
+        Ok(()) => true,
+        Err(error) => {
+            log::debug!("the floating window waits for a gesture to resize: {error:?}");
+            false
+        }
+    }
+}
+
+fn is_floating(host: &web_sys::Window, page: &web_sys::Window) -> bool {
+    AsRef::<JsValue>::as_ref(host) != AsRef::<JsValue>::as_ref(page)
+}
+
+fn apply_requested_canvas_size(
+    canvas: &HtmlCanvasElement,
+    page: &web_sys::Window,
+    (width, height): (f32, f32),
+    owed: &Cell<Option<(f32, f32)>>,
+) {
+    let host = canvas_window(canvas, page);
+    if is_floating(&host, page) {
+        // A floating window's canvas fills the window. The window takes the
+        // size, and the canvas follows it; a window that may not resize yet
+        // owes it, and the canvas goes on filling it meanwhile rather than
+        // shrinking inside it.
+        let resized = resize_floating_window(&host, width, height);
+        owed.set((!resized).then_some((width, height)));
+        return;
+    }
+    if let Some(html_element) = canvas.dyn_ref::<web_sys::HtmlElement>() {
+        let style = html_element.style();
+        let _ = style.set_property("width", &format!("{width}px"));
+        let _ = style.set_property("height", &format!("{height}px"));
+    }
+    owed.set(None);
+}
+
+fn resize_owed_floating_window(
+    canvas: &HtmlCanvasElement,
+    page: &web_sys::Window,
+    owed: &Cell<Option<(f32, f32)>>,
+) {
+    let Some((width, height)) = owed.get() else {
+        return;
+    };
+    let host = canvas_window(canvas, page);
+    if !is_floating(&host, page) || resize_floating_window(&host, width, height) {
+        owed.set(None);
+    }
+}
+
+/// Resizes a floating window that owes a size as soon as a gesture lets it.
+fn resize_owed_on_release(
+    canvas: &HtmlCanvasElement,
+    page: &web_sys::Window,
+    owed: Rc<Cell<Option<(f32, f32)>>>,
+) -> Result<(), JsValue> {
+    let on_release = {
+        let canvas = canvas.clone();
+        let page = page.clone();
+        Closure::wrap(Box::new(move |_event: PointerEvent| {
+            resize_owed_floating_window(&canvas, &page, &owed);
+        }) as Box<dyn FnMut(PointerEvent)>)
+    };
+    canvas.add_event_listener_with_callback("pointerup", on_release.as_ref().unchecked_ref())?;
+    on_release.forget();
+    Ok(())
+}
+
+/// The canvas's CSS size as laid out, fractions included: at a device pixel
+/// ratio of 1.5 a canvas is seldom a whole number of CSS pixels, and the
+/// rounded `clientWidth` would size its buffer a pixel short.
+fn canvas_css_size(canvas: &HtmlCanvasElement) -> (f64, f64) {
+    let rect = canvas.get_bounding_client_rect();
+    (rect.width().max(1.0), rect.height().max(1.0))
+}
+
+pub(crate) fn web_modifiers(event: &web_sys::MouseEvent) -> cranpose_app_shell::Modifiers {
+    cranpose_app_shell::Modifiers {
+        shift: event.shift_key(),
+        ctrl: event.ctrl_key(),
+        alt: event.alt_key(),
+        meta: event.meta_key(),
+    }
+}
+
+fn web_key_modifiers(event: &web_sys::KeyboardEvent) -> cranpose_app_shell::Modifiers {
+    cranpose_app_shell::Modifiers {
+        shift: event.shift_key(),
+        ctrl: event.ctrl_key(),
+        alt: event.alt_key(),
+        meta: event.meta_key(),
+    }
+}
+
+fn web_key_event_prefix(
+    event: &web_sys::KeyboardEvent,
+) -> Option<(cranpose_app_shell::KeyCode, cranpose_app_shell::Modifiers)> {
+    if event.is_composing() || event.key_code() == 229 {
+        return None;
+    }
+    Some((
+        cranpose_app_shell::KeyCode::from_dom_code(&event.code()),
+        web_key_modifiers(event),
+    ))
+}
+
+fn wheel_uptime_millis() -> u64 {
+    crate::thread_state::with(|state| {
+        state
+            .web
+            .wheel_epoch
+            .get_or_init(web_time::Instant::now)
+            .elapsed()
+            .as_millis() as u64
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WebBackendPreference {
+    Auto,
+    WebGpu,
+    Gl,
+}
+
+#[derive(Debug)]
+struct BrowserDisplayHandle;
+
+impl wgpu::rwh::HasDisplayHandle for BrowserDisplayHandle {
+    fn display_handle(&self) -> Result<wgpu::rwh::DisplayHandle<'_>, wgpu::rwh::HandleError> {
+        Ok(wgpu::rwh::DisplayHandle::web())
+    }
+}
+
+#[derive(Default)]
+struct WebFrameTimer {
+    generation: Cell<u64>,
+    pending: Cell<bool>,
+}
+
+struct WebPlatformFrameDriver<'a> {
+    frame_timer: &'a Rc<WebFrameTimer>,
+    frame_pending: &'a Rc<Cell<bool>>,
+    render_loop: &'a RenderLoop,
+}
+
+impl WebPlatformFrameDriver<'_> {
+    /// Asks for a frame at `wake` too, unless the app's own schedule brings
+    /// one sooner. The accessibility mirror holds back changes until its next
+    /// sync, and a frame must come then even when the app asks for none.
+    fn also_wake_at(&self, schedule: FrameSchedule, wake: Option<web_time::Instant>) {
+        let Some(wake) = wake else {
+            return;
+        };
+        if schedule.needs_frame
+            || schedule.needs_update
+            || schedule
+                .next_deadline
+                .is_some_and(|deadline| deadline <= wake)
+        {
+            return;
+        }
+        self.clear_wake();
+        self.request_wake_at(wake);
+    }
+}
+
+impl PlatformFrameDriver for WebPlatformFrameDriver<'_> {
+    fn request_frame(&self) {
+        request_web_frame(self.frame_pending, self.render_loop, Some(self.frame_timer));
+    }
+
+    fn request_wake_at(&self, deadline: web_time::Instant) {
+        request_web_frame_at_deadline(
+            self.frame_timer,
+            deadline,
+            self.frame_pending,
+            self.render_loop,
+        );
+    }
+
+    fn clear_wake(&self) {
+        clear_web_frame_wake(self.frame_timer);
+    }
+}
+
+/// Runs a web Compose application with wgpu rendering.
+///
+/// Called by `AppLauncher::run_web()`. This is the framework-level
+/// entrypoint that manages the web canvas and rendering.
+///
+/// **Note:** Applications should use `AppLauncher` instead of calling this directly.
+pub async fn run(
+    canvas_id: &str,
+    settings: AppSettings,
+    content: impl FnMut() + 'static,
+) -> Result<(), JsValue> {
+    console_error_panic_hook::set_once();
+
+    let platform_env = crate::platform_env::PlatformEnvironment::new();
+    let mut content = content;
+    let content = {
+        let env = Rc::clone(&platform_env);
+        move || env.compose_root(&mut content)
+    };
+
+    super::services::register();
+    super::host_surface::install();
+    settings.start_process();
+
+    let window = web_sys::window().ok_or("no global window exists")?;
+    let document = window
+        .document()
+        .ok_or("should have a document on window")?;
+
+    let canvas = document
+        .get_element_by_id(canvas_id)
+        .ok_or_else(|| format!("canvas with id '{canvas_id}' not found"))?
+        .dyn_into::<HtmlCanvasElement>()?;
+
+    let scale_factor = window.device_pixel_ratio();
+    super::frame_host::follow(&canvas);
+
+    if let Some(html_element) = canvas.dyn_ref::<web_sys::HtmlElement>() {
+        let style = html_element.style();
+        for (property, value) in
+            super::canvas_layout::canvas_inline_styles(settings.web_fill_viewport)
+        {
+            style.set_property(property, value)?;
+        }
+    }
+    let (css_width, css_height) = canvas_css_size(&canvas);
+    let width = css_width.round() as u32;
+    let height = css_height.round() as u32;
+    let backend_preference = requested_web_backend(&window);
+    limit_webgl_extensions(settings.gpu_requirements);
+    let mut instance_desc =
+        wgpu::InstanceDescriptor::new_with_display_handle(Box::new(BrowserDisplayHandle));
+    instance_desc.backends = instance_backends(backend_preference);
+    let instance = match backend_preference {
+        WebBackendPreference::Auto => {
+            wgpu::util::new_instance_with_webgpu_detection(instance_desc).await
+        }
+        WebBackendPreference::WebGpu | WebBackendPreference::Gl => {
+            wgpu::Instance::new(instance_desc)
+        }
+    };
+
+    // Sized before its context exists, the canvas gets its drawing buffer
+    // at this size; sized after, WebGL makes it again.
+    let render_scale = super::surface_scale::web_canvas_buffer_scale(scale_factor);
+    let (buffer_width, buffer_height) =
+        super::surface_scale::web_canvas_device_size(css_width, css_height, scale_factor, None);
+    canvas.set_width(buffer_width);
+    canvas.set_height(buffer_height);
+    let surface = instance
+        .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
+        .map_err(|e| format!("failed to create surface: {e:?}"))?;
+    // WebGL keeps its frame in wgpu's own texture; a WebGPU canvas keeps
+    // none, and its frames draw whole.
+    surface.keep_presented_images(true);
+
+    let (adapter, device, queue) =
+        open_device(&instance, &surface, settings.gpu_requirements).await?;
+    let adapter_info = adapter.get_info();
+    log::info!(
+        "Web backend preference={:?}, selected backend={:?}, max_texture_dimension_2d={}",
+        backend_preference,
+        adapter_info.backend,
+        adapter.limits().max_texture_dimension_2d
+    );
+
+    let surface_caps = surface.get_capabilities(&adapter);
+    let surface_format =
+        crate::surface_format::select_display_surface_format(&surface_caps.formats)
+            .ok_or_else(|| JsValue::from_str("web surface reports no supported formats"))?;
+    let alpha_mode = surface_caps
+        .alpha_modes
+        .first()
+        .copied()
+        .ok_or_else(|| JsValue::from_str("web surface reports no supported alpha modes"))?;
+
+    let present_mode = crate::present_mode::select_present_mode(&surface_caps);
+    let surface_config = wgpu::SurfaceConfiguration {
+        usage: cranpose_render_wgpu::presentable_root_usages(surface_caps.usages),
+        format: surface_format,
+        width: buffer_width,
+        height: buffer_height,
+        present_mode,
+        alpha_mode,
+        color_space: wgpu::SurfaceColorSpace::Auto,
+        view_formats: crate::surface_format::display_surface_view_formats(surface_format),
+        desired_maximum_frame_latency: 2,
+    };
+
+    // The renderer starts, and with it the first screen's recorded
+    // pipelines, before the surface: the page reads nothing back from the
+    // GPU process until its first frame, so on WebGL the GPU process links
+    // their programs, one at a time, while the page sets up its surface and
+    // composes. On a Mate 20 X the gauntlet's programs started linking
+    // 30-40 ms sooner, and its first content in a cold Chrome came about
+    // 35 ms sooner.
+    let fonts = settings.resolve_font_set();
+    fold_glass_on_mobile_devices(&window);
+    let mut renderer = WgpuRenderer::with_font_set(fonts);
+    let (device, queue) = (Arc::new(device), Arc::new(queue));
+    let device_loss = super::device_loss::WebDeviceLoss::new(
+        crate::GpuContext {
+            instance: instance.clone(),
+            adapter: adapter.clone(),
+            device: Arc::clone(&device),
+            queue: Arc::clone(&queue),
+        },
+        settings.gpu_requirements,
+        adapter_info.backend,
+    );
+    renderer.set_device_lost_handler(device_loss.handler());
+    let discovery = Rc::new(PipelineDiscovery::new(GpuTarget {
+        device: Arc::clone(&device),
+        queue: Arc::clone(&queue),
+        surface_format: crate::surface_format::display_surface_view_format(surface_format),
+        backend: adapter_info.backend,
+        downlevel: adapter.get_downlevel_capabilities().flags,
+        surface_size: (buffer_width, buffer_height),
+    }));
+    discovery.start(&mut renderer).await;
+
+    surface.configure(&device, &surface_config);
+
+    let mut surface_config = surface_config;
+    let (actual_width, actual_height, effective_scale) =
+        if adapter_info.backend == wgpu::Backend::BrowserWebGpu {
+            present_initial_placeholder_frame(
+                &surface,
+                &device,
+                &queue,
+                surface_format,
+                "web initial present",
+            );
+            (surface_config.width, surface_config.height, render_scale)
+        } else {
+            let probe = match current_surface_texture(&surface, "web probe") {
+                SurfaceFrame::Ready(probe) => probe,
+                SurfaceFrame::Reconfigure => {
+                    return Err(
+                        "failed to probe surface texture: surface needs reconfiguration".into(),
+                    );
+                }
+                SurfaceFrame::Skip => {
+                    return Err("failed to probe surface texture: surface unavailable".into());
+                }
+            };
+            let actual_width = probe.texture.width();
+            let actual_height = probe.texture.height();
+            let probe_view = probe.texture.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(surface_format.remove_srgb_suffix()),
+                ..Default::default()
+            });
+            cranpose_render_wgpu::clear_to_default_background(&device, &queue, &probe_view);
+            queue.present(probe);
+            let effective_scale =
+                if actual_width < surface_config.width || actual_height < surface_config.height {
+                    let fit_x = actual_width as f64 / width as f64;
+                    let fit_y = actual_height as f64 / height as f64;
+                    let s = fit_x.min(fit_y);
+                    surface_config.width = actual_width;
+                    surface_config.height = actual_height;
+                    s
+                } else {
+                    render_scale
+                };
+            (actual_width, actual_height, effective_scale)
+        };
+    log::info!(
+        "Web canvas css={width}x{height}, buffer={actual_width}x{actual_height}, effective_scale={effective_scale:.2}, device_scale={scale_factor:.2}"
+    );
+
+    let content = crate::gpu_context::provide_current_gpu_context(device_loss.share(), content);
+
+    // The page runs idle prefetch passes between frames (`web_idle_prefetch`):
+    // a lazy list leaves them the items beyond its viewport that its scroll
+    // does not soon reach.
+    cranpose_ui::set_idle_prefetch_passes(true);
+    let app = Rc::new(RefCell::new(AppShell::new_with_size_and_density(
+        renderer,
+        default_root_key(),
+        content,
+        (actual_width, actual_height),
+        (css_width as f32, css_height as f32),
+        effective_scale as f32,
+    )));
+    app.borrow_mut()
+        .set_semantics_enabled(settings.web_accessibility_on_start);
+    app.borrow_mut().set_dev_options(settings.dev_options);
+    crate::accessibility::install_inspector(&mut app.borrow_mut(), settings.developer_inspector);
+    let platform = Rc::new(RefCell::new(WebPlatform::default()));
+    platform.borrow_mut().set_scale_factor(scale_factor);
+
+    let surface = Rc::new(surface);
+    let surface_config = Rc::new(RefCell::new(surface_config));
+    let render_loop: RenderLoop = Rc::new(RefCell::new(None));
+    let frame_pending = Rc::new(Cell::new(false));
+    let frame_timer = Rc::new(WebFrameTimer::default());
+    let surface_dirty = Rc::new(Cell::new(true));
+    let request_frame: Rc<dyn Fn()> = {
+        let frame_pending = Rc::clone(&frame_pending);
+        let render_loop = Rc::clone(&render_loop);
+        let frame_timer = Rc::clone(&frame_timer);
+        Rc::new(move || request_web_frame(&frame_pending, &render_loop, Some(&frame_timer)))
+    };
+    super::host_surface::wake_with(Rc::clone(&request_frame));
+    let accessibility = Rc::new(RefCell::new(
+        super::accessibility::WebAccessibilityBridge::install(
+            &document,
+            canvas.clone(),
+            Rc::clone(&app),
+            Rc::clone(&request_frame),
+        )?,
+    ));
+    let frame_running = Rc::new(Cell::new(false));
+    app.borrow_mut().set_frame_waker(frame_waker(
+        Rc::clone(&request_frame),
+        Rc::clone(&frame_running),
+        woken_task_pump(Rc::downgrade(&app)),
+    ));
+
+    super::clipboard::install(&app, Rc::clone(&request_frame));
+
+    super::drop::install(&canvas, Rc::clone(&request_frame))?;
+
+    super::power::start_battery_probe(Rc::clone(&request_frame));
+
+    app.borrow_mut()
+        .set_platform_text_input(accessibility.borrow().text_input_handler());
+
+    if let Ok(Some(query)) = window.match_media("(prefers-color-scheme: dark)") {
+        let initial = if query.matches() {
+            cranpose_services::SystemTheme::Dark
+        } else {
+            cranpose_services::SystemTheme::Light
+        };
+        platform_env.set_system_theme(initial);
+        let env = Rc::clone(&platform_env);
+        let app_for_theme = Rc::clone(&app);
+        let request_frame_for_theme = Rc::clone(&request_frame);
+        let closure = Closure::wrap(Box::new(move |event: web_sys::MediaQueryListEvent| {
+            let theme = if event.matches() {
+                cranpose_services::SystemTheme::Dark
+            } else {
+                cranpose_services::SystemTheme::Light
+            };
+            if env.set_system_theme(theme) {
+                app_for_theme.borrow_mut().request_root_render();
+                request_frame_for_theme();
+            }
+        }) as Box<dyn FnMut(_)>);
+        query.add_event_listener_with_callback("change", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+    super::accessibility_options::watch(&window, Rc::clone(&app), Rc::clone(&request_frame));
+    super::lifecycle::watch(&window, Rc::clone(&request_frame));
+
+    {
+        let app = Rc::clone(&app);
+        let platform = Rc::clone(&platform);
+        let wheel_canvas = canvas.clone();
+        let request_frame = Rc::clone(&request_frame);
+        let closure = Closure::wrap(Box::new(move |event: WheelEvent| {
+            let x = event.offset_x() as f64;
+            let y = event.offset_y() as f64;
+            let logical = platform.borrow().pointer_position(x, y);
+
+            let wheel = super::wheel::wheel_scroll_from_dom(
+                event.delta_x() as f32,
+                event.delta_y() as f32,
+                event.delta_mode(),
+                super::wheel::WebWheelPage {
+                    width: wheel_canvas.client_width() as f32,
+                    height: wheel_canvas.client_height() as f32,
+                },
+                web_modifiers(&event),
+                wheel_uptime_millis(),
+            );
+
+            if let Ok(mut app_mut) = app.try_borrow_mut() {
+                app_mut.set_cursor(logical.x, logical.y);
+                if app_mut.wheel_scrolled(wheel) {
+                    event.prevent_default();
+                }
+                request_frame();
+            }
+        }) as Box<dyn FnMut(_)>);
+        canvas.add_event_listener_with_callback("wheel", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+
+    super::pointer::listen(
+        &canvas,
+        Rc::clone(&app),
+        Rc::clone(&platform),
+        Rc::clone(&request_frame),
+    )?;
+
+    {
+        let app = Rc::clone(&app);
+        let request_frame = Rc::clone(&request_frame);
+        let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
+            use cranpose_app_shell::{KeyEvent, KeyEventType};
+
+            let Some((key_code, modifiers)) = web_key_event_prefix(&event) else {
+                return;
+            };
+            let text = {
+                let key = event.key();
+                if key.len() == 1 { key } else { String::new() }
+            };
+
+            let key_event = KeyEvent {
+                key_code,
+                text,
+                modifiers,
+                event_type: KeyEventType::KeyDown,
+            };
+
+            if let Ok(mut app_mut) = app.try_borrow_mut() {
+                if app_mut.on_key_event(&key_event) {
+                    event.prevent_default();
+                }
+                request_frame();
+            }
+        }) as Box<dyn FnMut(_)>);
+        document.add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+
+    {
+        let app = Rc::clone(&app);
+        let request_frame = Rc::clone(&request_frame);
+        let closure = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
+            use cranpose_app_shell::{KeyEvent, KeyEventType};
+
+            let Some((key_code, modifiers)) = web_key_event_prefix(&event) else {
+                return;
+            };
+
+            let key_event = KeyEvent {
+                key_code,
+                text: String::new(),
+                modifiers,
+                event_type: KeyEventType::KeyUp,
+            };
+
+            if let Ok(mut app_mut) = app.try_borrow_mut() {
+                app_mut.on_key_event(&key_event);
+                request_frame();
+            }
+        }) as Box<dyn FnMut(_)>);
+        document.add_event_listener_with_callback("keyup", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+
+    {
+        let app = Rc::clone(&app);
+        let request_frame = Rc::clone(&request_frame);
+        let closure = Closure::wrap(Box::new(move |event: web_sys::ClipboardEvent| {
+            if let Some(data) = event.clipboard_data()
+                && let Ok(text) = data.get_data("text/plain")
+                && !text.is_empty()
+                && let Ok(mut app_mut) = app.try_borrow_mut()
+            {
+                if app_mut.on_paste(&text) {
+                    event.prevent_default();
+                }
+                request_frame();
+            }
+        }) as Box<dyn FnMut(_)>);
+        document.add_event_listener_with_callback("paste", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+
+    {
+        let app = Rc::clone(&app);
+        let request_frame = Rc::clone(&request_frame);
+        let closure = Closure::wrap(Box::new(move |event: web_sys::ClipboardEvent| {
+            if let Ok(mut app_mut) = app.try_borrow_mut()
+                && let Some(text) = app_mut.on_copy()
+            {
+                if let Some(data) = event.clipboard_data() {
+                    let _ = data.set_data("text/plain", &text);
+                    event.prevent_default();
+                }
+                request_frame();
+            }
+        }) as Box<dyn FnMut(_)>);
+        document.add_event_listener_with_callback("copy", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+
+    {
+        let app = Rc::clone(&app);
+        let request_frame = Rc::clone(&request_frame);
+        let closure = Closure::wrap(Box::new(move |event: web_sys::ClipboardEvent| {
+            if let Ok(mut app_mut) = app.try_borrow_mut()
+                && let Some(text) = app_mut.on_cut()
+            {
+                if let Some(data) = event.clipboard_data() {
+                    let _ = data.set_data("text/plain", &text);
+                    event.prevent_default();
+                }
+                request_frame();
+            }
+        }) as Box<dyn FnMut(_)>);
+        document.add_event_listener_with_callback("cut", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+
+    let floating_size_owed: Rc<Cell<Option<(f32, f32)>>> = Rc::new(Cell::new(None));
+    let device_size: Rc<Cell<Option<(u32, u32)>>> = Rc::new(Cell::new(None));
+
+    let reshape: ReshapeFn = {
+        let canvas = canvas.clone();
+        let window = window.clone();
+        let app = Rc::clone(&app);
+        let surface = Rc::clone(&surface);
+        let surface_config = Rc::clone(&surface_config);
+        let surface_dirty = Rc::clone(&surface_dirty);
+        let request_frame = Rc::clone(&request_frame);
+        let floating_size_owed = Rc::clone(&floating_size_owed);
+        let device_size = Rc::clone(&device_size);
+        Rc::new(move |requested: Option<(f32, f32)>| {
+            if let Some(size) = requested {
+                apply_requested_canvas_size(&canvas, &window, size, &floating_size_owed);
+            }
+            let host = canvas_window(&canvas, &window);
+
+            let scale_factor = host.device_pixel_ratio();
+            let (width, height) = canvas_css_size(&canvas);
+            let (buffer_width, buffer_height) = super::surface_scale::web_canvas_device_size(
+                width,
+                height,
+                scale_factor,
+                device_size.get(),
+            );
+            let render_scale = super::surface_scale::web_canvas_buffer_scale(scale_factor);
+
+            let unchanged = {
+                let config = surface_config.borrow();
+                config.width == buffer_width && config.height == buffer_height
+            };
+            if unchanged && requested.is_none() {
+                return;
+            }
+
+            canvas.set_width(buffer_width);
+            canvas.set_height(buffer_height);
+            {
+                let mut config = surface_config.borrow_mut();
+                config.width = buffer_width;
+                config.height = buffer_height;
+                let mut app_mut = app.borrow_mut();
+                if let Some(device) = app_mut.renderer().try_device() {
+                    surface.configure(device, &config);
+                }
+                app_mut.set_buffer_size(buffer_width, buffer_height);
+                app_mut.set_viewport(width as f32, height as f32);
+                app_mut.set_density(render_scale as f32);
+                app_mut.request_root_render();
+            }
+            platform.borrow_mut().set_scale_factor(scale_factor);
+            super::host_surface::publish(width as f32, height as f32, render_scale as f32);
+            surface_dirty.set(true);
+            request_frame();
+        })
+    };
+
+    super::host_surface::publish(css_width as f32, css_height as f32, effective_scale as f32);
+
+    resize_owed_on_release(&canvas, &window, floating_size_owed)?;
+    let canvas_watch = Rc::new(super::canvas_watch::CanvasWatch::new(
+        canvas.clone(),
+        {
+            let reshape = Rc::clone(&reshape);
+            Rc::new(move || reshape(None))
+        },
+        device_size,
+    ));
+    canvas_watch.follow();
+
+    let render_loop_for_deadline = Rc::clone(&render_loop);
+    #[cfg(feature = "webview")]
+    let request_frame_for_loop = Rc::clone(&request_frame);
+    let recovery = Rc::new(super::device_loss::Recovery {
+        app: Rc::clone(&app),
+        surface: Rc::clone(&surface),
+        config: Rc::clone(&surface_config),
+        surface_dirty: Rc::clone(&surface_dirty),
+        request_frame: Rc::clone(&request_frame),
+        discovery: Rc::clone(&discovery),
+    });
+    device_loss.watch_canvas(&canvas, &recovery)?;
+    device_loss.schedule_drill(&window, &canvas);
+    let presenter = CanvasPresenter::new(
+        Rc::clone(&surface),
+        surface_config,
+        Rc::clone(&surface_dirty),
+        Rc::clone(&request_frame),
+        discovery,
+        Rc::downgrade(&app),
+    );
+    let document_for_loop = document.clone();
+    let cursors_for_loop = RefCell::new(super::cursor::WebCursors::new(
+        &canvas,
+        settings.custom_cursor_size,
+    ));
+    let canvas_for_cursor = canvas.clone();
+    let reshape_for_loop = Rc::clone(&reshape);
+
+    #[cfg(feature = "webview")]
+    let mut webviews = super::webview::BrowserViews::default();
+    #[cfg(feature = "webview")]
+    let webview_canvas = canvas.clone();
+
+    let idle_prefetch = super::idle_prefetch::IdlePrefetch::new(&app);
+    *render_loop.borrow_mut() = Some(Closure::wrap(Box::new(move || {
+        let frame_started_at = web_time::Instant::now();
+        frame_pending.set(false);
+        frame_running.set(true);
+        canvas_watch.follow();
+        #[cfg(feature = "webview")]
+        webviews.dispatch(&platform_env.native_views);
+        let update_result = app.borrow_mut().update();
+        #[cfg(feature = "webview")]
+        webviews.sync(
+            &platform_env.native_views,
+            &mut app.borrow_mut(),
+            &webview_canvas,
+            &request_frame_for_loop,
+        );
+        // A size the app asked for in this update is applied in the same
+        // frame, while the gesture that led to it still counts as one: a
+        // floating window only resizes itself in answer to one.
+        if let Some(size) = super::host_surface::take_requested_size() {
+            reshape_for_loop(Some(size));
+        }
+        super::cursor::sync_pointer_icon(
+            &cursors_for_loop,
+            &document_for_loop,
+            &canvas_for_cursor,
+            app.borrow().take_pointer_icon_change(),
+        );
+        if let Ok(mut app_mut) = app.try_borrow_mut()
+            && let Err(error) = accessibility
+                .borrow_mut()
+                .sync(&document_for_loop, &mut app_mut)
+        {
+            log::error!("web accessibility sync failed: {error:?}");
+        }
+
+        let present_required = surface_present_required(
+            surface_dirty.get(),
+            update_result.visual_changed,
+            app.borrow().needs_redraw(),
+        );
+        device_loss.recover(&recovery);
+        if present_required && !device_loss.paused() && presenter.present(&app, frame_started_at) {
+            device_loss.presented();
+        }
+
+        frame_running.set(false);
+        let frame_driver = WebPlatformFrameDriver {
+            frame_timer: &frame_timer,
+            frame_pending: &frame_pending,
+            render_loop: &render_loop_for_deadline,
+        };
+        let schedule = app.borrow().schedule_platform_frame(&frame_driver);
+        release_kept_copy_when_idle(&app, schedule);
+        frame_driver.also_wake_at(schedule, accessibility.borrow().sync_wake());
+        idle_prefetch.queue_after_frame(frame_started_at);
+    }) as Box<dyn FnMut()>));
+
+    request_frame();
+
+    Ok(())
+}
+
+/// Draws frames into the canvas.
+struct CanvasPresenter {
+    surface: Rc<wgpu::Surface<'static>>,
+    config: Rc<RefCell<wgpu::SurfaceConfiguration>>,
+    /// Whether the canvas shows less than the app holds.
+    dirty: Rc<Cell<bool>>,
+    request_frame: Rc<dyn Fn()>,
+    discovery: Rc<PipelineDiscovery>,
+    /// Asks for a frame that draws again.
+    redraw: Rc<dyn Fn()>,
+    /// Draws the frame the app holds at once, outside an animation frame:
+    /// once the first frame's pipelines compiled, the frame they were
+    /// discovered for shows without waiting for the next animation frame
+    /// and the update it runs first.
+    draw_now: Rc<dyn Fn()>,
+}
+
+impl CanvasPresenter {
+    fn new(
+        surface: Rc<wgpu::Surface<'static>>,
+        config: Rc<RefCell<wgpu::SurfaceConfiguration>>,
+        dirty: Rc<Cell<bool>>,
+        request_frame: Rc<dyn Fn()>,
+        discovery: Rc<PipelineDiscovery>,
+        app: std::rc::Weak<RefCell<AppShell<WgpuRenderer>>>,
+    ) -> Rc<Self> {
+        let redraw: Rc<dyn Fn()> = {
+            let dirty = Rc::clone(&dirty);
+            let request_frame = Rc::clone(&request_frame);
+            Rc::new(move || {
+                dirty.set(true);
+                request_frame();
+            })
+        };
+        Rc::new_cyclic(|presenter: &std::rc::Weak<Self>| {
+            let presenter = std::rc::Weak::clone(presenter);
+            let request_redraw = Rc::clone(&redraw);
+            let draw_now: Rc<dyn Fn()> =
+                Rc::new(move || match (presenter.upgrade(), app.upgrade()) {
+                    (Some(presenter), Some(app)) if app.try_borrow_mut().is_ok() => {
+                        presenter.present(&app, web_time::Instant::now());
+                    }
+                    _ => request_redraw(),
+                });
+            Self {
+                surface,
+                config,
+                dirty,
+                request_frame,
+                discovery,
+                redraw,
+                draw_now,
+            }
+        })
+    }
+
+    /// Draws `app` into the canvas's next image and presents it, or
+    /// reconfigures a surface the browser reports lost. While the first
+    /// frame's pipelines compile, the canvas keeps what it shows. A
+    /// presented frame counts in the frame statistics from `started_at`.
+    fn present(
+        &self,
+        app: &RefCell<AppShell<WgpuRenderer>>,
+        started_at: web_time::Instant,
+    ) -> bool {
+        if !self.discovery.may_draw() {
+            return false;
+        }
+        let config = self.config.borrow();
+        match current_surface_texture(&self.surface, "web") {
+            SurfaceFrame::Ready(output) => {
+                let view = output.texture.create_view(&wgpu::TextureViewDescriptor {
+                    format: Some(crate::surface_format::display_surface_view_format(
+                        config.format,
+                    )),
+                    ..Default::default()
+                });
+                let render_width = output.texture.width();
+                let render_height = output.texture.height();
+                {
+                    let mut app_mut = app.borrow_mut();
+                    self.discovery.begin_frame(app_mut.renderer());
+                    if let Err(err) = app_mut.renderer().render_surface_texture(
+                        &output,
+                        &view,
+                        render_width,
+                        render_height,
+                    ) {
+                        log::error!("render failed: {err:?}");
+                    }
+                    app_mut.renderer().present(output);
+                    app_mut.record_presented_frame(started_at, web_time::Instant::now());
+                }
+                self.discovery.end_frame(&self.redraw, &self.draw_now);
+                self.dirty.set(false);
+                true
+            }
+            SurfaceFrame::Reconfigure => {
+                {
+                    let mut app_mut = app.borrow_mut();
+                    if let Some(device) = app_mut.renderer().try_device() {
+                        self.surface.configure(device, &config);
+                    } else {
+                        log::error!(
+                            "web surface reconfigure skipped: GPU renderer is not initialized"
+                        );
+                    }
+                }
+                self.dirty.set(true);
+                (self.request_frame)();
+                false
+            }
+            SurfaceFrame::Skip => {
+                self.dirty.set(true);
+                false
+            }
+        }
+    }
+}
+
+/// Opens a device on an adapter that draws to `surface`, with the features and
+/// limits the app asks for: at startup and after a device is lost.
+pub(crate) async fn open_device(
+    instance: &wgpu::Instance,
+    surface: &wgpu::Surface<'static>,
+    requirements: crate::GpuRequirements,
+) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), String> {
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: Some(surface),
+            force_fallback_adapter: false,
+            apply_limit_buckets: false,
+        })
+        .await
+        .map_err(|e| format!("failed to find suitable adapter: {e:?}"))?;
+    let backend = adapter.get_info().backend;
+    let required_limits = requirements.limits_on(
+        &adapter,
+        required_limits_for_web_backend(backend, adapter.limits()),
+    );
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("Main Device"),
+            required_features: cranpose_render_wgpu::optional_device_features(&adapter)
+                | requirements.features_on(&adapter),
+            required_limits,
+            experimental_features: wgpu::ExperimentalFeatures::disabled(),
+            memory_hints: wgpu::MemoryHints::default(),
+            trace: wgpu::Trace::Off,
+        })
+        .await
+        .map_err(|e| format!("failed to create device: {e:?}"))?;
+    Ok((adapter, device, queue))
+}
+
+/// Once the app holds still, the copy of the frame the renderer may keep for
+/// the canvas goes until frames change again.
+fn release_kept_copy_when_idle(app: &RefCell<AppShell<WgpuRenderer>>, schedule: FrameSchedule) {
+    if schedule.is_idle() {
+        app.borrow_mut().renderer().release_kept_copy();
+    }
+}
+
+fn request_animation_frame(window: &web_sys::Window, f: &Closure<dyn FnMut()>) -> bool {
+    match window.request_animation_frame(f.as_ref().unchecked_ref()) {
+        Ok(_) => true,
+        Err(error) => {
+            log::error!("requestAnimationFrame registration failed: {error:?}");
+            false
+        }
+    }
+}
+
+/// The app's frame waker: a wake outside a frame asks the window for one; a
+/// wake inside a running frame only runs the woken tasks, since the frame asks
+/// for the next one at its end from what the app still needs.
+fn frame_waker(
+    request_frame: Rc<dyn Fn()>,
+    frame_running: Rc<Cell<bool>>,
+    run_tasks: impl Fn() + 'static,
+) -> impl Fn() + 'static {
+    move || {
+        if !frame_running.get() {
+            request_frame();
+        }
+        run_tasks();
+    }
+}
+
+/// Runs the tasks a wake-up made ready as a microtask once the running script
+/// yields, rather than in the next animation frame: a coroutine whose `delay`
+/// ran out resumes when its timer fires, as Compose's main dispatcher resumes
+/// one, and the frame draws what it changed. One pump is queued at a time.
+fn woken_task_pump(app: std::rc::Weak<RefCell<AppShell<WgpuRenderer>>>) -> impl Fn() + 'static {
+    let queued = Rc::new(Cell::new(false));
+    move || {
+        if queued.replace(true) {
+            return;
+        }
+        let queued = Rc::clone(&queued);
+        let app = std::rc::Weak::clone(&app);
+        wasm_bindgen_futures::spawn_local(async move {
+            queued.set(false);
+            if let Some(app) = app.upgrade()
+                && let Ok(mut app) = app.try_borrow_mut()
+            {
+                app.run_pending_tasks();
+            }
+        });
+    }
+}
+
+fn request_web_frame(
+    frame_pending: &Cell<bool>,
+    render_loop: &RenderLoop,
+    timer: Option<&WebFrameTimer>,
+) {
+    if let Some(timer) = timer {
+        timer.pending.set(false);
+        timer
+            .generation
+            .set(timer.generation.get().saturating_add(1));
+    }
+    let Some(host) = super::frame_host::window() else {
+        log::error!("requestAnimationFrame unavailable: browser window is not available");
+        return;
+    };
+    if frame_pending.replace(true) && super::frame_host::asked_of(&host) {
+        return;
+    }
+    let render_loop = render_loop.borrow();
+    let Some(render_loop) = render_loop.as_ref() else {
+        frame_pending.set(false);
+        return;
+    };
+    if request_animation_frame(&host, render_loop) {
+        super::frame_host::note_asked(&host);
+    } else {
+        frame_pending.set(false);
+    }
+}
+
+fn request_web_frame_at_deadline(
+    timer: &Rc<WebFrameTimer>,
+    deadline: web_time::Instant,
+    frame_pending: &Rc<Cell<bool>>,
+    render_loop: &RenderLoop,
+) {
+    if frame_pending.get() || timer.pending.get() {
+        return;
+    }
+
+    timer.pending.set(true);
+    let generation = timer.generation.get();
+    let delay = deadline
+        .checked_duration_since(web_time::Instant::now())
+        .unwrap_or_default();
+    let delay_ms = delay.as_millis().min(i32::MAX as u128) as i32;
+    let timer_for_timeout = Rc::clone(timer);
+    let frame_pending_for_timeout = Rc::clone(frame_pending);
+    let render_loop_for_timeout = Rc::clone(render_loop);
+    let callback = Closure::once_into_js(move || {
+        if timer_for_timeout.generation.get() != generation {
+            return;
+        }
+        timer_for_timeout.pending.set(false);
+        request_web_frame(
+            &frame_pending_for_timeout,
+            &render_loop_for_timeout,
+            Some(&timer_for_timeout),
+        );
+    });
+
+    let Some(window) = super::frame_host::window() else {
+        log::error!("setTimeout unavailable: browser window is not available");
+        timer.pending.set(false);
+        request_web_frame(frame_pending, render_loop, Some(timer));
+        return;
+    };
+
+    if let Err(error) = window
+        .set_timeout_with_callback_and_timeout_and_arguments_0(callback.unchecked_ref(), delay_ms)
+    {
+        log::error!("setTimeout registration failed for frame deadline: {error:?}");
+        timer.pending.set(false);
+        request_web_frame(frame_pending, render_loop, Some(timer));
+    }
+}
+
+fn clear_web_frame_wake(timer: &WebFrameTimer) {
+    timer.pending.set(false);
+    timer
+        .generation
+        .set(timer.generation.get().saturating_add(1));
+}
+
+/// Turns the liquid glass material folds on when the page runs on a phone or
+/// tablet: a user agent that says so, or iPadOS Safari, which reports a
+/// desktop one but takes touch. Their tile-based GPUs are where the folds
+/// repay their compiles: a Mali-G76 shades a full-screen unfolded glass in
+/// about half a second and a folded one within the frame.
+fn fold_glass_on_mobile_devices(window: &web_sys::Window) {
+    let navigator = window.navigator();
+    let agent = navigator.user_agent().unwrap_or_default();
+    if agent.contains("Mobi")
+        || agent.contains("Android")
+        || (agent.contains("Macintosh") && navigator.max_touch_points() > 1)
+    {
+        cranpose_ui_graphics::set_glass_material_folds(true);
+    }
+}
+
+fn requested_web_backend(window: &web_sys::Window) -> WebBackendPreference {
+    let query = window.location().search().unwrap_or_default();
+    for pair in query.trim_start_matches('?').split('&') {
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        if key != "backend" {
+            continue;
+        }
+        return match value {
+            "webgpu" => WebBackendPreference::WebGpu,
+            "gl" => WebBackendPreference::Gl,
+            _ => WebBackendPreference::Auto,
+        };
+    }
+    WebBackendPreference::Auto
+}
+
+fn instance_backends(preference: WebBackendPreference) -> wgpu::Backends {
+    match preference {
+        WebBackendPreference::Auto => wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL,
+        WebBackendPreference::WebGpu => wgpu::Backends::BROWSER_WEBGPU,
+        WebBackendPreference::Gl => wgpu::Backends::GL,
+    }
+}
+
+// Cranpose's renderer needs no WebGL extension beyond the ones `glow` itself
+// uses, and each one a page enables can wait for the browser's GPU process
+// (forks/README.md). Code that renders with Cranpose's device, such as a game
+// engine, says what it needs, and then gets every one.
+fn limit_webgl_extensions(requirements: crate::GpuRequirements) {
+    if requirements == crate::GpuRequirements::default() {
+        wgpu::hal::gles::ask_only_for_used_extensions();
+    }
+}
+
+fn required_limits_for_web_backend(
+    backend: wgpu::Backend,
+    adapter_limits: wgpu::Limits,
+) -> wgpu::Limits {
+    match backend {
+        wgpu::Backend::BrowserWebGpu => wgpu::Limits::default().using_resolution(adapter_limits),
+        _ => wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter_limits),
+    }
+}

@@ -11,7 +11,7 @@ pub(crate) fn select_present_mode(caps: &wgpu::SurfaceCapabilities) -> wgpu::Pre
 
 #[cfg(target_os = "android")]
 pub(crate) fn select_android_present_mode(caps: &wgpu::SurfaceCapabilities) -> wgpu::PresentMode {
-    let requested = crate::android_frame_telemetry::system_property("debug.cranpose.present_mode")
+    let requested = crate::android::frame_telemetry::system_property("debug.cranpose.present_mode")
         .as_deref()
         .and_then(parse_present_mode);
     select_android_present_mode_for_request(caps, requested)

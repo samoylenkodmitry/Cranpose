@@ -801,7 +801,7 @@ fn find_text_exact_local(
 
 /// `wait_for_idle` returning `Err` means it hit its own timeout while the
 /// app was still mid-animation (see `RobotResponse::Error` in
-/// `crates/cranpose/src/desktop.rs`'s `wait_for_idle` handler) -- under host
+/// `crates/cranpose/src/desktop/event_loop.rs`'s `wait_for_idle` handler) -- under host
 /// load this can happen while a fling is still genuinely carrying the
 /// scroll position forward. Discarding that `Err` (as this helper used to,
 /// via `let _ = robot.wait_for_idle();`) let a ground-truth read that
