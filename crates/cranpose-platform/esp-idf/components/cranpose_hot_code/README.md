@@ -11,9 +11,9 @@ animated frame:
 | Per frame | instructions | cycles waiting for code | cycles waiting for data |
 | --- | --- | --- | --- |
 | ES3C35P (ESP32-S3), all code in flash | 64K | 702K | 81K |
-| ES3C35P, this component on | 64K | 42K | 13K |
+| ES3C35P, this component on | 64K | 32K | 11K |
 | E32R35T (classic ESP32), all code in flash | 55K | 777K | 108K |
-| E32R35T, this component on | 55K | 267K | 48K |
+| E32R35T, this component on | 56K | 263K | 50K |
 
 This component links the framework functions that a frame runs most into
 IRAM, the internal RAM that the CPU fetches without the cache. A linker
@@ -23,9 +23,9 @@ output section after ESP-IDF's own IRAM code.
 | Frame | demo | a drawn line of text changing every frame | a composed one |
 | --- | --- | --- | --- |
 | ES3C35P, without | 3.14 ms | 5.99 ms | 8.52 ms |
-| ES3C35P, with 125 KB | 0.53 ms | 2.55 ms | 4.98 ms |
+| ES3C35P, with 125 KB | 0.48 ms | 2.36 ms | 4.92 ms |
 | E32R35T, without | 3.49 ms | 7.28 ms | 9.77 ms |
-| E32R35T, with 64 KB | 1.42 ms | 4.19 ms | 7.01 ms |
+| E32R35T, with 64 KB | 1.39 ms | 4.12 ms | 7.07 ms |
 
 The demo's bar reads its animated width while it draws, so its frames
 neither compose nor lay out; so does the drawn line. A composed line runs
@@ -65,7 +65,9 @@ panel that comes and goes, a counting button and a list that scrolls by
 itself. The busier screen keeps the list from fitting the benchmark lines
 alone: against a list of the three benchmark screens it runs the ES3C35P's
 demo frame 0.07 ms and its drawn line 0.19 ms slower, and its composed line
-0.12 ms faster. The E32R35T does not have the memory for it yet.
+0.12 ms faster. The E32R35T's 64 KB have no room for it: with its profile
+the busier screen ran no faster there (12.31 ms a frame against 12.23) and
+the demo frame 0.23 ms slower.
 
 - `esp32s3.ld` comes from QEMU: `just esp32-sim-profile MODE` builds the
   demo for QEMU's ESP32-S3 without this component and counts the misses of

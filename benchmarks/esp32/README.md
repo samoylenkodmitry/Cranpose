@@ -50,13 +50,13 @@ Both apps run their code from flash on both boards.
 
 | | Cranpose ES3C35P | LVGL ES3C35P | Cranpose E32R35T | LVGL E32R35T |
 | --- | --- | --- | --- | --- |
-| Frame | 0.53 ms | 1.14 ms | 1.42 ms | 2.21 ms |
-| Instructions | 64K | 159K | 55K | 181K |
-| Cycles waiting for code | 42K | 58K | 267K | 229K |
-| Cycles waiting for data | 13K | 8K | 48K | 35K |
-| First frame after reset | 338 ms | 342 ms | 420 ms | 439 ms |
+| Frame | 0.48 ms | 1.14 ms | 1.39 ms | 2.21 ms |
+| Instructions | 64K | 159K | 56K | 181K |
+| Cycles waiting for code | 32K | 58K | 263K | 229K |
+| Cycles waiting for data | 11K | 8K | 50K | 35K |
+| First frame after reset | 337 ms | 342 ms | 420 ms | 439 ms |
 | Internal RAM free (lowest) | 97 KB (66 KB) | 135 KB (103 KB) | 138 KB (136 KB) | 198 KB (198 KB) |
-| App image | 2.94 MB | 0.52 MB | 2.88 MB | 0.47 MB |
+| App image | 2.93 MB | 0.52 MB | 2.88 MB | 0.47 MB |
 
 Cranpose runs about a third of LVGL's instructions for this frame. Most of
 the rest of its time waits for code, more on the classic ESP32, whose 64 KB
@@ -76,14 +76,14 @@ composes the number in a `Text` (`--feature text-composed`) or draws it in
 | Frame | ES3C35P | E32R35T |
 | --- | --- | --- |
 | LVGL, label set every frame | 2.83 ms | 4.46 ms |
-| Cranpose, drawn | 2.55 ms | 4.19 ms |
-| Cranpose, composed | 4.98 ms | 7.01 ms |
+| Cranpose, drawn | 2.36 ms | 4.12 ms |
+| Cranpose, composed | 4.92 ms | 7.07 ms |
 
 A drawn line takes no composition or layout, as the bar does. A composed
 line composes its `Text` and lays it out each frame: fewer instructions
 than LVGL's frame (195K against 331K on the ES3C35P), but over more code
 than IRAM and the cache hold, so it waits more than three times as long for
-code (880K cycles against 263K).
+code (890K cycles against 263K).
 
 Before its first frame each app waits out the panel's reset and start-up
 sequence, about 260 ms on the ES3C35P and 220 ms on the E32R35T. LVGL
