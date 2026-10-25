@@ -63,7 +63,6 @@ limit = 1000
 "crates/cranpose-render/common/src/scene_builder.rs" = 3420
 "crates/cranpose-render/common/src/software_text_raster.rs" = 5664
 "crates/cranpose-render/gl-templates/src/generate.rs" = 1463
-"crates/cranpose-render/pixels/src/draw.rs" = 1262
 "crates/cranpose-render/pixels/src/pipeline.rs" = 1563
 "crates/cranpose-render/wgpu/src/collect.rs" = 1801
 "crates/cranpose-render/wgpu/src/draw_pass.rs" = 2182
