@@ -14,6 +14,12 @@
 //! cargo run --package desktop-app --example round_glass_probe --features desktop,robot-app
 //! ```
 
+#![allow(
+    clippy::print_stderr,
+    clippy::print_stdout,
+    reason = "an example prints its results"
+)]
+
 #[path = "../robot-runners/robot_shot.rs"]
 #[expect(dead_code)]
 mod robot_shot;

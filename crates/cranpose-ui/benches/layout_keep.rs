@@ -5,6 +5,8 @@
 //! `FRAMES=0` and `FRAMES=1000` and divide the difference in retired
 //! instructions by 1000.
 
+#![allow(clippy::print_stdout, reason = "a benchmark prints its numbers")]
+
 use cranpose_core::{Composition, MemoryApplier, MutableState, location_key};
 use cranpose_ui::{
     AppContext, BoxWithConstraints, Column, ColumnSpec, Modifier, Row, RowSpec, Size, Text,

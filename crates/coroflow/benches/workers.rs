@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, reason = "a benchmark prints its numbers")]
+
 use std::{
     sync::{Arc, Condvar, Mutex, mpsc},
     time::{Duration, Instant},

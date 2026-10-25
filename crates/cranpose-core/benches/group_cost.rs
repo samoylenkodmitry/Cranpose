@@ -5,6 +5,8 @@
 //! with `LEAVES=0` and `LEAVES=1000` and divide the difference in retired
 //! instructions by `FRAMES * 1000`.
 
+#![allow(clippy::print_stdout, reason = "a benchmark prints its numbers")]
+
 use std::hint::black_box;
 
 use cranpose_core::{Composition, MemoryApplier, MutableState, location_key};

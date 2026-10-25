@@ -5,6 +5,8 @@
 //! `CHILDREN=0` and `CHILDREN=1000` and divide the difference in retired
 //! instructions by `FRAMES * 1000`.
 
+#![allow(clippy::print_stdout, reason = "a benchmark prints its numbers")]
+
 use std::hint::black_box;
 
 use cranpose_core::{

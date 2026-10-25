@@ -1,3 +1,4 @@
+#![allow(clippy::print_stdout, reason = "a test prints what it measured")]
 #![cfg(feature = "embedded-default-font")]
 
 use std::{alloc::System, cell::RefCell, rc::Rc};

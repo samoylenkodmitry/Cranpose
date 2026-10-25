@@ -2647,6 +2647,7 @@ pub(crate) mod fence_profile {
 
     /// Charges the frame's last pass and prints the per-label ranking once per
     /// report period.
+    #[expect(clippy::print_stderr, reason = "the report prints when switched on")]
     pub(crate) fn end_frame(
         device: &wgpu::Device,
         queue: &wgpu::Queue,

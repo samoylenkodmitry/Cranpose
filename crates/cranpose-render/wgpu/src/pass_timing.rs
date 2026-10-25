@@ -92,6 +92,7 @@ pub(crate) struct PassTimer {
 }
 
 impl PassTimer {
+    #[expect(clippy::print_stderr, reason = "explains why no timings come")]
     pub(crate) fn for_device(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
         if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             eprintln!(
@@ -339,6 +340,7 @@ impl PassTimer {
         }
     }
 
+    #[expect(clippy::print_stderr, reason = "pass timings print when requested")]
     fn print_and_reset_window(&self, frame: u64) {
         let report = self.report();
         if report.frames > 0 || report.invalid_frames > 0 || report.dropped_frames > 0 {

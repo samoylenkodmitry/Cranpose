@@ -1,3 +1,9 @@
+#![allow(
+    clippy::print_stderr,
+    clippy::print_stdout,
+    reason = "a command-line tool prints its output"
+)]
+
 use std::{collections::BTreeMap, env, fs, path::Path};
 
 use anyhow::{Context, Result, bail};

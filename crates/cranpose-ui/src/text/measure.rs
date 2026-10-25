@@ -1387,6 +1387,7 @@ impl LayoutSource<'_> {
     }
 }
 
+#[expect(clippy::print_stderr, reason = "layout telemetry, when switched on")]
 fn prepare_layout<M: TextMeasurer + ?Sized>(
     measurer: &M,
     node_id: Option<NodeId>,

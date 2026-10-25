@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, reason = "a benchmark prints its numbers")]
+
 use std::{hint::black_box, time::Instant};
 
 use cranpose_core::{

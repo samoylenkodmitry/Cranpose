@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, reason = "an example prints its results")]
+
 use cranpose_core::{Composition, MemoryApplier, location_key};
 use cranpose_ui::{Column, ColumnSpec, Modifier, Text, TextStyle, composable};
 

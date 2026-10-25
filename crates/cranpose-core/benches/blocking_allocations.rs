@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, reason = "a benchmark prints its numbers")]
+
 use std::alloc::System;
 
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};

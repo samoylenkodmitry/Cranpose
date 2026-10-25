@@ -3,7 +3,7 @@ use std::{
     collections::HashMap,
 };
 
-use cranpose_core::NodeMarks;
+use cranpose_core::{NodeMarks, collections::map::HashMap as NodeMap};
 use cranpose_ui_graphics::FxBuildHasher;
 
 use crate::{
@@ -20,8 +20,7 @@ pub(crate) struct RenderThreadState {
     pub(crate) hit_geometry_scratch: Cell<Vec<HitGraphState>>,
     /// The dirty nodes of a scene update, kept empty between updates so no
     /// frame makes or allocates the map.
-    pub(crate) dirty_node_scratch:
-        Cell<Option<cranpose_core::collections::map::HashMap<cranpose_core::NodeId, NodeUpdate>>>,
+    pub(crate) dirty_node_scratch: Cell<Option<NodeMap<cranpose_core::NodeId, NodeUpdate>>>,
     pub(crate) command_recordings: RefCell<HashMap<RecorderKey, RecorderSlot, FxBuildHasher>>,
     pub(crate) recording_generation: Cell<u64>,
     /// Whether a scene update or build changed a layer in 3D since the

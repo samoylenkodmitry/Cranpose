@@ -4,6 +4,8 @@
 //! `/usr/bin/time -l` with `DEPTH=0` and `DEPTH=200` and divide the
 //! difference in retired instructions by `FRAMES * 200`.
 
+#![allow(clippy::print_stdout, reason = "a benchmark prints its numbers")]
+
 use std::hint::black_box;
 
 use cranpose_core::{

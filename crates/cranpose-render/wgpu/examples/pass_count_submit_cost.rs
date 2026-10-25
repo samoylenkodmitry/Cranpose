@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, reason = "an example prints its results")]
+
 use std::time::{Duration, Instant};
 
 const WIDTH: u32 = 1080;

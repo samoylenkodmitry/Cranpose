@@ -97,6 +97,7 @@ impl<A: Applier + 'static> Composition<A> {
         self.last_pass_stats = CompositionPassDebugStats::default();
     }
 
+    #[expect(clippy::print_stderr, reason = "COMPOSE_DEBUG_SLOT_TABLE asks for it")]
     fn maybe_dump_slot_table(&self, label: &str) {
         if !crate::env_flag!("COMPOSE_DEBUG_SLOT_TABLE") {
             return;
@@ -472,6 +473,7 @@ impl<A: Applier + 'static> Composition<A> {
         scope_groups
     }
 
+    #[expect(clippy::print_stderr, reason = "a scope telemetry threshold asks")]
     fn process_invalid_scopes_until_root_request(&mut self) -> Result<bool, NodeError> {
         let runtime_handle = self.runtime_handle();
         let mut did_recompose = false;

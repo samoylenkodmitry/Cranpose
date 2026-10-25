@@ -1,3 +1,9 @@
+#![allow(
+    clippy::print_stderr,
+    clippy::print_stdout,
+    reason = "a robot run reports each step on the terminal"
+)]
+
 use std::process::{ExitCode, Termination};
 
 mod external_x11_frame_telemetry;

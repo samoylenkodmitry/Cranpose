@@ -32,6 +32,7 @@ pub fn semantics_contain_text(node: &cranpose_ui::SemanticsNode, text: &str) -> 
 /// The metric line is printed in a stable machine-readable form:
 /// `{metric} stage=<stage> work_fps=<fps> work_avg_ms=<ms> frames=<count> ...`.
 #[cfg(feature = "desktop-robot")]
+#[expect(clippy::print_stdout, reason = "robot runs read this line")]
 pub fn assert_robot_fps_over(
     robot: &cranpose::Robot,
     metric: &str,

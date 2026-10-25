@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, reason = "a benchmark prints its numbers")]
+
 use std::{cell::Cell, hint::black_box, rc::Rc, time::Instant};
 
 use cranpose_core::{

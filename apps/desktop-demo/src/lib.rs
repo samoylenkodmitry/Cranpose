@@ -1,3 +1,9 @@
+#![allow(
+    clippy::print_stderr,
+    clippy::print_stdout,
+    reason = "the demo application reports launch failures and its traces on the terminal"
+)]
+
 pub mod app;
 pub mod fonts;
 

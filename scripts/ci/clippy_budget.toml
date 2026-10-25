@@ -17,8 +17,7 @@
 "clippy::missing_assert_message" = 191
 "clippy::multiple_inherent_impl" = 121
 "clippy::needless_pass_by_value" = 179
-"clippy::print_stderr" = 95
-"clippy::print_stdout" = 94
+"clippy::print_stderr" = 7
 "clippy::ref_option" = 18
 "clippy::significant_drop_tightening" = 203
 "clippy::string_slice" = 263
