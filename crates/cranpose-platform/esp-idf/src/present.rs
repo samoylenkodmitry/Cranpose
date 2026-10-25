@@ -114,7 +114,8 @@ impl Presenter {
     /// start-up, so that only its transfer is left once the display reads
     /// pixels: whole into PSRAM, when it covers the panel and the chip has
     /// the room, and returns it; else only the glyphs of its text, into the
-    /// glyph cache.
+    /// glyph cache. Out of line, as only the first pictures draw ahead.
+    #[inline(never)]
     fn draw_ahead(
         &mut self,
         framebuffer: &mut Framebuffer,

@@ -305,8 +305,8 @@ pub trait Renderer {
         viewport: Size,
     ) -> Result<(), Self::Error>;
 
-    /// Updates the scene for the nodes in `updates` and refreshes the hit targets. The default
-    /// implementation rebuilds the whole scene.
+    /// Updates the scene for the nodes in `updates`, and the hit targets when the update changed
+    /// one or the geometry above one. The default implementation rebuilds the whole scene.
     fn update_scene_from_applier(
         &mut self,
         applier: &mut cranpose_core::MemoryApplier,
@@ -318,8 +318,8 @@ pub trait Renderer {
         self.rebuild_scene_from_applier(applier, root, viewport)
     }
 
-    /// Updates the scene when only what is drawn changed. Hit targets are refreshed only when their
-    /// geometry changed. The default implementation calls `update_scene_from_applier`.
+    /// Updates the scene when only what is drawn changed: nothing was composed or laid out. The
+    /// default implementation calls `update_scene_from_applier`.
     fn update_visual_scene_from_applier(
         &mut self,
         applier: &mut cranpose_core::MemoryApplier,

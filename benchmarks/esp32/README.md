@@ -44,18 +44,19 @@ internal RAM.
 The demo's bar reads the animated width in its draw: each frame records the
 bar's drawing again, as LVGL draws its bar again, without composing or
 laying out the screen. The framework code such frames run most is in IRAM
-(`cranpose_hot_code`, from profiles of this demo and of the text below).
+(`cranpose_hot_code`, from profiles of this demo, of the text below and, on
+the ES3C35P, of a busier screen).
 Both apps run their code from flash on both boards.
 
 | | Cranpose ES3C35P | LVGL ES3C35P | Cranpose E32R35T | LVGL E32R35T |
 | --- | --- | --- | --- | --- |
-| Frame | 0.50 ms | 1.14 ms | 1.60 ms | 2.21 ms |
-| Instructions | 64K | 159K | 56K | 181K |
-| Cycles waiting for code | 40K | 58K | 306K | 229K |
-| Cycles waiting for data | 11K | 8K | 51K | 35K |
-| First frame after reset | 337 ms | 342 ms | 420 ms | 439 ms |
-| Internal RAM free (lowest) | 97 KB (66 KB) | 135 KB (103 KB) | 135 KB (132 KB) | 198 KB (198 KB) |
-| App image | 2.94 MB | 0.52 MB | 2.89 MB | 0.47 MB |
+| Frame | 0.53 ms | 1.14 ms | 1.42 ms | 2.21 ms |
+| Instructions | 64K | 159K | 55K | 181K |
+| Cycles waiting for code | 42K | 58K | 267K | 229K |
+| Cycles waiting for data | 13K | 8K | 48K | 35K |
+| First frame after reset | 338 ms | 342 ms | 420 ms | 439 ms |
+| Internal RAM free (lowest) | 97 KB (66 KB) | 135 KB (103 KB) | 138 KB (136 KB) | 198 KB (198 KB) |
+| App image | 2.94 MB | 0.52 MB | 2.88 MB | 0.47 MB |
 
 Cranpose runs about a third of LVGL's instructions for this frame. Most of
 the rest of its time waits for code, more on the classic ESP32, whose 64 KB
@@ -75,14 +76,14 @@ composes the number in a `Text` (`--feature text-composed`) or draws it in
 | Frame | ES3C35P | E32R35T |
 | --- | --- | --- |
 | LVGL, label set every frame | 2.83 ms | 4.46 ms |
-| Cranpose, drawn | 2.65 ms | 4.25 ms |
-| Cranpose, composed | 5.82 ms | 7.53 ms |
+| Cranpose, drawn | 2.55 ms | 4.19 ms |
+| Cranpose, composed | 4.98 ms | 7.01 ms |
 
 A drawn line takes no composition or layout, as the bar does. A composed
 line composes its `Text` and lays it out each frame: fewer instructions
-than LVGL's frame (205K against 331K on the ES3C35P), but over more code
-than IRAM and the cache hold, so it waits three to four times as long for
-code (1,073K cycles against 263K).
+than LVGL's frame (195K against 331K on the ES3C35P), but over more code
+than IRAM and the cache hold, so it waits more than three times as long for
+code (880K cycles against 263K).
 
 Before its first frame each app waits out the panel's reset and start-up
 sequence, about 260 ms on the ES3C35P and 220 ms on the E32R35T. LVGL

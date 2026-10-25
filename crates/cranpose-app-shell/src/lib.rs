@@ -289,9 +289,15 @@ struct UpdateOutcome {
 }
 
 fn log_update_stage_telemetry(stages: &UpdateStages, outcome: UpdateOutcome) {
-    let Some(threshold_ms) = update_stage_telemetry_threshold_ms() else {
-        return;
-    };
+    if let Some(threshold_ms) = update_stage_telemetry_threshold_ms() {
+        report_update_stages(threshold_ms, stages, outcome);
+    }
+}
+
+/// Prints the stage times of an update that took `threshold_ms` or longer.
+/// Out of line, as the telemetry is off unless asked for.
+#[inline(never)]
+fn report_update_stages(threshold_ms: f64, stages: &UpdateStages, outcome: UpdateOutcome) {
     let Some(
         [
             started_at,
@@ -1396,6 +1402,10 @@ where
         self.update_with_frame_time(Some(frame_time))
     }
 
+    /// Out of line: a platform's loop calls the update of each frame from
+    /// one place, and inlined there the update's code would spread through
+    /// the loop's own.
+    #[inline(never)]
     fn update_with_frame_time(&mut self, frame_time: Option<u64>) -> FrameUpdateResult {
         let _app_context = self.app.app_context.enter_scope();
         let mut stages = UpdateStages::start(update_stage_telemetry_threshold_ms().is_some());
@@ -1445,14 +1455,30 @@ where
         let Some(node) = self.app.app_context.take_pointer_claim() else {
             return;
         };
+        self.give_press_to(node);
+    }
+
+    /// Out of line: a frame seldom has a claim, so the frame's own code
+    /// stays small.
+    #[inline(never)]
+    fn give_press_to(&mut self, node: NodeId) {
         for index in 0..self.surfaces.len() {
             SurfaceMut::new(self, index).give_press_to(node);
         }
     }
 
     fn dispatch_requested_mouse_moves(&mut self, frame_time: u64) {
-        use cranpose_ui::mouse_input::MouseInputTarget;
         let pending = self.app.app_context.pending_mouse_moves();
+        if pending > 0 {
+            self.dispatch_mouse_moves(pending, frame_time);
+        }
+    }
+
+    /// Moves the cursor of each surface that `pending` requested mouse moves
+    /// name. Out of line, as most frames have none.
+    #[inline(never)]
+    fn dispatch_mouse_moves(&mut self, pending: usize, frame_time: u64) {
+        use cranpose_ui::mouse_input::MouseInputTarget;
         for _ in 0..pending {
             let Some(request) = self.app.app_context.take_mouse_move() else {
                 break;

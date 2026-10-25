@@ -566,10 +566,14 @@ where
     }
 
     fn run_post_layout_recomposition(&mut self) -> bool {
-        if !self.app.composition.should_recompose() {
-            return false;
-        }
+        self.app.composition.should_recompose() && self.recompose_after_layout()
+    }
 
+    /// Recomposes the scopes the layout pass invalidated and lays out again
+    /// what they changed. Out of line, as a layout pass seldom invalidates
+    /// any.
+    #[inline(never)]
+    fn recompose_after_layout(&mut self) -> bool {
         let Some(root_key) = self.app.composition.root_key() else {
             return false;
         };
@@ -654,11 +658,18 @@ where
         self.app
             .app_context
             .append_z_order_changes(&mut self.pending_dirty_nodes);
-        if self.pending_dirty_nodes.len() == reordered {
-            return;
+        if self.pending_dirty_nodes.len() > reordered {
+            self.reordered_children_to_parents(reordered);
         }
+    }
+
+    /// Replaces each child from `from` on in the pending dirty nodes, whose z
+    /// index changed, with its parent. Out of line, as z indexes seldom
+    /// change.
+    #[inline(never)]
+    fn reordered_children_to_parents(&mut self, from: usize) {
         let mut applier = self.app.composition.applier_mut();
-        for node in &mut self.pending_dirty_nodes[reordered..] {
+        for node in &mut self.pending_dirty_nodes[from..] {
             if let Some(parent) = applier.get_mut(*node).ok().and_then(|child| child.parent()) {
                 *node = parent;
             }

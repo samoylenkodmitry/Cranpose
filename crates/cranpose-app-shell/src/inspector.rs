@@ -450,9 +450,21 @@ pub(crate) fn refresh<R: Renderer>(
     surface: &mut RootSurface<R>,
     revision: u64,
 ) -> bool {
-    let Some(projector) = app.inspector_projector else {
-        return false;
-    };
+    match app.inspector_projector {
+        Some(projector) => refresh_with(app, surface, revision, projector),
+        None => false,
+    }
+}
+
+/// Brings the inspector overlay of `surface` up to date. Out of line, as an
+/// app seldom installs the inspector.
+#[inline(never)]
+fn refresh_with<R: Renderer>(
+    app: &mut ShellApp,
+    surface: &mut RootSurface<R>,
+    revision: u64,
+    projector: InspectorProjector,
+) -> bool {
     let viewport = surface.viewport_size();
     if surface.inspector.viewport != Some(viewport) {
         surface.inspector.viewport = Some(viewport);

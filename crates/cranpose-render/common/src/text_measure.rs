@@ -234,6 +234,31 @@ impl TextMeasurer for CachedFontTextMeasurer {
             })
     }
 
+    fn measure_subsequence(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        range: std::ops::Range<usize>,
+        style: &cranpose_ui::text::TextStyle,
+    ) -> TextMetrics {
+        // The whole of a text is its own subsequence; an empty one is
+        // measured without its spans, as `subsequence` gives it.
+        if !range.is_empty() && range == (0..text.text.len()) {
+            return self.measure(text, style);
+        }
+        self.measure(&text.subsequence(range), style)
+    }
+
+    /// The width a wrap would measure for the whole line, so a line that
+    /// fits is kept whole without a search for its breaks.
+    fn measure_line_width(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        line_range: std::ops::Range<usize>,
+        style: &cranpose_ui::text::TextStyle,
+    ) -> Option<f32> {
+        Some(self.measure_subsequence(text, line_range, style).width)
+    }
+
     fn get_offset_for_position(
         &self,
         text: &cranpose_ui::text::AnnotatedString,

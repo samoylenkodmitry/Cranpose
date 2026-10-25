@@ -22,7 +22,8 @@ pub trait Touch {
     /// that it woke.
     fn arm<F>(&mut self, wake: F) -> Result<(), EspError>
     where
-        F: Fn() -> bool + Send + Sync + 'static;
+        F: Fn() -> bool + Send + Sync + 'static,
+        Self: Sized;
 
     /// Returns the position of the first finger in display pixels, or
     /// `None` while no finger touches the panel or its setup runs.

@@ -633,14 +633,14 @@ impl Scene {
 
     /// Applies content and layer-property changes to the retained graph.
     /// Empty updates or an unavailable scoped update rebuild the scene.
-    /// Hit targets are refreshed when their geometry changes or `refresh_hits`
-    /// is true, as required after layout or pointer-handler changes.
+    /// Hit targets are collected again when the update changed a hit target
+    /// or the geometry above one: each updated layer compares its hit state,
+    /// and the layers beneath one built again, before and after.
     pub fn update_from_applier(
         &mut self,
         applier: &MemoryApplier,
         root: NodeId,
         updates: SceneUpdates<'_>,
-        refresh_hits: bool,
     ) {
         let report = if updates.is_empty() {
             None
@@ -656,7 +656,7 @@ impl Scene {
         if let Some(graph) = &self.graph {
             crate::scene_builder::publish_space(applier, graph);
         }
-        if !refresh_hits && !report.hit_graph_dirty {
+        if !report.hit_graph_dirty {
             return;
         }
         self.clear_hits();

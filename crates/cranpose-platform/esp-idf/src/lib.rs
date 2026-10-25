@@ -204,7 +204,7 @@ pub fn run(
         framebuffer,
         presenter,
         panel,
-        touch,
+        touch: &mut touch,
         config,
         start,
         finger: None,
@@ -217,6 +217,20 @@ pub fn run(
         slept: false,
         awake_since: start,
     };
+    drive(&mut screen, &mut pacer, &touched)
+}
+
+/// The frame loop of [`run`]: `touched` is set when the touch panel's
+/// interrupt fires. Without type parameters and out of line, it is one
+/// function of this crate in every application, which the IRAM lists of
+/// `components/cranpose_hot_code` can name. It borrows the screen, so the
+/// code that drops it on an error stays in `run`.
+#[inline(never)]
+fn drive(
+    screen: &mut Screen<'_, '_>,
+    pacer: &mut Pacer,
+    touched: &AtomicBool,
+) -> Result<Infallible, RunError> {
     loop {
         if screen.finger.is_some() || touched.swap(false, Ordering::SeqCst) {
             screen.route_touch();
@@ -241,11 +255,11 @@ pub fn run(
 
 /// The application's side of the loop: its composition, the panel it is
 /// drawn on and the touch panel it reads.
-struct Screen<'d, T> {
+struct Screen<'d, 't> {
     framebuffer: Framebuffer,
     presenter: Presenter,
     panel: Panel<'d>,
-    touch: T,
+    touch: &'t mut dyn Touch,
     config: DisplayConfig,
     start: Instant,
     /// Where the finger is while it touches the panel.
@@ -257,7 +271,7 @@ struct Screen<'d, T> {
     last_tick: Option<Instant>,
 }
 
-impl<T: Touch> Screen<'_, T> {
+impl Screen<'_, '_> {
     /// Composes a frame and presents what it changes, unless a frame interval
     /// has not passed since the last tick.
     fn tick(&mut self, now: Instant) -> Result<(), EspError> {
@@ -304,7 +318,9 @@ impl<T: Touch> Screen<'_, T> {
 
     /// Reads the panel and passes what changed since the last read to the
     /// composition: a finger down, moved or lifted. A failed read leaves the
-    /// finger where it was.
+    /// finger where it was. Out of line: it runs only while a finger is on
+    /// the panel, and the pointer dispatch it calls is large.
+    #[inline(never)]
     fn route_touch(&mut self) {
         let sample = match self.touch.read() {
             Ok(sample) => sample,
