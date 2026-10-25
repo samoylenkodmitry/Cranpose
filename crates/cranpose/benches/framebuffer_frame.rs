@@ -20,7 +20,11 @@
 //! that many rows, as a host with a small buffer does, and `REDRAW=all`
 //! draws the whole picture each frame, as a host does after a screen change.
 
-#![allow(clippy::print_stdout, reason = "a benchmark prints its numbers")]
+#![allow(
+    clippy::print_stderr,
+    clippy::print_stdout,
+    reason = "a benchmark prints its numbers and why it could not run"
+)]
 
 use std::hint::black_box;
 

@@ -297,6 +297,7 @@ fn log_update_stage_telemetry(stages: &UpdateStages, outcome: UpdateOutcome) {
 /// Prints the stage times of an update that took `threshold_ms` or longer.
 /// Out of line, as the telemetry is off unless asked for.
 #[inline(never)]
+#[expect(clippy::print_stderr, reason = "an update telemetry threshold asks")]
 fn report_update_stages(threshold_ms: f64, stages: &UpdateStages, outcome: UpdateOutcome) {
     let Some(
         [

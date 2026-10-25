@@ -5623,12 +5623,14 @@ pub mod test_scratch;
 #[cfg(any(test, feature = "test-helpers"))]
 pub use test_scratch::test_scratch_dir;
 
+#[expect(clippy::print_stderr, reason = "CRANPOSE_STRUCTURAL_DIAG asks for it")]
 pub(crate) fn note_structural(reason: &str, parent_id: NodeId, child_id: NodeId) {
     if env_flag!("CRANPOSE_STRUCTURAL_DIAG") {
         eprintln!("[structural] {reason} parent={parent_id} child={child_id}");
     }
 }
 
+#[expect(clippy::print_stderr, reason = "CRANPOSE_STRUCTURAL_DIAG asks for it")]
 pub(crate) fn note_structural_move(parent_id: NodeId, from_index: usize, to_index: usize) {
     if env_flag!("CRANPOSE_STRUCTURAL_DIAG") {
         eprintln!("[structural] move parent={parent_id} from={from_index} to={to_index}");
