@@ -15,8 +15,9 @@
 //! (`wgpu::hal::GlslTemplate`).
 
 mod generate;
+mod rust_source;
 
 pub use generate::{
     BlockBinding, Generated, MacroKind, Template, TextureBinding, generate, module_templates,
-    rust_source,
 };
+pub use rust_source::rust_source;
