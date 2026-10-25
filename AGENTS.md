@@ -1,11 +1,8 @@
 # Agent Notes for Cranpose
 
-- No unsafe code or `unwrap()`. Keep KISS, DRY and SOLID; duplicated code of ten or more lines needs a shared abstraction.
-- Fix root causes and audit every consumer of a wrong value. Leave no partial fixes, deprecated paths or compatibility layers in this pre-alpha repo. Review architecture, correctness and maintainability before completion.
 - Handle all platforms, always. A change is not done while any platform Cranpose ships lacks it: Android, iOS, watchOS, macOS, Windows, Linux and the web (WebGPU and WebGL).
-- Always make performance optimizations. Never write absurd, wasteful code, and remove any you spot in the codebase as soon as you spot it.
-- If you spot a clone, copy or allocation made just to satisfy the borrow checker, immediately rearchitect so no allocation is needed. A big refactoring is justified.
-- For implementation, read [Rust/API conventions](docs/agent-workflows.md#rust-and-api-conventions) and the [performance coding guide](docs/performance_coding_guide.md). Document public APIs only.
+- Never write absurd, wasteful code, and remove any you spot in the codebase as soon as you spot it.
+- For implementation, read [Rust/API conventions](docs/agent-workflows.md#rust-and-api-conventions) and the [performance coding guide](docs/performance_coding_guide.md).
 - Tests: write only e2e and integration tests through public entry points, plus tests for corner cases that can break behavior. No unit tests of implementation details (private state, internal structure, call order): they test nothing and duplicate the code. Test bodies go under `/test*/`, never beside implementation.
 - Prefer RustRover MCP for semantic navigation, types/usages, call graphs and refactoring when ready; pass `projectPath`. Use direct tools for known-file reads, literal searches, documentation and simple edits, and shell tools for builds, tests, Git and SSH. Open the IDE only when semantic work warrants the setup; if access fails, explain once and use an appropriate fallback. Respect project host and execution limits. Read [code tools](docs/agent-workflows.md#code-tools).
 - Check branch/status at start and completion and after relevant git operations; isolate concurrent work. Never use `git reset`. Preserve unrelated and uncommitted work.
@@ -16,6 +13,20 @@
 - Batch independent reads/checks. Wait 30–60 seconds for long jobs when supported; report progress between waits. Avoid tight polling, repeated status checks and unchanged log dumps.
 - Run targeted checks after meaningful edits and required broad checks before integration; rerun only for changed code, failures or new risks. Documentation-only edits need link/format validation, not product builds.
 - Work without subagents unless requested. When requested, use bounded tasks and minimal context; use only small, fast, inexpensive models. After two passes with no measurable progress, revisit the hypothesis or reference and change approach. Do not declare unfinished work complete.
+
+Code rules (lints and gates check the rest; follow their errors):
+
+- KISS, DRY and SOLID; ten or more duplicated lines need a shared abstraction. Fix root causes and audit every consumer of a wrong value. Leave no partial fixes, deprecated paths or compatibility layers in this pre-alpha repo. Review architecture, correctness and maintainability before completion.
+- One concept per module, named after its main item; a parent module holds only `mod` and `pub use`. Name the owning module before adding code. Split a file over its budget first, in its own commit.
+- Types carry the rules: newtypes for ids and units, an enum for an argument that selects behavior, a field valid in one state inside that enum variant, `Option` for absence and never a sentinel. Give a function a new type before it reaches 8 arguments.
+- Never clone, copy or allocate to satisfy the borrow checker; rearchitect, even with a big refactoring. Fix a borrow conflict in this order: a shorter borrow or a named `let`; `mem::take`; split the struct into parts and move the method onto the part; indices into an owning `Vec`.
+- Several maps with one key become one map of a struct.
+- Items are private, then `pub(crate)`; `pub` is the crate API only, and a public signature holds no `Rc`, `RefCell` or `Box`. A `RefCell` borrow or a lock lasts a few lines and never spans a callback.
+- Names: no `get_` prefix; `as_` is free, `to_` costs, `into_` consumes; no `Manager`, `Helper` or `Util` types; no module name repeated in a type name. A trait exists for generic or `dyn` use, never to group methods; a function with a clear receiver is a method.
+- `let _guard = x` keeps a guard alive; `let _ = x` drops it at once.
+- Doc comments go on public API only. A `//` comment states a reason the code cannot show, never history.
+- A refactor keeps behavior and output bytes identical; untested behavior gets a test first.
+- `thiserror` in libraries, `anyhow` in applications; a specific `Result` error for failure, `Option` for absence.
 
 Performance rules:
 

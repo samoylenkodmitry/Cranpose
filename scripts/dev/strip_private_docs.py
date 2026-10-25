@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Removes every comment that is not documentation of a public API.
+"""Removes every doc comment that does not document a public API.
 
-usage: scripts/dev/strip_private_docs.py <file.rs>...
+usage: scripts/dev/strip_private_docs.py [--check] <file.rs>...
 
 Kept: a `///` block that documents an item declared `pub` (not `pub(crate)`
 or `pub(super)`), a variant or member of a `pub enum` or `pub trait`, or an
-exported macro, in a crate under `crates/`, and `//!` module docs in such a
-crate outside its test files. Removed: every other `///` block, every `//!`
-in applications and test files, and every plain `//` line. Run `cargo fmt`
-afterwards to fold the blank lines that are left.
+exported macro, in a crate under `crates/`, `//!` module docs in such a
+crate outside its test files, and every plain `//` comment. Removed: every
+other `///` block and every `//!` in applications and test files. Run
+`cargo fmt` afterwards to fold the blank lines that are left.
+
+With `--check` nothing is written: it prints the lines it would remove.
 """
 import pathlib
 import sys
@@ -52,7 +54,7 @@ def track_public_block(line: str, public_depths: list[int]) -> None:
         public_depths.append(depth)
 
 
-def strip(path: pathlib.Path) -> int:
+def strip(path: pathlib.Path, write: bool) -> int:
     lines = path.read_text().split("\n")
     keep_public_docs = published(path)
     out = []
@@ -72,35 +74,32 @@ def strip(path: pathlib.Path) -> int:
                 removed += end - i
             i = end
             continue
-        if stripped.startswith(INNER):
-            if keep_public_docs:
-                out.append(lines[i])
-            else:
-                removed += 1
-            i += 1
-            continue
-        if stripped.startswith("//"):
+        if stripped.startswith(INNER) and not keep_public_docs:
             removed += 1
             i += 1
             continue
         out.append(lines[i])
         i += 1
-    if removed:
+    if removed and write:
         path.write_text("\n".join(out))
     return removed
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) < 2:
+    check = "--check" in argv[1:]
+    names = [name for name in argv[1:] if name != "--check"]
+    if not names:
         print(__doc__, file=sys.stderr)
         return 2
+    verb = "to remove" if check else "removed"
     total = 0
-    for name in argv[1:]:
+    for name in names:
         path = pathlib.Path(name)
-        removed = strip(path)
+        removed = strip(path, write=not check)
         total += removed
-        print(f"{path}: {removed} line(s) removed")
-    print(f"{total} line(s) removed")
+        if removed or not check:
+            print(f"{path}: {removed} line(s) {verb}")
+    print(f"{total} line(s) {verb}")
     return 0
 
 
