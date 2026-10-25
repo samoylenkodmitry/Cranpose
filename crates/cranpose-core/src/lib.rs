@@ -3823,17 +3823,173 @@ struct MemoryApplierState {
     high_id_generations: HashMap<NodeId, u32>,
     next_stable_id: NodeId,
     layout_runtime: Option<RuntimeHandle>,
-    recycled_nodes: HashMap<TypeId, Vec<RecycledNode>>,
-    returning_recycled_nodes: HashMap<TypeId, Vec<RecycledNode>>,
-    cold_recycled_nodes: HashMap<TypeId, Vec<RecycledNode>>,
-    recycled_node_limits: HashMap<TypeId, usize>,
-    warm_recycled_node_targets: HashMap<TypeId, usize>,
-    fresh_recyclable_creations: HashMap<TypeId, usize>,
-    recycled_node_prototypes: HashMap<TypeId, Box<dyn Node>>,
+    recycle_pools: HashMap<TypeId, RecyclePool>,
     structural_change_parents: Vec<NodeId>,
     virtual_node_ids: HashSet<NodeId>,
     bubble_passes: bubble_passes::BubblePasses,
     layout_dirt_roots: layout_dirt_roots::LayoutDirtRoots,
+}
+
+// The recycled shells of one node type, and what sizes its pool: the shells
+// warm from the last pass, the ones returned this pass by a node that came
+// warm or cold, the limit its nodes ask for, the warm count it keeps, the
+// shells this pass had to create fresh and a prototype to make more from.
+#[derive(Default)]
+struct RecyclePool {
+    warm: Vec<RecycledNode>,
+    returning: Vec<RecycledNode>,
+    cold: Vec<RecycledNode>,
+    limit: Option<usize>,
+    warm_target: Option<usize>,
+    fresh_creations: usize,
+    prototype: Option<Box<dyn Node>>,
+}
+
+impl RecyclePool {
+    fn len(&self) -> usize {
+        self.warm.len() + self.returning.len() + self.cold.len()
+    }
+
+    fn capacity(&self) -> usize {
+        self.warm.capacity() + self.returning.capacity() + self.cold.capacity()
+    }
+
+    fn nodes(&self) -> impl Iterator<Item = &RecycledNode> {
+        self.warm.iter().chain(&self.returning).chain(&self.cold)
+    }
+
+    fn remember_prototype(&mut self, shell: &dyn Node) {
+        if self.prototype.is_none() {
+            self.prototype = shell.rehouse_for_recycle();
+        }
+    }
+
+    fn push(&mut self, recycled: RecycledNode) {
+        let pool = if recycled.warm_origin() {
+            &mut self.returning
+        } else {
+            &mut self.cold
+        };
+        pool.push(recycled);
+        drop_oldest_past(pool, self.limit);
+    }
+
+    fn push_warm(&mut self, mut recycled: RecycledNode) {
+        recycled.set_warm_origin(true);
+        self.warm.push(recycled);
+        drop_oldest_past(&mut self.warm, self.limit);
+    }
+
+    fn take(&mut self) -> Option<RecycledNode> {
+        self.returning.pop().or_else(|| self.warm.pop())
+    }
+
+    fn warm_target_limit(&self) -> usize {
+        match self.limit {
+            None => usize::MAX,
+            Some(limit) if limit <= 8 => limit,
+            Some(limit) => limit / 4,
+        }
+    }
+
+    fn update_warm_target(&mut self, observed_demand: usize) -> usize {
+        let target_limit = self.warm_target_limit();
+        let existing = self.warm_target.unwrap_or(0).min(target_limit);
+        if observed_demand == 0 {
+            return existing;
+        }
+        let target = match self.limit {
+            Some(limit) if limit > 8 => target_limit,
+            Some(_) => observed_demand.min(target_limit),
+            None => observed_demand,
+        };
+        self.warm_target = Some(target);
+        target
+    }
+
+    // Seeds warm shells made from the prototype until the warm pool holds
+    // `target`, each under a new stable id.
+    fn replenish_warm(&mut self, target: usize, next_stable_id: &mut NodeId) {
+        let missing = target.saturating_sub(self.warm.len());
+        let Some(prototype) = &self.prototype else {
+            return;
+        };
+        let mut shells = Vec::with_capacity(missing);
+        for _ in 0..missing {
+            let Some(shell) = prototype.rehouse_for_recycle() else {
+                break;
+            };
+            shells.push(shell);
+        }
+        for shell in shells {
+            if self.warm.len() >= self.limit.unwrap_or(usize::MAX) {
+                return;
+            }
+            let stable_id = *next_stable_id;
+            *next_stable_id = next_stable_id.saturating_add(1);
+            self.push_warm(RecycledNode::from_shell(stable_id, shell, true));
+        }
+    }
+
+    fn trim_warm_to(&mut self, target: usize) {
+        let removable = self.warm.len().saturating_sub(target);
+        let dropped: Vec<_> = self.warm.drain(0..removable).collect();
+        drop(dropped);
+    }
+
+    fn compact_warm(&mut self) {
+        if self.warm.capacity() <= self.warm.len().saturating_mul(4).max(64) {
+            return;
+        }
+        let mut compacted = Vec::with_capacity(self.warm.len());
+        compacted.append(&mut self.warm);
+        self.warm = compacted;
+    }
+
+    // At the end of an apply pass: the returned shells join the warm ones,
+    // the cold ones this pass needed fresh shells for turn warm and the rest
+    // go, and the warm pool moves to its target.
+    fn end_pass(&mut self, next_stable_id: &mut NodeId) {
+        self.warm.append(&mut std::mem::take(&mut self.returning));
+        let needed = std::mem::take(&mut self.fresh_creations);
+        let mut cold = std::mem::take(&mut self.cold);
+        if needed > 0 {
+            let remaining_limit = self
+                .limit
+                .unwrap_or(usize::MAX)
+                .saturating_sub(self.warm.len());
+            let promote = cold.len().min(needed).min(remaining_limit);
+            let split_at = cold.len().saturating_sub(promote);
+            for mut recycled in cold.split_off(split_at) {
+                recycled.set_warm_origin(true);
+                self.warm.push(recycled);
+            }
+        }
+        drop(cold);
+        // A type that only had shells created fresh has nothing to size yet.
+        if self.warm.is_empty()
+            && self.limit.is_none()
+            && self.warm_target.is_none()
+            && self.prototype.is_none()
+        {
+            return;
+        }
+        let target = self.update_warm_target(needed);
+        self.replenish_warm(target, next_stable_id);
+        self.trim_warm_to(target);
+        self.compact_warm();
+    }
+}
+
+// Drops the oldest shells of `pool` past `limit`.
+fn drop_oldest_past(pool: &mut Vec<RecycledNode>, limit: Option<usize>) {
+    if let Some(limit) = limit
+        && pool.len() > limit
+    {
+        let excess = pool.len() - limit;
+        let dropped: Vec<_> = pool.drain(0..excess).collect();
+        drop(dropped);
+    }
 }
 
 /// Reusable ancestry storage for [`MemoryApplier::scene_nodes_attached_to_into`].
@@ -4177,22 +4333,14 @@ impl MemoryApplier {
     /// Returns the number of pooled recycled nodes of type `N`.
     pub fn debug_recycled_node_count_for<N: Node + 'static>(&self) -> usize {
         let key = TypeId::of::<N>();
-        self.state.recycled_nodes.get(&key).map_or(0, Vec::len)
-            + self
-                .state
-                .returning_recycled_nodes
-                .get(&key)
-                .map_or(0, Vec::len)
-            + self.state.cold_recycled_nodes.get(&key).map_or(0, Vec::len)
+        self.state
+            .recycle_pools
+            .get(&key)
+            .map_or(0, RecyclePool::len)
     }
 
     /// Returns the sizes of the applier's tables, for leak and memory checks.
     pub fn debug_stats(&self) -> MemoryApplierDebugStats {
-        let mut recycled_keys: HashSet<TypeId> = HashSet::default();
-        recycled_keys.extend(self.state.recycled_nodes.keys().copied());
-        recycled_keys.extend(self.state.returning_recycled_nodes.keys().copied());
-        recycled_keys.extend(self.state.cold_recycled_nodes.keys().copied());
-
         MemoryApplierDebugStats {
             next_stable_id: self.state.next_stable_id,
             nodes_len: self.len(),
@@ -4209,10 +4357,13 @@ impl MemoryApplier {
             high_id_nodes_cap: self.state.high_id_nodes.capacity(),
             high_id_generations_len: self.state.high_id_generations.len(),
             high_id_generations_cap: self.state.high_id_generations.capacity(),
-            recycled_type_count: recycled_keys.len(),
-            recycled_type_cap: self.state.recycled_nodes.capacity()
-                + self.state.returning_recycled_nodes.capacity()
-                + self.state.cold_recycled_nodes.capacity(),
+            recycled_type_count: self
+                .state
+                .recycle_pools
+                .values()
+                .filter(|pool| pool.len() > 0)
+                .count(),
+            recycled_type_cap: self.state.recycle_pools.capacity(),
             recycled_node_count: self.total_recycled_node_count(),
             recycled_node_capacity: self.total_recycled_node_capacity(),
             warm_recycled_node_id_count: self.total_warm_recycled_node_id_count(),
@@ -4255,17 +4406,12 @@ impl MemoryApplier {
 
     /// Returns the heap bytes that the pooled recycled nodes take, including what they own.
     pub fn debug_recycled_node_heap_bytes(&self) -> usize {
-        let pool_bytes = |pools: &HashMap<TypeId, Vec<RecycledNode>>| {
-            pools
-                .values()
-                .flat_map(|nodes| nodes.iter())
-                .map(|node| size_of_val(&*node.node) + node.node.debug_heap_bytes())
-                .sum::<usize>()
-        };
-
-        pool_bytes(&self.state.recycled_nodes)
-            + pool_bytes(&self.state.returning_recycled_nodes)
-            + pool_bytes(&self.state.cold_recycled_nodes)
+        self.state
+            .recycle_pools
+            .values()
+            .flat_map(RecyclePool::nodes)
+            .map(|node| size_of_val(&*node.node) + node.node.debug_heap_bytes())
+            .sum::<usize>()
     }
 
     /// Gives the applier the runtime of its composition, so code that runs during layout with only
@@ -4284,92 +4430,53 @@ impl MemoryApplier {
         self.state.layout_runtime.clone()
     }
 
-    fn pool_node_count(pools: &HashMap<TypeId, Vec<RecycledNode>>) -> usize {
-        pools.values().map(Vec::len).sum()
-    }
-
-    fn pool_node_capacity(pools: &HashMap<TypeId, Vec<RecycledNode>>) -> usize {
-        pools.values().map(Vec::capacity).sum()
-    }
-
     fn total_recycled_node_count(&self) -> usize {
-        Self::pool_node_count(&self.state.recycled_nodes)
-            + Self::pool_node_count(&self.state.returning_recycled_nodes)
-            + Self::pool_node_count(&self.state.cold_recycled_nodes)
+        self.state
+            .recycle_pools
+            .values()
+            .map(RecyclePool::len)
+            .sum()
     }
 
     fn total_recycled_node_capacity(&self) -> usize {
-        Self::pool_node_capacity(&self.state.recycled_nodes)
-            + Self::pool_node_capacity(&self.state.returning_recycled_nodes)
-            + Self::pool_node_capacity(&self.state.cold_recycled_nodes)
+        self.state
+            .recycle_pools
+            .values()
+            .map(RecyclePool::capacity)
+            .sum()
     }
 
     fn total_warm_recycled_node_id_count(&self) -> usize {
         self.live_warm_recycled_origin_count()
-            + Self::pool_node_count(&self.state.recycled_nodes)
-            + Self::pool_node_count(&self.state.returning_recycled_nodes)
+            + self
+                .state
+                .recycle_pools
+                .values()
+                .map(|pool| pool.warm.len() + pool.returning.len())
+                .sum::<usize>()
     }
 
     fn total_warm_recycled_node_id_capacity(&self) -> usize {
         self.live_warm_recycled_origin_capacity()
-            + Self::pool_node_capacity(&self.state.recycled_nodes)
-            + Self::pool_node_capacity(&self.state.returning_recycled_nodes)
+            + self
+                .state
+                .recycle_pools
+                .values()
+                .map(|pool| pool.warm.capacity() + pool.returning.capacity())
+                .sum::<usize>()
     }
 
     fn remember_recycle_pool_limit(&mut self, key: TypeId, recycle_pool_limit: Option<usize>) {
-        if let Some(limit) = recycle_pool_limit {
-            self.state.recycled_node_limits.insert(key, limit);
-        } else {
-            self.state.recycled_node_limits.remove(&key);
+        if recycle_pool_limit.is_some() || self.state.recycle_pools.contains_key(&key) {
+            self.state.recycle_pools.entry(key).or_default().limit = recycle_pool_limit;
         }
-    }
-
-    fn recycle_pool_limit_for(&self, key: TypeId) -> Option<usize> {
-        self.state.recycled_node_limits.get(&key).copied()
     }
 
     fn warm_recycled_pool_len(&self, key: TypeId) -> usize {
-        self.state.recycled_nodes.get(&key).map_or(0, Vec::len)
-    }
-
-    fn warm_recycled_node_target(&self, key: TypeId) -> usize {
         self.state
-            .warm_recycled_node_targets
+            .recycle_pools
             .get(&key)
-            .copied()
-            .unwrap_or(0)
-    }
-
-    fn warm_recycled_node_target_limit(&self, key: TypeId) -> usize {
-        let Some(limit) = self.recycle_pool_limit_for(key) else {
-            return usize::MAX;
-        };
-        if limit <= 8 { limit } else { limit / 4 }
-    }
-
-    fn update_warm_recycled_node_target(&mut self, key: TypeId, observed_demand: usize) -> usize {
-        let target_limit = self.warm_recycled_node_target_limit(key);
-        let existing = self.warm_recycled_node_target(key).min(target_limit);
-        if observed_demand == 0 {
-            return existing;
-        }
-
-        let target = match self.recycle_pool_limit_for(key) {
-            Some(limit) if limit > 8 => target_limit,
-            Some(_) => observed_demand.min(target_limit),
-            None => observed_demand,
-        };
-        self.state.warm_recycled_node_targets.insert(key, target);
-        target
-    }
-
-    fn remember_recycled_node_prototype(&mut self, key: TypeId, shell: &dyn Node) {
-        if self.state.recycled_node_prototypes.contains_key(&key) {
-            return;
-        }
-        if let Some(prototype) = shell.rehouse_for_recycle() {
-            self.state.recycled_node_prototypes.insert(key, prototype);
-        }
+            .map_or(0, |pool| pool.warm.len())
     }
 
     fn live_warm_recycled_origin_count(&self) -> usize {
@@ -4399,50 +4506,9 @@ impl MemoryApplier {
         recycled: RecycledNode,
     ) {
         self.remember_recycle_pool_limit(key, recycle_pool_limit);
-        self.remember_recycled_node_prototype(key, recycled.node.as_ref());
-
-        let warm_origin = recycled.warm_origin();
-        let pool = if warm_origin {
-            self.state.returning_recycled_nodes.entry(key).or_default()
-        } else {
-            self.state.cold_recycled_nodes.entry(key).or_default()
-        };
+        let pool = self.state.recycle_pools.entry(key).or_default();
+        pool.remember_prototype(recycled.node.as_ref());
         pool.push(recycled);
-        if let Some(limit) = recycle_pool_limit
-            && pool.len() > limit
-        {
-            let excess = pool.len() - limit;
-            let dropped: Vec<_> = pool.drain(0..excess).collect();
-            drop(dropped);
-        }
-    }
-
-    fn push_warm_recycled_node(
-        &mut self,
-        key: TypeId,
-        recycle_pool_limit: Option<usize>,
-        mut recycled: RecycledNode,
-    ) {
-        self.remember_recycle_pool_limit(key, recycle_pool_limit);
-
-        recycled.set_warm_origin(true);
-        let mut dropped = Vec::new();
-        let mut remove_pool_entry = false;
-        {
-            let pool = self.state.recycled_nodes.entry(key).or_default();
-            pool.push(recycled);
-            if let Some(limit) = recycle_pool_limit
-                && pool.len() > limit
-            {
-                let excess = pool.len() - limit;
-                dropped = pool.drain(0..excess).collect();
-                remove_pool_entry = pool.is_empty();
-            }
-        }
-        if remove_pool_entry {
-            self.state.recycled_nodes.remove(&key);
-        }
-        drop(dropped);
     }
 
     fn seed_recycled_node_shell_impl(
@@ -4456,88 +4522,12 @@ impl MemoryApplier {
             return;
         }
 
-        self.remember_recycled_node_prototype(key, shell.as_ref());
+        self.remember_recycle_pool_limit(key, recycle_pool_limit);
         let stable_id = self.state.next_stable_id;
         self.state.next_stable_id = self.state.next_stable_id.saturating_add(1);
-        self.push_warm_recycled_node(
-            key,
-            recycle_pool_limit,
-            RecycledNode::from_shell(stable_id, shell, true),
-        );
-    }
-
-    fn take_recycled_node_from_pool(
-        pools: &mut HashMap<TypeId, Vec<RecycledNode>>,
-        key: TypeId,
-    ) -> Option<RecycledNode> {
-        let pool = pools.get_mut(&key)?;
-        let node = pool.pop();
-        if pool.is_empty() {
-            pools.remove(&key);
-        }
-        node
-    }
-
-    fn compact_idle_warm_pool(&mut self, key: TypeId) {
-        let Some(pool) = self.state.recycled_nodes.get_mut(&key) else {
-            return;
-        };
-        if pool.capacity() <= pool.len().saturating_mul(4).max(64) {
-            return;
-        }
-
-        let retained = pool.len();
-        let mut compacted = Vec::with_capacity(retained);
-        compacted.append(pool);
-        let remove_pool_entry = compacted.is_empty();
-        *pool = compacted;
-        let _ = pool;
-
-        if remove_pool_entry {
-            self.state.recycled_nodes.remove(&key);
-        }
-    }
-
-    fn trim_idle_warm_pool_to_target(&mut self, key: TypeId, target: usize) {
-        let pool_len = self.warm_recycled_pool_len(key);
-        if pool_len <= target {
-            return;
-        }
-
-        let Some(pool) = self.state.recycled_nodes.get_mut(&key) else {
-            return;
-        };
-        let removable = (pool_len - target).min(pool.len());
-        let dropped: Vec<_> = pool.drain(0..removable).collect();
-        let remove_pool_entry = pool.is_empty();
-        let _ = pool;
-
-        if remove_pool_entry {
-            self.state.recycled_nodes.remove(&key);
-        }
-        drop(dropped);
-    }
-
-    fn replenish_warm_pool_to_target(&mut self, key: TypeId, target: usize) {
-        let missing = target.saturating_sub(self.warm_recycled_pool_len(key));
-        if missing == 0 {
-            return;
-        }
-
-        let recycle_pool_limit = self.recycle_pool_limit_for(key);
-        let mut shells = Vec::with_capacity(missing);
-        if let Some(prototype) = self.state.recycled_node_prototypes.get(&key) {
-            for _ in 0..missing {
-                let Some(shell) = prototype.rehouse_for_recycle() else {
-                    break;
-                };
-                shells.push(shell);
-            }
-        }
-
-        for shell in shells {
-            self.seed_recycled_node_shell_impl(key, recycle_pool_limit, shell);
-        }
+        let pool = self.state.recycle_pools.entry(key).or_default();
+        pool.remember_prototype(shell.as_ref());
+        pool.push_warm(RecycledNode::from_shell(stable_id, shell, true));
     }
 
     fn prune_stable_generations(&mut self) {
@@ -4546,14 +4536,13 @@ impl MemoryApplier {
             return;
         }
 
-        let recycled: HashSet<NodeId> = [
-            &self.state.recycled_nodes,
-            &self.state.returning_recycled_nodes,
-            &self.state.cold_recycled_nodes,
-        ]
-        .into_iter()
-        .flat_map(|pools| pools.values().flatten().map(RecycledNode::stable_id))
-        .collect();
+        let recycled: HashSet<NodeId> = self
+            .state
+            .recycle_pools
+            .values()
+            .flat_map(RecyclePool::nodes)
+            .map(RecycledNode::stable_id)
+            .collect();
         self.state
             .stable_index
             .retain_retired(|stable_id| recycled.contains(&stable_id));
@@ -4974,8 +4963,7 @@ impl Applier for MemoryApplier {
     }
 
     fn take_recycled_node(&mut self, key: TypeId) -> Option<RecycledNode> {
-        Self::take_recycled_node_from_pool(&mut self.state.returning_recycled_nodes, key)
-            .or_else(|| Self::take_recycled_node_from_pool(&mut self.state.recycled_nodes, key))
+        self.state.recycle_pools.get_mut(&key)?.take()
     }
 
     fn set_recycled_node_origin(&mut self, id: NodeId, warm_origin: bool) {
@@ -4998,54 +4986,17 @@ impl Applier for MemoryApplier {
     }
 
     fn record_fresh_recyclable_creation(&mut self, key: TypeId) {
-        *self
-            .state
-            .fresh_recyclable_creations
+        self.state
+            .recycle_pools
             .entry(key)
-            .or_insert(0) += 1;
+            .or_default()
+            .fresh_creations += 1;
     }
 
     fn clear_recycled_nodes(&mut self) {
-        let returning = std::mem::take(&mut self.state.returning_recycled_nodes);
-        for (key, mut nodes) in returning {
-            let pool = self.state.recycled_nodes.entry(key).or_default();
-            pool.append(&mut nodes);
-        }
-
-        let fresh_recyclable_creations = std::mem::take(&mut self.state.fresh_recyclable_creations);
-        let cold = std::mem::take(&mut self.state.cold_recycled_nodes);
-        for (key, mut nodes) in cold {
-            let needed = fresh_recyclable_creations.get(&key).copied().unwrap_or(0);
-            if needed > 0 {
-                let remaining_limit = self
-                    .recycle_pool_limit_for(key)
-                    .unwrap_or(usize::MAX)
-                    .saturating_sub(self.warm_recycled_pool_len(key));
-                let promote = nodes.len().min(needed).min(remaining_limit);
-                let split_at = nodes.len().saturating_sub(promote);
-                let promoted = nodes.split_off(split_at);
-                for mut recycled in promoted {
-                    recycled.set_warm_origin(true);
-                    self.state
-                        .recycled_nodes
-                        .entry(key)
-                        .or_default()
-                        .push(recycled);
-                }
-            }
-        }
-
-        let mut keys: HashSet<TypeId> = HashSet::default();
-        keys.extend(self.state.recycled_nodes.keys().copied());
-        keys.extend(self.state.recycled_node_limits.keys().copied());
-        keys.extend(self.state.warm_recycled_node_targets.keys().copied());
-        keys.extend(self.state.recycled_node_prototypes.keys().copied());
-        for key in keys {
-            let observed_demand = fresh_recyclable_creations.get(&key).copied().unwrap_or(0);
-            let target = self.update_warm_recycled_node_target(key, observed_demand);
-            self.replenish_warm_pool_to_target(key, target);
-            self.trim_idle_warm_pool_to_target(key, target);
-            self.compact_idle_warm_pool(key);
+        let next_stable_id = &mut self.state.next_stable_id;
+        for pool in self.state.recycle_pools.values_mut() {
+            pool.end_pass(next_stable_id);
         }
         self.prune_stable_generations();
         self.compact();
