@@ -1,4 +1,4 @@
-use std::{mem, ops::Range};
+use std::ops::Range;
 
 #[cfg(any(test, debug_assertions))]
 use super::SlotInvariantError;
@@ -139,6 +139,8 @@ impl PayloadStore {
 
     #[cfg(any(test, debug_assertions))]
     pub(in crate::slot) fn validate_integrity(&self) -> Result<(), SlotInvariantError> {
+        use std::mem;
+
         let mut claimed = vec![false; self.slots.len()];
         for (index, &slot) in self.order.iter().enumerate() {
             let slot = slot as usize;
