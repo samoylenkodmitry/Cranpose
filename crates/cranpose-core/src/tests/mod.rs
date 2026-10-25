@@ -774,6 +774,7 @@ mod snapshot_observer_nesting_tests;
 mod snapshot_state_tests;
 mod state_and_effect_tests;
 mod state_holder_tests;
+pub(crate) mod state_mock;
 
 #[test]
 fn hot_keys_follow_structure_not_absolute_lines() {

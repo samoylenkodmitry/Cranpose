@@ -4,6 +4,11 @@ use cranpose_core::NodeId;
 use cranpose_ui_graphics::{Brush, DrawPrimitive, Point, Size as ViewportSize, Size as PrimSize};
 
 use super::*;
+
+const VIEWPORT: ViewportSize = ViewportSize {
+    width: 320.0,
+    height: 480.0,
+};
 use crate::{
     modifier::{Color, ModifierNodeSlices, PointerEvent, PointerEventKind},
     widgets::Canvas,
@@ -71,22 +76,6 @@ fn compose_lazy_row_with_background() -> TestComposition {
             },
         );
     })
-}
-
-fn measure_row(composition: &mut TestComposition, root: NodeId) {
-    let handle = composition.runtime_handle();
-    let mut applier = composition.applier_mut();
-    applier.set_runtime_handle(handle);
-    measure_layout(
-        &mut applier,
-        root,
-        ViewportSize {
-            width: 320.0,
-            height: 480.0,
-        },
-    )
-    .expect("layout measurement");
-    applier.clear_runtime_handle();
 }
 
 fn layout_tree(composition: &mut TestComposition, root: NodeId) -> LayoutTree {
@@ -196,7 +185,9 @@ fn recomposing_swipe_canvas_updates_drawing_without_remeasurement() {
             .expect("compose changing canvas");
         let root = composition.root().expect("root");
         if frame == 0 {
-            measure_row(&mut composition, root);
+            composition
+                .measure_layout(root, VIEWPORT)
+                .expect("layout measurement");
         }
         composition
             .flush_pending_node_updates()
@@ -243,7 +234,9 @@ fn replacement_swipe_state_and_resizing_use_the_current_content_width() {
             })
             .expect("compose controller and dimensions");
         let root = composition.root().expect("root");
-        measure_row(&mut composition, root);
+        composition
+            .measure_layout(root, VIEWPORT)
+            .expect("layout measurement");
         let tree = layout_tree(&mut composition, root);
         let handler = pointer_handler(&tree);
         handler(down(10.0));
@@ -262,7 +255,9 @@ fn replacement_swipe_state_and_resizing_use_the_current_content_width() {
 fn dragging_translates_content_with_the_finger() {
     let mut composition = compose_row(false);
     let root = composition.root().expect("root");
-    measure_row(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
     let tree = layout_tree(&mut composition, root);
 
     let handler = pointer_handler(&tree);
@@ -301,7 +296,9 @@ fn dragging_translates_content_with_the_finger() {
 fn background_only_draws_while_displaced() {
     let mut composition = compose_row(true);
     let root = composition.root().expect("root");
-    measure_row(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
 
     let tree = layout_tree(&mut composition, root);
     assert_eq!(
@@ -317,7 +314,9 @@ fn background_only_draws_while_displaced() {
     composition
         .process_invalid_scopes()
         .expect("recompose after reveal");
-    measure_row(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
     let displaced = layout_tree(&mut composition, root);
     assert!(
         count_color_primitives(&displaced, BIN_RED) > 0,
@@ -329,7 +328,9 @@ fn background_only_draws_while_displaced() {
 fn dismissed_row_hides_background_and_collapses_to_zero_height() {
     let mut composition = compose_row(true);
     let root = composition.root().expect("root");
-    measure_row(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
     assert!(
         (root_height(&mut composition, root) - 48.0).abs() < 1e-3,
         "row starts at its natural 48px height"
@@ -352,7 +353,9 @@ fn dismissed_row_hides_background_and_collapses_to_zero_height() {
     composition
         .process_invalid_scopes()
         .expect("recompose after the dismiss settles");
-    measure_row(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
 
     let settled = layout_tree(&mut composition, root);
     assert_eq!(
@@ -371,7 +374,9 @@ fn dismissed_row_hides_background_and_collapses_to_zero_height() {
 fn dismissed_row_inside_lazy_column_leaves_no_lingering_strip() {
     let mut composition = compose_lazy_row_with_background();
     let root = composition.root().expect("root");
-    measure_row(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
 
     let tree = layout_tree(&mut composition, root);
     let handler = deepest_pointer_handler(&tree);
@@ -383,7 +388,9 @@ fn dismissed_row_inside_lazy_column_leaves_no_lingering_strip() {
     composition
         .process_invalid_scopes()
         .expect("recompose after capture");
-    measure_row(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
     assert!(
         count_color_primitives(&layout_tree(&mut composition, root), BIN_RED) > 0,
         "the swipe must reveal the bin background mid-drag"
@@ -401,7 +408,9 @@ fn dismissed_row_inside_lazy_column_leaves_no_lingering_strip() {
         composition
             .process_invalid_scopes()
             .expect("recompose during collapse");
-        measure_row(&mut composition, root);
+        composition
+            .measure_layout(root, VIEWPORT)
+            .expect("layout measurement");
     }
 
     let settled = layout_tree(&mut composition, root);

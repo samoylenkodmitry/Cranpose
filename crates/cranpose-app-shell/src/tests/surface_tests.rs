@@ -14,7 +14,7 @@ use cranpose_ui_graphics::{GraphicsLayer, PointerIcon};
 use super::{
     tests::{
         HitGraphRenderer, ScopedUpdateCountingRenderer, SoftKeyboardProbe, TextFieldDispatchProbe,
-        test_guard,
+        request_probe_focus, test_guard,
     },
     *,
 };
@@ -575,13 +575,7 @@ fn the_soft_keyboard_belongs_to_the_active_surface() {
     assert!(click(&mut window, 40.0, 20.0));
     let focus_flag = Rc::new(RefCell::new(false));
     let handler = Rc::new(TextFieldDispatchProbe::default());
-    shell.debug_enter_app_context(|| {
-        cranpose_ui::text_field_focus::request_focus(
-            Rc::clone(&focus_flag),
-            Rc::<TextFieldDispatchProbe>::clone(&handler),
-            0,
-        );
-    });
+    request_probe_focus(&shell, &focus_flag, &handler);
     assert_eq!(*window_keyboard.calls.borrow(), vec!["show"]);
     assert!(primary_keyboard.calls.borrow().is_empty());
 

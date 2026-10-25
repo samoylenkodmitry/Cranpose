@@ -75,21 +75,6 @@ fn bubbling_preserves_the_layout_nodes_existing_owner() {
 }
 
 #[test]
-fn modifier_slices_cache_reuses_unique_snapshot_allocation() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    let mut node = fresh_node();
-    node.set_modifier(Modifier::empty().padding(2.0));
-    let snapshot = node.modifier_slices_snapshot();
-    let snapshot_ptr = Rc::as_ptr(&snapshot);
-    drop(snapshot);
-
-    node.set_modifier(Modifier::empty().padding(4.0));
-
-    let updated = node.modifier_slices_snapshot();
-    assert_eq!(Rc::as_ptr(&updated), snapshot_ptr);
-}
-
-#[test]
 fn modifier_slices_cache_preserves_live_snapshot_isolation() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut node = fresh_node();

@@ -1,49 +1,7 @@
 use std::rc::Rc;
 
 use super::*;
-use crate::state::{PREEXISTING_SNAPSHOT_ID, StateObject};
-
-fn mock_state_record() -> Rc<StateRecord> {
-    StateRecord::new(PREEXISTING_SNAPSHOT_ID, (), None)
-}
-
-struct MockStateObject;
-
-impl StateObject for MockStateObject {
-    fn object_id(&self) -> crate::state::ObjectId {
-        crate::state::ObjectId(0)
-    }
-
-    fn first_record(&self) -> Rc<StateRecord> {
-        mock_state_record()
-    }
-
-    fn try_readable_record(
-        &self,
-        snapshot_id: SnapshotId,
-        invalid: &SnapshotIdSet,
-    ) -> Option<Rc<StateRecord>> {
-        Some(self.readable_record(snapshot_id, invalid))
-    }
-
-    fn readable_record(
-        &self,
-        _snapshot_id: SnapshotId,
-        _invalid: &SnapshotIdSet,
-    ) -> Rc<StateRecord> {
-        mock_state_record()
-    }
-
-    fn prepend_state_record(&self, _record: Rc<StateRecord>) {}
-
-    fn promote_record(&self, _child_id: SnapshotId) -> Result<(), &'static str> {
-        Ok(())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
+use crate::{state::StateObject, tests::state_mock::MockState};
 
 #[test]
 fn test_readonly_snapshot_creation() {
@@ -122,7 +80,7 @@ fn test_readonly_snapshot_read_observer() {
     });
 
     let snapshot = ReadonlySnapshot::new(1, SnapshotIdSet::new(), Some(observer));
-    let mock_state = MockStateObject;
+    let mock_state = MockState::with_id(0);
 
     snapshot.record_read(&mock_state);
     snapshot.record_read(&mock_state);
@@ -149,7 +107,7 @@ fn test_readonly_snapshot_nested_with_observer() {
     let parent = ReadonlySnapshot::new(1, SnapshotIdSet::new(), Some(parent_observer));
     let nested = parent.take_nested_snapshot(Some(nested_observer));
 
-    let mock_state = MockStateObject;
+    let mock_state = MockState::with_id(0);
 
     nested.record_read(&mock_state);
 
@@ -161,7 +119,7 @@ fn test_readonly_snapshot_nested_with_observer() {
 #[should_panic(expected = "Cannot write to a read-only snapshot")]
 fn test_readonly_snapshot_write_panics() {
     let snapshot = ReadonlySnapshot::new(1, SnapshotIdSet::new(), None);
-    let mock_state = Rc::new(MockStateObject);
+    let mock_state = Rc::new(MockState::with_id(0));
     snapshot.record_write(mock_state);
 }
 

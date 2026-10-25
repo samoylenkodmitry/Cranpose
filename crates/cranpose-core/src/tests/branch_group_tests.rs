@@ -1772,6 +1772,8 @@ fn repeated_occurrences_of_one_branch_site_retain_independently() {
 mod delegating_with_key {
     use super::*;
 
+    // forwards on purpose: the probe calls a local function named `with_key`, which the
+    // composable macro must not take for the runtime's own.
     fn with_key<K: Hash>(key: &K, content: impl FnOnce()) {
         cranpose_core::with_key(key, content);
     }

@@ -1,92 +1,13 @@
 use std::rc::Rc;
 
 use super::*;
-use crate::state::{NeverEqual, SnapshotMutableState, StateObject};
+use crate::{
+    state::{NeverEqual, SnapshotMutableState, StateObject},
+    tests::state_mock::MockState,
+};
 
 fn new_state(initial: i32) -> Rc<SnapshotMutableState<i32>> {
     SnapshotMutableState::new_in_rc(initial, Rc::new(NeverEqual))
-}
-
-struct MockStateObject;
-
-fn mock_state_record() -> Rc<StateRecord> {
-    StateRecord::new(PREEXISTING_SNAPSHOT_ID, (), None)
-}
-
-impl StateObject for MockStateObject {
-    fn object_id(&self) -> crate::state::ObjectId {
-        crate::state::ObjectId(0)
-    }
-
-    fn first_record(&self) -> Rc<StateRecord> {
-        mock_state_record()
-    }
-
-    fn try_readable_record(
-        &self,
-        snapshot_id: SnapshotId,
-        invalid: &SnapshotIdSet,
-    ) -> Option<Rc<StateRecord>> {
-        Some(self.readable_record(snapshot_id, invalid))
-    }
-
-    fn readable_record(
-        &self,
-        _snapshot_id: SnapshotId,
-        _invalid: &SnapshotIdSet,
-    ) -> Rc<StateRecord> {
-        mock_state_record()
-    }
-
-    fn prepend_state_record(&self, _record: Rc<StateRecord>) {}
-
-    fn promote_record(&self, _child_id: SnapshotId) -> Result<(), &'static str> {
-        Ok(())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
-
-struct MissingParentReadableStateObject {
-    record: Rc<StateRecord>,
-}
-
-impl MissingParentReadableStateObject {
-    fn new(writer_id: SnapshotId) -> Self {
-        Self {
-            record: StateRecord::new(writer_id, (), None),
-        }
-    }
-}
-
-impl StateObject for MissingParentReadableStateObject {
-    fn object_id(&self) -> crate::state::ObjectId {
-        crate::state::ObjectId(10_001)
-    }
-
-    fn first_record(&self) -> Rc<StateRecord> {
-        Rc::clone(&self.record)
-    }
-
-    fn try_readable_record(&self, _: SnapshotId, _: &SnapshotIdSet) -> Option<Rc<StateRecord>> {
-        None
-    }
-
-    fn readable_record(&self, _: SnapshotId, _: &SnapshotIdSet) -> Rc<StateRecord> {
-        panic!("apply must use a fallible parent readable-record lookup")
-    }
-
-    fn prepend_state_record(&self, _record: Rc<StateRecord>) {}
-
-    fn promote_record(&self, _child_id: SnapshotId) -> Result<(), &'static str> {
-        Ok(())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
 }
 
 #[test]
@@ -136,7 +57,7 @@ fn test_mutable_snapshot_read_observer() {
     });
 
     let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), Some(observer), None, 0);
-    let mock_state = MockStateObject;
+    let mock_state = MockState::with_id(0);
 
     snapshot.record_read(&mock_state);
     snapshot.record_read(&mock_state);
@@ -157,9 +78,9 @@ fn test_mutable_snapshot_write_observer() {
     });
 
     let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), None, Some(observer), 0);
-    let mock_state = Rc::new(MockStateObject);
+    let mock_state = Rc::new(MockState::with_id(0));
 
-    snapshot.record_write(Rc::<MockStateObject>::clone(&mock_state));
+    snapshot.record_write(Rc::<MockState>::clone(&mock_state));
     snapshot.record_write(mock_state);
 
     assert_eq!(*write_count.lock().unwrap(), 1);
@@ -178,9 +99,7 @@ fn test_mutable_snapshot_apply_empty() {
 fn mutable_apply_returns_failure_when_parent_readable_record_is_missing() {
     let _guard = reset_runtime_for_tests();
     let snapshot = MutableSnapshot::new(7, SnapshotIdSet::new(), None, None, 1);
-    let state = Rc::new(MissingParentReadableStateObject::new(
-        snapshot.snapshot_id(),
-    ));
+    let state = Rc::new(MockState::unreadable(10_001, snapshot.snapshot_id()));
 
     snapshot.record_write(state);
 
@@ -255,7 +174,7 @@ fn test_mutable_snapshot_write_after_apply_panics() {
     let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
     snapshot.apply().check();
 
-    let mock_state = Rc::new(MockStateObject);
+    let mock_state = Rc::new(MockState::with_id(0));
     snapshot.record_write(mock_state);
 }
 
@@ -266,7 +185,7 @@ fn test_mutable_snapshot_write_after_dispose_panics() {
     let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
     snapshot.dispose();
 
-    let mock_state = Rc::new(MockStateObject);
+    let mock_state = Rc::new(MockState::with_id(0));
     snapshot.record_write(mock_state);
 }
 

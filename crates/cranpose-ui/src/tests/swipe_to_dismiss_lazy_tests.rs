@@ -1,10 +1,14 @@
 use std::{cell::RefCell, rc::Rc};
 
-use cranpose_core::NodeId;
 use cranpose_foundation::lazy::{LazyItems, LazyListScope, rememberLazyListState};
 use cranpose_ui_graphics::Size as ViewportSize;
 
 use super::*;
+
+const VIEWPORT: ViewportSize = ViewportSize {
+    width: 320.0,
+    height: 480.0,
+};
 
 fn compose_lazy_swipe_rows() -> TestComposition {
     run_test_composition(|| {
@@ -31,22 +35,6 @@ fn compose_lazy_swipe_rows() -> TestComposition {
             },
         );
     })
-}
-
-fn measure(composition: &mut TestComposition, root: NodeId) {
-    let handle = composition.runtime_handle();
-    let mut applier = composition.applier_mut();
-    applier.set_runtime_handle(handle);
-    measure_layout(
-        &mut applier,
-        root,
-        ViewportSize {
-            width: 320.0,
-            height: 480.0,
-        },
-    )
-    .expect("layout measurement");
-    applier.clear_runtime_handle();
 }
 
 fn layout_texts(tree: &LayoutTree) -> Vec<String> {
@@ -81,7 +69,9 @@ fn semantics_descriptions(tree: &SemanticsTree) -> Vec<String> {
 fn swipe_to_dismiss_renders_content_inside_lazy_column_item() {
     let mut composition = compose_lazy_swipe_rows();
     let root = composition.root().expect("lazy column root");
-    measure(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
 
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
@@ -102,7 +92,9 @@ fn swipe_to_dismiss_renders_content_inside_lazy_column_item() {
 fn swipe_to_dismiss_exposes_semantics_inside_lazy_column_item() {
     let mut composition = compose_lazy_swipe_rows();
     let root = composition.root().expect("lazy column root");
-    measure(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
 
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
@@ -149,7 +141,9 @@ fn a_keyed_lazy_item_supplies_its_key_to_its_content() {
         );
     });
     let root = composition.root().expect("lazy column root");
-    measure(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
 
     let keys = seen.borrow().clone();
     assert!(!keys.is_empty(), "no lazy item was composed");
@@ -189,7 +183,9 @@ fn an_unkeyed_lazy_item_reports_no_identity() {
         );
     });
     let root = composition.root().expect("lazy column root");
-    measure(&mut composition, root);
+    composition
+        .measure_layout(root, VIEWPORT)
+        .expect("layout measurement");
 
     let keys = seen.borrow().clone();
     assert!(!keys.is_empty(), "no lazy item was composed");

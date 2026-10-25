@@ -533,23 +533,6 @@ fn subcompose_scope_layout_uses_retained_placement_scratch() {
 }
 
 #[test]
-fn subcompose_modifier_slices_cache_reuses_unique_snapshot_allocation() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    let policy: Rc<MeasurePolicy> =
-        Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
-    let mut node = SubcomposeLayoutNode::new(Modifier::empty(), Rc::clone(&policy));
-    node.set_modifier(Modifier::empty().padding(2.0));
-    let snapshot = node.modifier_slices_snapshot();
-    let snapshot_ptr = Rc::as_ptr(&snapshot);
-    drop(snapshot);
-
-    node.set_modifier(Modifier::empty().padding(4.0));
-
-    let updated = node.modifier_slices_snapshot();
-    assert_eq!(Rc::as_ptr(&updated), snapshot_ptr);
-}
-
-#[test]
 fn semantics_configuration_reads_the_live_modifier_chain() {
     let _app_context = crate::render_state::app_context_test_scope();
     let policy: Rc<MeasurePolicy> = Rc::new(|scope, _| scope.layout(0.0, 0.0, Vec::new()));

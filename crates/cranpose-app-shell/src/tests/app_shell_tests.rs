@@ -752,18 +752,42 @@ impl RenderScene for MutableRecordingScene {
     }
 }
 
-struct FixedWidthTextMeasurer(f32);
+#[derive(Clone, Copy)]
+enum StubTextMeasurer {
+    Fixed(f32),
+    FontSized,
+}
 
-impl cranpose_ui::TextMeasurer for FixedWidthTextMeasurer {
+impl StubTextMeasurer {
+    fn width(self, text: &cranpose_ui::text::AnnotatedString, style: &TextStyle) -> f32 {
+        match self {
+            Self::Fixed(width) => width,
+            Self::FontSized => text.text.chars().count() as f32 * style.resolve_font_size(14.0),
+        }
+    }
+
+    fn char_width_and_line_height(self, style: &TextStyle) -> (f32, f32) {
+        match self {
+            Self::Fixed(width) => (width, 1.0),
+            Self::FontSized => {
+                let size = style.resolve_font_size(14.0);
+                (size, size)
+            }
+        }
+    }
+}
+
+impl cranpose_ui::TextMeasurer for StubTextMeasurer {
     fn measure(
         &self,
-        _text: &cranpose_ui::text::AnnotatedString,
-        _style: &TextStyle,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &TextStyle,
     ) -> cranpose_ui::TextMetrics {
+        let (_, line_height) = self.char_width_and_line_height(style);
         cranpose_ui::TextMetrics {
-            width: self.0,
-            height: 1.0,
-            line_height: 1.0,
+            width: self.width(text, style),
+            height: line_height,
+            line_height,
             line_count: 1,
         }
     }
@@ -780,19 +804,20 @@ impl cranpose_ui::TextMeasurer for FixedWidthTextMeasurer {
 
     fn get_cursor_x_for_offset(
         &self,
-        _text: &cranpose_ui::text::AnnotatedString,
-        _style: &TextStyle,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &TextStyle,
         _offset: usize,
     ) -> f32 {
-        self.0
+        self.width(text, style)
     }
 
     fn layout(
         &self,
         text: &cranpose_ui::text::AnnotatedString,
-        _style: &TextStyle,
+        style: &TextStyle,
     ) -> cranpose_ui::TextLayoutResult {
-        cranpose_ui::TextLayoutResult::monospaced(&text.text, self.0, 1.0)
+        let (char_width, line_height) = self.char_width_and_line_height(style);
+        cranpose_ui::TextLayoutResult::monospaced(&text.text, char_width, line_height)
     }
 }
 
@@ -817,7 +842,7 @@ impl cranpose_ui::TextMeasurer for CountingFixedWidthTextMeasurer {
         style: &TextStyle,
     ) -> cranpose_ui::TextMetrics {
         self.measure_calls.set(self.measure_calls.get() + 1);
-        FixedWidthTextMeasurer(self.width).measure(text, style)
+        StubTextMeasurer::Fixed(self.width).measure(text, style)
     }
 
     fn get_offset_for_position(
@@ -827,7 +852,7 @@ impl cranpose_ui::TextMeasurer for CountingFixedWidthTextMeasurer {
         x: f32,
         y: f32,
     ) -> usize {
-        FixedWidthTextMeasurer(self.width).get_offset_for_position(text, style, x, y)
+        StubTextMeasurer::Fixed(self.width).get_offset_for_position(text, style, x, y)
     }
 
     fn get_cursor_x_for_offset(
@@ -836,7 +861,7 @@ impl cranpose_ui::TextMeasurer for CountingFixedWidthTextMeasurer {
         style: &TextStyle,
         offset: usize,
     ) -> f32 {
-        FixedWidthTextMeasurer(self.width).get_cursor_x_for_offset(text, style, offset)
+        StubTextMeasurer::Fixed(self.width).get_cursor_x_for_offset(text, style, offset)
     }
 
     fn layout(
@@ -844,7 +869,7 @@ impl cranpose_ui::TextMeasurer for CountingFixedWidthTextMeasurer {
         text: &cranpose_ui::text::AnnotatedString,
         style: &TextStyle,
     ) -> cranpose_ui::TextLayoutResult {
-        FixedWidthTextMeasurer(self.width).layout(text, style)
+        StubTextMeasurer::Fixed(self.width).layout(text, style)
     }
 }
 
@@ -885,7 +910,7 @@ impl Renderer for TestRenderer {
                     measure_calls,
                 ));
             } else {
-                app_context.set_text_measurer(FixedWidthTextMeasurer(text_width));
+                app_context.set_text_measurer(StubTextMeasurer::Fixed(text_width));
             }
         }
     }
@@ -2672,6 +2697,23 @@ fn layout_recovers_after_tab_switching_updates() {
     );
 }
 
+pub(super) fn request_probe_focus<R>(
+    shell: &AppShell<R>,
+    focus_flag: &Rc<RefCell<bool>>,
+    handler: &Rc<TextFieldDispatchProbe>,
+) where
+    R: Renderer,
+    R::Error: Debug,
+{
+    shell.debug_enter_app_context(|| {
+        cranpose_ui::text_field_focus::request_focus(
+            Rc::clone(focus_flag),
+            Rc::<TextFieldDispatchProbe>::clone(handler),
+            0,
+        );
+    });
+}
+
 #[derive(Default)]
 pub(super) struct SoftKeyboardProbe {
     pub(super) calls: RefCell<Vec<&'static str>>,
@@ -2700,13 +2742,7 @@ fn text_field_focus_drives_platform_soft_keyboard() {
     let focus_flag = Rc::new(RefCell::new(false));
     let handler = Rc::new(TextFieldDispatchProbe::default());
 
-    shell.debug_enter_app_context(|| {
-        cranpose_ui::text_field_focus::request_focus(
-            Rc::clone(&focus_flag),
-            Rc::<TextFieldDispatchProbe>::clone(&handler),
-            0,
-        );
-    });
+    request_probe_focus(&shell, &focus_flag, &handler);
     assert_eq!(*keyboard.calls.borrow(), vec!["show"]);
 
     shell.debug_enter_app_context(cranpose_ui::text_field_focus::clear_focus);
@@ -2726,13 +2762,7 @@ fn key_event_after_field_removal_hides_soft_keyboard() {
     let handler = Rc::new(TextFieldDispatchProbe::default());
     {
         let focus_flag = Rc::new(RefCell::new(false));
-        shell.debug_enter_app_context(|| {
-            cranpose_ui::text_field_focus::request_focus(
-                Rc::clone(&focus_flag),
-                Rc::<TextFieldDispatchProbe>::clone(&handler),
-                0,
-            );
-        });
+        request_probe_focus(&shell, &focus_flag, &handler);
     }
 
     let event = KeyEvent::key_down(KeyCode::A, "a");
@@ -3014,13 +3044,7 @@ fn frame_update_after_field_removal_hides_soft_keyboard() {
     let handler = Rc::new(TextFieldDispatchProbe::default());
     {
         let focus_flag = Rc::new(RefCell::new(false));
-        shell.debug_enter_app_context(|| {
-            cranpose_ui::text_field_focus::request_focus(
-                Rc::clone(&focus_flag),
-                Rc::<TextFieldDispatchProbe>::clone(&handler),
-                0,
-            );
-        });
+        request_probe_focus(&shell, &focus_flag, &handler);
     }
     assert_eq!(*keyboard.calls.borrow(), vec!["show"]);
 
