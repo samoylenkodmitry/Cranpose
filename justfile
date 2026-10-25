@@ -395,6 +395,59 @@ deny-advisories:
     @command -v cargo-deny >/dev/null || cargo install cargo-deny --locked --version 0.20.2
     cargo deny check advisories
 
+# Fails when `path` is over `max` bytes. The size budgets below call it on
+# what their build already produced, so a check costs no build of its own.
+_size-ceiling path max what:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    size=$(wc -c < {{quote(path)}} | tr -d ' ')
+    if [ "$size" -gt {{max}} ]; then
+      echo "size budget: the {{what}} is $size bytes, over its ceiling of {{max}}; cut what grew it, or raise the ceiling in the justfile with the reason"
+      exit 1
+    fi
+    echo "size budget: the {{what}} is $size bytes, within {{max}}"
+
+# The web demo's wasm after `just web`: 12.5 MiB, the size CI built on
+# 2026-10-25 (12,983,806 bytes) and about 1%.
+web-size-budget: (_size-ceiling "apps/desktop-demo/pkg/desktop_app_bg.wasm" "13107200" "web demo wasm")
+
+# The ESP32-S3 app image after `just esp32-build`: 2.8 MiB, the image of
+# 2026-10-25 (2,865,760 bytes) and about 2.4%. The factory partition holds
+# 8,323,072 bytes.
+esp32-size-budget:
+    mkdir -p target/esp32
+    . "$HOME/export-{{esp32_toolchain}}.sh" && espflash save-image --chip esp32s3 --flash-mode dio --flash-size 8mb --partition-table {{esp32_demo}}/partitions.csv {{esp32_elf}} target/esp32/app.bin
+    just _size-ceiling target/esp32/app.bin 2936012 "ESP32-S3 app image"
+
+# Each feature of the framework crates built alone, so a feature that only
+# compiles beside another is found. About 12 minutes: the nightly runs it.
+# Target-only features are left to their own builds.
+features:
+    @command -v cargo-hack >/dev/null || cargo install cargo-hack --locked --version 0.6.45
+    cargo hack check --each-feature --no-dev-deps --workspace --keep-going \
+      --exclude desktop-app --exclude desktop-app-platform --exclude xtask \
+      --exclude coroflow-demo --exclude coroflow-demo-web --exclude coroflow-demo-android \
+      --exclude cranpose-native-demo --exclude perf-compare-cranpose --exclude perf-data \
+      --exclude-features android,ios,watchos,web,cranpose-platform-android,cranpose-platform-web,native-windows,uri-android,uri-web,file-picker-web,preferences-web,system-theme-web,web-http,wearable,heart-rate,storekit,playbilling,aaudio,avaudio
+
+# The generic functions that copy most LLVM IR into the desktop binary, the
+# 40 largest. A report for the nightly summary.
+llvm-lines:
+    @command -v cargo-llvm-lines >/dev/null || cargo install cargo-llvm-lines --locked --version 0.4.48
+    cargo llvm-lines -p desktop-app --bin desktop-app --release | head -43
+
+# Mutation testing of the Rust lines main changed in the last day: lists the
+# mutants no test caught. A nightly report, stopped after 25 minutes.
+mutants-nightly:
+    @command -v cargo-mutants >/dev/null || cargo install cargo-mutants --locked --version 27.1.0
+    scripts/ci/mutants_since.sh "24 hours ago" 25
+
+# The public API each published crate the branch changed gains or loses,
+# against the merge base. A report: about 30 seconds for each changed crate.
+public-api-diff base="origin/main":
+    @command -v cargo-public-api >/dev/null || cargo install cargo-public-api --locked --version 0.52.0
+    scripts/ci/public_api_diff.sh {{base}}
+
 # Dependencies that no code uses. Parses the sources, builds nothing: about
 # 2 seconds. A dependency named only to turn on a feature goes in its
 # manifest's [package.metadata.cargo-shear] ignored list, with the reason.
@@ -1149,12 +1202,12 @@ _disk-guard:
 # all seven on every pull request.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions twin-matrix-check check-forks test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-no-atomic64 clippy-wasm doc budgets complexity-gate duplication-gate source-budgets deny shear test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout test-robot-suite-partition test-android-accessibility-contract
+ci: fmt-check typos versions twin-matrix-check check-forks test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-no-atomic64 clippy-wasm doc budgets complexity-gate duplication-gate source-budgets deny shear public-api-diff test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout test-robot-suite-partition test-android-accessibility-contract
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
 # Every gate, including the platform builds and the robot suite.
-ci-full: ci clippy-ios clippy-android web-backends android watchos robot vulkan-sync test-emscripten
+ci-full: ci clippy-ios clippy-android web-backends web-size-budget android watchos robot vulkan-sync test-emscripten
 
 liquid-reference-traces output bundle="io.cranpose.liquid-reference" device="booted":
     python3 apps/liquid-reference/collect-traces.py '{{output}}' --bundle '{{bundle}}' --device '{{device}}'

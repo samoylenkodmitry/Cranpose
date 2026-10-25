@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a build script reads cargo's environment"
+)]
+
 #[cfg(feature = "cjk")]
 fn main() -> std::io::Result<()> {
     use std::{
