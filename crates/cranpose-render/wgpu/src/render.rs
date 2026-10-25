@@ -80,8 +80,6 @@ pub(crate) const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     a: cranpose_render_common::FRAME_CLEAR_COLOR[3] as f64,
 };
 const MAX_TEXTURE_CACHE_ITEMS: usize = 256;
-const MAX_IMAGE_TEXTURE_CACHE_BYTES: usize = 256 * 1024 * 1024;
-const MAX_EXTERNAL_TEXTURE_BINDINGS: usize = 8;
 
 const DEFAULT_WGPU_RENDER_STAGE_TELEMETRY_THRESHOLD_MS: f64 = 4.0;
 
@@ -1238,9 +1236,7 @@ pub(crate) struct GpuRenderer {
     text: TextResources,
     viewport_uniforms: ViewportUniforms,
     run_store: RunStore,
-    image_texture_cache: BoundedLruCache<u64, CachedImageTexture>,
-    image_texture_cache_bytes: usize,
-    external_texture_bindings: BoundedLruCache<u64, ImageBindGroups>,
+    images: ImageTextures,
     /// How run tables and retained glyph runs reach the GPU, and whether
     /// kept layer surfaces stay in their atlas: see [`UploadMode::copy_free`].
     pub(crate) copy_free: UploadMode,
@@ -1560,13 +1556,7 @@ impl GpuRenderer {
             text: TextResources::new(text_fonts, text_glyph_atlas, copy_free),
             viewport_uniforms,
             run_store,
-            image_texture_cache: BoundedLruCache::with_capacity_at_least_one(
-                MAX_TEXTURE_CACHE_ITEMS,
-            ),
-            image_texture_cache_bytes: 0,
-            external_texture_bindings: BoundedLruCache::with_capacity_at_least_one(
-                MAX_EXTERNAL_TEXTURE_BINDINGS,
-            ),
+            images: ImageTextures::new(),
             copy_free,
             pass_scratch: crate::draw_pass::PassScratch::default(),
             frame_graph_executor,
@@ -2282,7 +2272,7 @@ impl GpuRenderer {
         if image.format() == cranpose_ui_graphics::ImagePixelFormat::External {
             return self.external_texture_binding(image, sampling);
         }
-        if let Some(cached) = self.image_texture_cache.get(&image.id()) {
+        if let Some(cached) = self.images.get(image.id()) {
             return Ok(cached.bind_groups.binding(sampling));
         }
 
@@ -2340,21 +2330,7 @@ impl GpuRenderer {
             bytes,
         };
         let binding = cached.bind_groups.binding(sampling);
-        if let Some(replaced) = self.image_texture_cache.put(image.id(), cached) {
-            self.image_texture_cache_bytes = self
-                .image_texture_cache_bytes
-                .saturating_sub(replaced.bytes);
-        }
-        self.image_texture_cache_bytes += bytes;
-        while self.image_texture_cache_bytes > MAX_IMAGE_TEXTURE_CACHE_BYTES
-            && self.image_texture_cache.len() > 1
-        {
-            let Some((_, evicted)) = self.image_texture_cache.pop_lru() else {
-                break;
-            };
-            self.image_texture_cache_bytes =
-                self.image_texture_cache_bytes.saturating_sub(evicted.bytes);
-        }
+        self.images.insert(image.id(), cached);
         Ok(binding)
     }
 
@@ -2364,7 +2340,7 @@ impl GpuRenderer {
         sampling: ImageSampling,
     ) -> Result<ImageBinding, String> {
         let key = image.storage_id();
-        if let Some(bind_groups) = self.external_texture_bindings.get(&key) {
+        if let Some(bind_groups) = self.images.external(key) {
             return Ok(bind_groups.binding(sampling));
         }
         let view = image
@@ -2372,7 +2348,7 @@ impl GpuRenderer {
             .ok_or("an external texture's handle is not a wgpu::TextureView")?;
         let bind_groups = self.image_bind_groups(view, false);
         let binding = bind_groups.binding(sampling);
-        self.external_texture_bindings.put(key, bind_groups);
+        self.images.insert_external(key, bind_groups);
         Ok(binding)
     }
 
@@ -2758,7 +2734,7 @@ impl GpuRenderer {
             .set(self.text.image_cache.len() as u32);
         self.frame_stats
             .image_cache_size
-            .set(self.image_texture_cache.len() as u32);
+            .set(self.images.len() as u32);
         self.effect_renderer
             .merge_and_reset_debug_counters(&self.frame_stats);
         self.keep_window(plan, &submitted);
@@ -3112,8 +3088,8 @@ impl GpuRenderer {
             scene_node_index_cap: 0,
             text_renderer_pool_len: self.text.image_cache.len(),
             text_renderer_pool_cap: self.text.image_cache.cap().get(),
-            image_texture_cache_len: self.image_texture_cache.len(),
-            image_texture_cache_cap: self.image_texture_cache.cap().get(),
+            image_texture_cache_len: self.images.len(),
+            image_texture_cache_cap: self.images.capacity(),
             run_arena_staging_bytes: self.run_store.arena_staging_bytes(),
             run_store_bytes: self.run_store.stored_bytes(),
             run_store_runs: self.run_store.stored_count(),
@@ -5331,6 +5307,8 @@ use renderer_pipelines::{
     RRECT_SHADOW_PIPELINES, RendererPipelines,
 };
 mod image_draws;
+mod image_textures;
+use image_textures::ImageTextures;
 mod text_glyph_cache;
 mod text_resources;
 pub(crate) use image_draws::{ImageDrawCmd, ImageSlot, place_image_draws, resolve_image_geometry};
