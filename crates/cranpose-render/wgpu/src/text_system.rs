@@ -33,7 +33,7 @@ impl TextLayoutResolver for TextSystemState {
     }
 }
 
-/// The fonts a [`WgpuRenderer`] measures and draws text with.
+/// The fonts a [`WgpuRenderer`](crate::WgpuRenderer) measures and draws text with.
 #[derive(Clone)]
 pub struct WgpuTextSystem {
     software_fonts: SoftwareTextFontSet,
