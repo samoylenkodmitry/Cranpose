@@ -27,6 +27,8 @@ use unicode_segmentation::UnicodeSegmentation;
 
 mod shaped_font;
 
+use shaped_font::ShapedFont;
+
 pub use crate::annotated_text::TextFonts;
 #[cfg(test)]
 use crate::font_layout::layout_line_glyphs;
@@ -48,7 +50,6 @@ use crate::{
     text_hyphenation::HyphenationDictionaryStore,
     text_mask_gamma::TextLuminance,
 };
-use shaped_font::ShapedFont;
 
 const COMPOSE_STROKE_MITER_LIMIT: f32 = 4.0;
 const SHADOW_SIGMA_SCALE: f32 = 0.57735;

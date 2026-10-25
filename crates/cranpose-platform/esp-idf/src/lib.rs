@@ -292,8 +292,7 @@ impl Screen<'_, '_> {
             return Ok(());
         }
         let updated = Instant::now();
-        self.presenter
-            .present(self.framebuffer, &mut self.panel)?;
+        self.presenter.present(self.framebuffer, &mut self.panel)?;
         let presented = Instant::now();
         let phases = FramePhases {
             update: updated.duration_since(now),
