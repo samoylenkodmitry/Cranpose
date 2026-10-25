@@ -18,7 +18,13 @@ pub(crate) struct PageTarget {
     pub(crate) last_row: Option<usize>,
 }
 
-#[cfg_attr(test, allow(dead_code))]
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "only the wasm page calls it, and host test builds leave the page out"
+    )
+)]
 pub(crate) fn page_targets(
     ids: &[i32],
     elements: &[AccessibilityElement],
@@ -274,7 +280,13 @@ impl MirrorAttributes {
 /// of plain text, and the value of a text field a reader does not edit. A
 /// container holds the nodes inside it instead, and a field a reader edits
 /// holds its text as its value.
-#[cfg_attr(test, allow(dead_code))]
+#[cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "only the wasm page calls it, and host test builds leave the page out"
+    )
+)]
 pub(crate) fn mirror_text(element: &AccessibilityElement) -> Option<&str> {
     if is_mirror_container(element) {
         return None;

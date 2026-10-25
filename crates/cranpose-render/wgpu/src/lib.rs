@@ -210,13 +210,39 @@ pub struct DebugCpuAllocationStats {
     pub layer_cache_bytes: u64,
 }
 
-/// The device a renderer draws with and the surface format it presents.
-struct GpuTarget {
-    device: Arc<wgpu::Device>,
-    queue: Arc<wgpu::Queue>,
-    surface_format: wgpu::TextureFormat,
-    adapter_backend: wgpu::Backend,
-    adapter_downlevel: wgpu::DownlevelFlags,
+/// The device a renderer draws with, the surface format it presents and what
+/// the adapter behind the device supports.
+#[derive(Clone)]
+pub struct GpuTarget {
+    /// The device every GPU resource is created on.
+    pub device: Arc<wgpu::Device>,
+    /// The queue frames are submitted to.
+    pub queue: Arc<wgpu::Queue>,
+    /// The format of the surface frames are presented to.
+    pub surface_format: wgpu::TextureFormat,
+    /// The graphics API the adapter runs on.
+    pub adapter_backend: wgpu::Backend,
+    /// What the adapter supports below the full WebGPU feature set.
+    pub adapter_downlevel: wgpu::DownlevelFlags,
+}
+
+impl GpuTarget {
+    /// A target on a device of `adapter`, presenting to a surface of
+    /// `surface_format`.
+    pub fn on_adapter(
+        adapter: &wgpu::Adapter,
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        surface_format: wgpu::TextureFormat,
+    ) -> Self {
+        Self {
+            device,
+            queue,
+            surface_format,
+            adapter_backend: adapter.get_info().backend,
+            adapter_downlevel: adapter.get_downlevel_capabilities().flags,
+        }
+    }
 }
 
 enum PresentBackend {
@@ -337,21 +363,7 @@ impl WgpuRenderer {
     /// Replacing a live renderer (Android surface recreation, device loss)
     /// bumps the renderer epoch, so a packet built against the previous
     /// renderer is cancelled instead of drawn.
-    pub fn init_gpu(
-        &mut self,
-        device: Arc<wgpu::Device>,
-        queue: Arc<wgpu::Queue>,
-        surface_format: wgpu::TextureFormat,
-        adapter_backend: wgpu::Backend,
-        adapter_downlevel: wgpu::DownlevelFlags,
-    ) {
-        let target = GpuTarget {
-            device,
-            queue,
-            surface_format,
-            adapter_backend,
-            adapter_downlevel,
-        };
+    pub fn init_gpu(&mut self, target: GpuTarget) {
         self.install_gpu(target, PipelineCompilation::Background);
     }
 
@@ -359,21 +371,7 @@ impl WgpuRenderer {
     /// first needed instead of on the background compiler: no frame draws
     /// with a stand-in, which a reference frame in a test must not.
     #[doc(hidden)]
-    pub fn init_gpu_compiling_inline_for_tests(
-        &mut self,
-        device: Arc<wgpu::Device>,
-        queue: Arc<wgpu::Queue>,
-        surface_format: wgpu::TextureFormat,
-        adapter_backend: wgpu::Backend,
-        adapter_downlevel: wgpu::DownlevelFlags,
-    ) {
-        let target = GpuTarget {
-            device,
-            queue,
-            surface_format,
-            adapter_backend,
-            adapter_downlevel,
-        };
+    pub fn init_gpu_compiling_inline_for_tests(&mut self, target: GpuTarget) {
         self.install_gpu(target, PipelineCompilation::Inline);
     }
 
@@ -421,25 +419,13 @@ impl WgpuRenderer {
     /// * `observer` — runs on the present thread around every present to the
     ///   surface.
     #[cfg(not(target_arch = "wasm32"))]
-    #[expect(clippy::too_many_arguments)]
     pub fn init_gpu_threaded(
         &mut self,
-        device: Arc<wgpu::Device>,
-        queue: Arc<wgpu::Queue>,
-        surface_format: wgpu::TextureFormat,
-        adapter_backend: wgpu::Backend,
-        adapter_downlevel: wgpu::DownlevelFlags,
+        target: GpuTarget,
         waker: Arc<dyn Fn() + Send + Sync>,
         clock: Option<Arc<dyn Fn() -> i64 + Send + Sync>>,
         observer: Option<Box<dyn PresentObserver>>,
     ) -> Result<(), WgpuRendererError> {
-        let target = GpuTarget {
-            device,
-            queue,
-            surface_format,
-            adapter_backend,
-            adapter_downlevel,
-        };
         let init = PresentRuntimeInit {
             gpu: self.next_gpu_init(target, PipelineCompilation::Background),
             clock,
@@ -452,21 +438,7 @@ impl WgpuRenderer {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
-    pub fn init_gpu_inline_for_tests(
-        &mut self,
-        device: Arc<wgpu::Device>,
-        queue: Arc<wgpu::Queue>,
-        surface_format: wgpu::TextureFormat,
-        adapter_backend: wgpu::Backend,
-        adapter_downlevel: wgpu::DownlevelFlags,
-    ) -> InlinePresentRuntime {
-        let target = GpuTarget {
-            device,
-            queue,
-            surface_format,
-            adapter_backend,
-            adapter_downlevel,
-        };
+    pub fn init_gpu_inline_for_tests(&mut self, target: GpuTarget) -> InlinePresentRuntime {
         let init = PresentRuntimeInit {
             gpu: self.next_gpu_init(target, PipelineCompilation::Background),
             clock: None,

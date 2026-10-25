@@ -21,7 +21,7 @@ pub(crate) struct CranposeThreadState {
     pub(crate) native_window_registry: ScopedWeakStack<crate::native_window::NativeWindowRegistry>,
     #[cfg_attr(
         not(any(test, all(feature = "android", target_os = "android"))),
-        expect(dead_code)
+        expect(dead_code, reason = "only the Android backend registers host windows")
     )]
     pub(crate) android_host_window_registry: ScopedWeakStack<AndroidHostWindowRegistry>,
     #[cfg(feature = "localization")]

@@ -53,6 +53,16 @@ impl GpuResources {
     fn has_surface(&self) -> bool {
         self.native_window_ptr.is_some()
     }
+
+    fn gpu_target(&self) -> cranpose_render_wgpu::GpuTarget {
+        cranpose_render_wgpu::GpuTarget {
+            device: Arc::clone(&self.device),
+            queue: Arc::clone(&self.queue),
+            surface_format: self.surface_format,
+            adapter_backend: self.backend,
+            adapter_downlevel: self.adapter.get_downlevel_capabilities().flags,
+        }
+    }
 }
 
 enum PendingInput {
@@ -1499,11 +1509,7 @@ fn init_gpu_threaded_for_android(
 ) -> Result<(), AndroidSurfaceError> {
     renderer
         .init_gpu_threaded(
-            Arc::clone(&resources.device),
-            Arc::clone(&resources.queue),
-            resources.surface_format,
-            resources.backend,
-            resources.adapter.get_downlevel_capabilities().flags,
+            resources.gpu_target(),
             Arc::new(frame_driver.frame_waker()),
             Some(Arc::new(super::frame_telemetry::monotonic_nanos)),
             frame_driver.display_timing_observer(&resources.device),
@@ -1655,13 +1661,7 @@ where
             hand_surface_to_present_thread(&mut renderer, &mut setup);
             surface_handed = true;
         } else {
-            renderer.init_gpu(
-                Arc::clone(&setup.resources.device),
-                Arc::clone(&setup.resources.queue),
-                setup.resources.surface_format,
-                setup.resources.backend,
-                setup.resources.adapter.get_downlevel_capabilities().flags,
-            );
+            renderer.init_gpu(setup.resources.gpu_target());
         }
 
         let content_clone = Rc::clone(content);
@@ -1700,13 +1700,7 @@ where
             if present_thread {
                 init_gpu_threaded_for_android(shell.renderer(), &setup.resources, frame_driver)?;
             } else {
-                shell.renderer().init_gpu(
-                    Arc::clone(&setup.resources.device),
-                    Arc::clone(&setup.resources.queue),
-                    setup.resources.surface_format,
-                    setup.resources.backend,
-                    setup.resources.adapter.get_downlevel_capabilities().flags,
-                );
+                shell.renderer().init_gpu(setup.resources.gpu_target());
             }
             log::info!("Renderer reinitialized with new Android GPU pipeline resources");
         }

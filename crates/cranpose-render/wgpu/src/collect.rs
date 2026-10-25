@@ -27,8 +27,8 @@ use crate::{
         push_layer_shadow, push_text_style_draws,
     },
     scene::{
-        BackdropLayer, ClipRounding, CompositorScene, LayerRoundedClip, Placement as RunPlacement,
-        RunDraw, SceneCapacityHint, ShadowDraw, SnapAnchor, clip_holds,
+        BackdropLayer, ClipRounding, CompositorScene, ContentContext, LayerRoundedClip,
+        Placement as RunPlacement, RunDraw, SceneCapacityHint, ShadowDraw, SnapAnchor, clip_holds,
     },
 };
 
@@ -1407,19 +1407,6 @@ fn boundary_anchor(
     )
 }
 
-/// Where a layer's own primitives land: the layer's bounds and local
-/// graphics layer, the clip and anchor they inherit, and whether their
-/// motion context animates.
-#[derive(Clone, Copy)]
-struct ContentContext<'a> {
-    layer_bounds: Rect,
-    local_layer: &'a GraphicsLayer,
-    visual_clip: Option<Rect>,
-    rounding: Option<ClipRounding>,
-    anchor: Option<SnapAnchor>,
-    motion_context_animated: bool,
-}
-
 fn push_content(
     out: &mut LayerScene,
     text_layout: &mut impl TextLayoutResolver,
@@ -1689,7 +1676,7 @@ fn push_primitive(
         visual_clip,
         rounding,
         anchor: snap_anchor,
-        motion_context_animated,
+        ..
     } = *content;
     match &entry.node {
         PrimitiveNode::Draw(draw) => {
@@ -1706,14 +1693,13 @@ fn push_primitive(
             }
             push_draw_primitive(
                 &draw.primitive,
-                layer_bounds,
-                local_layer,
-                clip,
-                rounding.filter(|_| clip == visual_clip),
-                snap_anchor,
+                &ContentContext {
+                    visual_clip: clip,
+                    rounding: rounding.filter(|_| clip == visual_clip),
+                    ..*content
+                },
                 &mut out.scene,
                 None,
-                motion_context_animated,
             );
             assign_snap_anchor_since(&mut out.scene, counts, snap_anchor);
         }
@@ -1759,7 +1745,7 @@ fn push_draw_run(out: &mut LayerScene, run: &DrawRunNode, content: &ContentConte
         visual_clip,
         rounding,
         anchor: snap_anchor,
-        motion_context_animated,
+        ..
     } = *content;
     let placement = RunPlacement::painted(
         Point::new(layer_bounds.x, layer_bounds.y),
@@ -1801,17 +1787,7 @@ fn push_draw_run(out: &mut LayerScene, run: &DrawRunNode, content: &ContentConte
             RecordLane::Others => {
                 flush_shapes(out, position, &mut shapes_from);
                 for primitive in &recording.others()[segment.range()] {
-                    push_draw_primitive(
-                        primitive,
-                        layer_bounds,
-                        local_layer,
-                        visual_clip,
-                        rounding,
-                        snap_anchor,
-                        &mut out.scene,
-                        None,
-                        motion_context_animated,
-                    );
+                    push_draw_primitive(primitive, content, &mut out.scene, None);
                 }
             }
         }

@@ -136,13 +136,13 @@ impl PipelineDiscovery {
     /// not draw.
     pub(crate) fn install(&self, renderer: &mut WgpuRenderer) {
         let target = self.target.borrow();
-        renderer.init_gpu(
-            Arc::clone(&target.device),
-            Arc::clone(&target.queue),
-            target.surface_format,
-            target.backend,
-            target.downlevel,
-        );
+        renderer.init_gpu(cranpose_render_wgpu::GpuTarget {
+            device: Arc::clone(&target.device),
+            queue: Arc::clone(&target.queue),
+            surface_format: target.surface_format,
+            adapter_backend: target.backend,
+            adapter_downlevel: target.downlevel,
+        });
     }
 
     /// Whether a frame may draw: not while the discovered pipelines compile.

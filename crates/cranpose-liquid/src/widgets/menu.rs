@@ -1473,6 +1473,15 @@ pub fn LiquidMenu(
                     (rect.x + rect.width * 0.5, rect.y + rect.height * 0.5)
                 }));
                 let gesture = gesture.clone();
+                let rows = Rc::new(MenuRows {
+                    typography: typography.clone(),
+                    has_checks,
+                    colors,
+                    hovered,
+                    gesture_hover,
+                    on_item: Rc::clone(&on_item),
+                    on_dismiss: Rc::clone(&on_dismiss),
+                });
                 let source_phase =
                     menu_absorbed_visual_phase(appear, menu_geometry_phase(expanded, appear).path);
                 for source in absorbed.iter().cloned() {
@@ -1487,18 +1496,14 @@ pub fn LiquidMenu(
                 }
                 Box(card, BoxSpec::default(), {
                     let items = Rc::clone(&items);
-                    let typography = typography.clone();
-                    let on_item = Rc::clone(&on_item);
-                    let on_dismiss = Rc::clone(&on_dismiss);
+                    let rows = Rc::clone(&rows);
                     move || {
                         Column(
                             Modifier::empty().fill_max_width().padding(MENU_SHADOW_PAD),
                             ColumnSpec::default(),
                             {
                                 let items = Rc::clone(&items);
-                                let typography = typography.clone();
-                                let on_item = Rc::clone(&on_item);
-                                let on_dismiss = Rc::clone(&on_dismiss);
+                                let rows = Rc::clone(&rows);
                                 let gesture = gesture.clone();
                                 move || {
                                     Box(
@@ -1541,9 +1546,7 @@ pub fn LiquidMenu(
                                         });
                                     Box(rows_wrap, BoxSpec::default(), {
                                         let items = Rc::clone(&items);
-                                        let typography = typography.clone();
-                                        let on_item = Rc::clone(&on_item);
-                                        let on_dismiss = Rc::clone(&on_dismiss);
+                                        let rows = Rc::clone(&rows);
                                         let gesture = gesture.clone();
                                         move || {
                                             Column(
@@ -1556,9 +1559,7 @@ pub fn LiquidMenu(
                                                 ColumnSpec::default(),
                                                 {
                                                     let items = Rc::clone(&items);
-                                                    let typography = typography.clone();
-                                                    let on_item = Rc::clone(&on_item);
-                                                    let on_dismiss = Rc::clone(&on_dismiss);
+                                                    let rows = Rc::clone(&rows);
                                                     let gesture = gesture.clone();
                                                     move || {
                                                         for (index, starts_section) in
@@ -1584,12 +1585,7 @@ pub fn LiquidMenu(
                                                             }
 
                                                             if item.header {
-                                                                menu_header_row(
-                                                                    item,
-                                                                    &typography,
-                                                                    has_checks,
-                                                                    colors,
-                                                                );
+                                                                menu_header_row(item, &rows);
                                                                 continue;
                                                             }
                                                             let expanded_header = item.keeps_open
@@ -1602,15 +1598,9 @@ pub fn LiquidMenu(
                                                             menu_item_row(
                                                                 index,
                                                                 item,
-                                                                &typography,
-                                                                has_checks,
-                                                                colors,
-                                                                hovered,
-                                                                gesture_hover,
+                                                                &rows,
                                                                 expanded_header,
                                                                 gesture.item_rect(index),
-                                                                Rc::clone(&on_item),
-                                                                Rc::clone(&on_dismiss),
                                                             );
                                                         }
                                                     }
@@ -1710,12 +1700,13 @@ fn commit_menu_row(
     }
 }
 
-fn menu_header_row(
-    item: &LiquidMenuItem,
-    typography: &crate::theme::LiquidTypography,
-    has_checks: bool,
-    colors: crate::theme::LiquidColors,
-) {
+fn menu_header_row(item: &LiquidMenuItem, rows: &MenuRows) {
+    let MenuRows {
+        ref typography,
+        has_checks,
+        colors,
+        ..
+    } = *rows;
     let label = item.label.clone();
     let style = TextStyle {
         span_style: SpanStyle {
@@ -1749,26 +1740,32 @@ fn menu_row_semantics(label: String, has_checks: bool, checked: bool) -> Semanti
     }
 }
 
-#[expect(clippy::too_many_arguments)]
-fn menu_item_row(
-    index: usize,
-    item: &LiquidMenuItem,
-    typography: &crate::theme::LiquidTypography,
+// What every row of an open menu shares: its look, the row the pointer or
+// a gesture is over, and what choosing a row does.
+struct MenuRows {
+    typography: crate::theme::LiquidTypography,
     has_checks: bool,
     colors: crate::theme::LiquidColors,
     hovered: MutableState<Option<usize>>,
     gesture_hover: Option<usize>,
-    expanded_header: bool,
-    rect_sink: Rc<Cell<Rect>>,
     on_item: Rc<dyn Fn(usize)>,
     on_dismiss: Rc<dyn Fn()>,
+}
+
+fn menu_item_row(
+    index: usize,
+    item: &LiquidMenuItem,
+    rows: &MenuRows,
+    expanded_header: bool,
+    rect_sink: Rc<Cell<Rect>>,
 ) {
+    let (colors, hovered, has_checks) = (rows.colors, rows.hovered, rows.has_checks);
     let color = if item.destructive {
         colors.destructive
     } else {
         colors.label
     };
-    let is_hovered = hovered.get() == Some(index) || gesture_hover == Some(index);
+    let is_hovered = hovered.get() == Some(index) || rows.gesture_hover == Some(index);
     let highlight = if colors.is_dark {
         Color::from_rgba_u8(120, 120, 128, 44)
     } else {
@@ -1784,8 +1781,8 @@ fn menu_item_row(
         .semantics_spec(menu_row_semantics(row_label, has_checks, checked))
         .focusable()
         .pointer_input(index, {
-            let on_item = Rc::clone(&on_item);
-            let on_dismiss = Rc::clone(&on_dismiss);
+            let on_item = Rc::clone(&rows.on_item);
+            let on_dismiss = Rc::clone(&rows.on_dismiss);
             move |scope: PointerInputScope| {
                 let on_item = Rc::clone(&on_item);
                 let on_dismiss = Rc::clone(&on_dismiss);
@@ -1848,7 +1845,7 @@ fn menu_item_row(
     let icon = item.icon;
     let accordion_chevron = item.keeps_open && subtitle.is_some();
     let secondary = colors.secondary_label;
-    let typography = typography.clone();
+    let typography = rows.typography.clone();
     Row(
         row,
         RowSpec::default().vertical_alignment(VerticalAlignment::CenterVertically),

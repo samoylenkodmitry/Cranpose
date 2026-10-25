@@ -180,13 +180,12 @@ fn main() {
     let mut renderer = cranpose_render_wgpu::WgpuRenderer::new(&[
         cranpose_render_common::software_text_raster::DEFAULT_SOFTWARE_TEXT_FONT_BYTES,
     ]);
-    renderer.init_gpu_compiling_inline_for_tests(
+    renderer.init_gpu_compiling_inline_for_tests(cranpose_render_wgpu::GpuTarget::on_adapter(
+        &adapter,
         std::sync::Arc::new(device),
         std::sync::Arc::new(queue),
         wgpu::TextureFormat::Bgra8UnormSrgb,
-        adapter.get_info().backend,
-        adapter.get_downlevel_capabilities().flags,
-    );
+    ));
 
     let root_key = location_key(file!(), line!(), column!());
     let list_state: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));

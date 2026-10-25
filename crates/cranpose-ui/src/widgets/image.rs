@@ -1,7 +1,6 @@
 //! Image composable and painter primitives.
 
 #![expect(non_snake_case, reason = "names follow Compose's casing")]
-#![expect(clippy::too_many_arguments)]
 
 #[cfg(feature = "svg")]
 use std::sync::{Mutex, MutexGuard};
@@ -736,24 +735,35 @@ fn image_destination_clip(
     Some((dst_rect, clipped_dst_rect))
 }
 
-fn draw_bitmap_painter(
-    scope: &mut dyn DrawScope,
-    bitmap: ImageBitmap,
-    intrinsic_size: Size,
+// How an Image draws its painter: placed by its alignment and content
+// scale on whole device pixels of `density`, with its alpha and color filter.
+struct ImageDraw {
     alignment: Alignment,
     content_scale: ContentScale,
     alpha: f32,
     color_filter: Option<ColorFilter>,
     density: f32,
+}
+
+impl ImageDraw {
+    fn clip(&self, src_size: Size, container_size: Size) -> Option<(Rect, Rect)> {
+        image_destination_clip(
+            src_size,
+            container_size,
+            self.alignment,
+            self.content_scale,
+            self.density,
+        )
+    }
+}
+
+fn draw_bitmap_painter(
+    scope: &mut dyn DrawScope,
+    bitmap: ImageBitmap,
+    intrinsic_size: Size,
+    draw: &ImageDraw,
 ) {
-    let container_size = scope.size();
-    let Some((dst_rect, clipped_dst_rect)) = image_destination_clip(
-        intrinsic_size,
-        container_size,
-        alignment,
-        content_scale,
-        density,
-    ) else {
+    let Some((dst_rect, clipped_dst_rect)) = draw.clip(intrinsic_size, scope.size()) else {
         return;
     };
     let full_src_rect = Rect::from_size(Size::new(bitmap.width() as f32, bitmap.height() as f32));
@@ -766,8 +776,8 @@ fn draw_bitmap_painter(
         bitmap,
         clipped_src_rect,
         clipped_dst_rect,
-        alpha,
-        color_filter,
+        draw.alpha,
+        draw.color_filter.clone(),
         ImageSampling::Linear,
     );
 }
@@ -776,17 +786,11 @@ fn draw_bitmap_region_painter(
     scope: &mut dyn DrawScope,
     bitmap: ImageBitmap,
     source: Rect,
-    alignment: Alignment,
-    content_scale: ContentScale,
-    alpha: f32,
-    color_filter: Option<ColorFilter>,
     sampling: ImageSampling,
-    density: f32,
+    draw: &ImageDraw,
 ) {
     let source_size = Size::new(source.width.max(0.0), source.height.max(0.0));
-    let Some((dst_rect, clipped_dst_rect)) =
-        image_destination_clip(source_size, scope.size(), alignment, content_scale, density)
-    else {
+    let Some((dst_rect, clipped_dst_rect)) = draw.clip(source_size, scope.size()) else {
         return;
     };
     let Some(clipped_source) = map_destination_clip_to_source(source, dst_rect, clipped_dst_rect)
@@ -797,8 +801,8 @@ fn draw_bitmap_region_painter(
         bitmap,
         clipped_source,
         clipped_dst_rect,
-        alpha,
-        color_filter,
+        draw.alpha,
+        draw.color_filter.clone(),
         sampling,
     );
 }
@@ -880,23 +884,15 @@ fn draw_svg_painter(
     scope: &mut dyn DrawScope,
     svg: SvgPainter,
     intrinsic_size: Size,
-    alignment: Alignment,
-    content_scale: ContentScale,
-    alpha: f32,
-    color_filter: Option<ColorFilter>,
-    density: f32,
+    draw: &ImageDraw,
 ) {
-    let container_size = scope.size();
-    let Some((dst_rect, clipped_dst_rect)) = image_destination_clip(
-        intrinsic_size,
-        container_size,
-        alignment,
-        content_scale,
-        density,
-    ) else {
+    let Some((dst_rect, clipped_dst_rect)) = draw.clip(intrinsic_size, scope.size()) else {
         return;
     };
-    let pixel_size = Size::new(dst_rect.width * density, dst_rect.height * density);
+    let pixel_size = Size::new(
+        dst_rect.width * draw.density,
+        dst_rect.height * draw.density,
+    );
     let bitmap = match svg.rasterize(pixel_size) {
         Ok(bitmap) => bitmap,
         Err(error) => {
@@ -914,8 +910,8 @@ fn draw_svg_painter(
         bitmap,
         clipped_src_rect,
         clipped_dst_rect,
-        alpha,
-        color_filter,
+        draw.alpha,
+        draw.color_filter.clone(),
         ImageSampling::Linear,
     );
 }
@@ -970,7 +966,13 @@ where
     });
 
     // The grid the image is aligned on: the composition's, as Text keeps it.
-    let density = crate::density::density().density();
+    let draw = ImageDraw {
+        alignment,
+        content_scale,
+        alpha: draw_alpha,
+        color_filter,
+        density: crate::density::density().density(),
+    };
     let image_modifier = semantics_modifier
         .then(modifier)
         .stable_semantics(|config| {
@@ -984,7 +986,7 @@ where
             }
         })
         .draw_behind(move |scope: &mut dyn DrawScope| {
-            if draw_alpha <= 0.0 {
+            if draw.alpha <= 0.0 {
                 return;
             }
             let container_size = scope.size();
@@ -992,16 +994,9 @@ where
                 return;
             }
             match &painter.kind {
-                PainterKind::Bitmap(bitmap) => draw_bitmap_painter(
-                    scope,
-                    bitmap.clone(),
-                    intrinsic_dp,
-                    alignment,
-                    content_scale,
-                    draw_alpha,
-                    color_filter.clone(),
-                    density,
-                ),
+                PainterKind::Bitmap(bitmap) => {
+                    draw_bitmap_painter(scope, bitmap.clone(), intrinsic_dp, &draw);
+                }
                 PainterKind::BitmapRegion {
                     bitmap,
                     source,
@@ -1010,12 +1005,8 @@ where
                     scope,
                     bitmap.clone(),
                     source.rect(),
-                    alignment,
-                    content_scale,
-                    draw_alpha,
-                    color_filter.clone(),
                     *sampling,
-                    density,
+                    &draw,
                 ),
                 PainterKind::BitmapTiled {
                     bitmap,
@@ -1025,8 +1016,8 @@ where
                     scope,
                     bitmap,
                     |container| tile_quads(source.rect(), container),
-                    draw_alpha,
-                    color_filter.clone(),
+                    draw.alpha,
+                    draw.color_filter.clone(),
                     *sampling,
                 ),
                 PainterKind::NinePatch {
@@ -1042,20 +1033,13 @@ where
                     |container| {
                         nine_patch_quads(source.rect(), container, insets.insets(), *center, *edges)
                     },
-                    draw_alpha,
-                    color_filter.clone(),
+                    draw.alpha,
+                    draw.color_filter.clone(),
                     *sampling,
                 ),
-                PainterKind::Svg(svg) => draw_svg_painter(
-                    scope,
-                    svg.clone(),
-                    intrinsic_dp,
-                    alignment,
-                    content_scale,
-                    draw_alpha,
-                    color_filter.clone(),
-                    density,
-                ),
+                PainterKind::Svg(svg) => {
+                    draw_svg_painter(scope, svg.clone(), intrinsic_dp, &draw);
+                }
             }
         });
 

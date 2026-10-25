@@ -97,7 +97,13 @@ impl<B: KeyedBuild> ShapePipelines<B> {
     /// Builds the specialized pipelines draws want from now on: the browser
     /// compiles what the device creates in the background
     /// (`wgpu::Device::compile_pipelines_in_background`).
-    #[cfg_attr(not(any(test, target_arch = "wasm32")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(test, target_arch = "wasm32")),
+        expect(
+            dead_code,
+            reason = "only the web backend builds pipelines in the background"
+        )
+    )]
     pub(crate) fn build_in_background(&mut self) {
         self.background_builds = true;
     }

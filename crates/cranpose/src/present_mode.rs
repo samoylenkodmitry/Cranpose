@@ -17,7 +17,7 @@ pub(crate) fn select_android_present_mode(caps: &wgpu::SurfaceCapabilities) -> w
     select_android_present_mode_for_request(caps, requested)
 }
 
-#[cfg_attr(not(any(test, target_os = "android")), expect(dead_code))]
+#[cfg_attr(not(any(test, target_os = "android")), expect(dead_code, reason = "only the Android backend chooses a present mode"))]
 fn select_android_present_mode_for_request(
     caps: &wgpu::SurfaceCapabilities,
     requested: Option<wgpu::PresentMode>,

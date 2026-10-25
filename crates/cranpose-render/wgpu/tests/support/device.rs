@@ -90,21 +90,16 @@ impl HeadlessDevice {
         format: wgpu::TextureFormat,
         pipelines: Pipelines,
     ) {
+        let target = cranpose_render_wgpu::GpuTarget {
+            device: self.device,
+            queue: self.queue,
+            surface_format: format,
+            adapter_backend: self.backend,
+            adapter_downlevel: self.downlevel,
+        };
         match pipelines {
-            Pipelines::Background => renderer.init_gpu(
-                self.device,
-                self.queue,
-                format,
-                self.backend,
-                self.downlevel,
-            ),
-            Pipelines::Inline => renderer.init_gpu_compiling_inline_for_tests(
-                self.device,
-                self.queue,
-                format,
-                self.backend,
-                self.downlevel,
-            ),
+            Pipelines::Background => renderer.init_gpu(target),
+            Pipelines::Inline => renderer.init_gpu_compiling_inline_for_tests(target),
         }
     }
 }

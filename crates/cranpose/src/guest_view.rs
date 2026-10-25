@@ -55,13 +55,12 @@ impl GuestView {
         let mut renderer = WgpuRenderer::with_text_system(WgpuTextSystem::from_font_set(
             settings.resolve_font_set(),
         ));
-        renderer.init_gpu(
+        renderer.init_gpu(cranpose_render_wgpu::GpuTarget::on_adapter(
+            &gpu.adapter,
             std::sync::Arc::clone(&gpu.device),
             std::sync::Arc::clone(&gpu.queue),
             format,
-            gpu.adapter.get_info().backend,
-            gpu.adapter.get_downlevel_capabilities().flags,
-        );
+        ));
         let shell = AppShell::new_with_size_and_density(
             renderer,
             default_root_key(),

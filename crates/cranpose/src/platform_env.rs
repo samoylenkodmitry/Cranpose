@@ -28,14 +28,20 @@ impl PlatformEnvironment {
     }
 
     /// The window's edges the system draws on.
-    #[cfg_attr(not(any(target_os = "android", target_os = "ios")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "android", target_os = "ios")),
+        expect(dead_code, reason = "only Android and iOS report a safe area")
+    )]
     pub(crate) fn safe_area(&self) -> EdgeInsets {
         self.safe_area.get()
     }
 
     #[cfg_attr(
         not(any(target_os = "android", target_os = "ios", feature = "framebuffer")),
-        expect(dead_code)
+        expect(
+            dead_code,
+            reason = "only Android, iOS and the framebuffer backend report a safe area"
+        )
     )]
     pub(crate) fn set_safe_area(&self, insets: EdgeInsets) -> bool {
         let changed = self.safe_area.get() != insets;
@@ -43,7 +49,10 @@ impl PlatformEnvironment {
         changed
     }
 
-    #[cfg_attr(not(any(target_os = "android", target_os = "ios")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "android", target_os = "ios")),
+        expect(dead_code, reason = "only Android and iOS report keyboard insets")
+    )]
     pub(crate) fn set_ime_insets(&self, insets: EdgeInsets) -> bool {
         let changed = self.ime_insets.get() != insets;
         self.ime_insets.set(insets);

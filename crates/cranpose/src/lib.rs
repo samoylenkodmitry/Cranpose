@@ -69,7 +69,7 @@ mod accessibility_publish_policy;
 mod android_entry;
 #[cfg_attr(
     not(all(feature = "android", target_os = "android")),
-    expect(dead_code)
+    expect(dead_code, reason = "only the Android backend hosts windows")
 )]
 mod android_host_window;
 mod android_input;
@@ -443,7 +443,10 @@ mod frame_pacer;
         all(feature = "android", target_os = "android"),
         all(feature = "ios", target_os = "ios")
     )),
-    allow(dead_code)
+    allow(
+        dead_code,
+        reason = "only the Android and iOS backends set memory hints"
+    )
 )]
 pub(crate) mod gpu_limits;
 #[cfg(any(test, all(feature = "android", target_os = "android")))]

@@ -233,13 +233,13 @@ fn renderer_for(
     let mut renderer = WgpuRenderer::with_text_system(text_system.clone());
     renderer.set_root_scale(scale);
     renderer.set_transparent_background(transparent);
-    renderer.init_gpu(
-        Arc::clone(&gpu.device),
-        Arc::clone(&gpu.queue),
-        FRAME_FORMAT,
-        gpu.backend,
-        gpu.downlevel,
-    );
+    renderer.init_gpu(cranpose_render_wgpu::GpuTarget {
+        device: Arc::clone(&gpu.device),
+        queue: Arc::clone(&gpu.queue),
+        surface_format: FRAME_FORMAT,
+        adapter_backend: gpu.backend,
+        adapter_downlevel: gpu.downlevel,
+    });
     renderer
 }
 

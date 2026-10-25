@@ -263,21 +263,35 @@ impl OffscreenPool {
     }
 
     pub(crate) fn uniform_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Effect Uniform Bind Group Layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                // A runtime shader's vertex stage reads its quad placement.
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: true,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        })
+        // A runtime shader's vertex stage reads its quad placement.
+        dynamic_uniform_layout(
+            device,
+            "Effect Uniform Bind Group Layout",
+            wgpu::ShaderStages::VERTEX_FRAGMENT,
+        )
     }
+}
+
+// A layout of one uniform buffer that the stages in `visibility` read at a
+// dynamic offset.
+pub(crate) fn dynamic_uniform_layout(
+    device: &wgpu::Device,
+    label: &'static str,
+    visibility: wgpu::ShaderStages,
+) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some(label),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: true,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    })
 }
 
 #[cfg(test)]

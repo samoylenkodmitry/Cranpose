@@ -11,7 +11,7 @@ use cranpose_app_shell::{
 };
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
 use cranpose_render_common::Renderer;
-use cranpose_render_wgpu::{WgpuRenderer, WgpuTextSystem};
+use cranpose_render_wgpu::{GpuTarget, WgpuRenderer, WgpuTextSystem};
 use winit::{
     application::ApplicationHandler,
     dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position},
@@ -1656,11 +1656,10 @@ impl App {
         let scale_factor = window.scale_factor();
         let mut renderer = wgpu_renderer_for_surface(
             context.text_system.clone(),
+            &context.gpu.adapter,
             Arc::clone(&context.gpu.device),
             Arc::clone(&context.gpu.queue),
             crate::surface_format::display_surface_view_format(surface_format),
-            context.adapter_backend,
-            context.gpu.adapter.get_downlevel_capabilities().flags,
             scale_factor,
             self.device_loss.handler(&self.event_proxy),
         );
@@ -3692,21 +3691,20 @@ fn surface_config_for_window(
     })
 }
 
-#[expect(clippy::too_many_arguments)]
 fn wgpu_renderer_for_surface(
     text_system: WgpuTextSystem,
+    adapter: &wgpu::Adapter,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
     surface_format: wgpu::TextureFormat,
-    backend: wgpu::Backend,
-    downlevel: wgpu::DownlevelFlags,
     scale_factor: f64,
     on_device_lost: cranpose_render_wgpu::DeviceLostHandler,
 ) -> WgpuRenderer {
     let mut renderer = WgpuRenderer::with_text_system(text_system);
     renderer.set_root_scale(scale_factor as f32);
     renderer.set_device_lost_handler(on_device_lost);
-    renderer.init_gpu(device, queue, surface_format, backend, downlevel);
+    let target = GpuTarget::on_adapter(adapter, device, queue, surface_format);
+    renderer.init_gpu(target);
     renderer
 }
 
@@ -5271,11 +5269,10 @@ impl ApplicationHandler for App {
         let initial_scale = window.scale_factor();
         let renderer = wgpu_renderer_for_surface(
             text_system.clone(),
+            &adapter,
             Arc::clone(&device),
             Arc::clone(&queue),
             crate::surface_format::display_surface_view_format(surface_format),
-            adapter_info.backend,
-            adapter.get_downlevel_capabilities().flags,
             initial_scale,
             self.device_loss.handler(&self.event_proxy),
         );

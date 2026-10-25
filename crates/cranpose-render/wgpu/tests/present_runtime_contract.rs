@@ -8,7 +8,7 @@ use cranpose_render_common::{
     Renderer,
     graph::{CachePolicy, LayerNode, ProjectiveTransform, RenderGraph, RenderNode},
 };
-use cranpose_render_wgpu::{CancelReason, PresentOutcome, PublishOutcome, WgpuRenderer};
+use cranpose_render_wgpu::{CancelReason, GpuTarget, PresentOutcome, PublishOutcome, WgpuRenderer};
 use cranpose_ui_graphics::{Color, Rect};
 
 use crate::support;
@@ -78,21 +78,9 @@ fn surface_config(width: u32, height: u32) -> wgpu::SurfaceConfiguration {
     }
 }
 
-#[expect(
-    clippy::type_complexity,
-    reason = "the tuple names each part it returns"
-)]
-fn threaded_parts() -> Result<
-    (
-        MutexGuard<'static, ()>,
-        WgpuRenderer,
-        Arc<wgpu::Device>,
-        Arc<wgpu::Queue>,
-        wgpu::Backend,
-        wgpu::DownlevelFlags,
-    ),
-    String,
-> {
+fn threaded_parts(
+    surface_format: wgpu::TextureFormat,
+) -> Result<(MutexGuard<'static, ()>, WgpuRenderer, GpuTarget), String> {
     let lock = support::gpu_test_lock();
     let adapter = support::device::headless_adapter(wgpu::Backends::all())?;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -107,16 +95,13 @@ fn threaded_parts() -> Result<
     Ok((
         lock,
         WgpuRenderer::new(&[support::TEST_FONT]),
-        Arc::new(device),
-        Arc::new(queue),
-        adapter.get_info().backend,
-        adapter.get_downlevel_capabilities().flags,
+        GpuTarget::on_adapter(&adapter, Arc::new(device), Arc::new(queue), surface_format),
     ))
 }
 
 macro_rules! inline_runtime_or_skip {
     ($name:literal) => {{
-        match threaded_parts() {
+        match threaded_parts(wgpu::TextureFormat::Bgra8UnormSrgb) {
             Ok(parts) => parts,
             Err(err) => {
                 eprintln!("skipping {}: headless WGPU init failed: {err}", $name);
@@ -136,15 +121,8 @@ fn drain_outcomes(renderer: &mut WgpuRenderer) -> Vec<(u64, PresentOutcome)> {
 
 #[test]
 fn a_surface_never_sits_configured_with_nothing_presented_to_it() {
-    let (_lock, mut renderer, device, queue, backend, downlevel) =
-        inline_runtime_or_skip!("placeholder frame");
-    let mut runtime = renderer.init_gpu_inline_for_tests(
-        device,
-        queue,
-        wgpu::TextureFormat::Bgra8UnormSrgb,
-        backend,
-        downlevel,
-    );
+    let (_lock, mut renderer, target) = inline_runtime_or_skip!("placeholder frame");
+    let mut runtime = renderer.init_gpu_inline_for_tests(target);
 
     let (_, presented_before, placeholder_before) = renderer
         .present_status_snapshot_for_tests()
@@ -193,15 +171,8 @@ fn a_surface_never_sits_configured_with_nothing_presented_to_it() {
 
 #[test]
 fn depth_one_credit_gates_publish_before_lowering() {
-    let (_lock, mut renderer, device, queue, backend, downlevel) =
-        inline_runtime_or_skip!("depth-one credit");
-    let mut runtime = renderer.init_gpu_inline_for_tests(
-        device,
-        queue,
-        wgpu::TextureFormat::Bgra8UnormSrgb,
-        backend,
-        downlevel,
-    );
+    let (_lock, mut renderer, target) = inline_runtime_or_skip!("depth-one credit");
+    let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
         .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
         .expect("inline runtime must accept controls");
@@ -265,15 +236,8 @@ fn depth_one_credit_gates_publish_before_lowering() {
 
 #[test]
 fn a_returned_frame_frees_a_credit_it_reports_until_drained() {
-    let (_lock, mut renderer, device, queue, backend, downlevel) =
-        inline_runtime_or_skip!("returned credit");
-    let mut runtime = renderer.init_gpu_inline_for_tests(
-        device,
-        queue,
-        wgpu::TextureFormat::Bgra8UnormSrgb,
-        backend,
-        downlevel,
-    );
+    let (_lock, mut renderer, target) = inline_runtime_or_skip!("returned credit");
+    let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
         .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
         .expect("inline runtime must accept controls");
@@ -313,15 +277,8 @@ fn a_returned_frame_frees_a_credit_it_reports_until_drained() {
 
 #[test]
 fn reconfigure_cancels_waiting_packet_before_ack() {
-    let (_lock, mut renderer, device, queue, backend, downlevel) =
-        inline_runtime_or_skip!("invalidation-before-ack");
-    let mut runtime = renderer.init_gpu_inline_for_tests(
-        device,
-        queue,
-        wgpu::TextureFormat::Bgra8UnormSrgb,
-        backend,
-        downlevel,
-    );
+    let (_lock, mut renderer, target) = inline_runtime_or_skip!("invalidation-before-ack");
+    let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
         .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
         .expect("inline runtime must accept controls");
@@ -365,15 +322,8 @@ fn reconfigure_cancels_waiting_packet_before_ack() {
 
 #[test]
 fn drop_surface_cancels_waiting_packet_with_buffers_returned() {
-    let (_lock, mut renderer, device, queue, backend, downlevel) =
-        inline_runtime_or_skip!("drop-surface cancel");
-    let mut runtime = renderer.init_gpu_inline_for_tests(
-        device,
-        queue,
-        wgpu::TextureFormat::Bgra8UnormSrgb,
-        backend,
-        downlevel,
-    );
+    let (_lock, mut renderer, target) = inline_runtime_or_skip!("drop-surface cancel");
+    let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
         .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
         .expect("inline runtime must accept controls");
@@ -416,15 +366,8 @@ fn drop_surface_cancels_waiting_packet_with_buffers_returned() {
 
 #[test]
 fn needs_frame_warmup_reads_present_thread_atomic() {
-    let (_lock, mut renderer, device, queue, backend, downlevel) =
-        inline_runtime_or_skip!("warmup atomic");
-    let mut runtime = renderer.init_gpu_inline_for_tests(
-        device,
-        queue,
-        wgpu::TextureFormat::Bgra8UnormSrgb,
-        backend,
-        downlevel,
-    );
+    let (_lock, mut renderer, target) = inline_runtime_or_skip!("warmup atomic");
+    let mut runtime = renderer.init_gpu_inline_for_tests(target);
     let ack = renderer
         .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
         .expect("inline runtime must accept controls");
@@ -489,16 +432,11 @@ fn needs_frame_warmup_reads_present_thread_atomic() {
 
 #[test]
 fn real_thread_runtime_smoke() {
-    let (_lock, mut renderer, device, queue, backend, downlevel) =
-        inline_runtime_or_skip!("real-thread smoke");
+    let (_lock, mut renderer, target) = inline_runtime_or_skip!("real-thread smoke");
     let (wake_tx, wake_rx) = std::sync::mpsc::channel::<()>();
     renderer
         .init_gpu_threaded(
-            device,
-            queue,
-            wgpu::TextureFormat::Bgra8UnormSrgb,
-            backend,
-            downlevel,
+            target,
             Arc::new(move || {
                 let _ = wake_tx.send(());
             }),
@@ -585,17 +523,12 @@ impl Drop for CountingObserver {
 
 #[test]
 fn a_present_observer_sees_only_surface_presents_and_leaves_with_the_runtime() {
-    let (_lock, mut renderer, device, queue, backend, downlevel) =
-        inline_runtime_or_skip!("present observer");
+    let (_lock, mut renderer, target) = inline_runtime_or_skip!("present observer");
     let presents = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (dropped_tx, dropped_rx) = std::sync::mpsc::channel::<()>();
     renderer
         .init_gpu_threaded(
-            device,
-            queue,
-            wgpu::TextureFormat::Bgra8UnormSrgb,
-            backend,
-            downlevel,
+            target,
             Arc::new(|| {}),
             None,
             Some(Box::new(CountingObserver {
@@ -641,35 +574,24 @@ fn drain_with_timeout(renderer: &mut WgpuRenderer, count: usize) -> Vec<(u64, Pr
 
 #[test]
 fn queued_packets_keep_complete_pixels_while_the_producer_changes_the_scene() {
-    let (_lock, mut producer, device, queue, backend, downlevel) =
-        threaded_parts().expect("queued packet guard requires a GPU adapter");
     let format = wgpu::TextureFormat::Rgba8Unorm;
+    let (_lock, mut producer, target) =
+        threaded_parts(format).expect("queued packet guard requires a GPU adapter");
     // Both renderers compile each pipeline where first needed: a frame drawn
     // while a pipeline compiles in the background carries stand-in draws,
     // which neither the expected pixels nor the packet compared with them
     // may hold.
-    producer.init_gpu_compiling_inline_for_tests(
-        Arc::clone(&device),
-        Arc::clone(&queue),
-        format,
-        backend,
-        downlevel,
-    );
+    producer.init_gpu_compiling_inline_for_tests(target.clone());
     let (packets, incoming) =
         std::sync::mpsc::sync_channel::<(cranpose_render_wgpu::HeldFramePacket, Vec<u8>)>(2);
     let (start, ready) = std::sync::mpsc::sync_channel(0);
     std::thread::scope(|scope| {
         let worker = scope.spawn(move || {
             let mut consumer = WgpuRenderer::new(&[support::TEST_FONT]);
-            consumer.init_gpu_compiling_inline_for_tests(
-                Arc::clone(&device),
-                Arc::clone(&queue),
-                format,
-                backend,
-                downlevel,
-            );
+            consumer.init_gpu_compiling_inline_for_tests(target.clone());
+            let (device, queue) = (&target.device, &target.queue);
             let (texture, view) = support::render_target(
-                &device,
+                device,
                 WIDTH,
                 HEIGHT,
                 format,
@@ -684,7 +606,7 @@ fn queued_packets_keep_complete_pixels_while_the_producer_changes_the_scene() {
                         .expect("consumer render"),
                     PresentOutcome::Presented,
                 );
-                let pixels = support::read_texture(&device, &queue, &texture);
+                let pixels = support::read_texture(device, queue, &texture);
                 support::assert_same_bytes(
                     &format!("concurrent packet {rendered}"),
                     WIDTH,
