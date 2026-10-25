@@ -72,19 +72,23 @@ impl Presenter {
         })
     }
 
+    // Draws and sends the areas `framebuffer` changed, and returns the
+    // bytes it sent.
     pub(crate) fn present(
         &mut self,
         framebuffer: &mut Framebuffer,
         panel: &mut Panel<'_>,
-    ) -> Result<(), EspError> {
+    ) -> Result<usize, EspError> {
         framebuffer.changed_areas(&mut self.areas);
         let ahead = if panel.is_setting_up() {
             self.draw_ahead(framebuffer, panel)
         } else {
             None
         };
+        let mut sent = 0;
         for &area in &self.areas {
             let area = panel.align(area);
+            sent += area.width as usize * area.height as usize * 2;
             for strip_area in strips(area, self.rows_per_strip(panel, area)) {
                 let pixels = strip_area.width as usize * strip_area.height as usize;
                 if ahead.is_none() {
@@ -107,7 +111,8 @@ impl Presenter {
                 self.next_strip = (self.next_strip + 1) % self.strips.len();
             }
         }
-        panel.finish_picture()
+        panel.finish_picture()?;
+        Ok(sent)
     }
 
     /// Draws the first picture while the display still waits out its

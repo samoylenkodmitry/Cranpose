@@ -66,6 +66,8 @@ impl Platform for Board {
 /// finishes its transfers in the order they were queued, and the semaphore
 /// counts the ones it finished.
 struct Strips {
+    // The bytes sent since the stats window began.
+    sent: u64,
     free: Vec<*mut u16>,
     in_flight: VecDeque<*mut u16>,
     done: sys::QueueHandle_t,
@@ -88,6 +90,7 @@ impl Strips {
             .collect::<Vec<_>>();
         assert!(free.iter().all(|buffer| !buffer.is_null()), "strip buffers");
         Self {
+            sent: 0,
             free,
             in_flight: VecDeque::new(),
             done,
@@ -115,6 +118,7 @@ impl Strips {
     /// and rows given.
     fn send(&mut self, columns: Range<usize>, rows: Range<usize>, buffer: &'static mut [u16]) {
         self.in_flight.push_back(buffer.as_mut_ptr());
+        self.sent += (columns.len() * rows.len() * 2) as u64;
         unsafe {
             panel_draw(
                 columns.start as i32,
@@ -246,7 +250,15 @@ struct Stats {
 }
 
 impl Stats {
-    fn record(stats: &mut Option<Self>, start: Instant, busy: Duration, now: Instant) {
+    // Counts a frame that took `busy`, ending at `now`; `sent` holds the
+    // bytes sent since the window began, which a logged window resets.
+    fn record(
+        stats: &mut Option<Self>,
+        start: Instant,
+        busy: Duration,
+        now: Instant,
+        sent: &mut u64,
+    ) {
         let Some(stats) = stats else {
             log::info!(
                 "first frame after {} ms: draw and send {} ms",
@@ -259,6 +271,7 @@ impl Stats {
                 busy: Duration::ZERO,
                 slowest: Duration::ZERO,
             });
+            *sent = 0;
             return;
         };
         stats.frames += 1;
@@ -269,12 +282,14 @@ impl Stats {
             return;
         }
         log::info!(
-            "{} frames in {:.1} s: busy {:.2} ms, slowest {:.1} ms",
+            "{} frames in {:.1} s: busy {:.2} ms, slowest {:.1} ms, sent {:.1} KB a frame",
             stats.frames,
             window.as_secs_f32(),
             stats.busy.as_secs_f32() * 1000.0 / stats.frames as f32,
-            stats.slowest.as_secs_f32() * 1000.0
+            stats.slowest.as_secs_f32() * 1000.0,
+            *sent as f32 / 1024.0 / stats.frames as f32
         );
+        *sent = 0;
         *stats = Self {
             window_start: now,
             frames: 0,
@@ -363,7 +378,13 @@ fn main() {
         let now = Instant::now();
         if drew {
             let was_first = stats.is_none();
-            Stats::record(&mut stats, start, now.duration_since(frame_start), now);
+            Stats::record(
+                &mut stats,
+                start,
+                now.duration_since(frame_start),
+                now,
+                &mut strips.sent,
+            );
             if was_first {
                 unsafe { panel_backlight_on() };
             }

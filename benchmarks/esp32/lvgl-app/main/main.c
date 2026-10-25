@@ -31,6 +31,8 @@ static const char *TAG = "lvgl_bench";
 static lv_display_t *display;
 static TaskHandle_t ui_task;
 static bool rendered;
+// The bytes sent to the panel since the stats window began.
+static uint64_t sent_bytes;
 static SemaphoreHandle_t flushed;
 static volatile bool flushing;
 
@@ -65,6 +67,7 @@ static void flush(lv_display_t *disp, const lv_area_t *area, uint8_t *pixels)
 {
     uint32_t pixel_count = lv_area_get_width(area) * lv_area_get_height(area);
     lv_draw_sw_rgb565_swap(pixels, pixel_count);
+    sent_bytes += pixel_count * 2;
     flushing = true;
     panel_draw(area->x1, area->y1, area->x2, area->y2, pixels);
 }
@@ -216,8 +219,10 @@ static void record(stats_t *stats, int64_t start, int64_t busy, int64_t now)
     if (window < STATS_WINDOW_US) {
         return;
     }
-    ESP_LOGI(TAG, "%u frames in %.1f s: busy %.2f ms, slowest %.1f ms", (unsigned)stats->frames,
-             window / 1e6, stats->busy / 1e3 / stats->frames, stats->slowest / 1e3);
+    ESP_LOGI(TAG, "%u frames in %.1f s: busy %.2f ms, slowest %.1f ms, sent %.1f KB a frame",
+             (unsigned)stats->frames, window / 1e6, stats->busy / 1e3 / stats->frames, stats->slowest / 1e3,
+             sent_bytes / 1024.0 / stats->frames);
+    sent_bytes = 0;
     *stats = (stats_t){.window_start = now, .started = true};
 }
 
