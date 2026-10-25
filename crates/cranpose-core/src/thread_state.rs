@@ -470,10 +470,16 @@ pub fn with_or_fresh<T: 'static, R>(
     f: impl FnOnce(&T) -> R,
 ) -> R {
     let mut f = Some(f);
-    let mut call = |state: &T| f.take().map(|f| f(state));
-    key.try_with(&mut call)
-        .ok()
-        .flatten()
-        .or_else(|| call(&fresh()))
-        .expect("the closure runs on exactly one state")
+    if let Ok(Some(result)) = key.try_with(|state| f.take().map(|f| f(state))) {
+        return result;
+    }
+    with_fresh(fresh, f.expect("the closure runs on exactly one state"))
+}
+
+// Out of line, so a caller keeps no room on its stack for the fresh state,
+// which takes hundreds of bytes for some crates' states and which only a
+// late destructor at thread exit needs.
+#[inline(never)]
+fn with_fresh<T, R>(fresh: impl FnOnce() -> T, f: impl FnOnce(&T) -> R) -> R {
+    f(&fresh())
 }
