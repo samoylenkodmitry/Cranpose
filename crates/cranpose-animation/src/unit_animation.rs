@@ -15,41 +15,29 @@ use cranpose_ui_graphics::{Dp, Sp};
 
 use crate::animation::{AnimationType, Lerp, SpringScalar, animateValueAsState};
 
-impl Lerp for Dp {
-    fn lerp(&self, target: &Self, fraction: f32) -> Self {
-        Self(self.0.lerp(&target.0, fraction))
-    }
+macro_rules! impl_length_animation {
+    ($($unit:ty),*) => {$(
+        impl Lerp for $unit {
+            fn lerp(&self, target: &Self, fraction: f32) -> Self {
+                Self(self.0.lerp(&target.0, fraction))
+            }
+        }
+
+        impl SpringScalar for $unit {
+            const DIMENSIONS: usize = 1;
+
+            fn dimension(&self, _index: usize) -> f32 {
+                self.0
+            }
+
+            fn from_dimensions(dimensions: [f32; crate::animation::SPRING_MAX_DIMENSIONS]) -> Self {
+                Self(dimensions[0])
+            }
+        }
+    )*};
 }
 
-impl SpringScalar for Dp {
-    const DIMENSIONS: usize = 1;
-
-    fn dimension(&self, _index: usize) -> f32 {
-        self.0
-    }
-
-    fn from_dimensions(dimensions: [f32; crate::animation::SPRING_MAX_DIMENSIONS]) -> Self {
-        Self(dimensions[0])
-    }
-}
-
-impl Lerp for Sp {
-    fn lerp(&self, target: &Self, fraction: f32) -> Self {
-        Self(self.0.lerp(&target.0, fraction))
-    }
-}
-
-impl SpringScalar for Sp {
-    const DIMENSIONS: usize = 1;
-
-    fn dimension(&self, _index: usize) -> f32 {
-        self.0
-    }
-
-    fn from_dimensions(dimensions: [f32; crate::animation::SPRING_MAX_DIMENSIONS]) -> Self {
-        Self(dimensions[0])
-    }
-}
+impl_length_animation!(Dp, Sp);
 
 /// Fire-and-forget animation of a density-independent length.
 ///

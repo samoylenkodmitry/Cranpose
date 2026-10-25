@@ -121,37 +121,27 @@ impl TextDirection {
     }
 }
 
-impl LineBreak {
-    /// Returns true unless the value is `Unspecified`.
-    pub fn is_specified(self) -> bool {
-        !matches!(self, Self::Unspecified)
-    }
+macro_rules! impl_unspecified_fallback {
+    ($($choice:ty),*) => {$(
+        impl $choice {
+            /// Returns true unless the value is `Unspecified`.
+            pub fn is_specified(self) -> bool {
+                !matches!(self, Self::Unspecified)
+            }
 
-    /// Returns `self` when it is specified, otherwise the value returned by `fallback`.
-    pub fn take_or_else(self, fallback: impl FnOnce() -> Self) -> Self {
-        if self.is_specified() {
-            self
-        } else {
-            fallback()
+            /// Returns `self` when it is specified, otherwise the value returned by `fallback`.
+            pub fn take_or_else(self, fallback: impl FnOnce() -> Self) -> Self {
+                if self.is_specified() {
+                    self
+                } else {
+                    fallback()
+                }
+            }
         }
-    }
+    )*};
 }
 
-impl Hyphens {
-    /// Returns true unless the value is `Unspecified`.
-    pub fn is_specified(self) -> bool {
-        !matches!(self, Self::Unspecified)
-    }
-
-    /// Returns `self` when it is specified, otherwise the value returned by `fallback`.
-    pub fn take_or_else(self, fallback: impl FnOnce() -> Self) -> Self {
-        if self.is_specified() {
-            self
-        } else {
-            fallback()
-        }
-    }
-}
+impl_unspecified_fallback!(LineBreak, Hyphens);
 
 /// Resolves a paragraph's direction, using content with an LTR fallback when
 /// no direction is specified.
