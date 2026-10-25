@@ -1,6 +1,6 @@
 use cranpose_ui::text::{RangeStyle, SpanStyle};
 
-use super::*;
+use super::{shaped_font::ShapedFont, *};
 
 const TABULAR_ZERO: u16 = 19;
 const SLASHED_ZERO: u16 = 2251;
@@ -187,7 +187,7 @@ fn no_settings_or_disabled_features_give_todays_glyphs_and_advances() {
     ] {
         let style = featured(Some(settings));
         assert!(
-            matches!(font.shaped_for(&style), Cow::Borrowed(_)),
+            matches!(font.shaped_for(&style), ShapedFont::Borrowed(_)),
             "{settings} should shape nothing"
         );
         assert_eq!(
@@ -197,7 +197,7 @@ fn no_settings_or_disabled_features_give_todays_glyphs_and_advances() {
         assert_eq!(atlas_glyph_ids(&fonts, &annotated, &style), plain_glyphs);
         assert_eq!(layout_widths(&font, text, &style), plain_layout);
     }
-    assert!(matches!(font.shaped_for(&plain), Cow::Borrowed(_)));
+    assert!(matches!(font.shaped_for(&plain), ShapedFont::Borrowed(_)));
 }
 
 #[test]
@@ -208,7 +208,7 @@ fn a_shaped_face_shares_raster_caches_but_not_character_glyphs() {
     assert_ne!(zero.glyph_map_hash, font.glyph_map_hash);
     assert!(matches!(
         zero.shaped_for(&featured(Some("\"zero\" 1"))),
-        Cow::Borrowed(_)
+        ShapedFont::Borrowed(_)
     ));
     let unshaped = zero.shaped_for(&featured(None));
     assert_eq!(unshaped.glyph_map_hash, font.glyph_map_hash);

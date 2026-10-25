@@ -25,6 +25,8 @@ use cranpose_ui_graphics::{Color, ImageBitmap, Point, Rect, whole};
 use tiny_skia::{LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
 use unicode_segmentation::UnicodeSegmentation;
 
+mod shaped_font;
+
 pub use crate::annotated_text::TextFonts;
 #[cfg(test)]
 use crate::font_layout::layout_line_glyphs;
@@ -327,24 +329,6 @@ impl SoftwareTextFont {
     /// rasterized output depends on which font served the run.
     pub fn content_hash(&self) -> u64 {
         self.content_hash
-    }
-
-    pub(crate) fn shaped_for(&self, style: &TextStyle) -> Cow<'_, Self> {
-        match self
-            .font
-            .with_feature_settings(style.span_style.font_feature_settings.as_deref())
-        {
-            None => Cow::Borrowed(self),
-            Some(font) => Cow::Owned(Self {
-                glyph_map_hash: self.content_hash ^ font.feature_key(),
-                font,
-                metadata: self.metadata.clone(),
-                score: self.score,
-                content_hash: self.content_hash,
-                #[cfg(feature = "text-shaping")]
-                shaping: Arc::clone(&self.shaping),
-            }),
-        }
     }
 
     /// Whether this face supports every character of `text` as
