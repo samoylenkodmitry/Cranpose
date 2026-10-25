@@ -8,6 +8,7 @@
 
 #![deny(unsafe_code)]
 
+mod heap;
 mod panel;
 mod present;
 mod small_alloc;
@@ -447,13 +448,18 @@ impl FrameStats {
             return;
         }
         let average = |total: Duration| total.as_secs_f32() * 1000.0 / self.frames as f32;
+        let heap = heap::HeapReport::now();
         log::info!(
-            "{} frames in {:.1} s: update {:.2} ms, draw and send {:.2} ms, slowest {:.1} ms",
+            "{} frames in {:.1} s: update {:.2} ms, draw and send {:.2} ms, slowest {:.1} ms; \
+             heap {} KB free, {} KB in one block, {} KB at least",
             self.frames,
             window.as_secs_f32(),
             average(self.update),
             average(self.present),
             self.slowest.as_secs_f32() * 1000.0,
+            heap.free / 1024,
+            heap.largest / 1024,
+            heap.lowest / 1024,
         );
         *self = Self::new(presented);
     }
