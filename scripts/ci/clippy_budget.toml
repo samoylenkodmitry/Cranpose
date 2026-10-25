@@ -7,7 +7,7 @@
 "clippy::cast_possible_truncation" = 1036
 "clippy::cast_sign_loss" = 571
 "clippy::disallowed_methods" = 196
-"clippy::disallowed_types" = 183
+"clippy::disallowed_types" = 181
 "clippy::float_cmp" = 158
 "clippy::fn_params_excessive_bools" = 6
 "clippy::inline_always" = 63
