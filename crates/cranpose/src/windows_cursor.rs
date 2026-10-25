@@ -18,7 +18,7 @@ pub(crate) fn pointer_scale() -> f64 {
     let key = wide("Control Panel\\Cursors");
     let value = wide("CursorBaseSize");
     let mut size: u32 = 0;
-    let mut length = std::mem::size_of::<u32>() as u32;
+    let mut length = size_of::<u32>() as u32;
     // SAFETY: both names are NUL-terminated UTF-16 that outlive the call, and
     // the data pointer is a DWORD whose length is passed with it.
     let status = unsafe {
