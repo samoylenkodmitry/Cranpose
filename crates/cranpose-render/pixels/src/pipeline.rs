@@ -866,6 +866,11 @@ fn raster_layer_mapping(
 
 /// Queues `layer`'s elevation shadow, when it casts one, cut to its shadow
 /// clip within `parent_visual_clip`.
+// Out of line, as are the surface and a text's draw: inlined, their locals
+// would take room on the stack at every layer nesting level of the walk,
+// which recurses through `push_layer_items`. A child's other draws stay
+// inline: out of line, the ESP32-S3 demo waited longer for their code.
+#[inline(never)]
 fn push_layer_shadow_of(
     scene: &mut RasterScene,
     layer: &LayerNode,
@@ -953,6 +958,7 @@ fn populate_draws_from_graph(
 /// Draws `layer` and its subtree into a surface of its own and queues the
 /// surface's pixels, placed by `transform`, the layer's map to device
 /// pixels.
+#[inline(never)]
 fn push_layer_surface(
     layer: &LayerNode,
     scene: &mut RasterScene,
@@ -1310,6 +1316,8 @@ fn render_graph_primitive(
     assign_snap_anchor_since(scene, counts_before, context.layer_snap_anchor);
 }
 
+// Out of line for the walk's stack, as `push_layer_shadow_of` tells.
+#[inline(never)]
 fn render_graph_text(
     scene: &mut RasterScene,
     text: &TextPrimitiveNode,
