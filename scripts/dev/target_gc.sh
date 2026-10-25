@@ -348,19 +348,36 @@ worktree_records() {
     '
 }
 
+# Whether TARGET, found under worktree WT, lies in another worktree inside WT,
+# such as an agent's under .claude/worktrees: that worktree's own pass reports
+# it, with its own processes and lock. RECORDS are worktree_records' lines.
+in_nested_worktree() {
+    local target="$1" wt="$2" records="$3" path locked
+    while IFS=$'\t' read -r path locked; do
+        [ -n "$path" ] && [ "$path" != "$wt" ] || continue
+        case "$path" in "$wt"/*) ;; *) continue ;; esac
+        case "$target" in "$path" | "$path"/*) return 0 ;; esac
+    done <<EOF
+$records
+EOF
+    return 1
+}
+
 # One line per candidate: last_build_epoch, size_mb, protected_reason, path.
 # Sorted oldest-built first, which is the eviction order.
 collect_candidates() {
-    local wt locked target root
+    local wt locked target root records
+    records="$(worktree_records)"
 
     while IFS=$'\t' read -r wt locked; do
         [ -n "$wt" ] && [ -d "$wt" ] || continue
         while IFS= read -r target; do
             [ -n "$target" ] || continue
+            in_nested_worktree "$target" "$wt" "$records" && continue
             emit_candidate "$target" "$wt" "$locked"
         done < <(discover_build_output "$wt" 6)
     done <<EOF
-$(worktree_records)
+$records
 EOF
 
     for root in ${extra_roots+"${extra_roots[@]}"}; do

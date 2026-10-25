@@ -205,6 +205,14 @@ listing="$(gc --root "$sibling" --min-free-gb 999999 --busy-minutes 0 2>&1)"
 check "a sibling repository's primary checkout is protected" \
     "$(printf '%s\n' "$listing" | grep '^sibling/target ' | grep -c 'protected: primary checkout')" "1"
 
+# A worktree inside the primary checkout, as agents' under .claude/worktrees,
+# owns its targets: the primary checkout's protection does not cover them.
+git -C "$main_wt" worktree add -q -b wt-inner "$main_wt/.claude/worktrees/inner"
+make_target "$main_wt/.claude/worktrees/inner/target" 202608010000
+listing="$(gc --min-free-gb 999999 --busy-minutes 0 2>&1)"
+check "a worktree inside the primary checkout owns its target" \
+    "$(printf '%s\n' "$listing" | grep '^inner/target ' | grep -c 'would reclaim')" "1"
+
 # A worktree whose directory is gone leaves a registration that the sweep
 # prunes; a live worktree's registration stays.
 git -C "$main_wt" worktree add -q -b wt-gone "$root/gone"
