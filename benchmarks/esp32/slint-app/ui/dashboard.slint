@@ -1,0 +1,409 @@
+// The dashboard of crates/cranpose/tests/support/dashboard.rs in Slint: the
+// same layout and colors, its values bound to `t`, the milliseconds since
+// the first frame, by the functions of the Rust `timeline`. The texts, the
+// line and the list's offset come from src/main.rs, which sets them as a
+// Slint app sets its data.
+
+import "../../../../apps/esp32-demo/assets/NotoSans-Latin.ttf";
+
+global Palette {
+    out property <color> background: #0f1220;
+    out property <color> card: #1b1f33;
+    out property <color> track: #2a3050;
+    out property <color> muted: #8c93b0;
+    out property <color> blue: #4361ee;
+    out property <color> violet: #7b2ff7;
+    out property <color> cyan: #4cc9f0;
+    out property <color> pink: #f72585;
+    out property <color> purple: #7209b7;
+    out property <color> yellow: #ffd166;
+    out property <color> orange: #f77f00;
+    out property <color> red: #ff6b6b;
+    out property <color> teal: #4ecdc4;
+}
+
+global Timeline {
+    // A sine of period `period` milliseconds at `t`, started at `phase`
+    // radians.
+    public pure function wave(t: int, period: int, phase: float) -> float {
+        return sin(Math.mod(t, period) / period * 360deg + phase * 1rad);
+    }
+}
+
+component Card inherits Rectangle {
+    background: Palette.card;
+    border-radius: 12px;
+}
+
+component Stat inherits Card {
+    in property <string> label;
+    in property <color> dot;
+    in property <string> value;
+    VerticalLayout {
+        padding: 8px;
+        spacing: 2px;
+        alignment: start;
+        HorizontalLayout {
+            alignment: start;
+            spacing: 6px;
+            Rectangle {
+                width: 8px;
+                height: 8px;
+                y: (parent.height - self.height) / 2;
+                background: root.dot;
+                border-radius: 4px;
+            }
+
+            Text {
+                text: root.label;
+                color: Palette.muted;
+                font-size: 12px;
+            }
+        }
+
+        Text {
+            text: root.value;
+            color: white;
+            font-size: 16px;
+        }
+    }
+}
+
+component Level inherits VerticalLayout {
+    in property <string> label;
+    in property <color> from;
+    in property <color> to;
+    in property <float> level;
+    spacing: 3px;
+    Text {
+        text: root.label;
+        color: Palette.muted;
+        font-size: 12px;
+    }
+
+    Rectangle {
+        height: 8px;
+        background: Palette.track;
+        border-radius: 4px;
+        // The gradient spans the whole track, as LVGL's bar draws it: the
+        // fill ends on the color the track has where it ends.
+        Rectangle {
+            x: 0;
+            width: parent.width * root.level;
+            border-radius: 4px;
+            background: @linear-gradient(90deg, root.from 0%, root.to.mix(root.from, root.level) 100%);
+        }
+    }
+}
+
+component Switch inherits Rectangle {
+    in property <bool> on;
+    width: 40px;
+    height: 22px;
+    border-radius: 11px;
+    background: root.on ? Palette.cyan : Palette.track;
+    Rectangle {
+        x: root.on ? parent.width - parent.height + 2px : 2px;
+        y: 2px;
+        width: parent.height - 4px;
+        height: self.width;
+        border-radius: self.width / 2;
+        background: white;
+        animate x { duration: 200ms; easing: linear; }
+    }
+}
+
+component SensorRow inherits Rectangle {
+    in property <int> index;
+    property <[color]> avatars: [Palette.blue, Palette.pink, Palette.teal, Palette.orange, Palette.violet];
+    property <[string]> letters: ["A", "B", "C", "D", "E"];
+    height: 28px;
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 8px;
+        alignment: stretch;
+        Rectangle {
+            width: 20px;
+            height: 20px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 10px;
+            background: root.avatars[Math.mod(root.index, 5)];
+            Text {
+                text: root.letters[Math.mod(root.index, 5)];
+                color: white;
+                font-size: 12px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        Text {
+            text: "Sensor " + (root.index < 9 ? "0" : "") + (root.index + 1);
+            color: white;
+            font-size: 14px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+
+        Text {
+            text: Math.mod(root.index * 37 + 11, 100) + " kWh";
+            color: Palette.muted;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component Dashboard inherits Window {
+    in property <string> heading;
+    in property <int> t;
+    in property <string> clock;
+    in property <string> cpu;
+    in property <string> temperature;
+    in property <string> network;
+    in property <string> percent;
+    in property <string> line-commands;
+    in property <length> scroll;
+    out property <length> chart-width: chart.width;
+    out property <length> chart-height: chart.height;
+    width: 320px;
+    height: 480px;
+    background: Palette.background;
+    default-font-family: "Noto Sans";
+
+    property <float> gauge: 0.5 + 0.45 * Timeline.wave(root.t, 4000, 0);
+    property <float> slider: 0.5 + 0.5 * Timeline.wave(root.t, 3000, 0);
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 6px;
+
+        Rectangle {
+            height: 40px;
+            border-radius: 12px;
+            background: @linear-gradient(90deg, Palette.blue 0%, Palette.violet 100%);
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                Text {
+                    text: root.heading;
+                    color: white;
+                    font-size: 18px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                Text {
+                    text: root.clock;
+                    color: white;
+                    font-size: 18px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        HorizontalLayout {
+            height: 52px;
+            spacing: 6px;
+            Stat {
+                label: "CPU";
+                dot: Palette.red;
+                value: root.cpu;
+            }
+
+            Stat {
+                label: "TEMP";
+                dot: Palette.teal;
+                value: root.temperature;
+            }
+
+            Stat {
+                label: "NET";
+                dot: Palette.yellow;
+                value: root.network;
+            }
+        }
+
+        Card {
+            height: 112px;
+            HorizontalLayout {
+                padding: 10px;
+                Rectangle {
+                    width: 84px;
+                    height: 84px;
+                    y: (parent.height - self.height) / 2;
+                    border-width: 10px;
+                    border-radius: 42px;
+                    border-color: Palette.track;
+                    Path {
+                        width: 84px;
+                        height: 84px;
+                        viewbox-width: 84;
+                        viewbox-height: 84;
+                        stroke: Palette.cyan;
+                        stroke-width: 10px;
+                        stroke-line-cap: round;
+                        MoveTo {
+                            x: 42;
+                            y: 5;
+                        }
+
+                        ArcTo {
+                            x: 42 + 37 * sin(root.gauge * 360deg);
+                            y: 42 - 37 * cos(root.gauge * 360deg);
+                            radius-x: 37;
+                            radius-y: 37;
+                            large-arc: root.gauge > 0.5;
+                            sweep: true;
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: root.percent;
+                            color: white;
+                            font-size: 20px;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: "load";
+                            color: Palette.muted;
+                            font-size: 12px;
+                            horizontal-alignment: center;
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    padding-left: 14px;
+                    spacing: 3px;
+                    alignment: center;
+                    Level {
+                        label: "Fan";
+                        from: Palette.pink;
+                        to: Palette.purple;
+                        level: 0.5 + 0.45 * Timeline.wave(root.t, 2000, 0);
+                    }
+
+                    Level {
+                        label: "Pump";
+                        from: Palette.cyan;
+                        to: Palette.blue;
+                        level: 0.5 + 0.45 * Timeline.wave(root.t, 2700, 1);
+                    }
+
+                    Level {
+                        label: "Light";
+                        from: Palette.yellow;
+                        to: Palette.orange;
+                        level: 0.5 + 0.45 * Timeline.wave(root.t, 3400, 2);
+                    }
+                }
+            }
+        }
+
+        Card {
+            height: 100px;
+            VerticalLayout {
+                padding: 10px;
+                spacing: 4px;
+                Text {
+                    text: "Activity";
+                    color: Palette.muted;
+                    font-size: 12px;
+                }
+
+                chart := Rectangle {
+                    property <length> gap: 3px;
+                    property <length> bar-width: (self.width - 23 * self.gap) / 24;
+                    for index in 24: Rectangle {
+                        property <length> bar-height: chart.height * (0.55 + 0.4 * Timeline.wave(root.t, 1600, index * 0.5));
+                        x: index * (chart.bar-width + chart.gap);
+                        y: chart.height - self.bar-height;
+                        width: chart.bar-width;
+                        height: self.bar-height;
+                        border-radius: 2px;
+                        background: @linear-gradient(180deg, Palette.cyan 0%, Palette.blue 100%);
+                    }
+                    Path {
+                        width: chart.width;
+                        height: chart.height;
+                        viewbox-width: chart.width / 1px;
+                        viewbox-height: chart.height / 1px;
+                        commands: root.line-commands;
+                        stroke: Palette.yellow;
+                        stroke-width: 2px;
+                        stroke-line-cap: round;
+                        stroke-line-join: round;
+                    }
+                }
+            }
+        }
+
+        Card {
+            height: 44px;
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 12px;
+                alignment: stretch;
+                Switch {
+                    y: (parent.height - self.height) / 2;
+                    on: Math.mod(floor(root.t / 1000), 2) == 0;
+                }
+
+                Switch {
+                    y: (parent.height - self.height) / 2;
+                    on: Math.mod(floor(root.t / 1500), 2) == 0;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    Rectangle {
+                        y: (parent.height - self.height) / 2;
+                        height: 4px;
+                        border-radius: 2px;
+                        background: Palette.track;
+                    }
+
+                    Rectangle {
+                        x: 0;
+                        y: (parent.height - self.height) / 2;
+                        width: parent.width * root.slider;
+                        height: 4px;
+                        border-radius: 2px;
+                        background: Palette.blue;
+                    }
+
+                    Rectangle {
+                        x: parent.width * root.slider - 8px;
+                        y: (parent.height - self.height) / 2;
+                        width: 16px;
+                        height: 16px;
+                        border-radius: 8px;
+                        background: white;
+                    }
+                }
+            }
+        }
+
+        Card {
+            vertical-stretch: 1;
+            Flickable {
+                y: 6px;
+                height: parent.height - 12px;
+                content-height: 40 * 28px;
+                content-y: -scroll;
+                interactive: false;
+                for index in 40: SensorRow {
+                    y: index * 28px;
+                    width: parent.width;
+                    index: index;
+                }
+            }
+        }
+    }
+}

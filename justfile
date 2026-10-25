@@ -51,6 +51,7 @@ fmt:
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all --manifest-path apps/isolated-demo/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path apps/esp32-demo/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/esp32/slint-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/perf-data/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/egui-app/Cargo.toml
@@ -66,6 +67,7 @@ fmt-check:
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all --check
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all --check --manifest-path apps/isolated-demo/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path apps/esp32-demo/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/esp32/slint-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/perf-data/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/egui-app/Cargo.toml
@@ -191,7 +193,7 @@ esp32-bench board app="demo": _disk-guard
 # a busier screen (its workload feature).
 # Profiles the demo on a board with the sampler and prints the hottest functions.
 esp32-profile board mode="demo" seconds="40": _disk-guard
-    . "$HOME/export-{{esp32_toolchain}}.sh" && python3 scripts/esp32/board_run.py --board {{board}} {{ if mode == "demo" { "" } else if mode == "workload" { "--feature workload" } else { "--feature text-" + mode } }} --component scripts/esp32/sampler --sdkconfig scripts/esp32/sdkconfig.no_hot_code --seconds {{seconds}} --log target/esp32/profile-{{board}}-{{mode}}.log && python3 scripts/esp32/profile.py target/esp32/profile-{{board}}-{{mode}}.elf target/esp32/profile-{{board}}-{{mode}}.log --crates
+    . "$HOME/export-{{esp32_toolchain}}.sh" && python3 scripts/esp32/board_run.py --board {{board}} {{ if mode == "demo" { "" } else if mode == "workload" { "--feature workload" } else if mode == "dashboard" { "--feature dashboard" } else { "--feature text-" + mode } }} --component scripts/esp32/sampler --sdkconfig scripts/esp32/sdkconfig.no_hot_code --seconds {{seconds}} --log target/esp32/profile-{{board}}-{{mode}}.log && python3 scripts/esp32/profile.py target/esp32/profile-{{board}}-{{mode}}.elf target/esp32/profile-{{board}}-{{mode}}.log --crates
 
 # For the ES3C35P's IRAM list (see crates/cranpose-platform/esp-idf/
 # components/cranpose_hot_code/README.md): builds the demo for QEMU's ESP32-S3
@@ -199,7 +201,7 @@ esp32-profile board mode="demo" seconds="40": _disk-guard
 # scripts/esp32/icache/setup.sh once. `mode` as for esp32-profile.
 # Profiles the demo in QEMU by its instruction cache misses, without a board.
 esp32-sim-profile mode="demo": _disk-guard
-    . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;{{justfile_directory()}}/scripts/esp32/sdkconfig.no_hot_code" CARGO_WORKSPACE_DIR={{justfile_directory()}}/{{esp32_demo}} CARGO_TARGET_DIR={{justfile_directory()}}/target/esp32-sim cargo build --release {{ if mode == "demo" { "" } else if mode == "workload" { "--features workload" } else { "--features text-" + mode } }}
+    . "$HOME/export-{{esp32_toolchain}}.sh" && cd {{esp32_demo}} && ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;{{justfile_directory()}}/scripts/esp32/sdkconfig.no_hot_code" CARGO_WORKSPACE_DIR={{justfile_directory()}}/{{esp32_demo}} CARGO_TARGET_DIR={{justfile_directory()}}/target/esp32-sim cargo build --release {{ if mode == "demo" { "" } else if mode == "workload" { "--features workload" } else if mode == "dashboard" { "--features dashboard" } else { "--features text-" + mode } }}
     mkdir -p target/esp32 && cp target/esp32-sim/xtensa-esp32s3-espidf/release/esp32-demo target/esp32/sim-{{mode}}.elf
     . "$HOME/export-{{esp32_toolchain}}.sh" && python3 scripts/esp32/sim_profile.py target/esp32/sim-{{mode}}.elf target/esp32/sim-{{mode}}.log --bootloader target/esp32-sim/xtensa-esp32s3-espidf/release/bootloader.bin
 

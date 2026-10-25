@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Builds an app for a board, flashes it and saves its serial log.
 
-The apps are the Cranpose demo (apps/esp32-demo) and the LVGL benchmark
-(benchmarks/esp32/lvgl-app). `--component` links an ESP-IDF component into
+The apps are the Cranpose demo (apps/esp32-demo) and the LVGL and Slint
+benchmarks (benchmarks/esp32/lvgl-app, benchmarks/esp32/slint-app). `--component` links an ESP-IDF component into
 either, with the settings of its sdkconfig.defaults, such as
 scripts/esp32/sampler or benchmarks/esp32/perfstats. The ELF
 is copied beside the log, so a profile in the log can be read later.
@@ -23,12 +23,14 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import termios
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DEMO = ROOT / "apps/esp32-demo"
 LVGL = ROOT / "benchmarks/esp32/lvgl-app"
+SLINT = ROOT / "benchmarks/esp32/slint-app"
 ESPRESSIF = pathlib.Path.home() / ".espressif"
 IDF_VERSION = "v5.5.5"
 
@@ -54,22 +56,52 @@ def one(pattern, what):
     return found[0]
 
 
-def build_demo(board, component, extra_sdkconfig, features, log):
+def build_rust(app, binary, board, components, extra_sdkconfig, features, log):
+    """Builds the Rust app in `app`, with the demo's ESP-IDF settings and
+    the ESP-IDF `components` linked in. They replace the app's own list in
+    its Cargo.toml, not its dependencies' lists."""
     config = BOARDS[board]
     target = f"xtensa-{config['mcu']}-espidf"
-    defaults = ";".join([f"sdkconfig.defaults;sdkconfig.{board}", *map(str, extra_sdkconfig)])
+    defaults = ";".join([str(DEMO / "sdkconfig.defaults"), str(DEMO / f"sdkconfig.{board}"),
+                         *map(str, extra_sdkconfig)])
     env = dict(os.environ, MCU=config["mcu"], ESP_IDF_SDKCONFIG_DEFAULTS=defaults)
-    if component:
+    if components:
         extra = log.with_suffix(".components.toml")
-        extra.write_text(f'[[extra_components]]\ncomponent_dirs = ["{component}"]\n')
+        dirs = ", ".join(f'"{component}"' for component in components)
+        extra.write_text(f'[[extra_components]]\ncomponent_dirs = [{dirs}]\n')
         env["ESP_IDF_SYS_EXTRA_COMPONENTS_FILE"] = str(extra)
     # esp-idf-sys rebuilds its CMake project only when its own inputs change,
     # so a component added or removed since the last build needs a nudge.
     (DEMO / "sdkconfig.defaults").touch()
-    run(["cargo", "build", "--release", "--target", target, "--features", ",".join([board, *features])],
-        DEMO, env, log.with_suffix(".build"))
-    release = DEMO / "target" / target / "release"
-    return release / "esp32-demo", release / "bootloader.bin", DEMO / config["partitions"]
+    command = ["cargo", "build", "--release", "--target", target]
+    if features:
+        command += ["--features", ",".join(features)]
+    run(command, app, env, log.with_suffix(".build"))
+    release = app / "target" / target / "release"
+    return release / binary, release / "bootloader.bin", DEMO / config["partitions"]
+
+
+SLINT_CORE = "i-slint-core-1.18.1"
+
+
+def unpack_slint_core():
+    """Puts the copy of Slint's core crate the Slint app's Cargo.toml patches
+    in its target directory: Slint 1.18.1 without its std feature calls
+    f32::rem_euclid, which only std has, in one place."""
+    copy = SLINT / "target" / SLINT_CORE
+    if copy.exists():
+        return
+    copy.parent.mkdir(parents=True, exist_ok=True)
+    url = f"https://static.crates.io/crates/i-slint-core/{SLINT_CORE}.crate"
+    with tempfile.TemporaryDirectory() as unpacked:
+        subprocess.run(f"curl -sSfL {url} | tar -xz -C {unpacked}", shell=True, check=True)
+        source = pathlib.Path(unpacked) / SLINT_CORE / "graphics/path.rs"
+        text = source.read_text()
+        call = "let mut rem = t.rem_euclid(1.);"
+        if call not in text:
+            sys.exit(f"{SLINT_CORE}: the rem_euclid call moved; update unpack_slint_core")
+        source.write_text(text.replace(call, "let mut rem = num_traits::Euclid::rem_euclid(&t, &1.);"))
+        shutil.move(str(pathlib.Path(unpacked) / SLINT_CORE), copy)
 
 
 def idf_environment():
@@ -182,7 +214,7 @@ def read_for(fd, seconds, close):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--board", choices=BOARDS, required=True)
-    parser.add_argument("--app", choices=["demo", "lvgl"], default="demo")
+    parser.add_argument("--app", choices=["demo", "lvgl", "slint"], default="demo")
     parser.add_argument("--component", type=pathlib.Path,
                         help="an ESP-IDF component directory to link in")
     parser.add_argument("--sdkconfig", type=pathlib.Path, action="append", default=[],
@@ -206,9 +238,15 @@ def main():
     if component and (component / "sdkconfig.defaults").exists():
         extra.insert(0, component / "sdkconfig.defaults")
     if args.app == "demo":
-        elf, bootloader, partitions = build_demo(args.board, component, extra, args.feature, args.log)
+        elf, bootloader, partitions = build_rust(DEMO, "esp32-demo", args.board, [component] if component else [],
+                                                 extra, [args.board, *args.feature], args.log)
     elif args.feature:
         sys.exit("--feature builds the demo; the LVGL app takes its options from --sdkconfig")
+    elif args.app == "slint":
+        unpack_slint_core()
+        components = [SLINT.parent / "panel", *([component] if component else [])]
+        elf, bootloader, partitions = build_rust(SLINT, "slint-bench", args.board, components,
+                                                 [SLINT / "sdkconfig.slint", *extra], [], args.log)
     else:
         elf, bootloader, partitions = build_lvgl(args.board, component, extra, args.log)
     flash(args.board, port, elf, bootloader, partitions, args.log)
