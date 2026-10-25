@@ -49,11 +49,11 @@ fn capture_blur_batch(
         renderer.encode_blur_pass(
             recorder,
             device,
-            "Tile Mode Test",
-            UploadAllocatorId::BlurHorizontal,
-            &target.view,
-            (64, 32),
-            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            BlurPassTarget::cleared(
+                ("Tile Mode Test", UploadAllocatorId::BlurHorizontal),
+                &target.view,
+                (64, 32),
+            ),
             BlurSourceSet::single(source),
             draws.iter().copied(),
         );

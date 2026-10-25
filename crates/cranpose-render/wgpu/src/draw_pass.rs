@@ -127,6 +127,22 @@ pub(crate) struct PassSegment<'a> {
     pub(crate) scale: f32,
 }
 
+impl<'a> PassSegment<'a> {
+    // All of `scene`'s ops, with no composites or scissor, untransformed.
+    pub(crate) fn plain(scene: &'a CompositorScene, offset: [f32; 2], scale: f32) -> Self {
+        Self {
+            scene,
+            ops: &scene.draw_ops,
+            composites: &[],
+            offset,
+            scissor: None,
+            first_run_window: None,
+            transform: SegmentTransform::IDENTITY,
+            scale,
+        }
+    }
+}
+
 /// How the segments of a pass lie: in order, each over the ones before it,
 /// or side by side, as the members of an atlas lie, each within its
 /// scissor, which no other segment's touches.

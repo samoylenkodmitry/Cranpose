@@ -30,9 +30,9 @@ use crate::{
         SourceContent, op_draw_bounds, segment_draws_anything,
     },
     effect_renderer::{
-        AtlasSideWork, BlurRegion, CompositeSampleMode, EffectReads, EffectScratchTargetProvider,
-        RoundedCompositeMask, SubstrateAverage, SubstrateRegion, SubstrateRegions,
-        blur_scratch_size, substrate_scratch_size,
+        AtlasSideWork, BlurRegion, BlurSpec, CompositeSampleMode, EffectReads,
+        EffectScratchTargetProvider, EffectTarget, RoundedCompositeMask, SubstrateAverage,
+        SubstrateRegion, SubstrateRegions, blur_scratch_size, substrate_scratch_size,
     },
     frame_graph::{
         FrameCommandRecorder, FrameTextureDescriptor, TextureRegionCopy, UploadMode,
@@ -786,13 +786,6 @@ fn region_offset(region: &CaptureRegion) -> [f32; 2] {
         region.rect.x - region.origin[0],
         region.rect.y - region.origin[1],
     ]
-}
-
-#[derive(Clone, Copy)]
-struct BlurSpec {
-    radius_x: f32,
-    radius_y: f32,
-    tile_mode: TileMode,
 }
 
 /// A backdrop effect the renderer can resolve from a shared atlas: a blur,
@@ -1734,9 +1727,7 @@ fn stage_blur_regions(
             source: (placement.x, placement.y, width, height),
             scratch,
             dest: scratch,
-            radius_x: blur.radius_x,
-            radius_y: blur.radius_y,
-            tile_mode: blur.tile_mode,
+            blur: *blur,
             read: member_read_texels(items[index], placement, scale),
         });
     }
@@ -1817,9 +1808,7 @@ fn stage_substrate_regions(
                         source,
                         scratch,
                         dest: scratch,
-                        radius_x: radius_px,
-                        radius_y: radius_px,
-                        tile_mode: TileMode::Clamp,
+                        blur: BlurSpec::uniform(radius_px, TileMode::Clamp),
                         read,
                     });
                     region_slots.push(slot);
@@ -4331,10 +4320,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             let passes = self.renderer.effect_renderer.encode_effect(
                 self.recorder,
                 &device,
-                source,
-                &dest.view,
+                EffectTarget {
+                    source,
+                    dest_view: &dest.view,
+                    layer_pixel_rect,
+                },
                 effect,
-                layer_pixel_rect,
                 reads,
                 &mut refs,
             );
