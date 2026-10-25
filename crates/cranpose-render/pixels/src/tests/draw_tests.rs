@@ -154,20 +154,21 @@ fn render_single_text_frame(
     x: f32,
 ) -> (u32, u32, Vec<u8>) {
     let mut raster_scene = RasterScene::new();
-    raster_scene.push_text(
-        Rect {
+    raster_scene.push_text(TextDraw {
+        rect: Rect {
             x,
             y: 16.0,
             width: 320.0,
             height: 90.0,
         },
-        Rc::new(cranpose_ui::text::AnnotatedString::from("MMMMMMMM")),
+        snap_anchor: None,
+        text: Rc::new(cranpose_ui::text::AnnotatedString::from("MMMMMMMM")),
         color,
-        std::sync::Arc::new(style),
-        64.0,
-        1.0,
-        None,
-    );
+        text_style: std::sync::Arc::new(style),
+        font_size: 64.0,
+        scale: 1.0,
+        clip: None,
+    });
 
     let width = 360;
     let height = 140;
@@ -272,22 +273,23 @@ fn unsupported_blend_mode_falls_back_without_abort() {
 #[test]
 fn multiline_text_renders_second_line_pixels() {
     let mut raster_scene = RasterScene::new();
-    raster_scene.push_text(
-        Rect {
+    raster_scene.push_text(TextDraw {
+        rect: Rect {
             x: 8.0,
             y: 8.0,
             width: 180.0,
             height: 80.0,
         },
-        Rc::new(cranpose_ui::text::AnnotatedString::from(
+        snap_anchor: None,
+        text: Rc::new(cranpose_ui::text::AnnotatedString::from(
             "Dynamic\nModifiers",
         )),
-        Color::WHITE,
-        std::sync::Arc::new(cranpose_ui::TextStyle::default()),
-        14.0,
-        1.0,
-        None,
-    );
+        color: Color::WHITE,
+        text_style: std::sync::Arc::new(cranpose_ui::TextStyle::default()),
+        font_size: 14.0,
+        scale: 1.0,
+        clip: None,
+    });
 
     let width = 220;
     let height = 100;
@@ -357,25 +359,26 @@ fn draw_scene_renders_graph_backed_scene_without_flat_primitives() {
 #[test]
 fn text_clip_bounds_prevent_drawing_outside_scroll_window() {
     let mut raster_scene = RasterScene::new();
-    raster_scene.push_text(
-        Rect {
+    raster_scene.push_text(TextDraw {
+        rect: Rect {
             x: 8.0,
             y: 40.0,
             width: 180.0,
             height: 24.0,
         },
-        Rc::new(cranpose_ui::text::AnnotatedString::from("Clipped Text")),
-        Color::WHITE,
-        std::sync::Arc::new(cranpose_ui::TextStyle::default()),
-        14.0,
-        1.0,
-        Some(Rect {
+        snap_anchor: None,
+        text: Rc::new(cranpose_ui::text::AnnotatedString::from("Clipped Text")),
+        color: Color::WHITE,
+        text_style: std::sync::Arc::new(cranpose_ui::TextStyle::default()),
+        font_size: 14.0,
+        scale: 1.0,
+        clip: Some(Rect {
             x: 0.0,
             y: 0.0,
             width: 220.0,
             height: 20.0,
         }),
-    );
+    });
 
     let width = 220;
     let height = 100;

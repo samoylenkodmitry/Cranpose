@@ -651,37 +651,14 @@ impl CompositorScene {
         });
     }
 
-    #[expect(clippy::too_many_arguments)]
-    pub fn push_image_with_geometry(
-        &mut self,
-        rect: Rect,
-        quad: [[f32; 2]; 4],
-        image: ImageBitmap,
-        alpha: f32,
-        color_filter: Option<ColorFilter>,
-        sampling: ImageSampling,
-        (clip, rounding): (Option<Rect>, Option<ClipRounding>),
-        src_rect: Option<Rect>,
-        blend_mode: BlendMode,
-        motion_context_animated: bool,
-    ) {
+    pub fn push_image(&mut self, draw: ImageDraw) {
         self.flush_loose();
         let z_index = self.next_z;
         self.next_z += 1;
         let index = self.images.len();
         self.images.push(ImageDraw {
-            rect,
-            quad,
-            snap_anchor: None,
-            image,
-            alpha: alpha.clamp(0.0, 1.0),
-            color_filter,
-            sampling,
-            clip,
-            rounding,
-            blend_mode,
-            src_rect,
-            motion_context_animated,
+            alpha: draw.alpha.clamp(0.0, 1.0),
+            ..draw
         });
         self.draw_ops.push(DrawOp {
             z_index,
@@ -689,36 +666,12 @@ impl CompositorScene {
         });
     }
 
-    #[expect(clippy::too_many_arguments)]
-    pub fn push_text(
-        &mut self,
-        node_id: NodeId,
-        rect: Rect,
-        text: DrawnText,
-        color: Color,
-        (text_style, style_hash): (Arc<TextStyle>, u64),
-        font_size: f32,
-        scale: f32,
-        layout_options: TextLayoutOptions,
-        clip: Option<Rect>,
-    ) {
+    pub fn push_text(&mut self, draw: TextDraw) {
         self.flush_loose();
         let z_index = self.next_z;
         self.next_z += 1;
         let index = self.texts.len();
-        self.texts.push(TextDraw {
-            node_id,
-            rect,
-            snap_anchor: None,
-            text,
-            color,
-            text_style,
-            style_hash,
-            font_size,
-            scale,
-            layout_options,
-            clip,
-        });
+        self.texts.push(draw);
         self.draw_ops.push(DrawOp {
             z_index,
             kind: DrawOpKind::Text(index),
@@ -754,28 +707,9 @@ impl CompositorScene {
         });
     }
 
-    #[expect(clippy::too_many_arguments)]
-    pub fn push_effect_layer(
-        &mut self,
-        rect: Rect,
-        clip: Option<Rect>,
-        effect: Option<RenderEffect>,
-        blend_mode: BlendMode,
-        composite_alpha: f32,
-        z_start: usize,
-        z_end: usize,
-    ) {
+    pub fn push_effect_layer(&mut self, layer: EffectLayer) {
         self.flush_loose();
-        self.effect_layers.push(EffectLayer {
-            rect,
-            clip,
-            snap_anchor: None,
-            effect,
-            blend_mode,
-            composite_alpha,
-            z_start,
-            z_end,
-        });
+        self.effect_layers.push(layer);
     }
 
     pub fn push_backdrop_layer(&mut self, mut layer: BackdropLayer) {

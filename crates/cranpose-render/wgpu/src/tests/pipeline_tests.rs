@@ -1,4 +1,7 @@
+use std::rc::Rc;
+
 use cranpose_ui::{
+    TextLayoutOptions,
     text::TextMotion,
     text_layout_result::{GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult},
 };
@@ -92,46 +95,48 @@ fn measure_text_for_test(
     with_test_app_context(|| measure_text(text, style))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn push_text_style_draws_for_test(
-    scene: &mut Scene,
+fn text_node(
     node_id: NodeId,
-    rect: Rect,
-    text_rect: Rect,
-    content_layer: &GraphicsLayer,
     text: &cranpose_ui::text::AnnotatedString,
     text_style: &TextStyle,
     font_size: f32,
-    options: TextLayoutOptions,
-    text_clip: Option<Rect>,
+    layout_options: TextLayoutOptions,
+) -> TextPrimitiveNode {
+    TextPrimitiveNode {
+        node_id,
+        rect: Rect::EMPTY,
+        text: Rc::new(text.clone()),
+        render_text: Arc::new(text.render_string()),
+        text_style: Arc::new(text_style.clone()),
+        font_size,
+        layout_options,
+        clip: None,
+        paint: Default::default(),
+    }
+}
+
+fn placement(
+    bounds: Rect,
+    text_rect: Rect,
+    layer: &GraphicsLayer,
+    clip: Option<Rect>,
+) -> TextPlacement<'_> {
+    TextPlacement {
+        bounds,
+        text_rect,
+        layer,
+        clip,
+        snap_anchor: None,
+    }
+}
+
+fn push_text_style_draws_for_test(
+    scene: &mut Scene,
+    node: &TextPrimitiveNode,
+    placement: TextPlacement<'_>,
 ) {
     with_test_app_context(|| {
-        let mut text_layout = UiTextLayoutResolver;
-        let render_text = Arc::new(text.render_string());
-        let text = Rc::new(text.clone());
-        push_text_style_draws(
-            scene,
-            &mut text_layout,
-            node_id,
-            rect,
-            text_rect,
-            content_layer,
-            (&text, &render_text),
-            (
-                &Arc::new(text_style.clone()),
-                TextPaint::of(
-                    text_style,
-                    text_style.render_hash(),
-                    &text.span_styles,
-                    font_size,
-                    (render_text.render_hash(), render_text.is_empty()),
-                ),
-            ),
-            font_size,
-            options,
-            text_clip,
-            None,
-        );
+        push_text_style_draws(scene, &mut UiTextLayoutResolver, node, placement);
     });
 }
 
@@ -364,15 +369,14 @@ fn push_text_style_draws_emits_background_shadow_and_main_text() {
 
     push_text_style_draws_for_test(
         &mut scene,
-        7 as NodeId,
-        rect,
-        rect,
-        &GraphicsLayer::default(),
-        &cranpose_ui::text::AnnotatedString::from("Decorated shadow text"),
-        &style,
-        14.0,
-        TextLayoutOptions::default(),
-        Some(clip),
+        &text_node(
+            7 as NodeId,
+            &cranpose_ui::text::AnnotatedString::from("Decorated shadow text"),
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(rect, rect, &GraphicsLayer::default(), Some(clip)),
     );
 
     let records = shape_records(&mut scene);
@@ -427,15 +431,14 @@ fn push_text_style_draws_hard_shadow_does_not_emit_effect_layer() {
 
     push_text_style_draws_for_test(
         &mut scene,
-        7 as NodeId,
-        rect,
-        rect,
-        &GraphicsLayer::default(),
-        &cranpose_ui::text::AnnotatedString::from("Hard shadow"),
-        &style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            7 as NodeId,
+            &cranpose_ui::text::AnnotatedString::from("Hard shadow"),
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(rect, rect, &GraphicsLayer::default(), None),
     );
 
     assert_eq!(scene.texts.len(), 1, "content text expected");
@@ -491,28 +494,26 @@ fn estimate_text_style_draw_bounds_matches_scene_emission() {
 
     push_text_style_draws_for_test(
         &mut scene,
-        31 as NodeId,
-        rect,
-        rect,
-        &GraphicsLayer::default(),
-        &text,
-        &style,
-        14.0,
-        TextLayoutOptions::default(),
-        clip,
-    );
-
-    let estimated = with_test_app_context(|| {
-        estimate_text_style_draw_bounds(
+        &text_node(
             31 as NodeId,
-            rect,
-            rect,
-            &GraphicsLayer::default(),
             &text,
             &style,
             14.0,
             TextLayoutOptions::default(),
-            clip,
+        ),
+        placement(rect, rect, &GraphicsLayer::default(), clip),
+    );
+
+    let estimated = with_test_app_context(|| {
+        estimate_text_style_draw_bounds(
+            &text_node(
+                31 as NodeId,
+                &text,
+                &style,
+                14.0,
+                TextLayoutOptions::default(),
+            ),
+            placement(rect, rect, &GraphicsLayer::default(), clip),
         )
     });
 
@@ -539,15 +540,14 @@ fn push_text_style_draws_emits_decoration_shapes() {
 
     push_text_style_draws_for_test(
         &mut scene,
-        7 as NodeId,
-        rect,
-        rect,
-        &GraphicsLayer::default(),
-        &cranpose_ui::text::AnnotatedString::from("Decorated"),
-        &style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            7 as NodeId,
+            &cranpose_ui::text::AnnotatedString::from("Decorated"),
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(rect, rect, &GraphicsLayer::default(), None),
     );
 
     assert_eq!(
@@ -583,27 +583,25 @@ fn push_text_style_draws_preserves_subpixel_decoration_y() {
     let mut shifted_scene = Scene::new();
     push_text_style_draws_for_test(
         &mut base_scene,
-        70 as NodeId,
-        base_rect,
-        base_rect,
-        &GraphicsLayer::default(),
-        &text,
-        &style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            70 as NodeId,
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(base_rect, base_rect, &GraphicsLayer::default(), None),
     );
     push_text_style_draws_for_test(
         &mut shifted_scene,
-        71 as NodeId,
-        shifted_rect,
-        shifted_rect,
-        &GraphicsLayer::default(),
-        &text,
-        &style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            71 as NodeId,
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(shifted_rect, shifted_rect, &GraphicsLayer::default(), None),
     );
 
     let base = shape_records(&mut base_scene);
@@ -637,15 +635,14 @@ fn push_text_style_draws_emits_multiline_decoration_shapes_per_visual_line() {
 
     push_text_style_draws_for_test(
         &mut scene,
-        22 as NodeId,
-        rect,
-        rect,
-        &GraphicsLayer::default(),
-        &text,
-        &style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            22 as NodeId,
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(rect, rect, &GraphicsLayer::default(), None),
     );
 
     let records = shape_records(&mut scene);
@@ -980,15 +977,14 @@ fn push_text_style_draws_resolves_decoration_brush_with_span_alpha_and_layer_alp
 
     push_text_style_draws_for_test(
         &mut scene,
-        23 as NodeId,
-        rect,
-        rect,
-        &layer,
-        &text,
-        &style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            23 as NodeId,
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(rect, rect, &layer, None),
     );
 
     let records = shape_records(&mut scene);
@@ -1032,27 +1028,25 @@ fn push_text_style_draws_baseline_shift_offsets_decoration_y_position() {
 
     push_text_style_draws_for_test(
         &mut base_scene,
-        24 as NodeId,
-        rect,
-        rect,
-        &GraphicsLayer::default(),
-        &text,
-        &base_style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            24 as NodeId,
+            &text,
+            &base_style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(rect, rect, &GraphicsLayer::default(), None),
     );
     push_text_style_draws_for_test(
         &mut shifted_scene,
-        25 as NodeId,
-        rect,
-        rect,
-        &GraphicsLayer::default(),
-        &text,
-        &shifted_style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            25 as NodeId,
+            &text,
+            &shifted_style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(rect, rect, &GraphicsLayer::default(), None),
     );
 
     let base = shape_records(&mut base_scene);
@@ -1085,15 +1079,14 @@ fn push_text_style_draws_applies_baseline_shift() {
 
     push_text_style_draws_for_test(
         &mut scene,
-        7 as NodeId,
-        rect,
-        rect,
-        &GraphicsLayer::default(),
-        &cranpose_ui::text::AnnotatedString::from("Shifted"),
-        &style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            7 as NodeId,
+            &cranpose_ui::text::AnnotatedString::from("Shifted"),
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(rect, rect, &GraphicsLayer::default(), None),
     );
 
     assert_eq!(scene.texts.len(), 1);
@@ -1127,15 +1120,14 @@ fn push_text_style_draws_non_solid_brush_contract_uses_gpu_shader_mask() {
 
     push_text_style_draws_for_test(
         &mut scene,
-        7 as NodeId,
-        rect,
-        rect,
-        &GraphicsLayer::default(),
-        &cranpose_ui::text::AnnotatedString::from("Gradient text"),
-        &style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            7 as NodeId,
+            &cranpose_ui::text::AnnotatedString::from("Gradient text"),
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(rect, rect, &GraphicsLayer::default(), None),
     );
 
     assert_eq!(
@@ -1203,15 +1195,14 @@ fn push_text_style_draws_default_linear_gradient_fill_resolves_infinite_endpoint
 
     push_text_style_draws_for_test(
         &mut scene,
-        13 as NodeId,
-        rect,
-        rect,
-        &GraphicsLayer::default(),
-        &cranpose_ui::text::AnnotatedString::from("Gradient fill"),
-        &style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            13 as NodeId,
+            &cranpose_ui::text::AnnotatedString::from("Gradient fill"),
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(rect, rect, &GraphicsLayer::default(), None),
     );
 
     assert_eq!(
@@ -1260,15 +1251,14 @@ fn push_text_style_draws_stroke_contract_uses_gpu_shader_mask() {
 
     push_text_style_draws_for_test(
         &mut scene,
-        8 as NodeId,
-        rect,
-        rect,
-        &GraphicsLayer::default(),
-        &cranpose_ui::text::AnnotatedString::from("Stroke text"),
-        &style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            8 as NodeId,
+            &cranpose_ui::text::AnnotatedString::from("Stroke text"),
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(rect, rect, &GraphicsLayer::default(), None),
     );
 
     assert_eq!(
@@ -1344,15 +1334,14 @@ fn push_text_style_draws_stroke_material_scales_width_with_layer_scale() {
 
     push_text_style_draws_for_test(
         &mut scene,
-        18 as NodeId,
-        rect,
-        rect,
-        &scaled_layer,
-        &cranpose_ui::text::AnnotatedString::from("Scaled stroke"),
-        &style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            18 as NodeId,
+            &cranpose_ui::text::AnnotatedString::from("Scaled stroke"),
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(rect, rect, &scaled_layer, None),
     );
 
     assert_eq!(
@@ -1415,15 +1404,14 @@ fn push_text_style_draws_gradient_stroke_contract_uses_gpu_shader_mask() {
 
     push_text_style_draws_for_test(
         &mut scene,
-        12 as NodeId,
-        rect,
-        rect,
-        &GraphicsLayer::default(),
-        &cranpose_ui::text::AnnotatedString::from("Gradient stroke"),
-        &style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            12 as NodeId,
+            &cranpose_ui::text::AnnotatedString::from("Gradient stroke"),
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(rect, rect, &GraphicsLayer::default(), None),
     );
 
     assert_eq!(
@@ -1500,15 +1488,14 @@ fn push_text_style_draws_span_gradient_without_paint_override_uses_gpu_shader_ma
 
     push_text_style_draws_for_test(
         &mut scene,
-        19 as NodeId,
-        rect,
-        rect,
-        &GraphicsLayer::default(),
-        &text,
-        &style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            19 as NodeId,
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(rect, rect, &GraphicsLayer::default(), None),
     );
 
     assert_eq!(
@@ -1575,15 +1562,14 @@ fn push_text_style_draws_span_gradient_with_paint_override_uses_gpu_shader_mask_
 
     push_text_style_draws_for_test(
         &mut scene,
-        20 as NodeId,
-        rect,
-        rect,
-        &GraphicsLayer::default(),
-        &text,
-        &style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            20 as NodeId,
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(rect, rect, &GraphicsLayer::default(), None),
     );
 
     assert_eq!(scene.images.len(), 0, "no software fallback should be used");
@@ -1691,15 +1677,14 @@ fn push_text_style_draws_adjacent_span_color_overrides_use_direct_path() {
 
     push_text_style_draws_for_test(
         &mut scene,
-        21 as NodeId,
-        rect,
-        rect,
-        &GraphicsLayer::default(),
-        &text,
-        &style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            21 as NodeId,
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(rect, rect, &GraphicsLayer::default(), None),
     );
 
     assert_eq!(scene.images.len(), 0, "no software fallback should be used");
@@ -1743,15 +1728,14 @@ fn push_text_style_draws_span_color_override_uses_direct_per_glyph_color() {
 
     push_text_style_draws_for_test(
         &mut scene,
-        24 as NodeId,
-        rect,
-        rect,
-        &GraphicsLayer::default(),
-        &text,
-        &style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            24 as NodeId,
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(rect, rect, &GraphicsLayer::default(), None),
     );
 
     assert_eq!(scene.images.len(), 0, "no software fallback should be used");
@@ -1799,15 +1783,14 @@ fn push_text_style_draws_span_alpha_override_modulates_gpu_material_alpha() {
 
     push_text_style_draws_for_test(
         &mut scene,
-        25 as NodeId,
-        rect,
-        rect,
-        &GraphicsLayer::default(),
-        &text,
-        &style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            25 as NodeId,
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(rect, rect, &GraphicsLayer::default(), None),
     );
 
     assert_eq!(scene.images.len(), 0, "no software fallback should be used");
@@ -1855,15 +1838,14 @@ fn push_text_style_draws_wrap_newline_gap_color_spans_use_direct_path() {
 
     push_text_style_draws_for_test(
         &mut scene,
-        26 as NodeId,
-        rect,
-        rect,
-        &GraphicsLayer::default(),
-        &text,
-        &style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            26 as NodeId,
+            &text,
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(rect, rect, &GraphicsLayer::default(), None),
     );
 
     assert_eq!(scene.images.len(), 0, "no software fallback should be used");
@@ -1921,15 +1903,8 @@ fn push_text_style_draws_mixed_bidi_wrapped_color_spans_use_direct_path() {
 
     push_text_style_draws_for_test(
         &mut scene,
-        27 as NodeId,
-        rect,
-        rect,
-        &GraphicsLayer::default(),
-        &prepared.text,
-        &style,
-        14.0,
-        options,
-        None,
+        &text_node(27 as NodeId, &prepared.text, &style, 14.0, options),
+        placement(rect, rect, &GraphicsLayer::default(), None),
     );
 
     assert_eq!(scene.images.len(), 0, "no software fallback should be used");
@@ -1970,29 +1945,27 @@ fn push_text_style_draws_keeps_static_and_animated_text_geometry_in_scene_space(
     let mut static_scene = Scene::new();
     push_text_style_draws_for_test(
         &mut static_scene,
-        9 as NodeId,
-        base_rect,
-        base_rect,
-        &GraphicsLayer::default(),
-        &cranpose_ui::text::AnnotatedString::from("Motion"),
-        &static_style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            9 as NodeId,
+            &cranpose_ui::text::AnnotatedString::from("Motion"),
+            &static_style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(base_rect, base_rect, &GraphicsLayer::default(), None),
     );
 
     let mut animated_scene = Scene::new();
     push_text_style_draws_for_test(
         &mut animated_scene,
-        10 as NodeId,
-        base_rect,
-        base_rect,
-        &GraphicsLayer::default(),
-        &cranpose_ui::text::AnnotatedString::from("Motion"),
-        &animated_style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            10 as NodeId,
+            &cranpose_ui::text::AnnotatedString::from("Motion"),
+            &animated_style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(base_rect, base_rect, &GraphicsLayer::default(), None),
     );
 
     assert_eq!(static_scene.texts.len(), 1);
@@ -2032,29 +2005,27 @@ fn push_text_style_draws_stroke_keeps_mask_and_effect_bounds_in_scene_space() {
     let mut static_scene = Scene::new();
     push_text_style_draws_for_test(
         &mut static_scene,
-        22 as NodeId,
-        base_rect,
-        base_rect,
-        &GraphicsLayer::default(),
-        &cranpose_ui::text::AnnotatedString::from("Stroke Motion"),
-        &static_style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            22 as NodeId,
+            &cranpose_ui::text::AnnotatedString::from("Stroke Motion"),
+            &static_style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(base_rect, base_rect, &GraphicsLayer::default(), None),
     );
 
     let mut animated_scene = Scene::new();
     push_text_style_draws_for_test(
         &mut animated_scene,
-        23 as NodeId,
-        base_rect,
-        base_rect,
-        &GraphicsLayer::default(),
-        &cranpose_ui::text::AnnotatedString::from("Stroke Motion"),
-        &animated_style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            23 as NodeId,
+            &cranpose_ui::text::AnnotatedString::from("Stroke Motion"),
+            &animated_style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(base_rect, base_rect, &GraphicsLayer::default(), None),
     );
 
     assert_eq!(static_scene.texts.len(), 1);
@@ -2112,15 +2083,14 @@ fn push_text_style_draws_gradient_keeps_mask_and_effect_bounds_in_scene_space() 
 
     push_text_style_draws_for_test(
         &mut scene,
-        11 as NodeId,
-        base_rect,
-        base_rect,
-        &GraphicsLayer::default(),
-        &cranpose_ui::text::AnnotatedString::from("Gradient static"),
-        &style,
-        14.0,
-        TextLayoutOptions::default(),
-        None,
+        &text_node(
+            11 as NodeId,
+            &cranpose_ui::text::AnnotatedString::from("Gradient static"),
+            &style,
+            14.0,
+            TextLayoutOptions::default(),
+        ),
+        placement(base_rect, base_rect, &GraphicsLayer::default(), None),
     );
 
     assert!(

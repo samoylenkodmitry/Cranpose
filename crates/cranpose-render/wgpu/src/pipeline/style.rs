@@ -17,7 +17,7 @@ use cranpose_ui::DrawCommand;
 use cranpose_ui_graphics::{BlendMode, CornerRadii, DrawPrimitive, GraphicsLayer, Rect, Size};
 
 #[cfg(test)]
-use crate::scene::CompositorScene;
+use crate::scene::{CompositorScene, ImageDraw};
 
 #[cfg(test)]
 pub(crate) fn apply_draw_commands(
@@ -82,18 +82,20 @@ pub(crate) fn apply_draw_commands(
                 let combined_alpha = (alpha * layer.alpha).clamp(0.0, 1.0);
                 let combined_filter =
                     compose_color_filters(color_filter.as_ref(), layer.color_filter.as_ref());
-                scene.push_image_with_geometry(
-                    transformed,
+                scene.push_image(ImageDraw {
+                    rect: transformed,
                     quad,
+                    snap_anchor: None,
                     image,
-                    combined_alpha,
-                    combined_filter,
+                    alpha: combined_alpha,
+                    color_filter: combined_filter,
                     sampling,
-                    (clip, None),
+                    clip,
+                    rounding: None,
+                    blend_mode: blend_mode.unwrap_or(BlendMode::SrcOver),
                     src_rect,
-                    blend_mode.unwrap_or(BlendMode::SrcOver),
-                    false,
-                );
+                    motion_context_animated: false,
+                });
             }
             DrawPrimitive::Shadow(shadow_prim) => {
                 super::push_shadow_primitive(&shadow_prim, layer_bounds, layer, clip, None, scene);

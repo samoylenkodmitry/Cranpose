@@ -569,32 +569,11 @@ impl RasterScene {
         self.push_draw_shape(DrawShape::of_params(params));
     }
 
-    #[expect(clippy::too_many_arguments)]
-    pub fn push_image_with_geometry(
-        &mut self,
-        rect: Rect,
-        _local_rect: Rect,
-        _quad: [[f32; 2]; 4],
-        image: ImageBitmap,
-        alpha: f32,
-        color_filter: Option<ColorFilter>,
-        sampling: ImageSampling,
-        clip: Option<Rect>,
-        src_rect: Option<Rect>,
-        blend_mode: BlendMode,
-    ) {
+    pub fn push_image(&mut self, draw: ImageDraw) {
         self.order.push(RenderItem::Image(self.images.len()));
         self.images.push(ImageDraw {
-            rect,
-            snap_anchor: None,
-            image,
-            alpha: alpha.clamp(0.0, 1.0),
-            color_filter,
-            sampling,
-            clip,
-            blend_mode,
-            src_rect,
-            transform: None,
+            alpha: draw.alpha.clamp(0.0, 1.0),
+            ..draw
         });
     }
 
@@ -629,28 +608,9 @@ impl RasterScene {
         });
     }
 
-    #[expect(clippy::too_many_arguments)]
-    pub fn push_text(
-        &mut self,
-        rect: Rect,
-        text: Rc<cranpose_ui::text::AnnotatedString>,
-        color: Color,
-        text_style: Arc<TextStyle>,
-        font_size: f32,
-        scale: f32,
-        clip: Option<Rect>,
-    ) {
+    pub fn push_text(&mut self, draw: TextDraw) {
         self.order.push(RenderItem::Text(self.texts.len()));
-        self.texts.push(TextDraw {
-            rect,
-            snap_anchor: None,
-            text,
-            color,
-            text_style,
-            font_size,
-            scale,
-            clip,
-        });
+        self.texts.push(draw);
     }
 }
 

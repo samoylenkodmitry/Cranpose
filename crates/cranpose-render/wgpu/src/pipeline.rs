@@ -1,4 +1,4 @@
-use std::{ops::Range, rc::Rc, sync::Arc};
+use std::{ops::Range, sync::Arc};
 
 use cranpose_core::NodeId;
 #[cfg(test)]
@@ -7,6 +7,7 @@ use cranpose_render_common::geometry::{expand_blurred_rect, union_rect};
 use cranpose_render_common::primitive_emit::resolve_clip;
 use cranpose_render_common::{
     Brush,
+    graph::TextPrimitiveNode,
     hit_graph::collect_hits_from_graph,
     layer_shadow::{ShadowLight, layer_shadow_geometry},
     layer_transform::{apply_layer_to_rect, layer_uniform_scale},
@@ -23,7 +24,7 @@ use cranpose_ui::measure_text;
 #[cfg(test)]
 use cranpose_ui::prepare_text_layout;
 use cranpose_ui::{
-    LayoutBox, TextLayoutOptions,
+    LayoutBox,
     text::{TextDecoration, TextDrawStyle, TextStyle},
     text_layout_result::TextLayoutResult,
 };
@@ -33,15 +34,15 @@ use cranpose_ui_graphics::{
 };
 
 use crate::scene::{
-    ClipRounding, CompositorScene, DrawnText, Placement, RRectShadowDraw, RunDraw, Scene,
-    ShadowDraw, SnapAnchor, TextDraw,
+    ClipRounding, CompositorScene, DrawnText, EffectLayer, ImageDraw, Placement, RRectShadowDraw,
+    RunDraw, Scene, ShadowDraw, SnapAnchor, TextDraw,
 };
 
 mod style;
 use cranpose_render_common::{
     style_shared::resolve_layer_brush,
     text_paint::{
-        TextPaint, has_visible_decoration, resolve_text_color_without_gradient_fallback,
+        has_visible_decoration, resolve_text_color_without_gradient_fallback,
         spans_override_foreground, spans_override_foreground_color,
     },
 };
@@ -560,70 +561,11 @@ trait TextStyleDrawSink {
         anchor: Option<SnapAnchor>,
     );
 
-    #[expect(clippy::too_many_arguments)]
-    fn push_text(
-        &mut self,
-        node_id: NodeId,
-        rect: Rect,
-        text: DrawnText,
-        color: Color,
-        // The style, and its `TextStyle::render_hash` hashed once.
-        text_style: (Arc<TextStyle>, u64),
-        font_size: f32,
-        scale: f32,
-        layout_options: TextLayoutOptions,
-        clip: Option<Rect>,
-    );
+    fn push_text(&mut self, draw: TextDraw);
 
-    #[expect(clippy::too_many_arguments)]
-    fn push_shadow_text(
-        &mut self,
-        node_id: NodeId,
-        rect: Rect,
-        text: DrawnText,
-        color: Color,
-        // The style, and its `TextStyle::render_hash` hashed once.
-        text_style: (Arc<TextStyle>, u64),
-        font_size: f32,
-        scale: f32,
-        layout_options: TextLayoutOptions,
-        blur_radius: f32,
-        clip: Option<Rect>,
-    );
+    fn push_shadow_text(&mut self, draw: TextDraw, blur_radius: f32);
 
-    #[expect(clippy::too_many_arguments)]
-    fn push_effect_layer(
-        &mut self,
-        rect: Rect,
-        clip: Option<Rect>,
-        effect: Option<RenderEffect>,
-        blend_mode: BlendMode,
-        composite_alpha: f32,
-        z_start: usize,
-        z_end: usize,
-    );
-
-    #[expect(clippy::too_many_arguments)]
-    fn push_effect_layer_with_surface(
-        &mut self,
-        rect: Rect,
-        clip: Option<Rect>,
-        effect: Option<RenderEffect>,
-        blend_mode: BlendMode,
-        composite_alpha: f32,
-        z_start: usize,
-        z_end: usize,
-    ) {
-        self.push_effect_layer(
-            rect,
-            clip,
-            effect,
-            blend_mode,
-            composite_alpha,
-            z_start,
-            z_end,
-        );
-    }
+    fn push_effect_layer(&mut self, layer: EffectLayer);
 }
 
 impl TextStyleDrawSink for CompositorScene {
@@ -640,61 +582,16 @@ impl TextStyleDrawSink for CompositorScene {
         self.push_loose(primitive, Placement::at(Point::default(), anchor, clip));
     }
 
-    fn push_text(
-        &mut self,
-        node_id: NodeId,
-        rect: Rect,
-        text: DrawnText,
-        color: Color,
-        text_style: (Arc<TextStyle>, u64),
-        font_size: f32,
-        scale: f32,
-        layout_options: TextLayoutOptions,
-        clip: Option<Rect>,
-    ) {
-        Self::push_text(
-            self,
-            node_id,
-            rect,
-            text,
-            color,
-            text_style,
-            font_size,
-            scale,
-            layout_options,
-            clip,
-        );
+    fn push_text(&mut self, draw: TextDraw) {
+        Self::push_text(self, draw);
     }
 
-    fn push_shadow_text(
-        &mut self,
-        node_id: NodeId,
-        rect: Rect,
-        text: DrawnText,
-        color: Color,
-        (text_style, style_hash): (Arc<TextStyle>, u64),
-        font_size: f32,
-        scale: f32,
-        layout_options: TextLayoutOptions,
-        blur_radius: f32,
-        clip: Option<Rect>,
-    ) {
+    fn push_shadow_text(&mut self, draw: TextDraw, blur_radius: f32) {
+        let clip = draw.clip;
         self.push_shadow_draw(ShadowDraw {
             shapes: None,
             post_blur_cutouts: None,
-            texts: vec![TextDraw {
-                node_id,
-                rect,
-                snap_anchor: None,
-                text,
-                color,
-                text_style,
-                style_hash,
-                font_size,
-                scale,
-                layout_options,
-                clip,
-            }],
+            texts: vec![draw],
             blur_radius,
             clip,
             rounded_clip: None,
@@ -702,48 +599,8 @@ impl TextStyleDrawSink for CompositorScene {
         });
     }
 
-    fn push_effect_layer(
-        &mut self,
-        rect: Rect,
-        clip: Option<Rect>,
-        effect: Option<RenderEffect>,
-        blend_mode: BlendMode,
-        composite_alpha: f32,
-        z_start: usize,
-        z_end: usize,
-    ) {
-        Self::push_effect_layer(
-            self,
-            rect,
-            clip,
-            effect,
-            blend_mode,
-            composite_alpha,
-            z_start,
-            z_end,
-        );
-    }
-
-    fn push_effect_layer_with_surface(
-        &mut self,
-        rect: Rect,
-        clip: Option<Rect>,
-        effect: Option<RenderEffect>,
-        blend_mode: BlendMode,
-        composite_alpha: f32,
-        z_start: usize,
-        z_end: usize,
-    ) {
-        Self::push_effect_layer(
-            self,
-            rect,
-            clip,
-            effect,
-            blend_mode,
-            composite_alpha,
-            z_start,
-            z_end,
-        );
+    fn push_effect_layer(&mut self, layer: EffectLayer) {
+        Self::push_effect_layer(self, layer);
     }
 }
 
@@ -774,71 +631,37 @@ impl TextStyleDrawSink for TextBoundsCollector {
         self.next_z += 1;
     }
 
-    fn push_text(
-        &mut self,
-        _node_id: NodeId,
-        rect: Rect,
-        _text: DrawnText,
-        _color: Color,
-        _text_style: (Arc<TextStyle>, u64),
-        _font_size: f32,
-        _scale: f32,
-        _layout_options: TextLayoutOptions,
-        _clip: Option<Rect>,
-    ) {
-        self.bounds = union_rect(self.bounds, rect);
+    fn push_text(&mut self, draw: TextDraw) {
+        self.bounds = union_rect(self.bounds, draw.rect);
         self.next_z += 1;
     }
 
-    fn push_shadow_text(
-        &mut self,
-        _node_id: NodeId,
-        rect: Rect,
-        _text: DrawnText,
-        _color: Color,
-        _text_style: (Arc<TextStyle>, u64),
-        _font_size: f32,
-        scale: f32,
-        _layout_options: TextLayoutOptions,
-        blur_radius: f32,
-        clip: Option<Rect>,
-    ) {
-        let shadow_bounds = expand_blurred_rect(rect, blur_radius, scale, clip);
+    fn push_shadow_text(&mut self, draw: TextDraw, blur_radius: f32) {
+        let shadow_bounds = expand_blurred_rect(draw.rect, blur_radius, draw.scale, draw.clip);
         if let Some(shadow_bounds) = shadow_bounds {
             self.bounds = union_rect(self.bounds, shadow_bounds);
         }
         self.next_z += 1;
     }
 
-    fn push_effect_layer(
-        &mut self,
-        rect: Rect,
-        _clip: Option<Rect>,
-        _effect: Option<RenderEffect>,
-        _blend_mode: BlendMode,
-        _composite_alpha: f32,
-        _z_start: usize,
-        _z_end: usize,
-    ) {
-        self.bounds = union_rect(self.bounds, rect);
+    fn push_effect_layer(&mut self, layer: EffectLayer) {
+        self.bounds = union_rect(self.bounds, layer.rect);
     }
 }
 
-#[expect(clippy::too_many_arguments)]
+// `text_rect` is the text's box after the layer's transform, and
+// `transformed_text_style` its style with the layer's paint applied.
 fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
     sink: &mut S,
-    node_id: NodeId,
+    node: &TextPrimitiveNode,
+    placement: &TextPlacement<'_>,
     text_rect: Rect,
-    content_layer: &GraphicsLayer,
-    text: &cranpose_ui::text::AnnotatedString,
     transformed_text_style: &TextStyle,
     fallback_color: Color,
-    font_size: f32,
-    text_scale: f32,
-    options: TextLayoutOptions,
-    text_clip: Option<Rect>,
 ) -> bool {
-    let transformed_span_text = text_with_layer_transformed_span_paint(text, content_layer);
+    let text = &*node.text;
+    let text_scale = layer_uniform_scale(placement.layer);
+    let transformed_span_text = text_with_layer_transformed_span_paint(text, placement.layer);
     let material_batches = gpu_text_material_batches_for_text(
         &transformed_span_text,
         transformed_text_style,
@@ -866,53 +689,60 @@ fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
     for (visible_ranges, effect, effect_rect) in batch_effects {
         let z_start = sink.current_z();
         let mask_text = text_for_gpu_mask_batch(text, &visible_ranges);
-        sink.push_text(
-            node_id,
-            text_rect,
-            DrawnText::of(Arc::new(mask_text.render_string()), &mask_text_style),
-            Color(1.0, 1.0, 1.0, 0.0),
-            (
-                Arc::new(mask_text_style.clone()),
-                mask_text_style.render_hash(),
-            ),
-            font_size,
-            text_scale,
-            options,
-            text_clip.map(|clip| expand_text_effect_rect(clip, effect.input_padding())),
-        );
+        sink.push_text(TextDraw {
+            node_id: node.node_id,
+            rect: text_rect,
+            snap_anchor: None,
+            text: DrawnText::of(Arc::new(mask_text.render_string()), &mask_text_style),
+            color: Color(1.0, 1.0, 1.0, 0.0),
+            text_style: Arc::new(mask_text_style.clone()),
+            style_hash: mask_text_style.render_hash(),
+            font_size: node.font_size,
+            scale: text_scale,
+            layout_options: node.layout_options,
+            clip: placement
+                .clip
+                .map(|clip| expand_text_effect_rect(clip, effect.input_padding())),
+        });
         let z_end = sink.current_z();
-        sink.push_effect_layer_with_surface(
-            effect_rect,
-            text_clip,
-            Some(effect),
-            BlendMode::SrcOver,
-            1.0,
+        sink.push_effect_layer(EffectLayer {
+            rect: effect_rect,
+            clip: placement.clip,
+            snap_anchor: None,
+            effect: Some(effect),
+            blend_mode: BlendMode::SrcOver,
+            composite_alpha: 1.0,
             z_start,
             z_end,
-        );
+        });
     }
 
     true
 }
 
-#[expect(clippy::too_many_arguments)]
 fn emit_text_style_draws<S: TextStyleDrawSink>(
     sink: &mut S,
     text_layout: &mut impl TextLayoutResolver,
-    node_id: NodeId,
-    rect: Rect,
-    text_rect: Rect,
-    content_layer: &GraphicsLayer,
-    (text, render_text): (
-        &Rc<cranpose_ui::text::AnnotatedString>,
-        &Arc<cranpose_ui::text::RenderString>,
-    ),
-    text_style: &Arc<TextStyle>,
-    font_size: f32,
-    options: TextLayoutOptions,
-    text_clip: Option<Rect>,
-    snap_anchor: Option<SnapAnchor>,
+    node: &TextPrimitiveNode,
+    placement: TextPlacement<'_>,
 ) {
+    let TextPlacement {
+        bounds: rect,
+        text_rect,
+        layer: content_layer,
+        clip: text_clip,
+        snap_anchor,
+    } = placement;
+    let TextPrimitiveNode {
+        node_id,
+        text,
+        render_text,
+        text_style,
+        font_size,
+        layout_options: options,
+        ..
+    } = node;
+    let (node_id, font_size, options) = (*node_id, *font_size, *options);
     let text_scale = layer_uniform_scale(content_layer);
     let baseline_shift_px = text_style
         .span_style
@@ -926,6 +756,10 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         height: text_rect.height,
     };
     let transformed_shifted_text_rect = apply_layer_to_rect(shifted_text_rect, rect, content_layer);
+    let decoration_placement = TextPlacement {
+        text_rect: shifted_text_rect,
+        ..placement
+    };
     if let Some(background) = text_style.span_style.background {
         let brush = apply_layer_to_brush(Brush::solid(background), content_layer);
         sink.push_shape(
@@ -973,16 +807,20 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         let blur_radius = shadow.blur_radius.max(0.0) * text_scale;
         let shadow_style_hash = shadow_text_style.render_hash();
         sink.push_shadow_text(
-            node_id,
-            apply_layer_to_rect(shadow_rect, rect, content_layer),
-            DrawnText::of(Arc::clone(render_text), &shadow_text_style),
-            apply_layer_to_color(shadow.color, content_layer),
-            (Arc::new(shadow_text_style), shadow_style_hash),
-            font_size,
-            text_scale,
-            options,
+            TextDraw {
+                node_id,
+                rect: apply_layer_to_rect(shadow_rect, rect, content_layer),
+                snap_anchor: None,
+                text: DrawnText::of(Arc::clone(render_text), &shadow_text_style),
+                color: apply_layer_to_color(shadow.color, content_layer),
+                text_style: Arc::new(shadow_text_style),
+                style_hash: shadow_style_hash,
+                font_size,
+                scale: text_scale,
+                layout_options: options,
+                clip: text_clip,
+            },
             blur_radius,
-            text_clip,
         );
     }
 
@@ -994,30 +832,21 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
     if has_span_foreground_overrides
         && push_span_gpu_text_material_draws(
             sink,
-            node_id,
+            node,
+            &placement,
             transformed_shifted_text_rect,
-            content_layer,
-            text,
             &transformed_text_style,
             transformed_text_color,
-            font_size,
-            text_scale,
-            options,
-            text_clip,
         )
     {
         if decorated {
             push_text_decorations(
                 sink,
                 text_layout,
-                rect,
-                shifted_text_rect,
-                content_layer,
+                decoration_placement,
                 text,
                 text_style,
                 &text_brush,
-                text_clip,
-                snap_anchor,
             );
         }
         return;
@@ -1034,16 +863,11 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         if spans_override_foreground_color(spans)
             && push_span_gpu_text_material_draws(
                 sink,
-                node_id,
+                node,
+                &placement,
                 transformed_shifted_text_rect,
-                content_layer,
-                text,
                 &transformed_text_style,
                 transformed_text_color,
-                font_size,
-                text_scale,
-                options,
-                text_clip,
             )
         {
             return;
@@ -1058,213 +882,145 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         let mask_text = text_for_gpu_mask(text);
         let mask_style_hash = mask_text_style.render_hash();
 
-        sink.push_text(
+        sink.push_text(TextDraw {
             node_id,
-            transformed_shifted_text_rect,
-            DrawnText::of(Arc::new(mask_text.render_string()), &mask_text_style),
-            Color::WHITE,
-            (Arc::new(mask_text_style), mask_style_hash),
+            rect: transformed_shifted_text_rect,
+            snap_anchor: None,
+            text: DrawnText::of(Arc::new(mask_text.render_string()), &mask_text_style),
+            color: Color::WHITE,
+            text_style: Arc::new(mask_text_style),
+            style_hash: mask_style_hash,
             font_size,
-            text_scale,
-            options,
-            text_clip.map(|clip| expand_text_effect_rect(clip, effect.input_padding())),
-        );
+            scale: text_scale,
+            layout_options: options,
+            clip: text_clip.map(|clip| expand_text_effect_rect(clip, effect.input_padding())),
+        });
 
         let z_end = sink.current_z();
-        sink.push_effect_layer_with_surface(
-            effect_rect,
-            text_clip,
-            Some(effect),
-            BlendMode::SrcOver,
-            1.0,
+        sink.push_effect_layer(EffectLayer {
+            rect: effect_rect,
+            clip: text_clip,
+            snap_anchor: None,
+            effect: Some(effect),
+            blend_mode: BlendMode::SrcOver,
+            composite_alpha: 1.0,
             z_start,
             z_end,
-        );
+        });
         if decorated {
             push_text_decorations(
                 sink,
                 text_layout,
-                rect,
-                shifted_text_rect,
-                content_layer,
+                decoration_placement,
                 text,
                 text_style,
                 &text_brush,
-                text_clip,
-                snap_anchor,
             );
         }
         return;
     }
 
     let transformed_style_hash = transformed_text_style.render_hash();
-    push_text_draw(
-        sink,
+    sink.push_text(TextDraw {
         node_id,
-        transformed_shifted_text_rect,
-        DrawnText::of(Arc::clone(render_text), &transformed_text_style),
-        transformed_text_color,
-        (transformed_text_style, transformed_style_hash),
+        rect: transformed_shifted_text_rect,
+        snap_anchor: None,
+        text: DrawnText::of(Arc::clone(render_text), &transformed_text_style),
+        color: transformed_text_color,
+        text_style: transformed_text_style,
+        style_hash: transformed_style_hash,
         font_size,
-        text_scale,
-        options,
-        text_clip,
-    );
+        scale: text_scale,
+        layout_options: options,
+        clip: text_clip,
+    });
 
     if decorated {
         push_text_decorations(
             sink,
             text_layout,
-            rect,
-            shifted_text_rect,
-            content_layer,
+            decoration_placement,
             text,
             text_style,
             &text_brush,
-            text_clip,
-            snap_anchor,
         );
     }
 }
 
-#[expect(clippy::too_many_arguments)]
-fn push_text_draw<S: TextStyleDrawSink>(
-    sink: &mut S,
-    node_id: NodeId,
-    rect: Rect,
-    text: DrawnText,
-    color: Color,
-    text_style: (Arc<TextStyle>, u64),
-    font_size: f32,
-    scale: f32,
-    layout_options: TextLayoutOptions,
-    clip: Option<Rect>,
-) {
-    sink.push_text(
-        node_id,
-        rect,
-        text,
-        color,
-        text_style,
-        font_size,
-        scale,
-        layout_options,
-        clip,
-    );
+// Where a text node draws: the bounds and transform of its layer, its box
+// before the transform, its clip and the anchor its draws snap with.
+#[derive(Clone, Copy)]
+pub(crate) struct TextPlacement<'a> {
+    pub(crate) bounds: Rect,
+    pub(crate) text_rect: Rect,
+    pub(crate) layer: &'a GraphicsLayer,
+    pub(crate) clip: Option<Rect>,
+    pub(crate) snap_anchor: Option<SnapAnchor>,
 }
 
 /// Pushes a text's draws: its glyphs in the paint's colour when the paint
 /// is plain, without reading the style, and every draw its style asks for
-/// otherwise; each anchored to `snap_anchor`.
-#[expect(clippy::too_many_arguments)]
+/// otherwise; each anchored to the placement's snap anchor.
 pub(crate) fn push_text_style_draws(
     scene: &mut CompositorScene,
     text_layout: &mut impl TextLayoutResolver,
-    node_id: NodeId,
-    rect: Rect,
-    text_rect: Rect,
-    content_layer: &GraphicsLayer,
-    (text, render_text): (
-        &Rc<cranpose_ui::text::AnnotatedString>,
-        &Arc<cranpose_ui::text::RenderString>,
-    ),
-    (text_style, paint): (&Arc<TextStyle>, TextPaint),
-    font_size: f32,
-    options: TextLayoutOptions,
-    text_clip: Option<Rect>,
-    snap_anchor: Option<SnapAnchor>,
+    node: &TextPrimitiveNode,
+    placement: TextPlacement<'_>,
 ) {
+    let paint = node.paint();
     if paint.plain {
         let shifted_text_rect = Rect {
-            y: text_rect.y + paint.baseline_shift,
-            ..text_rect
+            y: placement.text_rect.y + paint.baseline_shift,
+            ..placement.text_rect
         };
-        let texts = scene.texts.len();
-        push_text_draw(
-            scene,
-            node_id,
-            apply_layer_to_rect(shifted_text_rect, rect, content_layer),
-            DrawnText::plain(Arc::clone(render_text), &paint),
-            apply_layer_to_color(paint.color, content_layer),
-            (Arc::clone(text_style), paint.style_hash),
-            font_size,
-            layer_uniform_scale(content_layer),
-            options,
-            text_clip,
-        );
-        // A plain text pushes its glyphs and nothing else.
-        if let Some(anchor) = snap_anchor {
-            for text in &mut scene.texts[texts..] {
-                text.snap_anchor = Some(anchor);
-            }
-        }
+        scene.push_text(TextDraw {
+            node_id: node.node_id,
+            rect: apply_layer_to_rect(shifted_text_rect, placement.bounds, placement.layer),
+            // A plain text pushes its glyphs and nothing else.
+            snap_anchor: placement.snap_anchor,
+            text: DrawnText::plain(Arc::clone(&node.render_text), &paint),
+            color: apply_layer_to_color(paint.color, placement.layer),
+            text_style: Arc::clone(&node.text_style),
+            style_hash: paint.style_hash,
+            font_size: node.font_size,
+            scale: layer_uniform_scale(placement.layer),
+            layout_options: node.layout_options,
+            clip: placement.clip,
+        });
         return;
     }
     let counts = crate::collect::scene_counts(scene);
-    emit_text_style_draws(
-        scene,
-        text_layout,
-        node_id,
-        rect,
-        text_rect,
-        content_layer,
-        (text, render_text),
-        text_style,
-        font_size,
-        options,
-        text_clip,
-        snap_anchor,
-    );
-    crate::collect::assign_snap_anchor_since(scene, counts, snap_anchor);
+    emit_text_style_draws(scene, text_layout, node, placement);
+    crate::collect::assign_snap_anchor_since(scene, counts, placement.snap_anchor);
 }
 
 #[cfg(test)]
-#[expect(clippy::too_many_arguments)]
 pub(crate) fn estimate_text_style_draw_bounds(
-    node_id: NodeId,
-    rect: Rect,
-    text_rect: Rect,
-    content_layer: &GraphicsLayer,
-    text: &cranpose_ui::text::AnnotatedString,
-    text_style: &TextStyle,
-    font_size: f32,
-    options: TextLayoutOptions,
-    text_clip: Option<Rect>,
+    node: &TextPrimitiveNode,
+    placement: TextPlacement<'_>,
 ) -> Option<Rect> {
     let mut collector = TextBoundsCollector::default();
     let mut text_layout = UiTextLayoutResolver;
-    let render_text = Arc::new(text.render_string());
-    let text = Rc::new(text.clone());
-    emit_text_style_draws(
-        &mut collector,
-        &mut text_layout,
-        node_id,
-        rect,
-        text_rect,
-        content_layer,
-        (&text, &render_text),
-        &Arc::new(text_style.clone()),
-        font_size,
-        options,
-        text_clip,
-        None,
-    );
+    emit_text_style_draws(&mut collector, &mut text_layout, node, placement);
     collector.bounds
 }
 
-#[expect(clippy::too_many_arguments)]
+// `placement.text_rect` is the text's box shifted to its baseline.
 fn push_text_decorations<S: TextStyleDrawSink>(
     sink: &mut S,
     text_layout: &mut impl TextLayoutResolver,
-    rect: Rect,
-    text_rect: Rect,
-    content_layer: &GraphicsLayer,
+    placement: TextPlacement<'_>,
     annotated_text: &cranpose_ui::text::AnnotatedString,
     global_style: &TextStyle,
     text_brush: &Brush,
-    text_clip: Option<Rect>,
-    snap_anchor: Option<SnapAnchor>,
 ) {
+    let TextPlacement {
+        bounds: rect,
+        text_rect,
+        layer: content_layer,
+        clip: text_clip,
+        snap_anchor,
+    } = placement;
     let layout = text_layout.layout_text(annotated_text, global_style);
     let mut segments =
         decoration_segments_from_glyph_layouts(annotated_text, global_style, &layout);
@@ -1785,18 +1541,20 @@ pub(crate) fn push_draw_primitive(
         }
 
         fn push_image(&mut self, params: ImageDrawParams) {
-            self.scene.push_image_with_geometry(
-                params.rect,
-                params.quad,
-                params.image,
-                params.alpha,
-                params.color_filter,
-                params.sampling,
-                (params.clip, self.rounding),
-                params.src_rect,
-                params.blend_mode,
-                params.motion_context_animated,
-            );
+            self.scene.push_image(ImageDraw {
+                rect: params.rect,
+                quad: params.quad,
+                snap_anchor: None,
+                image: params.image,
+                alpha: params.alpha,
+                color_filter: params.color_filter,
+                sampling: params.sampling,
+                clip: params.clip,
+                rounding: self.rounding,
+                blend_mode: params.blend_mode,
+                src_rect: params.src_rect,
+                motion_context_animated: params.motion_context_animated,
+            });
         }
 
         fn push_shadow(
@@ -1818,17 +1576,19 @@ pub(crate) fn push_draw_primitive(
 
         fn push_text(&mut self, params: TextDrawParams) {
             let style_hash = params.text_style.render_hash();
-            self.scene.push_text(
-                DRAW_PRIMITIVE_TEXT_NODE_ID,
-                params.rect,
-                DrawnText::of(params.render_text, &params.text_style),
-                params.color,
-                (Arc::new(params.text_style), style_hash),
-                params.font_size,
-                params.scale,
-                params.layout_options,
-                params.clip,
-            );
+            self.scene.push_text(TextDraw {
+                node_id: DRAW_PRIMITIVE_TEXT_NODE_ID,
+                rect: params.rect,
+                snap_anchor: None,
+                text: DrawnText::of(params.render_text, &params.text_style),
+                color: params.color,
+                text_style: Arc::new(params.text_style),
+                style_hash,
+                font_size: params.font_size,
+                scale: params.scale,
+                layout_options: params.layout_options,
+                clip: params.clip,
+            });
         }
     }
 

@@ -26,20 +26,24 @@ fn push_text_style_draws_for_test(
     text_style: &TextStyle,
     clip: Option<Rect>,
 ) {
-    let text = Rc::new(cranpose_ui::text::AnnotatedString::from(text));
-    let text_style = Arc::new(text_style.clone());
-    with_test_app_context(|| {
-        push_text_style_draws(
-            scene,
-            rect,
-            rect,
-            &GraphicsLayer::default(),
-            &text,
-            &text_style,
-            14.0,
-            clip,
-        );
-    });
+    let node = TextPrimitiveNode {
+        node_id: 1,
+        rect,
+        text: Rc::new(cranpose_ui::text::AnnotatedString::from(text)),
+        render_text: cranpose_ui::text::shared_plain_render_string(text),
+        text_style: Arc::new(text_style.clone()),
+        font_size: 14.0,
+        layout_options: TextLayoutOptions::default(),
+        clip,
+        paint: Default::default(),
+    };
+    let placement = TextPlacement {
+        bounds: rect,
+        text_rect: rect,
+        layer: &GraphicsLayer::default(),
+        clip,
+    };
+    with_test_app_context(|| push_text_style_draws(scene, &node, placement));
 }
 
 fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> RenderGraph {
