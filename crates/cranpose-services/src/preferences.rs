@@ -116,9 +116,7 @@ fn default_preferences() -> PreferencesRef {
 #[cfg(all(target_arch = "wasm32", not(feature = "preferences-web")))]
 fn default_preferences() -> PreferencesRef {
     static DEFAULT: OnceLock<PreferencesRef> = OnceLock::new();
-    DEFAULT
-        .get_or_init(|| Arc::new(MemoryPreferences::default()) as PreferencesRef)
-        .clone()
+    Arc::clone(DEFAULT.get_or_init(|| Arc::new(MemoryPreferences::default()) as PreferencesRef))
 }
 
 /// The browser's `localStorage`, which is where preferences outlive a reload.
