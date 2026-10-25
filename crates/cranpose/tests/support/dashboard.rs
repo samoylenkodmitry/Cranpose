@@ -278,7 +278,9 @@ fn Level(label: &'static str, index: usize, colors: [Color; 2], time: Time) {
                         width: size.width * timeline::level(time.get(), index),
                         height: size.height,
                     },
-                    Brush::horizontal_gradient(colors.to_vec(), 0.0, f32::INFINITY),
+                    // Across the whole track, as LVGL's bar draws its gradient:
+                    // the fill ends on the color the track has there.
+                    Brush::horizontal_gradient(colors.to_vec(), 0.0, size.width),
                     CornerRadii::uniform(4.0),
                 );
             }),
@@ -398,7 +400,7 @@ fn Switch(period: u64, time: Time) {
 fn Slider(time: Time) {
     Canvas(Modifier::empty().weight(1.0).height(22.0), move |scope| {
         let size = scope.size();
-        let x = 8.0 + timeline::slider(time.get()) * (size.width - 16.0);
+        let x = timeline::slider(time.get()) * size.width;
         let top = size.height / 2.0 - 2.0;
         scope.draw_round_rect_at(
             Rect {
