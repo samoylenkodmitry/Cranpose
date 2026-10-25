@@ -151,7 +151,6 @@ pub(crate) struct RuntimeThreadState {
     pub(crate) current_composer: RefCell<Option<Rc<ComposerCore>>>,
     pub(crate) spare_commands: RefCell<Vec<CommandQueue>>,
     pub(crate) spare_composer_stacks: Cell<Option<crate::composer::ComposerStacks>>,
-    /// The group frames of finished slot passes, for the next ones.
     pub(crate) spare_group_frames: RefCell<Vec<crate::slot::GroupFrameStorage>>,
     pub(crate) bridges: RefCell<FixedHashMap<u64, Rc<dyn Any>>>,
     /// The constant values `__constant` keeps, by slot: empty until the

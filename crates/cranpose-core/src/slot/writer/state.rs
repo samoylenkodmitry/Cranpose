@@ -54,8 +54,6 @@ impl SlotWriteSessionState {
         self.folds = folds;
     }
 
-    /// Hands the pass's group frames to the next pass on this thread, once
-    /// the pass finished.
     pub(crate) fn recycle_group_frames(&mut self) {
         self.group_stack.recycle();
     }

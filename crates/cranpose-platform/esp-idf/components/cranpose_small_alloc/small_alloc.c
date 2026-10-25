@@ -16,12 +16,12 @@
 //
 // The heap aligns its blocks to 4 bytes. Its own aligned allocation looks for
 // a free block 24 bytes longer than asked and, for a block it finds 4 bytes
-// off, cuts the 20 bytes before it off as a free block: every freed hole was
-// too short for the next request of its size, and a busy screen on the
-// classic ESP32 failed with 29 KB free in holes of at most 352 bytes. A block
-// of a larger alignment is taken from the heap's plain allocation instead,
-// that alignment longer, and starts at the first aligned address past the
-// heap block's first word, where the distance back to the heap block is kept.
+// off, cuts the 20 bytes before it off as a free block: the hole a freed
+// block leaves is then too short for the next request of its size, and the
+// free memory ends up in holes that no request fits. A block of a larger
+// alignment is taken from the heap's plain allocation instead, that alignment
+// longer, and starts at the first aligned address past the heap block's first
+// word, where the distance back to the heap block is kept.
 
 #include <pthread.h>
 #include <stdbool.h>

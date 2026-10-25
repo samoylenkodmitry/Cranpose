@@ -283,10 +283,8 @@ impl PixelsRenderer {
     }
 }
 
-/// The text measurements the renderer's measurer keeps. A frame measures
-/// again only the texts whose layout changed, and the renderer serves
-/// microcontrollers, where a measurement takes about 190 bytes: 64 of them
-/// kept the texts a ticker showed over the last minute.
+// A frame measures again only the texts whose layout changed, and on a
+// microcontroller a measurement takes about 190 bytes.
 const MEASURED_TEXTS_KEPT: usize = 16;
 
 impl Renderer for PixelsRenderer {

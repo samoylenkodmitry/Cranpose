@@ -1,16 +1,12 @@
 #![expect(unsafe_code)]
 
-//! What the heap has left of the internal RAM, for the frame statistics.
-
 use esp_idf_svc::sys;
 
-/// The heap's internal byte-addressable RAM, in bytes.
+// The heap's internal byte-addressable RAM in bytes: free now, in its largest
+// free block, and the least free since startup.
 pub(crate) struct HeapReport {
-    /// Free now.
     pub(crate) free: usize,
-    /// The largest free block: the longest allocation that can succeed.
     pub(crate) largest: usize,
-    /// The least that was free since startup.
     pub(crate) lowest: usize,
 }
 
